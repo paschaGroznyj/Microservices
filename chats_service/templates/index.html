@@ -1,0 +1,41 @@
+<!-- templates/index.html -->
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Чат #{{ chat_id }}</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 20px auto; }
+        input, button { margin: 5px; padding: 8px; }
+        pre { background: #f5f5f5; padding: 10px; border-radius: 4px; overflow: auto; }
+        .message { margin: 5px 0; }
+        .user { color: blue; }
+        .bot { color: green; font-style: italic; }
+    </style>
+</head>
+<body>
+    <h2>Чат #{{ chat_id }}</h2>
+    <h2>Юзер #{{ username }}</h2>
+    <label>User ID:</label>
+    <input id="userId" type="number" value="1"><br>
+
+    <label>Сообщение:</label>
+    <input id="message" type="text" placeholder="Введите сообщение"><br>
+
+    <button onclick="sendMessage()">Отправить</button>
+
+    <hr>
+
+    <h3>История сообщений</h3>
+    <div id="history"></div>
+
+    <h3>Live-события (WebSocket)</h3>
+    <pre id="ws_output"></pre>
+
+   <script>
+    window.CHAT_ID = {{ chat_id }};
+    </script>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

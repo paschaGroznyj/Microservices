@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+dotenv
+bcrypt
+asyncpg
+python-jose[cryptography]
+python-multipart

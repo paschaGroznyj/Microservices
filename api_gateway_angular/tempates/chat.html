@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Чат - Добро пожаловать, {{ user.username }}</title>
+    <link rel="stylesheet" href="/static/css/chat.css">
+</head>
+<body>
+    <div id="chat-app">
+        <nav class="navbar">
+        <div class="nav-brand">💬 Чат Приложение</div>
+        <div class="nav-user">
+            <span>Привет, <span id="username">{{ user.username }}</span>!</span>
+
+            <!-- Форма выхода -->
+            <form method="post" action="/logout-web" style="display: inline;">
+                <button type="submit" class="btn-logout" onclick="return confirm('Вы уверены, что хотите выйти?');">
+                    Выйти
+                </button>
+            </form>
+        </div>
+    </nav>
+
+        <div class="chat-layout">
+            <!-- Сайдбар с чатами -->
+            <div class="sidebar">
+                <h3>Ваши чаты</h3>
+                <div id="chat-list" class="chat-list">
+                    <!-- Чаты будут загружены через JS -->
+                </div>
+                <button id="new-chat-btn" class="btn-new-chat">+ Новый чат</button>
+            </div>
+
+            <!-- Основная область чата -->
+            <div class="chat-main">
+                <div class="chat-header">
+                    <h3 id="chat-title">Выберите чат</h3>
+                </div>
+
+                <div class="chat-messages" id="chat-messages">
+                    <!-- Сообщения будут здесь -->
+                </div>
+
+                <div class="message-input-area">
+                    <input type="text" id="message-input" placeholder="Введите сообщение..." disabled>
+                    <button id="send-btn" disabled>Отправить</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

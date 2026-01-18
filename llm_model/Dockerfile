@@ -2,9 +2,12 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Устанавливаем системные зависимости (если нужно для каких-то пакетов)
+# Системные зависимости
 RUN apt-get update && apt-get install -y \
-    gcc \
+    iputils-ping \
+    curl \
+    net-tools \
+    dnsutils \
     && rm -rf /var/lib/apt/lists/*
 
 # Копируем и устанавливаем зависимости
@@ -22,8 +25,6 @@ USER appuser
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
-# Открываем порт
 EXPOSE 9001
 
-# Запускаем приложение
 CMD ["python", "app.py"]

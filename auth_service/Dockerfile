@@ -4,7 +4,10 @@ WORKDIR /app
 
 # Системные зависимости
 RUN apt-get update && apt-get install -y \
-    gcc \
+    iputils-ping \
+    curl \
+    net-tools \
+    dnsutils \
     && rm -rf /var/lib/apt/lists/*
 
 # Python зависимости

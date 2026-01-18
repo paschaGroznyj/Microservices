@@ -3,7 +3,8 @@ import json
 import logging
 import asyncio
 from kafka import KafkaConsumer
-from db_scripts.chats_tables import DataBaseChats
+from app.db.chats_tables import DataBaseChats
+from app.core.config import KAFKA_BROKER, PORT_CHATS_SERVICE
 import requests  # Для отправки сообщений обратно в основной сервис
 import time
 
@@ -15,14 +16,14 @@ class DBConsumer:
     def __init__(self):
         self.db = DataBaseChats()
         self.consumer = None
-        self.main_service_url = "http://localhost:8001"  # URL основного сервиса
+        self.main_service_url = f"http://chats_service:{PORT_CHATS_SERVICE}"  # URL основного сервиса
 
     async def init(self):
         await self.db.init_db_pool()
 
         self.consumer = KafkaConsumer(
             'chat-messages',
-            bootstrap_servers=['localhost:9092'],
+            bootstrap_servers=[KAFKA_BROKER],
             group_id='db-consumer-group',
             value_deserializer=lambda m: json.loads(m.decode('utf-8')),
             auto_offset_reset='latest',

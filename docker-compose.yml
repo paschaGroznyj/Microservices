@@ -22,7 +22,7 @@ services:
       - kafka-data:/var/lib/kafka/data
 
     # LLM Model сервис
-  llm_model:
+  llm_model_service:
     build: ./llm_model
     container_name: llm_model_service
     ports:
@@ -30,11 +30,18 @@ services:
     depends_on:
       - broker
     environment:
-      - PORT_LLM_CONSUMER=9001
-      - KAFKA_BROKER=broker:9092
-      - API_GIGACHAT=${API_GIGACHAT:-your_api_key_here}  # Можно передать из .env корневой папки
-    # volumes:
-    #   - ./llm_model:/app  # Раскомментируйте для разработки (hot-reload)
+      PORT_LLM_CONSUMER: ${PORT_LLM_CONSUMER}
+      KAFKA_BROKER: ${KAFKA_BROKER}
+      API_GIGACHAT: ${API_GIGACHAT}  # Можно передать из .env корневой папки
+
+      HF_HOME: /app/.cache/huggingface
+      TRANSFORMERS_CACHE: /app/.cache/huggingface/transformers
+      SENTENCE_TRANSFORMERS_HOME: /app/.cache/huggingface/sentence-transformers
+
+      HF_DATASETS_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    volumes:
+      - llm_cache:/app/.cache/huggingface
     restart: unless-stopped
 
   gateway:
@@ -83,40 +90,47 @@ services:
         POSTGRES_PASSWORD: ${DB_PASSWORD}
       ports:
         - "5433:5432"
-#  auth_service:
-#    build: ./auth_service
-#    container_name: auth_service
-#    expose:
-#      - "8000"
-#
-#  chats_service:
-#    build: ./chats_service
-#    container_name: chats_service
-#    expose:
-#      - "8001"
+
+  chats_service:
+    container_name: chats_service
+    build: ./chats_service
+    command: uvicorn app.app:app --host 0.0.0.0 --port 8001
+    ports:
+      - "8001:8001"
+    environment:
+      PORT_CHATS_SERVICE: ${PORT_CHATS_SERVICE}
+      SECRET_KEY: ${SECRET_KEY}
+      ALGORITHM: ${ALGORITHM}
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      KAFKA_BROKER: ${KAFKA_BROKER}
+    depends_on:
+      - postgres
+      - broker
+
+  chats-consumer:
+    container_name: chats-consumer
+    build: ./chats_service
+    command: python -m app.endpoint_consumer
+    environment:
+      PORT_CHATS_SERVICE: ${PORT_CHATS_SERVICE}
+      SECRET_KEY: ${SECRET_KEY}
+      ALGORITHM: ${ALGORITHM}
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      KAFKA_BROKER: ${KAFKA_BROKER}
+    depends_on:
+      - postgres
+      - broker
+    restart: unless-stopped
 
 volumes:
   kafka-data:
-#  uth_service:
-#      build: ./auth_service
-#      container_name: auth_service
-#      ports:
-#        - "8000:8000"
-#      depends_on:
-#        - kafka
-#      volumes:
-#        - ./auth_service:/app
-#      environment:
-#        - BOOTSTRAP_SERVERS=kafka:9092
-#
-#  chats_service:
-#    build: ./chats_service
-#    container_name: chats_service
-#    ports:
-#      - "8001:8000"
-#    depends_on:
-#      - kafka
-#    volumes:
-#      - ./chats_service:/app
-#    environment:
-#      - BOOTSTRAP_SERVERS=kafka:9092
+  llm_cache:
+

@@ -89,7 +89,6 @@ async def health():
     return {"service": "llm-bot", "status": status}
 
 from config import PORT_LLM_CONSUMER
-print(KAFKA_BROKER)
 
 if __name__ == "__main__":
     threading.Thread(target=kafka_consumer, daemon=True).start()

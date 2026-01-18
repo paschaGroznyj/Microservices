@@ -1,6 +1,6 @@
 import asyncio
 import asyncpg
-from utils.config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME
+from app.core.config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME
 import logging
 
 logging.basicConfig(

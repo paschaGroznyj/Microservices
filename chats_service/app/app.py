@@ -1,18 +1,13 @@
 import json
 import logging
-from fastapi import FastAPI, HTTPException, Depends
-from utils.config import KAFKA_BROKER
+from fastapi import FastAPI
 from kafka import KafkaProducer
 from pydantic import BaseModel
-from db_scripts.chats_tables import DataBaseChats
+from app.db.chats_tables import DataBaseChats
 from fastapi.websockets import WebSocket, WebSocketDisconnect
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-from fastapi import Cookie, Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, status
 from jose import JWTError, jwt
-from utils.config import SECRET_KEY, ALGORITHM
-import asyncio
-from datetime import datetime, timedelta
+from app.core.config import SECRET_KEY, ALGORITHM, KAFKA_BROKER
 import time
 
 WATCHDOG_INTERVAL = 10      # как часто проверяем
@@ -30,8 +25,6 @@ producer = KafkaProducer(
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 app = FastAPI(title="Chats Service")
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
 
 # async def bot_response_watchdog():
 #     logging.info("🤖 Bot watchdog started")
@@ -100,18 +93,7 @@ async def get_current_user_from_cookie(token: str = Depends(get_token)):
 
 
     return {"status": "ok", "detail": "Bot message broadcasted"}
-@app.get("/chat/{chat_id}")
-async def chat_page(
-    request: Request,
-    chat_id: int,
-    username: str = Depends(get_current_user_from_cookie)
-):
 
-    return templates.TemplateResponse("index.html", {
-        "request": request,
-        "chat_id": chat_id,
-        "username": username
-    })
 
 connections: dict[int, list[WebSocket]] = {}
 @app.websocket("/ws/chat/{chat_id}")
@@ -242,13 +224,13 @@ async def create_chat(data: dict):
 @app.get("/health")
 async def health():
     status = "ok" if service_message_alive else "error"
-    return {"service": "llm-bot", "status": status}
+    return {"service": "chats_service", "status": status}
 
 
-import uvicorn
-from utils.config import PORT_CHATS_SERVICE
-
-if __name__ == "__main__":
-    uvicorn.run("chats_service.app:app", host="127.0.0.1", port=int(PORT_CHATS_SERVICE), reload=True)
+# import uvicorn
+# from utils.config import PORT_CHATS_SERVICE
+#
+# if __name__ == "__main__":
+#     uvicorn.run("chats_service.app.app:app", host="127.0.0.1", port=int(PORT_CHATS_SERVICE), reload=True)
 
 

@@ -155,13 +155,8 @@ async def get_current_user_info(request: Request):
 
 @app.get("/health")
 async def health():
-    """Health check всегда возвращает ok, если сервер запущен"""
-    return {
-        "service": "llm-bot",
-        "status": "ok",
-        "server_status": "running",
-        "kafka_status": "connecting"  # Можно добавить отдельный статус для Kafka
-    }
+    status = "ok" if service_auth_alive else "error"
+    return {"service": "auth_service", "status": status}
 
 # import uvicorn
 # from utils.config import PORT_AUTH_SERVICE

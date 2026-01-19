@@ -93,7 +93,7 @@ class SimpleRAG:
         self.encoder = LaBSEEncoder()
 
         # загрузка документов
-        text = load_pdf_text(docs_path, start_page=4, end_page=20)
+        text = load_pdf_text(docs_path, start_page=4, end_page=40)
         chunks = chunk_text(text)
         print("Векторизация")
         embeddings = self.encoder.encode(chunks)

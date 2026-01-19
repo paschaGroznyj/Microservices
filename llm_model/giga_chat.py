@@ -109,11 +109,12 @@ class GigaChatApi:
             return direct_answer
         # Иначе используем RAG
         context = self.rag.retrieve(user_message)
+        print(f"КОНТЕКСТ: {context[:500]}")
         rag_prompt = self.rag_prompt(user_message, context)
         return self.take_answer(rag_prompt)
 
-llm_client = GigaChatApi(API_GIGACHAT)
+# llm_client = GigaChatApi(API_GIGACHAT)
 # print(llm.take_answer("Привет"))
 # print(llm_client.dummy_answer("Hello world"))
 #
-print(llm_client.llm_agent_step("Принципы объектного ориентированного программирования из методички"))
+# print(llm_client.llm_agent_step("Принципы объектного ориентированного программирования из методички"))

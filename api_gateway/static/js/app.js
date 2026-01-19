@@ -180,14 +180,14 @@ class ChatAppSimple {
         if (this.ws) {
             this.ws.close();
         }
-
+	
+	console.log("🧩 CONNECT WS chatId =", chatId);
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const WS_HOST = "127.0.0.1:8001"; // chats-service
+        const WS_HOST = "localhost:8001"; // chats-service
 
         this.ws = new WebSocket(
         `${protocol}//${WS_HOST}/ws/chat/${chatId}`
         );
-
         this.ws.onmessage = (event) => {
             const message = JSON.parse(event.data);
             this.addMessage(message);

@@ -1,17 +1,37 @@
 import os
 import faiss
-import fitz
 import numpy as np
 from transformers import AutoTokenizer, AutoModel
 import torch
+import PyPDF2
 
-def load_pdf_text(path: str, start_page=0, end_page=None):
-    doc = fitz.open(path)
-    end_page = end_page or len(doc)
-    return "\n".join(
-        doc[i].get_text("text")
-        for i in range(start_page, min(end_page, len(doc)))
-    )
+
+def load_pdf_text(pdf_path: str, start_page: int, end_page: int) -> str:
+    """
+    Извлекает текст из PDF-документа между start_page и stop_page (включительно).
+
+    Параметры:
+        pdf_path (str): Путь к PDF-файлу.
+        start_page (int): Номер начальной страницы (считается с 0).
+        stop_page (int): Номер конечной страницы (включительно, считается с 0).
+
+    Возвращает:
+        str: Объединённый текст указанных страниц.
+    """
+    with open(pdf_path, 'rb') as file:
+        reader = PyPDF2.PdfReader(file)
+        total_pages = len(reader.pages)
+
+        # Проверка корректности диапазона страниц
+        if start_page < 0 or end_page >= total_pages or start_page > end_page:
+            raise ValueError(f"Некорректный диапазон страниц. Доступно страниц: {total_pages}")
+
+        text = ""
+        for page_num in range(start_page, end_page + 1):
+            page = reader.pages[page_num]
+            text += page.extract_text() + "\n"
+
+        return text
 
 
 # def load_docx_text(path: str):
@@ -73,7 +93,7 @@ class SimpleRAG:
         self.encoder = LaBSEEncoder()
 
         # загрузка документов
-        text = load_pdf_text(docs_path, start_page=4, end_page=40)
+        text = load_pdf_text(docs_path, start_page=4, end_page=20)
         chunks = chunk_text(text)
         print("Векторизация")
         embeddings = self.encoder.encode(chunks)

@@ -32,16 +32,14 @@ services:
     environment:
       PORT_LLM_CONSUMER: ${PORT_LLM_CONSUMER}
       KAFKA_BROKER: ${KAFKA_BROKER}
-      API_GIGACHAT: ${API_GIGACHAT}  # Можно передать из .env корневой папки
+      API_GIGACHAT: ${API_GIGACHAT}
 
       HF_HOME: /app/.cache/huggingface
-      TRANSFORMERS_CACHE: /app/.cache/huggingface/transformers
-      SENTENCE_TRANSFORMERS_HOME: /app/.cache/huggingface/sentence-transformers
 
       HF_DATASETS_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
     volumes:
-      - llm_cache:/app/.cache/huggingface
+      - ./models:/app/.cache/huggingface/hub
     restart: unless-stopped
 
   gateway:

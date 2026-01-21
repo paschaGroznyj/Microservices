@@ -22,9 +22,29 @@ services:
       - kafka-data:/var/lib/kafka/data
 
     # LLM Model сервис
-  llm_model_service:
-    build: ./llm_model
-    container_name: llm_model_service
+#  llm_model_service:
+#    build: ./llm_model
+#    container_name: llm_model_service
+#    ports:
+#      - "9001:9001"
+#    depends_on:
+#      - broker
+#    environment:
+#      PORT_LLM_CONSUMER: ${PORT_LLM_CONSUMER}
+#      KAFKA_BROKER: ${KAFKA_BROKER}
+#      API_GIGACHAT: ${API_GIGACHAT}
+#
+#      HF_HOME: /app/.cache/huggingface
+#
+#      HF_DATASETS_OFFLINE: "1"
+#      TRANSFORMERS_OFFLINE: "1"
+#    volumes:
+#      - ./models:/app/.cache/huggingface/hub
+#    restart: unless-stopped
+
+  agent_service:
+    build: ./agent_service
+    container_name: agent_service
     ports:
       - "9001:9001"
     depends_on:
@@ -33,6 +53,20 @@ services:
       PORT_LLM_CONSUMER: ${PORT_LLM_CONSUMER}
       KAFKA_BROKER: ${KAFKA_BROKER}
       API_GIGACHAT: ${API_GIGACHAT}
+
+      GIGACHAT_AUTHORIZATION: ${GIGACHAT_AUTHORIZATION}
+      STORAGE_PATH: ${STORAGE_PATH}
+      SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES}
+      ARTICLES_FOLDER: ${ARTICLES_FOLDER}
+      METADATA_FOLDER: ${METADATA_FOLDER}
+      FAISS_FOLDER: ${FAISS_FOLDER}
+      DIGESTS_FOLDER: ${DIGESTS_FOLDER}
+
+      OBS_BUCKET: ${OBS_BUCKET}
+      OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
+      OBS_SECRET_KEY: ${OBS_SECRET_KEY}
+      OBS_REGION: ${OBS_REGION}
+      OBS_ENDPOINT: ${OBS_ENDPOINT}
 
       HF_HOME: /app/.cache/huggingface
 

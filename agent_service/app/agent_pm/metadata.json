@@ -1,0 +1,25 @@
+{
+  "files": {
+    "2026-01-16_Industry-Aligned_Granular_Topic_Modeling.md": {
+      "hash": "07593a93bbe36450a1404f9f3e5484926711a3b64d9a47681ec226b3bb259f22",
+      "mtime": "2026-01-21T10:17:41.641993",
+      "size": 12605
+    },
+    "2026-01-17_SMc2f_Robust_Scenario_Mining_for_Robotic_Autonomy_from_Coarse_to_Fine.md": {
+      "hash": "dffd7d10c5c22461dbaefba60d4029c662fd61dc04c91b97225d7bd0980fed6d",
+      "mtime": "2026-01-21T10:17:41.720702",
+      "size": 19384
+    },
+    "2026-01-19_A_Lightweight_Model-Driven_4D_Radar_Framework_for_Pervasive_Human_Detection_in_Harsh_Conditions.md": {
+      "hash": "ff0fa85dd8ada3565304f11e3ab605f12704844f96006471890ce7bbb2081978",
+      "mtime": "2026-01-21T10:17:41.780738",
+      "size": 15179
+    },
+    "2026-01-19_Confidence_over_Time_Confidence_Calibration_with_Temporal_Logic_for_Large_Language_Model_Reasoning.md": {
+      "hash": "1ca52578572cb0cba5e228fb077c7de6426b6c4c855d824fc7d17562b1a62fb6",
+      "mtime": "2026-01-21T10:17:41.848208",
+      "size": 13732
+    }
+  },
+  "last_sync": "2026-01-21T10:17:58.803697"
+}

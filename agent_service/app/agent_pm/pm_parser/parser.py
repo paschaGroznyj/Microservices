@@ -9,7 +9,12 @@ import json
 import os
 from pathlib import Path
 
+from langchain.chat_models.gigachat import GigaChat
+from langchain.schema import SystemMessage
+from core.config import GIGACHAT_CREDENTIALS
+
 from .botocore_client import OBSWorker
+from summary import SummaryGenerator
 
 load_dotenv()
 
@@ -24,6 +29,7 @@ class ARXIVParser:
         base_dir = Path(__file__).resolve().parent.parent  # final_agent
         self.name_doc_dir = base_dir / os.getenv("STORAGE_PATH") / os.getenv("ARTICLES_FOLDER")
         self.name_meta_dir = base_dir / os.getenv("STORAGE_PATH")
+        self.name_doc_dig = base_dir / "digests"
         self.base_url = "https://arxiv.org/search/?"
         self.parameters = {"query": "+".join(["process", "mining"]),
                       "searchtype": "all",
@@ -40,6 +46,11 @@ class ARXIVParser:
                                "cs.CV": "Computer Vision and Pattern Recognition",
                                "cs.HC": "Human-Computer Interaction"}
         self.doc_names = []
+        self.llm = GigaChat(
+            credentials=GIGACHAT_CREDENTIALS,  # Обязательный параметр
+            verify_ssl_certs=False,  # Отключаем проверку SSL
+        )
+        self.summarizer = SummaryGenerator()
     def __pre_convert_url(self):
         for key, value in self.parameters.items():
             self.parameters_string += key + "=" + value + "&"
@@ -98,6 +109,8 @@ class ARXIVParser:
                     #     print(f"Ошибка при скачивании PDF {pdf_url}: {e}")
                     #     text_article = None
 
+                category = self.__get_category(abstract)
+
                 result_list.append({
                        "arxiv_id": arxiv_id,
                        "title": title,
@@ -106,11 +119,42 @@ class ARXIVParser:
                        "url_article": url_article,
                        "pdf_url": pdf_url,
                        "authors": authors_dict,
-                       "tags": tags
+                       "tags": tags,
+                       "category": category
                 })
 
             return result_list
                 # self.__download_and_save_pdf_article(pdf_url, title, date_sub)
+
+    def __get_category(self, content_:str):
+        # Полный список категорий для промпта
+        categories = [
+            "Общие принципы: определение PM",
+            "Общие принципы: Стандарты PM",
+            "Общие принципы: Фреймворки PM",
+            "Общие принципы: Моделирование в PM",
+            "Общие принципы: Неэффективности",
+            "Методики исследования: CRISP_DM",
+            "Методики исследования: PM Square",
+            "PM-лог: Структура логов",
+            "PM-лог: Форматы данных",
+            "Проверка качества: Качество данных",
+            "Проверка качества: Качество лога"
+        ]
+        categories_str = "\n".join(f"- {cat}" for cat in categories)
+
+        prompt2 = [SystemMessage(content=f"""Выбери одну категорию из следующего списка: 
+                                            Категории: {categories_str} 
+                                            Выбирай наиболее релевантную категорию к которой ты можешь отнести следующий текст:
+
+                                            ## Текст статьи из PDF:
+                                            {content_}.
+                                            В ответ выводи только выбранную категорию, без лишнего текста.""")]
+        
+        response_theme = self.llm(prompt2)
+        theme = response_theme.content.strip()
+
+        return theme
 
     def __save_meta_in_json(self, new_articles: list[dict]):
         os.makedirs(self.name_meta_dir, exist_ok=True)
@@ -220,6 +264,33 @@ class ARXIVParser:
                 return {item["arxiv_id"]: item for item in data}
         except (json.JSONDecodeError, KeyError):
             return {}
+    
+    def __gen_digest_for_file(self, new_articles):
+        md_files_orig = list(self.name_doc_dir.glob("*.md"))
+        
+        md_files_dig = list(self.name_doc_dig.rglob("*.md"))
+
+        names = []
+        for i in md_files_dig:
+            names.append(i.name)
+
+        files_to_digest = [art for art in md_files_orig if art.name not in names]
+
+        results = []
+
+        for filepath in files_to_digest:
+            digest_result = self.summarizer.generate_summary(
+                filepath.read_text(encoding='utf-8'),
+                filepath.name
+            )
+            results.append({
+                            "file": filepath.name,
+                            "status": digest_result["status"],
+                            "digest_file": digest_result.get('digest_file')
+                        })
+            
+        return results
+
 
     async def sync_from_obs(self):
         await obs.download_all_md()
@@ -240,6 +311,7 @@ class ARXIVParser:
             print("Список новых статей", new_articles)
             self.__download__and_save_pdf_article(new_articles)
             self.__save_meta_in_json(new_articles)
+            self.__gen_digest_for_file(new_articles)
         except Exception as e:
             print("У нас отвалился портал", e[:100])
 

@@ -12,10 +12,12 @@ from langchain.schema import SystemMessage
 from core.config import *
 from .vector_db import VectorDBManager
 from .monitor import StorageMonitor
-from core.config import ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH, GIGACHAT_CREDENTIALS, METADATA_FILE, QWEN_CREDENTIALS
+from core.config import ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH, GIGACHAT_CREDENTIALS, METADATA_FILE, HF_TOKEN, QWEN_CREDENTIALS
 from .summary import SummaryGenerator
 from .pm_parser.botocore_client import OBSWorker
-from .summary_period import create_semantic_digest
+from huggingface_hub import InferenceClient
+import os
+from .summary_period import agent_composite_digest_tool
 
 logging.basicConfig(level=logging.INFO)
 
@@ -403,9 +405,12 @@ class KnowledgeAgent:
                         "results": results
                     }
                 elif action['action'] == "summarize_filt":
+                    client = InferenceClient(token=HF_TOKEN)
                     json_file = self.name_meta_dir / "metadata.json"
-                    results = create_semantic_digest(json_file=json_file, query=user_input)
+                    results = agent_composite_digest_tool(query=user_input, llm_client=client, json_path=json_file, md_folder=self.digest_path)
                     filename_fin = results['digest_file']
+                    print(results['digest_file'])
+                    print(results['filename'])
                     asyncio.run(self.obs_loader.upload_single_digest_cond(filename_fin, results['filename']))
                     return {
                         "status": "success",
@@ -415,11 +420,13 @@ class KnowledgeAgent:
                 else:  # summarize_file
                     if action.get('files') and action['files'][0]:
                         filename = action.get('files', [None])[0]
+                        
                         asyncio.run(self.obs_loader.ensure_article_downloaded(filename))
                         filepath = self.articles_path / filename
                         if filepath.exists():
                             content = filepath.read_text(encoding='utf-8')
-                            digest_result = self.summarizer.generate_summary(content, filename)
+                            json_file = self.name_meta_dir / "metadata.json"
+                            digest_result = self.summarizer.generate_summary(content, filename, json_file)
 
                             if digest_result["status"] == "created":
                                 filename_fin = digest_result['digest_file']

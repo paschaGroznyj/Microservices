@@ -26,7 +26,7 @@ class SummaryGenerator:
 
     def _check_digest_exists(self, filename: str, content_hash: str) -> bool:
         """Проверить, есть ли уже дайджест для этой версии файла"""
-        digest_file = self.digest_dir / f"{filename}_{content_hash[:8]}.json"
+        digest_file = self.digest_dir / f"{filename}.md"
         return digest_file.exists()
 
     def format_markdown(self, text: str) -> str:
@@ -89,31 +89,46 @@ class SummaryGenerator:
         # print(f"Сохранено: {filepath}")
         return str(filepath)
 
-    def generate_summary(self, content_: str, filename: str) -> Dict[str, Any]:
+    def generate_summary(self, content_: str, filename: str, json_file:str) -> Dict[str, Any]:
         """Генерирует академическое саммари PDF-статей по строгому шаблону"""
-        content_hash = self._get_content_hash(content_)
+        
+        with open(json_file, 'r', encoding='utf-8') as f:
+            articles = json.load(f)
+        
+        try:
 
-        # Проверяем, есть ли уже дайджест
-        if self._check_digest_exists(filename, content_hash):
-            digest_file = self.digest_dir / f"{filename}_{content_hash[:8]}.json"
-            return {"status": "exists", "digest_file": str(digest_file), "content_hash": content_hash}
+            for article in articles:
+                if filename[11:-3] in article.get('title', ''):
+                    # Нашли! Достаем нужный ключ
+                    theme = article.get('category', 'Не найден')
+                    break
+        except:
+            theme = 'категория не найдена'
+
+        print(theme)
+        # content_hash = self._get_content_hash(content_)
+
+        # # Проверяем, есть ли уже дайджест
+        # if self._check_digest_exists(filename, content_hash):
+        #     digest_file = self.digest_dir / f"{filename}.md"
+        #     return {"status": "exists", "digest_file": str(digest_file), "content_hash": content_hash}
 
         # try:
-        # Полный список категорий для промпта
-        categories = [
-            "Общие принципы: определение PM",
-            "Общие принципы: Стандарты PM",
-            "Общие принципы: Фреймворки PM",
-            "Общие принципы: Моделирование в PM",
-            "Общие принципы: Неэффективности",
-            "Методики исследования: CRISP_DM",
-            "Методики исследования: PM Square",
-            "PM-лог: Структура логов",
-            "PM-лог: Форматы данных",
-            "Проверка качества: Качество данных",
-            "Проверка качества: Качество лога"
-        ]
-        categories_str = "\n".join(f"- {cat}" for cat in categories)
+        # # Полный список категорий для промпта
+        # categories = [
+        #     "Общие принципы: определение PM",
+        #     "Общие принципы: Стандарты PM",
+        #     "Общие принципы: Фреймворки PM",
+        #     "Общие принципы: Моделирование в PM",
+        #     "Общие принципы: Неэффективности",
+        #     "Методики исследования: CRISP_DM",
+        #     "Методики исследования: PM Square",
+        #     "PM-лог: Структура логов",
+        #     "PM-лог: Форматы данных",
+        #     "Проверка качества: Качество данных",
+        #     "Проверка качества: Качество лога"
+        # ]
+        # categories_str = "\n".join(f"- {cat}" for cat in categories)
 
         prompt = [SystemMessage(content=f"""Твоя задача: прочитать текст статьи из "{filename}", извлечь и адаптировать информацию для русскоязычного эксперта.
 
@@ -145,30 +160,30 @@ class SummaryGenerator:
         ## Текст статьи из PDF:
         {content_[:200]}.""")]
 
-        prompt2 = [SystemMessage(content=f"""Выбери одну категорию из следующего списка: 
-                                            Категории: {categories_str} 
-                                            Выбирай наиболее релевантную категорию к которой ты можешь отнести следующий текст:
+        # prompt2 = [SystemMessage(content=f"""Выбери одну категорию из следующего списка: 
+        #                                     Категории: {categories_str} 
+        #                                     Выбирай наиболее релевантную категорию к которой ты можешь отнести следующий текст:
 
-                                            ## Текст статьи из PDF:
-                                            {content_[:500]}.
-                                            В ответ выводи только выбранную категорию, без лишнего текста.""")]
+        #                                     ## Текст статьи из PDF:
+        #                                     {content_[:500]}.
+        #                                     В ответ выводи только выбранную категорию, без лишнего текста.""")]
 
         response_sum = self.llm(prompt)
         summary = response_sum.content.strip()
 
-        response_theme = self.llm(prompt2)
-        theme = response_theme.content.strip()
+        # response_theme = self.llm(prompt2)
+        # theme = response_theme.content.strip()
 
-        with open(self.knowledge_dir / "metadata.json", 'r', encoding='utf-8') as f:
-            data_list = json.load(f)
+        # with open(self.knowledge_dir / "metadata.json", 'r', encoding='utf-8') as f:
+        #     data_list = json.load(f)
 
-        for dl in data_list:
-            filename_meta = f"{dl['data_sub']}_{dl['title']}.md"
-            if filename == filename_meta:
-                dl['category'] = theme
+        # for dl in data_list:
+        #     filename_meta = f"{dl['data_sub']}_{dl['title']}.md"
+        #     if filename == filename_meta:
+        #         dl['category'] = theme
 
-        with open(self.knowledge_dir / "metadata.json", 'w', encoding='utf-8') as f:
-            json.dump(data_list, f, ensure_ascii=False, indent=2)
+        # with open(self.knowledge_dir / "metadata.json", 'w', encoding='utf-8') as f:
+        #     json.dump(data_list, f, ensure_ascii=False, indent=2)
 
         if 'Общие принципы' in theme:
             folder = self.digest_dir / 'Общие_принципы'
@@ -179,13 +194,15 @@ class SummaryGenerator:
         elif 'PM-лог' in theme:
             folder = self.digest_dir / 'PM_лог'
             digest_file = self.save_to_md(summary, filename=filename, folder=folder)
+        elif 'категория не найдена' in theme:
+            folder = self.digest_dir
+            digest_file = self.save_to_md(summary, filename=filename, folder=folder)
         else:
             folder = self.digest_dir / 'Проверка_качества'
             digest_file = self.save_to_md(summary, filename=filename, folder=folder)
 
         return {
             "status": "created",
-            "content_hash": content_hash,
             "filename": filename,
             "created_at": datetime.now().isoformat(),
             "digest": summary,
@@ -200,26 +217,26 @@ class SummaryGenerator:
         #         "content_hash": content_hash
         #     }
 
-    def get_new_articles_digests(self, articles_path: Path) -> List[Dict]:
-        """Создать дайджесты только для новых/измененных статей"""
-        new_digests = []
+    # def get_new_articles_digests(self, articles_path: Path) -> List[Dict]:
+    #     """Создать дайджесты только для новых/измененных статей"""
+    #     new_digests = []
 
-        for md_file in articles_path.rglob("*.md"):
-            filename = md_file.name
-            try:
-                with open(md_file, 'r', encoding='utf-8') as f:
-                    content = f.read()
+    #     for md_file in articles_path.rglob("*.md"):
+    #         filename = md_file.name
+    #         try:
+    #             with open(md_file, 'r', encoding='utf-8') as f:
+    #                 content = f.read()
 
-                result = self.generate_summary(content, filename)
-                new_digests.append({
-                    "filename": filename,
-                    "result": result
-                })
+    #             result = self.generate_summary(content, filename)
+    #             new_digests.append({
+    #                 "filename": filename,
+    #                 "result": result
+    #             })
 
-            except Exception as e:
-                new_digests.append({
-                    "filename": filename,
-                    "error": str(e)
-                })
+    #         except Exception as e:
+    #             new_digests.append({
+    #                 "filename": filename,
+    #                 "error": str(e)
+    #             })
 
-        return new_digests
+    #     return new_digests

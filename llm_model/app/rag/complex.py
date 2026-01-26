@@ -3,42 +3,8 @@ import faiss
 import numpy as np
 from transformers import AutoTokenizer, AutoModel
 import torch
-import PyPDF2
 
 
-def load_pdf_text(pdf_path: str, start_page: int, end_page: int) -> str:
-    """
-    Извлекает текст из PDF-документа между start_page и stop_page (включительно).
-
-    Параметры:
-        pdf_path (str): Путь к PDF-файлу.
-        start_page (int): Номер начальной страницы (считается с 0).
-        stop_page (int): Номер конечной страницы (включительно, считается с 0).
-
-    Возвращает:
-        str: Объединённый текст указанных страниц.
-    """
-    with open(pdf_path, 'rb') as file:
-        reader = PyPDF2.PdfReader(file)
-        total_pages = len(reader.pages)
-
-        # Проверка корректности диапазона страниц
-        if start_page < 0 or end_page >= total_pages or start_page > end_page:
-            raise ValueError(f"Некорректный диапазон страниц. Доступно страниц: {total_pages}")
-
-        text = ""
-        for page_num in range(start_page, end_page + 1):
-            page = reader.pages[page_num]
-            text += page.extract_text() + "\n"
-
-        return text
-
-
-# def load_docx_text(path: str):
-#     doc = Document(path)
-#     return "\n".join(
-#         p.text for p in doc.paragraphs if p.text.strip()
-#     )
 
 def chunk_text(text: str, chunk_size=800, overlap=200):
     chunks = []
@@ -53,7 +19,7 @@ class LaBSEEncoder:
     def __init__(self):
         self.tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/LaBSE")
         self.model = AutoModel.from_pretrained("sentence-transformers/LaBSE")
-        self.model.eval()  # только инференс
+        self.model.eval()  # ������ ��������
         # CPU-only
         self.device = torch.device("cpu")
         self.model.to(self.device)
@@ -68,7 +34,7 @@ class LaBSEEncoder:
         tokens = {k: v.to(self.device) for k, v in tokens.items()}
         with torch.no_grad():
             output = self.model(**tokens).last_hidden_state.mean(dim=1)
-        # нормализуем эмбеддинги
+        # ����������� ����������
         embeddings = torch.nn.functional.normalize(output, p=2, dim=1)
         return embeddings.cpu().numpy()
 
@@ -88,14 +54,14 @@ class FaissIndex:
         ]
 
 
-class SimpleRAG:
+class MessageRAG:
     def __init__(self, docs_path: str):
         self.encoder = LaBSEEncoder()
 
-        # загрузка документов
+        # �������� ����������
         text = load_pdf_text(docs_path, start_page=4, end_page=40)
         chunks = chunk_text(text)
-        print("Векторизация")
+        print("������������")
         embeddings = self.encoder.encode(chunks)
         self.index = FaissIndex(embeddings.shape[1])
         self.index.add(embeddings, chunks)

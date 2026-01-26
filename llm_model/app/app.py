@@ -1,3 +1,4 @@
+import asyncio
 import threading
 import time
 from fastapi import FastAPI
@@ -5,13 +6,15 @@ import uvicorn
 import json
 import logging
 from kafka import KafkaConsumer, KafkaProducer
-from giga_chat import GigaChatApi
-from config import API_GIGACHAT, KAFKA_BROKER
+from giga_chat import LLMAgent
+from llm_model.app.core.config import API_GIGACHAT, KAFKA_BROKER
+from typing import List
+from db.app_db import DataBaseMessages
 
 logging.basicConfig(level=logging.INFO)
 
 # Инициализация
-llm = GigaChatApi(API_GIGACHAT)
+llm = LLMAgent(API_GIGACHAT)
 
 producer = KafkaProducer(
     bootstrap_servers=[KAFKA_BROKER],
@@ -57,7 +60,7 @@ def kafka_consumer():
 
                 try:
                     # Генерация ответа
-                    response_text = llm.llm_agent_step(text)  # или dummy_answer для теста
+                    response_text = llm.llm_agent_step(text) # Подумать над передачей аргументов внутри кафки
 
                     # Формируем сообщение от бота
                     bot_message = {
@@ -88,7 +91,7 @@ async def health():
     status = "ok" if consumer_alive else "error"
     return {"service": "llm-bot", "status": status}
 
-from config import PORT_LLM_CONSUMER
+from llm_model.app.core.config import PORT_LLM_CONSUMER
 
 if __name__ == "__main__":
     threading.Thread(target=kafka_consumer, daemon=True).start()

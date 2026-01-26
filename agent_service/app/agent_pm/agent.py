@@ -364,9 +364,10 @@ class KnowledgeAgent:
 
             elif action['action'] == "search_db":
                 results = self.vector_db.similarity_search(action['query'] or "", 5)
-                preview = [f"{r['metadata'].get('title', 'N/A')}: {r['score']:.3f}" for r in results[:5]]
+                preview = [f"{r['metadata'].get('title', 'N/A')}: {r['score']:.3f}" for r in results[:5 ]]
+                full_preview = '\n'.join(preview)
                 return {"status": "success", "count": len(results), "preview": preview,
-                        "message": f"Что-то я нашел {';'.join(preview)}"}
+                        "message": f"Что-то я нашел {full_preview}"}
 
             elif action['action'] in ["summarize_file", "summarize_all", "summarize_new", "summarize_filt"]:
                 if action['action'] == "summarize_all":

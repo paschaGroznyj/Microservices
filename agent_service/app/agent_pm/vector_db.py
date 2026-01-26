@@ -28,8 +28,7 @@ class VectorDBManager:
         
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=512,
-            chunk_overlap=50,
-            separators=["\n\n", "\n## ", "\n### ", "\n", ".", "!?", "?", ";", " ", ""],
+            chunk_overlap=50
         )
         
         self.vectorstore = self._load_vectorstore()

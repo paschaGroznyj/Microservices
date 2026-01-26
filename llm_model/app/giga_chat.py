@@ -1,13 +1,11 @@
-import logging
-
 from langchain_core.messages import SystemMessage
 from langchain_gigachat.chat_models import GigaChat
-from config import API_GIGACHAT, PORT_CRB_SERVICE
-from rag.simple_rag import SimpleRAG
+from llm_model.app.rag.complex import SimpleRAG, MessageRAG, RAGManager
 import time
 import json
+from typing import List, Any, Dict
 
-class GigaChatApi:
+class LLMAgent:
     def __init__(self, api):
         pass
         self.giga = GigaChat(
@@ -15,7 +13,8 @@ class GigaChatApi:
             credentials=api,
             verify_ssl_certs=False,
         )
-        self.rag = SimpleRAG("rag/docs/Posobie_Yava_poslednyaya_versia.pdf")
+        # self.rag = SimpleRAG("app/rag/docs/Posobie_Yava_poslednyaya_versia.pdf")
+        self.rag_manager = RAGManager()
 
     def take_answer(self, prompt):
         start = time.time()
@@ -79,6 +78,12 @@ class GigaChatApi:
     """
 
     @staticmethod
+    def fallback_prompt(user_query: str) -> str:
+        return f"""
+        В БД не найден ответ для данного чата по запросу пользователя {user_query}
+        """
+
+    @staticmethod
     def parse_llm_json(text: str):
         """Извлекает JSON из ответа LLM (даже если есть пояснения)"""
         try:
@@ -92,26 +97,54 @@ class GigaChatApi:
             pass
         return {"action": "none"}
 
-    def llm_agent_step(self, user_message: str):
+    # def llm_agent_step(self, user_message: str):
+    #     # Сначала определим тематику запроса
+    #     classification_prompt = self.first_prompt(user_message)
+    #     classification_response = self.take_answer(classification_prompt)
+    #
+    #     decision = self.parse_llm_json(classification_response)
+    #     print("Решение о RAG *************", decision)
+    #     if not isinstance(decision, dict):
+    #         decision = {"need_rag": True, "answer": None}
+    #
+    #     need_rag = decision.get("need_rag", True)
+    #     direct_answer = decision.get("answer", None)
+    #
+    #     if not need_rag and direct_answer:
+    #         return direct_answer
+    #     # Иначе используем RAG
+    #     context = self.rag.retrieve(user_message)
+    #     print(f"КОНТЕКСТ: {context[:500]}")
+    #     rag_prompt = self.rag_prompt(user_message, context)
+    #     return self.take_answer(rag_prompt)
+
+    def llm_agent_step(self, user_message: str, chat_id: int):
         # Сначала определим тематику запроса
-        classification_prompt = self.first_prompt(user_message)
-        classification_response = self.take_answer(classification_prompt)
+        # classification_prompt = self.first_prompt(user_message)
+        # classification_response = self.take_answer(classification_prompt)
+        #
+        # decision = self.parse_llm_json(classification_response)
+        # print("Решение о RAG *************", decision)
+        # if not isinstance(decision, dict):
+        #     decision = {"need_rag": True, "answer": None}
+        #
+        # need_rag = decision.get("need_rag", True)
+        # direct_answer = decision.get("answer", None)
+        #
+        # if not need_rag and direct_answer:
+        #     return direct_answer
+        # RAG-контекст
+        rag = self.rag_manager.get_rag(chat_id)
+        if rag is None:
+            # Нет индекса — отвечаем без контекста
+            print(f"RAG не найден для chat_id={chat_id}, отвечаю без контекста")
+            # return self.take_answer(self.fallback_prompt(user_message))
 
-        decision = self.parse_llm_json(classification_response)
-        print("Решение о RAG *************", decision)
-        if not isinstance(decision, dict):
-            decision = {"need_rag": True, "answer": None}
-
-        need_rag = decision.get("need_rag", True)
-        direct_answer = decision.get("answer", None)
-
-        if not need_rag and direct_answer:
-            return direct_answer
-        # Иначе используем RAG
-        context = self.rag.retrieve(user_message)
-        print(f"КОНТЕКСТ: {context[:500]}")
+        context = rag.hybrid_search(user_message, k=5, alpha=0.6)
         rag_prompt = self.rag_prompt(user_message, context)
-        return self.take_answer(rag_prompt)
+        # return self.take_answer(rag_prompt)
+        return context
+
 
 # llm_client = GigaChatApi(API_GIGACHAT)
 # print(llm.take_answer("Привет"))

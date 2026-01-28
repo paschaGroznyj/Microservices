@@ -154,6 +154,8 @@ class AutoProcessor:
         self.monitor = monitor
         self.vector_db = vector_db
         self.summarizer = summarizer
+        base_dir = Path(__file__).resolve().parent  # final_agent
+        self.name_meta_dir = base_dir / Path(STORAGE_PATH)
 
     def process_new_articles(self) -> Dict[str, Any]:
         """ГЛАВНАЯ ФУНКЦИЯ: Авто-обработка новых статей"""
@@ -174,7 +176,8 @@ class AutoProcessor:
                 filepath = self.articles_path / filename
                 if filepath.exists():
                     content = filepath.read_text(encoding='utf-8')
-                    digest_result = self.summarizer.generate_summary(content, filename)
+                    json_file = self.name_meta_dir / "metadata.json"
+                    digest_result = self.summarizer.generate_summary(content, filename, json_file=json_file)
                     results["new"].append({
                         "file": filename,
                         "status": digest_result["status"],
@@ -375,11 +378,13 @@ class KnowledgeAgent:
                     # Дайджест ВСЕХ статей
                     md_files = list(self.articles_path.glob("*.md"))
                     results = []
-
+                    print("Спискок статей", len(md_files))
                     for filepath in md_files:
+                        json_file = self.name_meta_dir / "metadata.json"
                         digest_result = self.summarizer.generate_summary(
                             filepath.read_text(encoding='utf-8'),
-                            filepath.name
+                            filepath.name,
+                            json_file
                         )
                         results.append({
                             "file": filepath.name,
@@ -406,7 +411,7 @@ class KnowledgeAgent:
                         "results": results
                     }
                 elif action['action'] == "summarize_filt":
-                    client = InferenceClient(token=HF_TOKEN)
+                    client = InferenceClient(api_key=HF_TOKEN)
                     json_file = self.name_meta_dir / "metadata.json"
                     results = agent_composite_digest_tool(query=user_input, llm_client=client, json_path=json_file, md_folder=self.digest_path)
                     filename_fin = results['digest_file']

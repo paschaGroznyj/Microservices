@@ -1,25 +1,45 @@
 {
   "files": {
     "2026-01-16_Industry-Aligned_Granular_Topic_Modeling.md": {
-      "hash": "07593a93bbe36450a1404f9f3e5484926711a3b64d9a47681ec226b3bb259f22",
-      "mtime": "2026-01-21T10:17:41.641993",
-      "size": 12605
+      "hash": "1dc983fa75ddf0d07ec34d92a21af769de886ae03d6afe1452221f0e1255e735",
+      "mtime": "2026-01-28T11:21:52.709680",
+      "size": 12561
     },
     "2026-01-17_SMc2f_Robust_Scenario_Mining_for_Robotic_Autonomy_from_Coarse_to_Fine.md": {
-      "hash": "dffd7d10c5c22461dbaefba60d4029c662fd61dc04c91b97225d7bd0980fed6d",
-      "mtime": "2026-01-21T10:17:41.720702",
-      "size": 19384
+      "hash": "885f36110b45265e61a5758986c83840d4540af3c9d017b89f226a36a3ba4aea",
+      "mtime": "2026-01-28T11:21:52.751141",
+      "size": 19340
     },
     "2026-01-19_A_Lightweight_Model-Driven_4D_Radar_Framework_for_Pervasive_Human_Detection_in_Harsh_Conditions.md": {
-      "hash": "ff0fa85dd8ada3565304f11e3ab605f12704844f96006471890ce7bbb2081978",
-      "mtime": "2026-01-21T10:17:41.780738",
-      "size": 15179
+      "hash": "6c3298b3684c5c9cc1fdc8e55c07c775fae9b0660a6ac484705cc631b6841095",
+      "mtime": "2026-01-28T11:21:52.796080",
+      "size": 15135
     },
     "2026-01-19_Confidence_over_Time_Confidence_Calibration_with_Temporal_Logic_for_Large_Language_Model_Reasoning.md": {
-      "hash": "1ca52578572cb0cba5e228fb077c7de6426b6c4c855d824fc7d17562b1a62fb6",
-      "mtime": "2026-01-21T10:17:41.848208",
-      "size": 13732
+      "hash": "ee1736fe662586a304f52c0b0a6e401cb4dd2bb49f3f93bf7a6547a64eeb52e5",
+      "mtime": "2026-01-28T11:21:52.835241",
+      "size": 13688
+    },
+    "2026-01-23_Using_Shadows_in_Circular_Synthetic_Aperture_Sonar_Imaging_for_Target_Analysis.md": {
+      "hash": "8adb7065893aedb08091184b104b2355d06d4dc3a7e7113ef13a356cf4dae0d3",
+      "mtime": "2026-01-28T11:21:52.872506",
+      "size": 10401
+    },
+    "2026-01-25_Agentic_Business_Process_Management_Systems.md": {
+      "hash": "4bcbebba6119030e019f0dc328dbac6160093677ac70069d1579c1997e5a9023",
+      "mtime": "2026-01-28T11:21:52.907148",
+      "size": 8398
+    },
+    "2026-01-26_Kinetic_Mining_in_Context_Few-Shot_Action_Synthesis_via_Text-to-Motion_Distillation.md": {
+      "hash": "2e3d3bc6a2bb2b3f4d07683195d6e2ec6fa4cc0607f67d41cb2653f44189bf28",
+      "mtime": "2026-01-28T11:21:52.941689",
+      "size": 8291
+    },
+    "2026-01-27_GraphSB_Boosting_Imbalanced_Node_Classification_on_Graphs_through_Structural_Balance.md": {
+      "hash": "ba9a8f4a0acc8edf208f835f9b67a9204ebfd52c0348f3fcf9a2e8a29c3c1cb4",
+      "mtime": "2026-01-28T11:21:52.979712",
+      "size": 15508
     }
   },
-  "last_sync": "2026-01-21T10:17:58.803697"
+  "last_sync": "2026-01-28T12:28:49.541131"
 }

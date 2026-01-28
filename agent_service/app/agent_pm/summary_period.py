@@ -46,9 +46,38 @@ class CompositeFilters(BaseModel):
         count = sum([self.has_date, self.has_topic, self.has_category, bool(self.title)])
         return count > 1
 
+    def to_slug(self) -> str:
+        """
+        Компактная строка фильтров для имени файла
+        """
+        parts = []
+
+        if self.date_range:
+            parts.append(
+                f"date_{self.date_range['start_date']}_{self.date_range['end_date']}"
+            )
+
+        if self.category:
+            parts.append(f"cat_{_slugify(self.category)}")
+
+        if self.topic:
+            parts.append(f"topic_{_slugify(self.topic)}")
+
+        if self.title:
+            parts.append(f"title_{_slugify(self.title)}")
+
+        return "__".join(parts) if parts else "all"
+
+def _slugify(text: str) -> str:
+    return (
+        text.lower()
+        .replace(" ", "_")
+        .replace("/", "_")
+        .replace(":", "")
+    )
+
 class LLMCompositeExtractor:
     """LLM извлекает ВСЕ параметры одновременно."""
-    
     @staticmethod
     def extract_composite_filters(query: str, llm_client) -> CompositeFilters:
         """
@@ -85,9 +114,8 @@ class LLMCompositeExtractor:
         
         ВЕРНИ ТОЛЬКО VALID JSON:
         """
-        
         response = llm_client.chat.completions.create(
-            model="Qwen/Qwen2.5-7B-Instruct",
+            model="Qwen/Qwen3-VL-8B-Instruct",
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"}
         )
@@ -95,18 +123,55 @@ class LLMCompositeExtractor:
         json_str = response.choices[0].message.content
         filters = CompositeFilters.model_validate_json(json_str)
         
-        print(f"   📅 Дата: {filters.date_range}")
-        print(f"   🏷️  Категория: {filters.category}")
-        print(f"   🔖 Тема: {filters.topic}")
-        print(f"   {'🔥 СОСТАВНЫЙ' if filters.is_composite else 'Одиночный'} фильтр")
+        print(f"   Дата: {filters.date_range}")
+        print(f"   Категория: {filters.category}")
+        print(f"   Тема: {filters.topic}")
+        print(f"   {'СОСТАВНЫЙ' if filters.is_composite else 'Одиночный'} фильтр")
         
         return filters
 
+    @staticmethod
+    def create_summary(article_text: str, file_name, llm_client) -> str:
+        prompt = f"""Твоя задача: прочитать текст статьи из "{file_name}", извлечь и адаптировать информацию для русскоязычного эксперта.
+
+        ## ПРАВИЛА (строго соблюдай):
+        1. Переводи для русскоязычного эксперта, сохраняя академический стиль, сохраняя точность терминов
+        2. Факты БЕРИ ТОЛЬКО ИЗ ТЕКСТА, без домыслов
+        3. Первый раз термин: русский (original). Далее: только русский
+        4. Алгоритмы - пошагово с оригинальными названиями
+        5. GitHub: найди в тексте ИЛИ проанализируй авторов/метод, иначе 'отсутствует'
+        6. Если в статье нет какой-либо информации для шаблона - напиши 'не указано'
+        7. Выводи результат строго по шаблону, без дополнительных комментариев и пояснений
+        8. Не меняй порядок пунктов шаблона и не добавляй новые
+
+        ## Пример шаблона саммари:
+        "Название статьи на русском:",
+        "Название оригинальной статьи на английском:",
+        "Авторы:",
+        "Ссылка на github":,
+        "Статья в сообществе": "'отсутствует' или 'нет'",
+        "Описание":
+            1. **Цель:** ...
+            2. **Проблема:** ...
+            3. **Задачи:** ...
+            4. **Подход - суть алгоритма/метода:** ...
+            5. **Как реализуется подход:** ...
+            6. **Пример из статьи:** ...
+            7. **Вывод:** ...
+
+        ## Текст статьи из PDF:
+        {article_text}."""
+
+        response = llm_client.chat.completions.create(
+            model="Qwen/Qwen3-VL-8B-Instruct",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content
 # =============================================================================
 # 2. ГЛАВНАЯ ФУНКЦИЯ С СОСТАВНОЙ ФИЛЬТРАЦИЕЙ
 # =============================================================================
 
-def create_composite_digest(json_path: str, query: str, llm_client, md_folder: str = "digests") -> Dict:
+def create_composite_digest(json_path: str, query: str, llm_client, md_folder: str = "digests"):
     """
     🧠 ПОЛНЫЙ ПАЙПЛАЙН: LLM → СОСТАВНЫЕ ФИЛЬТРЫ → md_files
     """
@@ -133,7 +198,8 @@ def create_composite_digest(json_path: str, query: str, llm_client, md_folder: s
         'found_articles': len(filtered),
         'top_articles': filtered[:5],
         'md_files': md_paths,
-        'action': 'summarize_batch' if md_paths else 'no_matches'
+        'action': 'summarize_batch' if md_paths else 'no_matches',
+        'filters': filters
     }
 
 def find_matching_md_files(articles: List[Dict], root_folder: Path) -> List[Path]:
@@ -141,16 +207,18 @@ def find_matching_md_files(articles: List[Dict], root_folder: Path) -> List[Path
     matching_files = []
     for article in articles:
         expected_filename = f"{article['data_sub']}_{article['title']}.md"
-        print(expected_filename)
+        expected_filename = Path(expected_filename)
+        matching_files.append(expected_filename)
+        # Ниже очень жесткая проверка, список всегда пустой на выходе
         # Ищем файл рекурсивно во всех подпапках
-        for md_file in root_folder.rglob('*'):
-            print(md_file.name)
-            if md_file.is_file() and md_file.suffix == '.md' and md_file.name == expected_filename:
-                matching_files.append(md_file)
-                print(f"   ✅ Найден: {md_file}")
-                break  # Берем первый найденный
+        # for md_file in root_folder.rglob('*'):
+        #     print("md_file.name", md_file.name)
+        #     if md_file.is_file() and md_file.suffix == '.md' and md_file.name == expected_filename:
+        #         matching_files.append(md_file)
+        #         print(f"  Найден: {md_file}")
+        #         break  # Берем первый найденный
     
-    print(f"📁 Найдено md файлов: {len(matching_files)} из {len(articles)} статей")
+    print(f"Найдено md файлов: {len(matching_files)} из {len(articles)} статей")
     return matching_files
 
 # =============================================================================
@@ -161,33 +229,33 @@ def apply_composite_filters(articles: List[Dict], filters: CompositeFilters) -> 
     """Применяет ВСЕ активные фильтры последовательно."""
     filtered = articles.copy()
     
-    print(f"🔄 Применение {len([f for f in [filters.date_range, filters.category, filters.topic, filters.title] if f])} фильтров:")
+    print(f"Применение {len([f for f in [filters.date_range, filters.category, filters.topic, filters.title] if f])} фильтров:")
     
     # 1️⃣ ДАТА (самый строгий фильтр - применяется первым)
     if filters.has_date:
-        print("   📅 Фильтр по дате...")
+        print("Фильтр по дате...")
         filtered = date_filter(filtered, filters.date_range['start_date'], filters.date_range['end_date'])
     
     # 2️⃣ КАТЕГОРИЯ (точная)
     if filters.has_category:
-        print("   🏷️  Фильтр по категории...")
+        print("Фильтр по категории...")
         filtered = category_filter(filtered, filters.category)
     
     # 3️⃣ НАЗВАНИЕ (точная)
     if filters.title:
-        print("   📄 Фильтр по названию...")
+        print("Фильтр по названию...")
         filtered = title_filter(filtered, filters.title)
     
     # 4️⃣ ТЕМА (семантическая - последней, с учетом предыдущих фильтров)
     if filters.has_topic:
-        print("   🧠 Семантический фильтр...")
+        print("Семантический фильтр...")
         filtered = semantic_filter(filtered, filters.topic, filters.threshold)
     
     # Сортировка по релевантности
     filtered.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
     filtered = filtered[:filters.limit]
     
-    print(f"✅ Итог: {len(filtered)} статей после всех фильтров")
+    print(f"Итог: {len(filtered)} статей после всех фильтров")
     return filtered
 
 # Остальные функции фильтрации (без изменений)
@@ -249,11 +317,13 @@ def agent_composite_digest_tool(query: str, llm_client, json_path="knowledge_bas
     """Инструмент для агента с поддержкой составных фильтров."""
     arts, result = create_composite_digest(json_path, query, llm_client, md_folder)
 
-    full_text = build_digest_content(arts, Path(md_folder), query)
+    filter_slug = result['filters'].to_slug()
+    full_text = build_digest_content(arts, Path(md_folder), query, llm_client)
+    base_path = Path(__file__).resolve().parent
+    digest_all_path = base_path / 'digests_all'
+    output_path, filename = save_digest(full_text,  filter_type=filter_slug, output_dir=digest_all_path)
 
-    output_path, filename = save_digest(full_text, result['query'], 'digests_all')
-
-    print(f"🎯 СОСТАВНЫЙ ДАЙДЖЕСТ:")
+    print(f"СОСТАВНЫЙ ДАЙДЖЕСТ:")
     print(f"   Запрос: {result['query']}")
     print(f"   Фильтры: {len([f for f in result['composite_filters'].values() if f])} активных")
     print(f"   Найдено: {result['found_articles']} статей")
@@ -268,7 +338,7 @@ def agent_composite_digest_tool(query: str, llm_client, json_path="knowledge_bas
 # =============================================================================
 # 5. СОХРАНЕНИЕ ДАЙДЖЕСТА
 # =============================================================================
-def build_digest_content(articles: List[Dict], md_path: Path, query: list) -> str:
+def build_digest_content(articles: List[Dict], md_path: Path, query: list, llm_client) -> str:
     """Строит итоговый дайджест"""
     content = [f"# 📋 Дайджест материалов внешних источников за период/по теме: '{query}'",
                f"**Создан:** {datetime.now().strftime('%d.%m.%Y %H:%M')}",
@@ -276,7 +346,7 @@ def build_digest_content(articles: List[Dict], md_path: Path, query: list) -> st
 
     md_paths = find_matching_md_files(articles, md_path)
 
-    print(md_paths)
+    # print(md_paths)
 
     for i, article in enumerate(articles):
         title = article.get('title', 'N/A')
@@ -287,9 +357,8 @@ def build_digest_content(articles: List[Dict], md_path: Path, query: list) -> st
 
         md_file = None
         for path in md_paths:
-            if f"{date}_{Path(title).stem}.md" in path.name:
+            if f"{date}_{title}.md" in path.name:
                 md_file = path
-
         content.extend([
             "",
             f"## 🎯 {title}",
@@ -303,18 +372,25 @@ def build_digest_content(articles: List[Dict], md_path: Path, query: list) -> st
         # Читаем MD
         # filename_meta = f"{article['data_sub']}_{article['title']}.md"
         # md_file = Path(md_path) / filename_meta
+        base_path = Path(__file__).resolve().parent
+        md_file = base_path / 'knowledge_base' / 'articles' / md_file
+
         if md_file and md_file.exists():
+            print("Найден md файл", md_file)
             with open(md_file, 'r', encoding='utf-8') as f:
                 md_content = f.read()
                 # Убираем YAML фронтматтер
                 md_content = re.split(r'^---\s*$', md_content, maxsplit=2)[2] if '---' in md_content else md_content
-                content.append(re.sub(r'^#{1,6}\s+', '### ', md_content, flags=re.MULTILINE))
+
+                summary_from_llm = LLMCompositeExtractor.create_summary(md_content[:2000], md_file.name, llm_client) # Самари от LLM
+
+                content.append(re.sub(r'^#{1,6}\s+', '### ', summary_from_llm, flags=re.MULTILINE))
 
         content.append("---" * 30)
 
     return "\n".join(content)
 
-def save_digest(content: str, filter_type: str, output_dir: str) -> Path:
+def save_digest(content: str, filter_type: str, output_dir: Path) -> Path:
     """Сохраняет дайджест"""
     Path(output_dir).mkdir(exist_ok=True)
     filename = f"digest_{filter_type}.md"
@@ -324,3 +400,4 @@ def save_digest(content: str, filter_type: str, output_dir: str) -> Path:
         f.write(content)
 
     return output_path, filename
+

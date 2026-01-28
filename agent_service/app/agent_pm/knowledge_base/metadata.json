@@ -1,9 +1,68 @@
 [
   {
+    "source": "https://arxiv.org",
+    "arxiv_id": "2601.19352",
+    "title": "GraphSB_Boosting_Imbalanced_Node_Classification_on_Graphs_through_Structural_Balance",
+    "data_sub": "2026-01-27",
+    "url_article": "https://arxiv.org/abs/2601.19352",
+    "pdf_url": "https://arxiv.org/pdf/2601.19352",
+    "authors": {
+      "Zhixiao Wang": "/search/?searchtype=author&query=Wang%2C+Z",
+      "Chaofan Zhu": "/search/?searchtype=author&query=Zhu%2C+C",
+      "Qihan Feng": "/search/?searchtype=author&query=Feng%2C+Q",
+      "Jian Zhang": "/search/?searchtype=author&query=Zhang%2C+J",
+      "Xiaobin Rui": "/search/?searchtype=author&query=Rui%2C+X",
+      "Philip S Yu": "/search/?searchtype=author&query=Yu%2C+P+S"
+    },
+    "tags": [
+      "Machine Learning"
+    ],
+    "category": null
+  },
+  {
+    "source": "https://arxiv.org",
+    "arxiv_id": "2601.18833",
+    "title": "Agentic_Business_Process_Management_Systems",
+    "data_sub": "2026-01-25",
+    "url_article": "https://arxiv.org/abs/2601.18833",
+    "pdf_url": "https://arxiv.org/pdf/2601.18833",
+    "authors": {
+      "Marlon Dumas": "/search/?searchtype=author&query=Dumas%2C+M",
+      "Fredrik Milani": "/search/?searchtype=author&query=Milani%2C+F",
+      "David Chapela-Campa": "/search/?searchtype=author&query=Chapela-Campa%2C+D"
+    },
+    "tags": [
+      "Artificial Intelligence",
+      "Software Engineering"
+    ],
+    "category": null
+  },
+  {
+    "source": "https://arxiv.org",
+    "arxiv_id": "2601.16733",
+    "title": "Using_Shadows_in_Circular_Synthetic_Aperture_Sonar_Imaging_for_Target_Analysis",
+    "data_sub": "2026-01-23",
+    "url_article": "https://arxiv.org/abs/2601.16733",
+    "pdf_url": "https://arxiv.org/pdf/2601.16733",
+    "authors": {
+      "Yann Le Gall": "/search/?searchtype=author&query=Gall%2C+Y+L",
+      "Nicolas Burlet": "/search/?searchtype=author&query=Burlet%2C+N",
+      "Mathieu Simon": "/search/?searchtype=author&query=Simon%2C+M",
+      "Fabien Novella": "/search/?searchtype=author&query=Novella%2C+F",
+      "Samantha Dugelay": "/search/?searchtype=author&query=Dugelay%2C+S",
+      "Jean-Philippe Malkasse": "/search/?searchtype=author&query=Malkasse%2C+J"
+    },
+    "tags": [
+      "Computer Vision and Pattern Recognition",
+      "Signal Processing"
+    ],
+    "category": null
+  },
+  {
+    "source": "https://arxiv.org",
     "arxiv_id": "2601.13387",
     "title": "Confidence_over_Time_Confidence_Calibration_with_Temporal_Logic_for_Large_Language_Model_Reasoning",
     "data_sub": "2026-01-19",
-    "abstract": "Abstract:Large Language Models (LLMs) increasingly rely on long-form, multi-step reasoning to solve complex tasks such as mathematical problem solving and scientific question answering. Despite strong performance, existing confidence estimation methods typically reduce an entire reasoning process to a single scalar score, ignoring how confidence evolves throughout the generation. As a result, these methods are often sensitive to superficial factors such as response length or verbosity, and struggle to distinguish correct reasoning from confidently stated errors. We propose to characterize the stepwise confidence signal using Signal Temporal Logic (STL). Using a discriminative STL mining procedure, we discover temporal formulas that distinguish confidence signals of correct and incorrect responses. Our analysis found that the STL patterns generalize across tasks, and numeric parameters exhibit sensitivity to individual questions. Based on these insights, we develop a confidence estimation approach that informs STL blocks with parameter hypernetworks. Experiments on multiple reasoning tasks show our confidence scores are more calibrated than the baselines.",
     "url_article": "https://arxiv.org/abs/2601.13387",
     "pdf_url": "https://arxiv.org/pdf/2601.13387",
     "authors": {
@@ -19,13 +78,13 @@
       "Computation and Language",
       "Machine Learning"
     ],
-    "category": "Общие принципы: Моделирование в PM"
+    "category": null
   },
   {
+    "source": "https://arxiv.org",
     "arxiv_id": "2601.13373",
     "title": "A_Lightweight_Model-Driven_4D_Radar_Framework_for_Pervasive_Human_Detection_in_Harsh_Conditions",
     "data_sub": "2026-01-19",
-    "abstract": "Abstract:Pervasive sensing in industrial and underground environments is severely constrained by airborne dust, smoke, confined geometry, and metallic structures, which rapidly degrade optical and LiDAR based perception. Elevation resolved 4D mmWave radar offers strong resilience to such conditions, yet there remains a limited understanding of how to process its sparse and anisotropic point clouds for reliable human detection in enclosed, visibility degraded spaces. This paper presents a fully model-driven 4D radar perception framework designed for real-time execution on embedded edge hardware. The system uses radar as its sole perception modality and integrates domain aware multi threshold filtering, ego motion compensated temporal accumulation, KD tree Euclidean clustering with Doppler aware refinement, and a rule based 3D classifier. The framework is evaluated in a dust filled enclosed trailer and in real underground mining tunnels, and in the tested scenarios the radar based detector maintains stable pedestrian identification as camera and LiDAR modalities fail under severe visibility degradation. These results suggest that the proposed model-driven approach provides robust, interpretable, and computationally efficient perception for safety-critical applications in harsh industrial and subterranean environments.",
     "url_article": "https://arxiv.org/abs/2601.13373",
     "pdf_url": "https://arxiv.org/pdf/2601.13373",
     "authors": {
@@ -36,13 +95,13 @@
     "tags": [
       "Computer Vision and Pattern Recognition"
     ],
-    "category": "Общие принципы: Фреймворки PM"
+    "category": null
   },
   {
+    "source": "https://arxiv.org",
     "arxiv_id": "2601.12010",
     "title": "SMc2f_Robust_Scenario_Mining_for_Robotic_Autonomy_from_Coarse_to_Fine",
     "data_sub": "2026-01-17",
-    "abstract": "Abstract:The safety validation of autonomous robotic vehicles hinges on systematically testing their planning and control stacks against rare, safety-critical scenarios. Mining these long-tail events from massive real-world driving logs is therefore a critical step in the robotic development lifecycle. The goal of the Scenario Mining task is to retrieve useful information to enable targeted re-simulation, regression testing, and failure analysis of the robot's decision-making algorithms. RefAV, introduced by the Argoverse team, is an end-to-end framework that uses large language models (LLMs) to spatially and temporally localize scenarios described in natural language. However, this process performs retrieval on trajectory labels, ignoring the direct connection between natural language and raw RGB images, which runs counter to the intuition of video retrieval; it also depends on the quality of upstream 3D object detection and tracking. Further, inaccuracies in trajectory data lead to inaccuracies in downstream spatial and temporal localization. To address these issues, we propose Robust Scenario Mining for Robotic Autonomy from Coarse to Fine (SMc2f), a coarse-to-fine pipeline that employs vision-language models (VLMs) for coarse image-text filtering, builds a database of successful mining cases on top of RefAV and automatically retrieves exemplars to few-shot condition the LLM for more robust retrieval, and introduces text-trajectory contrastive learning to pull matched pairs together and push mismatched pairs apart in a shared embedding space, yielding a fine-grained matcher that refines the LLM's candidate trajectories. Experiments on public datasets demonstrate substantial gains in both retrieval quality and efficiency.",
     "url_article": "https://arxiv.org/abs/2601.12010",
     "pdf_url": "https://arxiv.org/pdf/2601.12010",
     "authors": {
@@ -52,13 +111,13 @@
     "tags": [
       "Computer Vision and Pattern Recognition"
     ],
-    "category": "Общие принципы: Моделирование в PM"
+    "category": null
   },
   {
+    "source": "https://arxiv.org",
     "arxiv_id": "2601.11762",
     "title": "Industry-Aligned_Granular_Topic_Modeling",
     "data_sub": "2026-01-16",
-    "abstract": "Abstract:Topic modeling has extensive applications in text mining and data analysis across various industrial sectors. Although the concept of granularity holds significant value for business applications by providing deeper insights, the capability of topic modeling methods to produce granular topics has not been thoroughly explored. In this context, this paper introduces a framework called TIDE, which primarily provides a novel granular topic modeling method based on large language models (LLMs) as a core feature, along with other useful functionalities for business applications, such as summarizing long documents, topic parenting, and distillation. Through extensive experiments on a variety of public and real-world business datasets, we demonstrate that TIDE's topic modeling approach outperforms modern topic modeling methods, and our auxiliary components provide valuable support for dealing with industrial business scenarios. The TIDE framework is currently undergoing the process of being open sourced.",
     "url_article": "https://arxiv.org/abs/2601.11762",
     "pdf_url": "https://arxiv.org/pdf/2601.11762",
     "authors": {
@@ -74,6 +133,6 @@
       "Artificial Intelligence",
       "Machine Learning"
     ],
-    "category": "Общие принципы: Моделирование в PM"
+    "category": null
   }
 ]

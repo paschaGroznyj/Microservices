@@ -8,19 +8,20 @@ from dotenv import load_dotenv
 import json
 import os
 from pathlib import Path
-
+from datetime import datetime
+from typing import Optional
 from langchain.chat_models.gigachat import GigaChat
 from langchain.schema import SystemMessage
 from core.config import GIGACHAT_CREDENTIALS
 
 from .botocore_client import OBSWorker
-from summary import SummaryGenerator
+from agent_pm.summary import SummaryGenerator
 
 load_dotenv()
 
 obs = OBSWorker()
 class ARXIVParser:
-    def __init__(self):
+    def __init__(self, data_range: tuple):
         self.months_dict = {
         'January': 1, 'February': 2, 'March': 3, 'April': 4,
             'May': 5, 'June': 6, 'July': 7, 'August': 8,
@@ -36,6 +37,12 @@ class ARXIVParser:
                       "source": "header",
                       "start": ""
                       }
+        # Преобразуем строки в date, если они строки
+        if isinstance(data_range[0], str):
+            self.data_start = datetime.strptime(data_range[0], "%Y-%m-%d").date()
+            self.data_end = datetime.strptime(data_range[1], "%Y-%m-%d").date()
+        else:
+            self.data_start, self.data_end = data_range
         self.article_list = []
         self.parameters_string = ""
         self.__pre_convert_url()
@@ -62,11 +69,13 @@ class ARXIVParser:
         day = day.zfill(2) # Добавление нуля вначале
         month = str(month).zfill(2)
 
-        return f"{year}-{month}-{day}"
+        return f"{year}-{month}-{day}", (year, month, day)
 
 
-    def __parsing_page_articles(self):
-        for i in range(0, 50, 50):
+    def parsing(self, data_range: Optional[tuple[datetime.date, datetime.date]] = None):
+        start = data_range[0] if data_range else self.data_start
+        end = data_range[1] if data_range else self.data_end
+        for i in range(0, 1000, 50):
             get_url = self.cat_url + str(i)
             text = requests.get(get_url)
             soup = BeautifulSoup(text.content, 'html.parser')
@@ -74,7 +83,7 @@ class ARXIVParser:
             result_list = []
 
             preview_articles = [i for i in soup.find_all('li', class_="arxiv-result")]
-            for art in preview_articles[:5]:
+            for art in preview_articles:
                 tags_div = art.find('div', class_="tags is-inline-block").find_all('span')
                 if not tags_div:
                     continue
@@ -90,16 +99,25 @@ class ARXIVParser:
                 title = self.__clear_title_article(title)
                 date_sub = art.find('p', class_='is-size-7').text.strip()
                 url_article = art.find('a').get("href").strip()
-                date_sub = self.__convert_month(date_sub)
+                date_sub, tuple_data = self.__convert_month(date_sub)
+                current_data = datetime.strptime(f"{tuple_data[0]}-{tuple_data[1]}-{tuple_data[2]}", '%Y-%m-%d').date()
+                print(current_data)
+                if current_data > end:
+                    continue
+
+                if current_data < start:
+                    break
+
                 authors = art.find('p', class_='authors')
                 authors_dict = {i.text: i.get('href') for i in authors.find_all('a')}
                 abstract = self.__parse_article(url_article)
 
 
                 p_tag = art.find('p', class_="list-title is-inline-block")
-                arxiv_id = p_tag.find('a').text.split(":")[1]
+                arxiv_id = p_tag.find('a').text.split(":")[1] # достать
                 pdf_link_tag = p_tag.find('a', string='pdf')
                 pdf_url = None
+                category = None
 
                 if pdf_link_tag:
                     pdf_url = pdf_link_tag['href'].strip()
@@ -109,20 +127,19 @@ class ARXIVParser:
                     #     print(f"Ошибка при скачивании PDF {pdf_url}: {e}")
                     #     text_article = None
 
-                category = self.__get_category(abstract)
+                # category = self.__get_category(abstract)
 
                 result_list.append({
+                       "source": "https://arxiv.org",
                        "arxiv_id": arxiv_id,
-                       "title": title,
-                       "data_sub": date_sub,
-                       "abstract": abstract,
-                       "url_article": url_article,
-                       "pdf_url": pdf_url,
-                       "authors": authors_dict,
-                       "tags": tags,
-                       "category": category
+                       "title": title, # str
+                       "data_sub": date_sub, # str {year}-{month}-{day}
+                       "url_article": url_article, # str если есть
+                       "pdf_url": pdf_url, # str если есть
+                       "authors": authors_dict, # dict {"Sindhura Kumbakonam Subramanian": "ссылка_если_есть"}
+                       "tags": tags, # list если есть
+                       "category": category if category else None # Отработка после Гигачата
                 })
-
             return result_list
                 # self.__download_and_save_pdf_article(pdf_url, title, date_sub)
 
@@ -183,7 +200,6 @@ class ARXIVParser:
 
     def __download__and_save_pdf_article(self, meta: list):
         for value in meta:
-            print(value["title"])
             response = requests.get(value["pdf_url"])
             response.raise_for_status()
 
@@ -305,13 +321,14 @@ class ARXIVParser:
             print("Статей в объектном хранилище нет!")
         print("Запуск парсера")
         try:
-            meta = self.__parsing_page_articles()
+            meta = self.parsing()
             existing_ids = set(self.__read_existing_metadata().keys())
+
+            # тут достать arxiv_id из ссылки
             new_articles = [art for art in meta if art["arxiv_id"] not in existing_ids]
-            print("Список новых статей", new_articles)
             self.__download__and_save_pdf_article(new_articles)
             self.__save_meta_in_json(new_articles)
-            self.__gen_digest_for_file(new_articles)
+            # self.__gen_digest_for_file(new_articles)
         except Exception as e:
             print("У нас отвалился портал", e[:100])
 

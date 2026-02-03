@@ -205,7 +205,7 @@ class ARXIVParser:
 
             reader = PdfReader(BytesIO(response.content))
             text = ""
-            for page in reader.pages[:3]:
+            for page in reader.pages: # Ограничение по количеству страниц, можно проставить тут
                 text += page.extract_text()
 
             with open(
@@ -313,12 +313,12 @@ class ARXIVParser:
         await obs.download_metadata()
 
     async def run(self):
-        try:
-            print("Считываем файлы из OBS")
-            await self.sync_from_obs()
-            print("Файлы на локальной машине")
-        except Exception as e:
-            print("Статей в объектном хранилище нет!")
+        # try:
+        #     print("Считываем файлы из OBS")
+        #     await self.sync_from_obs()
+        #     print("Файлы на локальной машине")
+        # except Exception as e:
+        #     print("Статей в объектном хранилище нет!")
         print("Запуск парсера")
         try:
             meta = self.parsing()
@@ -339,15 +339,15 @@ class ARXIVParser:
         #     self.__make_md(md_files, meta)
         # except Exception as e:
         #     print("⛔ Проблемы с Интернетом, отвалился парсер", e)
-
-        print("Подгрузка FAISS")
-        await obs.upload_vectorstore()
-
-        print("Подгрузка дайджестов")
-        await  obs.upload_digests()
-
-        await obs.upload_all_md()
-        await obs.put_json()
+        #
+        # print("Подгрузка FAISS")
+        # await obs.upload_vectorstore()
+        #
+        # print("Подгрузка дайджестов")
+        # await  obs.upload_digests()
+        #
+        # await obs.upload_all_md()
+        # await obs.put_json()
 
 #
 #

@@ -7,7 +7,7 @@ import logging
 from kafka import KafkaConsumer, KafkaProducer
 from agent_pm.agent import KnowledgeAgent
 import asyncio
-from agent_pm.pm_parser.parser import ARXIVParser
+from agent_pm.pm_parser.arxiv_parser import ARXIVParser
 from core.config import KAFKA_BROKER
 
 logging.basicConfig(level=logging.INFO)

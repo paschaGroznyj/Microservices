@@ -95,19 +95,25 @@ class SummaryGenerator:
         with open(json_file, 'r', encoding='utf-8') as f:
             articles = json.load(f)
         print("Статьи", len(articles))
-        theme = "категория не найдена"
+        theme = 'категория не найдена'
+        pdf_url = 'Не найден'
         try:
             for article in articles:
                 if filename[11:-3] in article.get('title', ''):
                     # Нашли! Достаем нужный ключ
-                    theme = article.get('category', 'Не найден')
-                    pdf_url = article.get('pdf_url', 'Не найден')
+                    theme = article.get('category')
+                    if theme is None:
+                        theme = 'категория не найдена'
+
+                    pdf_url = article.get('pdf_url')
+                    if pdf_url is None:
+                        pdf_url = 'Не найден'
                     break
         except Exception as e:
             print(f"Что то с json, {e}")
             theme = 'категория не найдена'
-        print(theme)
-        print(pdf_url)
+        print("Тема:", theme)
+
 
         # content_hash = self._get_content_hash(content_)
 
@@ -197,7 +203,7 @@ class SummaryGenerator:
             folder = self.digest_dir / 'PM_лог'
             digest_file = self.save_to_md(summary, filename=filename, folder=folder)
         elif 'категория не найдена' in theme:
-            folder = self.digest_dir
+            folder = self.digest_dir / 'Без категории'
             digest_file = self.save_to_md(summary, filename=filename, folder=folder)
         else:
             folder = self.digest_dir / 'Проверка_качества'
@@ -209,7 +215,8 @@ class SummaryGenerator:
             "created_at": datetime.now().isoformat(),
             "digest": summary,
             "category": theme,
-            "digest_file": str(digest_file)
+            "digest_file": str(digest_file).split("\\")[-1],
+            "digest_folder": folder.name
         }
 
         # except Exception as e:

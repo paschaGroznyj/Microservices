@@ -4,6 +4,7 @@ from botocore.client import Config
 from dotenv import load_dotenv
 import os
 import json
+import re
 from pathlib import Path
 
 load_dotenv()
@@ -62,6 +63,36 @@ class OBSWorker:
 
             print("Downloaded metadata.json")
 
+
+    def clean_text(self, text: str) -> str:
+        lines = text.splitlines()
+
+        while lines:
+            line = lines[0].strip()
+
+            if not line:
+                lines.pop(0)
+                continue
+
+            if re.fullmatch(r'[0-9a-fA-F]{3,8}', line):
+                lines.pop(0)
+                continue
+
+            if len(line) < 10 and ' ' not in line:
+                lines.pop(0)
+                continue
+
+            break
+
+        text = '\n'.join(lines)
+        text = re.sub(
+            r'\n\d+\n0\nx-amz-checksum-crc32:.*$',
+            '',
+            text,
+            flags=re.S
+        )
+        return text.strip()
+
     async def download_all_md(self):
         local_dir = self.name_doc_dir
         os.makedirs(local_dir, exist_ok=True)
@@ -91,9 +122,13 @@ class OBSWorker:
 
                     response = await client.get_object(Bucket=self.bucket, Key=key)
                     data = await response["Body"].read()
+                    text = data.decode("utf-8", errors="ignore")
+                    cleaned = self.clean_text(text)
 
-                    with open(local_path, "wb") as f:
-                        f.write(data)
+                    with open(local_path, "w", encoding="utf-8") as f:
+                        f.write(cleaned)
+                    # with open(local_path, "wb") as f:
+                    #     f.write(data)
 
                     print(f"Downloaded {key}")
 

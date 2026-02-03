@@ -310,7 +310,7 @@ class OBSWorker:
             print(f"Дайджест {digest_path} не найден")
             return
 
-        s3_key = f"digest_condition/{filename}.md"
+        s3_key = f"digests/{filename}"
         async with self.client() as client:
             await self._upload_file(client, digest_path, s3_key)
         print(f"Дайджест {filename} → S3")
@@ -322,7 +322,7 @@ class OBSWorker:
             print(f"Дайджест {digest_path} не найден")
             return
 
-        s3_key = f"digest/{filename}.json"
+        s3_key = f"reviews/{filename}.json"
         async with self.client() as client:
             await self._upload_file(client, digest_path, s3_key)
         print(f"Дайджест {filename}.json → S3")
@@ -342,8 +342,9 @@ class OBSWorker:
                 print(md_file)
                 # Относительный путь от digest_root (например: Общие_принципы/file.md)
                 rel_path = md_file.relative_to(digest_root)
+                print(rel_path)
                 # Ключ в S3: digest/Общие_принципы/file.md
-                s3_key = f"digest/{rel_path.as_posix()}"
+                s3_key = f"reviews/{rel_path.as_posix()}"
 
                 try:
                     # Проверяем, существует ли уже в S3

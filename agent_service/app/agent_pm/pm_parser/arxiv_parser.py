@@ -282,6 +282,7 @@ class ARXIVParser:
             return {}
     
     def __gen_digest_for_file(self, new_articles):
+        path = self.name_meta_dir / "metadata.json"
         md_files_orig = list(self.name_doc_dir.glob("*.md"))
         
         md_files_dig = list(self.name_doc_dig.rglob("*.md"))
@@ -297,7 +298,7 @@ class ARXIVParser:
         for filepath in files_to_digest:
             digest_result = self.summarizer.generate_summary(
                 filepath.read_text(encoding='utf-8'),
-                filepath.name
+                filepath.name, path
             )
             results.append({
                             "file": filepath.name,

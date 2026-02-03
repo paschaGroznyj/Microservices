@@ -101,11 +101,13 @@ class SummaryGenerator:
                 if filename[11:-3] in article.get('title', ''):
                     # Нашли! Достаем нужный ключ
                     theme = article.get('category', 'Не найден')
+                    pdf_url = article.get('pdf_url', 'Не найден')
                     break
         except:
             theme = 'категория не найдена'
 
         print(theme)
+        print(pdf_url)
         # content_hash = self._get_content_hash(content_)
 
         # # Проверяем, есть ли уже дайджест
@@ -146,8 +148,7 @@ class SummaryGenerator:
         "Название статьи на русском:",
         "Название оригинальной статьи на английском:",
         "Авторы:",
-        "Ссылка на github":,
-        "Статья в сообществе": "'отсутствует' или 'нет'",
+        "Ссылка на источник статьи: {pdf_url}"
         "Описание":
             1. **Цель:** ...
             2. **Проблема:** ...

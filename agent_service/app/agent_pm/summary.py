@@ -89,25 +89,26 @@ class SummaryGenerator:
         # print(f"Сохранено: {filepath}")
         return str(filepath)
 
-    def generate_summary(self, content_: str, filename: str, json_file:str) -> Dict[str, Any]:
+    def generate_summary(self, content_: str, filename: str, json_file: Path) -> Dict[str, Any]:
         """Генерирует академическое саммари PDF-статей по строгому шаблону"""
         
         with open(json_file, 'r', encoding='utf-8') as f:
             articles = json.load(f)
-        
+        print("Статьи", len(articles))
+        theme = "категория не найдена"
         try:
-
             for article in articles:
                 if filename[11:-3] in article.get('title', ''):
                     # Нашли! Достаем нужный ключ
                     theme = article.get('category', 'Не найден')
                     pdf_url = article.get('pdf_url', 'Не найден')
                     break
-        except:
+        except Exception as e:
+            print(f"Что то с json, {e}")
             theme = 'категория не найдена'
-
         print(theme)
         print(pdf_url)
+
         # content_hash = self._get_content_hash(content_)
 
         # # Проверяем, есть ли уже дайджест
@@ -185,7 +186,7 @@ class SummaryGenerator:
 
         # with open(self.knowledge_dir / "metadata.json", 'w', encoding='utf-8') as f:
         #     json.dump(data_list, f, ensure_ascii=False, indent=2)
-
+        print("Получили summary", summary[:100])
         if 'Общие принципы' in theme:
             folder = self.digest_dir / 'Общие_принципы'
             digest_file = self.save_to_md(summary, filename=filename, folder=folder)
@@ -201,7 +202,7 @@ class SummaryGenerator:
         else:
             folder = self.digest_dir / 'Проверка_качества'
             digest_file = self.save_to_md(summary, filename=filename, folder=folder)
-
+        print("Сохранили в md")
         return {
             "status": "created",
             "filename": filename,

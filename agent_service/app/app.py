@@ -7,7 +7,7 @@ import logging
 from kafka import KafkaConsumer, KafkaProducer
 from agent_pm.agent import KnowledgeAgent
 import asyncio
-from agent_pm.pm_parser.parser import ARXIVParser
+from agent_pm.pm_parser.arxiv_parser import ARXIVParser
 from core.config import KAFKA_BROKER
 
 logging.basicConfig(level=logging.INFO)
@@ -87,7 +87,8 @@ def kafka_consumer():
 def run_parser_once():
     logging.info("Запускаю первоначальный парсинг статей...")
     try:
-        parser = ARXIVParser()
+        data_range = ('2026-01-15', '2026-01-27')
+        parser = ARXIVParser(data_range)
         asyncio.run(parser.run())
         logging.info("Парсинг завершён успешно.")
     except Exception as e:

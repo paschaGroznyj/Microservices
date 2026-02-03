@@ -24,6 +24,10 @@ botocore
 aiobotocore
 python-dotenv
 pathlib
+playwright
+PyMuPDF
+pymupdf4llm
 requests
+huggingface-hub==0.31.1
 numpy==1.26.4
 

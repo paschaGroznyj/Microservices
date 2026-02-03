@@ -68,6 +68,7 @@ services:
       OBS_REGION: ${OBS_REGION}
       OBS_ENDPOINT: ${OBS_ENDPOINT}
 
+      HF_TOKEN: ${HF_TOKEN}
       HF_HOME: /app/.cache/huggingface
 
       HF_DATASETS_OFFLINE: "1"

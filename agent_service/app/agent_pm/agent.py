@@ -62,7 +62,7 @@ class PydanticOutputParser:
             # 3. Берем ПОСЛЕДНИЙ JSON (тот, что с реальным ответом)
             last_json = json_blocks[-1]
 
-            print(f"Найден JSON: {last_json[:100]}...")
+            # print(f"Найден JSON: {last_json[:100]}...")
 
             # 4. Парсим
             data = json.loads(last_json)
@@ -333,127 +333,165 @@ class KnowledgeAgent:
             return {"action": "rebuild_all", "files": [], "query": "", "reasoning": "Перестройка"}
         return {"action": "analyze_folder", "files": [], "query": "", "reasoning": "Анализ"}
 
+    def pluralize_vectors(self, n: int) -> str:
+        if n % 10 == 1 and n % 100 != 11:
+            return "вектор"
+        elif 2 <= n % 10 <= 4 and not (12 <= n % 100 <= 14):
+            return "вектора"
+        else:
+            return "векторов"
+
     def _execute(self, action: AgentAction, user_input='') -> Dict[str, Any]:
         """ШАГ 2: ВЫПОЛНЕНИЕ ИНСТРУМЕНТА"""
-        print(f"ВЫПОЛНЯЕМ: {action['action']}")
+        # print(f"ВЫПОЛНЯЕМ: {action['action']}")
 
-        try:
-            if action['action'] == "rebuild_all":
-                changes = self.monitor.get_changes()
-                deleted = changes.get('deleted', [])
-                if deleted:
-                    self.vector_db.delete_documents(deleted)
-                count = self.vector_db.rebuild_index()
-                return {"status": "success", "message": f"Я построил {count} векторов"}
+        # try:
+        if action['action'] == "rebuild_all":
+            changes = self.monitor.get_changes()
+            deleted = changes.get('deleted', [])
+            if deleted:
+                self.vector_db.delete_documents(deleted)
+            count = self.vector_db.rebuild_index()
+            word = self.pluralize_vectors(count)
+            return {"status": "success", "message": f"Я построил {count} {word}"}
 
-            elif action['action'] == "delete_file":
-                files = action.get('files', [])
-                if files:
-                    self.vector_db.delete_documents(files)
-                    return {"status": "success", "message": f"Я удалил {len(files)} файлов"}
-                return {"status": "error", "message": "Нет файлов для удаления"}
+        elif action['action'] == "delete_file":
+            files = action.get('files', [])
+            if files:
+                self.vector_db.delete_documents(files)
+                return {"status": "success", "message": f"Я удалил {len(files)} файлов"}
+            return {"status": "error", "message": "Нет файлов для удаления"}
 
-            elif action['action'] == "analyze_folder":
-                changes = self.monitor.get_changes()
-                files_list = list(self.articles_path.glob("*.md"))
+        elif action['action'] == "analyze_folder":
+            changes = self.monitor.get_changes()
+            files_list = list(self.articles_path.glob("*.md"))
+            return {
+                "status": "success",
+                "new_files": len(changes['new']),
+                "modified_files": len(changes['modified']),
+                "total_files": len(files_list),
+                "files": [f.name for f in files_list[:5]],
+                "message": "Я проанализировал указанную тобой директорию"
+            }
+
+        elif action['action'] == "search_db":
+            results = self.vector_db.similarity_search(action['query'] or "", k=5)
+            if not results:
                 return {
                     "status": "success",
-                    "new_files": len(changes['new']),
-                    "modified_files": len(changes['modified']),
-                    "total_files": len(files_list),
-                    "files": [f.name for f in files_list[:5]],
-                    "message": "Я проанализировал указанную тобой директорию"
+                    "count": 0,
+                    "preview": [],
+                    "message": "По вашему запросу ничего не найдено в базе знаний."
                 }
 
-            elif action['action'] == "search_db":
-                results = self.vector_db.similarity_search(action['query'] or "", 5)
-                preview = [f"{r['metadata'].get('title', 'N/A')}: {r['score']:.3f}" for r in results[:5 ]]
-                full_preview = '\n'.join(preview)
-                return {"status": "success", "count": len(results), "preview": preview,
-                        "message": f"Что-то я нашел {full_preview}"}
+            formatted_results = []
+            for i, r in enumerate(results, 1):
+                content_snippet = r['content'].strip()
+                if len(content_snippet) > 300:
+                    content_snippet = content_snippet[:300].rsplit(' ', 1)[0] + '…'
+                score = r['score']
 
-            elif action['action'] in ["summarize_file", "summarize_all", "summarize_new", "summarize_filt"]:
-                if action['action'] == "summarize_all":
-                    asyncio.run(self.obs_loader.run_download())
-                    # Дайджест ВСЕХ статей
-                    md_files = list(self.articles_path.glob("*.md"))
-                    results = []
-                    print("Спискок статей", len(md_files))
-                    for filepath in md_files:
-                        json_file = self.name_meta_dir / "metadata.json"
-                        digest_result = self.summarizer.generate_summary(
-                            filepath.read_text(encoding='utf-8'),
-                            filepath.name,
-                            json_file
-                        )
-                        results.append({
-                            "file": filepath.name,
-                            "status": digest_result["status"],
-                            "digest_file": digest_result.get('digest_file')
-                        })
+                block = f"**Результат {i}** (релевантность: {score:.3f})\n" \
+                        f"**Фрагмент**: {content_snippet}"
+                formatted_results.append(block)
 
-                    asyncio.run(self.obs_loader.upload_digests())
+            full_preview = "\n---\n".join(formatted_results)
+            message = f"Найдено {len(results)} релевантных фрагментов по запросу:\n\n{full_preview}"
 
-                    success_count = sum(1 for r in results if r["status"] == "created")
-                    return {
-                        "status": "success",
-                        "message": f"Я сформировал Дайджесты: {success_count}/{len(results)}",
-                        "results": results
-                    }
-                elif action['action'] == "summarize_new":
-                    asyncio.run(self.obs_loader.run_download())
-                    results = self.auto_processor.process_new_articles()
-                    asyncio.run(self.obs_loader.upload_digests())
-                    asyncio.run(self.obs_loader.upload_vectorstore())
-                    return {
-                        "status": "success",
-                        "message": f"Я сформировал один новый Дайджест",
-                        "results": results
-                    }
-                elif action['action'] == "summarize_filt":
-                    client = InferenceClient(api_key=HF_TOKEN)
+            return {
+                "status": "success",
+                "count": len(results),
+                "preview": formatted_results,
+                "message": message
+            }
+
+        elif action['action'] in ["summarize_file", "summarize_all", "summarize_new", "summarize_filt"]:
+            if action['action'] == "summarize_all":
+                asyncio.run(self.obs_loader.run_download())
+                # Дайджест ВСЕХ статей
+                md_files = list(self.articles_path.glob("*.md"))
+                results = []
+                # print("Спискок статей", len(md_files))
+                for filepath in md_files:
                     json_file = self.name_meta_dir / "metadata.json"
-                    results = agent_composite_digest_tool(query=user_input, llm_client=client, json_path=json_file, md_folder=self.digest_path)
-                    filename_fin = results['digest_file']
-                    print(results['digest_file'])
-                    print(results['filename'])
-                    asyncio.run(self.obs_loader.upload_single_digest_cond(filename_fin, results['filename']))
-                    return {
-                        "status": "success",
-                        "message": f"Я сформировал дайджест за твой период",
-                        "results": results
-                    }
-                else:  # summarize_file
-                    if action.get('files') and action['files'][0]:
-                        filename = action.get('files', [None])[0]
-                        
-                        asyncio.run(self.obs_loader.ensure_article_downloaded(filename))
-                        filepath = self.articles_path / filename
-                        if filepath.exists():
-                            content = filepath.read_text(encoding='utf-8')
-                            json_file = self.name_meta_dir / "metadata.json"
-                            digest_result = self.summarizer.generate_summary(content, filename, json_file)
+                    digest_result = self.summarizer.generate_summary(
+                        filepath.read_text(encoding='utf-8'),
+                        filepath.name,
+                        json_file
+                    )
+                    results.append({
+                        "file": filepath.name,
+                        "status": digest_result["status"],
+                        "digest_file": digest_result.get('digest_file')
+                    })
 
-                            if digest_result["status"] == "created":
-                                filename_fin = digest_result['digest_file']
-                                asyncio.run(self.obs_loader.upload_single_digest(filename_fin, filename))
-                                return {
-                                    "status": "success",
-                                    "message": f"Дайджест создан: {digest_result['digest_file']}",
-                                    "summary": digest_result.get("digest")
-                                }
-                            elif digest_result["status"] == "exists":
-                                filename_fin = digest_result['digest_file']
-                                asyncio.run(self.obs_loader.upload_single_digest(filename_fin, filename))
-                                return {
-                                    "status": "exists",
-                                    "message": f"Дайджест уже есть: {digest_result['digest_file']}"
-                                }
+                asyncio.run(self.obs_loader.upload_digests())
 
-                    return {"status": "error", "message": "Не получилось найти файл"}
+                success_count = sum(1 for r in results if r["status"] == "created")
+                return {
+                    "status": "success",
+                    "message": f"Я сформировал Дайджесты: {success_count}/{len(results)}. Их можно найти по пути obs://cds-bucket/reviews/",
+                    "results": results
+                }
+            elif action['action'] == "summarize_new":
+                asyncio.run(self.obs_loader.run_download())
+                results = self.auto_processor.process_new_articles()
+                asyncio.run(self.obs_loader.upload_digests())
+                asyncio.run(self.obs_loader.upload_vectorstore())
+                return {
+                    "status": "success",
+                    "message": f"Провел саммари новых статей",
+                    "results": results
+                }
+            elif action['action'] == "summarize_filt":
+                client = InferenceClient(api_key=HF_TOKEN)
+                json_file = self.name_meta_dir / "metadata.json"
+                results = agent_composite_digest_tool(query=user_input, llm_client=client, json_path=json_file, md_folder=self.digest_path)
+                filename_fin = results['digest_file']
+                # print(results['digest_file'])
+                # print(results['filename'])
+                if results['found_articles'] == 0:
+                    message = "Материалов за указанный вами период или категории нет, выберите другой период или категорию"
+                else:
+                    message = f"Я сформировал дайджест по {results['found_articles']} статьям, найти его можно по пути: obs://cds-bucket/digests/{results['filename']}"
+                # print(message)
+                asyncio.run(self.obs_loader.upload_single_digest_cond(filename_fin, results['filename']))
+                return {
+                    "status": "success",
+                    "message": message,
+                    "results": results
+                }
+            else:  # summarize_file
+                if action.get('files') and action['files'][0]:
+                    filename = action.get('files', [None])[0]
 
-        except Exception as e:
-            return {"status": "error", "message": f"Ошибка: {str(e)}"}
+                    asyncio.run(self.obs_loader.ensure_article_downloaded(filename))
+                    filepath = self.articles_path / filename
+                    if filepath.exists():
+                        content = filepath.read_text(encoding='utf-8')
+                        json_file = self.name_meta_dir / "metadata.json"
+                        digest_result = self.summarizer.generate_summary(content, filename, json_file)
+
+                        if digest_result["status"] == "created":
+                            filename_fin = digest_result['digest_file']
+                            asyncio.run(self.obs_loader.upload_single_digest(filename_fin, filename))
+                            return {
+                                "status": "success",
+                                "message": f"Я сформировал одиночный дайджест по файлу {digest_result['digest_file']}. Его можно найти по пути: obs://cds-bucket/reviews/",
+                                "summary": digest_result.get("digest")
+                            }
+                        elif digest_result["status"] == "exists":
+                            filename_fin = digest_result['digest_file']
+                            asyncio.run(self.obs_loader.upload_single_digest(filename_fin, filename))
+                            return {
+                                "status": "exists",
+                                "message": f"Дайджест по файлу уже есть: {digest_result['digest_file']}. Расположен по пути: obs://cds-bucket/reviews/"
+                            }
+
+                return {"status": "error", "message": "Не получилось найти файл"}
+
+        # except Exception as e:
+        #     return {"status": "error", "message": f"Ошибка: {str(e)}"}
 
     def run_autonomous_mode(self) -> Dict[str, Any]:
         """АВТОНОМНЫЙ РЕЖИМ: только автозапуск + 30мин ожидания пользователя"""

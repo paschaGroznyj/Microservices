@@ -13,9 +13,14 @@ agent = KnowledgeAgent()
 # text = "Можешь найти информацию в документации о калибровке решений для LLM?"
 # text = "Перестрой векторную базу"
 # text = "Суммаризуй все"Ф
-text = "Сформируй дайджест по статьям связанным с AI machine learning"
+# text = "Сформируй дайджест по статьям за январь 2026"
+# text = "Сформируй дайджесты по всем статьям"
+# text = "Сформируй дайджест по этому файлу 2026-01-28_MuRAL-CPD_Active_Learning_for_Multiresolution_Change_Point_Detection.md"
+# text = "Найди информацию по теме методы обработки изображений"
+text = "Перестрой векторную базу"
 response = agent.process_query(text)
-
+with open("answer.txt", mode='a', encoding='utf-8') as f:
+    f.write(response['message'] + "\n")
 # from agent_pm.pm_parser.parser import parser
 # import asyncio
 #

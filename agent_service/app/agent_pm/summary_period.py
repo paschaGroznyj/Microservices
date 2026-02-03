@@ -123,11 +123,11 @@ class LLMCompositeExtractor:
         json_str = response.choices[0].message.content
         filters = CompositeFilters.model_validate_json(json_str)
         
-        print(f"   Дата: {filters.date_range}")
-        print(f"   Категория: {filters.category}")
-        print(f"   Тема: {filters.topic}")
-        print(f"   {'СОСТАВНЫЙ' if filters.is_composite else 'Одиночный'} фильтр")
-        
+        # print(f"   Дата: {filters.date_range}")
+        # print(f"   Категория: {filters.category}")
+        # print(f"   Тема: {filters.topic}")
+        # print(f"   {'СОСТАВНЫЙ' if filters.is_composite else 'Одиночный'} фильтр")
+        #
         return filters
 
     @staticmethod
@@ -148,7 +148,6 @@ class LLMCompositeExtractor:
         "Название статьи на русском:",
         "Название оригинальной статьи на английском:",
         "Авторы:",
-        "Ссылка на github":,
         "Статья в сообществе": "'отсутствует' или 'нет'",
         "Описание":
             1. **Цель:** ...
@@ -229,8 +228,8 @@ def apply_composite_filters(articles: List[Dict], filters: CompositeFilters) -> 
     """Применяет ВСЕ активные фильтры последовательно."""
     filtered = articles.copy()
     
-    print(f"Применение {len([f for f in [filters.date_range, filters.category, filters.topic, filters.title] if f])} фильтров:")
-    
+    # print(f"Применение {len([f for f in [filters.date_range, filters.category, filters.topic, filters.title] if f])} фильтров:")
+    #
     # 1️⃣ ДАТА (самый строгий фильтр - применяется первым)
     if filters.has_date:
         print("Фильтр по дате...")
@@ -323,11 +322,11 @@ def agent_composite_digest_tool(query: str, llm_client, json_path="knowledge_bas
     digest_all_path = base_path / 'digests_all'
     output_path, filename = save_digest(full_text,  filter_type=filter_slug, output_dir=digest_all_path)
 
-    print(f"СОСТАВНЫЙ ДАЙДЖЕСТ:")
-    print(f"   Запрос: {result['query']}")
-    print(f"   Фильтры: {len([f for f in result['composite_filters'].values() if f])} активных")
-    print(f"   Найдено: {result['found_articles']} статей")
-    print(f"   Путь до файла: {output_path}")
+    # print(f"СОСТАВНЫЙ ДАЙДЖЕСТ:")
+    # print(f"   Запрос: {result['query']}")
+    # print(f"   Фильтры: {len([f for f in result['composite_filters'].values() if f])} активных")
+    # print(f"   Найдено: {result['found_articles']} статей")
+    # print(f"   Путь до файла: {output_path}")
 
     result.update({'digest_file':str(output_path)})
     result.update({'filename': filename})

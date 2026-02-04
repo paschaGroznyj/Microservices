@@ -7,20 +7,17 @@
 
 2. Запуск микросервисов
    - Сервис отправки сообщений
-     • FastAPI: chats_service/app.py
-     • Kafka Consumer (запись в БД): chats_service/endpoint_consumer.py
+     • FastAPI: chats_service/app/app.py
+     • Kafka Consumer (запись в БД): chats_service/app/endpoint_consumer.py
 
    - Сервис авторизации
-     • auth_service/app_cookie.py
+     • auth_service/app.py
 
-   - Сервис бота (LLM)
-     • llm_model/app.py
+   - Сервис агента PM
+     • agent_service/app/app.py
 
    - API Gateway
-     • api_gateway/app_api.py
-
-   - Сервис получения курсов валют ЦБ
-     • Отдельный сервис на Java
+     • api_gateway/app.py
 
 
 ## 🧩 Архитектура микросервисов и Kafka
@@ -110,7 +107,7 @@
    - читает Kafka
    - сохраняет сообщение пользователя в БД
 
-4. LLM Service (Consumer)
+4. Agent Service (Consumer)
    - читает то же сообщение из Kafka
    - обрабатывает через LLM
    - PRODUCER: кладёт ответ бота в Kafka
@@ -127,7 +124,7 @@
 - Chats Service:
   • producer (user message)
   • consumer (DB + WebSocket)
-- LLM Service:
+- Agent Service:
   • consumer (user message)
   • producer (bot answer)
 - Frontend ничего не знает про Kafka

@@ -279,7 +279,7 @@ def semantic_filter(articles: List[Dict], topic: str, threshold: float) -> List[
 
     if topic == 'весь_запрос':
         filtered = articles
-    
+    print("Количество статей для залива#######", len(articles))
     for art in articles:
         text = f"{art.get('title', '')} {art.get('category', '')} {' '.join(art.get('tags', []))}".strip()
         if not text:

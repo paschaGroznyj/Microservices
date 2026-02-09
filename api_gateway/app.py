@@ -36,14 +36,14 @@ SERVICES = {
         "url": f"http://chats_service:{PORT_CHATS_SERVICE}",
         "health_endpoint": "/health",
     },
-    # "llm_bot": {
-    #     "url": f"http://llm_model_service:{PORT_LLM_CONSUMER}",
-    #     "health_endpoint": "/health",
-    # },
-    "llm_bot": {
-        "url": f"http://agent_service:{PORT_LLM_CONSUMER}",
-        "health_endpoint": "/health",
-    }
+     "llm_bot": {
+         "url": f"http://llm_model_service:{PORT_LLM_CONSUMER}",
+         "health_endpoint": "/health",
+     }
+#    "llm_bot": {
+#        "url": f"http://agent_service:{PORT_LLM_CONSUMER}",
+#        "health_endpoint": "/health",
+#    }
 }
 
 BASE_DIR = Path(__file__).resolve().parent

@@ -71,8 +71,8 @@ services:
       HF_TOKEN: ${HF_TOKEN}
       HF_HOME: /app/.cache/huggingface
 
-      HF_DATASETS_OFFLINE: "1"
-      TRANSFORMERS_OFFLINE: "1"
+#      HF_DATASETS_OFFLINE: "0"
+#     TRANSFORMERS_OFFLINE: "1"
     volumes:
       - ./models:/app/.cache/huggingface/hub
     restart: unless-stopped

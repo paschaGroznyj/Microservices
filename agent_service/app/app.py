@@ -7,8 +7,9 @@ import logging
 from kafka import KafkaConsumer, KafkaProducer
 from agent_pm.agent import KnowledgeAgent
 import asyncio
-from agent_pm.pm_parser.arxiv_parser import ARXIVParser
+# from agent_pm.pm_parser.arxiv_parser import ARXIVParser
 from core.config import KAFKA_BROKER
+from agent_pm.pm_parser.pipeline_parsers import run
 
 logging.basicConfig(level=logging.INFO)
 
@@ -84,15 +85,19 @@ def kafka_consumer():
             logging.error(f"LLM отвалился")
 
 
-def run_parser_once():
+async def run_parser_once():
     logging.info("Запускаю первоначальный парсинг статей...")
     try:
-        data_range = ('2026-01-15', '2026-01-27')
-        parser = ARXIVParser(data_range)
-        asyncio.run(parser.run())
+        # data_range = ('2026-01-15', '2026-01-27')
+        # parser = ARXIVParser(data_range)
+        # asyncio.run(parser.run())
+        await run()
         logging.info("Парсинг завершён успешно.")
     except Exception as e:
         logging.error(f"Ошибка при запуске парсера: {e}")
+
+def run_parser_thread():
+    asyncio.run(run_parser_once())
 
 app = FastAPI()
 
@@ -105,5 +110,5 @@ from core.config import PORT_LLM_CONSUMER
 
 if __name__ == "__main__":
     threading.Thread(target=kafka_consumer, daemon=True).start() # Поднятие консьюмера
-    threading.Thread(target=run_parser_once, daemon=True).start() # Запуск парсера
+    threading.Thread(target=run_parser_thread, daemon=True).start() # Запуск парсера
     uvicorn.run(app, host="0.0.0.0", port=int(PORT_LLM_CONSUMER), log_level="info")

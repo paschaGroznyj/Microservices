@@ -132,13 +132,13 @@ class ARXIVParser:
                     #     print(f"Ошибка при скачивании PDF {pdf_url}: {e}")
                     #     text_article = None
 
-                # category = self.__get_category(abstract)
+                category = self.__get_category(abstract)
 
                 result_list.append({
                        "source": "https://arxiv.org",
                        "external_id": arxiv_id,
                        "title": title, # str
-                       "data_sub": date_sub, # str {year}-{month}-{day}
+                       "date_sub": date_sub, # str {year}-{month}-{day}
                        "url_article": url_article, # str если есть
                        "pdf_url": pdf_url, # str если есть
                        "authors": authors_dict, # dict {"Sindhura Kumbakonam Subramanian": "ссылка_если_есть"}
@@ -224,11 +224,11 @@ class ARXIVParser:
 
             reader = PdfReader(BytesIO(response.content))
             text = ""
-            for page in reader.pages[:3]: # Ограничение по количеству страниц, можно проставить тут
+            for page in reader.pages: # Ограничение по количеству страниц, можно проставить тут
                 text += page.extract_text()
 
             with open(
-                    os.path.join(self.name_doc_dir, f"{value['data_sub']}_{value['title']}.md"),
+                    os.path.join(self.name_doc_dir, f"{value['date_sub']}_{value['title']}.md"),
                     "w",
                     encoding="utf-8"
             ) as f:

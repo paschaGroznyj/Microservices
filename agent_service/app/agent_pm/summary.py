@@ -215,7 +215,8 @@ class SummaryGenerator:
             "created_at": datetime.now().isoformat(),
             "digest": summary,
             "category": theme,
-            "digest_file": str(digest_file).split("\\")[-1],
+            # "digest_file": Path(digest_file).name,
+            "digest_file": str(digest_file),
             "digest_folder": folder.name
         }
 

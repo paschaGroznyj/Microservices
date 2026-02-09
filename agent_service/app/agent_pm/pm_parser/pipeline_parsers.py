@@ -5,7 +5,7 @@ from .botocore_client import OBSWorker
 from .fluxicon_parser import FluxiconParser
 from .scholar_parser import ScholarParser, PipelineConfig
 
-data_range = ('2026-01-10', '2026-01-30')
+data_range = ('2026-01-20', '2026-01-30')
 
 obs = OBSWorker()
 arx_parser = ARXIVParser(data_range)

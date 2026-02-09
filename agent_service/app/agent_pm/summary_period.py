@@ -205,7 +205,7 @@ def find_matching_md_files(articles: List[Dict], root_folder: Path) -> List[Path
     """Рекурсивно ищет md файлы по всем подпапкам, соответствующие отфильтрованным статьям."""
     matching_files = []
     for article in articles:
-        expected_filename = f"{article['data_sub']}_{article['title']}.md"
+        expected_filename = f"{article['date_sub']}_{article['title']}.md"
         expected_filename = Path(expected_filename)
         matching_files.append(expected_filename)
         # Ниже очень жесткая проверка, список всегда пустой на выходе
@@ -262,16 +262,28 @@ def date_filter(articles: List[Dict], start_date: str, end_date: str) -> List[Di
     try:
         start = datetime.strptime(start_date, '%Y-%m-%d')
         end = datetime.strptime(end_date, '%Y-%m-%d')
-        return [art for art in articles if _date_in_range(art.get('data_sub'), start, end)]
+        return [art for art in articles if _date_in_range(art.get('date_sub'), start, end)]
     except ValueError:
         return articles
 
-def category_filter(articles: List[Dict], category: str) -> List[Dict]:
-    return [art for art in articles if category.lower() in art.get('category', '').lower()]
+def category_filter(articles: List[Dict], category: Optional[str]) -> List[Dict]:
+    if not category:
+        return articles
 
-def title_filter(articles: List[Dict], title: str) -> List[Dict]:
-    return [art for art in articles if title.lower() in art.get('title', '').lower()]
+    cat = category.lower()
+    return [
+        art for art in articles
+        if (art.get('category') or '').lower().find(cat) != -1
+    ]
+def title_filter(articles: List[Dict], title: Optional[str]) -> List[Dict]:
+    if not title:
+        return articles
 
+    t = title.lower()
+    return [
+        art for art in articles
+        if (art.get('title') or '').lower().find(t) != -1
+    ]
 def semantic_filter(articles: List[Dict], topic: str, threshold: float) -> List[Dict]:
     filtered = []
     query_emb = EMBED_MODEL.encode([topic])
@@ -351,7 +363,7 @@ def build_digest_content(articles: List[Dict], md_path: Path, query: list, llm_c
         title = article.get('title', 'N/A')
         url = article.get('url_article', 'N/A')
         category = article.get('category', 'Не указана')
-        date = article.get('data_sub', '')
+        date = article.get('date_sub', '')
         theme = article.get('tags', '')
 
         md_file = None

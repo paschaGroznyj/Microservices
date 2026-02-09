@@ -3,6 +3,10 @@ import os
 import time
 import json
 import yaml
+import asyncio
+import requests
+from io import BytesIO
+from PyPDF2 import PdfReader
 from dotenv import load_dotenv
 from dataclasses import dataclass, asdict
 from mistralai import Mistral
@@ -31,10 +35,12 @@ class Article:
     tags: str
     abstract: str 
     file_article: str
+    text_article: str
 
 class IEEEParser:
-    def __init__(self, requested_link):
+    name = "ieee"
 
+    def __init__(self, requested_link):
         self.driver = self.create_stealth_headless_driver()
         self.driver.get(requested_link)
         self.requested_link = requested_link
@@ -99,7 +105,7 @@ class IEEEParser:
         articles = []
         
         # Process pages
-        for i in range(len(pagination_links)):
+        for i in range(len(pagination_links))[:2]:
             start = datetime.now()
             if i != 0:
                 time.sleep(5)
@@ -134,10 +140,10 @@ class IEEEParser:
                 # Check if article is about PM
                 title = self.driver.find_element(By.CLASS_NAME, 'document-title').text
                 abstract = [x.text for x in self.driver.find_elements(By.CLASS_NAME, 'u-mb-1') if 'Abstract' in x.text][0]
-                is_pm_response = self.is_pm(title, abstract)
-                print(is_pm_response)
-                if is_pm_response['is_suitable'] == 'False':
-                    continue
+                # is_pm_response = self.is_pm(title, abstract)
+                # print(is_pm_response)
+                # if is_pm_response['is_suitable'] == 'False':
+                #     continue
                 
                 # Get authors
                 authors = {}
@@ -169,6 +175,7 @@ class IEEEParser:
                 for frame in frames:
                     if 'iframe src' in frame.get_attribute('outerHTML'):
                         direct_link = frame.get_attribute('src')
+                        text_article = self.__get_text_pdf_file(link=direct_link)
                         articles.append(
                             Article(
                                 'https://ieeexplore.ieee.org/',
@@ -180,7 +187,8 @@ class IEEEParser:
                                 authors,
                                 ' '.join(tags),
                                 abstract,
-                                'file'
+                                'file',
+                                text_article
                             )
                         )
             print(f'Page {i+1} processed in {datetime.now() - start}')
@@ -202,7 +210,36 @@ class IEEEParser:
         while any(f.endswith('.crdownload') for f in files):
             time.sleep(1)
             files = os.listdir(self.download_path)
-    
+
+    def __get_text_pdf_file(self, link: str, sleep_sec=3):
+        cookies = {c['name']: c['value'] for c in self.driver.get_cookies()}
+
+        headers = {
+            "User-Agent": self.driver.execute_script("return navigator.userAgent;"),
+            "Referer": self.driver.current_url,
+            "Accept": "application/pdf"
+        }
+
+        response = requests.get(
+            link,
+            headers=headers,
+            cookies=cookies,
+            timeout=30
+        )
+
+        response.raise_for_status()
+
+        reader = PdfReader(BytesIO(response.content))
+        text = ""
+
+        for page in reader.pages[:3]:
+            extracted = page.extract_text()
+            if extracted:
+                text += extracted + "\n"
+
+        time.sleep(sleep_sec)
+        return text
+
     @staticmethod
     def is_suitable_search_result(element):
         try:
@@ -303,9 +340,20 @@ class IEEEParser:
         
         return driver
 
-if __name__ == '__main__':
+    async def arun(self) -> list[dict]:
+        return await asyncio.to_thread(self.parse)
+
+
+async def main():
+    data_range = ('2026-01-20', '2026-01-30') # Тут фильтрация по дате пока что не предусмотрена
     link = 'https://ieeexplore.ieee.org/search/searchresult.jsp?queryText=Process%20Mining&highlight=true&returnType=SEARCH&matchPubs=true&refinementName=Publication%20Topics&pageNumber=1&refinements=PublicationTopics:Process%20Mining&ranges=2025_2025_Year&returnFacets=ALL'
-    p = IEEEParser(link)
-    articles = p.parse()
-    with open('test.json', 'w+', encoding='utf8') as jsonfile:
-        json.dump(articles, jsonfile, indent=4, ensure_ascii=False)
+    ieeep_parser = IEEEParser(link)
+    results = await asyncio.gather(
+        ieeep_parser.arun(),
+        return_exceptions=True
+    )
+    with open('ieee.json', 'w+', encoding='utf8') as jsonfile:
+        json.dump(results, jsonfile, indent=4, ensure_ascii=False)
+
+if __name__ == "__main__":
+    asyncio.run(main())

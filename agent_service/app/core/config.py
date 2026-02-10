@@ -24,6 +24,10 @@ GIGACHAT_MODEL = "GigaChat:latest"
 
 # Embedding
 EMBEDDING_MODEL = "sentence-transformers/LaBSE"
+EMBED_MODEL_GLOSS = "paraphrase-multilingual-MiniLM-L12-v2"
+
+# Path to glossary
+PATH_TO_GLOSSARY = "Глоссарий РМ_cloud.md"
 
 # �����������
 SYNC_INTERVAL_MINUTES = int(os.getenv("SYNC_INTERVAL_MINUTES", "15"))

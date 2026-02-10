@@ -13,7 +13,7 @@
    - Сервис авторизации
      • auth_service/app.py
 
-   - Сервис агента PM
+   - Сервис агента PM - [информация об агенте и проекте](agent_service/readme.md)
      • agent_service/app/app.py
 
    - API Gateway

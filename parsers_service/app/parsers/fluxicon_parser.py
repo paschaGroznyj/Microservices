@@ -1,3 +1,4 @@
+import re
 import json
 import asyncio
 import requests
@@ -5,7 +6,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 from typing import List, Optional
 from dataclasses import dataclass, asdict
-import re
+
 
 
 @dataclass
@@ -116,16 +117,16 @@ class FluxiconParser:
         except Exception:
             return False
 
-
-async def main():
-    data_range = ('2026-01-01', '2026-01-30')
-    flux_parser = FluxiconParser(data_range)
-    results = await asyncio.gather(
-        flux_parser.arun(),
-        return_exceptions=True
-    )
-    with open('flux.json', 'w+', encoding='utf8') as jsonfile:
-        json.dump(results, jsonfile, indent=4, ensure_ascii=False)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+#
+# async def main():
+#     data_range = ('2026-01-01', '2026-01-30')
+#     flux_parser = FluxiconParser(data_range)
+#     results = await asyncio.gather(
+#         flux_parser.arun(),
+#         return_exceptions=True
+#     )
+#     with open('flux.json', 'w+', encoding='utf8') as jsonfile:
+#         json.dump(results, jsonfile, indent=4, ensure_ascii=False)
+#
+# if __name__ == "__main__":
+#     asyncio.run(main())

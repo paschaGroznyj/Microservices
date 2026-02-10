@@ -10,6 +10,7 @@ import multiprocessing as mp
 
 import requests
 import fitz
+import hashlib
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 import io
 # from pypdf import PdfReader
@@ -25,14 +26,13 @@ from dataclasses import dataclass, asdict
 class PipelineConfig:
     query: str = '"process mining" OR "process discovery" OR "event log" OR "process model" OR "audit trail"'
     max_pages: int = 10
-    max_pdf_pages: int = 100
-    profile_dir: Path = Path("../../pw_profile_scholar")  # Куки/мета-информация сессии, чтобы не ловить постоянно капчу
+    max_pdf_pages: int = 30
+    profile_dir: Path = Path("/app/pw_profile_scholar")  # Куки/мета-информация сессии, чтобы не ловить постоянно капчу
     headless: bool = True  # Включить или выключить визуальный браузер (удобно для дебага локально)
     fulltext: bool = False
     ui_lang: str = "ru"
-    md_dir: Path = Path(
-        "../../md")  # Папка для сохранения markdown, можно поменять потом или поставить общую для всего конфига (кстати я предусмотрел чтобы название статей еще были уникальные, то есть чтобы не оказались одни и те же статьи в папке)
-    report_json: Path = Path("../final_items.json")  # Информация по всем статьям которые получилось скачать и найти
+    md_dir: Path = Path("/app/md")  # Папка для сохранения markdown, можно поменять потом или поставить общую для всего конфига (кстати я предусмотрел чтобы название статей еще были уникальные, то есть чтобы не оказались одни и те же статьи в папке)
+    report_json: Path = Path("/app/final_items.json")  # Информация по всем статьям которые получилось скачать и найти
     http_timeout: int = 45
     download_retries: int = 2
     download_retry_sleep: float = 1.0
@@ -43,8 +43,8 @@ class PipelineConfig:
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
-    convert_timeout_s: float = 60.0  # Время на конвертацию
-    path_logs: Path = Path("../../logs")  # Папка с логами выполнения
+    convert_timeout_s: float = 30.0  # Время на конвертацию
+    path_logs: Path = Path("/app/logs")  # Папка с логами выполнения
     log_file: str = "scholar_parser.log"
     log_level: str = "INFO"
     log_max_bytes: int = 10_000_000
@@ -517,20 +517,30 @@ def convert_with_timeout(
 
     return q.get()
 
+def __url_to_hash(url: str, length: int = 12) -> str:
+    return hashlib.sha256(url.encode("utf-8")).hexdigest()[:length]
+def __clear_title_article(title: str):
+    safe_title = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', title)
+    safe_title = re.sub(r'[_\s]+', '_', safe_title).strip('_')
+    return str(safe_title)
 
 def scholar_item_to_article(it: ScholarItem) -> dict:
     """Обертка над ScholarItem -> Article"""
+    clear_tittle = __clear_title_article(it.title)
+    file_article = f"{it.date_pub}_{clear_tittle}.md"
+    external_id = __url_to_hash(it.article_url)
+
     return asdict(Article(
         source=it.source or "googlescholar",
-        external_id=it.article_url,            # стабильный ID
-        title=it.title,
-        date_sub=it.date_pub or "",             # ISO-строка или ""
+        external_id=external_id,            # стабильный ID
+        title=clear_tittle,
+        date_sub=it.date_pub or "",
         url_article=it.article_url,
         pdf_url=it.pdf_url or "",
         authors={"raw": it.authors} if it.authors else None,
         tags=it.tags,
         abstract=it.abstract or "",
-        file_article=None,                      # сохраняется позже OBS
+        file_article=file_article,
         category=it.category,
         text_article=it.abstract or ""
     ))
@@ -548,7 +558,7 @@ class ScholarParser:
         # self.start_date = start_s
         # self.end_date = end_s
         self.config = config
-        self.config.md_dir.mkdir(parents=True, exist_ok=True)
+        # self.config.md_dir.mkdir(parents=True, exist_ok=True)
         # self.log = setup_logger(self.config)
 
         self.today = date.today()
@@ -662,13 +672,13 @@ class ScholarParser:
         return items_all
 
     def _process(self, items: List[ScholarItem]) -> List[ScholarItem]:
-        self.config.md_dir.mkdir(exist_ok=True)
+        # self.config.md_dir.mkdir(exist_ok=True)
         final_items = []
 
         with requests.Session() as s:
             for it in items:
                 stem = safe_stem(it.date_pub, it.title)
-                md_path = self.config.md_dir / f"{stem}.md"
+                # md_path = self.config.md_dir / f"{stem}.md"
 
                 try:
                     (
@@ -715,7 +725,7 @@ class ScholarParser:
                     if kind == "ok":
                         it.page_count, md = res[1], res[2]
                         it.abstract = md
-                        md_path.write_text(md.strip() + "\n", encoding="utf-8")
+                        # md_path.write_text(md.strip() + "\n", encoding="utf-8")
                         final_items.append(it)
                     else:
                         continue
@@ -731,19 +741,19 @@ class ScholarParser:
     async def arun(self) -> list[dict]:
         items: list[ScholarItem] = await asyncio.to_thread(self.run)
         return [scholar_item_to_article(it) for it in items]
-
-async def main():
-    import json
-    data_range = ('2026-01-01', '2026-01-30')
-    cfg = PipelineConfig()
-    cfg.max_pages = 2
-    google_s = ScholarParser(date_range=data_range, config=cfg)
-    results = await asyncio.gather(
-        google_s.arun(),
-        return_exceptions=True
-    )
-    with open('google_sc.json', 'w+', encoding='utf8') as jsonfile:
-        json.dump(results, jsonfile, indent=4, ensure_ascii=False)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+#
+# async def main():
+#     import json
+#     data_range = ('2026-01-01', '2026-01-30')
+#     cfg = PipelineConfig()
+#     cfg.max_pages = 2
+#     google_s = ScholarParser(date_range=data_range, config=cfg)
+#     results = await asyncio.gather(
+#         google_s.arun(),
+#         return_exceptions=True
+#     )
+#     with open('google_sc.json', 'w+', encoding='utf8') as jsonfile:
+#         json.dump(results, jsonfile, indent=4, ensure_ascii=False)
+#
+# if __name__ == "__main__":
+#     asyncio.run(main())

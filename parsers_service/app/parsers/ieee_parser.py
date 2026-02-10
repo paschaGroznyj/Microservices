@@ -2,7 +2,6 @@ import re
 import os
 import time
 import json
-import yaml
 import asyncio
 import requests
 from io import BytesIO
@@ -11,9 +10,11 @@ from dotenv import load_dotenv
 from dataclasses import dataclass, asdict
 from mistralai import Mistral
 from datetime import datetime
+import shutil
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver.support import expected_conditions as EC
@@ -304,9 +305,17 @@ class IEEEParser:
             "plugins.always_open_pdf_externally": True, 
         }
         options.add_experimental_option("prefs", prefs)
-        
+
+        # Явный путь к системному chromium (для Docker / ARM)
+        chromium_bin = shutil.which("chromium") or shutil.which("chromium-browser")
+        if chromium_bin:
+            options.binary_location = chromium_bin
+
+        chromedriver_bin = shutil.which("chromedriver") or shutil.which("chromium-driver")
+        service = Service(executable_path=chromedriver_bin) if chromedriver_bin else Service()
+
         # Create driver
-        driver = webdriver.Chrome(options=options)
+        driver = webdriver.Chrome(options=options, service=service)
         
         # Execute stealth scripts
         stealth_scripts = [
@@ -340,20 +349,44 @@ class IEEEParser:
         
         return driver
 
+
+    def _dismiss_cookie_banner(self, timeout: int = 6) -> None:
+        try:
+            btn = WebDriverWait(self.driver, timeout).until(
+                EC.element_to_be_clickable((
+                    By.XPATH,
+                    "//button[contains(., 'Accept') or contains(., 'I Agree') or contains(., 'Принять') or contains(., 'Соглас')]"
+                ))
+            )
+            btn.click()
+            time.sleep(0.3)
+            return
+        except Exception:
+            pass
+
+        try:
+            self.driver.execute_script("""
+                const el = document.querySelector('.osano-cm-window__dialog, .osano-cm-dialog, [role="dialog"].osano-cm-dialog');
+                if (el) el.remove();
+            """)
+            time.sleep(0.2)
+        except Exception:
+            pass
+
     async def arun(self) -> list[dict]:
         return await asyncio.to_thread(self.parse)
 
 
-async def main():
-    data_range = ('2026-01-20', '2026-01-30') # Тут фильтрация по дате пока что не предусмотрена
-    link = 'https://ieeexplore.ieee.org/search/searchresult.jsp?queryText=Process%20Mining&highlight=true&returnType=SEARCH&matchPubs=true&refinementName=Publication%20Topics&pageNumber=1&refinements=PublicationTopics:Process%20Mining&ranges=2025_2025_Year&returnFacets=ALL'
-    ieeep_parser = IEEEParser(link)
-    results = await asyncio.gather(
-        ieeep_parser.arun(),
-        return_exceptions=True
-    )
-    with open('ieee.json', 'w+', encoding='utf8') as jsonfile:
-        json.dump(results, jsonfile, indent=4, ensure_ascii=False)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+# async def main():
+#     data_range = ('2026-01-20', '2026-01-30') # Тут фильтрация по дате пока что не предусмотрена
+#     link = 'https://ieeexplore.ieee.org/search/searchresult.jsp?queryText=Process%20Mining&highlight=true&returnType=SEARCH&matchPubs=true&refinementName=Publication%20Topics&pageNumber=1&refinements=PublicationTopics:Process%20Mining&ranges=2025_2025_Year&returnFacets=ALL'
+#     ieeep_parser = IEEEParser(link)
+#     results = await asyncio.gather(
+#         ieeep_parser.arun(),
+#         return_exceptions=True
+#     )
+#     with open('ieee.json', 'w+', encoding='utf8') as jsonfile:
+#         json.dump(results, jsonfile, indent=4, ensure_ascii=False)
+#
+# if __name__ == "__main__":
+#     asyncio.run(main())

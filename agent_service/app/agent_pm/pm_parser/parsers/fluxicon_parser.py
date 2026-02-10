@@ -1,37 +1,26 @@
 import json
 import asyncio
+import logging
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 from typing import List, Optional
-from dataclasses import dataclass, asdict
 import re
 
+from .models import Article
+from .base import BaseParser
 
-@dataclass
-class Article:
-    source: str
-    external_id: str
-    title: str
-    date_sub: str
-    url_article: str
-    pdf_url: str
-    authors: dict | None
-    tags: str | List | None
-    abstract: str
-    file_article: str | None
-    category: str | None
-    text_article: str
+logger = logging.getLogger("parser.fluxicon")
 
 
-class FluxiconParser:
+class FluxiconParser(BaseParser):
     name = "fluxicon"
 
     def __init__(self, date_range: Optional[tuple[str, str]] = None):
         self.base_url = "https://www.fluxicon.com"
         self.date_range = date_range
 
-    def parse(self) -> List[dict]:
+    def parse(self) -> List[Article]:
         response = requests.get(
             f"{self.base_url}/blog/",
             timeout=20,
@@ -76,28 +65,27 @@ class FluxiconParser:
                     text_blocks.append(child.get_text(strip=True))
 
             abstract = "\n".join(text_blocks)
-            file_article = f"{date_sub}_{title}.md"
             results.append(
                 Article(
                     source="https://www.fluxicon.com",
                     external_id=link,
-                    title=self._safe_title(title),
+                    title=title,
                     date_sub=date_sub,
                     url_article=f"{self.base_url}{link}",
                     pdf_url="",
                     authors=None,
                     tags=None,
                     abstract=abstract,
-                    file_article=file_article,
+                    file_article=None,
                     category=None,
                     text_article=abstract
                 )
             )
 
-        return [asdict(a) for a in results]
+        logger.info("Найдено %d статей", len(results))
+        return results
 
-
-    async def arun(self) -> List[dict]:
+    async def arun(self) -> List[Article]:
         return await asyncio.to_thread(self.parse)
 
     def _safe_title(self, text: str) -> str:
@@ -118,14 +106,11 @@ class FluxiconParser:
 
 
 async def main():
-    data_range = ('2026-01-01', '2026-01-30')
-    flux_parser = FluxiconParser(data_range)
-    results = await asyncio.gather(
-        flux_parser.arun(),
-        return_exceptions=True
-    )
+    date_range = ('2026-01-01', '2026-01-30')
+    flux_parser = FluxiconParser(date_range)
+    results = await flux_parser.arun()
     with open('flux.json', 'w+', encoding='utf8') as jsonfile:
-        json.dump(results, jsonfile, indent=4, ensure_ascii=False)
+        json.dump([a.to_dict() for a in results], jsonfile, indent=4, ensure_ascii=False)
 
 if __name__ == "__main__":
     asyncio.run(main())

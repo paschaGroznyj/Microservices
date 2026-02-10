@@ -20,6 +20,11 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from dataclasses import dataclass, asdict
 
+from .models import Article
+from .base import BaseParser
+
+logger = logging.getLogger("parser.scholar")
+
 
 @dataclass
 class PipelineConfig:
@@ -31,8 +36,8 @@ class PipelineConfig:
     fulltext: bool = False
     ui_lang: str = "ru"
     md_dir: Path = Path(
-        "../../md")  # Папка для сохранения markdown, можно поменять потом или поставить общую для всего конфига (кстати я предусмотрел чтобы название статей еще были уникальные, то есть чтобы не оказались одни и те же статьи в папке)
-    report_json: Path = Path("../final_items.json")  # Информация по всем статьям которые получилось скачать и найти
+        "../../knowledge_base/articles/")  # Папка для сохранения markdown, можно поменять потом или поставить общую для всего конфига (кстати я предусмотрел чтобы название статей еще были уникальные, то есть чтобы не оказались одни и те же статьи в папке)
+    report_json: Path = Path("../../knowledge_base/metadata_scholar.json")  # Информация по всем статьям которые получилось скачать и найти
     http_timeout: int = 45
     download_retries: int = 2
     download_retry_sleep: float = 1.0
@@ -49,21 +54,6 @@ class PipelineConfig:
     log_level: str = "INFO"
     log_max_bytes: int = 10_000_000
     log_backup_count: int = 5
-
-@dataclass
-class Article:
-    source: str
-    external_id: str
-    title: str
-    date_sub: str
-    url_article: str
-    pdf_url: str
-    authors: dict | None
-    tags: str | List | None
-    abstract: str
-    file_article: str | None
-    category: str | None
-    text_article: str
 
 @dataclass
 class ScholarItem:
@@ -518,9 +508,9 @@ def convert_with_timeout(
     return q.get()
 
 
-def scholar_item_to_article(it: ScholarItem) -> dict:
+def scholar_item_to_article(it: ScholarItem) -> Article:
     """Обертка над ScholarItem -> Article"""
-    return asdict(Article(
+    return Article(
         source=it.source or "googlescholar",
         external_id=it.article_url,            # стабильный ID
         title=it.title,
@@ -528,14 +518,14 @@ def scholar_item_to_article(it: ScholarItem) -> dict:
         url_article=it.article_url,
         pdf_url=it.pdf_url or "",
         authors={"raw": it.authors} if it.authors else None,
-        tags=it.tags,
+        tags=[it.tags] if isinstance(it.tags, str) else it.tags,
         abstract=it.abstract or "",
         file_article=None,                      # сохраняется позже OBS
         category=it.category,
         text_article=it.abstract or ""
-    ))
+    )
 
-class ScholarParser:
+class ScholarParser(BaseParser):
     name = "scholar"
 
     def __init__(
@@ -554,7 +544,7 @@ class ScholarParser:
         self.today = date.today()
         self.min_age_days = (self.today - self.end_date).days
         self.max_age_days = (self.today - self.start_date).days
-        print(self.min_age_days, self.max_age_days)
+        logger.debug("Диапазон возраста: min=%d, max=%d дней", self.min_age_days, self.max_age_days)
 
         if self.min_age_days < 0 or self.max_age_days < 0:
             raise ValueError("date_range должен быть в прошлом или сегодня.")
@@ -565,12 +555,12 @@ class ScholarParser:
         start = time.time()
         items = self._scrape()
         end = time.time()
-        print("Общее время скрапинга: %.2f sec" % (end - start))
+        logger.info("Общее время скрапинга: %.2f sec", end - start)
         items = self._process(items)
         return items
 
     def _scrape(self) -> List[ScholarItem]:
-        print("Начало скрапинга на Playwright (sync)")
+        logger.info("Начало скрапинга на Playwright (sync)")
         items_all: List[ScholarItem] = []
 
         with sync_playwright() as p:
@@ -599,16 +589,16 @@ class ScholarParser:
                         self.config.path_logs.mkdir(parents=True, exist_ok=True)
                         shot = self.config.path_logs / f"captcha_{int(time.time())}.png"
                         page.screenshot(path=str(shot), full_page=True)
-                        print("Найдена CAPTCHA на странице %s (screenshot: %s)", page.url, shot)
+                        logger.error("Найдена CAPTCHA на странице %s (screenshot: %s)", page.url, shot)
                         raise RuntimeError(f"Найдена CAPTCHA на странице {page.url} (screenshot: {shot})")
                     else:
-                        print("Нашел CAPTCHA. Решите капчу!!! И нажмите Enter")
+                        logger.warning("Нашел CAPTCHA. Решите капчу и нажмите Enter")
                         input()
 
                 try:
                     page.wait_for_selector("div.gs_r.gs_or.gs_scl", timeout=20_000)  # ждем пока загрузится страница
                 except PlaywrightTimeoutError as e:
-                    print("Не удалось дождаться загрузки результатов поиска. Завершение работы: %s", str(e))
+                    logger.warning("Не удалось дождаться загрузки результатов поиска: %s", str(e))
                     break
 
                 page_items = parse_results_on_page(page)
@@ -616,17 +606,17 @@ class ScholarParser:
                 ages_all = [it.age_days for it in page_items if it.age_days is not None]
 
                 for it in page_items:
-                    print("Article", it.age_days)
+                    logger.debug("Статья: age_days=%s", it.age_days)
                     if it.age_days is None:
                         continue
                     if it.age_days < self.min_age_days:
-                        print("Skip min_age_days")
+                        logger.debug("Пропуск: слишком свежая (age=%d < min=%d)", it.age_days, self.min_age_days)
                         continue
                     if it.age_days > self.max_age_days:
-                        print("Skip max_age_days")
+                        logger.debug("Пропуск: слишком старая (age=%d > max=%d)", it.age_days, self.max_age_days)
                         continue
                     if not is_probably_pdf(it.pdf_label, it.pdf_url):
-                        print("Skip тут")
+                        logger.debug("Пропуск: не PDF")
                         continue
 
                     items_all.append(it)
@@ -635,17 +625,17 @@ class ScholarParser:
                 pages_parsed += 1
                 pdf_candidates = sum(1 for it in page_items if is_probably_pdf(it.pdf_label, it.pdf_url))
 
-                print(
-                    "Страница %d: результатов %d, PDF-кандидатов %d, принято +%d, всего принято %d" %
-                    (pages_parsed, len(page_items), pdf_candidates, kept_on_page, len(items_all))
+                logger.info(
+                    "Страница %d: результатов %d, PDF-кандидатов %d, принято +%d, всего принято %d",
+                    pages_parsed, len(page_items), pdf_candidates, kept_on_page, len(items_all)
                 )
 
                 if ages_all:
                     youngest = min(ages_all)
                     if youngest > self.max_age_days:
-                        print(
-                            "Остановка по возрасту: самый старый результат на странице — %d дн. (> лимита %d дн.)." %
-                            (youngest, self.max_age_days)
+                        logger.info(
+                            "Остановка по возрасту: самый старый результат на странице — %d дн. (> лимита %d дн.)",
+                            youngest, self.max_age_days
                         )
                         break
 
@@ -682,15 +672,15 @@ class ScholarParser:
                     ) = download_pdf_with_retries(self.config, s, it.pdf_url)
 
                     if pdf_bytes is None:
-                        print(
-                            "Скачивание %s не удалось (%s) за %.2f сек, попыток %d" %
-                            (it.title, stop_reason, elapsed, attempts)
+                        logger.warning(
+                            "Скачивание %s не удалось (%s) за %.2f сек, попыток %d",
+                            it.title, stop_reason, elapsed, attempts
                         )
                         continue
 
-                    print("Скачивание %s: %.2f сек, попыток %d" % (it.title, elapsed, attempts))
+                    logger.info("Скачивание %s: %.2f сек, попыток %d", it.title, elapsed, attempts)
 
-                    print("Форматируется файл: %s, %s" % (it.title, it.article_url))
+                    logger.info("Форматируется файл: %s, %s", it.title, it.article_url)
                     res = convert_with_timeout(
                         pdf_bytes=pdf_bytes,
                         timeout_s=self.config.convert_timeout_s,
@@ -698,52 +688,48 @@ class ScholarParser:
                     )
 
                     if res is None:
-                        print("Пропускаем %s: долгая конверктация" % (it.title))
+                        logger.warning("Пропускаем %s: долгая конвертация", it.title)
                         continue
 
                     kind = res[0]
-                    print("Статус по статье", kind)
+                    logger.debug("Статус по статье: %s", kind)
                     if kind == "skip":
                         it.page_count = res[1]
-                        print("Пропускаем %s: много страниц (%d)" % (it.title, it.page_count))
+                        logger.warning("Пропускаем %s: много страниц (%d)", it.title, it.page_count)
                         continue
 
                     if kind == "err":
-                        print("Ошибка %s: ошибка конвертации %s" % (it.title, res[1]))
+                        logger.error("Ошибка %s: ошибка конвертации %s", it.title, res[1])
                         continue
 
                     if kind == "ok":
                         it.page_count, md = res[1], res[2]
                         it.abstract = md
-                        md_path.write_text(md.strip() + "\n", encoding="utf-8")
                         final_items.append(it)
                     else:
                         continue
 
                 except Exception as e:
-                    print("Ошибка сессии скачивания файла %s: %s" % (it.title, str(e)))
+                    logger.error("Ошибка сессии скачивания файла %s: %s", it.title, str(e))
 
                 time.sleep(self.config.sleep_between_downloads)
 
-        print("Парсер завершил работу. Найдено статей: %d" % (len(final_items)))
+        logger.info("Парсер завершил работу. Найдено статей: %d", len(final_items))
         return final_items
 
-    async def arun(self) -> list[dict]:
-        items: list[ScholarItem] = await asyncio.to_thread(self.run)
+    async def arun(self) -> List[Article]:
+        items: List[ScholarItem] = await asyncio.to_thread(self.run)
         return [scholar_item_to_article(it) for it in items]
 
 async def main():
     import json
-    data_range = ('2026-01-01', '2026-01-30')
+    date_range = ('2026-01-01', '2026-01-30')
     cfg = PipelineConfig()
     cfg.max_pages = 2
-    google_s = ScholarParser(date_range=data_range, config=cfg)
-    results = await asyncio.gather(
-        google_s.arun(),
-        return_exceptions=True
-    )
+    google_s = ScholarParser(date_range=date_range, config=cfg)
+    results = await google_s.arun()
     with open('google_sc.json', 'w+', encoding='utf8') as jsonfile:
-        json.dump(results, jsonfile, indent=4, ensure_ascii=False)
+        json.dump([a.to_dict() for a in results], jsonfile, indent=4, ensure_ascii=False)
 
 if __name__ == "__main__":
     asyncio.run(main())

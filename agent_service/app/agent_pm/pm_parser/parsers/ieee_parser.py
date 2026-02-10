@@ -4,50 +4,45 @@ import time
 import json
 import yaml
 import asyncio
+import logging
 import requests
 from io import BytesIO
 from PyPDF2 import PdfReader
 from dotenv import load_dotenv
-from dataclasses import dataclass, asdict
 from mistralai import Mistral
 from datetime import datetime
+from typing import List
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException
+
+from .models import Article, normalize_date
+from .base import BaseParser
+
+logger = logging.getLogger("parser.ieee")
 
 
 DATE_PATTERN = re.compile(
     r'\b(\d{1,2})\s+([Jj]anuary|[Ff]ebruary|[Mm]arch|[Aa]pril|[Mm]ay|[Jj]une|[Jj]uly|[Aa]ugust|[Ss]eptember|[Oo]ctober|[Nn]ovember|[Dd]ecember)\s+(\d{4})\b'
 )
 
-@dataclass
-class Article:
-    source: str
-    external_id: str
-    title: str 
-    date_sub: str 
-    url_article: str 
-    pdf_url: str 
-    authors: dict  
-    tags: str
-    abstract: str 
-    file_article: str
-    text_article: str
 
-class IEEEParser:
+class IEEEParser(BaseParser):
     name = "ieee"
 
     def __init__(self, requested_link):
         self.driver = self.create_stealth_headless_driver()
         self.driver.get(requested_link)
+        self._dismiss_cookie_banner()
         self.requested_link = requested_link
 
         load_dotenv()
 
-        print('PARSER INITIALIZED')
+        logger.info("Парсер инициализирован")
 
     @staticmethod
     def is_pm(title, abstract):
@@ -83,7 +78,7 @@ class IEEEParser:
 
         return json_response
 
-    
+
     @staticmethod
     def find_link(element):
         try:
@@ -91,29 +86,31 @@ class IEEEParser:
         except NoSuchElementException:
             return False
 
-    
-    def parse(self):
+
+    def parse(self) -> List[Article]:
         wait = WebDriverWait(self.driver, timeout=60)
         wait.until(
             EC.presence_of_all_elements_located((By.CLASS_NAME, 'pagination-bar'))
         )
-        
+        self._dismiss_cookie_banner()
+
         # Get pages
         pagination_bar = self.driver.find_element(By.CLASS_NAME, 'pagination-bar')
         pagination_links = pagination_bar.find_elements(By.TAG_NAME, 'button')[:-1]
 
         articles = []
-        
+
         # Process pages
         for i in range(len(pagination_links))[:2]:
             start = datetime.now()
             if i != 0:
                 time.sleep(5)
                 pagination_bar = self.driver.find_element(By.CLASS_NAME, 'pagination-bar')
+                self._dismiss_cookie_banner()
                 pagination_bar.find_elements(By.TAG_NAME, 'button')[i].click()
-            
-            print(f'Processing page {i+1}')
-            
+
+            logger.info("Обработка страницы %d", i + 1)
+
             # Get search results
             wait.until(
                 EC.presence_of_all_elements_located((By.CLASS_NAME, 'List-results-items'))
@@ -121,19 +118,20 @@ class IEEEParser:
             search_results = self.driver.find_elements(By.CLASS_NAME, 'List-results-items')
             suitable_results = (sr for sr in search_results if self.is_suitable_search_result(sr))
             links = [self.find_link(sr) for sr in suitable_results]
-            
+
             # Process search results
             for link in links:
                 if not link:
                     continue
                 self.driver.get(link)
-                
+                self._dismiss_cookie_banner()
+
                 # Detemine the date of publication
                 try:
                     date_string = ' '.join(DATE_PATTERN.findall(self.driver.page_source)[0])
                     date = datetime.strptime(date_string, '%d %B %Y').date()
                 except IndexError:
-                    print('Publication date not found')
+                    logger.warning("Дата публикации не найдена")
                 if date < datetime.strptime('01.10.2025', '%d.%m.%Y').date():
                     continue
 
@@ -144,22 +142,25 @@ class IEEEParser:
                 # print(is_pm_response)
                 # if is_pm_response['is_suitable'] == 'False':
                 #     continue
-                
+
                 # Get authors
                 authors = {}
                 for author_element in self.driver.find_elements(By.CLASS_NAME, 'authors-info'):
                     link = author_element.find_element(By.TAG_NAME, 'a').get_attribute('href')
                     name = author_element.find_element(By.TAG_NAME, 'span').text
                     authors[name] = link
-                
+
                 # Get tags
                 tags = []
-                self.driver.find_element(By.ID, 'keywords').click()
+                self._dismiss_cookie_banner()
+                kw = WebDriverWait(self.driver, 10).until(EC.element_to_be_clickable((By.ID, "keywords")))
+                self.driver.execute_script("arguments[0].scrollIntoView({block:'center'});", kw)
+                kw.click()
                 tags_containers = self.driver.find_elements(By.CLASS_NAME, 'doc-keywords-list-item')
                 for tc in tags_containers:
                     if tc.find_element(By.TAG_NAME, 'strong').text == 'IEEE Keywords':
                         tags = [item.text for item in tc.find_elements(By.TAG_NAME, 'a')]
-                
+
                 # Find the PDF button
                 pdf_button = self.driver.find_element(By.CLASS_NAME, 'xpl-btn-pdf')
                 pdf_link = pdf_button.get_attribute('href')
@@ -178,31 +179,32 @@ class IEEEParser:
                         text_article = self.__get_text_pdf_file(link=direct_link)
                         articles.append(
                             Article(
-                                'https://ieeexplore.ieee.org/',
-                                link.split('/')[-1],
-                                title,
-                                date_string,
-                                link,
-                                direct_link,
-                                authors,
-                                ' '.join(tags),
-                                abstract,
-                                'file',
-                                text_article
+                                source='https://ieeexplore.ieee.org/',
+                                external_id=link.split('/')[-1],
+                                title=title,
+                                date_sub=normalize_date(date_string),
+                                url_article=link,
+                                pdf_url=direct_link,
+                                authors=authors,
+                                tags=tags,
+                                abstract=abstract,
+                                file_article=None,
+                                category=None,
+                                text_article=text_article
                             )
                         )
-            print(f'Page {i+1} processed in {datetime.now() - start}')
+            logger.info("Страница %d обработана за %s", i + 1, datetime.now() - start)
             self.driver.get(self.requested_link)
 
-        return [asdict(item) for item in articles]
-        
+        return articles
+
     def save_to_html(self):
         """
         for debug purposes only
         """
         with open('page.html', 'w', encoding='utf8') as f:
             f.write(self.driver.page_source)
-    
+
     def download(self, link):
         self.driver.get(link)
         time.sleep(2)
@@ -249,18 +251,18 @@ class IEEEParser:
         except NoSuchElementException:
             return False
         return True
-    
+
     def create_stealth_headless_driver(self):
         options = Options()
-        
+
         # Use new headless mode
         options.add_argument('--headless=new')
-        
+
         # Disable automation flags
         options.add_argument('--disable-blink-features=AutomationControlled')
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option('useAutomationExtension', False)
-        
+
         # Normal browser settings
         options.add_argument('--window-size=1920,1080')
         options.add_argument('--start-maximized')
@@ -269,10 +271,10 @@ class IEEEParser:
         options.add_argument('--disable-gpu')
         options.add_argument('--disable-web-security')
         options.add_argument('--allow-running-insecure-content')
-        
+
         # Realistic user agent
         options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36')
-        
+
         # Enable features
         options.add_argument('--enable-webgl')
         options.add_argument('--enable-3d-apis')
@@ -280,15 +282,15 @@ class IEEEParser:
 
         options.add_argument('--enable-features=NetworkService,NetworkServiceInProcess')
         options.add_argument('--disable-features=VizDisplayCompositor')
-        
+
         # Disable logging
         options.add_argument('--log-level=3')
         options.add_argument('--silent')
 
         options.add_argument('--disable-pdf-viewer')
         options.add_argument('--disable-features=ChromePDFViewer')
-        
-        
+
+
         # Set preferences
         prefs = {
             "download.prompt_for_download": False,  # Disable download prompt
@@ -299,15 +301,15 @@ class IEEEParser:
             "webrtc.ip_handling_policy": "disable_non_proxied_udp",
             "webrtc.multiple_routes_enabled": False,
             "webrtc.nonproxied_udp_enabled": False,
-            "plugins.plugins_disabled": ["Chrome PDF Viewer"], # Disable Chrome's PDF Viewer , 
+            "plugins.plugins_disabled": ["Chrome PDF Viewer"], # Disable Chrome's PDF Viewer ,
             "download.extensions_to_open": "application/pdf",
-            "plugins.always_open_pdf_externally": True, 
+            "plugins.always_open_pdf_externally": True,
         }
         options.add_experimental_option("prefs", prefs)
-        
+
         # Create driver
         driver = webdriver.Chrome(options=options)
-        
+
         # Execute stealth scripts
         stealth_scripts = [
             # Hide automation
@@ -316,17 +318,17 @@ class IEEEParser:
                 get: () => undefined
             });
             """,
-            
+
             # Override permissions
             """
             const originalQuery = window.navigator.permissions.query;
             window.navigator.permissions.query = (parameters) => (
-                parameters.name === 'notifications' ? 
-                    Promise.resolve({ state: Notification.permission }) : 
+                parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
                     originalQuery(parameters)
             );
             """,
-            
+
             # Spoof hardware concurrency
             """
             Object.defineProperty(navigator, 'hardwareConcurrency', {
@@ -334,26 +336,45 @@ class IEEEParser:
             });
             """,
         ]
-        
+
         for script in stealth_scripts:
             driver.execute_script(script)
-        
+
         return driver
 
-    async def arun(self) -> list[dict]:
+    def _dismiss_cookie_banner(self, timeout: int = 6) -> None:
+        try:
+            btn = WebDriverWait(self.driver, timeout).until(
+                EC.element_to_be_clickable((
+                    By.XPATH,
+                    "//button[contains(., 'Accept') or contains(., 'I Agree') or contains(., 'Принять') or contains(., 'Соглас')]"
+                ))
+            )
+            btn.click()
+            time.sleep(0.3)
+            return
+        except Exception:
+            pass
+
+        try:
+            self.driver.execute_script("""
+                const el = document.querySelector('.osano-cm-window__dialog, .osano-cm-dialog, [role="dialog"].osano-cm-dialog');
+                if (el) el.remove();
+            """)
+            time.sleep(0.2)
+        except Exception:
+            pass
+
+    async def arun(self) -> List[Article]:
         return await asyncio.to_thread(self.parse)
 
 
 async def main():
-    data_range = ('2026-01-20', '2026-01-30') # Тут фильтрация по дате пока что не предусмотрена
     link = 'https://ieeexplore.ieee.org/search/searchresult.jsp?queryText=Process%20Mining&highlight=true&returnType=SEARCH&matchPubs=true&refinementName=Publication%20Topics&pageNumber=1&refinements=PublicationTopics:Process%20Mining&ranges=2025_2025_Year&returnFacets=ALL'
     ieeep_parser = IEEEParser(link)
-    results = await asyncio.gather(
-        ieeep_parser.arun(),
-        return_exceptions=True
-    )
+    results = await ieeep_parser.arun()
     with open('ieee.json', 'w+', encoding='utf8') as jsonfile:
-        json.dump(results, jsonfile, indent=4, ensure_ascii=False)
+        json.dump([a.to_dict() for a in results], jsonfile, indent=4, ensure_ascii=False)
 
 if __name__ == "__main__":
     asyncio.run(main())

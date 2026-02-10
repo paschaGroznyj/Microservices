@@ -77,6 +77,27 @@ services:
       - ./models:/app/.cache/huggingface/hub
     restart: unless-stopped
 
+  parsers_service:
+    build: ./parsers_service
+    container_name: parsers_service
+    ports:
+      - "8003:8003"
+    environment:
+      PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
+
+      STORAGE_PATH: ${STORAGE_PATH}
+      SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES}
+      SYNC_INTERVAL_SCHEDULER: ${SYNC_INTERVAL_SCHEDULER}
+      ARTICLES_FOLDER: ${ARTICLES_FOLDER}
+      METADATA_FOLDER: ${METADATA_FOLDER}
+
+      OBS_BUCKET: ${OBS_BUCKET}
+      OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
+      OBS_SECRET_KEY: ${OBS_SECRET_KEY}
+      OBS_REGION: ${OBS_REGION}
+      OBS_ENDPOINT: ${OBS_ENDPOINT}
+    restart: unless-stopped
+
   gateway:
     build: ./api_gateway
     container_name: api_gateway

@@ -12,9 +12,11 @@ from dotenv import load_dotenv
 from mistralai import Mistral
 from datetime import datetime
 from typing import List
+import shutil
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver.support import expected_conditions as EC
@@ -307,8 +309,16 @@ class IEEEParser(BaseParser):
         }
         options.add_experimental_option("prefs", prefs)
 
+        # Явный путь к системному chromium (для Docker / ARM)
+        chromium_bin = shutil.which("chromium") or shutil.which("chromium-browser")
+        if chromium_bin:
+            options.binary_location = chromium_bin
+
+        chromedriver_bin = shutil.which("chromedriver") or shutil.which("chromium-driver")
+        service = Service(executable_path=chromedriver_bin) if chromedriver_bin else Service()
+
         # Create driver
-        driver = webdriver.Chrome(options=options)
+        driver = webdriver.Chrome(options=options, service=service)
 
         # Execute stealth scripts
         stealth_scripts = [

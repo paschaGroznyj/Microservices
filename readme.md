@@ -18,6 +18,9 @@
 
    - API Gateway
      • api_gateway/app.py
+   
+   - Сервис для парсинга статей
+     - agent_service/app/run_parcsers.py
 
 
 ## 🧩 Архитектура микросервисов и Kafka

@@ -5,6 +5,7 @@ from .scholar_parser import ScholarParser, PipelineConfig
 from .arxiv_parser import ARXIVParser
 from .fluxicon_parser import FluxiconParser
 from .ieee_parser import IEEEParser
+from .logs import setup_logging
 
 __all__ = [
     "Article",
@@ -15,4 +16,5 @@ __all__ = [
     "ARXIVParser",
     "FluxiconParser",
     "IEEEParser",
+    "setup_logging"
 ]

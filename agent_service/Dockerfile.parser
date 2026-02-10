@@ -1,0 +1,35 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Системные зависимости: Chromium для Selenium (IEEE) + утилиты
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget \
+    curl \
+    gnupg \
+    unzip \
+    chromium \
+    chromium-driver \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python-зависимости (только парсерные)
+COPY requirements.parser.txt .
+RUN pip install --no-cache-dir -r requirements.parser.txt
+
+# Код приложения
+COPY . .
+
+# Пользователь без root + Playwright от его имени
+RUN useradd -m -u 1000 appuser \
+    && mkdir -p /app/knowledge_base/articles /app/logs /app/pw_profile_scholar \
+    && chown -R appuser:appuser /app
+USER appuser
+
+# Playwright: установка Chromium от appuser (чтобы браузер попал в /home/appuser/.cache)
+RUN playwright install chromium
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app/app
+
+# Batch job — не сервер, порт не нужен
+CMD ["python", "app/run_parsers.py"]

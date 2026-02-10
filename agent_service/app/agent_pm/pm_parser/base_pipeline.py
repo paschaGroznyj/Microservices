@@ -1,6 +1,8 @@
 import asyncio
 import json
 from typing import List, Dict
+from pathlib import Path
+import logging
 
 from .parsers import (
     BaseParser,
@@ -11,12 +13,13 @@ from .parsers import (
     FluxiconParser,
     ARXIVParser,
     IEEEParser,
+    setup_logging
 )
-
 
 class ParserPipeline:
     def __init__(self, parsers: List[BaseParser]):
         self.parsers = parsers
+        self.logger = logging.getLogger("parser.pipeline")
 
     async def run(self) -> Dict[str, List[Article]]:
         """Запускает все парсеры параллельно, возвращает dict[name, list[Article]]."""
@@ -40,21 +43,21 @@ class ParserPipeline:
             if isinstance(articles, list):
                 count = storage.save(articles)
                 saved_counts[parser_name] = count
-                print(f"{parser_name}: сохранено {count} новых статей")
+                self.logger.info("%s: сохранено %d новых статей", parser_name, count)
             else:
                 saved_counts[parser_name] = 0
-                print(f"{parser_name}: пропущен (ошибка)")
+                self.logger.warning("%s: пропущен (ошибка)", parser_name)
 
         return saved_counts
 
     async def _safe_run(self, parser: BaseParser):
         try:
-            print(f"Запуск парсера: {parser.name}")
+            self.logger.info("Запуск парсера: %s", parser.name)
             res = await parser.arun()
-            print(f"Парсер {parser.name} завершён, найдено {len(res)} статей")
+            self.logger.info("Парсер %s завершён, найдено %d статей", parser.name, len(res))
             return res
         except Exception as e:
-            print(f"Парсер {parser.name} упал: {e}")
+            self.logger.exception("Парсер %s упал", parser.name)
             return {
                 "error": str(e),
                 "source": parser.name
@@ -75,16 +78,13 @@ async def main():
     ]
 
     pipeline = ParserPipeline(parsers)
-    results = await pipeline.run()
-
-    # Сохраняем как JSON для проверки
-    serializable = {
-        name: [a.to_dict() for a in articles] if isinstance(articles, list) else articles
-        for name, articles in results.items()
-    }
-    with open("all_sources.json", "w", encoding="utf-8") as f:
-        json.dump(serializable, f, indent=4, ensure_ascii=False)
+    storage = ArticleStorage(
+        articles_dir="knowledge_base/articles",
+        metadata_path="knowledge_base/metadata.json",
+    )
+    await pipeline.run_and_save(storage=storage)
 
 
 if __name__ == "__main__":
+    setup_logging(Path("./logs"), log_file="parsers.log", level="INFO")
     asyncio.run(main())

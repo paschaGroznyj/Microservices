@@ -29,7 +29,7 @@ logger = logging.getLogger("parser.scholar")
 @dataclass
 class PipelineConfig:
     query: str = '"process mining" OR "process discovery" OR "event log" OR "process model" OR "audit trail"'
-    max_pages: int = 10
+    max_pages: int = 100
     max_pdf_pages: int = 100
     profile_dir: Path = Path("../../pw_profile_scholar")  # Куки/мета-информация сессии, чтобы не ловить постоянно капчу
     headless: bool = True  # Включить или выключить визуальный браузер (удобно для дебага локально)
@@ -37,7 +37,8 @@ class PipelineConfig:
     ui_lang: str = "ru"
     md_dir: Path = Path(
         "../../knowledge_base/articles/")  # Папка для сохранения markdown, можно поменять потом или поставить общую для всего конфига (кстати я предусмотрел чтобы название статей еще были уникальные, то есть чтобы не оказались одни и те же статьи в папке)
-    report_json: Path = Path("../../knowledge_base/metadata_scholar.json")  # Информация по всем статьям которые получилось скачать и найти
+    report_json: Path = Path(
+        "../../knowledge_base/metadata_scholar.json")  # Информация по всем статьям которые получилось скачать и найти
     http_timeout: int = 45
     download_retries: int = 2
     download_retry_sleep: float = 1.0
@@ -54,6 +55,7 @@ class PipelineConfig:
     log_level: str = "INFO"
     log_max_bytes: int = 10_000_000
     log_backup_count: int = 5
+
 
 @dataclass
 class ScholarItem:
@@ -79,33 +81,6 @@ ConvertResult = Union[
     Tuple[Literal["skip"], int],
     Tuple[Literal["err"], str],
 ]
-
-
-def setup_logger(cfg: PipelineConfig) -> logging.Logger:
-    cfg.path_logs.mkdir(parents=True, exist_ok=True)
-
-    logger = logging.getLogger("scholar_parser")
-    if logger.handlers:
-        return logger  # чтобы не дублировать при повторных запусках
-
-    level = getattr(logging, cfg.log_level.upper(), logging.INFO)
-    logger.setLevel(level)
-    logger.propagate = False
-
-    fh = RotatingFileHandler(
-        filename=str(cfg.path_logs / cfg.log_file),
-        maxBytes=int(cfg.log_max_bytes),
-        backupCount=int(cfg.log_backup_count),
-        encoding="utf-8",
-    )
-    fh.setLevel(level)
-    fh.setFormatter(logging.Formatter(
-        "%(asctime)s | %(levelname)s | %(processName)s | %(message)s",
-        "%Y-%m-%d %H:%M:%S",
-    ))
-
-    logger.addHandler(fh)
-    return logger
 
 
 def build_scholar_url(query: str, start: int, ui_lang: str = "ru", fulltext: bool = False) -> str:
@@ -512,18 +487,19 @@ def scholar_item_to_article(it: ScholarItem) -> Article:
     """Обертка над ScholarItem -> Article"""
     return Article(
         source=it.source or "googlescholar",
-        external_id=it.article_url,            # стабильный ID
+        external_id=it.article_url,  # стабильный ID
         title=it.title,
-        date_sub=it.date_pub or "",             # ISO-строка или ""
+        date_sub=it.date_pub or "",  # ISO-строка или ""
         url_article=it.article_url,
         pdf_url=it.pdf_url or "",
         authors={"raw": it.authors} if it.authors else None,
         tags=[it.tags] if isinstance(it.tags, str) else it.tags,
         abstract=it.abstract or "",
-        file_article=None,                      # сохраняется позже OBS
+        file_article=None,  # сохраняется позже OBS
         category=it.category,
         text_article=it.abstract or ""
     )
+
 
 class ScholarParser(BaseParser):
     name = "scholar"
@@ -535,11 +511,8 @@ class ScholarParser(BaseParser):
     ):
         self.start_date = datetime.strptime(date_range[0], "%Y-%m-%d").date()
         self.end_date = datetime.strptime(date_range[1], "%Y-%m-%d").date()
-        # self.start_date = start_s
-        # self.end_date = end_s
         self.config = config
         self.config.md_dir.mkdir(parents=True, exist_ok=True)
-        # self.log = setup_logger(self.config)
 
         self.today = date.today()
         self.min_age_days = (self.today - self.end_date).days
@@ -646,6 +619,9 @@ class ScholarParser(BaseParser):
                 page.wait_for_load_state("domcontentloaded")
                 jitter_sleep(2.0, 4.0)
 
+            else:
+                logger.info("Достигнут лимит страниц: %d", self.config.max_pages)
+
             ctx.close()
 
         items_all.sort(key=lambda x: (x.age_days if x.age_days is not None else 10 ** 9, x.title.lower()))
@@ -721,6 +697,7 @@ class ScholarParser(BaseParser):
         items: List[ScholarItem] = await asyncio.to_thread(self.run)
         return [scholar_item_to_article(it) for it in items]
 
+
 async def main():
     import json
     date_range = ('2026-01-01', '2026-01-30')
@@ -730,6 +707,7 @@ async def main():
     results = await google_s.arun()
     with open('google_sc.json', 'w+', encoding='utf8') as jsonfile:
         json.dump([a.to_dict() for a in results], jsonfile, indent=4, ensure_ascii=False)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

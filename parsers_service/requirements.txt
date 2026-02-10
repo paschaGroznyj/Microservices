@@ -1,0 +1,12 @@
+requests
+beautifulsoup4
+PyPDF2
+python-dotenv
+mistralai
+selenium
+playwright
+PyMuPDF
+aiobotocore
+boto3
+pyyaml
+python-dotenv==1.0.0

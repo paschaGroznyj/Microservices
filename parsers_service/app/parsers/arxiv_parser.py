@@ -1,10 +1,8 @@
-import os
 import re
 import time
 import json
 import asyncio
 from io import BytesIO
-from pathlib import Path
 from datetime import datetime
 from dataclasses import dataclass, asdict
 from typing import Optional, List
@@ -202,16 +200,16 @@ class ARXIVParser:
     async def arun(self) -> list[dict]:
         return await asyncio.to_thread(self.parsing)
 
-async def main():
-    data_range = ('2026-01-20', '2026-01-30')
-    arx_parser = ARXIVParser(data_range)
-    results = await asyncio.gather(
-        arx_parser.arun(),
-        return_exceptions=True
-    )
-    with open('../arx.json', 'w+', encoding='utf8') as jsonfile:
-        json.dump(results, jsonfile, indent=4, ensure_ascii=False)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+# async def main():
+#     data_range = ('2026-01-20', '2026-01-30')
+#     arx_parser = ARXIVParser(data_range)
+#     results = await asyncio.gather(
+#         arx_parser.arun(),
+#         return_exceptions=True
+#     )
+#     with open('../arx.json', 'w+', encoding='utf8') as jsonfile:
+#         json.dump(results, jsonfile, indent=4, ensure_ascii=False)
+#
+# if __name__ == "__main__":
+#     asyncio.run(main())
 

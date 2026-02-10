@@ -10,3 +10,5 @@ aiobotocore
 boto3
 pyyaml
 python-dotenv==1.0.0
+fastapi
+uvicorn

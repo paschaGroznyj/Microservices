@@ -76,7 +76,7 @@ def build_parsers(date_range: tuple):
         ARXIVParser(date_range),
         FluxiconParser(date_range),
         ScholarParser(date_range=date_range, config=cfg),
-        IEEEParser(IEEE_LINK),
+        IEEEParser(IEEE_LINK, date_range=date_range),
     ]
 
 

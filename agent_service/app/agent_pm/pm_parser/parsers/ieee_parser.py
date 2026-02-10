@@ -36,11 +36,18 @@ DATE_PATTERN = re.compile(
 class IEEEParser(BaseParser):
     name = "ieee"
 
-    def __init__(self, requested_link):
+    def __init__(self, requested_link, date_range: tuple = None):
         self.driver = self.create_stealth_headless_driver()
         self.driver.get(requested_link)
         self._dismiss_cookie_banner()
         self.requested_link = requested_link
+
+        if date_range:
+            self.date_start = datetime.strptime(date_range[0], "%Y-%m-%d").date() if isinstance(date_range[0], str) else date_range[0]
+            self.date_end = datetime.strptime(date_range[1], "%Y-%m-%d").date() if isinstance(date_range[1], str) else date_range[1]
+        else:
+            self.date_start = datetime.strptime('01.10.2025', '%d.%m.%Y').date()
+            self.date_end = None
 
         load_dotenv()
 
@@ -134,7 +141,10 @@ class IEEEParser(BaseParser):
                     date = datetime.strptime(date_string, '%d %B %Y').date()
                 except IndexError:
                     logger.warning("Дата публикации не найдена")
-                if date < datetime.strptime('01.10.2025', '%d.%m.%Y').date():
+                    continue
+                if date < self.date_start:
+                    continue
+                if self.date_end and date > self.date_end:
                     continue
 
                 # Check if article is about PM

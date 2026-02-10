@@ -132,20 +132,22 @@ class ARXIVParser:
                     #     print(f"Ошибка при скачивании PDF {pdf_url}: {e}")
                     #     text_article = None
 
-                # category = self.__get_category(abstract)
+                category = self.__get_category(abstract)
 
                 result_list.append({
                        "source": "https://arxiv.org",
                        "external_id": arxiv_id,
                        "title": title, # str
-                       "data_sub": date_sub, # str {year}-{month}-{day}
+                       "date_sub": date_sub, # str {year}-{month}-{day}
                        "url_article": url_article, # str если есть
                        "pdf_url": pdf_url, # str если есть
                        "authors": authors_dict, # dict {"Sindhura Kumbakonam Subramanian": "ссылка_если_есть"}
                        "tags": tags, # list если есть
                        "category": category if category else None # Отработка после Гигачата
                 })
+                print("Название статьи", title)
                 time.sleep(3)
+
             if not page_has_relevant:
                 # Проверим: если самая первая статья на странице < start → выход
                 if preview_articles:
@@ -228,7 +230,7 @@ class ARXIVParser:
                 text += page.extract_text()
 
             with open(
-                    os.path.join(self.name_doc_dir, f"{value['data_sub']}_{value['title']}.md"),
+                    os.path.join(self.name_doc_dir, f"{value['date_sub']}_{value['title']}.md"),
                     "w",
                     encoding="utf-8"
             ) as f:
@@ -342,9 +344,10 @@ class ARXIVParser:
         #     print("Статей в объектном хранилище нет!")
         meta = self.parsing()
         existing_ids = set(self.__read_existing_metadata().keys())
-
+        print("Считали существующие метаданные", existing_ids)
         # тут достать arxiv_id из ссылки
         new_articles = [art for art in meta if art["external_id"] not in existing_ids]
+        print("NEW ARTICLES", new_articles)
         self.__download__and_save_pdf_article(new_articles)
         self.__save_meta_in_json(new_articles)
         # self.__gen_digest_for_file(new_articles)

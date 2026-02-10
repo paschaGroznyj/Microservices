@@ -223,7 +223,7 @@ class SummaryGenerator:
             "created_at": datetime.now().isoformat(),
             "digest": summary,
             "category": theme,
-            "digest_file": str(digest_file).split("\\")[-1],
+            "digest_file": str(digest_file), # Потом подумать над неймингом в message
             "digest_folder": folder.name
         }
 

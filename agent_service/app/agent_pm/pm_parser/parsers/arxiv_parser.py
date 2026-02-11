@@ -3,10 +3,10 @@ import re
 import time
 import json
 import asyncio
+import logging
 from io import BytesIO
 from pathlib import Path
 from datetime import datetime
-from dataclasses import dataclass, asdict
 from typing import Optional, List
 
 import requests
@@ -14,31 +14,18 @@ from bs4 import BeautifulSoup
 from PyPDF2 import PdfReader
 from dotenv import load_dotenv
 
+from .models import Article
+from .base import BaseParser
 
 
 load_dotenv()
-
-@dataclass
-class Article:
-    source: str
-    external_id: str
-    title: str
-    date_sub: str
-    url_article: str
-    pdf_url: str
-    authors: dict
-    tags: str | List
-    abstract: str
-    file_article: str
-    category: str | None
-    text_article: str
+logger = logging.getLogger("parser.arxiv")
 
 
-# obs = OBSWorker()
-class ARXIVParser:
+class ARXIVParser(BaseParser):
     name = "arxiv"
 
-    def __init__(self, data_range: tuple):
+    def __init__(self, date_range: tuple):
         self.months_dict = {
         'January': 1, 'February': 2, 'March': 3, 'April': 4,
             'May': 5, 'June': 6, 'July': 7, 'August': 8,
@@ -51,11 +38,11 @@ class ARXIVParser:
                       "start": ""
                       }
         # Преобразуем строки в date, если они строки
-        if isinstance(data_range[0], str):
-            self.data_start = datetime.strptime(data_range[0], "%Y-%m-%d").date()
-            self.data_end = datetime.strptime(data_range[1], "%Y-%m-%d").date()
+        if isinstance(date_range[0], str):
+            self.data_start = datetime.strptime(date_range[0], "%Y-%m-%d").date()
+            self.data_end = datetime.strptime(date_range[1], "%Y-%m-%d").date()
         else:
-            self.data_start, self.data_end = data_range
+            self.data_start, self.data_end = date_range
         self.article_list = []
         self.parameters_string = ""
         self.__pre_convert_url()
@@ -69,14 +56,11 @@ class ARXIVParser:
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
         }
-        # self.llm = GigaChat(
-        #     credentials=GIGACHAT_CREDENTIALS,  # Обязательный параметр
-        #     verify_ssl_certs=False,  # Отключаем проверку SSL
-        # )
-        # self.summarizer = SummaryGenerator()
+
     def __pre_convert_url(self):
         for key, value in self.parameters.items():
             self.parameters_string += key + "=" + value + "&"
+
     def __convert_month(self, date_sub):
         submitted_date = date_sub.split(";")[0]
         day, month, year = submitted_date.split(" ")[1], submitted_date.split(" ")[2].strip(","), submitted_date.split(" ")[3]
@@ -118,7 +102,7 @@ class ARXIVParser:
                 url_article = art.find('a').get("href").strip()
                 date_sub, tuple_data = self.__convert_month(date_sub)
                 current_data = datetime.strptime(f"{tuple_data[0]}-{tuple_data[1]}-{tuple_data[2]}", '%Y-%m-%d').date()
-                print(current_data)
+                logger.debug("Дата статьи: %s", current_data)
                 if current_data > end:
                     continue
 
@@ -135,7 +119,6 @@ class ARXIVParser:
                 arxiv_id = p_tag.find('a').text.split(":")[1] # достать
                 pdf_link_tag = p_tag.find('a', string='pdf')
                 pdf_url = ''
-                category = []
                 text_article = ''
 
                 if pdf_link_tag:
@@ -153,16 +136,16 @@ class ARXIVParser:
                         authors=authors_dict,
                         tags=tags,
                         abstract=abstract,
-                        file_article=file_article,
-                        category=category if category else None,
+                        file_article=None,
+                        category=None,
                         text_article=text_article
                     )
                 )
-                print("Название статьи", title)
+                logger.info("Найдена статья: %s", title)
                 time.sleep(3)
 
             if not page_has_relevant:
-                # Проверим: если самая первая статья на странице < start → выход
+                # Проверим: если самая первая статья на странице < start -> выход
                 if preview_articles:
                     first_art = preview_articles[0]
                     first_date_raw = first_art.find('p', class_='is-size-7').text.strip()
@@ -170,11 +153,11 @@ class ARXIVParser:
                     first_date = datetime.strptime(f"{first_tuple[0]}-{first_tuple[1]}-{first_tuple[2]}",
                                                    '%Y-%m-%d').date()
                     if first_date < start:
-                        print("Достигнута нижняя граница дат. Парсинг завершён.")
+                        logger.info("Достигнута нижняя граница дат. Парсинг завершён.")
                         break
 
 
-        return [asdict(item) for item in result_list]
+        return result_list
 
 
     def __parse_article(self, url_article: str):
@@ -199,19 +182,15 @@ class ARXIVParser:
         safe_title = re.sub(r'[_\s]+', '_', safe_title).strip('_')
         return str(safe_title)
 
-    async def arun(self) -> list[dict]:
+    async def arun(self) -> List[Article]:
         return await asyncio.to_thread(self.parsing)
 
 async def main():
-    data_range = ('2026-01-20', '2026-01-30')
-    arx_parser = ARXIVParser(data_range)
-    results = await asyncio.gather(
-        arx_parser.arun(),
-        return_exceptions=True
-    )
+    date_range = ('2026-01-20', '2026-01-30')
+    arx_parser = ARXIVParser(date_range)
+    results = await arx_parser.arun()
     with open('../arx.json', 'w+', encoding='utf8') as jsonfile:
-        json.dump(results, jsonfile, indent=4, ensure_ascii=False)
+        json.dump([a.to_dict() for a in results], jsonfile, indent=4, ensure_ascii=False)
 
 if __name__ == "__main__":
     asyncio.run(main())
-

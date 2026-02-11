@@ -145,7 +145,9 @@ class ARXIVParser:
                        "tags": tags, # list если есть
                        "category": category if category else None # Отработка после Гигачата
                 })
+                print("Название статьи", title)
                 time.sleep(3)
+
             if not page_has_relevant:
                 # Проверим: если самая первая статья на странице < start → выход
                 if preview_articles:
@@ -342,9 +344,10 @@ class ARXIVParser:
         #     print("Статей в объектном хранилище нет!")
         meta = self.parsing()
         existing_ids = set(self.__read_existing_metadata().keys())
-
+        print("Считали существующие метаданные", existing_ids)
         # тут достать arxiv_id из ссылки
         new_articles = [art for art in meta if art["external_id"] not in existing_ids]
+        print("NEW ARTICLES", new_articles)
         self.__download__and_save_pdf_article(new_articles)
         self.__save_meta_in_json(new_articles)
         # self.__gen_digest_for_file(new_articles)

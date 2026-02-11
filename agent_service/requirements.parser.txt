@@ -1,0 +1,9 @@
+requests
+beautifulsoup4
+PyPDF2
+PyMuPDF
+playwright
+selenium
+mistralai
+python-dotenv
+pyyaml

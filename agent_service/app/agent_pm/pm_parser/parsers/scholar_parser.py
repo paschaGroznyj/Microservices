@@ -12,25 +12,33 @@ import requests
 import fitz
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 import io
-from pypdf import PdfReader
+# from pypdf import PdfReader
+from PyPDF2 import PdfReader
 import asyncio
 import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
+from dataclasses import dataclass, asdict
+
+from .models import Article
+from .base import BaseParser
+
+logger = logging.getLogger("parser.scholar")
 
 
 @dataclass
 class PipelineConfig:
     query: str = '"process mining" OR "process discovery" OR "event log" OR "process model" OR "audit trail"'
-    max_pages: int = 10
-    max_pdf_pages: int = 20
-    profile_dir: Path = Path("../pw_profile_scholar")  # Куки/мета-информация сессии, чтобы не ловить постоянно капчу
+    max_pages: int = 100
+    max_pdf_pages: int = 100
+    profile_dir: Path = Path("../../pw_profile_scholar")  # Куки/мета-информация сессии, чтобы не ловить постоянно капчу
     headless: bool = True  # Включить или выключить визуальный браузер (удобно для дебага локально)
     fulltext: bool = False
     ui_lang: str = "ru"
     md_dir: Path = Path(
-        "../md")  # Папка для сохранения markdown, можно поменять потом или поставить общую для всего конфига (кстати я предусмотрел чтобы название статей еще были уникальные, то есть чтобы не оказались одни и те же статьи в папке)
-    report_json: Path = Path("../final_items.json")  # Информация по всем статьям которые получилось скачать и найти
+        "../../knowledge_base/articles/")  # Папка для сохранения markdown, можно поменять потом или поставить общую для всего конфига (кстати я предусмотрел чтобы название статей еще были уникальные, то есть чтобы не оказались одни и те же статьи в папке)
+    report_json: Path = Path(
+        "../../knowledge_base/metadata_scholar.json")  # Информация по всем статьям которые получилось скачать и найти
     http_timeout: int = 45
     download_retries: int = 2
     download_retry_sleep: float = 1.0
@@ -42,7 +50,7 @@ class PipelineConfig:
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
     convert_timeout_s: float = 60.0  # Время на конвертацию
-    path_logs: Path = Path("../logs")  # Папка с логами выполнения
+    path_logs: Path = Path("../../logs")  # Папка с логами выполнения
     log_file: str = "scholar_parser.log"
     log_level: str = "INFO"
     log_max_bytes: int = 10_000_000
@@ -73,33 +81,6 @@ ConvertResult = Union[
     Tuple[Literal["skip"], int],
     Tuple[Literal["err"], str],
 ]
-
-
-def setup_logger(cfg: PipelineConfig) -> logging.Logger:
-    cfg.path_logs.mkdir(parents=True, exist_ok=True)
-
-    logger = logging.getLogger("scholar_parser")
-    if logger.handlers:
-        return logger  # чтобы не дублировать при повторных запусках
-
-    level = getattr(logging, cfg.log_level.upper(), logging.INFO)
-    logger.setLevel(level)
-    logger.propagate = False
-
-    fh = RotatingFileHandler(
-        filename=str(cfg.path_logs / cfg.log_file),
-        maxBytes=int(cfg.log_max_bytes),
-        backupCount=int(cfg.log_backup_count),
-        encoding="utf-8",
-    )
-    fh.setLevel(level)
-    fh.setFormatter(logging.Formatter(
-        "%(asctime)s | %(levelname)s | %(processName)s | %(message)s",
-        "%Y-%m-%d %H:%M:%S",
-    ))
-
-    logger.addHandler(fh)
-    return logger
 
 
 def build_scholar_url(query: str, start: int, ui_lang: str = "ru", fulltext: bool = False) -> str:
@@ -465,7 +446,7 @@ def _convert_worker_pypdf(pdf_bytes: bytes, q: mp.Queue, max_pages: int) -> None
             return
 
         parts: List[str] = []
-        for page in reader.pages:
+        for page in reader.pages[:3]:
             txt = page.extract_text() or ""
             txt = txt.strip()
             if txt:
@@ -484,7 +465,7 @@ def convert_with_timeout(
 ) -> Optional[ConvertResult]:
     q: mp.Queue = mp.Queue()
     p = mp.Process(
-        target=_convert_worker_fast,
+        target=_convert_worker_pypdf,
         args=(pdf_bytes, q, max_pages),
         daemon=True,
     )
@@ -502,22 +483,41 @@ def convert_with_timeout(
     return q.get()
 
 
-class ScholarParser:
+def scholar_item_to_article(it: ScholarItem) -> Article:
+    """Обертка над ScholarItem -> Article"""
+    return Article(
+        source=it.source or "googlescholar",
+        external_id=it.article_url,  # стабильный ID
+        title=it.title,
+        date_sub=it.date_pub or "",  # ISO-строка или ""
+        url_article=it.article_url,
+        pdf_url=it.pdf_url or "",
+        authors={"raw": it.authors} if it.authors else None,
+        tags=[it.tags] if isinstance(it.tags, str) else it.tags,
+        abstract=it.abstract or "",
+        file_article=None,  # сохраняется позже OBS
+        category=it.category,
+        text_article=it.abstract or ""
+    )
+
+
+class ScholarParser(BaseParser):
+    name = "scholar"
+
     def __init__(
             self,
-            date_range: Tuple[date, date],
+            date_range: Tuple[str, str],
             config: PipelineConfig
     ):
-        start_s, end_s = date_range
-        self.start_date = datetime.strptime(start_s, "%Y-%m-%d").date()
-        self.end_date = datetime.strptime(end_s, "%Y-%m-%d").date()
+        self.start_date = datetime.strptime(date_range[0], "%Y-%m-%d").date()
+        self.end_date = datetime.strptime(date_range[1], "%Y-%m-%d").date()
         self.config = config
         self.config.md_dir.mkdir(parents=True, exist_ok=True)
-        self.log = setup_logger(self.config)
 
         self.today = date.today()
         self.min_age_days = (self.today - self.end_date).days
         self.max_age_days = (self.today - self.start_date).days
+        logger.debug("Диапазон возраста: min=%d, max=%d дней", self.min_age_days, self.max_age_days)
 
         if self.min_age_days < 0 or self.max_age_days < 0:
             raise ValueError("date_range должен быть в прошлом или сегодня.")
@@ -528,12 +528,12 @@ class ScholarParser:
         start = time.time()
         items = self._scrape()
         end = time.time()
-        self.log.info("Общее время скрапинга: %.2f sec", end - start)
+        logger.info("Общее время скрапинга: %.2f sec", end - start)
         items = self._process(items)
         return items
 
     def _scrape(self) -> List[ScholarItem]:
-        self.log.info("Начало скрапинга на Playwright (sync)")
+        logger.info("Начало скрапинга на Playwright (sync)")
         items_all: List[ScholarItem] = []
 
         with sync_playwright() as p:
@@ -562,16 +562,16 @@ class ScholarParser:
                         self.config.path_logs.mkdir(parents=True, exist_ok=True)
                         shot = self.config.path_logs / f"captcha_{int(time.time())}.png"
                         page.screenshot(path=str(shot), full_page=True)
-                        self.log.error("Найдена CAPTCHA на странице %s (screenshot: %s)", page.url, shot)
+                        logger.error("Найдена CAPTCHA на странице %s (screenshot: %s)", page.url, shot)
                         raise RuntimeError(f"Найдена CAPTCHA на странице {page.url} (screenshot: {shot})")
                     else:
-                        print("Нашел CAPTCHA. Решите капчу!!! И нажмите Enter")
+                        logger.warning("Нашел CAPTCHA. Решите капчу и нажмите Enter")
                         input()
 
                 try:
                     page.wait_for_selector("div.gs_r.gs_or.gs_scl", timeout=20_000)  # ждем пока загрузится страница
                 except PlaywrightTimeoutError as e:
-                    self.log.warning("Не удалось дождаться загрузки результатов поиска. Завершение работы: %s", str(e))
+                    logger.warning("Не удалось дождаться загрузки результатов поиска: %s", str(e))
                     break
 
                 page_items = parse_results_on_page(page)
@@ -579,13 +579,17 @@ class ScholarParser:
                 ages_all = [it.age_days for it in page_items if it.age_days is not None]
 
                 for it in page_items:
+                    logger.debug("Статья: age_days=%s", it.age_days)
                     if it.age_days is None:
                         continue
                     if it.age_days < self.min_age_days:
+                        logger.debug("Пропуск: слишком свежая (age=%d < min=%d)", it.age_days, self.min_age_days)
                         continue
                     if it.age_days > self.max_age_days:
+                        logger.debug("Пропуск: слишком старая (age=%d > max=%d)", it.age_days, self.max_age_days)
                         continue
                     if not is_probably_pdf(it.pdf_label, it.pdf_url):
+                        logger.debug("Пропуск: не PDF")
                         continue
 
                     items_all.append(it)
@@ -594,7 +598,7 @@ class ScholarParser:
                 pages_parsed += 1
                 pdf_candidates = sum(1 for it in page_items if is_probably_pdf(it.pdf_label, it.pdf_url))
 
-                self.log.info(
+                logger.info(
                     "Страница %d: результатов %d, PDF-кандидатов %d, принято +%d, всего принято %d",
                     pages_parsed, len(page_items), pdf_candidates, kept_on_page, len(items_all)
                 )
@@ -602,8 +606,8 @@ class ScholarParser:
                 if ages_all:
                     youngest = min(ages_all)
                     if youngest > self.max_age_days:
-                        self.log.info(
-                            "Остановка по возрасту: самый старый результат на странице — %d дн. (> лимита %d дн.).",
+                        logger.info(
+                            "Остановка по возрасту: самый старый результат на странице — %d дн. (> лимита %d дн.)",
                             youngest, self.max_age_days
                         )
                         break
@@ -614,6 +618,9 @@ class ScholarParser:
 
                 page.wait_for_load_state("domcontentloaded")
                 jitter_sleep(2.0, 4.0)
+
+            else:
+                logger.info("Достигнут лимит страниц: %d", self.config.max_pages)
 
             ctx.close()
 
@@ -641,15 +648,15 @@ class ScholarParser:
                     ) = download_pdf_with_retries(self.config, s, it.pdf_url)
 
                     if pdf_bytes is None:
-                        self.log.warning(
+                        logger.warning(
                             "Скачивание %s не удалось (%s) за %.2f сек, попыток %d",
                             it.title, stop_reason, elapsed, attempts
                         )
                         continue
 
-                    self.log.info("Скачивание %s: %.2f сек, попыток %d", it.title, elapsed, attempts)
+                    logger.info("Скачивание %s: %.2f сек, попыток %d", it.title, elapsed, attempts)
 
-                    self.log.info("Форматируется файл: %s, %s", it.title, it.article_url)
+                    logger.info("Форматируется файл: %s, %s", it.title, it.article_url)
                     res = convert_with_timeout(
                         pdf_bytes=pdf_bytes,
                         timeout_s=self.config.convert_timeout_s,
@@ -657,43 +664,49 @@ class ScholarParser:
                     )
 
                     if res is None:
-                        self.log.warning("Пропускаем %s: долгая конверктация", it.title)
+                        logger.warning("Пропускаем %s: долгая конвертация", it.title)
                         continue
 
                     kind = res[0]
-
+                    logger.debug("Статус по статье: %s", kind)
                     if kind == "skip":
                         it.page_count = res[1]
-                        self.log.info("Пропускаем %s: много страниц (%d)", it.title, it.page_count)
+                        logger.warning("Пропускаем %s: много страниц (%d)", it.title, it.page_count)
                         continue
 
                     if kind == "err":
-                        self.log.error("Ошибка %s: ошибка конвертации %s", it.title, res[1])
+                        logger.error("Ошибка %s: ошибка конвертации %s", it.title, res[1])
                         continue
 
                     if kind == "ok":
                         it.page_count, md = res[1], res[2]
                         it.abstract = md
-                        md_path.write_text(md.strip() + "\n", encoding="utf-8")
                         final_items.append(it)
                     else:
                         continue
 
                 except Exception as e:
-                    self.log.error("Ошибка сессии скачивания файла %s: %s", it.title, str(e))
+                    logger.error("Ошибка сессии скачивания файла %s: %s", it.title, str(e))
 
                 time.sleep(self.config.sleep_between_downloads)
 
-        self.log.info("Парсер завершил работу. Найдено статей: %d", len(final_items))
+        logger.info("Парсер завершил работу. Найдено статей: %d", len(final_items))
         return final_items
 
+    async def arun(self) -> List[Article]:
+        items: List[ScholarItem] = await asyncio.to_thread(self.run)
+        return [scholar_item_to_article(it) for it in items]
 
-# Примеры использования
+
 async def main():
+    import json
+    date_range = ('2026-01-01', '2026-01-30')
     cfg = PipelineConfig()
     cfg.max_pages = 2
-    gs = ScholarParser((date(2026, 1, 1), date(2026, 1, 31)), cfg)
-    items = await asyncio.to_thread(gs.run)
+    google_s = ScholarParser(date_range=date_range, config=cfg)
+    results = await google_s.arun()
+    with open('google_sc.json', 'w+', encoding='utf8') as jsonfile:
+        json.dump([a.to_dict() for a in results], jsonfile, indent=4, ensure_ascii=False)
 
 
 if __name__ == "__main__":

@@ -18,7 +18,7 @@ from config import (
     PORT_LLM_CONSUMER, PORT_DB_CONSUMER,
     PORT_AUTH_SERVICE, PORT_CHATS_SERVICE,
     PORT_CRB_SERVICE, SECRET_KEY, ALGORITHM,
-    PORT_GATEWAY_PORT
+    PORT_GATEWAY_PORT, PORT_PARSERS_SERVICE
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -39,7 +39,11 @@ SERVICES = {
      "llm_bot": {
          "url": f"http://llm_model_service:{PORT_LLM_CONSUMER}",
          "health_endpoint": "/health",
-     }
+     },
+    "parsers": {
+             "url": f"http://parsers_service:{PORT_PARSERS_SERVICE}",
+             "health_endpoint": "/health",
+         }
 #    "llm_bot": {
 #        "url": f"http://agent_service:{PORT_LLM_CONSUMER}",
 #        "health_endpoint": "/health",

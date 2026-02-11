@@ -278,13 +278,11 @@ def category_filter(articles: List[Dict], category: Optional[str]) -> List[Dict]
 def title_filter(articles: List[Dict], title: Optional[str]) -> List[Dict]:
     if not title:
         return articles
-
     t = title.lower()
     return [
         art for art in articles
         if (art.get('title') or '').lower().find(t) != -1
     ]
-
 def semantic_filter(articles: List[Dict], topic: str, threshold: float) -> List[Dict]:
     filtered = []
     query_emb = EMBED_MODEL.encode([topic])

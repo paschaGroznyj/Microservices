@@ -27,17 +27,17 @@ def parse_glossary_md(file_path: str) -> List[Dict[str, str]]:
     print(f"📖 Загружено терминов из глоссария: {len(glossary)}")
     return glossary
 
-def find_relevant_glossary(content: str, file_path: str, top_k: int = 5) -> str:
-    model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+def find_relevant_glossary(embed_model, content: str, file_path: str, top_k: int = 5) -> str:
+    # model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
 
     glossary = parse_glossary_md(file_path)
     
     # Весь текст статьи
-    article_emb = model.encode(content)
+    article_emb = embed_model.encode(content)
     
     # Все определения глоссария
     glossary_defs = [item['term'] for item in glossary]
-    glossary_embs = model.encode(glossary_defs)
+    glossary_embs = embed_model.encode(glossary_defs)
     
     # Косинусное сходство
     scores = util.cos_sim(article_emb, glossary_embs)[0]

@@ -1,1 +1,1 @@
-from .embedding import KBEmbedding
+from .embedding import AsyncStandaloneEmbedding, DummyKBEmbedding

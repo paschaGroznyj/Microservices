@@ -1,21 +1,27 @@
 from typing import Dict, Any, cast
-from huggingface_hub import InferenceClient
+from huggingface_hub import InferenceClient, AsyncInferenceClient
 from chromadb import Documents, EmbeddingFunction, Embeddings
 from chromadb.utils.embedding_functions import register_embedding_function
 
 
-@register_embedding_function
-class KBEmbedding(EmbeddingFunction):
+class AsyncStandaloneEmbedding:
     def __init__(self, model, api_key):
         self.model = model
-        self.embedding_client = InferenceClient(
+        self.embedding_client = AsyncInferenceClient(
             provider='hf-inference',
             api_key=api_key
         )
     
+    async def embed(self, input):
+        embedding = await self.embedding_client.feature_extraction(input, model=self.model)
+        return embedding
+
+class DummyKBEmbedding(EmbeddingFunction):
+    def __init__(self, model):
+        self.model=model
+    
     def __call__(self, input: Documents) -> Embeddings:
-        embeddings = self.embedding_client.feature_extraction(input, model=self.model)
-        return cast(Embeddings, embeddings)
+        return cast(Embeddings, [])
     
     @staticmethod
     def name() -> str:
@@ -26,4 +32,4 @@ class KBEmbedding(EmbeddingFunction):
 
     @staticmethod
     def build_from_config(config: Dict[str, Any]) -> "EmbeddingFunction":
-        return KBEmbedding(config['model'])
+        return DummyKBEmbedding(config['model'])

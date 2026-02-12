@@ -13,11 +13,14 @@
    - Сервис авторизации
      • auth_service/app.py
 
-   - Сервис агента PM
+   - Сервис агента PM - [информация об агенте и проекте](agent_service/readme.md)
      • agent_service/app/app.py
 
    - API Gateway
      • api_gateway/app.py
+   
+   - Сервис для парсинга статей
+     • agent_service/app/run_parcsers.py
 
 
 ## 🧩 Архитектура микросервисов и Kafka

@@ -1,12 +1,16 @@
 import hashlib
 from langchain.chat_models.gigachat import GigaChat
 from langchain.schema import SystemMessage
-from core.config import GIGACHAT_CREDENTIALS, QWEN_CREDENTIALS, STORAGE_PATH
+from core.config import GIGACHAT_CREDENTIALS, STORAGE_PATH, EMBED_MODEL_GLOSS, PATH_TO_GLOSSARY
 from typing import Dict, Any, List
 import json
 import re
 from datetime import datetime
 from pathlib import Path
+from sentence_transformers import SentenceTransformer
+from glossary import find_relevant_glossary
+
+EMBED_MODEL = SentenceTransformer(EMBED_MODEL_GLOSS)
 
 
 class SummaryGenerator:
@@ -115,6 +119,7 @@ class SummaryGenerator:
         print("Тема:", theme)
 
 
+        final_text = find_relevant_glossary(EMBED_MODEL, content_[:4000], PATH_TO_GLOSSARY)
         # content_hash = self._get_content_hash(content_)
 
         # # Проверяем, есть ли уже дайджест
@@ -141,6 +146,9 @@ class SummaryGenerator:
 
         prompt = [SystemMessage(content=f"""Твоя задача: прочитать текст статьи из "{filename}", извлечь и адаптировать информацию для русскоязычного эксперта.
 
+        ## ГЛОССАРИЙ (обязательно используй для всех технических терминов из текста если необходимо):
+        {final_text}
+        
         ## ПРАВИЛА (строго соблюдай):
         1. Переводи для русскоязычного эксперта, сохраняя академический стиль, сохраняя точность терминов
         2. Факты БЕРИ ТОЛЬКО ИЗ ТЕКСТА, без домыслов
@@ -215,7 +223,7 @@ class SummaryGenerator:
             "created_at": datetime.now().isoformat(),
             "digest": summary,
             "category": theme,
-            "digest_file": str(digest_file).split("\\")[-1],
+            "digest_file": str(digest_file), # Потом подумать над неймингом в message
             "digest_folder": folder.name
         }
 

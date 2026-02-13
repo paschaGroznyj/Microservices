@@ -4,7 +4,7 @@
 # import torch
 # import numpy as np
 
-
+# Попозже раскомментим :)))))
 # def parse_glossary_md(file_path: str) -> List[Dict[str, str]]:
 #     """Парсит формат: > *TERM (аббревиатуры)* – описание"""
 #     glossary = []
@@ -38,6 +38,7 @@
 #     # Все определения глоссария
 #     glossary_defs = [item['term'] for item in glossary]
 #     glossary_embs = model.encode(glossary_defs)
+
     
 #     # Косинусное сходство
 #     scores = util.cos_sim(article_emb, glossary_embs)[0]

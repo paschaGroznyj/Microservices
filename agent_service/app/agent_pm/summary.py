@@ -119,7 +119,9 @@ class SummaryGenerator:
         print("Тема:", theme)
 
 
+        # НЕ забыть расскоментить =============================
         # final_text = find_relevant_glossary(content_[:4000], PATH_TO_GLOSSARY) # Закомментил
+
         # content_hash = self._get_content_hash(content_)
 
         # # Проверяем, есть ли уже дайджест

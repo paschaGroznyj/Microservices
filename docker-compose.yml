@@ -71,11 +71,17 @@ services:
       HF_TOKEN: ${HF_TOKEN}
       HF_HOME: /app/.cache/huggingface
 
-#      HF_DATASETS_OFFLINE: "0"
-#     TRANSFORMERS_OFFLINE: "1"
+      HF_DATASETS_OFFLINE: "0"
+      TRANSFORMERS_OFFLINE: "0"
     volumes:
       - ./models:/app/.cache/huggingface/hub
     restart: unless-stopped
+
+  selenium_chrome:
+      image: selenium/standalone-chrome:latest
+      shm_size: '2gb'
+      ports:
+        - "4444:4444"
 
   parsers_service:
     build: ./parsers_service
@@ -96,6 +102,9 @@ services:
       OBS_SECRET_KEY: ${OBS_SECRET_KEY}
       OBS_REGION: ${OBS_REGION}
       OBS_ENDPOINT: ${OBS_ENDPOINT}
+    depends_on:
+     - selenium_chrome
+     
     restart: unless-stopped
 
   gateway:
@@ -186,29 +195,29 @@ services:
       - broker
     restart: unless-stopped
 
-  # Парсер — batch job, запуск: docker-compose run parser_service
-  parser_service:
-    build:
-      context: ./agent_service
-      dockerfile: Dockerfile.parser
-    container_name: parser_service
-    environment:
-      DATE_RANGE_START: ${DATE_RANGE_START:-2026-01-01}
-      DATE_RANGE_END: ${DATE_RANGE_END:-2026-01-30}
-      STORAGE_PATH: /app/knowledge_base
-      ARTICLES_FOLDER: articles
-      METADATA_FILE: metadata.json
-      LOG_LEVEL: INFO
-      SCHOLAR_MAX_PAGES: ${SCHOLAR_MAX_PAGES:-2}
-      MISTRAL_KEY: ${MISTRAL_KEY:-}
-      MISTRAL_MODEL: ${MISTRAL_MODEL:-}
-    volumes:
-      - parser_data:/app/knowledge_base
-      - parser_logs:/app/logs
+  # # Парсер — batch job, запуск: docker-compose run parser_service
+  # parser_service:
+  #   build:
+  #     context: ./agent_service
+  #     dockerfile: Dockerfile.parser
+  #   container_name: parser_service
+  #   environment:
+  #     DATE_RANGE_START: ${DATE_RANGE_START:-2026-01-01}
+  #     DATE_RANGE_END: ${DATE_RANGE_END:-2026-01-30}
+  #     STORAGE_PATH: /app/knowledge_base
+  #     ARTICLES_FOLDER: articles
+  #     METADATA_FILE: metadata.json
+  #     LOG_LEVEL: INFO
+  #     SCHOLAR_MAX_PAGES: ${SCHOLAR_MAX_PAGES:-2}
+  #     MISTRAL_KEY: ${MISTRAL_KEY:-}
+  #     MISTRAL_MODEL: ${MISTRAL_MODEL:-}
+  #   volumes:
+  #     - parser_data:/app/knowledge_base
+  #     - parser_logs:/app/logs
 
 volumes:
   kafka-data:
   llm_cache:
-  parser_data:
-  parser_logs:
+  # parser_data:
+  # parser_logs:
 

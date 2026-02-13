@@ -125,7 +125,7 @@ class ParserPipeline:
         # Собираем все Article-объекты из всех парсеров
         all_articles = []
         for result in results:
-            logger.info(f"ВНУТРЯНКА СТАТЬИ {result}")
+            # print("РЕЗУЛЬАТ ПАРСИНГА", result)
             all_articles.extend(result)
 
         return all_articles
@@ -169,9 +169,10 @@ async def perform_parsing_cycle():
             start_date.strftime("%Y-%m-%d"),
             end_date.strftime("%Y-%m-%d")
         )
-        logger.info(f"Парсинг диапазона: {data_range}")
+        
 
         # data_range = ('2026-02-05', '2026-02-10')
+        logger.info(f"Парсинг диапазона: {data_range}")
         link_ieee = (
             "https://ieeexplore.ieee.org/search/searchresult.jsp?"
             "queryText=Process%20Mining&highlight=true&returnType=SEARCH&matchPubs=true&"
@@ -183,21 +184,20 @@ async def perform_parsing_cycle():
         cfg.max_pages = 2
 
         parsers = [
-            # ARXIVParser(data_range),
-            # FluxiconParser(data_range),
+            ARXIVParser(data_range),
+            FluxiconParser(data_range),
             ScholarParser(date_range=data_range, config=cfg),
-            # IEEEParser(link_ieee)
+            IEEEParser(link_ieee)
         ]
 
         pipeline = ParserPipeline(parsers)
         raw_articles = await pipeline.run()
 
-        # 3. Сохраняем локально (статьи + метаданные)
         logger.info(f"Обработка {len(raw_articles)} статей...")
         _save_articles_and_metadata(raw_articles)
 
         save_last_end_date(end_date)
-        # 4. Загружаем всё обратно в OBS
+
         logger.info("Загрузка результатов в OBS...")
         await obs.upload_all_md()
         await obs.put_json()
@@ -212,7 +212,8 @@ async def perform_parsing_cycle():
 
 async def scheduled_parsing_loop():
     while True:
-        interval = int(SYNC_INTERVAL_SCHEDULER)
+        # interval = int(SYNC_INTERVAL_SCHEDULER) * 60 * 24 * 14
+        interval = int(SYNC_INTERVAL_SCHEDULER) * 60 * 24 * 14
         logger.info(f"== Интервал == {interval}")
         await perform_parsing_cycle()
         await asyncio.sleep(interval)

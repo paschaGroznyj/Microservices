@@ -278,7 +278,6 @@ def category_filter(articles: List[Dict], category: Optional[str]) -> List[Dict]
 def title_filter(articles: List[Dict], title: Optional[str]) -> List[Dict]:
     if not title:
         return articles
-
     t = title.lower()
     return [
         art for art in articles
@@ -381,7 +380,7 @@ def build_digest_content(articles: List[Dict], md_path: Path, query: list, llm_c
 
         content.append("### Саммари статьи")
         # Читаем MD
-        # filename_meta = f"{article['data_sub']}_{article['title']}.md"
+        # filename_meta = f"{article['date_sub']}_{article['title']}.md"
         # md_file = Path(md_path) / filename_meta
         base_path = Path(__file__).resolve().parent
         md_file = base_path / 'knowledge_base' / 'articles' / md_file

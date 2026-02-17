@@ -2,11 +2,13 @@ import re
 import os
 import time
 import json
+import hashlib
 import asyncio
 import requests
 from io import BytesIO
 from PyPDF2 import PdfReader
 from dotenv import load_dotenv
+from typing import Optional
 from dataclasses import dataclass, asdict
 from mistralai import Mistral
 from datetime import datetime
@@ -38,19 +40,29 @@ class Article:
     abstract: str 
     file_article: str
     text_article: str
+    category: str | None
 
 class IEEEParser:
     name = "ieee"
 
-    def __init__(self, requested_link, date_start, date_finish):
+    def __init__(self, requested_link, date_range: Optional[tuple[str, str]] = None):
         self.requested_link = requested_link
-        self.date_start = date_start
-        self.date_finish = date_finish
-        if not date_finish:
-            self.date_finish = datetime.strftime(datetime.now().date, '%d.%m.%Y')
+        self.date_range = date_range
 
         print('PARSER INITIALIZED')
 
+    def _in_date_range(self, date_str: str) -> bool:
+        if not self.date_range:
+            return True
+
+        try:
+            article_date = datetime.fromisoformat(date_str)
+            start = datetime.fromisoformat(self.date_range[0])
+            end = datetime.fromisoformat(self.date_range[1])
+            return start <= article_date <= end
+        except Exception:
+            return False
+    
     @staticmethod
     def find_link(element):
         try:
@@ -72,6 +84,7 @@ class IEEEParser:
             page.set_default_navigation_timeout(30_000)
 
             page.goto(self.requested_link)
+            page.wait_for_selector('.pagination-bar')
             pagination_bar = page.locator(".pagination-bar")
             pagination_links = pagination_bar.locator('button').all()[:-1]
 
@@ -91,6 +104,7 @@ class IEEEParser:
                 search_results = page.locator(".List-results-items").all()
                 suitable_results = [sr for sr in search_results if self.is_suitable_search_result(sr)]
                 links = [self.find_link(sr) for sr in suitable_results]
+                print(links)
 
                 print(f'Search results: {len(search_results)}, suitable results: {len(suitable_results)}, links: {len(links)}')
                 
@@ -104,11 +118,12 @@ class IEEEParser:
                     try:
                         date_string = ' '.join(DATE_PATTERN.findall(page.content())[0])
                         date = datetime.strptime(date_string, '%d %B %Y').date()
+                        iso_date = date.isoformat()
                         print(date)
                     except IndexError:
                         print('Publication date not found')
-                    if date < datetime.strptime(self.date_start, '%d.%m.%Y').date() \
-                    and date > datetime.strptime(self.date_finish, '%d.%m.%Y').date():
+                    
+                    if not self._in_date_range(iso_date):
                         continue
 
                     title = page.locator('.document-title').text_content()
@@ -150,8 +165,9 @@ class IEEEParser:
                                     authors,
                                     ' '.join(tags),
                                     abstract,
-                                    'file',
-                                    text_article
+                                    f'{iso_date}_{self.__url_to_hash(link)}.md',
+                                    text_article,
+                                    None
                                 )
                             )
                 print(f'Page {i+1} processed in {datetime.now() - start}')
@@ -159,6 +175,9 @@ class IEEEParser:
 
         return [asdict(item) for item in articles]
             
+    def __url_to_hash(self, url: str, length: int = 12) -> str:
+        return hashlib.sha256(url.encode("utf-8")).hexdigest()[:length]
+    
     def parse(self):
         wait = WebDriverWait(self.driver, timeout=60)
         wait.until(
@@ -451,7 +470,9 @@ class IEEEParser:
 if __name__ == "__main__":
     load_dotenv()
     link = 'https://ieeexplore.ieee.org/search/searchresult.jsp?queryText=Process%20Mining&highlight=true&returnType=SEARCH&matchPubs=true&refinementName=Publication%20Topics&pageNumber=1&refinements=PublicationTopics:Process%20Mining&ranges=2025_2025_Year&returnFacets=ALL'
-    result = IEEEParser(link, '01.10.2025', '01.02.2026')._scrape()
+    result = IEEEParser(link, ('2025-10-01', '2026-02-01'))._scrape()
+
+    print(f'Found results: {len(result)}')
 
     with open('test.json', 'w+', encoding='utf8') as jsonfile:
         json.dump(result, jsonfile, ensure_ascii=False, indent=4)

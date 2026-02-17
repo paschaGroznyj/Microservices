@@ -155,7 +155,24 @@ services:
         POSTGRES_PASSWORD: ${DB_PASSWORD}
       ports:
         - "5433:5432"
-
+  
+  chromadb:
+    image: chromadb/chroma
+    container_name: chromadb
+  
+  rag_service:
+    container_name: rag_service
+    build: ./rag_service
+    command: uvicorn app.app:app --host 0.0.0.0 --port 8002
+    ports:
+      - "8000:8002"
+    environment:
+      HF_TOKEN: ${HF_TOKEN}
+      EMB_MODEL: ${EMB_MODEL}
+      GC_KEY: ${GC_KEY}
+    depends_on:
+      - chromadb
+  
   chats_service:
     container_name: chats_service
     build: ./chats_service

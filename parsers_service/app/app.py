@@ -46,7 +46,7 @@ def load_last_end_date() -> datetime:
     """Загружает последнюю обработанную дату. Если нет — возвращает сегодня минус 14 дней."""
     if not STATE_FILE.exists():
         # Первый запуск: начать с 14 дней назад
-        return datetime.today() - timedelta(days=10)
+        return datetime.today() - timedelta(days=20)
 
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
@@ -181,7 +181,7 @@ async def perform_parsing_cycle():
             "ranges=2026_2026_Year&returnFacets=ALL"
         )
         cfg = PipelineConfig()
-        cfg.max_pages = 2
+        cfg.max_pages = 6
 
         parsers = [
             ARXIVParser(data_range),

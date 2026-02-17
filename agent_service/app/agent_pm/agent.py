@@ -18,6 +18,7 @@ from .pm_parser.botocore_client import OBSWorker
 from huggingface_hub import InferenceClient
 import os
 from .summary_period import agent_composite_digest_tool
+from .update_metadata import MetadataUpdater
 
 logging.basicConfig(level=logging.INFO)
 
@@ -32,6 +33,7 @@ class ActionType(str, Enum):
     ANALYZE_FOLDER = "analyze_folder"
     DELETE_FILE = "delete_file"
     SUMMARIZE_FILTER = 'summarize_filt'
+    REBUILD_CATEGORIES = 'rebuild_categories'
 
 
 class AgentAction(BaseModel):
@@ -84,7 +86,8 @@ class PydanticOutputParser:
                     'rebuild': 'rebuild_all',
                     'build': 'rebuild_all',
                     'analyze': 'analyze_folder',
-                    'summarize_filter': 'summarize_filt'
+                    'summarize_filter': 'summarize_filt',
+                    'rebuild_categories': 'rebuild_categories'
                 }
                 data['action'] = action_map.get(data['action'].lower().strip(), data['action'])
             return self._pydantic_object.model_validate(data)
@@ -108,6 +111,7 @@ class PydanticOutputParser:
             'analyze_folder': ['analyze_folder', 'проверь папку', 'анализ', 'анализируй'],
             'delete_file': ['delete_file', 'удали', 'все новые'],
             'summarize_filt': ['по категории', 'за период'],
+            'rebuild_categories': ['переопредели', 'категории', 'метаданные']
         }
 
         # Определяем action по ключевым словам
@@ -260,6 +264,7 @@ class KnowledgeAgent:
     6. [analyze_folder] - анализ папки
     7. [delete_file] - удалить файл из БД
     8. [summarize_filt] - суммаризация/дайджест с условием по дате или теме
+    9. [rebuild_categories] - переопредели категории в метаданыных
 
     ОСОБЫЕ ПРАВИЛА:
     - Если БД ОТСУТСТВУЕТ (0 векторов) → ВСЕГДА выбирай [rebuild_all]
@@ -331,6 +336,8 @@ class KnowledgeAgent:
             return {"action": "delete_file", "files": [], "query": "", "reasoning": "Удаление"}
         elif any(word in user_lower for word in ['обнови', 'построй', 'перестрой']):
             return {"action": "rebuild_all", "files": [], "query": "", "reasoning": "Перестройка"}
+        elif any(word in user_lower for word in ['обнови', 'категории', 'метаданные']):
+            return {"action": "rebuild_categories", "files": [], "query": "", "reasoning": "Обновление"}
         return {"action": "analyze_folder", "files": [], "query": "", "reasoning": "Анализ"}
 
     def pluralize_vectors(self, n: int) -> str:
@@ -402,6 +409,13 @@ class KnowledgeAgent:
                     "status": "success",
                     "count": len(results),
                     "preview": formatted_results,
+                    "message": message
+                }
+
+            elif action['action'] == "rebuild_categories":
+                message = self.auto_categories()
+                return {
+                    "status": "success",
                     "message": message
                 }
 
@@ -516,6 +530,21 @@ class KnowledgeAgent:
 
         except Exception as e:
             return {"mode": "autonomous", "status": "error", "error": str(e)}
+
+    def auto_categories(self):
+        asyncio.run(self.obs_loader.download_metadata())  # Подкачаем метаданные для определения категорий
+        base_dir = Path(__file__).resolve().parent
+        json_file = base_dir / "knowledge_base" / "metadata.json"
+
+        updater = MetadataUpdater(
+            metadata_file=json_file,
+            max_retries=3,
+            retry_delay=15
+        )
+
+        message = updater.run()
+        asyncio.run(self.obs_loader.put_json())
+        return message
 
     def process_query(self, user_input: str) -> Dict[str, Any]:
         try:

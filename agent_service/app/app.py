@@ -13,6 +13,7 @@ from core.config import KAFKA_BROKER
 logging.basicConfig(level=logging.INFO)
 
 agent = KnowledgeAgent()
+agent.auto_categories()
 
 producer = KafkaProducer(
     bootstrap_servers=[KAFKA_BROKER],

@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from aiobotocore.session import AioSession
 from botocore.client import Config
 from dotenv import load_dotenv
+from typing import List
 import os
 import json
 import re
@@ -74,23 +75,24 @@ class OBSWorker:
                 lines.pop(0)
                 continue
 
-            if re.fullmatch(r'[0-9a-fA-F]{3,8}', line):
+            if re.fullmatch(r'[0-9a-fA-F]{3,12}', line):
                 lines.pop(0)
                 continue
 
-            if len(line) < 10 and ' ' not in line:
+            if re.fullmatch(r'\d+', line):
                 lines.pop(0)
                 continue
 
             break
 
+        pattern = r'\n(?:\d+\n)*x-amz-checksum-crc32:.*$'
+        text = re.sub(pattern, '', text, flags=re.S)
+        lines = text.splitlines()
+        while lines and lines[-1].strip().isdigit() and len(lines[-1].strip()) < 5:
+            lines.pop()
+
         text = '\n'.join(lines)
-        text = re.sub(
-            r'\n\d+\n0\nx-amz-checksum-crc32:.*$',
-            '',
-            text,
-            flags=re.S
-        )
+
         return text.strip()
 
     async def download_all_md(self):
@@ -327,6 +329,66 @@ class OBSWorker:
             await self._upload_file(client, digest_path, s3_key)
         print(f"Дайджест {filename}.json S3")
 
+    async def download_reviews(self):
+        local_dir = Path(self.name_digests)
+        os.makedirs(local_dir, exist_ok=True)
+
+        prefix = "reviews/"
+
+        async with self.client() as client:
+            paginator = client.get_paginator('list_objects_v2')
+
+            # 1. Получаем список всех объектов с префиксом "reviews/"
+            all_keys: List[str] = []
+
+            try:
+                async for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
+                    if 'Contents' in page:
+                        for obj in page['Contents']:
+                            key = obj['Key']
+                            # Игнорируем сами "папки" (ключи, заканчивающиеся на /), если они есть
+                            if not key.endswith('/'):
+                                all_keys.append(key)
+            except Exception as e:
+                print(f"Ошибка при списке объектов: {e}")
+                return
+
+            if not all_keys:
+                print(f"Объектов с префиксом '{prefix}' не найдено.")
+                return
+
+            print(f"Найдено файлов для скачивания: {len(all_keys)}")
+
+            # 2. Скачиваем каждый файл
+            for s3_key in all_keys:
+                # Формируем локальный путь
+                # Убираем префикс "reviews/" из начала ключа, чтобы получить относительный путь
+                relative_path = s3_key[len(prefix):]
+                local_file_path = local_dir / relative_path
+
+                # Создаем локальные подпапки, если их нет
+                local_file_path.parent.mkdir(parents=True, exist_ok=True)
+
+                try:
+                    response = await client.get_object(Bucket=self.bucket, Key=s3_key)
+
+                    # Читаем поток данных
+                    async with response['Body'] as stream:
+                        data = await stream.read()
+                        text = data.decode("utf-8", errors="ignore")
+                        cleaned = self.clean_text(text)
+
+                    # Сохраняем на диск (режим 'wb' для бинарных данных, работает и для текста)
+                    with open(local_file_path, 'w', encoding="utf-8") as f:
+                        f.write(cleaned)
+
+                    print(f"Скачан: {s3_key} -> {local_file_path}")
+
+                except Exception as e:
+                    print(f"Ошибка при скачивании {s3_key}: {e}")
+
+        print("Загрузка завершена.")
+
     async def upload_digests(self):
         """Загрузить ВСЕ новые .md дайджесты из локальной папки digest/ и её подпапок"""
         digest_root = self.name_digests
@@ -358,9 +420,9 @@ class OBSWorker:
         print(f"Загружено дайджестов: {uploaded}")
 
     async def run_download(self):
-        bucket = self.bucket
         await self.download_metadata()
         await self.download_all_md()
+        # await self.download_reviews()
 
     # async def run_download(self):
     #     bucket = self.bucket
@@ -372,20 +434,21 @@ class OBSWorker:
     #     await self.put_json(bucket)
     #     await self.upload_all_md(bucket)
 
-# async def main():
-#     obs = OBSWorker()
-#     # await obs.run_download()
-#     await obs.run_upload()
-#
-#
-#     # parser.run() / agent / обработка
-#
-#     # await obs.delete_dir(bucket, "articles/")
-#     # await obs.delete_dir(bucket, "metadata/")
-#
-#     # await obs.put_json(bucket)
-#   #  await obs.upload_all_md(bucket)
-#
-#
-# if __name__ == "__main__":
-#     asyncio.run(main())
+async def main():
+    obs = OBSWorker()
+    # await obs.run_download()
+    await obs.download_reviews()
+
+
+    # parser.run() / agent / обработка
+
+    # await obs.delete_dir(bucket, "articles/")
+    # await obs.delete_dir(bucket, "metadata/")
+
+    # await obs.put_json(bucket)
+  #  await obs.upload_all_md(bucket)
+
+import asyncio
+
+if __name__ == "__main__":
+    asyncio.run(main())

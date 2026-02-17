@@ -4,6 +4,7 @@ import time
 import json
 import yaml
 import asyncio
+import hashlib
 from typing import List
 from dotenv import load_dotenv
 from dataclasses import dataclass, asdict
@@ -33,6 +34,8 @@ class Article:
     tags: str
     abstract: str
     file_article: str
+    category: str | None
+    text_article: str
 
 
 class IEEEParser:
@@ -43,7 +46,7 @@ class IEEEParser:
         self.driver = self.create_stealth_headless_driver()
         self.driver.get(requested_link)
         self.requested_link = requested_link
-
+        self._dismiss_cookie_banner()
         load_dotenv()
 
         print('PARSER INITIALIZED')
@@ -97,7 +100,7 @@ class IEEEParser:
         # wait.until(
         #     EC.presence_of_all_elements_located((By.CLASS_NAME, 'pagination-bar'))
         # )
-
+        self._dismiss_cookie_banner()
         # # Get pages
         # pagination_bar = self.driver.find_element(By.CLASS_NAME, 'pagination-bar')
         # pagination_links = pagination_bar.find_elements(By.TAG_NAME, 'button')[:-1]
@@ -107,8 +110,9 @@ class IEEEParser:
         # Process pages
         for i in range(3):
             start = datetime.now()
-            # if i != 0:
-            #     time.sleep(5)
+            if i != 0:
+                time.sleep(5)
+                self._dismiss_cookie_banner()
             #     pagination_bar = self.driver.find_element(By.CLASS_NAME, 'pagination-bar')
             #     pagination_bar.find_elements(By.TAG_NAME, 'button')[i].click()
 
@@ -127,7 +131,7 @@ class IEEEParser:
                 if not link:
                     continue
                 self.driver.get(link)
-
+                self._dismiss_cookie_banner()
                 # Detemine the date of publication
                 try:
                     date_string = ' '.join(DATE_PATTERN.findall(self.driver.page_source)[0])
@@ -136,7 +140,7 @@ class IEEEParser:
                     print('Publication date not found')
                 if date < datetime.strptime('01.10.2025', '%d.%m.%Y').date():
                     continue
-
+                date_string = date.strftime('%Y-%m-%d')
                 # Check if article is about PM
                 title = self.driver.find_element(By.CLASS_NAME, 'document-title').text
                 abstract = [x.text for x in self.driver.find_elements(By.CLASS_NAME, 'u-mb-1') if 'Abstract' in x.text][
@@ -155,6 +159,7 @@ class IEEEParser:
 
                 # Get tags
                 tags = []
+                self._dismiss_cookie_banner()
                 self.driver.find_element(By.ID, 'keywords').click()
                 tags_containers = self.driver.find_elements(By.CLASS_NAME, 'doc-keywords-list-item')
                 for tc in tags_containers:
@@ -187,13 +192,18 @@ class IEEEParser:
                                 authors,
                                 ' '.join(tags),
                                 abstract,
-                                'file'
+                                f"{date_string}_{self.__url_to_hash(link)}.md",
+                                None,
+                                text_article=abstract
                             )
                         )
             print(f'Page {i + 1} processed in {datetime.now() - start}')
             self.driver.get(self.requested_link)
 
         return [asdict(item) for item in articles]
+
+    def __url_to_hash(self, url: str, length: int = 12) -> str:
+        return hashlib.sha256(url.encode("utf-8")).hexdigest()[:length]
 
     def save_to_html(self):
         """
@@ -249,10 +259,11 @@ class IEEEParser:
         }
         options.add_experimental_option("prefs", prefs)
         
-        driver = webdriver.Remote(
-            command_executor='http://selenium_chrome:4444/wd/hub',
-            options=options
-        )
+        # driver = webdriver.Remote(
+        #     command_executor='http://selenium_chrome:4444/wd/hub',
+        #     options=options
+        # )
+        driver = webdriver.Chrome(options=options)
         # Работа с браузером
         driver.get("https://google.com")
         print( "GOOOGLE", driver.title)
@@ -267,6 +278,28 @@ class IEEEParser:
         
         return driver
 
+    def _dismiss_cookie_banner(self, timeout: int = 6) -> None:
+        try:
+            btn = WebDriverWait(self.driver, timeout).until(
+                EC.element_to_be_clickable((
+                    By.XPATH,
+                    "//button[contains(., 'Accept') or contains(., 'I Agree') or contains(., 'Принять') or contains(., 'Соглас')]"
+                ))
+            )
+            btn.click()
+            time.sleep(0.3)
+            return
+        except Exception:
+            pass
+
+        try:
+            self.driver.execute_script("""
+                const el = document.querySelector('.osano-cm-window__dialog, .osano-cm-dialog, [role="dialog"].osano-cm-dialog');
+                if (el) el.remove();
+            """)
+            time.sleep(0.2)
+        except Exception:
+            pass
 
     async def arun(self) -> list[dict]:
         return await asyncio.to_thread(self.parse)

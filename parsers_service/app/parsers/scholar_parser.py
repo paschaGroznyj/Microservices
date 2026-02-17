@@ -527,8 +527,9 @@ def __clear_title_article(title: str):
 def scholar_item_to_article(it: ScholarItem) -> dict:
     """Обертка над ScholarItem -> Article"""
     clear_tittle = __clear_title_article(it.title)
-    file_article = f"{it.date_pub}_{clear_tittle}.md"
     external_id = __url_to_hash(it.article_url)
+    file_article = f"{it.date_pub}_{external_id}.md"
+
 
     return asdict(Article(
         source=it.source or "googlescholar",

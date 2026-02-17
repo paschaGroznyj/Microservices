@@ -6,6 +6,7 @@ import re
 import json
 import numpy as np
 from pathlib import Path
+import time
 from typing import List, Dict, Any, Optional
 from datetime import datetime, date
 from pydantic import BaseModel, Field
@@ -166,6 +167,22 @@ class LLMCompositeExtractor:
             messages=[{"role": "user", "content": prompt}]
         )
         return response.choices[0].message.content
+
+# Для Отладки
+# from huggingface_hub import InferenceClient
+# from dotenv import load_dotenv
+# import os
+# load_dotenv()
+# HF_TOKEN = os.getenv("HF_TOKEN")
+#
+#
+# client = InferenceClient(api_key=HF_TOKEN)
+# response = client.chat.completions.create(
+#             model="Qwen/Qwen3-VL-8B-Instruct",
+#             messages=[{"role": "user", "content": "Привет"}]
+#         )
+# print(response.choices[0].message.content)
+
 # =============================================================================
 # 2. ГЛАВНАЯ ФУНКЦИЯ С СОСТАВНОЙ ФИЛЬТРАЦИЕЙ
 # =============================================================================
@@ -284,26 +301,40 @@ def title_filter(articles: List[Dict], title: Optional[str]) -> List[Dict]:
         if (art.get('title') or '').lower().find(t) != -1
     ]
 def semantic_filter(articles: List[Dict], topic: str, threshold: float) -> List[Dict]:
-    filtered = []
-    query_emb = EMBED_MODEL.encode([topic])
 
     if topic == 'весь_запрос':
-        filtered = articles
-    print("Количество статей для залива#######", len(articles))
+        return articles
+
+    texts = []
+    valid_articles = []
+
     for art in articles:
-        text = f"{art.get('title', '')} {art.get('category', '')} {' '.join(art.get('tags', []))}".strip()
-        if not text:
-            continue
-        
-        art_emb = EMBED_MODEL.encode([text])
-        score = cosine_similarity(query_emb, art_emb)[0][0]
-        print('Оценкааааааа', score)
-        
+        tags = art.get('tags', '')
+        tags_text = ' '.join(tags) if isinstance(tags, list) else tags
+
+        text = f"{art.get('title', '')} {art.get('category', '')} {tags_text}".strip()
+
+        if text:
+            texts.append(text)
+            valid_articles.append(art)
+
+    if not texts:
+        return []
+
+    query_emb = EMBED_MODEL.encode([topic])
+    arts_emb = EMBED_MODEL.encode(texts)
+
+    scores = cosine_similarity(query_emb, arts_emb)[0]
+
+    filtered = []
+
+    for art, score in zip(valid_articles, scores):
         if score >= threshold:
             art['relevance_score'] = float(score)
             filtered.append(art)
 
     return filtered
+
 
 def _date_in_range(data_sub: str, start: datetime, end: datetime) -> bool:
     try:
@@ -318,6 +349,25 @@ def load_json_metadata(json_path: str) -> List[Dict]:
             return json.load(f)
     except:
         return []
+
+# json_path="knowledge_base/metadata.json"
+# articles = load_json_metadata(json_path=json_path)
+# articles_filenames = []
+# for art in articles:
+#     articles_filenames.append(art['file_article'])
+#
+# reviews_dir = Path("digests")
+#
+# existing_files = {
+#     md_file.name: md_file
+#     for md_file in reviews_dir.rglob("*.md")
+# }
+#
+# exist_reviews = []
+# for md_file in reviews_dir.rglob('*.md'):
+#     if md_file.name in articles_filenames:
+#         exist_reviews.append(md_file)
+# print(exist_reviews)
 
 # =============================================================================
 # 4. ИНТЕГРАЦИЯ С АГЕНТОМ
@@ -353,51 +403,88 @@ def build_digest_content(articles: List[Dict], md_path: Path, query: list, llm_c
     content = [f"# 📋 Дайджест материалов внешних источников за период/по теме: '{query}'",
                f"**Создан:** {datetime.now().strftime('%d.%m.%Y %H:%M')}",
                f"**Найдено статей:** {len(articles)}"]
+    start = time.time()
+    existing_files = {
+        md_file.name: md_file
+        for md_file in md_path.rglob("*.md")
+    }
 
-    md_paths = find_matching_md_files(articles, md_path)
+    # md_paths = find_matching_md_files(articles, md_path)
 
     # print(md_paths)
 
-    for i, article in enumerate(articles):
-        title = article.get('title', 'N/A')
-        url = article.get('url_article', 'N/A')
-        category = article.get('category', 'Не указана')
-        date = article.get('date_sub', '')
-        theme = article.get('tags', '')
+    base_path = Path(__file__).resolve().parent
+    articles_dir = base_path / "knowledge_base" / "articles"
 
-        md_file = None
-        for path in md_paths:
-            if f"{date}_{title}.md" in path.name:
-                md_file = path
+    for i, article in enumerate(articles):
+        filename = article.get("file_article")
+        title = article.get("title", "N/A")
+        url = article.get("url_article", "N/A")
+        category = article.get("category") or "Без категории"
+        date = article.get("date_sub", "")
+        theme = article.get("tags", "")
+
+        # md_file = None
+        # for path in md_paths:
+        #     if f"{date}_{title}.md" in path.name:
+        #         md_file = path
+
         content.extend([
             "",
             f"## 🎯 {title}",
             f"**Категория:** {category} | **Дата:** {date}",
-            f"**ТЕМА:** {theme}", 
+            f"**ТЕМА:** {theme}",
             f"## Ссылка на источник {url}",
-            ""
+            "",
+            "### Саммари статьи"
         ])
 
-        content.append("### Саммари статьи")
+        # Проверка — есть ли уже саммари
+        if filename in existing_files:
+            print(f"Используем готовый md: {filename}")
+            md_file = existing_files[filename]
+
+            with open(md_file, "r", encoding="utf-8") as f:
+                md_content = f.read()
+
+            content.append(md_content)
         # Читаем MD
         # filename_meta = f"{article['date_sub']}_{article['title']}.md"
         # md_file = Path(md_path) / filename_meta
-        base_path = Path(__file__).resolve().parent
-        md_file = base_path / 'knowledge_base' / 'articles' / md_file
+        # base_path = Path(__file__).resolve().parent
+        # md_file = base_path / 'knowledge_base' / 'articles' / md_file
 
-        if md_file and md_file.exists():
-            print("Найден md файл", md_file)
-            with open(md_file, 'r', encoding='utf-8') as f:
-                md_content = f.read()
-                # Убираем YAML фронтматтер
-                md_content = re.split(r'^---\s*$', md_content, maxsplit=2)[2] if '---' in md_content else md_content
+        else:
+            print(f"Генерируем через LLM: {filename}")
 
-                summary_from_llm = LLMCompositeExtractor.create_summary(md_content[:2000], md_file.name, llm_client) # Самари от LLM
+            article_md_path = articles_dir / filename
 
-                content.append(re.sub(r'^#{1,6}\s+', '### ', summary_from_llm, flags=re.MULTILINE))
+            if article_md_path.exists():
+                with open(article_md_path, "r", encoding="utf-8") as f:
+                    md_content = f.read()
+                md_content = (
+                    re.split(r'^---\s*$', md_content, maxsplit=2)[2]
+                    if '---' in md_content
+                    else md_content
+                )
+
+                summary = LLMCompositeExtractor.create_summary(
+                    md_content[:2000],
+                    filename,
+                    llm_client
+                )
+
+                digest_dir = Path(md_path / category)
+                digest_dir.mkdir(parents=True, exist_ok=True)
+
+                with open(digest_dir / filename, "w", encoding="utf-8") as f:
+                    f.write(summary)
+
+                content.append(summary)
 
         content.append("---" * 30)
-
+    finish = time.time()
+    print(finish - start)
     return "\n".join(content)
 
 def save_digest(content: str, filter_type: str, output_dir: Path) -> Path:

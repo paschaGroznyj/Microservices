@@ -2,6 +2,7 @@ import re
 import time
 import json
 import asyncio
+import hashlib
 from io import BytesIO
 from datetime import datetime
 from dataclasses import dataclass, asdict
@@ -151,7 +152,7 @@ class ARXIVParser:
                         authors=authors_dict,
                         tags=tags,
                         abstract=abstract,
-                        file_article=file_article,
+                        file_article=f"{date_sub}_{self.__url_to_hash(url_article)}.md",
                         category=category if category else None,
                         text_article=text_article
                     )
@@ -174,6 +175,8 @@ class ARXIVParser:
 
         return [asdict(item) for item in result_list]
 
+    def __url_to_hash(self, url: str, length: int = 12) -> str:
+        return hashlib.sha256(url.encode("utf-8")).hexdigest()[:length]
 
     def __parse_article(self, url_article: str):
         text = requests.get(url_article, headers=self.headers, timeout=15)

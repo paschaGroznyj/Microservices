@@ -1,5 +1,6 @@
 import re
 import json
+import hashlib
 import asyncio
 import requests
 from bs4 import BeautifulSoup
@@ -77,19 +78,19 @@ class FluxiconParser:
                     text_blocks.append(child.get_text(strip=True))
 
             abstract = "\n".join(text_blocks)
-            file_article = f"{date_sub}_{title}.md"
+            url = f"{self.base_url}{link}"
             results.append(
                 Article(
                     source="https://www.fluxicon.com",
                     external_id=link,
                     title=self._safe_title(title),
                     date_sub=date_sub,
-                    url_article=f"{self.base_url}{link}",
+                    url_article=url,
                     pdf_url="",
                     authors=None,
                     tags=None,
                     abstract=abstract,
-                    file_article=file_article,
+                    file_article=f"{date_sub}_{self.__url_to_hash(url)}.md",
                     category=None,
                     text_article=abstract
                 )
@@ -97,6 +98,8 @@ class FluxiconParser:
 
         return [asdict(a) for a in results]
 
+    def __url_to_hash(self, url: str, length: int = 12) -> str:
+        return hashlib.sha256(url.encode("utf-8")).hexdigest()[:length]
 
     async def arun(self) -> List[dict]:
         return await asyncio.to_thread(self.parse)

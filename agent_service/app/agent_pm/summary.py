@@ -103,8 +103,8 @@ class SummaryGenerator:
         pdf_url = 'Не найден'
         try:
             for article in articles:
-                if filename[11:-3] in article.get('title', ''):
-                    # Нашли! Достаем нужный ключ
+                # Нашли! Достаем нужный ключ
+                if filename == article['file_article']:
                     theme = article.get('category')
                     if theme is None:
                         theme = 'категория не найдена'
@@ -206,7 +206,7 @@ class SummaryGenerator:
             7. **Вывод:** ...
 
         ## Текст статьи из PDF:
-        {content_[:200]}.""")]
+        {content_[:500]}.""")]
 
 
         # prompt2 = [SystemMessage(content=f"""Выбери одну категорию из следующего списка: 

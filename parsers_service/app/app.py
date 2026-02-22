@@ -3,11 +3,12 @@ import json
 from pathlib import Path
 from typing import List, Dict, Any
 from dataclasses import asdict
-from fastapi import FastAPI
+from fastapi import FastAPI, Response, HTTPException
 from contextlib import asynccontextmanager
 import uvicorn
 import asyncio
 import logging
+import httpx
 from datetime import datetime, timedelta
 from pathlib import Path
 import json
@@ -22,6 +23,7 @@ from botocore_client import OBSWorker
 # Конфигурация
 from core.config import (
     PORT_PARSERS_SERVICE,
+    PORT_LLM_CONSUMER,
     ARTICLES_FOLDER,
     STORAGE_PATH,
     METADATA_FILE,
@@ -169,7 +171,7 @@ async def perform_parsing_cycle():
             start_date.strftime("%Y-%m-%d"),
             end_date.strftime("%Y-%m-%d")
         )
-        
+
 
         # data_range = ('2026-02-05', '2026-02-10')
         logger.info(f"Парсинг диапазона: {data_range}")
@@ -204,6 +206,23 @@ async def perform_parsing_cycle():
 
         logger.info("=== Цикл синхронизации завершён ===")
 
+        try:
+            async with httpx.AsyncClient() as client:
+                logger.info(SERVICES['agent_service']['url'])
+                response = await client.post(
+                    f"{SERVICES['agent_service']['url']}/make_reviews",
+                    json={"status": "success"})
+                response.raise_for_status()
+
+                logger.info(f"Агент подтвердил задачу: {response.json()}")
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Агент вернул ошибку: {e.response.status_code} - {e.response.text}")
+            raise HTTPException(status_code=502, detail=f"Agent service reported error: {e.response.text}")
+        except httpx.RequestError as e:
+            logger.error(f"Не удалось связаться с агентом: {e}")
+            raise HTTPException(status_code=503, detail=f"Agent service unreachable: {str(e)}")
+
+
     except Exception as e:
         logger.exception(f"Критическая ошибка в цикле парсинга: {e}")
     finally:
@@ -212,7 +231,7 @@ async def perform_parsing_cycle():
 
 async def scheduled_parsing_loop():
     while True:
-        # interval = int(SYNC_INTERVAL_SCHEDULER) * 60 * 24 * 14
+        # interval = int(SYNC_INTERVAL_SCHEDULER)
         interval = int(SYNC_INTERVAL_SCHEDULER) * 60 * 24 * 14
         logger.info(f"== Интервал == {interval}")
         await perform_parsing_cycle()
@@ -232,6 +251,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Parsers Service", lifespan=lifespan)
 
+SERVICES = {
+    "agent_service": {
+        "url": f"http://localhost:{PORT_LLM_CONSUMER}"
+    }
+}
 
 @app.get("/health")
 async def health():
@@ -241,3 +265,4 @@ async def health():
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=int(PORT_PARSERS_SERVICE), log_level="info")
+    # uvicorn.run(app, host="127.0.0.1", port=int(PORT_PARSERS_SERVICE), log_level="info")

@@ -360,7 +360,15 @@ class KnowledgeAgent:
                     self.vector_db.delete_documents(deleted)
                 count = self.vector_db.rebuild_index()
                 word = self.pluralize_vectors(count)
-                return {"status": "success", "message": f"Я построил {count} {word}"}
+                if count == 0:
+                    return {
+                        "status": "warning",
+                        "message": (
+                            "Не удалось создать векторный индекс: база пуста.\n"
+                            "Рекомендую сначала выполнить команду:\n"
+                            "Сформируй ревью по всем статьям, чтобы наполнить источник для векторизации."
+                        )
+                    }
 
             elif action['action'] == "delete_file":
                 files = action.get('files', [])

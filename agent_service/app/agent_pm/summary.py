@@ -97,8 +97,6 @@ class SummaryGenerator:
 
     def generate_summary(self, content_: str, filename: str, theme: str, pdf_url: str) -> Dict[str, Any]:
         """Генерирует академическое саммари PDF-статей по строгому шаблону"""
-
-
         # НЕ забыть расскоментить =============================
         # final_text = find_relevant_glossary(content_[:4000], PATH_TO_GLOSSARY) # Закомментил
 

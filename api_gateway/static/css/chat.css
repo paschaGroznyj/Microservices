@@ -1,4 +1,4 @@
-/* Чат в стиле первой страницы */
+/* пїЅпїЅпїЅ пїЅ пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ */
 * {
     margin: 0;
     padding: 0;
@@ -24,7 +24,7 @@ body {
     overflow: hidden;
 }
 
-/* Навигация */
+/* пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ */
 .navbar {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
@@ -66,14 +66,14 @@ body {
     box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
 }
 
-/* Основной layout */
+/* пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ layout */
 .chat-layout {
     display: flex;
     flex: 1;
     overflow: hidden;
 }
 
-/* Сайдбар */
+/* пїЅпїЅпїЅпїЅпїЅпїЅпїЅ */
 .sidebar {
     width: 280px;
     background: rgba(255, 255, 255, 0.98);
@@ -94,7 +94,7 @@ body {
 
 .chat-list {
     flex: 1;
-    overflow-y: auto;
+    overflow-y: visible;
 }
 
 .chat-item {
@@ -164,7 +164,7 @@ body {
     box-shadow: 0 10px 25px rgba(102, 126, 234, 0.4);
 }
 
-/* Основная область чата */
+/* пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅ */
 .chat-main {
     flex: 1;
     display: flex;
@@ -183,7 +183,7 @@ body {
     font-size: 1.3rem;
 }
 
-/* Сообщения */
+/* пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ */
 .chat-messages {
     flex: 1;
     padding: 2rem;
@@ -274,7 +274,7 @@ body {
     color: white;
 }
 
-/* Поле ввода */
+/* пїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅ */
 .message-input-area {
     padding: 1.5rem 2rem;
     border-top: 1px solid rgba(102, 126, 234, 0.1);
@@ -328,7 +328,7 @@ body {
     box-shadow: 0 10px 25px rgba(102, 126, 234, 0.4);
 }
 
-/* Скроллбар */
+/* пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ */
 ::-webkit-scrollbar {
     width: 8px;
 }
@@ -347,7 +347,7 @@ body {
     background: linear-gradient(135deg, #5a6fd8 0%, #6a4192 100%);
 }
 
-/* Адаптивность */
+/* пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ */
 @media (max-width: 768px) {
     #chat-app {
         margin: 0;

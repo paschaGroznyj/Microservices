@@ -224,12 +224,12 @@ class KnowledgeAgent:
         # Флаг для автозапуска
         self.skip_startup_autoprocess = skip_startup_autoprocess
 
-        if not skip_startup_autoprocess:
-            self._startup_autoprocess()
-
-    def _startup_autoprocess(self):
-        """АВТОМАТИЧЕСКАЯ ОБРАБОТКА при запуске (после парсера)"""
-        result = self.auto_processor.process_new_articles()
+    #     if not skip_startup_autoprocess:
+    #         self._startup_autoprocess()
+    #
+    # def _startup_autoprocess(self):
+    #     """АВТОМАТИЧЕСКАЯ ОБРАБОТКА при запуске (после парсера)"""
+    #     result = self.auto_processor.process_new_articles()
 
 
     def get_state(self) -> str:
@@ -432,14 +432,30 @@ class KnowledgeAgent:
                     asyncio.run(self.obs_loader.run_download())
                     # Дайджест ВСЕХ статей
                     md_files = list(self.articles_path.glob("*.md"))
+                    json_file = self.name_meta_dir / "metadata.json"
+                    with open(json_file, 'r',
+                              encoding='utf-8') as f:  # Считаем метаданные один раз, чтобы связать с множеством ревью
+                        articles_data = json.load(f)
+
+                    articles_map: Dict[str, Dict[str, str]] = {
+                        article['file_article']: {
+                            "theme": article.get('category', 'категория не найдена'),
+                            "pdf_url": article.get('pdf_url', 'Не найден')
+                        }
+                        for article in articles_data
+                    }
                     results = []
                     # print("Спискок статей", len(md_files))
                     for filepath in md_files:
-                        json_file = self.name_meta_dir / "metadata.json"
+                        meta = articles_map.get(filepath.name, {})
+                        theme = meta.get("theme", "категория не найдена")
+                        pdf_url = meta.get("pdf_url", "Не найден")
+
                         digest_result = self.summarizer.generate_summary(
-                            filepath.read_text(encoding='utf-8'),
-                            filepath.name,
-                            json_file
+                            content_=filepath.read_text(encoding='utf-8'),
+                            filename=filepath.name,
+                            theme=theme,
+                            pdf_url=pdf_url
                         )
                         results.append({
                             "file": filepath.name,
@@ -515,32 +531,32 @@ class KnowledgeAgent:
         except Exception as e:
             return {"status": "error", "message": f"Ошибка: {str(e)}"}
 
-    def run_autonomous_mode(self) -> Dict[str, Any]:
-        """АВТОНОМНЫЙ РЕЖИМ: только автозапуск + 30мин ожидания пользователя"""
+    # def run_autonomous_mode(self) -> Dict[str, Any]:
+    #     """АВТОНОМНЫЙ РЕЖИМ: только автозапуск + 30мин ожидания пользователя"""
+    #
+    #     start_time = time.time()
+    #
+    #     try:
+    #         # ШАГ 1: Автоматическая обработка новых статей
+    #         result = self.auto_processor.process_new_articles()
+    #
+    #         # ШАГ 2: Финальное состояние
+    #         final_stats = self.get_state()
+    #
+    #
+    #         return {
+    #             "mode": "autonomous",
+    #             "status": "completed",
+    #             "autoprocess": result,
+    #             "duration": time.time() - start_time,
+    #             "final_stats": final_stats
+    #         }
+    #
+    #     except Exception as e:
+    #         return {"mode": "autonomous", "status": "error", "error": str(e)}
 
-        start_time = time.time()
-
-        try:
-            # ШАГ 1: Автоматическая обработка новых статей
-            result = self.auto_processor.process_new_articles()
-
-            # ШАГ 2: Финальное состояние
-            final_stats = self.get_state()
-
-
-            return {
-                "mode": "autonomous",
-                "status": "completed",
-                "autoprocess": result,
-                "duration": time.time() - start_time,
-                "final_stats": final_stats
-            }
-
-        except Exception as e:
-            return {"mode": "autonomous", "status": "error", "error": str(e)}
-
-    def auto_categories(self):
-        asyncio.run(self.obs_loader.download_metadata())  # Подкачаем метаданные для определения категорий
+    async def auto_categories(self):
+        await self.obs_loader.download_metadata()  # Подкачаем метаданные для определения категорий
         base_dir = Path(__file__).resolve().parent
         json_file = base_dir / "knowledge_base" / "metadata.json"
 
@@ -551,8 +567,58 @@ class KnowledgeAgent:
         )
 
         message = updater.run()
-        asyncio.run(self.obs_loader.put_json())
+        await self.obs_loader.put_json()
         return message
+
+    async def make_reviews(self):
+        await self.auto_categories() # Заранее определим категории для статей внутри метаданных
+        await self.obs_loader.download_all_md() # Подгрузим оригиналы статей
+        await self.obs_loader.download_reviews() # Подгрузим уже готовые ревью
+        reviews_root = self.digest_path  # Путь до ревьюшек/summary статей по шаблону
+        json_file = self.name_meta_dir / "metadata.json"  # Файл до метаданных
+
+        with open(json_file, 'r', encoding='utf-8') as f: # Считаем метаданные один раз, чтобы связать с множеством ревью
+            articles_data = json.load(f)
+
+        articles_map: Dict[str, Dict[str, str]] = {
+            article['file_article']: {
+                "theme": article.get('category', 'категория не найдена'),
+                "pdf_url": article.get('pdf_url', 'Не найден')
+            }
+            for article in articles_data
+        }
+
+
+        # Дайджест ВСЕХ статей
+        if not reviews_root.exists():
+            os.makedirs(reviews_root, exist_ok=True)
+        md_articles = [name.name for name in self.articles_path.glob("*.md")] # Тексты оригинальных статей
+        md_reviews = [name.name for name in reviews_root.rglob("*.md")]  # Тексты ревью
+
+        need_reviews = list(set(md_articles) - set(md_reviews))
+        print("Тексты статей для которых нужно сделать ревью", need_reviews)
+        results = []
+        for filename in need_reviews:
+            article_path = self.articles_path / filename
+            meta = articles_map.get(filename, {})
+            theme = meta.get("theme", "категория не найдена")
+            pdf_url = meta.get("pdf_url", "Не найден")
+
+            digest_result = self.summarizer.generate_summary(
+                    content_=article_path.read_text(encoding='utf-8'),
+                    filename=filename,
+                    theme=theme,
+                    pdf_url=pdf_url
+                )
+            results.append({
+                    "file": filename,
+                    "status": digest_result["status"],
+                    "digest_file": digest_result.get('digest_file')
+                })
+
+        await self.obs_loader.upload_digests()
+        success_count = sum(1 for r in results if r["status"] == "created")
+        print(success_count)
 
     def process_query(self, user_input: str) -> Dict[str, Any]:
         try:

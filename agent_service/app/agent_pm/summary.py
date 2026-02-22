@@ -8,6 +8,8 @@ import re
 from datetime import datetime
 from pathlib import Path
 from sentence_transformers import SentenceTransformer
+
+
 # from .glossary import find_relevant_glossary
 
 # EMBED_MODEL = SentenceTransformer(EMBED_MODEL_GLOSS)
@@ -93,32 +95,8 @@ class SummaryGenerator:
         # print(f"Сохранено: {filepath}")
         return str(filepath)
 
-    def generate_summary(self, content_: str, filename: str, json_file: Path) -> Dict[str, Any]:
+    def generate_summary(self, content_: str, filename: str, theme: str, pdf_url: str) -> Dict[str, Any]:
         """Генерирует академическое саммари PDF-статей по строгому шаблону"""
-        
-        with open(json_file, 'r', encoding='utf-8') as f:
-            articles = json.load(f)
-        print("Статьи", len(articles))
-        theme = 'категория не найдена'
-        pdf_url = 'Не найден'
-        try:
-            for article in articles:
-                # Нашли! Достаем нужный ключ
-                if filename == article['file_article']:
-                    theme = article.get('category')
-                    if theme is None:
-                        theme = 'категория не найдена'
-
-                    pdf_url = article.get('pdf_url')
-                    if pdf_url is None:
-                        pdf_url = 'Не найден'
-                    break
-        except Exception as e:
-            print(f"Что то с json, {e}")
-            theme = 'категория не найдена'
-        print("Тема:", theme)
-
-
         # НЕ забыть расскоментить =============================
         # final_text = find_relevant_glossary(content_[:4000], PATH_TO_GLOSSARY) # Закомментил
 
@@ -150,7 +128,7 @@ class SummaryGenerator:
 
         # ## ГЛОССАРИЙ (обязательно используй для всех технических терминов из текста если необходимо):
         # {final_text}
-        
+
         # ## ПРАВИЛА (строго соблюдай):
         # 1. Переводи для русскоязычного эксперта, сохраняя академический стиль, сохраняя точность терминов
         # 2. Факты БЕРИ ТОЛЬКО ИЗ ТЕКСТА, без домыслов
@@ -178,9 +156,8 @@ class SummaryGenerator:
         # ## Текст статьи из PDF:
         # {content_[:200]}.""")]
 
-
         prompt = [SystemMessage(content=f"""Твоя задача: прочитать текст статьи из "{filename}", извлечь и адаптировать информацию для русскоязычного эксперта.
-        
+
         ## ПРАВИЛА (строго соблюдай):
         1. Переводи для русскоязычного эксперта, сохраняя академический стиль, сохраняя точность терминов
         2. Факты БЕРИ ТОЛЬКО ИЗ ТЕКСТА, без домыслов
@@ -208,9 +185,8 @@ class SummaryGenerator:
         ## Текст статьи из PDF:
         {content_[:500]}.""")]
 
-
-        # prompt2 = [SystemMessage(content=f"""Выбери одну категорию из следующего списка: 
-        #                                     Категории: {categories_str} 
+        # prompt2 = [SystemMessage(content=f"""Выбери одну категорию из следующего списка:
+        #                                     Категории: {categories_str}
         #                                     Выбирай наиболее релевантную категорию к которой ты можешь отнести следующий текст:
 
         #                                     ## Текст статьи из PDF:
@@ -256,7 +232,7 @@ class SummaryGenerator:
             "created_at": datetime.now().isoformat(),
             "digest": summary,
             "category": theme,
-            "digest_file": str(digest_file), # Потом подумать над неймингом в message
+            "digest_file": str(digest_file),  # Потом подумать над неймингом в message
             "digest_folder": folder.name
         }
 

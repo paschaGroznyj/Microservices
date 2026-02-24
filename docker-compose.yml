@@ -77,11 +77,11 @@ services:
       - ./models:/app/.cache/huggingface/hub
     restart: unless-stopped
 
-  selenium_chrome:
-      image: selenium/standalone-chrome:latest
-      shm_size: '2gb'
-      ports:
-        - "4444:4444"
+  # selenium_chrome:
+  #     image: selenium/standalone-chrome:latest
+  #     shm_size: '2gb'
+  #     ports:
+  #       - "4444:4444"
 
   parsers_service:
     build: ./parsers_service
@@ -156,22 +156,24 @@ services:
       ports:
         - "5433:5432"
   
-  chromadb:
-    image: chromadb/chroma
-    container_name: chromadb
+  # chromadb:
+  #   image: chromadb/chroma
+  #   container_name: chromadb
+  #   ports:
+  #     - "9003:8000"
   
-  rag_service:
-    container_name: rag_service
-    build: ./rag_service
-    command: uvicorn app.app:app --host 0.0.0.0 --port 8002
-    ports:
-      - "8000:8002"
-    environment:
-      HF_TOKEN: ${HF_TOKEN}
-      EMB_MODEL: ${EMB_MODEL}
-      GC_KEY: ${GC_KEY}
-    depends_on:
-      - chromadb
+  # rag_service:
+  #   container_name: rag_service
+  #   build: ./rag_service
+  #   command: uvicorn app.app:app --host 0.0.0.0 --port 8002
+  #   ports:
+  #     - "8002:8002"
+  #   environment:
+  #     HF_TOKEN: ${HF_TOKEN}
+  #     EMB_MODEL: ${EMB_MODEL}
+  #   depends_on:
+  #     - chromadb
+                                
   
   chats_service:
     container_name: chats_service

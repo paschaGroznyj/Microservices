@@ -1,9 +1,10 @@
 import threading
 import time
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 import uvicorn
 import json
 import logging
+from pydantic import BaseModel
 from kafka import KafkaConsumer, KafkaProducer
 from agent_pm.agent import KnowledgeAgent
 import asyncio
@@ -13,7 +14,6 @@ from core.config import KAFKA_BROKER
 logging.basicConfig(level=logging.INFO)
 
 agent = KnowledgeAgent()
-agent.auto_categories()
 
 producer = KafkaProducer(
     bootstrap_servers=[KAFKA_BROKER],
@@ -24,6 +24,7 @@ producer = KafkaProducer(
 consumer = KafkaConsumer(
     'chat-messages',
     bootstrap_servers=[KAFKA_BROKER],
+    api_version=(4,1,0),
     group_id='llm-bot-group',  # ← обязательно отличается от DB consumer'а!
     value_deserializer=lambda m: json.loads(m.decode('utf-8')),
     auto_offset_reset='latest'
@@ -87,6 +88,37 @@ def kafka_consumer():
 
 app = FastAPI()
 
+class ParsingMessage(BaseModel):
+    status: str
+
+@app.post("/make_reviews")
+async def make_reviews(parsing_status: ParsingMessage):
+    if parsing_status.status == "success":
+        logging.info("Получена команда на запуск генерации ревью. Запускаем в фоне...")
+
+        try:
+            # Создадим фоновую задачу, не дожидаемся ее выполнения, сразу передаем ответ обратно
+            # в parsers_service. Типа выстрелил и забыл
+            task = asyncio.create_task(agent.make_reviews())
+
+            def handle_task_exception(t):
+                if t.exception():
+                    logging.error(f"Фоновая задача генерации ревью упала с ошибкой: {t.exception()}")
+
+            task.add_done_callback(handle_task_exception)
+
+            # Отправим запрос сразу в сервис парсинга
+            return {
+                "status": "accepted",
+                "message": "Задача поставлена в очередь на выполнение"
+            }
+        except Exception as e:
+            logging.error(f"Ошибка в агенте: {e}")
+            raise HTTPException(status_code=500, detail=f"Agent failed: {str(e)}")
+
+    return {"status": "ignored", "message": "Статус не success"}
+
+
 @app.get("/health")
 async def health():
     status = "ok" if consumer_alive else "error"
@@ -97,3 +129,4 @@ from core.config import PORT_LLM_CONSUMER
 if __name__ == "__main__":
     threading.Thread(target=kafka_consumer, daemon=True).start() # Поднятие консьюмера
     uvicorn.run(app, host="0.0.0.0", port=int(PORT_LLM_CONSUMER), log_level="info")
+    # uvicorn.run(app, host="127.0.0.1", port=int(PORT_LLM_CONSUMER), log_level="info")

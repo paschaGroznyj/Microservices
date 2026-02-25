@@ -142,12 +142,14 @@ class ChatAppSimple {
             // Определяем, нужно ли рендерить Markdown
             const isBot = msg.is_from_bot;
             const rawContent = msg.message || '';
-
+            console.log(rawContent)
             // Рендерим контент: бот → markdown → HTML, юзер → plain text
             let renderedContent = '';
             if (isBot) {
+                console.log('Мы зашли в условие')
                 // Конвертируем MD в HTML
                 renderedContent = marked.parse(rawContent);
+                console.log('Рендер контент')
                 // Опционально: санитизация через DOMPurify (рекомендую!)
                 if (typeof DOMPurify !== 'undefined') {
                     renderedContent = DOMPurify.sanitize(renderedContent);
@@ -222,16 +224,36 @@ class ChatAppSimple {
         };
     }
 
-    addMessage(message) {
+        addMessage(message) {
         const container = document.getElementById('chat-messages');
+        if (!container) return;
+
+        const isBot = message.is_from_bot;
+        const rawContent = message.message || '';
+        let renderedContent = '';
+        console.log(rawContent)
+        if (isBot) {
+            // 1. Парсим Markdown
+            renderedContent = marked.parse(rawContent);
+            // 2. Очищаем от опасного HTML
+            if (typeof DOMPurify !== 'undefined') {
+                renderedContent = DOMPurify.sanitize(renderedContent);
+            }
+        } else {
+            // Для пользователя экранируем HTML
+            renderedContent = this.escapeHtml(rawContent);
+        }
+
         const div = document.createElement('div');
-        div.className = `message ${message.is_from_bot ? 'bot' : 'user'}`;
+        div.className = `message ${isBot ? 'bot' : 'user'}`;
+        
+        // Вставляем уже обработанный HTML
         div.innerHTML = `
             <div class="message-header">
-                <span class="message-sender">${message.is_from_bot ? '🤖 Бот' : '👤 Вы'}</span>
+                <span class="message-sender">${isBot ? '🤖 Бот' : '👤 Вы'}</span>
                 <span class="message-time">${new Date().toLocaleTimeString()}</span>
             </div>
-            <div class="message-text">${message.message}</div>
+            <div class="message-text">${renderedContent}</div>
         `;
 
         container.appendChild(div);

@@ -139,6 +139,85 @@ class OBSWorker:
                 else:
                     break
 
+    async def download_vectorstore(self):
+        """Скачать файлы индекса (.faiss и .pkl) из OBS, проверяя изменения."""
+
+        local_dir = self.name_faiss_index
+        s3_prefix = "faiss_index/" 
+        os.makedirs(local_dir, exist_ok=True)
+
+        async with self.client() as client:
+            continuation_token = None
+            files_downloaded = 0
+
+            while True:
+                params = {
+                    "Bucket": self.bucket,
+                    "Prefix": s3_prefix
+                }
+                if continuation_token:
+                    params["ContinuationToken"] = continuation_token
+
+                resp = await client.list_objects_v2(**params)
+
+                if "Contents" not in resp:
+                    break
+
+                for obj in resp["Contents"]:
+                    key = obj["Key"]
+
+                    # Пропускаем "папки" и файлы не тех расширений
+                    if key.endswith('/') or not (key.endswith('.faiss') or key.endswith('.pkl')):
+                        continue
+
+                    # Формируем локальный путь (сохраняем структуру, если есть подпапки, или просто имя файла)
+                    relative_path = key.replace(s3_prefix, "", 1)
+                    local_path = os.path.join(local_dir, relative_path)
+
+                    # Создаем подпапки локально, если они есть в ключе S3
+                    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+
+                    remote_size = obj.get("Size", 0)
+                    need_download = False
+
+                    # Проверка: существует ли файл и совпадает ли размер
+                    if not os.path.exists(local_path):
+                        need_download = True
+                        print(f"[{os.path.basename(key)}] Не найден локально.")
+                    elif os.path.getsize(local_path) != remote_size:
+                        need_download = True
+                        print(
+                            f"[{os.path.basename(key)}] Размер изменен (S3: {remote_size}, Local: {os.path.getsize(local_path)}). Обновляем.")
+                    else:
+                        # Файл актуален
+                        continue
+
+                    if need_download:
+                        try:
+                            # Скачиваем бинарный поток
+                            response = await client.get_object(Bucket=self.bucket, Key=key)
+                            data = await response["Body"].read()
+
+                            # Пишем как бинарный файл (важно для .faiss и .pkl!)
+                            with open(local_path, "wb") as f:
+                                f.write(data)
+
+                            print(f"Загружен: {key}")
+                            files_downloaded += 1
+
+                        except Exception as e:
+                            print(f"Ошибка при скачивании {key}: {e}")
+
+                if resp.get("IsTruncated"):
+                    continuation_token = resp.get("NextContinuationToken")
+                else:
+                    break
+
+            if files_downloaded == 0:
+                print("Все файлы индексов актуальны.")
+            else:
+                print(f"Синхронизация завершена. Скачано файлов: {files_downloaded}")
+
     async def put_json(self):
         local_path = self.name_meta_dir / "metadata.json"
         with open(local_path, "r", encoding="utf-8") as f:

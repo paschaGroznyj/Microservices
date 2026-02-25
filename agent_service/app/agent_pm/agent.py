@@ -440,17 +440,22 @@ class KnowledgeAgent:
                 for i, r in enumerate(results, 1):
                     raw_content = r['content'].strip()
                     clean_content = self.clean_markdown(raw_content)
-                    
                     content_snippet = clean_content
+                    print(content_snippet)
                     if len(content_snippet) > 300:
-                        content_snippet = content_snippet[:300].rsplit(' ', 1)[0] + '…'
+                        content_snippet = content_snippet[:300].rsplit(' ', 1)[0] + '...'
                     score = r['score']
 
-                    block = f"**Результат {i}** (релевантность: {score:.3f})\n\n{content_snippet}"
+                    block = f"""**Результат {i}** (релевантность: {score:.3f})
+
+{content_snippet}"""
                     formatted_results.append(block)
 
-                full_preview = "\n---\n".join(formatted_results)
-                message = f"Найдено {len(results)} релевантных фрагментов по запросу:\n\n{full_preview}"
+                full_preview = "\n\n---\n\n".join(formatted_results)
+                        
+                message = f"""Найдено {len(results)} релевантных фрагментов по запросу:
+
+{full_preview}"""
 
                 return {
                     "status": "success",

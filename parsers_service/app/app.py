@@ -162,9 +162,9 @@ async def perform_parsing_cycle():
         end_date = start_date + timedelta(days=13)
 
         today = datetime.today()
-        if start_date > today:
-            logger.info("Диапазон выходит за пределы текущей даты — пропускаем")
-            return
+        # if start_date > today:
+        #     logger.info("Диапазон выходит за пределы текущей даты — пропускаем")
+        #     return
 
         end_date = min(end_date, today) # Чтобы не брать дни из будущего
 
@@ -254,7 +254,7 @@ app = FastAPI(title="Parsers Service", lifespan=lifespan)
 
 SERVICES = {
     "agent_service": {
-        "url": f"http://localhost:{PORT_LLM_CONSUMER}"
+        "url": f"http://agent_service:{PORT_LLM_CONSUMER}"
     }
 }
 

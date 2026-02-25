@@ -112,6 +112,7 @@ services:
       - "8003:8003"
     environment:
       PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
+      PORT_LLM_CONSUMER: ${PORT_LLM_CONSUMER}
 
       STORAGE_PATH: ${STORAGE_PATH}
       SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES}
@@ -123,10 +124,7 @@ services:
       OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
       OBS_SECRET_KEY: ${OBS_SECRET_KEY}
       OBS_REGION: ${OBS_REGION}
-      OBS_ENDPOINT: ${OBS_ENDPOINT}
-    depends_on:
-     - selenium_chrome
-     
+      OBS_ENDPOINT: ${OBS_ENDPOINT}     
     restart: unless-stopped
 
   gateway:

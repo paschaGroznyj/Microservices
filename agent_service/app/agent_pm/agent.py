@@ -248,6 +248,10 @@ class KnowledgeAgent:
         self.parser = PydanticOutputParser(pydantic_object=AgentAction)
         self.obs_loader = OBSWorker()
 
+        asyncio.run(self.obs_loader.run_download())
+        asyncio.run(self.obs_loader.download_reviews())
+        asyncio.run(self.obs_loader.download_vectorstore())
+
         # Флаг для автозапуска
         self.skip_startup_autoprocess = skip_startup_autoprocess
 
@@ -422,6 +426,7 @@ class KnowledgeAgent:
                 }
 
             elif action['action'] == "search_db":
+                asyncio.run(self.obs_loader.download_vectorstore())
                 results = self.vector_db.similarity_search(action['query'] or "", k=5)
                 if not results:
                     return {
@@ -433,13 +438,15 @@ class KnowledgeAgent:
 
                 formatted_results = []
                 for i, r in enumerate(results, 1):
-                    content_snippet = r['content'].strip()
+                    raw_content = r['content'].strip()
+                    clean_content = self.clean_markdown(raw_content)
+                    
+                    content_snippet = clean_content
                     if len(content_snippet) > 300:
                         content_snippet = content_snippet[:300].rsplit(' ', 1)[0] + '…'
                     score = r['score']
 
-                    block = f"**Результат {i}** (релевантность: {score:.3f})\n" \
-                            f"**Фрагмент**: {content_snippet}"
+                    block = f"**Результат {i}** (релевантность: {score:.3f})\n\n{content_snippet}"
                     formatted_results.append(block)
 
                 full_preview = "\n---\n".join(formatted_results)
@@ -480,6 +487,7 @@ class KnowledgeAgent:
             elif action['action'] in ["summarize_file", "summarize_all", "summarize_new", "summarize_filt"]:
                 if action['action'] == "summarize_all":
                     asyncio.run(self.obs_loader.run_download())
+                    asyncio.run(self.obs_loader.download_reviews())
                     # Дайджест ВСЕХ статей
                     md_files = list(self.articles_path.glob("*.md"))
                     # ДУБЛИРОВАНИЕ КОДА
@@ -536,6 +544,7 @@ class KnowledgeAgent:
                     }
                 elif action['action'] == "summarize_filt":
                     asyncio.run(self.obs_loader.run_download())
+                    asyncio.run(self.obs_loader.download_reviews())
                     client = InferenceClient(api_key=HF_TOKEN)
                     json_file = self.name_meta_dir / "metadata.json"
                     results = agent_composite_digest_tool(query=user_input, llm_client=client, json_path=json_file, md_folder=self.digest_path)
@@ -633,6 +642,40 @@ class KnowledgeAgent:
     #
     #     except Exception as e:
     #         return {"mode": "autonomous", "status": "error", "error": str(e)}
+
+    def clean_markdown(self, text):
+        if not text:
+            return ""
+    
+        # 1. Убираем явные заголовки (# Заголовок)
+        text = re.sub(r'^#+\s*', '', text, flags=re.MULTILINE)
+        
+        # 2. Убираем жирный/курсив
+        text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
+        text = re.sub(r'\*(.*?)\*', r'\1', text)
+        
+        # 3. Убираем маркеры списков
+        text = re.sub(r'^(\s*[-*+]|\s*\d+\.)\s+', '', text, flags=re.MULTILINE)
+        
+        # 4. Защита от ложных заголовков по двоеточию
+        text = re.sub(r'^:\s*', '', text, flags=re.MULTILINE)
+        
+        # 5. Убираем ссылки и код
+        text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)
+        text = re.sub(r'```.*?```', '', text, flags=re.DOTALL)
+        text = re.sub(r'`(.*?)`', r'\1', text)
+        
+        # 6. Убираем горизонтальные линии внутри сниппета
+        text = re.sub(r'^\s*---+\s*$', '', text, flags=re.MULTILINE)
+        
+        # 7. "Сплющиваем" опасные переносы строк
+        text = re.sub(r'([А-ЯA-Z][^:.!?]*):\n\s*([А-ЯA-Z])', r'\1: \2', text)
+        
+        # Чистим лишние пустые строки
+        text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)
+        
+        return text.strip()
+
 
     async def auto_categories(self):
         await self.obs_loader.download_metadata()  # Подкачаем метаданные для определения категорий

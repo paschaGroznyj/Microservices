@@ -300,7 +300,7 @@ app = FastAPI(title="Parsers Service", lifespan=lifespan)
 
 SERVICES = {
     "agent_service": {
-        "url": f"http://localhost:{PORT_LLM_CONSUMER}"
+        "url": f"http://agent_service:{PORT_LLM_CONSUMER}"
     }
 }
 

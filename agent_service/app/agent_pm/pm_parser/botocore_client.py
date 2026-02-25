@@ -139,13 +139,11 @@ class OBSWorker:
                 else:
                     break
 
-    import os
-
     async def download_vectorstore(self):
         """Скачать файлы индекса (.faiss и .pkl) из OBS, проверяя изменения."""
 
         local_dir = self.name_faiss_index
-        s3_prefix = "faiss_index/"  # Важно со слэшем, если это папка
+        s3_prefix = "faiss_index/"
         os.makedirs(local_dir, exist_ok=True)
 
         async with self.client() as client:
@@ -219,7 +217,6 @@ class OBSWorker:
                 print("Все файлы индексов актуальны.")
             else:
                 print(f"Синхронизация завершена. Скачано файлов: {files_downloaded}")
-
 
     async def put_json(self):
         local_path = self.name_meta_dir / "metadata.json"

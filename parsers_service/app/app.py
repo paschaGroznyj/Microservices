@@ -1,7 +1,7 @@
 import os
 import json
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from dataclasses import asdict
 from fastapi import FastAPI, Response, HTTPException
 from contextlib import asynccontextmanager
@@ -12,7 +12,7 @@ import httpx
 from datetime import datetime, timedelta
 from pathlib import Path
 import json
-
+import re
 
 from parsers.scholar_parser import PipelineConfig, ScholarParser
 from parsers.fluxicon_parser import FluxiconParser
@@ -44,6 +44,41 @@ STATE_FILE = Path("logs") / "state.json"
 
 
 obs = OBSWorker()
+
+PROCESS_MINING_KEYWORDS = [
+    "process mining",
+    "process discovery",
+    "event logs",
+    "process model",
+    "audit trail",
+    "conformance checking",
+    "process enhancement",
+    "root cause analysis",
+    "process monitoring",
+    "compliance checking",
+    "deviation analysis",
+    "continuous auditing",
+    "business process analysis",
+    "process intelligence",
+    "task mining",
+    "operational analytics",
+    "financial auditing",
+    "internal audit",
+    "process compliance",
+    "audit log analysis",
+]
+
+
+escaped_keywords = [re.escape(kw).replace(r"\ ", r"\s+") for kw in PROCESS_MINING_KEYWORDS]
+pattern_str = "|".join(escaped_keywords)
+
+FULL_PATTERN = re.compile(f"{pattern_str}", re.IGNORECASE)
+
+def is_process_mining_related(text: Optional[str]) -> bool:
+    """Проверяет наличие ключевых слов Process Mining в тексте."""
+    if not text:
+        return False
+    return bool(FULL_PATTERN.search(text))
 
 def load_last_end_date() -> datetime:
     """Загружает последнюю обработанную дату. Если нет — возвращает сегодня минус 14 дней."""
@@ -85,13 +120,24 @@ def _save_articles_and_metadata(articles: List[Dict]):
 
     existing_meta = _read_existing_metadata()
     new_articles = []
+    skipped_count = 0
+    filtered_count = 0
 
     for art in articles:
         external_id = art["external_id"]
         if external_id in existing_meta:
             logger.info(f"Пропускаем дубликат: {external_id} ({art.get('title', 'N/A')})")
             continue
+        text_body = art.get("text_article", "")
+        abstract_body = art.get("abstract", "")
 
+        combined_text = f"{abstract_body}\n{text_body}"
+
+        if not is_process_mining_related(combined_text):
+            logger.debug(f"Отфильтровано (не PM): {external_id} - {art.get('title', 'N/A')}")
+            filtered_count += 1
+            continue
+        logger.info("Проходим дальше по статье")
         filename = art["file_article"]
         if not filename:
             filename = f"{external_id}.md"
@@ -150,10 +196,10 @@ async def perform_parsing_cycle():
         parsing_active = True
         logger.info("=== Начало цикла синхронизации ===")
 
-        # # 1. Скачиваем существующие данные из OBS
-        logger.info("Скачивание данных из OBS...")
-        await obs.download_all_md()
-        await obs.download_metadata()
+        # # # 1. Скачиваем существующие данные из OBS
+        # logger.info("Скачивание данных из OBS...")
+        # await obs.download_all_md()
+        # await obs.download_metadata()
 
 
         # 2. Определяем диапазон дат
@@ -174,7 +220,7 @@ async def perform_parsing_cycle():
         )
 
 
-        # date_range = ('2026-02-10', '2026-02-24')
+        date_range = ('2025-01-01', '2026-02-25')
         logger.info(f"Парсинг диапазона: {date_range}")
         link_ieee = (
             "https://ieeexplore.ieee.org/search/searchresult.jsp?"
@@ -184,13 +230,13 @@ async def perform_parsing_cycle():
             "ranges=2026_2026_Year&returnFacets=ALL"
         )
         cfg = PipelineConfig()
-        cfg.max_pages = 6
+        cfg.max_pages = 20
 
         parsers = [
-            # ARXIVParser(date_range),
-            # FluxiconParser(date_range),
-            # ScholarParser(date_range=date_range, config=cfg),
-            # IEEEParser(link_ieee, date_range=date_range)
+            ARXIVParser(date_range),
+            FluxiconParser(date_range),
+            ScholarParser(date_range=date_range, config=cfg),
+            IEEEParser(link_ieee, date_range=date_range)
         ]
 
         pipeline = ParserPipeline(parsers)

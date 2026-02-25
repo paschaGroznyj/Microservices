@@ -143,7 +143,7 @@ class OBSWorker:
         """Скачать файлы индекса (.faiss и .pkl) из OBS, проверяя изменения."""
 
         local_dir = self.name_faiss_index
-        s3_prefix = "faiss_index/" 
+        s3_prefix = "faiss_index/"
         os.makedirs(local_dir, exist_ok=True)
 
         async with self.client() as client:
@@ -516,7 +516,7 @@ class OBSWorker:
 async def main():
     obs = OBSWorker()
     # await obs.run_download()
-    await obs.download_reviews()
+    await obs.download_vectorstore()
 
 
     # parser.run() / agent / обработка

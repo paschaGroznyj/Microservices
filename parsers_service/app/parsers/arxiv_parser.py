@@ -1,6 +1,7 @@
 import re
 import time
 import json
+import urllib
 import asyncio
 import hashlib
 from io import BytesIO
@@ -37,14 +38,39 @@ class Article:
 class ARXIVParser:
     name = "arxiv"
 
-    def __init__(self, data_range: tuple):
+    PM_KEYWORDS = [
+        '"process mining"',
+        '"process discovery"',
+        '"event logs"',
+        '"process model"',
+        '"audit trail"',
+        '"conformance checking"',
+        '"process enhancement"',
+        '"root cause analysis"',
+        '"process monitoring"',
+        '"compliance checking"',
+        '"deviation analysis"',
+        '"continuous auditing"',
+        '"business process analysis"',
+        '"process intelligence"',
+        '"task mining"',
+        '"operational analytics"',
+        '"financial auditing"',
+        '"internal audit"',
+        '"process compliance"',
+        '"audit log analysis"'
+    ]
+
+    def __init__(self, data_range: tuple, search_word=None):
         self.months_dict = {
         'January': 1, 'February': 2, 'March': 3, 'April': 4,
             'May': 5, 'June': 6, 'July': 7, 'August': 8,
             'September': 9, 'October': 10, 'November': 11, 'December': 12
         }
+        full_query_str = " OR ".join(self.PM_KEYWORDS)
+        encoded_query = urllib.parse.quote(full_query_str, safe=' OR')
         self.base_url = "https://arxiv.org/search/?"
-        self.parameters = {"query": "+".join(["process", "mining"]),
+        self.parameters = {"query": encoded_query,
                       "searchtype": "all",
                       "source": "header",
                       "start": ""
@@ -91,8 +117,9 @@ class ARXIVParser:
         start = data_range[0] if data_range else self.data_start
         end = data_range[1] if data_range else self.data_end
         result_list = []
-        for i in range(0, 200, 50):
+        for i in range(50):
             get_url = self.cat_url + str(i)
+            print(f"Номер страницы: {i}")
             text = requests.get(get_url, headers=self.headers, timeout=15)
             soup = BeautifulSoup(text.content, 'html.parser')
 
@@ -187,12 +214,14 @@ class ARXIVParser:
     def __get_text_pdf_file(self, link: str, sleep_sec=3):
         response = requests.get(link, headers=self.headers, timeout=20)
         response.raise_for_status()
-
-        reader = PdfReader(BytesIO(response.content))
-        text = ""
-        for page in reader.pages[:3]: # Ограничение по количеству страниц, можно проставить тут
-            text += page.extract_text()
-        time.sleep(sleep_sec)
+        try:
+            reader = PdfReader(BytesIO(response.content))
+            text = ""
+            for page in reader.pages[:4]: # Ограничение по количеству страниц, можно проставить тут
+                text += page.extract_text()
+            time.sleep(sleep_sec)
+        except Exception as e:
+            return ""
         return text
 
     def __clear_title_article(self, title: str):

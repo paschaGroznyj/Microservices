@@ -460,11 +460,22 @@ class KnowledgeAgent:
                 }
 
             elif action['action'] == "general_question":
-                # Парсим ответ бота, чтобы передать на фронт
-                match = re.search(r'\]\s*(.*?)\s*\*\*', action["agent_answer"], re.DOTALL)
-                if match: answer = match.group(1).strip(); print(answer)
-                else: answer = "Это точно был общий вопрос"
-                return {"status": "success", "message": answer}
+                raw_text = action["agent_answer"]
+                text_no_tag = re.sub(r'\s*\[.*?\]\s*', '', raw_text)
+
+                clean_text = text_no_tag
+
+                match = re.search(r'\{[^{}]*\}', clean_text, re.DOTALL)
+                clean_text = clean_text[:match.start()] + clean_text[match.end():]
+
+                clean_text = re.sub(r'\*\*', '', clean_text)  # Убираем жирность
+                clean_text = re.sub(r'\n\s*\n', '\n', clean_text)  # Убираем двойные пустые строки
+
+                final_answer = clean_text.strip()
+                if not final_answer:
+                    final_answer = "Чистили-чистили, но не дочистили. Это был точно общий вопрос"
+
+                return {"status": "success", "message": final_answer}
 
             elif action['action'] in ["summarize_file", "summarize_all", "summarize_new", "summarize_filt"]:
                 if action['action'] == "summarize_all":

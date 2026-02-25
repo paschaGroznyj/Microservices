@@ -3,11 +3,12 @@ import json
 from pathlib import Path
 from typing import List, Dict, Any
 from dataclasses import asdict
-from fastapi import FastAPI
+from fastapi import FastAPI, Response, HTTPException
 from contextlib import asynccontextmanager
 import uvicorn
 import asyncio
 import logging
+import httpx
 from datetime import datetime, timedelta
 from pathlib import Path
 import json
@@ -16,12 +17,14 @@ import json
 from parsers.scholar_parser import PipelineConfig, ScholarParser
 from parsers.fluxicon_parser import FluxiconParser
 from parsers.arxiv_parser import ARXIVParser
-from parsers.ieee_parser import IEEEParser
+# from parsers.ieee_parser import IEEEParser
+from parsers.ieee_parser_pw import IEEEParser
 from botocore_client import OBSWorker
 
 # Конфигурация
 from core.config import (
     PORT_PARSERS_SERVICE,
+    PORT_LLM_CONSUMER,
     ARTICLES_FOLDER,
     STORAGE_PATH,
     METADATA_FILE,
@@ -46,7 +49,7 @@ def load_last_end_date() -> datetime:
     """Загружает последнюю обработанную дату. Если нет — возвращает сегодня минус 14 дней."""
     if not STATE_FILE.exists():
         # Первый запуск: начать с 14 дней назад
-        return datetime.today() - timedelta(days=10)
+        return datetime.today() - timedelta(days=14)
 
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
@@ -125,7 +128,7 @@ class ParserPipeline:
         # Собираем все Article-объекты из всех парсеров
         all_articles = []
         for result in results:
-            logger.info(f"ВНУТРЯНКА СТАТЬИ {result}")
+            # print("РЕЗУЛЬАТ ПАРСИНГА", result)
             all_articles.extend(result)
 
         return all_articles
@@ -159,19 +162,20 @@ async def perform_parsing_cycle():
         end_date = start_date + timedelta(days=13)
 
         today = datetime.today()
-        if start_date > today:
-            logger.info("Диапазон выходит за пределы текущей даты — пропускаем")
-            return
+        # if start_date > today:
+        #     logger.info("Диапазон выходит за пределы текущей даты — пропускаем")
+        #     return
 
         end_date = min(end_date, today) # Чтобы не брать дни из будущего
 
-        data_range = (
+        date_range = (
             start_date.strftime("%Y-%m-%d"),
             end_date.strftime("%Y-%m-%d")
         )
-        logger.info(f"Парсинг диапазона: {data_range}")
 
-        # data_range = ('2026-02-05', '2026-02-10')
+
+        # date_range = ('2026-02-10', '2026-02-24')
+        logger.info(f"Парсинг диапазона: {date_range}")
         link_ieee = (
             "https://ieeexplore.ieee.org/search/searchresult.jsp?"
             "queryText=Process%20Mining&highlight=true&returnType=SEARCH&matchPubs=true&"
@@ -180,29 +184,45 @@ async def perform_parsing_cycle():
             "ranges=2026_2026_Year&returnFacets=ALL"
         )
         cfg = PipelineConfig()
-        cfg.max_pages = 2
+        cfg.max_pages = 6
 
         parsers = [
-            # ARXIVParser(data_range),
-            # FluxiconParser(data_range),
-            ScholarParser(date_range=data_range, config=cfg),
-            # IEEEParser(link_ieee)
+            # ARXIVParser(date_range),
+            # FluxiconParser(date_range),
+            # ScholarParser(date_range=date_range, config=cfg),
+            # IEEEParser(link_ieee, date_range=date_range)
         ]
 
         pipeline = ParserPipeline(parsers)
         raw_articles = await pipeline.run()
 
-        # 3. Сохраняем локально (статьи + метаданные)
         logger.info(f"Обработка {len(raw_articles)} статей...")
         _save_articles_and_metadata(raw_articles)
 
         save_last_end_date(end_date)
-        # 4. Загружаем всё обратно в OBS
+
         logger.info("Загрузка результатов в OBS...")
         await obs.upload_all_md()
         await obs.put_json()
 
         logger.info("=== Цикл синхронизации завершён ===")
+
+        try:
+            async with httpx.AsyncClient() as client:
+                logger.info(SERVICES['agent_service']['url'])
+                response = await client.post(
+                    f"{SERVICES['agent_service']['url']}/make_reviews",
+                    json={"status": "success"})
+                response.raise_for_status()
+
+                logger.info(f"Агент подтвердил задачу: {response.json()}")
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Агент вернул ошибку: {e.response.status_code} - {e.response.text}")
+            raise HTTPException(status_code=502, detail=f"Agent service reported error: {e.response.text}")
+        except httpx.RequestError as e:
+            logger.error(f"Не удалось связаться с агентом: {e}")
+            raise HTTPException(status_code=503, detail=f"Agent service unreachable: {str(e)}")
+
 
     except Exception as e:
         logger.exception(f"Критическая ошибка в цикле парсинга: {e}")
@@ -213,6 +233,7 @@ async def perform_parsing_cycle():
 async def scheduled_parsing_loop():
     while True:
         interval = int(SYNC_INTERVAL_SCHEDULER)
+        # interval = int(SYNC_INTERVAL_SCHEDULER) * 60 * 24 * 14
         logger.info(f"== Интервал == {interval}")
         await perform_parsing_cycle()
         await asyncio.sleep(interval)
@@ -231,6 +252,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Parsers Service", lifespan=lifespan)
 
+SERVICES = {
+    "agent_service": {
+        "url": f"http://agent_service:{PORT_LLM_CONSUMER}"
+    }
+}
 
 @app.get("/health")
 async def health():
@@ -240,3 +266,4 @@ async def health():
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=int(PORT_PARSERS_SERVICE), log_level="info")
+    # uvicorn.run(app, host="127.0.0.1", port=int(PORT_PARSERS_SERVICE), log_level="info")

@@ -76,7 +76,7 @@ class VectorDBManager:
         return documents
     
     def rebuild_index(self, file_paths: str = None):
-        asyncio.run(self.obs_loader.run_download())
+        asyncio.run(self.obs_loader.download_reviews())
         documents = self._load_markdown_files(file_paths)
         # print("ДОКУМЕНТЫ ЗАГРУЖЕНЫ", documents)
         if not documents:

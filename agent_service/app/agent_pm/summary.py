@@ -8,9 +8,11 @@ import re
 from datetime import datetime
 from pathlib import Path
 from sentence_transformers import SentenceTransformer
-from glossary import find_relevant_glossary
 
-EMBED_MODEL = SentenceTransformer(EMBED_MODEL_GLOSS)
+
+# from .glossary import find_relevant_glossary
+
+# EMBED_MODEL = SentenceTransformer(EMBED_MODEL_GLOSS)
 
 
 class SummaryGenerator:
@@ -93,33 +95,11 @@ class SummaryGenerator:
         # print(f"Сохранено: {filepath}")
         return str(filepath)
 
-    def generate_summary(self, content_: str, filename: str, json_file: Path) -> Dict[str, Any]:
+    def generate_summary(self, content_: str, filename: str, theme: str, pdf_url: str) -> Dict[str, Any]:
         """Генерирует академическое саммари PDF-статей по строгому шаблону"""
-        
-        with open(json_file, 'r', encoding='utf-8') as f:
-            articles = json.load(f)
-        print("Статьи", len(articles))
-        theme = 'категория не найдена'
-        pdf_url = 'Не найден'
-        try:
-            for article in articles:
-                if filename[11:-3] in article.get('title', ''):
-                    # Нашли! Достаем нужный ключ
-                    theme = article.get('category')
-                    if theme is None:
-                        theme = 'категория не найдена'
+        # НЕ забыть расскоментить =============================
+        # final_text = find_relevant_glossary(content_[:4000], PATH_TO_GLOSSARY) # Закомментил
 
-                    pdf_url = article.get('pdf_url')
-                    if pdf_url is None:
-                        pdf_url = 'Не найден'
-                    break
-        except Exception as e:
-            print(f"Что то с json, {e}")
-            theme = 'категория не найдена'
-        print("Тема:", theme)
-
-
-        final_text = find_relevant_glossary(EMBED_MODEL, content_[:4000], PATH_TO_GLOSSARY)
         # content_hash = self._get_content_hash(content_)
 
         # # Проверяем, есть ли уже дайджест
@@ -144,11 +124,40 @@ class SummaryGenerator:
         # ]
         # categories_str = "\n".join(f"- {cat}" for cat in categories)
 
+        # prompt = [SystemMessage(content=f"""Твоя задача: прочитать текст статьи из "{filename}", извлечь и адаптировать информацию для русскоязычного эксперта.
+
+        # ## ГЛОССАРИЙ (обязательно используй для всех технических терминов из текста если необходимо):
+        # {final_text}
+
+        # ## ПРАВИЛА (строго соблюдай):
+        # 1. Переводи для русскоязычного эксперта, сохраняя академический стиль, сохраняя точность терминов
+        # 2. Факты БЕРИ ТОЛЬКО ИЗ ТЕКСТА, без домыслов
+        # 3. Первый раз термин: русский (original). Далее: только русский
+        # 4. Алгоритмы - пошагово с оригинальными названиями
+        # 5. GitHub: найди в тексте ИЛИ проанализируй авторов/метод, иначе 'отсутствует'
+        # 6. Если в статье нет какой-либо информации для шаблона - напиши 'не указано'
+        # 7. Выводи результат строго по шаблону, без дополнительных комментариев и пояснений
+        # 8. Не меняй порядок пунктов шаблона и не добавляй новые
+
+        # ## Пример шаблона саммари:
+        # "Название статьи на русском:",
+        # "Название оригинальной статьи на английском:",
+        # "Авторы:",
+        # "Ссылка на источник статьи: {pdf_url}"
+        # "Описание":
+        #     1. **Цель:** ...
+        #     2. **Проблема:** ...
+        #     3. **Задачи:** ...
+        #     4. **Подход - суть алгоритма/метода:** ...
+        #     5. **Как реализуется подход:** ...
+        #     6. **Пример из статьи:** ...
+        #     7. **Вывод:** ...
+
+        # ## Текст статьи из PDF:
+        # {content_[:200]}.""")]
+
         prompt = [SystemMessage(content=f"""Твоя задача: прочитать текст статьи из "{filename}", извлечь и адаптировать информацию для русскоязычного эксперта.
 
-        ## ГЛОССАРИЙ (обязательно используй для всех технических терминов из текста если необходимо):
-        {final_text}
-        
         ## ПРАВИЛА (строго соблюдай):
         1. Переводи для русскоязычного эксперта, сохраняя академический стиль, сохраняя точность терминов
         2. Факты БЕРИ ТОЛЬКО ИЗ ТЕКСТА, без домыслов
@@ -174,10 +183,10 @@ class SummaryGenerator:
             7. **Вывод:** ...
 
         ## Текст статьи из PDF:
-        {content_[:200]}.""")]
+        {content_[:500]}.""")]
 
-        # prompt2 = [SystemMessage(content=f"""Выбери одну категорию из следующего списка: 
-        #                                     Категории: {categories_str} 
+        # prompt2 = [SystemMessage(content=f"""Выбери одну категорию из следующего списка:
+        #                                     Категории: {categories_str}
         #                                     Выбирай наиболее релевантную категорию к которой ты можешь отнести следующий текст:
 
         #                                     ## Текст статьи из PDF:
@@ -223,7 +232,7 @@ class SummaryGenerator:
             "created_at": datetime.now().isoformat(),
             "digest": summary,
             "category": theme,
-            "digest_file": str(digest_file), # Потом подумать над неймингом в message
+            "digest_file": str(digest_file),  # Потом подумать над неймингом в message
             "digest_folder": folder.name
         }
 

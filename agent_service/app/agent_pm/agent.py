@@ -34,6 +34,7 @@ class ActionType(str, Enum):
     DELETE_FILE = "delete_file"
     SUMMARIZE_FILTER = 'summarize_filt'
     REBUILD_CATEGORIES = 'rebuild_categories'
+    REBUILD_QUESTION = 'general_question'
 
 
 class AgentAction(BaseModel):
@@ -87,7 +88,8 @@ class PydanticOutputParser:
                     'build': 'rebuild_all',
                     'analyze': 'analyze_folder',
                     'summarize_filter': 'summarize_filt',
-                    'rebuild_categories': 'rebuild_categories'
+                    'rebuild_categories': 'rebuild_categories',
+                    'general_question': 'general_question'
                 }
                 data['action'] = action_map.get(data['action'].lower().strip(), data['action'])
             return self._pydantic_object.model_validate(data)
@@ -111,7 +113,8 @@ class PydanticOutputParser:
             'analyze_folder': ['analyze_folder', 'проверь папку', 'анализ', 'анализируй'],
             'delete_file': ['delete_file', 'удали', 'все новые'],
             'summarize_filt': ['по категории', 'за период'],
-            'rebuild_categories': ['переопредели', 'категории', 'метаданные']
+            'rebuild_categories': ['переопредели', 'категории', 'метаданные'],
+            'general_question': ['упай', 'вставай']
         }
 
         # Определяем action по ключевым словам
@@ -138,7 +141,7 @@ class PydanticOutputParser:
         return """В КОНЦЕ ОТВЕТА добавь ТОЧНО такой JSON:
 
 **{
-  "action": "search_db|summarize_file|summarize_all|summarize_new|rebuild_all|analyze_folder|delete_file|summarize_filt",
+  "action": "search_db|summarize_file|summarize_all|summarize_new|rebuild_all|analyze_folder|delete_file|summarize_filt|rebuild_categories|general_question",
   "query": "поисковый запрос", 
   "files": ["file1.md"],
   "reasoning": "почему выбрал этот инструмент"
@@ -178,10 +181,34 @@ class AutoProcessor:
             print(f"Новых статей: {len(new_articles)}")
             for filename in new_articles:
                 filepath = self.articles_path / filename
+                # ДУБЛИРОВАНИЕ КОДА
+                json_file = self.name_meta_dir / "metadata.json"  # Файл до метаданных
+
+                with open(json_file, 'r',
+                          encoding='utf-8') as f:  # Считаем метаданные один раз, чтобы связать с множеством ревью
+                    articles_data = json.load(f)
+
+                articles_map: Dict[str, Dict[str, str]] = {
+                    article['file_article']: {
+                        "theme": article.get('category', 'категория не найдена'),
+                        "pdf_url": article.get('pdf_url', 'Не найден')
+                    }
+                    for article in articles_data
+                }
+
+                meta = articles_map.get(filename, {})
+                theme = meta.get("theme", "категория не найдена")
+                pdf_url = meta.get("pdf_url", "Не найден")
+
                 if filepath.exists():
                     content = filepath.read_text(encoding='utf-8')
-                    json_file = self.name_meta_dir / "metadata.json"
-                    digest_result = self.summarizer.generate_summary(content, filename, json_file=json_file)
+                    digest_result = self.summarizer.generate_summary(
+                        content_=content,
+                        filename=filename,
+                        theme=theme,
+                        pdf_url=pdf_url
+                    )
+                    # ДУБЛИРОВАНИЕ КОДА
                     results["new"].append({
                         "file": filename,
                         "status": digest_result["status"],
@@ -220,6 +247,10 @@ class KnowledgeAgent:
         # PydanticOutputParser
         self.parser = PydanticOutputParser(pydantic_object=AgentAction)
         self.obs_loader = OBSWorker()
+
+        asyncio.run(self.obs_loader.run_download())
+        asyncio.run(self.obs_loader.download_reviews())
+        asyncio.run(self.obs_loader.download_vectorstore())
 
         # Флаг для автозапуска
         self.skip_startup_autoprocess = skip_startup_autoprocess
@@ -265,6 +296,7 @@ class KnowledgeAgent:
     7. [delete_file] - удалить файл из БД
     8. [summarize_filt] - суммаризация/дайджест с условием по дате или теме
     9. [rebuild_categories] - переопредели категории в метаданыных
+    10. [general_question] - общие вопросы пользователя, которые не касаются директорий, БД, дайджестов и ревью
 
     ОСОБЫЕ ПРАВИЛА:
     - Если БД ОТСУТСТВУЕТ (0 векторов) → ВСЕГДА выбирай [rebuild_all]
@@ -275,6 +307,7 @@ class KnowledgeAgent:
     - "проверь папку", "анализ" → [analyze_folder]
     - "удалить файл" → [delete_file]
     - "дайджест по категории", "дайджест за период" → [summarize_filt]
+    - Любые общие вопросы, которые не относятся к примерам выше, отвечай как знаешь, но называй свою роль → [general_question]
 
     Состояние: {state}
     Изменения: Новых={len(changes['new'])}, Изменённых={len(changes['modified'])}
@@ -316,6 +349,7 @@ class KnowledgeAgent:
                 "state": state,
                 "reasoning": action.reasoning,
                 "action": action.action,
+                "agent_answer": response.content,
                 "files": action.files or [],
                 "query": action.query or "",
                 "status": "analyzed",
@@ -369,6 +403,8 @@ class KnowledgeAgent:
                             "Сформируй ревью по всем статьям, чтобы наполнить источник для векторизации."
                         )
                     }
+                else:
+                    return {"status": "success", "message": f"Я построил {count} {word}"} # Про правила русского языка не забываем)
 
             elif action['action'] == "delete_file":
                 files = action.get('files', [])
@@ -390,6 +426,7 @@ class KnowledgeAgent:
                 }
 
             elif action['action'] == "search_db":
+                asyncio.run(self.obs_loader.download_vectorstore())
                 results = self.vector_db.similarity_search(action['query'] or "", k=5)
                 if not results:
                     return {
@@ -401,13 +438,15 @@ class KnowledgeAgent:
 
                 formatted_results = []
                 for i, r in enumerate(results, 1):
-                    content_snippet = r['content'].strip()
+                    raw_content = r['content'].strip()
+                    clean_content = self.clean_markdown(raw_content)
+                    
+                    content_snippet = clean_content
                     if len(content_snippet) > 300:
                         content_snippet = content_snippet[:300].rsplit(' ', 1)[0] + '…'
                     score = r['score']
 
-                    block = f"**Результат {i}** (релевантность: {score:.3f})\n" \
-                            f"**Фрагмент**: {content_snippet}"
+                    block = f"**Результат {i}** (релевантность: {score:.3f})\n\n{content_snippet}"
                     formatted_results.append(block)
 
                 full_preview = "\n---\n".join(formatted_results)
@@ -427,11 +466,31 @@ class KnowledgeAgent:
                     "message": message
                 }
 
+            elif action['action'] == "general_question":
+                raw_text = action["agent_answer"]
+                text_no_tag = re.sub(r'\s*\[.*?\]\s*', '', raw_text)
+
+                clean_text = text_no_tag
+
+                match = re.search(r'\{[^{}]*\}', clean_text, re.DOTALL)
+                clean_text = clean_text[:match.start()] + clean_text[match.end():]
+
+                clean_text = re.sub(r'\*\*', '', clean_text)  # Убираем жирность
+                clean_text = re.sub(r'\n\s*\n', '\n', clean_text)  # Убираем двойные пустые строки
+
+                final_answer = clean_text.strip()
+                if not final_answer:
+                    final_answer = "Чистили-чистили, но не дочистили. Это был точно общий вопрос"
+
+                return {"status": "success", "message": final_answer}
+
             elif action['action'] in ["summarize_file", "summarize_all", "summarize_new", "summarize_filt"]:
                 if action['action'] == "summarize_all":
                     asyncio.run(self.obs_loader.run_download())
+                    asyncio.run(self.obs_loader.download_reviews())
                     # Дайджест ВСЕХ статей
                     md_files = list(self.articles_path.glob("*.md"))
+                    # ДУБЛИРОВАНИЕ КОДА
                     json_file = self.name_meta_dir / "metadata.json"
                     with open(json_file, 'r',
                               encoding='utf-8') as f:  # Считаем метаданные один раз, чтобы связать с множеством ревью
@@ -457,6 +516,7 @@ class KnowledgeAgent:
                             theme=theme,
                             pdf_url=pdf_url
                         )
+                        # ДУБЛИРОВАНИЕ КОДА
                         results.append({
                             "file": filepath.name,
                             "status": digest_result["status"],
@@ -468,7 +528,8 @@ class KnowledgeAgent:
                     success_count = sum(1 for r in results if r["status"] == "created")
                     return {
                         "status": "success",
-                        "message": f"Я сформировал Дайджесты: {success_count}/{len(results)}. Их можно найти по пути obs://cds-bucket/reviews/",
+                        "message": f"Я сформировал Дайджесты: {success_count}/{len(results)}."
+                                   f" Их можно найти по пути obs://cds-iad/reviews/",
                         "results": results
                     }
                 elif action['action'] == "summarize_new":
@@ -482,6 +543,8 @@ class KnowledgeAgent:
                         "results": results
                     }
                 elif action['action'] == "summarize_filt":
+                    asyncio.run(self.obs_loader.run_download())
+                    asyncio.run(self.obs_loader.download_reviews())
                     client = InferenceClient(api_key=HF_TOKEN)
                     json_file = self.name_meta_dir / "metadata.json"
                     results = agent_composite_digest_tool(query=user_input, llm_client=client, json_path=json_file, md_folder=self.digest_path)
@@ -491,7 +554,8 @@ class KnowledgeAgent:
                     if results['found_articles'] == 0:
                         message = "Материалов за указанный вами период или категории нет, выберите другой период или категорию"
                     else:
-                        message = f"Я сформировал дайджест по {results['found_articles']} статьям, найти его можно по пути: obs://cds-bucket/digests/{results['filename']}"
+                        message = f"Я сформировал дайджест по {results['found_articles']} статьям," \
+                                    f"скачать его можно по ссылке: https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/digests/{results['filename']}"
                     # print(message)
                     asyncio.run(self.obs_loader.upload_single_digest_cond(filename_fin, results['filename']))
                     return {
@@ -505,17 +569,41 @@ class KnowledgeAgent:
 
                         asyncio.run(self.obs_loader.ensure_article_downloaded(filename))
                         filepath = self.articles_path / filename
+                        # ДУБЛИРОВАНИЕ КОДА
+                        json_file = self.name_meta_dir / "metadata.json"  # Файл до метаданных
+
+                        with open(json_file, 'r',
+                                  encoding='utf-8') as f:  # Считаем метаданные один раз, чтобы связать с множеством ревью
+                            articles_data = json.load(f)
+
+                        articles_map: Dict[str, Dict[str, str]] = {
+                            article['file_article']: {
+                                "theme": article.get('category', 'категория не найдена'),
+                                "pdf_url": article.get('pdf_url', 'Не найден')
+                            }
+                            for article in articles_data
+                        }
+
+                        meta = articles_map.get(filename, {})
+                        theme = meta.get("theme", "категория не найдена")
+                        pdf_url = meta.get("pdf_url", "Не найден")
+
                         if filepath.exists():
                             content = filepath.read_text(encoding='utf-8')
-                            json_file = self.name_meta_dir / "metadata.json"
-                            digest_result = self.summarizer.generate_summary(content, filename, json_file)
+                            digest_result = self.summarizer.generate_summary(
+                                content_=content,
+                                filename=filename,
+                                theme=theme,
+                                pdf_url=pdf_url
+                            )
 
                             if digest_result["status"] == "created":
                                 filename_fin = digest_result['digest_file']
                                 asyncio.run(self.obs_loader.upload_single_digest(filename_fin, filename))
                                 return {
                                     "status": "success",
-                                    "message": f"Я сформировал одиночный дайджест по файлу {digest_result['digest_file']}. Его можно найти по пути: obs://cds-bucket/reviews/",
+                                    "message": f"Я сформировал одиночное ревью по файлу {filename}."
+                                               f" Скачать его можно по ссылке: https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/reviews/{filename}",
                                     "summary": digest_result.get("digest")
                                 }
                             elif digest_result["status"] == "exists":
@@ -523,7 +611,7 @@ class KnowledgeAgent:
                                 asyncio.run(self.obs_loader.upload_single_digest(filename_fin, filename))
                                 return {
                                     "status": "exists",
-                                    "message": f"Дайджест по файлу уже есть: {digest_result['digest_file']}. Расположен по пути: obs://cds-bucket/reviews/"
+                                    "message": f"Ревью по файлу уже есть: {digest_result['digest_file']}. Расположен по пути: obs://cds-bucket/reviews/"
                                 }
 
                     return {"status": "error", "message": "Не получилось найти файл"}
@@ -554,6 +642,40 @@ class KnowledgeAgent:
     #
     #     except Exception as e:
     #         return {"mode": "autonomous", "status": "error", "error": str(e)}
+
+    def clean_markdown(self, text):
+        if not text:
+            return ""
+    
+        # 1. Убираем явные заголовки (# Заголовок)
+        text = re.sub(r'^#+\s*', '', text, flags=re.MULTILINE)
+        
+        # 2. Убираем жирный/курсив
+        text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
+        text = re.sub(r'\*(.*?)\*', r'\1', text)
+        
+        # 3. Убираем маркеры списков
+        text = re.sub(r'^(\s*[-*+]|\s*\d+\.)\s+', '', text, flags=re.MULTILINE)
+        
+        # 4. Защита от ложных заголовков по двоеточию
+        text = re.sub(r'^:\s*', '', text, flags=re.MULTILINE)
+        
+        # 5. Убираем ссылки и код
+        text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)
+        text = re.sub(r'```.*?```', '', text, flags=re.DOTALL)
+        text = re.sub(r'`(.*?)`', r'\1', text)
+        
+        # 6. Убираем горизонтальные линии внутри сниппета
+        text = re.sub(r'^\s*---+\s*$', '', text, flags=re.MULTILINE)
+        
+        # 7. "Сплющиваем" опасные переносы строк
+        text = re.sub(r'([А-ЯA-Z][^:.!?]*):\n\s*([А-ЯA-Z])', r'\1: \2', text)
+        
+        # Чистим лишние пустые строки
+        text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)
+        
+        return text.strip()
+
 
     async def auto_categories(self):
         await self.obs_loader.download_metadata()  # Подкачаем метаданные для определения категорий

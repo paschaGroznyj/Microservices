@@ -17,7 +17,8 @@ import json
 from parsers.scholar_parser import PipelineConfig, ScholarParser
 from parsers.fluxicon_parser import FluxiconParser
 from parsers.arxiv_parser import ARXIVParser
-from parsers.ieee_parser import IEEEParser
+# from parsers.ieee_parser import IEEEParser
+from parsers.ieee_parser_pw import IEEEParser
 from botocore_client import OBSWorker
 
 # Конфигурация
@@ -48,7 +49,7 @@ def load_last_end_date() -> datetime:
     """Загружает последнюю обработанную дату. Если нет — возвращает сегодня минус 14 дней."""
     if not STATE_FILE.exists():
         # Первый запуск: начать с 14 дней назад
-        return datetime.today() - timedelta(days=20)
+        return datetime.today() - timedelta(days=14)
 
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
@@ -161,20 +162,20 @@ async def perform_parsing_cycle():
         end_date = start_date + timedelta(days=13)
 
         today = datetime.today()
-        if start_date > today:
-            logger.info("Диапазон выходит за пределы текущей даты — пропускаем")
-            return
+        # if start_date > today:
+        #     logger.info("Диапазон выходит за пределы текущей даты — пропускаем")
+        #     return
 
         end_date = min(end_date, today) # Чтобы не брать дни из будущего
 
-        data_range = (
+        date_range = (
             start_date.strftime("%Y-%m-%d"),
             end_date.strftime("%Y-%m-%d")
         )
 
 
-        # data_range = ('2026-02-05', '2026-02-10')
-        logger.info(f"Парсинг диапазона: {data_range}")
+        # date_range = ('2026-02-10', '2026-02-24')
+        logger.info(f"Парсинг диапазона: {date_range}")
         link_ieee = (
             "https://ieeexplore.ieee.org/search/searchresult.jsp?"
             "queryText=Process%20Mining&highlight=true&returnType=SEARCH&matchPubs=true&"
@@ -186,10 +187,10 @@ async def perform_parsing_cycle():
         cfg.max_pages = 6
 
         parsers = [
-            ARXIVParser(data_range),
-            FluxiconParser(data_range),
-            ScholarParser(date_range=data_range, config=cfg),
-            IEEEParser(link_ieee)
+            # ARXIVParser(date_range),
+            # FluxiconParser(date_range),
+            # ScholarParser(date_range=date_range, config=cfg),
+            # IEEEParser(link_ieee, date_range=date_range)
         ]
 
         pipeline = ParserPipeline(parsers)
@@ -231,8 +232,8 @@ async def perform_parsing_cycle():
 
 async def scheduled_parsing_loop():
     while True:
-        # interval = int(SYNC_INTERVAL_SCHEDULER)
-        interval = int(SYNC_INTERVAL_SCHEDULER) * 60 * 24 * 14
+        interval = int(SYNC_INTERVAL_SCHEDULER)
+        # interval = int(SYNC_INTERVAL_SCHEDULER) * 60 * 24 * 14
         logger.info(f"== Интервал == {interval}")
         await perform_parsing_cycle()
         await asyncio.sleep(interval)
@@ -253,7 +254,7 @@ app = FastAPI(title="Parsers Service", lifespan=lifespan)
 
 SERVICES = {
     "agent_service": {
-        "url": f"http://localhost:{PORT_LLM_CONSUMER}"
+        "url": f"http://agent_service:{PORT_LLM_CONSUMER}"
     }
 }
 

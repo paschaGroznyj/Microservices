@@ -137,18 +137,48 @@ class ChatAppSimple {
 
     renderMessages(messages) {
         const container = document.getElementById('chat-messages');
-        console.log(messages);
-        container.innerHTML = messages.map(msg => `
-            <div class="message ${msg.is_from_bot ? 'bot' : 'user'}">
-                <div class="message-header">
-                    <span class="message-sender">${msg.is_from_bot ? '🤖 Бот' : '👤 Вы'}</span>
-                    <span class="message-time">${new Date(msg.created_at).toLocaleTimeString()}</span>
-                </div>
-                <div class="message-text">${msg.message}</div>
-            </div>
-        `).join('');
 
+        container.innerHTML = messages.map(msg => {
+            // Определяем, нужно ли рендерить Markdown
+            const isBot = msg.is_from_bot;
+            const rawContent = msg.message || '';
+            console.log(rawContent)
+            // Рендерим контент: бот → markdown → HTML, юзер → plain text
+            let renderedContent = '';
+            if (isBot) {
+                console.log('Мы зашли в условие')
+                // Конвертируем MD в HTML
+                renderedContent = marked.parse(rawContent);
+                console.log('Рендер контент')
+                // Опционально: санитизация через DOMPurify (рекомендую!)
+                if (typeof DOMPurify !== 'undefined') {
+                    renderedContent = DOMPurify.sanitize(renderedContent);
+                }
+            } else {
+                // Для пользователя — экранируем HTML, чтобы не ломалась вёрстка
+                renderedContent = this.escapeHtml(rawContent);
+            }
+
+            return `
+                <div class="message ${isBot ? 'bot' : 'user'}">
+                    <div class="message-header">
+                        <span class="message-sender">${isBot ? '🤖 Бот' : '👤 Вы'}</span>
+                        <span class="message-time">${new Date(msg.created_at).toLocaleTimeString()}</span>
+                    </div>
+                    <div class="message-text">${renderedContent}</div>
+                </div>
+            `;
+        }).join('');
+
+        // Прокрутка вниз
         container.scrollTop = container.scrollHeight;
+    }
+
+    // Вспомогательная функция для экранирования HTML (для пользовательских сообщений)
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
 
     async sendMessage() {
@@ -194,16 +224,36 @@ class ChatAppSimple {
         };
     }
 
-    addMessage(message) {
+        addMessage(message) {
         const container = document.getElementById('chat-messages');
+        if (!container) return;
+
+        const isBot = message.is_from_bot;
+        const rawContent = message.message || '';
+        let renderedContent = '';
+        console.log(rawContent)
+        if (isBot) {
+            // 1. Парсим Markdown
+            renderedContent = marked.parse(rawContent);
+            // 2. Очищаем от опасного HTML
+            if (typeof DOMPurify !== 'undefined') {
+                renderedContent = DOMPurify.sanitize(renderedContent);
+            }
+        } else {
+            // Для пользователя экранируем HTML
+            renderedContent = this.escapeHtml(rawContent);
+        }
+
         const div = document.createElement('div');
-        div.className = `message ${message.is_from_bot ? 'bot' : 'user'}`;
+        div.className = `message ${isBot ? 'bot' : 'user'}`;
+        
+        // Вставляем уже обработанный HTML
         div.innerHTML = `
             <div class="message-header">
-                <span class="message-sender">${message.is_from_bot ? '🤖 Бот' : '👤 Вы'}</span>
+                <span class="message-sender">${isBot ? '🤖 Бот' : '👤 Вы'}</span>
                 <span class="message-time">${new Date().toLocaleTimeString()}</span>
             </div>
-            <div class="message-text">${message.message}</div>
+            <div class="message-text">${renderedContent}</div>
         `;
 
         container.appendChild(div);

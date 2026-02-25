@@ -324,7 +324,7 @@ class OBSWorker:
             print(f"Дайджест {digest_path} не найден")
             return
 
-        s3_key = f"reviews/{filename}.json"
+        s3_key = f"reviews/{filename}" # Тут был конец json, может такая задумка?)
         async with self.client() as client:
             await self._upload_file(client, digest_path, s3_key)
         print(f"Дайджест {filename}.json S3")

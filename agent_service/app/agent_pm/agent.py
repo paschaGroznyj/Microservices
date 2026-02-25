@@ -34,6 +34,7 @@ class ActionType(str, Enum):
     DELETE_FILE = "delete_file"
     SUMMARIZE_FILTER = 'summarize_filt'
     REBUILD_CATEGORIES = 'rebuild_categories'
+    REBUILD_QUESTION = 'general_question'
 
 
 class AgentAction(BaseModel):
@@ -87,7 +88,8 @@ class PydanticOutputParser:
                     'build': 'rebuild_all',
                     'analyze': 'analyze_folder',
                     'summarize_filter': 'summarize_filt',
-                    'rebuild_categories': 'rebuild_categories'
+                    'rebuild_categories': 'rebuild_categories',
+                    'general_question': 'general_question'
                 }
                 data['action'] = action_map.get(data['action'].lower().strip(), data['action'])
             return self._pydantic_object.model_validate(data)
@@ -111,7 +113,8 @@ class PydanticOutputParser:
             'analyze_folder': ['analyze_folder', 'проверь папку', 'анализ', 'анализируй'],
             'delete_file': ['delete_file', 'удали', 'все новые'],
             'summarize_filt': ['по категории', 'за период'],
-            'rebuild_categories': ['переопредели', 'категории', 'метаданные']
+            'rebuild_categories': ['переопредели', 'категории', 'метаданные'],
+            'general_question': ['упай', 'вставай']
         }
 
         # Определяем action по ключевым словам
@@ -138,7 +141,7 @@ class PydanticOutputParser:
         return """В КОНЦЕ ОТВЕТА добавь ТОЧНО такой JSON:
 
 **{
-  "action": "search_db|summarize_file|summarize_all|summarize_new|rebuild_all|analyze_folder|delete_file|summarize_filt",
+  "action": "search_db|summarize_file|summarize_all|summarize_new|rebuild_all|analyze_folder|delete_file|summarize_filt|rebuild_categories|general_question",
   "query": "поисковый запрос", 
   "files": ["file1.md"],
   "reasoning": "почему выбрал этот инструмент"
@@ -178,10 +181,34 @@ class AutoProcessor:
             print(f"Новых статей: {len(new_articles)}")
             for filename in new_articles:
                 filepath = self.articles_path / filename
+                # ДУБЛИРОВАНИЕ КОДА
+                json_file = self.name_meta_dir / "metadata.json"  # Файл до метаданных
+
+                with open(json_file, 'r',
+                          encoding='utf-8') as f:  # Считаем метаданные один раз, чтобы связать с множеством ревью
+                    articles_data = json.load(f)
+
+                articles_map: Dict[str, Dict[str, str]] = {
+                    article['file_article']: {
+                        "theme": article.get('category', 'категория не найдена'),
+                        "pdf_url": article.get('pdf_url', 'Не найден')
+                    }
+                    for article in articles_data
+                }
+
+                meta = articles_map.get(filename, {})
+                theme = meta.get("theme", "категория не найдена")
+                pdf_url = meta.get("pdf_url", "Не найден")
+
                 if filepath.exists():
                     content = filepath.read_text(encoding='utf-8')
-                    json_file = self.name_meta_dir / "metadata.json"
-                    digest_result = self.summarizer.generate_summary(content, filename, json_file=json_file)
+                    digest_result = self.summarizer.generate_summary(
+                        content_=content,
+                        filename=filename,
+                        theme=theme,
+                        pdf_url=pdf_url
+                    )
+                    # ДУБЛИРОВАНИЕ КОДА
                     results["new"].append({
                         "file": filename,
                         "status": digest_result["status"],
@@ -265,6 +292,7 @@ class KnowledgeAgent:
     7. [delete_file] - удалить файл из БД
     8. [summarize_filt] - суммаризация/дайджест с условием по дате или теме
     9. [rebuild_categories] - переопредели категории в метаданыных
+    10. [general_question] - общие вопросы пользователя, которые не касаются директорий, БД, дайджестов и ревью
 
     ОСОБЫЕ ПРАВИЛА:
     - Если БД ОТСУТСТВУЕТ (0 векторов) → ВСЕГДА выбирай [rebuild_all]
@@ -275,6 +303,7 @@ class KnowledgeAgent:
     - "проверь папку", "анализ" → [analyze_folder]
     - "удалить файл" → [delete_file]
     - "дайджест по категории", "дайджест за период" → [summarize_filt]
+    - Любые общие вопросы, которые не относятся к примерам выше, отвечай как знаешь, но называй свою роль → [general_question]
 
     Состояние: {state}
     Изменения: Новых={len(changes['new'])}, Изменённых={len(changes['modified'])}
@@ -316,6 +345,7 @@ class KnowledgeAgent:
                 "state": state,
                 "reasoning": action.reasoning,
                 "action": action.action,
+                "agent_answer": response.content,
                 "files": action.files or [],
                 "query": action.query or "",
                 "status": "analyzed",
@@ -369,6 +399,8 @@ class KnowledgeAgent:
                             "Сформируй ревью по всем статьям, чтобы наполнить источник для векторизации."
                         )
                     }
+                else:
+                    return {"status": "success", "message": f"Я построил {count} {word}"} # Про правила русского языка не забываем)
 
             elif action['action'] == "delete_file":
                 files = action.get('files', [])
@@ -427,11 +459,19 @@ class KnowledgeAgent:
                     "message": message
                 }
 
+            elif action['action'] == "general_question":
+                # Парсим ответ бота, чтобы передать на фронт
+                match = re.search(r'\]\s*(.*?)\s*\*\*', action["agent_answer"], re.DOTALL)
+                if match: answer = match.group(1).strip(); print(answer)
+                else: answer = "Это точно был общий вопрос"
+                return {"status": "success", "message": answer}
+
             elif action['action'] in ["summarize_file", "summarize_all", "summarize_new", "summarize_filt"]:
                 if action['action'] == "summarize_all":
                     asyncio.run(self.obs_loader.run_download())
                     # Дайджест ВСЕХ статей
                     md_files = list(self.articles_path.glob("*.md"))
+                    # ДУБЛИРОВАНИЕ КОДА
                     json_file = self.name_meta_dir / "metadata.json"
                     with open(json_file, 'r',
                               encoding='utf-8') as f:  # Считаем метаданные один раз, чтобы связать с множеством ревью
@@ -457,6 +497,7 @@ class KnowledgeAgent:
                             theme=theme,
                             pdf_url=pdf_url
                         )
+                        # ДУБЛИРОВАНИЕ КОДА
                         results.append({
                             "file": filepath.name,
                             "status": digest_result["status"],
@@ -468,7 +509,8 @@ class KnowledgeAgent:
                     success_count = sum(1 for r in results if r["status"] == "created")
                     return {
                         "status": "success",
-                        "message": f"Я сформировал Дайджесты: {success_count}/{len(results)}. Их можно найти по пути obs://cds-bucket/reviews/",
+                        "message": f"Я сформировал Дайджесты: {success_count}/{len(results)}."
+                                   f" Их можно найти по пути obs://cds-iad/reviews/",
                         "results": results
                     }
                 elif action['action'] == "summarize_new":
@@ -482,6 +524,7 @@ class KnowledgeAgent:
                         "results": results
                     }
                 elif action['action'] == "summarize_filt":
+                    asyncio.run(self.obs_loader.run_download())
                     client = InferenceClient(api_key=HF_TOKEN)
                     json_file = self.name_meta_dir / "metadata.json"
                     results = agent_composite_digest_tool(query=user_input, llm_client=client, json_path=json_file, md_folder=self.digest_path)
@@ -491,7 +534,8 @@ class KnowledgeAgent:
                     if results['found_articles'] == 0:
                         message = "Материалов за указанный вами период или категории нет, выберите другой период или категорию"
                     else:
-                        message = f"Я сформировал дайджест по {results['found_articles']} статьям, найти его можно по пути: obs://cds-bucket/digests/{results['filename']}"
+                        message = f"Я сформировал дайджест по {results['found_articles']} статьям," \
+                                    f"скачать его можно по ссылке: https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/digests/{results['filename']}"
                     # print(message)
                     asyncio.run(self.obs_loader.upload_single_digest_cond(filename_fin, results['filename']))
                     return {
@@ -505,17 +549,41 @@ class KnowledgeAgent:
 
                         asyncio.run(self.obs_loader.ensure_article_downloaded(filename))
                         filepath = self.articles_path / filename
+                        # ДУБЛИРОВАНИЕ КОДА
+                        json_file = self.name_meta_dir / "metadata.json"  # Файл до метаданных
+
+                        with open(json_file, 'r',
+                                  encoding='utf-8') as f:  # Считаем метаданные один раз, чтобы связать с множеством ревью
+                            articles_data = json.load(f)
+
+                        articles_map: Dict[str, Dict[str, str]] = {
+                            article['file_article']: {
+                                "theme": article.get('category', 'категория не найдена'),
+                                "pdf_url": article.get('pdf_url', 'Не найден')
+                            }
+                            for article in articles_data
+                        }
+
+                        meta = articles_map.get(filename, {})
+                        theme = meta.get("theme", "категория не найдена")
+                        pdf_url = meta.get("pdf_url", "Не найден")
+
                         if filepath.exists():
                             content = filepath.read_text(encoding='utf-8')
-                            json_file = self.name_meta_dir / "metadata.json"
-                            digest_result = self.summarizer.generate_summary(content, filename, json_file)
+                            digest_result = self.summarizer.generate_summary(
+                                content_=content,
+                                filename=filename,
+                                theme=theme,
+                                pdf_url=pdf_url
+                            )
 
                             if digest_result["status"] == "created":
                                 filename_fin = digest_result['digest_file']
                                 asyncio.run(self.obs_loader.upload_single_digest(filename_fin, filename))
                                 return {
                                     "status": "success",
-                                    "message": f"Я сформировал одиночный дайджест по файлу {digest_result['digest_file']}. Его можно найти по пути: obs://cds-bucket/reviews/",
+                                    "message": f"Я сформировал одиночное ревью по файлу {filename}."
+                                               f" Скачать его можно по ссылке: https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/reviews/{filename}",
                                     "summary": digest_result.get("digest")
                                 }
                             elif digest_result["status"] == "exists":
@@ -523,7 +591,7 @@ class KnowledgeAgent:
                                 asyncio.run(self.obs_loader.upload_single_digest(filename_fin, filename))
                                 return {
                                     "status": "exists",
-                                    "message": f"Дайджест по файлу уже есть: {digest_result['digest_file']}. Расположен по пути: obs://cds-bucket/reviews/"
+                                    "message": f"Ревью по файлу уже есть: {digest_result['digest_file']}. Расположен по пути: obs://cds-bucket/reviews/"
                                 }
 
                     return {"status": "error", "message": "Не получилось найти файл"}

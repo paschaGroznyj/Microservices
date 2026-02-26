@@ -11,6 +11,8 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, date
 from pydantic import BaseModel, Field
 from sklearn.metrics.pairwise import cosine_similarity
+from .summary import SummaryGenerator
+from mistralai import Mistral
 from sentence_transformers import SentenceTransformer
 from core.config import EMBEDDING_MODEL
 
@@ -162,9 +164,17 @@ class LLMCompositeExtractor:
         ## Текст статьи из PDF:
         {article_text}."""
 
+        # response = llm_client.chat.completions.create(
+        #     model="Qwen/Qwen3-VL-8B-Instruct",
+        #     messages=[{"role": "user", "content": prompt}]
+        # )
+
+
         response = llm_client.chat.completions.create(
-            model="Qwen/Qwen3-VL-8B-Instruct",
-            messages=[{"role": "user", "content": prompt}]
+            model="Qwen/Qwen3.5-397B-A17B",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.6,
+            top_p=0.95
         )
         return response.choices[0].message.content
 
@@ -179,7 +189,25 @@ class LLMCompositeExtractor:
 # client = InferenceClient(api_key=HF_TOKEN)
 # response = client.chat.completions.create(
 #             model="Qwen/Qwen3-VL-8B-Instruct",
-#             messages=[{"role": "user", "content": "Привет"}]
+#             messages=[{"role": "user", "content": "Привет"}],
+#             temperature=0.6,
+#             top_p=0.95
+#         )
+# print(response.choices[0].message.content)
+
+# from mistralai import Mistral
+# from dotenv import load_dotenv
+# import os
+# load_dotenv()
+# MISTRAL_TOKEN = os.getenv("MISTRAL_TOKEN")
+#
+#
+# llm = Mistral(api_key=MISTRAL_TOKEN)
+# response = llm.chat.complete(
+#             model="mistral-large-latest",
+#             messages=[{"role": "user", "content": "Привет"}],
+#             temperature=0.6,
+#             top_p=0.95
 #         )
 # print(response.choices[0].message.content)
 
@@ -409,6 +437,7 @@ def build_digest_content(articles: List[Dict], md_path: Path, query: list, llm_c
         for md_file in md_path.rglob("*.md")
     }
 
+    sum = SummaryGenerator()
     # md_paths = find_matching_md_files(articles, md_path)
 
     # print(md_paths)
@@ -468,19 +497,21 @@ def build_digest_content(articles: List[Dict], md_path: Path, query: list, llm_c
                     else md_content
                 )
 
-                summary = LLMCompositeExtractor.create_summary(
-                    md_content[:2000],
-                    filename,
-                    llm_client
-                )
+                # summary = LLMCompositeExtractor.create_summary(
+                #     md_content[:2000],
+                #     filename,
+                #     llm_client
+                # )
+
+                summary = sum.generate_summary(md_content, filename=filename) # Заменил на Гигачат
 
                 digest_dir = Path(md_path / category)
                 digest_dir.mkdir(parents=True, exist_ok=True)
 
                 with open(digest_dir / filename, "w", encoding="utf-8") as f:
-                    f.write(summary)
+                    f.write(summary['digest'])
 
-                content.append(summary)
+                content.append(summary['digest'])
 
         content.append("---" * 30)
     finish = time.time()

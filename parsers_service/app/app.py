@@ -208,9 +208,9 @@ async def perform_parsing_cycle():
         end_date = start_date + timedelta(days=13)
 
         today = datetime.today()
-        # if start_date > today:
-        #     logger.info("Диапазон выходит за пределы текущей даты — пропускаем")
-        #     return
+        if start_date > today:
+            logger.info("Диапазон выходит за пределы текущей даты — пропускаем")
+            return
 
         end_date = min(end_date, today) # Чтобы не брать дни из будущего
 
@@ -220,7 +220,7 @@ async def perform_parsing_cycle():
         )
 
 
-        date_range = ('2025-01-01', '2026-02-25')
+        # date_range = ('2026-01-01', '2026-02-25')
         logger.info(f"Парсинг диапазона: {date_range}")
         link_ieee = (
             "https://ieeexplore.ieee.org/search/searchresult.jsp?"
@@ -230,7 +230,7 @@ async def perform_parsing_cycle():
             "ranges=2026_2026_Year&returnFacets=ALL"
         )
         cfg = PipelineConfig()
-        cfg.max_pages = 20
+        cfg.max_pages = 30
 
         parsers = [
             ARXIVParser(date_range),
@@ -278,8 +278,8 @@ async def perform_parsing_cycle():
 
 async def scheduled_parsing_loop():
     while True:
-        interval = int(SYNC_INTERVAL_SCHEDULER)
-        # interval = int(SYNC_INTERVAL_SCHEDULER) * 60 * 24 * 14
+        # interval = int(SYNC_INTERVAL_SCHEDULER)
+        interval = int(SYNC_INTERVAL_SCHEDULER) * 60 * 24
         logger.info(f"== Интервал == {interval}")
         await perform_parsing_cycle()
         await asyncio.sleep(interval)

@@ -248,9 +248,9 @@ class KnowledgeAgent:
         self.parser = PydanticOutputParser(pydantic_object=AgentAction)
         self.obs_loader = OBSWorker()
 
-        asyncio.run(self.obs_loader.run_download())
-        asyncio.run(self.obs_loader.download_reviews())
-        asyncio.run(self.obs_loader.download_vectorstore())
+        # asyncio.run(self.obs_loader.run_download())
+        # asyncio.run(self.obs_loader.download_reviews())
+        # asyncio.run(self.obs_loader.download_vectorstore())
 
         # Флаг для автозапуска
         self.skip_startup_autoprocess = skip_startup_autoprocess
@@ -426,7 +426,7 @@ class KnowledgeAgent:
                 }
 
             elif action['action'] == "search_db":
-                asyncio.run(self.obs_loader.download_vectorstore())
+                # asyncio.run(self.obs_loader.download_vectorstore()) # OBS ломает файлы, хотя вроде сохраняем как бинарник
                 results = self.vector_db.similarity_search(action['query'] or "", k=5)
                 if not results:
                     return {
@@ -441,11 +441,9 @@ class KnowledgeAgent:
                     raw_content = r['content'].strip()
                     clean_content = self.clean_markdown(raw_content)
                     content_snippet = clean_content
-                    print(content_snippet)
-                    if len(content_snippet) > 300:
-                        content_snippet = content_snippet[:300].rsplit(' ', 1)[0] + '...'
+                    if len(content_snippet) > 512:
+                        content_snippet = content_snippet[:512].rsplit(' ', 1)[0] + '...'
                     score = r['score']
-
                     block = f"""**Результат {i}** (релевантность: {score:.3f})
 
 {content_snippet}"""
@@ -689,8 +687,8 @@ class KnowledgeAgent:
 
         updater = MetadataUpdater(
             metadata_file=json_file,
-            max_retries=3,
-            retry_delay=15
+            max_retries=1,
+            retry_delay=30
         )
 
         message = updater.run()

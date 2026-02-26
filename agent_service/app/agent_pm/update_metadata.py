@@ -7,6 +7,9 @@ from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 from huggingface_hub import InferenceClient
 from huggingface_hub.errors import HfHubHTTPError
+from langchain.chat_models.gigachat import GigaChat
+from langchain.schema import SystemMessage
+from core.config import GIGACHAT_CREDENTIALS
 
 load_dotenv()
 
@@ -18,7 +21,11 @@ class MetadataUpdater:
         self.metadata_file = metadata_file
         self.max_retries = max_retries
         self.retry_delay = retry_delay
-        self.llm = InferenceClient(api_key=HF_TOKEN)
+        # self.llm = InferenceClient(api_key=HF_TOKEN)
+        self.llm = GigaChat(
+            credentials=GIGACHAT_CREDENTIALS,  # Обязательный параметр
+            verify_ssl_certs=False,  # Отключаем проверку SSL
+        )
 
         # Список допустимых категорий (для валидации, можно вынести в конфиг)
         self.valid_categories = [
@@ -46,17 +53,25 @@ class MetadataUpdater:
 Ответ только названием категории."""
 
         try:
-            response = self.llm.chat.completions.create(
-                model="Qwen/Qwen3-VL-8B-Instruct",  # Или ваша модель
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=100
-            )
-
-            if not response.choices or not response.choices[0].message.content:
-                return None
-
-            raw_content = response.choices[0].message.content.strip().strip('"\'')
+            # response = self.llm.chat.completions.create(
+            #     model="Qwen/Qwen3.5-397B-A17B",
+            #     max_tokens=1000,
+            #     messages=[{"role": "user", "content": prompt}],
+            #     temperature=0.5,
+            #     top_p=0.95
+            # )
+            #
+            # if not response.choices or not response.choices[0].message.content:
+            #     return None
+            #
+            # raw_content = response.choices[0].message.content.strip().strip('"\'')
+            message = [
+                SystemMessage(
+                    content=prompt
+                )
+            ]
+            response_sum = self.llm(message)
+            raw_content = response_sum.content.strip()
 
             # Точное совпадение
             if raw_content in self.valid_categories:

@@ -11,8 +11,6 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, date
 from pydantic import BaseModel, Field
 from sklearn.metrics.pairwise import cosine_similarity
-from .summary import SummaryGenerator
-from mistralai import Mistral
 from sentence_transformers import SentenceTransformer
 from core.config import EMBEDDING_MODEL
 
@@ -120,18 +118,39 @@ class LLMCompositeExtractor:
         response = llm_client.chat.completions.create(
             model="Qwen/Qwen3-VL-8B-Instruct",
             messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
+            max_tokens=1024
         )
         
         json_str = response.choices[0].message.content
-        filters = CompositeFilters.model_validate_json(json_str)
-        
-        # print(f"   Дата: {filters.date_range}")
-        # print(f"   Категория: {filters.category}")
-        # print(f"   Тема: {filters.topic}")
-        # print(f"   {'СОСТАВНЫЙ' if filters.is_composite else 'Одиночный'} фильтр")
-        #
-        return filters
+
+        # 2. Попытка парсинга
+        try:
+            filters = CompositeFilters.model_validate_json(json_str)
+            return filters
+        except Exception as parse_error:
+            # 3. АВТО-ФИКС: Если JSON обрезан (EOF error), пробуем дозакрыть скобки
+            print(f"Ошибка парсинга JSON: {parse_error}. Пробую восстановить...")
+            
+            open_braces = json_str.count('{')
+            close_braces = json_str.count('}')
+            open_brackets = json_str.count('[')
+            close_brackets = json_str.count(']')
+            open_quotes = json_str.count('"') % 2 # Если нечетное кол-во, значит кавычка открыта
+            
+            fixed_json = json_str
+            if open_quotes:
+                fixed_json += '"' # Закрываем строку
+            while close_brackets < open_brackets:
+                fixed_json += ']'
+                close_brackets += 1
+            while close_braces < open_braces:
+                fixed_json += '}'
+                close_braces += 1
+            
+            print(f"Исправленный JSON (фрагмент): {fixed_json[:200]}...")
+            filters = CompositeFilters.model_validate_json(fixed_json)
+            return filters
 
     @staticmethod
     def create_summary(article_text: str, file_name, llm_client) -> str:
@@ -437,7 +456,6 @@ def build_digest_content(articles: List[Dict], md_path: Path, query: list, llm_c
         for md_file in md_path.rglob("*.md")
     }
 
-    sum = SummaryGenerator()
     # md_paths = find_matching_md_files(articles, md_path)
 
     # print(md_paths)

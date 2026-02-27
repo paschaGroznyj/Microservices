@@ -117,7 +117,7 @@ class ARXIVParser:
         start = data_range[0] if data_range else self.data_start
         end = data_range[1] if data_range else self.data_end
         result_list = []
-        for i in range(50):
+        for i in range(0, 1000, 50):
             get_url = self.cat_url + str(i)
             print(f"Номер страницы: {i}")
             text = requests.get(get_url, headers=self.headers, timeout=15)

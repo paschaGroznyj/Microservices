@@ -17,12 +17,16 @@ agent = KnowledgeAgent()
 # text = "Сформируй дайджесты по всем статьям"
 # text = "Сформируй дайджест по этому файлу 2026-01-28_MuRAL-CPD_Active_Learning_for_Multiresolution_Change_Point_Detection.md"
 # text = "Найди информацию по теме методы обработки изображений"
-text = "Обнови категории в метаданных"
+text = "Поиск документов с примерами оптимизации моделей"
+# text = "Перестрой индексы"
 # text = "Сформируй дайджесты по категории Общие принципы"
 response = agent.process_query(text)
 with open("answer.txt", mode='a', encoding='utf-8') as f:
     f.write(response['message'] + "\n")
-# from agent_pm.pm_parser.parser import parser
-# import asyncio
 #
-# asyncio.run(parser.run())
+# async def main():
+#     await agent.make_reviews()
+#
+# if __name__ == '__main__':
+#     import asyncio
+#     asyncio.run(main())

@@ -250,7 +250,7 @@ class KnowledgeAgent:
 
         asyncio.run(self.obs_loader.run_download())
         asyncio.run(self.obs_loader.download_reviews())
-        asyncio.run(self.obs_loader.download_vectorstore())
+        # asyncio.run(self.obs_loader.download_vectorstore())
 
         # Флаг для автозапуска
         self.skip_startup_autoprocess = skip_startup_autoprocess
@@ -398,13 +398,21 @@ class KnowledgeAgent:
                     return {
                         "status": "warning",
                         "message": (
-                            "Не удалось создать векторный индекс: база пуста.\n"
-                            "Рекомендую сначала выполнить команду:\n"
-                            "Сформируй ревью по всем статьям, чтобы наполнить источник для векторизации."
+                            "⚠️ **Не удалось создать векторный индекс**\n\n"
+                            "💡 **Что делать:**\n"
+                            "Выполните команду:\n"
+                            "`Сформируй ревью по всем статьям`"
                         )
                     }
                 else:
-                    return {"status": "success", "message": f"Я построил {count} {word}"} # Про правила русского языка не забываем)
+                    return {
+                        "status": "success",
+                        "message": (
+                            f"✅ **Векторный индекс успешно построен!**\n\n"
+                            f"Обработано и добавлено в базу: **{count} {word}**.\n"
+                            f"Теперь семантический поиск готов к работе. 🚀"
+                        )
+                    }
 
             elif action['action'] == "delete_file":
                 files = action.get('files', [])
@@ -422,18 +430,32 @@ class KnowledgeAgent:
                     "modified_files": len(changes['modified']),
                     "total_files": len(files_list),
                     "files": [f.name for f in files_list[:5]],
-                    "message": "Я проанализировал указанную тобой директорию"
+                    "message":  f"📂 **Анализ директории завершен**\n\n"
+                                f"📊 **Статистика изменений:**\n"
+                                f"• 🆕 Новых файлов: `{len(changes['new'])}`\n"
+                                f"• ✏️ Изменено файлов: `{len(changes['modified'])}`\n"
+                                f"• 📁 Всего файлов: `{len(files_list)}`"
+
+
                 }
 
             elif action['action'] == "search_db":
-                asyncio.run(self.obs_loader.download_vectorstore())
+                # asyncio.run(self.obs_loader.download_vectorstore()) # OBS ломает файлы, хотя вроде сохраняем как бинарник
                 results = self.vector_db.similarity_search(action['query'] or "", k=5)
                 if not results:
                     return {
-                        "status": "success",
+                        "status": "warning",  # Меняем на warning, так как это не успех, а отсутствие данных
                         "count": 0,
                         "preview": [],
-                        "message": "По вашему запросу ничего не найдено в базе знаний."
+                        "message": (
+                            f"🔍 **По запросу не найдено совпадений**\n\n"
+                            f"Запрос: `\"{action['query']}\"`\n\n"
+                            f"⚠️ **Вероятная причина:** Векторная база знаний пуста или еще не создана.\n"
+                            f"Без векторного индекса семантический поиск работать не может.\n\n"
+                            f"💡 **Рекомендация:**\n"
+                            f"Сначала выполните команду для построения индекса:\n"
+                            f"`Построй векторную базу по всем статьям`"
+                        )
                     }
 
                 formatted_results = []
@@ -441,11 +463,9 @@ class KnowledgeAgent:
                     raw_content = r['content'].strip()
                     clean_content = self.clean_markdown(raw_content)
                     content_snippet = clean_content
-                    print(content_snippet)
-                    if len(content_snippet) > 300:
-                        content_snippet = content_snippet[:300].rsplit(' ', 1)[0] + '...'
+                    if len(content_snippet) > 512:
+                        content_snippet = content_snippet[:512].rsplit(' ', 1)[0] + '...'
                     score = r['score']
-
                     block = f"""**Результат {i}** (релевантность: {score:.3f})
 
 {content_snippet}"""
@@ -482,10 +502,14 @@ class KnowledgeAgent:
 
                 clean_text = re.sub(r'\*\*', '', clean_text)  # Убираем жирность
                 clean_text = re.sub(r'\n\s*\n', '\n', clean_text)  # Убираем двойные пустые строки
+                clean_text = re.sub(r'general_question', '', clean_text)
 
                 final_answer = clean_text.strip()
+                instruction_link = "https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/instructions/agent_commands.html"
                 if not final_answer:
                     final_answer = "Чистили-чистили, но не дочистили. Это был точно общий вопрос"
+
+                final_answer = f"{final_answer}\n\n📚 [Прикладываю ссылку на инструкцию]({instruction_link})"
 
                 return {"status": "success", "message": final_answer}
 
@@ -494,7 +518,7 @@ class KnowledgeAgent:
                     asyncio.run(self.obs_loader.run_download())
                     asyncio.run(self.obs_loader.download_reviews())
                     # Дайджест ВСЕХ статей
-                    md_files = list(self.articles_path.glob("*.md"))
+                    reviews_root = self.digest_path
                     # ДУБЛИРОВАНИЕ КОДА
                     json_file = self.name_meta_dir / "metadata.json"
                     with open(json_file, 'r',
@@ -509,33 +533,80 @@ class KnowledgeAgent:
                         for article in articles_data
                     }
                     results = []
+                    
+                    # Дайджест ВСЕХ статей
+                    if not reviews_root.exists():
+                        os.makedirs(reviews_root, exist_ok=True)
+                    md_articles = [name.name for name in self.articles_path.glob("*.md")]  # Тексты оригинальных статей
+                    md_reviews = [name.name for name in reviews_root.rglob("*.md")]  # Тексты ревью
+
+                    need_reviews = list(set(md_articles) - set(md_reviews))
+                    print("Тексты статей для которых нужно сделать ревью", need_reviews)
                     # print("Спискок статей", len(md_files))
-                    for filepath in md_files:
-                        meta = articles_map.get(filepath.name, {})
+                    for filename in need_reviews:
+                        article_path = self.articles_path / filename
+                        meta = articles_map.get(filename, {})
                         theme = meta.get("theme", "категория не найдена")
                         pdf_url = meta.get("pdf_url", "Не найден")
 
                         digest_result = self.summarizer.generate_summary(
-                            content_=filepath.read_text(encoding='utf-8'),
-                            filename=filepath.name,
+                            content_=article_path.read_text(encoding='utf-8'),
+                            filename=filename,
                             theme=theme,
                             pdf_url=pdf_url
                         )
                         # ДУБЛИРОВАНИЕ КОДА
                         results.append({
-                            "file": filepath.name,
+                            "file": filename,
                             "status": digest_result["status"],
                             "digest_file": digest_result.get('digest_file')
                         })
 
                     asyncio.run(self.obs_loader.upload_digests())
+                    articles_count = len(md_articles)
+                    reviews_count = len(md_reviews)
+                    diff = articles_count - reviews_count
 
-                    success_count = sum(1 for r in results if r["status"] == "created")
+                    obs_path = "obs://cds-iad/reviews/"
+                    base_url = "https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/reviews/"
+
+                    if diff == 0:
+                        # 🎉 Сценарий: Полная синхронизация
+                        message = (
+                            f"🎉 **Полная синхронизация!**\n\n"
+                            f"🗄 **Статей:** `{articles_count}`\n"
+                            f"✅ **Ревью:** `{reviews_count}`\n\n"
+                            f"✨ Все актуальные статьи уже имеют ревью.\n"
+                            f"Новых задач для генерации нет.\n"
+                            f"📂 Хранилище актуально: `{obs_path}`"
+                        )
+                        status = "synced"
+
+                    else:
+                        excess_count = abs(diff) 
+                        
+                        message = (
+                            f"⚠️ **Обнаружено несоответствие!**\n\n"
+                            f"🗄 **Статей в хранилище:** `{articles_count}`\n"
+                            f"✅ **Найдено ревью:** `{reviews_count}`\n\n"
+                            f"🧮 **Разница:** `{excess_count}` лишних ревью.\n\n"
+                            f"🤔 **Возможные причины:**\n"
+                            f"• Статьи были удалены из базы, но ревью остались.\n"
+                            f"• Ревью были созданы вручную.\n"
+                            f"• Изменилась логика именования файлов.\n\n"
+                            f"💡 **Рекомендация:** Проверьте папку `{obs_path}` на наличие orphaned (осиротевших) файлов."
+                        )
+                        status = "warning"
+
+                    # Формируем итоговый ответ
                     return {
-                        "status": "success",
-                        "message": f"Я сформировал Дайджесты: {success_count}/{len(results)}."
-                                   f" Их можно найти по пути obs://cds-iad/reviews/",
-                        "results": results
+                        "status": status,
+                        "message": message,
+                        "stats": {
+                            "articles": articles_count,
+                            "reviews": reviews_count,
+                            "difference": diff
+                        }
                     }
                 elif action['action'] == "summarize_new":
                     asyncio.run(self.obs_loader.run_download())
@@ -552,15 +623,28 @@ class KnowledgeAgent:
                     asyncio.run(self.obs_loader.download_reviews())
                     client = InferenceClient(api_key=HF_TOKEN)
                     json_file = self.name_meta_dir / "metadata.json"
-                    results = agent_composite_digest_tool(query=user_input, llm_client=client, json_path=json_file, md_folder=self.digest_path)
+                    results = agent_composite_digest_tool(llm_client=client, query=user_input, json_path=json_file, md_folder=self.digest_path)
                     filename_fin = results['digest_file']
                     # print(results['digest_file'])
                     # print(results['filename'])
                     if results['found_articles'] == 0:
-                        message = "Материалов за указанный вами период или категории нет, выберите другой период или категорию"
+                        message = (
+                            "❌ **Нет данных для формирования дайджеста**\n\n"
+                            "По вашему запросу (период или категория) материалов не обнаружено.\n"
+                            "Пожалуйста, выберите другие параметры."
+                        )
                     else:
-                        message = f"Я сформировал дайджест по {results['found_articles']} статьям," \
-                                    f"скачать его можно по ссылке: https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/digests/{results['filename']}"
+                        count = results['found_articles']
+                        filename = results['filename']
+                        base_url = "https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/digests/"
+                        full_link = f"{base_url}{filename}"
+                        
+                        message = (
+                            f"🎉 **Готово! Дайджест сформирован.**\n\n"
+                            f"• Обработано статей: **{count}**\n"
+                            f"• Имя файла: `{filename}`\n\n"
+                            f"🔗 **Ссылка на скачивание:** [Скачать]({full_link})"
+                        )
                     # print(message)
                     asyncio.run(self.obs_loader.upload_single_digest_cond(filename_fin, results['filename']))
                     return {
@@ -602,24 +686,47 @@ class KnowledgeAgent:
                                 pdf_url=pdf_url
                             )
 
+                            base_url = "https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/reviews"
+                            obs_path = "obs://cds-iad/reviews/"
+
                             if digest_result["status"] == "created":
                                 filename_fin = digest_result['digest_file']
+                                # Загрузка файла
                                 asyncio.run(self.obs_loader.upload_single_digest(filename_fin, filename))
+                                
+                                full_link = f"{base_url}/{filename}"
+                                
+                                message = (
+                                    f"✨ **Одиночное ревью успешно сформировано!**\n\n"
+                                    f"📄 **Файл:** `{filename}`\n"
+                                    f"📥 **Скачать:** [Нажмите здесь]({full_link})\n"
+                                    f"_Или скопируйте ссылку:_ `{full_link}`"
+                                )
+                                
                                 return {
                                     "status": "success",
-                                    "message": f"Я сформировал одиночное ревью по файлу {filename}."
-                                               f" Скачать его можно по ссылке: https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/reviews/{filename}",
-                                    "summary": digest_result.get("digest")
+                                    "message": message
                                 }
+
                             elif digest_result["status"] == "exists":
                                 filename_fin = digest_result['digest_file']
                                 asyncio.run(self.obs_loader.upload_single_digest(filename_fin, filename))
+                                
+                                existing_link = f"{base_url}/{filename}"
+                                
+                                message = (
+                                    f"ℹ️ **Ревью уже существует**\n\n"
+                                    f"Файл `{filename}` был создан ранее.\n"
+                                    f"📂 **Путь в хранилище:** `{obs_path}`\n"
+                                    f"🔗 **Ссылка на скачивание:** `{existing_link}`"
+                                )
+                                
                                 return {
                                     "status": "exists",
-                                    "message": f"Ревью по файлу уже есть: {digest_result['digest_file']}. Расположен по пути: obs://cds-bucket/reviews/"
+                                    "message": message
                                 }
 
-                    return {"status": "error", "message": "Не получилось найти файл"}
+                    return {"status": "error", "message": "❌ Не получилось найти файл"}
 
         except Exception as e:
             return {"status": "error", "message": f"Ошибка: {str(e)}"}
@@ -689,8 +796,8 @@ class KnowledgeAgent:
 
         updater = MetadataUpdater(
             metadata_file=json_file,
-            max_retries=3,
-            retry_delay=15
+            max_retries=1,
+            retry_delay=30
         )
 
         message = updater.run()

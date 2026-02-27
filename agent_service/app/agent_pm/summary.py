@@ -5,13 +5,21 @@ from core.config import GIGACHAT_CREDENTIALS, STORAGE_PATH, EMBED_MODEL_GLOSS, P
 from typing import Dict, Any, List
 import json
 import re
+import os
 from datetime import datetime
 from pathlib import Path
 from sentence_transformers import SentenceTransformer
+from huggingface_hub import InferenceClient
+from huggingface_hub.errors import HfHubHTTPError
+from dotenv import load_dotenv
 
+
+load_dotenv()
+
+HF_TOKEN = os.getenv("HF_TOKEN")
 
 # from .glossary import find_relevant_glossary
-
+#
 # EMBED_MODEL = SentenceTransformer(EMBED_MODEL_GLOSS)
 
 
@@ -25,6 +33,7 @@ class SummaryGenerator:
             credentials=GIGACHAT_CREDENTIALS,  # Обязательный параметр
             verify_ssl_certs=False,  # Отключаем проверку SSL
         )
+        # self.llm = InferenceClient(api_key=HF_TOKEN)
 
     def _get_content_hash(self, content: str) -> str:
         """Хэш содержимого для проверки изменений"""
@@ -95,7 +104,7 @@ class SummaryGenerator:
         # print(f"Сохранено: {filepath}")
         return str(filepath)
 
-    def generate_summary(self, content_: str, filename: str, theme: str, pdf_url: str) -> Dict[str, Any]:
+    def generate_summary(self, content_: str, filename: str = None, theme: str = None, pdf_url: str = None) -> Dict[str, Any]:
         """Генерирует академическое саммари PDF-статей по строгому шаблону"""
         # НЕ забыть расскоментить =============================
         # final_text = find_relevant_glossary(content_[:4000], PATH_TO_GLOSSARY) # Закомментил
@@ -183,7 +192,7 @@ class SummaryGenerator:
             7. **Вывод:** ...
 
         ## Текст статьи из PDF:
-        {content_[:500]}.""")]
+        {content_[:1500]}.""")]
 
         # prompt2 = [SystemMessage(content=f"""Выбери одну категорию из следующего списка:
         #                                     Категории: {categories_str}
@@ -192,8 +201,16 @@ class SummaryGenerator:
         #                                     ## Текст статьи из PDF:
         #                                     {content_[:500]}.
         #                                     В ответ выводи только выбранную категорию, без лишнего текста.""")]
-
-        response_sum = self.llm(prompt)
+        # =====================================
+        # response = self.llm.chat.completions.create(
+        #     model="Qwen/Qwen3.5-397B-A17B",
+        #     messages=[{"role": "user", "content": prompt}],
+        #     temperature=0.6,
+        #     top_p=0.95
+        # )
+        # summary = response.choices[0].message.content
+        # =====================================
+        response_sum = self.llm(prompt) # Для гигачата
         summary = response_sum.content.strip()
 
         # response_theme = self.llm(prompt2)
@@ -209,7 +226,19 @@ class SummaryGenerator:
 
         # with open(self.knowledge_dir / "metadata.json", 'w', encoding='utf-8') as f:
         #     json.dump(data_list, f, ensure_ascii=False, indent=2)
-        print("Получили summary", summary[:100])
+        print("Получили summary", summary[:200])
+        if theme is None:
+            folder = self.digest_dir / 'Без категории'
+            digest_file = self.save_to_md(summary, filename=filename, folder=folder)
+            return {
+                "status": "created",
+                "filename": filename,
+                "created_at": datetime.now().isoformat(),
+                "digest": summary,
+                "category": theme,
+                "digest_file": str(digest_file),  # Потом подумать над неймингом в message
+                "digest_folder": folder.name
+            }
         if 'Общие принципы' in theme:
             folder = self.digest_dir / 'Общие_принципы'
             digest_file = self.save_to_md(summary, filename=filename, folder=folder)

@@ -118,18 +118,39 @@ class LLMCompositeExtractor:
         response = llm_client.chat.completions.create(
             model="Qwen/Qwen3-VL-8B-Instruct",
             messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
+            max_tokens=1024
         )
         
         json_str = response.choices[0].message.content
-        filters = CompositeFilters.model_validate_json(json_str)
-        
-        # print(f"   Дата: {filters.date_range}")
-        # print(f"   Категория: {filters.category}")
-        # print(f"   Тема: {filters.topic}")
-        # print(f"   {'СОСТАВНЫЙ' if filters.is_composite else 'Одиночный'} фильтр")
-        #
-        return filters
+
+        # 2. Попытка парсинга
+        try:
+            filters = CompositeFilters.model_validate_json(json_str)
+            return filters
+        except Exception as parse_error:
+            # 3. АВТО-ФИКС: Если JSON обрезан (EOF error), пробуем дозакрыть скобки
+            print(f"Ошибка парсинга JSON: {parse_error}. Пробую восстановить...")
+            
+            open_braces = json_str.count('{')
+            close_braces = json_str.count('}')
+            open_brackets = json_str.count('[')
+            close_brackets = json_str.count(']')
+            open_quotes = json_str.count('"') % 2 # Если нечетное кол-во, значит кавычка открыта
+            
+            fixed_json = json_str
+            if open_quotes:
+                fixed_json += '"' # Закрываем строку
+            while close_brackets < open_brackets:
+                fixed_json += ']'
+                close_brackets += 1
+            while close_braces < open_braces:
+                fixed_json += '}'
+                close_braces += 1
+            
+            print(f"Исправленный JSON (фрагмент): {fixed_json[:200]}...")
+            filters = CompositeFilters.model_validate_json(fixed_json)
+            return filters
 
     @staticmethod
     def create_summary(article_text: str, file_name, llm_client) -> str:
@@ -162,9 +183,17 @@ class LLMCompositeExtractor:
         ## Текст статьи из PDF:
         {article_text}."""
 
+        # response = llm_client.chat.completions.create(
+        #     model="Qwen/Qwen3-VL-8B-Instruct",
+        #     messages=[{"role": "user", "content": prompt}]
+        # )
+
+
         response = llm_client.chat.completions.create(
-            model="Qwen/Qwen3-VL-8B-Instruct",
-            messages=[{"role": "user", "content": prompt}]
+            model="Qwen/Qwen3.5-397B-A17B",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.6,
+            top_p=0.95
         )
         return response.choices[0].message.content
 
@@ -179,7 +208,25 @@ class LLMCompositeExtractor:
 # client = InferenceClient(api_key=HF_TOKEN)
 # response = client.chat.completions.create(
 #             model="Qwen/Qwen3-VL-8B-Instruct",
-#             messages=[{"role": "user", "content": "Привет"}]
+#             messages=[{"role": "user", "content": "Привет"}],
+#             temperature=0.6,
+#             top_p=0.95
+#         )
+# print(response.choices[0].message.content)
+
+# from mistralai import Mistral
+# from dotenv import load_dotenv
+# import os
+# load_dotenv()
+# MISTRAL_TOKEN = os.getenv("MISTRAL_TOKEN")
+#
+#
+# llm = Mistral(api_key=MISTRAL_TOKEN)
+# response = llm.chat.complete(
+#             model="mistral-large-latest",
+#             messages=[{"role": "user", "content": "Привет"}],
+#             temperature=0.6,
+#             top_p=0.95
 #         )
 # print(response.choices[0].message.content)
 
@@ -468,19 +515,21 @@ def build_digest_content(articles: List[Dict], md_path: Path, query: list, llm_c
                     else md_content
                 )
 
-                summary = LLMCompositeExtractor.create_summary(
-                    md_content[:2000],
-                    filename,
-                    llm_client
-                )
+                # summary = LLMCompositeExtractor.create_summary(
+                #     md_content[:2000],
+                #     filename,
+                #     llm_client
+                # )
+
+                summary = sum.generate_summary(md_content, filename=filename) # Заменил на Гигачат
 
                 digest_dir = Path(md_path / category)
                 digest_dir.mkdir(parents=True, exist_ok=True)
 
                 with open(digest_dir / filename, "w", encoding="utf-8") as f:
-                    f.write(summary)
+                    f.write(summary['digest'])
 
-                content.append(summary)
+                content.append(summary['digest'])
 
         content.append("---" * 30)
     finish = time.time()

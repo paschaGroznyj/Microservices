@@ -23,8 +23,13 @@ class DataBaseChats:
                     host=DB_HOST,
                     port=DB_PORT,
                     database=DB_NAME,
-                    min_size=1,
-                    max_size=10
+                    min_size=10,
+                    max_size=50,
+                    max_queries=50000,
+                    max_inactive_connection_lifetime=300,
+                    command_timeout=60,
+                    timeout=60,
+                    statement_cache_size=100
                 )
 
                 # Инициализация структуры базы данных

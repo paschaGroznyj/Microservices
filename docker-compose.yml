@@ -105,27 +105,27 @@ services:
   #     ports:
   #       - "4444:4444"
 
-  parsers_service:
-    build: ./parsers_service
-    container_name: parsers_service
-    ports:
-      - "8003:8003"
-    environment:
-      PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
-      PORT_LLM_CONSUMER: ${PORT_LLM_CONSUMER}
+  # parsers_service:
+  #   build: ./parsers_service
+  #   container_name: parsers_service
+  #   ports:
+  #     - "8003:8003"
+  #   environment:
+  #     PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
+  #     PORT_LLM_CONSUMER: ${PORT_LLM_CONSUMER}
 
-      STORAGE_PATH: ${STORAGE_PATH}
-      SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES}
-      SYNC_INTERVAL_SCHEDULER: ${SYNC_INTERVAL_SCHEDULER}
-      ARTICLES_FOLDER: ${ARTICLES_FOLDER}
-      METADATA_FOLDER: ${METADATA_FOLDER}
+  #     STORAGE_PATH: ${STORAGE_PATH}
+  #     SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES}
+  #     SYNC_INTERVAL_SCHEDULER: ${SYNC_INTERVAL_SCHEDULER}
+  #     ARTICLES_FOLDER: ${ARTICLES_FOLDER}
+  #     METADATA_FOLDER: ${METADATA_FOLDER}
 
-      OBS_BUCKET: ${OBS_BUCKET}
-      OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
-      OBS_SECRET_KEY: ${OBS_SECRET_KEY}
-      OBS_REGION: ${OBS_REGION}
-      OBS_ENDPOINT: ${OBS_ENDPOINT}     
-    restart: unless-stopped
+  #     OBS_BUCKET: ${OBS_BUCKET}
+  #     OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
+  #     OBS_SECRET_KEY: ${OBS_SECRET_KEY}
+  #     OBS_REGION: ${OBS_REGION}
+  #     OBS_ENDPOINT: ${OBS_ENDPOINT}     
+  #   restart: unless-stopped
 
   gateway:
     build: ./api_gateway
@@ -166,16 +166,49 @@ services:
     restart: unless-stopped
 
   postgres:
-      image: postgres:15
-      container_name: postgres
-      environment:
-        POSTGRES_DB: ${DB_NAME}           # Особенность Postgres
-        POSTGRES_USER: ${DB_USER}
-        POSTGRES_PASSWORD: ${DB_PASSWORD}
-      ports:
-        - "5433:5432"
-  
+    image: postgres:15
+    container_name: postgres
+    restart: unless-stopped
 
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+
+      # Настройки PostgreSQL для производительности и автоочистки
+      command: >
+        postgres
+        -c autovacuum=on
+        -c max_connections=300
+        -c autovacuum_vacuum_scale_factor=0.1
+        -c autovacuum_vacuum_threshold=1000
+        -c min_wal_size=500MB
+        -c max_wal_size=2GB
+        -c wal_keep_size=0
+        -c checkpoint_timeout=15min
+        -c log_min_duration_statement=1000
+        -c shared_buffers=256MB
+        -c work_mem=8MB
+        -c maintenance_work_mem=64MB
+        -c effective_cache_size=768MB
+
+    ports:
+      - "5433:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backups:/backups
+
+    logging:
+      # Ограничение размера логов, чтобы контейнер не раздувало
+      driver: "json-file"
+      options:
+        max-size: "10m"      # Каждый файл лога максимум 10MB
+        max-file: "3"         # Хранить не больше 3 файлов
+        compress: "true"      # Сжимать старые логи
+
+      
   # chromadb:
   #   image: chromadb/chroma
   #   container_name: chromadb
@@ -258,6 +291,7 @@ services:
 volumes:
   kafka-data:
   llm_cache:
+  postgres_data:
   # parser_data:
   # parser_logs:
 

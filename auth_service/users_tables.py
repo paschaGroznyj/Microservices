@@ -8,6 +8,9 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
+
+BCRYPT_ROUNDS=10
+
 class DataBaseUser:
     async def init_db_pool(self):
         """Инициализация пула подключений к базе данных."""
@@ -22,10 +25,14 @@ class DataBaseUser:
                     host=DB_HOST,
                     port=DB_PORT,
                     database=DB_NAME,
-                    min_size=1,
-                    max_size=10
+                    min_size=10,
+                    max_size=100,
+                    max_queries=50000,
+                    max_inactive_connection_lifetime=300,
+                    command_timeout=60,
+                    timeout=60,
+                    statement_cache_size=100
                 )
-
                 # Инициализация структуры базы данных
                 async with self.pool.acquire() as conn:
                     await DataBaseUser.__init_db(conn)
@@ -62,11 +69,16 @@ class DataBaseUser:
                 if not user_in_db:
                     return None
 
-                if bcrypt.checkpw(password.encode(), user_in_db["password_hash"].encode()):
+                is_valid = await asyncio.to_thread(
+                    bcrypt.checkpw,
+                    password.encode('utf-8'),
+                    user_in_db["password_hash"].encode('utf-8')
+                )
+                if is_valid:
                     if back_user_id == True:
                         user_id = await conn.fetchrow("""
                                             SELECT id FROM users WHERE username = $1
-                                        """, username)
+                                                      """, username)
                         return user_id
                     return user_in_db
                 return None
@@ -84,23 +96,25 @@ class DataBaseUser:
 
     async def add_user(self, username: str, password: str):
         # Хэшируем пароль (bcrypt)
-        salt = bcrypt.gensalt()
-        password_hash = bcrypt.hashpw(password.encode(), salt).decode()
-
-        flag_user = await self.check_user_password(username)
-        if not flag_user:
-            try:
-                async with self.pool.acquire() as conn:
-                    user_id = await conn.fetchval("""
-                        INSERT INTO users (username, password_hash)
-                        VALUES ($1, $2)
-                        RETURNING id;
-                    """, username, password_hash)
-                    logging.info(f"Добавили {username} с id={user_id}")
-                    return user_id
-            except asyncpg.UniqueViolationError:
-                logging.error(f"Юзер {username} уже существует (unique violation)")
-                return None
-        else:
-            logging.error(f"Юзер {username} уже в домике (найден в БД)")
+        password_hash = await asyncio.to_thread(
+            self._hash_password,
+            password
+        )
+        try:
+            async with self.pool.acquire() as conn:
+                user_id = await conn.fetchval("""
+                    INSERT INTO users (username, password_hash)
+                    VALUES ($1, $2)
+                    RETURNING id;
+                """, username, password_hash)
+                logging.info(f"Добавили {username} с id={user_id}")
+                return user_id
+        except asyncpg.UniqueViolationError:
+            logging.error(f"Юзер {username} уже существует (unique violation)")
             return None
+
+    def _hash_password(self, password: str) -> str:
+        """Синхронная функция для выполнения в executor"""
+        salt = bcrypt.gensalt(rounds=BCRYPT_ROUNDS) # Синхронная функция, которая все блокировала
+        password_hash = bcrypt.hashpw(password.encode(), salt).decode()
+        return password_hash

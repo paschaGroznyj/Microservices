@@ -59,10 +59,13 @@ def kafka_consumer():
                     continue
 
                 try:
-                    # Генерация ответа
                     response = agent.process_query(text)
                     response_text = response["message"]
 
+                    # from datetime import datetime
+                    # now = datetime.now()
+                    # formatted_time = now.strftime("%H:%M:%S")
+                    # response_text = f"Идет проведение нагрузочного тестирования! Cпасибо за понимание. Текущее время: **{formatted_time}**"
                     # Формируем сообщение от бота
                     bot_message = {
                         "user_id": -1,  # специальный ID для бота

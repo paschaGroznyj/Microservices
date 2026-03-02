@@ -131,7 +131,7 @@ services:
     build: ./api_gateway
     container_name: api_gateway
     ports:
-      - "7000:7000"
+      - "7001:7001"
     environment:
       PORT_AUTH_SERVICE: ${PORT_AUTH_SERVICE}
       PORT_CHATS_SERVICE: ${PORT_CHATS_SERVICE}
@@ -165,34 +165,43 @@ services:
       - postgres
     restart: unless-stopped
 
+  # postgres_old:
+  #     image: postgres:15
+  #     container_name: postgres
+  #     environment:
+  #       POSTGRES_DB: ${DB_NAME}           # Особенность Postgres
+  #       POSTGRES_USER: ${DB_USER}
+  #       POSTGRES_PASSWORD: ${DB_PASSWORD}
+  #     ports:
+  #       - "5433:5432"
+  
   postgres:
-      image: postgres:15
-      container_name: postgres
-      environment:
-        POSTGRES_DB: ${DB_NAME}           # Особенность Postgres
-        POSTGRES_USER: ${DB_USER}
-        POSTGRES_PASSWORD: ${DB_PASSWORD}
-      ports:
-        - "5433:5432"
+    image: pgvector/pgvector:pg18-bookworm
+    environment:
+      POSTGRES_DB: ${DB_NAME}           # Особенность Postgres
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "5432:5432"
   
 
-  # chromadb:
-  #   image: chromadb/chroma
-  #   container_name: chromadb
-  #   ports:
-  #     - "9003:8000"
+  chromadb:
+    image: chromadb/chroma
+    container_name: chromadb
+    ports:
+      - "9003:8000"
   
-  # rag_service:
-  #   container_name: rag_service
-  #   build: ./rag_service
-  #   command: uvicorn app.app:app --host 0.0.0.0 --port 8002
-  #   ports:
-  #     - "8002:8002"
-  #   environment:
-  #     HF_TOKEN: ${HF_TOKEN}
-  #     EMB_MODEL: ${EMB_MODEL}
-  #   depends_on:
-  #     - chromadb
+  rag_service:
+    container_name: rag_service
+    build: ./rag_service
+    command: uvicorn app.app:app --host 0.0.0.0 --port 8002
+    ports:
+      - "8002:8002"
+    environment:
+      HF_TOKEN: ${HF_TOKEN}
+      EMB_MODEL: ${EMB_MODEL}
+    depends_on:
+      - postgres
                                 
 
   

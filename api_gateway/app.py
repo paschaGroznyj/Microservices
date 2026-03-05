@@ -17,7 +17,7 @@ from typing import Optional
 import time
 
 from config import (
-    PORT_LLM_CONSUMER, PORT_DB_CONSUMER,
+    PORT_PM_AGENT, PORT_DB_CONSUMER,
     PORT_AUTH_SERVICE, PORT_CHATS_SERVICE,
     PORT_CRB_SERVICE, SECRET_KEY, ALGORITHM,
     PORT_GATEWAY_PORT, PORT_PARSERS_SERVICE
@@ -82,7 +82,7 @@ SERVICES = {
              "health_endpoint": "/health",
          },
     "agent_service": {
-        "url": f"http://agent_service:{PORT_LLM_CONSUMER}",
+        "url": f"http://agent_service:{PORT_PM_AGENT}",
         "health_endpoint": "/health",
     }
 }

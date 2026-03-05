@@ -4,7 +4,6 @@ from fastapi import FastAPI
 from kafka import KafkaProducer
 from pydantic import BaseModel
 from app.db.chats_tables import DataBaseChats
-from fastapi.websockets import WebSocket, WebSocketDisconnect
 from fastapi import Depends, HTTPException, Request, status
 from jose import JWTError, jwt
 from app.core.config import SECRET_KEY, ALGORITHM, KAFKA_BROKER
@@ -92,53 +91,10 @@ async def get_current_user_from_cookie(token: str = Depends(get_token)):
     return username
 
 
-    return {"status": "ok", "detail": "Bot message broadcasted"}
-
-
-connections: dict[int, list[WebSocket]] = {}
-@app.websocket("/ws/chat/{chat_id}")
-async def websocket_chat(websocket: WebSocket, chat_id: int):
-    await websocket.accept()
-
-    if chat_id not in connections:
-        connections[chat_id] = []
-
-    connections[chat_id].append(websocket)
-
-    try:
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        connections[chat_id].remove(websocket)
-
-
-# Функция для отправки события в WebSocket
-async def broadcast(chat_id: int, message: dict):
-    for ws in connections.get(chat_id, []):
-        logging.info(f"Подключение {ws}, сообщение {message}")
-        await ws.send_json(message)
-
 class ChatMessage(BaseModel):
     user_id: int
     message: str
     chat_id: int
-
-
-class BotMessage(BaseModel):
-    chat_id: int
-    message: dict
-
-@app.post("/internal/bot_message")
-async def receive_bot_message(bot_msg: BotMessage):
-    """Получаем сообщения от бота через DB Consumer и отправляем через WebSocket"""
-    logging.info(f"Получено сообщение от бота для chat_id={bot_msg.chat_id}: {bot_msg.message}")
-    start = time.perf_counter()
-
-    # Отправляем сообщение через WebSocket всем клиентам в чате
-    await broadcast(bot_msg.chat_id, bot_msg.message)
-    elapsed = time.perf_counter() - start
-    logging.info(f"Message Service. Время на отправку в сокет и сообщение от бота = {elapsed:.4f}s")
-
 
 @app.on_event("startup")
 async def startup():
@@ -165,9 +121,6 @@ async def send_message(chat: ChatMessage):
         "is_from_bot": False
     }
     start = time.perf_counter()
-
-    # отправляем пользователю сразу
-    await broadcast(chat.chat_id, message)
     # отправка в Kafka
     producer.send("chat-messages", key=chat.user_id, value=message)
     producer.flush()

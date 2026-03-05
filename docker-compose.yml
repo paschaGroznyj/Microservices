@@ -99,6 +99,18 @@ services:
       - ./models:/app/.cache/huggingface/hub
     restart: unless-stopped
 
+  plug_service:
+    build: ./plug_service
+    container_name: plug_service
+    ports:
+      - "19001:9001"
+    depends_on:
+      - broker
+    environment:
+      PORT_PLUG_AGENT: ${PORT_PLUG_AGENT}
+      KAFKA_BROKER: ${KAFKA_BROKER}
+    restart: unless-stopped
+
   # selenium_chrome:
   #     image: selenium/standalone-chrome:latest
   #     shm_size: '2gb'
@@ -237,6 +249,7 @@ services:
       - "8001:8001"
     environment:
       PORT_CHATS_SERVICE: ${PORT_CHATS_SERVICE}
+      PORT_GATEWAY_PORT: ${PORT_GATEWAY_PORT}
       SECRET_KEY: ${SECRET_KEY}
       ALGORITHM: ${ALGORITHM}
       DB_HOST: ${DB_HOST}

@@ -10,6 +10,7 @@ from huggingface_hub.errors import HfHubHTTPError
 from langchain.chat_models.gigachat import GigaChat
 from langchain.schema import SystemMessage
 from core.config import GIGACHAT_CREDENTIALS
+from .gigachat_manager import manager
 
 load_dotenv()
 
@@ -22,10 +23,11 @@ class MetadataUpdater:
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         # self.llm = InferenceClient(api_key=HF_TOKEN)
-        self.llm = GigaChat(
-            credentials=GIGACHAT_CREDENTIALS,  # Обязательный параметр
-            verify_ssl_certs=False,  # Отключаем проверку SSL
-        )
+        
+        # self.llm = GigaChat(
+        #     credentials=GIGACHAT_CREDENTIALS,  # Обязательный параметр
+        #     verify_ssl_certs=False,  # Отключаем проверку SSL
+        # )
 
         # Список допустимых категорий (для валидации, можно вынести в конфиг)
         self.valid_categories = [
@@ -65,12 +67,14 @@ class MetadataUpdater:
             #     return None
             #
             # raw_content = response.choices[0].message.content.strip().strip('"\'')
-            message = [
-                SystemMessage(
-                    content=prompt
-                )
-            ]
-            response_sum = self.llm(message)
+            # message = [
+            #     SystemMessage(
+            #         content=prompt
+            #     )
+            # ]
+            messages = [SystemMessage(content=prompt)]
+            response_sum = manager.invoke(messages)
+            # response_sum = self.llm(message)
             raw_content = response_sum.content.strip()
 
             # Точное совпадение

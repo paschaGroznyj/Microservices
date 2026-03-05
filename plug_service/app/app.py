@@ -60,7 +60,7 @@ def kafka_consumer():
                     from datetime import datetime
                     now = datetime.now()
                     formatted_time = now.strftime("%H:%M:%S")
-                    response_text = f"Идет проведение нагрузочного тестирования! Cпасибо за понимание. Текущее время: **{formatted_time}**"
+                    response_text = f"Зеркало-заглушка. Текущее время: **{formatted_time}**"
                     # Формируем сообщение от бота
                     bot_message = {
                         "user_id": -1,  # специальный ID для бота

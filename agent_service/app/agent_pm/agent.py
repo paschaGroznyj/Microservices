@@ -7,7 +7,8 @@ from pydantic import BaseModel, Field
 from pathlib import Path
 import time
 import asyncio
-from langchain.chat_models.gigachat import GigaChat
+from .gigachat_manager import manager
+# from langchain.chat_models.gigachat import GigaChat
 from langchain.schema import SystemMessage
 from core.config import *
 from .vector_db import VectorDBManager
@@ -29,7 +30,7 @@ class ActionType(str, Enum):
     SUMMARIZE_FILE = "summarize_file"
     SUMMARIZE_ALL = "summarize_all"
     SUMMARIZE_NEW = "summarize_new"
-    REBUILD_ALL = "rebuild_all"
+    # REBUILD_ALL = "rebuild_all"
     ANALYZE_FOLDER = "analyze_folder"
     DELETE_FILE = "delete_file"
     SUMMARIZE_FILTER = 'summarize_filt'
@@ -76,7 +77,7 @@ class PydanticOutputParser:
                     'summarize_file': 'summarize_file',
                     'summarize_all': 'summarize_all',
                     'summarize_new': 'summarize_new',
-                    'rebuild_all': 'rebuild_all',
+                    # 'rebuild_all': 'rebuild_all',
                     'analyze_folder': 'analyze_folder',
                     'delete_file': 'delete_file',
                     'summarize_filt': 'summarize_filt',
@@ -84,8 +85,8 @@ class PydanticOutputParser:
                     'search': 'search_db',
                     'summary': 'summarize_file',
                     'summarize': 'summarize_file',
-                    'rebuild': 'rebuild_all',
-                    'build': 'rebuild_all',
+                    # 'rebuild': 'rebuild_all',
+                    # 'build': 'rebuild_all',
                     'analyze': 'analyze_folder',
                     'summarize_filter': 'summarize_filt',
                     'rebuild_categories': 'rebuild_categories',
@@ -109,7 +110,7 @@ class PydanticOutputParser:
             'summarize_file': ['summarize_file', 'summarize', 'суммаризуй', 'дайджест', 'кратко'],
             'summarize_all': ['summarize_all', 'всех', 'все статьи', 'дайджест всех'],
             'summarize_new': ['summarize_new', 'новые', 'все новые'],
-            'rebuild_all': ['rebuild_all', 'построй', 'перестрой', 'обнови', 'создай базу'],
+            # 'rebuild_all': ['rebuild_all', 'построй', 'перестрой', 'обнови', 'создай базу'],
             'analyze_folder': ['analyze_folder', 'проверь папку', 'анализ', 'анализируй'],
             'delete_file': ['delete_file', 'удали', 'все новые'],
             'summarize_filt': ['по категории', 'за период'],
@@ -141,7 +142,7 @@ class PydanticOutputParser:
         return """В КОНЦЕ ОТВЕТА добавь ТОЧНО такой JSON:
 
 **{
-  "action": "search_db|summarize_file|summarize_all|summarize_new|rebuild_all|analyze_folder|delete_file|summarize_filt|rebuild_categories|general_question",
+  "action": "search_db|summarize_file|summarize_all|summarize_new|analyze_folder|delete_file|summarize_filt|rebuild_categories|general_question",
   "query": "поисковый запрос", 
   "files": ["file1.md"],
   "reasoning": "почему выбрал этот инструмент"
@@ -243,6 +244,7 @@ class KnowledgeAgent:
         self.auto_processor = AutoProcessor(
             self.articles_path, self.monitor, self.vector_db,
             self.summarizer)
+        gigachat = manager.gigachat  # Авто-реинициализация!
 
         # PydanticOutputParser
         self.parser = PydanticOutputParser(pydantic_object=AgentAction)
@@ -291,16 +293,13 @@ class KnowledgeAgent:
     2. [summarize_file] - суммаризация/ревью файла
     3. [summarize_new] - суммаризация/ревью новых статей
     4. [summarize_all] - ревью ВСЕХ файлов
-    5. [rebuild_all] - ПОЛНАЯ перестройка БД
-    6. [analyze_folder] - анализ папки
-    7. [delete_file] - удалить файл из БД
-    8. [summarize_filt] - суммаризация/дайджест с условием по дате или теме
-    9. [rebuild_categories] - переопредели категории в метаданыных
-    10. [general_question] - общие вопросы пользователя, которые не касаются директорий, БД, дайджестов и ревью
+    5. [analyze_folder] - анализ папки
+    6. [delete_file] - удалить файл из БД
+    7. [summarize_filt] - суммаризация/дайджест с условием по дате или теме
+    8. [rebuild_categories] - переопредели категории в метаданыных
+    9. [general_question] - общие вопросы пользователя, которые не касаются директорий, БД, дайджестов и ревью
 
     ОСОБЫЕ ПРАВИЛА:
-    - Если БД ОТСУТСТВУЕТ (0 векторов) → ВСЕГДА выбирай [rebuild_all]
-    - Есть НОВЫЕ/ИЗМЕНЁННЫЕ файлы → [rebuild_all]
     - "ревью по статье", "суммаризуй", "кратко" → [summarize_file]
     - "ревью по всем", "суммаризуй все" → [summarize_all]
     - Если запрос на поиск → [search_db]
@@ -321,16 +320,19 @@ class KnowledgeAgent:
     ШАГ 3: Выбери ТОЧНЫЙ инструмент"""
 
         try:
-            gigachat = GigaChat(
-                credentials=GIGACHAT_CREDENTIALS,  # Обязательный параметр
-                verify_ssl_certs=False,  # Отключаем проверку SSL
-            )
-            messages = [
-                SystemMessage(
-                    content=prompt
-                )
-            ]
-            response = gigachat(messages)
+            # gigachat = GigaChat(
+            #     credentials=GIGACHAT_CREDENTIALS,  # Обязательный параметр
+            #     verify_ssl_certs=False,  # Отключаем проверку SSL
+            # )
+            # messages = [
+            #     SystemMessage(
+            #         content=prompt
+            #     )
+            # ]
+            # response = gigachat(messages)
+
+            messages = [SystemMessage(content=prompt)]
+            response = manager.invoke(messages)
 
             # Парсим план агента
             for attempt in range(3):
@@ -368,8 +370,8 @@ class KnowledgeAgent:
             return {"action": "summarize_file", "files": [], "query": "", "reasoning": "Дайджест"}
         elif 'удали' in user_lower or 'delete' in user_lower:
             return {"action": "delete_file", "files": [], "query": "", "reasoning": "Удаление"}
-        elif any(word in user_lower for word in ['обнови', 'построй', 'перестрой']):
-            return {"action": "rebuild_all", "files": [], "query": "", "reasoning": "Перестройка"}
+        # elif any(word in user_lower for word in ['обнови', 'построй', 'перестрой']):
+        #     return {"action": "rebuild_all", "files": [], "query": "", "reasoning": "Перестройка"}
         elif any(word in user_lower for word in ['обнови', 'категории', 'метаданные']):
             return {"action": "rebuild_categories", "files": [], "query": "", "reasoning": "Обновление"}
         return {"action": "analyze_folder", "files": [], "query": "", "reasoning": "Анализ"}
@@ -387,34 +389,34 @@ class KnowledgeAgent:
         # print(f"ВЫПОЛНЯЕМ: {action['action']}")
 
         try:
-            if action['action'] == "rebuild_all":
-                changes = self.monitor.get_changes()
-                deleted = changes.get('deleted', [])
-                if deleted:
-                    self.vector_db.delete_documents(deleted)
-                count = self.vector_db.rebuild_index()
-                word = self.pluralize_vectors(count)
-                if count == 0:
-                    return {
-                        "status": "warning",
-                        "message": (
-                            "⚠️ **Не удалось создать векторный индекс**\n\n"
-                            "💡 **Что делать:**\n"
-                            "Выполните команду:\n"
-                            "`Сформируй ревью по всем статьям`"
-                        )
-                    }
-                else:
-                    return {
-                        "status": "success",
-                        "message": (
-                            f"✅ **Векторный индекс успешно построен!**\n\n"
-                            f"Обработано и добавлено в базу: **{count} {word}**.\n"
-                            f"Теперь семантический поиск готов к работе. 🚀"
-                        )
-                    }
+            # if action['action'] == "rebuild_all":
+            #     changes = self.monitor.get_changes()
+            #     deleted = changes.get('deleted', [])
+            #     if deleted:
+            #         self.vector_db.delete_documents(deleted)
+            #     count = self.vector_db.rebuild_index()
+            #     word = self.pluralize_vectors(count)
+            #     if count == 0:
+            #         return {
+            #             "status": "warning",
+            #             "message": (
+            #                 "⚠️ **Не удалось создать векторный индекс**\n\n"
+            #                 "💡 **Что делать:**\n"
+            #                 "Выполните команду:\n"
+            #                 "`Сформируй ревью по всем статьям`"
+            #             )
+            #         }
+            #     else:
+            #         return {
+            #             "status": "success",
+            #             "message": (
+            #                 f"✅ **Векторный индекс успешно построен!**\n\n"
+            #                 f"Обработано и добавлено в базу: **{count} {word}**.\n"
+            #                 f"Теперь семантический поиск готов к работе. 🚀"
+            #             )
+            #         }
 
-            elif action['action'] == "delete_file":
+            if action['action'] == "delete_file":
                 files = action.get('files', [])
                 if files:
                     self.vector_db.delete_documents(files)
@@ -853,6 +855,22 @@ class KnowledgeAgent:
         await self.obs_loader.upload_digests()
         success_count = sum(1 for r in results if r["status"] == "created")
         print(success_count)
+
+        # Перестроим векторную базу
+        changes = self.monitor.get_changes()
+        deleted = changes.get('deleted', [])
+        if deleted:
+            self.vector_db.delete_documents(deleted)
+        count = self.vector_db.rebuild_index()
+        word = self.pluralize_vectors(count)
+        if count == 0:
+            print("⚠️ **Не удалось создать векторный индекс**\n\n 💡 **Что делать:**\n Выполните команду:\n `Сформируй ревью по всем статьям`"
+                )
+        else:
+            print(f"✅ **Векторный индекс успешно построен!**\n\n"
+                    f"Обработано и добавлено в базу: **{count} {word}**.\n"
+                    f"Теперь семантический поиск готов к работе. 🚀"
+                )
 
     def process_query(self, user_input: str) -> Dict[str, Any]:
         try:

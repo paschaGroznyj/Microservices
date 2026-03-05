@@ -52,7 +52,7 @@ services:
 #    depends_on:
 #      - broker
 #    environment:
-#      PORT_LLM_CONSUMER: ${PORT_LLM_CONSUMER}
+#      PORT_PM_AGENT: ${PORT_PM_AGENT}
 #      KAFKA_BROKER: ${KAFKA_BROKER}
 #      API_GIGACHAT: ${API_GIGACHAT}
 #
@@ -64,6 +64,15 @@ services:
 #      - ./models:/app/.cache/huggingface/hub
 #    restart: unless-stopped
 
+  redis:
+    image: redis:7.2-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+
   agent_service:
     build: ./agent_service
     container_name: agent_service
@@ -72,7 +81,7 @@ services:
     depends_on:
       - broker
     environment:
-      PORT_LLM_CONSUMER: ${PORT_LLM_CONSUMER}
+      PORT_PM_AGENT: ${PORT_PM_AGENT}
       KAFKA_BROKER: ${KAFKA_BROKER}
       API_GIGACHAT: ${API_GIGACHAT}
 
@@ -95,6 +104,10 @@ services:
 
       HF_DATASETS_OFFLINE: "0"
       TRANSFORMERS_OFFLINE: "0"
+
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+      REDIS_KEY: ${REDIS_KEY}
     volumes:
       - ./models:/app/.cache/huggingface/hub
     restart: unless-stopped
@@ -109,8 +122,25 @@ services:
     environment:
       PORT_PLUG_AGENT: ${PORT_PLUG_AGENT}
       KAFKA_BROKER: ${KAFKA_BROKER}
+
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+      REDIS_KEY: ${REDIS_KEY}
     restart: unless-stopped
 
+
+  token_service:
+    build: ./token_service
+    container_name: token_service
+    ports:
+      - "9004:9004"
+    depends_on:
+      - redis
+    environment:
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+      REDIS_KEY: ${REDIS_KEY}
+      PORT_TOKEN_GENERATE_SERVICE: ${PORT_TOKEN_GENERATE_SERVICE}
   # selenium_chrome:
   #     image: selenium/standalone-chrome:latest
   #     shm_size: '2gb'
@@ -124,7 +154,7 @@ services:
   #     - "8003:8003"
   #   environment:
   #     PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
-  #     PORT_LLM_CONSUMER: ${PORT_LLM_CONSUMER}
+  #     PORT_PM_AGENT: ${PORT_PM_AGENT}
 
   #     STORAGE_PATH: ${STORAGE_PATH}
   #     SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES}
@@ -148,7 +178,7 @@ services:
       PORT_AUTH_SERVICE: ${PORT_AUTH_SERVICE}
       PORT_CHATS_SERVICE: ${PORT_CHATS_SERVICE}
       PORT_GATEWAY_PORT: ${PORT_GATEWAY_PORT}
-      PORT_LLM_CONSUMER: ${PORT_LLM_CONSUMER}
+      PORT_PM_AGENT: ${PORT_PM_AGENT}
       PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
       SECRET_KEY: ${SECRET_KEY}
       ALGORITHM: ${ALGORITHM}
@@ -305,6 +335,7 @@ volumes:
   kafka-data:
   llm_cache:
   postgres_data:
+  redis_data:
   # parser_data:
   # parser_logs:
 

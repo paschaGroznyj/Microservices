@@ -58,6 +58,7 @@ def kafka_consumer():
                 try:
                     # response = agent.process_query(text)
                     # response_text = response["message"]
+
                     response_text = manager.invoke("пусто")
                     # from datetime import datetime
                     # now = datetime.now()

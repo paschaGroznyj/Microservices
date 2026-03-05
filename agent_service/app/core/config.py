@@ -11,7 +11,7 @@ PORT_CRB_SERVICE = os.getenv("PORT_CRB_SERVICE")
 
 REDIS_HOST = os.getenv("REDIS_HOST")
 REDIS_PORT = int(os.getenv("REDIS_PORT"))
-REDIS_KEY = os.getenv("REDIS_TOKEN_KEY")
+REDIS_KEY = os.getenv("REDIS_KEY")
 
 # �����
 # ����

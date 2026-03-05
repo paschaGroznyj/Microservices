@@ -112,21 +112,22 @@ services:
       - ./models:/app/.cache/huggingface/hub
     restart: unless-stopped
 
-  plug_service:
-    build: ./plug_service
-    container_name: plug_service
-    ports:
-      - "19001:9001"
-    depends_on:
-      - broker
-    environment:
-      PORT_PLUG_AGENT: ${PORT_PLUG_AGENT}
-      KAFKA_BROKER: ${KAFKA_BROKER}
 
-      REDIS_HOST: ${REDIS_HOST}
-      REDIS_PORT: ${REDIS_PORT}
-      REDIS_KEY: ${REDIS_KEY}
-    restart: unless-stopped
+  # plug_service:
+  #   build: ./plug_service
+  #   container_name: plug_service
+  #   ports:
+  #     - "19001:9001"
+  #   depends_on:
+  #     - broker
+  #   environment:
+  #     PORT_PLUG_AGENT: ${PORT_PLUG_AGENT}
+  #     KAFKA_BROKER: ${KAFKA_BROKER}
+
+  #     REDIS_HOST: ${REDIS_HOST}
+  #     REDIS_PORT: ${REDIS_PORT}
+  #     REDIS_KEY: ${REDIS_KEY}
+  #   restart: unless-stopped
 
 
   token_service:
@@ -141,6 +142,7 @@ services:
       REDIS_PORT: ${REDIS_PORT}
       REDIS_KEY: ${REDIS_KEY}
       PORT_TOKEN_GENERATE_SERVICE: ${PORT_TOKEN_GENERATE_SERVICE}
+      IAM_API_KEY: ${IAM_API_KEY}
   # selenium_chrome:
   #     image: selenium/standalone-chrome:latest
   #     shm_size: '2gb'

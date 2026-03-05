@@ -1,5 +1,6 @@
 import hashlib
-from langchain.chat_models.gigachat import GigaChat
+# from langchain.chat_models.gigachat import GigaChat
+from .gigachat_manager import manager
 from langchain.schema import SystemMessage
 from core.config import GIGACHAT_CREDENTIALS, STORAGE_PATH, EMBED_MODEL_GLOSS, PATH_TO_GLOSSARY
 from typing import Dict, Any, List
@@ -29,10 +30,10 @@ class SummaryGenerator:
         self.knowledge_dir = base_dir / STORAGE_PATH
         self.digest_dir = base_dir / digest_dir
         self.digest_dir.mkdir(exist_ok=True)
-        self.llm = GigaChat(
-            credentials=GIGACHAT_CREDENTIALS,  # Обязательный параметр
-            verify_ssl_certs=False,  # Отключаем проверку SSL
-        )
+        # self.llm = GigaChat(
+        #     credentials=GIGACHAT_CREDENTIALS,  # Обязательный параметр
+        #     verify_ssl_certs=False,  # Отключаем проверку SSL
+        # )
         # self.llm = InferenceClient(api_key=HF_TOKEN)
 
     def _get_content_hash(self, content: str) -> str:
@@ -210,7 +211,8 @@ class SummaryGenerator:
         # )
         # summary = response.choices[0].message.content
         # =====================================
-        response_sum = self.llm(prompt) # Для гигачата
+        response_sum = manager.invoke(prompt)
+        # response_sum = self.llm(prompt) # Для гигачата
         summary = response_sum.content.strip()
 
         # response_theme = self.llm(prompt2)

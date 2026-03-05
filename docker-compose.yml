@@ -105,8 +105,9 @@ services:
       HF_DATASETS_OFFLINE: "0"
       TRANSFORMERS_OFFLINE: "0"
 
-      REDIS_HOST: "redis"
-      REDIS_PORT: "6379"
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+      REDIS_KEY: ${REDIS_KEY}
     volumes:
       - ./models:/app/.cache/huggingface/hub
     restart: unless-stopped
@@ -122,8 +123,9 @@ services:
       PORT_PLUG_AGENT: ${PORT_PLUG_AGENT}
       KAFKA_BROKER: ${KAFKA_BROKER}
 
-      REDIS_HOST: "redis"
-      REDIS_PORT: "6379"
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+      REDIS_KEY: ${REDIS_KEY}
     restart: unless-stopped
 
 
@@ -135,8 +137,9 @@ services:
     depends_on:
       - redis
     environment:
-      REDIS_HOST: "redis"
-      REDIS_PORT: "6379"
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+      REDIS_KEY: ${REDIS_KEY}
       PORT_TOKEN_GENERATE_SERVICE: ${PORT_TOKEN_GENERATE_SERVICE}
   # selenium_chrome:
   #     image: selenium/standalone-chrome:latest

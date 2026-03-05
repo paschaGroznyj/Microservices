@@ -244,6 +244,7 @@ class KnowledgeAgent:
         self.auto_processor = AutoProcessor(
             self.articles_path, self.monitor, self.vector_db,
             self.summarizer)
+        gigachat = manager.gigachat  # Авто-реинициализация!
 
         # PydanticOutputParser
         self.parser = PydanticOutputParser(pydantic_object=AgentAction)
@@ -330,7 +331,6 @@ class KnowledgeAgent:
             # ]
             # response = gigachat(messages)
 
-            gigachat = manager.gigachat  # Авто-реинициализация!
             messages = [SystemMessage(content=prompt)]
             response = manager.invoke(messages)
 

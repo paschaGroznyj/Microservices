@@ -6,6 +6,7 @@ import redis
 from core.config import (REDIS_HOST,
                         REDIS_PORT,
                         TOKEN_TTL,
+                        IAM_API_KEY,
                         PORT_TOKEN_GENERATE_SERVICE)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
@@ -15,9 +16,11 @@ logger = logging.getLogger(__name__)
 
 
 def get_gigachat_token() -> str:
-    import uuid
-    token = str(uuid.uuid4())
-    return token
+    response = requests.post(
+        url="http://10.0.4.62:2000/token",
+        headers={"IAM-User-ID": IAM_API_KEY}
+    )
+    return response.json()['token']
 
 
 def main():
@@ -34,7 +37,7 @@ def main():
         except Exception as e:
             logger.error(f"❌ Ошибка обновления токена: {e}")
 
-        time.sleep(1600)  # Ждем перед следующим обновлением
+        time.sleep(TOKEN_TTL)  # Ждем перед следующим обновлением
 
 
 if __name__ == "__main__":

@@ -24,6 +24,6 @@ USER appuser
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
-EXPOSE 8000
+EXPOSE 9004
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "app/app.py"]

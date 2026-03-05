@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+kafka-python
+python-dotenv==1.0.0
+apscheduler==3.10.4
+pydantic==2.8.0
+pathlib
+requests
+

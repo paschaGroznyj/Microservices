@@ -1,5 +1,6 @@
 # gateway/app.py
 from fastapi import FastAPI, HTTPException, Request, Depends, Form, Cookie, Response
+from fastapi.websockets import WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -48,6 +49,25 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="API Gateway", lifespan=lifespan)
 
 # Service Discovery
+# SERVICES = {
+#     "auth": {
+#         "url": f"http://auth_service:{PORT_AUTH_SERVICE}",
+#         "health_endpoint": "/health",
+#     },
+#     "chats": {
+#         "url": f"http://chats_service:{PORT_CHATS_SERVICE}",
+#         "health_endpoint": "/health",
+#     },
+#     "parsers": {
+#              "url": f"http://parsers_service:{PORT_PARSERS_SERVICE}",
+#              "health_endpoint": "/health",
+#          },
+#     "agent_service": {
+#         "url": f"http://agent_service:{PORT_LLM_CONSUMER}",
+#         "health_endpoint": "/health",
+#     }
+# }
+
 SERVICES = {
     "auth": {
         "url": f"http://auth_service:{PORT_AUTH_SERVICE}",
@@ -57,10 +77,6 @@ SERVICES = {
         "url": f"http://chats_service:{PORT_CHATS_SERVICE}",
         "health_endpoint": "/health",
     },
-    #  "llm_bot": {
-    #      "url": f"http://llm_model_service:{PORT_LLM_CONSUMER}",
-    #      "health_endpoint": "/health",
-    #  },
     "parsers": {
              "url": f"http://parsers_service:{PORT_PARSERS_SERVICE}",
              "health_endpoint": "/health",
@@ -92,6 +108,51 @@ class UserRegister(BaseModel):
 class UserLogin(BaseModel):
     username: str
     password: str
+
+class BotMessage(BaseModel):
+    chat_id: int
+    message: dict
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+connections: dict[int, list[WebSocket]] = {}
+@app.websocket("/ws/chat/{chat_id}")
+async def websocket_chat(websocket: WebSocket, chat_id: int):
+    await websocket.accept()
+
+    if chat_id not in connections:
+        connections[chat_id] = []
+
+    connections[chat_id].append(websocket)
+
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        connections[chat_id].remove(websocket)
+
+# Функция для отправки события в WebSocket
+async def broadcast(chat_id: int, message: dict):
+    for ws in connections.get(chat_id, []):
+        logging.info(f"Подключение {ws}, сообщение {message}")
+        await ws.send_json(message)
+
+@app.post("/internal/bot_message")
+async def receive_bot_message(bot_msg: BotMessage):
+    """Получаем сообщения от бота через DB Consumer и отправляем через WebSocket"""
+    logging.info(f"Получено сообщение от бота для chat_id={bot_msg.chat_id}: {bot_msg.message}")
+    start = time.perf_counter()
+
+    # Отправляем сообщение через WebSocket всем клиентам в чате
+    await broadcast(bot_msg.chat_id, bot_msg.message)
+    elapsed = time.perf_counter() - start
+    logging.info(f"Message Service. Время на отправку в сокет и сообщение от бота = {elapsed:.4f}s")
 
 
 # Service Discovery функция
@@ -411,7 +472,16 @@ async def send_message(request: Request):
     # Получаем данные из запроса
     data = await request.json()
     data["user_id"] = user["user_id"]
-    logger.info(f"Что летит при отправке сообщений {data}")
+    logger.info(f"Что летит при отправке сообщений {data['chat_id']}, {data['message']}")
+
+    message = {
+        "user_id": data["user_id"],
+        "chat_id": data["chat_id"],
+        "message": data["message"],
+        "is_from_bot": False
+    }
+
+    await broadcast(data["chat_id"], message) # Отравим сразу по вебсокету
     try:
         start = time.perf_counter()
         response = await app.state.http_client.post(

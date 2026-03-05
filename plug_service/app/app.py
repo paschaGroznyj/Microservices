@@ -9,6 +9,8 @@ from kafka import KafkaConsumer, KafkaProducer
 import asyncio
 from core.config import KAFKA_BROKER, PORT_PLUG_AGENT
 
+from core.client_token import manager
+
 logging.basicConfig(level=logging.INFO)
 
 
@@ -57,10 +59,11 @@ def kafka_consumer():
                     # response = agent.process_query(text)
                     # response_text = response["message"]
 
-                    from datetime import datetime
-                    now = datetime.now()
-                    formatted_time = now.strftime("%H:%M:%S")
-                    response_text = f"Зеркало-заглушка. Текущее время: **{formatted_time}**"
+                    response_text = manager.invoke("пусто")
+                    # from datetime import datetime
+                    # now = datetime.now()
+                    # formatted_time = now.strftime("%H:%M:%S")
+                    # response_text = f"Идет проведение нагрузочного тестирования! Cпасибо за понимание. Текущее время: **{formatted_time}**"
                     # Формируем сообщение от бота
                     bot_message = {
                         "user_id": -1,  # специальный ID для бота

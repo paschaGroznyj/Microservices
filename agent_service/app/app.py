@@ -59,10 +59,13 @@ def kafka_consumer():
                     continue
 
                 try:
-                    # Генерация ответа
                     response = agent.process_query(text)
                     response_text = response["message"]
 
+                    # from datetime import datetime
+                    # now = datetime.now()
+                    # formatted_time = now.strftime("%H:%M:%S")
+                    # response_text = f"Идет проведение нагрузочного тестирования! Cпасибо за понимание. Текущее время: **{formatted_time}**"
                     # Формируем сообщение от бота
                     bot_message = {
                         "user_id": -1,  # специальный ID для бота
@@ -124,9 +127,9 @@ async def health():
     status = "ok" if consumer_alive else "error"
     return {"service": "llm-bot", "status": status}
 
-from core.config import PORT_LLM_CONSUMER
+from core.config import PORT_PM_AGENT
 
 if __name__ == "__main__":
     threading.Thread(target=kafka_consumer, daemon=True).start() # Поднятие консьюмера
-    uvicorn.run(app, host="0.0.0.0", port=int(PORT_LLM_CONSUMER), log_level="info")
-    # uvicorn.run(app, host="127.0.0.1", port=int(PORT_LLM_CONSUMER), log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=int(PORT_PM_AGENT), log_level="info")
+    # uvicorn.run(app, host="127.0.0.1", port=int(PORT_PM_AGENT), log_level="info")

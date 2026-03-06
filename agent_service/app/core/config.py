@@ -6,9 +6,12 @@ load_dotenv()
 
 KAFKA_BROKER = os.getenv("KAFKA_BROKER")
 
-PORT_LLM_CONSUMER = os.getenv("PORT_LLM_CONSUMER")
+PORT_PM_AGENT = os.getenv("PORT_PM_AGENT")
 PORT_CRB_SERVICE = os.getenv("PORT_CRB_SERVICE")
 
+REDIS_HOST = os.getenv("REDIS_HOST")
+REDIS_PORT = int(os.getenv("REDIS_PORT"))
+REDIS_KEY = os.getenv("REDIS_KEY")
 
 # �����
 # ����

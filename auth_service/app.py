@@ -107,6 +107,26 @@ async def login(response: Response, form_data: OAuth2PasswordRequestForm = Depen
     response.set_cookie(key="users_access_token", value=access_token, httponly=True)
     return {"access_token": access_token, "token_type": "bearer"}
 
+
+@app.post("/register-and-login")
+async def register_and_login(response: Response, form_data: OAuth2PasswordRequestForm = Depends()):
+    """Регистрация + автоматический логин (оптимизированный обработчик)"""
+    user_id = await db.add_user(form_data.username, form_data.password)
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Пользователь уже существует")
+
+    access_token = create_access_token({
+        "sub": form_data.username,
+        "user_id": user_id
+    })
+    response.set_cookie(
+        key="users_access_token",
+        value=access_token,
+        httponly=True,
+        max_age=3600
+    )
+    return {"access_token": access_token, "token_type": "bearer", "user_id": user_id}
+
 @app.post("/logout")
 async def logout_user(response: Response):
     response.delete_cookie(key="users_access_token")

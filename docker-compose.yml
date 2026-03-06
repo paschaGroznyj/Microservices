@@ -52,7 +52,7 @@ services:
 #    depends_on:
 #      - broker
 #    environment:
-#      PORT_LLM_CONSUMER: ${PORT_LLM_CONSUMER}
+#      PORT_PM_AGENT: ${PORT_PM_AGENT}
 #      KAFKA_BROKER: ${KAFKA_BROKER}
 #      API_GIGACHAT: ${API_GIGACHAT}
 #
@@ -64,6 +64,15 @@ services:
 #      - ./models:/app/.cache/huggingface/hub
 #    restart: unless-stopped
 
+  redis:
+    image: redis:7.2-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+
   agent_service:
     build: ./agent_service
     container_name: agent_service
@@ -72,7 +81,7 @@ services:
     depends_on:
       - broker
     environment:
-      PORT_LLM_CONSUMER: ${PORT_LLM_CONSUMER}
+      PORT_PM_AGENT: ${PORT_PM_AGENT}
       KAFKA_BROKER: ${KAFKA_BROKER}
       API_GIGACHAT: ${API_GIGACHAT}
 
@@ -95,37 +104,72 @@ services:
 
       HF_DATASETS_OFFLINE: "0"
       TRANSFORMERS_OFFLINE: "0"
+
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+      REDIS_KEY: ${REDIS_KEY}
     volumes:
       - ./models:/app/.cache/huggingface/hub
     restart: unless-stopped
 
+
+  # plug_service:
+  #   build: ./plug_service
+  #   container_name: plug_service
+  #   ports:
+  #     - "19001:9001"
+  #   depends_on:
+  #     - broker
+  #   environment:
+  #     PORT_PLUG_AGENT: ${PORT_PLUG_AGENT}
+  #     KAFKA_BROKER: ${KAFKA_BROKER}
+
+  #     REDIS_HOST: ${REDIS_HOST}
+  #     REDIS_PORT: ${REDIS_PORT}
+  #     REDIS_KEY: ${REDIS_KEY}
+  #   restart: unless-stopped
+
+
+  token_service:
+    build: ./token_service
+    container_name: token_service
+    ports:
+      - "9004:9004"
+    depends_on:
+      - redis
+    environment:
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+      REDIS_KEY: ${REDIS_KEY}
+      PORT_TOKEN_GENERATE_SERVICE: ${PORT_TOKEN_GENERATE_SERVICE}
+      IAM_API_KEY: ${IAM_API_KEY}
   # selenium_chrome:
   #     image: selenium/standalone-chrome:latest
   #     shm_size: '2gb'
   #     ports:
   #       - "4444:4444"
 
-  parsers_service:
-    build: ./parsers_service
-    container_name: parsers_service
-    ports:
-      - "8003:8003"
-    environment:
-      PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
-      PORT_LLM_CONSUMER: ${PORT_LLM_CONSUMER}
+  # parsers_service:
+  #   build: ./parsers_service
+  #   container_name: parsers_service
+  #   ports:
+  #     - "8003:8003"
+  #   environment:
+  #     PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
+  #     PORT_PM_AGENT: ${PORT_PM_AGENT}
 
-      STORAGE_PATH: ${STORAGE_PATH}
-      SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES}
-      SYNC_INTERVAL_SCHEDULER: ${SYNC_INTERVAL_SCHEDULER}
-      ARTICLES_FOLDER: ${ARTICLES_FOLDER}
-      METADATA_FOLDER: ${METADATA_FOLDER}
+  #     STORAGE_PATH: ${STORAGE_PATH}
+  #     SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES}
+  #     SYNC_INTERVAL_SCHEDULER: ${SYNC_INTERVAL_SCHEDULER}
+  #     ARTICLES_FOLDER: ${ARTICLES_FOLDER}
+  #     METADATA_FOLDER: ${METADATA_FOLDER}
 
-      OBS_BUCKET: ${OBS_BUCKET}
-      OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
-      OBS_SECRET_KEY: ${OBS_SECRET_KEY}
-      OBS_REGION: ${OBS_REGION}
-      OBS_ENDPOINT: ${OBS_ENDPOINT}     
-    restart: unless-stopped
+  #     OBS_BUCKET: ${OBS_BUCKET}
+  #     OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
+  #     OBS_SECRET_KEY: ${OBS_SECRET_KEY}
+  #     OBS_REGION: ${OBS_REGION}
+  #     OBS_ENDPOINT: ${OBS_ENDPOINT}     
+  #   restart: unless-stopped
 
   gateway:
     build: ./api_gateway
@@ -136,7 +180,7 @@ services:
       PORT_AUTH_SERVICE: ${PORT_AUTH_SERVICE}
       PORT_CHATS_SERVICE: ${PORT_CHATS_SERVICE}
       PORT_GATEWAY_PORT: ${PORT_GATEWAY_PORT}
-      PORT_LLM_CONSUMER: ${PORT_LLM_CONSUMER}
+      PORT_PM_AGENT: ${PORT_PM_AGENT}
       PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
       SECRET_KEY: ${SECRET_KEY}
       ALGORITHM: ${ALGORITHM}
@@ -176,20 +220,54 @@ services:
   #       - "5433:5432"
   
   postgres:
-    image: pgvector/pgvector:pg18-bookworm
+    image: postgres:15
+    container_name: postgres
+    restart: unless-stopped
+
     environment:
-      POSTGRES_DB: ${DB_NAME}           # Особенность Postgres
+      POSTGRES_DB: ${DB_NAME}
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
-    ports:
-      - "5432:5432"
-  
+      POSTGRES_INITDB_ARGS: "--data-checksums"
 
-  chromadb:
-    image: chromadb/chroma
-    container_name: chromadb
+      # Настройки PostgreSQL для производительности и автоочистки
+      command: >
+        postgres
+        -c autovacuum=on
+        -c max_connections=300
+        -c autovacuum_vacuum_scale_factor=0.1
+        -c autovacuum_vacuum_threshold=1000
+        -c min_wal_size=500MB
+        -c max_wal_size=2GB
+        -c wal_keep_size=0
+        -c checkpoint_timeout=15min
+        -c log_min_duration_statement=1000
+        -c shared_buffers=256MB
+        -c work_mem=8MB
+        -c maintenance_work_mem=64MB
+        -c effective_cache_size=768MB
+
     ports:
-      - "9003:8000"
+      - "5433:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backups:/backups
+
+    logging:
+      # Ограничение размера логов, чтобы контейнер не раздувало
+      driver: "json-file"
+      options:
+        max-size: "10m"      # Каждый файл лога максимум 10MB
+        max-file: "3"         # Хранить не больше 3 файлов
+        compress: "true"      # Сжимать старые логи
+
+      
+  # chromadb:
+  #   image: chromadb/chroma
+  #   container_name: chromadb
+  #   ports:
+  #     - "9003:8000"
   
   rag_service:
     container_name: rag_service
@@ -213,6 +291,7 @@ services:
       - "8001:8001"
     environment:
       PORT_CHATS_SERVICE: ${PORT_CHATS_SERVICE}
+      PORT_GATEWAY_PORT: ${PORT_GATEWAY_PORT}
       SECRET_KEY: ${SECRET_KEY}
       ALGORITHM: ${ALGORITHM}
       DB_HOST: ${DB_HOST}
@@ -267,6 +346,8 @@ services:
 volumes:
   kafka-data:
   llm_cache:
+  postgres_data:
+  redis_data:
   # parser_data:
   # parser_logs:
 

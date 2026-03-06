@@ -4,7 +4,7 @@ import logging
 import asyncio
 from kafka import KafkaConsumer
 from app.db.chats_tables import DataBaseChats
-from app.core.config import KAFKA_BROKER, PORT_CHATS_SERVICE
+from app.core.config import KAFKA_BROKER
 import requests  # Для отправки сообщений обратно в основной сервис
 import time
 
@@ -16,7 +16,7 @@ class DBConsumer:
     def __init__(self):
         self.db = DataBaseChats()
         self.consumer = None
-        self.main_service_url = f"http://chats_service:{PORT_CHATS_SERVICE}"  # URL основного сервиса
+        self.main_service_url = f"http://api_gateway:7000"  # URL основного сервиса
 
     async def init(self):
         await self.db.init_db_pool()

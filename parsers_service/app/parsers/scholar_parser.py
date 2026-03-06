@@ -24,7 +24,28 @@ from dataclasses import dataclass, asdict
 
 @dataclass
 class PipelineConfig:
-    query: str = '"process mining" OR "process discovery" OR "event log" OR "process model" OR "audit trail"'
+    query: str = (
+        '"process mining" OR '
+        '"process discovery" OR '
+        '"event logs" OR '
+        '"process model" OR '
+        '"audit trail" OR '
+        '"conformance checking" OR '
+        '"process enhancement" OR '
+        '"root cause analysis" OR '
+        '"process monitoring" OR '
+        '"compliance checking" OR '
+        '"deviation analysis" OR '
+        '"continuous auditing" OR '
+        '"business process analysis" OR '
+        '"process intelligence" OR '
+        '"task mining" OR '
+        '"operational analytics" OR '
+        '"financial auditing" OR '
+        '"internal audit" OR '
+        '"process compliance" OR '
+        '"audit log analysis"'
+    )
     max_pages: int = 10
     max_pdf_pages: int = 30
     profile_dir: Path = Path("/app/pw_profile_scholar")  # Куки/мета-информация сессии, чтобы не ловить постоянно капчу

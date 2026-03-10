@@ -11,6 +11,7 @@ from langchain.chat_models.gigachat import GigaChat
 from langchain.schema import SystemMessage
 from core.config import GIGACHAT_CREDENTIALS
 from .gigachat_manager import manager
+from .analyze_article import RelevanceAnalyzer
 
 load_dotenv()
 
@@ -43,6 +44,56 @@ class MetadataUpdater:
             "Проверка качества: Качество данных",
             "Проверка качества: Качество лога"
         ]
+
+        self.analyzer = RelevanceAnalyzer(manager)
+
+    def assess_relevance_and_category(self, item: Dict) -> Dict[str, Any]:
+        """
+        Оценивает релевантность статьи и возвращает категорию + метрики
+        """
+        file_name = item.get('file_article', 'Без названия')
+        abstract = item.get('abstract', '')
+        
+        if not abstract:
+            return {
+                "is_relevant": False,
+                "overall_score": 0.0,
+                "category": None,
+                "reasoning": "Нет абстракта для анализа"
+            }
+        
+        try:
+            # Анализируем релевантность по тексту абстракта
+            result = self.analyzer.assess_relevance(
+                content=abstract, 
+                filename=file_name
+            )
+            
+            # Если не релевантна - пропускаем категоризацию
+            if not result["is_relevant"]:
+                return {
+                    "is_relevant": False,
+                    "overall_score": result["overall_score"],
+                    "category": None,
+                    "reasoning": result["reasoning"]
+                }
+            
+            # Если релевантна - определяем категорию
+            category = self.get_category(abstract)
+            return {
+                "is_relevant": True,
+                "overall_score": result["overall_score"],
+                "category": category,
+                "reasoning": result["reasoning"]
+            }
+            
+        except Exception as e:
+            return {
+                "is_relevant": False,
+                "overall_score": 0.0,
+                "category": None,
+                "reasoning": f"Ошибка анализа: {str(e)}"
+            }
 
     def get_category(self, content: str) -> Optional[str]:
         """Запрашивает категорию у LLM с базовой обработкой ответа."""
@@ -119,22 +170,42 @@ class MetadataUpdater:
 
             processed_in_this_batch = 0
             failed_items = []  # Сюда соберем те, что не удалось обработать
+            relevant_count = 0
 
             for i, item in enumerate(items_to_process):
                 title = item.get('title', 'Без названия')[:40]
                 try:
-                    category = self.get_category(item['abstract'])
-
-                    if category:
-                        item['category'] = category
+                    analysis = self.assess_relevance_and_category(item)
+                    if analysis["is_relevant"]:
+                        # Релевантна - присваиваем категорию
+                        item['category'] = analysis["category"]
+                        item['relevance_score'] = analysis["overall_score"]
+                        item['relevance_reasoning'] = analysis["reasoning"][:200]
+                        item['is_relevant'] = analysis['is_relevant']
+                        relevant_count += 1
+                        status = f"[✅] {title} -> {analysis['category']} (score: {analysis['overall_score']})"
                         processed_in_this_batch += 1
-                        print(f"[OK] {title} -> {category}")
                     else:
-                        # Модель вернула мусор или пустоту (не ошибка сети, а логическая)
-                        # Считаем это ошибкой обработки, но не сетевой. Повторять нет смысла, если модель тупит.
-                        # Но можно добавить в failed_items, если думаем, что следующий запрос пройдет.
-                        print(f"[WARN] {title} -> Неверный формат ответа")
-                        failed_items.append(item)
+                        # Не релевантна - помечаем как пропуск
+                        item['category'] = "Не релевантна PM"
+                        item['relevance_score'] = analysis["overall_score"]
+                        item['relevance_reasoning'] = analysis["reasoning"][:100]
+                        status = f"[⚠️] {title} -> score {analysis['overall_score']:.1f}"
+                    
+                    print(status)
+
+                    # category = self.get_category(item['abstract'])
+
+                    # if category:
+                    #     item['category'] = category
+                    #     processed_in_this_batch += 1
+                    #     print(f"[OK] {title} -> {category}")
+                    # else:
+                    #     # Модель вернула мусор или пустоту (не ошибка сети, а логическая)
+                    #     # Считаем это ошибкой обработки, но не сетевой. Повторять нет смысла, если модель тупит.
+                    #     # Но можно добавить в failed_items, если думаем, что следующий запрос пройдет.
+                    #     print(f"[WARN] {title} -> Неверный формат ответа")
+                    #     failed_items.append(item)
 
                 except Exception as e:
                     # Ошибка сети или API (например, 402, таймаут)
@@ -144,7 +215,7 @@ class MetadataUpdater:
             # Сохраняем прогресс после каждой попытки (даже если были ошибки)
             self._save_metadata(metadata)
 
-            print(f"Обработано успешно: {processed_in_this_batch}. Ошибок/Пропусков: {len(failed_items)}")
+            print(f"Обработано успешно: {processed_in_this_batch}. Релевантно {relevant_count}. Ошибок/Пропусков: {len(failed_items)}")
 
             # Если все обработали успешно — выходим
             if not failed_items:

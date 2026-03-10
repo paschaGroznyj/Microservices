@@ -13,7 +13,6 @@ from typing import Optional
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
-
 # Настройки из конфига
 from core.config import (
     PORT_TOKEN_GENERATE_SERVICE,
@@ -29,7 +28,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="GigaChat Token Proxy", version="1.0")
-
 
 
 class TokenCache:
@@ -62,27 +60,6 @@ class TokenCache:
         """Проверяет наличие валидного токена"""
         return self.get() is not None
 
-def get_token_ttl(r: redis.Redis, key: str) -> int:
-    """Возвращает оставшееся время жизни токена в секундах.
-    -2 если ключ не существует, -1 если нет TTL."""
-    return r.ttl(key)
-
-def should_refresh_token(r: redis.Redis, key: str, min_ttl: int) -> bool:
-    """Решает, нужно ли запрашивать новый токен."""
-    ttl = get_token_ttl(r, key)
-    
-    if ttl == -2:
-        logger.info("🔍 Токен в Redis не найден — требуется обновление")
-        return True
-    elif ttl == -1:
-        logger.warning("⚠️ У токена нет TTL — принудительное обновление")
-        return True
-    elif ttl < min_ttl:
-        logger.info(f"🔍 TTL токена ({ttl} сек) < порога ({min_ttl} сек) — обновление")
-        return True
-    else:
-        logger.info(f"✅ Токен валиден ещё {ttl} сек — пропускаем обновление")
-        return False
 
 token_cache = TokenCache(ttl_seconds=TOKEN_TTL)
 
@@ -130,7 +107,7 @@ def oauth_token(
         return {
             "access_token": cached,
             "token_type": "Bearer",
-            "expires_in": 300  # Сообщаем клиенту, что токен живёт ~5 мин
+            "expires_at": TOKEN_TTL  # Сообщаем клиенту, что токен живёт ~5 мин
         }
 
     logger.info("🔄 Кэш пуст — запрашиваем токен у внутреннего API")
@@ -141,7 +118,7 @@ def oauth_token(
         return {
             "access_token": new_token,
             "token_type": "Bearer",
-            "expires_in": 300
+            "expires_at": TOKEN_TTL
         }
     except Exception as e:
         logger.error(f"❌ Критическая ошибка получения токена: {e}")
@@ -170,7 +147,6 @@ def metrics():
         "internal_api_url": INTERNAL_TOKEN_API_URL
     }
 
->>>>>>> origin/feature/generator_tokens
 
 if __name__ == "__main__":
     import uvicorn

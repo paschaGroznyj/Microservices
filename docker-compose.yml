@@ -64,70 +64,70 @@ services:
 #      - ./models:/app/.cache/huggingface/hub
 #    restart: unless-stopped
 
-#  redis:
-#    image: redis:7.2-alpine
-#    container_name: redis
-#    ports:
-#      - "6379:6379"
-#    volumes:
-#      - redis_data:/data
-#    command: redis-server --appendonly yes
+  # redis:
+  #  image: redis:7.2-alpine
+  #  container_name: redis
+  #  ports:
+  #    - "6379:6379"
+  #  volumes:
+  #    - redis_data:/data
+  #  command: redis-server --appendonly yes
 
-  agent_service:
-    build: ./agent_service
-    container_name: agent_service
-    ports:
-      - "9001:9001"
-    depends_on:
-      - broker
-    environment:
-      PORT_PM_AGENT: ${PORT_PM_AGENT}
-      KAFKA_BROKER: ${KAFKA_BROKER}
-      API_GIGACHAT: ${API_GIGACHAT}
-
-      GIGACHAT_AUTHORIZATION: ${GIGACHAT_AUTHORIZATION}
-      STORAGE_PATH: ${STORAGE_PATH}
-      SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES}
-      ARTICLES_FOLDER: ${ARTICLES_FOLDER}
-      METADATA_FOLDER: ${METADATA_FOLDER}
-      FAISS_FOLDER: ${FAISS_FOLDER}
-      DIGESTS_FOLDER: ${DIGESTS_FOLDER}
-
-      OBS_BUCKET: ${OBS_BUCKET}
-      OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
-      OBS_SECRET_KEY: ${OBS_SECRET_KEY}
-      OBS_REGION: ${OBS_REGION}
-      OBS_ENDPOINT: ${OBS_ENDPOINT}
-
-      HF_TOKEN: ${HF_TOKEN}
-      HF_HOME: /app/.cache/huggingface
-
-      HF_DATASETS_OFFLINE: "0"
-      TRANSFORMERS_OFFLINE: "0"
-
-      REDIS_HOST: ${REDIS_HOST}
-      REDIS_PORT: ${REDIS_PORT}
-      REDIS_KEY: ${REDIS_KEY}
-    volumes:
-      - ./models:/app/.cache/huggingface/hub
-    restart: unless-stopped
-
-
-  # plug_service:
-  #   build: ./plug_service
-  #   container_name: plug_service
+  # agent_service:
+  #   build: ./agent_service
+  #   container_name: agent_service
   #   ports:
-  #     - "19001:9001"
+  #     - "9001:9001"
   #   depends_on:
   #     - broker
   #   environment:
-  #     PORT_PLUG_AGENT: ${PORT_PLUG_AGENT}
+  #     PORT_PM_AGENT: ${PORT_PM_AGENT}
   #     KAFKA_BROKER: ${KAFKA_BROKER}
+  #     API_GIGACHAT: ${API_GIGACHAT}
+
+  #     GIGACHAT_AUTHORIZATION: ${GIGACHAT_AUTHORIZATION}
+  #     STORAGE_PATH: ${STORAGE_PATH}
+  #     SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES}
+  #     ARTICLES_FOLDER: ${ARTICLES_FOLDER}
+  #     METADATA_FOLDER: ${METADATA_FOLDER}
+  #     FAISS_FOLDER: ${FAISS_FOLDER}
+  #     DIGESTS_FOLDER: ${DIGESTS_FOLDER}
+
+  #     OBS_BUCKET: ${OBS_BUCKET}
+  #     OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
+  #     OBS_SECRET_KEY: ${OBS_SECRET_KEY}
+  #     OBS_REGION: ${OBS_REGION}
+  #     OBS_ENDPOINT: ${OBS_ENDPOINT}
+
+  #     HF_TOKEN: ${HF_TOKEN}
+  #     HF_HOME: /app/.cache/huggingface
+
+  #     HF_DATASETS_OFFLINE: "0"
+  #     TRANSFORMERS_OFFLINE: "0"
 
   #     REDIS_HOST: ${REDIS_HOST}
   #     REDIS_PORT: ${REDIS_PORT}
   #     REDIS_KEY: ${REDIS_KEY}
+  #   volumes:
+  #     - ./models:/app/.cache/huggingface/hub
   #   restart: unless-stopped
+
+
+  plug_service:
+    build: ./plug_service
+    container_name: plug_service
+    ports:
+      - "19001:9001"
+    depends_on:
+      - broker
+    environment:
+      PORT_PLUG_AGENT: ${PORT_PLUG_AGENT}
+      KAFKA_BROKER: ${KAFKA_BROKER}
+
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+      REDIS_KEY: ${REDIS_KEY}
+    restart: unless-stopped
 
 
   token_service:
@@ -335,7 +335,7 @@ volumes:
   kafka-data:
   llm_cache:
   postgres_data:
-#  redis_data:
+  # redis_data:
   # parser_data:
   # parser_logs:
 

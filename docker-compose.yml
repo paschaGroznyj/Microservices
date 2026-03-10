@@ -73,44 +73,39 @@ services:
   #    - redis_data:/data
   #  command: redis-server --appendonly yes
 
-  # agent_service:
-  #   build: ./agent_service
-  #   container_name: agent_service
-  #   ports:
-  #     - "9001:9001"
-  #   depends_on:
-  #     - broker
-  #   environment:
-  #     PORT_PM_AGENT: ${PORT_PM_AGENT}
-  #     KAFKA_BROKER: ${KAFKA_BROKER}
-  #     API_GIGACHAT: ${API_GIGACHAT}
+  agent_service:
+    build: ./agent_service
+    container_name: agent_service
+    ports:
+      - "9001:9001"
+    depends_on:
+      - broker
+    environment:
+      PORT_PM_AGENT: ${PORT_PM_AGENT}
+      KAFKA_BROKER: ${KAFKA_BROKER}
 
-  #     GIGACHAT_AUTHORIZATION: ${GIGACHAT_AUTHORIZATION}
-  #     STORAGE_PATH: ${STORAGE_PATH}
-  #     SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES}
-  #     ARTICLES_FOLDER: ${ARTICLES_FOLDER}
-  #     METADATA_FOLDER: ${METADATA_FOLDER}
-  #     FAISS_FOLDER: ${FAISS_FOLDER}
-  #     DIGESTS_FOLDER: ${DIGESTS_FOLDER}
+      STORAGE_PATH: ${STORAGE_PATH}
+      SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES}
+      ARTICLES_FOLDER: ${ARTICLES_FOLDER}
+      METADATA_FOLDER: ${METADATA_FOLDER}
+      FAISS_FOLDER: ${FAISS_FOLDER}
+      DIGESTS_FOLDER: ${DIGESTS_FOLDER}
 
-  #     OBS_BUCKET: ${OBS_BUCKET}
-  #     OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
-  #     OBS_SECRET_KEY: ${OBS_SECRET_KEY}
-  #     OBS_REGION: ${OBS_REGION}
-  #     OBS_ENDPOINT: ${OBS_ENDPOINT}
+      OBS_BUCKET: ${OBS_BUCKET}
+      OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
+      OBS_SECRET_KEY: ${OBS_SECRET_KEY}
+      OBS_REGION: ${OBS_REGION}
+      OBS_ENDPOINT: ${OBS_ENDPOINT}
 
-  #     HF_TOKEN: ${HF_TOKEN}
-  #     HF_HOME: /app/.cache/huggingface
+      HF_TOKEN: ${HF_TOKEN}
+      HF_HOME: /app/.cache/huggingface
 
-  #     HF_DATASETS_OFFLINE: "0"
-  #     TRANSFORMERS_OFFLINE: "0"
+      HF_DATASETS_OFFLINE: "0"
+      TRANSFORMERS_OFFLINE: "0"
 
-  #     REDIS_HOST: ${REDIS_HOST}
-  #     REDIS_PORT: ${REDIS_PORT}
-  #     REDIS_KEY: ${REDIS_KEY}
-  #   volumes:
-  #     - ./models:/app/.cache/huggingface/hub
-  #   restart: unless-stopped
+    volumes:
+      - ./models:/app/.cache/huggingface/hub
+    restart: unless-stopped
 
 
   plug_service:

@@ -12,9 +12,9 @@ from datetime import datetime, date
 from pydantic import BaseModel, Field
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
-from core.config import EMBEDDING_MODEL
-
-EMBED_MODEL = SentenceTransformer(EMBEDDING_MODEL)
+from .core.config import EMBEDDING_MODEL
+from .core.agent_provider import get_model
+from langchain.schema import SystemMessage
 
 # =============================================================================
 # 1. РАСШИРЕННАЯ СТРУКТУРА ДЛЯ СОСТАВНЫХ ФИЛЬТРОВ
@@ -77,6 +77,25 @@ def _slugify(text: str) -> str:
         .replace(":", "")
     )
 
+
+def extract_json(text: str) -> str:
+    text = text.strip()
+
+    # ```json ... ```
+    match = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
+    if match:
+        return match.group(1)
+
+    # ``` ... ```
+    match = re.search(r"```\s*(.*?)\s*```", text, re.DOTALL)
+    if match:
+        return match.group(1)
+
+    if text.startswith("json"):
+        return text[4:].strip()
+
+    return text
+
 class LLMCompositeExtractor:
     """LLM извлекает ВСЕ параметры одновременно."""
     @staticmethod
@@ -115,14 +134,10 @@ class LLMCompositeExtractor:
         
         ВЕРНИ ТОЛЬКО VALID JSON:
         """
-        response = llm_client.chat.completions.create(
-            model="Qwen/Qwen3-VL-8B-Instruct",
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-            max_tokens=1024
-        )
+        messages = [SystemMessage(content=prompt)]
+        response = llm_client.invoke(messages)
         
-        json_str = response.choices[0].message.content
+        json_str = extract_json(response.content)
 
         # 2. Попытка парсинга
         try:
@@ -183,52 +198,10 @@ class LLMCompositeExtractor:
         ## Текст статьи из PDF:
         {article_text}."""
 
-        # response = llm_client.chat.completions.create(
-        #     model="Qwen/Qwen3-VL-8B-Instruct",
-        #     messages=[{"role": "user", "content": prompt}]
-        # )
+        messages = [SystemMessage(content=prompt)]
+        response = llm_client.invoke(messages)
 
-
-        response = llm_client.chat.completions.create(
-            model="Qwen/Qwen3.5-397B-A17B",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.6,
-            top_p=0.95
-        )
-        return response.choices[0].message.content
-
-# Для Отладки
-# from huggingface_hub import InferenceClient
-# from dotenv import load_dotenv
-# import os
-# load_dotenv()
-# HF_TOKEN = os.getenv("HF_TOKEN")
-#
-#
-# client = InferenceClient(api_key=HF_TOKEN)
-# response = client.chat.completions.create(
-#             model="Qwen/Qwen3-VL-8B-Instruct",
-#             messages=[{"role": "user", "content": "Привет"}],
-#             temperature=0.6,
-#             top_p=0.95
-#         )
-# print(response.choices[0].message.content)
-
-# from mistralai import Mistral
-# from dotenv import load_dotenv
-# import os
-# load_dotenv()
-# MISTRAL_TOKEN = os.getenv("MISTRAL_TOKEN")
-#
-#
-# llm = Mistral(api_key=MISTRAL_TOKEN)
-# response = llm.chat.complete(
-#             model="mistral-large-latest",
-#             messages=[{"role": "user", "content": "Привет"}],
-#             temperature=0.6,
-#             top_p=0.95
-#         )
-# print(response.choices[0].message.content)
+        return response.content
 
 # =============================================================================
 # 2. ГЛАВНАЯ ФУНКЦИЯ С СОСТАВНОЙ ФИЛЬТРАЦИЕЙ
@@ -397,25 +370,6 @@ def load_json_metadata(json_path: str) -> List[Dict]:
     except:
         return []
 
-# json_path="knowledge_base/metadata.json"
-# articles = load_json_metadata(json_path=json_path)
-# articles_filenames = []
-# for art in articles:
-#     articles_filenames.append(art['file_article'])
-#
-# reviews_dir = Path("digests")
-#
-# existing_files = {
-#     md_file.name: md_file
-#     for md_file in reviews_dir.rglob("*.md")
-# }
-#
-# exist_reviews = []
-# for md_file in reviews_dir.rglob('*.md'):
-#     if md_file.name in articles_filenames:
-#         exist_reviews.append(md_file)
-# print(exist_reviews)
-
 # =============================================================================
 # 4. ИНТЕГРАЦИЯ С АГЕНТОМ
 # =============================================================================
@@ -429,12 +383,6 @@ def agent_composite_digest_tool(query: str, llm_client, json_path="knowledge_bas
     base_path = Path(__file__).resolve().parent
     digest_all_path = base_path / 'digests_all'
     output_path, filename = save_digest(full_text,  filter_type=filter_slug, output_dir=digest_all_path)
-
-    # print(f"СОСТАВНЫЙ ДАЙДЖЕСТ:")
-    # print(f"   Запрос: {result['query']}")
-    # print(f"   Фильтры: {len([f for f in result['composite_filters'].values() if f])} активных")
-    # print(f"   Найдено: {result['found_articles']} статей")
-    # print(f"   Путь до файла: {output_path}")
 
     result.update({'digest_file':str(output_path)})
     result.update({'filename': filename})

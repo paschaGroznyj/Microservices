@@ -9,14 +9,12 @@ from huggingface_hub import InferenceClient
 from huggingface_hub.errors import HfHubHTTPError
 from langchain.chat_models.gigachat import GigaChat
 from langchain.schema import SystemMessage
-from core.config import GIGACHAT_CREDENTIALS
-from .gigachat_manager import manager
+from .core.agent_provider import get_model
 from .analyze_article import RelevanceAnalyzer
 
 load_dotenv()
 
-HF_TOKEN = os.getenv("HF_TOKEN")
-
+gigachat = get_model()
 
 class MetadataUpdater:
     def __init__(self, metadata_file: Path, max_retries: int = 3, retry_delay: int = 10):
@@ -45,7 +43,7 @@ class MetadataUpdater:
             "Проверка качества: Качество лога"
         ]
 
-        self.analyzer = RelevanceAnalyzer(manager)
+        self.analyzer = RelevanceAnalyzer(gigachat)
 
     def assess_relevance_and_category(self, item: Dict) -> Dict[str, Any]:
         """
@@ -124,9 +122,9 @@ class MetadataUpdater:
             #     )
             # ]
             messages = [SystemMessage(content=prompt)]
-            response_sum = manager.invoke(messages)
+            response_sum = gigachat.invoke(messages)
             # response_sum = self.llm(message)
-            raw_content = response_sum.content.strip()
+            raw_content = response_sum.content
 
             # Точное совпадение
             if raw_content in self.valid_categories:

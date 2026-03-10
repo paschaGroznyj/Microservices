@@ -9,10 +9,22 @@ from kafka import KafkaConsumer, KafkaProducer
 import asyncio
 from core.config import KAFKA_BROKER, PORT_PLUG_AGENT
 
-from core.client_token import manager
-
 logging.basicConfig(level=logging.INFO)
 
+from langchain.chat_models import GigaChat
+from langchain.schema import SystemMessage
+
+giga = GigaChat(
+    credentials="somebody_once_told_me",
+    auth_url="http://token_service:9004/api/v2/oauth", # Данный адрес контейнера является единственным источником истины для получения токена внутри ВМ cloud
+    verify_ssl_certs=False,
+    model="GigaChat-2-Max"
+)
+
+# ================== ДЛЯ ЛОКАЛЬНОЙ ОТЛАДКИ ================
+# auth_url меняется на http://host.docker.internal:9004/api/v2/oauth при работе с докером
+# auth_url меняется на http://localhost:9004/api/v2/oauth при работе без докера
+# Условие по созданию проброса на порт 9004, должно быть выполнено
 
 producer = KafkaProducer(
     bootstrap_servers=[KAFKA_BROKER],
@@ -59,7 +71,8 @@ def kafka_consumer():
                     # response = agent.process_query(text)
                     # response_text = response["message"]
 
-                    response_text = manager.invoke("пусто")
+                    # Всё работает — токен кэшируется автоматически!
+                    response_text = giga.invoke([SystemMessage(content=text)]).content
                     # from datetime import datetime
                     # now = datetime.now()
                     # formatted_time = now.strftime("%H:%M:%S")

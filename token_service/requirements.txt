@@ -1,3 +1,4 @@
-redis
-dotenv
+fastapi
+uvicorn[standard]
 requests
+pydantic

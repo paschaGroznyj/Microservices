@@ -7,16 +7,14 @@ from pydantic import BaseModel, Field
 from pathlib import Path
 import time
 import asyncio
-from .gigachat_manager import manager
-# from langchain.chat_models.gigachat import GigaChat
+from .core.agent_provider import get_model
 from langchain.schema import SystemMessage
-from core.config import *
+from .core.config import *
 from .vector_db import VectorDBManager
 from .monitor import StorageMonitor
-from core.config import ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH, GIGACHAT_CREDENTIALS, METADATA_FILE, HF_TOKEN, QWEN_CREDENTIALS
+from .core.config import ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH, METADATA_FILE
 from .summary import SummaryGenerator
-from .pm_parser.botocore_client import OBSWorker
-from huggingface_hub import InferenceClient
+from .core.botocore_client import OBSWorker
 import os
 from .summary_period import agent_composite_digest_tool
 from .update_metadata import MetadataUpdater
@@ -244,7 +242,7 @@ class KnowledgeAgent:
         self.auto_processor = AutoProcessor(
             self.articles_path, self.monitor, self.vector_db,
             self.summarizer)
-        gigachat = manager.gigachat  # Авто-реинициализация!
+        self.gigachat = get_model() # Паттерн Singleton для получения экзепляра Гигачат
 
         # PydanticOutputParser
         self.parser = PydanticOutputParser(pydantic_object=AgentAction)
@@ -257,25 +255,17 @@ class KnowledgeAgent:
         # Флаг для автозапуска
         self.skip_startup_autoprocess = skip_startup_autoprocess
 
-    #     if not skip_startup_autoprocess:
-    #         self._startup_autoprocess()
-    #
-    # def _startup_autoprocess(self):
-    #     """АВТОМАТИЧЕСКАЯ ОБРАБОТКА при запуске (после парсера)"""
-    #     result = self.auto_processor.process_new_articles()
-
 
     def get_state(self) -> str:
         """Текущее состояние системы с проверкой существования БД"""
         changes = self.monitor.get_changes()
         stats = self.vector_db.get_stats()
 
-        # Проверяем наличие векторной базы
-        db_exists = stats['total_vectors'] > 0
-        db_status = "СУЩЕСТВУЕТ" if db_exists else "ОТСУТСТВУЕТ - НУЖНО ПОСТРОИТЬ"
+        # # Проверяем наличие векторной базы
+        # db_exists = stats['total_vectors'] > 0
+        # db_status = "СУЩЕСТВУЕТ" if db_exists else "ОТСУТСТВУЕТ - НУЖНО ПОСТРОИТЬ"
 
         return f"""Статистика:
-    • Векторов: {stats['total_vectors']} {db_status}
     • Новых файлов: {len(changes['new'])}
     • Изменённых: {len(changes['modified'])}
     • Удалённых: {len(changes['deleted'])}"""
@@ -320,19 +310,8 @@ class KnowledgeAgent:
     ШАГ 3: Выбери ТОЧНЫЙ инструмент"""
 
         try:
-            # gigachat = GigaChat(
-            #     credentials=GIGACHAT_CREDENTIALS,  # Обязательный параметр
-            #     verify_ssl_certs=False,  # Отключаем проверку SSL
-            # )
-            # messages = [
-            #     SystemMessage(
-            #         content=prompt
-            #     )
-            # ]
-            # response = gigachat(messages)
-
             messages = [SystemMessage(content=prompt)]
-            response = manager.invoke(messages)
+            response = self.gigachat.invoke(messages)
 
             # Парсим план агента
             for attempt in range(3):
@@ -487,7 +466,7 @@ class KnowledgeAgent:
                 }
 
             elif action['action'] == "rebuild_categories":
-                message = self.auto_categories()
+                message = asyncio.run(self.auto_categories())
                 return {
                     "status": "success",
                     "message": message
@@ -623,9 +602,8 @@ class KnowledgeAgent:
                 elif action['action'] == "summarize_filt":
                     asyncio.run(self.obs_loader.run_download())
                     asyncio.run(self.obs_loader.download_reviews())
-                    client = InferenceClient(api_key=HF_TOKEN)
                     json_file = self.name_meta_dir / "metadata.json"
-                    results = agent_composite_digest_tool(llm_client=client, query=user_input, json_path=json_file, md_folder=self.digest_path)
+                    results = agent_composite_digest_tool(llm_client=self.gigachat, query=user_input, json_path=json_file, md_folder=self.digest_path)
                     filename_fin = results['digest_file']
                     # print(results['digest_file'])
                     # print(results['filename'])

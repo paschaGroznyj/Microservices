@@ -15,13 +15,11 @@ from langchain.chat_models import GigaChat
 from langchain.schema import SystemMessage
 
 giga = GigaChat(
-    credentials="any_value",  # Прокси не проверяет, можно любое значение
-    auth_url="http://token_service:9004/api/v2/oauth",  # ← Ваш прокси!
+    credentials="none",
+    auth_url="http://host.docker.internal:9004/api/v2/oauth",
     verify_ssl_certs=False,
     model="GigaChat-2-Max"
 )
-
-
 
 producer = KafkaProducer(
     bootstrap_servers=[KAFKA_BROKER],
@@ -67,9 +65,9 @@ def kafka_consumer():
                 try:
                     # response = agent.process_query(text)
                     # response_text = response["message"]
+
                     # Всё работает — токен кэшируется автоматически!
-                    response_text = giga.invoke([SystemMessage(content="Привет, как дела?")])
-                    print(response_text.content)
+                    response_text = giga.invoke([SystemMessage(content=text)]).content
                     # from datetime import datetime
                     # now = datetime.now()
                     # formatted_time = now.strftime("%H:%M:%S")

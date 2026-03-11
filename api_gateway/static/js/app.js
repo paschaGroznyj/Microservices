@@ -517,10 +517,11 @@ class ChatAppSimple {
 
 
 
-// Инициализация при загрузке страницы
+// Инициализация при загрузке страницы. Ждет пока построится HTML дерево, только потом запускает код
 document.addEventListener('DOMContentLoaded', () => {
     // Если на странице есть элемент с id="chat-app"
     if (document.getElementById('chat-app')) {
         window.chatApp = new ChatAppSimple();
     }
+    initMobileMenu(); // Вызовется только тогда, когда страница полностью будет загружена
 });

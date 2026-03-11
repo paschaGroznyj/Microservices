@@ -220,7 +220,7 @@ services:
   #       - "5433:5432"
   
   postgres:
-    image: postgres:15
+    image: pgvector/pgvector:pg15
     container_name: postgres
     restart: unless-stopped
 
@@ -278,6 +278,14 @@ services:
     environment:
       HF_TOKEN: ${HF_TOKEN}
       EMB_MODEL: ${EMB_MODEL}
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+      REDIS_KEY: ${REDIS_KEY}
+      VDB_TYPE: ${VDB_TYPE}
     depends_on:
       - postgres
                                 

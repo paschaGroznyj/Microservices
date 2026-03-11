@@ -19,7 +19,7 @@ CHECK_INTERVAL = TOKEN_TTL
 
 def get_gigachat_token() -> str:
     response = requests.post(
-        url="http://10.0.4.62:2000/token",
+        url="http://host.docker.internal:9004/token",
         headers={"IAM-User-ID": IAM_API_KEY}
     )
     return response.json()['token']

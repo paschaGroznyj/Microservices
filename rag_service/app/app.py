@@ -1,10 +1,8 @@
-import os
 import uuid
 import chromadb
 import asyncpg
 import numpy as np
 from pgvector.asyncpg import register_vector
-from dotenv import load_dotenv
 from fastapi import FastAPI
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
@@ -12,26 +10,37 @@ from typing import AsyncGenerator, Dict, List
 from asyncpg.protocol.record import Record
 
 from .embedding import DummyKBEmbedding, AsyncStandaloneEmbedding
-
-load_dotenv()
+from .core.config import (
+    REDIS_HOST,
+    REDIS_PORT,
+    REDIS_KEY,
+    DB_USER,
+    DB_PASSWORD,
+    DB_HOST,
+    DB_PORT,
+    VDB_TYPE,
+    EMB_MODEL,
+    HF_TOKEN
+)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
     vdb_client = None
-    if os.environ['VDB_TYPE'] == 'chroma':
+    if VDB_TYPE == 'chroma':
         vdb_client = chromadb.HttpClient(host='chromadb', port=8000)
         app.state.collection = vdb_client.get_or_create_collection(
             'kb_collection', 
-            embedding_function=DummyKBEmbedding(os.environ['EMB_MODEL'])
+            embedding_function=DummyKBEmbedding(EMB_MODEL)
         )
         app.state.vdb_client = vdb_client
 
-    elif os.environ['VDB_TYPE'] == 'pgvector':
+    elif VDB_TYPE == 'pgvector':
+        print(DB_PORT)
         conn = await asyncpg.connect(
-            user=os.environ['DB_USER'],
-            password=os.environ['DB_PASSWORD'],
-            host=os.environ['DB_HOST'],
-            port=os.environ['DB_PORT']
+            user=DB_USER,
+            password=DB_PASSWORD,
+            host=DB_HOST,
+            port=DB_PORT
         )
 
         await conn.execute('CREATE EXTENSION IF NOT EXISTS vector')
@@ -40,7 +49,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         await conn.execute('CREATE TABLE IF NOT EXISTS rag_docs (id bigserial PRIMARY KEY, embedding vector(768), content varchar(5000))')
         app.state.vdb_client = conn
 
-    emb_client = AsyncStandaloneEmbedding(os.environ['EMB_MODEL'], os.environ['HF_TOKEN'])
+    emb_client = AsyncStandaloneEmbedding(EMB_MODEL, HF_TOKEN)
     app.state.emb_client = emb_client
 
     yield

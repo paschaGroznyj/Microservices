@@ -161,7 +161,7 @@ services:
   #     OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
   #     OBS_SECRET_KEY: ${OBS_SECRET_KEY}
   #     OBS_REGION: ${OBS_REGION}
-  #     OBS_ENDPOINT: ${OBS_ENDPOINT}     
+  #     OBS_ENDPOINT: ${OBS_ENDPOINT}
   #   restart: unless-stopped
 
   gateway:
@@ -245,13 +245,13 @@ services:
         max-file: "3"         # Хранить не больше 3 файлов
         compress: "true"      # Сжимать старые логи
 
-      
+
   # chromadb:
   #   image: chromadb/chroma
   #   container_name: chromadb
   #   ports:
   #     - "9003:8000"
-  
+
   # rag_service:
   #   container_name: rag_service
   #   build: ./rag_service
@@ -263,9 +263,9 @@ services:
   #     EMB_MODEL: ${EMB_MODEL}
   #   depends_on:
   #     - chromadb
-                                
 
-  
+
+
   chats_service:
     container_name: chats_service
     build: ./chats_service
@@ -333,4 +333,3 @@ volumes:
   # redis_data:
   # parser_data:
   # parser_logs:
-

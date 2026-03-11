@@ -41,12 +41,26 @@
   --theme-submit-btn-text: #000000;
 }
 
+
+html, body {
+  height: 100%;
+}
+
+#chat-app {
+  height: 100%;
+}
+
+.chat-layout {
+  height: 100%;
+}
+
 /* Основной контейнер чата */
 .chat-main {
   flex: 1;
   display: flex;
   flex-direction: column;
   background: var(--bg-primary);
+  height: 100%;
 }
 
 /* Контейнер сообщений */
@@ -61,6 +75,9 @@
   align-items: center;
   scrollbar-width: none;
   padding: 0 24px;
+
+  -webkit-overflow-scrolling: touch; /* плавный скролл iOS */
+  overscroll-behavior: contain;
 }
 
 /* Стилизация скроллбара сообщений */

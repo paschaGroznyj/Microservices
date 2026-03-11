@@ -2,11 +2,13 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Чат - Добро пожаловать, {{ user.username }}</title>
     <link rel="stylesheet" href="/static/css/chat.css">
     <link rel="stylesheet" href="/static/css/sidebar.css">
     <link rel="stylesheet" href="/static/css/main_chat.css">
     <link rel="stylesheet" href="/static/css/modal_dropdown.css">
+    <link rel="stylesheet" href="/static/css/mobile.css">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.5/dist/purify.min.js"></script>
 </head>
@@ -111,6 +113,12 @@
 
             <div class="chat-main">
                 <div class="head-section">
+                    <!-- 🔥 Кнопка меню для мобильных -->
+                    <button class="mobile-menu-toggle" id="mobile-menu-toggle" aria-label="Меню">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M3 12h18M3 6h18M3 18h18" stroke-linecap="round"/>
+                        </svg>
+                    </button>
                     <h3 id="chat-title">Agent Process Mining</h3>
                 </div>
             <div class="chat-main-inner">
@@ -177,11 +185,15 @@
     </div>
 
 
+
+
+
+    <!-- Затемнение фона при открытом меню -->
+    <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
     <script src="/static/js/app.js"></script>
     <script src="/static/js/modalWindow.js"></script>
-
-
-
+    <script src="/static/js/mobile.js"></script>
 
 </body>
 </html>

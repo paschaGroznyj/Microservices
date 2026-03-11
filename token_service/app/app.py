@@ -107,7 +107,7 @@ def oauth_token(
         return {
             "access_token": cached,
             "token_type": "Bearer",
-            "expires_in": 300  # Сообщаем клиенту, что токен живёт ~5 мин
+            "expires_at": TOKEN_TTL  # Сообщаем клиенту, что токен живёт ~5 мин
         }
 
     logger.info("🔄 Кэш пуст — запрашиваем токен у внутреннего API")
@@ -118,7 +118,7 @@ def oauth_token(
         return {
             "access_token": new_token,
             "token_type": "Bearer",
-            "expires_in": 300
+            "expires_at": TOKEN_TTL
         }
     except Exception as e:
         logger.error(f"❌ Критическая ошибка получения токена: {e}")

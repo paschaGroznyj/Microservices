@@ -10,7 +10,6 @@ langchain==0.3.27
 langchain-community==0.3.31
 langchain_gigachat==0.3.12
 langchain_core==0.3.80
-PyPDF2
 fastapi
 uvicorn
 kafka-python
@@ -24,11 +23,7 @@ botocore
 aiobotocore
 python-dotenv
 pathlib
-playwright
-PyMuPDF
-pymupdf4llm
 requests
 huggingface-hub==0.31.1
 numpy==1.26.4
-redis
 

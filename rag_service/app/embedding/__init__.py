@@ -1,1 +1,1 @@
-from .embedding import AsyncStandaloneEmbedding, DummyKBEmbedding
+from .embedding import AsyncStandaloneEmbedding, DummyKBEmbedding, GigaChatEmbedding

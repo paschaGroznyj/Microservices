@@ -1,8 +1,26 @@
+import redis
+from gigachat import GigaChat
 from typing import Dict, Any, cast
 from huggingface_hub import InferenceClient, AsyncInferenceClient
 from chromadb import Documents, EmbeddingFunction, Embeddings
 from chromadb.utils.embedding_functions import register_embedding_function
 
+from app.core.config import (
+    REDIS_HOST,
+    REDIS_PORT,
+    REDIS_KEY
+)
+
+class GigaChatEmbedding:
+    def __init__(self):
+        self.r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+
+    async def embed(self, request):
+        self.token = self.r.get(REDIS_KEY)
+        giga = GigaChat(access_token=self.token, verify_ssl_certs=False)
+        response = await giga.aembeddings([request])
+
+        return response.data[0].embedding
 
 class AsyncStandaloneEmbedding:
     def __init__(self, model, api_key):

@@ -3,3 +3,5 @@ fastapi
 uvicorn
 pgvector
 asyncpg
+redis
+gigachat

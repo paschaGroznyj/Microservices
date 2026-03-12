@@ -9,11 +9,8 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Dict, List
 from asyncpg.protocol.record import Record
 
-from .embedding import DummyKBEmbedding, AsyncStandaloneEmbedding
+from .embedding import DummyKBEmbedding, AsyncStandaloneEmbedding, GigaChatEmbedding
 from .core.config import (
-    REDIS_HOST,
-    REDIS_PORT,
-    REDIS_KEY,
     DB_USER,
     DB_PASSWORD,
     DB_HOST,
@@ -46,10 +43,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         await conn.execute('CREATE EXTENSION IF NOT EXISTS vector')
         await register_vector(conn)
 
-        await conn.execute('CREATE TABLE IF NOT EXISTS rag_docs (id bigserial PRIMARY KEY, embedding vector(768), content varchar(5000))')
+        await conn.execute('CREATE TABLE IF NOT EXISTS rag_docs (id bigserial PRIMARY KEY, embedding vector(1024), content varchar(5000))')
         app.state.vdb_client = conn
 
-    emb_client = AsyncStandaloneEmbedding(EMB_MODEL, HF_TOKEN)
+    emb_client = GigaChatEmbedding()
     app.state.emb_client = emb_client
 
     yield

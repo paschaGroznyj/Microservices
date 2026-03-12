@@ -103,6 +103,11 @@ services:
       HF_DATASETS_OFFLINE: "0"
       TRANSFORMERS_OFFLINE: "0"
 
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_LOGIN: ${SMTP_LOGIN}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+
     volumes:
       - ./models:/app/.cache/huggingface/hub
     restart: unless-stopped
@@ -168,7 +173,7 @@ services:
     build: ./api_gateway
     container_name: api_gateway
     ports:
-      - "7000:7000"
+      - "7001:7000"
     environment:
       PORT_AUTH_SERVICE: ${PORT_AUTH_SERVICE}
       PORT_CHATS_SERVICE: ${PORT_CHATS_SERVICE}
@@ -306,6 +311,20 @@ services:
       - broker
     restart: unless-stopped
 
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    ports:
+      - "9000:9000"
+      - "9090:9090"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9090"
+    restart: unless-stopped
+
   # # Парсер — batch job, запуск: docker-compose run parser_service
   # parser_service:
   #   build:
@@ -330,6 +349,7 @@ volumes:
   kafka-data:
   llm_cache:
   postgres_data:
+  minio_data:
   # redis_data:
   # parser_data:
   # parser_logs:

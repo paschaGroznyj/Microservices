@@ -19,14 +19,6 @@ class EmailSender:
         self.smtp_login = smtp_login
         self.smtp_password = smtp_password
 
-    def _strip_html(self, html: str) -> str:
-        """Убираем HTML-теги, оставляя plain text."""
-        text = re.sub(r'<br\s*/?>', '\n', html)
-        text = re.sub(r'</?p>', '\n', text)
-        text = re.sub(r'<[^>]+>', '', text)
-        text = re.sub(r'\n{3,}', '\n\n', text)
-        return text.strip()
-
     def send_digest(
         self,
         to_addresses: List[str],
@@ -101,3 +93,10 @@ class EmailSender:
         with smtplib.SMTP_SSL(self.smtp_host, self.smtp_port) as server:
             server.login(self.smtp_login, self.smtp_password)
             server.sendmail(self.smtp_login, to_addresses, msg.as_string())
+
+    def _strip_html(self, html: str) -> str:
+        text = re.sub(r'<br\s*/?>', '\n', html)
+        text = re.sub(r'</?p>', '\n', text)
+        text = re.sub(r'<[^>]+>', '', text)
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        return text.strip()

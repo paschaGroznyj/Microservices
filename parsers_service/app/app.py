@@ -187,7 +187,8 @@ class ParserPipeline:
             return res
         except Exception as e:
             logger.exception(f"Парсер {parser.name} упал: {e}")
-            return {"error": str(e), "source": parser.name}
+            # return {"error": str(e), "source": parser.name}
+            return []
 
 
 async def perform_parsing_cycle():
@@ -304,9 +305,16 @@ SERVICES = {
     }
 }
 
+@app.post("/run")
+async def run_parsing():
+    if parsing_active:
+        return {"status": "already_running"}
+    asyncio.create_task(perform_parsing_cycle())
+    return {"status": "started"}
+
 @app.get("/health")
 async def health():
-    status = "active" if parsing_active else "error"
+    status = "active" if parsing_active else "idle"
     return {"service": "parsers_service", "status": status}
 
 

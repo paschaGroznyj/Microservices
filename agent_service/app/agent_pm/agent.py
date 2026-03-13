@@ -20,8 +20,6 @@ from .summary_period import agent_composite_digest_tool
 from .update_metadata import MetadataUpdater
 from .digest_email_handler import DigestEmailHandler
 
-logging.basicConfig(level=logging.INFO)
-
 
 # Pydantic модели для structured output
 class ActionType(str, Enum):
@@ -855,12 +853,21 @@ class KnowledgeAgent:
         success_count = sum(1 for r in results if r["status"] == "created")
         print(success_count)
 
-        # Перестроим векторную базу
+        # Автоотправка новых дайджестов на почту
+        new_digest_files = [
+            r["digest_file"] for r in results
+            if r["status"] == "created" and r.get("digest_file")
+        ]
+        if new_digest_files:
+            print(f"Автоотправка {len(new_digest_files)} дайджестов на почту...")
+            email_result = self.email_handler.send_auto_digest(new_digest_files)
+            print(f"Результат автоотправки: {email_result}")
+
         changes = self.monitor.get_changes()
         deleted = changes.get('deleted', [])
         if deleted:
-            self.vector_db.delete_documents(deleted)
-        count = self.vector_db.rebuild_index()
+            await asyncio.to_thread(self.vector_db.delete_documents, deleted)
+        count = await asyncio.to_thread(self.vector_db.rebuild_index)
         word = self.pluralize_vectors(count)
         if count == 0:
             print("⚠️ **Не удалось создать векторный индекс**\n\n 💡 **Что делать:**\n Выполните команду:\n `Сформируй ревью по всем статьям`"

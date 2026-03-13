@@ -1,8 +1,10 @@
 import re
+import json
 import logging
 import asyncio
+import tempfile
 from datetime import datetime
-from html import escape
+from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 from .email_sender import EmailSender
@@ -10,6 +12,8 @@ from .core.config import SMTP_HOST, SMTP_PORT, SMTP_LOGIN, SMTP_PASSWORD
 from .summary_period import agent_composite_digest_tool
 
 logger = logging.getLogger(__name__)
+
+RECIPIENTS_CONFIG = Path(__file__).resolve().parent.parent.parent / "config" / "recipients.json"
 
 
 class DigestEmailHandler:
@@ -93,128 +97,74 @@ class DigestEmailHandler:
                 "message": f"Дайджест сформирован, но ошибка отправки: {send_result.get('message', 'неизвестная ошибка')}",
             }
 
-    def build_digest_email_html(
-        self, user_input: str, results: Dict[str, Any]
-    ) -> str:
-        """Формирует HTML-тело письма с дайджестом."""
-        composite_filters = results.get("composite_filters") or {}
-        top_articles = results.get("top_articles") or []
-        filename = escape(str(results.get("filename", "digest")))
-        found_articles = results.get("found_articles", 0)
-        generated_at = datetime.now().strftime("%d.%m.%Y %H:%M")
+    @staticmethod
+    def _load_recipients() -> List[str]:
+        """Загружает список получателей из config/recipients.json."""
+        if not RECIPIENTS_CONFIG.exists():
+            logger.warning(f"Файл получателей не найден: {RECIPIENTS_CONFIG}")
+            return []
+        try:
+            with open(RECIPIENTS_CONFIG, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            recipients = data.get("recipients", [])
+            # Фильтруем пустые строки и невалидные адреса
+            valid = [r.strip() for r in recipients if r.strip() and "@" in r]
+            return valid
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.error(f"Ошибка чтения recipients.json: {e}")
+            return []
 
-        filter_items = []
-        date_range = composite_filters.get("date_range") or {}
-        start_date = date_range.get("start_date")
-        end_date = date_range.get("end_date")
-        if start_date and end_date:
-            filter_items.append(f"Период: {start_date} - {end_date}")
-
-        for label, key in (
-            ("Категория", "category"),
-            ("Тема", "topic"),
-            ("Название", "title"),
-        ):
-            value = composite_filters.get(key)
-            if value:
-                filter_items.append(f"{label}: {value}")
-
-        if not filter_items:
-            filter_items.append(
-                "Дополнительные фильтры не выделены, использован исходный текст запроса."
-            )
-
-        filters_html = "".join(
-            f"<li>{escape(item)}</li>" for item in filter_items
-        )
-
-        article_items = []
-        for article in top_articles[:5]:
-            title = escape(str(article.get("title") or "Без названия"))
-            category = escape(str(article.get("category") or "Без категории"))
-            publication_date = escape(str(article.get("date_sub") or "не указана"))
-
-            tags = article.get("tags")
-            if isinstance(tags, list):
-                tags_text = ", ".join(str(tag) for tag in tags if tag)
-            else:
-                tags_text = str(tags or "")
-            tags_text = escape(tags_text) if tags_text else ""
-
-            url = str(article.get("url_article") or "").strip()
-            url_html = ""
-            if url and url != "N/A":
-                safe_url = escape(url, quote=True)
-                url_html = (
-                    '<p style="margin:6px 0 0 0;">'
-                    f'Источник: <a href="{safe_url}">{escape(url)}</a>'
-                    "</p>"
-                )
-
-            tags_html = ""
-            if tags_text:
-                tags_html = (
-                    f'<p style="margin:6px 0 0 0;">Ключевые слова: {tags_text}</p>'
-                )
-
-            article_items.append(
-                '<li style="margin-bottom:12px;">'
-                f"<b>{title}</b>"
-                f'<p style="margin:6px 0 0 0;">Категория: {category} | Дата: {publication_date}</p>'
-                f"{tags_html}"
-                f"{url_html}"
-                "</li>"
-            )
-
-        if article_items:
-            articles_html = (
-                '<ol style="padding-left:20px;">'
-                f"{''.join(article_items)}"
-                "</ol>"
-            )
-        else:
-            articles_html = (
-                "<p>Краткий список материалов не удалось сформировать в теле письма. "
-                "Полный результат сохранён во вложении.</p>"
-            )
-
-        remaining_count = max(found_articles - min(len(top_articles), 5), 0)
-        more_articles_html = ""
-        if remaining_count:
-            more_articles_html = (
-                f"<p>Во вложенном файле доступно ещё {remaining_count} "
-                "материалов, не показанных в этом письме.</p>"
-            )
-
-        return f"""
-        <html>
-          <body style="font-family: Arial, sans-serif; color: #222; line-height: 1.5;">
-            <h2>Дайджест материалов AgentPM</h2>
-            <p>Здравствуйте.</p>
-            <p>
-              По вашему запросу подготовлен дайджест материалов из внешних источников.
-              Полная версия результата приложена к письму отдельным файлом.
-            </p>
-            <p><b>Запрос:</b> {escape(user_input)}</p>
-            <p><b>Файл дайджеста:</b> {filename}</p>
-            <p><b>Время формирования:</b> {generated_at}</p>
-            <p><b>Количество найденных статей:</b> {found_articles}</p>
-
-            <h3>Параметры отбора</h3>
-            <ul>
-              {filters_html}
-            </ul>
-
-            <h3>Материалы, вошедшие в дайджест</h3>
-            <p>Ниже приведены первые материалы из выборки для быстрого ознакомления:</p>
-            {articles_html}
-            {more_articles_html}
-
-            <p>
-              Если письмо отображается корректно, для полной версии откройте приложенный файл.
-              Если нужен другой период, тема или категория, сформируйте новый запрос.
-            </p>
-            <p>Это письмо отправлено автоматически сервисом AgentPM.</p>
-          </body>
-        </html>
+    def send_auto_digest(self, digest_files: List[str]) -> Dict[str, str]:
         """
+        Автоматическая отправка новых дайджестов после парсинга.
+
+        Склеивает все дайджесты в один .md файл и отправляет
+        через EmailSender (который сам делает zip.txt).
+        """
+        recipients = self._load_recipients()
+        if not recipients:
+            logger.info("Автоотправка: список получателей пуст, пропускаем")
+            return {"status": "skipped", "message": "Нет получателей в recipients.json"}
+
+        existing_files = [f for f in digest_files if Path(f).exists()]
+        if not existing_files:
+            logger.info("Автоотправка: нет файлов дайджестов для отправки")
+            return {"status": "skipped", "message": "Нет файлов для отправки"}
+
+        count = len(existing_files)
+
+        # Склеиваем все дайджесты в один .md
+        today = datetime.now().strftime("%Y-%m-%d")
+        merged_path = Path(tempfile.gettempdir()) / f"digests_{today}.md"
+        try:
+            with open(merged_path, "w", encoding="utf-8") as out:
+                for filepath in existing_files:
+                    p = Path(filepath)
+                    category = p.parent.name  # Без категории, Общие_принципы, ...
+                    out.write(f"## Категория: {category}\n\n")
+                    out.write(p.read_text(encoding="utf-8"))
+                    out.write("\n\n---\n\n")
+
+            body_text = (
+                f"Здравствуйте!\n\n"
+                f"Это автоматическое письмо из системы AgentPM.\n\n"
+                f"После парсинга сформировано новых дайджестов: {count}.\n"
+                f"Все дайджесты находятся во вложенном архиве.\n\n"
+                f"С уважением,\nAgentPM"
+            )
+
+            result = self.email_sender.send_digest(
+                to_addresses=recipients,
+                subject=f"AgentPM: новые дайджесты ({count} шт.)",
+                body_html=body_text,
+                attachment_path=str(merged_path),
+            )
+
+            logger.info(f"Автоотправка: {result}")
+            return result
+
+        except Exception as e:
+            logger.error(f"Ошибка автоотправки дайджестов: {e}")
+            return {"status": "error", "message": str(e)}
+        finally:
+            merged_path.unlink(missing_ok=True)

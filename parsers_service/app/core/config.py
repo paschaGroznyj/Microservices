@@ -7,6 +7,7 @@ load_dotenv()
 PORT_PARSERS_SERVICE = os.getenv("PORT_PARSERS_SERVICE")
 STORAGE_PATH = os.getenv("STORAGE_PATH", "./knowledge_base")
 ARTICLES_FOLDER = "articles"
+PDFS_FOLDER = "pdfs"
 METADATA_FILE = "metadata.json"
 VECTOR_DB_PATH = os.getenv("VECTOR_DB_PATH", "./faiss_index")
 

@@ -312,19 +312,19 @@ services:
       - broker
     restart: unless-stopped
 
-  minio:
-    image: minio/minio:latest
-    container_name: minio
-    ports:
-      - "9000:9000"
-      - "9090:9090"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
-    volumes:
-      - minio_data:/data
-    command: server /data --console-address ":9090"
-    restart: unless-stopped
+#  minio:
+#    image: minio/minio:latest
+#    container_name: minio
+#    ports:
+#      - "9000:9000"
+#      - "9090:9090"
+#    environment:
+#      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+#      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+#    volumes:
+#      - minio_data:/data
+#    command: server /data --console-address ":9090"
+#    restart: unless-stopped
 
   # # Парсер — batch job, запуск: docker-compose run parser_service
 #  parser_service:
@@ -350,7 +350,7 @@ volumes:
   kafka-data:
   llm_cache:
   postgres_data:
-  minio_data:
+#  minio_data:
   # redis_data:
 #  parser_data:
 #  parser_logs:

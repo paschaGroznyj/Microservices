@@ -114,21 +114,21 @@ services:
     restart: unless-stopped
 
 
-#  plug_service:
-#    build: ./plug_service
-#    container_name: plug_service
-#    ports:
-#      - "19001:9001"
-#    depends_on:
-#      - broker
-#    environment:
-#      PORT_PLUG_AGENT: ${PORT_PLUG_AGENT}
-#      KAFKA_BROKER: ${KAFKA_BROKER}
-#
-#      REDIS_HOST: ${REDIS_HOST}
-#      REDIS_PORT: ${REDIS_PORT}
-#      REDIS_KEY: ${REDIS_KEY}
-#    restart: unless-stopped
+  plug_service:
+    build: ./plug_service
+    container_name: plug_service
+    ports:
+      - "19001:9001"
+    depends_on:
+      - broker
+    environment:
+      PORT_PLUG_AGENT: ${PORT_PLUG_AGENT}
+      KAFKA_BROKER: ${KAFKA_BROKER}
+
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+      REDIS_KEY: ${REDIS_KEY}
+    restart: unless-stopped
 
 
   token_service:
@@ -174,7 +174,7 @@ services:
     build: ./api_gateway
     container_name: api_gateway
     ports:
-      - "7001:7000"
+      - "7000:7000"
     environment:
       PORT_AUTH_SERVICE: ${PORT_AUTH_SERVICE}
       PORT_CHATS_SERVICE: ${PORT_CHATS_SERVICE}
@@ -312,45 +312,30 @@ services:
       - broker
     restart: unless-stopped
 
-#  minio:
-#    image: minio/minio:latest
-#    container_name: minio
-#    ports:
-#      - "9000:9000"
-#      - "9090:9090"
-#    environment:
-#      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-#      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
-#    volumes:
-#      - minio_data:/data
-#    command: server /data --console-address ":9090"
-#    restart: unless-stopped
-
   # # Парсер — batch job, запуск: docker-compose run parser_service
-#  parser_service:
-#     build:
-#       context: ./agent_service
-#       dockerfile: Dockerfile.parser
-#     container_name: parser_service
-#     environment:
-#       DATE_RANGE_START: ${DATE_RANGE_START:-2026-01-01}
-#       DATE_RANGE_END: ${DATE_RANGE_END:-2026-01-30}
-#       STORAGE_PATH: /app/knowledge_base
-#       ARTICLES_FOLDER: articles
-#       METADATA_FILE: metadata.json
-#       LOG_LEVEL: INFO
-#       SCHOLAR_MAX_PAGES: ${SCHOLAR_MAX_PAGES:-2}
-#       MISTRAL_KEY: ${MISTRAL_KEY:-}
-#       MISTRAL_MODEL: ${MISTRAL_MODEL:-}
-#     volumes:
-#       - parser_data:/app/knowledge_base
-#       - parser_logs:/app/logs
+  # parser_service:
+  #   build:
+  #     context: ./agent_service
+  #     dockerfile: Dockerfile.parser
+  #   container_name: parser_service
+  #   environment:
+  #     DATE_RANGE_START: ${DATE_RANGE_START:-2026-01-01}
+  #     DATE_RANGE_END: ${DATE_RANGE_END:-2026-01-30}
+  #     STORAGE_PATH: /app/knowledge_base
+  #     ARTICLES_FOLDER: articles
+  #     METADATA_FILE: metadata.json
+  #     LOG_LEVEL: INFO
+  #     SCHOLAR_MAX_PAGES: ${SCHOLAR_MAX_PAGES:-2}
+  #     MISTRAL_KEY: ${MISTRAL_KEY:-}
+  #     MISTRAL_MODEL: ${MISTRAL_MODEL:-}
+  #   volumes:
+  #     - parser_data:/app/knowledge_base
+  #     - parser_logs:/app/logs
 
 volumes:
   kafka-data:
   llm_cache:
   postgres_data:
-#  minio_data:
   # redis_data:
-#  parser_data:
-#  parser_logs:
+  # parser_data:
+  # parser_logs:

@@ -32,7 +32,6 @@ app = FastAPI(title="GigaChat Token Proxy", version="1.0")
 
 class TokenCache:
     """In-memory кэш токена с TTL"""
-
     def __init__(self, ttl_seconds: int):
         self.ttl = ttl_seconds
         self._token: Optional[str] = None

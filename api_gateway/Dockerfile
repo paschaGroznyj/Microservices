@@ -2,19 +2,19 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Системные зависимости
+# пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
 RUN apt-get update && apt-get install -y \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Python зависимости
+# Python пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Код приложения
+# пїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
 COPY . .
 
-# Безопасный пользователь
+# пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
 

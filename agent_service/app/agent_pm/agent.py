@@ -18,8 +18,7 @@ from .core.botocore_client import OBSWorker
 import os
 from .summary_period import agent_composite_digest_tool
 from .update_metadata import MetadataUpdater
-
-logging.basicConfig(level=logging.INFO)
+from .digest_email_handler import DigestEmailHandler
 
 
 # Pydantic модели для structured output
@@ -88,7 +87,11 @@ class PydanticOutputParser:
                     'analyze': 'analyze_folder',
                     'summarize_filter': 'summarize_filt',
                     'rebuild_categories': 'rebuild_categories',
-                    'general_question': 'general_question'
+                    'general_question': 'general_question',
+                    'send_digest_email': 'send_digest_email',
+                    # Fallback aliases
+                    'send_email': 'send_digest_email',
+                    'email': 'send_digest_email'
                 }
                 data['action'] = action_map.get(data['action'].lower().strip(), data['action'])
             return self._pydantic_object.model_validate(data)
@@ -113,7 +116,8 @@ class PydanticOutputParser:
             'delete_file': ['delete_file', 'удали', 'все новые'],
             'summarize_filt': ['по категории', 'за период'],
             'rebuild_categories': ['переопредели', 'категории', 'метаданные'],
-            'general_question': ['упай', 'вставай']
+            'general_question': ['упай', 'вставай'],
+            'send_digest_email': ['отправь на почту', 'отправь дайджест', 'send email', 'отправь на email']
         }
 
         # Определяем action по ключевым словам
@@ -140,7 +144,7 @@ class PydanticOutputParser:
         return """В КОНЦЕ ОТВЕТА добавь ТОЧНО такой JSON:
 
 **{
-  "action": "search_db|summarize_file|summarize_all|summarize_new|analyze_folder|delete_file|summarize_filt|rebuild_categories|general_question",
+  "action": "search_db|summarize_file|summarize_all|summarize_new|analyze_folder|delete_file|summarize_filt|rebuild_categories|general_question|send_digest_email",
   "query": "поисковый запрос", 
   "files": ["file1.md"],
   "reasoning": "почему выбрал этот инструмент"
@@ -248,6 +252,8 @@ class KnowledgeAgent:
         self.parser = PydanticOutputParser(pydantic_object=AgentAction)
         self.obs_loader = OBSWorker()
 
+        # Email (вынесено в отдельный модуль digest_email_handler)
+        self.email_handler = DigestEmailHandler()
         asyncio.run(self.obs_loader.run_download())
         asyncio.run(self.obs_loader.download_reviews())
         # asyncio.run(self.obs_loader.download_vectorstore())
@@ -288,6 +294,7 @@ class KnowledgeAgent:
     7. [summarize_filt] - суммаризация/дайджест с условием по дате или теме
     8. [rebuild_categories] - переопредели категории в метаданыных
     9. [general_question] - общие вопросы пользователя, которые не касаются директорий, БД, дайджестов и ревью
+    10. [send_digest_email] - сформировать дайджест и отправить на email пользователя
 
     ОСОБЫЕ ПРАВИЛА:
     - "ревью по статье", "суммаризуй", "кратко" → [summarize_file]
@@ -297,6 +304,7 @@ class KnowledgeAgent:
     - "удалить файл" → [delete_file]
     - "дайджест по категории", "дайджест за период" → [summarize_filt]
     - Любые общие вопросы, которые не относятся к примерам выше, отвечай как знаешь, но называй свою роль → [general_question]
+    - "отправь дайджест на почту", "отправь на email" → [send_digest_email]
 
     Состояние: {state}
     Изменения: Новых={len(changes['new'])}, Изменённых={len(changes['modified'])}
@@ -353,6 +361,8 @@ class KnowledgeAgent:
         #     return {"action": "rebuild_all", "files": [], "query": "", "reasoning": "Перестройка"}
         elif any(word in user_lower for word in ['обнови', 'категории', 'метаданные']):
             return {"action": "rebuild_categories", "files": [], "query": "", "reasoning": "Обновление"}
+        elif any(phrase in user_lower for phrase in ['отправь на почту', 'отправь на email', 'отправь дайджест']):
+            return {"action": "send_digest_email", "files": [], "query": user_input, "reasoning": "Отправка email"}
         return {"action": "analyze_folder", "files": [], "query": "", "reasoning": "Анализ"}
 
     def pluralize_vectors(self, n: int) -> str:
@@ -493,6 +503,15 @@ class KnowledgeAgent:
                 final_answer = f"{final_answer}\n\n📚 [Прикладываю ссылку на инструкцию]({instruction_link})"
 
                 return {"status": "success", "message": final_answer}
+
+            elif action['action'] == "send_digest_email":
+                return self.email_handler.execute(
+                    user_input=user_input,
+                    gigachat=self.gigachat,
+                    obs_loader=self.obs_loader,
+                    name_meta_dir=self.name_meta_dir,
+                    digest_path=self.digest_path,
+                )
 
             elif action['action'] in ["summarize_file", "summarize_all", "summarize_new", "summarize_filt"]:
                 if action['action'] == "summarize_all":
@@ -834,12 +853,21 @@ class KnowledgeAgent:
         success_count = sum(1 for r in results if r["status"] == "created")
         print(success_count)
 
-        # Перестроим векторную базу
+        # Автоотправка новых дайджестов на почту
+        new_digest_files = [
+            r["digest_file"] for r in results
+            if r["status"] == "created" and r.get("digest_file")
+        ]
+        if new_digest_files:
+            print(f"Автоотправка {len(new_digest_files)} дайджестов на почту...")
+            email_result = self.email_handler.send_auto_digest(new_digest_files)
+            print(f"Результат автоотправки: {email_result}")
+
         changes = self.monitor.get_changes()
         deleted = changes.get('deleted', [])
         if deleted:
-            self.vector_db.delete_documents(deleted)
-        count = self.vector_db.rebuild_index()
+            await asyncio.to_thread(self.vector_db.delete_documents, deleted)
+        count = await asyncio.to_thread(self.vector_db.rebuild_index)
         word = self.pluralize_vectors(count)
         if count == 0:
             print("⚠️ **Не удалось создать векторный индекс**\n\n 💡 **Что делать:**\n Выполните команду:\n `Сформируй ревью по всем статьям`"

@@ -103,8 +103,14 @@ services:
       HF_DATASETS_OFFLINE: "0"
       TRANSFORMERS_OFFLINE: "0"
 
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_LOGIN: ${SMTP_LOGIN}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+
     volumes:
       - ./models:/app/.cache/huggingface/hub
+      - ./agent_service/config:/app/config
     restart: unless-stopped
 
 
@@ -142,27 +148,27 @@ services:
   #     ports:
   #       - "4444:4444"
 
-  # parsers_service:
-  #   build: ./parsers_service
-  #   container_name: parsers_service
-  #   ports:
-  #     - "8003:8003"
-  #   environment:
-  #     PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
-  #     PORT_PM_AGENT: ${PORT_PM_AGENT}
+  parsers_service:
+     build: ./parsers_service
+     container_name: parsers_service
+     ports:
+       - "8003:8003"
+     environment:
+       PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
+       PORT_PM_AGENT: ${PORT_PM_AGENT}
 
-  #     STORAGE_PATH: ${STORAGE_PATH}
-  #     SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES}
-  #     SYNC_INTERVAL_SCHEDULER: ${SYNC_INTERVAL_SCHEDULER}
-  #     ARTICLES_FOLDER: ${ARTICLES_FOLDER}
-  #     METADATA_FOLDER: ${METADATA_FOLDER}
+       STORAGE_PATH: ${STORAGE_PATH}
+       SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES}
+       SYNC_INTERVAL_SCHEDULER: ${SYNC_INTERVAL_SCHEDULER}
+       ARTICLES_FOLDER: ${ARTICLES_FOLDER}
+       METADATA_FOLDER: ${METADATA_FOLDER}
 
-  #     OBS_BUCKET: ${OBS_BUCKET}
-  #     OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
-  #     OBS_SECRET_KEY: ${OBS_SECRET_KEY}
-  #     OBS_REGION: ${OBS_REGION}
-  #     OBS_ENDPOINT: ${OBS_ENDPOINT}
-  #   restart: unless-stopped
+       OBS_BUCKET: ${OBS_BUCKET}
+       OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
+       OBS_SECRET_KEY: ${OBS_SECRET_KEY}
+       OBS_REGION: ${OBS_REGION}
+       OBS_ENDPOINT: ${OBS_ENDPOINT}
+     restart: unless-stopped
 
   gateway:
     build: ./api_gateway

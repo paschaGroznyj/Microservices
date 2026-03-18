@@ -316,12 +316,14 @@ SERVICES = {
         "url": f"http://agent_service:{PORT_LLM_CONSUMER}"
     }
 }
+
 @app.post("/run")
 async def run_parsing():
     if parsing_active:
         return {"status": "already_running"}
     asyncio.create_task(perform_parsing_cycle())
     return {"status": "started"}
+
 @app.get("/health")
 async def health():
     status = "active" if parsing_active else "idle"

@@ -71,7 +71,8 @@ def kafka_consumer():
                         "user_id": -1,  # специальный ID для бота
                         "chat_id": chat_id,
                         "message": response_text.strip(),
-                        "is_from_bot": True
+                        "is_from_bot": True,
+                        "type_agent": "pm"
                     }
 
                     # Отправляем в Kafka

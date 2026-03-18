@@ -1,0 +1,140 @@
+synthetic_output = [
+{'document_id': 7236, 'chunk_id': 984, 'chunk_index': 0, 'entities': [{'name': 'Григорий Петров', 'type': 'PERSON'}, {'name': 'Злата Обуховская', 'type': 'PERSON'}, {'name': 'Ася Воронцова', 'type': 'PERSON'}, {'name': 'Яндекс', 'type': 'ORGANIZATION'}, {'name': 'Линукс', 'type': 'SOFTWARE'}], 'relations': []},
+{'document_id': 7236, 'chunk_id': 985, 'chunk_index': 1, 'entities': [], 'relations': []},
+{'document_id': 7236, 'chunk_id': 986, 'chunk_index': 2, 'entities': [{'name': 'iTunes', 'type': 'PLATFORM'}, {'name': 'Overcast', 'type': 'PLATFORM'}], 'relations': []},
+{'document_id': 7536, 'chunk_id': 1145, 'chunk_index': 0, 'entities': [{'name': 'MIT Sloan', 'type': 'ORGANIZATION'}, {'name': 'How to build a data-driven company', 'type': 'PUBLICATION'}], 'relations': []},
+{'document_id': 7237, 'chunk_id': 987, 'chunk_index': 0, 'entities': [{'name': 'Andriy Burkov', 'type': 'PERSON'}, {'name': 'Machine Learning Engineering', 'type': 'WORK_OF_ART'}], 'relations': []},
+{'document_id': 7238, 'chunk_id': 988, 'chunk_index': 0, 'entities': [{'name': 'Spark', 'type': 'TECHNOLOGY'}, {'name': 'Scala', 'type': 'PROGRAMMING_LANGUAGE'}, {'name': 'Python', 'type': 'PROGRAMMING_LANGUAGE'}, {'name': 'Amazon', 'type': 'ORGANIZATION'}], 'relations': []},
+{'document_id': 7239, 'chunk_id': 989, 'chunk_index': 0, 'entities': [], 'relations': []},
+{'document_id': 7240, 'chunk_id': 990, 'chunk_index': 0, 'entities': [{'name': 'DS&AI Community', 'type': 'ORGANIZATION'}, {'name': 'Банк', 'type': 'ORGANIZATION'}, {'name': 'Андрей Ахметов', 'type': 'PERSON'}, {'name': 'Блок КИБ', 'type': 'ORGANIZATION'}, {'name': 'Сергей Ковылов', 'type': 'PERSON'}, {'name': 'NVIDIA', 'type': 'ORGANIZATION'}, {'name': 'Никита Варганов', 'type': 'PERSON'}, {'name': 'Блок РБ', 'type': 'ORGANIZATION'}], 'relations': [{'source': 'Андрей Ахметов', 'target': 'Блок КИБ', 'type': 'WORKS_FOR'}, {'source': 'Сергей Ковылов', 'target': 'NVIDIA', 'type': 'WORKS_FOR'}, {'source': 'Никита Варганов', 'target': 'Блок РБ', 'type': 'WORKS_FOR'}]},
+{'document_id': 7240, 'chunk_id': 991, 'chunk_index': 1, 'entities': [{'name': 'Никита Варганов', 'type': 'PERSON'}, {'name': 'Блок РБ', 'type': 'ORGANIZATION'}, {'name': 'Сергей Кузнецов', 'type': 'PERSON'}, {'name': 'Эльварэс Гейдаров', 'type': 'PERSON'}, {'name': 'Блок Финансы', 'type': 'ORGANIZATION'}, {'name': 'Дмитрий Асонов', 'type': 'PERSON'}, {'name': 'Ксения Кузнецова', 'type': 'PERSON'}, {'name': 'SIR', 'type': 'ORGANIZATION'}], 'relations': [{'source': 'Никита Варганов', 'target': 'Блок РБ', 'type': 'WORKS_FOR'}, {'source': 'Сергей Кузнецов', 'target': 'Блок Финансы', 'type': 'WORKS_FOR'}, {'source': 'Эльварэс Гейдаров', 'target': 'Блок Финансы', 'type': 'WORKS_FOR'}, {'source': 'Дмитрий Асонов', 'target': 'SIR', 'type': 'WORKS_FOR'}, {'source': 'Ксения Кузнецова', 'target': 'SIR', 'type': 'WORKS_FOR'}]},
+{'document_id': 7349, 'chunk_id': 1036, 'chunk_index': 0, 'entities': [{'name': 'AIJ2020', 'type': 'EVENT'}, {'name': 'Пётр 1', 'type': 'PERSON'}, {'name': 'Амур', 'type': 'LOCATION'}, {'name': 'github', 'type': 'PLATFORM'}], 'relations': []}
+]
+
+
+synthetic_llm_output = [
+
+{
+"document_id":101,
+"chunk_id":452,
+"chunk_index":0,
+"entities":[
+{"name":"OpenAI","type":"Organization"},
+{"name":"ChatGPT","type":"Product"},
+{"name":"GPT-4","type":"Model"}
+],
+"relations":[
+{"source":"OpenAI","target":"ChatGPT","type":"CREATED"},
+{"source":"ChatGPT","target":"GPT-4","type":"POWERED_BY"}
+]
+},
+
+{
+"document_id":101,
+"chunk_id":453,
+"chunk_index":1,
+"entities":[
+{"name":"Cursor","type":"Product"},
+{"name":"AI Agents","type":"Concept"}
+],
+"relations":[
+{"source":"Cursor","target":"AI Agents","type":"USES"}
+]
+},
+
+{
+"document_id":101,
+"chunk_id":454,
+"chunk_index":2,
+"entities":[
+{"name":"OpenAI","type":"Organization"},
+{"name":"API","type":"Technology"}
+],
+"relations":[
+{"source":"OpenAI","target":"API","type":"PROVIDES"}
+]
+},
+
+{
+"document_id":202,
+"chunk_id":900,
+"chunk_index":0,
+"entities":[
+{"name":"PostgreSQL","type":"Database"},
+{"name":"pgvector","type":"Extension"}
+],
+"relations":[
+{"source":"pgvector","target":"PostgreSQL","type":"EXTENSION_OF"}
+]
+},
+
+{
+"document_id":202,
+"chunk_id":901,
+"chunk_index":1,
+"entities":[
+{"name":"LangChain","type":"Framework"},
+{"name":"PostgreSQL","type":"Database"},
+{"name":"Vector Search","type":"Concept"}
+],
+"relations":[
+{"source":"LangChain","target":"PostgreSQL","type":"CONNECTS_TO"},
+{"source":"PostgreSQL","target":"Vector Search","type":"ENABLES"}
+]
+},
+
+{
+"document_id":202,
+"chunk_id":902,
+"chunk_index":2,
+"entities":[
+{"name":"LangChain","type":"Framework"},
+{"name":"OpenAI","type":"Organization"}
+],
+"relations":[
+{"source":"LangChain","target":"OpenAI","type":"INTEGRATES_WITH"}
+]
+},
+
+{
+"document_id":303,
+"chunk_id":1200,
+"chunk_index":0,
+"entities":[
+{"name":"Neo4j","type":"Database"},
+{"name":"Knowledge Graph","type":"Concept"}
+],
+"relations":[
+{"source":"Neo4j","target":"Knowledge Graph","type":"IMPLEMENTS"}
+]
+},
+
+{
+"document_id":303,
+"chunk_id":1201,
+"chunk_index":1,
+"entities":[
+{"name":"GraphRAG","type":"Architecture"},
+{"name":"Neo4j","type":"Database"},
+{"name":"LangChain","type":"Framework"}
+],
+"relations":[
+{"source":"GraphRAG","target":"Neo4j","type":"USES"},
+{"source":"GraphRAG","target":"LangChain","type":"INTEGRATES_WITH"}
+]
+},
+
+{
+"document_id":303,
+"chunk_id":1202,
+"chunk_index":2,
+"entities":[
+{"name":"GraphRAG","type":"Architecture"},
+{"name":"Vector Search","type":"Concept"}
+],
+"relations":[
+{"source":"GraphRAG","target":"Vector Search","type":"COMBINES"}
+]
+}
+
+]

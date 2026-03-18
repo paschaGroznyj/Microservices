@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Чат - Добро пожаловать, {{ user.username }}</title>
+    <link rel="stylesheet" href="/static/css/chat.css">
+    <link rel="stylesheet" href="/static/css/sidebar.css">
+    <link rel="stylesheet" href="/static/css/main_chat.css">
+    <link rel="stylesheet" href="/static/css/modal_dropdown.css">
+    <link rel="stylesheet" href="/static/css/mobile.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.5/dist/purify.min.js"></script>
+</head>
+<body>
+    <div id="chat-app">
+{#        <nav class="navbar">#}
+{#        <div class="nav-brand">💬 Чат Приложение</div>#}
+{#        <div class="nav-user">#}
+{#            <span>Привет, <span id="username">{{ user.username }}</span>!</span>#}
+{##}
+{#            <!-- Форма выхода -->#}
+{#            <form method="post" action="/logout-web" style="display: inline;">#}
+{#                <button type="submit" class="btn-logout" onclick="return confirm('Вы уверены, что хотите выйти?');">#}
+{#                    Выйти#}
+{#                </button>#}
+{#            </form>#}
+{#        </div>#}
+{#    </nav>#}
+
+        <div class="chat-layout">
+            <!-- Сайдбар с чатами -->
+            <div class="sidebar">
+
+                <!-- Хедер -->
+              <!-- В .sidebar-header -->
+            <div class="sidebar-header">
+                <a href="/" class="home-link">
+                    <svg class="menu-icon" viewBox="0 0 20 20">
+                        <path d="M5 8L10 4L15 8V15H12V11H8V15H5V8Z" stroke="currentColor" fill="none" stroke-width="1.5"/>
+                    </svg>
+                </a>
+
+               <!-- Кнопка меню -->
+                    <button class="menu-options" id="menu-toggle" aria-label="Меню" aria-expanded="false">
+                        <svg width="16" height="16" viewBox="0 0 16 16">
+                            <circle cx="8" cy="4" r="1.5" fill="currentColor"/>
+                            <circle cx="8" cy="8" r="1.5" fill="currentColor"/>
+                            <circle cx="8" cy="12" r="1.5" fill="currentColor"/>
+                        </svg>
+                    </button>
+
+                    <!-- Выпадающее меню -->
+                    <div class="dropdown-menu" id="user-menu" hidden>
+                        <button class="dropdown-item" id="logout-trigger" type="button">
+                            <svg class="menu-icon" viewBox="0 0 20 20">
+                                <path d="M10 3H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4M14 9l4 3-4 3M10 12h8"
+                                      stroke="currentColor" fill="none" stroke-width="1.5" stroke-linecap="round"/>
+                            </svg>
+                            <span>Выйти</span>
+                        </button>
+                    </div>
+            </div>
+
+             <!-- Секция с кнопками - всегда под хедером -->
+                <div class="sidebar-section">
+                    <button id="new-chat-btn" class="new-chat-btn">
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <svg class="menu-icon" viewBox="0 0 20 20">
+                                <path d="M10 4V16M4 10H16" stroke="currentColor" stroke-width="1.5"/>
+                            </svg>
+                            <span class="menu-text">Новый чат</span>
+                        </div>
+                        <span class="menu-shortcut">Ctrl+Shift+O</span>
+                    </button>
+
+                    <div class="menu-item">
+                        <svg class="menu-icon" viewBox="0 0 20 20">
+                            <path d="M9 15C12.3137 15 15 12.3137 15 9C15 5.68629 12.3137 3 9 3C5.68629 3 3 5.68629 3 9C3 12.3137 5.68629 15 9 15Z" stroke="currentColor" fill="none" stroke-width="1.5"/>
+                            <path d="M13 13L17 17" stroke="currentColor" stroke-width="1.5"/>
+                        </svg>
+                        <span class="menu-text">Поиск в чатах</span>
+                        <span class="menu-shortcut">Ctrl+K</span>
+                    </div>
+                </div>
+
+                <div class="sidebar-section">
+                    <div class="section-header">Ваши чаты</div>
+                    <div id="chat-list" class="chat-list">
+                        <!-- Чаты будут загружены через JS -->
+                        <div class="chat-item">
+                            <span class="menu-text">Загрузка чатов...</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="profile-section">
+                    <button class="profile-button">
+                        <div class="avatar">{{ user.username[0]|upper }}</div>
+                        <div class="profile-info">
+                            <div class="profile-name">{{ user.username }}</div>
+                            <div class="profile-plan">Free</div>
+                        </div>
+                    </button>
+                </div>
+
+        </div>
+
+
+
+
+            <!-- Основная область чата -->
+
+            <div class="chat-main">
+                <div class="head-section">
+                    <!-- 🔥 Кнопка меню для мобильных -->
+                    <button class="mobile-menu-toggle" id="mobile-menu-toggle" aria-label="Меню">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M3 12h18M3 6h18M3 18h18" stroke-linecap="round"/>
+                        </svg>
+                    </button>
+                    <h3 id="chat-title">DS-консультант</h3>
+                </div>
+            <div class="chat-main-inner">
+                <div class="chat-messages" id="chat-messages">
+                    <!-- Сообщения будут здесь -->
+                </div>
+                <div id="message-input-container"></div>
+{#                <div class="message-input-wrapper">#}
+{##}
+{#                      <div class="message-input-box">#}
+{##}
+{#                        <textarea#}
+{#                          id="message-input"#}
+{#                          placeholder="Введите сообщение..."#}
+{#                          rows="1"#}
+{#                        ></textarea>#}
+{##}
+{#                        <button id="send-btn" disabled>#}
+{#                          <svg viewBox="0 0 24 24" class="send-icon">#}
+{#                            <path d="M12 5v14M5 12l7-7 7 7"#}
+{#                                  stroke="currentColor"#}
+{#                                  stroke-width="2"#}
+{#                                  fill="none"#}
+{#                                  stroke-linecap="round"#}
+{#                                  stroke-linejoin="round"/>#}
+{#                          </svg>#}
+{#                        </button>#}
+{##}
+{#                      </div>#}
+{##}
+{#                    </div>#}
+{#                <div class="input-footer">#}
+{#                Агент гигачата может совершать ошибки#}
+{#                </div>#}
+            </div>
+         </div>
+        </div>
+    </div>
+
+<!-- Модальное окно выхода -->
+    <div class="modal-overlay" id="logout-modal" hidden>
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3>Подтверждение выхода</h3>
+                <button class="modal-close" id="modal-close" type="button" aria-label="Закрыть">
+                    <svg width="20" height="20" viewBox="0 0 24 24">
+                        <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                </button>
+            </div>
+
+            <div class="modal-body">
+                <p>Вы действительно хотите выйти из аккаунта <strong>{{ user.username }}</strong>?</p>
+                <p class="modal-hint">Ваша сессия будет завершена. Несохранённые данные могут быть потеряны.</p>
+            </div>
+
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="modal-cancel" type="button">Отмена</button>
+                <form method="post" action="/logout-web" style="display: inline;">
+                    <button type="submit" class="btn btn-danger">Выйти</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+
+
+
+
+    <!-- Затемнение фона при открытом меню -->
+    <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+    <script src="/static/js/app.js"></script>
+    <script src="/static/js/modalWindow.js"></script>
+    <script src="/static/js/mobile.js"></script>
+
+</body>
+</html>

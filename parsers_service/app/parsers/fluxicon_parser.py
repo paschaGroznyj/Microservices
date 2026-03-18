@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 from typing import List, Optional
 from dataclasses import dataclass, asdict
+from weasyprint import HTML
 
 
 
@@ -24,6 +25,7 @@ class Article:
     file_article: str | None
     category: str | None
     text_article: str
+    pdf_bytes: bytes = b""
 
 
 class FluxiconParser:
@@ -79,6 +81,10 @@ class FluxiconParser:
 
             abstract = "\n".join(text_blocks)
             url = f"{self.base_url}{link}"
+
+            # Конвертируем HTML-страницу статьи в PDF
+            pdf_bytes = self._html_to_pdf(url)
+
             results.append(
                 Article(
                     source="https://www.fluxicon.com",
@@ -92,11 +98,25 @@ class FluxiconParser:
                     abstract=abstract,
                     file_article=f"{date_sub}_{self.__url_to_hash(url)}.md",
                     category=None,
-                    text_article=abstract
+                    text_article=abstract,
+                    pdf_bytes=pdf_bytes
                 )
             )
 
         return [asdict(a) for a in results]
+
+    def _html_to_pdf(self, url: str) -> bytes:
+        """Загружает HTML-страницу и конвертирует в PDF через weasyprint"""
+        try:
+            resp = requests.get(
+                url, timeout=20, verify=False,
+                headers={"User-Agent": "Mozilla/5.0"}
+            )
+            resp.raise_for_status()
+            return HTML(string=resp.text, base_url=url).write_pdf()
+        except Exception as e:
+            print(f"Не удалось создать PDF для {url}: {e}")
+            return b""
 
     def __url_to_hash(self, url: str, length: int = 12) -> str:
         return hashlib.sha256(url.encode("utf-8")).hexdigest()[:length]

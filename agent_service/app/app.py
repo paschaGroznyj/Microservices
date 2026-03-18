@@ -9,7 +9,7 @@ from kafka import KafkaConsumer, KafkaProducer
 from agent_pm.agent import KnowledgeAgent
 import asyncio
 # from agent_pm.pm_parser.arxiv_parser import ARXIVParser
-from core.config import KAFKA_BROKER
+from agent_pm.core.config import KAFKA_BROKER, PORT_PM_AGENT
 
 logging.basicConfig(level=logging.INFO)
 
@@ -71,7 +71,8 @@ def kafka_consumer():
                         "user_id": -1,  # специальный ID для бота
                         "chat_id": chat_id,
                         "message": response_text.strip(),
-                        "is_from_bot": True
+                        "is_from_bot": True,
+                        "type_agent": "pm"
                     }
 
                     # Отправляем в Kafka
@@ -127,7 +128,6 @@ async def health():
     status = "ok" if consumer_alive else "error"
     return {"service": "llm-bot", "status": status}
 
-from core.config import PORT_PM_AGENT
 
 if __name__ == "__main__":
     threading.Thread(target=kafka_consumer, daemon=True).start() # Поднятие консьюмера

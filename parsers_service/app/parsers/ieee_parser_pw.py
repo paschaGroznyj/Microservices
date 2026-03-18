@@ -22,16 +22,17 @@ DATE_PATTERN = re.compile(
 class Article:
     source: str
     external_id: str
-    title: str 
-    date_sub: str 
-    url_article: str 
-    pdf_url: str 
-    authors: dict  
+    title: str
+    date_sub: str
+    url_article: str
+    pdf_url: str
+    authors: dict
     tags: str
-    abstract: str 
+    abstract: str
     file_article: str
     text_article: str
     category: str | None
+    pdf_bytes: bytes = b""
 
 class IEEEParser:
     name = "ieee"
@@ -145,7 +146,7 @@ class IEEEParser:
                     for frame in frames:
                         if 'iframe src' in frame.evaluate('el => el.outerHTML'):
                             direct_link = frame.get_attribute('src')
-                            text_article = self.__get_text_pdf_file(page=page, link=direct_link)
+                            text_article, pdf_bytes = self.__get_text_pdf_file(page=page, link=direct_link)
                             articles.append(
                                 Article(
                                     'https://ieeexplore.ieee.org/',
@@ -159,7 +160,8 @@ class IEEEParser:
                                     abstract,
                                     f'{iso_date}_{self.__url_to_hash(link)}.md',
                                     text_article,
-                                    None
+                                    None,
+                                    pdf_bytes
                                 )
                             )
                 print(f'Page {i+1} processed in {datetime.now() - start}')
@@ -189,8 +191,9 @@ class IEEEParser:
         )
 
         response.raise_for_status()
+        pdf_bytes = response.content
 
-        reader = PdfReader(BytesIO(response.content))
+        reader = PdfReader(BytesIO(pdf_bytes))
         text = ""
 
         for page in reader.pages[:3]:
@@ -199,7 +202,7 @@ class IEEEParser:
                 text += extracted + "\n"
 
         time.sleep(sleep_sec)
-        return text
+        return text, pdf_bytes
 
     @staticmethod
     def is_suitable_search_result(element):

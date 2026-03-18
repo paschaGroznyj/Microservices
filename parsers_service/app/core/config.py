@@ -7,10 +7,11 @@ load_dotenv()
 PORT_PARSERS_SERVICE = os.getenv("PORT_PARSERS_SERVICE")
 STORAGE_PATH = os.getenv("STORAGE_PATH", "./knowledge_base")
 ARTICLES_FOLDER = "articles"
+PDFS_FOLDER = "pdfs"
 METADATA_FILE = "metadata.json"
 VECTOR_DB_PATH = os.getenv("VECTOR_DB_PATH", "./faiss_index")
 
 SYNC_INTERVAL_MINUTES = int(os.getenv("SYNC_INTERVAL_MINUTES", "15"))
 SYNC_INTERVAL_SCHEDULER = os.getenv("SYNC_INTERVAL_SCHEDULER", "10")
 
-PORT_LLM_CONSUMER = os.getenv("PORT_LLM_CONSUMER")
+PORT_LLM_CONSUMER = os.getenv("PORT_PM_AGENT", "9001")

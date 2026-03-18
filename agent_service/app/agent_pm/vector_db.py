@@ -8,8 +8,8 @@ from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.docstore.document import Document
-from core.config import EMBEDDING_MODEL
-from .pm_parser.botocore_client import OBSWorker
+from .core.config import EMBEDDING_MODEL
+from .core.botocore_client import OBSWorker
 
 logger = logging.getLogger(__name__)
 

@@ -16,7 +16,16 @@ class DBConsumer:
     def __init__(self):
         self.db = DataBaseChats()
         self.consumer = None
-        self.main_service_url = f"http://api_gateway:7000"  # URL основного сервиса
+        self.agents = {
+            "pm": {
+                "name": "Agent PM",
+                "gateway": "http://api_gateway:7000"
+            },
+            "ds": {
+                "name": "Data Science IAD",
+                "gateway": "http://api_gateway_ds:1000"
+            }
+        }
 
     async def init(self):
         await self.db.init_db_pool()
@@ -45,18 +54,23 @@ class DBConsumer:
             logging.info(f"Message Service. Время чтобы вытащить из кафки и положить в БД = {elapsed:.4f}s")
             # Если сообщение от бота, отправляем обратно в основной сервис для WebSocket
             if is_from_bot:
-                await self.send_to_main_service(chat_id, payload)
+                type_agent = payload.get("type_agent")
+                if type_agent:
+                    gateway_url = self.agents[type_agent]["gateway"]
+                else:
+                    gateway_url = self.agents["pm"]["gateway"]
+                await self.send_to_main_service(chat_id, payload, gateway_url)
 
         except Exception as e:
             logger.error(f"Ошибка обработки сообщения: {e}")
 
-    async def send_to_main_service(self, chat_id: int, message: dict):
+    async def send_to_main_service(self, chat_id: int, message: dict, gateway_url: str):
         """Отправляем сообщение обратно в основной сервис для WebSocket"""
         try:
             start = time.perf_counter()
             # Внутренний endpoint в основном сервисе для получения сообщений от бота
             response = requests.post(
-                f"{self.main_service_url}/internal/bot_message",
+                f"{gateway_url}/internal/bot_message",
                 json={
                     "chat_id": chat_id,
                     "message": message

@@ -1,8 +1,8 @@
 import hashlib
 # from langchain.chat_models.gigachat import GigaChat
-from .gigachat_manager import manager
+from .core.agent_provider import get_model
 from langchain.schema import SystemMessage
-from core.config import GIGACHAT_CREDENTIALS, STORAGE_PATH, EMBED_MODEL_GLOSS, PATH_TO_GLOSSARY
+from .core.config import STORAGE_PATH, EMBED_MODEL_GLOSS, PATH_TO_GLOSSARY
 from typing import Dict, Any, List
 import json
 import re
@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+gigachat = get_model()
 HF_TOKEN = os.getenv("HF_TOKEN")
 
 # from .glossary import find_relevant_glossary
@@ -30,11 +31,7 @@ class SummaryGenerator:
         self.knowledge_dir = base_dir / STORAGE_PATH
         self.digest_dir = base_dir / digest_dir
         self.digest_dir.mkdir(exist_ok=True)
-        # self.llm = GigaChat(
-        #     credentials=GIGACHAT_CREDENTIALS,  # Обязательный параметр
-        #     verify_ssl_certs=False,  # Отключаем проверку SSL
-        # )
-        # self.llm = InferenceClient(api_key=HF_TOKEN)
+
 
     def _get_content_hash(self, content: str) -> str:
         """Хэш содержимого для проверки изменений"""
@@ -211,7 +208,7 @@ class SummaryGenerator:
         # )
         # summary = response.choices[0].message.content
         # =====================================
-        response_sum = manager.invoke(prompt)
+        response_sum = gigachat.invoke(prompt)
         # response_sum = self.llm(prompt) # Для гигачата
         summary = response_sum.content.strip()
 
@@ -266,34 +263,3 @@ class SummaryGenerator:
             "digest_file": str(digest_file),  # Потом подумать над неймингом в message
             "digest_folder": folder.name
         }
-
-        # except Exception as e:
-        #     return {
-        #         "status": "error",
-        #         "message": f"Ошибка: {str(e)[:100]}",
-        #         "content_hash": content_hash
-        #     }
-
-    # def get_new_articles_digests(self, articles_path: Path) -> List[Dict]:
-    #     """Создать дайджесты только для новых/измененных статей"""
-    #     new_digests = []
-
-    #     for md_file in articles_path.rglob("*.md"):
-    #         filename = md_file.name
-    #         try:
-    #             with open(md_file, 'r', encoding='utf-8') as f:
-    #                 content = f.read()
-
-    #             result = self.generate_summary(content, filename)
-    #             new_digests.append({
-    #                 "filename": filename,
-    #                 "result": result
-    #             })
-
-    #         except Exception as e:
-    #             new_digests.append({
-    #                 "filename": filename,
-    #                 "error": str(e)
-    #             })
-
-    #     return new_digests

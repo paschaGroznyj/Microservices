@@ -23,3 +23,9 @@ PATH_TO_GLOSSARY = "Глоссарий РМ_cloud.md"
 
 # �����������
 SYNC_INTERVAL_MINUTES = int(os.getenv("SYNC_INTERVAL_MINUTES", "15"))
+
+# SMTP Email
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.yandex.ru")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_LOGIN = os.getenv("SMTP_LOGIN", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")

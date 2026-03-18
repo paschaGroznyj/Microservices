@@ -26,6 +26,7 @@ from core.config import (
     PORT_PARSERS_SERVICE,
     PORT_LLM_CONSUMER,
     ARTICLES_FOLDER,
+    PDFS_FOLDER,
     STORAGE_PATH,
     METADATA_FILE,
     SYNC_INTERVAL_SCHEDULER
@@ -39,6 +40,7 @@ parsing_active = False
 # Пути
 base_dir = Path(__file__).resolve().parent
 ARTICLES_DIR = base_dir / STORAGE_PATH / ARTICLES_FOLDER
+PDFS_DIR = base_dir / STORAGE_PATH / PDFS_FOLDER
 METADATA_PATH = base_dir / STORAGE_PATH / METADATA_FILE
 STATE_FILE = Path("logs") / "state.json"
 
@@ -117,6 +119,7 @@ def _read_existing_metadata() -> Dict[str, Dict]:
 def _save_articles_and_metadata(articles: List[Dict]):
     """Сохраняет тексты статей и обновляет metadata.json без дубликатов и без text_article"""
     os.makedirs(ARTICLES_DIR, exist_ok=True)
+    os.makedirs(PDFS_DIR, exist_ok=True)
 
     existing_meta = _read_existing_metadata()
     new_articles = []
@@ -146,7 +149,16 @@ def _save_articles_and_metadata(articles: List[Dict]):
         with open(article_path, "w", encoding="utf-8") as f:
             f.write(art.get("text_article", ""))
 
-        meta_entry = {k: v for k, v in art.items() if k != "text_article"}
+        # Сохраняем оригинальный PDF на диск
+        pdf_bytes = art.get("pdf_bytes", b"")
+        if pdf_bytes:
+            pdf_filename = Path(filename).stem + ".pdf"
+            pdf_path = PDFS_DIR / pdf_filename
+            with open(pdf_path, "wb") as f:
+                f.write(pdf_bytes)
+            logger.info(f"Сохранён PDF: {pdf_filename}")
+
+        meta_entry = {k: v for k, v in art.items() if k not in ("text_article", "pdf_bytes")}
         existing_meta[external_id] = meta_arch = meta_entry
         new_articles.append(meta_arch)
 
@@ -187,7 +199,6 @@ class ParserPipeline:
             return res
         except Exception as e:
             logger.exception(f"Парсер {parser.name} упал: {e}")
-            # return {"error": str(e), "source": parser.name}
             return []
 
 
@@ -250,6 +261,7 @@ async def perform_parsing_cycle():
 
         logger.info("Загрузка результатов в OBS...")
         await obs.upload_all_md()
+        await obs.upload_all_pdfs()
         await obs.put_json()
 
         logger.info("=== Цикл синхронизации завершён ===")

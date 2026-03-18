@@ -32,6 +32,7 @@ class Article:
     file_article: str
     category: str | None
     text_article: str
+    pdf_bytes: bytes = b""
 
 
 # obs = OBSWorker()
@@ -163,10 +164,11 @@ class ARXIVParser:
                 pdf_url = ''
                 category = []
                 text_article = ''
+                pdf_bytes = b""
 
                 if pdf_link_tag:
                     pdf_url = pdf_link_tag['href'].strip()
-                    text_article = self.__get_text_pdf_file(pdf_url)
+                    text_article, pdf_bytes = self.__get_text_pdf_file(pdf_url)
 
                 result_list.append(
                     Article(
@@ -181,7 +183,8 @@ class ARXIVParser:
                         abstract=abstract,
                         file_article=f"{date_sub}_{self.__url_to_hash(url_article)}.md",
                         category=category if category else None,
-                        text_article=text_article
+                        text_article=text_article,
+                        pdf_bytes=pdf_bytes
                     )
                 )
                 print("Название статьи", title)
@@ -214,15 +217,16 @@ class ARXIVParser:
     def __get_text_pdf_file(self, link: str, sleep_sec=3):
         response = requests.get(link, headers=self.headers, timeout=20)
         response.raise_for_status()
+        pdf_bytes = response.content
         try:
-            reader = PdfReader(BytesIO(response.content))
+            reader = PdfReader(BytesIO(pdf_bytes))
             text = ""
             for page in reader.pages[:4]: # Ограничение по количеству страниц, можно проставить тут
                 text += page.extract_text()
             time.sleep(sleep_sec)
         except Exception as e:
-            return ""
-        return text
+            return "", b""
+        return text, pdf_bytes
 
     def __clear_title_article(self, title: str):
         safe_title = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', title)

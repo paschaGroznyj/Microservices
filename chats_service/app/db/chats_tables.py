@@ -35,7 +35,7 @@ class DataBaseChats:
                 # Инициализация структуры базы данных
                 async with self.pool.acquire() as conn:
                     await DataBaseChats.__init_db(conn)
-
+                    return
 
             except Exception as e:
                 print("Пока не удалось подключиться")

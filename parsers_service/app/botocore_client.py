@@ -22,6 +22,7 @@ class OBSWorker:
         }
         base_dir = Path(__file__).resolve().parent  # agent_for_bz
         self.name_doc_dir = base_dir / os.getenv("STORAGE_PATH") / os.getenv("ARTICLES_FOLDER")
+        self.name_pdf_dir = base_dir / os.getenv("STORAGE_PATH") / os.getenv("PDFS_FOLDER", "pdfs")
         self.name_meta_dir = base_dir / os.getenv("STORAGE_PATH")
         self.bucket = os.getenv("OBS_BUCKET")
 
@@ -181,6 +182,28 @@ class OBSWorker:
                     ContentLength=len(data)
                 )
 
+    async def upload_all_pdfs(self):
+        if not self.name_pdf_dir.exists():
+            return
+        async with self.client() as client:
+            for filename in os.listdir(self.name_pdf_dir):
+                if not filename.endswith(".pdf"):
+                    continue
+
+                local_path = self.name_pdf_dir / filename
+                key = f"pdfs/{filename}"
+
+                with open(local_path, "rb") as f:
+                    data = f.read()
+
+                await client.put_object(
+                    Bucket=self.bucket,
+                    Key=key,
+                    Body=data,
+                    ContentType="application/pdf",
+                    ContentLength=len(data)
+                )
+                print(f"Загружен PDF: {key}")
 
     async def delete_dir(self, prefix: str):
         """

@@ -8,8 +8,11 @@ RUN apt-get update && apt-get install -y \
     curl \
     net-tools \
     dnsutils \
+    ca-certificates \ 
     && rm -rf /var/lib/apt/lists/*
 
+# ca-certificates только для локальной отладки
+ 
 # Копируем и устанавливаем зависимости
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

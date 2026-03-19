@@ -85,6 +85,7 @@ class Article:
     file_article: str | None
     category: str | None
     text_article: str
+    pdf_bytes: bytes = b""
 
 @dataclass
 class ScholarItem:
@@ -101,6 +102,7 @@ class ScholarItem:
     category: Optional[str] = None
     page_count: Optional[int] = None
     source: str = "googlescholar"
+    pdf_bytes: Optional[bytes] = None
 
 
 PDF_URL_RE = re.compile(r"\.pdf(\?|$)", re.IGNORECASE)
@@ -564,7 +566,8 @@ def scholar_item_to_article(it: ScholarItem) -> dict:
         abstract=it.abstract or "",
         file_article=file_article,
         category=it.category,
-        text_article=it.abstract or ""
+        text_article=it.abstract or "",
+        pdf_bytes=it.pdf_bytes or b""
     ))
 
 class ScholarParser:
@@ -747,6 +750,7 @@ class ScholarParser:
                     if kind == "ok":
                         it.page_count, md = res[1], res[2]
                         it.abstract = md
+                        it.pdf_bytes = pdf_bytes
                         # md_path.write_text(md.strip() + "\n", encoding="utf-8")
                         final_items.append(it)
                     else:

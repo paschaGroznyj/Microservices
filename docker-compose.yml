@@ -64,14 +64,14 @@ services:
 #      - ./models:/app/.cache/huggingface/hub
 #    restart: unless-stopped
 
-  redis:
-    image: redis:7.2-alpine
-    container_name: redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    command: redis-server --appendonly yes
+  # redis:
+  #  image: redis:7.2-alpine
+  #  container_name: redis
+  #  ports:
+  #    - "6379:6379"
+  #  volumes:
+  #    - redis_data:/data
+  #  command: redis-server --appendonly yes
 
   agent_service:
     build: ./agent_service
@@ -83,9 +83,7 @@ services:
     environment:
       PORT_PM_AGENT: ${PORT_PM_AGENT}
       KAFKA_BROKER: ${KAFKA_BROKER}
-      API_GIGACHAT: ${API_GIGACHAT}
 
-      GIGACHAT_AUTHORIZATION: ${GIGACHAT_AUTHORIZATION}
       STORAGE_PATH: ${STORAGE_PATH}
       SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES}
       ARTICLES_FOLDER: ${ARTICLES_FOLDER}
@@ -105,29 +103,32 @@ services:
       HF_DATASETS_OFFLINE: "0"
       TRANSFORMERS_OFFLINE: "0"
 
-      REDIS_HOST: ${REDIS_HOST}
-      REDIS_PORT: ${REDIS_PORT}
-      REDIS_KEY: ${REDIS_KEY}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_LOGIN: ${SMTP_LOGIN}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+
     volumes:
       - ./models:/app/.cache/huggingface/hub
+      - ./agent_service/config:/app/config
     restart: unless-stopped
 
 
-  # plug_service:
-  #   build: ./plug_service
-  #   container_name: plug_service
-  #   ports:
-  #     - "19001:9001"
-  #   depends_on:
-  #     - broker
-  #   environment:
-  #     PORT_PLUG_AGENT: ${PORT_PLUG_AGENT}
-  #     KAFKA_BROKER: ${KAFKA_BROKER}
+  plug_service:
+    build: ./plug_service
+    container_name: plug_service
+    ports:
+      - "19001:9001"
+    depends_on:
+      - broker
+    environment:
+      PORT_PLUG_AGENT: ${PORT_PLUG_AGENT}
+      KAFKA_BROKER: ${KAFKA_BROKER}
 
-  #     REDIS_HOST: ${REDIS_HOST}
-  #     REDIS_PORT: ${REDIS_PORT}
-  #     REDIS_KEY: ${REDIS_KEY}
-  #   restart: unless-stopped
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+      REDIS_KEY: ${REDIS_KEY}
+    restart: unless-stopped
 
 
   token_service:
@@ -135,41 +136,39 @@ services:
     container_name: token_service
     ports:
       - "9004:9004"
-    depends_on:
-      - redis
     environment:
-      REDIS_HOST: ${REDIS_HOST}
-      REDIS_PORT: ${REDIS_PORT}
-      REDIS_KEY: ${REDIS_KEY}
+      INTERNAL_TOKEN_API_URL: ${INTERNAL_TOKEN_API_URL}
       PORT_TOKEN_GENERATE_SERVICE: ${PORT_TOKEN_GENERATE_SERVICE}
+      TOKEN_TTL: ${TOKEN_TTL}
       IAM_API_KEY: ${IAM_API_KEY}
+
   # selenium_chrome:
   #     image: selenium/standalone-chrome:latest
   #     shm_size: '2gb'
   #     ports:
   #       - "4444:4444"
 
-  # parsers_service:
-  #   build: ./parsers_service
-  #   container_name: parsers_service
-  #   ports:
-  #     - "8003:8003"
-  #   environment:
-  #     PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
-  #     PORT_PM_AGENT: ${PORT_PM_AGENT}
+  parsers_service:
+     build: ./parsers_service
+     container_name: parsers_service
+     ports:
+       - "8003:8003"
+     environment:
+       PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
+       PORT_PM_AGENT: ${PORT_PM_AGENT}
 
-  #     STORAGE_PATH: ${STORAGE_PATH}
-  #     SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES}
-  #     SYNC_INTERVAL_SCHEDULER: ${SYNC_INTERVAL_SCHEDULER}
-  #     ARTICLES_FOLDER: ${ARTICLES_FOLDER}
-  #     METADATA_FOLDER: ${METADATA_FOLDER}
+       STORAGE_PATH: ${STORAGE_PATH}
+       SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES}
+       SYNC_INTERVAL_SCHEDULER: ${SYNC_INTERVAL_SCHEDULER}
+       ARTICLES_FOLDER: ${ARTICLES_FOLDER}
+       METADATA_FOLDER: ${METADATA_FOLDER}
 
-  #     OBS_BUCKET: ${OBS_BUCKET}
-  #     OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
-  #     OBS_SECRET_KEY: ${OBS_SECRET_KEY}
-  #     OBS_REGION: ${OBS_REGION}
-  #     OBS_ENDPOINT: ${OBS_ENDPOINT}     
-  #   restart: unless-stopped
+       OBS_BUCKET: ${OBS_BUCKET}
+       OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
+       OBS_SECRET_KEY: ${OBS_SECRET_KEY}
+       OBS_REGION: ${OBS_REGION}
+       OBS_ENDPOINT: ${OBS_ENDPOINT}
+     restart: unless-stopped
 
   gateway:
     build: ./api_gateway
@@ -262,13 +261,13 @@ services:
         max-file: "3"         # Хранить не больше 3 файлов
         compress: "true"      # Сжимать старые логи
 
-      
+
   # chromadb:
   #   image: chromadb/chroma
   #   container_name: chromadb
   #   ports:
   #     - "9003:8000"
-  
+
   rag_service:
     container_name: rag_service
     build: ./rag_service
@@ -355,7 +354,6 @@ volumes:
   kafka-data:
   llm_cache:
   postgres_data:
-  redis_data:
+  # redis_data:
   # parser_data:
   # parser_logs:
-

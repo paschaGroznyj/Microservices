@@ -36,7 +36,7 @@ class DataBaseUser:
                 # Инициализация структуры базы данных
                 async with self.pool.acquire() as conn:
                     await DataBaseUser.__init_db(conn)
-
+                    return
 
             except Exception as e:
                 print("Пока не удалось подключиться")

@@ -14,5 +14,8 @@ DB_PORT = os.environ['DB_PORT']
 
 VDB_TYPE = os.environ['VDB_TYPE']
 
+GC_AUTH_URL = os.environ['GC_AUTH_URL']
+GC_MODEL = os.environ['GC_MODEL']
+
 EMB_MODEL = os.environ['EMB_MODEL']
 HF_TOKEN = os.environ['HF_TOKEN']

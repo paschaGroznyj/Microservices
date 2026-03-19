@@ -286,12 +286,10 @@ services:
       REDIS_PORT: ${REDIS_PORT}
       REDIS_KEY: ${REDIS_KEY}
       VDB_TYPE: ${VDB_TYPE}
+      GC_AUTH_URL: ${GC_AUTH_URL}
+      GC_MODEL: ${GC_MODEL}
     depends_on:
       - postgres
-      - redis
-      - token_service
-                                
-
   
   chats_service:
     container_name: chats_service

@@ -1,23 +1,21 @@
 import uuid
 import chromadb
-import asyncpg
-import numpy as np
-from pgvector.asyncpg import register_vector
-from fastapi import FastAPI
-from pydantic import BaseModel
+from fastapi import FastAPI, Response, status
+from sqlalchemy import URL, Select, text, delete
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Dict, List
-from asyncpg.protocol.record import Record
+from typing import AsyncGenerator
 
-from .embedding import DummyKBEmbedding, AsyncStandaloneEmbedding, GigaChatEmbedding
+
+from .models import Chunk, GetChunk, PutDocument, DelChunk
+from .embedding import DummyKBEmbedding, GigaChatEmbedding
 from .core.config import (
     DB_USER,
     DB_PASSWORD,
     DB_HOST,
     DB_PORT,
     VDB_TYPE,
-    EMB_MODEL,
-    HF_TOKEN
+    EMB_MODEL
 )
 
 @asynccontextmanager
@@ -32,39 +30,38 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         app.state.vdb_client = vdb_client
 
     elif VDB_TYPE == 'pgvector':
-        print(DB_PORT)
-        conn = await asyncpg.connect(
-            user=DB_USER,
+        url = URL.create(
+            'postgresql+asyncpg',
+            username=DB_USER,
             password=DB_PASSWORD,
             host=DB_HOST,
             port=DB_PORT
         )
 
-        await conn.execute('CREATE EXTENSION IF NOT EXISTS vector')
-        await register_vector(conn)
+        engine = create_async_engine(url)
+        app.state.session = async_sessionmaker(engine, expire_on_commit=False)
 
-        await conn.execute('CREATE TABLE IF NOT EXISTS rag_docs (id bigserial PRIMARY KEY, embedding vector(1024), content varchar(5000))')
-        app.state.vdb_client = conn
+        async with app.state.session() as session:
+            await session.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
+            await session.commit()
 
     emb_client = GigaChatEmbedding()
     app.state.emb_client = emb_client
 
     yield
 
-    del vdb_client
+    await engine.dispose()
     del emb_client
 
 
 app = FastAPI(title='RAG Service', lifespan=lifespan)
 
-class Document(BaseModel):
-    content: str
 
 @app.post('/put')
-async def put(document: Document):
+async def put(document: PutDocument):
     app.state.collection.add(
         ids = [str(uuid.uuid4())],
-        embeddings = await app.state.emb_client.embed(document.content),
+        embeddings = await app.state.emb_client.embed(document.text),
         documents = [document.content]
     )
     return {
@@ -73,7 +70,7 @@ async def put(document: Document):
     }
 
 @app.get('/get')
-async def get(document: Document):
+async def get(document: GetChunk):
     response = app.state.collection.query(
         query_embeddings = await app.state.emb_client.embed(document.content),
         n_results = 5
@@ -81,28 +78,60 @@ async def get(document: Document):
     return response
 
 @app.post('/put_pv')
-async def put_pv(document: Document):
+async def put_pv(document: PutDocument):
 
-    embedding = await app.state.emb_client.embed(document.content)
-    await app.state.vdb_client.execute('INSERT INTO rag_docs (embedding, content) VALUES ($1, $2)', np.array(embedding), document.content)
+    embedding = await app.state.emb_client.embed(document.text)
+    c = Chunk(
+        original_id = document.id,
+        original_name = document.name,
+        chunk_text = document.text,
+        embedding = embedding
+    )
+
+    async with app.state.session() as session:
+        session.add(c)
+        await session.commit()
 
     return {
-        "doc_length": len(document.content),
-        "new_collection_length": ''
+        "name": document.name,
+        "chunks_added": ''
     }
 
 @app.get('/get_pv')
-async def get_pv(document: Document):
-    embedding = await app.state.emb_client.embed(document.content)
-    response = await app.state.vdb_client.fetch('SELECT content FROM rag_docs ORDER BY embedding <-> $1 LIMIT 5', np.array(embedding))
-    return [dict(qr) for qr in response]
+async def get_pv(document: GetChunk):
+    embedding = await app.state.emb_client.embed(document.text)
 
-@app.post('/del_pv/{id}')
-async def del_pv(id):
-    await app.state.vdb_client.execute('DELETE FROM rag_docs where id = $1', int(id))
-    return {'deleted': id}
+    async with app.state.session() as session:
+        stmt = Select(Chunk.id, Chunk.original_name, Chunk.chunk_text).order_by(Chunk.embedding.l2_distance(embedding)).limit(document.top_n)
+        
+        queryset = await session.execute(stmt)
+
+    return queryset.mappings().all()
+
+@app.post('/del_pv')
+async def del_pv(chunk_pointer: DelChunk, response: Response):
+    """
+    Docstring для del_pv
+    Удаляем либо по ID оригинального документа, либо по ID чанка (если вдруг надо удалить одиночный чанк)
+    """
+    async with app.state.session() as session:
+        stmt = delete(Chunk).where(Chunk.id == chunk_pointer.original_id if chunk_pointer.original_id else Chunk.id == chunk_pointer.db_id)
+
+        result = await session.execute(stmt)
+
+        if result.rowcount == 0:
+            response.status_code = status.HTTP_404_NOT_FOUND
+            return
+
+        await session.commit()
+
+    return {'rows_deleted': result.rowcount}
 
 @app.get('/all')
 async def get_all():
-    query_result = await app.state.vdb_client.fetch('SELECT id, content FROM rag_docs')
-    return [dict(qr) for qr in query_result]
+
+    async with app.state.session() as session:
+        stmt = Select(Chunk.id, Chunk.original_id, Chunk.original_name, Chunk.chunk_text)
+        queryset = await session.execute(stmt)
+    
+    return queryset.mappings().all()

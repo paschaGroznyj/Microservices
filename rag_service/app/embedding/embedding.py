@@ -1,9 +1,6 @@
-import redis
-import requests
 from typing import Dict, Any, cast
-from huggingface_hub import InferenceClient, AsyncInferenceClient
+from huggingface_hub import AsyncInferenceClient
 from chromadb import Documents, EmbeddingFunction, Embeddings
-from chromadb.utils.embedding_functions import register_embedding_function
 from langchain_gigachat.embeddings import GigaChatEmbeddings
 
 from app.core.config import GC_AUTH_URL, GC_MODEL
@@ -19,7 +16,7 @@ class GigaChatEmbedding:
     async def embed(self, request):
         response = await self.gc.aembed_documents([request])
 
-        return response.data[0].embedding
+        return response[0]
 
 class AsyncStandaloneEmbedding:
     def __init__(self, model, api_key):

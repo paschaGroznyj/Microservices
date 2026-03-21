@@ -6,3 +6,4 @@ asyncpg
 redis
 gigachat
 langchain-gigachat
+sqlalchemy

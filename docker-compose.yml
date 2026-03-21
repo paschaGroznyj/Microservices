@@ -289,6 +289,7 @@ services:
       GC_MODEL: ${GC_MODEL}
     depends_on:
       - postgres
+      - token_service
   
   chats_service:
     container_name: chats_service

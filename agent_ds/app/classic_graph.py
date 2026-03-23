@@ -1,8 +1,10 @@
 import asyncio
 import logging
 
+from requests import session
 from sympy.physics.optics import quarter_wave_retarder
 
+import gigachat.context
 from db.app_db import DataBaseMessages
 from typing import List, Dict, Any, Optional
 from db.graph_db import GraphStore
@@ -141,51 +143,65 @@ async def extract_entities_and_relations_batch(
         model=None,
         document_id: Optional[int] = None
 ) -> List[Dict]:
-    """
-    Обрабатывает чанки батчами и возвращает плоский список результатов.
-
-    Returns:
-        [
-            {
-                "document_id": 303,
-                "chunk_id": 1202,
-                "chunk_index": 2,
-                "entities": [...],
-                "relations": [...]
-            },
-            ...
-        ]
-    """
     results = []
 
-    chunk_meta = {c["id"]: {"chunk_index": c["chunk_index"], "document_id": c["document_id"]}
-                  for c in chunks}
+    # Индекс для быстрого доступа к соседям
+    chunks_by_index = {c["chunk_index"]: c for c in chunks}
+    chunk_meta = {
+        c["id"]: {"chunk_index": c["chunk_index"], "document_id": c["document_id"]}
+        for c in chunks
+    }
 
-    # Разбиваем чанки на батчи
     for i in range(0, len(chunks), batch_size):
         batch = chunks[i:i + batch_size]
 
-        # Формируем пользовательский промпт с нумерованными чанками
         user_content = "Process these text chunks:\n\n"
         for chunk in batch:
-            # Экранируем возможные конфликты в тексте
-            text = chunk["content"].replace('"""', '"')
-            user_content += f'### CHUNK {chunk["id"]}:\n{text}\n\n'
+            idx = chunk["chunk_index"]
 
-        user_content += "\nReturn JSON with results for EACH chunk_id."
+            # Берём соседей для контекста
+            prev_chunk = chunks_by_index.get(idx - 1)
+            next_chunk = chunks_by_index.get(idx + 1)
+
+            text = chunk["content"].replace('"""', '"')
+
+            # Добавляем контекст соседей серым текстом
+            context_before = f"[CONTEXT: ...{prev_chunk['content'][-150:]}]\n" if prev_chunk else ""
+            context_after = f"\n[CONTEXT: {next_chunk['content'][:150]}...]" if next_chunk else ""
+
+            user_content += (
+                f"### CHUNK {chunk['id']}:\n"
+                f"{context_before}"
+                f"{text}"
+                f"{context_after}\n\n"
+            )
+
+        user_content += "\nExtract entities and relations ONLY from the main chunk text, not from [CONTEXT] blocks. Return JSON for each chunk_id."
 
         try:
             response = model.invoke([
                 SystemMessage(content=BATCH_SYSTEM_PROMPT),
                 HumanMessage(content=user_content)
             ])
+            logger.info(response.response_metadata)
+            metadata = dict(response.response_metadata)
 
+            token_usage = dict(metadata.get("token_usage", {}))
+            cached = token_usage.get("precached_prompt_tokens", 0)
+            prompt = token_usage.get("prompt_tokens", 0)
+            total = token_usage.get("total_tokens", 0)
+
+            logger.info(
+                f"doc={document_id} batch={i // batch_size + 1} | "
+                f"prompt={prompt} cached={cached} total={total} | "
+                f"cache_ratio={cached / (prompt + cached) * 100:.0f}%" if (prompt + cached) > 0 else "cache_ratio=0%"
+            )
             parsed = parse_json_response(response.content)
+
             if parsed and "results" in parsed:
                 for item in parsed["results"]:
                     chunk_id = item.get("chunk_id")
                     meta = chunk_meta.get(chunk_id, {})
-
                     results.append({
                         "document_id": meta.get("document_id"),
                         "chunk_id": chunk_id,
@@ -194,10 +210,10 @@ async def extract_entities_and_relations_batch(
                         "relations": item.get("relations", [])
                     })
             else:
-                print(f"Unexpected response format for batch {i // batch_size + 1}")
+                logger.warning(f"Unexpected format for batch {i // batch_size + 1}")
 
         except Exception as e:
-            print(f"❌ Error processing batch {i // batch_size + 1}: {e}")
+            logger.error(f"❌ Error batch {i // batch_size + 1}: {e}")
             for chunk in batch:
                 results.append({
                     "document_id": document_id,
@@ -234,6 +250,9 @@ async def generate_entities_and_relations(db: DataBaseMessages, graph: GraphStor
     rows = await db.select_chunks_graph()
     chunks_in_graph = await graph.get_all_chunks()
     docs_chunks = {}
+
+    counts_chunks = [i for i in range(50, 300, 50)]
+
     for row in rows:
         row = dict(row)
         if row["id"] in chunks_in_graph:
@@ -248,12 +267,14 @@ async def generate_entities_and_relations(db: DataBaseMessages, graph: GraphStor
 
     all_results = []
 
+    gigachat.context.session_id_cvar.set("graph-extract")
+    logger.info("Session ID установлен: graph-extract")
     for document_id, chunks in docs_chunks.items():
         print(f"📄 Processing document {document_id} ({len(chunks)} chunks)...")
 
         results = await extract_entities_and_relations_batch(
             chunks=chunks,
-            batch_size=5,
+            batch_size=10,
             model=giga
         )
         all_results.extend(results)
@@ -313,8 +334,8 @@ async def search_in_graph(db: DataBaseMessages, graph: GraphStore, query: str):
         f"final: {len(final_chunks)}"
     )
 
-    chunks_text = await db.select_text_chunks(final_chunks)
-    return chunks_text
+    chunks_data = await db.select_text_chunks(final_chunks)
+    return chunks_data
 
 async def main():
     db = DataBaseMessages()
@@ -324,8 +345,13 @@ async def main():
         NEO4J_PASSWORD
     )
     await db.init_db_pool()
-    all_results = await generate_entities_and_relations(db, graph) # Для формирования Graph
-    await insert_graph_data(graph, all_results)
+    # all_results = await generate_entities_and_relations(db, graph) # Для формирования Graph
+    # for i in all_results:
+    #     logger.info(i)
+
+
+
+    # await insert_graph_data(graph, all_results)
 
 
     # query = "А гигачат у нас это чья модель?"

@@ -169,18 +169,33 @@ class DataBaseMessages:
             logging.error("Ошибка при получении чанков для эмбеддингов", e)
             raise
 
-    async def select_text_chunks(self, chunks: List[str]):
-        """Для извлечения текста чанков после Graph поиска"""
+    async def select_text_chunks(self, chunks: List[int]) -> List[Dict]:
         try:
             async with self.pool.acquire() as conn:
                 rows = await conn.fetch("""
-                                        SELECT content, id
-                                        FROM chunks
-                                        WHERE id = ANY ($1::int[]);
-                                        """, list(chunks))  # Преобразуем tuple в list
-                return rows
+                                        SELECT c.id,
+                                               c.document_id,
+                                               c.chunk_index,
+                                               c.content,
+                                               d.links
+                                        FROM chunks c
+                                                 JOIN documents d ON c.document_id = d.id
+                                        WHERE c.id = ANY ($1::int[])
+                                        """, list(chunks))
+
+                return [
+                    {
+                        "chunk_id": r["id"],
+                        "document_id": r["document_id"],
+                        "chunk_index": r["chunk_index"],
+                        "content": r["content"],
+                        "links": r["links"] or [],
+                        "search_type": "graph"
+                    }
+                    for r in rows
+                ]
         except Exception as e:
-            logging.error(f"Ошибка при получении чанков для эмбеддингов: {e}")
+            logging.error(f"Ошибка при получении чанков: {e}")
             raise
 
     async def select_chunks_graph(self):
@@ -193,8 +208,8 @@ class DataBaseMessages:
                                         ON c.document_id = d.id
                                         WHERE d.date BETWEEN '2025-01-01' AND '2026-03-12'
                                         ORDER BY c.document_id DESC
-                                        LIMIT 1000;
-                                        """)
+                                        LIMIT 200 OFFSET 1820; 
+                                        """) # LIMIT от 20
                 return rows
         except Exception as e:
             logging.error("Ошибка при получении чанков для графа", e)
@@ -218,29 +233,21 @@ class DataBaseMessages:
             self,
             query_embedding: List[float],
             limit: int = 5,
-            threshold: float = 0.7  # Порог косинусного сходства (0..1)
+            threshold: float = 0.7
     ) -> List[Dict[str, Any]]:
-        """
-        Векторный поиск с использованием косинусного расстояния.
-        Возвращает чанки, отсортированные по релевантности.
-        """
         async with self.pool.acquire() as conn:
-            # <=> возвращает расстояние: 0 = идентично, 2 = противоположно
-            # Нам нужно: сходство >= threshold
-            # сходство = 1 - расстояние
-            # => 1 - (embedding <=> $1) >= $3
-            # => (embedding <=> $1) <= 1 - threshold
-
             rows = await conn.fetch("""
-                                    SELECT id,
-                                           document_id,
-                                           chunk_index,
-                                           content,
-                                           1 - (embedding <=> $1) as score
-                                    FROM chunks
-                                    WHERE embedding IS NOT NULL
-                                      AND (1 - (embedding <=> $1)) >= $3 -- Фильтр по порогу
-                                    ORDER BY embedding <=> $1
+                                    SELECT c.id,
+                                           c.document_id,
+                                           c.chunk_index,
+                                           c.content,
+                                           d.links,
+                                           1 - (c.embedding <=> $1) as score
+                                    FROM chunks c
+                                             JOIN documents d ON c.document_id = d.id
+                                    WHERE c.embedding IS NOT NULL
+                                      AND (1 - (c.embedding <=> $1)) >= $3
+                                    ORDER BY c.embedding <=> $1
                                         LIMIT $2
                                     """, str(query_embedding), limit, threshold)
 
@@ -250,6 +257,7 @@ class DataBaseMessages:
                     "document_id": r["document_id"],
                     "chunk_index": r["chunk_index"],
                     "content": r["content"],
+                    "links": r["links"] or [],
                     "score": float(r["score"]),
                     "search_type": "vector"
                 }
@@ -261,25 +269,21 @@ class DataBaseMessages:
             query_text: str,
             limit: int = 5,
     ) -> List[Dict[str, Any]]:
-        """
-        Полнотекстовый поиск (BM25) без привязки к языку.
-        """
         async with self.pool.acquire() as conn:
-            query = """
-                    SELECT
-                        id,
-                        document_id,
-                        chunk_index,
-                        content,
-                        ts_rank_cd(tsv, websearch_to_tsquery('simple', $1)) as score
-                    FROM chunks
-                    WHERE tsv @@ websearch_to_tsquery('simple', $1)
-                    ORDER BY score DESC
-                    LIMIT $2;
-                    """
-            params = [query_text, limit]
-
-            rows = await conn.fetch(query, *params)
+            rows = await conn.fetch("""
+                                    SELECT c.id,
+                                           c.document_id,
+                                           c.chunk_index,
+                                           c.content,
+                                           d.links,
+                                           ts_rank_cd(c.tsv, websearch_to_tsquery('simple', $1)) as score
+                                    FROM chunks c
+                                             JOIN documents d ON c.document_id = d.id
+                                    WHERE c.tsv @@ websearch_to_tsquery('simple'
+                                        , $1)
+                                    ORDER BY score DESC
+                                        LIMIT $2
+                                    """, query_text, limit)
 
             return [
                 {
@@ -287,6 +291,7 @@ class DataBaseMessages:
                     "document_id": r["document_id"],
                     "chunk_index": r["chunk_index"],
                     "content": r["content"],
+                    "links": r["links"] or [],
                     "score": float(r["score"]),
                     "search_type": "bm25"
                 }

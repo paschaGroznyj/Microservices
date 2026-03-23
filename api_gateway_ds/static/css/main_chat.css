@@ -61,6 +61,16 @@ html, body {
   flex-direction: column;
   background: var(--bg-primary);
   height: 100%;
+  overflow: hidden;
+}
+
+/* Новый враппер — горизонтальный flex */
+#chat-wrapper {
+    flex: 1;          /* занимает всё пространство между шапкой и инпутом */
+    display: flex;
+    flex-direction: row;
+    overflow: hidden;
+    min-height: 0;    /* важно для flex внутри flex */
 }
 
 /* Контейнер сообщений */
@@ -78,6 +88,7 @@ html, body {
 
   -webkit-overflow-scrolling: touch; /* плавный скролл iOS */
   overscroll-behavior: contain;
+  transition: all 0.25s ease; /* плавное сужение когда сайдбар открывается */
 }
 
 /* Стилизация скроллбара сообщений */

@@ -60,6 +60,12 @@ class DataBaseUser:
             """
         )
 
+        # Миграция для существующих БД
+        await conn.execute("""
+                           ALTER TABLE users
+                               ADD COLUMN IF NOT EXISTS is_guest BOOLEAN DEFAULT FALSE;
+                           """)
+
     async def check_user_password(self, username: str, password: str = None, back_user_id=False):
         async with self.pool.acquire() as conn:
             if password:
@@ -118,3 +124,29 @@ class DataBaseUser:
         salt = bcrypt.gensalt(rounds=BCRYPT_ROUNDS) # Синхронная функция, которая все блокировала
         password_hash = bcrypt.hashpw(password.encode(), salt).decode()
         return password_hash
+
+    async def add_guest_user(self):
+        """Создаёт гостевого пользователя с рандомным username"""
+        import secrets
+        import string
+
+        for _ in range(5):  # на случай коллизии — пробуем до 5 раз
+            suffix = ''.join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(8))
+            username = f"guest_{suffix}"
+            # Рандомный хэш — гость не сможет залогиниться по паролю
+            fake_password_hash = secrets.token_hex(32)
+
+            try:
+                async with self.pool.acquire() as conn:
+                    user_id = await conn.fetchval("""
+                                                  INSERT INTO users (username, password_hash, is_guest)
+                                                  VALUES ($1, $2, TRUE) RETURNING id;
+                                                  """, username, fake_password_hash)
+                    logging.info(f"Создан гостевой пользователь {username} с id={user_id}")
+                    return user_id, username
+            except asyncpg.UniqueViolationError:
+                logging.warning(f"Коллизия гостевого username {username}, повторяем...")
+                continue
+
+        logging.error("Не удалось создать гостевого пользователя после 5 попыток")
+        return None, None

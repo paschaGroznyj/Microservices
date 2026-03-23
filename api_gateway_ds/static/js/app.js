@@ -144,57 +144,57 @@ class ChatAppSimple {
         }
     }
 
-    renderMessages(messages) {
-        const container = document.getElementById('chat-messages');
-        if (!container) return;
-
-        container.innerHTML = '';
-
-        messages.forEach(msg => {
-            const isBot = msg.is_from_bot;
-            const rawContent = msg.message || '';
-
-            const messageEl = document.createElement('div');
-            messageEl.className = isBot ? 'assistant-message' : 'user-message';
-
-            let content = rawContent;
-
-            if (isBot) {
-                content = marked.parse(rawContent);
-                if (typeof DOMPurify !== 'undefined') {
-                    content = DOMPurify.sanitize(content);
-                }
-            } else {
-                content = this.escapeHtml(rawContent);
-            }
-
-            messageEl.innerHTML = `
-                ${content}
-                ${!isBot ? `
-                    <div class="timestamp">
-                        ${new Date(msg.created_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
-                    </div>
-                ` : ''}
-            `;
-
-            const actions = this.createMessageActions(msg.id, rawContent, isBot);
-
-            if (isBot) {
-                messageEl.appendChild(actions);
-                container.appendChild(messageEl);
-            } else {
-                const wrapper = document.createElement('div');
-                wrapper.className = 'user-message-wrapper';
-
-                wrapper.appendChild(messageEl);
-                wrapper.appendChild(actions);
-
-                container.appendChild(wrapper);
-            }
-        });
-
-        container.scrollTop = container.scrollHeight;
-    }
+    // renderMessages(messages) {
+    //     const container = document.getElementById('chat-messages');
+    //     if (!container) return;
+    //
+    //     container.innerHTML = '';
+    //
+    //     messages.forEach(msg => {
+    //         const isBot = msg.is_from_bot;
+    //         const rawContent = msg.message || '';
+    //
+    //         const messageEl = document.createElement('div');
+    //         messageEl.className = isBot ? 'assistant-message' : 'user-message';
+    //
+    //         let content = rawContent;
+    //
+    //         if (isBot) {
+    //             content = marked.parse(rawContent);
+    //             if (typeof DOMPurify !== 'undefined') {
+    //                 content = DOMPurify.sanitize(content);
+    //             }
+    //         } else {
+    //             content = this.escapeHtml(rawContent);
+    //         }
+    //
+    //         messageEl.innerHTML = `
+    //             ${content}
+    //             ${!isBot ? `
+    //                 <div class="timestamp">
+    //                     ${new Date(msg.created_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
+    //                 </div>
+    //             ` : ''}
+    //         `;
+    //
+    //         const actions = this.createMessageActions(msg.id, rawContent, isBot);
+    //
+    //         if (isBot) {
+    //             messageEl.appendChild(actions);
+    //             container.appendChild(messageEl);
+    //         } else {
+    //             const wrapper = document.createElement('div');
+    //             wrapper.className = 'user-message-wrapper';
+    //
+    //             wrapper.appendChild(messageEl);
+    //             wrapper.appendChild(actions);
+    //
+    //             container.appendChild(wrapper);
+    //         }
+    //     });
+    //
+    //     container.scrollTop = container.scrollHeight;
+    // }
 
     // Вспомогательная функция для экранирования HTML (для пользовательских сообщений)
     escapeHtml(text) {
@@ -399,50 +399,48 @@ class ChatAppSimple {
         };
     }
 
-           addMessage(message) {
-            const container = document.getElementById('chat-messages');
-            if (!container) return;
+         addMessage(message) {
+                const container = document.getElementById('chat-messages');
+                if (!container) return;
 
-            const isBot = message.is_from_bot;
-            const rawContent = message.message || '';
+                const isBot = message.is_from_bot;
+                const rawContent = message.message || '';
+                const sources = message.sources || [];
+                console.log("Ссылки", sources)
+                const messageEl = document.createElement('div');
+                messageEl.className = isBot ? 'assistant-message' : 'user-message';
 
-            const messageEl = document.createElement('div');
-            messageEl.className = isBot ? 'assistant-message' : 'user-message';
-
-            let content = rawContent;
-
-            if (isBot) {
-                content = marked.parse(rawContent);
-                if (typeof DOMPurify !== 'undefined') {
-                    content = DOMPurify.sanitize(content);
+                let content = rawContent;
+                if (isBot) {
+                    content = marked.parse(rawContent);
+                    if (typeof DOMPurify !== 'undefined') {
+                        content = DOMPurify.sanitize(content);
+                    }
+                } else {
+                    content = this.escapeHtml(rawContent);
                 }
-            } else {
-                content = this.escapeHtml(rawContent);
+
+                messageEl.innerHTML = `
+                    <div class="message-content">${content}</div>
+                    ${!isBot ? `<div class="timestamp">${new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</div>` : ''}
+                `;
+
+                // actions — копирование + кнопка источников рядом
+                const actions = this.createMessageActions(message.id, rawContent, isBot, sources);
+
+                if (isBot) {
+                    messageEl.appendChild(actions);
+                    container.appendChild(messageEl);
+                } else {
+                    const wrapper = document.createElement('div');
+                    wrapper.className = 'user-message-wrapper';
+                    wrapper.appendChild(messageEl);
+                    wrapper.appendChild(actions);
+                    container.appendChild(wrapper);
+                }
+
+                container.scrollTop = container.scrollHeight;
             }
-
-            messageEl.innerHTML = `
-                ${content}
-                ${!isBot ? `<div class="timestamp">${new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</div>` : ''}
-            `;
-
-            const actions = this.createMessageActions(message.id, rawContent, isBot);
-
-            if (isBot) {
-                messageEl.appendChild(actions);
-                container.appendChild(messageEl);
-            } else {
-                const wrapper = document.createElement('div');
-                wrapper.className = 'user-message-wrapper';
-
-                wrapper.appendChild(messageEl);
-                wrapper.appendChild(actions);
-
-                container.appendChild(wrapper);
-            }
-
-            container.scrollTop = container.scrollHeight;
-        }
-
         async createNewChat() {
         try {
             const response = await fetch("/api/chats/new", {
@@ -474,44 +472,111 @@ class ChatAppSimple {
         /**
          * Создает кнопки действий для сообщения
          */
-        createMessageActions(messageId, messageText, isBot) {
+
+        createMessageActions(messageId, messageText, isBot, sources = []) {
             const actionsDiv = document.createElement('div');
             actionsDiv.className = isBot ? 'message-actions' : 'user-actions';
             actionsDiv.dataset.messageId = messageId;
 
+            // Кнопка копирования — твой код без изменений
             const copyButton = document.createElement('button');
             copyButton.className = 'action-button copy-button';
             copyButton.title = 'Копировать';
-
             copyButton.innerHTML = `
-                <svg class="action-icon" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"> <path d="M6 5V3C6 2.44772 6.44772 2 7 2H16C16.5523 2 17 2.44772 17 3V14C17 14.5523 16.5523 15 16 15H14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/> <rect x="3" y="5" width="11" height="13" rx="2" stroke="currentColor" stroke-width="1.5"/> </svg>
+                <svg class="action-icon" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M6 5V3C6 2.44772 6.44772 2 7 2H16C16.5523 2 17 2.44772 17 3V14C17 14.5523 16.5523 15 16 15H14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    <rect x="3" y="5" width="11" height="13" rx="2" stroke="currentColor" stroke-width="1.5"/>
+                </svg>
             `;
-
             copyButton.addEventListener('click', async (e) => {
                 e.stopPropagation();
-
                 await navigator.clipboard.writeText(messageText);
-
                 copyButton.classList.add('copied');
-
-                copyButton.innerHTML = `
-                    <svg class="action-icon" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"> <path d="M6 5V3C6 2.44772 6.44772 2 7 2H16C16.5523 2 17 2.44772 17 3V14C17 14.5523 16.5523 15 16 15H14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/> <rect x="3" y="5" width="11" height="13" rx="2" stroke="currentColor" stroke-width="1.5"/> </svg>
-                `;
-
-                setTimeout(() => {
-                    copyButton.classList.remove('copied');
-
-                    copyButton.innerHTML = `
-                        <svg class="action-icon" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"> <path d="M6 5V3C6 2.44772 6.44772 2 7 2H16C16.5523 2 17 2.44772 17 3V14C17 14.5523 16.5523 15 16 15H14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/> <rect x="3" y="5" width="11" height="13" rx="2" stroke="currentColor" stroke-width="1.5"/> </svg>
-                    `;
-                }, 1500);
+                setTimeout(() => copyButton.classList.remove('copied'), 1500);
             });
-
             actionsDiv.appendChild(copyButton);
+
+            // Кнопка источников — только для бота и только если есть ссылки
+            if (isBot && sources.length > 0) {
+                const sourcesBtn = document.createElement('button');
+                sourcesBtn.className = 'action-button sources-button';
+                sourcesBtn.title = 'Источники';
+                sourcesBtn.innerHTML = `
+                    <svg class="action-icon" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M4 6h12M4 10h8M4 14h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    </svg>
+                    <span class="sources-count-badge">${sources.length}</span>
+                `;
+                sourcesBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    // Снимаем active с других кнопок
+                    document.querySelectorAll('.sources-button.active').forEach(b => {
+                        if (b !== sourcesBtn) b.classList.remove('active');
+                    });
+                    sourcesBtn.classList.toggle('active');
+                    this.toggleSourcesSidebar(sources, sourcesBtn);
+                });
+                actionsDiv.appendChild(sourcesBtn);
+            }
 
             return actionsDiv;
         }
 
+    toggleSourcesSidebar(sources, triggerBtn) {
+        const existing = document.getElementById('sources-sidebar');
+        console.log('Провалились в открытие сайдбара ', 'existing', existing)
+        // Если сайдбар уже открыт — закрываем
+        if (existing) {
+            existing.remove();
+            document.getElementById('chat-wrapper')?.classList.remove('sidebar-open');
+            return;
+        }
+
+        const sidebar = document.createElement('div');
+        sidebar.id = 'sources-sidebar';
+        sidebar.innerHTML = `
+            <div class="sidebar-header">
+                <span>Источники</span>
+                <button class="sidebar-close">✕</button>
+            </div>
+            <div class="sidebar-body">
+                ${sources.map(({ label, url, preview }) => `
+                    <a class="source-card" href="${url}" target="_blank" rel="noopener noreferrer">
+                        ${preview ? `<div class="source-card-preview">${this.escapeHtml(preview)}</div>` : ''}
+                        <div class="source-card-footer">
+                            <span class="source-card-label">🔗 ${this.escapeHtml(label)}</span>
+                            <span class="source-card-arrow">↗</span>
+                        </div>
+                    </a>
+                `).join('')}
+            </div>
+        `;
+        console.log('Создали сайдбар');
+        sidebar.querySelector('.sidebar-close').onclick = () => {
+            sidebar.remove();
+            document.getElementById('chat-wrapper')?.classList.remove('sidebar-open');
+            triggerBtn?.classList.remove('active');
+        };
+
+        document.getElementById('chat-wrapper')?.appendChild(sidebar);
+        document.getElementById('chat-wrapper')?.classList.add('sidebar-open');
+    }
+
+    renderMessages(messages) {
+            const container = document.getElementById('chat-messages');
+            if (!container) return;
+            container.innerHTML = '';
+
+            messages.forEach(msg => {
+                // sources из БД — если есть колонка, иначе []
+                this.addMessage({
+                    ...msg,
+                    sources: msg.sources || []
+                });
+            });
+
+            container.scrollTop = container.scrollHeight;
+        }
 
 }
 

@@ -108,6 +108,25 @@ async def login(response: Response, form_data: OAuth2PasswordRequestForm = Depen
     return {"access_token": access_token, "token_type": "bearer"}
 
 
+@app.post("/guest-login")
+async def guest_login(response: Response):
+    """Вход без регистрации — создаём гостевой аккаунт"""
+    user_id, username = await db.add_guest_user()
+    if not user_id:
+        raise HTTPException(status_code=500, detail="Не удалось создать гостевого пользователя")
+
+    access_token = create_access_token({
+        "sub": username,
+        "user_id": user_id
+    })
+    response.set_cookie(
+        key="users_access_token",
+        value=access_token,
+        httponly=True,
+        max_age=3600
+    )
+    return {"access_token": access_token, "token_type": "bearer", "user_id": user_id}
+
 @app.post("/register-and-login")
 async def register_and_login(response: Response, form_data: OAuth2PasswordRequestForm = Depends()):
     """Регистрация + автоматический логин (оптимизированный обработчик)"""

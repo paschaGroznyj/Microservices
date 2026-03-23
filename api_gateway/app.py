@@ -239,6 +239,45 @@ async def register_page(request: Request):
     })
 
 
+@app.get("/without-register-page", response_class=RedirectResponse)
+async def without_register_page(request: Request):
+    """Сразу перенаправляем на гостевой вход, форма не нужна"""
+    return RedirectResponse(url="/without-register-web", status_code=303)
+
+# ========== ОБРАБОТКА ФОРМ ==========
+
+@app.post("/without-register-web")
+async def without_register_web(request: Request):
+    """Вход без регистрации — создаём гостевой аккаунт"""
+    auth_url = SERVICES['auth']['url']
+    try:
+        response = await app.state.http_client.post(
+            f"{auth_url}/guest-login"
+        )
+        if response.status_code == 200:
+            data = response.json()
+            token = data.get("access_token")
+
+            resp = RedirectResponse(url="/", status_code=303)
+            resp.set_cookie(
+                key="users_access_token",
+                value=token,
+                httponly=True,
+                max_age=3600,
+                secure=False
+            )
+            return resp
+        else:
+            error_detail = response.json().get("detail", "Ошибка гостевого входа")
+            return templates.TemplateResponse(
+                "welcome.html",
+                {"request": request, "error": error_detail},
+                status_code=400
+            )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Auth service unreachable: {str(e)}")
+
+
 # ========== ОБРАБОТКА ФОРМ ==========
 @app.post("/login-web")
 async def login_web(

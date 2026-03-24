@@ -7,3 +7,6 @@ redis
 gigachat
 langchain-gigachat
 sqlalchemy
+aiobotocore
+botocore
+langchain-text-splitters

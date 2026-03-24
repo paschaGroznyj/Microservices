@@ -287,6 +287,11 @@ services:
       VDB_TYPE: ${VDB_TYPE}
       GC_AUTH_URL: ${GC_AUTH_URL}
       GC_MODEL: ${GC_MODEL}
+      OBS_BUCKET: ${OBS_BUCKET}
+      OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
+      OBS_SECRET_KEY: ${OBS_SECRET_KEY}
+      OBS_REGION: ${OBS_REGION}
+      OBS_ENDPOINT: ${OBS_ENDPOINT}
     depends_on:
       - postgres
       - token_service

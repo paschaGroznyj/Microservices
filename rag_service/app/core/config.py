@@ -19,3 +19,9 @@ GC_MODEL = os.environ['GC_MODEL']
 
 EMB_MODEL = os.environ['EMB_MODEL']
 HF_TOKEN = os.environ['HF_TOKEN']
+
+OBS_BUCKET=os.environ['OBS_BUCKET']
+OBS_ACCESS_KEY=os.environ['OBS_ACCESS_KEY']
+OBS_SECRET_KEY=os.environ['OBS_SECRET_KEY']
+OBS_REGION=os.environ['OBS_REGION']
+OBS_ENDPOINT=os.environ['OBS_ENDPOINT']

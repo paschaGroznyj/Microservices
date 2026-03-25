@@ -6,7 +6,7 @@ from langchain_community.chat_models import GigaChat
 def get_model():
     return GigaChat(
         credentials="none",
-        auth_url="http://localhost:9004/api/v2/oauth", # Данный адрес контейнера является единственным источником истины для получения токена внутри ВМ cloud
+        auth_url="http://token_service:9004/api/v2/oauth", # Данный адрес контейнера является единственным источником истины для получения токена внутри ВМ cloud
         verify_ssl_certs=False,
         model="GigaChat-2-Max"
     )

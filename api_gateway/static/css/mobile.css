@@ -152,3 +152,88 @@
     height: 100%;
   }
 }
+
+@media (max-width: 768px) {
+    
+    /* 🔥 ПРОФИЛЬ: базовый отступ + safe-area */
+    .profile-section {
+        margin-bottom: calc(16px + env(safe-area-inset-bottom, 40px)); /* 🔥 40px фолбэк для жестов */
+        padding: 8px 12px;
+        position: relative;
+        z-index: 5;
+    }
+    
+    /* 🔥 САЙДБАР: высота + отступ снизу */
+    .sidebar.open {
+        display: flex !important;
+        flex-direction: column;
+        height: 100dvh;
+        padding-bottom: calc(8px + env(safe-area-inset-bottom, 40px)); /* 🔥 Фолбэк 40px */
+        box-sizing: border-box;
+    }
+}
+
+/* ========== МОБИЛЬНЫЕ ПРАВКИ ДЛЯ ПОЛЯ ВВОДА ========== */
+@media (max-width: 768px) {
+    
+    /* 🔥 ВВОД: padding вместо margin (надёжнее) */
+    .message-input-wrapper {
+        padding: 8px 16px calc(env(safe-area-inset-bottom, 40px)); /* 🔥 Фолбэк 40px */
+        background: var(--bg-primary);
+        margin-bottom: 0; /* Убираем margin */
+    }
+    
+    .message-input-box,
+    .message-input-box-start {
+        border-radius: 20px;
+        padding: 10px 12px 10px 16px;
+        min-height: 52px;
+    }
+    
+    #send-btn {
+        width: 44px;
+        height: 44px;
+        min-width: 44px;
+        min-height: 44px;
+    }
+    
+    .send-icon {
+        width: 20px;
+        height: 20px;
+    }
+    
+    .input-footer {
+        padding: 8px 16px calc(12px + env(safe-area-inset-bottom, 40px)); /* 🔥 Фолбэк 40px */
+        margin-bottom: 0; /* Убираем margin */
+        font-size: 11px;
+        line-height: 1.4;
+    }
+    
+    #message-input {
+        font-size: 16px;
+        padding: 10px 0;
+    }
+    
+    .message-input-wrapper-start {
+        padding: 0 16px calc(16px + env(safe-area-inset-bottom, 40px));
+    }
+    
+    .message-input-box-start {
+        min-height: 52px;
+        border-radius: 20px;
+        padding: 2px 12px 10px 10px;
+    }
+    
+    /* 🔥 Dynamic viewport height */
+    #chat-app,
+    .chat-layout {
+        height: 100dvh;
+    }
+}
+
+@media (max-width: 768px) {
+    .message-input-box-start #message-input {
+    font-size: 12px;
+    padding: 20px 0;
+}
+}

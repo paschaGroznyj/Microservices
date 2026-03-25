@@ -7,5 +7,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN useradd -m -u 1000 chromauser && chown -R chromauser:chromauser /app
+RUN useradd -m -u 1500 chromauser && chown -R chromauser:chromauser /app
 USER chromauser

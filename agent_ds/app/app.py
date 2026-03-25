@@ -45,31 +45,29 @@ class MessageProcessor:
         try:
             text = payload.get("message", "")
             chat_id = payload.get("chat_id")
-            strategy = payload.get("strategy", "graph")  # Можно выбирать стратегию
+            strategy = payload.get("strategy", "hybrid")  # Можно выбирать стратегию
 
-
-
-            #
-            # # Выбираем стратегию поиска
-            # if strategy in self.strategies:
-            #     logger.info(f"Выбрали стратегию {strategy}")
-            #     results = await self.strategies[strategy](text)
-            # else:
-            #     results = await self._rag_search(text)
-            #
-            # # Формируем ответ с контекстом
-            # response, links = await self._generate_response(text, results)
+            
+            # Выбираем стратегию поиска
+            if strategy in self.strategies:
+                logger.info(f"Выбрали стратегию {strategy}")
+                results = await self.strategies[strategy](text)
+            else:
+                results = await self._rag_search(text)
+            
+            # Формируем ответ с контекстом
+            response, links = await self._generate_response(text, results)
 
             # Заглушка
-            response = "Тут ответ модели"
-            links = [
-                "http://blog.kaggle.com/2018/01/22/reviewing-2017-and-previewing-2018/",
-                "https://corp.mail.ru/ru/press/events/413/",
-                "https://docs.google.com/document/d/1ajyJhXyt4q9ZsufXV1kZxDH_3Isg3MYAKsFqNytXrCw/edit",
-                "https://meduza.io/feature/2018/01/22/orki-pobedivshie-tehnarey",
-                "https://m.youtube.com/watch?v=XfRea9SvziU",
-                "https://www.dataquest.io/blog/introduction-to-ensembles/"
-            ]
+            # response = "Тут ответ модели"
+            # links = [
+            #     "http://blog.kaggle.com/2018/01/22/reviewing-2017-and-previewing-2018/",
+            #     "https://corp.mail.ru/ru/press/events/413/",
+            #     "https://docs.google.com/document/d/1ajyJhXyt4q9ZsufXV1kZxDH_3Isg3MYAKsFqNytXrCw/edit",
+            #     "https://meduza.io/feature/2018/01/22/orki-pobedivshie-tehnarey",
+            #     "https://m.youtube.com/watch?v=XfRea9SvziU",
+            #     "https://www.dataquest.io/blog/introduction-to-ensembles/"
+            # ]
 
             # Отправляем ответ
             await self._send_response(chat_id, response, links)
@@ -100,10 +98,18 @@ class MessageProcessor:
         # Объединяем и дедуплицируем результаты
         return _merge_results(rag_results, graph_results)
 
+    def _extract_domain(self, url: str) -> str:
+            try:
+                from urllib.parse import urlparse
+                host = urlparse(url).hostname or url
+                return host.replace("www.", "")
+            except Exception:
+                return url
+
     async def _generate_response(self, query: str, results: List[Dict]) -> tuple[str, list[str]]:
         """Генерация ответа. Возвращает (текст, список_ссылок)"""
 
-        top_results = results[:5]
+        top_results = results[:15]
 
         context_parts = []
         for i, r in enumerate(top_results, 1):
@@ -142,8 +148,17 @@ class MessageProcessor:
             [SystemMessage(content=prompt)]
         )
 
+        # Форматируем с ссылками в конце
+        formatted_text = response.content.strip()
+        
+        if unique_links:
+            formatted_text += "\n\n---\n\n### 📚 Источники:\n\n"
+            for i, link in enumerate(unique_links[:10], 1):
+                domain = self._extract_domain(link)
+                formatted_text += f"{i}. [{domain}]({link})\n"
+
         # Возвращаем текст и ссылки раздельно
-        return response.content, unique_links
+        return formatted_text, unique_links
 
     async def _send_response(self, chat_id: int, text: str, links: list[str]):
         """Отправка ответа в Kafka"""
@@ -219,7 +234,7 @@ async def kafka_consumer_loop():
     consumer = AIOKafkaConsumer(
         'chat-messages',
         bootstrap_servers=KAFKA_BROKER,
-        group_id='llm-bot-group',
+        group_id='ds-bot-group',
         value_deserializer=lambda m: json.loads(m.decode('utf-8')),
         auto_offset_reset='latest'
     )
@@ -233,9 +248,17 @@ async def kafka_consumer_loop():
 
             payload = msg.value
 
-            # Пропускаем сообщения от бота
-            if payload.get("is_from_bot", False) or payload.get("user_id") == -1:
+            user_id = payload.get("user_id")
+            is_from_bot = payload.get("is_from_bot", False)
+            type_agent = payload.get("type_agent")
+            # Пропускаем сообщения от бота (защита от петли)
+            if is_from_bot or user_id == -1:
                 continue
+
+            # Пропускаем сообщения не для этого агента
+            if type_agent != "ds":
+                continue
+
             logger.info(f"Сообщение {payload}")
             # Запускаем обработку в отдельной таске
             asyncio.create_task(processor.process(payload))
@@ -289,8 +312,8 @@ def _merge_results(rag_results: List[Dict], graph_results: List[Dict]) -> List[D
 
     for r in graph_results:
         row = dict(r)
-        if row["id"] not in seen_ids:
-            seen_ids.add(row["id"])
+        if row["chunk_id"] not in seen_ids:
+            seen_ids.add(row["chunk_id"])
             row["source"] = "graph"
             merged.append(row)
 

@@ -254,10 +254,10 @@ class KnowledgeAgent:
 
         # Email (вынесено в отдельный модуль digest_email_handler)
         self.email_handler = DigestEmailHandler()
-        asyncio.run(self.obs_loader.run_download())
-        asyncio.run(self.obs_loader.download_reviews())
+        # asyncio.run(self.obs_loader.run_download())
+        # asyncio.run(self.obs_loader.download_reviews())
         # asyncio.run(self.obs_loader.download_vectorstore())
-
+        asyncio.run(self.make_reviews())
         # Флаг для автозапуска
         self.skip_startup_autoprocess = skip_startup_autoprocess
 
@@ -530,14 +530,14 @@ class KnowledgeAgent:
                             "theme": article.get('category', 'категория не найдена'),
                             "pdf_url": article.get('pdf_url', 'Не найден')
                         }
-                        for article in articles_data
+                        for article in articles_data if not article.get('category', 'Не релевантна PM') == 'Не релевантна PM'
                     }
-                    results = []
-                    
+
+
                     # Дайджест ВСЕХ статей
                     if not reviews_root.exists():
                         os.makedirs(reviews_root, exist_ok=True)
-                    md_articles = [name.name for name in self.articles_path.glob("*.md")]  # Тексты оригинальных статей
+                    md_articles = [name.name for name in self.articles_path.glob("*.md") if name.name in articles_map.keys()] # Тексты оригинальных статей
                     md_reviews = [name.name for name in reviews_root.rglob("*.md")]  # Тексты ревью
 
                     need_reviews = list(set(md_articles) - set(md_reviews))
@@ -619,7 +619,7 @@ class KnowledgeAgent:
                         "results": results
                     }
                 elif action['action'] == "summarize_filt":
-                    asyncio.run(self.obs_loader.run_download())
+                    # asyncio.run(self.obs_loader.run_download())
                     asyncio.run(self.obs_loader.download_reviews())
                     json_file = self.name_meta_dir / "metadata.json"
                     results = agent_composite_digest_tool(llm_client=self.gigachat, query=user_input, json_path=json_file, md_folder=self.digest_path)
@@ -635,12 +635,11 @@ class KnowledgeAgent:
                     else:
                         count = results['found_articles']
                         filename = results['filename']
-                        base_url = "https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/digests/"
+                        base_url = "https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/PM/digests/"
                         full_link = f"{base_url}{filename}"
                         
                         message = (
                             f"🎉 **Готово! Дайджест сформирован.**\n\n"
-                            f"• Обработано статей: **{count}**\n"
                             f"• Имя файла: `{filename}`\n\n"
                             f"🔗 **Ссылка на скачивание:** [Скачать]({full_link})"
                         )
@@ -685,8 +684,8 @@ class KnowledgeAgent:
                                 pdf_url=pdf_url
                             )
 
-                            base_url = "https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/reviews"
-                            obs_path = "obs://cds-iad/reviews/"
+                            base_url = "https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/PM/reviews"
+                            obs_path = "obs://cds-iad/PM/reviews/"
 
                             if digest_result["status"] == "created":
                                 filename_fin = digest_result['digest_file']
@@ -818,14 +817,14 @@ class KnowledgeAgent:
                 "theme": article.get('category', 'категория не найдена'),
                 "pdf_url": article.get('pdf_url', 'Не найден')
             }
-            for article in articles_data
+            for article in articles_data if not article.get('category', 'Не релевантна PM') == 'Не релевантна PM'
         }
 
 
         # Дайджест ВСЕХ статей
         if not reviews_root.exists():
             os.makedirs(reviews_root, exist_ok=True)
-        md_articles = [name.name for name in self.articles_path.glob("*.md")] # Тексты оригинальных статей
+        md_articles = [name.name for name in self.articles_path.glob("*.md") if name.name in articles_map.keys()] # Тексты оригинальных статей
         md_reviews = [name.name for name in reviews_root.rglob("*.md")]  # Тексты ревью
 
         need_reviews = list(set(md_articles) - set(md_reviews))
@@ -836,9 +835,12 @@ class KnowledgeAgent:
             meta = articles_map.get(filename, {})
             theme = meta.get("theme", "категория не найдена")
             pdf_url = meta.get("pdf_url", "Не найден")
-
+            content = article_path.read_text(encoding='utf-8')
+            print(f"ℹ️ Контент размер = {len(content)}, для файла {filename}")
+            if len(content) == 0:
+                continue
             digest_result = self.summarizer.generate_summary(
-                    content_=article_path.read_text(encoding='utf-8'),
+                    content=content,
                     filename=filename,
                     theme=theme,
                     pdf_url=pdf_url

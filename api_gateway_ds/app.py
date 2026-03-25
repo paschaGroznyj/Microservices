@@ -511,6 +511,7 @@ async def send_message(request: Request):
     # Получаем данные из запроса
     data = await request.json()
     data["user_id"] = user["user_id"]
+    data["type_agent"] = "ds" # О Великий gateway
     logger.info(f"Что летит при отправке сообщений {data['chat_id']}, {data['message']}")
 
     message = {

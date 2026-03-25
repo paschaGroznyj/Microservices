@@ -17,7 +17,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 3. Создаём пользователя
-RUN useradd -m -u 1000 appuser
+RUN useradd -m -u 1500 appuser
 
 # 4. Playwright: устанавливаем браузер от имени appuser
 USER appuser

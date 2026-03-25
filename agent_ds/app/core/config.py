@@ -11,8 +11,8 @@ DB_PORT = os.getenv("DB_PORT")
 DB_USER = os.getenv("DB_USER")
 DB_NAME = os.getenv("DB_NAME")
 
-NEO4J_URI = "bolt://localhost:7687"
-# NEO4J_URI = "bolt://my_neo4j_graph:7687"
+# NEO4J_URI = "bolt://localhost:7687"
+NEO4J_URI = "bolt://my_neo4j_graph:7687"
 NEO4J_USER = "neo4j"
 NEO4J_PASSWORD = "password"
 

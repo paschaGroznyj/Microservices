@@ -86,7 +86,7 @@ class VectorDBManager:
         self.vectorstore = FAISS.from_documents(texts, self.embeddings)
         os.makedirs(self.vector_db_path, exist_ok=True)
         self.vectorstore.save_local(str(self.vector_db_path))
-        asyncio.run(self.obs_loader.upload_vectorstore())
+        # asyncio.run(self.obs_loader.upload_vectorstore())
         return self.vectorstore.index.ntotal
     
     def delete_documents(self, file_paths: List[str]):

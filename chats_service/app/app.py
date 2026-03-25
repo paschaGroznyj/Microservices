@@ -95,6 +95,7 @@ class ChatMessage(BaseModel):
     user_id: int
     message: str
     chat_id: int
+    type_agent: str
 
 @app.on_event("startup")
 async def startup():
@@ -118,6 +119,7 @@ async def send_message(chat: ChatMessage):
         "user_id": chat.user_id,
         "chat_id": chat.chat_id,
         "message": chat.message,
+        "type_agent": chat.type_agent,
         "is_from_bot": False
     }
     start = time.perf_counter()

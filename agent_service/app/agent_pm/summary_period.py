@@ -412,10 +412,14 @@ def build_digest_content(articles: List[Dict], md_path: Path, query: list, llm_c
     articles_dir = base_path / "knowledge_base" / "articles"
 
     for i, article in enumerate(articles):
+        
+        category = article.get("category") or "Без категории"
+        if category == "Не релевантна PM":
+            continue
+
         filename = article.get("file_article")
         title = article.get("title", "N/A")
         url = article.get("url_article", "N/A")
-        category = article.get("category") or "Без категории"
         date = article.get("date_sub", "")
         theme = article.get("tags", "")
 
@@ -451,7 +455,6 @@ def build_digest_content(articles: List[Dict], md_path: Path, query: list, llm_c
 
         else:
             print(f"Генерируем через LLM: {filename}")
-
             article_md_path = articles_dir / filename
 
             if article_md_path.exists():

@@ -3,9 +3,7 @@ import os
 
 load_dotenv()
 
-REDIS_HOST = os.getenv("REDIS_HOST", "redis")
-REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
-REDIS_KEY = os.getenv("REDIS_KEY")
-PORT_TOKEN_GENERATE_SERVICE =os.getenv("PORT_TOKEN_GENERATE_SERVICE")
-
+INTERNAL_TOKEN_API_URL = os.getenv("INTERNAL_TOKEN_API_URL")
+PORT_TOKEN_GENERATE_SERVICE = int(os.getenv("PORT_TOKEN_GENERATE_SERVICE", 9004))
+TOKEN_TTL = int(os.getenv("TOKEN_TTL"))
 IAM_API_KEY = os.getenv("IAM_API_KEY")

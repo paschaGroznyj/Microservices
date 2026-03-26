@@ -1,7 +1,7 @@
 import hashlib
 # from langchain.chat_models.gigachat import GigaChat
 from .core.agent_provider import get_model
-from langchain.schema import SystemMessage
+from langchain.schema import SystemMessage, HumanMessage
 from .core.config import STORAGE_PATH, EMBED_MODEL_GLOSS, PATH_TO_GLOSSARY
 from typing import Dict, Any, List
 import json
@@ -18,11 +18,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 gigachat = get_model()
-HF_TOKEN = os.getenv("HF_TOKEN")
-
-# from .glossary import find_relevant_glossary
-#
-# EMBED_MODEL = SentenceTransformer(EMBED_MODEL_GLOSS)
 
 
 class SummaryGenerator:
@@ -102,7 +97,7 @@ class SummaryGenerator:
         # print(f"Сохранено: {filepath}")
         return str(filepath)
 
-    def generate_summary(self, content_: str, filename: str = None, theme: str = None, pdf_url: str = None) -> Dict[str, Any]:
+    def generate_summary(self, content: str, filename: str = None, theme: str = None, pdf_url: str = None) -> Dict[str, Any]:
         """Генерирует академическое саммари PDF-статей по строгому шаблону"""
         # НЕ забыть расскоментить =============================
         # final_text = find_relevant_glossary(content_[:4000], PATH_TO_GLOSSARY) # Закомментил
@@ -162,8 +157,8 @@ class SummaryGenerator:
 
         # ## Текст статьи из PDF:
         # {content_[:200]}.""")]
-
-        prompt = [SystemMessage(content=f"""Твоя задача: прочитать текст статьи из "{filename}", извлечь и адаптировать информацию для русскоязычного эксперта.
+        print(f"КОНТЕКСТ 📄 {content[:500]}")
+        SYSTEM_PROMT = f"""Твоя задача: прочитать текст статьи из "{filename}", извлечь и адаптировать информацию для русскоязычного эксперта.
 
         ## ПРАВИЛА (строго соблюдай):
         1. Переводи для русскоязычного эксперта, сохраняя академический стиль, сохраняя точность терминов
@@ -171,9 +166,9 @@ class SummaryGenerator:
         3. Первый раз термин: русский (original). Далее: только русский
         4. Алгоритмы - пошагово с оригинальными названиями
         5. GitHub: найди в тексте ИЛИ проанализируй авторов/метод, иначе 'отсутствует'
-        6. Если в статье нет какой-либо информации для шаблона - напиши 'не указано'
-        7. Выводи результат строго по шаблону, без дополнительных комментариев и пояснений
-        8. Не меняй порядок пунктов шаблона и не добавляй новые
+        6. Выводи результат строго по шаблону, без дополнительных комментариев и пояснений
+        7. Не меняй порядок пунктов шаблона и не добавляй новые
+
 
         ## Пример шаблона саммари:
         "Название статьи на русском:",
@@ -190,42 +185,14 @@ class SummaryGenerator:
             7. **Вывод:** ...
 
         ## Текст статьи из PDF:
-        {content_[:1500]}.""")]
+        """
 
-        # prompt2 = [SystemMessage(content=f"""Выбери одну категорию из следующего списка:
-        #                                     Категории: {categories_str}
-        #                                     Выбирай наиболее релевантную категорию к которой ты можешь отнести следующий текст:
-
-        #                                     ## Текст статьи из PDF:
-        #                                     {content_[:500]}.
-        #                                     В ответ выводи только выбранную категорию, без лишнего текста.""")]
-        # =====================================
-        # response = self.llm.chat.completions.create(
-        #     model="Qwen/Qwen3.5-397B-A17B",
-        #     messages=[{"role": "user", "content": prompt}],
-        #     temperature=0.6,
-        #     top_p=0.95
-        # )
-        # summary = response.choices[0].message.content
-        # =====================================
-        response_sum = gigachat.invoke(prompt)
-        # response_sum = self.llm(prompt) # Для гигачата
-        summary = response_sum.content.strip()
-
-        # response_theme = self.llm(prompt2)
-        # theme = response_theme.content.strip()
-
-        # with open(self.knowledge_dir / "metadata.json", 'r', encoding='utf-8') as f:
-        #     data_list = json.load(f)
-
-        # for dl in data_list:
-        #     filename_meta = f"{dl['data_sub']}_{dl['title']}.md"
-        #     if filename == filename_meta:
-        #         dl['category'] = theme
-
-        # with open(self.knowledge_dir / "metadata.json", 'w', encoding='utf-8') as f:
-        #     json.dump(data_list, f, ensure_ascii=False, indent=2)
-        print("Получили summary", summary[:200])
+        response = gigachat.invoke([
+                SystemMessage(content=SYSTEM_PROMT),
+                HumanMessage(content=content[:3000])
+            ])
+        summary = response.content.strip()
+        print("✨ Получили summary от модели", summary[:500])
         if theme is None:
             folder = self.digest_dir / 'Без категории'
             digest_file = self.save_to_md(summary, filename=filename, folder=folder)

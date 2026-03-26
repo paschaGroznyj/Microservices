@@ -27,6 +27,7 @@ class OBSWorker:
         self.name_faiss_index = base_dir / os.getenv("FAISS_FOLDER")
         self.name_digests = base_dir / os.getenv("DIGESTS_FOLDER")
         self.bucket = os.getenv("OBS_BUCKET")
+        self.open_bucket = os.getenv("OBS_OPEN_BUCKET")
 
     @asynccontextmanager
     async def client(self):
@@ -54,6 +55,7 @@ class OBSWorker:
                 response = await client.get_object(Bucket=self.bucket, Key=key)
             except:
                 print("Файла метаданных нет!")
+                return
             data = await response["Body"].read()
             raw_text = data.decode("utf-8", errors="ignore")
 
@@ -355,7 +357,7 @@ class OBSWorker:
         """Вспомогательная загрузка одного файла"""
         with open(local_path, "rb") as f:
             await client.put_object(
-                Bucket=self.bucket,
+                Bucket=self.open_bucket,
                 Key=s3_key,
                 Body=f
             )
@@ -391,7 +393,7 @@ class OBSWorker:
             print(f"Дайджест {digest_path} не найден")
             return
 
-        s3_key = f"digests/{filename}"
+        s3_key = f"PM/digests/{filename}"
         async with self.client() as client:
             await self._upload_file(client, digest_path, s3_key)
         print(f"Дайджест {filename} S3")
@@ -403,7 +405,7 @@ class OBSWorker:
             print(f"Дайджест {digest_path} не найден")
             return
 
-        s3_key = f"reviews/{filename}" # Тут был конец json, может такая задумка?)
+        s3_key = f"PM/reviews/{filename}" # Тут был конец json, может такая задумка?)
         async with self.client() as client:
             await self._upload_file(client, digest_path, s3_key)
         print(f"Дайджест {filename}.json S3")
@@ -412,7 +414,7 @@ class OBSWorker:
         local_dir = Path(self.name_digests)
         os.makedirs(local_dir, exist_ok=True)
 
-        prefix = "reviews/"
+        prefix = "PM/reviews/"
 
         async with self.client() as client:
             paginator = client.get_paginator('list_objects_v2')
@@ -421,7 +423,7 @@ class OBSWorker:
             all_keys: List[str] = []
 
             try:
-                async for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
+                async for page in paginator.paginate(Bucket=self.open_bucket, Prefix=prefix):
                     if 'Contents' in page:
                         for obj in page['Contents']:
                             key = obj['Key']
@@ -449,7 +451,7 @@ class OBSWorker:
                 local_file_path.parent.mkdir(parents=True, exist_ok=True)
 
                 try:
-                    response = await client.get_object(Bucket=self.bucket, Key=s3_key)
+                    response = await client.get_object(Bucket=self.open_bucket, Key=s3_key)
 
                     # Читаем поток данных
                     async with response['Body'] as stream:
@@ -485,11 +487,11 @@ class OBSWorker:
                 rel_path = md_file.relative_to(digest_root)
                 print(rel_path)
                 # Ключ в S3: digest/Общие_принципы/file.md
-                s3_key = f"reviews/{rel_path.as_posix()}"
+                s3_key = f"PM/reviews/{rel_path.as_posix()}"
 
                 try:
                     # Проверяем, существует ли уже в S3
-                    await client.head_object(Bucket=self.bucket, Key=s3_key)
+                    await client.head_object(Bucket=self.open_bucket, Key=s3_key)
                     print(f"{s3_key} уже в S3")
                 except Exception:
                     # Любой exception (404 или другая ошибка) → считаем, что нужно загрузить

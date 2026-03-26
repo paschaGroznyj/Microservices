@@ -49,9 +49,13 @@ def kafka_consumer():
                 chat_id = payload.get("chat_id")
                 text = payload.get("message")
                 is_from_bot = payload.get("is_from_bot", False)
-
+                type_agent = payload.get("type_agent")
                 # Пропускаем сообщения от бота (защита от петли)
                 if is_from_bot or user_id == -1:
+                    continue
+
+                # Пропускаем сообщения не для этого агента
+                if type_agent != "pm":
                     continue
 
                 if not text or chat_id is None:

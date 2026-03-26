@@ -47,18 +47,30 @@ class MessageProcessor:
             chat_id = payload.get("chat_id")
             strategy = payload.get("strategy", "hybrid")  # Можно выбирать стратегию
 
+            
             # Выбираем стратегию поиска
             if strategy in self.strategies:
                 logger.info(f"Выбрали стратегию {strategy}")
                 results = await self.strategies[strategy](text)
             else:
                 results = await self._rag_search(text)
-
+            
             # Формируем ответ с контекстом
-            response = await self._generate_response(text, results)
+            response, links = await self._generate_response(text, results)
+
+            # Заглушка
+            # response = "Тут ответ модели"
+            # links = [
+            #     "http://blog.kaggle.com/2018/01/22/reviewing-2017-and-previewing-2018/",
+            #     "https://corp.mail.ru/ru/press/events/413/",
+            #     "https://docs.google.com/document/d/1ajyJhXyt4q9ZsufXV1kZxDH_3Isg3MYAKsFqNytXrCw/edit",
+            #     "https://meduza.io/feature/2018/01/22/orki-pobedivshie-tehnarey",
+            #     "https://m.youtube.com/watch?v=XfRea9SvziU",
+            #     "https://www.dataquest.io/blog/introduction-to-ensembles/"
+            # ]
 
             # Отправляем ответ
-            await self._send_response(chat_id, response, results)
+            await self._send_response(chat_id, response, links)
 
             return response
 
@@ -86,42 +98,94 @@ class MessageProcessor:
         # Объединяем и дедуплицируем результаты
         return _merge_results(rag_results, graph_results)
 
-    async def _generate_response(self, query: str, results: List[Dict]) -> str:
-        """Генерация ответа с использованием контекста"""
-        context = "\n\n".join([r["content"] for r in results[:5]])
-        logger.info(f"💬 {context}")
-        prompt = f"""На основе следующей информации ответь на вопрос.
+    def _extract_domain(self, url: str) -> str:
+            try:
+                from urllib.parse import urlparse
+                host = urlparse(url).hostname or url
+                return host.replace("www.", "")
+            except Exception:
+                return url
 
-Информация:
-{context}
+    async def _generate_response(self, query: str, results: List[Dict]) -> tuple[str, list[str]]:
+        """Генерация ответа. Возвращает (текст, список_ссылок)"""
 
-Вопрос: {query}
+        top_results = results[:15]
 
-Ответ:"""
+        context_parts = []
+        for i, r in enumerate(top_results, 1):
+            context_parts.append(f"[{i}] {r['content']}")
+        context = "\n\n".join(context_parts)
+
+        # Собираем уникальные ссылки отдельно
+        seen_links = set()
+        unique_links = []
+        for r in top_results:
+            raw = r.get("links") or []
+            if isinstance(raw, str):
+                raw = raw.strip("{}").split(",")
+            for link in raw:
+                link = link.strip()
+                if link and link not in seen_links:
+                    seen_links.add(link)
+                    unique_links.append(link)
+
+        prompt = f"""Ответь на вопрос пользователя, используя только информацию из контекста ниже.
+    Если в контексте нет ответа — скажи об этом прямо.
+    Не выдумывай факты и не добавляй ссылки самостоятельно.
+
+    Контекст:
+    {context}
+
+    Вопрос: {query}
+
+    Ответ:"""
+
+        logger.info(f"💬 Context:\n{context}")
+        logger.info(f"🔗 Links: {unique_links}")
 
         response = await asyncio.to_thread(
             giga.invoke,
             [SystemMessage(content=prompt)]
         )
-        return response.content
 
-    async def _send_response(self, chat_id: int, text: str, results: List[Dict]):
+        # Форматируем с ссылками в конце
+        formatted_text = response.content.strip()
+        
+        if unique_links:
+            formatted_text += "\n\n---\n\n### 📚 Источники:\n\n"
+            for i, link in enumerate(unique_links[:10], 1):
+                domain = self._extract_domain(link)
+                formatted_text += f"{i}. [{domain}]({link})\n"
+
+        # Возвращаем текст и ссылки раздельно
+        return formatted_text, unique_links
+
+    async def _send_response(self, chat_id: int, text: str, links: list[str]):
         """Отправка ответа в Kafka"""
+
+        def url_to_label(url: str) -> str:
+            try:
+                from urllib.parse import urlparse
+                host = urlparse(url).hostname or url
+                return host.replace("www.", "")
+            except Exception:
+                return url
+
         bot_message = {
             "user_id": -1,
             "chat_id": chat_id,
             "message": text.strip(),
             "is_from_bot": True,
             "type_agent": "ds",
-            "metadata": {
-                "strategy": "hybrid",
-                "chunks_found": len(results),
-                "sources": [r.get("id") for r in results[:3]]
-            }
+            # ссылки отдельным полем
+            "sources": [
+                {"label": url_to_label(link), "url": link}
+                for link in links
+            ]
         }
 
         await self.producer.send_and_wait("chat-messages", value=bot_message)
-        logger.info(f"Sent response to chat {chat_id}")
+        logger.info(f"Sent response to chat {chat_id}, sources: {len(links)}")
 
 
 @asynccontextmanager
@@ -170,7 +234,7 @@ async def kafka_consumer_loop():
     consumer = AIOKafkaConsumer(
         'chat-messages',
         bootstrap_servers=KAFKA_BROKER,
-        group_id='llm-bot-group',
+        group_id='ds-bot-group',
         value_deserializer=lambda m: json.loads(m.decode('utf-8')),
         auto_offset_reset='latest'
     )
@@ -184,9 +248,17 @@ async def kafka_consumer_loop():
 
             payload = msg.value
 
-            # Пропускаем сообщения от бота
-            if payload.get("is_from_bot", False) or payload.get("user_id") == -1:
+            user_id = payload.get("user_id")
+            is_from_bot = payload.get("is_from_bot", False)
+            type_agent = payload.get("type_agent")
+            # Пропускаем сообщения от бота (защита от петли)
+            if is_from_bot or user_id == -1:
                 continue
+
+            # Пропускаем сообщения не для этого агента
+            if type_agent != "ds":
+                continue
+
             logger.info(f"Сообщение {payload}")
             # Запускаем обработку в отдельной таске
             asyncio.create_task(processor.process(payload))
@@ -240,8 +312,8 @@ def _merge_results(rag_results: List[Dict], graph_results: List[Dict]) -> List[D
 
     for r in graph_results:
         row = dict(r)
-        if row["id"] not in seen_ids:
-            seen_ids.add(row["id"])
+        if row["chunk_id"] not in seen_ids:
+            seen_ids.add(row["chunk_id"])
             row["source"] = "graph"
             merged.append(row)
 

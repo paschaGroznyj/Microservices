@@ -209,9 +209,9 @@ async def perform_parsing_cycle():
         logger.info("=== Начало цикла синхронизации ===")
 
         # # # 1. Скачиваем существующие данные из OBS
-        # logger.info("Скачивание данных из OBS...")
-        # await obs.download_all_md()
-        # await obs.download_metadata()
+        logger.info("Скачивание данных из OBS...")
+        await obs.download_all_md()
+        await obs.download_metadata()
 
 
         # 2. Определяем диапазон дат
@@ -232,7 +232,7 @@ async def perform_parsing_cycle():
         )
 
 
-        # date_range = ('2026-01-01', '2026-02-25')
+        # date_range = ('2026-01-01', '2026-03-24')
         logger.info(f"Парсинг диапазона: {date_range}")
         link_ieee = (
             "https://ieeexplore.ieee.org/search/searchresult.jsp?"
@@ -242,11 +242,11 @@ async def perform_parsing_cycle():
             "ranges=2026_2026_Year&returnFacets=ALL"
         )
         cfg = PipelineConfig()
-        cfg.max_pages = 30
+        cfg.max_pages = 60
 
         parsers = [
             ARXIVParser(date_range),
-            FluxiconParser(date_range),
+            # FluxiconParser(date_range), # Почему то умер
             ScholarParser(date_range=date_range, config=cfg),
             IEEEParser(link_ieee, date_range=date_range)
         ]

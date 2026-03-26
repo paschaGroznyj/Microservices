@@ -24,7 +24,7 @@ splitter = RecursiveCharacterTextSplitter(
 
 embeddings = GigaChatEmbeddings(
     credentials="somebody_once_told_me",
-    auth_url="http://host.docker.internal:9004/api/v2/oauth",
+    auth_url="http://token_service:9004/api/v2/oauth",
     verify_ssl_certs=False,
     model="Embeddings-2"
 )

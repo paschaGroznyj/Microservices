@@ -86,11 +86,11 @@ class ARXIVParser:
         self.parameters_string = ""
         self.__pre_convert_url()
         self.cat_url = self.base_url + self.parameters_string.strip("&")
-        self.dict_need_tags = {"cs.AI": "Artificial Intelligence",
-                               "cs.CY": "Computers and Society",
-                               "cs.LG": "Machine Learning",
-                               "cs.CV": "Computer Vision and Pattern Recognition",
-                               "cs.HC": "Human-Computer Interaction"}
+        # self.dict_need_tags = {"cs.AI": "Artificial Intelligence",
+        #                        "cs.CY": "Computers and Society",
+        #                        "cs.LG": "Machine Learning",
+        #                        "cs.CV": "Computer Vision and Pattern Recognition",
+        #                        "cs.HC": "Human-Computer Interaction"}
         self.doc_names = []
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
@@ -118,7 +118,7 @@ class ARXIVParser:
         start = data_range[0] if data_range else self.data_start
         end = data_range[1] if data_range else self.data_end
         result_list = []
-        for i in range(0, 1000, 50):
+        for i in range(0, 1500, 50):
             get_url = self.cat_url + str(i)
             print(f"Номер страницы: {i}")
             text = requests.get(get_url, headers=self.headers, timeout=15)
@@ -137,8 +137,8 @@ class ARXIVParser:
                     tags.append(tag.get('data-tooltip'))
 
 
-                if not (set(self.dict_need_tags.values()) & set(tags)):
-                    continue # Пропускаем статью без нужных тегов
+                # if not (set(self.dict_need_tags.values()) & set(tags)):
+                #     continue # Пропускаем статью без нужных тегов
                 title = art.find('p', class_="title is-5 mathjax").text.strip()
                 title = self.__clear_title_article(title)
                 date_sub = art.find('p', class_='is-size-7').text.strip()

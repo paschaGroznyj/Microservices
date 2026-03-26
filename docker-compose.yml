@@ -43,36 +43,6 @@ services:
 #    volumes:
 #      - kafka-data:/var/lib/kafka/data
 
-    # LLM Model сервис
-#  llm_model_service:
-#    build: ./llm_model
-#    container_name: llm_model_service
-#    ports:
-#      - "9001:9001"
-#    depends_on:
-#      - broker
-#    environment:
-#      PORT_PM_AGENT: ${PORT_PM_AGENT}
-#      KAFKA_BROKER: ${KAFKA_BROKER}
-#      API_GIGACHAT: ${API_GIGACHAT}
-#
-#      HF_HOME: /app/.cache/huggingface
-#
-#      HF_DATASETS_OFFLINE: "1"
-#      TRANSFORMERS_OFFLINE: "1"
-#    volumes:
-#      - ./models:/app/.cache/huggingface/hub
-#    restart: unless-stopped
-
-  # redis:
-  #  image: redis:7.2-alpine
-  #  container_name: redis
-  #  ports:
-  #    - "6379:6379"
-  #  volumes:
-  #    - redis_data:/data
-  #  command: redis-server --appendonly yes
-
   agent_service:
     build: ./agent_service
     container_name: agent_service
@@ -92,6 +62,7 @@ services:
       DIGESTS_FOLDER: ${DIGESTS_FOLDER}
 
       OBS_BUCKET: ${OBS_BUCKET}
+      OBS_OPEN_BUCKET: ${OBS_OPEN_BUCKET}
       OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
       OBS_SECRET_KEY: ${OBS_SECRET_KEY}
       OBS_REGION: ${OBS_REGION}
@@ -114,21 +85,22 @@ services:
     restart: unless-stopped
 
 
-  plug_service:
-    build: ./plug_service
-    container_name: plug_service
-    ports:
-      - "19001:9001"
-    depends_on:
-      - broker
-    environment:
-      PORT_PLUG_AGENT: ${PORT_PLUG_AGENT}
-      KAFKA_BROKER: ${KAFKA_BROKER}
 
-      REDIS_HOST: ${REDIS_HOST}
-      REDIS_PORT: ${REDIS_PORT}
-      REDIS_KEY: ${REDIS_KEY}
-    restart: unless-stopped
+  # plug_service:
+  #   build: ./plug_service
+  #   container_name: plug_service
+  #   ports:
+  #     - "19001:9001"
+  #   depends_on:
+  #     - broker
+  #   environment:
+  #     PORT_PLUG_AGENT: ${PORT_PLUG_AGENT}
+  #     KAFKA_BROKER: ${KAFKA_BROKER}
+
+  #     REDIS_HOST: ${REDIS_HOST}
+  #     REDIS_PORT: ${REDIS_PORT}
+  #     REDIS_KEY: ${REDIS_KEY}
+  #   restart: unless-stopped
 
 
   token_service:
@@ -149,32 +121,32 @@ services:
   #       - "4444:4444"
 
   parsers_service:
-     build: ./parsers_service
-     container_name: parsers_service
-     ports:
-       - "8003:8003"
-     environment:
-       PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
-       PORT_PM_AGENT: ${PORT_PM_AGENT}
+    build: ./parsers_service
+    container_name: parsers_service
+    ports:
+      - "8003:8003"
+    environment:
+      PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
+      PORT_PM_AGENT: ${PORT_PM_AGENT}
+      STORAGE_PATH: ${STORAGE_PATH}
+      SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES}
+      SYNC_INTERVAL_SCHEDULER: ${SYNC_INTERVAL_SCHEDULER}
+      ARTICLES_FOLDER: ${ARTICLES_FOLDER}
+      METADATA_FOLDER: ${METADATA_FOLDER}
 
-       STORAGE_PATH: ${STORAGE_PATH}
-       SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES}
-       SYNC_INTERVAL_SCHEDULER: ${SYNC_INTERVAL_SCHEDULER}
-       ARTICLES_FOLDER: ${ARTICLES_FOLDER}
-       METADATA_FOLDER: ${METADATA_FOLDER}
-
-       OBS_BUCKET: ${OBS_BUCKET}
-       OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
-       OBS_SECRET_KEY: ${OBS_SECRET_KEY}
-       OBS_REGION: ${OBS_REGION}
-       OBS_ENDPOINT: ${OBS_ENDPOINT}
-     restart: unless-stopped
+      OBS_BUCKET: ${OBS_BUCKET}
+      OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
+      OBS_SECRET_KEY: ${OBS_SECRET_KEY}
+      OBS_REGION: ${OBS_REGION}
+      OBS_ENDPOINT: ${OBS_ENDPOINT}
+    
+    restart: unless-stopped
 
   gateway:
     build: ./api_gateway
     container_name: api_gateway
     ports:
-      - "7001:7001"
+      - "7000:7000"
     environment:
       PORT_AUTH_SERVICE: ${PORT_AUTH_SERVICE}
       PORT_CHATS_SERVICE: ${PORT_CHATS_SERVICE}
@@ -183,11 +155,6 @@ services:
       PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
       SECRET_KEY: ${SECRET_KEY}
       ALGORITHM: ${ALGORITHM}
-#    depends_on:
-#      - auth_service
-#      - chats_service
-#      - llm_model
-#      - crb_service
     restart: unless-stopped
 
   auth_service:
@@ -219,7 +186,7 @@ services:
   #       - "5433:5432"
   
   postgres:
-    image: pgvector/pgvector:pg18
+    image: pgvector/pgvector:pg15
     container_name: postgres
     restart: unless-stopped
 
@@ -250,7 +217,7 @@ services:
       - "5433:5432"
 
     volumes:
-      - postgres_data:/var/lib/postgresql
+      - postgres_data:/var/lib/postgresql/data
       - ./backups:/backups
 
     logging:
@@ -267,6 +234,7 @@ services:
   #   container_name: chromadb
   #   ports:
   #     - "9003:8000"
+
 
   rag_service:
     container_name: rag_service
@@ -335,27 +303,7 @@ services:
       - postgres
       - broker
     restart: unless-stopped
-
-  # # Парсер — batch job, запуск: docker-compose run parser_service
-  # parser_service:
-  #   build:
-  #     context: ./agent_service
-  #     dockerfile: Dockerfile.parser
-  #   container_name: parser_service
-  #   environment:
-  #     DATE_RANGE_START: ${DATE_RANGE_START:-2026-01-01}
-  #     DATE_RANGE_END: ${DATE_RANGE_END:-2026-01-30}
-  #     STORAGE_PATH: /app/knowledge_base
-  #     ARTICLES_FOLDER: articles
-  #     METADATA_FILE: metadata.json
-  #     LOG_LEVEL: INFO
-  #     SCHOLAR_MAX_PAGES: ${SCHOLAR_MAX_PAGES:-2}
-  #     MISTRAL_KEY: ${MISTRAL_KEY:-}
-  #     MISTRAL_MODEL: ${MISTRAL_MODEL:-}
-  #   volumes:
-  #     - parser_data:/app/knowledge_base
-  #     - parser_logs:/app/logs
-
+    
 volumes:
   kafka-data:
   llm_cache:

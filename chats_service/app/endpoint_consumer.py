@@ -5,6 +5,7 @@ import asyncio
 from kafka import KafkaConsumer
 from app.db.chats_tables import DataBaseChats
 from app.core.config import KAFKA_BROKER
+from typing import List
 import requests  # Для отправки сообщений обратно в основной сервис
 import time
 
@@ -54,11 +55,8 @@ class DBConsumer:
             logging.info(f"Message Service. Время чтобы вытащить из кафки и положить в БД = {elapsed:.4f}s")
             # Если сообщение от бота, отправляем обратно в основной сервис для WebSocket
             if is_from_bot:
-                type_agent = payload.get("type_agent")
-                if type_agent:
-                    gateway_url = self.agents[type_agent]["gateway"]
-                else:
-                    gateway_url = self.agents["pm"]["gateway"]
+                type_agent = payload.get("type_agent", "pm")
+                gateway_url = self.agents[type_agent]["gateway"]
                 await self.send_to_main_service(chat_id, payload, gateway_url)
 
         except Exception as e:
@@ -73,7 +71,7 @@ class DBConsumer:
                 f"{gateway_url}/internal/bot_message",
                 json={
                     "chat_id": chat_id,
-                    "message": message
+                    "message": message, # Сообщение из кафки, сам текст, флаг на бота, ссылки
                 }
             )
             logger.info(f"Сообщение бота отправлено в основной сервис: {response.status_code}")

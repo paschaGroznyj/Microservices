@@ -13,16 +13,13 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-
 from .models import Chunk, GetChunk, PutDocument, DelChunk
-from .embedding import DummyKBEmbedding, GigaChatEmbedding
+from .embedding import GigaChatEmbedding
 from .core.config import (
     DB_USER,
     DB_PASSWORD,
     DB_HOST,
     DB_PORT,
-    VDB_TYPE,
-    EMB_MODEL,
     OBS_ACCESS_KEY,
     OBS_SECRET_KEY,
     OBS_REGION,
@@ -41,30 +38,21 @@ s3_params = {
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
-    vdb_client = None
-    if VDB_TYPE == 'chroma':
-        vdb_client = chromadb.HttpClient(host='chromadb', port=8000)
-        app.state.collection = vdb_client.get_or_create_collection(
-            'kb_collection', 
-            embedding_function=DummyKBEmbedding(EMB_MODEL)
-        )
-        app.state.vdb_client = vdb_client
 
-    elif VDB_TYPE == 'pgvector':
-        url = URL.create(
-            'postgresql+asyncpg',
-            username=DB_USER,
-            password=DB_PASSWORD,
-            host=DB_HOST,
-            port=DB_PORT
-        )
+    url = URL.create(
+        'postgresql+asyncpg',
+        username=DB_USER,
+        password=DB_PASSWORD,
+        host=DB_HOST,
+        port=DB_PORT
+    )
 
-        engine = create_async_engine(url)
-        app.state.session = async_sessionmaker(engine, expire_on_commit=False)
+    engine = create_async_engine(url)
+    app.state.session = async_sessionmaker(engine, expire_on_commit=False)
 
-        async with app.state.session() as session:
-            await session.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
-            await session.commit()
+    async with app.state.session() as session:
+        await session.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
+        await session.commit()
     
     @asynccontextmanager
     async def client():
@@ -84,27 +72,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 
 
 app = FastAPI(title='RAG Service', lifespan=lifespan)
-
-
-@app.post('/put')
-async def put(document: PutDocument):
-    app.state.collection.add(
-        ids = [str(uuid.uuid4())],
-        embeddings = await app.state.emb_client.embed(document.text),
-        documents = [document.content]
-    )
-    return {
-        "doc_length": len(document.content),
-        "new_collection_length": app.state.collection.count()
-    }
-
-@app.get('/get')
-async def get(document: GetChunk):
-    response = app.state.collection.query(
-        query_embeddings = await app.state.emb_client.embed(document.content),
-        n_results = 5
-    )
-    return response
 
 @app.post('/put_pv')
 async def put_pv(document: PutDocument):
@@ -228,8 +195,6 @@ async def run_rag():
 
         query = await session.execute(stmt)
         ids = set(query.scalars().all())
-    
-    print(ids)
     
     async with app.state.s3_client() as client:
         content_resp = await client.list_objects_v2(**params)

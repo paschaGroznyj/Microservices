@@ -1,7 +1,9 @@
 import re
 import uuid
 import json
+import asyncio
 import chromadb
+from datetime import datetime
 from aiobotocore.session import AioSession
 from botocore.client import Config
 from fastapi import FastAPI, Response, status
@@ -200,15 +202,17 @@ def clean_text(text: str) -> str:
             text,
             flags=re.S
         )
+        text = text.replace(r'\x00', '')
         return text.strip()
 
 @app.post('/run_rag')
 async def run_rag():
     """
     Docstring для run_rag
-    1. Получаем количество файлов
-    2. Разделяем их на стримы
-    3. В каждом стриме файлы заворачиваем в раг
+    Эндпоинт обращается к S3-бакету, загружает оттуда метаданные и содержимое файлов.
+    Содержимое нарезается на чанки, чанки делятся на батчи по 10 штук.
+    Для каждого чанка в батче создается корутина, они заворачиваются в gather, результаты через zip скрепляются с текстом чанков.
+    Формируются ORM объекты и записываются в БД в едином запросе.
     """
 
     params = {
@@ -216,6 +220,17 @@ async def run_rag():
         "Prefix": "articles/"
     }
 
+    load_id = str(uuid.uuid4())
+    start = datetime.now()
+
+    async with app.state.session() as session:
+        stmt = Select(Chunk.original_id)
+
+        query = await session.execute(stmt)
+        ids = set(query.scalars().all())
+    
+    print(ids)
+    
     async with app.state.s3_client() as client:
         content_resp = await client.list_objects_v2(**params)
 
@@ -231,34 +246,54 @@ async def run_rag():
                 json.dump(metadata, f, ensure_ascii=False, indent=2)
 
         chunks_count = 0
-                
+        all_chunks = []
+        
         for obj in content_resp["Contents"]:
             key = obj["Key"]
 
             file_name = key.split('/')[-1]
-            doc_id = file_name.split('_')[-1].split('.')[0]
 
+            if metadata[file_name]['external_id'] in ids:
+                continue
+            
             if not key.endswith(".md"):
                 continue
 
             response = await client.get_object(Bucket=OBS_BUCKET, Key=key)
             data = await response["Body"].read()
+
+            data = data.replace(b'\x00', b'')
             text = data.decode("utf-8", errors="ignore")
+            text = clean_text(text)
             text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
             text_chunks = text_splitter.split_text(text)
             chunks_count += len(text_chunks)
-            print(f'Chunks created: {len(text_chunks)}')
-            db_objects = [Chunk(
-                original_id = doc_id,
-                original_name = 'test_name', # metadata[file_name]['title'],
-                chunk_text = text_chunk,
-                embedding = await app.state.emb_client.embed(text_chunk)
-            ) for text_chunk in text_chunks]
+            print(f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} Created {len(text_chunks)} chunks for document {file_name}')
 
-            async with app.state.session() as session:
-                session.add_all(db_objects)
-                session.commit()
+            chunk_batches = [text_chunks[i:i+10] for i in range(0, len(text_chunks), 10)]
+
+            chunk_embedding_map = {}
+
+            for batch in chunk_batches:
+                coros = [app.state.emb_client.embed(chunk) for chunk in batch]
+                results = await asyncio.gather(*coros)
+                chunk_embedding_map = chunk_embedding_map | dict(zip(batch, results))
+            
+            db_objects = [Chunk(
+                original_id = metadata[file_name]['external_id'],
+                original_name = file_name,
+                chunk_text = text,
+                embedding = embedding,
+                load_id = load_id
+            ) for text, embedding in chunk_embedding_map.items()]
+
+            all_chunks.extend(db_objects)
         
-        print(f'Chunks added in session: {chunks_count}')
+        print(f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} Chunking done in {datetime.now() - start}, starting DB query.')        
+        async with app.state.session() as session:
+            session.add_all(all_chunks)
+            await session.commit()
+        
+        print(f'{chunks_count} chunks added.')
 
         return {'chunks_added': chunks_count}

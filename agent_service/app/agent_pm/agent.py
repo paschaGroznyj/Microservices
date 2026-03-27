@@ -33,6 +33,7 @@ class ActionType(str, Enum):
     SUMMARIZE_FILTER = 'summarize_filt'
     REBUILD_CATEGORIES = 'rebuild_categories'
     REBUILD_QUESTION = 'general_question'
+    SEND_DIGEST_EMAIL = 'send_digest_email'
 
 
 class AgentAction(BaseModel):
@@ -117,7 +118,7 @@ class PydanticOutputParser:
             'summarize_filt': ['по категории', 'за период'],
             'rebuild_categories': ['переопредели', 'категории', 'метаданные'],
             'general_question': ['упай', 'вставай'],
-            'send_digest_email': ['отправь на почту', 'отправь дайджест', 'send email', 'отправь на email']
+            'send_digest_email': ['отправь на почту', 'отправь дайджест', 'send email', 'отправь на email', 'email', 'почта', 'mail']
         }
 
         # Определяем action по ключевым словам
@@ -361,7 +362,7 @@ class KnowledgeAgent:
         #     return {"action": "rebuild_all", "files": [], "query": "", "reasoning": "Перестройка"}
         elif any(word in user_lower for word in ['обнови', 'категории', 'метаданные']):
             return {"action": "rebuild_categories", "files": [], "query": "", "reasoning": "Обновление"}
-        elif any(phrase in user_lower for phrase in ['отправь на почту', 'отправь на email', 'отправь дайджест']):
+        elif any(phrase in user_lower for phrase in ['почта', 'email', 'mail', 'yandex']):
             return {"action": "send_digest_email", "files": [], "query": user_input, "reasoning": "Отправка email"}
         return {"action": "analyze_folder", "files": [], "query": "", "reasoning": "Анализ"}
 

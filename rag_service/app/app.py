@@ -1,108 +1,267 @@
+import re
 import uuid
+import json
+import asyncio
 import chromadb
-import asyncpg
-import numpy as np
-from pgvector.asyncpg import register_vector
-from fastapi import FastAPI
-from pydantic import BaseModel
+from datetime import datetime
+from aiobotocore.session import AioSession
+from botocore.client import Config
+from fastapi import FastAPI, Response, status
+from sqlalchemy import URL, Select, text, delete
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Dict, List
-from asyncpg.protocol.record import Record
+from typing import AsyncGenerator
 
-from .embedding import DummyKBEmbedding, AsyncStandaloneEmbedding, GigaChatEmbedding
+from .models import Chunk, GetChunk, PutDocument, DelChunk
+from .embedding import GigaChatEmbedding
 from .core.config import (
     DB_USER,
     DB_PASSWORD,
     DB_HOST,
     DB_PORT,
-    VDB_TYPE,
-    EMB_MODEL,
-    HF_TOKEN
+    DB_NAME,
+    OBS_ACCESS_KEY,
+    OBS_SECRET_KEY,
+    OBS_REGION,
+    OBS_BUCKET,
+    OBS_ENDPOINT
 )
+
+s3_params = {
+    "service_name": "s3",
+    "aws_access_key_id": OBS_ACCESS_KEY,
+    "aws_secret_access_key": OBS_SECRET_KEY,
+    "region_name": OBS_REGION,
+    "endpoint_url": OBS_ENDPOINT,
+    "config": Config(s3={"addressing_style": "virtual"})
+}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
-    vdb_client = None
-    if VDB_TYPE == 'chroma':
-        vdb_client = chromadb.HttpClient(host='chromadb', port=8000)
-        app.state.collection = vdb_client.get_or_create_collection(
-            'kb_collection', 
-            embedding_function=DummyKBEmbedding(EMB_MODEL)
-        )
-        app.state.vdb_client = vdb_client
 
-    elif VDB_TYPE == 'pgvector':
-        print(DB_PORT)
-        conn = await asyncpg.connect(
-            user=DB_USER,
-            password=DB_PASSWORD,
-            host=DB_HOST,
-            port=DB_PORT
-        )
+    url = URL.create(
+        'postgresql+asyncpg',
+        username=DB_USER,
+        password=DB_PASSWORD,
+        host=DB_HOST,
+        port=DB_PORT,
+        database=DB_NAME
+    )
 
-        await conn.execute('CREATE EXTENSION IF NOT EXISTS vector')
-        await register_vector(conn)
+    engine = create_async_engine(url)
+    app.state.session = async_sessionmaker(engine, expire_on_commit=False)
 
-        await conn.execute('CREATE TABLE IF NOT EXISTS rag_docs (id bigserial PRIMARY KEY, embedding vector(1024), content varchar(5000))')
-        app.state.vdb_client = conn
-
+    async with app.state.session() as session:
+        await session.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
+        await session.commit()
+    
+    @asynccontextmanager
+    async def client():
+        session = AioSession()
+        async with session.create_client(**s3_params) as client:
+            yield client
+    
     emb_client = GigaChatEmbedding()
     app.state.emb_client = emb_client
+    app.state.s3_client = client
 
     yield
 
-    del vdb_client
+    await engine.dispose()
     del emb_client
+    del client
 
 
 app = FastAPI(title='RAG Service', lifespan=lifespan)
 
-class Document(BaseModel):
-    content: str
-
-@app.post('/put')
-async def put(document: Document):
-    app.state.collection.add(
-        ids = [str(uuid.uuid4())],
-        embeddings = await app.state.emb_client.embed(document.content),
-        documents = [document.content]
-    )
-    return {
-        "doc_length": len(document.content),
-        "new_collection_length": app.state.collection.count()
-    }
-
-@app.get('/get')
-async def get(document: Document):
-    response = app.state.collection.query(
-        query_embeddings = await app.state.emb_client.embed(document.content),
-        n_results = 5
-    )
-    return response
-
 @app.post('/put_pv')
-async def put_pv(document: Document):
+async def put_pv(document: PutDocument):
 
-    embedding = await app.state.emb_client.embed(document.content)
-    await app.state.vdb_client.execute('INSERT INTO rag_docs (embedding, content) VALUES ($1, $2)', np.array(embedding), document.content)
+    embedding = await app.state.emb_client.embed(document.text)
+    c = Chunk(
+        original_id = document.id,
+        original_name = document.name,
+        chunk_text = document.text,
+        embedding = embedding
+    )
+
+    async with app.state.session() as session:
+        session.add(c)
+        await session.commit()
 
     return {
-        "doc_length": len(document.content),
-        "new_collection_length": ''
+        "name": document.name,
+        "chunks_added": ''
     }
 
 @app.get('/get_pv')
-async def get_pv(document: Document):
-    embedding = await app.state.emb_client.embed(document.content)
-    response = await app.state.vdb_client.fetch('SELECT content FROM rag_docs ORDER BY embedding <-> $1 LIMIT 5', np.array(embedding))
-    return [dict(qr) for qr in response]
+async def get_pv(document: GetChunk):
+    embedding = await app.state.emb_client.embed(document.text)
 
-@app.post('/del_pv/{id}')
-async def del_pv(id):
-    await app.state.vdb_client.execute('DELETE FROM rag_docs where id = $1', int(id))
-    return {'deleted': id}
+    async with app.state.session() as session:
+        stmt = Select(Chunk.id, Chunk.original_name, Chunk.chunk_text).order_by(Chunk.embedding.l2_distance(embedding)).limit(document.top_n)
+        
+        queryset = await session.execute(stmt)
+
+    return queryset.mappings().all()
+
+@app.post('/del_pv')
+async def del_pv(chunk_pointer: DelChunk, response: Response):
+    """
+    Docstring для del_pv
+    Удаляем либо по ID оригинального документа, либо по ID чанка (если вдруг надо удалить одиночный чанк)
+    """
+    async with app.state.session() as session:
+        stmt = delete(Chunk).where(Chunk.id == chunk_pointer.original_id if chunk_pointer.original_id else Chunk.id == chunk_pointer.db_id)
+
+        result = await session.execute(stmt)
+
+        if result.rowcount == 0:
+            response.status_code = status.HTTP_404_NOT_FOUND
+            return
+
+        await session.commit()
+
+    return {'rows_deleted': result.rowcount}
 
 @app.get('/all')
 async def get_all():
-    query_result = await app.state.vdb_client.fetch('SELECT id, content FROM rag_docs')
-    return [dict(qr) for qr in query_result]
+
+    async with app.state.session() as session:
+        stmt = Select(Chunk.id, Chunk.original_id, Chunk.original_name, Chunk.chunk_text)
+        queryset = await session.execute(stmt)
+    
+    return queryset.mappings().all()
+
+def extract_json_array(raw: str) -> str:
+        start = raw.find("[")
+        end = raw.rfind("]")
+
+        if start == -1 or end == -1 or end < start:
+            raise ValueError("JSON array not found in response")
+
+        return raw[start:end + 1]
+
+
+def clean_text(text: str) -> str:
+        lines = text.splitlines()
+
+        while lines:
+            line = lines[0].strip()
+
+            if not line:
+                lines.pop(0)
+                continue
+
+            if re.fullmatch(r'[0-9a-fA-F]{3,8}', line):
+                lines.pop(0)
+                continue
+
+            if len(line) < 10 and ' ' not in line:
+                lines.pop(0)
+                continue
+
+            break
+
+        text = '\n'.join(lines)
+        text = re.sub(
+            r'\n\d+\n0\nx-amz-checksum-crc32:.*$',
+            '',
+            text,
+            flags=re.S
+        )
+        text = text.replace(r'\x00', '')
+        return text.strip()
+
+@app.post('/run_rag')
+async def run_rag():
+    """
+    Docstring для run_rag
+    Эндпоинт обращается к S3-бакету, загружает оттуда метаданные и содержимое файлов.
+    Содержимое нарезается на чанки, чанки делятся на батчи по 10 штук.
+    Для каждого чанка в батче создается корутина, они заворачиваются в gather, результаты через zip скрепляются с текстом чанков.
+    Формируются ORM объекты и записываются в БД в едином запросе.
+    """
+
+    params = {
+        "Bucket": OBS_BUCKET,
+        "Prefix": "articles/"
+    }
+
+    load_id = str(uuid.uuid4())
+    start = datetime.now()
+
+    async with app.state.session() as session:
+        stmt = Select(Chunk.original_id)
+
+        query = await session.execute(stmt)
+        ids = set(query.scalars().all())
+    
+    async with app.state.s3_client() as client:
+        content_resp = await client.list_objects_v2(**params)
+
+        md_reponse = await client.get_object(Bucket=OBS_BUCKET, Key='metadata/metadata.json')
+        data = await md_reponse["Body"].read()
+        raw_text = data.decode("utf-8", errors="ignore")
+        clean_json = extract_json_array(raw_text)
+        metadata = json.loads(clean_json)
+
+        metadata = {item['file_article']: item for item in metadata}
+
+        chunks_count = 0
+        all_chunks = []
+        
+        for obj in content_resp["Contents"]:
+            key = obj["Key"]
+
+            file_name = key.split('/')[-1]
+
+            if metadata[file_name]['external_id'] in ids:
+                continue
+            
+            if not key.endswith(".md"):
+                continue
+
+            response = await client.get_object(Bucket=OBS_BUCKET, Key=key)
+            data = await response["Body"].read()
+
+            data = data.replace(b'\x00', b'')
+            text = data.decode("utf-8", errors="ignore")
+            text = clean_text(text)
+            metadata[file_name]['text'] = text
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+            text_chunks = text_splitter.split_text(text)
+            chunks_count += len(text_chunks)
+            print(f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} Created {len(text_chunks)} chunks for document {file_name}')
+
+            chunk_batches = [text_chunks[i:i+10] for i in range(0, len(text_chunks), 10)]
+
+            chunk_embedding_map = {}
+
+            for batch in chunk_batches:
+                coros = [app.state.emb_client.embed(chunk) for chunk in batch]
+                results = await asyncio.gather(*coros)
+                chunk_embedding_map = chunk_embedding_map | dict(zip(batch, results))
+            
+            db_objects = [Chunk(
+                original_id = metadata[file_name]['external_id'],
+                original_name = file_name,
+                chunk_text = text,
+                embedding = embedding,
+                load_id = load_id
+            ) for text, embedding in chunk_embedding_map.items()]
+
+            all_chunks.extend(db_objects)
+        
+        with open('metadata.json', "w", encoding="utf-8") as f:
+                json.dump(metadata, f, ensure_ascii=False, indent=2)
+        
+        print(f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} Chunking done in {datetime.now() - start}, starting DB query.')        
+        async with app.state.session() as session:
+            session.add_all(all_chunks)
+            await session.commit()
+        
+        print(f'{chunks_count} chunks added.')
+
+        return {'chunks_added': chunks_count}

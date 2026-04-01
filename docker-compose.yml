@@ -240,30 +240,36 @@ services:
   #   ports:
   #     - "9003:8000"
 
-  # rag_service: # Пока комменчу, нужно убрать redis
-  #   container_name: rag_service
-  #   build: ./rag_service
-  #   command: uvicorn app.app:app --host 0.0.0.0 --port 8002
-  #   ports:
-  #     - "8002:8002"
-  #   environment:
-  #     HF_TOKEN: ${HF_TOKEN}
-  #     EMB_MODEL: ${EMB_MODEL}
-  #     DB_HOST: ${DB_HOST}
-  #     DB_PORT: ${DB_PORT}
-  #     DB_USER: ${DB_USER}
-  #     DB_PASSWORD: ${DB_PASSWORD}
-  #     REDIS_HOST: ${REDIS_HOST}
-  #     REDIS_PORT: ${REDIS_PORT}
-  #     REDIS_KEY: ${REDIS_KEY}
-  #     VDB_TYPE: ${VDB_TYPE}
-  #   depends_on:
-  #     - postgres
-  #     - redis
-  #     - token_service
 
-
-
+  rag_service:
+    container_name: rag_service
+    build: ./rag_service
+    command: uvicorn app.app:app --host 0.0.0.0 --port 8002
+    ports:
+      - "8002:8002"
+    environment:
+      HF_TOKEN: ${HF_TOKEN}
+      EMB_MODEL: ${EMB_MODEL}
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+      REDIS_KEY: ${REDIS_KEY}
+      VDB_TYPE: ${VDB_TYPE}
+      GC_AUTH_URL: ${GC_AUTH_URL}
+      GC_MODEL: ${GC_MODEL}
+      OBS_BUCKET: ${OBS_BUCKET}
+      OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
+      OBS_SECRET_KEY: ${OBS_SECRET_KEY}
+      OBS_REGION: ${OBS_REGION}
+      OBS_ENDPOINT: ${OBS_ENDPOINT}
+    depends_on:
+      - postgres
+      - token_service
+  
   chats_service:
     container_name: chats_service
     build: ./chats_service

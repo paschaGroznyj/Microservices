@@ -19,7 +19,7 @@ from rag_service.app.models import Chunk
 # access to the values within the .ini file in use.
 config = context.config
 
-from rag_service.app.core.config import DB_USER, DB_PASSWORD, DB_HOST, DB_PORT
+from rag_service.app.core.config import DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
@@ -34,7 +34,8 @@ database_url = URL.create(
         username=DB_USER,
         password=DB_PASSWORD,
         host=DB_HOST if platform.system() == 'Linux' else 'localhost',
-        port=DB_PORT if platform.system() == 'Linux' else 5433
+        port=DB_PORT if platform.system() == 'Linux' else 5433,
+        database=DB_NAME
     ).render_as_string(hide_password=False)
 
 config.set_main_option("sqlalchemy.url", database_url)

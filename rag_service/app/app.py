@@ -20,6 +20,7 @@ from .core.config import (
     DB_PASSWORD,
     DB_HOST,
     DB_PORT,
+    DB_NAME,
     OBS_ACCESS_KEY,
     OBS_SECRET_KEY,
     OBS_REGION,
@@ -44,7 +45,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         username=DB_USER,
         password=DB_PASSWORD,
         host=DB_HOST,
-        port=DB_PORT
+        port=DB_PORT,
+        database=DB_NAME
     )
 
     engine = create_async_engine(url)
@@ -207,9 +209,6 @@ async def run_rag():
 
         metadata = {item['file_article']: item for item in metadata}
 
-        with open('metadata.json', "w", encoding="utf-8") as f:
-                json.dump(metadata, f, ensure_ascii=False, indent=2)
-
         chunks_count = 0
         all_chunks = []
         
@@ -230,6 +229,7 @@ async def run_rag():
             data = data.replace(b'\x00', b'')
             text = data.decode("utf-8", errors="ignore")
             text = clean_text(text)
+            metadata[file_name]['text'] = text
             text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
             text_chunks = text_splitter.split_text(text)
             chunks_count += len(text_chunks)
@@ -253,6 +253,9 @@ async def run_rag():
             ) for text, embedding in chunk_embedding_map.items()]
 
             all_chunks.extend(db_objects)
+        
+        with open('metadata.json', "w", encoding="utf-8") as f:
+                json.dump(metadata, f, ensure_ascii=False, indent=2)
         
         print(f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} Chunking done in {datetime.now() - start}, starting DB query.')        
         async with app.state.session() as session:

@@ -16,6 +16,8 @@ from .core.config import EMBEDDING_MODEL
 from .core.agent_provider import get_model
 from langchain.schema import SystemMessage
 
+EMBED_MODEL = SentenceTransformer(EMBEDDING_MODEL)
+
 # =============================================================================
 # 1. РАСШИРЕННАЯ СТРУКТУРА ДЛЯ СОСТАВНЫХ ФИЛЬТРОВ
 # =============================================================================

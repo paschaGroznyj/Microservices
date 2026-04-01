@@ -496,28 +496,28 @@ class ChatAppSimple {
             });
             actionsDiv.appendChild(copyButton);
 
-            // Кнопка источников — только для бота и только если есть ссылки
-            if (isBot && sources.length > 0) {
-                const sourcesBtn = document.createElement('button');
-                sourcesBtn.className = 'action-button sources-button';
-                sourcesBtn.title = 'Источники';
-                sourcesBtn.innerHTML = `
-                    <svg class="action-icon" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M4 6h12M4 10h8M4 14h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                    </svg>
-                    <span class="sources-count-badge">${sources.length}</span>
-                `;
-                sourcesBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    // Снимаем active с других кнопок
-                    document.querySelectorAll('.sources-button.active').forEach(b => {
-                        if (b !== sourcesBtn) b.classList.remove('active');
-                    });
-                    sourcesBtn.classList.toggle('active');
-                    this.toggleSourcesSidebar(sources, sourcesBtn);
-                });
-                actionsDiv.appendChild(sourcesBtn);
-            }
+            // // Кнопка источников — только для бота и только если есть ссылки
+            // if (isBot && sources.length > 0) {
+            //     const sourcesBtn = document.createElement('button');
+            //     sourcesBtn.className = 'action-button sources-button';
+            //     sourcesBtn.title = 'Источники';
+            //     sourcesBtn.innerHTML = `
+            //         <svg class="action-icon" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+            //             <path d="M4 6h12M4 10h8M4 14h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            //         </svg>
+            //         <span class="sources-count-badge">${sources.length}</span>
+            //     `;
+            //     sourcesBtn.addEventListener('click', (e) => {
+            //         e.stopPropagation();
+            //         // Снимаем active с других кнопок
+            //         document.querySelectorAll('.sources-button.active').forEach(b => {
+            //             if (b !== sourcesBtn) b.classList.remove('active');
+            //         });
+            //         sourcesBtn.classList.toggle('active');
+            //         this.toggleSourcesSidebar(sources, sourcesBtn);
+            //     });
+            //     actionsDiv.appendChild(sourcesBtn);
+            // }
 
             return actionsDiv;
         }

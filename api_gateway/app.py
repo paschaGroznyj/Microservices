@@ -46,7 +46,8 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down API Gateway...")
     await app.state.http_client.aclose()
-app = FastAPI(title="API Gateway", lifespan=lifespan)
+# app = FastAPI(title="API Gateway", lifespan=lifespan)
+app = FastAPI(title="API Gateway", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
 # Service Discovery
 # SERVICES = {
@@ -120,6 +121,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.get("/some-route")
+async def some_route(request: Request):
+    authentik_user = request.headers.get("X-Authentik-Username")
+    logger.info(authentik_user)
 
 connections: dict[int, list[WebSocket]] = {}
 @app.websocket("/ws/chat/{chat_id}")

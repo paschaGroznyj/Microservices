@@ -20,6 +20,8 @@ from langchain.schema import SystemMessage
 # 1. РАСШИРЕННАЯ СТРУКТУРА ДЛЯ СОСТАВНЫХ ФИЛЬТРОВ
 # =============================================================================
 
+EMBED_MODEL = SentenceTransformer(EMBEDDING_MODEL)
+
 class CompositeFilters(BaseModel):
     """Составные фильтры: можно комбинировать date+topic, category+date и т.д."""
     date_range: Optional[Dict[str, str]] = Field(None, description="{'start_date': 'YYYY-MM-DD', 'end_date': 'YYYY-MM-DD'}")

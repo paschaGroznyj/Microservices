@@ -388,7 +388,7 @@ class ChatAppSimple {
 
 	console.log("🧩 CONNECT WS chatId =", chatId);
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const WS_HOST = "localhost:7000"; // на gateway
+        const WS_HOST = window.location.host; // на gateway
 
         this.ws = new WebSocket(
         `${protocol}//${WS_HOST}/ws/chat/${chatId}`

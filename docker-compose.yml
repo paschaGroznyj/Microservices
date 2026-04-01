@@ -5,6 +5,8 @@ services:
     ports:
       - "9092:9092"
       - "9093:9093"
+    mem_limit: 512m
+    memswap_limit: 512m
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -18,6 +20,9 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_NUM_PARTITIONS: 3
+      KAFKA_HEAP_OPTS: "-Xmx256m -Xms128m"
+      KAFKA_LOG_RETENTION_HOURS: 6
+      KAFKA_LOG_RETENTION_BYTES: 536870912  # 512MB
     volumes:
       - kafka-data:/var/lib/kafka/data
 
@@ -120,27 +125,27 @@ services:
   #     ports:
   #       - "4444:4444"
 
-  parsers_service:
-    build: ./parsers_service
-    container_name: parsers_service
-    ports:
-      - "8003:8003"
-    environment:
-      PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
-      PORT_PM_AGENT: ${PORT_PM_AGENT}
-      STORAGE_PATH: ${STORAGE_PATH}
-      SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES}
-      SYNC_INTERVAL_SCHEDULER: ${SYNC_INTERVAL_SCHEDULER}
-      ARTICLES_FOLDER: ${ARTICLES_FOLDER}
-      METADATA_FOLDER: ${METADATA_FOLDER}
+  # parsers_service:
+  #   build: ./parsers_service
+  #   container_name: parsers_service
+  #   ports:
+  #     - "8003:8003"
+  #   environment:
+  #     PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
+  #     PORT_PM_AGENT: ${PORT_PM_AGENT}
+  #     STORAGE_PATH: ${STORAGE_PATH}
+  #     SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES}
+  #     SYNC_INTERVAL_SCHEDULER: ${SYNC_INTERVAL_SCHEDULER}
+  #     ARTICLES_FOLDER: ${ARTICLES_FOLDER}
+  #     METADATA_FOLDER: ${METADATA_FOLDER}
 
-      OBS_BUCKET: ${OBS_BUCKET}
-      OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
-      OBS_SECRET_KEY: ${OBS_SECRET_KEY}
-      OBS_REGION: ${OBS_REGION}
-      OBS_ENDPOINT: ${OBS_ENDPOINT}
+  #     OBS_BUCKET: ${OBS_BUCKET}
+  #     OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
+  #     OBS_SECRET_KEY: ${OBS_SECRET_KEY}
+  #     OBS_REGION: ${OBS_REGION}
+  #     OBS_ENDPOINT: ${OBS_ENDPOINT}
     
-    restart: unless-stopped
+  #   restart: unless-stopped
 
   gateway:
     build: ./api_gateway

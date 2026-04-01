@@ -19,6 +19,7 @@ from parsers.fluxicon_parser import FluxiconParser
 from parsers.arxiv_parser import ARXIVParser
 # from parsers.ieee_parser import IEEEParser
 from parsers.ieee_parser_pw import IEEEParser
+from parsers.yandex_disk_parser import YandexDiskParser
 from botocore_client import OBSWorker
 
 # Конфигурация
@@ -248,7 +249,7 @@ async def perform_parsing_cycle():
             ARXIVParser(date_range),
             # FluxiconParser(date_range), # Почему то умер
             ScholarParser(date_range=date_range, config=cfg),
-            IEEEParser(link_ieee, date_range=date_range)
+            IEEEParser(link_ieee, date_range=date_range),
         ]
 
         pipeline = ParserPipeline(parsers)
@@ -323,6 +324,57 @@ async def run_parsing():
         return {"status": "already_running"}
     asyncio.create_task(perform_parsing_cycle())
     return {"status": "started"}
+
+@app.post("/run_icpm")
+async def run_icpm():
+    """Разовый запуск парсера ICPM с Яндекс.Диска."""
+    if parsing_active:
+        return {"status": "already_running"}
+
+    async def _run_icpm():
+        global parsing_active
+        try:
+            parsing_active = True
+            logger.info("=== Разовый запуск ICPM парсера ===")
+
+            await obs.download_all_md()
+            await obs.download_metadata()
+
+            icpm_url = os.getenv("YANDEX_DISK_ICPM_URL", "https://disk.yandex.ru/d/t3YC0BQjOA1sBA")
+            icpm_date = os.getenv("ICPM_CONFERENCE_DATE", "2025-10-01")
+            date_range = (icpm_date, icpm_date)
+
+            parser = YandexDiskParser(public_url=icpm_url, date_range=date_range, conference_name="ICPM")
+            pipeline = ParserPipeline([parser])
+            raw_articles = await pipeline.run()
+
+            logger.info(f"ICPM: обработка {len(raw_articles)} статей...")
+            _save_articles_and_metadata(raw_articles)
+
+            await obs.upload_all_md()
+            await obs.upload_all_pdfs()
+            await obs.put_json()
+
+            logger.info("=== ICPM парсинг завершён ===")
+
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        f"{SERVICES['agent_service']['url']}/make_reviews",
+                        json={"status": "success"})
+                    response.raise_for_status()
+                    logger.info(f"Агент подтвердил задачу: {response.json()}")
+            except Exception as e:
+                logger.error(f"Не удалось уведомить агента: {e}")
+
+        except Exception as e:
+            logger.exception(f"Ошибка ICPM парсинга: {e}")
+        finally:
+            parsing_active = False
+
+    asyncio.create_task(_run_icpm())
+    return {"status": "icpm_started"}
+
 
 @app.get("/health")
 async def health():

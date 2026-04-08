@@ -30,6 +30,7 @@ class CompositeFilters(BaseModel):
     category: Optional[str] = Field(None)
     topic: Optional[str] = Field(None)
     title: Optional[str] = Field(None)
+    source: Optional[str] = Field(None, description="Источник: yandex_disk:ICPM, googlescholar, arxiv.org, ieeexplore.ieee.org")
     threshold: float = Field(0.3, description="Порог семантики")
     limit: int = Field(50)
     
@@ -46,9 +47,13 @@ class CompositeFilters(BaseModel):
         return bool(self.category)
     
     @property
+    def has_source(self) -> bool:
+        return bool(self.source)
+    
+    @property
     def is_composite(self) -> bool:
         """True если несколько фильтров активны."""
-        count = sum([self.has_date, self.has_topic, self.has_category, bool(self.title)])
+        count = sum([self.has_date, self.has_topic, self.has_category, bool(self.title), self.has_source])
         return count > 1
 
     def to_slug(self) -> str:
@@ -70,6 +75,9 @@ class CompositeFilters(BaseModel):
 
         if self.title:
             parts.append(f"title_{_slugify(self.title)}")
+
+        if self.source:
+            parts.append(f"source_{_slugify(self.source)}")
 
         return "__".join(parts) if parts else "all"
 
@@ -108,12 +116,19 @@ class LLMCompositeExtractor:
         LLM анализирует запрос и выделяет ВСЕ параметры сразу.
         Поддерживает составные запросы: "pm4py за ноябрь", "CRISP_DM + ML 2025"
         """
+
+        SOURCE = ["yandex_disk:ICPM", "googlescholar", "arxiv.org", "ieeexplore.ieee.org"]
+
         prompt = f"""
         Проанализируй запрос дайджеста: "{query}"
 
         Извлеки ВСЕ параметры фильтрации одновременно в JSON CompositeFilters:
 
         ПРИМЕРЫ СОСТАВНЫХ ЗАПРОСОВ:
+        • "дайджест по ICPM" 
+          → {{"source": "yandex_disk:ICPM"}}
+        • "pm4py за ноябрь из googlescholar" 
+          → {{"date_range": {{"start_date": "2025-11-01", "end_date": "2025-11-30"}}, "topic": "pm4py", "source":"googlescholar"}}
         • "дайджест по pm4py за ноябрь" 
           → {{"date_range": {{"start_date": "2025-11-01", "end_date": "2025-11-30"}}, "topic": "pm4py"}}
         • "статьи с марта по октябрь 2025 по категории Общие принципы: CRISP_DM"
@@ -128,13 +143,17 @@ class LLMCompositeExtractor:
           → {{"topic": "AI machine learning"}}
         • "дайджест по статьям по категории Общие принципы, связанными с AI machine learning"
           → {{"category": "Общие принципы", "topic": "AI machine learning"}}
+        • "статьи по категории Общие принципы из googlescholar, связанными с AI machine learning"
+          → {{"category": "Общие принципы", "topic": "AI machine learning", "source": "googlescholar"}}
 
-        
+        ДОПУСТИМЫЕ ИСТОЧНИКИ (source):
+        {', '.join(SOURCE)}
         
         ПРАВИЛА:
         1. ДАТЫ всегда в YYYY-MM-DD ("ноябрь" → "2025-11-01/30")
         2. НЕ удаляй параметры, даже если их несколько
-        3. ТОЛЬКО если нет фильтров по дате, теме, категории, названию → topic=весь_запрос
+        3. "ICPM" → source="yandex_disk:ICPM" (по умолчанию)
+        4. ТОЛЬКО если нет фильтров по дате, теме, категории, названию → topic=весь_запрос
         
         ВЕРНИ ТОЛЬКО VALID JSON:
         """
@@ -275,18 +294,23 @@ def apply_composite_filters(articles: List[Dict], filters: CompositeFilters) -> 
     if filters.has_date:
         print("Фильтр по дате...")
         filtered = date_filter(filtered, filters.date_range['start_date'], filters.date_range['end_date'])
+
+    # 2️⃣ ИСТОЧНИК (точный - второй по строгости)
+    if filters.has_source:
+        print(f"Фильтр по источнику: {filters.source}")
+        filtered = source_filter(filtered, filters.source)
     
-    # 2️⃣ КАТЕГОРИЯ (точная)
+    # 3️⃣ КАТЕГОРИЯ (точная)
     if filters.has_category:
         print("Фильтр по категории...")
         filtered = category_filter(filtered, filters.category)
     
-    # 3️⃣ НАЗВАНИЕ (точная)
+    # 4️⃣ НАЗВАНИЕ (точная)
     if filters.title:
         print("Фильтр по названию...")
         filtered = title_filter(filtered, filters.title)
     
-    # 4️⃣ ТЕМА (семантическая - последней, с учетом предыдущих фильтров)
+    # 5️⃣ ТЕМА (семантическая - последней, с учетом предыдущих фильтров)
     if filters.has_topic:
         print("Семантический фильтр...")
         filtered = semantic_filter(filtered, filters.topic, filters.threshold)
@@ -297,6 +321,17 @@ def apply_composite_filters(articles: List[Dict], filters: CompositeFilters) -> 
     
     print(f"Итог: {len(filtered)} статей после всех фильтров")
     return filtered
+
+def source_filter(articles: List[Dict], source: str) -> List[Dict]:
+    """Фильтр по источнику данных."""
+    if not source:
+        return articles
+    
+    source_lower = source.lower()
+    return [
+        art for art in articles
+        if (art.get('source', '') or '').lower().find(source_lower) != -1
+    ]
 
 # Остальные функции фильтрации (без изменений)
 def date_filter(articles: List[Dict], start_date: str, end_date: str) -> List[Dict]:

@@ -265,6 +265,13 @@ async def run_rag():
             if metadata[file_name]['file_article'] in names:
                 continue
             
+            try:
+                if metadata[file_name]['category'] == 'Не релевантна PM':
+                    print('skipped')
+                    continue
+            except KeyError:
+                pass
+            
             if not key.endswith(".md"):
                 continue
 

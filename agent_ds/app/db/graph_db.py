@@ -104,7 +104,7 @@ class GraphStore:
             if source and not target:
                 # (ChatGPT)-[:CREATED_BY]->(?)
                 query = f"""
-                    MATCH (e:Entity {{normalized_name: $source}})-[:{rel_type}]->(neighbor:Entity)
+                    MATCH (e:Entity {{normalized_name: $source}})-[:{rel_type}]-(neighbor:Entity)
                     MATCH (e)-[:MENTIONED_IN]->(c:Chunk)
                     RETURN DISTINCT c.id AS chunk_id, neighbor.name AS neighbor
                 """
@@ -113,7 +113,7 @@ class GraphStore:
             elif target and not source:
                 # (?)-[:CREATED_BY]->(OpenAI)
                 query = f"""
-                    MATCH (neighbor:Entity)-[:{rel_type}]->(e:Entity {{normalized_name: $target}})
+                    MATCH (neighbor:Entity)-[:{rel_type}]-(e:Entity {{normalized_name: $target}})
                     MATCH (e)-[:MENTIONED_IN]->(c:Chunk)
                     RETURN DISTINCT c.id AS chunk_id, neighbor.name AS neighbor
                 """
@@ -137,6 +137,29 @@ class GraphStore:
 
             return [record["chunk_id"] for record in rows]
 
+    async def get_relations_for_entities(self, entity_names: list[str]) -> list[dict]:
+        """Возвращает все связи между найденными сущностями"""
+        async with self.driver.session() as session:
+            result = await session.run("""
+                MATCH (e1:Entity)-[r]->(e2:Entity)
+                WHERE e1.normalized_name IN $names 
+                   OR e2.normalized_name IN $names
+                RETURN e1.name AS source, 
+                       type(r) AS relation, 
+                       e2.name AS target
+                LIMIT 50
+            """, names=[n.lower() for n in entity_names])
+
+            return [
+                {
+                    "source": record["source"],
+                    "relation": record["relation"],
+                    "target": record["target"]
+                }
+                async for record in result
+                if record["relation"] != "MENTIONED_IN"
+            ]
+
     async def get_all_chunks(self):
         async with self.driver.session() as session:
             result = await session.run("""
@@ -158,6 +181,6 @@ def normalize_entity_name(name: str) -> str:
     name = re.sub(r"\s+", " ", name)
 
     # убрать спецсимволы
-    name = re.sub(r"[^\w\s]", "", name)
+    name = re.sub(r"[^\w\s]", " ", name)
 
     return name

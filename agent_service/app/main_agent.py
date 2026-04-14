@@ -17,9 +17,10 @@ agent = KnowledgeAgent()
 # text = "Сформируй дайджесты по всем статьям"
 # text = "Сформируй дайджест по этому файлу 2026-01-28_MuRAL-CPD_Active_Learning_for_Multiresolution_Change_Point_Detection.md"
 # text = "Найди информацию по теме методы обработки изображений"
-text = "Поиск документов с примерами оптимизации моделей"
+# text = "Поиск документов с примерами оптимизации моделей"
 # text = "Перестрой индексы"
 # text = "Сформируй дайджесты по категории Общие принципы"
+text = "Привет"
 response = agent.process_query(text)
 with open("answer.txt", mode='a', encoding='utf-8') as f:
     f.write(response['message'] + "\n")

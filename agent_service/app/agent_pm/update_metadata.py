@@ -5,9 +5,6 @@ import shutil
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
-from huggingface_hub import InferenceClient
-from huggingface_hub.errors import HfHubHTTPError
-from langchain.chat_models.gigachat import GigaChat
 from langchain.schema import SystemMessage
 from .core.agent_provider import get_model
 from .analyze_article import RelevanceAnalyzer

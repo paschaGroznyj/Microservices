@@ -1,5 +1,6 @@
 from functools import lru_cache
 from langchain_community.chat_models import GigaChat
+from langchain_gigachat.embeddings import GigaChatEmbeddings
 
 
 @lru_cache
@@ -8,8 +9,20 @@ def get_model():
         credentials="none",
         auth_url="http://token_service:9004/api/v2/oauth", # Данный адрес контейнера является единственным источником истины для получения токена внутри ВМ cloud
         verify_ssl_certs=False,
-        model="GigaChat-2-Max"
+        model="GigaChat-2-Max",
+        timeout=60,
+        temperature=0.0
     )
+
+@lru_cache
+def get_embedding_model():
+    return GigaChatEmbeddings(
+        credentials="somebody_once_told_me",
+        auth_url="http://localhost:9004/api/v2/oauth",
+        verify_ssl_certs=False,
+        model="Embeddings-2"
+    )
+
 
 # ================== ДЛЯ ЛОКАЛЬНОЙ ОТЛАДКИ ================
 # auth_url меняется на http://host.docker.internal:9004/api/v2/oauth при работе с докером

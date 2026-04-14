@@ -1,15 +1,12 @@
-import logging
 import json
 import re
 from typing import List, Dict, Any, Optional
 from enum import Enum
 from pydantic import BaseModel, Field
 from pathlib import Path
-import time
 import asyncio
 from .core.agent_provider import get_model
 from langchain.schema import SystemMessage
-from .core.config import *
 from .vector_db import VectorDBManager
 from .monitor import StorageMonitor
 from .core.config import ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH, METADATA_FILE
@@ -516,8 +513,8 @@ class KnowledgeAgent:
 
             elif action['action'] in ["summarize_file", "summarize_all", "summarize_new", "summarize_filt"]:
                 if action['action'] == "summarize_all":
-                    asyncio.run(self.obs_loader.run_download())
-                    asyncio.run(self.obs_loader.download_reviews())
+                    # asyncio.run(self.obs_loader.run_download())
+                    # asyncio.run(self.obs_loader.download_reviews())
                     # Дайджест ВСЕХ статей
                     reviews_root = self.digest_path
                     # ДУБЛИРОВАНИЕ КОДА
@@ -610,7 +607,7 @@ class KnowledgeAgent:
                         }
                     }
                 elif action['action'] == "summarize_new":
-                    asyncio.run(self.obs_loader.run_download())
+                    # asyncio.run(self.obs_loader.run_download())
                     results = self.auto_processor.process_new_articles()
                     asyncio.run(self.obs_loader.upload_digests())
                     asyncio.run(self.obs_loader.upload_vectorstore())
@@ -621,7 +618,7 @@ class KnowledgeAgent:
                     }
                 elif action['action'] == "summarize_filt":
                     # asyncio.run(self.obs_loader.run_download())
-                    asyncio.run(self.obs_loader.download_reviews())
+                    # asyncio.run(self.obs_loader.download_reviews())
                     json_file = self.name_meta_dir / "metadata.json"
                     results = agent_composite_digest_tool(llm_client=self.gigachat, query=user_input, json_path=json_file, md_folder=self.digest_path)
                     filename_fin = results['digest_file']

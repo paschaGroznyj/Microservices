@@ -4,25 +4,21 @@ LLM выделяет ВСЕ параметры (дата+тема+категор
 """
 import re
 import json
-import numpy as np
 from pathlib import Path
 import time
 from typing import List, Dict, Any, Optional
 from datetime import datetime, date
 from pydantic import BaseModel, Field
 from sklearn.metrics.pairwise import cosine_similarity
-from sentence_transformers import SentenceTransformer
-from .core.config import EMBEDDING_MODEL
-from .core.agent_provider import get_model
+from .core.agent_provider import get_model, get_embedd_model
 from langchain.schema import SystemMessage
-
-EMBED_MODEL = SentenceTransformer(EMBEDDING_MODEL)
 
 # =============================================================================
 # 1. РАСШИРЕННАЯ СТРУКТУРА ДЛЯ СОСТАВНЫХ ФИЛЬТРОВ
 # =============================================================================
 
-EMBED_MODEL = SentenceTransformer(EMBEDDING_MODEL)
+EMBED_MODEL = get_embedd_model()
+
 
 class CompositeFilters(BaseModel):
     """Составные фильтры: можно комбинировать date+topic, category+date и т.д."""
@@ -380,8 +376,9 @@ def semantic_filter(articles: List[Dict], topic: str, threshold: float) -> List[
     if not texts:
         return []
 
-    query_emb = EMBED_MODEL.encode([topic])
-    arts_emb = EMBED_MODEL.encode(texts)
+    print("Вызываю модель эмбеддингов")
+    query_emb = EMBED_MODEL.embed_documents([topic])
+    arts_emb = EMBED_MODEL.embed_documents(texts)
 
     scores = cosine_similarity(query_emb, arts_emb)[0]
 

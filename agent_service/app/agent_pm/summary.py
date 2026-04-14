@@ -2,16 +2,11 @@ import hashlib
 # from langchain.chat_models.gigachat import GigaChat
 from .core.agent_provider import get_model
 from langchain.schema import SystemMessage, HumanMessage
-from .core.config import STORAGE_PATH, EMBED_MODEL_GLOSS, PATH_TO_GLOSSARY
+from .core.config import STORAGE_PATH, PATH_TO_GLOSSARY
 from typing import Dict, Any, List
-import json
 import re
-import os
 from datetime import datetime
 from pathlib import Path
-from sentence_transformers import SentenceTransformer
-from huggingface_hub import InferenceClient
-from huggingface_hub.errors import HfHubHTTPError
 from dotenv import load_dotenv
 
 

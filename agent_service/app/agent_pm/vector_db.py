@@ -2,13 +2,10 @@ import os
 import logging
 from typing import List, Dict, Any
 from pathlib import Path
-import asyncio
-
 from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.docstore.document import Document
-from .core.config import EMBEDDING_MODEL
+from .core.agent_provider import get_embedd_model
 from .core.botocore_client import OBSWorker
 
 logger = logging.getLogger(__name__)
@@ -19,12 +16,8 @@ class VectorDBManager:
         self.digest_path = base_dir / digest_path
         print(self.digest_path)
         self.vector_db_path = base_dir / vector_db_path
-        
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name=EMBEDDING_MODEL,
-            model_kwargs={'device': 'cpu'},
-            encode_kwargs={'normalize_embeddings': True}
-        )
+
+        self.embeddings = get_embedd_model()
         
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=512,
@@ -76,7 +69,7 @@ class VectorDBManager:
         return documents
     
     def rebuild_index(self, file_paths: str = None):
-        asyncio.run(self.obs_loader.download_reviews())
+        # asyncio.run(self.obs_loader.download_reviews())
         documents = self._load_markdown_files(file_paths)
         # print("ДОКУМЕНТЫ ЗАГРУЖЕНЫ", documents)
         if not documents:

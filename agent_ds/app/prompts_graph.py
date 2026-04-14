@@ -73,6 +73,7 @@ STUDIED_AT          — учился в
 SUBSTITUTES_FOR     — заменяет собой
 REBRANDED_AS        — переименован в
 CANNIBALIZE         — вытесняет/уничтожает рынок
+OPPOSES             — противостоит
 NEGATIVELY_CORRELATED — отрицательно коррелирует с
 INCOMPATIBLE_WITH   — несовместим с
 
@@ -96,7 +97,7 @@ INCOMPATIBLE_WITH   — несовместим с
 
 4. Если одна сущность неизвестна — оставь source или target пустым "".
    Cypher-генератор обработает это как wildcard.
-
+     
 5. Выводи ТОЛЬКО валидный JSON без markdown и пояснений.
 
 === ПРИМЕРЫ ===
@@ -265,6 +266,9 @@ CANNIBALIZE         — вытесняет рынок или экспертиз�
 
 REBRANDED_AS        — переименован
                       (ClaudBot)-[:REBRANDED_AS]->(OpenClaw)
+
+OPPOSES             — противостоит
+                      (США)-[:OPPOSES]->(Китай)]
 
 NEGATIVELY_CORRELATED — метрики отрицательно коррелируют
                       (CBSR)-[:NEGATIVELY_CORRELATED]->(AOT)

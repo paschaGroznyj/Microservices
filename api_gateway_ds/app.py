@@ -212,7 +212,7 @@ async def homepage(request: Request):
 
     if not user:
         # Не авторизован - показываем приветственную страницу
-        return templates.TemplateResponse("welcome.html", {
+        return templates.TemplateResponse(name="welcome.html", context={
             "request": request,
             "user": None
         })

@@ -48,6 +48,7 @@ class OBSWorker:
 
         local_dir = self.name_meta_dir
         os.makedirs(local_dir, exist_ok=True)
+        print(self.bucket)
         async with self.client() as client:
             key = "metadata/metadata.json"
             local_path = local_dir / "metadata.json"
@@ -60,7 +61,7 @@ class OBSWorker:
             raw_text = data.decode("utf-8", errors="ignore")
 
             clean_json = self.extract_json_array(raw_text)
-            data = json.loads(clean_json)
+            data = json.loads(clean_json, strict=False)
             with open(local_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
 
@@ -515,10 +516,10 @@ class OBSWorker:
     #     await self.put_json(bucket)
     #     await self.upload_all_md(bucket)
 
-async def main():
-    obs = OBSWorker()
-    # await obs.run_download()
-    await obs.download_vectorstore()
+# async def main():
+#     obs = OBSWorker()
+#     await obs.download_metadata()
+    # await obs.download_vectorstore()
 
 
     # parser.run() / agent / обработка
@@ -528,8 +529,8 @@ async def main():
 
     # await obs.put_json(bucket)
   #  await obs.upload_all_md(bucket)
-
-import asyncio
-
-if __name__ == "__main__":
-    asyncio.run(main())
+#
+# import asyncio
+#
+# if __name__ == "__main__":
+#     asyncio.run(main())

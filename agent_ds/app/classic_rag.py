@@ -1,3 +1,5 @@
+from langchain_community.llms.tongyi import astream_generate_with_retry
+
 from db.app_db import DataBaseMessages
 import asyncio
 import re
@@ -24,7 +26,7 @@ splitter = RecursiveCharacterTextSplitter(
 
 embeddings = GigaChatEmbeddings(
     credentials="somebody_once_told_me",
-    auth_url="http://token_service:9004/api/v2/oauth",
+    auth_url="http://localhost:9004/api/v2/oauth",
     verify_ssl_certs=False,
     model="Embeddings-2"
 )
@@ -104,16 +106,20 @@ async def create_embeddings(db: DataBaseMessages):
         batch_ids.append(row["id"])
 
         if len(batch_texts) == BATCH_SIZE:
-
-            vectors = await embeddings.aembed_documents(batch_texts)
-            await db.update_embeddings(batch_ids, vectors)
+            response = await embeddings._client.aembeddings(texts=batch_texts)
+            for item in response.data:
+                print(item.usage.prompt_tokens)  # токены конкретного чанка
+                print(item.index)  # индекс в батче
+                print(len(item.embedding))  # размерность вектора
+            # vectors = await embeddings.aembed_documents(batch_texts)
+            # await db.update_embeddings(batch_ids, vectors)
             print("Получен list[векторов]")
             batch_texts = []
             batch_ids = []
 
-    if batch_texts:
-        vectors = await embeddings.aembed_documents(batch_texts)
-        await db.update_embeddings(batch_ids, vectors)
+    # if batch_texts:
+    #     vectors = await embeddings.aembed_documents(batch_texts)
+    #     await db.update_embeddings(batch_ids, vectors)
 
 async def search_in_embeddings(db: DataBaseMessages, query: str):
     vector = await embeddings.aembed_query(query)
@@ -141,16 +147,80 @@ async def search_in_embeddings(db: DataBaseMessages, query: str):
     # for r in results:
     #     print(f"Score: {r['score']:.3f}, Preview: {r['content']}")
 
+import json
+from typing import Dict
+from datetime import datetime
+
+async def generate_answer_with_context(query: str, db) -> Dict:
+    """Генерирует ответ и возвращает полную запись для Ragas"""
+
+    # 1. Поиск контекста
+    search_results = await search_in_embeddings(db, query)
+    contexts = [c["content"] for c in search_results]
+
+    # 2. Формирование промпта
+    if not contexts:
+        response = "В контексте нет информации для ответа."
+    else:
+        prompt = f"""Ответь на вопрос пользователя, используя только информацию из контекста ниже.
+Если в контексте нет ответа — скажи об этом прямо.
+Не выдумывай факты и не добавляй ссылки самостоятельно.
+
+Контекст:
+{' | '.join(contexts)}
+
+Вопрос: {query}
+
+Ответ:"""
+        response = giga.invoke([SystemMessage(content=prompt)]).content
+
+    # 3. Сбор данных в формате Ragas
+    return {
+        "user_input": query,
+        "retrieved_contexts": contexts,  # List[str] — как требует Ragas
+        "response": response,
+        "reference": None,  # ← заполните вручную позже, или оставьте null
+    }
+
 
 async def main():
     db = DataBaseMessages()
     await db.init_db_pool()
-    return db
+
+    queries = [
+        "С кем конкурирует дипсик?",
+        "Как генеративный ИИ влияет на занятость сотрудников?",
+        "Как математика связана с гуманитарными науками?",
+        "С кем сотрудничает Palantir и кто его создал?",
+        "Кто из сотрудников IBM публиковал исследования и в каких изданиях?",
+        "Какие платежные системы партнёрятся с Agent Payments Protocol и с какими фреймворками он совместим?",
+        "Какое китайское оборудование связано с передачей данных, и кто из известных личностей выступает против Китая?"
+    ]
+
+    results = []
+
+    for i, q in enumerate(queries, 1):
+        print(f"[{i}/{len(queries)}] Обрабатываю: {q}")
+        record = await generate_answer_with_context(q, db)
+        results.append(record)
+        print(f"✓ Ответ получен ({len(record['retrieved_contexts'])} контекстов)\n")
+
+    # Сохранение в JSON
+    output_file = f"ragas_dataset_hybrid.json"
+
+    dataset = {
+        "samples": results
+    }
+
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(dataset, f, ensure_ascii=False, indent=2)
+
+    print(f"\n💾 Dataset сохранён: {output_file}")
+    print(f"📊 Всего семплов: {len(results)}")
+    print(f"🔧 Откройте файл и заполните поле 'reference' вручную для ContextRecall")
+
+    await db.close()
 
 
-# if __name__ == '__main__':
-
-    # db = asyncio.run(main())
-    # asyncio.run(pouring_into_chunks(db))
-    # asyncio.run(create_embeddings(db))
-    # asyncio.run(search_in_embeddings(db, "Качество обработки данных"))
+if __name__ == "__main__":
+    asyncio.run(main())

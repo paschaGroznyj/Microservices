@@ -143,65 +143,51 @@ async def extract_entities_and_relations_batch(
         model=None,
         document_id: Optional[int] = None
 ) -> List[Dict]:
+    """
+    Обрабатывает чанки батчами и возвращает плоский список результатов.
+
+    Returns:
+        [
+            {
+                "document_id": 303,
+                "chunk_id": 1202,
+                "chunk_index": 2,
+                "entities": [...],
+                "relations": [...]
+            },
+            ...
+        ]
+    """
     results = []
 
-    # Индекс для быстрого доступа к соседям
-    chunks_by_index = {c["chunk_index"]: c for c in chunks}
-    chunk_meta = {
-        c["id"]: {"chunk_index": c["chunk_index"], "document_id": c["document_id"]}
-        for c in chunks
-    }
+    chunk_meta = {c["id"]: {"chunk_index": c["chunk_index"], "document_id": c["document_id"]}
+                  for c in chunks}
 
+    # Разбиваем чанки на батчи
     for i in range(0, len(chunks), batch_size):
         batch = chunks[i:i + batch_size]
 
+        # Формируем пользовательский промпт с нумерованными чанками
         user_content = "Process these text chunks:\n\n"
         for chunk in batch:
-            idx = chunk["chunk_index"]
-
-            # Берём соседей для контекста
-            prev_chunk = chunks_by_index.get(idx - 1)
-            next_chunk = chunks_by_index.get(idx + 1)
-
+            # Экранируем возможные конфликты в тексте
             text = chunk["content"].replace('"""', '"')
+            user_content += f'### CHUNK {chunk["id"]}:\n{text}\n\n'
 
-            # Добавляем контекст соседей серым текстом
-            context_before = f"[CONTEXT: ...{prev_chunk['content'][-150:]}]\n" if prev_chunk else ""
-            context_after = f"\n[CONTEXT: {next_chunk['content'][:150]}...]" if next_chunk else ""
-
-            user_content += (
-                f"### CHUNK {chunk['id']}:\n"
-                f"{context_before}"
-                f"{text}"
-                f"{context_after}\n\n"
-            )
-
-        user_content += "\nExtract entities and relations ONLY from the main chunk text, not from [CONTEXT] blocks. Return JSON for each chunk_id."
+        user_content += "\nReturn JSON with results for EACH chunk_id."
 
         try:
             response = model.invoke([
                 SystemMessage(content=BATCH_SYSTEM_PROMPT),
                 HumanMessage(content=user_content)
             ])
-            logger.info(response.response_metadata)
-            metadata = dict(response.response_metadata)
 
-            token_usage = dict(metadata.get("token_usage", {}))
-            cached = token_usage.get("precached_prompt_tokens", 0)
-            prompt = token_usage.get("prompt_tokens", 0)
-            total = token_usage.get("total_tokens", 0)
-
-            logger.info(
-                f"doc={document_id} batch={i // batch_size + 1} | "
-                f"prompt={prompt} cached={cached} total={total} | "
-                f"cache_ratio={cached / (prompt + cached) * 100:.0f}%" if (prompt + cached) > 0 else "cache_ratio=0%"
-            )
             parsed = parse_json_response(response.content)
-
             if parsed and "results" in parsed:
                 for item in parsed["results"]:
                     chunk_id = item.get("chunk_id")
                     meta = chunk_meta.get(chunk_id, {})
+
                     results.append({
                         "document_id": meta.get("document_id"),
                         "chunk_id": chunk_id,
@@ -210,10 +196,10 @@ async def extract_entities_and_relations_batch(
                         "relations": item.get("relations", [])
                     })
             else:
-                logger.warning(f"Unexpected format for batch {i // batch_size + 1}")
+                print(f"Unexpected response format for batch {i // batch_size + 1}")
 
         except Exception as e:
-            logger.error(f"❌ Error batch {i // batch_size + 1}: {e}")
+            print(f"❌ Error processing batch {i // batch_size + 1}: {e}")
             for chunk in batch:
                 results.append({
                     "document_id": document_id,
@@ -225,7 +211,6 @@ async def extract_entities_and_relations_batch(
                 })
 
     return results
-
 
 def parse_json_response(text: str) -> Optional[Dict]:
     """
@@ -251,7 +236,6 @@ async def generate_entities_and_relations(db: DataBaseMessages, graph: GraphStor
     chunks_in_graph = await graph.get_all_chunks()
     docs_chunks = {}
 
-    counts_chunks = [i for i in range(50, 300, 50)]
 
     for row in rows:
         row = dict(row)
@@ -297,29 +281,39 @@ async def search_in_graph(db: DataBaseMessages, graph: GraphStore, query: str):
     entity_chunks = set()
     relation_chunks = set()
     rel_type_chunks = set()
+    found_entity_names = []
 
     # 1. Поиск по сущностям
     for entity in json_answer.get("entities", []):
+        found_entity_names.append(entity["name"])
         ids = await graph.get_chunks_by_entity(entity["name"])
         entity_chunks.update(ids)
 
     for rel in json_answer.get("relations", []):
         source = rel.get("source", "").strip()
         target = rel.get("target", "").strip()
-        rel_type = rel.get("type", "").strip()
+        rel_type_raw = rel.get("type", "")
 
-        # 2. Поиск по паре сущностей (оба конца известны)
+        if source:
+            found_entity_names.append(source)
+        if target:
+            found_entity_names.append(target)
+
+        if isinstance(rel_type_raw, str):
+            rel_types = [rel_type_raw.strip()] if rel_type_raw.strip() else []
+        elif isinstance(rel_type_raw, list):
+            rel_types = [t.strip() for t in rel_type_raw if t.strip()]
+        else:
+            rel_types = []
+
         if source and target:
             ids = await graph.get_chunks_by_relation(source, target)
             relation_chunks.update(ids)
+        elif source or target:
+            for rel_type in rel_types:
+                ids = await graph.get_chunks_by_relation_type(source, target, rel_type)
+                rel_type_chunks.update(ids)
 
-        # 3. Поиск по сущность + тип связи (один конец пустой)
-        elif rel_type and (source or target):
-            ids = await graph.get_chunks_by_relation_type(source, target, rel_type)
-            rel_type_chunks.update(ids)
-
-    # Приоритет: точные триплеты > тип связи > просто сущности
-    # Если точные совпадения есть — не разбавляем общими
     if relation_chunks:
         final_chunks = list(relation_chunks | rel_type_chunks)
     elif rel_type_chunks:
@@ -335,40 +329,157 @@ async def search_in_graph(db: DataBaseMessages, graph: GraphStore, query: str):
     )
 
     chunks_data = await db.select_text_chunks(final_chunks)
-    return chunks_data
+
+    # Получаем связи для всех найденных сущностей
+    relations = []
+    if found_entity_names:
+        relations = await graph.get_relations_for_entities(found_entity_names)
+
+    logger.info(f"Relations found: {len(relations)}")
+
+    return {
+        "chunks": chunks_data[:4],
+        "relations": relations
+    }
+
+
+def build_answer_prompt(query: str, chunks: list, relations: list) -> str:
+    chunks_text = "\n\n".join([
+        f"[Чанк {c['chunk_id']}]: {c['content']}"
+        for c in chunks
+    ])
+
+    relations_text = "\n".join([
+        f"- {r['source']} --[{r['relation']}]--> {r['target']}"
+        for r in relations
+    ])
+
+    return f"""Ответь на вопрос, используя предоставленные фрагменты текста и граф связей.
+
+Граф связей между сущностями:
+{relations_text}
+
+Текстовые фрагменты:
+{chunks_text}
+
+Вопрос: {query}
+
+Ответ:"""
+
+
+# ─── Вспомогательные функции ───────────────────────────────────────────────────
+def relations_to_text(relations: list[dict]) -> str:
+    """Конвертирует список связей графа в человекочитаемый текст"""
+    if not relations:
+        return ""
+
+    lines = [
+        f"{r['source']} {r['relation'].lower().replace('_', ' ')} {r['target']}"
+        for r in relations
+    ]
+    return "Известные связи между сущностями: " + "; ".join(lines) + "."
+
+
+async def generate_answer_with_graph_context(query: str, graph: GraphStore, db) -> Dict:
+    """Генерирует ответ с использованием Graph RAG и возвращает запись для Ragas"""
+
+    # 1. Поиск в графе: получаем чанки + связи
+    result = await search_in_graph(query=query, graph=graph, db=db)
+
+    chunks = result.get("chunks", [])
+    relations = result.get("relations", [])
+
+    # 2. Формируем контекст: контент чанков + текстовое описание связей
+    contexts = [c["content"] for c in chunks]
+
+    if relations:
+        relations_text = relations_to_text(relations)
+        contexts.append(relations_text)
+
+    # 3. Генерация ответа
+    if not contexts:
+        response = "В контексте нет информации для ответа."
+    else:
+        prompt = f"""Ответь на вопрос пользователя, используя только информацию из контекста ниже.
+Если в контексте нет ответа — скажи об этом прямо.
+Не выдумывай факты и не добавляй ссылки самостоятельно.
+
+Контекст:
+{' | '.join(contexts)}
+
+Вопрос: {query}
+
+Ответ:"""
+        response = giga.invoke([SystemMessage(content=prompt)]).content
+
+    # 4. Сбор данных в формате Ragas
+    return {
+        "user_input": query,
+        "retrieved_contexts": contexts,  # List[str] — как требует Ragas
+        "response": response,
+        "reference": None,  # ← заполните вручную позже
+    }
+
 
 async def main():
+    # Инициализация
     db = DataBaseMessages()
+    await db.init_db_pool()
+
     graph = GraphStore(
         NEO4J_URI,
         NEO4J_USER,
         NEO4J_PASSWORD
     )
-    await db.init_db_pool()
-    # all_results = await generate_entities_and_relations(db, graph) # Для формирования Graph
-    # for i in all_results:
-    #     logger.info(i)
 
+    # Тестовые запросы
+    queries = [
+        "С кем конкурирует дипсик?",
+        "Как генеративный ИИ влияет на занятость сотрудников?",
+        "Как математика связана с гуманитарными науками?",
+        "С кем сотрудничает Palantir и кто его создал?",
+        "Кто из сотрудников IBM публиковал исследования и в каких изданиях?",
+        "Какие платежные системы партнёрятся с Agent Payments Protocol и с какими фреймворками он совместим?",
+        "Какое китайское оборудование связано с передачей данных, и кто из известных личностей выступает против Китая?"
+    ]
 
+    results = []
 
-    # await insert_graph_data(graph, all_results)
+    for i, q in enumerate(queries, 1):
+        print(f"[{i}/{len(queries)}] Graph RAG: {q}")
 
+        try:
+            record = await generate_answer_with_graph_context(q, graph, db)
+            results.append(record)
 
-    # query = "А гигачат у нас это чья модель?"
-    # await search_in_graph(query=query, graph=graph, db=db)
+        except Exception as e:
+            print(f"✗ Ошибка при обработке '{q}': {e}")
+            # Добавляем пустой результат, чтобы не ломать датасет
+            results.append({
+                "user_input": q,
+                "retrieved_contexts": [],
+                "response": f"Ошибка обработки: {str(e)}",
+                "reference": None,
+            })
 
-    # result = await graph.get_all_chunks()
-    # print(result)
+    # Сохранение в JSON
+    output_file = f"ragas_dataset_graph.json"
 
+    dataset = {
+        "samples": results
+    }
 
-    # entities = await graph.get_all_entities()
-    #
-    # chunks = await graph.get_chunks_by_entity("Cursor")
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(dataset, f, ensure_ascii=False, indent=2)
 
-    # for e in chunks:
-    #     print(e)
+    print(f"\n💾 Graph RAG dataset сохранён: {output_file}")
+    print(f"📊 Всего семплов: {len(results)}")
+    print(f"🔧 Заполните поле 'reference' вручную для метрики ContextRecall")
 
+    # Cleanup
     await graph.close()
+
+
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -158,12 +158,21 @@ class DataBaseMessages:
         """Для извлечения чанков с последующей векторизацией"""
         try:
             async with self.pool.acquire() as conn:
+                # rows = await conn.fetch("""
+                #                         SELECT id, content, document_id, chunk_index
+                #                         FROM chunks
+                #                         WHERE embedding IS NULL
+                #                         ORDER BY document_id LIMIT 50;
+                #                         """)
                 rows = await conn.fetch("""
-                                        SELECT id, content, document_id, chunk_index
-                                        FROM chunks
-                                        WHERE embedding IS NULL 
-                                        ORDER BY document_id LIMIT 50;
-                                        """)
+                                        SELECT c.id, c.content, c.document_id, c.chunk_index, d.date
+                                        FROM chunks as c
+                                                 JOIN documents as d
+                                                      ON c.document_id = d.id
+                                        WHERE d.date BETWEEN '2025-01-01' AND '2026-03-12'
+                                        ORDER BY c.document_id DESC LIMIT 64
+                                        OFFSET 2100;
+                                        """)  # LIMIT от 20
                 return rows
         except Exception as e:
             logging.error("Ошибка при получении чанков для эмбеддингов", e)
@@ -208,7 +217,7 @@ class DataBaseMessages:
                                         ON c.document_id = d.id
                                         WHERE d.date BETWEEN '2025-01-01' AND '2026-03-12'
                                         ORDER BY c.document_id DESC
-                                        LIMIT 200 OFFSET 1820; 
+                                        LIMIT 300 OFFSET 2100; 
                                         """) # LIMIT от 20
                 return rows
         except Exception as e:
@@ -237,6 +246,13 @@ class DataBaseMessages:
     ) -> List[Dict[str, Any]]:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("""
+                                    WITH corpus AS (SELECT c.id
+                                                    FROM chunks c
+                                                             JOIN documents d ON c.document_id = d.id
+                                                    WHERE d.date BETWEEN '2025-01-01' AND '2026-03-12'
+                                                    ORDER BY c.document_id DESC
+                                        LIMIT 300
+                                    OFFSET 2100 )
                                     SELECT c.id,
                                            c.document_id,
                                            c.chunk_index,
@@ -246,6 +262,7 @@ class DataBaseMessages:
                                     FROM chunks c
                                              JOIN documents d ON c.document_id = d.id
                                     WHERE c.embedding IS NOT NULL
+                                      AND c.id IN (SELECT id FROM corpus)
                                       AND (1 - (c.embedding <=> $1)) >= $3
                                     ORDER BY c.embedding <=> $1
                                         LIMIT $2
@@ -271,6 +288,13 @@ class DataBaseMessages:
     ) -> List[Dict[str, Any]]:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("""
+                                    WITH corpus AS (SELECT c.id
+                                                    FROM chunks c
+                                                             JOIN documents d ON c.document_id = d.id
+                                                    WHERE d.date BETWEEN '2025-01-01' AND '2026-03-12'
+                                                    ORDER BY c.document_id DESC
+                                        LIMIT 300
+                                    OFFSET 2100 )
                                     SELECT c.id,
                                            c.document_id,
                                            c.chunk_index,
@@ -281,6 +305,7 @@ class DataBaseMessages:
                                              JOIN documents d ON c.document_id = d.id
                                     WHERE c.tsv @@ websearch_to_tsquery('simple'
                                         , $1)
+                                      AND c.id IN (SELECT id FROM corpus)
                                     ORDER BY score DESC
                                         LIMIT $2
                                     """, query_text, limit)

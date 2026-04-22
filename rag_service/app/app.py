@@ -2,8 +2,10 @@ import re
 import uuid
 import json
 import asyncio
-import chromadb
+from gigachat import GigaChat
 from datetime import datetime
+from itertools import chain
+from dataclasses import dataclass
 from aiobotocore.session import AioSession
 from botocore.client import Config
 from fastapi import FastAPI, Response, status
@@ -11,7 +13,7 @@ from sqlalchemy import URL, Select, text, delete
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from typing import AsyncGenerator, List, Optional
 
 from .models import Chunk, GetChunk, PutDocument, DelChunk
 from .embedding import GigaChatEmbedding
@@ -25,7 +27,8 @@ from .core.config import (
     OBS_SECRET_KEY,
     OBS_REGION,
     OBS_BUCKET,
-    OBS_ENDPOINT
+    OBS_ENDPOINT,
+    GC_AUTH_URL
 )
 
 s3_params = {
@@ -65,12 +68,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     emb_client = GigaChatEmbedding()
     app.state.emb_client = emb_client
     app.state.s3_client = client
+    app.state.url = url
 
     yield
 
     await engine.dispose()
     del emb_client
     del client
+    del url
 
 
 app = FastAPI(title='RAG Service', lifespan=lifespan)
@@ -174,6 +179,43 @@ def clean_text(text: str) -> str:
         text = text.replace(r'\x00', '')
         return text.strip()
 
+class SemanticChunker:
+    """
+    Docstring для SemanticChunker
+    Класс для семантического чанкинга.
+    Было выяснено, что Гигачат неплохо справляется с определением заголовков.
+    Будем нарезать по ним, что позволит сохранить смысловое наполнение чанков.
+    """
+    def __init__(self):
+        self.model = GigaChat(
+            credentials="none",
+            auth_url=GC_AUTH_URL,
+            verify_ssl_certs=False,
+            model="GigaChat-2-Max"
+        )
+        self.system_prompt = """
+        Найди в тексте статьи все заголовки и подзаголовки. 
+        Выведи их без форматирования списком через запятую. Статья: {}
+        """
+    
+    async def achunk(self, text: str) -> List:
+        response = await self.model.achat(self.system_prompt.format(text))
+        headers = response.choices[0].message.content.split(', ')
+        pre_rcts = RecursiveCharacterTextSplitter(separators=headers)
+        precut_chunks = pre_rcts.split_text(text)
+        print(f'Found {len(headers)} headers, created {len(precut_chunks)} precut chunks.')
+        chunks = []
+        rcts = RecursiveCharacterTextSplitter(chunk_size=200, chunk_overlap=20)
+        for pc in precut_chunks:
+            chunks.extend(rcts.split_text(pc))
+        return chunks
+
+@dataclass
+class ArticleText:
+    file_name: str
+    text: str
+
+
 @app.post('/run_rag')
 async def run_rag():
     """
@@ -193,10 +235,10 @@ async def run_rag():
     start = datetime.now()
 
     async with app.state.session() as session:
-        stmt = Select(Chunk.original_id)
+        stmt = Select(Chunk.original_name)
 
         query = await session.execute(stmt)
-        ids = set(query.scalars().all())
+        names = set(query.scalars().all())
     
     async with app.state.s3_client() as client:
         content_resp = await client.list_objects_v2(**params)
@@ -205,20 +247,30 @@ async def run_rag():
         data = await md_reponse["Body"].read()
         raw_text = data.decode("utf-8", errors="ignore")
         clean_json = extract_json_array(raw_text)
-        metadata = json.loads(clean_json)
+        metadata = json.loads(clean_json, strict=False)
 
         metadata = {item['file_article']: item for item in metadata}
 
+        with open('metadata.json', 'w+', encoding='utf8') as jsonfile:
+            json.dump(metadata, jsonfile, indent=4, ensure_ascii=False)
+
         chunks_count = 0
-        all_chunks = []
+        texts = []
         
         for obj in content_resp["Contents"]:
             key = obj["Key"]
 
             file_name = key.split('/')[-1]
 
-            if metadata[file_name]['external_id'] in ids:
+            if metadata[file_name]['file_article'] in names:
                 continue
+            
+            try:
+                if metadata[file_name]['category'] == 'Не релевантна PM':
+                    print('skipped')
+                    continue
+            except KeyError:
+                pass
             
             if not key.endswith(".md"):
                 continue
@@ -228,38 +280,42 @@ async def run_rag():
 
             data = data.replace(b'\x00', b'')
             text = data.decode("utf-8", errors="ignore")
-            text = clean_text(text)
-            metadata[file_name]['text'] = text
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-            text_chunks = text_splitter.split_text(text)
-            chunks_count += len(text_chunks)
-            print(f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} Created {len(text_chunks)} chunks for document {file_name}')
-
-            chunk_batches = [text_chunks[i:i+10] for i in range(0, len(text_chunks), 10)]
-
-            chunk_embedding_map = {}
-
-            for batch in chunk_batches:
-                coros = [app.state.emb_client.embed(chunk) for chunk in batch]
-                results = await asyncio.gather(*coros)
-                chunk_embedding_map = chunk_embedding_map | dict(zip(batch, results))
-            
-            db_objects = [Chunk(
-                original_id = metadata[file_name]['external_id'],
-                original_name = file_name,
-                chunk_text = text,
-                embedding = embedding,
-                load_id = load_id
-            ) for text, embedding in chunk_embedding_map.items()]
-
-            all_chunks.extend(db_objects)
+            texts.append(ArticleText(file_name, clean_text(text)))
         
-        with open('metadata.json', "w", encoding="utf-8") as f:
-                json.dump(metadata, f, ensure_ascii=False, indent=2)
+        text_batches = [texts[i:i+10] for i in range(0, len(texts), 10)]
+        text_splitter = SemanticChunker()
+        text_chunks = []
+        
+        for batch in text_batches:
+            coros = [text_splitter.achunk(text.text) for text in batch]
+            result = await asyncio.gather(*coros)
+            fnames = [text.file_name for text in batch]
+            chunk_map = dict(zip(fnames, result))
+            for k,v in chunk_map.items():
+                text_chunks.extend([ArticleText(k, chunk) for chunk in v])
+
+        chunks_count += len(text_chunks)
+
+        chunk_batches = [text_chunks[i:i+10] for i in range(0, len(text_chunks), 10)]
+
+        db_objects = []
+
+        for batch in chunk_batches:
+            coros = [app.state.emb_client.embed(chunk.text) for chunk in batch]
+            results = await asyncio.gather(*coros, return_exceptions=True)
+            db_objects.extend(
+                Chunk(
+                    original_id = chunk.file_name,
+                    original_name = chunk.file_name,
+                    chunk_text = chunk.text,
+                    embedding = results[i],
+                    load_id = load_id
+                ) for i, chunk in enumerate(batch)
+            )
         
         print(f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} Chunking done in {datetime.now() - start}, starting DB query.')        
         async with app.state.session() as session:
-            session.add_all(all_chunks)
+            session.add_all(db_objects)
             await session.commit()
         
         print(f'{chunks_count} chunks added.')

@@ -860,7 +860,7 @@ class KnowledgeAgent:
         ]
         if new_digest_files:
             print(f"Автоотправка {len(new_digest_files)} дайджестов на почту...")
-            email_result = self.email_handler.send_auto_digest(new_digest_files)
+            email_result = self.email_handler.send_auto_digest(new_digest_files, self.obs_loader)
             print(f"Результат автоотправки: {email_result}")
 
         changes = self.monitor.get_changes()

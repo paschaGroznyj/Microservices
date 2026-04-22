@@ -70,12 +70,16 @@ class DigestEmailHandler:
         count = results["found_articles"]
         filename = results.get("filename", "digest")
 
-        asyncio.run(obs_loader.upload_single_digest_cond(digest_file, filename))
+        s3_key = asyncio.run(obs_loader.upload_single_digest_cond(digest_file, filename))
+
+        bucket_endpoint = "https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru"
+
+        obs_url = f"{bucket_endpoint}/{s3_key}"
 
         body_text = (
             "Здравствуйте!\n\n"
             "Это письмо из системы AgentPM.\n\n"
-            "Во вложении находится архив с дайджестом.\n\n"
+            f"Дайджест можно найти по ссылке: {obs_url}.\n\n"
             "С уважением,\nAgentPM"
         )
 
@@ -83,7 +87,7 @@ class DigestEmailHandler:
             to_addresses=[recipient_email],
             subject="AgentPM",
             body_html=body_text,
-            attachment_path=digest_file if digest_file else None,
+            # attachment_path=digest_file if digest_file else None,
         )
 
         if send_result["status"] == "ok":
@@ -114,7 +118,7 @@ class DigestEmailHandler:
             logger.error(f"Ошибка чтения recipients.json: {e}")
             return []
 
-    def send_auto_digest(self, digest_files: List[str]) -> Dict[str, str]:
+    def send_auto_digest(self, digest_files: List[str], obs_loader) -> Dict[str, str]:
         """
         Автоматическая отправка новых дайджестов после парсинга.
 
@@ -145,11 +149,19 @@ class DigestEmailHandler:
                     out.write(p.read_text(encoding="utf-8"))
                     out.write("\n\n---\n\n")
 
+            # Загрузка склеенного дайджеста в OBS
+            obs_url = asyncio.run(obs_loader.upload_single_digest_cond(str(merged_path), f"digests_{today}"))
+            if not obs_url:
+                return {
+                    "status": "error",
+                    "message": "Не удалось загрузить склеенный дайджест в хранилище.",
+                }
+            
             body_text = (
                 f"Здравствуйте!\n\n"
                 f"Это автоматическое письмо из системы AgentPM.\n\n"
                 f"После парсинга сформировано новых дайджестов: {count}.\n"
-                f"Все дайджесты находятся во вложенном архиве.\n\n"
+                f"Все дайджесты собраны в один файл по ссылке: {obs_url}\n\n"
                 f"С уважением,\nAgentPM"
             )
 
@@ -157,7 +169,7 @@ class DigestEmailHandler:
                 to_addresses=recipients,
                 subject=f"AgentPM: новые дайджесты ({count} шт.)",
                 body_html=body_text,
-                attachment_path=str(merged_path),
+                # attachment_path=str(merged_path),
             )
 
             logger.info(f"Автоотправка: {result}")

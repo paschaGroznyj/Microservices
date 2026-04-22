@@ -398,6 +398,7 @@ class OBSWorker:
         async with self.client() as client:
             await self._upload_file(client, digest_path, s3_key)
         print(f"Дайджест {filename} S3")
+        return s3_key
 
     async def upload_single_digest(self, digest_path: str, filename):
         """Загрузить один дайджест filename.json в S3"""

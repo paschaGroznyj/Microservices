@@ -1,0 +1,9 @@
+psycopg[binary]==3.2.9
+requests
+beautifulsoup4
+PyPDF2
+python-dotenv
+playwright
+weasyprint
+pymupdf
+langchain

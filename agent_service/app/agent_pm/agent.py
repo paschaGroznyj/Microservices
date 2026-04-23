@@ -9,14 +9,14 @@ from .core.agent_provider import get_model
 from langchain.schema import SystemMessage
 from .vector_db import VectorDBManager
 from .monitor import StorageMonitor
-from .core.config import ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH, METADATA_FILE
+from .core.config import ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH, METADATA_FILE, PORT_GATEWAY_PORT
 from .summary import SummaryGenerator
 from .core.botocore_client import OBSWorker
 import os
 from .summary_period import agent_composite_digest_tool
 from .update_metadata import MetadataUpdater
 from .digest_email_handler import DigestEmailHandler
-
+import requests
 
 # Pydantic модели для structured output
 class ActionType(str, Enum):
@@ -39,6 +39,8 @@ class AgentAction(BaseModel):
     query: Optional[str] = Field(default=None, description="Запрос поиска")
     reasoning: str = Field(..., description="Обоснование действия", alias='reasoning')
 
+
+GATEWAY_URL = f"http://api_gateway:{PORT_GATEWAY_PORT}"
 
 class PydanticOutputParser:
     def __init__(self, pydantic_object):
@@ -255,10 +257,20 @@ class KnowledgeAgent:
         # asyncio.run(self.obs_loader.run_download())
         # asyncio.run(self.obs_loader.download_reviews())
         # asyncio.run(self.obs_loader.download_vectorstore())
-        asyncio.run(self.make_reviews())
+        # asyncio.run(self.make_reviews())
         # Флаг для автозапуска
         self.skip_startup_autoprocess = skip_startup_autoprocess
 
+    def _send_status(self, status: str, request_id: str):
+        if not request_id:
+            return
+        try:
+            requests.post(f"{GATEWAY_URL}/internal/bot_status", json={
+                "request_id": request_id,
+                "status": status
+            }, timeout=2)
+        except Exception as e:
+            print(f"Не удалось отправить статус: {e}")
 
     def get_state(self) -> str:
         """Текущее состояние системы с проверкой существования БД"""
@@ -371,7 +383,7 @@ class KnowledgeAgent:
         else:
             return "векторов"
 
-    def _execute(self, action: AgentAction, user_input='') -> Dict[str, Any]:
+    def _execute(self, action: AgentAction, user_input='', request_id: str = '') -> Dict[str, Any]:
         """ШАГ 2: ВЫПОЛНЕНИЕ ИНСТРУМЕНТА"""
         # print(f"ВЫПОЛНЯЕМ: {action['action']}")
 
@@ -406,11 +418,13 @@ class KnowledgeAgent:
             if action['action'] == "delete_file":
                 files = action.get('files', [])
                 if files:
+                    self._send_status(f"🗑️ Удаляю {len(files)} файлов из базы...", request_id)
                     self.vector_db.delete_documents(files)
                     return {"status": "success", "message": f"Я удалил {len(files)} файлов"}
                 return {"status": "error", "message": "Нет файлов для удаления"}
 
             elif action['action'] == "analyze_folder":
+                self._send_status("📂 Анализирую директорию...", request_id)
                 changes = self.monitor.get_changes()
                 files_list = list(self.articles_path.glob("*.md"))
                 return {
@@ -429,6 +443,7 @@ class KnowledgeAgent:
                 }
 
             elif action['action'] == "search_db":
+                self._send_status("🔍 Ищу в базе знаний...", request_id)
                 # asyncio.run(self.obs_loader.download_vectorstore()) # OBS ломает файлы, хотя вроде сохраняем как бинарник
                 results = self.vector_db.similarity_search(action['query'] or "", k=5)
                 if not results:
@@ -474,6 +489,7 @@ class KnowledgeAgent:
                 }
 
             elif action['action'] == "rebuild_categories":
+                self._send_status("🏗️ Перестраиваю категории...", request_id)
                 message = asyncio.run(self.auto_categories())
                 return {
                     "status": "success",
@@ -481,6 +497,7 @@ class KnowledgeAgent:
                 }
 
             elif action['action'] == "general_question":
+                self._send_status("💬 Формирую ответ на вопрос...", request_id)
                 raw_text = action["agent_answer"]
                 text_no_tag = re.sub(r'\s*\[.*?\]\s*', '', raw_text)
 
@@ -503,6 +520,7 @@ class KnowledgeAgent:
                 return {"status": "success", "message": final_answer}
 
             elif action['action'] == "send_digest_email":
+                self._send_status("📧 Подготавливаю и отправляю дайджест на почту...", request_id)
                 return self.email_handler.execute(
                     user_input=user_input,
                     gigachat=self.gigachat,
@@ -513,6 +531,7 @@ class KnowledgeAgent:
 
             elif action['action'] in ["summarize_file", "summarize_all", "summarize_new", "summarize_filt"]:
                 if action['action'] == "summarize_all":
+                    self._send_status("📥 Загружаю метаданные статей...", request_id)
                     # asyncio.run(self.obs_loader.run_download())
                     # asyncio.run(self.obs_loader.download_reviews())
                     # Дайджест ВСЕХ статей
@@ -539,6 +558,7 @@ class KnowledgeAgent:
                     md_reviews = [name.name for name in reviews_root.rglob("*.md")]  # Тексты ревью
 
                     need_reviews = list(set(md_articles) - set(md_reviews))
+                    self._send_status(f"📝 Найдено {len(need_reviews)} статей без ревью, начинаю генерацию...", request_id)
                     print("Тексты статей для которых нужно сделать ревью", need_reviews)
                     # print("Спискок статей", len(md_files))
                     for filename in need_reviews:
@@ -548,18 +568,19 @@ class KnowledgeAgent:
                         pdf_url = meta.get("pdf_url", "Не найден")
 
                         digest_result = self.summarizer.generate_summary(
-                            content_=article_path.read_text(encoding='utf-8'),
+                            content=article_path.read_text(encoding='utf-8'),
                             filename=filename,
                             theme=theme,
                             pdf_url=pdf_url
                         )
-                        # ДУБЛИРОВАНИЕ КОДА
-                        results.append({
-                            "file": filename,
-                            "status": digest_result["status"],
-                            "digest_file": digest_result.get('digest_file')
-                        })
+                        # # ДУБЛИРОВАНИЕ КОДА
+                        # results.append({
+                        #     "file": filename,
+                        #     "status": digest_result["status"],
+                        #     "digest_file": digest_result.get('digest_file')
+                        # })
 
+                    self._send_status("☁️ Загружаю ревью в облако...", request_id)
                     asyncio.run(self.obs_loader.upload_digests())
                     articles_count = len(md_articles)
                     reviews_count = len(md_reviews)
@@ -608,7 +629,9 @@ class KnowledgeAgent:
                     }
                 elif action['action'] == "summarize_new":
                     # asyncio.run(self.obs_loader.run_download())
+                    self._send_status("🆕 Ищу новые статьи для обработки...", request_id)
                     results = self.auto_processor.process_new_articles()
+                    self._send_status("☁️ Загружаю результаты в облако...", request_id)
                     asyncio.run(self.obs_loader.upload_digests())
                     asyncio.run(self.obs_loader.upload_vectorstore())
                     return {
@@ -617,6 +640,7 @@ class KnowledgeAgent:
                         "results": results
                     }
                 elif action['action'] == "summarize_filt":
+                    self._send_status("🔎 Фильтрую статьи по запросу...", request_id)
                     # asyncio.run(self.obs_loader.run_download())
                     # asyncio.run(self.obs_loader.download_reviews())
                     json_file = self.name_meta_dir / "metadata.json"
@@ -642,6 +666,7 @@ class KnowledgeAgent:
                             f"🔗 **Ссылка на скачивание:** [Скачать]({full_link})"
                         )
                     # print(message)
+                    self._send_status("☁️ Загружаю дайджест в облако...", request_id)
                     asyncio.run(self.obs_loader.upload_single_digest_cond(filename_fin, results['filename']))
                     return {
                         "status": "success",
@@ -651,7 +676,7 @@ class KnowledgeAgent:
                 else:  # summarize_file
                     if action.get('files') and action['files'][0]:
                         filename = action.get('files', [None])[0]
-
+                        self._send_status(f"📥 Скачиваю статью: {filename}", request_id)
                         asyncio.run(self.obs_loader.ensure_article_downloaded(filename))
                         filepath = self.articles_path / filename
                         # ДУБЛИРОВАНИЕ КОДА
@@ -878,10 +903,11 @@ class KnowledgeAgent:
                     f"Теперь семантический поиск готов к работе. 🚀"
                 )
 
-    def process_query(self, user_input: str) -> Dict[str, Any]:
+    def process_query(self, user_input: str, request_id: str) -> Dict[str, Any]:
         try:
+            self._send_status("🌞 Определяю инструмент ...", request_id)
             action = self._analyze(user_input)
-            result = self._execute(action, user_input)
+            result = self._execute(action, user_input, request_id)
             final_state = self.get_state()
 
             user_message = result.get("message", "Операция завершена.")
@@ -895,7 +921,7 @@ class KnowledgeAgent:
                 "success": True
             }
         except Exception as e:
-            error_msg = f"Я упал, но скоро встану. Ошибка: {str(e[:100])}"
+            error_msg = f"Я упал, но скоро встану. Ошибка: {e}"
             return {
                 "input": user_input,
                 "error": str(e),

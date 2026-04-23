@@ -395,16 +395,49 @@ class ChatAppSimple {
         );
         this.ws.onmessage = (event) => {
             const message = JSON.parse(event.data);
-            this.addMessage(message);
-        };
+            if (message.type === 'agent_status') {
+                this.updateStatus(message.status);  // отдельная ветка
+            } else {
+                this.addMessage(message);           // обычное сообщение
+            }
+                };
     }
+
+            updateStatus(statusText) {
+                const container = document.getElementById('chat-messages');
+                if (!container) return;
+                console.log('Статус агента', statusText)
+                // Ищем существующий индикатор или создаём новый
+                let statusEl = document.getElementById('agent-status-indicator');
+
+                if (!statusEl) {
+                    statusEl = document.createElement('div');
+                    statusEl.id = 'agent-status-indicator';
+                    statusEl.className = 'agent-status';
+                    container.appendChild(statusEl);
+                }
+
+                statusEl.innerHTML = `
+                    <span class="status-spinner"></span>
+                    <span class="status-text">${statusText}</span>
+                `;
+
+                container.scrollTop = container.scrollHeight;
+            }
 
            addMessage(message) {
             const container = document.getElementById('chat-messages');
             if (!container) return;
 
+
+
             const isBot = message.is_from_bot;
             const rawContent = message.message || '';
+
+            if (isBot) {
+                const statusEl = document.getElementById('agent-status-indicator');
+                if (statusEl) statusEl.remove();
+            }
 
             const messageEl = document.createElement('div');
             messageEl.className = isBot ? 'assistant-message' : 'user-message';

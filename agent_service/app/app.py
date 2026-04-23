@@ -50,6 +50,7 @@ def kafka_consumer():
                 text = payload.get("message")
                 is_from_bot = payload.get("is_from_bot", False)
                 type_agent = payload.get("type_agent")
+                request_id = payload.get("request_id")
                 # Пропускаем сообщения от бота (защита от петли)
                 if is_from_bot or user_id == -1:
                     continue
@@ -63,7 +64,7 @@ def kafka_consumer():
                     continue
 
                 try:
-                    response = agent.process_query(text)
+                    response = agent.process_query(text, request_id)
                     response_text = response["message"]
 
                     # from datetime import datetime

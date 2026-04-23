@@ -47,7 +47,7 @@ class DBConsumer:
             chat_id = payload.get("chat_id")
             message = payload.get("message")
             is_from_bot = payload.get("is_from_bot", False)
-
+            logging.info(payload)
             # Сохраняем в БД
             await self.db.add_message(user_id, message, chat_id, is_from_bot)
             logger.info(f"Сообщение сохранено в БД: chat={chat_id}, user={user_id}")
@@ -56,6 +56,7 @@ class DBConsumer:
             # Если сообщение от бота, отправляем обратно в основной сервис для WebSocket
             if is_from_bot:
                 type_agent = payload.get("type_agent", "pm")
+                logging.info(type_agent)
                 gateway_url = self.agents[type_agent]["gateway"]
                 await self.send_to_main_service(chat_id, payload, gateway_url)
 

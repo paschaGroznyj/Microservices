@@ -7,7 +7,7 @@ load_dotenv()
 KAFKA_BROKER = os.getenv("KAFKA_BROKER")
 
 PORT_PM_AGENT = os.getenv("PORT_PM_AGENT")
-
+PORT_GATEWAY_PORT = os.getenv("PORT_GATEWAY_PORT")
 
 STORAGE_PATH = os.getenv("STORAGE_PATH", "./knowledge_base")
 ARTICLES_FOLDER = "articles"

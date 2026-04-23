@@ -96,6 +96,7 @@ class ChatMessage(BaseModel):
     message: str
     chat_id: int
     type_agent: str
+    request_id: str
 
 @app.on_event("startup")
 async def startup():
@@ -120,8 +121,10 @@ async def send_message(chat: ChatMessage):
         "chat_id": chat.chat_id,
         "message": chat.message,
         "type_agent": chat.type_agent,
-        "is_from_bot": False
+        "is_from_bot": False,
+        "request_id": chat.request_id
     }
+    logging.info(message)
     start = time.perf_counter()
     # отправка в Kafka
     producer.send("chat-messages", key=chat.user_id, value=message)

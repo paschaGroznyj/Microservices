@@ -19,9 +19,9 @@ agent = KnowledgeAgent()
 # text = "Найди информацию по теме методы обработки изображений"
 # text = "Поиск документов с примерами оптимизации моделей"
 # text = "Перестрой индексы"
-# text = "Сформируй дайджесты по категории Общие принципы"
+# text = "Сформируй дайджесты по теме process mining"
 text = "Привет"
-response = agent.process_query(text)
+response = agent.process_query(text, "sdvdssdvs")
 with open("answer.txt", mode='a', encoding='utf-8') as f:
     f.write(response['message'] + "\n")
 #

@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 import httpx
 import logging
 import json
+import uuid
 from pathlib import Path
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
@@ -114,6 +115,10 @@ class BotMessage(BaseModel):
     chat_id: int
     message: dict
 
+class BotStatus(BaseModel):
+    request_id: str
+    status: str
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -148,6 +153,23 @@ async def broadcast(chat_id: int, message: dict):
     for ws in connections.get(chat_id, []):
         logging.info(f"Подключение {ws}, сообщение {message}")
         await ws.send_json(message)
+
+@app.post("/internal/bot_status")
+async def bot_status(payload: BotStatus):
+    chat_id = pending_requests.get(payload.request_id)
+
+    if not chat_id:
+        logger.warning(f"Неизвестный request_id: {payload.request_id}")
+        raise HTTPException(status_code=404, detail="request_id not found")
+
+    logger.info(f"Статус агента для chat_id={chat_id}: {payload.status}")
+
+    await broadcast(chat_id, {
+        "type": "agent_status",  # прописали проверку на фронте
+        "status": payload.status
+    })
+
+    return {"ok": True}
 
 @app.post("/internal/bot_message")
 async def receive_bot_message(bot_msg: BotMessage):
@@ -505,6 +527,7 @@ async def get_current_user_info(request: Request):
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Auth service unreachable: {str(e)}")
 
+pending_requests: dict[str, int] = {}
 
 # ========== ПРОКСИ ДЛЯ ЧАТОВ ==========
 @app.post("/api/chats/send_message")
@@ -516,8 +539,14 @@ async def send_message(request: Request):
 
     # Получаем данные из запроса
     data = await request.json()
+
+    request_id = str(uuid.uuid4()) # Генерация id для передачи его агенту с последующей реализацией ОС о его действиях
+    # Запоминаем связь ДО отправки агенту
+    pending_requests[request_id] = data["chat_id"]
+
     data["user_id"] = user["user_id"]
     data["type_agent"] = "pm" # О Великий gateway
+    data["request_id"] = request_id
     logger.info(f"Что летит при отправке сообщений {data['chat_id']}, {data['message']}")
 
     message = {

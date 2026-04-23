@@ -40,7 +40,7 @@ services:
     working_dir: /app
     stdin_open: true
     tty: true
-    command: python app/main.py
+    command: python app/search_arxiv.py
 
 volumes:
   postgres_data:

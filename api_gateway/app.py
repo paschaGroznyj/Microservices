@@ -529,6 +529,16 @@ async def get_current_user_info(request: Request):
 
 pending_requests: dict[str, int] = {}
 
+
+@app.post("/api/search")
+async def searching(request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    data = await request.json()
+    logging.info(f"ДАННЫЕ с вкладки ПОИСКА {data}")
+
 # ========== ПРОКСИ ДЛЯ ЧАТОВ ==========
 @app.post("/api/chats/send_message")
 async def send_message(request: Request):

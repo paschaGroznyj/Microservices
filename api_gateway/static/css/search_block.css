@@ -1,0 +1,475 @@
+:root {
+  --bg: #f5f4f0;
+  --surface: #ffffff;
+  --surface2: #f0eeea;
+  --border: rgba(0,0,0,0.09);
+  --border-mid: rgba(0,0,0,0.15);
+  --text: #1a1a18;
+  --text-2: #6b6b66;
+  --text-3: #a8a8a2;
+  --accent: #2c5f8a;
+  --accent-bg: #e8f0f8;
+  --tag-cs: #dff0e8;
+  --tag-cs-text: #1a6644;
+  --tag-stat: #ede9fb;
+  --tag-stat-text: #4a3a9e;
+  --tag-pm: #fef3e2;
+  --tag-pm-text: #8a5a00;
+  --radius: 10px;
+  --radius-sm: 6px;
+}
+
+/* ── Arxiv: results state ── */
+.results-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.results-state.hidden{
+   opacity: 0; pointer-events: none; display: none;
+}
+
+.results-bar {
+  padding: 10px 16px;
+  border-bottom: 0.5px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.results-input-wrap { flex: 1; display: flex; gap: 6px; }
+.results-input {
+  flex: 1;
+  padding: 6px 10px;
+  border: 0.5px solid var(--border-mid);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--surface);
+  outline: none;
+}
+.results-input:focus { border-color: rgba(44,95,138,0.4); }
+.results-search-btn {
+  padding: 6px 11px;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: #fff;
+  cursor: pointer;
+  font-family: inherit;
+}
+.results-meta {
+  font-size: 11px;
+  padding: 10px;
+  color: var(--text-3);
+  white-space: nowrap;
+  font-family: 'DM Mono', monospace;
+}
+.sort-select {
+  padding: 5px 8px;
+  border: 0.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-family: inherit;
+  color: var(--text-2);
+  background: var(--surface2);
+  cursor: pointer;
+  outline: none;
+}
+
+.card {
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  display: flex;
+  flex-direction: column;
+}
+.card:hover {
+  border-color: var(--border-mid);
+  box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+}
+
+.card-tags { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; }
+.tag {
+  padding: 2px 7px;
+  border-radius: 20px;
+  font-size: 10px;
+  font-weight: 500;
+}
+.tag-cs { background: var(--tag-cs); color: var(--tag-cs-text); }
+.tag-stat { background: var(--tag-stat); color: var(--tag-stat-text); }
+.tag-pm { background: var(--tag-pm); color: var(--tag-pm-text); }
+
+.card-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  line-height: 1.45;
+  margin-bottom: 7px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  flex: 1;
+}
+.card-authors {
+  font-size: 10.5px;
+  color: var(--text-2);
+  margin-bottom: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.card-date {
+  font-size: 10px;
+  color: var(--text-3);
+  font-family: 'DM Mono', monospace;
+}
+.card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 0.5px solid var(--border);
+}
+.card-link {
+  font-size: 10px;
+  color: var(--accent);
+  text-decoration: none;
+}
+.card-link:hover { text-decoration: underline; }
+.card-open {
+  padding: 3px 8px;
+  border: 0.5px solid var(--border-mid);
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-family: inherit;
+  color: var(--text-2);
+  background: var(--surface2);
+  cursor: pointer;
+}
+.card-open:hover { background: var(--accent-bg); color: var(--accent); }
+
+/* skeleton loader */
+.skeleton-card {
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.skel {
+  background: linear-gradient(90deg, var(--surface2) 25%, #e8e6df 50%, var(--surface2) 75%);
+  background-size: 200% 100%;
+  border-radius: 4px;
+  animation: shimmer 1.2s infinite;
+}
+
+/* ── Arxiv: center state ── */
+/* Center Search State */
+.center-state {
+  flex: 1; /* По умолчанию занимает всё место и центрирует контент */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
+  transition: all 0.3s ease;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* When searched: shrink search bar to top */
+.center-state.searched {
+  flex: 0 0 auto; /* Не растягивается, высота по контенту */
+  justify-content: flex-start;
+  padding: 16px 24px 8px 24px;
+  border-bottom: 1px solid var(--border); /* Опционально: разделитель */
+  background: var(--bg); /* Фон, чтобы перекрывать прокручивающиеся карточки если нужно */
+  z-index: 10;
+}
+
+/* Hide decorative elements when searched */
+.center-state.searched .cs-icon,
+.center-state.searched .cs-title,
+.center-state.searched .cs-sub,
+.center-state.searched .cs-hints {
+  display: none;
+  opacity: 0;
+  height: 0;
+  margin: 0;
+}
+
+/* Form styling adjustments */
+.cs-form {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  max-width: 380px;
+  transition: max-width 0.3s ease;
+}
+
+.center-state.searched .cs-form {
+  max-width: 600px; /* Расширяем форму при поиске */
+}
+
+/* Results State */
+.results-state {
+  flex: 1; /* Занимает всё оставшееся место */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; /* Важно! */
+
+  /* Hidden state */
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+
+  /* Если нужно, чтобы результаты были ПОД поиском в DOM,
+     но визуально переключались, можно использовать absolute,
+     но при структуре flex лучше оставить так */
+}
+
+.results-state.visible {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: all;
+}
+
+/* Grid and Cards */
+.cards-wrap {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  width: 100%;
+  /* Убрали height: 1px */
+}
+
+.results-state.visible {
+  opacity: 1;
+  pointer-events: all;
+}
+
+.center-state.searched .cs-icon,
+.center-state.searched .cs-title,
+.center-state.searched .cs-sub,
+.center-state.searched .cs-hints {
+  display: none;
+}
+
+.cs-icon {
+  width: 44px; height: 44px;
+  background: var(--accent-bg);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+}
+.cs-icon svg { width: 20px; height: 20px; }
+
+.cs-title { font-size: 15px; font-weight: 500; color: var(--text); }
+.cs-sub {
+  font-size: 12.5px;
+  color: var(--text-2);
+  text-align: center;
+  max-width: 280px;
+  line-height: 1.55;
+}
+
+.cs-form {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  max-width: 380px;
+}
+.cs-input {
+  flex: 1;
+  padding: 9px 13px;
+  border: 0.5px solid var(--border-mid);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--surface);
+  outline: none;
+}
+.cs-input:focus { border-color: rgba(44,95,138,0.4); }
+.cs-search-btn {
+  padding: 9px 16px;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  font-family: inherit;
+  color: #fff;
+  cursor: pointer;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.cs-search-btn:hover { background: #245079; }
+
+.cs-hints {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.hint-chip {
+  padding: 4px 10px;
+  background: var(--surface2);
+  border: 0.5px solid var(--border);
+  border-radius: 20px;
+  font-size: 11px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.hint-chip:hover { background: var(--accent-bg); color: var(--accent); border-color: rgba(44,95,138,0.2); }
+
+/* ПОВОРОТ КАРТОЧКИ */
+/* Оверлей */
+.card-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s;
+}
+.card-overlay.active {
+  opacity: 1;
+  pointer-events: all;
+}
+
+/* Обёртка карточки — она и флипается */
+.card-flip-wrap {
+  width: 380px;
+  height: 260px;
+  perspective: 1200px;
+}
+
+.card-flip-inner {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  transform-style: preserve-3d;
+  transform: rotateY(90deg) translateY(60px);
+  transition: transform 0.5s cubic-bezier(0.23, 1, 0.32, 1),
+              opacity 0.3s;
+  opacity: 0;
+}
+
+/* Когда оверлей активен — карточка "прилетает" */
+.card-overlay.active .card-flip-inner {
+  transform: rotateY(0deg) translateY(0);
+  opacity: 1;
+}
+
+/* Когда закрываем — флипаем на обратную сторону и уходим */
+.card-overlay.closing .card-flip-inner {
+  transform: rotateY(-180deg) translateY(60px);
+  opacity: 0;
+}
+
+/* Стороны карточки */
+.card-face {
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  padding: 20px;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  background: #ffffff;
+  border: 0.5px solid rgba(0,0,0,0.12);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+  display: flex;
+  flex-direction: column;
+}
+
+/* Задняя сторона — повёрнута */
+.card-face.back {
+  transform: rotateY(180deg);
+  background: #f8f9fb;
+}
+
+/* Крестик закрытия */
+.card-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(0,0,0,0.07);
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #888;
+  font-size: 14px;
+  line-height: 1;
+  transition: background 0.15s;
+}
+.card-close:hover { background: rgba(0,0,0,0.13); }
+
+/* Содержимое лицевой стороны */
+.flip-tags { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 10px; }
+.flip-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1a1a18;
+  line-height: 1.45;
+  flex: 1;
+}
+.flip-meta {
+  font-size: 11px;
+  color: #a8a8a2;
+  margin-top: 10px;
+  font-family: 'DM Mono', monospace;
+}
+.flip-authors { font-size: 11.5px; color: #6b6b66; margin-top: 4px; }
+
+/* Содержимое задней стороны */
+.flip-abstract-label {
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #a8a8a2;
+  margin-bottom: 10px;
+}
+.flip-abstract {
+  font-size: 12px;
+  color: #3a3a38;
+  line-height: 1.6;
+  overflow-y: auto;
+  flex: 1;
+}
+.flip-link {
+  margin-top: 12px;
+  font-size: 11px;
+  color: #2c5f8a;
+  text-decoration: none;
+  align-self: flex-start;
+}
+.flip-link:hover { text-decoration: underline; }

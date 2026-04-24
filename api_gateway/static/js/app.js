@@ -5,7 +5,7 @@ class ChatAppSimple {
         this.currentChat = null;
         this.isUIInitialized = false;
         this.ws = null;
-        this.init();
+        // this.init();
     }
 
     async init() {
@@ -94,7 +94,7 @@ class ChatAppSimple {
 
     chatList.innerHTML = chats.map(chat => `
         <div class="chat-item ${chat.id === this.currentChat ? 'active' : ''}"
-             data-chat-id="${chat.id}">
+             data-chat-id="${chat.id}" data-tab="agent">
             <div class="chat-preview">
                 ${chat.last_message || 'Нет сообщений'}
             </div>
@@ -337,25 +337,29 @@ class ChatAppSimple {
         console.log('input= ', input, 'text ', text)
         if (!text) return;
 
-        // 🔥 Если чат не выбран — создаём новый автоматически
-        if (!this.currentChat) {
-            console.log('📝 Чат не выбран, создаём новый...');
+       if (!this.currentChat) {
             try {
-                const chatId = await this.createNewChat();
-                // newChat уже вызывает openChat, так что this.currentChat установлен
-                this.addMessage({
-                    message: text,
-                    is_from_bot: false,
-                    id: `temp-${Date.now()}`, // временный ID
-                    created_at: new Date().toISOString()
-                });
-                console.log('✅ Новый чат создан:', chatId);
+                // Очищаем инпут ДО createNewChat, чтобы loadMessages
+                // не застал уже отправленное сообщение в UI
+                input.value = '';
+                input.style.height = "auto";
+
+                await this.createNewChat();
             } catch (err) {
                 console.error('❌ Failed to create chat:', err);
                 alert('Не удалось создать чат. Попробуйте ещё раз.');
                 return;
             }
         }
+
+        // Оптимистичный рендер с temp id
+        const tempId = `temp-${Date.now()}`;
+        this.addMessage({
+            message: text,
+            is_from_bot: false,
+            id: tempId,
+            created_at: new Date().toISOString()
+        });
 
         try {
             const response = await fetch('/api/chats/send_message', {
@@ -396,11 +400,19 @@ class ChatAppSimple {
         this.ws.onmessage = (event) => {
             const message = JSON.parse(event.data);
             if (message.type === 'agent_status') {
-                this.updateStatus(message.status);  // отдельная ветка
+                this.updateStatus(message.status);
             } else {
-                this.addMessage(message);           // обычное сообщение
+                // Проверяем: есть ли уже такое сообщение от пользователя (оптимистичный рендер)
+                if (!message.is_from_bot) {
+                    const existing = [...document.querySelectorAll('.user-message-wrapper')].find(el => {
+                        const msgEl = el.querySelector('.user-message');
+                        return msgEl?.textContent?.trim().includes(message.message?.trim());
+                    });
+                    if (existing) return; // уже есть — пропускаем
+                }
+                this.addMessage(message);
             }
-                };
+        };
     }
 
             updateStatus(statusText) {
@@ -426,54 +438,53 @@ class ChatAppSimple {
             }
 
            addMessage(message) {
-            const container = document.getElementById('chat-messages');
-            if (!container) return;
+                const container = document.getElementById('chat-messages');
+                if (!container) return;
 
+                const isBot = message.is_from_bot;
+                const rawContent = message.message || '';
 
-
-            const isBot = message.is_from_bot;
-            const rawContent = message.message || '';
-
-            if (isBot) {
-                const statusEl = document.getElementById('agent-status-indicator');
-                if (statusEl) statusEl.remove();
-            }
-
-            const messageEl = document.createElement('div');
-            messageEl.className = isBot ? 'assistant-message' : 'user-message';
-
-            let content = rawContent;
-
-            if (isBot) {
-                content = marked.parse(rawContent);
-                if (typeof DOMPurify !== 'undefined') {
-                    content = DOMPurify.sanitize(content);
+                if (isBot) {
+                    const statusEl = document.getElementById('agent-status-indicator');
+                    if (statusEl) statusEl.remove();
                 }
-            } else {
-                content = this.escapeHtml(rawContent);
-            }
 
-            messageEl.innerHTML = `
-                ${content}
-                ${!isBot ? `<div class="timestamp">${new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</div>` : ''}
-            `;
+                const messageEl = document.createElement('div');
+                messageEl.className = isBot ? 'assistant-message' : 'user-message';
 
-            const actions = this.createMessageActions(message.id, rawContent, isBot);
+                let content = rawContent;
 
-            if (isBot) {
-                messageEl.appendChild(actions);
-                container.appendChild(messageEl);
-            } else {
-                const wrapper = document.createElement('div');
-                wrapper.className = 'user-message-wrapper';
+                if (isBot) {
+                    content = marked.parse(rawContent);
+                    if (typeof DOMPurify !== 'undefined') {
+                        content = DOMPurify.sanitize(content);
+                    }
+                } else {
+                    content = this.escapeHtml(rawContent);
+                }
 
-                wrapper.appendChild(messageEl);
-                wrapper.appendChild(actions);
+                messageEl.innerHTML = `
+                    ${content}
+                    ${!isBot ? `<div class="timestamp">${new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</div>` : ''}
+                `;
 
-                container.appendChild(wrapper);
-            }
+                const actions = this.createMessageActions(message.id, rawContent, isBot);
 
-            container.scrollTop = container.scrollHeight;
+                if (isBot) {
+                    messageEl.dataset.id = message.id;
+                    messageEl.appendChild(actions);
+                    container.appendChild(messageEl);
+                } else {
+                    const wrapper = document.createElement('div');
+                    wrapper.className = 'user-message-wrapper';
+
+                    wrapper.appendChild(messageEl);
+                    wrapper.appendChild(actions);
+
+                    container.appendChild(wrapper);
+                }
+
+                container.scrollTop = container.scrollHeight;
         }
 
         async createNewChat() {
@@ -550,11 +561,18 @@ class ChatAppSimple {
 
 
 
-// Инициализация при загрузке страницы. Ждет пока построится HTML дерево, только потом запускает код
-document.addEventListener('DOMContentLoaded', () => {
-    // Если на странице есть элемент с id="chat-app"
-    if (document.getElementById('chat-app')) {
-        window.chatApp = new ChatAppSimple();
-    }
-    initMobileMenu(); // Вызовется только тогда, когда страница полностью будет загружена
-});
+// // Инициализация при загрузке страницы. Ждет пока построится HTML дерево, только потом запускает код
+// document.addEventListener('DOMContentLoaded', () => {
+//     // Если на странице есть элемент с id="chat-app"
+//     if (document.getElementById('chat-app')) {
+//         window.chatApp = new ChatAppSimple();
+//     }
+//     initMobileMenu(); // Вызовется только тогда, когда страница полностью будет загружена
+// });
+
+
+const app = new ChatAppSimple();
+
+app.init()
+// Экспортируем именно экземпляр (объект), а не класс
+export default app;

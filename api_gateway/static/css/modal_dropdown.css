@@ -12,7 +12,7 @@
     min-width: 200px;
     margin-top: 8px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-    z-index: 1000;
+    z-index: 150;
     animation: dropdown-appear 0.15s ease-out;
 }
 
@@ -96,11 +96,12 @@
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(3px);
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 2000;
+    z-index: 1000;
     animation: modal-fade-in 0.2s ease-out;
 }
 

@@ -9,6 +9,9 @@
     <link rel="stylesheet" href="/static/css/main_chat.css">
     <link rel="stylesheet" href="/static/css/modal_dropdown.css">
     <link rel="stylesheet" href="/static/css/mobile.css">
+    <link rel="stylesheet" href="/static/css/status_agent.css">
+    <link rel="stylesheet" href="/static/css/search_block.css">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.5/dist/purify.min.js"></script>
 </head>
@@ -64,24 +67,34 @@
 
              <!-- Секция с кнопками - всегда под хедером -->
                 <div class="sidebar-section">
-                    <button id="new-chat-btn" class="new-chat-btn">
-                        <div style="display: flex; align-items: center; gap: 12px;">
-                            <svg class="menu-icon" viewBox="0 0 20 20">
-                                <path d="M10 4V16M4 10H16" stroke="currentColor" stroke-width="1.5"/>
-                            </svg>
-                            <span class="menu-text">Новый чат</span>
+                    <div class="sb-header">
+                        <div class="sb-brand">
+                            <div class="sb-brand-dot"></div>
+                            Agent PM
                         </div>
-                        <span class="menu-shortcut">Ctrl+Shift+O</span>
-                    </button>
-
-                    <div class="menu-item">
-                        <svg class="menu-icon" viewBox="0 0 20 20">
-                            <path d="M9 15C12.3137 15 15 12.3137 15 9C15 5.68629 12.3137 3 9 3C5.68629 3 3 5.68629 3 9C3 12.3137 5.68629 15 9 15Z" stroke="currentColor" fill="none" stroke-width="1.5"/>
-                            <path d="M13 13L17 17" stroke="currentColor" stroke-width="1.5"/>
-                        </svg>
-                        <span class="menu-text">Поиск в чатах</span>
-                        <span class="menu-shortcut">Ctrl+K</span>
+                        <!-- Секция с кнопкой новый чат-->
+                        <button id="new-chat-btn" class="new-chat-btn">
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <svg class="menu-icon" viewBox="0 0 20 20">
+                                    <path d="M10 4V16M4 10H16" stroke="currentColor" stroke-width="1.5"/>
+                                </svg>
+                                <span class="menu-text">Новый чат</span>
+                            </div>
+                            <span class="menu-shortcut">Ctrl+Shift+O</span>
+                        </button>
                     </div>
+                </div>
+
+                <!-- Секция выбора поля. Агент или поиск -->
+                <div class="sb-nav">
+                  <div class="nav-item active" id="nav-agent" data-tab="agent">
+                    <svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.2"/><path d="M8 5.5v3.2l1.8 1.1" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+                    Агент
+                  </div>
+                  <div class="nav-item" id="nav-arxiv" data-tab="arxiv">
+                    <svg viewBox="0 0 16 16" fill="none"><rect x="2.5" y="1.5" width="11" height="13" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M5 5.5h6M5 8h4M5 10.5h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+                    Поиск статей
+                  </div>
                 </div>
 
                 <div class="sidebar-section">
@@ -107,53 +120,74 @@
         </div>
 
 
-
-
-            <!-- Основная область чата -->
-
+            <!-- Основная область чата, ШАПКА над чатом -->
             <div class="chat-main">
-                <div class="head-section">
+
+                <div class="main-header">
                     <!-- 🔥 Кнопка меню для мобильных -->
                     <button class="mobile-menu-toggle" id="mobile-menu-toggle" aria-label="Меню">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M3 12h18M3 6h18M3 18h18" stroke-linecap="round"/>
                         </svg>
                     </button>
-                    <h3 id="chat-title">Agent Process Mining</h3>
+                    <div class="main-title" id="main-title">Agent Process Mining</div>
+                    <div class="tab-pills">
+                        <!-- Переключатель блоков -->
+                        <button class="pill active" id="pill-agent" data-tab="agent">Агент</button>
+                        <button class="pill" id="pill-arxiv" data-tab="arxiv">Статьи</button>
+                    </div>
                 </div>
-            <div class="chat-main-inner">
-                <div class="chat-messages" id="chat-messages">
-                    <!-- Сообщения будут здесь -->
+
+        <div class="content">
+            <div class="view" id="view-agent">
+                <div class="chat-main-inner">
+                    <div class="chat-messages" id="chat-messages">
+                        <!-- Сообщения будут здесь -->
+                    </div>
+                    <div id="message-input-container"></div>
                 </div>
-                <div id="message-input-container"></div>
-{#                <div class="message-input-wrapper">#}
-{##}
-{#                      <div class="message-input-box">#}
-{##}
-{#                        <textarea#}
-{#                          id="message-input"#}
-{#                          placeholder="Введите сообщение..."#}
-{#                          rows="1"#}
-{#                        ></textarea>#}
-{##}
-{#                        <button id="send-btn" disabled>#}
-{#                          <svg viewBox="0 0 24 24" class="send-icon">#}
-{#                            <path d="M12 5v14M5 12l7-7 7 7"#}
-{#                                  stroke="currentColor"#}
-{#                                  stroke-width="2"#}
-{#                                  fill="none"#}
-{#                                  stroke-linecap="round"#}
-{#                                  stroke-linejoin="round"/>#}
-{#                          </svg>#}
-{#                        </button>#}
-{##}
-{#                      </div>#}
-{##}
-{#                    </div>#}
-{#                <div class="input-footer">#}
-{#                Агент гигачата может совершать ошибки#}
-{#                </div>#}
             </div>
+                <!-- Arxiv view -->
+                <div class="view hidden" id="view-arxiv">
+                <!-- Center search (initial state) -->
+                <div class="center-state" id="center-state">
+                  <div class="cs-icon">
+                    <svg viewBox="0 0 20 20" fill="none">
+                      <circle cx="9" cy="9" r="5.5" stroke="#2c5f8a" stroke-width="1.5"/>
+                      <path d="M13 13L17 17" stroke="#2c5f8a" stroke-width="1.5" stroke-linecap="round"/>
+                    </svg>
+                  </div>
+                  <div class="cs-title">Поиск статей на arXiv</div>
+                  <div class="cs-sub">Введите тему — карточки со статьями появятся прямо здесь, отсортированные по дате</div>
+                  <div class="cs-form">
+                    <input class="cs-input" id="center-input" placeholder="process mining, conformance..."/>
+                    <button class="cs-search-btn" id="search-btn">Найти</button>
+
+                      <div class="results-meta" id="results-meta">—</div>
+                    <select class="sort-select" id="sort-select">
+                      <option value="date">По дате</option>
+                      <option value="relevance">По релевантности</option>
+                    </select>
+
+                  </div>
+                  <div class="cs-hints">
+                    <span class="hint-chip" data-query="process mining">process mining</span>
+                    <span class="hint-chip" data-query="conformance checking">conformance checking</span>
+                    <span class="hint-chip" data-query="object-centric PM">object-centric PM</span>
+                    <span class="hint-chip" data-query="predictive monitoring">predictive monitoring</span>
+                  </div>
+                </div>
+
+                <!-- Results state -->
+                <div class="results-state hidden" id="results-state">
+                  <div class="cards-wrap" id="cards-wrap">
+                    <div class="cards-grid" id="cards-grid"></div>
+                  </div>
+                </div>
+                </div>
+
+            </div>
+
          </div>
         </div>
     </div>
@@ -190,10 +224,12 @@
 
     <!-- Затемнение фона при открытом меню -->
     <div class="sidebar-overlay" id="sidebar-overlay"></div>
-
-    <script src="/static/js/app.js"></script>
     <script src="/static/js/modalWindow.js"></script>
     <script src="/static/js/mobile.js"></script>
+
+
+    <script type="module" src="/static/js/app.js"></script>
+    <script type="module" src="/static/js/searchBlock.js"></script>
 
 </body>
 </html>

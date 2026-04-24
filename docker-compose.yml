@@ -222,6 +222,7 @@ services:
 
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
       - ./backups:/backups
 
     logging:
@@ -266,7 +267,7 @@ services:
       OBS_ENDPOINT: ${OBS_ENDPOINT}
     depends_on:
       - postgres
-      - token_service
+      # - token_service
   
   chats_service:
     container_name: chats_service

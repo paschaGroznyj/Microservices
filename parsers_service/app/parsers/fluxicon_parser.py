@@ -140,9 +140,9 @@ class FluxiconParser:
         except Exception:
             return False
 
-#
+
 # async def main():
-#     data_range = ('2026-01-01', '2026-01-30')
+#     data_range = ('2026-04-05', '2026-04-17')
 #     flux_parser = FluxiconParser(data_range)
 #     results = await asyncio.gather(
 #         flux_parser.arun(),

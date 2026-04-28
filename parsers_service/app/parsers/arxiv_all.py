@@ -7,8 +7,8 @@ from datetime import date, timedelta
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any
 
-from parsers_service.app.core.db import DataBase
-from parsers_service.app.core.repository import ResearchRepository
+from core.db import DataBase
+from core.repository import ResearchRepository
 
 
 @dataclass
@@ -222,7 +222,7 @@ def build_payload(post_body: Dict[str, Any]) -> RequestPayload:
             keywords=params_raw.get("keywords", []),
             date_start=params_raw.get("date_start"),
             date_end=params_raw.get("date_end"),
-            limit=params_raw.get("limit", 20),
+            limit=params_raw.get("limit", 10),
         ),
     )
 
@@ -236,3 +236,8 @@ async def main(post_body: Dict[str, Any]):
         return await pipeline.run(payload)
     finally:
         await db.close()
+
+async def start_search(post_body: Dict[str, Any], db: DataBase):
+    payload = build_payload(post_body)
+    pipeline = ResearchPipeline(db)
+    return await pipeline.run(payload)

@@ -3,7 +3,8 @@ import json
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from dataclasses import asdict
-from fastapi import FastAPI, Response, HTTPException
+from pydantic import BaseModel
+from fastapi import FastAPI, Response, HTTPException, Request
 from contextlib import asynccontextmanager
 import uvicorn
 import asyncio
@@ -14,11 +15,14 @@ from pathlib import Path
 import json
 import re
 
-from parsers.scholar_parser import PipelineConfig, ScholarParser
-from parsers.fluxicon_parser import FluxiconParser
+from core.db import DataBase
+from parsers.arxiv_all import start_search
+# from parsers.scholar_parser import PipelineConfig, ScholarParser
+# from parsers.ieee_parser_pw import IEEEParser
+# from parsers.fluxicon_parser import FluxiconParser
 from parsers.arxiv_parser import ARXIVParser
 # from parsers.ieee_parser import IEEEParser
-from parsers.ieee_parser_pw import IEEEParser
+
 from parsers.yandex_disk_parser import YandexDiskParser
 from botocore_client import OBSWorker
 
@@ -33,6 +37,9 @@ from core.config import (
     SYNC_INTERVAL_SCHEDULER
 )
 
+
+db = DataBase()
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -45,6 +52,14 @@ PDFS_DIR = base_dir / STORAGE_PATH / PDFS_FOLDER
 METADATA_PATH = base_dir / STORAGE_PATH / METADATA_FILE
 STATE_FILE = Path("logs") / "state.json"
 
+
+
+
+# Вместо dataclass используем BaseModel
+class FavoriteStatus(BaseModel):
+    username: str
+    article_id: str
+    is_favorite: bool
 
 obs = OBSWorker()
 
@@ -300,15 +315,25 @@ async def scheduled_parsing_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Запуск фоновой задачи парсинга...")
-    task = asyncio.create_task(scheduled_parsing_loop())
+    # logger.info("Запуск фоновой задачи парсинга...")
+    # task = asyncio.create_task(scheduled_parsing_loop())
+    # yield
+    # logger.info("Завершение работы сервиса...")
+    # task.cancel()
+    # try:
+    #     await task
+    # except asyncio.CancelledError:
+    #     pass
+
+    global parsing_active
+    # Startup
+    parsing_active = True
+    await db.init_db_pool()
     yield
-    logger.info("Завершение работы сервиса...")
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
+    # Shutdown
+    parsing_active = False
+    await db.pool.close()
+
 
 app = FastAPI(title="Parsers Service", lifespan=lifespan)
 
@@ -375,6 +400,13 @@ async def run_icpm():
     asyncio.create_task(_run_icpm())
     return {"status": "icpm_started"}
 
+
+@app.post("/favorites")
+async def search_articles(data: FavoriteStatus):
+    logger.info(f"{data.username}, {data.article_id}, {data.is_favorite}")
+@app.post("/search/articles")
+async def search_articles(request: Dict[str, Any]):
+    return await start_search(request, db)
 
 @app.get("/health")
 async def health():

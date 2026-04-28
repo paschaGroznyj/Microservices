@@ -19,25 +19,55 @@ const PAPERS = [
   {title:"Root Cause Analysis in Deviant Cases Using Process Mining",authors:"Swinnen J., Depaire B., Jans M.",date:"2024-10-20",tags:[{l:"cs.AI",c:"cs"}],link:"https://arxiv.org", abstract: "Привет"},
 ];
 
+const TAG_PALETTE = [
+  { bg: "#e8f0f8", text: "#1a3a52" },  // синий (accent)
+  { bg: "#dff0e8", text: "#1a6644" },  // зелёный
+  { bg: "#ede9fb", text: "#3c2f8a" },  // фиолетовый
+  { bg: "#fef3e2", text: "#8a5a00" },  // жёлтый
+  { bg: "#fde8e8", text: "#8a1a1a" },  // красный
+  { bg: "#e8f8f5", text: "#0e5c4a" },  // бирюзовый
+];
 
-let currentQuery = "";
+function tagColor(str) {
+  // Простой хэш строки → индекс палитры
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return TAG_PALETTE[Math.abs(hash) % TAG_PALETTE.length];
+}
 
 function tagHtml(tag) {
-  return `<span class="tag tag-${tag.c}">${tag.l}</span>`;
+  const color = tagColor(tag);
+  return `<span class="tag" style="background:${color.bg};color:${color.text}">${tag}</span>`;
 }
+
+
+// Хранилище избранного: article_id → paper
+const favorites = new Map();
+let currentPapers = [];
 
 function renderCards() {
   const sort = document.getElementById("sort-select").value;
-  let papers = [...PAPERS];
+  let papers = [...currentPapers];
   if (sort === "date") {
     papers.sort((a, b) => b.date.localeCompare(a.date));
   }
   const grid = document.getElementById("cards-grid");
   grid.innerHTML = papers.map((p, i) => `
     <div class="card" data-index="${i}">
-      <div class="card-tags">${p.tags.map(tagHtml).join("")}</div>
+      <div class="card-header-row">
+      <div class="card-tags">${p.tags.map(t => tagHtml(t)).join("")}</div>
+      <button class="card-star ${favorites.has(p.article_id) ? 'active' : ''}" data-article-id="${p.article_id}" data-index="${i}">
+        <svg viewBox="0 0 24 24" width="16" height="16">
+          <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"
+            stroke="currentColor" stroke-width="1.5" fill="${favorites.has(p.article_id) ? 'currentColor' : 'none'}" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    </div>
+      <div class="card-favorites"></div>
       <div class="card-title">${p.title}</div>
-      <div class="card-authors">${p.authors}</div>
+      <div class="card-authors">${Array.isArray(p.authors) ? p.authors.join(", ") : p.authors}</div>
       <div class="card-date">${p.date}</div>
       <div class="card-footer">
         <a class="card-link" href="${p.link}" target="_blank">arxiv.org ↗</a>
@@ -59,82 +89,70 @@ function showSkeleton() {
   `).join("");
 }
 
-async function doSearch() {
-
-    if (!app.currentUser) {
-      alert("Пожалуйста, подождите завершения авторизации или обновите страницу.");
-      return;
+async function doSearch(isDefault = false, keyword = null) {
+  if (!app.currentUser) {
+    alert("Пожалуйста, подождите завершения авторизации или обновите страницу.");
+    return;
   }
 
   const input = document.getElementById('center-input');
   const text = input.value.trim();
-  if (!text) return;
+  if (!isDefault && !text) return;
 
-  const username = app.currentUser.username
-  console.log('DO SEARCH', username, text)
-  try {
-        const response = await fetch('/api/search', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            credentials: 'include',
-            body: JSON.stringify({
-                username: username,
-                query: text
-            })
-        });
-
-        if (response.ok) {
-            input.value = '';
-            input.style.height = "auto";
-
-            const sendBtn = document.getElementById('search-btn');
-            // sendBtn.classList.remove('active');
-            // sendBtn.disabled = true;
-        }
-    } catch (error) {
-        console.error('Error sending message:', error);
-    }
-
+  const username = app.currentUser.username;
+  const url = isDefault ? '/api/search/default' : '/api/search';
+  const body = isDefault ? { username, key_word: keyword } : { username, query: text };
 
   document.getElementById("center-state").classList.add("searched");
   document.getElementById("results-state").classList.add("visible");
   document.getElementById("results-meta").textContent = "загрузка...";
-
+  document.getElementById("basket-btn").classList.remove("hidden");
   checkerTab('arxiv');
   showSkeleton();
-  setTimeout(() => {
-    document.getElementById("results-meta").textContent = PAPERS.length + " статей";
-    renderCards();
-  }, 900);
-}
 
-function sendSearchQuery() {
-  const searchBtn = document.getElementById("search-btn");
-  const textarea = document.getElementById("center-input")
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(body)
+    });
 
-  if (!textarea || !searchBtn) {
-    console.log("Область пустая или кнопки нет");
-    return;
-  }
-
-  const newTextarea = textarea.cloneNode(true);
-  textarea.parentNode.replaceChild(newTextarea, textarea);
-
-  newTextarea.addEventListener('input', () => this.handleInputResize(newTextarea, searchBtn));
-
-  newTextarea.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          doSearch();
+    if (!response.ok) {
+      if (response.status === 502) {
+        showToast({
+          title: "Сервис недоступен",
+          text: "Не удалось подключиться к сервису парсеров. Попробуйте позже.",
+          type: "error"
+        });
       }
-  });
+      document.getElementById("results-meta").textContent = "Ошибка загрузки";
+      return;
+    }
 
-  searchBtn.onclick = () => doSearch();
+    const data = await response.json();
+    currentPapers = data.articles;
+
+    document.getElementById("results-meta").textContent = currentPapers.length + " статей";
+    renderCards();
+
+  } catch (error) {
+    console.error('Error:', error);
+    showToast({
+      title: "Ошибка сети",
+      text: "Проверьте подключение к интернету.",
+      type: "error"
+    });
+    document.getElementById("results-meta").textContent = "Ошибка загрузки";
+  }
 }
+
+
 
 function fillAndSearch(q) {
   document.getElementById("center-input").value = q;
-  doSearch();
+  console.log('ЗНАЧЕНИЕ', q)
+  doSearch(true, q)
 }
 
 function checkerTab(tab){
@@ -214,6 +232,31 @@ document.addEventListener('DOMContentLoaded', () => {
         searchBtn.addEventListener('click', doSearch);
     }
 
+    document.addEventListener('click', (e) => {
+    if (e.target.closest('#hide-toast')) {
+        hideToast();
+    }
+    });
+    // Открытие корзины
+    document.addEventListener('click', (e) => {
+    if (e.target.closest('#basket-btn')) {
+        openBasket();
+    }
+    });
+    // Закрытие корзины
+    document.addEventListener('click', (e) => {
+      const removeBtn = e.target.closest('[data-remove-id]');
+      if (removeBtn) {
+        const id = removeBtn.dataset.removeId;
+        removeFromBasket(id);
+        return;
+      }
+
+      if (e.target.closest('#close-basket')) {
+        closeBasket();
+      }
+    });
+
     // --- Enter в поле ввода ---
     const centerInput = document.getElementById('center-input');
     if (centerInput) {
@@ -233,13 +276,41 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!card) return;
 
             // Не открываем флип если кликнули на ссылку или кнопку внутри карточки
-            if (e.target.closest(".card-link") || e.target.closest(".card-open")) return;
+            if (e.target.closest(".card-link") || e.target.closest(".card-open") || e.target.closest(".card-star")) return;
 
             const index = card.dataset.index;
-            const paper = PAPERS[index];
+            const paper = currentPapers[index];
             if (paper) openCard(paper);
         });
     }
+
+      // Кнопка избранного
+      cardsGrid.addEventListener("click", (e) => {
+      // Звёздочка
+      const starBtn = e.target.closest(".card-star");
+      console.log('Тап по звездочке')
+      if (starBtn) {
+        toggleFavorite(starBtn);
+        return;
+      }
+
+      // Флип карточки
+      const card = e.target.closest(".card");
+      if (!card) return;
+      if (e.target.closest(".card-link") || e.target.closest(".card-open")) return;
+      const paper = currentPapers[card.dataset.index];
+      if (paper) openCard(paper);
+        });
+
+
+    // Взаимодействие с корзиной
+    document.getElementById("basket-overlay").addEventListener("click", (e) => {
+        if (e.target === document.getElementById("basket-overlay")) closeBasket();
+    });
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeBasket();
+    });
 });
 
 
@@ -314,6 +385,210 @@ function openCard(paper) {
   });
 }
 
+// ── Анимация звёздочки летящей к корзине ─────────────────
+function animateStar(fromEl, toEl, adding) {
+  const fromRect = fromEl.getBoundingClientRect();
+  const toRect   = toEl.getBoundingClientRect();
+
+  const fly = document.createElement("div");
+  fly.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" fill="currentColor"/></svg>`;
+  fly.style.cssText = `
+    position: fixed;
+    left: ${fromRect.left + fromRect.width/2 - 7}px;
+    top:  ${fromRect.top  + fromRect.height/2 - 7}px;
+    pointer-events: none;
+    z-index: 9999;
+    color: ${adding ? '#f5c518' : '#ccc'};
+    transition: left 0.5s cubic-bezier(0.25,0.46,0.45,0.94),
+                top  0.5s cubic-bezier(0.25,0.46,0.45,0.94),
+                opacity 0.5s, transform 0.5s;
+  `;
+  document.body.appendChild(fly);
+
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    fly.style.left    = `${toRect.left + toRect.width/2 - 7}px`;
+    fly.style.top     = `${toRect.top  + toRect.height/2 - 7}px`;
+    fly.style.opacity = "0";
+    fly.style.transform = "scale(0.3) rotate(30deg)";
+  }));
+
+  setTimeout(() => fly.remove(), 550);
+}
+
+// ── Обновление счётчика ───────────────────────────────────
+function updateCount() {
+  const n = favorites.size;
+  const el = document.getElementById("basket-count");
+  el.textContent = n;
+  el.classList.toggle("visible", n > 0);
+  if (n > 0) {
+    el.classList.remove("bump");
+    void el.offsetWidth;
+    el.classList.add("bump");
+  }
+  document.getElementById("basket-panel-count").textContent = n + " " + pluralArticles(n);
+}
+
+function pluralArticles(n) {
+  if (n % 10 === 1 && n % 100 !== 11) return "статья";
+  if ([2,3,4].includes(n%10) && ![12,13,14].includes(n%100)) return "статьи";
+  return "статей";
+}
+
+
+async function toggleFavorite(btn) {
+    console.log(btn)
+  const articleId = btn.dataset.articleId;  // ID для БД и Map
+  const index = btn.dataset.index;           // индекс для массива
+  console.log(btn.dataset)
+  const paper = currentPapers[index];
+
+  const isNowFavorite = !btn.classList.contains("active");
+  const username = app.currentUser.username
+  const adding = !favorites.has(articleId);
+  console.log('Статья и ее id', paper, articleId, index)
+  // Сразу обновляем UI — не ждём ответа сервера
+  btn.classList.toggle("active");
+
+  // Анимируем звёздочку к/от корзины
+  const basketBtn = document.getElementById("basket-btn");
+  animateStar(btn, basketBtn, adding);
+
+  if (adding) {
+    favorites.set(articleId, paper);
+    btn.classList.add("active");
+    btn.querySelector("path").setAttribute("fill", "currentColor");
+    // Пульс на кнопке корзины
+    basketBtn.classList.remove("basket-pulse");
+    void basketBtn.offsetWidth;
+    basketBtn.classList.add("basket-pulse");
+    setTimeout(() => basketBtn.classList.remove("basket-pulse"), 400);
+  } else {
+    favorites.delete(articleId);
+    btn.classList.remove("active");
+    btn.querySelector("path").setAttribute("fill", "none");
+  }
+
+  updateCount();
+  refreshBasketCards();
+
+  try {
+    await fetch('/api/favorites', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        username: username,
+        article_id: articleId,
+        is_favorite: adding
+      })
+    });
+  } catch (error) {
+    // Если запрос упал — откатываем UI обратно
+    btn.classList.toggle("active");
+    showToast({ title: "Ошибка", text: "Не удалось сохранить.", type: "error" });
+  }
+}
+
+// ── Корзина: открыть/закрыть ─────────────────────────────
+function openBasket() {
+  refreshBasketCards();
+  const overlay = document.getElementById("basket-overlay");
+  overlay.classList.remove("closing");
+  overlay.classList.add("active");
+}
+
+function closeBasket() {
+  const overlay = document.getElementById("basket-overlay");
+  overlay.classList.add("closing");
+  setTimeout(() => overlay.classList.remove("active","closing"), 350);
+}
+
+// ── Рендер карточек в корзине ────────────────────────────
+function refreshBasketCards() {
+  const container = document.getElementById("basket-cards");
+  const empty     = document.getElementById("basket-empty");
+  const items     = [...favorites.values()];
+
+  empty.style.display = items.length ? "none" : "flex";
+  console.log('ITEMS', items)
+  container.innerHTML = items.map(p => `
+    <div class="basket-card" id="bcard-${p.article_id}">
+      <button class="basket-card-remove" data-remove-id="${p.article_id}">✕</button>
+      <div class="basket-card-title">${p.title}</div>
+      <div class="basket-card-authors">${p.authors.join(", ")}</div>
+      <div class="basket-card-date">${p.date}</div>
+    </div>
+  `).join("");
+}
+
+function removeFromBasket(id) {
+  const card = document.getElementById("bcard-" + id);
+  if (card) {
+    card.classList.add("removing");
+    setTimeout(() => {
+      favorites.delete(id);
+      updateCount();
+      refreshBasketCards();
+      // Обновляем звёздочку на карточке в сетке
+      const starBtn = document.querySelector(`.card-star[data-article-id="${id}"]`);
+      if (starBtn) {
+        starBtn.classList.remove("active");
+        starBtn.querySelector("path").setAttribute("fill","none");
+      }
+    }, 300);
+  }
+
+  fetch('/api/favorites', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    credentials: 'include',
+    body: JSON.stringify({ username: app.currentUser.username, article_id: id, is_favorite: false })
+  }).catch(console.error);
+}
+
+function showToast({ title, text, type = "error", duration = 4000 }) {
+  // Убираем предыдущий если есть
+  const existing = document.getElementById("app-toast");
+  if (existing) existing.remove();
+
+  const icons = {
+    error:   `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="#ef4444" stroke-width="1.5"/><path d="M8 5v3.5M8 10.5v.5" stroke="#ef4444" stroke-width="1.5" stroke-linecap="round"/></svg>`,
+    success: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="#22c55e" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#22c55e" stroke-width="1.5" stroke-linecap="round"/></svg>`,
+    warning: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2L14 13H2L8 2Z" stroke="#f59e0b" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 6v3M8 10.5v.5" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round"/></svg>`,
+  };
+
+  const toast = document.createElement("div");
+  toast.className = `toast ${type}`;
+  toast.id = "app-toast";
+  toast.innerHTML = `
+    <div class="toast-icon">${icons[type]}</div>
+    <div class="toast-body">
+      <div class="toast-title">${title}</div>
+      <div class="toast-text">${text}</div>
+    </div>
+    <button class="toast-close" id="hide-toast">✕</button>
+  `;
+
+  document.body.appendChild(toast);
+
+  // Анимация влёта
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => toast.classList.add("visible"));
+  });
+
+  // Автоскрытие
+  toast._timer = setTimeout(() => hideToast(), duration);
+}
+
+function hideToast() {
+  const toast = document.getElementById("app-toast");
+  if (!toast) return;
+  clearTimeout(toast._timer);
+  toast.classList.remove("visible");
+  setTimeout(() => toast.remove(), 350);
+}
+
 function closeCard() {
   const overlay = document.getElementById("card-overlay");
   overlay.classList.add("closing");
@@ -327,7 +602,6 @@ function closeCard() {
 // Закрытие по Escape
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") closeCard();
-  if (e.key === "Enter" && document.activeElement.id === "center-input") doSearch();
 });
 
 // Инициализируем оверлей

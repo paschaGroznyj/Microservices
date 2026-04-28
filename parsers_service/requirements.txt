@@ -16,3 +16,4 @@ fastapi
 uvicorn
 lxml==6.0.0
 asyncpg==0.31.0
+httpx

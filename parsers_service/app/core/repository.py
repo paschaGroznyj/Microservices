@@ -267,3 +267,60 @@ class ResearchRepository:
             """, user_name, limit, offset)
 
             return [dict(row) for row in rows]
+
+    async def toggle_favorite(self, username: str, article_id: int, is_favorite: bool):
+        async with self.db.pool.acquire() as conn:
+            if is_favorite:
+                # Добавляем в избранное
+                # ON CONFLICT DO NOTHING предотвратит ошибку, если статья уже в избранном
+                await conn.execute("""
+                                    INSERT INTO favorites (user_id, article_id)
+                                    SELECT id, $2
+                                    FROM users
+                                    WHERE username = $1
+                                    ON CONFLICT (user_id, article_id) DO NOTHING;
+                                   """, username, article_id)
+            else:
+                # Удаляем из избранного
+                await conn.execute("""
+                                   DELETE
+                                   FROM favorites
+                                   WHERE user_id = (SELECT id
+                                    FROM users
+                                    WHERE username = $1)
+                                     AND article_id = $2;
+                                   """, username, article_id)
+
+    async def get_favorites(self, username: str):
+        """Тянем список избранных статей для конкретного пользователя"""
+        async with self.db.pool.acquire() as conn:
+            return await conn.fetch("""
+                                    SELECT a.id AS article_id,
+                                        a.external_id,
+                                        a.title,
+                                        a.date_sub,
+                                        a.url_article,
+                                        a.authors_json,
+                                        a.tags_json,
+                                        a.abstract,
+                                        a.category
+                                    FROM favorites f
+                                             JOIN users u ON f.user_id = u.id
+                                             JOIN articles a ON f.article_id = a.id
+                                    WHERE u.username = $1
+                                    ORDER BY f.created_at DESC;""", username)
+
+# from db import DataBase
+# import asyncio
+#
+# db = DataBase()
+#
+# research = ResearchRepository(db)
+#
+# async def main():
+#     await db.init_db_pool()
+#     result = await research.get_favorites('oppo')
+#     for i in result:
+#         print(i["article_id"])
+#
+# asyncio.run(main())

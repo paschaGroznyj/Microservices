@@ -89,6 +89,33 @@ function showSkeleton() {
   `).join("");
 }
 
+// Загрузка избранных статей с бэка
+async function loadFavorites() {
+  try {
+    const response = await fetch('/api/favorites/select', {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include"
+        // Не обязательно отправлять юзернейм, тянется из куки
+    });
+
+    if (!response.ok) return;
+
+    const data = await response.json();
+    console.log('Данные с бэка для избранного', data)
+    // Заполняем Map — article_id → paper
+    data.articles.forEach(p => {
+      favorites.set(String(p.article_id), p);
+    });
+
+    updateCount();
+    syncStarsWithFavorites();
+
+  } catch (error) {
+    console.error('Ошибка загрузки избранного:', error);
+  }
+}
+
 async function doSearch(isDefault = false, keyword = null) {
   if (!app.currentUser) {
     alert("Пожалуйста, подождите завершения авторизации или обновите страницу.");
@@ -111,15 +138,19 @@ async function doSearch(isDefault = false, keyword = null) {
   showSkeleton();
 
   try {
-    const response = await fetch(url, {
+
+    const [searchResponse] = await Promise.all([
+    fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify(body)
-    });
+    }),
+    loadFavorites()  // параллельно обновляем избранное
+  ]);
 
-    if (!response.ok) {
-      if (response.status === 502) {
+    if (!searchResponse.ok) {
+      if (searchResponse.status === 502) {
         showToast({
           title: "Сервис недоступен",
           text: "Не удалось подключиться к сервису парсеров. Попробуйте позже.",
@@ -130,11 +161,13 @@ async function doSearch(isDefault = false, keyword = null) {
       return;
     }
 
-    const data = await response.json();
+    const data = await searchResponse.json();
+    console.log('Данные с бэка после парсинга', data)
     currentPapers = data.articles;
 
     document.getElementById("results-meta").textContent = currentPapers.length + " статей";
     renderCards();
+    syncStarsWithFavorites()
 
   } catch (error) {
     console.error('Error:', error);
@@ -231,6 +264,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (searchBtn) {
         searchBtn.addEventListener('click', doSearch);
     }
+
+    // const waitForUser = setInterval(() => {
+    // if (app.currentUser) {
+    //   clearInterval(waitForUser);
+    //   loadFavorites();
+    //   }
+    // }, 100);
 
     document.addEventListener('click', (e) => {
     if (e.target.closest('#hide-toast')) {
@@ -385,6 +425,16 @@ function openCard(paper) {
   });
 }
 
+// Подсветка звездочек, чтобы было совпадение с корзиной
+function syncStarsWithFavorites() {
+  document.querySelectorAll('.card-star').forEach(btn => {
+    const id = String(btn.dataset.articleId);
+    const isFav = favorites.has(id);
+    btn.classList.toggle('active', isFav);
+    btn.querySelector('path').setAttribute('fill', isFav ? 'currentColor' : 'none');
+  });
+}
+
 // ── Анимация звёздочки летящей к корзине ─────────────────
 function animateStar(fromEl, toEl, adding) {
   const fromRect = fromEl.getBoundingClientRect();
@@ -479,7 +529,7 @@ async function toggleFavorite(btn) {
       credentials: 'include',
       body: JSON.stringify({
         username: username,
-        article_id: articleId,
+        article_id: parseInt(articleId),
         is_favorite: adding
       })
     });
@@ -490,7 +540,6 @@ async function toggleFavorite(btn) {
   }
 }
 
-// ── Корзина: открыть/закрыть ─────────────────────────────
 function openBasket() {
   refreshBasketCards();
   const overlay = document.getElementById("basket-overlay");
@@ -543,7 +592,7 @@ function removeFromBasket(id) {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     credentials: 'include',
-    body: JSON.stringify({ username: app.currentUser.username, article_id: id, is_favorite: false })
+    body: JSON.stringify({ username: app.currentUser.username, article_id: parseInt(id), is_favorite: false })
   }).catch(console.error);
 }
 

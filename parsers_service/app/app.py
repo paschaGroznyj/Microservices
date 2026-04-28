@@ -16,6 +16,7 @@ import json
 import re
 
 from core.db import DataBase
+from core.repository import ResearchRepository
 from parsers.arxiv_all import start_search
 # from parsers.scholar_parser import PipelineConfig, ScholarParser
 # from parsers.ieee_parser_pw import IEEEParser
@@ -39,6 +40,7 @@ from core.config import (
 
 
 db = DataBase()
+research = ResearchRepository(db)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -58,7 +60,7 @@ STATE_FILE = Path("logs") / "state.json"
 # Вместо dataclass используем BaseModel
 class FavoriteStatus(BaseModel):
     username: str
-    article_id: str
+    article_id: int
     is_favorite: bool
 
 obs = OBSWorker()
@@ -403,10 +405,32 @@ async def run_icpm():
 
 @app.post("/favorites")
 async def search_articles(data: FavoriteStatus):
+    return await research.toggle_favorite(data.username, data.article_id, data.is_favorite)
     logger.info(f"{data.username}, {data.article_id}, {data.is_favorite}")
 @app.post("/search/articles")
 async def search_articles(request: Dict[str, Any]):
     return await start_search(request, db)
+
+@app.post("/favorites/select")
+async def select_favorites(request: Dict[str, Any]):
+    username = request['username']
+    rows = await research.get_favorites(username)
+
+    articles = []
+    for row in rows:
+        articles.append({
+            "article_id": row["article_id"],
+            "external_id": row["external_id"],
+            "title": row["title"],
+            "date": row["date_sub"],  # ← единое название как у парсера
+            "link": row["url_article"],  # ← единое название
+            "authors": json.loads(row["authors_json"]),  # строка → список
+            "tags": json.loads(row["tags_json"]),  # строка → список
+            "abstract": row["abstract"],
+            "category": row["category"],
+        })
+
+    return {"articles": articles}
 
 @app.get("/health")
 async def health():

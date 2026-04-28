@@ -15,3 +15,9 @@ SYNC_INTERVAL_MINUTES = int(os.getenv("SYNC_INTERVAL_MINUTES", "15"))
 SYNC_INTERVAL_SCHEDULER = os.getenv("SYNC_INTERVAL_SCHEDULER", "10")
 
 PORT_LLM_CONSUMER = os.getenv("PORT_PM_AGENT", "9001")
+
+DB_PASSWORD = os.getenv("DB_PASSWORD")
+DB_HOST = os.getenv("DB_HOST")
+DB_PORT = os.getenv("DB_PORT")
+DB_USER = os.getenv("DB_USER")
+DB_NAME = os.getenv("DB_NAME")

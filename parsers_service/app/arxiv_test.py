@@ -1,12 +1,12 @@
 import asyncio
-from parsers_service.app.parsers.arxiv_all_search import main
+from parsers.arxiv_all import main
 
 
 post_body = {
-    "user_name": "alexey",
+    "user_name": "oppo",
     "user_query": "Найди свежие статьи по object detection и computer vision",
     "params": {
-        "keywords": ["computer vision", "object detection"]
+        "keywords": ["computer vision"]
     }
 }
 

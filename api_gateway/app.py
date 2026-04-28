@@ -529,15 +529,85 @@ async def get_current_user_info(request: Request):
 
 pending_requests: dict[str, int] = {}
 
+@app.post("/api/favorites")
+async def favorites(request: Request):
+    """Обработка звездочек избранного"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    data = await request.json()
+    data_json = {'username': data.get('username'),
+                 'article_id': data.get('article_id'),
+                 'is_favorited': data.get('is_favorited')}
+    logging.info(f"ИЗБРАННОЕ {data}")
+    parser_url = SERVICES['parsers']['url']
+    try:
+        response = await app.state.http_client.post(
+            f"{parser_url}/favorites",
+            json=data,
+            timeout=30.0
+        )
+        if response.status_code == 200:
+            return Response(
+                content=response.content,
+                status_code=200,
+                media_type="application/json"
+            )
+        else:
+            raise HTTPException(status_code=response.status_code, detail="Parser error")
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Parsers service unreachable: {str(e)}")
+
 
 @app.post("/api/search")
 async def searching(request: Request):
+    """Направить в агента"""
     user = await get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     data = await request.json()
     logging.info(f"ДАННЫЕ с вкладки ПОИСКА {data}")
+
+
+@app.post("/api/search/default")
+async def searching_default(request: Request):
+    """Направить сразу в парсер"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    data = await request.json()
+
+    post_body = {
+        "user_name": data['username'],
+        "user_query": "default",
+        "params": {
+            "keywords": [data['key_word']]
+        }
+    }
+
+    logging.info(f"ДЕФОЛТ ДАННЫЕ с вкладки ПОИСКА {data}")
+    parser_url = SERVICES['parsers']['url']
+    # Отправляем дефолтные словосочетания с фронта
+    try:
+        response = await app.state.http_client.post(
+            f"{parser_url}/search/articles",
+            json=post_body,
+            timeout=30.0
+        )
+        if response.status_code == 200:
+            # logging.info(f"Смотрим ЧТО прилетело с парсера: {response.text}")
+            return Response(
+                content=response.content,
+                status_code=200,
+                media_type="application/json"
+            )
+        else:
+            raise HTTPException(status_code=response.status_code, detail="Parser error")
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Parsers service unreachable: {str(e)}")
 
 # ========== ПРОКСИ ДЛЯ ЧАТОВ ==========
 @app.post("/api/chats/send_message")

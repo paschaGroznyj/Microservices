@@ -85,9 +85,62 @@ class IEEEParser:
             for i in range(4):
                 start = datetime.now()
                 if i != 0:
+                    print(f"\n--- ПЕРЕХОД НА СТРАНИЦУ {i + 1} ---")
                     time.sleep(5)
-                    # pagination_bar = page.locator(".pagination-bar")
-                    # pagination_bar.locator('button').all()[i].click()
+
+                    # 1. Проверяем, видна ли панель вообще
+                    pagination_bar = page.locator(".pagination-bar")
+                    if not pagination_bar.is_visible():
+                        print("ОШИБКА: Pagination bar не видна!")
+                        # Попробуем сделать скриншот, чтобы увидеть, что не так
+                        page.screenshot(path=f"debug_page_{i}_no_pagination.png")
+                        continue
+
+                        # 2. Получаем все кнопки
+                    buttons = pagination_bar.locator('button').all()
+                    print(f"Найдено кнопок пагинации: {len(buttons)}")
+
+                    # Выведем текст/атрибуты кнопок, чтобы понять, та ли это кнопка
+                    for idx, btn in enumerate(buttons):
+                        try:
+                            txt = btn.text_content()
+                            aria = btn.get_attribute('aria-label')
+                            print(f"  Кнопка {idx}: Text='{txt}', Aria='{aria}'")
+                        except:
+                            print(f"  Кнопка {idx}: <недоступна>")
+
+                    # 3. Проверка границ
+                    if i >= len(buttons):
+                        print(f"ОШИБКА: Индекс {i} выходит за пределы списка кнопок ({len(buttons)})")
+                        break
+
+                    target_btn = buttons[i]
+
+                    # 4. Проверяем, кликабельна ли кнопка
+                    if not target_btn.is_enabled():
+                        print(f"ОШИБКА: Кнопка страницы {i + 1} не активна (disabled)")
+                        break
+
+                    print(f"Кликаем по кнопке индекс {i}...")
+
+                    # 5. Делаем клик с ожиданием загрузки сети или изменения URL
+                    # Важно: click может не ждать загрузки новой страницы, если это SPA
+                    target_btn.click()
+
+                    # Ждем, пока URL изменится или появится индикатор загрузки
+                    # IEEE Explore часто меняет URL при пагинации, например ?pageNumber=2
+                    try:
+                        page.wait_for_url(lambda url: f"pageNumber={i + 1}" in url or f"page={i + 1}" in url,
+                                          timeout=10000)
+                        print(f"URL изменился успешно: {page.url}")
+                    except:
+                        print("URL не изменился ожидаемым образом, возможно, это AJAX запрос.")
+                        # Альтернатива: ждем исчезновения лоадера или появления новых результатов
+                        page.wait_for_load_state("networkidle")
+                        print("Состояние networkidle достигнуто.")
+
+                    # Обновляем ссылку на бар, так как DOM мог обновиться
+                    pagination_bar = page.locator(".pagination-bar")
                 
                 print(f'Processing page #{i+1}')
 
@@ -219,12 +272,12 @@ class IEEEParser:
     async def arun(self) -> list[dict]:
         return await asyncio.to_thread(self._scrape)
 
-# if __name__ == "__main__":
-#     load_dotenv()
-#     link = 'https://ieeexplore.ieee.org/search/searchresult.jsp?queryText=Process%20Mining&highlight=true&returnType=SEARCH&matchPubs=true&refinementName=Publication%20Topics&refinements=PublicationTopics:Process%20Mining&returnFacets=ALL&ranges=2026_2026_Year'
-#     result = IEEEParser(link, ('2026-01-01', '2026-02-01'))._scrape()
-#
-#     print(f'Found results: {len(result)}')
-#
-#     with open('test.json', 'w+', encoding='utf8') as jsonfile:
-#         json.dump(result, jsonfile, ensure_ascii=False, indent=4)
+if __name__ == "__main__":
+    load_dotenv()
+    link = 'https://ieeexplore.ieee.org/search/searchresult.jsp?queryText=Process%20Mining&highlight=true&returnType=SEARCH&matchPubs=true&refinementName=Publication%20Topics&refinements=PublicationTopics:Process%20Mining&returnFacets=ALL&ranges=2026_2026_Year'
+    result = IEEEParser(link, ('2026-04-10', '2026-04-17'))._scrape()
+
+    print(f'Found results: {len(result)}')
+
+    with open('test.json', 'w+', encoding='utf8') as jsonfile:
+        json.dump(result, jsonfile, ensure_ascii=False, indent=4)

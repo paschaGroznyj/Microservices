@@ -2,6 +2,7 @@ import asyncio
 import asyncpg
 import logging
 import os
+from .config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME
 
 
 logging.basicConfig(
@@ -21,11 +22,11 @@ class DataBase:
         for attempt in range(1, max_retries + 1):
             try:
                 self.pool = await asyncpg.create_pool(
-                    user=os.getenv("DB_USER", "resuser"),
-                    password=os.getenv("DB_PASSWORD", "respassword"),
-                    host=os.getenv("DB_HOST", "localhost"),
-                    port=int(os.getenv("DB_PORT", "5433")),
-                    database=os.getenv("DB_NAME", "resname"),
+                    user=DB_USER,
+                    password=DB_PASSWORD,
+                    host=DB_HOST,
+                    port=DB_PORT,
+                    database=DB_NAME,
                     min_size=2,
                     max_size=10,
                     max_queries=50000,
@@ -55,15 +56,9 @@ class DataBase:
 
     async def init_schema(self, conn):
         await conn.execute("""
-            CREATE TABLE IF NOT EXISTS research_users (
-                id BIGSERIAL PRIMARY KEY,
-                user_name TEXT NOT NULL UNIQUE,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW()
-            );
-
             CREATE TABLE IF NOT EXISTS search_requests (
                 id BIGSERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL REFERENCES research_users(id) ON DELETE CASCADE,
+                user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 user_query TEXT NOT NULL,
                 params_json JSONB NOT NULL DEFAULT '{}'::jsonb,
                 date_start DATE,
@@ -92,7 +87,7 @@ class DataBase:
 
             CREATE TABLE IF NOT EXISTS user_articles (
                 id BIGSERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL REFERENCES research_users(id) ON DELETE CASCADE,
+                user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 article_id BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
                 created_at TIMESTAMP NOT NULL DEFAULT NOW(),
                 UNIQUE (user_id, article_id)
@@ -105,9 +100,17 @@ class DataBase:
                 created_at TIMESTAMP NOT NULL DEFAULT NOW(),
                 UNIQUE (request_id, article_id)
             );
-
+            
+            CREATE TABLE IF NOT EXISTS favorites (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                article_id BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                UNIQUE (user_id, article_id)
+            );
+        
             CREATE INDEX IF NOT EXISTS ix_research_users_user_name
-                ON research_users(user_name);
+                ON users(username);
 
             CREATE INDEX IF NOT EXISTS ix_search_requests_user_id
                 ON search_requests(user_id);
@@ -132,4 +135,8 @@ class DataBase:
 
             CREATE INDEX IF NOT EXISTS ix_request_articles_article_id
                 ON request_articles(article_id);
+            
+            CREATE INDEX IF NOT EXISTS idx_favorites_user_id 
+                ON favorites(user_id);
+               
         """)

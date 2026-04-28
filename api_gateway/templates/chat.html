@@ -169,6 +169,15 @@
                       <option value="relevance">По релевантности</option>
                     </select>
 
+                      <!-- Корзина избранного -->
+                      <button class="basket-btn hidden" id="basket-btn">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                          <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+                        </svg>
+                        Избранное
+                        <span class="basket-count" id="basket-count">0</span>
+                      </button>
+
                   </div>
                   <div class="cs-hints">
                     <span class="hint-chip" data-query="process mining">process mining</span>
@@ -218,7 +227,30 @@
         </div>
     </div>
 
-
+<!-- Отображение корзины -->
+<div class="basket-overlay" id="basket-overlay">
+  <div class="basket-panel">
+    <div class="basket-panel-header">
+      <div class="basket-panel-title">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+        Избранные статьи
+      </div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <span class="basket-panel-count" id="basket-panel-count">0 статей</span>
+        <button class="basket-close" id="close-basket">✕</button>
+      </div>
+    </div>
+    <div class="basket-panel-body" id="basket-panel-body">
+      <div class="basket-empty" id="basket-empty">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+        </svg>
+        <div class="basket-empty-text">Нажмите ★ на карточке чтобы добавить статью</div>
+      </div>
+      <div class="basket-cards" id="basket-cards"></div>
+    </div>
+  </div>
+</div>
 
 
 

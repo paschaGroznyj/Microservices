@@ -26,6 +26,13 @@ class ResearchRepository:
                 RETURNING id
             """, user_name)
 
+    async def get_user_id_by_name(self, user_name: str) -> int:
+        async with self.db.pool.acquire() as conn:
+            return await conn.fetchval("""
+                                          SELECT id
+                                          FROM users
+                                          WHERE username = $1
+                                          """, user_name)
     async def create_search_request(
         self,
         user_id: int,
@@ -149,7 +156,8 @@ class ResearchRepository:
         params,
         articles: list,
     ) -> dict:
-        user_id = await self.get_or_create_user(user_name)
+        user_id = await self.get_user_id_by_name(user_name)
+        print(user_id)
         request_id = await self.create_search_request(
             user_id=user_id,
             user_query=user_query,
@@ -168,9 +176,11 @@ class ResearchRepository:
                     "article_id": article_id,
                     "external_id": article.external_id,
                     "title": article.title,
-                    "date_sub": article.date_sub,
-                    "url_article": article.url_article,
-                    "pdf_url": article.pdf_url,
+                    "authors": article.authors,
+                    "tags": article.tags,
+                    "date": article.date_sub,
+                    "link": article.url_article,
+                    "abstract": article.abstract,
                     "source": article.source,
                 })
             except Exception as e:
@@ -189,7 +199,7 @@ class ResearchRepository:
             rows = await conn.fetch("""
                 SELECT
                     sr.id,
-                    ru.user_name,
+                    ru.username,
                     sr.user_query,
                     sr.params_json,
                     sr.date_start,
@@ -198,8 +208,8 @@ class ResearchRepository:
                     sr.limit_value,
                     sr.created_at
                 FROM search_requests sr
-                JOIN research_users ru ON ru.id = sr.user_id
-                WHERE ru.user_name = $1
+                JOIN users ru ON ru.id = sr.user_id
+                WHERE ru.username = $1
                 ORDER BY sr.created_at DESC
                 LIMIT $2 OFFSET $3
             """, user_name, limit, offset)
@@ -236,7 +246,7 @@ class ResearchRepository:
             rows = await conn.fetch("""
                 SELECT
                     a.id AS article_id,
-                    ru.user_name,
+                    ru.username,
                     a.source,
                     a.external_id,
                     a.title,
@@ -249,9 +259,9 @@ class ResearchRepository:
                     a.category,
                     ua.created_at AS saved_at
                 FROM user_articles ua
-                JOIN research_users ru ON ru.id = ua.user_id
+                JOIN users ru ON ru.id = ua.user_id
                 JOIN articles a ON a.id = ua.article_id
-                WHERE ru.user_name = $1
+                WHERE ru.username = $1
                 ORDER BY ua.created_at DESC
                 LIMIT $2 OFFSET $3
             """, user_name, limit, offset)

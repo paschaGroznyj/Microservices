@@ -200,6 +200,7 @@ html, body {
   word-break: break-word;
   width: fit-content;
   margin-top: 8px;
+  font-family: inherit;
 }
 
 /* Сообщение ассистента (без облака) */

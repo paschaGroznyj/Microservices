@@ -537,15 +537,38 @@ async def favorites(request: Request):
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     data = await request.json()
-    data_json = {'username': data.get('username'),
-                 'article_id': data.get('article_id'),
-                 'is_favorited': data.get('is_favorited')}
     logging.info(f"ИЗБРАННОЕ {data}")
     parser_url = SERVICES['parsers']['url']
     try:
         response = await app.state.http_client.post(
             f"{parser_url}/favorites",
             json=data,
+            timeout=30.0
+        )
+        if response.status_code == 200:
+            return Response(
+                content=response.content,
+                status_code=200,
+                media_type="application/json"
+            )
+        else:
+            raise HTTPException(status_code=response.status_code, detail="Parser error")
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Parsers service unreachable: {str(e)}")
+
+@app.post("/api/favorites/select")
+async def favorites_select(request: Request):
+    """Обработка звездочек избранного"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    username = {'username': user['username']}
+    parser_url = SERVICES['parsers']['url']
+    try:
+        response = await app.state.http_client.post(
+            f"{parser_url}/favorites/select",
+            json=username,
             timeout=30.0
         )
         if response.status_code == 200:

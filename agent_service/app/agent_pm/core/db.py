@@ -3,12 +3,14 @@ import asyncpg
 import logging
 import os
 
+from pgvector.asyncpg import register_vector
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 
+EMB_DIM = "1024"
 
 class AgentDB:
     def __init__(self):
@@ -53,7 +55,43 @@ class AgentDB:
         if self.pool:
             await self.pool.close()
 
+    @staticmethod
+    def _vector_to_str(vector: list[float]) -> str:
+        return "[" + ",".join(map(str, vector)) + "]"
+    
+    async def _init_connection(self, conn: asyncpg.Connection):
+        await register_vector(conn)
+
     async def init_schema(self, conn: asyncpg.Connection):
+        await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS article_embeddings (
+                id BIGSERIAL PRIMARY KEY,
+                article_id BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+                embedding vector(1024) NOT NULL,
+                embedding_model TEXT NOT NULL,
+                source_text TEXT,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                UNIQUE (article_id, embedding_model)
+            );
+        """)
+
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS ix_article_embeddings_article_id
+                ON article_embeddings(article_id);
+
+            CREATE INDEX IF NOT EXISTS ix_article_embeddings_model
+                ON article_embeddings(embedding_model);
+        """)
+
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS ix_article_embeddings_embedding_cosine
+                ON article_embeddings
+                USING hnsw (embedding vector_cosine_ops);
+        """)
+
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS article_translations (
                 id BIGSERIAL PRIMARY KEY,
@@ -115,6 +153,94 @@ class AgentDB:
             """, request_id, user_name)
 
             return dict(row) if row else None
+
+    async def get_request_articles_for_embedding(self, user_name: str, request_id: int) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT
+                    a.id AS article_id,
+                    a.external_id,
+                    a.title,
+                    a.abstract,
+                    a.date_sub,
+                    a.category
+                FROM request_articles ra
+                JOIN articles a ON a.id = ra.article_id
+                JOIN search_requests sr ON sr.id = ra.request_id
+                JOIN research_users ru ON ru.id = sr.user_id
+                WHERE ra.request_id = $1
+                  AND ru.user_name = $2
+                ORDER BY a.date_sub DESC NULLS LAST, a.id DESC
+            """, request_id, user_name)
+
+            return [dict(row) for row in rows]
+        
+    async def upsert_article_embedding(
+        self,
+        article_id: int,
+        embedding: list[float],
+        embedding_model: str,
+        source_text: str,
+    ) -> int:
+        
+        embedding_str = self._vector_to_str(embedding)
+
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval("""
+                INSERT INTO article_embeddings (
+                    article_id,
+                    embedding,
+                    embedding_model,
+                    source_text,
+                    updated_at
+                )
+                VALUES ($1, $2::vector, $3, $4, NOW())
+                ON CONFLICT (article_id, embedding_model)
+                DO UPDATE SET
+                    embedding = EXCLUDED.embedding,
+                    source_text = EXCLUDED.source_text,
+                    updated_at = NOW()
+                RETURNING id
+            """, article_id, embedding_str, embedding_model, source_text)
+
+    async def search_similar_articles_for_request(
+        self,
+        user_name: str,
+        request_id: int,
+        query_embedding: list[float],
+        embedding_model: str,
+        match_threshold: float = 0.65,
+        match_count: int = 20,
+    ) -> list[dict]:
+        
+        query_embedding_str = self._vector_to_str(query_embedding)
+        
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT
+                    a.id AS article_id,
+                    a.external_id,
+                    a.title,
+                    a.abstract,
+                    a.date_sub,
+                    a.url_article,
+                    a.pdf_url,
+                    a.category,
+                    1 - (ae.embedding <=> $3) AS similarity
+                FROM request_articles ra
+                JOIN search_requests sr ON sr.id = ra.request_id
+                JOIN research_users ru ON ru.id = sr.user_id
+                JOIN articles a ON a.id = ra.article_id
+                JOIN article_embeddings ae ON ae.article_id = a.id
+                WHERE sr.id = $1
+                  AND ru.user_name = $2
+                  AND ae.embedding_model = $4
+                  AND 1 - (ae.embedding <=> $3::vector) >= $5
+                ORDER BY ae.embedding <=> $3
+                LIMIT $6
+            """, request_id, user_name, query_embedding_str, embedding_model, match_threshold, match_count)
+
+            return [dict(row) for row in rows]
 
     async def get_request_articles(self, user_name: str, request_id: int) -> list[dict]:
         async with self.pool.acquire() as conn:

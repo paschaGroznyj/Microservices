@@ -17,5 +17,5 @@ botocore==1.42.84
 aiobotocore==3.4.0
 python-dotenv
 requests
-
+asyncpg
 

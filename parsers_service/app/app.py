@@ -408,8 +408,20 @@ async def search_articles(data: FavoriteStatus):
     return await research.toggle_favorite(data.username, data.article_id, data.is_favorite)
     logger.info(f"{data.username}, {data.article_id}, {data.is_favorite}")
 @app.post("/search/articles")
-async def search_articles(request: Dict[str, Any]):
-    return await start_search(request, db)
+async def search_articles(request: Request):
+    """
+        body = {
+        "user_name": data.get("user_name"),
+        "query": data.get("query"),
+        "params": {"keywords": data.get("keywords"),
+                   "date_start": data.get("date_start"),
+                   "date_end": data.get("date_end"),
+                   "limit": data.get("limit", 10)},
+    }
+    """
+    data = await request.json()
+    logging.info(data)
+    return await start_search(data, db)
 
 @app.post("/favorites/select")
 async def select_favorites(request: Dict[str, Any]):

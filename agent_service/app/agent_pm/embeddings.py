@@ -9,7 +9,7 @@ gigachat_emb = get_embedd_model()
 
 class EmbeddingProcessor:
     def __init__(self, model_name: str | None = None):
-        self.model_name = model_name or os.getenv("EMBEDDING_MODEL", "gigachat-embeddings")
+        self.model_name = model_name or os.getenv("EMBEDDING_MODEL", "Embeddings-2")
 
         self.client = gigachat_emb
 

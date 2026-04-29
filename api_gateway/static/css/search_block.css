@@ -419,6 +419,40 @@
   margin-bottom: 8px;
 }
 
+/* Стиль для нерелевантных карточек */
+.card.irrelevant-card {
+    background-color: #f0f0f0; /* Светло-серый фон */
+    color: #888; /* Серый текст */
+    opacity: 0.6; /* Полупрозрачность */
+    border: 1px solid #ddd;
+    transition: all 0.3s ease;
+}
+
+/* При наведении можно чуть подсвечивать, чтобы было понятно, что она кликабельна */
+.card.irrelevant-card:hover {
+    opacity: 0.9;
+    background-color: #e8e8e8;
+}
+
+/* Заголовок и авторы в нерелевантной карточке тоже серые */
+.card.irrelevant-card .card-title,
+.card.irrelevant-card .card-authors,
+.card.irrelevant-card .card-date {
+    color: #666;
+}
+
+/* Ссылки и кнопки можно оставить активными, но чуть бледнее */
+.card.irrelevant-card .card-link,
+.card.irrelevant-card .card-open {
+    color: #999;
+    border-color: #ccc;
+}
+
+.card.irrelevant-card .card-open:hover {
+    background-color: #ddd;
+    color: #333;
+}
+
 /* Кнопка изрбанного */
 .card-star {
   background: none;

@@ -9,6 +9,7 @@ from typing import Optional, List, Dict, Any
 
 from core.db import DataBase
 from core.repository import ResearchRepository
+from fastapi import HTTPException
 
 
 @dataclass
@@ -23,6 +24,7 @@ class SearchParams:
 class RequestPayload:
     user_name: str
     user_query: str
+    request_id: int | None
     params: SearchParams
 
 
@@ -61,13 +63,27 @@ class ArxivClient:
     def search(self, keywords: List[str], date_start: Optional[str], date_end: Optional[str], limit: int) -> List[Article]:
         date_start, date_end = self._resolve_dates(date_start, date_end)
         query = self._build_query(keywords, date_start, date_end, limit)
-        response = requests.get(
-            f"{self.BASE_URL}{query}",
-            headers=self.headers,
-            timeout=self.timeout,
-        )
-        response.raise_for_status()
-        return self._parse_feed(response.content)
+        try:
+            response = requests.get(
+                f"{self.BASE_URL}{query}",
+                headers=self.headers,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            if response.status_code == 429:
+                # Ошибка на лимит запросов
+                raise HTTPException(
+                    status_code=429,
+                    detail="ArXiv rate limit exceeded. Please try again later."
+                )
+            if response.status_code == 502:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"ArXiv API error: {response.status_code}"
+                )
+            return self._parse_feed(response.content)
+        except requests.exceptions.RequestException as e:
+            raise HTTPException(status_code=503, detail=f"Network error: {str(e)}")
 
     def _resolve_dates(self, date_start: Optional[str], date_end: Optional[str]) -> tuple[str, str]:
         today = date.today()
@@ -183,6 +199,7 @@ class ResearchPipeline:
             f"date_start={payload.params.date_start}, "
             f"date_end={payload.params.date_end}, "
             f"limit={payload.params.limit}"
+            f"request_id={payload.request_id}"
         )
 
         articles = self.arxiv.search(
@@ -199,6 +216,7 @@ class ResearchPipeline:
             user_query=payload.user_query,
             params=payload.params,
             articles=articles,
+            request_id=payload.request_id,
         )
 
     def _setup_logger(self) -> logging.Logger:
@@ -222,6 +240,7 @@ def build_payload(post_body: Dict[str, Any]) -> RequestPayload:
     return RequestPayload(
         user_name=post_body["user_name"],
         user_query=post_body["query"],
+        request_id=post_body["request_id"],
         params=SearchParams(
             keywords=params_raw.get("keywords", []),
             date_start=params_raw.get("date_start"),

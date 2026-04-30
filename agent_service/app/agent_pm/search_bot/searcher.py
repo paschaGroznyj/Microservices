@@ -6,18 +6,12 @@ BATCH_SIZE = 32
 
 
 class ArticleSearcher:
-    def __init__(self, embedding_model_name: str = "Embeddings-2"):
-        self.db = AgentDB()
+    def __init__(self, db, embedding_model_name: str = "Embeddings-2"):
+        self.db = db
         self.embeddings = get_embedd_model()
         self.processor = EmbeddingProcessor(embedding_model_name)
         self.embedding_model_name = embedding_model_name
         self.MAX_LENGTH = 1800
-
-    async def init(self):
-        await self.db.init_db_pool()
-
-    async def close(self):
-        await self.db.close()
 
     # ── Эмбеддинги ───────────────────────────────────────────
     async def _embed_articles(self, articles: list[dict]):
@@ -96,22 +90,18 @@ class ArticleSearcher:
 
 
 # ── Точка входа ──────────────────────────────────────────────
-async def searcher_main(post_body: dict):
-    searcher = ArticleSearcher()
-    await searcher.init()
-    try:
-        return await searcher.search(
-            user_name=post_body["user_name"],
-            request_id=post_body["request_id"],
-            match_threshold=float(post_body.get("match_threshold", 0.65)),
-            match_count=int(post_body.get("match_count", 20)),
-        )
-    finally:
-        await searcher.close()
+async def searcher_main(post_body: dict, db: AgentDB):
+    searcher = ArticleSearcher(db)
+    return await searcher.search(
+        user_name=post_body["user_name"],
+        request_id=post_body["request_id"],
+        match_threshold=float(post_body.get("match_threshold", 0.65)),
+        match_count=int(post_body.get("match_count", 20)))
 
 
-if __name__ == "__main__":
-    import asyncio
-    data = {"user_name": "oppo", "request_id": 143, "match_threshold": 0.80}
-    result = asyncio.run(searcher_main(data))
-    print(result)
+
+# if __name__ == "__main__":
+#     import asyncio
+#     data = {"user_name": "oppo", "request_id": 143, "match_threshold": 0.80}
+#     result = asyncio.run(searcher_main(data))
+#     print(result)

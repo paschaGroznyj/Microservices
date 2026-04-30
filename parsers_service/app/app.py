@@ -417,6 +417,7 @@ async def search_articles(request: Request):
                    "date_start": data.get("date_start"),
                    "date_end": data.get("date_end"),
                    "limit": data.get("limit", 10)},
+        "request_id": request_id,
     }
     """
     data = await request.json()

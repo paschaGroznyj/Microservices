@@ -138,5 +138,7 @@ class DataBase:
             
             CREATE INDEX IF NOT EXISTS idx_favorites_user_id 
                 ON favorites(user_id);
-               
+            
+            ALTER TABLE search_requests ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending';
+            ALTER TABLE search_requests ADD COLUMN IF NOT EXISTS error_message TEXT;
         """)

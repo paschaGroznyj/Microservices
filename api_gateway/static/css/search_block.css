@@ -263,6 +263,15 @@
   /* Убрали height: 1px */
 }
 
+.cards-grid.hidden{
+  display: none !important;
+}
+
+.cards-grid.loading {
+  pointer-events: none;
+  opacity: 0.8;
+}
+
 .results-state.visible {
   opacity: 1;
   pointer-events: all;

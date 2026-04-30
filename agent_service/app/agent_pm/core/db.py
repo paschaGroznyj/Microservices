@@ -59,9 +59,6 @@ class AgentDB:
     def _vector_to_str(vector: list[float]) -> str:
         return "[" + ",".join(map(str, vector)) + "]"
 
-    async def _init_connection(self, conn: asyncpg.Connection):
-        await register_vector(conn)
-
     async def init_schema(self, conn: asyncpg.Connection):
         await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
@@ -124,6 +121,8 @@ class AgentDB:
             CREATE INDEX IF NOT EXISTS ix_request_articles_is_relevant
                 ON request_articles(is_relevant);
         """)
+
+
 
     async def get_user_id_by_name(self, user_name: str) -> int | None:
         async with self.pool.acquire() as conn:
@@ -493,3 +492,22 @@ class AgentDB:
             """, request_id, user_name)
 
             return [dict(row) for row in rows]
+
+    async def insert_query(self, username: str, query: str) -> int:
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval("""
+                    INSERT INTO search_requests (user_id, user_query, status)
+                    SELECT id, $2, $3
+                    FROM users
+                    WHERE username = $1
+                    RETURNING id
+                """, username, query, 'pending')
+
+    async def update_status(self, request_id: int, llm_answer: str):
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+            UPDATE search_requests 
+            SET status = 'rejected', 
+                error_message = $1 
+            WHERE id = $2
+        """, llm_answer, request_id)

@@ -8,6 +8,7 @@ KAFKA_BROKER = os.getenv("KAFKA_BROKER")
 
 PORT_PM_AGENT = os.getenv("PORT_PM_AGENT")
 PORT_GATEWAY_PORT = os.getenv("PORT_GATEWAY_PORT")
+PORT_PARSERS_SERVICE = os.getenv("PORT_PARSERS_SERVICE")
 
 STORAGE_PATH = os.getenv("STORAGE_PATH", "./knowledge_base")
 ARTICLES_FOLDER = "articles"
@@ -29,3 +30,9 @@ SMTP_HOST = os.getenv("SMTP_HOST", "smtp.yandex.ru")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_LOGIN = os.getenv("SMTP_LOGIN", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+
+DB_PASSWORD = os.getenv("DB_PASSWORD")
+DB_HOST = os.getenv("DB_HOST")
+DB_PORT = os.getenv("DB_PORT")
+DB_USER = os.getenv("DB_USER")
+DB_NAME = os.getenv("DB_NAME")

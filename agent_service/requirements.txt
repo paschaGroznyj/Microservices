@@ -6,7 +6,7 @@ faiss-cpu==1.13.1
 scikit-learn
 fastapi
 uvicorn
-kafka-python
+aiokafka
 python-dotenv==1.0.0
 watchdog==4.0.0
 apscheduler==3.10.4
@@ -17,5 +17,5 @@ botocore==1.42.84
 aiobotocore==3.4.0
 python-dotenv
 requests
-
+asyncpg
 

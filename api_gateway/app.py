@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from contextlib import asynccontextmanager
 import httpx
+import asyncio
 import logging
 import json
 import uuid
@@ -127,10 +128,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Хранилище очередей — username → Queue
+sse_queues: dict[str, asyncio.Queue] = {}
+
+async def push_sse(username: str, data: dict):
+    if username not in sse_queues:
+        sse_queues[username] = asyncio.Queue()
+    await sse_queues[username].put(data)
+
 @app.get("/some-route")
 async def some_route(request: Request):
     authentik_user = request.headers.get("X-Authentik-Username")
     logger.info(authentik_user)
+
+# Другой коннектор для отправки релевантных статей на фронт
+user_connections: dict[str, WebSocket] = {}
+
+@app.websocket("/ws/user/{username}")
+async def websocket_user(websocket: WebSocket, username: str):
+    await websocket.accept()
+    user_connections[username] = websocket
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        user_connections.pop(username, None)
 
 connections: dict[int, list[WebSocket]] = {}
 @app.websocket("/ws/chat/{chat_id}")
@@ -582,6 +604,19 @@ async def favorites_select(request: Request):
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Parsers service unreachable: {str(e)}")
 
+async def notify_user_error(username: str, error_type: str = "error_parser"):
+    ws = user_connections.get(username)
+    if ws:
+        await ws.send_json({"type": error_type})
+    else:
+        logging.warning(f"Нет WS соединения для {username}")
+
+async def notify_user_message(username: str, type_message: str, message: str):
+    ws = user_connections.get(username)
+    if ws:
+        await ws.send_json({"type": type_message, "message": message})
+    else:
+        logging.warning(f"Нет WS соединения для {username}")
 
 @app.post("/api/search")
 async def searching(request: Request):
@@ -591,7 +626,74 @@ async def searching(request: Request):
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     data = await request.json()
-    logging.info(f"ДАННЫЕ с вкладки ПОИСКА {data}")
+    post_body = {
+        "user_name": data['username'],
+        "query": data['query']
+    }
+    agent_url = SERVICES['agent_service']['url']
+    # Отправляем дефолтные словосочетания с фронта
+    try:
+        response = await app.state.http_client.post(
+            f"{agent_url}/api/search",
+            json=post_body,
+            timeout=30.0
+        )
+        """
+        С парсера
+        {   
+            'type': 'parser'
+            'request_id': request_id,
+            'user_name': user_name,
+            'user_query': user_query,
+            'count': len(saved_articles),
+            'articles': saved_articles,
+        }
+        С агента, если запрос не релевантный
+        {
+            'type': 'agent'
+            'message': text
+        }
+        
+        """
+        logging.info(response.content)
+        if response.status_code == 200:
+            result = response.json()
+
+            if result.get("type") == "agent":
+                await notify_user_message(data['username'], type_message=result.get("type"), message=result['message'])
+            # Агент вернул ошибку парсера внутри 200
+            if result.get("type") == "arxiv_error":
+                await notify_user_message(data['username'], type_message=result.get("type"), message=result['message'])
+            if result.get("type") == "error_parser":
+                await notify_user_error(data['username'])
+                raise HTTPException(status_code=502, detail="Parser internal error")
+
+            return Response(
+                content=response.content,
+                status_code=200,
+                media_type="application/json"
+            )
+        else:
+            # Агент вернул не 200 — шлём WS и пробрасываем ошибку
+            await notify_user_error(data['username'])
+            raise HTTPException(status_code=response.status_code, detail="Agent error")
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Agent service unreachable: {str(e)}")
+
+@app.post("/internal/sse-push")
+async def internal_sse_push(request: Request):
+    """Агент сообщает что эмбеддинги готовы"""
+    data = await request.json()
+    username = data["username"]
+    logging.info(f"ОТВЕТ АГЕНТА ПО ЭМБЕДДИНГАМ: {data}")
+    ws = user_connections.get(username)
+    logging.info(user_connections)
+    if ws:
+        await ws.send_json(data["data"])
+    else:
+        logging.warning(f"Нет WS соединения для {username}")
+
+    return {"ok": True}
 
 
 @app.post("/api/search/default")
@@ -605,10 +707,11 @@ async def searching_default(request: Request):
 
     post_body = {
         "user_name": data['username'],
-        "user_query": "default",
+        "query": "default",
         "params": {
             "keywords": [data['key_word']]
-        }
+        },
+        "request_id": None
     }
 
     logging.info(f"ДЕФОЛТ ДАННЫЕ с вкладки ПОИСКА {data}")

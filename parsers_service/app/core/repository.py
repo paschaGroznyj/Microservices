@@ -74,6 +74,35 @@ class ResearchRepository:
                 params.limit,
             )
 
+    async def update_request_params(self, request_id: int, params):
+        """
+        Обновляет параметры существующего запроса (keywords, dates, limit)
+        и меняет статус на 'processing'.
+        Используется, когда Агент передал управление Парсеру.
+        """
+        params_dict = asdict(params)
+        params_json = json.dumps(params_dict, ensure_ascii=False)
+        keywords_json = json.dumps(params.keywords or [], ensure_ascii=False)
+
+        async with self.db.pool.acquire() as conn:
+            await conn.execute("""
+                               UPDATE search_requests
+                               SET params_json   = $2::jsonb,
+                                   keywords_json = $3::jsonb,
+                                   date_start    = $4,
+                                   date_end      = $5,
+                                   limit_value   = $6,
+                                   status        = 'processing'
+                               WHERE id = $1
+                               """,
+                               request_id,
+                               params_json,
+                               keywords_json,
+                               to_date(params.date_start) if params.date_start else None,
+                               to_date(params.date_end) if params.date_end else None,
+                               params.limit,
+                               )
+
     async def upsert_article(self, article) -> int:
         authors_json = json.dumps(article.authors or [], ensure_ascii=False)
         tags_json = json.dumps(article.tags or [], ensure_ascii=False)
@@ -155,14 +184,19 @@ class ResearchRepository:
         user_query: str,
         params,
         articles: list,
+        request_id: int = None,
     ) -> dict:
         user_id = await self.get_user_id_by_name(user_name)
         print(user_id)
-        request_id = await self.create_search_request(
-            user_id=user_id,
-            user_query=user_query,
-            params=params,
-        )
+
+        if request_id:
+            await self.update_request_params(request_id, params)
+        else:
+            request_id = await self.create_search_request(
+                user_id=user_id,
+                user_query=user_query,
+                params=params,
+            )
 
         saved_articles = []
 

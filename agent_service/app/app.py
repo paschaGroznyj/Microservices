@@ -1,101 +1,160 @@
 import threading
 import time
-from fastapi import FastAPI, HTTPException
+
+import httpx
+from fastapi import FastAPI, HTTPException, Request, Response
 import uvicorn
 import json
 import logging
-from pydantic import BaseModel
-from kafka import KafkaConsumer, KafkaProducer
-from agent_pm.agent import KnowledgeAgent
+from typing import List, Dict, Any, Optional
+from pydantic import BaseModel, Field
+from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
+from contextlib import asynccontextmanager
+# from agent_pm.agent import KnowledgeAgent
+from agent_pm.async_agent import KnowledgeAgent
+from langchain.schema import HumanMessage, SystemMessage
+from agent_pm.summary_period import extract_json
 import asyncio
+from httpx import AsyncClient
 # from agent_pm.pm_parser.arxiv_parser import ARXIVParser
-from agent_pm.core.config import KAFKA_BROKER, PORT_PM_AGENT
+from agent_pm.core.config import KAFKA_BROKER, PORT_PM_AGENT, PORT_PARSERS_SERVICE, PORT_GATEWAY_PORT
+from agent_pm.search_bot.searcher import searcher_main
+from agent_pm.core.db import AgentDB
 
 logging.basicConfig(level=logging.INFO)
 
-agent = KnowledgeAgent()
+db = AgentDB()
 
-producer = KafkaProducer(
-    bootstrap_servers=[KAFKA_BROKER],
-    api_version=(4,1,0),
-    key_serializer=lambda k: str(k).encode('utf-8'),
-    value_serializer=lambda m: json.dumps(m).encode('utf-8'))
-
-consumer = KafkaConsumer(
-    'chat-messages',
-    bootstrap_servers=[KAFKA_BROKER],
-    api_version=(4,1,0),
-    group_id='llm-bot-group',  # ← обязательно отличается от DB consumer'а!
-    value_deserializer=lambda m: json.loads(m.decode('utf-8')),
-    auto_offset_reset='latest'
-)
-
-logging.info("LLM-бот запущен и ждёт сообщения...")
-
-# Глобальный флаг
+# Глобальные переменные для producer/consumer
+producer: AIOKafkaProducer | None = None
+consumer: AIOKafkaConsumer | None = None
 consumer_alive = False
+agent: KnowledgeAgent | None = None
+
+async def get_producer() -> AIOKafkaProducer:
+    global producer
+    if producer is None:
+        producer = AIOKafkaProducer(
+            bootstrap_servers=[KAFKA_BROKER],
+            key_serializer=lambda k: str(k).encode("utf-8"),
+            value_serializer=lambda m: json.dumps(m).encode("utf-8"),
+        )
+        await producer.start()
+    return producer
+
+async def handle_message(payload: dict, prod: AIOKafkaProducer):
+    """Обработка одного сообщения — запускается конкурентно."""
+    start = time.perf_counter()
+
+    user_id = payload.get("user_id")
+    chat_id = payload.get("chat_id")
+    text = payload.get("message")
+    is_from_bot = payload.get("is_from_bot", False)
+    type_agent = payload.get("type_agent")
+    request_id = payload.get("request_id")
+
+    if is_from_bot or user_id == -1:
+        return
+    if type_agent != "pm":
+        return
+    if not text or chat_id is None:
+        logging.warning(f"Некорректное сообщение: {payload}")
+        return
+
+    try:
+        response = await agent.process_query(user_input=text, request_id=request_id)
+        # loop = asyncio.get_running_loop()
+        # response = await loop.run_in_executor(
+        #     None, agent.process_query, text, request_id
+        # )
+        response_text = response["message"]
+        # from datetime import datetime
+        # now = datetime.now()
+        # formatted_time = now.strftime("%H:%M:%S")
+        # response_text = f"Идет проведение нагрузочного тестирования! Cпасибо за понимание. Текущее время: **{formatted_time}**"
+
+        bot_message = {
+            "user_id": -1,
+            "chat_id": chat_id,
+            "message": response_text.strip(),
+            "is_from_bot": True,
+            "type_agent": "pm",
+        }
+
+        await prod.send_and_wait("chat-messages", value=bot_message)
+        logging.info(f"Ответ в чат {chat_id}: {response_text[:50]}...")
+        logging.info(f"Время обработки: {time.perf_counter() - start:.4f}s")
+
+    except Exception as e:
+        logging.error(f"Ошибка обработки сообщения: {e}")
 
 
-def kafka_consumer():
+async def kafka_consumer():
     global consumer_alive
+
+    consumer = AIOKafkaConsumer(
+        "chat-messages",
+        bootstrap_servers=[KAFKA_BROKER],
+        group_id="llm-bot-group",
+        value_deserializer=lambda m: json.loads(m.decode("utf-8")),
+        auto_offset_reset="latest",
+    )
+
+    await consumer.start()
     consumer_alive = True
-    while True:
-        try:
-            for message in consumer:
-                start = time.perf_counter()
+    logging.info("LLM-бот запущен и ждёт сообщения...")
 
-                payload = message.value
-                user_id = payload.get("user_id")
-                chat_id = payload.get("chat_id")
-                text = payload.get("message")
-                is_from_bot = payload.get("is_from_bot", False)
-                type_agent = payload.get("type_agent")
-                request_id = payload.get("request_id")
-                # Пропускаем сообщения от бота (защита от петли)
-                if is_from_bot or user_id == -1:
-                    continue
+    prod = await get_producer()
 
-                # Пропускаем сообщения не для этого агента
-                if type_agent != "pm":
-                    continue
+    tasks: set[asyncio.Task] = set()
 
-                if not text or chat_id is None:
-                    logging.warning(f"Некорректное сообщение: {payload}")
-                    continue
+    try:
+        async for message in consumer:
+            # Каждое сообщение — отдельная задача, не ждём завершения
+            task = asyncio.create_task(handle_message(message.value, prod))
 
-                try:
-                    # response = agent.process_query(text, request_id)
-                    # response_text = response["message"]
+            # Держим ссылки на таски, чтобы GC их не собрал
+            tasks.add(task)
+            task.add_done_callback(tasks.discard)
 
-                    from datetime import datetime
-                    now = datetime.now()
-                    formatted_time = now.strftime("%H:%M:%S")
-                    response_text = f"Идет проведение нагрузочного тестирования! Cпасибо за понимание. Текущее время: **{formatted_time}**"
-                    # Формируем сообщение от бота
-                    bot_message = {
-                        "user_id": -1,  # специальный ID для бота
-                        "chat_id": chat_id,
-                        "message": response_text.strip(),
-                        "is_from_bot": True,
-                        "type_agent": "pm"
-                    }
+    except asyncio.CancelledError:
+        logging.info("Kafka consumer остановлен, ждём завершения активных задач...")
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+    finally:
+        consumer_alive = False
+        await consumer.stop()
 
-                    # Отправляем в Kafka
-                    producer.send("chat-messages", value=bot_message)
-                    producer.flush()
-                    logging.info(f"Отправлен ответ бота в чат {chat_id}: {response_text[:50]}...")
-                    elapsed = time.perf_counter() - start
-                    logging.info(f"LLM Service. Время чтобы вытащить из кафки и сгенерировать ответ = {elapsed:.4f}s")
+async def shutdown():
+    global producer
+    if producer:
+        await producer.stop()
 
-                except Exception as e:
-                    logging.error(f"Ошибка в LLM-боте: {e}")
-            time.sleep(0.1)
-        except Exception as e:
-            consumer_alive = False
-            logging.error(f"LLM отвалился")
+async def kafka_moment():
+    try:
+        await kafka_consumer()
+    finally:
+        await shutdown()
 
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global agent
+    await db.init_db_pool()
+    task = asyncio.create_task(kafka_consumer())
+    agent = KnowledgeAgent(database=db, skip_startup_autoprocess=False)
+    yield
+
+    # Graceful shutdown
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    await shutdown()
+    await db.close()
+
+app = FastAPI(lifespan=lifespan)
 
 class ParsingMessage(BaseModel):
     status: str
@@ -128,13 +187,186 @@ async def make_reviews(parsing_status: ParsingMessage):
     return {"status": "ignored", "message": "Статус не success"}
 
 
+
+SERVICES = {
+    "parsers": {
+         "url": f"http://parsers_service:{PORT_PARSERS_SERVICE}",
+         },
+    "gateway": {
+        "url": f"http://api_gateway:{PORT_GATEWAY_PORT}"
+    }
+}
+
+@app.post("/api/search")
+async def searching(request: Request):
+    data = await request.json()
+    logging.info(data)
+
+    request_id = await db.insert_query(username=data["user_name"], query=data["query"])
+
+    intent = parse_user_intent(data["query"])
+    logging.info(f"INTENT = {intent}")
+    # Пользователь просто поздоровался
+    if not intent["is_search"]:
+        await db.update_status(request_id=request_id, llm_answer=intent["chat_response"])
+        return {"type": "agent", "message": intent["chat_response"]}
+
+    # Иначе — идём в парсер с готовыми keywords
+    post_body = {
+        "user_name": data["user_name"],
+        "query": data["query"],
+        "params": {"keywords": intent["keywords"]},
+        "request_id": request_id
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            # 1. Парсим статьи
+            response = await client.post(
+                f"{SERVICES['parsers']['url']}/search/articles",
+                json=post_body
+            )
+            if response.status_code == 200:
+                parser_data = response.json()
+                request_id = parser_data["request_id"]
+                parser_data['type'] = 'parser'
+
+                # 2. Считаем эмбеддинги и ищем релевантные — фоново
+                asyncio.create_task(
+                    run_search_and_notify(
+                        user_name=data["user_name"],
+                        request_id=int(request_id),
+                    )
+                )
+                # 3. Сразу отдаём все статьи фронту
+                return parser_data
+            else:
+                error_msg = "Не удалось выполнить поиск. Попробуйте позже."
+
+                try:
+                    error_detail = response.json().get("detail", "")
+                    if response.status_code == 429:
+                        error_msg = "Слишком частые запросы к arxiv. Подождите минуту и попробуйте снова.😉"
+                    elif response.status_code == 502:
+                        error_msg = "Сервис поиска временно недоступен.😶‍"
+                    elif error_detail:
+                        error_msg = f"Ошибка поиска"
+                except:
+                    pass
+
+                logging.warning(f"Parser returned error {response.status_code}: {error_msg}")
+
+                return {
+                    "type": "arxiv_error",
+                    "message": error_msg
+                }
+
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Parsers service unreachable: {str(e)}")
+
+async def run_search_and_notify(user_name: str, request_id: int):
+    """Фоновая задача — эмбеддинги + поиск похожих → пуш на gateway"""
+    try:
+        searcher_body = {
+            "user_name": user_name,
+            "request_id": request_id,
+            "match_threshold": 0.8
+        }
+        result = await searcher_main(searcher_body, db=db)
+        relevant_ids = [i["article_id"] for i in result["articles"]]
+
+        # Пушим на gateway чтобы он передал фронту через SSE
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"{SERVICES['gateway']['url']}/internal/sse-push",
+                json={
+                    "username": user_name,
+                    "data": {
+                        "type": "embeddings_ready",
+                        "request_id": request_id,
+                        "article_ids": relevant_ids,
+                        "count": len(relevant_ids)
+                    }
+                }
+            )
+    except Exception as e:
+        logging.error(f"Background search failed: {e}")
+
 @app.get("/health")
 async def health():
     status = "ok" if consumer_alive else "error"
     return {"service": "llm-bot", "status": status}
 
+class SearchIntent(BaseModel):
+    is_search: bool = Field(
+        description="True если пользователь хочет найти статьи, False если просто общается"
+    )
+    keywords: list[str] = Field(
+        default=[],
+        description="Ключевые слова для поиска на arXiv, на английском"
+    )
+    categories: list[str] = Field(
+        default=[],
+        description="Категории arXiv если применимо: cs.AI, cs.LG, stat.ML и т.д."
+    )
+    chat_response: Optional[str] = Field(
+        default=None,
+        description="Ответ модели если is_search=False (приветствие, вопрос не по теме и т.д.)"
+    )
+
+
+def parse_user_intent(user_query: str) -> dict:
+    system_prompt = """
+Ты анализируешь запрос пользователя и определяешь его намерение.
+Верни только JSON без markdown.
+
+Если пользователь хочет найти статьи — верни:
+{
+  "is_search": true,
+  "keywords": ["process mining", "conformance checking"],
+  "categories": ["cs.AI", "cs.LG"],
+  "chat_response": null
+}
+
+Если пользователь просто общается (привет, как дела, спасибо) — верни:
+{
+  "is_search": false,
+  "keywords": [],
+  "categories": [],
+  "chat_response": "Привет! Я помогаю искать научные статьи. [ДРУЖЕЛЮБНО ПОПРОСИТЬ ПЕРЕФРАЗИРОВАТЬ ЗАПРОС]"
+}
+
+Ключевые слова всегда на английском.
+Категории только стандартные arXiv: cs.AI, cs.LG, cs.SE, cs.DB, cs.CR, stat.ML и т.д.
+"""
+
+    response = agent.gigachat.invoke([
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_query),
+    ])
+    try:
+        data = json.loads(extract_json(response.content))
+    except Exception as e:
+        logging.info("НЕ удалось распарсить json при поисковом запросе AGENT SERVICE")
+        data = {
+            "is_search": False,
+            "keywords": [],
+            "categories": [],
+            "chat_response": 'Технические шоколадки. Повторим запрос?😉',
+        }
+    # data = {
+    #     "is_search": False,
+    #     "keywords": [user_query],
+    #     "categories": [],
+    #     "chat_response": 'У вас некорректный запрос😒',
+    # }
+    return SearchIntent(
+        is_search=data.get("is_search", False),
+        keywords=data.get("keywords", []),
+        categories=data.get("categories", []),
+        chat_response=data.get("chat_response"),
+    ).model_dump()
 
 if __name__ == "__main__":
-    threading.Thread(target=kafka_consumer, daemon=True).start() # Поднятие консьюмера
+    # threading.Thread(target=kafka_consumer, daemon=True).start() # Поднятие консьюмера
     uvicorn.run(app, host="0.0.0.0", port=int(PORT_PM_AGENT), log_level="info")
     # uvicorn.run(app, host="127.0.0.1", port=int(PORT_PM_AGENT), log_level="info")

@@ -46,25 +46,42 @@ function tagHtml(tag) {
 // Хранилище избранного: article_id → paper
 const favorites = new Map();
 let currentPapers = [];
+let relevantArticleIds = new Set(); // Список релевантных статей в сокета
 
 function renderCards() {
+  console.log('ВЫЗОВ RENDERcards');
   const sort = document.getElementById("sort-select").value;
   let papers = [...currentPapers];
   if (sort === "date") {
     papers.sort((a, b) => b.date.localeCompare(a.date));
   }
   const grid = document.getElementById("cards-grid");
-  grid.innerHTML = papers.map((p, i) => `
-    <div class="card" data-index="${i}">
+  grid.innerHTML = papers.map((p, i) =>{
+
+      // Если Set пустой (поиск еще не закончен или сброс), считаем все релевантными
+    const isRelevant = relevantArticleIds.size === 0 || relevantArticleIds.has(p.article_id);
+    console.log(relevantArticleIds)
+    // Классы карточки: базовый + условие нерелевантности
+    const cardClass = isRelevant ? 'card' : 'card irrelevant-card';
+
+    // Стиль звезды: если нерелевантно, можно сделать её серой или скрыть,
+    // но обычно оставляют возможность добавить в избранное.
+    // Здесь оставим логику избранного как есть, но визуально карточка изменится.
+    const isFav = favorites.has(p.article_id);
+    const starClass = isFav ? 'card-star active' : 'card-star';
+    const starFill = isFav ? 'currentColor' : 'none';
+
+      return`
+    <div class="${cardClass}" data-index="${i}" data-article-id="${p.article_id}">
       <div class="card-header-row">
-      <div class="card-tags">${p.tags.map(t => tagHtml(t)).join("")}</div>
-      <button class="card-star ${favorites.has(p.article_id) ? 'active' : ''}" data-article-id="${p.article_id}" data-index="${i}">
-        <svg viewBox="0 0 24 24" width="16" height="16">
-          <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"
-            stroke="currentColor" stroke-width="1.5" fill="${favorites.has(p.article_id) ? 'currentColor' : 'none'}" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </button>
-    </div>
+        <div class="card-tags">${p.tags.map(t => tagHtml(t)).join("")}</div>
+        <button class="${starClass}" data-article-id="${p.article_id}" data-index="${i}">
+          <svg viewBox="0 0 24 24" width="16" height="16">
+            <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"
+              stroke="currentColor" stroke-width="1.5" fill="${starFill}" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </div>
       <div class="card-favorites"></div>
       <div class="card-title">${p.title}</div>
       <div class="card-authors">${Array.isArray(p.authors) ? p.authors.join(", ") : p.authors}</div>
@@ -74,11 +91,13 @@ function renderCards() {
         <button class="card-open">Открыть</button>
       </div>
     </div>
-  `).join("");
+  `}).join("");
+
 }
 
 function showSkeleton() {
   const grid = document.getElementById("cards-grid");
+  grid.classList.remove('hidden')
   grid.innerHTML = Array(6).fill(`
     <div class="skeleton-card">
       <div class="skel" style="height:14px;width:60%"></div>
@@ -87,6 +106,11 @@ function showSkeleton() {
       <div class="skel" style="height:10px;width:50%;margin-top:4px"></div>
     </div>
   `).join("");
+}
+
+function hideSkeleton(){
+    const grid = document.getElementById("cards-grid");
+      grid.classList.add('hidden');
 }
 
 // Загрузка избранных статей с бэка
@@ -126,10 +150,11 @@ async function doSearch(isDefault = false, keyword = null) {
   const text = input.value.trim();
   if (!isDefault && !text) return;
 
+  relevantArticleIds.clear(); // Обновляем множество релевантных статей
   const username = app.currentUser.username;
   const url = isDefault ? '/api/search/default' : '/api/search';
   const body = isDefault ? { username, key_word: keyword } : { username, query: text };
-
+  console.log(url)
   document.getElementById("center-state").classList.add("searched");
   document.getElementById("results-state").classList.add("visible");
   document.getElementById("results-meta").textContent = "загрузка...";
@@ -146,7 +171,7 @@ async function doSearch(isDefault = false, keyword = null) {
       credentials: 'include',
       body: JSON.stringify(body)
     }),
-    loadFavorites()  // параллельно обновляем избранное
+    // loadFavorites()  // параллельно обновляем избранное
   ]);
 
     if (!searchResponse.ok) {
@@ -162,6 +187,28 @@ async function doSearch(isDefault = false, keyword = null) {
     }
 
     const data = await searchResponse.json();
+    if (data.type === 'agent') {
+        hideSkeleton();
+        document.getElementById("results-meta").textContent = "";
+        showToast({
+                title: "Нерелевантный запрос",
+                text: `${data.message}`,
+                type: "agent",
+                duration: 10000
+            });
+        return;
+    }
+    if (data.type === 'arxiv_error') {
+        hideSkeleton();
+        document.getElementById("results-meta").textContent = "";
+        showToast({
+                title: "Проблема с arxiv",
+                text: `${data.message}`,
+                type: "arxiv",
+                duration: 10000
+            });
+        return;
+    }
     console.log('Данные с бэка после парсинга', data)
     currentPapers = data.articles;
 
@@ -180,7 +227,55 @@ async function doSearch(isDefault = false, keyword = null) {
   }
 }
 
+let userSocket = null;
+// Работа с сокетом, агент отправляет сообщение с релевантными статьями
+function initUserSocket(username) {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const WS_HOST = window.location.host; // на gateway
 
+    userSocket = new WebSocket(
+        `${protocol}//${WS_HOST}/ws/user/${username}`
+        );
+    console.log('Открыли сокет для поисковика статей')
+    userSocket.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+
+        if (data.type === 'embeddings_ready') {
+            console.log('РЕЛЕВАНТНЫЕ СТАТЬИ', data)
+            relevantArticleIds = new Set(data.article_ids);
+            showToast({
+                title: "Анализ готов",
+                text: `Найдено ${data.count} релевантных статей. Показать?`,
+                type: "success",
+                duration: 10000
+            });
+            renderCards();
+        }
+        // if (data.type === 'agent') {
+        //     showToast({
+        //         title: "Не релевантный запрос",
+        //         text: `${data.message}`,
+        //         type: "agent",
+        //         duration: 10000
+        //     });
+        // }
+        if (data.type === 'error_parser') {
+        showToast({
+            title: "Ошибка парсера",
+            text: "Не удалось получить статьи. Попробуйте позже.",
+            type: "error",
+            duration: 10000
+        });
+        // Возвращаем UI в исходное состояние
+        document.getElementById("results-meta").textContent = "Ошибка загрузки";
+        }
+    };
+
+    userSocket.onclose = () => {
+        // Переподключаемся через 3 сек
+        setTimeout(() => initUserSocket(username), 3000);
+    };
+}
 
 function fillAndSearch(q) {
   document.getElementById("center-input").value = q;
@@ -259,18 +354,18 @@ document.addEventListener('DOMContentLoaded', () => {
         sortSelect.addEventListener('change', renderCards);
     }
 
-    // --- Кнопка поиска ---
     const searchBtn = document.getElementById('search-btn');
     if (searchBtn) {
-        searchBtn.addEventListener('click', doSearch);
+        searchBtn.addEventListener('click', () => doSearch());
     }
 
-    // const waitForUser = setInterval(() => {
-    // if (app.currentUser) {
-    //   clearInterval(waitForUser);
-    //   loadFavorites();
-    //   }
-    // }, 100);
+    const waitForUser = setInterval(() => {
+    if (app.currentUser) {
+      clearInterval(waitForUser);
+      loadFavorites(); // Один раз грузим корзину
+      initUserSocket(app.currentUser.username); // Один раз открываем сокет для релевантных статей
+      }
+    }, 100);
 
     document.addEventListener('click', (e) => {
     if (e.target.closest('#hide-toast')) {
@@ -605,6 +700,14 @@ function showToast({ title, text, type = "error", duration = 4000 }) {
     error:   `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="#ef4444" stroke-width="1.5"/><path d="M8 5v3.5M8 10.5v.5" stroke="#ef4444" stroke-width="1.5" stroke-linecap="round"/></svg>`,
     success: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="#22c55e" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#22c55e" stroke-width="1.5" stroke-linecap="round"/></svg>`,
     warning: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2L14 13H2L8 2Z" stroke="#f59e0b" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 6v3M8 10.5v.5" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round"/></svg>`,
+    agent:   `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="3" y="4" width="10" height="9" rx="2" stroke="#6b7280" stroke-width="1.5"/><circle cx="6" cy="8" r="1" fill="#6b7280"/><circle cx="10" cy="8" r="1" fill="#6b7280"/><path d="M8 4V2" stroke="#6b7280" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="1.5" r="0.5" fill="#6b7280"/><path d="M5 13v1M11 13v1" stroke="#6b7280" stroke-width="1.5" stroke-linecap="round"/></svg>`,
+    arxiv: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#3b82f6" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="8" cy="8" r="1.5" fill="#3b82f6"/>
+  <ellipse cx="8" cy="8" rx="6" ry="2.5" transform="rotate(0 8 8)"/>
+  <ellipse cx="8" cy="8" rx="6" ry="2.5" transform="rotate(60 8 8)"/>
+  <ellipse cx="8" cy="8" rx="6" ry="2.5" transform="rotate(120 8 8)"/>
+</svg>`
+
   };
 
   const toast = document.createElement("div");

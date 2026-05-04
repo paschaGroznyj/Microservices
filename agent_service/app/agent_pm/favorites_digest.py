@@ -7,9 +7,60 @@ from typing import Optional, List, Dict, Any, Tuple
 from pydantic import BaseModel, Field
 from langchain.schema import SystemMessage, HumanMessage
 
+from .core.botocore_client import OBSWorker
 from .core.agent_provider import get_model
 
 llm_client = get_model()
+
+from pydantic import BaseModel, Field
+
+
+class QueryDateRange(BaseModel):
+    start_date: Optional[str] = Field(default=None, description="YYYY-MM-DD")
+    end_date: Optional[str] = Field(default=None, description="YYYY-MM-DD")
+    has_date_filter: bool = Field(default=False)
+
+
+DATE_EXTRACT_PROMPT = """
+Ты извлекаешь диапазон дат из запроса пользователя для фильтрации статей.
+
+Текущая дата: 2026-05-04.
+
+Нужно вернуть ТОЛЬКО JSON в формате:
+{
+  "start_date": "YYYY-MM-DD" | null,
+  "end_date": "YYYY-MM-DD" | null,
+  "has_date_filter": true | false
+}
+
+Правила:
+- Если в запросе нет упоминания периода или даты, верни:
+  {"start_date": null, "end_date": null, "has_date_filter": false}
+- Если указан месяц, верни полный диапазон месяца.
+- Если указан год, верни диапазон с 1 января по 31 декабря этого года.
+- Если указан квартал, верни диапазон квартала.
+- Если указан "последний квартал", считай относительно текущей даты.
+- Если указан "за сегодня", "за вчера", "за неделю", "за месяц" — преобразуй в точные даты.
+- Все даты строго в формате YYYY-MM-DD.
+- Верни только валидный JSON без markdown.
+""".strip()
+
+def extract_date_filters_from_query(query: str) -> QueryDateRange:
+    messages = [
+        SystemMessage(content=DATE_EXTRACT_PROMPT),
+        HumanMessage(content=query),
+    ]
+
+    response = llm_client.invoke(messages)
+    content = extract_json(response.content)
+
+    try:
+        data = json.loads(content)
+        return QueryDateRange(**data)
+    except Exception:
+        cleaned = content.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        data = json.loads(cleaned)
+        return QueryDateRange(**data)
 
 class FavoritesDigestFilters(BaseModel):
     start_date: Optional[str] = Field(default=None, description="YYYY-MM-DD")
@@ -336,6 +387,7 @@ async def build_user_favorites_review_digest(
     save_to_file: bool = False,
     output_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
+    
     digest_json = await FavoritesReviewDigestService.generate_digest(
         username=username,
         favorites_with_reviews=favorites_with_reviews,
@@ -365,6 +417,40 @@ async def build_user_favorites_review_digest(
         )
         result["digest_file"] = str(output_path)
         result["filename"] = filename
+
+    return result
+
+async def build_user_favorites_review_digest_from_query(
+    username: str,
+    favorites_with_reviews: List[Dict[str, Any]],
+    user_query: str,
+    save_to_file: bool = False,
+    output_dir: Optional[Path] = None,
+) -> Dict[str, Any]:
+    
+    obs_loader = OBSWorker()
+
+    date_filters = extract_date_filters_from_query(user_query)
+
+    result = await build_user_favorites_review_digest(
+        username=username,
+        favorites_with_reviews=favorites_with_reviews,
+        start_date=date_filters.start_date if date_filters.has_date_filter else None,
+        end_date=date_filters.end_date if date_filters.has_date_filter else None,
+        save_to_file=save_to_file,
+        output_dir=output_dir,
+    )
+
+    result["user_query"] = user_query
+    result["detected_date_filter"] = date_filters.model_dump()
+
+    us_name = result["username"]
+    create = result["created_at"]
+
+    filename = f"digest_{us_name}_{create}.md"
+
+    await obs_loader.upload_digest_markdown_content(result["digest_markdown"], filename)
+    print(f"Дайджест {filename} добавлен")
 
     return result
 

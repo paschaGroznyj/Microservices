@@ -362,13 +362,10 @@ class ResearchRepository:
                     a.tags_json,
                     a.abstract,
                     a.category,
-                    r.review,
-                    r.created_at AS review_created_at,
-                    r.updated_at AS review_updated_at
+                    r.review_text,
                 FROM favorites f
-                JOIN users u ON f.user_id = u.id
                 JOIN articles a ON f.article_id = a.id
-                LEFT JOIN reviews r
+                LEFT JOIN arcticle_reviews r
                     ON r.article_id = a.id
                    AND r.user_id = u.id
                 WHERE u.username = $1

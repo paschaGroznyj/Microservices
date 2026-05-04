@@ -58,6 +58,7 @@ services:
     environment:
       PORT_PM_AGENT: ${PORT_PM_AGENT}
       PORT_GATEWAY_PORT: ${PORT_GATEWAY_PORT}
+      PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
       KAFKA_BROKER: ${KAFKA_BROKER}
 
       STORAGE_PATH: ${STORAGE_PATH}
@@ -78,6 +79,12 @@ services:
       SMTP_PORT: ${SMTP_PORT}
       SMTP_LOGIN: ${SMTP_LOGIN}
       SMTP_PASSWORD: ${SMTP_PASSWORD}
+
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
 
     volumes:
       - ./agent_service/config:/app/config
@@ -119,27 +126,33 @@ services:
   #     ports:
   #       - "4444:4444"
 
-  # parsers_service:
-  #   build: ./parsers_service
-  #   container_name: parsers_service
-  #   ports:
-  #     - "8003:8003"
-  #   environment:
-  #     PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
-  #     PORT_PM_AGENT: ${PORT_PM_AGENT}
-  #     STORAGE_PATH: ${STORAGE_PATH}
-  #     SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES}
-  #     SYNC_INTERVAL_SCHEDULER: ${SYNC_INTERVAL_SCHEDULER}
-  #     ARTICLES_FOLDER: ${ARTICLES_FOLDER}
-  #     METADATA_FOLDER: ${METADATA_FOLDER}
+  parsers_service:
+   build: ./parsers_service
+   container_name: parsers_service
+   ports:
+     - "8003:8003"
+   environment:
+     PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
+     PORT_PM_AGENT: ${PORT_PM_AGENT}
+     STORAGE_PATH: ${STORAGE_PATH}
+     SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES}
+     SYNC_INTERVAL_SCHEDULER: ${SYNC_INTERVAL_SCHEDULER}
+     ARTICLES_FOLDER: ${ARTICLES_FOLDER}
+     METADATA_FOLDER: ${METADATA_FOLDER}
 
-  #     OBS_BUCKET: ${OBS_BUCKET}
-  #     OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
-  #     OBS_SECRET_KEY: ${OBS_SECRET_KEY}
-  #     OBS_REGION: ${OBS_REGION}
-  #     OBS_ENDPOINT: ${OBS_ENDPOINT}
-    
-  #   restart: unless-stopped
+     OBS_BUCKET: ${OBS_BUCKET}
+     OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
+     OBS_SECRET_KEY: ${OBS_SECRET_KEY}
+     OBS_REGION: ${OBS_REGION}
+     OBS_ENDPOINT: ${OBS_ENDPOINT}
+
+     DB_HOST: ${DB_HOST}
+     DB_PORT: ${DB_PORT}
+     DB_USER: ${DB_USER}
+     DB_PASSWORD: ${DB_PASSWORD}
+     DB_NAME: ${DB_NAME}
+
+   restart: unless-stopped
 
   gateway:
     build: ./api_gateway
@@ -285,6 +298,7 @@ services:
     depends_on:
       - postgres
       - broker
+    restart: unless-stopped
 
   chats-consumer:
     container_name: chats-consumer
@@ -305,25 +319,25 @@ services:
       - broker
     restart: unless-stopped
 
-  # # Парсер — batch job, запуск: docker-compose run parser_service
-  # parser_service:
-  #   build:
-  #     context: ./agent_service
-  #     dockerfile: Dockerfile.parser
-  #   container_name: parser_service
-  #   environment:
-  #     DATE_RANGE_START: ${DATE_RANGE_START:-2026-01-01}
-  #     DATE_RANGE_END: ${DATE_RANGE_END:-2026-01-30}
-  #     STORAGE_PATH: /app/knowledge_base
-  #     ARTICLES_FOLDER: articles
-  #     METADATA_FILE: metadata.json
-  #     LOG_LEVEL: INFO
-  #     SCHOLAR_MAX_PAGES: ${SCHOLAR_MAX_PAGES:-2}
-  #     MISTRAL_KEY: ${MISTRAL_KEY:-}
-  #     MISTRAL_MODEL: ${MISTRAL_MODEL:-}
-  #   volumes:
-  #     - parser_data:/app/knowledge_base
-  #     - parser_logs:/app/logs
+#    Парсер — batch job, запуск: docker-compose run parser_service
+#  parser_service:
+#   build:
+#     context: ./agent_service
+#     dockerfile: Dockerfile.parser
+#   container_name: parser_service
+#   environment:
+#     DATE_RANGE_START: ${DATE_RANGE_START:-2026-01-01}
+#     DATE_RANGE_END: ${DATE_RANGE_END:-2026-01-30}
+#     STORAGE_PATH: /app/knowledge_base
+#     ARTICLES_FOLDER: articles
+#     METADATA_FILE: metadata.json
+#     LOG_LEVEL: INFO
+#     SCHOLAR_MAX_PAGES: ${SCHOLAR_MAX_PAGES:-2}
+#     MISTRAL_KEY: ${MISTRAL_KEY:-}
+#     MISTRAL_MODEL: ${MISTRAL_MODEL:-}
+#   volumes:
+#     - parser_data:/app/knowledge_base
+#     - parser_logs:/app/logs
 
 
 
@@ -350,5 +364,5 @@ volumes:
   postgres_data:
   neo4j_data:
   # redis_data:
-  # parser_data:
-  # parser_logs:
+#  parser_data:
+#  parser_logs:

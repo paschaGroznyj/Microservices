@@ -511,3 +511,46 @@ class AgentDB:
                 error_message = $1 
             WHERE id = $2
         """, llm_answer, request_id)
+
+    async def get_article_translation(self, article_id: int):
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow("""
+                                       SELECT abstract, translate, title
+                                       FROM articles
+                                       WHERE id = $1
+                                       """, article_id)
+
+    async def save_translation(self, article_id: int, translated_text: str):
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                               UPDATE articles
+                               SET translate = $1
+                               WHERE id = $2
+                               """, translated_text, article_id)
+
+    async def get_reviews(self, user_id: int):
+        async with self.pool.acquire() as conn:
+            return await conn.fetch("""
+            SELECT 
+                a.id AS article_id, 
+                a.pdf_url, 
+                a.title, 
+                a_r.review_text
+            FROM favorites f
+            JOIN articles a ON f.article_id = a.id
+            LEFT JOIN article_reviews a_r 
+                ON a_r.user_id = f.user_id AND a_r.article_id = f.article_id
+            WHERE f.user_id = $1
+        """, user_id)
+
+    async def save_review(self, user_id: int, article_id: int, review_text: str):
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO article_reviews (user_id, article_id, review_text)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (user_id, article_id) 
+                DO UPDATE SET 
+                    review_text = EXCLUDED.review_text,
+                    generated_at = NOW()
+            """, user_id, article_id, review_text)
+

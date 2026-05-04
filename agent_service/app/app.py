@@ -62,7 +62,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
         return
 
     try:
-        response = await agent.process_query(user_input=text, request_id=request_id)
+        response = await agent.process_query(user_input=text, request_id=request_id, user_id=user_id, database=db)
         # loop = asyncio.get_running_loop()
         # response = await loop.run_in_executor(
         #     None, agent.process_query, text, request_id
@@ -98,6 +98,10 @@ async def kafka_consumer():
         group_id="llm-bot-group",
         value_deserializer=lambda m: json.loads(m.decode("utf-8")),
         auto_offset_reset="latest",
+        session_timeout_ms=60000,  # Ждем 60 сек перед тем как убить клиента
+        heartbeat_interval_ms=10000,  # Шлем пульс каждые 10 сек
+        max_poll_interval_ms=300000,  # Даем 5 минут на обработку одного сообщения
+        max_poll_records=1,
     )
 
     await consumer.start()
@@ -196,6 +200,33 @@ SERVICES = {
         "url": f"http://api_gateway:{PORT_GATEWAY_PORT}"
     }
 }
+
+@app.post("/api/translate")
+async def translate(request: Request):
+    data = await request.json()
+    article_id = int(data["article_id"])
+
+    # Проверяем есть ли уже перевод в БД
+    row = await db.get_article_translation(article_id)
+
+    if row and row["translate"]:
+        # Перевод уже есть — отдаём из БД
+        return {"translated_abstract": row["translate"], "cached": True}
+
+    if not row or not row["abstract"]:
+        raise HTTPException(status_code=404, detail="Article not found")
+
+    # Перевода нет — отправляем в LLM
+    translated = translator(
+        title=row.get("title", ""),
+        abstract=row["abstract"]
+    )
+    logging.info(translated)
+    # Сохраняем перевод в БД
+    await db.save_translation(article_id, translated)
+
+    return {"translated_abstract": translated, "cached": False}
+
 
 @app.post("/api/search")
 async def searching(request: Request):
@@ -313,6 +344,32 @@ class SearchIntent(BaseModel):
         description="Ответ модели если is_search=False (приветствие, вопрос не по теме и т.д.)"
     )
 
+def translator(title: str, abstract: str) -> str:
+    system_prompt = f"""
+Ты — научный переводчик. Переводишь тексты академических статей с английского на русский.
+
+Правила:
+- Сохраняй научный стиль и точность формулировок
+- Термины и названия методов оставляй на английском в скобках: «векторное представление (embedding)»
+- Названия инструментов, библиотек, моделей не переводи: LSTM, arXiv, Python, LangChain
+- Не добавляй пояснений, вступлений и комментариев — только перевод
+- Не используй markdown
+
+Название статьи: {title}
+"""
+
+    response = agent.gigachat.invoke([
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=abstract),
+    ])
+
+    result = (response.content or "").strip()
+
+    if not result:
+        logging.warning("Переводчик вернул пустой ответ")
+        return abstract  # fallback — возвращаем оригинал
+
+    return result
 
 def parse_user_intent(user_query: str) -> dict:
     system_prompt = """

@@ -31,3 +31,18 @@ with open("answer.txt", mode='a', encoding='utf-8') as f:
 # if __name__ == '__main__':
 #     import asyncio
 #     asyncio.run(main())
+
+from agent_pm.core.db import AgentDB
+from agent_pm.core.agent_provider import get_model
+from agent_pm.async_agent import tool_make_reviews_basket
+
+db = AgentDB()
+llm = get_model()
+
+async def main():
+    await db.init_db_pool()
+    result = await tool_make_reviews_basket(db, 44, llm)
+    print(result)
+
+import asyncio
+asyncio.run(main())

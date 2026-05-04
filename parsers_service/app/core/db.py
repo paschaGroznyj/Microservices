@@ -65,6 +65,8 @@ class DataBase:
                 date_end DATE,
                 keywords_json JSONB NOT NULL DEFAULT '[]'::jsonb,
                 limit_value INTEGER NOT NULL DEFAULT 20,
+                error_message TEXT,
+                status TEXT DEFAULT 'pending',
                 created_at TIMESTAMP NOT NULL DEFAULT NOW()
             );
 
@@ -79,6 +81,7 @@ class DataBase:
                 authors_json JSONB NOT NULL DEFAULT '[]'::jsonb,
                 tags_json JSONB NOT NULL DEFAULT '[]'::jsonb,
                 abstract TEXT,
+                translate TEXT,
                 category TEXT,
                 created_at TIMESTAMP NOT NULL DEFAULT NOW(),
                 updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -108,7 +111,18 @@ class DataBase:
                 created_at TIMESTAMP NOT NULL DEFAULT NOW(),
                 UNIQUE (user_id, article_id)
             );
-        
+                
+            CREATE TABLE IF NOT EXISTS article_reviews (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                article_id BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+                review_text TEXT NOT NULL,
+                generated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                UNIQUE (user_id, article_id)
+            );
+            
+            CREATE INDEX IF NOT EXISTS ix_article_reviews_user_id ON article_reviews(user_id);
+                    
             CREATE INDEX IF NOT EXISTS ix_research_users_user_name
                 ON users(username);
 
@@ -141,4 +155,5 @@ class DataBase:
             
             ALTER TABLE search_requests ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending';
             ALTER TABLE search_requests ADD COLUMN IF NOT EXISTS error_message TEXT;
+            ALTER TABLE articles ADD COLUMN IF NOT EXISTS translate TEXT;
         """)

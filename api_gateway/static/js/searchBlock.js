@@ -260,9 +260,17 @@ function initUserSocket(username) {
         //     });
         // }
         if (data.type === 'error_parser') {
+            showToast({
+                title: "Ошибка парсера",
+                text: "Не удалось получить статьи. Попробуйте позже.",
+                type: "error",
+                duration: 10000
+            });
+        }
+         if (data.type === 'translate') {
         showToast({
-            title: "Ошибка парсера",
-            text: "Не удалось получить статьи. Попробуйте позже.",
+            title: "Ошибка перевода",
+            text: "Не удалось перевести аннотацию. Попробуйте позже.",
             type: "error",
             duration: 10000
         });
@@ -470,20 +478,68 @@ function initCardOverlay() {
         <!-- Задняя сторона -->
         <div class="card-face front">
           <button class="card-close" data-action="close">✕</button>
-          <div class="flip-abstract-label">Аннотация</div>
+          <div class="flip-abstract-label">
+            Аннотация
+          </div>
           <div class="flip-abstract" id="flip-abstract"></div>
-          <a class="flip-link" id="flip-link" target="_blank">Открыть на arxiv.org ↗</a>
+          <div class="flip-footer">
+            <a class="flip-link" id="flip-link" target="_blank">Открыть на arxiv.org ↗</a>
+            <button class="flip-translate-btn" id="flip-translate-btn" data-action="translate">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M3 5h12M9 3v2M7 19l4-9 4 9M6 17h8M16 5l5 5-5 5M21 10h-5"/>
+              </svg>
+              Перевести
+            </button>
+          </div>
         </div>
-
       </div>
     </div>
   `;
 
   // Клик по затемнению — закрыть
-    overlay.addEventListener("click", (e) => {
+    overlay.addEventListener("click", async (e) => {
     if (e.target.closest("[data-action='close']") || e.target === overlay) {
       closeCard();
+      return;
     }
+
+    if (e.target.closest("[data-action='translate']")) {
+    const btn = e.target.closest("[data-action='translate']");
+    const articleId = overlay.dataset.articleId;  // ← берём с оверлея
+
+    btn.textContent = "Загрузка...";
+    btn.disabled = true;
+    console.log('Отправить перед для статьи: ', articleId)
+    try {
+      const response = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ article_id: articleId })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        document.getElementById("flip-abstract").textContent = data.translated_abstract;
+        btn.textContent = "✓ Переведено";
+
+        // Сохраняем в currentPapers чтобы не запрашивать повторно
+          const articleId = overlay.dataset.articleId;
+          const paperIndex = currentPapers.findIndex(p => String(p.article_id) === String(articleId));
+          if (paperIndex !== -1) {
+            currentPapers[paperIndex].translated_abstract = data.translated_abstract;
+          }
+
+      } else {
+        btn.textContent = "Ошибка";
+        btn.disabled = false;
+      }
+    } catch (err) {
+      btn.textContent = "Ошибка";
+      btn.disabled = false;
+    }
+  }
+
   });
 
   document.body.appendChild(overlay);
@@ -495,8 +551,26 @@ function openCard(paper) {
   document.getElementById("flip-title").textContent = paper.title;
   document.getElementById("flip-authors").textContent = paper.authors;
   document.getElementById("flip-meta").textContent = paper.date;
-  document.getElementById("flip-abstract").textContent =
-    paper.abstract || "Аннотация недоступна.";
+
+  const translateBtn = document.getElementById("flip-translate-btn");
+   if (paper.translated_abstract) {
+    // Перевод уже есть — показываем сразу
+    document.getElementById("flip-abstract").textContent = paper.translated_abstract;
+   translateBtn.innerHTML = `
+    ✓ Переведено
+  `;
+    translateBtn.disabled = true;
+  } else {
+    // Показываем оригинал и активную кнопку
+    document.getElementById("flip-abstract").textContent = paper.abstract || "Аннотация недоступна.";
+     translateBtn.innerHTML = `
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m10.5 21 5.25-11.25L21 21m-9-3h7.5M3 5.621a48.474 48.474 0 0 1 6-.371m0 0c1.12 0 2.233.038 3.334.114M9 5.25V3m3.334 2.364C11.176 10.658 7.69 15.08 3 17.502m9.334-12.138c.896.061 1.785.147 2.666.257m-4.589 8.495a18.023 18.023 0 0 1-3.827-5.802" />
+    </svg>
+    Перевести
+  `;
+    translateBtn.disabled = false;
+  }
   document.getElementById("flip-link").href = paper.link;
 
   // Сбрасываем состояние flip-inner на случай повторного открытия
@@ -507,6 +581,7 @@ function openCard(paper) {
 
   // Показываем оверлей
   const overlay = document.getElementById("card-overlay");
+  overlay.dataset.articleId = paper.article_id;
   overlay.classList.remove("closing");
   overlay.classList.add("active");
 
@@ -757,4 +832,4 @@ document.addEventListener("keydown", e => {
 });
 
 // Инициализируем оверлей
-initCardOverlay();
+await initCardOverlay();

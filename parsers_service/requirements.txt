@@ -4,9 +4,6 @@ PyPDF2
 pycryptodome
 python-dotenv
 mistralai
-selenium
-playwright
-PyMuPDF
 aiobotocore
 boto3
 pyyaml

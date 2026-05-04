@@ -19,10 +19,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 3. Создаём пользователя
 RUN useradd -m -u 1500 appuser
 
-# 4. Playwright: устанавливаем браузер от имени appuser
-USER appuser
-RUN playwright install chromium
-USER root
+## 4. Playwright: устанавливаем браузер от имени appuser
+#USER appuser
+#RUN playwright install chromium
+#USER root
 
 # 5. Копируем код и настраиваем права
 COPY . .

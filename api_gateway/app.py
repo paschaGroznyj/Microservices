@@ -680,6 +680,43 @@ async def searching(request: Request):
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Agent service unreachable: {str(e)}")
 
+
+@app.post("/api/translate")
+async def translate(request: Request):
+    """Направить в агента"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    data = await request.json()
+    post_body = {
+        "username": user['username'],
+        "article_id": data['article_id']
+    }
+    logging.info(f"Это перевод для {post_body}")
+    agent_url = SERVICES['agent_service']['url']
+    # Отправляем дефолтные словосочетания с фронта
+    try:
+        response = await app.state.http_client.post(
+            f"{agent_url}/api/translate",
+            json=post_body,
+            timeout=30.0
+        )
+        logging.info(response.content)
+        if response.status_code == 200:
+            return Response(
+                content=response.content,
+                status_code=200,
+                media_type="application/json"
+            )
+        else:
+            # Агент вернул не 200 — шлём WS и пробрасываем ошибку
+            await notify_user_message(user['username'], type_message='translate', message="Не удалось перевести аннотацию")
+            raise HTTPException(status_code=response.status_code, detail="Agent error")
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Agent service unreachable: {str(e)}")
+
+
 @app.post("/internal/sse-push")
 async def internal_sse_push(request: Request):
     """Агент сообщает что эмбеддинги готовы"""

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import time
 from enum import Enum
 import json
@@ -20,9 +21,10 @@ from .digest_email_handler import DigestEmailHandler
 from .monitor import StorageMonitor
 from .summary import SummaryGenerator
 from .summary_period import agent_composite_digest_tool
-from .favorites_digest import build_user_favorites_review_digest_from_query
 from .update_metadata import MetadataUpdater
 from .vector_db import VectorDBManager
+from .download_pdf_and_make import download_and_parse_pdf, generate_review
+from .favorites_digest import build_user_favorites_review_digest_from_query
 from pydantic import BaseModel, Field
 
 GATEWAY_URL = f"http://api_gateway:{PORT_GATEWAY_PORT}"
@@ -354,6 +356,76 @@ async def tool_summarize_file(
     return {"status": "error", "message": "❌ Не получилось найти файл"}
 
 
+async def tool_make_reviews_basket(db, user_id, llm_client):
+    """
+    Основная функция-инструмент.
+    1. Находит избранные статьи без ревью.
+    2. Параллельно скачивает PDF, генерирует ревью и сохраняет в БД.
+    """
+    rows = await db.get_reviews(user_id)
+    articles_data = [dict(row) for row in rows]
+
+    articles_to_process = [art for art in articles_data if not art.get('review_text')]
+    if len(articles_data) == 0:
+        message = (
+            "📂 **Ваша корзина пока пуста**\n\n"
+            "Чтобы я мог сделать ревью, нужно сначала добавить статьи в избранное.\n"
+            "Загляните в раздел *Поиск статей*, выберите что-нибудь интересное и нажмите на звездочку ⭐️😉"
+        )
+        return {"status": "success", "message": message}
+
+    if not articles_to_process:
+        message = (
+            f"✨ **Отличные новости! Всё уже готово**\n\n"
+            f"Вы уже сформировали ревью для всех {len(articles_data)} статей в вашей корзине.\n\n"
+            f"Можем перейти к следующему шагу? Например, собрать по ним общий дайджест 🤠"
+        )
+        return {"status": "success", "message": message}
+
+    print(f"Начинаем обработку {len(articles_to_process)} новых статей...")
+
+    tasks = []
+    for article in articles_to_process:
+        task = process_single_article_safe(
+            article=article,
+            db=db,
+            user_id=user_id,
+            llm=llm_client
+        )
+        tasks.append(task)
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    success_count = sum(1 for r in results if r is True)
+    total_count = len(articles_to_process)
+
+    results_data = {
+        "processed": success_count,
+        "total": total_count
+    }
+
+    # Формируем сообщение для пользователя
+    if success_count == 0:
+        message = (
+            "ℹ️ **Нечего анализировать**\n\n"
+            "В вашей корзине избранного нет новых статей без ревью, "
+            "либо возникли ошибки при обработке PDF.\n"
+            "Попробуйте добавить новые статьи в избранное."
+        )
+    else:
+        message = (
+            f"🎉 **Готово! Ревью сформированы.**\n\n"
+            f"• Обработано статей: `{success_count}` из `{total_count}`\n\n"
+            f"Теперь вы можете просмотреть краткие саммари в разделе 'Избранное'.\n"
+            f"Нажмите на кнопку 'Ревью' рядом с каждой статьей."
+        )
+
+    return {
+        "status": "success",
+        "message": message,
+        "results": results_data
+    }
+
 async def tool_digest_basket(db,
     user_id: str,
     user_query: str
@@ -371,9 +443,38 @@ async def tool_digest_basket(db,
     )
 
     if res['digest_markdown']:
-        return {"status": 'created', "message": res}
+        message = (
+            f"🎉 **Готово! Дайджест сформирован.**\n\n"
+            f"Теперь вы можете скачать дайджест из объектного хранилища.\n"
+        )
+        return {"status": 'created', "message": message}
 
     return {"status": "error", "message": "❌ Не получилось сделать дайджест"}
+
+async def process_single_article_safe(article: dict, db, user_id: int, llm):
+    """
+    Безопасная обертка для обработки одной статьи.
+    """
+    article_id = article['article_id']
+    pdf_url = article['pdf_url']
+    title = article['title']
+
+    try:
+        text_content = await download_and_parse_pdf(pdf_url)
+
+        if not text_content or len(text_content) < 50:
+            raise ValueError("Недостаточно текста для анализа")
+
+        review_text = await generate_review(llm, text_content, title, pdf_url)
+        logging.info(f"ТЕКСТ РЕВЬЮ {review_text[:100]}")
+        await db.save_review(user_id, article_id, review_text)
+
+        return True
+
+    except Exception as e:
+        print(f"❌ Failed to process article {article_id} ({title}): {e}")
+        return False
+
 
 # Pydantic модели для structured output
 class ActionType(str, Enum):
@@ -603,6 +704,7 @@ class KnowledgeAgent:
         self.articles_path = base_dir / Path(STORAGE_PATH) / ARTICLES_FOLDER
         self.name_meta_dir = base_dir / Path(STORAGE_PATH)
         self.digest_path = base_dir / "digests"
+        self.db = None
 
         self.monitor = StorageMonitor(STORAGE_PATH, METADATA_FILE)
         self.vector_db = VectorDBManager(str(self.digest_path), VECTOR_DB_PATH)
@@ -811,6 +913,7 @@ class KnowledgeAgent:
 
                 case "summarize_basket":
                     await self._send_status(f"🧺 Формирую ревью по корзине с избранным", request_id)
+                    return await tool_make_reviews_basket(self.db, user_id, llm_client=self.gigachat)
                     time.sleep(5)
                 case "digest_basket":
                     await self._send_status(f"⭐ Формирую единый дайджест по корзине с избранным", request_id)

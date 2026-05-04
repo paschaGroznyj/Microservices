@@ -20,6 +20,7 @@ from .digest_email_handler import DigestEmailHandler
 from .monitor import StorageMonitor
 from .summary import SummaryGenerator
 from .summary_period import agent_composite_digest_tool
+from .favorites_digest import build_user_favorites_review_digest_from_query
 from .update_metadata import MetadataUpdater
 from .vector_db import VectorDBManager
 from pydantic import BaseModel, Field
@@ -351,6 +352,28 @@ async def tool_summarize_file(
         return {"status": digest_result["status"], "message": message}
 
     return {"status": "error", "message": "❌ Не получилось найти файл"}
+
+
+async def tool_digest_basket(db,
+    user_id: str,
+    user_query: str
+) -> Dict[str, Any]:
+    """Генерация дайджеста."""
+    
+    rows = await db.get_reviews(user_id)
+    articles_data = [dict(row) for row in rows]
+
+    res = await build_user_favorites_review_digest_from_query(
+        username=user_id,
+        favorites_with_reviews=articles_data,
+        user_query=user_query,
+        save_to_file=False,
+    )
+
+    if res['digest_markdown']:
+        return {"status": 'created', "message": res}
+
+    return {"status": "error", "message": "❌ Не получилось сделать дайджест"}
 
 # Pydantic модели для structured output
 class ActionType(str, Enum):
@@ -727,7 +750,7 @@ class KnowledgeAgent:
     # Диспетчер выполнения
     # ------------------------------------------------------------------
 
-    async def _execute(self, action: Dict[str, Any], user_input: str = "", request_id: str = "") -> Dict[str, Any]:
+    async def _execute(self, action: Dict[str, Any], user_input: str = "", request_id: str = "", user_id: int = None) -> Dict[str, Any]:
         try:
             match action["action"]:
 
@@ -791,6 +814,7 @@ class KnowledgeAgent:
                     time.sleep(5)
                 case "digest_basket":
                     await self._send_status(f"⭐ Формирую единый дайджест по корзине с избранным", request_id)
+                    return await tool_digest_basket(db=self.db, user_id=user_id, user_query=user_input)
                     time.sleep(5)
 
                 case _:
@@ -904,11 +928,14 @@ class KnowledgeAgent:
     # Точка входа
     # ------------------------------------------------------------------
 
-    async def process_query(self, user_input: str, request_id: str) -> Dict[str, Any]:
+    async def process_query(self, user_input: str, request_id: str, user_id: int, database) -> Dict[str, Any]:
+        if not self.db:
+            self.db = database
+
         try:
             await self._send_status("🌞 Определяю инструмент ...", request_id)
             action = await self._analyze(user_input)
-            result = await self._execute(action, user_input, request_id)
+            result = await self._execute(action, user_input, request_id, user_id)
             final_state = await self.get_state()
 
             return {

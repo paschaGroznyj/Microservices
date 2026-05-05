@@ -13,6 +13,7 @@ import httpx
 from datetime import datetime, timedelta
 from pathlib import Path
 import json
+import shutil
 import re
 
 from core.db import DataBase
@@ -190,6 +191,36 @@ def _save_articles_and_metadata(articles: List[Dict]):
 
     logger.info(f"Сохранено {len(new_articles)} новых статей")
 
+def _remove_directory(dir_path: str | Path, ignore_errors: bool = False) -> bool:
+    """
+    Удаляет директорию и всё её содержимое.
+    
+    Args:
+        dir_path: Путь к директории.
+        ignore_errors: Если True, ошибки при удалении игнорируются.
+        
+    Returns:
+        True, если удаление прошло успешно (или директория не существовала), 
+        False в случае ошибки (если ignore_errors=False).
+    """
+    path = Path(dir_path)
+    
+    if not path.exists():
+        logger.debug(f"Директория не существует: {path}")
+        return True
+        
+    if not path.is_dir():
+        logger.warning(f"Указанный путь не является директорией: {path}")
+        return False
+
+    try:
+        # shutil.rmtree удаляет директорию рекурсивно
+        shutil.rmtree(path, ignore_errors=ignore_errors)
+        logger.info(f"Директория успешно удалена: {path}")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при удалении директории {path}: {e}")
+        return False
 
 class ParserPipeline:
     def __init__(self, parsers: List):
@@ -228,7 +259,7 @@ async def perform_parsing_cycle():
 
         # # # 1. Скачиваем существующие данные из OBS
         logger.info("Скачивание данных из OBS...")
-        await obs.download_all_md()
+        # await obs.download_all_md()
         await obs.download_metadata()
 
 
@@ -300,6 +331,9 @@ async def perform_parsing_cycle():
             logger.error(f"Не удалось связаться с агентом: {e}")
             raise HTTPException(status_code=503, detail=f"Agent service unreachable: {str(e)}")
 
+        logger.info("Удаляем лишнее")
+        _remove_directory(ARTICLES_DIR)
+        _remove_directory(PDFS_DIR)
 
     except Exception as e:
         logger.exception(f"Критическая ошибка в цикле парсинга: {e}")

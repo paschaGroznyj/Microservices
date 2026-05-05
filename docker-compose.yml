@@ -5,8 +5,8 @@ services:
     ports:
       - "9092:9092"
       - "9093:9093"
-    mem_limit: 512m
-    memswap_limit: 512m
+    mem_limit: 1g
+    memswap_limit: 1g
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -20,11 +20,12 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_NUM_PARTITIONS: 3
-      KAFKA_HEAP_OPTS: "-Xmx256m -Xms128m"
+      KAFKA_HEAP_OPTS: "-Xmx512m -Xms128m"
       KAFKA_LOG_RETENTION_HOURS: 6
-      KAFKA_LOG_RETENTION_BYTES: 536870912  # 512MB
+      KAFKA_LOG_RETENTION_BYTES: 1073741824  # 512MB
     volumes:
       - kafka-data:/var/lib/kafka/data
+    restart: unless-stopped
 
 #  broker: # Для локальной отладки
 #    image: apache/kafka:4.1.0
@@ -109,16 +110,17 @@ services:
   #     REDIS_KEY: ${REDIS_KEY}
   #   restart: unless-stopped
 
-#  token_service:
-#    build: ./token_service
-#    container_name: token_service
-#    ports:
-#      - "9004:9004"
-#    environment:
-#      INTERNAL_TOKEN_API_URL: ${INTERNAL_TOKEN_API_URL}
-#      PORT_TOKEN_GENERATE_SERVICE: ${PORT_TOKEN_GENERATE_SERVICE}
-#      TOKEN_TTL: ${TOKEN_TTL}
-#      IAM_API_KEY: ${IAM_API_KEY}
+  token_service:
+    build: ./token_service
+    container_name: token_service
+    ports:
+      - "9004:9004"
+    environment:
+      INTERNAL_TOKEN_API_URL: ${INTERNAL_TOKEN_API_URL}
+      PORT_TOKEN_GENERATE_SERVICE: ${PORT_TOKEN_GENERATE_SERVICE}
+      TOKEN_TTL: ${TOKEN_TTL}
+      IAM_API_KEY: ${IAM_API_KEY}
+    restart: unless-stopped
 
   # selenium_chrome:
   #     image: selenium/standalone-chrome:latest
@@ -153,6 +155,7 @@ services:
      DB_NAME: ${DB_NAME}
 
    restart: unless-stopped
+
 
   gateway:
     build: ./api_gateway
@@ -248,34 +251,35 @@ services:
   #     - "9003:8000"
 
 
-#  rag_service:
-#    container_name: rag_service
-#    build: ./rag_service
-#    command: uvicorn app.app:app --host 0.0.0.0 --port 8002
-#    ports:
-#      - "8002:8002"
-#    environment:
-#      HF_TOKEN: ${HF_TOKEN}
-#      EMB_MODEL: ${EMB_MODEL}
-#      DB_HOST: ${DB_HOST}
-#      DB_PORT: ${DB_PORT}
-#      DB_USER: ${DB_USER}
-#      DB_PASSWORD: ${DB_PASSWORD}
-#      DB_NAME: ${DB_NAME}
-#      REDIS_HOST: ${REDIS_HOST}
-#      REDIS_PORT: ${REDIS_PORT}
-#      REDIS_KEY: ${REDIS_KEY}
-#      VDB_TYPE: ${VDB_TYPE}
-#      GC_AUTH_URL: ${GC_AUTH_URL}
-#      GC_MODEL: ${GC_MODEL}
-#      OBS_BUCKET: ${OBS_BUCKET}
-#      OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
-#      OBS_SECRET_KEY: ${OBS_SECRET_KEY}
-#      OBS_REGION: ${OBS_REGION}
-#      OBS_ENDPOINT: ${OBS_ENDPOINT}
-#    depends_on:
-#      - postgres
-#      - token_service
+
+  # rag_service:
+  #   container_name: rag_service
+  #   build: ./rag_service
+  #   command: uvicorn app.app:app --host 0.0.0.0 --port 8002
+  #   ports:
+  #     - "8002:8002"
+  #   environment:
+  #     HF_TOKEN: ${HF_TOKEN}
+  #     EMB_MODEL: ${EMB_MODEL}
+  #     DB_HOST: ${DB_HOST}
+  #     DB_PORT: ${DB_PORT}
+  #     DB_USER: ${DB_USER}
+  #     DB_PASSWORD: ${DB_PASSWORD}
+  #     DB_NAME: ${DB_NAME}
+  #     REDIS_HOST: ${REDIS_HOST}
+  #     REDIS_PORT: ${REDIS_PORT}
+  #     REDIS_KEY: ${REDIS_KEY}
+  #     VDB_TYPE: ${VDB_TYPE}
+  #     GC_AUTH_URL: ${GC_AUTH_URL}
+  #     GC_MODEL: ${GC_MODEL}
+  #     OBS_BUCKET: ${OBS_BUCKET}
+  #     OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
+  #     OBS_SECRET_KEY: ${OBS_SECRET_KEY}
+  #     OBS_REGION: ${OBS_REGION}
+  #     OBS_ENDPOINT: ${OBS_ENDPOINT}
+  #   depends_on:
+  #     - postgres
+  #     - token_service
 
   
   chats_service:
@@ -340,24 +344,6 @@ services:
 #     - parser_logs:/app/logs
 
 
-
-#  chrome_1:
-#    image: kasmweb/chrome:1.15.0
-#    ports:
-#      - "6901:6901"
-#    environment:
-#      - VNC_PW=password123
-#      - XDG_RUNTIME_DIR=/run/user/1000
-#      - LAUNCH_URL=https://google.com            # 🎯 URL для автозапуска в Chrome
-#      - APP_ARGS=--start-maximized               # 🪟 Аргументы для Chrome
-#    shm_size: '512mb'
-#    cap_add:
-#      - SYS_ADMIN                                # 🔐 Нужно для некоторых функций Chrome
-#      - NET_ADMIN                                # 🌐 Для сетевых функций
-#    # volumes:
-#    #   - chrome_data:/home/kasm-user/.config/google-chrome  # 💾 Сохранение профиля
-#    restart: unless-stopped
-
 volumes:
   kafka-data:
   llm_cache:
@@ -366,3 +352,7 @@ volumes:
   # redis_data:
 #  parser_data:
 #  parser_logs:
+
+networks:
+  default:
+    name: pascha_microservices

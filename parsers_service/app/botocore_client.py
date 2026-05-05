@@ -64,7 +64,7 @@ class OBSWorker:
             data = await response["Body"].read()
             raw_text = data.decode("utf-8", errors="ignore")
             clean_json = self.extract_json_array(raw_text)
-            parsed_data = json.loads(clean_json)
+            parsed_data = json.loads(clean_json, strict=False)
 
             with open(local_path, "w", encoding="utf-8") as f:
                 json.dump(parsed_data, f, ensure_ascii=False, indent=2)

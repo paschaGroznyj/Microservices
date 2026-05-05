@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from contextlib import asynccontextmanager
 # from agent_pm.agent import KnowledgeAgent
-from agent_pm.async_agent import KnowledgeAgent
+from Microservices.agent_service.app.agent_pm.async_agent_ import KnowledgeAgent
 from langchain.schema import HumanMessage, SystemMessage
 from agent_pm.summary_period import extract_json
 import asyncio

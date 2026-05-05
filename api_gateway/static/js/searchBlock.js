@@ -28,6 +28,33 @@ const TAG_PALETTE = [
   { bg: "#e8f8f5", text: "#0e5c4a" },  // бирюзовый
 ];
 
+function normalizeArticle(p) {
+  return {
+    article_id: p.article_id,
+    title: p.title,
+    abstract: p.abstract || "",
+    date: p.date || p.date_sub || "",
+    link: p.link || p.url_article || "",
+    source: p.source || "arxiv",
+    external_id: p.external_id || "",
+    // authors — строка или массив
+    authors: Array.isArray(p.authors)
+      ? p.authors
+      : typeof p.authors === "string"
+        ? JSON.parse(p.authors)
+        : [],
+    // tags — строка или массив
+    tags: Array.isArray(p.tags)
+      ? p.tags
+      : typeof p.tags === "string"
+        ? JSON.parse(p.tags)
+        : [],
+    // сохраняем перевод если уже есть
+    translated_abstract: p.translated_abstract || null,
+    is_favorite: p.is_favorite || false,
+  };
+}
+
 function tagColor(str) {
   // Простой хэш строки → индекс палитры
   let hash = 0;
@@ -173,7 +200,6 @@ async function doSearch(isDefault = false, keyword = null) {
     }),
     // loadFavorites()  // параллельно обновляем избранное
   ]);
-
     if (!searchResponse.ok) {
       if (searchResponse.status === 502) {
         showToast({
@@ -211,7 +237,7 @@ async function doSearch(isDefault = false, keyword = null) {
         return;
     }
     console.log('Данные с бэка после парсинга', data)
-    currentPapers = data.articles;
+    currentPapers = data.articles.map(normalizeArticle);
 
     document.getElementById("results-meta").textContent = currentPapers.length + " статей";
     renderCards();
@@ -243,7 +269,13 @@ function initUserSocket(username) {
 
         if (data.type === 'embeddings_ready') {
             console.log('РЕЛЕВАНТНЫЕ СТАТЬИ', data)
-            relevantArticleIds = new Set(data.article_ids);
+            const relevantIds = new Set(data.article_ids.map(String));
+
+            // Обновляем флаг релевантности на уже нормализованных статьях
+            currentPapers = currentPapers.map(p => ({
+                ...p,
+                is_relevant: relevantIds.size === 0 || relevantIds.has(String(p.article_id))
+            }));
             showToast({
                 title: "Анализ готов",
                 text: `Найдено ${data.count} релевантных статей. Показать?`,

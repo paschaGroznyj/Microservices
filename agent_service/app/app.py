@@ -234,21 +234,35 @@ async def searching(request: Request):
     logging.info(data)
 
     request_id = await db.insert_query(username=data["user_name"], query=data["query"])
+    existing_tags, existing_keywords = await asyncio.gather(
+        db.get_tags(),
+        db.get_keywords()
+    )
 
-    intent = parse_user_intent(data["query"])
+    intent = parse_user_intent(data["query"], existing_tags, existing_keywords)
     logging.info(f"INTENT = {intent}")
     # Пользователь просто поздоровался
     if not intent["is_search"]:
         await db.update_status(request_id=request_id, llm_answer=intent["chat_response"])
         return {"type": "agent", "message": intent["chat_response"]}
 
+    new_tags = list(set(intent["categories"]) - set(existing_tags))
+    new_keywords = list(set(intent["keywords"]) - set(existing_keywords))
+    if new_tags:
+        await db.insert_tags(new_tags)
+    if new_keywords:
+        await db.insert_keywords(new_keywords)
+    logging.info(f"Новые теги: {new_tags}, новые keywords: {new_keywords}, search_now: {intent['search_now']}")
+
     # Иначе — идём в парсер с готовыми keywords
     post_body = {
         "user_name": data["user_name"],
         "query": data["query"],
-        "params": {"keywords": intent["keywords"]},
-        "request_id": request_id
+        "params": {"keywords": intent["keywords"], "categories": intent["categories"]},
+        "request_id": request_id,
+        "search_now": intent["search_now"]
     }
+    logging.info(post_body)
     try:
         async with httpx.AsyncClient() as client:
             # 1. Парсим статьи
@@ -258,7 +272,6 @@ async def searching(request: Request):
             )
             if response.status_code == 200:
                 parser_data = response.json()
-                request_id = parser_data["request_id"]
                 parser_data['type'] = 'parser'
 
                 # 2. Считаем эмбеддинги и ищем релевантные — фоново
@@ -339,6 +352,10 @@ class SearchIntent(BaseModel):
         default=[],
         description="Категории arXiv если применимо: cs.AI, cs.LG, stat.ML и т.д."
     )
+    search_now: Optional[bool] = Field(
+        default=True,
+        description="Ответ модели, нужно ли запускать парсер или будем искать статьи в БД"
+    )
     chat_response: Optional[str] = Field(
         default=None,
         description="Ответ модели если is_search=False (приветствие, вопрос не по теме и т.д.)"
@@ -371,55 +388,73 @@ def translator(title: str, abstract: str) -> str:
 
     return result
 
-def parse_user_intent(user_query: str) -> dict:
-    system_prompt = """
-Ты анализируешь запрос пользователя и определяешь его намерение.
-Верни только JSON без markdown.
+def parse_user_intent(user_query: str, existing_tags: list[str], keywords: list[str]) -> dict:
+    tags_str = ", ".join(existing_tags) if existing_tags else "список пуст"
+    keywords = ', '.join(keywords) if keywords else 'база пуста'
+    logging.info(f"Теги и ключевые слова из БД {tags_str}, keywords: {keywords}")
 
-Если пользователь хочет найти статьи — верни:
-{
-  "is_search": true,
-  "keywords": ["process mining", "conformance checking"],
-  "categories": ["cs.AI", "cs.LG"],
-  "chat_response": null
-}
+    system_prompt = f"""
+    Ты анализируешь запрос пользователя и определяешь его намерение.
+    Верни только JSON без markdown.
 
-Если пользователь просто общается (привет, как дела, спасибо) — верни:
-{
-  "is_search": false,
-  "keywords": [],
-  "categories": [],
-  "chat_response": "Привет! Я помогаю искать научные статьи. [ДРУЖЕЛЮБНО ПОПРОСИТЬ ПЕРЕФРАЗИРОВАТЬ ЗАПРОС]"
-}
+    Существующие теги в базе:
+    {tags_str}
 
-Ключевые слова всегда на английском.
-Категории только стандартные arXiv: cs.AI, cs.LG, cs.SE, cs.DB, cs.CR, stat.ML и т.д.
-"""
+    Существующие ключевые слова в базе:
+    {keywords}
+
+    Если пользователь хочет найти статьи:
+    1. Извлеки ключевые слова из запроса (на английском)
+    2. Сравни их с существующими тегами и ключевыми словами
+    3. Если все ключевые слова есть в бд — search_now = false (статьи уже есть в БД)
+    4. Если предложенного тобой тега или ключевого слова нет в БД — search_now = true (нужно парсить arXiv)
+
+    Верни:
+    {{
+      "is_search": true,
+      "keywords": ["process mining", "conformance checking"],
+      "categories": ["cs.AI", "cs.LG"],
+      "search_now": true,
+      "chat_response": null
+    }}
+
+    Если пользователь просто общается — верни:
+    {{
+      "is_search": false,
+      "keywords": [],
+      "categories": [],
+      "search_now": false,
+      "chat_response": "Привет! Я помогаю искать научные статьи. Спросите меня о теме."
+    }}
+
+    Ключевые слова всегда на английском.
+    Категории arXiv — точные коды: cs.AI, cs.AR, cs.CE, cs.CL, cs.CR, cs.CV, cs.CY, cs.DB, cs.DC, cs.DL, cs.DS, cs.ET, cs.FL, cs.GR, cs.GT, cs.HC, cs.IR, cs.IT, cs.LG, cs.LO, cs.MA, cs.MM, cs.NE, cs.NI, cs.OS, cs.PL, cs.RO, cs.SC, cs.SE, cs.SI
+    Если тема явно относится к категории — включи её в categories.
+    keywords — свободные слова для поиска по заголовку и аннотации.
+    """
 
     response = agent.gigachat.invoke([
         SystemMessage(content=system_prompt),
         HumanMessage(content=user_query),
     ])
+
     try:
         data = json.loads(extract_json(response.content))
-    except Exception as e:
-        logging.info("НЕ удалось распарсить json при поисковом запросе AGENT SERVICE")
+    except Exception:
+        logging.info("Не удалось распарсить JSON — AGENT SERVICE")
         data = {
             "is_search": False,
             "keywords": [],
             "categories": [],
-            "chat_response": 'Технические шоколадки. Повторим запрос?😉',
+            "search_now": False,
+            "chat_response": "Технические шоколадки. Повторим запрос?😉",
         }
-    # data = {
-    #     "is_search": False,
-    #     "keywords": [user_query],
-    #     "categories": [],
-    #     "chat_response": 'У вас некорректный запрос😒',
-    # }
+
     return SearchIntent(
         is_search=data.get("is_search", False),
         keywords=data.get("keywords", []),
         categories=data.get("categories", []),
+        search_now=data.get("search_now", True),
         chat_response=data.get("chat_response"),
     ).model_dump()
 

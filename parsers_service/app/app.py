@@ -456,6 +456,24 @@ async def search_articles(request: Request):
     """
     data = await request.json()
     logging.info(data)
+    search_now = data.get("search_now", True)
+    if not search_now:
+        # Статьи уже есть — достаём из БД по тегам
+        articles = await research.get_articles_by_keywords(
+            keywords=data["params"]["keywords"],
+            categories=data["params"]["categories"],
+            user_name=data["user_name"]
+        )
+        return {
+            "request_id": data["request_id"],
+            "user_name": data["user_name"],
+            "user_query": data["query"],
+            "count": len(articles),
+            "articles": articles,
+            "cached": True
+        }
+
+    # Нужно парсить arXiv
     return await start_search(data, db)
 
 @app.post("/favorites/select")

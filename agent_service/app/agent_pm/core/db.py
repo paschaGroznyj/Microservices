@@ -554,3 +554,31 @@ class AgentDB:
                     generated_at = NOW()
             """, user_id, article_id, review_text)
 
+    # Работа с динамическим промптом
+    async def get_tags(self) -> list[str]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT tag_name FROM tags ORDER BY generated_at DESC")
+            return [row["tag_name"] for row in rows]
+
+    async def insert_tags(self, tags: list[str]) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.executemany("""
+                                   INSERT INTO tags (tag_name)
+                                   VALUES ($1)
+                                   ON CONFLICT (tag_name) DO NOTHING
+                                   """, [(tag,) for tag in tags])
+
+    # ── Ключевые слова ────────────────────────────────────────
+    async def get_keywords(self) -> list[str]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT keyword FROM keywords ORDER BY generated_at DESC")
+            return [row["keyword"] for row in rows]
+
+    async def insert_keywords(self, keywords: list[str]) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.executemany("""
+                                   INSERT INTO keywords (keyword)
+                                   VALUES ($1)
+                                   ON CONFLICT (keyword) DO NOTHING
+                                   """, [(kw,) for kw in keywords])
+

@@ -17,7 +17,9 @@ class VectorDBManager:
         print(self.digest_path)
         self.vector_db_path = base_dir / vector_db_path
 
+
         self.embeddings = get_embedd_model()
+
         
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=512,

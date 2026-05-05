@@ -7,7 +7,7 @@ from langchain_gigachat.embeddings import GigaChatEmbeddings
 def get_model():
     return GigaChat(
         credentials="none",
-        auth_url="http://host.docker.internal:9004/api/v2/oauth", # Данный адрес контейнера является единственным источником истины для получения токена внутри ВМ cloud
+        auth_url="http://token_service:9004/api/v2/oauth", # Данный адрес контейнера является единственным источником истины для получения токена внутри ВМ cloud
         verify_ssl_certs=False,
         model="GigaChat-2-Max"
     )
@@ -16,7 +16,7 @@ def get_model():
 def get_embedd_model():
     return GigaChatEmbeddings(
         credentials="somebody_once_told_me",
-        auth_url="http://host.docker.internal:9004/api/v2/oauth",
+        auth_url="http://token_service:9004/api/v2/oauth",
         verify_ssl_certs=False,
         model="Embeddings-2"
     )

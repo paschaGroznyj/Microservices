@@ -559,7 +559,6 @@ async def favorites(request: Request):
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     data = await request.json()
-    logging.info(f"ИЗБРАННОЕ {data}")
     parser_url = SERVICES['parsers']['url']
     try:
         response = await app.state.http_client.post(
@@ -655,7 +654,6 @@ async def searching(request: Request):
         }
         
         """
-        logging.info(response.content)
         if response.status_code == 200:
             result = response.json()
 

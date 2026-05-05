@@ -272,12 +272,3 @@
 #     async def arun(self) -> list[dict]:
 #         return await asyncio.to_thread(self._scrape)
 #
-# if __name__ == "__main__":
-#     load_dotenv()
-#     link = 'https://ieeexplore.ieee.org/search/searchresult.jsp?queryText=Process%20Mining&highlight=true&returnType=SEARCH&matchPubs=true&refinementName=Publication%20Topics&refinements=PublicationTopics:Process%20Mining&returnFacets=ALL&ranges=2026_2026_Year'
-#     result = IEEEParser(link, ('2026-04-10', '2026-04-17'))._scrape()
-#
-#     print(f'Found results: {len(result)}')
-#
-#     with open('test.json', 'w+', encoding='utf8') as jsonfile:
-#         json.dump(result, jsonfile, ensure_ascii=False, indent=4)

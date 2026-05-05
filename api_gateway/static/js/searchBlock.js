@@ -181,6 +181,7 @@ async function doSearch(isDefault = false, keyword = null) {
           text: "Не удалось подключиться к сервису парсеров. Попробуйте позже.",
           type: "error"
         });
+        showRateLimitModal(120);
       }
       document.getElementById("results-meta").textContent = "Ошибка загрузки";
       return;
@@ -283,6 +284,55 @@ function initUserSocket(username) {
         // Переподключаемся через 3 сек
         setTimeout(() => initUserSocket(username), 3000);
     };
+}
+
+function showRateLimitModal(seconds = 120) {
+  // Создаём модалку если её нет
+  let modal = document.getElementById("rate-limit-modal");
+  if (!modal) {
+    modal = document.createElement("div");
+    modal.id = "rate-limit-modal";
+    modal.innerHTML = `
+      <div class="rate-limit-backdrop"></div>
+      <div class="rate-limit-card">
+        <div class="rate-limit-icon">⏳</div>
+        <div class="rate-limit-title">arXiv просит подождать</div>
+        <div class="rate-limit-text">
+          Сервис arXiv ограничивает частоту запросов.<br>
+          Повторная попытка через:
+        </div>
+        <div class="rate-limit-timer" id="rate-limit-timer">${seconds}</div>
+        <div class="rate-limit-sub">секунд</div>
+        <button class="rate-limit-close" id="rate-limit-close">Закрыть</button>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    document.getElementById("rate-limit-close").addEventListener("click", () => {
+      clearInterval(modal._interval);
+      modal.classList.remove("active");
+    });
+  }
+
+  modal.classList.add("active");
+
+  // Запускаем таймер
+  let remaining = seconds;
+  const timerEl = document.getElementById("rate-limit-timer");
+  timerEl.textContent = remaining;
+
+  clearInterval(modal._interval);
+  modal._interval = setInterval(() => {
+    remaining--;
+    timerEl.textContent = remaining;
+
+    if (remaining <= 0) {
+      clearInterval(modal._interval);
+      modal.classList.remove("active");
+      // Автоматически повторяем поиск
+      doSearch();
+    }
+  }, 1000);
 }
 
 function fillAndSearch(q) {

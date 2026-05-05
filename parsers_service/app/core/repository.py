@@ -344,6 +344,45 @@ class ResearchRepository:
                                     WHERE u.username = $1
                                     ORDER BY f.created_at DESC;""", username)
 
+    async def get_articles_by_keywords(
+            self,
+            keywords: list[str],
+            categories: list[str],
+            user_name: str
+    ) -> list[dict]:
+        async with self.db.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                                    SELECT DISTINCT a.id           AS article_id,
+                                                    a.title,
+                                                    a.authors_json AS authors,
+                                                    a.date_sub     AS date,
+                                                    a.url_article  AS link,
+                                                    a.tags_json    AS tags,
+                                                    a.abstract,
+                                                    a.category
+                                    FROM articles a
+                                    WHERE (
+                                        -- По категориям arXiv — кастуем JSONB в TEXT
+                                        --EXISTS (
+                                          --  SELECT 1
+                                           -- FROM unnest($2::text[]) AS cat
+                                           -- WHERE a.tags_json::text ILIKE '%' || cat || '%'
+                                       -- )
+                                       -- OR
+                                        -- По ключевым словам в заголовке и аннотации
+                                        EXISTS (
+                                            SELECT 1
+                                            FROM unnest($1::text[]) AS kw
+                                            WHERE a.title ILIKE '%' || kw || '%'
+                                               OR a.abstract ILIKE '%' || kw || '%'
+                                        )
+                                    )
+                                    ORDER BY a.date_sub DESC
+                                    LIMIT 50;
+            """, keywords)
+
+            return [dict(row) for row in rows]
+
 # from db import DataBase
 # import asyncio
 #

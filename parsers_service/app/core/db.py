@@ -121,6 +121,20 @@ class DataBase:
                 UNIQUE (user_id, article_id)
             );
             
+            -- Категории arXiv (cs.AI, cs.LG и т.д.)
+            CREATE TABLE IF NOT EXISTS tags (
+                id BIGSERIAL PRIMARY KEY,
+                tag_name TEXT NOT NULL UNIQUE,
+                generated_at TIMESTAMP NOT NULL DEFAULT NOW()
+            );
+            
+            -- Ключевые слова от пользователей
+            CREATE TABLE IF NOT EXISTS keywords (
+                id BIGSERIAL PRIMARY KEY,
+                keyword TEXT NOT NULL UNIQUE,
+                generated_at TIMESTAMP NOT NULL DEFAULT NOW()
+            );
+            
             CREATE INDEX IF NOT EXISTS ix_article_reviews_user_id ON article_reviews(user_id);
                     
             CREATE INDEX IF NOT EXISTS ix_research_users_user_name

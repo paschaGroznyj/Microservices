@@ -700,7 +700,6 @@ async def translate(request: Request):
             json=post_body,
             timeout=30.0
         )
-        logging.info(response.content)
         if response.status_code == 200:
             return Response(
                 content=response.content,
@@ -744,7 +743,8 @@ async def searching_default(request: Request):
         "user_name": data['username'],
         "query": "default",
         "params": {
-            "keywords": [data['key_word']]
+            "keywords": [data['key_word']],
+            "limit": 500
         },
         "request_id": None
     }

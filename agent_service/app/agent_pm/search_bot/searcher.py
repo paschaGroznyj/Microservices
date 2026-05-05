@@ -1,6 +1,9 @@
 from agent_pm.core.db import AgentDB
 from agent_pm.embeddings import EmbeddingProcessor
 from agent_pm.core.agent_provider import get_embedd_model
+import logging
+
+logging.basicConfig(level=logging.INFO)
 
 BATCH_SIZE = 32
 
@@ -11,7 +14,20 @@ class ArticleSearcher:
         self.embeddings = get_embedd_model()
         self.processor = EmbeddingProcessor(embedding_model_name)
         self.embedding_model_name = embedding_model_name
-        self.MAX_LENGTH = 1800
+        self.MAX_CHARS = 800
+
+    def _truncate(self, text: str) -> str:
+        """Обрезаем по границе предложения чтобы не резать посередине"""
+        if len(text) <= self.MAX_CHARS:
+            return text
+
+        # Обрезаем и ищем последнюю точку
+        truncated = text[:self.MAX_CHARS]
+        last_dot = truncated.rfind(". ")
+        if last_dot > self.MAX_CHARS // 2:
+            return truncated[:last_dot + 1]
+
+        return truncated
 
     # ── Эмбеддинги ───────────────────────────────────────────
     async def _embed_articles(self, articles: list[dict]):
@@ -28,7 +44,7 @@ class ArticleSearcher:
             if not source_text.strip():
                 continue
 
-            batch_texts.append(source_text[:self.MAX_LENGTH])
+            batch_texts.append(self._truncate(source_text))
             batch_ids.append(article["article_id"])
 
             if len(batch_texts) == BATCH_SIZE:
@@ -40,7 +56,23 @@ class ArticleSearcher:
             await self._flush_batch(batch_ids, batch_texts)
 
     async def _flush_batch(self, ids: list[int], texts: list[str]):
-        vectors = await self.embeddings.aembed_documents(texts)
+        # Если батч не прошёл — пробуем по одной статье
+        try:
+            vectors = await self.embeddings.aembed_documents(texts)
+        except Exception as e:
+            if "413" in str(e) or "Tokens limit" in str(e):
+                logging.warning(f"Батч не прошёл по токенам, пробуем по одной: {e}")
+                vectors = []
+                for text in texts:
+                    try:
+                        vec = await self.embeddings.aembed_documents([text[:600]])
+                        vectors.append(vec[0])
+                    except Exception as inner:
+                        logging.error(f"Не удалось заэмбеддить даже короткий текст: {inner}")
+                        vectors.append([0.0] * 1024)  # нулевой вектор как fallback
+            else:
+                raise
+
         articles_data = [
             {"article_id": aid, "embedding": vec, "source_text": txt}
             for aid, vec, txt in zip(ids, vectors, texts)
@@ -100,8 +132,9 @@ async def searcher_main(post_body: dict, db: AgentDB):
 
 
 
+
 # if __name__ == "__main__":
 #     import asyncio
-#     data = {"user_name": "oppo", "request_id": 143, "match_threshold": 0.80}
+#     data = {"user_name": "oppo", "request_id": 296, "match_threshold": 0.80}
 #     result = asyncio.run(searcher_main(data))
 #     print(result)

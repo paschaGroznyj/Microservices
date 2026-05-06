@@ -412,6 +412,35 @@ class OBSWorker:
             await self._upload_file(client, digest_path, s3_key)
         print(f"Дайджест {filename}.json S3")
 
+    import os
+
+
+    async def upload_digest_markdown_content(self, md_content: str, filename: str):
+        """
+        Загружает markdown-дайджест в OBS/S3 напрямую из строки.
+
+        :param md_content: содержимое markdown-файла
+        :param filename: имя файла, например 'favorites_digest_oppo_all.md'
+        """
+        if not md_content or not md_content.strip():
+            print("Пустой md_content, загружать нечего")
+            return
+
+        if not filename.endswith(".md"):
+            filename = f"{filename}.md"
+
+        s3_key = f"PM/digests/{filename}"
+
+        async with self.client() as client:
+            await client.put_object(
+                Bucket=self.open_bucket,
+                Key=s3_key,
+                Body=md_content.encode("utf-8"),
+                ContentType="text/markdown; charset=utf-8",
+            )
+
+        print(f"Дайджест {filename} загружен в OBS")
+
     async def download_reviews(self):
         local_dir = Path(self.name_digests)
         os.makedirs(local_dir, exist_ok=True)

@@ -34,7 +34,7 @@ with open("answer.txt", mode='a', encoding='utf-8') as f:
 
 from agent_pm.core.db import AgentDB
 from agent_pm.core.agent_provider import get_model
-from agent_pm.async_agent import tool_make_reviews_basket
+from Microservices.agent_service.app.agent_pm.async_agent_ import tool_make_reviews_basket
 
 db = AgentDB()
 llm = get_model()

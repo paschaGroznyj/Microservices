@@ -24,6 +24,7 @@ from .summary_period import agent_composite_digest_tool
 from .update_metadata import MetadataUpdater
 from .vector_db import VectorDBManager
 from .download_pdf_and_make import download_and_parse_pdf, generate_review
+from .favorites_digest import build_user_favorites_review_digest_from_query
 from pydantic import BaseModel, Field
 
 GATEWAY_URL = f"http://api_gateway:{PORT_GATEWAY_PORT}"
@@ -424,6 +425,32 @@ async def tool_make_reviews_basket(db, user_id, llm_client):
         "results": results_data
     }
 
+async def tool_digest_basket(db,
+    user_id: str,
+    user_query: str
+) -> Dict[str, Any]:
+    """Генерация дайджеста."""
+    
+    rows = await db.get_reviews(user_id)
+    articles_data = [dict(row) for row in rows]
+
+    res = await build_user_favorites_review_digest_from_query(
+        username=user_id,
+        favorites_with_reviews=articles_data,
+        user_query=user_query,
+        save_to_file=False,
+    )
+    base_url = "https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/PM/digests/"
+    full_link = f"{base_url}{res['file_name']}"
+    if res['digest_markdown']:
+        message = (
+            f"🎉 **Готово! Дайджест сформирован.**\n\n"
+            f"📖 **Посмотреть:** [Нажмите здесь]({full_link})\n"
+        )
+        return {"status": 'created', "message": message}
+
+    return {"status": "error", "message": "❌ Не получилось сделать дайджест"}
+
 async def process_single_article_safe(article: dict, db, user_id: int, llm):
     """
     Безопасная обертка для обработки одной статьи.
@@ -690,7 +717,6 @@ class KnowledgeAgent:
         self.obs_loader = OBSWorker()
         self.email_handler = DigestEmailHandler()
         self.skip_startup_autoprocess = skip_startup_autoprocess
-
         # Переиспользуемый httpx клиент
         self._http_client: Optional[httpx.AsyncClient] = None
 
@@ -890,6 +916,7 @@ class KnowledgeAgent:
                     time.sleep(5)
                 case "digest_basket":
                     await self._send_status(f"⭐ Формирую единый дайджест по корзине с избранным", request_id)
+                    return await tool_digest_basket(db=self.db, user_id=user_id, user_query=user_input)
                     time.sleep(5)
 
                 case _:

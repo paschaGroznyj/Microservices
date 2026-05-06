@@ -744,7 +744,7 @@ async def searching_default(request: Request):
         "query": "default",
         "params": {
             "keywords": [data['key_word']],
-            "limit": 500
+            "limit": 100
         },
         "request_id": None
     }

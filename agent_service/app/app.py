@@ -10,7 +10,6 @@ from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from contextlib import asynccontextmanager
-# from agent_pm.agent import KnowledgeAgent
 from agent_pm.async_agent import KnowledgeAgent
 from langchain.schema import HumanMessage, SystemMessage
 from agent_pm.summary_period import extract_json
@@ -147,6 +146,7 @@ async def lifespan(app: FastAPI):
     await db.init_db_pool()
     task = asyncio.create_task(kafka_consumer())
     agent = KnowledgeAgent(database=db, skip_startup_autoprocess=False)
+    await agent.make_reviews()
     yield
 
     # Graceful shutdown
@@ -408,6 +408,7 @@ def parse_user_intent(user_query: str, existing_tags: list[str], keywords: list[
     2. Сравни их с существующими тегами и ключевыми словами
     3. Если все ключевые слова есть в бд — search_now = false (статьи уже есть в БД)
     4. Если предложенного тобой тега или ключевого слова нет в БД — search_now = true (нужно парсить arXiv)
+    5. Если пользователь пишет о свежих статьях - всегда возвращай всегда search_now = true независимо от тегов
 
     Верни:
     {{

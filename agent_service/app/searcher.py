@@ -292,7 +292,7 @@ class ArticleSearcher:
         if articles:
             await self._embed_articles(articles)
 
-        query_embedding = await self.embeddings.aembed_query("Что ты можешь сказать об llm models?")
+        query_embedding = await self.embeddings.aembed_query(self._truncate(request_data["user_query"]))
 
         matched = await self.db.search_similar_articles_for_request(
             user_name=user_name,

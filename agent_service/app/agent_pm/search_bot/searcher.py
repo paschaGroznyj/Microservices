@@ -97,9 +97,10 @@ class ArticleSearcher:
 
         articles = await self.db.get_request_articles_for_embedding(user_name, request_id)
         if articles:
+            logging.info("Отравляем на векторизацию")
             await self._embed_articles(articles)
 
-        query_embedding = await self.embeddings.aembed_query(request_data["user_query"][:self.MAX_LENGTH])
+        query_embedding = await self.embeddings.aembed_query(self._truncate(request_data["user_query"]))
 
         matched = await self.db.search_similar_articles_for_request(
             user_name=user_name,

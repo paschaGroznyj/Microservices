@@ -343,6 +343,34 @@ class ResearchRepository:
                                              JOIN articles a ON f.article_id = a.id
                                     WHERE u.username = $1
                                     ORDER BY f.created_at DESC;""", username)
+    
+    async def get_favorites_with_reviews(self, username: str) -> list[dict]:
+        """
+        Возвращает избранные статьи пользователя + его review по каждой статье.
+        Если review отсутствует, поле review будет None.
+        """
+        async with self.db.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT
+                    a.id AS article_id,
+                    a.external_id,
+                    a.title,
+                    a.date_sub,
+                    a.url_article,
+                    a.pdf_url,
+                    a.authors_json,
+                    a.tags_json,
+                    a.abstract,
+                    a.category,
+                    r.review_text,
+                FROM favorites f
+                JOIN articles a ON f.article_id = a.id
+                LEFT JOIN arcticle_reviews r
+                    ON r.article_id = a.id
+                   AND r.user_id = u.id
+                WHERE u.username = $1
+                ORDER BY f.created_at DESC
+            """, username)
 
     async def get_articles_by_keywords(
             self,
@@ -382,6 +410,7 @@ class ResearchRepository:
             """, keywords)
 
             return [dict(row) for row in rows]
+
 
 # from db import DataBase
 # import asyncio

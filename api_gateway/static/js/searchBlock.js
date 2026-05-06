@@ -77,17 +77,17 @@ let relevantArticleIds = new Set(); // Список релевантных ст�
 
 function renderCards() {
   console.log('ВЫЗОВ RENDERcards');
-  const sort = document.getElementById("sort-select").value;
+  // const sort = document.getElementById("sort-select").value;
   let papers = [...currentPapers];
-  if (sort === "date") {
-    papers.sort((a, b) => b.date.localeCompare(a.date));
-  }
+  // if (sort === "date") {
+  //   papers.sort((a, b) => b.date.localeCompare(a.date));
+  // }
   const grid = document.getElementById("cards-grid");
   grid.innerHTML = papers.map((p, i) =>{
 
       // Если Set пустой (поиск еще не закончен или сброс), считаем все релевантными
-    const isRelevant = relevantArticleIds.size === 0 || relevantArticleIds.has(p.article_id);
-    console.log(relevantArticleIds)
+    const isRelevant = relevantArticleIds.size === 0 || relevantArticleIds.has(p.article_id.toString());
+    console.log('Множество', relevantArticleIds, 'id_card', p.article_id.toString())
     // Классы карточки: базовый + условие нерелевантности
     const cardClass = isRelevant ? 'card' : 'card irrelevant-card';
 
@@ -115,7 +115,6 @@ function renderCards() {
       <div class="card-date">${p.date}</div>
       <div class="card-footer">
         <a class="card-link" href="${p.link}" target="_blank">arxiv.org ↗</a>
-        <button class="card-open">Открыть</button>
       </div>
     </div>
   `}).join("");
@@ -269,13 +268,8 @@ function initUserSocket(username) {
 
         if (data.type === 'embeddings_ready') {
             console.log('РЕЛЕВАНТНЫЕ СТАТЬИ', data)
-            const relevantIds = new Set(data.article_ids.map(String));
-
-            // Обновляем флаг релевантности на уже нормализованных статьях
-            currentPapers = currentPapers.map(p => ({
-                ...p,
-                is_relevant: relevantIds.size === 0 || relevantIds.has(String(p.article_id))
-            }));
+            relevantArticleIds = new Set(data.article_ids.map(String));
+            console.info('Значение переменной множества', relevantArticleIds)
             showToast({
                 title: "Анализ готов",
                 text: `Найдено ${data.count} релевантных статей. Показать?`,
@@ -439,10 +433,10 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // --- Сортировка ---
-    const sortSelect = document.getElementById('sort-select');
-    if (sortSelect) {
-        sortSelect.addEventListener('change', renderCards);
-    }
+    // const sortSelect = document.getElementById('sort-select');
+    // if (sortSelect) {
+    //     sortSelect.addEventListener('change', renderCards);
+    // }
 
     const searchBtn = document.getElementById('search-btn');
     if (searchBtn) {

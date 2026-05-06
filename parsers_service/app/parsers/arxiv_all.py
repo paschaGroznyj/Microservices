@@ -11,6 +11,20 @@ from core.db import DataBase
 from core.repository import ResearchRepository
 from fastapi import HTTPException
 
+import asyncio
+import httpx
+import arxiv
+from datetime import timezone
+
+import random
+
+USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/119.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/118.0.0.0 Safari/537.36',
+    'ArticlesAnalyzer/1.0 (research tool; mailto:your@email.com)',
+    'Python-requests/2.31.0',
+]
 
 @dataclass
 class SearchParams:
@@ -42,8 +56,104 @@ class Article:
     source: str = "arxiv"
 
 
+class ArxivLibClient:
+    """Клиент через официальную библиотеку arxiv — с автоматическим rate limiting"""
+
+    def __init__(self):
+        self.client = arxiv.Client(
+            page_size=100,
+            delay_seconds=3,
+            num_retries=3
+        )
+
+    def search(
+        self,
+        keywords: List[str],
+        date_start: Optional[str],
+        date_end: Optional[str],
+        limit: int
+    ) -> List[Article]:
+
+        query = self._build_query(keywords)
+
+        search = arxiv.Search(
+            query=query,
+            max_results=limit,
+            sort_by=arxiv.SortCriterion.SubmittedDate,
+            sort_order=arxiv.SortOrder.Descending,
+        )
+
+        articles = []
+        for result in self.client.results(search):
+            article = self._parse_result(result)
+
+            # Фильтрация по датам на стороне клиента
+            if date_start and article.date_sub < date_start:
+                continue
+            if date_end and article.date_sub > date_end:
+                continue
+
+            articles.append(article)
+
+        return self._deduplicate(articles)
+
+    def _build_query(self, keywords: List[str]) -> str:
+        if not keywords:
+            return "all:arxiv"
+        terms = [f"all:{kw.strip()}" for kw in keywords if kw.strip()]
+        return " OR ".join(terms)
+
+    def _parse_result(self, result: arxiv.Result) -> Article:
+        # external_id из entry_id — убираем версию
+        # http://arxiv.org/abs/2605.02890v1 → 2605.02890
+        external_id = result.entry_id.rsplit("/", 1)[-1].rsplit("v", 1)[0]
+
+        # Дата публикации
+        date_sub = ""
+        if result.published:
+            date_sub = result.published.astimezone(timezone.utc).strftime("%Y-%m-%d")
+
+        # Авторы
+        authors = [author.name for author in result.authors]
+
+        # Теги / категории
+        tags = list(result.categories) if result.categories else []
+
+        # Основная категория
+        category = result.primary_category if result.primary_category else (tags[0] if tags else None)
+
+        # Ссылки
+        url_article = result.entry_id  # основная ссылка
+        pdf_url = ""
+        for link in result.links:
+            if link.title == "pdf":
+                pdf_url = link.href
+
+        return Article(
+            external_id=external_id,
+            title=(result.title or "").strip(),
+            date_sub=date_sub,
+            url_article=url_article,
+            pdf_url=pdf_url,
+            authors=authors,
+            tags=tags,
+            abstract=(result.summary or "").strip(),
+            category=category,
+        )
+
+    def _deduplicate(self, articles: List[Article]) -> List[Article]:
+        seen = set()
+        result = []
+        for article in articles:
+            key = article.external_id or article.url_article or article.title.lower().strip()
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(article)
+        return result
+
 class ArxivClient:
-    BASE_URL = "http://export.arxiv.org/api/query?"
+    BASE_URL = "https://export.arxiv.org/api/query?"
 
     def __init__(self):
         self.timeout = int(os.getenv("HTTP_TIMEOUT", "45"))
@@ -56,34 +166,55 @@ class ArxivClient:
         #
         #     )
         # }
-        self.headers = {
-            'User-Agent': 'ArticlesAnalyzer/1.0 (mailto:new_post@gmail.com)'
-        }
+    
+    def _get_headers(self):
+        return {'User-Agent': random.choice(USER_AGENTS)}
 
-    def search(self, keywords: List[str], date_start: Optional[str], date_end: Optional[str], limit: int) -> List[Article]:
+
+
+    async def search(self, keywords: List[str], date_start: Optional[str], date_end: Optional[str], limit: int) -> List[Article]:
         date_start, date_end = self._resolve_dates(date_start, date_end)
         query = self._build_query(keywords, date_start, date_end, limit)
-        try:
-            response = requests.get(
-                f"{self.BASE_URL}{query}",
-                headers=self.headers,
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
-            if response.status_code == 429:
-                # Ошибка на лимит запросов
-                raise HTTPException(
-                    status_code=429,
-                    detail="ArXiv rate limit exceeded. Please try again later."
-                )
-            if response.status_code == 502:
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"ArXiv API error: {response.status_code}"
-                )
-            return self._parse_feed(response.content)
-        except requests.exceptions.RequestException as e:
-            raise HTTPException(status_code=503, detail=f"Network error: {str(e)}")
+        url = f"{self.BASE_URL}{query}"
+        
+        content = await self._request_with_retry(url)
+        return self._parse_feed(content)
+
+    async def _request_with_retry(self, url: str) -> bytes:
+        delays = [5, 15, 45]
+
+        for attempt, delay in enumerate(delays):
+            try:
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    response = await client.get(url, headers=self._get_headers())
+
+                    if response.status_code == 200:
+                        return response.content
+
+                    if response.status_code == 429:
+                        logging.warning(f"Rate limit arXiv, ждём {delay}с (попытка {attempt+1})")
+                        await asyncio.sleep(delay)
+                        continue
+
+                    if response.status_code in (502, 503):
+                        logging.warning(f"arXiv недоступен ({response.status_code}), ждём {delay}с")
+                        await asyncio.sleep(delay)
+                        continue
+
+                    # Любой другой не-200 — сразу падаем
+                    raise HTTPException(
+                        status_code=response.status_code,
+                        detail=f"arXiv API error: {response.status_code}"
+                    )
+
+            except HTTPException:
+                raise  # пробрасываем как есть
+            except Exception as e:
+                logging.error(f"Попытка {attempt+1} упала: {e}")
+                if attempt < len(delays) - 1:
+                    await asyncio.sleep(delay)
+
+        raise HTTPException(status_code=503, detail="arXiv недоступен после нескольких попыток")
 
     def _resolve_dates(self, date_start: Optional[str], date_end: Optional[str]) -> tuple[str, str]:
         today = date.today()
@@ -189,27 +320,38 @@ class ResearchPipeline:
     def __init__(self, db: DataBase):
         self.logger = self._setup_logger()
         self.repo = ResearchRepository(db)
-        self.arxiv = ArxivClient()
+        self.arxiv_http = ArxivClient()
+        self.arxiv_lib  = ArxivLibClient()   # новый через библиотеку
 
     async def run(self, payload: RequestPayload) -> Dict[str, Any]:
-        self.logger.info(
-            f"user_name={payload.user_name}, "
-            f"user_query={payload.user_query}, "
-            f"keywords={payload.params.keywords}, "
-            f"date_start={payload.params.date_start}, "
-            f"date_end={payload.params.date_end}, "
-            f"limit={payload.params.limit}"
-            f"request_id={payload.request_id}"
-        )
-
-        articles = self.arxiv.search(
-            keywords=payload.params.keywords,
-            date_start=payload.params.date_start,
-            date_end=payload.params.date_end,
-            limit=payload.params.limit,
-        )
-
-        # print(articles)
+        self.logger.info(f"user_name={payload.user_name}, keywords={payload.params.keywords}")
+        
+        articles = self.arxiv_lib.search(
+                    keywords=payload.params.keywords,
+                    date_start=payload.params.date_start,
+                    date_end=payload.params.date_end,
+                    limit=payload.params.limit,
+                )
+        # try:
+        #     # Сначала пробуем HTTP клиент
+        #     articles = await self.arxiv_http.search(
+        #         keywords=payload.params.keywords,
+        #         date_start=payload.params.date_start,
+        #         date_end=payload.params.date_end,
+        #         limit=payload.params.limit,
+        #     )
+        # except HTTPException as e:
+        #     if e.status_code in (429, 503):
+        #         # Fallback на библиотеку
+        #         self.logger.warning(f"HTTP клиент упал ({e.status_code}), переключаемся на arxiv lib")
+        #         articles = self.arxiv_lib.search(
+        #             keywords=payload.params.keywords,
+        #             date_start=payload.params.date_start,
+        #             date_end=payload.params.date_end,
+        #             limit=payload.params.limit,
+        #         )
+        #     else:
+        #         raise
 
         return await self.repo.save_search_results(
             user_name=payload.user_name,

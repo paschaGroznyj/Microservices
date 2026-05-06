@@ -446,9 +446,10 @@ async def build_user_favorites_review_digest_from_query(
 
     us_name = result["username"]
     create = result["created_at"]
-
+    
     filename = f"digest_{us_name}_{create}.md"
 
+    result["file_name"] = filename
     await obs_loader.upload_digest_markdown_content(result["digest_markdown"], filename)
     print(f"Дайджест {filename} добавлен")
 

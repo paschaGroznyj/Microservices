@@ -429,11 +429,11 @@ class OBSWorker:
         if not filename.endswith(".md"):
             filename = f"{filename}.md"
 
-        s3_key = f"theme_digests/{filename}"
+        s3_key = f"PM/digests/{filename}"
 
         async with self.client() as client:
             await client.put_object(
-                Bucket=self.bucket,
+                Bucket=self.open_bucket,
                 Key=s3_key,
                 Body=md_content.encode("utf-8"),
                 ContentType="text/markdown; charset=utf-8",

@@ -440,11 +440,12 @@ async def tool_digest_basket(db,
         user_query=user_query,
         save_to_file=False,
     )
-
+    base_url = "https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/PM/digests/"
+    full_link = f"{base_url}{res['file_name']}"
     if res['digest_markdown']:
         message = (
             f"🎉 **Готово! Дайджест сформирован.**\n\n"
-            f"Теперь вы можете скачать дайджест из объектного хранилища.\n"
+            f"📖 **Посмотреть:** [Нажмите здесь]({full_link})\n"
         )
         return {"status": 'created', "message": message}
 
@@ -716,7 +717,6 @@ class KnowledgeAgent:
         self.obs_loader = OBSWorker()
         self.email_handler = DigestEmailHandler()
         self.skip_startup_autoprocess = skip_startup_autoprocess
-
         # Переиспользуемый httpx клиент
         self._http_client: Optional[httpx.AsyncClient] = None
 

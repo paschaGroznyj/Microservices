@@ -10,8 +10,7 @@ from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from contextlib import asynccontextmanager
-# from agent_pm.agent import KnowledgeAgent
-from Microservices.agent_service.app.agent_pm.async_agent_ import KnowledgeAgent
+from agent_pm.async_agent import KnowledgeAgent
 from langchain.schema import HumanMessage, SystemMessage
 from agent_pm.summary_period import extract_json
 import asyncio
@@ -147,6 +146,7 @@ async def lifespan(app: FastAPI):
     await db.init_db_pool()
     task = asyncio.create_task(kafka_consumer())
     agent = KnowledgeAgent(database=db, skip_startup_autoprocess=False)
+    await agent.make_reviews()
     yield
 
     # Graceful shutdown

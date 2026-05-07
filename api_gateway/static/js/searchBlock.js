@@ -86,8 +86,8 @@ function renderCards() {
   grid.innerHTML = papers.map((p, i) =>{
 
       // Если Set пустой (поиск еще не закончен или сброс), считаем все релевантными
-    const isRelevant = relevantArticleIds.size === 0 || relevantArticleIds.has(p.article_id.toString());
-    console.log('Множество', relevantArticleIds, 'id_card', p.article_id.toString())
+    const isRelevant = relevantArticleIds.size === 0 || relevantArticleIds.has(p.article_id);
+    // console.log('Множество', relevantArticleIds, 'id_card', p.article_id)
     // Классы карточки: базовый + условие нерелевантности
     const cardClass = isRelevant ? 'card' : 'card irrelevant-card';
 
@@ -112,7 +112,7 @@ function renderCards() {
       <div class="card-favorites"></div>
       <div class="card-title">${p.title}</div>
       <div class="card-authors">${Array.isArray(p.authors) ? p.authors.join(", ") : p.authors}</div>
-      <div class="card-date">${p.date}</div>
+      <div class="card-date">${p.date_sub}</div>
       <div class="card-footer">
         <a class="card-link" href="${p.link}" target="_blank">arxiv.org ↗</a>
       </div>
@@ -235,8 +235,9 @@ async function doSearch(isDefault = false, keyword = null) {
             });
         return;
     }
-    console.log('Данные с бэка после парсинга', data)
-    currentPapers = data.articles.map(normalizeArticle);
+    console.log('Данные с бэка после парсинга DoSearch', data.articles)
+    // currentPapers = data.articles.map(normalizeArticle);
+    currentPapers = data.articles;
 
     document.getElementById("results-meta").textContent = currentPapers.length + " статей";
     renderCards();
@@ -268,7 +269,7 @@ function initUserSocket(username) {
 
         if (data.type === 'embeddings_ready') {
             console.log('РЕЛЕВАНТНЫЕ СТАТЬИ', data)
-            relevantArticleIds = new Set(data.article_ids.map(String));
+            relevantArticleIds = new Set(data.article_ids.map(Number));
             console.info('Значение переменной множества', relevantArticleIds)
             showToast({
                 title: "Анализ готов",

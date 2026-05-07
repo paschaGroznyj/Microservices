@@ -31,7 +31,6 @@ class ChatAppSimple {
         const response = await fetch('/api/auth/me', {
             credentials: 'include'
         });
-        console.log(response)
         if (response.ok) {
             const data = await response.json();
             console.log('Данные пользователя:', data);

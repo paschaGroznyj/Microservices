@@ -61,7 +61,7 @@ class ArxivLibClient:
 
     def __init__(self):
         self.client = arxiv.Client(
-            page_size=100,
+            page_size=20,
             delay_seconds=3,
             num_retries=3
         )
@@ -325,13 +325,14 @@ class ResearchPipeline:
 
     async def run(self, payload: RequestPayload) -> Dict[str, Any]:
         self.logger.info(f"user_name={payload.user_name}, keywords={payload.params.keywords}")
-        
-        articles = self.arxiv_lib.search(
-                    keywords=payload.params.keywords,
-                    date_start=payload.params.date_start,
-                    date_end=payload.params.date_end,
-                    limit=payload.params.limit,
-                )
+
+        articles = await asyncio.to_thread(
+            self.arxiv_lib.search,
+            keywords=payload.params.keywords,
+            date_start=payload.params.date_start,
+            date_end=payload.params.date_end,
+            limit=payload.params.limit,
+        )
         # try:
         #     # Сначала пробуем HTTP клиент
         #     articles = await self.arxiv_http.search(
@@ -352,7 +353,7 @@ class ResearchPipeline:
         #         )
         #     else:
         #         raise
-
+        logging.info("Сохраняем статьи в БД")
         return await self.repo.save_search_results(
             user_name=payload.user_name,
             user_query=payload.user_query,

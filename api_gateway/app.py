@@ -527,28 +527,38 @@ async def logout_web(request: Request):
     return response
 
 # Дополнительный endpoint для проверки текущего пользователя
+import json
+from fastapi.responses import Response
+
+
 @app.get("/api/auth/me")
 async def get_current_user_info(request: Request):
-    """Получение информации о текущем пользователе через Gateway"""
-    # Просто проксируем запрос к auth сервису
-    token = request.cookies.get("users_access_token")
-    if not token:
+    """
+    Получение информации о текущем пользователе.
+    Данные берутся из расшифрованного JWT токена
+    """
+    user = await get_current_user(request)
+
+    if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    try:
-        # Нужно добавить endpoint /me в auth сервис
-        response = await app.state.http_client.get(
-            f"{SERVICES['auth']['url']}/me",
-            cookies={"users_access_token": token}
-        )
-        return Response(
-            content=response.content,
-            status_code=response.status_code,
-            media_type="application/json"
-        )
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"Auth service unreachable: {str(e)}")
+    logging.info(f"Пользователь авторизован: {user['username']}")
 
+    response_data = {
+        "username": user["username"],
+        "user_id": user["user_id"],
+        "authenticated": True
+    }
+
+    return Response(
+        content=json.dumps(response_data),
+        status_code=200,
+        media_type="application/json",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache"
+        }
+    )
 pending_requests: dict[str, int] = {}
 
 @app.post("/api/favorites")
@@ -744,9 +754,10 @@ async def searching_default(request: Request):
         "query": "default",
         "params": {
             "keywords": [data['key_word']],
-            "limit": 100
+            "limit": 50
         },
-        "request_id": None
+        "request_id": None,
+        "search_now": False
     }
 
     logging.info(f"ДЕФОЛТ ДАННЫЕ с вкладки ПОИСКА {data}")

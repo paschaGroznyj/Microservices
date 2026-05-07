@@ -146,7 +146,7 @@ async def lifespan(app: FastAPI):
     await db.init_db_pool()
     task = asyncio.create_task(kafka_consumer())
     agent = KnowledgeAgent(database=db, skip_startup_autoprocess=False)
-    await agent.make_reviews()
+    # await agent.make_reviews()
     yield
 
     # Graceful shutdown
@@ -309,6 +309,7 @@ async def searching(request: Request):
 
 async def run_search_and_notify(user_name: str, request_id: int):
     """Фоновая задача — эмбеддинги + поиск похожих → пуш на gateway"""
+    logging.info("СОЗДАНИЕ ЭМБЕДДИНГОВ")
     try:
         searcher_body = {
             "user_name": user_name,
@@ -461,5 +462,5 @@ def parse_user_intent(user_query: str, existing_tags: list[str], keywords: list[
 
 if __name__ == "__main__":
     # threading.Thread(target=kafka_consumer, daemon=True).start() # Поднятие консьюмера
-    uvicorn.run(app, host="0.0.0.0", port=int(PORT_PM_AGENT), log_level="info")
+    uvicorn.run("app:app", host="0.0.0.0", port=int(PORT_PM_AGENT), log_level="info", reload=True)
     # uvicorn.run(app, host="127.0.0.1", port=int(PORT_PM_AGENT), log_level="info")

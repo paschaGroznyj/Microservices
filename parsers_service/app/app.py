@@ -15,6 +15,7 @@ from pathlib import Path
 import json
 import shutil
 import re
+from dataclasses import dataclass
 
 from core.db import DataBase
 from core.repository import ResearchRepository
@@ -63,6 +64,27 @@ class FavoriteStatus(BaseModel):
     username: str
     article_id: int
     is_favorite: bool
+
+@dataclass
+class SearchParams:
+    keywords: List[str]
+    date_start: Optional[str] = None
+    date_end: Optional[str] = None
+    limit: int = 10
+
+@dataclass
+class Article:
+    article_id: int
+    external_id: str
+    title: str
+    date_sub: str
+    url_article: str
+    pdf_url: str
+    authors: List[str]
+    tags: List[str]
+    abstract: str
+    category: Optional[str]
+    source: str = "arxiv"
 
 obs = OBSWorker()
 
@@ -458,18 +480,54 @@ async def search_articles(request: Request):
     logging.info(data)
     search_now = data.get("search_now", True)
     if not search_now:
+        keywords = [i.split(' ') for i in data["params"]["keywords"]]
         # Статьи уже есть — достаём из БД по тегам
         articles = await research.get_articles_by_keywords(
-            keywords=data["params"]["keywords"],
-            categories=data["params"]["categories"],
+            keywords=keywords,
+            categories=data["params"].get("categories", []),
             user_name=data["user_name"]
+        )
+
+        logging.info(f"Параметры: {data['params']}")
+        dataclass_articles = []
+        logging.info(f"ДОСТАЕМ ПО ДЕФОЛТУ: {articles[0].get('authors_json')}, {articles[0].get('tags_json')}")
+        for article in articles:
+
+            dataclass_articles.append(
+                Article(
+                    article_id=article.get('article_id'),
+                    external_id=article.get('external_id'),
+                    title=article.get('title'),
+                    date_sub=article.get('date_sub'),
+                    url_article=article.get('url_article'),
+                    pdf_url=article.get('pdf_url'),
+                    authors=json.loads(article.get('authors_json') or '[]'),
+                    tags=json.loads(article.get('tags_json') or '[]'),
+                    abstract=article.get('abstract'),
+                    category=article.get('category'),
+                )
+            )
+        logging.info(dataclass_articles[:1])
+        params = SearchParams(
+            keywords=data["params"].get("keywords", []),
+            date_start=data.get("date_start"),
+            date_end=data.get("date_end"),
+            limit=data.get("limit", 20),
+        )
+        logging.info(f"ПОСЛЕ dataclass {params}")
+        await research.save_search_results(
+            user_name=data["user_name"],
+            user_query=data["query"],
+            params=params,
+            articles=dataclass_articles,
+            request_id=data["request_id"],
         )
         return {
             "request_id": data["request_id"],
             "user_name": data["user_name"],
             "user_query": data["query"],
             "count": len(articles),
-            "articles": articles,
+            "articles": dataclass_articles,
             "cached": True
         }
 
@@ -504,5 +562,5 @@ async def health():
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=int(PORT_PARSERS_SERVICE), log_level="info")
+    uvicorn.run("app:app", host="0.0.0.0", port=int(PORT_PARSERS_SERVICE), log_level="info", reload=True)
     # uvicorn.run(app, host="127.0.0.1", port=int(PORT_PARSERS_SERVICE), log_level="info")

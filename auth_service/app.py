@@ -162,34 +162,26 @@ async def logout_user(response: Response):
 #         raise HTTPException(status_code=401, detail="Неверный токен")
 #
 #     return {"username": username}
-@app.get("/me")
-async def get_current_user_info(request: Request):
-    """Получение информации о текущем пользователе"""
-    token = request.cookies.get("users_access_token")
-    if not token:
-        raise HTTPException(status_code=401, detail="Token not found")
-
-    try:
-        auth_data = get_auth_data()
-        payload = jwt.decode(token, auth_data['secret_key'], algorithms=[auth_data['algorithm']])
-
-        username = payload.get("sub")
-        if not username:
-            raise HTTPException(status_code=401, detail="Invalid token")
-
-        # Получаем пользователя из БД
-        user = await db.check_user_password(username=username)
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        return {
-            "username": user["username"],
-            "user_id": user["id"],  # предположим, что есть поле id
-            "authenticated": True
-        }
-
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+# @app.post("/me")
+# async def get_current_user_info(request: Request):
+#     """Получение информации о текущем пользователе"""
+#     try:
+#         data = await request.json()
+#         username = data["username"]
+#         logging.info(f"ПОЛЬЗОВАТЕЛЬ {username}")
+#         # Получаем пользователя из БД
+#         user = await db.check_user_password(username=username)
+#         if not user:
+#             raise HTTPException(status_code=404, detail="User not found")
+#
+#         return {
+#             "username": user["username"],
+#             "user_id": user["id"],  # предположим, что есть поле id
+#             "authenticated": True
+#         }
+#
+#     except JWTError:
+#         raise HTTPException(status_code=401, detail="Invalid token")
 
 
 @app.get("/health")

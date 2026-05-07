@@ -56,6 +56,7 @@ services:
       - "9001:9001"
     depends_on:
       - broker
+      - postgres
     environment:
       PORT_PM_AGENT: ${PORT_PM_AGENT}
       PORT_GATEWAY_PORT: ${PORT_GATEWAY_PORT}
@@ -89,6 +90,7 @@ services:
 
     volumes:
       - ./agent_service/config:/app/config
+      - ./agent_service:/app
     restart: unless-stopped
 
 
@@ -153,6 +155,11 @@ services:
      DB_USER: ${DB_USER}
      DB_PASSWORD: ${DB_PASSWORD}
      DB_NAME: ${DB_NAME}
+   depends_on:
+    - postgres
+   volumes:
+     - ./parsers_service:/app
+
 
    restart: unless-stopped
 
@@ -170,6 +177,8 @@ services:
       PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
       SECRET_KEY: ${SECRET_KEY}
       ALGORITHM: ${ALGORITHM}
+    volumes:
+      - ./api_gateway:/app
     restart: unless-stopped
 
   auth_service:
@@ -188,6 +197,8 @@ services:
         DB_NAME: ${DB_NAME}
     depends_on:
       - postgres
+    volumes:
+      - ./auth_service:/app
     restart: unless-stopped
 
   # postgres_old:
@@ -299,6 +310,8 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME}
       KAFKA_BROKER: ${KAFKA_BROKER}
+    volumes:
+      - ./chats_service:/app
     depends_on:
       - postgres
       - broker
@@ -318,6 +331,8 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME}
       KAFKA_BROKER: ${KAFKA_BROKER}
+    volumes:
+      - ./chats_service:/app
     depends_on:
       - postgres
       - broker

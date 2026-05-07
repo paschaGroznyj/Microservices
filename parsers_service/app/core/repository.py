@@ -1,4 +1,6 @@
+import re
 import json
+import copy
 import logging
 from dataclasses import asdict
 from datetime import datetime, date
@@ -187,8 +189,6 @@ class ResearchRepository:
         request_id: int = None,
     ) -> dict:
         user_id = await self.get_user_id_by_name(user_name)
-        print(user_id)
-
         if request_id:
             await self.update_request_params(request_id, params)
         else:
@@ -202,6 +202,7 @@ class ResearchRepository:
 
         for article in articles:
             try:
+                logging.info(f"{article.tags}, {article.authors}")
                 article_id = await self.upsert_article(article)
                 await self.link_user_article(user_id, article_id)
                 await self.link_request_article(request_id, article_id)
@@ -212,7 +213,7 @@ class ResearchRepository:
                     "title": article.title,
                     "authors": article.authors,
                     "tags": article.tags,
-                    "date": article.date_sub,
+                    "date_sub": article.date_sub,
                     "link": article.url_article,
                     "abstract": article.abstract,
                     "source": article.source,
@@ -372,42 +373,94 @@ class ResearchRepository:
                 ORDER BY f.created_at DESC
             """, username)
 
+    # async def get_articles_by_keywords(
+    #         self,
+    #         keywords: list[str],
+    #         categories: list[str],
+    #         user_name: str
+    # ) -> list[dict]:
+    #     async with self.db.pool.acquire() as conn:
+    #         rows = await conn.fetch("""
+    #                                 SELECT DISTINCT a.id           AS article_id,
+    #                                                 a.title,
+    #                                                 a.authors_json AS authors,
+    #                                                 a.date_sub     AS date,
+    #                                                 a.url_article  AS link,
+    #                                                 a.tags_json    AS tags,
+    #                                                 a.abstract,
+    #                                                 a.category
+    #                                 FROM articles a
+    #                                 WHERE (
+    #                                     -- По категориям arXiv — кастуем JSONB в TEXT
+    #                                     --EXISTS (
+    #                                       --  SELECT 1
+    #                                        -- FROM unnest($2::text[]) AS cat
+    #                                        -- WHERE a.tags_json::text ILIKE '%' || cat || '%'
+    #                                    -- )
+    #                                    -- OR
+    #                                     -- По ключевым словам в заголовке и аннотации
+    #                                     EXISTS (
+    #                                         SELECT 1
+    #                                         FROM unnest($1::text[]) AS kw
+    #                                         WHERE a.title ILIKE '%' || kw || '%'
+    #                                            OR a.abstract ILIKE '%' || kw || '%'
+    #                                     )
+    #                                 )
+    #                                 ORDER BY a.date_sub DESC
+    #                                 LIMIT 50;
+    #         """, keywords)
+    #
+    #         return [dict(row) for row in rows]
+
+
     async def get_articles_by_keywords(
             self,
-            keywords: list[str],
+            keywords: list[list[str]],  # Теперь ожидаем список списков
             categories: list[str],
             user_name: str
     ) -> list[dict]:
+
+        query_parts = []
+
+        for group in keywords:
+            clean_words = []
+            for kw in group:
+                cleaned = re.sub(r'[^a-zA-Z0-9]', '', kw).strip()
+                if cleaned:
+                    clean_words.append(cleaned)
+
+            if clean_words:
+                group_query = " & ".join(clean_words)
+                query_parts.append(f"({group_query})")
+
+        if not query_parts:
+            return []
+
+        # Результат: "(process & mining) | (task & mining)"
+        final_ts_query = " | ".join(query_parts)
+
+        logging.info(f"TS Query: {final_ts_query}")
+
         async with self.db.pool.acquire() as conn:
             rows = await conn.fetch("""
-                                    SELECT DISTINCT a.id           AS article_id,
-                                                    a.title,
-                                                    a.authors_json AS authors,
-                                                    a.date_sub     AS date,
-                                                    a.url_article  AS link,
-                                                    a.tags_json    AS tags,
-                                                    a.abstract,
-                                                    a.category
+                                    SELECT DISTINCT 
+                                            a.id           AS article_id,
+                                            a.source       AS source,            -- Добавлено
+                                            a.external_id  AS external_id,       -- Добавлено
+                                            a.title        AS title,
+                                            a.date_sub     AS date_sub,          -- Унифицировано с первым запросом (было date)
+                                            a.url_article  AS url_article,       -- Унифицировано (было link)
+                                            a.pdf_url      AS pdf_url,           -- Добавлено
+                                            a.authors_json AS authors_json,      -- Унифицировано (было authors)
+                                            a.tags_json    AS tags_json,         -- Унифицировано (было tags)
+                                            a.abstract     AS abstract,
+                                            a.category     AS category
                                     FROM articles a
-                                    WHERE (
-                                        -- По категориям arXiv — кастуем JSONB в TEXT
-                                        --EXISTS (
-                                          --  SELECT 1
-                                           -- FROM unnest($2::text[]) AS cat
-                                           -- WHERE a.tags_json::text ILIKE '%' || cat || '%'
-                                       -- )
-                                       -- OR
-                                        -- По ключевым словам в заголовке и аннотации
-                                        EXISTS (
-                                            SELECT 1
-                                            FROM unnest($1::text[]) AS kw
-                                            WHERE a.title ILIKE '%' || kw || '%'
-                                               OR a.abstract ILIKE '%' || kw || '%'
-                                        )
-                                    )
+                                    WHERE to_tsvector('english', a.title) @@ to_tsquery('english', $1)
+                                       OR to_tsvector('english', a.abstract) @@ to_tsquery('english', $1)
                                     ORDER BY a.date_sub DESC
                                     LIMIT 50;
-            """, keywords)
+                                    """, final_ts_query)
 
             return [dict(row) for row in rows]
 

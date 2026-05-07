@@ -1,6 +1,7 @@
 import smtplib
 import logging
 import re
+import ssl
 import zipfile
 import tempfile
 from email.mime.text import MIMEText
@@ -90,6 +91,7 @@ class EmailSender:
             return {"status": "error", "message": str(e)}
 
     def _connect_and_send(self, msg: Union[MIMEText, MIMEMultipart], to_addresses: List[str]):
+        context = ssl.create_default_context()
         with smtplib.SMTP_SSL(self.smtp_host, self.smtp_port) as server:
             server.login(self.smtp_login, self.smtp_password)
             server.sendmail(self.smtp_login, to_addresses, msg.as_string())

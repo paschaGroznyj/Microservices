@@ -1,4 +1,5 @@
 import os
+import time
 import json
 import logging
 import asyncio
@@ -8,6 +9,7 @@ from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
 from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from .core.agent_provider import get_model
@@ -237,7 +239,7 @@ def start_digest_scheduler() -> None:
     day_of_week = os.getenv("DIGEST_SCHEDULE_DAY_OF_WEEK", "mon")
     timezone = os.getenv("DIGEST_TIMEZONE", "Europe/Moscow")
 
-    scheduler = BlockingScheduler(timezone=timezone)
+    scheduler = BackgroundScheduler(timezone=timezone)
     scheduler.add_job(
         run_scheduled_digest_job,
         trigger=CronTrigger(
@@ -261,6 +263,15 @@ def start_digest_scheduler() -> None:
         timezone,
     )
     scheduler.start()
+
+    try:
+        while True:
+            time.sleep(3600)
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Остановка планировщика...")
+        scheduler.shutdown(wait=False)
+        logger.info("Планировщик остановлен")
+
 
 
 if __name__ == "__main__":

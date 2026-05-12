@@ -11,6 +11,10 @@ from datetime import datetime, date
 from pydantic import BaseModel, Field
 from sklearn.metrics.pairwise import cosine_similarity
 from .core.agent_provider import get_model, get_embedd_model
+
+from langchain.schema import SystemMessage
+from .email_sender import EmailSender
+from .core.config import SMTP_HOST, SMTP_PORT, SMTP_LOGIN, SMTP_PASSWORD
 from langchain.schema import SystemMessage
 
 # =============================================================================
@@ -19,6 +23,71 @@ from langchain.schema import SystemMessage
 
 EMBED_MODEL = get_embedd_model()
 
+def extract_email_from_query(query: str) -> Optional[str]:
+    """
+    Извлекает первый email из текста пользовательского запроса.
+    """
+    if not query:
+        return None
+
+    match = re.search(r'(?<![\w.+-])[\w.+-]+@[\w-]+\.[\w.-]+', query)
+    return match.group(0) if match else None
+
+def send_digest_email_if_needed(
+    recipient_email: Optional[str],
+    filename: str,
+    email_sender: Optional[EmailSender] = None,
+    base_download_url: str = "https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/PM/digests/",
+) -> Dict[str, Any]:
+    """
+    Отправляет email, если найден адрес получателя.
+    Предполагается, что файл будет/может быть доступен по predictable URL через filename.
+    """
+    if not recipient_email:
+        return {
+            "email_requested": False,
+            "email_sent": False,
+            "email_message": "Email в запросе не найден.",
+        }
+
+    if not filename:
+        return {
+            "email_requested": True,
+            "email_sent": False,
+            "email_message": "Не найдено имя файла дайджеста.",
+            "recipient_email": recipient_email,
+        }
+
+    full_link = f"{base_download_url}{filename}"
+
+    body_text = (
+        "Здравствуйте!\n\n"
+        "Дайджест сформирован.\n\n"
+        f"Имя файла: {filename}\n"
+        f"Ссылка на скачивание: {full_link}\n\n"
+        "С уважением,\nAgentPM"
+    )
+
+    sender = email_sender or EmailSender(
+        smtp_host=SMTP_HOST,
+        smtp_port=SMTP_PORT,
+        smtp_login=SMTP_LOGIN,
+        smtp_password=SMTP_PASSWORD,
+    )
+
+    send_result = sender.send_digest(
+        to_addresses=[recipient_email],
+        subject="AgentPM: дайджест сформирован",
+        body_html=body_text,
+    )
+
+    return {
+        "email_requested": True,
+        "email_sent": send_result.get("status") == "ok",
+        "email_message": send_result.get("message", ""),
+        "recipient_email": recipient_email,
+        "download_link": full_link,
+    }
 
 class CompositeFilters(BaseModel):
     """Составные фильтры: можно комбинировать date+topic, category+date и т.д."""
@@ -411,7 +480,7 @@ def load_json_metadata(json_path: str) -> List[Dict]:
 # 4. ИНТЕГРАЦИЯ С АГЕНТОМ
 # =============================================================================
 
-def agent_composite_digest_tool(query: str, llm_client, json_path="knowledge_base/metadata.json", md_folder='digests'):
+def agent_composite_digest_tool(query: str, llm_client, json_path="knowledge_base/metadata.json", md_folder='digests', send_email: bool = True, email_sender: Optional[EmailSender] = None, base_download_url: str = "https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/PM/digests/"):
     """Инструмент для агента с поддержкой составных фильтров."""
     arts, result = create_composite_digest(json_path, query, llm_client, md_folder)
 
@@ -424,13 +493,32 @@ def agent_composite_digest_tool(query: str, llm_client, json_path="knowledge_bas
     result.update({'digest_file':str(output_path)})
     result.update({'filename': filename})
 
-    
+    recipient_email = extract_email_from_query(query)
+    result.update({
+        "recipient_email": recipient_email,
+        "email_requested": bool(recipient_email),
+    })
+
+    if send_email and recipient_email:
+        email_result = send_digest_email_if_needed(
+            recipient_email=recipient_email,
+            filename=filename,
+            email_sender=email_sender,
+            base_download_url=base_download_url,
+        )
+        result.update(email_result)
+    else:
+        result.update({
+            "email_sent": False,
+            "email_message": "Отправка не запрошена." if not recipient_email else "Отправка отключена параметром send_email.",
+        })
+
     return result
 
 # =============================================================================
 # 5. СОХРАНЕНИЕ ДАЙДЖЕСТА
 # =============================================================================
-def build_digest_content(articles: List[Dict], md_path: Path, query: list, llm_client) -> str:
+def build_digest_content(articles: List[Dict], md_path: Path, query: str, llm_client) -> str:
     """Строит итоговый дайджест"""
     content = [f"# 📋 Дайджест материалов внешних источников за период/по теме: '{query}'",
                f"**Создан:** {datetime.now().strftime('%d.%m.%Y %H:%M')}",

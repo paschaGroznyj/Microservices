@@ -754,10 +754,10 @@ async def searching_default(request: Request):
         "query": "default",
         "params": {
             "keywords": [data['key_word']],
-            "limit": 50
+            "limit": 33
         },
         "request_id": None,
-        "search_now": False
+        "search_now": True
     }
 
     logging.info(f"ДЕФОЛТ ДАННЫЕ с вкладки ПОИСКА {data}")

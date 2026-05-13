@@ -33,7 +33,6 @@ class Article:
     tags: List[str]
     abstract: str
     file_article: str
-    category: Optional[str]
     text_article: str
     pdf_bytes: bytes = b""
 
@@ -61,40 +60,46 @@ class ArxivClient:
     Входной интерфейс — SearchParams (keywords + даты + limit).
     Выходной интерфейс — List[Article] (полный датакласс ARXIVParser).
     """
-
+    name = "arxiv"
     # PM-keywords по умолчанию — берём из ARXIVParser
     DEFAULT_PM_KEYWORDS: List[str] = [
-        '"process mining"',
-        '"process discovery"',
-        '"event logs"',
-        '"process model"',
-        '"audit trail"',
-        '"conformance checking"',
-        '"process enhancement"',
-        '"root cause analysis"',
-        '"process monitoring"',
-        '"compliance checking"',
-        '"deviation analysis"',
-        '"continuous auditing"',
-        '"business process analysis"',
-        '"process intelligence"',
-        '"task mining"',
-        '"operational analytics"',
-        '"financial auditing"',
-        '"internal audit"',
-        '"process compliance"',
-        '"audit log analysis"',
+       # Ядро process mining
+        "process mining",
+        "process discovery",
+        "conformance checking",
+        "process enhancement",
+        "process model",
+        "task mining"
+
+        # Логи и следы
+        "event logs",
+        "audit trail",
+        "audit log analysis",
+
+        # Контроль и аудит
+        "process monitoring",
+        "process compliance",
+        "continuous auditing",
+        "internal audit",
+        "deviation analysis",
+        "compliance monitoring",
+
+        # Банковский контекст
+        "process mining banking",
+        "financial auditing"
     ]
 
     SOURCE = "https://arxiv.org"
 
     def __init__(
         self,
+        params: Optional[SearchParams] = None,  # ← принимаем в конструктор
         page_size: int = 20,
         delay_seconds: float = 3.0,
         num_retries: int = 3,
         http_timeout: int = 20,
     ):
+        self._params = params or SearchParams(keywords=[])
         self._lib_client = arxiv.Client(
             page_size=page_size,
             delay_seconds=delay_seconds,
@@ -114,33 +119,46 @@ class ArxivClient:
     # ------------------------------------------------------------------
 
     def search(self, params: SearchParams) -> List[Article]:
-        """Синхронный поиск. Можно вызывать напрямую или через asyncio.to_thread."""
         keywords = params.keywords or self.DEFAULT_PM_KEYWORDS
         date_start, date_end = self._resolve_dates(params.date_start, params.date_end)
 
-        query = self._build_query(keywords)
-        logger.info("arxiv query: %s | dates: %s → %s | limit: %s", query, date_start, date_end, params.limit)
+        all_articles: List[Article] = []
+        seen_ids: set = set()
 
-        arxiv_search = arxiv.Search(
-            query=query,
-            max_results=params.limit,
-            sort_by=arxiv.SortCriterion.SubmittedDate,
-            sort_order=arxiv.SortOrder.Descending,
-        )
+        for keyword in keywords:
+            query = self._build_query([keyword])
+            logger.info("Поиск по ключевому слову: '%s' | dates: %s → %s", keyword, date_start, date_end)
 
-        articles: List[Article] = []
-        for result in self._lib_client.results(arxiv_search):
-            article = self._parse_result(result, fetch_pdf=params.fetch_pdf)
+            try:
+                arxiv_search = arxiv.Search(
+                    query=query,
+                    max_results=params.limit,
+                    sort_by=arxiv.SortCriterion.SubmittedDate,
+                    sort_order=arxiv.SortOrder.Descending,
+                )
 
-            # Фильтрация по датам на стороне клиента
-            if date_start and article.date_sub < date_start:
+                for result in self._lib_client.results(arxiv_search):
+                    article = self._parse_result(result, fetch_pdf=params.fetch_pdf)
+
+                    if date_start and article.date_sub < date_start:
+                        logger.info("  Достигнута нижняя граница дат (%s), следующий keyword.", article.date_sub)
+                        break
+                    if date_end and article.date_sub > date_end:
+                        continue
+
+                    # Дедупликация на лету
+                    key = article.external_id or article.url_article
+                    if key in seen_ids:
+                        continue
+                    seen_ids.add(key)
+                    all_articles.append(article)
+
+            except Exception as exc:
+                logger.warning("Ошибка при поиске по '%s': %s — пропускаем.", keyword, exc)
                 continue
-            if date_end and article.date_sub > date_end:
-                continue
 
-            articles.append(article)
-
-        return self._deduplicate(articles)
+        logger.info("Итого найдено уникальных статей: %d", len(all_articles))
+        return all_articles
 
     # ------------------------------------------------------------------
     # Публичный async-метод
@@ -167,8 +185,16 @@ class ArxivClient:
         )
 
     def _build_query(self, keywords: List[str]) -> str:
-        """Собирает OR-запрос из списка ключевых слов."""
-        terms = [f'all:{kw.strip()}' for kw in keywords if kw.strip()]
+        terms = []
+        for kw in keywords:
+            kw = kw.strip()
+            if not kw:
+                continue
+            # Многословные фразы — оборачиваем в кавычки для точного совпадения
+            if " " in kw:
+                terms.append(f'all:"{kw}"')
+            else:
+                terms.append(f"all:{kw}")
         return " OR ".join(terms) if terms else "all:arxiv"
 
     def _parse_result(self, result: arxiv.Result, fetch_pdf: bool) -> Article:
@@ -185,9 +211,6 @@ class ArxivClient:
 
         # Теги / категории
         tags: List[str] = list(result.categories) if result.categories else []
-        category: Optional[str] = (
-            result.primary_category if result.primary_category else (tags[0] if tags else None)
-        )
 
         # Ссылки
         url_article = result.entry_id
@@ -218,7 +241,6 @@ class ArxivClient:
             tags=tags,
             abstract=(result.summary or "").strip(),
             file_article=file_article,
-            category=category,
             text_article=text_article,
             pdf_bytes=pdf_bytes,
         )
@@ -278,6 +300,10 @@ class ArxivClient:
         articles = await self.asearch(params)
         return [asdict(a) for a in articles]
 
+    async def arun(self) -> List[Dict[str, Any]]:
+        """Интерфейс для ParserPipeline — без аргументов, возвращает list of dicts."""
+        return await self.asearch_as_dicts(self._params)
+
 
 # ---------------------------------------------------------------------------
 # Пример использования
@@ -289,10 +315,10 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
     params = SearchParams(
-        keywords=['"process mining"', '"conformance checking"'],
-        date_start="2026-01-01",
+        keywords=[],
+        date_start="2026-04-28",
         date_end="2026-05-12",
-        limit=5,
+        limit=50,
         fetch_pdf=False,
     )
 

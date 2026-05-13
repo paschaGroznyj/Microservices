@@ -138,7 +138,7 @@ class DigestEmailHandler:
         count = len(existing_files)
 
         # Склеиваем все дайджесты в один .md
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
         merged_path = Path(tempfile.gettempdir()) / f"digests_{today}.md"
         try:
             with open(merged_path, "w", encoding="utf-8") as out:

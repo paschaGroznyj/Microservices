@@ -354,6 +354,45 @@ class OBSWorker:
 
             print("FAISS синхронизирован с перезаписью изменений")
 
+    async def delete_irrelevant_md(self, metadata: list):
+        """
+        Удаляет из OBS все .md файлы статей у которых is_relevant=False или category='Не релевантна PM'.
+        """
+        # Собираем имена файлов которые нужно удалить
+        to_delete = []
+        for item in metadata:
+            if item.get('is_relevant') or item.get('category') == 'Не релевантна PM':
+                # Проверяем оба условия — флаг и категория
+                if not item.get('is_relevant', True) or item.get('category') == 'Не релевантна PM':
+                    file_article = item.get('file_article', '')
+                    if file_article and file_article.endswith('.md'):
+                        to_delete.append(file_article)
+
+        if not to_delete:
+            print("Нет нерелевантных .md файлов для удаления.")
+            return
+
+        print(f"Удаляем {len(to_delete)} нерелевантных .md из OBS...")
+
+        async with self.client() as client:
+            # Удаляем пачками по 1000 (лимит S3/OBS)
+            chunk_size = 1000
+            deleted = 0
+            for i in range(0, len(to_delete), chunk_size):
+                chunk = to_delete[i:i + chunk_size]
+                delete_payload = {
+                    "Objects": [{"Key": f"articles/{filename}"} for filename in chunk],
+                    "Quiet": True
+                }
+                await client.delete_objects(
+                    Bucket=self.bucket,
+                    Delete=delete_payload
+                )
+                deleted += len(chunk)
+                print(f"  Удалено {deleted}/{len(to_delete)}")
+
+        print(f"Готово. Удалено {len(to_delete)} файлов.")
+
     async def _upload_file(self, client, local_path, s3_key):
         """Вспомогательная загрузка одного файла"""
         with open(local_path, "rb") as f:

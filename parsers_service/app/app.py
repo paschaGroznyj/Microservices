@@ -23,7 +23,8 @@ from parsers.arxiv_all import start_search
 # from parsers.scholar_parser import PipelineConfig, ScholarParser
 # from parsers.ieee_parser_pw import IEEEParser
 # from parsers.fluxicon_parser import FluxiconParser
-from parsers.arxiv_parser import ARXIVParser
+# from parsers.arxiv_parser import ARXIVParser
+from parsers.arxiv_api_parser import ArxivClient
 # from parsers.ieee_parser import IEEEParser
 
 from parsers.yandex_disk_parser import YandexDiskParser
@@ -68,9 +69,10 @@ class FavoriteStatus(BaseModel):
 @dataclass
 class SearchParams:
     keywords: List[str]
-    date_start: Optional[str] = None
-    date_end: Optional[str] = None
+    date_start: Optional[str] = None   # "YYYY-MM-DD"
+    date_end: Optional[str] = None     # "YYYY-MM-DD"
     limit: int = 10
+    fetch_pdf: bool = False             # качать PDF и извлекать текст
 
 @dataclass
 class Article:
@@ -88,28 +90,32 @@ class Article:
 
 obs = OBSWorker()
 
-PROCESS_MINING_KEYWORDS = [
-    "process mining",
-    "process discovery",
-    "event logs",
-    "process model",
-    "audit trail",
-    "conformance checking",
-    "process enhancement",
-    "root cause analysis",
-    "process monitoring",
-    "compliance checking",
-    "deviation analysis",
-    "continuous auditing",
-    "business process analysis",
-    "process intelligence",
-    "task mining",
-    "operational analytics",
-    "financial auditing",
-    "internal audit",
-    "process compliance",
-    "audit log analysis",
-]
+PROCESS_MINING_KEYWORDS: List[str] = [
+       # Ядро process mining
+        "process mining",
+        "process discovery",
+        "conformance checking",
+        "process enhancement",
+        "process model",
+        "task mining"
+
+        # Логи и следы
+        "event logs",
+        "audit trail",
+        "audit log analysis",
+
+        # Контроль и аудит
+        "process monitoring",
+        "process compliance",
+        "continuous auditing",
+        "internal audit",
+        "deviation analysis",
+        "compliance monitoring",
+
+        # Банковский контекст
+        "process mining banking",
+        "financial auditing"
+    ]
 
 
 escaped_keywords = [re.escape(kw).replace(r"\ ", r"\s+") for kw in PROCESS_MINING_KEYWORDS]
@@ -130,6 +136,7 @@ def load_last_end_date() -> datetime:
         return datetime.today() - timedelta(days=14)
 
     try:
+        logger.info("Читаем State")
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
             return datetime.strptime(data["last_end_date"], "%Y-%m-%d")
@@ -177,10 +184,10 @@ def _save_articles_and_metadata(articles: List[Dict]):
 
         combined_text = f"{abstract_body}\n{text_body}"
 
-        if not is_process_mining_related(combined_text):
-            logger.debug(f"Отфильтровано (не PM): {external_id} - {art.get('title', 'N/A')}")
-            filtered_count += 1
-            continue
+        # if not is_process_mining_related(combined_text):
+        #     logger.debug(f"Отфильтровано (не PM): {external_id} - {art.get('title', 'N/A')}")
+        #     filtered_count += 1
+        #     continue
         logger.info("Проходим дальше по статье")
         filename = art["file_article"]
         if not filename:
@@ -287,6 +294,7 @@ async def perform_parsing_cycle():
 
         # 2. Определяем диапазон дат
         last_end = load_last_end_date()
+        logger.info(f'last_end_date: {last_end}')
         start_date = last_end + timedelta(days=1)
         end_date = start_date + timedelta(days=13)
 
@@ -302,8 +310,8 @@ async def perform_parsing_cycle():
             end_date.strftime("%Y-%m-%d")
         )
 
-
-        # date_range = ('2026-01-01', '2026-03-24')
+        #
+        # date_range = ('2026-04-01', '2026-04-25')
         logger.info(f"Парсинг диапазона: {date_range}")
         link_ieee = (
             "https://ieeexplore.ieee.org/search/searchresult.jsp?"
@@ -312,14 +320,22 @@ async def perform_parsing_cycle():
             "refinements=PublicationTopics:Process%20Mining&"
             "ranges=2026_2026_Year&returnFacets=ALL"
         )
-        cfg = PipelineConfig()
-        cfg.max_pages = 60
+        # cfg = PipelineConfig()
+        # cfg.max_pages = 60
+
+        params = SearchParams(
+            keywords=[],
+            date_start=date_range[0],  # ← берём из date_range, не хардкодим
+            date_end=date_range[1],
+            limit=50,
+        )
 
         parsers = [
-            ARXIVParser(date_range),
-            # FluxiconParser(date_range), # Почему то умер
-            ScholarParser(date_range=date_range, config=cfg),
-            IEEEParser(link_ieee, date_range=date_range),
+            ArxivClient(params=params),
+            # ARXIVParser(date_range),
+            # # FluxiconParser(date_range), # Почему то умер
+            # ScholarParser(date_range=date_range, config=cfg),
+            # IEEEParser(link_ieee, date_range=date_range),
         ]
 
         pipeline = ParserPipeline(parsers)
@@ -331,8 +347,8 @@ async def perform_parsing_cycle():
         save_last_end_date(end_date)
 
         logger.info("Загрузка результатов в OBS...")
-        await obs.upload_all_md()
-        await obs.upload_all_pdfs()
+        # await obs.upload_all_md()
+        # await obs.upload_all_pdfs()
         await obs.put_json()
 
         logger.info("=== Цикл синхронизации завершён ===")
@@ -373,18 +389,10 @@ async def scheduled_parsing_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # logger.info("Запуск фоновой задачи парсинга...")
-    # task = asyncio.create_task(scheduled_parsing_loop())
-    # yield
-    # logger.info("Завершение работы сервиса...")
-    # task.cancel()
-    # try:
-    #     await task
-    # except asyncio.CancelledError:
-    #     pass
-
     global parsing_active
     # Startup
+    logger.info("Запуск фоновой задачи парсинга...")
+    task = asyncio.create_task(scheduled_parsing_loop())
     parsing_active = True
     await db.init_db_pool()
     yield
@@ -419,9 +427,9 @@ async def run_icpm():
         try:
             parsing_active = True
             logger.info("=== Разовый запуск ICPM парсера ===")
-
-            await obs.download_all_md()
-            await obs.download_metadata()
+            await obs.put_json()
+            # await obs.download_all_md()
+            # await obs.download_metadata()
 
             icpm_url = os.getenv("YANDEX_DISK_ICPM_URL", "https://disk.yandex.ru/d/t3YC0BQjOA1sBA")
             icpm_date = os.getenv("ICPM_CONFERENCE_DATE", "2025-10-01")
@@ -434,9 +442,9 @@ async def run_icpm():
             logger.info(f"ICPM: обработка {len(raw_articles)} статей...")
             _save_articles_and_metadata(raw_articles)
 
-            await obs.upload_all_md()
-            await obs.upload_all_pdfs()
-            await obs.put_json()
+            # await obs.upload_all_md()
+            # await obs.upload_all_pdfs()
+
 
             logger.info("=== ICPM парсинг завершён ===")
 

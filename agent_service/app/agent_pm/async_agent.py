@@ -956,15 +956,42 @@ class KnowledgeAgent:
         await self.obs_loader.download_metadata()
         base_dir = Path(__file__).resolve().parent
         json_file = base_dir / "knowledge_base" / "metadata.json"
-        updater = MetadataUpdater(metadata_file=json_file, max_retries=1, retry_delay=30)
+        updater = MetadataUpdater(metadata_file=json_file, articles_path=self.articles_path, max_retries=1, retry_delay=30)
         message = await asyncio.to_thread(updater.run)
+
+        with open(json_file, "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+        # 1. Удаляем нерелевантные локально
+        self._delete_irrelevant_md_local(metadata)
+
+        # 2. Удаляем нерелевантные из OBS
+        await self.obs_loader.delete_irrelevant_md(metadata)
         await self.obs_loader.put_json()
         return message
 
+    def _delete_irrelevant_md_local(self, metadata: list):
+        """Удаляет локальные .md файлы нерелевантных статей."""
+        deleted = 0
+        for item in metadata:
+            if item.get('is_relevant') or item.get('category') != 'Не релевантна PM':
+                continue
+
+            file_article = item.get('file_article', '')
+            if not file_article or not file_article.endswith('.md'):
+                continue
+
+            local_path = self.articles_path / file_article
+            if local_path.exists():
+                local_path.unlink()
+                deleted += 1
+                print(f"  🗑️ Удалён локально: {file_article}")
+
+        print(f"Локально удалено {deleted} нерелевантных .md файлов.")
+
     async def make_reviews(self) -> None:
+        # await self.obs_loader.download_all_md()
+        # await self.obs_loader.download_reviews()
         await self.auto_categories()
-        await self.obs_loader.download_all_md()
-        await self.obs_loader.download_reviews()
 
         def _load():
             with open(self.name_meta_dir / "metadata.json", "r", encoding="utf-8") as f:

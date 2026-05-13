@@ -19,6 +19,7 @@ from httpx import AsyncClient
 from agent_pm.core.config import KAFKA_BROKER, PORT_PM_AGENT, PORT_PARSERS_SERVICE, PORT_GATEWAY_PORT
 from agent_pm.search_bot.searcher import searcher_main
 from agent_pm.core.db import AgentDB
+from agent_pm.scheduler_digest import start_digest_scheduler, start_interval_digest_scheduler
 
 logging.basicConfig(level=logging.INFO)
 
@@ -97,8 +98,8 @@ async def kafka_consumer():
         group_id="llm-bot-group",
         value_deserializer=lambda m: json.loads(m.decode("utf-8")),
         auto_offset_reset="latest",
-        session_timeout_ms=60000,  # Ждем 60 сек перед тем как убить клиента
-        heartbeat_interval_ms=10000,  # Шлем пульс каждые 10 сек
+        session_timeout_ms=30000,  # Ждем 60 сек перед тем как убить клиента
+        heartbeat_interval_ms=5000,  # Шлем пульс каждые 10 сек
         max_poll_interval_ms=300000,  # Даем 5 минут на обработку одного сообщения
         max_poll_records=1,
     )
@@ -142,19 +143,31 @@ async def kafka_moment():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global agent
+    global agent, digest_scheduler
+
     await db.init_db_pool()
-    task = asyncio.create_task(kafka_consumer())
+
+    kafka_task = asyncio.create_task(kafka_consumer())
+
     agent = KnowledgeAgent(database=db, skip_startup_autoprocess=False)
-    # await agent.make_reviews()
+
+    # # Получаем сам объект scheduler, а не таск
+    # digest_scheduler = await start_interval_digest_scheduler()
+
     yield
 
     # Graceful shutdown
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
+    logging.info("Shutting down...")
+
+    # # 1. Останавливаем планировщик правильно
+    # if digest_scheduler and digest_scheduler.running:
+    #     digest_scheduler.shutdown(wait=False)
+    #     logging.info("Digest scheduler stopped.")
+
+    # 2. Kafka
+    kafka_task.cancel()
+    await asyncio.gather(kafka_task, return_exceptions=True)
+
     await shutdown()
     await db.close()
 
@@ -464,3 +477,4 @@ if __name__ == "__main__":
     # threading.Thread(target=kafka_consumer, daemon=True).start() # Поднятие консьюмера
     uvicorn.run("app:app", host="0.0.0.0", port=int(PORT_PM_AGENT), log_level="info", reload=True)
     # uvicorn.run(app, host="127.0.0.1", port=int(PORT_PM_AGENT), log_level="info")
+

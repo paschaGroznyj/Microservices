@@ -25,6 +25,14 @@ services:
       KAFKA_LOG_RETENTION_BYTES: 1073741824  # 512MB
     volumes:
       - kafka-data:/var/lib/kafka/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
     restart: unless-stopped
 
 #  broker: # Для локальной отладки
@@ -55,8 +63,10 @@ services:
     ports:
       - "9001:9001"
     depends_on:
-      - broker
-      - postgres
+      broker:
+        condition: service_healthy
+      postgres:
+        condition: service_started
     environment:
       PORT_PM_AGENT: ${PORT_PM_AGENT}
       PORT_GATEWAY_PORT: ${PORT_GATEWAY_PORT}
@@ -87,6 +97,15 @@ services:
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME}
+
+      DIGEST_RECIPIENTS: ${DIGEST_RECIPIENTS}
+      DIGEST_SCHEDULE_DAY_OF_WEEK: ${DIGEST_SCHEDULE_DAY_OF_WEEK}
+      DIGEST_SCHEDULE_HOUR: ${DIGEST_SCHEDULE_HOUR}
+      DIGEST_SCHEDULE_MINUTE: ${DIGEST_SCHEDULE_MINUTE}
+      DIGEST_TIMEZONE: ${DIGEST_TIMEZONE}
+      DIGEST_ENABLED: ${DIGEST_ENABLED}
+      DIGEST_RUN_MODE: ${DIGEST_RUN_MODE}
+      DIGEST_UPLOAD_TO_OBS: ${DIGEST_UPLOAD_TO_OBS}
 
     volumes:
       - ./agent_service/config:/app/config
@@ -254,6 +273,13 @@ services:
         max-size: "10m"      # Каждый файл лога максимум 10MB
         max-file: "3"         # Хранить не больше 3 файлов
         compress: "true"      # Сжимать старые логи
+    
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s # Даем время на первый запуск и инициализацию
 
   # chromadb:
   #   image: chromadb/chroma

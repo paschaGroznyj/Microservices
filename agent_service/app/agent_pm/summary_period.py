@@ -482,11 +482,13 @@ def load_json_metadata(json_path: str) -> List[Dict]:
 
 def agent_composite_digest_tool(query: str, llm_client, json_path="knowledge_base/metadata.json", md_folder='digests', send_email: bool = True, email_sender: Optional[EmailSender] = None, base_download_url: str = "https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/PM/digests/"):
     """Инструмент для агента с поддержкой составных фильтров."""
+    base_path = Path(__file__).resolve().parent
+    
     arts, result = create_composite_digest(json_path, query, llm_client, md_folder)
 
     filter_slug = result['filters'].to_slug()
     full_text = build_digest_content(arts, Path(md_folder), query, llm_client)
-    base_path = Path(__file__).resolve().parent
+    
     digest_all_path = base_path / 'digests_all'
     output_path, filename = save_digest(full_text,  filter_type=filter_slug, output_dir=digest_all_path)
 

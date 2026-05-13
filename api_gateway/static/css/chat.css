@@ -131,9 +131,9 @@ body {
   transition: opacity 0.2s;
 }
 .tab-pills {
-  margin-left: auto;
+  /* margin-left: auto; */
   display: flex;
-  gap: 4px;
+  gap: 0;
   background: var(--surface2);
   border: 0.5px solid var(--border);
   border-radius: 8px;
@@ -381,4 +381,44 @@ body {
     .message {
         max-width: 85%;
     }
+}
+
+
+/* ── Черная кнопка инфо ── */
+.info-btn-black {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: white;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: --text-primary;
+    transition: transform 0.1s;
+    flex-shrink: 0;
+    padding: 0;
+    
+    /* Если кнопка стоит ПЕРЕД .tab-pills в HTML, 
+       то margin-left: auto у .tab-pills прижмет табы вправо, 
+       а кнопка останется слева от них с отступом gap: 12px из родителя .main-header.
+       
+       Чтобы прижать кнопку ПЛОТНЕЕ к табам, уменьшим отступ справа у кнопки: */
+    margin-left: auto /* Компенсируем часть gap от родителя, если нужно плотнее */
+}
+
+.info-btn-black:hover {
+    background: --bg-secondary;
+    transform: scale(1.05);
+}
+
+.info-btn-black:active {
+    transform: scale(0.95);
+}
+
+/* Настройка размера иконки внутри */
+.info-btn-black .icon-info {
+    width: 18px;
+    height: 18px;
 }

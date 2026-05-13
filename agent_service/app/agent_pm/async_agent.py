@@ -316,7 +316,6 @@ async def tool_summarize_file(
         }
         for a in articles_data
     }
-
     meta = articles_map.get(filename, {})
     base_url = "https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/PM/reviews"
     obs_path = "obs://cds-iad/PM/reviews/"
@@ -327,7 +326,7 @@ async def tool_summarize_file(
     content = await asyncio.to_thread(filepath.read_text, encoding="utf-8")
     digest_result = await asyncio.to_thread(
         summarizer.generate_summary,
-        content_=content,
+        content=content,
         filename=filename,
         theme=meta.get("theme", "категория не найдена"),
         pdf_url=meta.get("pdf_url", "Не найден"),
@@ -667,7 +666,7 @@ class AutoProcessor:
                 if filepath.exists():
                     content = filepath.read_text(encoding='utf-8')
                     digest_result = self.summarizer.generate_summary(
-                        content_=content,
+                        content=content,
                         filename=filename,
                         theme=theme,
                         pdf_url=pdf_url

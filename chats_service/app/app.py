@@ -136,7 +136,7 @@ async def send_message(chat: ChatMessage):
 
 
 @app.get("/chat/{chat_id}/messages")
-async def get_chat_messages(chat_id: int, limit: int = 50, offset: int = 0,  username: str = Depends(get_current_user_from_cookie)):
+async def get_chat_messages(chat_id: int, limit: int = 1000, offset: int = 0,  username: str = Depends(get_current_user_from_cookie)):
     try:
         messages = await db.get_chat_messages(chat_id, username, limit=limit, offset=offset)
         return {
@@ -152,6 +152,7 @@ async def get_chat_messages(chat_id: int, limit: int = 50, offset: int = 0,  use
 @app.get("/user/all/messages")
 async def get_all_user_messages(limit: int = 50, offset: int = 0,  username: str = Depends(get_current_user_from_cookie)):
     try:
+        logging.info(f"Лимит по сообщениям для пользователя {limit}")
         messages = await db.get_all_user_messages(username, limit=limit, offset=offset)
         return {"messages": messages}
     except Exception as e:

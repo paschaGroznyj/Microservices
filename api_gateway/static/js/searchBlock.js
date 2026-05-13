@@ -239,7 +239,7 @@ async function doSearch(isDefault = false, keyword = null) {
     // currentPapers = data.articles.map(normalizeArticle);
     currentPapers = data.articles;
 
-    document.getElementById("results-meta").textContent = currentPapers.length + " статей";
+    document.getElementById("results-meta").textContent = currentPapers.length + ' ' + pluralArticles(currentPapers.length);
     renderCards();
     syncStarsWithFavorites()
 

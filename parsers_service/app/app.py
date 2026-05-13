@@ -392,7 +392,7 @@ async def lifespan(app: FastAPI):
     global parsing_active
     # Startup
     logger.info("Запуск фоновой задачи парсинга...")
-    task = asyncio.create_task(scheduled_parsing_loop())
+    # task = asyncio.create_task(scheduled_parsing_loop())
     parsing_active = True
     await db.init_db_pool()
     yield
@@ -495,10 +495,7 @@ async def search_articles(request: Request):
             categories=data["params"].get("categories", []),
             user_name=data["user_name"]
         )
-
-        logging.info(f"Параметры: {data['params']}")
         dataclass_articles = []
-        logging.info(f"ДОСТАЕМ ПО ДЕФОЛТУ: {articles[0].get('authors_json')}, {articles[0].get('tags_json')}")
         for article in articles:
 
             dataclass_articles.append(
@@ -515,14 +512,12 @@ async def search_articles(request: Request):
                     category=article.get('category'),
                 )
             )
-        logging.info(dataclass_articles[:1])
         params = SearchParams(
             keywords=data["params"].get("keywords", []),
             date_start=data.get("date_start"),
             date_end=data.get("date_end"),
             limit=data.get("limit", 20),
         )
-        logging.info(f"ПОСЛЕ dataclass {params}")
         await research.save_search_results(
             user_name=data["user_name"],
             user_query=data["query"],

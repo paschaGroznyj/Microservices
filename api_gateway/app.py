@@ -757,7 +757,7 @@ async def searching_default(request: Request):
             "limit": 33
         },
         "request_id": None,
-        "search_now": True
+        "search_now": False
     }
 
     logging.info(f"ДЕФОЛТ ДАННЫЕ с вкладки ПОИСКА {data}")

@@ -4,12 +4,13 @@ from langchain_gigachat.embeddings import GigaChatEmbeddings
 
 
 @lru_cache
-def get_model():
+def get_model(temperature: float = 0.5):
     return GigaChat(
         credentials="none",
         auth_url="http://token_service:9004/api/v2/oauth", # Данный адрес контейнера является единственным источником истины для получения токена внутри ВМ cloud
         verify_ssl_certs=False,
-        model="GigaChat-2-Max"
+        model="GigaChat-2-Max",
+        temperature=temperature
     )
 
 @lru_cache

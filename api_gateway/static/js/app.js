@@ -81,6 +81,7 @@ class ChatAppSimple {
 
             if (response.ok) {
                 const chats = await response.json();
+                console.log(chats.slice(-10))
                 this.renderChats(chats);
             }
         } catch (error) {

@@ -48,8 +48,8 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down API Gateway...")
     await app.state.http_client.aclose()
-app = FastAPI(title="API Gateway", lifespan=lifespan)
-# app = FastAPI(title="API Gateway", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+# app = FastAPI(title="API Gateway", lifespan=lifespan)
+app = FastAPI(title="API Gateway", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
 # Service Discovery
 # SERVICES = {
@@ -138,7 +138,6 @@ async def push_sse(username: str, data: dict):
 
 @app.get("/some-route")
 async def some_route(request: Request):
-    logging.info(request.headers)
     authentik_user = request.headers.get("X-Authentik-Username")
     logger.info(authentik_user)
 
@@ -225,28 +224,6 @@ async def discover_services():
 # Аутентификация через Gateway
 async def get_current_user(request: Request):
     """Получение текущего пользователя из cookie"""
-    authentik_user = request.headers.get("X-Authentik-Username")
-    if authentik_user:
-        # Автоматически создаём/находим юзера в БД
-        logging.info(authentik_user)
-        # user = await db.get_or_create_user(authentik_user)
-        auth_url = SERVICES['auth']['url']
-        try:
-            response = await app.state.http_client.post(
-                f"{auth_url}/authentik",
-                json={"username": authentik_user}
-            )
-            if response.status_code == 200:
-                data = response.json()
-                user_id = data.get("user_id")
-                return {
-                    "username": authentik_user, 
-                    "user_id": user_id,
-                    "authenticated": True}
-        except httpx.RequestError as e:
-            raise HTTPException(status_code=502, detail=f"Auth service unreachable: {str(e)}")
-        # return user
-
     token = request.cookies.get("users_access_token")
 
     if not token:
@@ -565,21 +542,12 @@ async def get_current_user_info(request: Request):
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    raw_name = request.headers.get("X-Authentik-Name")
-    
-    first_name = "Unknown"
-    if raw_name:
-        try:
-            first_name = raw_name.encode('latin-1').decode('utf-8')
-        except (UnicodeEncodeError, UnicodeDecodeError):
-            first_name = raw_name
-    logging.info(f"Пользователь авторизован: {user['username']}, под ФИО: {first_name}")
+    logging.info(f"Пользователь авторизован: {user['username']}")
 
     response_data = {
         "username": user["username"],
         "user_id": user["user_id"],
-        "authenticated": True,
-        "name": first_name
+        "authenticated": True
     }
 
     return Response(
@@ -866,16 +834,10 @@ async def get_chats(request: Request):
 
     try:
         start = time.perf_counter()
-
-        headers = {
-            "X-User-Name": user["username"]
-        }
-
         response = await app.state.http_client.get(
             f"{SERVICES['chats']['url']}/user/all/messages",
             cookies=request.cookies,
-            params={"limit": 500},
-            headers=headers
+            params={"limit": 500}
         )
         elapsed = time.perf_counter() - start
         logging.info(f"Время подгрузки чатов = {elapsed:.4f}s")
@@ -915,15 +877,10 @@ async def get_messages(chat_id: int, request: Request):
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     try:
-
-        headers = {
-            "X-User-Name": user["username"]
-        }
         response = await app.state.http_client.get(
             f"{SERVICES['chats']['url']}/chat/{chat_id}/messages",
             cookies=request.cookies,
-            params=dict(request.query_params),
-            headers=headers
+            params=dict(request.query_params)
         )
         return Response(
             content=response.content,

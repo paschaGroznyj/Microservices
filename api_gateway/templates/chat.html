@@ -158,18 +158,48 @@
                 <!-- Center search (initial state) -->
                 <div class="center-state" id="center-state">
                   <div class="cs-icon">
-                    <svg viewBox="0 0 20 20" fill="none">
-                      <circle cx="9" cy="9" r="5.5" stroke="#2c5f8a" stroke-width="1.5"/>
-                      <path d="M13 13L17 17" stroke="#2c5f8a" stroke-width="1.5" stroke-linecap="round"/>
-                    </svg>
+
+                      <div class="search-orbit"></div>
+
+                      <svg viewBox="0 0 20 20" fill="none">
+                          <circle
+                              class="lens"
+                              cx="9"
+                              cy="9"
+                              r="5.5"
+                          />
+
+                          <path
+                              class="handle"
+                              d="M13 13L17 17"
+                          />
+                      </svg>
+
                   </div>
                   <div class="cs-title">Поиск статей на arXiv</div>
                   <div class="cs-sub">Введите тему — карточки со статьями появятся прямо здесь</div>
                   <div class="cs-form">
                     <input class="cs-input" id="center-input" placeholder="process mining, conformance..."/>
-                    <button class="cs-search-btn" id="search-btn">Найти</button>
+                    <button class="cs-search-btn" id="search-btn">
 
-                      <div class="results-meta" id="results-meta">—</div>
+                          <svg
+                              xmlns="http://www.w3.org/2000/svg"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              class="search-svg"
+                          >
+                              <path
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                  stroke-width="1.7"
+                                  d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"
+                              />
+                          </svg>
+
+                      </button>
+
+                      <div class="results-meta hidden" id="results-meta">—</div>
                     <!-- <select class="sort-select" id="sort-select">
                       <option value="date">По дате</option>
                       <option value="relevance">По релевантности</option>

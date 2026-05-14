@@ -183,6 +183,7 @@ async function doSearch(isDefault = false, keyword = null) {
   console.log(url)
   document.getElementById("center-state").classList.add("searched");
   document.getElementById("results-state").classList.add("visible");
+  document.getElementById("results-meta").classList.remove("hidden");
   document.getElementById("results-meta").textContent = "загрузка...";
   document.getElementById("basket-btn").classList.remove("hidden");
   checkerTab('arxiv');

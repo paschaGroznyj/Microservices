@@ -209,44 +209,73 @@ class ChatAppSimple {
         if (!container) return;
 
         // Получаем имя пользователя (из this.currentUser или фолбэк)
-        const username = this.currentUser?.username || 'Пользователь';
+        const username = this.currentUser?.name || 'Пользователь';
 
         if (!this.currentChat) {
             // 🎨 Стартовый экран (нет выбранного чата)
             container.innerHTML = `
-                <div class="chat-start-screen">
-                    <div class="start-header">
-                        <h2>Привет, ${username}!</h2>
-                        <p class="start-subtitle">Чем сегодня займёмся?</p>
-                    </div>
-                    
-                    <div class="message-input-wrapper-start">
-                        <div class="message-input-box-start">
-                            <textarea
-                                id="message-input"
-                                placeholder="Напишите сообщение, чтобы начать..."
-                                rows="1"
-                            ></textarea>
-                            <button id="send-btn" disabled>
-                                <svg viewBox="0 0 24 24" class="send-icon">
-                                    <path d="M12 5v14M5 12l7-7 7 7"
-                                          stroke="currentColor"
-                                          stroke-width="2"
-                                          fill="none"
-                                          stroke-linecap="round"
-                                          stroke-linejoin="round"/>
-                                </svg>
-                            </button>
-                        </div>
-                    </div>
-                    
-                    <div class="start-hints">
-                        <span class="hint-item">💡 Задайте вопрос</span>
-                        <span class="hint-item">✍️ Напишите команду</span>
-                        <span class="hint-item">🔍 Попросите найти информацию</span>
-                    </div>
-                </div>
-            `;
+<div class="chat-start-screen">
+
+    <!-- PROCESS MINING BACKGROUND -->
+    <div class="process-bg">
+        <svg viewBox="0 0 1200 700" preserveAspectRatio="none">
+
+            <!-- connections -->
+            <path class="process-line"
+                  d="M120 180 C240 120, 320 280, 450 220 S680 80, 820 180 S1040 320, 1140 220" />
+
+            <path class="process-line"
+                  d="M80 480 C200 420, 340 560, 500 470 S760 300, 980 430" />
+
+            <path class="process-line"
+                  d="M240 120 C360 220, 520 160, 620 300 S860 540, 1040 500" />
+
+
+        </svg>
+    </div>
+
+    <div class="start-header">
+        <h2>
+            <span class="greeting">Привет,</span>
+            <span class="username">${username}</span>
+        </h2>
+
+        <p class="start-subtitle">
+            Сделаем semantic search for scientific research?
+        </p>
+    </div>
+
+    <div class="message-input-wrapper-start">
+        <div class="message-input-box-start">
+            <textarea
+                id="message-input"
+                placeholder="Введите запрос..."
+                rows="1"
+            ></textarea>
+
+            <button id="send-btn" disabled>
+                <svg viewBox="0 0 24 24" class="send-icon">
+                    <path d="M12 5v14M5 12l7-7 7 7"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          fill="none"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"/>
+                </svg>
+            </button>
+        </div>
+    </div>
+
+    <div class="start-hints">
+        <span class="hint-item">🔍 Найти информацию</span>
+        <span class="hint-item" data-prompt="Найди статьи по process mining">
+            📊 Process Mining
+        </span>
+        <span class="hint-item">⭐ Сохранить в избранное</span>
+    </div>
+
+</div>
+`;
         } else {
             // 💬 Обычный чат (выбрана беседа)
             container.innerHTML = `
@@ -285,8 +314,40 @@ class ChatAppSimple {
 
         this.setupUI();
         this.attachInputHandlers();
+        this.attachHintActions();
         setTimeout(() => container?.classList.remove('rending'), 200);
     }
+
+    attachHintActions() {
+            const input = document.getElementById('message-input');
+
+            if (!input) return;
+
+            document.querySelectorAll('.hint-item').forEach(chip => {
+
+                chip.addEventListener('click', () => {
+
+                    const prompt = chip.dataset.prompt;
+
+                    if (!prompt) return;
+
+                    input.value = prompt;
+
+                    // триггерим resize textarea
+                    input.dispatchEvent(new Event('input'));
+
+                    input.focus();
+
+                    // optional animation
+                    chip.classList.add('hint-clicked');
+
+                    setTimeout(() => {
+                        chip.classList.remove('hint-clicked');
+                    }, 300);
+                });
+
+            });
+        }
 
     attachInputHandlers() {
         const textarea = document.getElementById('message-input');
@@ -559,8 +620,13 @@ class ChatAppSimple {
 
 }
 
-
-
+document.querySelectorAll('.hint-item').forEach(chip => {
+    chip.addEventListener('click', () => {
+        console.log('Клик по process mining')
+        input.value = chip.dataset.prompt;
+        input.focus();
+    });
+});
 // // Инициализация при загрузке страницы. Ждет пока построится HTML дерево, только потом запускает код
 // document.addEventListener('DOMContentLoaded', () => {
 //     // Если на странице есть элемент с id="chat-app"

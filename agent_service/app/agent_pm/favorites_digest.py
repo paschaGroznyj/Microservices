@@ -1,6 +1,6 @@
 import json
 import re
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
@@ -10,10 +10,8 @@ from langchain.schema import SystemMessage, HumanMessage
 from .core.botocore_client import OBSWorker
 from .core.agent_provider import get_model
 
+
 llm_client = get_model()
-
-from pydantic import BaseModel, Field
-
 
 class QueryDateRange(BaseModel):
     start_date: Optional[str] = Field(default=None, description="YYYY-MM-DD")
@@ -45,22 +43,6 @@ DATE_EXTRACT_PROMPT = """
 - Верни только валидный JSON без markdown.
 """.strip()
 
-def extract_date_filters_from_query(query: str) -> QueryDateRange:
-    messages = [
-        SystemMessage(content=DATE_EXTRACT_PROMPT),
-        HumanMessage(content=query),
-    ]
-
-    response = llm_client.invoke(messages)
-    content = extract_json(response.content)
-
-    try:
-        data = json.loads(content)
-        return QueryDateRange(**data)
-    except Exception:
-        cleaned = content.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        data = json.loads(cleaned)
-        return QueryDateRange(**data)
 
 class FavoritesDigestFilters(BaseModel):
     start_date: Optional[str] = Field(default=None, description="YYYY-MM-DD")
@@ -93,7 +75,31 @@ def extract_json(text: str) -> str:
     return text
 
 
-def parse_date_safe(value) -> Optional[date]:
+def extract_date_filters_from_query(query: str) -> QueryDateRange:
+    messages = [
+        SystemMessage(content=DATE_EXTRACT_PROMPT),
+        HumanMessage(content=query),
+    ]
+
+    response = llm_client.invoke(messages)
+    content = extract_json(response.content)
+
+    try:
+        data = json.loads(content)
+        return QueryDateRange(**data)
+    except Exception:
+        cleaned = (
+            content
+            .removeprefix("```json")
+            .removeprefix("```")
+            .removesuffix("```")
+            .strip()
+        )
+        data = json.loads(cleaned)
+        return QueryDateRange(**data)
+
+
+def parse_date_safe(value: Any) -> Optional[date]:
     if value is None or value == "":
         return None
     if isinstance(value, datetime):
@@ -126,49 +132,32 @@ def filter_favorites_by_date(
         article_date = parse_date_safe(item.get("date_sub"))
         if article_date and start <= article_date <= end:
             filtered.append(item)
+
     return filtered
 
 
-def _normalize_json_field(value):
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return value
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-            return parsed if isinstance(parsed, list) else [parsed]
-        except Exception:
-            return [value]
-    return [value]
-
-
-def normalize_favorite_item(item: Dict[str, Any]) -> Dict[str, Any]:
+def normalize_review_item(item: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "article_id": item.get("article_id"),
-        "external_id": item.get("external_id"),
         "title": item.get("title"),
-        "date_sub": str(item.get("date_sub")) if item.get("date_sub") else None,
-        "url_article": item.get("url_article"),
         "pdf_url": item.get("pdf_url"),
-        "authors": _normalize_json_field(item.get("authors_json")),
-        "tags": _normalize_json_field(item.get("tags_json")),
-        "abstract": item.get("abstract"),
-        "category": item.get("category"),
-        "review": item.get("review"),
-        "review_created_at": str(item.get("review_created_at")) if item.get("review_created_at") else None,
-        "review_updated_at": str(item.get("review_updated_at")) if item.get("review_updated_at") else None,
+        "date_sub": str(item.get("date_sub")) if item.get("date_sub") else None,
+        "review": item.get("review") or item.get("review_text"),
     }
 
 
-def build_favorites_digest_payload(
+def build_favorites_reviews_digest_payload(
     username: str,
     favorites: List[Dict[str, Any]],
     filters: Optional[FavoritesDigestFilters] = None,
 ) -> Dict[str, Any]:
     filters = filters or FavoritesDigestFilters()
 
-    normalized = [normalize_favorite_item(item) for item in favorites]
+    normalized = [
+        normalize_review_item(dict(item) if not isinstance(item, dict) else item)
+        for item in favorites
+    ]
+
     filtered = filter_favorites_by_date(
         normalized,
         start_date=filters.start_date,
@@ -181,191 +170,94 @@ def build_favorites_digest_payload(
     return {
         "user": username,
         "created_at": datetime.now().isoformat(),
-        "filters": filters.model_dump(),
-        "total_favorites": len(filtered),
-        "total_reviewed": len(reviewed_articles),
-        "total_not_reviewed": len(not_reviewed_articles),
+        "period": {
+            "start_date": filters.start_date,
+            "end_date": filters.end_date,
+        },
+        "stats": {
+            "total_favorites": len(filtered),
+            "total_reviewed": len(reviewed_articles),
+            "total_not_reviewed": len(not_reviewed_articles),
+        },
         "reviewed_articles": reviewed_articles,
         "not_reviewed_articles": not_reviewed_articles,
     }
 
 
-DIGEST_SYSTEM_PROMPT = """
-Ты — аналитик научных статей и пользовательских review.
-
-Тебе передают список избранных статей пользователя и его review к ним.
-Нужно сделать дайджест по интересам пользователя и его оценкам статей.
-
-Верни результат СТРОГО в JSON.
-
-Формат ответа:
-{
-  "user": "username",
-  "period": {
-    "start_date": null,
-    "end_date": null
-  },
-  "stats": {
-    "total_favorites": 0,
-    "total_reviewed": 0,
-    "total_not_reviewed": 0
-  },
-  "overview": "2-4 предложения с общим описанием интересов пользователя",
-  "key_topics": [
-    {
-      "topic": "название темы",
-      "summary": "почему эта тема важна для пользователя",
-      "articles": [
-        {
-          "article_id": 0,
-          "title": "название статьи",
-          "category": "категория",
-          "user_review_summary": "краткое содержание review",
-          "sentiment": "positive | neutral | negative | mixed"
-        }
-      ]
-    }
-  ],
-  "strong_signals": [
-    "какие интересы/паттерны явно прослеживаются по review"
-  ],
-  "articles_without_reviews": [
-    {
-      "article_id": 0,
-      "title": "название статьи"
-    }
-  ],
-  "recommendations": [
-    "что ещё изучить пользователю",
-    "какие темы объединить",
-    "на что обратить внимание дальше"
-  ]
-}
-
-Правила:
-- Используй только входные данные.
-- Не придумывай факты, которых нет.
-- Если review мало, так и укажи в overview.
-- Если статей без review нет, верни пустой список.
-- Верни только валидный JSON без markdown.
-""".strip()
-
-
-class FavoritesReviewDigestService:
-    @staticmethod
-    async def generate_digest(
-        username: str,
-        favorites_with_reviews: List[Dict[str, Any]],
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        filters = FavoritesDigestFilters(
-            start_date=start_date,
-            end_date=end_date,
-        )
-
-        payload = build_favorites_digest_payload(
-            username=username,
-            favorites=favorites_with_reviews,
-            filters=filters,
-        )
-
-        if payload["total_favorites"] == 0:
-            return {
-                "user": username,
-                "period": {
-                    "start_date": start_date,
-                    "end_date": end_date,
-                },
-                "stats": {
-                    "total_favorites": 0,
-                    "total_reviewed": 0,
-                    "total_not_reviewed": 0,
-                },
-                "overview": "По выбранному периоду нет избранных статей.",
-                "key_topics": [],
-                "strong_signals": [],
-                "articles_without_reviews": [],
-                "recommendations": []
-            }
-
-        messages = [
-            SystemMessage(content=DIGEST_SYSTEM_PROMPT),
-            HumanMessage(content=json.dumps(payload, ensure_ascii=False, indent=2)),
-        ]
-
-        response = llm_client.invoke(messages)
-        content = extract_json(response.content)
-
-        try:
-            result = json.loads(content)
-        except json.JSONDecodeError:
-            cleaned = content.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-            result = json.loads(cleaned)
-
-        return result
-
-
-def render_digest_to_markdown(digest: Dict[str, Any]) -> str:
+def render_reviews_digest_to_markdown(digest: Dict[str, Any]) -> str:
     period = digest.get("period", {})
     stats = digest.get("stats", {})
 
+    start_date = period.get("start_date") or "не задано"
+    end_date = period.get("end_date") or "не задано"
+
     lines = [
-        f"# Дайджест по избранным review пользователя: {digest.get('user', 'unknown')}",
+        f"# Дайджест review пользователя: {digest.get('user', 'unknown')}",
         "",
-        f"**Период:** {period.get('start_date')} — {period.get('end_date')}",
+        f"**Период:** {start_date} — {end_date}",
         f"**Всего избранных:** {stats.get('total_favorites', 0)}",
         f"**С review:** {stats.get('total_reviewed', 0)}",
         f"**Без review:** {stats.get('total_not_reviewed', 0)}",
         "",
-        "## Обзор",
-        digest.get("overview", ""),
+        "## Статьи с review",
         "",
-        "## Ключевые темы",
     ]
 
-    for topic in digest.get("key_topics", []):
+    reviewed_articles = digest.get("reviewed_articles", [])
+    if not reviewed_articles:
         lines.extend([
-            f"### {topic.get('topic', 'Без темы')}",
-            topic.get("summary", ""),
+            "По выбранному периоду нет статей с review.",
             "",
         ])
+    else:
+        for idx, article in enumerate(reviewed_articles, start=1):
+            title = article.get("title", "Без названия")
+            article_id = article.get("article_id")
+            date_sub = article.get("date_sub") or "не указана"
+            pdf_url = article.get("pdf_url") or "отсутствует"
+            review = (article.get("review") or "").strip()
 
-        for article in topic.get("articles", []):
             lines.extend([
-                f"- **{article.get('title', 'Без названия')}** (article_id={article.get('article_id')}, category={article.get('category')}, sentiment={article.get('sentiment')})",
-                f"  - review summary: {article.get('user_review_summary', '')}",
+                f"### {idx}. {title}",
+                f"- article_id: {article_id}",
+                f"- date_sub: {date_sub}",
+                f"- pdf_url: {pdf_url}",
+                "",
+                review if review else "_review отсутствует_",
+                "",
+                "---",
+                "",
             ])
 
-        lines.append("")
-
     lines.extend([
-        "## Сильные сигналы",
-    ])
-
-    for item in digest.get("strong_signals", []):
-        lines.append(f"- {item}")
-
-    lines.extend([
-        "",
         "## Статьи без review",
-    ])
-
-    for article in digest.get("articles_without_reviews", []):
-        lines.append(f"- {article.get('title')} (article_id={article.get('article_id')})")
-
-    lines.extend([
         "",
-        "## Рекомендации",
     ])
 
-    for rec in digest.get("recommendations", []):
-        lines.append(f"- {rec}")
+    not_reviewed_articles = digest.get("not_reviewed_articles", [])
+    if not not_reviewed_articles:
+        lines.append("Таких статей нет.")
+    else:
+        for article in not_reviewed_articles:
+            title = article.get("title", "Без названия")
+            article_id = article.get("article_id")
+            date_sub = article.get("date_sub") or "не указана"
+            pdf_url = article.get("pdf_url") or "отсутствует"
 
+            lines.append(
+                f"- {title} (article_id={article_id}, date_sub={date_sub}, pdf_url={pdf_url})"
+            )
+
+    lines.append("")
     return "\n".join(lines)
 
 
-def save_digest(content: str, username: str, filter_type: str = "all", output_dir: Optional[Path] = None) -> Tuple[Path, str]:
+def save_digest(
+    content: str,
+    username: str,
+    filter_type: str = "all",
+    output_dir: Optional[Path] = None,
+) -> Tuple[Path, str]:
     output_dir = output_dir or (Path(__file__).resolve().parent / "digests_all")
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -387,15 +279,18 @@ async def build_user_favorites_review_digest(
     save_to_file: bool = False,
     output_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    
-    digest_json = await FavoritesReviewDigestService.generate_digest(
-        username=username,
-        favorites_with_reviews=favorites_with_reviews,
+    filters = FavoritesDigestFilters(
         start_date=start_date,
         end_date=end_date,
     )
 
-    md_content = render_digest_to_markdown(digest_json)
+    digest_json = build_favorites_reviews_digest_payload(
+        username=username,
+        favorites=favorites_with_reviews,
+        filters=filters,
+    )
+
+    md_content = render_reviews_digest_to_markdown(digest_json)
 
     result = {
         "status": "created",
@@ -408,7 +303,6 @@ async def build_user_favorites_review_digest(
     }
 
     if save_to_file:
-        filters = FavoritesDigestFilters(start_date=start_date, end_date=end_date)
         output_path, filename = save_digest(
             content=md_content,
             username=username,
@@ -420,14 +314,13 @@ async def build_user_favorites_review_digest(
 
     return result
 
+
 async def build_user_favorites_review_digest_from_query(
     username: str,
     favorites_with_reviews: List[Dict[str, Any]],
     user_query: str,
     save_to_file: bool = False,
-    output_dir: Optional[Path] = None,
-) -> Dict[str, Any]:
-    
+    output_dir: Optional[Path] = None) -> Dict[str, Any]:
     obs_loader = OBSWorker()
 
     date_filters = extract_date_filters_from_query(user_query)
@@ -445,9 +338,8 @@ async def build_user_favorites_review_digest_from_query(
     result["detected_date_filter"] = date_filters.model_dump()
 
     us_name = result["username"]
-    create = result["created_at"]
-    
-    filename = f"digest_{us_name}_{create}.md"
+    created_at = result["created_at"].replace(":", "-")
+    filename = f"digest_{us_name}_{created_at}.md"
 
     result["file_name"] = filename
     await obs_loader.upload_digest_markdown_content(result["digest_markdown"], filename)
@@ -458,13 +350,15 @@ async def build_user_favorites_review_digest_from_query(
 
 __all__ = [
     "FavoritesDigestFilters",
-    "FavoritesReviewDigestService",
-    "build_favorites_digest_payload",
+    "QueryDateRange",
+    "build_favorites_reviews_digest_payload",
     "build_user_favorites_review_digest",
+    "build_user_favorites_review_digest_from_query",
+    "extract_date_filters_from_query",
     "extract_json",
     "filter_favorites_by_date",
-    "normalize_favorite_item",
+    "normalize_review_item",
     "parse_date_safe",
-    "render_digest_to_markdown",
+    "render_reviews_digest_to_markdown",
     "save_digest",
 ]

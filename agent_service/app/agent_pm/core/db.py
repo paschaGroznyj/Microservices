@@ -534,7 +534,8 @@ class AgentDB:
             SELECT 
                 a.id AS article_id, 
                 a.pdf_url, 
-                a.title, 
+                a.title,
+                a.date_sub, 
                 a_r.review_text
             FROM favorites f
             JOIN articles a ON f.article_id = a.id

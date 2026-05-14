@@ -127,6 +127,18 @@ async def guest_login(response: Response):
     )
     return {"access_token": access_token, "token_type": "bearer", "user_id": user_id}
 
+
+@app.post("/authentik")
+async def guest_login(request: Request):
+    """Вход через никнейм authentik"""
+    import uuid
+    data = await request.json()
+    password = str(uuid.uuid4()) # Рандом пароль, все равно проверка по нику, просто добавляем пользователя в БД
+    logging.info(f"Прилетел username: {data['username']}")
+    user_id = await db.add_user(data["username"], password)
+    return {"user_id": user_id}
+    
+
 @app.post("/register-and-login")
 async def register_and_login(response: Response, form_data: OAuth2PasswordRequestForm = Depends()):
     """Регистрация + автоматический логин (оптимизированный обработчик)"""

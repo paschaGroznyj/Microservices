@@ -11,6 +11,7 @@
     <link rel="stylesheet" href="/static/css/mobile.css">
     <link rel="stylesheet" href="/static/css/status_agent.css">
     <link rel="stylesheet" href="/static/css/search_block.css">
+    <link rel="stylesheet" href="/static/css/modal_info.css">
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.5/dist/purify.min.js"></script>
@@ -131,6 +132,11 @@
                         </svg>
                     </button>
                     <div class="main-title" id="main-title">Agent Process Mining</div>
+                    <button class="info-btn-black" id="open-help" aria-label="Помощь">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="icon-info">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="m11.25 11.25.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z" />
+                            </svg>
+                    </button>
                     <div class="tab-pills">
                         <!-- Переключатель блоков -->
                         <button class="pill active" id="pill-agent" data-tab="agent">Агент</button>
@@ -152,18 +158,48 @@
                 <!-- Center search (initial state) -->
                 <div class="center-state" id="center-state">
                   <div class="cs-icon">
-                    <svg viewBox="0 0 20 20" fill="none">
-                      <circle cx="9" cy="9" r="5.5" stroke="#2c5f8a" stroke-width="1.5"/>
-                      <path d="M13 13L17 17" stroke="#2c5f8a" stroke-width="1.5" stroke-linecap="round"/>
-                    </svg>
+
+                      <div class="search-orbit"></div>
+
+                      <svg viewBox="0 0 20 20" fill="none">
+                          <circle
+                              class="lens"
+                              cx="9"
+                              cy="9"
+                              r="5.5"
+                          />
+
+                          <path
+                              class="handle"
+                              d="M13 13L17 17"
+                          />
+                      </svg>
+
                   </div>
                   <div class="cs-title">Поиск статей на arXiv</div>
                   <div class="cs-sub">Введите тему — карточки со статьями появятся прямо здесь</div>
                   <div class="cs-form">
                     <input class="cs-input" id="center-input" placeholder="process mining, conformance..."/>
-                    <button class="cs-search-btn" id="search-btn">Найти</button>
+                    <button class="cs-search-btn" id="search-btn">
 
-                      <div class="results-meta" id="results-meta">—</div>
+                          <svg
+                              xmlns="http://www.w3.org/2000/svg"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              class="search-svg"
+                          >
+                              <path
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                  stroke-width="1.7"
+                                  d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"
+                              />
+                          </svg>
+
+                      </button>
+
+                      <div class="results-meta hidden" id="results-meta">—</div>
                     <!-- <select class="sort-select" id="sort-select">
                       <option value="date">По дате</option>
                       <option value="relevance">По релевантности</option>
@@ -252,12 +288,236 @@
   </div>
 </div>
 
+<!-- ── Модалка INFO ── -->
+<div class="help-overlay" id="help-overlay">
+  <div class="help-panel">
+
+    <div class="help-header">
+      <div class="help-header-left">
+        <div class="help-header-icon">
+          <svg viewBox="0 0 16 16" fill="none">
+            <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.3"/>
+            <path d="M8 7v5M8 5v.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div>
+          <div class="help-title">Руководство пользователя</div>
+          <div class="help-subtitle">Agent Process Mining — v1.0.0</div>
+        </div>
+      </div>
+      <button class="help-close" id="help-close">✕</button>
+    </div>
+
+    <div class="help-body">
+
+      <!-- ── Секция: Агент ── -->
+      <div class="help-section" id="section-agent">
+        <div class="help-section-header">
+          <div class="help-section-icon icon-agent">🤖</div>
+          <div class="help-section-title">Агент</div>
+          <span class="help-section-count">12 инструментов</span>
+          <svg class="help-chevron" viewBox="0 0 16 16" fill="none">
+            <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+        </div>
+
+        <div class="help-section-body">
+          <div class="help-divider"></div>
+          <div class="help-section-inner">
+
+            <div class="help-tip">
+              <div class="help-tip-icon">💡</div>
+              <div class="help-tip-text">Агент понимает свободный текст — просто опишите задачу своими словами, он сам выберет нужный инструмент.</div>
+            </div>
+
+            <div class="help-feature-list">
+
+              <div class="help-item">
+                <div class="help-item-badge blue">search_db</div>
+                <div class="help-item-text">
+                  <div class="help-item-name">Поиск по базе документов</div>
+                  <div class="help-item-desc">Семантический поиск по загруженным файлам и статьям. Пример: <em>«найди документы про conformance checking»</em></div>
+                </div>
+              </div>
+
+              <div class="help-item">
+                <div class="help-item-badge blue">summarize_file</div>
+                <div class="help-item-text">
+                  <div class="help-item-name">Суммаризация файла</div>
+                  <div class="help-item-desc">Краткое резюме или ревью конкретного файла из базы.</div>
+                </div>
+              </div>
+
+              <div class="help-item">
+                <div class="help-item-badge blue">summarize_new</div>
+                <div class="help-item-text">
+                  <div class="help-item-name">Обзор новых статей</div>
+                  <div class="help-item-desc">Суммаризация статей которые появились недавно — удобно для ежедневного мониторинга.</div>
+                </div>
+              </div>
+
+              <div class="help-item">
+                <div class="help-item-badge blue">summarize_all</div>
+                <div class="help-item-text">
+                  <div class="help-item-name">Ревью всех файлов</div>
+                  <div class="help-item-desc">Сводный обзор по всему содержимому базы знаний.</div>
+                </div>
+              </div>
+
+              <div class="help-item">
+                <div class="help-item-badge blue">analyze_folder</div>
+                <div class="help-item-text">
+                  <div class="help-item-name">Анализ папки</div>
+                  <div class="help-item-desc">Структурный анализ содержимого выбранной папки — темы, количество, распределение.</div>
+                </div>
+              </div>
+
+              <div class="help-item">
+                <div class="help-item-badge blue">summarize_filt</div>
+                <div class="help-item-text">
+                  <div class="help-item-name">Дайджест с фильтром</div>
+                  <div class="help-item-desc">Суммаризация с условием по дате или теме. Есть встроенная отправка результата на почту.</div>
+                </div>
+              </div>
+
+              <div class="help-item">
+                <div class="help-item-badge blue">send_digest_email</div>
+                <div class="help-item-text">
+                  <div class="help-item-name">Дайджест на email</div>
+                  <div class="help-item-desc">Формирует сводку по всем файлам и отправляет на указанный адрес.</div>
+                </div>
+              </div>
+
+              <div class="help-item">
+                <div class="help-item-badge blue">summarize_basket</div>
+                <div class="help-item-text">
+                  <div class="help-item-name">Ревью избранного</div>
+                  <div class="help-item-desc">Создаёт ревью или саммари по статьям добавленным в корзину избранного ★</div>
+                </div>
+              </div>
+
+              <div class="help-item">
+                <div class="help-item-badge blue">digest_basket</div>
+                <div class="help-item-text">
+                  <div class="help-item-name">Дайджест избранного</div>
+                  <div class="help-item-desc">Сводка по всем статьям из корзины — темы, выводы, связи между публикациями.</div>
+                </div>
+              </div>
+
+              <div class="help-item">
+                <div class="help-item-badge blue">rebuild_categories</div>
+                <div class="help-item-text">
+                  <div class="help-item-name">Переопределить категории</div>
+                  <div class="help-item-desc">Переназначает категории в метаданных документов на основе содержимого.</div>
+                </div>
+              </div>
+
+              <div class="help-item">
+                <div class="help-item-badge blue">delete_file</div>
+                <div class="help-item-text">
+                  <div class="help-item-name">Удалить файл</div>
+                  <div class="help-item-desc">Удаляет документ из базы знаний по названию или идентификатору.</div>
+                </div>
+              </div>
+
+              <div class="help-item">
+                <div class="help-item-badge blue">general_question</div>
+                <div class="help-item-text">
+                  <div class="help-item-name">Общие вопросы</div>
+                  <div class="help-item-desc">Произвольный вопрос агенту без привязки к конкретному инструменту.</div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Секция: Поиск статей ── -->
+      <div class="help-section" id="section-search">
+        <div class="help-section-header">
+          <div class="help-section-icon icon-search">📄</div>
+          <div class="help-section-title">Поиск статей</div>
+          <span class="help-section-count">arXiv</span>
+          <svg class="help-chevron" viewBox="0 0 16 16" fill="none">
+            <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+        </div>
+
+        <div class="help-section-body">
+          <div class="help-divider"></div>
+          <div class="help-section-inner">
+
+            <div class="help-tip">
+              <div class="help-tip-icon">🔍</div>
+              <div class="help-tip-text">На другом конце поисковой строки работает LLM — пишите запрос на русском, она сама извлечёт ключевые слова и категории arXiv.</div>
+            </div>
+
+            <div class="help-feature-list">
+
+              <div class="help-item">
+                <div class="help-item-badge green">быстрый поиск</div>
+                <div class="help-item-text">
+                  <div class="help-item-name">Кнопки быстрого поиска</div>
+                  <div class="help-item-desc">Готовые запросы под строкой ввода — нажмите чтобы запустить поиск по популярным темам без ввода текста.</div>
+                </div>
+              </div>
+
+              <div class="help-item">
+                <div class="help-item-badge green">поисковая строка</div>
+                <div class="help-item-text">
+                  <div class="help-item-name">Произвольный запрос</div>
+                  <div class="help-item-desc">Напишите тему в свободной форме — например <em>«свежие статьи по object detection»</em>. LLM преобразует запрос в поисковые термины.</div>
+                </div>
+              </div>
+
+              <div class="help-item">
+                <div class="help-item-badge green">★ избранное</div>
+                <div class="help-item-text">
+                  <div class="help-item-name">Добавить в корзину</div>
+                  <div class="help-item-desc">Нажмите на звёздочку на карточке — статья добавляется в корзину избранного. Звёздочка станет жёлтой, счётчик увеличится.</div>
+                </div>
+              </div>
+
+              <div class="help-item">
+                <div class="help-item-badge green">корзина</div>
+                <div class="help-item-text">
+                  <div class="help-item-name">Раздел избранного</div>
+                  <div class="help-item-desc">Кнопка «Избранное» в панели поиска открывает список сохранённых статей. Из корзины можно передать статьи агенту для анализа.</div>
+                </div>
+              </div>
+
+              <div class="help-item">
+                <div class="help-item-badge green">flip-карточка</div>
+                <div class="help-item-text">
+                  <div class="help-item-name">Переворот карточки</div>
+                  <div class="help-item-desc">Кликните по карточке — она перевернётся и покажет аннотацию статьи. Нажмите крестик или фон чтобы закрыть.</div>
+                </div>
+              </div>
+
+              <div class="help-item">
+                <div class="help-item-badge green">перевод</div>
+                <div class="help-item-text">
+                  <div class="help-item-name">Перевод аннотации</div>
+                  <div class="help-item-desc">На обратной стороне карточки есть кнопка «Перевести» — LLM переводит аннотацию на русский и сохраняет результат.</div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
 
 
     <!-- Затемнение фона при открытом меню -->
     <div class="sidebar-overlay" id="sidebar-overlay"></div>
     <script src="/static/js/modalWindow.js"></script>
     <script src="/static/js/mobile.js"></script>
+    <script src="/static/js/mode_modal_info.js"></script>
 
 
     <script type="module" src="/static/js/app.js"></script>

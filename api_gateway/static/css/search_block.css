@@ -63,12 +63,19 @@
   font-family: inherit;
 }
 .results-meta {
+  display: grid;
+  place-items: center; /* Центрирует по обеим осям сразу */
   font-size: 11px;
   padding: 10px;
   color: var(--text-3);
   white-space: nowrap;
   font-family: 'DM Mono', monospace;
 }
+
+.results-meta.hidden {
+   opacity: 0; pointer-events: none; display: none;
+}
+
 .sort-select {
   padding: 5px 8px;
   border: 0.5px solid var(--border);
@@ -307,7 +314,7 @@
   width: 100%;
   max-width: 380px;
 }
-.cs-input {
+/* .cs-input {
   flex: 1;
   padding: 9px 13px;
   border: 0.5px solid var(--border-mid);
@@ -317,9 +324,9 @@
   color: var(--text);
   background: var(--surface);
   outline: none;
-}
+} */
 .cs-input:focus { border-color: rgba(44,95,138,0.4); }
-.cs-search-btn {
+/* .cs-search-btn {
   padding: 9px 16px;
   background: var(--accent);
   border: none;
@@ -330,8 +337,8 @@
   cursor: pointer;
   font-weight: 500;
   white-space: nowrap;
-}
-.cs-search-btn:hover { background: #245079; }
+} */
+/* .cs-search-btn:hover { background: #245079; } */
 
 .cs-hints {
   display: flex;
@@ -991,4 +998,483 @@
 .rate-limit-close:hover {
   background: var(--accent-bg);
   color: var(--accent);
+}
+
+/* =========================================================
+   SEARCH ICON
+   ========================================================= */
+
+.cs-icon {
+    position: relative;
+
+    width: 90px;
+    height: 90px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    margin-bottom: 24px;
+
+    animation:
+        iconFloat 5s ease-in-out infinite;
+
+    z-index: 2;
+}
+
+.cs-icon svg {
+    width: 54px;
+    height: 54px;
+
+    z-index: 2;
+}
+
+/* orbit ring */
+
+.search-orbit {
+    position: absolute;
+
+    width: 90px;
+    height: 90px;
+
+    border-radius: 50%;
+
+    border:
+        1px solid rgba(125,211,252,0.15);
+
+    animation:
+        orbitRotate 10s linear infinite;
+}
+
+.search-orbit::before {
+    content: '';
+
+    position: absolute;
+
+    top: -3px;
+    left: 50%;
+
+    width: 8px;
+    height: 8px;
+
+    border-radius: 50%;
+
+    background: #7dd3fc;
+
+    transform: translateX(-50%);
+
+    box-shadow:
+        0 0 12px rgba(125,211,252,0.8);
+}
+
+/* lens */
+
+.lens {
+    stroke: #7dd3fc;
+    stroke-width: 1.5;
+
+    filter:
+        drop-shadow(0 0 10px rgba(125,211,252,0.7));
+
+    stroke-dasharray: 40;
+    stroke-dashoffset: 40;
+
+    animation:
+        drawLens 2s ease forwards,
+        pulseLens 3s ease-in-out infinite;
+}
+
+/* handle */
+
+.handle {
+    stroke: #a78bfa;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+
+    filter:
+        drop-shadow(0 0 10px rgba(167,139,250,0.7));
+
+    stroke-dasharray: 20;
+    stroke-dashoffset: 20;
+
+    animation:
+        drawHandle 1s ease forwards;
+
+    animation-delay: 0.6s;
+}
+
+/* =========================================================
+   TITLE
+   ========================================================= */
+
+.cs-title {
+    font-size: 32px;
+
+    font-family: var(--font-anthropic-serif);
+
+    color: var(--text-primary);
+
+    margin-bottom: 12px;
+
+    opacity: 0;
+
+    transform:
+        translateY(18px);
+
+    animation:
+        fadeUp 0.9s ease forwards;
+
+    animation-delay: 0.4s;
+}
+
+.cs-sub {
+    font-size: 15px;
+
+    color: var(--text-secondary);
+
+    margin-bottom: 30px;
+
+    opacity: 0;
+
+    animation:
+        fadeIn 1s ease forwards;
+
+    animation-delay: 0.9s;
+}
+
+/* =========================================================
+   SEARCH FORM
+   ========================================================= */
+
+.cs-input {
+    width: 480px;
+
+    background: var(--surface);
+
+    border:
+        1px solid rgba(255,255,255,0.08);
+
+    border-radius: 18px;
+
+    padding: 16px 18px;
+
+    color: var(--text);
+
+    backdrop-filter: blur(12px);
+
+    transition:
+        border-color 0.25s ease,
+        box-shadow 0.25s ease,
+        transform 0.25s ease;
+}
+
+.cs-input:focus {
+    outline: none;
+
+    border-color:
+        rgba(125,211,252,0.45);
+
+    box-shadow:
+        0 0 25px rgba(125,211,252,0.14);
+
+    transform:
+        translateY(-1px);
+}
+
+/* =========================================================
+   BUTTON
+   ========================================================= */
+
+.cs-search-btn {
+    width: auto; 
+    height: calc(52px * var(--scale));
+    
+    /* Добавляем отступы по бокам */
+    padding: 0 24px; 
+    
+    /* Gap между иконкой и текстом */
+    gap: 8px; 
+
+    border: none;
+    border-radius: 26px;
+
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    cursor: pointer;
+
+    background:
+        linear-gradient(
+            135deg,
+            rgba(72, 17, 237, 0.75),
+            rgba(167,139,250,0.75)
+        );
+
+    color: white;
+
+    backdrop-filter: blur(12px);
+
+    transition:
+        transform 0.25s ease,
+        box-shadow 0.25s ease,
+        background 0.25s ease;
+}
+
+
+.search-svg {
+    width: 22px;
+    height: 22px;
+
+    z-index: 2;
+
+    transition:
+        transform 0.3s ease;
+}
+
+
+.cs-search-btn:hover {
+    transform:
+        translateY(-2px)
+        scale(1.04);
+
+    box-shadow:
+        0 8px 24px rgba(125,211,252,0.18);
+}
+
+
+.cs-search-btn:hover .search-svg {
+    transform:
+        scale(1.08)
+        rotate(-8deg);
+}
+
+/* click */
+
+.cs-search-btn:active {
+    transform:
+        scale(0.96);
+}
+
+
+.cs-search-btn::after {
+    content: '';
+
+    position: absolute;
+    inset: 0;
+
+    border-radius: inherit;
+
+    border:
+        1px solid rgba(255,255,255,0.12);
+
+    pointer-events: none;
+}
+
+/* animations */
+
+@keyframes searchBtnShine {
+    to {
+        transform: translateX(100%);
+    }
+}
+/* =========================================================
+   HINTS
+   ========================================================= */
+
+.cs-hints {
+    display: flex;
+    gap: 10px;
+
+    flex-wrap: wrap;
+    justify-content: center;
+
+    margin-top: 28px;
+
+    opacity: 0;
+
+    animation:
+        fadeIn 1s ease forwards;
+
+    animation-delay: 1.5s;
+}
+
+.hint-chip {
+    padding: 10px 14px;
+
+    border-radius: 14px;
+
+    background:
+        rgba(255,255,255,0.03);
+
+    border:
+        1px solid rgba(255,255,255,0.06);
+
+    cursor: pointer;
+
+    transition:
+        transform 0.25s ease,
+        border-color 0.25s ease,
+        background 0.25s ease;
+}
+
+.hint-chip:hover {
+    transform:
+        translateY(-3px);
+
+    border-color:
+        rgba(125,211,252,0.25);
+
+    background:
+        rgba(125,211,252,0.05);
+}
+
+/* =========================================================
+   ANIMATIONS
+   ========================================================= */
+
+@keyframes orbitRotate {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes iconFloat {
+    0% {
+        transform: translateY(0px);
+    }
+
+    50% {
+        transform: translateY(-8px);
+    }
+
+    100% {
+        transform: translateY(0px);
+    }
+}
+
+@keyframes drawLens {
+    to {
+        stroke-dashoffset: 0;
+    }
+}
+
+@keyframes drawHandle {
+    to {
+        stroke-dashoffset: 0;
+    }
+}
+
+@keyframes pulseLens {
+    0% {
+        opacity: 0.7;
+    }
+
+    50% {
+        opacity: 1;
+    }
+
+    100% {
+        opacity: 0.7;
+    }
+}
+
+@keyframes btnShine {
+    to {
+        transform: translateX(100%);
+    }
+}
+
+@keyframes fadeUp {
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes fadeIn {
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes bgFloat {
+    0% {
+        transform: translate(0px, 0px);
+    }
+
+    50% {
+        transform: translate(20px, -15px);
+    }
+
+    100% {
+        transform: translate(0px, 0px);
+    }
+}
+
+/* МАСШТАБ */
+/* Родительский контейнер */
+#center-state {
+    --scale: 0.8; 
+
+    margin: 0 auto;
+
+    padding: calc(20px * var(--scale));
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: calc(15px * var(--scale));
+}
+
+/* Заголовки и текст */
+.cs-title {
+    font-size: calc(27px * var(--scale));
+    margin-bottom: calc(5px * var(--scale));
+}
+
+.cs-sub {
+    font-size: calc(19px * var(--scale));
+    margin-bottom: calc(15px * var(--scale));
+}
+
+
+.cs-form {
+    width: 100%;
+    display: flex;
+    gap: calc(10px * var(--scale));
+    align-items: center;
+}
+
+.cs-input {
+    height: calc(52px * var(--scale));
+    padding: 0 calc(15px * var(--scale));
+    font-size: calc(16px * var(--scale));
+    border-radius: calc(24px * var(--scale));
+    flex-grow: 1;
+}
+
+
+
+/* Иконка сверху (орбита) */
+.cs-icon {
+    /* Масштабируем контейнер иконки */
+    transform: scale(var(--scale));
+}
+
+/* Чипсы подсказок */
+.cs-hints {
+    display: flex;
+    gap: calc(18px * var(--scale));
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.hint-chip {
+    padding: calc(6px * var(--scale)) calc(12px * var(--scale));
+    font-size: calc(16px * var(--scale));
+    border-radius: calc(18px * var(--scale));
 }

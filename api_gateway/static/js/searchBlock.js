@@ -183,6 +183,7 @@ async function doSearch(isDefault = false, keyword = null) {
   console.log(url)
   document.getElementById("center-state").classList.add("searched");
   document.getElementById("results-state").classList.add("visible");
+  document.getElementById("results-meta").classList.remove("hidden");
   document.getElementById("results-meta").textContent = "загрузка...";
   document.getElementById("basket-btn").classList.remove("hidden");
   checkerTab('arxiv');
@@ -239,7 +240,7 @@ async function doSearch(isDefault = false, keyword = null) {
     // currentPapers = data.articles.map(normalizeArticle);
     currentPapers = data.articles;
 
-    document.getElementById("results-meta").textContent = currentPapers.length + " статей";
+    document.getElementById("results-meta").textContent = currentPapers.length + ' ' + pluralArticles(currentPapers.length);
     renderCards();
     syncStarsWithFavorites()
 

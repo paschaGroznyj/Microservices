@@ -36,3 +36,21 @@ DB_HOST = os.getenv("DB_HOST")
 DB_PORT = os.getenv("DB_PORT")
 DB_USER = os.getenv("DB_USER")
 DB_NAME = os.getenv("DB_NAME")
+
+DIGEST_RECIPIENTS = os.getenv("DIGEST_RECIPIENTS", "")
+# mon,tue,wed,thu,fri,sat,sun или *, mon-fri и т.д.
+DIGEST_SCHEDULE_DAY_OF_WEEK = os.getenv('DIGEST_SCHEDULE_DAY_OF_WEEK', 'mon')
+DIGEST_SCHEDULE_HOUR = os.getenv('DIGEST_SCHEDULE_HOUR', 9)
+DIGEST_SCHEDULE_MINUTE = os.getenv('DIGEST_SCHEDULE_MINUTE', 0)
+DIGEST_TIMEZONE = os.getenv('DIGEST_TIMEZONE' , 'Europe/Moscow')
+
+# Включение / отключение автодайджеста
+DIGEST_ENABLED = os.getenv('DIGEST_ENABLED', 'true')
+
+# Режим запуска:
+# - once       -> однократный запуск для быстрой проверки
+# - scheduler  -> постоянный процесс с APScheduler
+DIGEST_RUN_MODE = os.getenv('DIGEST_RUN_MODE', 'scheduler')
+
+# Загружать ли итоговый дайджест в OBS-хранилище
+DIGEST_UPLOAD_TO_OBS = os.getenv('DIGEST_UPLOAD_TO_OBS', 'true')

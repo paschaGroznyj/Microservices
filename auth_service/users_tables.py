@@ -100,24 +100,51 @@ class DataBaseUser:
                     }
                 return None
 
-    async def add_user(self, username: str, password: str):
-        # Хэшируем пароль (bcrypt)
-        password_hash = await asyncio.to_thread(
-            self._hash_password,
-            password
-        )
+    # async def add_user(self, username: str, password: str):
+    #     # Хэшируем пароль (bcrypt)
+    #     password_hash = await asyncio.to_thread(
+    #         self._hash_password,
+    #         password
+    #     )
+    #     try:
+    #         async with self.pool.acquire() as conn:
+    #             user_id = await conn.fetchval("""
+    #                 INSERT INTO users (username, password_hash)
+    #                 VALUES ($1, $2)
+    #                 RETURNING id;
+    #             """, username, password_hash)
+    #             logging.info(f"Добавили {username} с id={user_id}")
+    #             return user_id
+    #     except asyncpg.UniqueViolationError:
+    #         logging.error(f"Юзер {username} уже существует (unique violation)")
+    #         return None
+
+    async def add_user(self, username: str, password: str = None):
+        DUMMY_PASSWORD_HASH = "EXTERNALLY_AUTHENTICATED_NO_LOGIN_POSSIBLE"
+    
         try:
             async with self.pool.acquire() as conn:
+                # Используем ON CONFLICT, чтобы избежать ошибки UniqueViolation
                 user_id = await conn.fetchval("""
                     INSERT INTO users (username, password_hash)
                     VALUES ($1, $2)
+                    ON CONFLICT (username) DO NOTHING
                     RETURNING id;
-                """, username, password_hash)
-                logging.info(f"Добавили {username} с id={user_id}")
-                return user_id
-        except asyncpg.UniqueViolationError:
-            logging.error(f"Юзер {username} уже существует (unique violation)")
-            return None
+                """, username, DUMMY_PASSWORD_HASH)
+
+                if user_id:
+                    logging.info(f"Создан новый пользователь {username} с id={user_id}")
+                    return user_id
+                
+                # Если вернул None, значит пользователь уже был
+                existing_id = await conn.fetchval(
+                    "SELECT id FROM users WHERE username = $1", username
+                )
+                return existing_id
+
+        except Exception as e:
+            logging.error(f"Ошибка при работе с пользователем {username}: {e}")
+            raise
 
     def _hash_password(self, password: str) -> str:
         """Синхронная функция для выполнения в executor"""

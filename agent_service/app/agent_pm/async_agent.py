@@ -316,7 +316,6 @@ async def tool_summarize_file(
         }
         for a in articles_data
     }
-
     meta = articles_map.get(filename, {})
     base_url = "https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/PM/reviews"
     obs_path = "obs://cds-iad/PM/reviews/"
@@ -327,7 +326,7 @@ async def tool_summarize_file(
     content = await asyncio.to_thread(filepath.read_text, encoding="utf-8")
     digest_result = await asyncio.to_thread(
         summarizer.generate_summary,
-        content_=content,
+        content=content,
         filename=filename,
         theme=meta.get("theme", "категория не найдена"),
         pdf_url=meta.get("pdf_url", "Не найден"),
@@ -667,7 +666,7 @@ class AutoProcessor:
                 if filepath.exists():
                     content = filepath.read_text(encoding='utf-8')
                     digest_result = self.summarizer.generate_summary(
-                        content_=content,
+                        content=content,
                         filename=filename,
                         theme=theme,
                         pdf_url=pdf_url
@@ -773,10 +772,10 @@ class KnowledgeAgent:
 4. [summarize_all] - ревью ВСЕХ файлов
 5. [analyze_folder] - анализ папки
 6. [delete_file] - удалить файл из БД
-7. [summarize_filt] - суммаризация/дайджест с условием по дате или теме
+7. [summarize_filt] - суммаризация/дайджест с условием по дате или теме, есть встронная отправка на почту
 8. [rebuild_categories] - переопредели категории в метаданных
 9. [general_question] - общие вопросы пользователя
-10. [send_digest_email] - сформировать дайджест и отправить на email
+10. [send_digest_email] - сформировать дайджест по всем файлам и отправить на email
 11. [summarize_basket] - создать ревью/саммари статей по корзине с избранным
 12. [digest_basket] - сформировать дайджест/сводку по корзине с избранным
 
@@ -789,6 +788,10 @@ class KnowledgeAgent:
 - "дайджест по категории", "дайджест за период" → [summarize_filt]
 - Любые общие вопросы → [general_question]
 - "отправь дайджест на почту" → [send_digest_email]
+
+ПРИМЕЧАНИЯ:
+ - не пугайся, если в [summarize_filt] пользователь укажет почту, тут отправяется дайджест за определенный период,
+ а для [send_digest_email] за весь период
 
 Состояние: {state}
 Изменения: Новых={len(changes['new'])}, Изменённых={len(changes['modified'])}

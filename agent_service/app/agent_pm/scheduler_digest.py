@@ -9,15 +9,19 @@ from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
 from apscheduler.schedulers.blocking import BlockingScheduler
-from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from .core.agent_provider import get_model
 from .core.botocore_client import OBSWorker
 from .email_sender import EmailSender
-from .core.config import SMTP_HOST, SMTP_PORT, SMTP_LOGIN, SMTP_PASSWORD
+from .core.config import (SMTP_HOST, SMTP_PORT, 
+                          SMTP_LOGIN, SMTP_PASSWORD, 
+                          DIGEST_RECIPIENTS, DIGEST_ENABLED, 
+                          DIGEST_UPLOAD_TO_OBS, DIGEST_SCHEDULE_HOUR,
+                          DIGEST_SCHEDULE_MINUTE, DIGEST_SCHEDULE_DAY_OF_WEEK,
+                          DIGEST_TIMEZONE, DIGEST_RUN_MODE)
 from .summary_period import load_json_metadata, date_filter, build_digest_content, save_digest
-
 
 logger = logging.getLogger("scheduled_digest")
 logging.basicConfig(
@@ -34,10 +38,10 @@ def parse_recipients(raw: Optional[str]) -> List[str]:
 
 
 def send_digest_to_many(
-    recipients: List[str],
-    filename: str,
-    email_sender: Optional[EmailSender] = None,
-    base_download_url: str = "https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/PM/digests/",
+        recipients: List[str],
+        filename: str,
+        email_sender: Optional[EmailSender] = None,
+        base_download_url: str = "https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/PM/digests/",
 ) -> Dict[str, Any]:
     if not recipients:
         return {
@@ -77,7 +81,7 @@ def send_digest_to_many(
         subject="AgentPM: автоматический дайджест за последние 2 недели",
         body_html=body_text,
     )
-
+    
     return {
         "email_requested": True,
         "email_sent": send_result.get("status") == "ok",
@@ -88,11 +92,11 @@ def send_digest_to_many(
 
 
 def create_last_2_weeks_digest(
-    json_path: str,
-    md_folder: str,
-    output_dir: str,
-    llm_client=None,
-    lookback_days: int = 14,
+        json_path: str,
+        md_folder: str,
+        output_dir: str,
+        llm_client=None,
+        lookback_days: int = 14,
 ) -> Dict[str, Any]:
     articles = load_json_metadata(json_path)
     if not articles:
@@ -131,6 +135,7 @@ def create_last_2_weeks_digest(
         "filename": filename,
     }
 
+
 def upload_digest_to_obs(output_path: str, filename: str) -> Dict[str, Any]:
     if not output_path or not filename:
         return {
@@ -157,20 +162,21 @@ def upload_digest_to_obs(output_path: str, filename: str) -> Dict[str, Any]:
             "obs_message": f"Ошибка загрузки в OBS: {exc}",
         }
 
+
 def run_scheduled_digest_job(
-    llm_client=None,
-    email_sender: Optional[EmailSender] = None,
+        llm_client=None,
+        email_sender: Optional[EmailSender] = None,
 ) -> Dict[str, Any]:
     load_dotenv()
-
-    enabled = os.getenv("DIGEST_ENABLED", "true").lower() == "true"
+    logging.info("Вызов функции по таймеру для отправки дайджестов на почту")
+    enabled = DIGEST_ENABLED.lower() == "true"
     if not enabled:
         result = {"status": "skipped", "message": "Автодайджест отключен"}
         logger.info(result)
         return result
 
-    recipients = parse_recipients(os.getenv("DIGEST_RECIPIENTS", ""))
-    lookback_days = int(os.getenv("DIGEST_LOOKBACK_DAYS", "14"))
+    recipients = parse_recipients(DIGEST_RECIPIENTS)
+    lookback_days = int(os.getenv("DIGEST_LOOKBACK_DAYS", 14))
 
     base_download_url = os.getenv(
         "DIGEST_BASE_DOWNLOAD_URL",
@@ -203,8 +209,8 @@ def run_scheduled_digest_job(
     if result.get("status") != "created":
         logger.error("Ошибка создания дайджеста: %s", result)
         return result
-    
-    obs_enabled = os.getenv("DIGEST_UPLOAD_TO_OBS", "true").lower() == "true"
+
+    obs_enabled = DIGEST_UPLOAD_TO_OBS.lower() == "true"
     if obs_enabled:
         obs_result = upload_digest_to_obs(
             output_path=str(result["digest_file"]),
@@ -231,15 +237,15 @@ def run_scheduled_digest_job(
     return result
 
 
-def start_digest_scheduler() -> None:
+async def start_digest_scheduler():
     load_dotenv()
 
-    hour = int(os.getenv("DIGEST_SCHEDULE_HOUR", "9"))
-    minute = int(os.getenv("DIGEST_SCHEDULE_MINUTE", "0"))
-    day_of_week = os.getenv("DIGEST_SCHEDULE_DAY_OF_WEEK", "mon")
-    timezone = os.getenv("DIGEST_TIMEZONE", "Europe/Moscow")
+    hour = int(DIGEST_SCHEDULE_HOUR)
+    minute = int(DIGEST_SCHEDULE_MINUTE)
+    day_of_week = DIGEST_SCHEDULE_DAY_OF_WEEK
+    timezone = DIGEST_TIMEZONE
 
-    scheduler = BackgroundScheduler(timezone=timezone)
+    scheduler = AsyncIOScheduler(timezone=timezone)
     scheduler.add_job(
         run_scheduled_digest_job,
         trigger=CronTrigger(
@@ -256,30 +262,57 @@ def start_digest_scheduler() -> None:
     )
 
     logger.info(
-        "Планировщик запущен | day_of_week=%s | hour=%s | minute=%s | timezone=%s",
+        "Планировщик запущен (AsyncIO) | day_of_week=%s | hour=%s | minute=%s | timezone=%s",
         day_of_week,
         hour,
         minute,
         timezone,
     )
     scheduler.start()
+    return scheduler
 
-    try:
-        while True:
-            time.sleep(3600)
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Остановка планировщика...")
-        scheduler.shutdown(wait=False)
-        logger.info("Планировщик остановлен")
+from apscheduler.triggers.interval import IntervalTrigger
 
+async def start_interval_digest_scheduler():
+    load_dotenv()
 
+    interval_hours = int(os.getenv("DIGEST_INTERVAL_HOURS", 0))
+    interval_minutes = int(os.getenv("DIGEST_INTERVAL_MINUTES", 0))
+    interval_seconds = int(os.getenv("DIGEST_INTERVAL_SECONDS", 30))
+    timezone = DIGEST_TIMEZONE
+
+    scheduler = AsyncIOScheduler(timezone=timezone)
+    scheduler.add_job(
+        run_scheduled_digest_job,
+        trigger=IntervalTrigger(
+            hours=interval_hours,
+            minutes=interval_minutes,
+            seconds=interval_seconds,
+            timezone=timezone,
+        ),
+        id="interval_digest_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+
+    logger.info(
+        "Планировщик запущен (интервальный) | hours=%s | minutes=%s | seconds=%s | timezone=%s",
+        interval_hours,
+        interval_minutes,
+        interval_seconds,
+        timezone,
+    )
+    scheduler.start()
+    return scheduler
 
 if __name__ == "__main__":
     load_dotenv()
-    run_mode = os.getenv("DIGEST_RUN_MODE", "scheduler").lower()
+    run_mode = DIGEST_RUN_MODE.lower()
 
     if run_mode == "once":
         result = run_scheduled_digest_job()
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
-        start_digest_scheduler()
+        asyncio.run(start_digest_scheduler())

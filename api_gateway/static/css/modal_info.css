@@ -1,0 +1,323 @@
+:root {
+  --bg: #f5f4f0;
+  --surface: #ffffff;
+  --surface2: #f0eeea;
+  --border: rgba(0,0,0,0.09);
+  --border-mid: rgba(0,0,0,0.15);
+  --text: #1a1a18;
+  --text-2: #6b6b66;
+  --text-3: #a8a8a2;
+  --accent: #2c5f8a;
+  --accent-bg: #e8f0f8;
+  --radius: 10px;
+  --radius-sm: 6px;
+}
+
+/* ── Кнопка инфо (вставить в main-header) ── */
+.info-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--surface2);
+  border: 0.5px solid var(--border-mid);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--text-3);
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  flex-shrink: 0;
+}
+.info-btn:hover {
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-color: rgba(44,95,138,0.3);
+}
+.info-btn svg { width: 14px; height: 14px; }
+
+/* ── Оверлей ── */
+.help-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.35);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 600;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s;
+  padding: 20px;
+}
+.help-overlay.active {
+  opacity: 1;
+  pointer-events: all;
+}
+
+/* ── Панель модалки ── */
+.help-panel {
+  width: min(680px, 100%);
+  max-height: 85vh;
+  background: var(--surface);
+  border-radius: 16px;
+  border: 0.5px solid rgba(0,0,0,0.12);
+  box-shadow: 0 24px 64px rgba(0,0,0,0.15);
+  display: flex;
+  flex-direction: column;
+  transform: translateY(24px) scale(0.97);
+  opacity: 0;
+  transition: transform 0.35s cubic-bezier(0.23,1,0.32,1), opacity 0.3s;
+  overflow: hidden;
+}
+.help-overlay.active .help-panel {
+  transform: translateY(0) scale(1);
+  opacity: 1;
+}
+.help-overlay.closing .help-panel {
+  transform: translateY(16px) scale(0.96);
+  opacity: 0;
+}
+
+/* ── Хедер ── */
+.help-header {
+  padding: 18px 22px 16px;
+  border-bottom: 0.5px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+.help-header-left { display: flex; align-items: center; gap: 10px; }
+.help-header-icon {
+  width: 32px; height: 32px;
+  background: var(--accent-bg);
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--accent);
+}
+.help-header-icon svg { width: 16px; height: 16px; }
+.help-title { font-size: 14px; font-weight: 500; color: var(--text); }
+.help-subtitle { font-size: 11px; color: var(--text-3); margin-top: 1px; }
+
+.help-close {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  background: var(--surface2);
+  border: none;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-3);
+  font-size: 14px;
+  transition: background 0.15s, color 0.15s;
+}
+.help-close:hover { background: #e0ddd8; color: var(--text); }
+
+/* ── Тело ── */
+.help-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ── Секция (карточка) ── */
+.help-section {
+  background: var(--surface2);
+  border: 0.5px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.help-section-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 16px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s;
+}
+.help-section-header:hover { background: rgba(0,0,0,0.02); }
+
+.help-section-icon {
+  width: 28px; height: 28px;
+  border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  font-size: 14px;
+}
+.icon-agent { background: #e8f0f8; }
+.icon-search { background: #dff0e8; }
+
+.help-section-title {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+.help-section-count {
+  font-size: 10px;
+  color: var(--text-3);
+  font-family: 'DM Mono', monospace;
+  background: var(--surface);
+  padding: 2px 7px;
+  border-radius: 20px;
+  border: 0.5px solid var(--border);
+}
+
+.help-chevron {
+  width: 16px; height: 16px;
+  color: var(--text-3);
+  transition: transform 0.25s cubic-bezier(0.23,1,0.32,1);
+  flex-shrink: 0;
+}
+.help-section.open .help-chevron { transform: rotate(180deg); }
+
+/* ── Контент секции ── */
+/* ── Контент секции ── */
+.help-section-body {
+  /* Убираем фиксированный max-height для анимации, если хотим нативный скролл внутри секции */
+  /* Но если нужна анимация раскрытия, оставляем max-height, но делаем его достаточно большим */
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.35s cubic-bezier(0.23,1,0.32,1);
+}
+
+.help-section.open .help-section-body {
+  /* Ставим значение с запасом, больше реальной высоты контента */
+  max-height: 80vh;
+}
+
+.help-section-inner {
+  padding: 10px 16px 50px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+
+  /* ВАЖНО: */
+  height: auto; /* Убираем фиксированную высоту */
+  max-height: 60vh; /* Ограничиваем высоту, чтобы появился скролл */
+  overflow-y: auto; /* Включаем вертикальный скролл */
+
+  /* Стилизация скроллбара (опционально, для красоты) */
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-3) transparent;
+}
+
+/* Опционально: стиль скроллбара для Webkit (Chrome, Safari) */
+.help-section-inner::-webkit-scrollbar {
+  width: 6px;
+}
+.help-section-inner::-webkit-scrollbar-track {
+  background: transparent;
+}
+.help-section-inner::-webkit-scrollbar-thumb {
+  background-color: var(--text-3);
+  border-radius: 20px;
+}
+
+/* ── Разделитель ── */
+.help-divider {
+  height: 0.5px;
+  background: var(--border);
+  margin: 0 16px;
+}
+
+/* ── Инструмент / фича ── */
+.help-item {
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 11px 13px;
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 10px;
+  align-items: start;
+}
+
+.help-item-badge {
+  font-size: 9.5px;
+  font-weight: 500;
+  font-family: 'DM Mono', monospace;
+  background: var(--surface2);
+  color: var(--text-2);
+  border: 0.5px solid var(--border-mid);
+  border-radius: 4px;
+  padding: 2px 6px;
+  white-space: nowrap;
+
+  /* Важно для выравнивания */
+  text-align: center;
+  align-self: start;
+  margin-top: 1px; /* Чуть опустить, чтобы было по центру первой строки текста */
+}
+.help-item-badge.blue { background: var(--accent-bg); color: var(--accent); border-color: rgba(44,95,138,0.2); }
+.help-item-badge.green { background: #dff0e8; color: #1a6644; border-color: rgba(26,102,68,0.2); }
+
+.help-item-text { flex: 1; }
+.help-item-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  margin-bottom: 3px;
+}
+.help-item-desc {
+  font-size: 11px;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
+/* ── Картинка-заглушка ── */
+.help-image {
+  width: 100%;
+  border-radius: var(--radius-sm);
+  border: 0.5px solid var(--border);
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+.help-image-placeholder {
+  background: linear-gradient(135deg, #e8f0f8 0%, #dff0e8 100%);
+  height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  font-size: 11px;
+  gap: 6px;
+}
+
+/* ── Тип вставки (tip) ── */
+.help-tip {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 9px 12px;
+  background: var(--accent-bg);
+  border-radius: var(--radius-sm);
+  border: 0.5px solid rgba(44,95,138,0.15);
+}
+.help-tip-icon { font-size: 13px; flex-shrink: 0; margin-top: 1px; }
+.help-tip-text { font-size: 11px; color: #1a3a52; line-height: 1.5; }
+
+/* ── Список фич ── */
+.help-feature-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Demo кнопка */
+.demo-trigger {
+  padding: 8px 16px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.demo-trigger:hover { background: #245079; }

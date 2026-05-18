@@ -160,6 +160,7 @@ class ResearchRepository:
                 tags_json,
                 article.abstract,
                 article.category,
+
             )
 
     async def link_user_article(self, user_id: int, article_id: int):
@@ -202,7 +203,6 @@ class ResearchRepository:
 
         for article in articles:
             try:
-                logging.info(f"{article.tags}, {article.authors}")
                 article_id = await self.upsert_article(article)
                 await self.link_user_article(user_id, article_id)
                 await self.link_request_article(request_id, article_id)

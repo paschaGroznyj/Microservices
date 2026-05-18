@@ -1,8 +1,11 @@
 import asyncio
 import asyncpg
 import bcrypt
-from config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME
+from config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME, FERNET_KEY
 import logging
+from cryptography.fernet import Fernet
+
+fernet = Fernet(FERNET_KEY)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,8 +56,10 @@ class DataBaseUser:
                 id SERIAL PRIMARY KEY,
                 username VARCHAR(50) UNIQUE NOT NULL,
                 password_hash VARCHAR(255) NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                scholar_token VARCHAR(255)
             );
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS scholar_token VARCHAR(255);
             
             CREATE INDEX IF NOT EXISTS ix_users_username ON users(username);
             """
@@ -119,6 +124,36 @@ class DataBaseUser:
             logging.error(f"Юзер {username} уже существует (unique violation)")
             return None
 
+    def _encrypt_token(self, token: str) -> str:
+        return fernet.encrypt(token.encode()).decode()
+
+    def _decrypt_token(self, encrypted: str) -> str:
+        return fernet.decrypt(encrypted.encode()).decode()
+
+    async def set_scholar_token(self, username: str, token: str) -> bool:
+        encrypted = await asyncio.to_thread(self._encrypt_token, token)
+        print(encrypted, len(encrypted))
+        try:
+            async with self.pool.acquire() as conn:
+                result = await conn.execute("""
+                                            UPDATE users
+                                            SET scholar_token = $1
+                                            WHERE username = $2;
+                                            """, encrypted, username)
+                return result.split()[-1] == "1"
+        except Exception as e:
+            logging.error(f"Ошибка при сохранении токена для {username}: {e}")
+            return False
+
+    async def get_scholar_token(self, username: str) -> str | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT scholar_token FROM users WHERE username = $1", username
+            )
+        if row and row["scholar_token"]:
+            return await asyncio.to_thread(self._decrypt_token, row["scholar_token"])
+        return None
+
     def _hash_password(self, password: str) -> str:
         """Синхронная функция для выполнения в executor"""
         salt = bcrypt.gensalt(rounds=BCRYPT_ROUNDS) # Синхронная функция, которая все блокировала
@@ -150,3 +185,87 @@ class DataBaseUser:
 
         logging.error("Не удалось создать гостевого пользователя после 5 попыток")
         return None, None
+
+    async def get_user_stats(self, username: str) -> dict:
+        """Полная статистика пользователя по username"""
+        async with self.pool.acquire() as conn:
+            agent_requests = await conn.fetchval("""
+                                                 SELECT COUNT(c.id)
+                                                 FROM chats c
+                                                          JOIN users u ON u.id = c.username
+                                                 WHERE u.username = $1
+                                                   AND c.is_from_bot = FALSE
+                                                 """, username)
+
+            search_requests = await conn.fetchval("""
+                                                  SELECT COUNT(s_r.id)
+                                                  FROM search_requests s_r
+                                                           JOIN users u ON u.id = s_r.user_id
+                                                  WHERE u.username = $1
+                                                    AND s_r.user_query != 'default'
+                                                  """, username)
+
+            favorites_count = await conn.fetchval("""
+                                                  SELECT COUNT(f.id)
+                                                  FROM favorites f
+                                                           JOIN users u ON u.id = f.user_id
+                                                  WHERE u.username = $1
+                                                  """, username)
+
+            tool_rows = await conn.fetch("""
+                                         SELECT tool_name, COUNT(*) AS cnt
+                                         FROM chats
+                                         WHERE chat_id IN (SELECT DISTINCT chat_id
+                                                           FROM chats
+                                                                    JOIN users ON chats.username = users.id
+                                                           WHERE users.username = $1)
+                                           AND tool_name IS NOT NULL
+                                         GROUP BY tool_name
+                                         ORDER BY cnt DESC
+                                         """, username)
+
+            joined_at = await conn.fetchval("""
+                                            SELECT LEAST(
+                                                           (SELECT MIN(c.created_at)
+                                                            FROM chats c
+                                                                     JOIN users u ON c.username = u.id
+                                                            WHERE u.username = $1),
+                                                           (SELECT MIN(s.created_at)
+                                                            FROM search_requests s
+                                                                     JOIN users u ON s.user_id = u.id
+                                                            WHERE u.username = $1)
+                                                   )
+                                            """, username)
+
+            token = await conn.fetchval("""SELECT scholar_token
+                                                FROM users
+                                                WHERE username = $1
+                                             """, username)
+            token_bool = None
+            if token:
+                token_bool = True
+            # Форматируем для фронта — "янв 2026"
+            MONTHS_RU = {
+                1: "января", 2: "февраля", 3: "марта", 4: "апреля",
+                5: "мая", 6: "июня", 7: "июля", 8: "августа",
+                9: "сентября", 10: "октября", 11: "ноября", 12: "декабря"
+            }
+
+            if joined_at:
+                joined = f"{MONTHS_RU[joined_at.month]} {joined_at.year}"
+            else:
+                from datetime import date
+                today = date.today()
+                joined = f"{MONTHS_RU[today.month]} {today.year}"
+
+            return {
+                "username": username,
+                "joined": joined,
+                "stats":{
+                    "agent_requests": agent_requests or 0,
+                    "search_requests": search_requests or 0,
+                    "favorites_count": favorites_count or 0,
+                    "tools": [{"tool": r["tool_name"], "count": r["cnt"]} for r in tool_rows],
+                    "token_bool": token_bool
+                }
+            }

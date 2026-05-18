@@ -5,3 +5,4 @@ bcrypt
 asyncpg
 python-jose[cryptography]
 python-multipart
+cryptography

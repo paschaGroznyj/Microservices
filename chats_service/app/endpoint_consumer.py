@@ -47,9 +47,10 @@ class DBConsumer:
             chat_id = payload.get("chat_id")
             message = payload.get("message")
             is_from_bot = payload.get("is_from_bot", False)
+            action = payload.get("action")
             logging.info(payload)
             # Сохраняем в БД
-            await self.db.add_message(user_id, message, chat_id, is_from_bot)
+            await self.db.add_message(user_id, message, chat_id, is_from_bot, action)
             logger.info(f"Сообщение сохранено в БД: chat={chat_id}, user={user_id}")
             elapsed = time.perf_counter() - start
             logging.info(f"Message Service. Время чтобы вытащить из кафки и положить в БД = {elapsed:.4f}s")

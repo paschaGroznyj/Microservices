@@ -19,4 +19,5 @@ python-dotenv
 requests
 asyncpg
 PyPDF2
+cryptography
 

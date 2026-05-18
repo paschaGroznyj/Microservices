@@ -15,6 +15,7 @@ import asyncio
 import httpx
 import arxiv
 from datetime import timezone
+from .scholar_api import ScholarClient
 
 import random
 
@@ -39,6 +40,8 @@ class RequestPayload:
     user_name: str
     user_query: str
     request_id: int | None
+    count_search: int
+    token: str
     params: SearchParams
 
 
@@ -53,7 +56,7 @@ class Article:
     tags: List[str]
     abstract: str
     category: Optional[str]
-    source: str = "arxiv"
+    source: str
 
 
 class ArxivLibClient:
@@ -139,6 +142,7 @@ class ArxivLibClient:
             tags=tags,
             abstract=(result.summary or "").strip(),
             category=category,
+            source="arxiv"
         )
 
     def _deduplicate(self, articles: List[Article]) -> List[Article]:
@@ -297,6 +301,7 @@ class ArxivClient:
                     tags=tags,
                     abstract=abstract,
                     category=category,
+                    source="arxiv"
                 )
             )
 
@@ -321,46 +326,176 @@ class ResearchPipeline:
         self.logger = self._setup_logger()
         self.repo = ResearchRepository(db)
         self.arxiv_http = ArxivClient()
-        self.arxiv_lib  = ArxivLibClient()   # новый через библиотеку
+        self.arxiv_lib = ArxivLibClient()
+        self.scholar = ScholarClient()
 
     async def run(self, payload: RequestPayload) -> Dict[str, Any]:
-        self.logger.info(f"user_name={payload.user_name}, keywords={payload.params.keywords}")
+        articles = []
+        sources = []
+        warnings = []
+        # ─────────────────────────────────────────────
+        # Параллельный запуск
+        # ─────────────────────────────────────────────
+        tasks = []
 
-        articles = await asyncio.to_thread(
-            self.arxiv_lib.search,
-            keywords=payload.params.keywords,
-            date_start=payload.params.date_start,
-            date_end=payload.params.date_end,
-            limit=payload.params.limit,
+        # 1. ArXiv (бесплатный/дешевый) — запускаем всегда
+        tasks.append(
+            self.safe_search(
+                name="arxiv",
+                coro=asyncio.to_thread(
+                    self.arxiv_lib.search,
+                    payload.params.keywords,
+                    payload.params.date_start,
+                    payload.params.date_end,
+                    payload.params.limit,
+                ),
+                timeout=20
+            )
         )
-        # try:
-        #     # Сначала пробуем HTTP клиент
-        #     articles = await self.arxiv_http.search(
-        #         keywords=payload.params.keywords,
-        #         date_start=payload.params.date_start,
-        #         date_end=payload.params.date_end,
-        #         limit=payload.params.limit,
-        #     )
-        # except HTTPException as e:
-        #     if e.status_code in (429, 503):
-        #         # Fallback на библиотеку
-        #         self.logger.warning(f"HTTP клиент упал ({e.status_code}), переключаемся на arxiv lib")
-        #         articles = self.arxiv_lib.search(
-        #             keywords=payload.params.keywords,
-        #             date_start=payload.params.date_start,
-        #             date_end=payload.params.date_end,
-        #             limit=payload.params.limit,
-        #         )
-        #     else:
-        #         raise
-        logging.info("Сохраняем статьи в БД")
-        return await self.repo.save_search_results(
+
+        if payload.count_search <= 2 or payload.token:
+            tasks.append(
+                self.safe_search(
+                    name="scholar",
+                    coro=asyncio.to_thread(
+                        self.scholar.search,
+                        payload.params.keywords,
+                        payload.params.date_start,
+                        payload.params.date_end,
+                        payload.params.limit,
+                        payload.token
+                    ),
+                    timeout=10
+                )
+            )
+        else:
+            self.logger.warning(f"Лимит поиска исчерпан ({payload.count_search} > 3). Scholar пропущен.")
+            warnings.append({"source": "scholar", "title": "Превышен лимит запросов",
+                             "message": "Поиск по Scholar недоступен: "
+                                        "превышен лимит бесплатных запросов.\nЧтобы использовать этот источник, "
+                                        "передайте токен в профиле"})
+
+
+        self.logger.info("Запуск поиска по источникам")
+
+        results = await asyncio.gather(*tasks)
+
+        # ─────────────────────────────────────────────
+        # Обработка результатов
+        # ─────────────────────────────────────────────
+
+        for result in results:
+            source_name = result["source"]
+            success = result["success"]
+            source_articles = result["articles"]
+
+            if success:
+                self.logger.info(
+                    f"{source_name} вернул {len(source_articles)} статей"
+                )
+                sources.append({
+                    "source": source_name,
+                    "success": True,
+                    "count": len(source_articles),
+                    "error": None
+                })
+                articles.extend(source_articles)
+
+            else:
+                self.logger.warning(
+                    f"{source_name} упал: {result['error']}"
+                )
+                sources.append({
+                    "source": source_name,
+                    "success": False,
+                    "count": 0,
+                    "error": result["error"]
+                })
+                warnings.append({
+                    "source": source_name,
+                    "message": f"{source_name} временно недоступен",
+                    "title": f"Ошибка: {source_name}"
+                })
+
+        # ─────────────────────────────────────────────
+        # Если вообще ничего не нашли
+        # ─────────────────────────────────────────────
+
+        if not articles:
+            return {
+                "type": "parser",
+                "status": "error",
+                "meta": {
+                    "sources": sources,
+                    "warnings": warnings
+                },
+                "payload": {
+                    "count": 0,
+                    "articles": []
+                },
+                "title": f"Критическая ошибка",
+                "message": "Не удалось получить статьи ни из одного источника"
+            }
+
+        # ─────────────────────────────────────────────
+        # success / partial
+        # ─────────────────────────────────────────────
+        all_success = all(
+            source["success"]
+            for source in sources
+        )
+        status = "success" if all_success else "partial"
+        # ─────────────────────────────────────────────
+        # Сохранение
+        # ─────────────────────────────────────────────
+        saved_payload = await self.repo.save_search_results(
             user_name=payload.user_name,
             user_query=payload.user_query,
             params=payload.params,
             articles=articles,
             request_id=payload.request_id,
         )
+
+        # ─────────────────────────────────────────────
+        # Финальный response
+        # ─────────────────────────────────────────────
+
+        return {
+            "type": "parser",
+            "status": status,
+            "meta": {
+                "sources": sources,
+                "warnings": warnings
+            },
+            "payload": saved_payload
+        }
+
+    async def safe_search(self, name, coro, timeout):
+        try:
+            result = await asyncio.wait_for(
+                coro,
+                timeout=timeout
+            )
+            return {
+                "source": name,
+                "success": True,
+                "articles": result,
+                "error": None
+            }
+        except asyncio.TimeoutError:
+            return {
+                "source": name,
+                "success": False,
+                "articles": [],
+                "error": "timeout"
+            }
+        except Exception as e:
+            return {
+                "source": name,
+                "success": False,
+                "articles": [],
+                "error": str(e)
+            }
 
     def _setup_logger(self) -> logging.Logger:
         logger = logging.getLogger("research_pipeline")
@@ -384,12 +519,14 @@ def build_payload(post_body: Dict[str, Any]) -> RequestPayload:
         user_name=post_body["user_name"],
         user_query=post_body["query"],
         request_id=post_body["request_id"],
+        count_search=post_body["count_search"],
+        token=post_body["token"],
         params=SearchParams(
             keywords=params_raw.get("keywords", []),
             date_start=params_raw.get("date_start"),
             date_end=params_raw.get("date_end"),
             limit=params_raw.get("limit", 20),
-        ),
+        )
     )
 
 

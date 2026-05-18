@@ -79,6 +79,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             "message": response_text.strip(),
             "is_from_bot": True,
             "type_agent": "pm",
+            "action": response['action']
         }
 
         await prod.send_and_wait("chat-messages", value=bot_message)
@@ -246,7 +247,10 @@ async def searching(request: Request):
     data = await request.json()
     logging.info(data)
 
-    request_id = await db.insert_query(username=data["user_name"], query=data["query"])
+    info = await db.insert_query(username=data["user_name"], query=data["query"])
+    request_id = info["request_id"]
+    count_search = info["count_search"]
+    token = info["token"]
     existing_tags, existing_keywords = await asyncio.gather(
         db.get_tags(),
         db.get_keywords()
@@ -273,7 +277,9 @@ async def searching(request: Request):
         "query": data["query"],
         "params": {"keywords": intent["keywords"], "categories": intent["categories"]},
         "request_id": request_id,
-        "search_now": intent["search_now"]
+        "search_now": intent["search_now"],
+        "count_search": count_search,
+        "token": token,
     }
     logging.info(post_body)
     try:
@@ -281,12 +287,11 @@ async def searching(request: Request):
             # 1. Парсим статьи
             response = await client.post(
                 f"{SERVICES['parsers']['url']}/search/articles",
-                json=post_body
+                json=post_body,
+                timeout=60
             )
             if response.status_code == 200:
                 parser_data = response.json()
-                parser_data['type'] = 'parser'
-
                 # 2. Считаем эмбеддинги и ищем релевантные — фоново
                 asyncio.create_task(
                     run_search_and_notify(

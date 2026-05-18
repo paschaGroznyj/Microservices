@@ -107,6 +107,8 @@ services:
       DIGEST_RUN_MODE: ${DIGEST_RUN_MODE}
       DIGEST_UPLOAD_TO_OBS: ${DIGEST_UPLOAD_TO_OBS}
 
+      FERNET_KEY: ${FERNET_KEY}
+
     volumes:
       - ./agent_service/config:/app/config
       - ./agent_service:/app
@@ -174,10 +176,12 @@ services:
      DB_USER: ${DB_USER}
      DB_PASSWORD: ${DB_PASSWORD}
      DB_NAME: ${DB_NAME}
+
+     SCRAPINGDOG_API_KEY: ${SCRAPINGDOG_API_KEY} # Мой ключ по умолчанию для всех
    depends_on:
     - postgres
-#   volumes:
-#     - ./parsers_service:/app
+   volumes:
+     - ./parsers_service:/app
 
 
    restart: unless-stopped
@@ -214,6 +218,8 @@ services:
         DB_USER: ${DB_USER}
         DB_PASSWORD: ${DB_PASSWORD}
         DB_NAME: ${DB_NAME}
+
+        FERNET_KEY: ${FERNET_KEY}
     depends_on:
       - postgres
     volumes:

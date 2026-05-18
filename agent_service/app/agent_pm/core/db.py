@@ -3,7 +3,7 @@ import asyncpg
 import logging
 import os
 
-from .config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME
+from .config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME, FERNET_KEY
 
 logging.basicConfig(
     level=logging.INFO,
@@ -11,6 +11,10 @@ logging.basicConfig(
 )
 
 EMB_DIM = "1024"
+
+from cryptography.fernet import Fernet
+
+fernet = Fernet(FERNET_KEY)
 
 class AgentDB:
     def __init__(self):
@@ -493,15 +497,32 @@ class AgentDB:
 
             return [dict(row) for row in rows]
 
-    async def insert_query(self, username: str, query: str) -> int:
+    def _decrypt_token(self, encrypted: str) -> str:
+        return fernet.decrypt(encrypted.encode()).decode()
+
+    async def insert_query(self, username: str, query: str) -> dict:
         async with self.pool.acquire() as conn:
-            return await conn.fetchval("""
+            request_id =  await conn.fetchval("""
                     INSERT INTO search_requests (user_id, user_query, status)
                     SELECT id, $2, $3
                     FROM users
                     WHERE username = $1
                     RETURNING id
                 """, username, query, 'pending')
+            search_requests = await conn.fetchval("""
+                                                  SELECT COUNT(s_r.id)
+                                                  FROM search_requests s_r
+                                                           JOIN users u ON u.id = s_r.user_id
+                                                  WHERE u.username = $1
+                                                    AND s_r.user_query != 'default'
+                                                  """, username)
+            token = await conn.fetchval(
+                    "SELECT scholar_token FROM users WHERE username = $1", username
+                )
+            if token:
+                token = await asyncio.to_thread(self._decrypt_token, token)
+            return {"request_id": request_id, "count_search": search_requests, "token": token}
+            
 
     async def update_status(self, request_id: int, llm_answer: str):
         async with self.pool.acquire() as conn:

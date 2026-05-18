@@ -114,11 +114,29 @@ function renderCards() {
       <div class="card-authors">${Array.isArray(p.authors) ? p.authors.join(", ") : p.authors}</div>
       <div class="card-date">${p.date_sub}</div>
       <div class="card-footer">
-        <a class="card-link" href="${p.link}" target="_blank">arxiv.org ↗</a>
-      </div>
+          <a class="card-link" href="${p.link}" target="_blank">${sourceLinkLabel(p.source)}</a>
+           ${sourceTag(p.source)}
+        </div>
     </div>
   `}).join("");
 
+}
+
+function sourceTag(source) {
+  const sources = {
+    arxiv:   { label: "arXiv",   cls: "tag-source-arxiv"   },
+    scholar: { label: "Scholar", cls: "tag-source-scholar" },
+  };
+  const s = sources[source] || { label: source || "unknown", cls: "tag-source-arxiv" };
+  return `<span class="tag tag-source ${s.cls}">${s.label}</span>`;
+}
+
+function sourceLinkLabel(source) {
+  const labels = {
+    arxiv:   "arxiv.org ↗",
+    scholar: "scholar ↗",
+  };
+  return labels[source] || "открыть ↗";
 }
 
 function showSkeleton() {
@@ -236,9 +254,9 @@ async function doSearch(isDefault = false, keyword = null) {
             });
         return;
     }
-    console.log('Данные с бэка после парсинга DoSearch', data.articles)
+    console.log('Данные с бэка после парсинга DoSearch', data.payload.articles)
     // currentPapers = data.articles.map(normalizeArticle);
-    currentPapers = data.articles;
+    currentPapers = data.payload.articles;
 
     document.getElementById("results-meta").textContent = currentPapers.length + ' ' + pluralArticles(currentPapers.length);
     renderCards();
@@ -296,17 +314,27 @@ function initUserSocket(username) {
                 duration: 10000
             });
         }
-         if (data.type === 'translate') {
-        showToast({
-            title: "Ошибка перевода",
-            text: "Не удалось перевести аннотацию. Попробуйте позже.",
-            type: "error",
-            duration: 10000
-        });
-        // Возвращаем UI в исходное состояние
-        document.getElementById("results-meta").textContent = "Ошибка загрузки";
+        if (data.type === 'translate') {
+            showToast({
+                title: "Ошибка перевода",
+                text: "Не удалось перевести аннотацию. Попробуйте позже.",
+                type: "error",
+                duration: 10000
+            });
         }
-    };
+        if (data.type === 'parser') {
+            console.log('Прилет предупреждения для токенов', data.type, data.message)
+            showToast({
+                title: data.title,
+                text: data.message,
+                type: "warning",
+                duration: 10000
+            });
+        }
+            // // Возвращаем UI в исходное состояние
+            // document.getElementById("results-meta").textContent = "Ошибка загрузки";
+        }
+
 
     userSocket.onclose = () => {
         // Переподключаемся через 3 сек
@@ -403,7 +431,7 @@ function switchTab(tab) {
   // Обновляем заголовок
   const titleEl = document.getElementById("main-title");
   if (titleEl) {
-      titleEl.textContent = tab === "agent" ? "Agent Process Mining" : "Поиск статей — arXiv";
+      titleEl.textContent = tab === "agent" ? "Agent Process Mining" : "Поиск статей";
   }
 }
 
@@ -641,6 +669,7 @@ function openCard(paper) {
   } else {
     // Показываем оригинал и активную кнопку
     document.getElementById("flip-abstract").textContent = paper.abstract || "Аннотация недоступна.";
+    document.getElementById("flip-link").textContent = 'Ссылка на ' + sourceLinkLabel(paper.source);
      translateBtn.innerHTML = `
     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
       <path d="m10.5 21 5.25-11.25L21 21m-9-3h7.5M3 5.621a48.474 48.474 0 0 1 6-.371m0 0c1.12 0 2.233.038 3.334.114M9 5.25V3m3.334 2.364C11.176 10.658 7.69 15.08 3 17.502m9.334-12.138c.896.061 1.785.147 2.666.257m-4.589 8.495a18.023 18.023 0 0 1-3.827-5.802" />
@@ -846,9 +875,18 @@ function removeFromBasket(id) {
 
 function showToast({ title, text, type = "error", duration = 4000 }) {
   // Убираем предыдущий если есть
-  const existing = document.getElementById("app-toast");
-  if (existing) existing.remove();
-
+  let container = document.getElementById("toast-container");
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "toast-container";
+    container.className = "toast-container";
+    document.body.appendChild(container);
+  }
+  const safeText = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\n/g, "<br>");
   const icons = {
     error:   `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="#ef4444" stroke-width="1.5"/><path d="M8 5v3.5M8 10.5v.5" stroke="#ef4444" stroke-width="1.5" stroke-linecap="round"/></svg>`,
     success: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="#22c55e" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#22c55e" stroke-width="1.5" stroke-linecap="round"/></svg>`,
@@ -865,33 +903,40 @@ function showToast({ title, text, type = "error", duration = 4000 }) {
 
   const toast = document.createElement("div");
   toast.className = `toast ${type}`;
-  toast.id = "app-toast";
+  // toast.id = `toast-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   toast.innerHTML = `
     <div class="toast-icon">${icons[type]}</div>
     <div class="toast-body">
       <div class="toast-title">${title}</div>
-      <div class="toast-text">${text}</div>
+      <div class="toast-text">${safeText}</div>
     </div>
     <button class="toast-close" id="hide-toast">✕</button>
   `;
 
-  document.body.appendChild(toast);
+  container.appendChild(toast);
 
-  // Анимация влёта
+  // Кнопка закрытия
+  toast.querySelector(".toast-close").addEventListener("click", () => {
+    removeSingleToast(toast);
+  });
+
   requestAnimationFrame(() => {
     requestAnimationFrame(() => toast.classList.add("visible"));
   });
 
-  // Автоскрытие
-  toast._timer = setTimeout(() => hideToast(), duration);
+  toast._timer = setTimeout(() => removeSingleToast(toast), duration);
 }
 
-function hideToast() {
-  const toast = document.getElementById("app-toast");
-  if (!toast) return;
+function removeSingleToast(toast) {
   clearTimeout(toast._timer);
   toast.classList.remove("visible");
   setTimeout(() => toast.remove(), 350);
+}
+
+// Оставь hideToast для совместимости если где-то используется
+function hideToast() {
+  const toasts = document.querySelectorAll(".toast");
+  toasts.forEach(t => removeSingleToast(t));
 }
 
 function closeCard() {

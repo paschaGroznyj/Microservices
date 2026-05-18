@@ -152,6 +152,23 @@
   color: var(--accent);
   text-decoration: none;
 }
+
+.tag-source {
+  border-radius: 4px;  /* прямоугольный, не круглый — отличается от тегов категорий */
+  font-size: 9.5px;
+  letter-spacing: 0.03em;
+}
+
+.tag-source-arxiv {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.tag-source-scholar {
+  background: #fff3e0;
+  color: #8a4a00;
+}
+
 .card-link:hover { text-decoration: underline; }
 .card-open {
   padding: 3px 8px;

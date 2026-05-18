@@ -432,7 +432,7 @@ async def tool_digest_basket(db,
     
     rows = await db.get_reviews(user_id)
     articles_data = [dict(row) for row in rows]
-
+    logging.info(articles_data)
     res = await build_user_favorites_review_digest_from_query(
         username=user_id,
         favorites_with_reviews=articles_data,

@@ -86,7 +86,7 @@ class Article:
     tags: List[str]
     abstract: str
     category: Optional[str]
-    source: str = "arxiv"
+    source: str
 
 obs = OBSWorker()
 
@@ -510,6 +510,7 @@ async def search_articles(request: Request):
                     tags=json.loads(article.get('tags_json') or '[]'),
                     abstract=article.get('abstract'),
                     category=article.get('category'),
+                    source=article.get('source'),
                 )
             )
         params = SearchParams(
@@ -518,7 +519,7 @@ async def search_articles(request: Request):
             date_end=data.get("date_end"),
             limit=data.get("limit", 20),
         )
-        await research.save_search_results(
+        saved_articles = await research.save_search_results(
             user_name=data["user_name"],
             user_query=data["query"],
             params=params,
@@ -526,12 +527,19 @@ async def search_articles(request: Request):
             request_id=data["request_id"],
         )
         return {
+            "type": "database",
             "request_id": data["request_id"],
             "user_name": data["user_name"],
             "user_query": data["query"],
-            "count": len(articles),
-            "articles": dataclass_articles,
-            "cached": True
+            "meta": {
+                "warnings": [{"source": "", "message": "Тут могло быть предупреждение поломки db"}]
+            },
+            "payload": {
+                "count": len(articles),
+                "articles": saved_articles['articles'],
+                "cached": True
+            }
+
         }
 
     # Нужно парсить arXiv

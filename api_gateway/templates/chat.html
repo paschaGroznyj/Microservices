@@ -12,6 +12,7 @@
     <link rel="stylesheet" href="/static/css/status_agent.css">
     <link rel="stylesheet" href="/static/css/search_block.css">
     <link rel="stylesheet" href="/static/css/modal_info.css">
+    <link rel="stylesheet" href="/static/css/profile_modal.css">
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.5/dist/purify.min.js"></script>
@@ -75,12 +76,10 @@
                         </div>
                         <!-- Секция с кнопкой новый чат-->
                         <button id="new-chat-btn" class="new-chat-btn">
-                            <div style="display: flex; align-items: center; gap: 12px;">
-                                <svg class="menu-icon" viewBox="0 0 20 20">
+                            <svg class="menu-icon" viewBox="0 0 20 20">
                                     <path d="M10 4V16M4 10H16" stroke="currentColor" stroke-width="1.5"/>
                                 </svg>
                                 <span class="menu-text">Новый чат</span>
-                            </div>
                             <span class="menu-shortcut">Ctrl+Shift+O</span>
                         </button>
                     </div>
@@ -109,7 +108,7 @@
                 </div>
 
                 <div class="profile-section">
-                    <button class="profile-button">
+                    <button class="profile-button" id="profile-btn">
                         <div class="avatar">{{ user.username[0]|upper }}</div>
                         <div class="profile-info">
                             <div class="profile-name">{{ user.username }}</div>
@@ -176,7 +175,7 @@
                       </svg>
 
                   </div>
-                  <div class="cs-title">Поиск статей на arXiv</div>
+                  <div class="cs-title">Поиск статей на arXiv и Scholar</div>
                   <div class="cs-sub">Введите тему — карточки со статьями появятся прямо здесь</div>
                   <div class="cs-form">
                     <input class="cs-input" id="center-input" placeholder="process mining, conformance..."/>
@@ -512,12 +511,110 @@
   </div>
 </div>
 
+<div class="profile-overlay" id="profile-overlay" role="dialog" aria-modal="true" aria-label="Профиль пользователя">
+  <div class="profile-panel" id="profile-panel">
+
+    <div class="profile-header">
+      <div class="profile-header-left">
+        <div class="profile-header-icon">
+          <svg viewBox="0 0 16 16" fill="none">
+            <circle cx="8" cy="5.5" r="2.5" stroke="currentColor" stroke-width="1.3"/>
+            <path d="M2.5 13.5c0-2.76 2.46-5 5.5-5s5.5 2.24 5.5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div>
+          <div class="profile-title">Профиль</div>
+          <div class="profile-subtitle" id="modal-subtitle">Загружается...</div>
+        </div>
+      </div>
+      <button class="profile-close" id="profile-close" aria-label="Закрыть">✕</button>
+    </div>
+
+    <div class="profile-body">
+
+      <div class="profile-hero">
+        <div class="avatar-lg" id="modal-avatar">A<div class="avatar-badge"></div></div>
+        <div class="hero-info">
+          <div class="hero-username" id="modal-username">alex_researcher</div>
+          <div class="hero-name" id="modal-name">Александр Петров</div>
+          <div class="hero-meta">
+            <span class="plan-badge" id="modal-plan">Free</span>
+            <span class="joined-badge" id="modal-joined">с янв 2024</span>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="section-label">Статистика</div>
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-value" id="stat-chats">247</div>
+            <div class="stat-label">Запросов к агенту</div>
+            <div class="stat-sub">за всё время</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="stat-search">89</div>
+            <div class="stat-label">Поисков статей</div>
+            <div class="stat-sub">arXiv + Scholar</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="stat-saved">34</div>
+            <div class="stat-label">В избранном</div>
+            <div class="stat-sub">статей сохранено</div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="section-label">Активность</div>
+        <div class="activity-bar">
+          <div class="bar-list">
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="section-label">API Scholar</div>
+        <div class="token-section">
+          <div class="token-header">
+            <span class="token-title">api.scrapingdog.com</span>
+            <span class="token-status" id="token-status">
+              <span class="token-dot inactive" id="token-dot"></span>
+              <span id="token-status-text">не установлен</span>
+            </span>
+          </div>
+          <div class="token-row">
+            <input class="token-input" type="password" id="token-input"
+               placeholder="xxxxxxxxxxxxxxxxxxxx"
+               maxlength="50"
+               autocomplete="off"/>
+            <button class="token-save" id="token-save-btn">Сохранить</button>
+          </div>
+          <div class="token-hint">Токен используется для поиска через Google Scholar. Хранится локально, не передаётся на сервер без запроса.</div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="profile-footer">
+      <button class="logout-btn" id="logout-btn">
+        <svg viewBox="0 0 16 16" fill="none"><path d="M6 14H3a1 1 0 01-1-1V3a1 1 0 011-1h3M10 11l3-3-3-3M13 8H6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Выйти из аккаунта
+      </button>
+      <span class="version-tag">v1.0.0</span>
+    </div>
+
+  </div>
+</div>
+
+<div class="toast-token" id="toast-token"></div>
 
     <!-- Затемнение фона при открытом меню -->
     <div class="sidebar-overlay" id="sidebar-overlay"></div>
     <script src="/static/js/modalWindow.js"></script>
     <script src="/static/js/mobile.js"></script>
     <script src="/static/js/mode_modal_info.js"></script>
+    <script src="/static/js/profileModal.js"></script>
 
 
     <script type="module" src="/static/js/app.js"></script>

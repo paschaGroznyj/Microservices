@@ -163,6 +163,22 @@ async def logout_user(response: Response):
     response.delete_cookie(key="users_access_token")
     return {'message': 'Пользователь успешно вышел из системы'}
 
+@app.post("/profile/me")
+async def me(request: Request):
+    data = await request.json()
+    username = data['username']
+    logging.info(f"profile_me: {username}")
+    result = await db.get_user_stats(username=username)
+    return result
+
+@app.post("/profile/token")
+async def me(request: Request):
+    data = await request.json()
+    username = data['username']
+    token = data['token']
+    logging.info(f"profile_me: {username}, token: {token}")
+    result = await db.set_scholar_token(username=username, token=token)
+    return result
 # @app.get("/me")
 # async def read_users_me(token: str = Depends(oauth2_scheme)):
 #     try:

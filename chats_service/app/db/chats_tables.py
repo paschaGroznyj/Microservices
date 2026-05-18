@@ -49,29 +49,31 @@ class DataBaseChats:
     async def __init_db(conn):
         await conn.execute("""
                 CREATE TABLE IF NOT EXISTS chats (
-                id SERIAL PRIMARY KEY,
-                username INTEGER NOT NULL,
-                chat_id INTEGER NOT NULL,
-                message_text TEXT,
-                is_from_bot BOOLEAN,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-
+                    id SERIAL PRIMARY KEY,
+                    username INTEGER NOT NULL,
+                    chat_id INTEGER NOT NULL,
+                    message_text TEXT,
+                    is_from_bot BOOLEAN,
+                    tool_name TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            
+            ALTER TABLE chats ADD COLUMN IF NOT EXISTS tool_name TEXT;
             CREATE INDEX IF NOT EXISTS ix_chats_username ON chats(username);
             CREATE INDEX IF NOT EXISTS ix_chats_chat_id ON chats(chat_id);
             """
                            )
-    async def add_message(self, username: int, message: str, chat_id: int, is_from_bot: bool):
+    async def add_message(self, username: int, message: str, chat_id: int, is_from_bot: bool, action: str = None):
         if username is None or chat_id is None:
             logging.warning("Пропущено сообщение: отсутствует user_id или chat_id")
             return None
         try:
             async with self.pool.acquire() as conn:
                await conn.fetchval("""
-                    INSERT INTO chats (username, chat_id, message_text, is_from_bot)
-                    VALUES ($1, $2, $3, $4);
+                    INSERT INTO chats (username, chat_id, message_text, is_from_bot, tool_name)
+                    VALUES ($1, $2, $3, $4, $5);
                 """,
-                username, chat_id, message, is_from_bot)
+                username, chat_id, message, is_from_bot, action)
         except asyncpg.UniqueViolationError:
             logging.error(f"Сообщение не может быть добавлено")
 

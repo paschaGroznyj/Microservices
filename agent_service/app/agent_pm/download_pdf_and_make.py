@@ -22,7 +22,7 @@ async def download_and_parse_pdf(link: str) -> str:
     # Ждем слота в семафоре перед началом скачивания
     async with DOWNLOAD_SEMAPHORE:
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
                 response = await client.get(link, headers=headers)
                 response.raise_for_status()
 

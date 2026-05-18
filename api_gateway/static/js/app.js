@@ -70,6 +70,92 @@ class ChatAppSimple {
 
         // Кнопка "Новый чат"
         document.getElementById('new-chat-btn')?.addEventListener('click', () => this.createNewChat());
+        document.getElementById('profile-button')?.addEventListener('click', () => this.attachProfileHandlers());
+    }
+
+
+    /* ───────────────────────────── */
+/* PROFILE MODAL */
+/* ───────────────────────────── */
+    attachProfileHandlers() {
+
+        const profileButton =
+            document.getElementById('profile-button');
+
+        const overlay =
+            document.getElementById('profile-overlay');
+
+        const closeBtn =
+            document.getElementById('profile-close-btn');
+
+        if (!profileButton || !overlay) return;
+        /* open */
+        profileButton.addEventListener('click', async () => {
+
+            overlay.classList.add('active');
+            /* stub request */
+            try {
+                await fetch('/api/profile/open', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        event: 'profile_open',
+                        timestamp: Date.now()
+                    })
+                });
+
+            } catch (e) {
+                console.log('profile analytics stub');
+            }
+        });
+
+        /* close button */
+        closeBtn?.addEventListener('click', () => {
+            overlay.classList.remove('active');
+        });
+
+        /* overlay close */
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) {
+                overlay.classList.remove('active');
+            }
+        });
+
+        /* ESC */
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                overlay.classList.remove('active');
+            }
+        });
+        /* save token */
+        document
+            .getElementById('save-token-btn')
+            ?.addEventListener('click', async () => {
+                const token =
+                    document.getElementById('scrapingdog-token')?.value;
+                console.log('save token', token);
+                /* gateway stub */
+                try {
+
+                    await fetch('/api/user/api-token', {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            provider: 'scrapingdog',
+                            token
+                        })
+                    });
+
+                } catch (e) {
+                    console.log('token save stub');
+                }
+            });
     }
 
 
@@ -160,13 +246,23 @@ class ChatAppSimple {
             let content = rawContent;
 
             if (isBot) {
-                content = marked.parse(rawContent);
-                if (typeof DOMPurify !== 'undefined') {
-                    content = DOMPurify.sanitize(content);
+                    content = marked.parse(rawContent);
+
+                    if (typeof DOMPurify !== 'undefined') {
+                        content = DOMPurify.sanitize(content);
+                    }
+                    const tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = content;
+                    const links = tempDiv.querySelectorAll('a');
+
+                    links.forEach(link => {
+                        link.setAttribute('target', '_blank');
+                        link.setAttribute('rel', 'noopener noreferrer');
+                    });
+                    content = tempDiv.innerHTML;
+                } else {
+                    content = this.escapeHtml(rawContent);
                 }
-            } else {
-                content = this.escapeHtml(rawContent);
-            }
 
             messageEl.innerHTML = `
                 ${content}
@@ -315,6 +411,7 @@ class ChatAppSimple {
         this.setupUI();
         this.attachInputHandlers();
         this.attachHintActions();
+        this.attachProfileHandlers();
         setTimeout(() => container?.classList.remove('rending'), 200);
     }
 
@@ -517,9 +614,19 @@ class ChatAppSimple {
 
                 if (isBot) {
                     content = marked.parse(rawContent);
+
                     if (typeof DOMPurify !== 'undefined') {
                         content = DOMPurify.sanitize(content);
                     }
+                    const tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = content;
+                    const links = tempDiv.querySelectorAll('a');
+
+                    links.forEach(link => {
+                        link.setAttribute('target', '_blank');
+                        link.setAttribute('rel', 'noopener noreferrer');
+                    });
+                    content = tempDiv.innerHTML;
                 } else {
                     content = this.escapeHtml(rawContent);
                 }

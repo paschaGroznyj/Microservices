@@ -1,6 +1,6 @@
 import json
 import logging
-from fastapi import FastAPI
+from fastapi import FastAPI, Header
 from kafka import KafkaProducer
 from pydantic import BaseModel
 from app.db.chats_tables import DataBaseChats
@@ -136,24 +136,24 @@ async def send_message(chat: ChatMessage):
 
 
 @app.get("/chat/{chat_id}/messages")
-async def get_chat_messages(chat_id: int, limit: int = 1000, offset: int = 0,  username: str = Depends(get_current_user_from_cookie)):
+async def get_chat_messages(chat_id: int, limit: int = 1000, offset: int = 0,  x_user_name: str = Header(..., alias="X-User-Name")):
     try:
-        messages = await db.get_chat_messages(chat_id, username, limit=limit, offset=offset)
+        messages = await db.get_chat_messages(chat_id, x_user_name, limit=limit, offset=offset)
         return {
             "chat_id": chat_id,
             "total": len(messages),
             "messages": messages,
-            "username": username
+            "username": x_user_name
         }
     except Exception as e:
         logging.error(f"Ошибка в эндпоинте: {e}")
         raise HTTPException(status_code=500, detail="Не удалось загрузить историю чата")
 
 @app.get("/user/all/messages")
-async def get_all_user_messages(limit: int = 50, offset: int = 0,  username: str = Depends(get_current_user_from_cookie)):
+async def get_all_user_messages(limit: int = 50, offset: int = 0,  x_user_name: str = Header(..., alias="X-User-Name")):
     try:
         logging.info(f"Лимит по сообщениям для пользователя {limit}")
-        messages = await db.get_all_user_messages(username, limit=limit, offset=offset)
+        messages = await db.get_all_user_messages(x_user_name, limit=limit, offset=offset)
         return {"messages": messages}
     except Exception as e:
         logging.error(f"Ошибка в эндпоинте: {e}")

@@ -530,6 +530,58 @@ async def logout_web(request: Request):
 import json
 from fastapi.responses import Response
 
+@app.post("/api/profile/me")
+async def me(request: Request):
+    user = await get_current_user(request)
+
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    auth_url = SERVICES['auth']['url']
+    try:
+        response = await app.state.http_client.post(
+            f"{auth_url}/profile/me",
+            json={"username": user['username']},
+            timeout=10.0
+        )
+        if response.status_code == 200:
+            logging.info(f'Статистика пользователя: {response.text}')
+            return Response(
+                content=response.content,
+                status_code=200,
+                media_type="application/json"
+            )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Auth service dead: {str(e)}")
+
+@app.post("/api/profile/token")
+async def token(request: Request):
+    """Получение Scholar токена с сохранение в БД"""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    auth_url = SERVICES['auth']['url']
+    data = await request.json()
+    logging.info(f"Прилет токена {data}")
+    logging.info(f"Длина ТОКЕНА {len(data['token'])}")
+    if len(data["token"]) > 50:
+        raise HTTPException(status_code=400, detail="Некорректная длина токена")
+    try:
+        response = await app.state.http_client.post(
+            f"{auth_url}/profile/token",
+            json={"username": user['username'], "token": data["token"]},
+            timeout=5.0
+        )
+        if response.status_code == 200:
+            logging.info(f'Статистика пользователя: {response.text}')
+            return Response(
+                content=response.content,
+                status_code=200,
+                media_type="application/json"
+            )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Auth service dead: {str(e)}")
 
 @app.get("/api/auth/me")
 async def get_current_user_info(request: Request):
@@ -620,10 +672,11 @@ async def notify_user_error(username: str, error_type: str = "error_parser"):
     else:
         logging.warning(f"Нет WS соединения для {username}")
 
-async def notify_user_message(username: str, type_message: str, message: str):
+async def notify_user_message(username: str, type_message: str, message: str, source: str = None, title: str = None):
     ws = user_connections.get(username)
     if ws:
-        await ws.send_json({"type": type_message, "message": message})
+        logging.info(f"Отправили по вебсокету сообщения: {type_message}, {message}")
+        await ws.send_json({"type": type_message, "message": message, "source": source, "title": title})
     else:
         logging.warning(f"Нет WS соединения для {username}")
 
@@ -645,7 +698,7 @@ async def searching(request: Request):
         response = await app.state.http_client.post(
             f"{agent_url}/api/search",
             json=post_body,
-            timeout=30.0
+            timeout=60.0
         )
         """
         С парсера
@@ -666,7 +719,6 @@ async def searching(request: Request):
         """
         if response.status_code == 200:
             result = response.json()
-
             if result.get("type") == "agent":
                 await notify_user_message(data['username'], type_message=result.get("type"), message=result['message'])
             # Агент вернул ошибку парсера внутри 200
@@ -675,7 +727,25 @@ async def searching(request: Request):
             if result.get("type") == "error_parser":
                 await notify_user_error(data['username'])
                 raise HTTPException(status_code=502, detail="Parser internal error")
+            logging.info(result.get("type"))
+            if result.get("type") == "parser":
+                meta = result.get("meta", {})
+                logging.info(meta)
+                warnings_list = meta.get("warnings", [])
 
+                if warnings_list:
+                    for warning in warnings_list:
+                        warning_text = warning.get("message", "Неизвестная ошибка")
+                        source = warning.get("source", "Неизвестный источник")
+                        await notify_user_message(
+                            data['username'],
+                            type_message=result.get("type"),
+                            message=warning_text,
+                            source=source,
+                            title=warning.get("title")
+                        )
+                else:
+                    pass
             return Response(
                 content=response.content,
                 status_code=200,
@@ -754,7 +824,7 @@ async def searching_default(request: Request):
         "query": "default",
         "params": {
             "keywords": [data['key_word']],
-            "limit": 33
+            "limit": 10
         },
         "request_id": None,
         "search_now": False
@@ -770,7 +840,6 @@ async def searching_default(request: Request):
             timeout=30.0
         )
         if response.status_code == 200:
-            # logging.info(f"Смотрим ЧТО прилетело с парсера: {response.text}")
             return Response(
                 content=response.content,
                 status_code=200,

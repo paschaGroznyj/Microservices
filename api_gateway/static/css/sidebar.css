@@ -147,26 +147,30 @@
 }
 
 .sb-header {
-  padding: 0px 14px 10px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   border-bottom: 0.5px solid var(--border);
 }
 
 /* Пункты меню */
 .menu-item,
 .new-chat-btn {
+  margin: 0;
   width: 100%;
-  padding: 7px 10px;
+  padding: 7px 9px;
   background: var(--surface);
-  border: 0.5px solid var(--border-mid);
+  border: 0.5px solid transparent;
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  font-size: 12.5px;
   font-family: inherit;
-  color: var(--text);
+  color: var(--text-2);
   cursor: pointer;
   text-align: left;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 .menu-item:hover,
 .new-chat-btn:hover { background: #e8e6e1; }
@@ -388,11 +392,11 @@
 }
 
 /* Кнопка нового чата - особый стиль */
-.new-chat-btn {
-  justify-content: space-between;
-  width: calc(100% - 12px);
-  margin: 2px 6px;
-}
+/*.new-chat-btn {*/
+/*  justify-content: space-between;*/
+/*  width: calc(100% - 12px);*/
+/*  margin: 2px 6px;*/
+/*}*/
 
 /* Стили для загрузки чатов */
 .loading-chats {

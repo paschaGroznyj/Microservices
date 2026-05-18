@@ -23,7 +23,11 @@
   --theme-user-msg-text: #0d0d0d;
   --theme-submit-btn-bg: #000000;
   --theme-submit-btn-text: #ffffff;
-  --font-anthropic-serif: "anthropicSerif", "anthropicSerif Fallback", Georgia, Times New Roman, Times, serif;
+  /*--font-anthropic-serif: "anthropicSerif", "anthropicSerif Fallback", Georgia, Times New Roman, Times, serif;*/
+--font-anthropic-sans: "Anthropic Sans", system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+--font-anthropic-serif: "Anthropic Serif", Georgia, "Arial Hebrew", "Noto Sans Hebrew", "Times New Roman", Times, "Hiragino Sans", "Yu Gothic", Meiryo, "Noto Sans CJK JP", "PingFang TC", "Microsoft JhengHei", "Noto Sans CJK TC", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans CJK KR", serif;
+--font-anthropic-mono: "Anthropic Mono", ui-monospace, monospace;
+--font-open-dyslexic: "OpenDyslexic", "Comic Sans MS", ui-serif, serif;
 }
 
 /* Темная тема */
@@ -200,7 +204,7 @@ html, body {
   word-break: break-word;
   width: fit-content;
   margin-top: 8px;
-  font-family: inherit;
+  font-family: var(--font-anthropic-sans);
 }
 
 /* Сообщение ассистента (без облака) */
@@ -211,6 +215,7 @@ html, body {
   margin: 16px 0;
   color: var(--text-primary);
   line-height: 1.6;
+  font-family: var(--font-anthropic-serif);
 }
 
 /* Форматирование текста ассистента */
@@ -980,27 +985,6 @@ message-input-wrapper,
    GLOW
    ========================================================= */
 
-.chat-start-screen::before {
-    content: '';
-
-    position: absolute;
-
-    width: 460px;
-    height: 460px;
-
-    background: radial-gradient(
-        circle,
-        rgba(125, 211, 252, 0.08),
-        transparent 70%
-    );
-
-    filter: blur(40px);
-
-    animation:
-        glowFloat 10s ease-in-out infinite;
-
-    z-index: 0;
-}
 
 /* =========================================================
    ANIMATIONS

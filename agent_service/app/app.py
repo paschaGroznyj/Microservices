@@ -354,6 +354,14 @@ async def run_search_and_notify(user_name: str, request_id: int):
     except Exception as e:
         logging.error(f"Background search failed: {e}")
 
+@app.post("/make_style_report")
+async def make_style_report(request: Request):
+    data =  await request.json()
+    style = data["style"]
+    text = data["text"]
+    return await make_report(text=text, style=style)
+
+
 @app.get("/health")
 async def health():
     status = "ok" if consumer_alive else "error"
@@ -477,6 +485,38 @@ def parse_user_intent(user_query: str, existing_tags: list[str], keywords: list[
         search_now=data.get("search_now", True),
         chat_response=data.get("chat_response"),
     ).model_dump()
+
+async def make_report(text: str, style: str):
+    system_prompt = f"""Ты помощник, который переформулирует пользовательские отзывы.
+
+    Стиль переформулирования: {style}
+
+    Правила:
+    - Не увеличивай объём текста, опирайся только на исходный отзыв
+    - Сохраняй смысл, меняй только подачу под стиль
+    - Определи категорию отзыва в одно слово, например: Идея, Баг, Проблема, Респект или другие
+
+    Ответь СТРОГО в формате JSON, без markdown, без пояснений:
+    {{
+    "category": "твоя категория", 
+    "text": "переформулированный отзыв"
+    }}"""
+
+    response = agent.gigachat.invoke([
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=text),
+    ])
+    logging.info(response.content)
+    try:
+        data = json.loads(response.content)
+    except Exception as e:
+        logging.info(f"Не удалось распарсить JSON — AGENT SERVICE, {e}")
+        data = {
+            "category": "",
+            "text": text,
+        }
+
+    return data
 
 if __name__ == "__main__":
     # threading.Thread(target=kafka_consumer, daemon=True).start() # Поднятие консьюмера

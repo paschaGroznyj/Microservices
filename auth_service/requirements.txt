@@ -6,3 +6,4 @@ asyncpg
 python-jose[cryptography]
 python-multipart
 cryptography
+httpx

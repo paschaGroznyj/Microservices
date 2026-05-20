@@ -6,8 +6,9 @@ from fastapi import FastAPI, Depends, HTTPException, Request, status, APIRouter
 from fastapi.responses import Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from users_tables import DataBaseUser
-from config import SECRET_KEY, ALGORITHM
+from config import SECRET_KEY, ALGORITHM, PORT_PM_AGENT
 from datetime import datetime, timedelta, timezone
+import httpx
 
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 BASE_DIR = Path(__file__).parent
@@ -20,6 +21,14 @@ service_auth_alive = False
 router = APIRouter(prefix='/auth', tags=['Auth'])
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+
+SERVICES = {
+    "agent_service": {
+        "url": f"http://agent_service:{PORT_PM_AGENT}",
+        "health_endpoint": "/health",
+    }
+}
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -179,6 +188,78 @@ async def me(request: Request):
     logging.info(f"profile_me: {username}, token: {token}")
     result = await db.set_scholar_token(username=username, token=token)
     return result
+
+@app.post("/feedback")
+async def feedback(request: Request):
+    data = await request.json()
+    logging.info(data)
+
+    user_id = int(data['user_id'])
+    username = data['username']
+    style = data['vibe_style']
+    original_text = data['text']
+    use_agent = data['use_agent']
+    original_category = data['category']
+    llm_text = None
+    llm_category = None
+
+
+    agent_url = SERVICES['agent_service']['url']
+    if use_agent:
+        post_data = {"style": style, "text": original_text}
+        # Отправляем текст для преобразования отзыва
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(
+                    f"{agent_url}/make_style_report",
+                    json=post_data,
+                    timeout=30.0
+                )
+                if response.status_code == 200:
+                    result = response.json()
+                    llm_text = result['text']
+                    llm_category = result['category']
+            except httpx.RequestError as e:
+                raise HTTPException(status_code=502, detail=f"Agent service unreachable: {str(e)}")
+
+
+
+    result = await db.save_feedback(user_id=user_id, username=username, style=style,
+                                    original_text=original_text, original_category=original_category,
+                                    llm_text=llm_text, llm_category=llm_category)
+    result = dict(result)
+    # Добавим атрибуты для рендеринга на фронте, автора добавим на gateway
+    result["text"] = llm_text if llm_text else original_text
+    result["category"] = llm_category if llm_category else original_category
+    logging.info(f"result: {result}")
+    return result
+
+
+@app.get("/feedback")
+async def get_feedback(request: Request):
+    """
+    Получение списка отзывов.
+    Доступно только авторизованным пользователям (опционально, можно сделать публичным)
+    """
+    # Если нужно ограничить доступ, раскомментируйте проверку:
+    # user = await get_current_user(request)
+    # if not user:
+    #     raise HTTPException(status_code=401, detail="Not authenticated")
+
+    try:
+        # Получаем последние 50 отзывов
+        result = await db.get_feedbacks(limit=50)
+        feedbacks_list = result["result"]
+        count = result["count_reports"]
+        return {
+            "status": "ok",
+            "count": count,
+            "feedbacks": feedbacks_list
+        }
+    except Exception as e:
+        logging.error(f"Error fetching feedbacks: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
 # @app.get("/me")
 # async def read_users_me(token: str = Depends(oauth2_scheme)):
 #     try:

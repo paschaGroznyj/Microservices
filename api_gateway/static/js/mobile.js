@@ -2,8 +2,11 @@ function initMobileMenu() {
     const sidebar = document.querySelector('.sidebar');
     const overlay = document.getElementById('sidebar-overlay');
     const toggleBtn = document.getElementById('mobile-menu-toggle');
-    const menuToggle = document.getElementById('menu-toggle'); // кнопка в сайдбаре
 
+    if (!sidebar || !overlay || !toggleBtn) { // просто !toggleBtn
+        console.warn('initMobileMenu: не найдены элементы', { sidebar, overlay, toggleBtn });
+        return;
+    }
     // Функция открытия/закрытия
     const toggleSidebar = (open) => {
         sidebar.classList.toggle('open', open);
@@ -12,10 +15,22 @@ function initMobileMenu() {
     };
 
     // Клик по гамбургеру
-    toggleBtn?.addEventListener('click', (e) => {
-        e.stopPropagation();
-        toggleSidebar(!sidebar.classList.contains('open'));
-    });
+   if (toggleBtn) {
+        toggleBtn.addEventListener("click", (e) => {
+            console.log('Регистриуем клик по гамбе')
+            e.stopPropagation();
+            toggleSidebar(!sidebar.classList.contains('open'));
+        });
+    }
+
+    //
+    // document.querySelectorAll('.mobile-menu-toggle').forEach(item => {
+    //     item.addEventListener('click', (e) => {
+    //         console.log('Регистриуем клик по гамбе')
+    //         e.stopPropagation();
+    //         toggleSidebar(!sidebar.classList.contains('open'));
+    //     });
+    // });
 
     // Клик по оверлею — закрыть
     overlay?.addEventListener('click', () => {

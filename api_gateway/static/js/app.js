@@ -22,7 +22,8 @@ class ChatAppSimple {
         // Загружаем интерфейс чата
         // this.setupUI();
         await this.loadChats();
-
+        await loadFeedbacks()
+        initMobileMenu(); // Вызовется только тогда, когда страница полностью будет загружена
         await this.renderMessageInput();
     }
 

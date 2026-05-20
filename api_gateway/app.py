@@ -442,80 +442,6 @@ async def register_web(
             status_code=400
         )
 
-    # except Exception as e:
-    #     logger.error(f"Ошибка: {e}")
-    #     return templates.TemplateResponse(
-    #         "register.html",
-    #         {"request": request, "error": "Сервис недоступен"},
-    #         status_code=500
-    #     )
-
-# @app.post("/register-web")
-# async def register_web(
-#         request: Request,
-#         username: str = Form(...),
-#         password: str = Form(...)
-# ):
-#     auth_url = SERVICES['auth']['url']
-#     async with httpx.AsyncClient(timeout=30.0) as client:
-#         try:
-#             # Регистрация
-#             response = await client.post(
-#                 f"{auth_url}/register",
-#                 data={"username": username, "password": password},
-#                 timeout=30.0
-#             )
-#             if response.status_code == 200:
-#                 # После регистрации сразу логиним
-#                 login_response = await client.post(
-#                     f"{auth_url}/login",
-#                     data={"username": username, "password": password},
-#                     timeout=30.0
-#                 )
-#                 if login_response.status_code == 200:
-#                     login_data = login_response.json()
-#                     token = login_data.get("access_token")
-#                     resp = RedirectResponse(url="/", status_code=303)
-#                     resp.set_cookie(
-#                         key="users_access_token",
-#                         value=token,
-#                         httponly=True,
-#                         max_age=3600,
-#                         secure=False
-#                     )
-#                     return resp
-#
-#             # Ошибка регистрации
-#             try:
-#                 error_data = response.json()
-#                 error_msg = error_data.get("detail", "Ошибка регистрации")
-#             except:
-#                 error_msg = response.text or "Ошибка регистрации"
-#
-#             logger.error(f"Ошибка регистрации: {error_msg}")
-#
-#             return templates.TemplateResponse(
-#                 "register.html",
-#                 {
-#                     "request": request,
-#                     "error": error_msg
-#                 },
-#                 status_code=400
-#             )
-#
-#         except Exception as e:
-#             logger.error(f"Неожиданная ошибка: {type(e).__name__}: {e}")
-#             import traceback
-#             logger.error(f"Traceback: {traceback.format_exc()}")
-#             return templates.TemplateResponse(
-#                 "register.html",
-#                 {
-#                     "request": request,
-#                     "error": f"Внутренняя ошибка сервера: {type(e).__name__}"
-#                 },
-#                 status_code=500
-#             )
-
 
 # Health check с discovery
 @app.get("/health")
@@ -1026,6 +952,66 @@ async def create_new_chat(request: Request):
             status_code=502,
             detail=f"Chats service unreachable: {str(e)}"
         )
+
+# GET /api/feedback — история
+@app.get("/api/feedback")
+async def get_feedbacks(request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    try:
+        response = await app.state.http_client.get(
+            f"{SERVICES['auth']['url']}/feedback"
+        )
+        logging.info(response.json())
+        return Response(
+            content=response.content,
+            status_code=response.status_code,
+            media_type="application/json"
+        )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Auth service unreachable: {str(e)}")
+
+
+# POST /api/feedback — новый отзыв
+@app.post("/api/feedback")
+async def post_feedback(request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    user = await get_current_user(request)
+    data = await request.json()
+    data["user_id"] = user["user_id"]
+    data["username"] = user["username"]
+    agent_url = SERVICES['auth']['url']
+    try:
+        response = await app.state.http_client.post(
+            f"{agent_url}/feedback",
+            json=data,
+            timeout=30.0
+        )
+        if response.status_code == 200:
+            body = response.json()
+            for ws in user_connections.values():
+                if ws:
+                    # Формируем правильную обертку для фронтенда
+                    ws_payload = {
+                        "type": "feedback_new",
+                        "feedback": body
+                    }
+                    try:
+                        await ws.send_json(ws_payload)
+                    except Exception as e:
+                        logging.error(f"WS send error: {e}")
+                        # Если ошибка отправки, возможно сокет мертв, удаляем его
+                        user_connections.pop(user["username"], None)
+
+            return {"ok": True}
+    except httpx.RequestError as e:
+        return {"ok": False}
+
 
 @app.on_event("startup")
 async def startup_event():

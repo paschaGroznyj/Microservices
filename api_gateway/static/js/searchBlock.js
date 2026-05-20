@@ -331,6 +331,11 @@ function initUserSocket(username) {
                 duration: 10000
             });
         }
+
+        if (data.type === 'feedback_new') {
+            console.log('Данные по Вебсокету на фидбэк', data.feedback)
+            onNewFeedback(data.feedback);
+        }
             // // Возвращаем UI в исходное состояние
             // document.getElementById("results-meta").textContent = "Ошибка загрузки";
         }

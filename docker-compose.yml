@@ -211,6 +211,7 @@ services:
       - "8000:8000"
     environment:
         PORT_AUTH_SERVICE: ${PORT_AUTH_SERVICE}
+        PORT_PM_AGENT: ${PORT_PM_AGENT}
         SECRET_KEY: ${SECRET_KEY}
         ALGORITHM: ${ALGORITHM}
         DB_HOST: ${DB_HOST}

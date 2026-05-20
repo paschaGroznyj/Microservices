@@ -29,6 +29,9 @@ function toggleSection(sectionToOpen) {
     // sectionToOpen.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 }
+
+
+
 // ── Слушатели ─────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
 

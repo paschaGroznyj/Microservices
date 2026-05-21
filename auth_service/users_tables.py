@@ -72,6 +72,7 @@ class DataBaseUser:
 
     @staticmethod
     async def __init_db(conn):
+        await conn.execute("SET TIME ZONE '+4'")
         await conn.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,

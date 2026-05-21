@@ -17,9 +17,21 @@ const CATEGORIES = [
 const AGENT_STYLES = [
   { id: "normal",      emoji: "✨", label: "Обычный" },
   { id: "formal",      emoji: "💼", label: "Деловой" },
+
+  // 🇷🇺 Русская классика
+  { id: "pushkin",     emoji: "🪶", label: "Пушкинский" },   // возвышенный, лирический, «душа моя»
+  { id: "esenin",      emoji: "🌾", label: "Есенинский" },   // деревенский, тоскливый, берёзки
+  { id: "chekhov",     emoji: "🎩", label: "Чеховский" },    // краткость, ирония, чуть грустно
+  { id: "dostoevsky",  emoji: "🕯️", label: "Достоевский" }, // страдание, надрыв, философия
+  { id: "tolstoy",     emoji: "📖", label: "Толстовский" },  // эпично, многословно, морализирует
+  { id: "gogol",       emoji: "😈", label: "Гоголевский" },  // абсурд, чертовщина, народный юмор
+
+  // 🎙️ Современное русское
+  { id: "babushka",    emoji: "🧣", label: "Бабушкин" },     // ласково, «касатик», пословицы
+  { id: "gen_z",       emoji: "😎", label: "Зумерский" },    // кринж/краш/вайб
+
+  // Оставил из старых
   { id: "pirate",      emoji: "🏴‍☠️", label: "Пиратский" },
-  { id: "shakespeare", emoji: "🎭", label: "Шекспировский" },
-  { id: "gen_z",       emoji: "😤", label: "Зумерский" },
   { id: "strict",      emoji: "🧐", label: "Строгий" },
 ];
 
@@ -54,10 +66,10 @@ function categoryColor(key) {
   return TAG_PALETTE[map[key] ?? 0];
 }
 
-function formatTime(iso) {
-  const d = new Date(iso);
-  return d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
-}
+// function formatTime(iso) {
+//   const d = new Date(iso);
+//   return d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+// }
 
 
 // ── Рендер категорий ───────────────────────────────────────
@@ -81,6 +93,16 @@ function renderCategories() {
       btn.style.borderColor = "transparent";
     }
     row.insertBefore(btn, divider);
+  });
+}
+
+function formatTime(dateString) {
+  console.log(dateString)
+  const date = new Date(dateString);
+
+  return date.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit'
   });
 }
 
@@ -174,7 +196,7 @@ function getStyleLabelById(styleId) {
 
 // ── Отправить отзыв ────────────────────────────────────────
 async function sendFeedback(text) {
-  const styleLabel = isAgentMode ? getStyleLabelById(currentStyle) : "Обычный";
+  const styleLabel = isAgentMode ? currentStyle : "normal";
   try {
     await fetch("/api/feedback", {
       method: "POST",

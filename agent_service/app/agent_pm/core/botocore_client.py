@@ -7,6 +7,7 @@ import os
 import json
 import re
 from pathlib import Path
+import mimetypes
 
 load_dotenv()
 
@@ -395,12 +396,22 @@ class OBSWorker:
 
     async def _upload_file(self, client, local_path, s3_key):
         """Вспомогательная загрузка одного файла"""
-        with open(local_path, "rb") as f:
-            await client.put_object(
+        path = Path(local_path)
+        data = path.read_bytes()
+        content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        await client.put_object(
                 Bucket=self.open_bucket,
                 Key=s3_key,
-                Body=f
+                Body=data,
+                ContentLength=len(data),
+                ContentType=content_type,
             )
+        # with open(local_path, "rb") as f:
+        #     await client.put_object(
+        #         Bucket=self.open_bucket,
+        #         Key=s3_key,
+        #         Body=f
+        #     )
         print(f"Загружен {s3_key}")
 
     async def ensure_article_downloaded(self, filename: str):

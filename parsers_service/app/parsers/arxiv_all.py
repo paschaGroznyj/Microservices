@@ -349,7 +349,7 @@ class ResearchPipeline:
                     payload.params.date_end,
                     payload.params.limit,
                 ),
-                timeout=20
+                timeout=25
             )
         )
 

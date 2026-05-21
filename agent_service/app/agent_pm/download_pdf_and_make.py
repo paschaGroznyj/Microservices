@@ -14,9 +14,11 @@ async def download_and_parse_pdf(link: str) -> str:
     Использует семафор для контроля параллелизма.
     """
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                      "AppleWebKit/537.36 (KHTML, like Gecko) "
-                      "Chrome/91.0.4472.124 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/pdf,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Referer": link, # Важно для IEEE: откуда мы пришли
+        "Connection": "keep-alive",
     }
 
     # Ждем слота в семафоре перед началом скачивания

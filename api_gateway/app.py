@@ -2,7 +2,7 @@
 from fastapi import FastAPI, HTTPException, Request, Depends, Form, Cookie, Response
 from fastapi.websockets import WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from contextlib import asynccontextmanager
@@ -494,12 +494,10 @@ async def me(request: Request):
             timeout=10.0
         )
         if response.status_code == 200:
-            logging.info(f'Статистика пользователя: {response.text}')
-            return Response(
-                content=response.content,
-                status_code=200,
-                media_type="application/json"
-            )
+            logging.info(f'Статистика пользователя: {type(response.content)}')
+            data = response.json()
+            data["name"] = await get_first_last_name(request)
+            return JSONResponse(content=data, status_code=200)
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Auth service dead: {str(e)}")
 
@@ -512,15 +510,14 @@ async def token(request: Request):
 
     auth_url = SERVICES['auth']['url']
     data = await request.json()
-    logging.info(f"Прилет токена {data}")
-    logging.info(f"Длина ТОКЕНА {len(data['token'])}")
+    logging.info(f"Прилет токена")
     if len(data["token"]) > 50:
         raise HTTPException(status_code=400, detail="Некорректная длина токена")
     try:
         response = await app.state.http_client.post(
             f"{auth_url}/profile/token",
             json={"username": user['username'], "token": data["token"]},
-            timeout=5.0
+            timeout=10.0
         )
         if response.status_code == 200:
             logging.info(f'Статистика пользователя: {response.text}')
@@ -531,6 +528,16 @@ async def token(request: Request):
             )
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Auth service dead: {str(e)}")
+
+async def get_first_last_name(request: Request):
+    raw_name = request.headers.get("X-Authentik-Name")
+    name = "Unknown"
+    if raw_name:
+        try:
+            name = raw_name.encode('latin-1').decode('utf-8')
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            name = raw_name
+    return name
 
 @app.get("/api/auth/me")
 async def get_current_user_info(request: Request):
@@ -543,21 +550,13 @@ async def get_current_user_info(request: Request):
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    raw_name = request.headers.get("X-Authentik-Name")
-    
-    first_name = "Unknown"
-    if raw_name:
-        try:
-            first_name = raw_name.encode('latin-1').decode('utf-8')
-        except (UnicodeEncodeError, UnicodeDecodeError):
-            first_name = raw_name
-    logging.info(f"Пользователь авторизован: {user['username']}, под ФИО: {first_name}")
+    name = await get_first_last_name(request)
 
     response_data = {
         "username": user["username"],
         "user_id": user["user_id"],
         "authenticated": True,
-        "name": first_name
+        "name": name
     }
 
     return Response(

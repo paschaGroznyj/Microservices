@@ -122,6 +122,7 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
+  height: 60px;
 }
 
 /* Шапка с выбором агента или поиска, шапка над чатом */
@@ -130,9 +131,10 @@ body {
   font-weight: 500;
   color: var(--text);
   transition: opacity 0.2s;
+  margin-right: auto;
 }
 .tab-pills {
-  /* margin-left: auto; */
+  margin-right: 0px;
   display: flex;
   gap: 0;
   background: var(--surface2);
@@ -400,13 +402,6 @@ body {
     transition: transform 0.1s;
     flex-shrink: 0;
     padding: 0;
-    
-    /* Если кнопка стоит ПЕРЕД .tab-pills в HTML, 
-       то margin-left: auto у .tab-pills прижмет табы вправо, 
-       а кнопка останется слева от них с отступом gap: 12px из родителя .main-header.
-       
-       Чтобы прижать кнопку ПЛОТНЕЕ к табам, уменьшим отступ справа у кнопки: */
-    margin-left: auto /* Компенсируем часть gap от родителя, если нужно плотнее */
 }
 
 .info-btn-black:hover {

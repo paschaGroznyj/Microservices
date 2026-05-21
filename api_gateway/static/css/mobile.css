@@ -109,12 +109,13 @@
     .message-input-box,
     .message-input-box-start {
         border-radius: 16px;
-        padding: 8px 12px;
     }
 
     #message-input {
         font-size: 16px; /* Предотвращает зум при фокусе на iOS */
     }
+
+    
 }
 
 /* По умолчанию скрыта (десктоп) */
@@ -157,7 +158,6 @@
     
     /* 🔥 ПРОФИЛЬ: базовый отступ + safe-area */
     .profile-section {
-        margin-bottom: calc(16px + env(safe-area-inset-bottom, 40px)); /* 🔥 40px фолбэк для жестов */
         padding: 8px 12px;
         position: relative;
         z-index: 5;
@@ -186,7 +186,7 @@
     .message-input-box,
     .message-input-box-start {
         border-radius: 20px;
-        padding: 10px 12px 10px 16px;
+        padding: 10px 10px 10px 10px;
         min-height: 52px;
     }
     
@@ -195,6 +195,7 @@
         height: 44px;
         min-width: 44px;
         min-height: 44px;
+        margin-bottom: 8px;
     }
     
     .send-icon {
@@ -221,7 +222,7 @@
     .message-input-box-start {
         min-height: 52px;
         border-radius: 20px;
-        padding: 2px 12px 10px 10px;
+        padding: 2px 12px 0px 10px;
     }
     
     /* 🔥 Dynamic viewport height */
@@ -236,4 +237,126 @@
     font-size: 12px;
     padding: 20px 0;
 }
+}
+
+@media (max-width: 490px) {
+
+    .basket-btn {
+        padding: 8px;
+        gap: 0;
+    }
+
+    .basket-btn svg {
+        width: 16px;
+        height: 16px;
+    }
+
+    .basket-btn {
+        font-size: 0;
+    }
+
+    .basket-count {
+        font-size: 10px;
+    }
+}
+
+@media (max-width: 490px) {
+
+    .cs-form {
+        flex-wrap: wrap;
+    }
+    .cs-input{
+        width: 150px;
+    }
+
+}
+
+@media (max-width: 490px) {
+
+    .cs-search-btn {
+        padding: 0 14px;
+        height: 46px;
+    }
+
+    .search-svg {
+        width: 18px;
+        height: 18px;
+    }
+
+}
+
+.cs-hints {
+    display: flex;
+    gap: 8px;
+
+    overflow-x: auto;
+
+    width: 100%;
+
+    padding-bottom: 4px;
+
+    scrollbar-width: none;
+}
+
+.cs-hints::-webkit-scrollbar {
+    display: none;
+}
+
+@media (max-width: 490px) {
+
+    .center-state.searched {
+        padding: 12px 12px 8px 12px;
+    }
+
+}
+
+@media (max-width: 413px) {
+
+    .feedback-panel{
+        height: 400px;
+    }
+
+    .cs-form {
+        flex-wrap: wrap;
+    }
+    .cs-input{
+        width: 100px;
+    }
+
+    .main-header {
+        gap: 6px;
+        padding: 8px 10px;
+    }
+
+    .cs-title{
+         white-space: nowrap;
+    }
+
+    .main-title {
+    font-size: 12px;
+
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+
+    max-width: 110px;
+}
+    .pill {
+        padding: 6px 10px;
+
+        font-size: 11px;
+    }
+    .tab-pills {
+  margin-right: 10px;
+}
+
+.token-save{
+    width: 30px;
+}
+
+.feedback-panel {
+        position: fixed;
+        right: 5px;
+    }
+
 }

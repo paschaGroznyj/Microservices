@@ -157,23 +157,42 @@
 /* Пункты меню */
 .menu-item,
 .new-chat-btn {
-  margin: 0;
-  width: 100%;
-  padding: 7px 9px;
-  background: var(--surface);
-  border: 0.5px solid transparent;
-  border-radius: var(--radius-sm);
-  font-size: 12.5px;
-  font-family: inherit;
-  color: var(--text-2);
-  cursor: pointer;
-  text-align: left;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    width: 100%;
+
+    padding: 7px 9px;
+
+    border-radius: var(--radius-sm);
+
+    font-size: 12.5px;
+    font-family: inherit;
+
+    color: var(--text-2);
+
+    background: transparent;
+    border: 0.5px solid transparent;
+
+    cursor: pointer;
+
+    transition:
+        background 0.12s,
+        border-color 0.12s;
+
+    text-align: left;
 }
 .menu-item:hover,
-.new-chat-btn:hover { background: #e8e6e1; }
+.new-chat-btn:hover {
+    background: rgba(0,0,0,0.04);
+}
+
+.new-chat-btn svg {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+}
 
 .chat-item {
   min-height: 36px;
@@ -290,7 +309,7 @@
   text-align: left;
   font-family: inherit;
   color: var(--text);
-
+  font-size: 12.5px;
 }
 
 /* Шорткаты */
@@ -340,7 +359,6 @@
 /* Профиль внизу - фиксирован */
 .profile-section {
     margin-top: auto;
-    padding: 0 16px;
     flex-shrink: 0;
     border-top: 0.5px solid var(--border);
     display: flex;

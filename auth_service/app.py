@@ -9,6 +9,7 @@ from users_tables import DataBaseUser
 from config import SECRET_KEY, ALGORITHM, PORT_PM_AGENT
 from datetime import datetime, timedelta, timezone
 import httpx
+from datetime import datetime, timezone
 
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 BASE_DIR = Path(__file__).parent
@@ -185,7 +186,6 @@ async def me(request: Request):
     data = await request.json()
     username = data['username']
     token = data['token']
-    logging.info(f"profile_me: {username}, token: {token}")
     result = await db.set_scholar_token(username=username, token=token)
     return result
 
@@ -229,6 +229,11 @@ async def feedback(request: Request):
                                     llm_text=llm_text, llm_category=llm_category)
     result = dict(result)
     # Добавим атрибуты для рендеринга на фронте, автора добавим на gateway
+    result["created_at"] = (
+    result["created_at"]
+    .replace(tzinfo=timezone.utc)
+    .isoformat()
+        )
     result["text"] = llm_text if llm_text else original_text
     result["category"] = llm_category if llm_category else original_category
     logging.info(f"result: {result}")

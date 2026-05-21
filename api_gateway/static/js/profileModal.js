@@ -62,14 +62,14 @@ const getJoinDateFormatted = (dateStringOrObject) => {
 function applyProfileData(data) {
   const username = data?.username || 'pascha';
   const name = data?.name || 'Павел';
-  const plan = data?.plan || 'Free';
+  // const plan = data?.plan || 'Free';
   const joined = data?.joined || getJoinDateFormatted();
   const stats = data?.stats || {chats: 247, search: 89, saved: 34};
 
   document.getElementById('modal-avatar').childNodes[0].nodeValue = username[0].toUpperCase();
   document.getElementById('modal-username').textContent = username;
   document.getElementById('modal-name').textContent = name;
-  document.getElementById('modal-plan').textContent = plan;
+  // document.getElementById('modal-plan').textContent = plan;
   document.getElementById('modal-joined').textContent = 'с ' + joined;
   modalSubtitle.textContent = '@' + username;
 
@@ -139,11 +139,30 @@ document.addEventListener('click', async (e) => {
   if (e.target.closest('#profile-close')) closeProfile();
   if (e.target === overlay) closeProfile();
 
+  // --- Логика сохранения токена ---
   if (e.target.closest('#token-save-btn')) {
+    const btn = e.target.closest('#token-save-btn');
     const val = tokenInput.value.trim();
+    
+    // Валидация
+    if (!val) { 
+        showToast('Введите токен'); 
+        return; 
+    }
+    if (val.length > 50) { 
+        showToast('Токен слишком длинный (макс. 50 символов)'); 
+        return; 
+    }
 
-    if (!val) { showToast('Введите токен'); return; }
-    if (val.length > 50) { showToast('Токен слишком длинный (макс. 50 символов)'); return; }
+    // Блокируем кнопку на время запроса
+    const originalContent = btn.innerHTML;
+    btn.disabled = true;
+    btn.style.opacity = '0.6';
+    btn.innerHTML = `
+    <svg class="animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+        <circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle>
+        <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"></path>
+    </svg>`;
 
     try {
         const res = await fetch('/api/profile/token', {
@@ -152,29 +171,56 @@ document.addEventListener('click', async (e) => {
             body: JSON.stringify({ token: val })
         });
 
-        const data = await res.json();
+
+        let data = {};
+        try {
+            data = await res.json();
+        } catch (parseErr) {
+            console.warn("Response is not JSON", parseErr);
+        }
 
         if (res.ok) {
             localStorage.setItem('scholar_api_token', val);
-            tokenDot.classList.remove('inactive');
-            tokenStatusText.textContent = 'активен';
+            
+            if (tokenDot) tokenDot.classList.remove('inactive');
+            if (tokenStatusText) tokenStatusText.textContent = 'активен';
+  
+            btn.classList.add('success');
             showToast('Токен сохранён');
+
+            setTimeout(() => {
+                btn.classList.remove('success');
+                btn.disabled = false;
+                btn.style.opacity = '1';
+                btn.innerHTML = originalContent;
+            }, 2000);
+
         } else {
-            const errorMsg = data.detail || data.error || 'Неизвестная ошибка';
+            const errorMsg = data.detail || data.error || 'Ошибка сервера';
             showToast(`Ошибка: ${errorMsg}`);
+            btn.disabled = false;
+            btn.style.opacity = '1';
+            btn.innerHTML = originalContent;
         }
     } catch (err) {
+        console.error(err);
         showToast('Нет соединения с сервером');
-    }
-}
-
-  if (e.target.closest('#logout-btn')) {
-    if (confirm('Выйти из аккаунта?')) {
-      localStorage.removeItem('scholar_api_token');
-      showToast('Выход...');
-      setTimeout(() => { window.location.href = '/logout'; }, 800);
+        btn.disabled = false;
+        btn.style.opacity = '1';
+        btn.innerHTML = originalContent;
     }
   }
+
+  if (e.target.closest('#logout-btn')) {
+    if (confirm('Выйти из приложения?')) {
+      localStorage.removeItem('scholar_api_token');
+      showToast('Выход...');
+      setTimeout(() => { 
+          window.location.href = 'https://uva-advanced.ru'; 
+      }, 800);
+    }
+  }
+
 });
 
 document.addEventListener('keydown', (e) => {

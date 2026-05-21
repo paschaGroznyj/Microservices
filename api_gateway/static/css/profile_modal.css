@@ -69,8 +69,53 @@
 .token-input{flex:1;height:32px;background:var(--surface);border:0.5px solid var(--border-mid);border-radius:var(--radius-sm);padding:0 10px;font-size:12px;font-family:'DM Mono',monospace;color:var(--text);outline:none;transition:border-color 0.15s;}
 .token-input:focus{border-color:rgba(44,95,138,0.4);}
 .token-input::placeholder{color:var(--text-3);}
-.token-save{height:32px;padding:0 14px;background:var(--accent);color:white;border:none;border-radius:var(--radius-sm);font-size:12px;font-family:inherit;cursor:pointer;transition:background 0.15s;white-space:nowrap;}
-.token-save:hover{background:#245079;}
+/* Базовые стили кнопки */
+.token-save {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid transparent; /* Резервируем место под бордер */
+    border-radius: 8px;
+    background: var(--bg-secondary, #f3f4f6); /* Или ваш цвет фона инпутов */
+    color: var(--text-3, #9ca3af);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+}
+
+/* При наведении */
+.token-save:hover {
+    background: #e5e7eb;
+    color: var(--text-1, #1f2937); /* Более темный цвет иконки */
+}
+
+/* Активное состояние (нажатие) */
+.token-save:active {
+    transform: scale(0.95);
+}
+
+/* Состояние успеха (добавляется через JS) */
+.token-save.success {
+    background: #dcfce7; /* Светло-зеленый фон */
+    color: black;      /* Зеленая иконка */
+    border-color: black;
+    cursor: default;
+}
+
+/* Анимация иконки внутри */
+.token-save svg {
+    width: 16px; /* Чуть крупнее для читаемости */
+    height: 16px;
+    stroke-width: 2.5; /* Делаем линии жирнее */
+    transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Эффект "пружины" при успехе */
+.token-save.success svg {
+    transform: scale(1.2);
+}
 .token-hint{font-size:10px;color:var(--text-3);margin-top:6px;line-height:1.4;}
 
 .flag-row{display:flex;align-items:center;justify-content:space-between;margin-top:10px;padding-top:10px;border-top:0.5px solid var(--border);}

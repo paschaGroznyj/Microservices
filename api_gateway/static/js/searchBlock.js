@@ -436,7 +436,7 @@ function switchTab(tab) {
   // Обновляем заголовок
   const titleEl = document.getElementById("main-title");
   if (titleEl) {
-      titleEl.textContent = tab === "agent" ? "Agent Process Mining" : "Поиск статей";
+      titleEl.textContent = tab === "agent" ? "Assistant Process Mining" : "Поиск статей";
   }
 }
 

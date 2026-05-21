@@ -5,6 +5,7 @@ class ChatAppSimple {
         this.currentChat = null;
         this.isUIInitialized = false;
         this.ws = null;
+        this.chats = [];
         // this.init();
     }
 
@@ -167,9 +168,8 @@ class ChatAppSimple {
             });
 
             if (response.ok) {
-                const chats = await response.json();
-                console.log(chats.slice(-10))
-                this.renderChats(chats);
+                this.chats = await response.json();
+                this.renderChats(this.chats);
             }
         } catch (error) {
             console.error('Error loading chats:', error);
@@ -179,12 +179,12 @@ class ChatAppSimple {
     renderChats(chats) {
     const chatList = document.getElementById('chat-list');
 
-    chatList.innerHTML = chats.map(chat => `
-        <div class="chat-item ${chat.id === this.currentChat ? 'active' : ''}"
-             data-chat-id="${chat.id}" data-tab="agent">
-            <div class="chat-preview">
-                ${chat.last_message || 'Нет сообщений'}
-            </div>
+    chatList.innerHTML = [...chats].reverse().map(chat => `
+    <div class="chat-item ${chat.id === this.currentChat ? 'active' : ''}"
+         data-chat-id="${chat.id}" data-tab="agent">
+        <div class="chat-preview">
+            ${chat.last_message || 'Нет сообщений'}
+        </div>
         </div>
     `).join('');
 }
@@ -306,7 +306,7 @@ class ChatAppSimple {
         if (!container) return;
 
         // Получаем имя пользователя (из this.currentUser или фолбэк)
-        const username = this.currentUser?.name || 'Пользователь';
+        const username = this.currentUser?.name.split(' ')[0] || 'Пользователь';
 
         if (!this.currentChat) {
             // 🎨 Стартовый экран (нет выбранного чата)
@@ -338,7 +338,7 @@ class ChatAppSimple {
         </h2>
 
         <p class="start-subtitle">
-            Сделаем semantic search for scientific research?
+            Поищем что-нибудь интересное?
         </p>
     </div>
 
@@ -350,7 +350,7 @@ class ChatAppSimple {
                 rows="1"
             ></textarea>
 
-            <button id="send-btn" disabled>
+            <button class="send-btn" id="send-btn" disabled>
                 <svg viewBox="0 0 24 24" class="send-icon">
                     <path d="M12 5v14M5 12l7-7 7 7"
                           stroke="currentColor"
@@ -671,8 +671,15 @@ class ChatAppSimple {
             const data = await response.json();
             const chatId = data.chat_id;
 
-            // 🔁 обновляем список чатов
-            await this.loadChats();
+            const newChat = {
+            id: chatId,
+            last_message: 'Новый чат',
+            timestamp: new Date().toISOString()
+                    };
+
+            this.chats.push(newChat);
+
+            this.renderChats(this.chats);
 
             // 🔓 сразу открываем новый чат
             await this.openChat(chatId);

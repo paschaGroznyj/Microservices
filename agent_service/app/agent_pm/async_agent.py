@@ -113,12 +113,13 @@ async def tool_search_db(
 async def tool_rebuild_categories(
     obs_loader: OBSWorker,
     name_meta_dir: Path,
+    article_path: Path,
 ) -> Dict[str, Any]:
     """Переопределение категорий в метаданных."""
     await obs_loader.download_metadata()
 
     json_file = name_meta_dir / "metadata.json"
-    updater = MetadataUpdater(metadata_file=json_file, max_retries=1, retry_delay=30)
+    updater = MetadataUpdater(metadata_file=json_file, articles_path=article_path, max_retries=1, retry_delay=30)
     message = await asyncio.to_thread(updater.run)
     await obs_loader.put_json()
 
@@ -128,7 +129,7 @@ async def tool_rebuild_categories(
 async def tool_general_question(agent_answer: str) -> Dict[str, Any]:
     """Форматирование ответа на общий вопрос."""
     instruction_link = (
-        "https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/instructions/agent_commands.html"
+        "https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/instructions/help.html"
     )
     text = re.sub(r"\s*\[.*?\]\s*", "", agent_answer)
     match = re.search(r"\{[^{}]*\}", text, re.DOTALL)
@@ -789,6 +790,10 @@ class KnowledgeAgent:
 - Любые общие вопросы → [general_question]
 - "отправь дайджест на почту" → [send_digest_email]
 
+ФОРМАТ ОТВЕТА (СТРОГО СОБЛЮДАТЬ):
+1. Сначала напиши краткий, вежливый ответ пользователю на его вопрос (на русском языке).
+2. Затем, с новой строки, выведи JSON-блок с выбором инструмента.
+
 ПРИМЕЧАНИЯ:
  - не пугайся, если в [summarize_filt] пользователь укажет почту, тут отправяется дайджест за определенный период,
  а для [send_digest_email] за весь период
@@ -807,7 +812,7 @@ class KnowledgeAgent:
         try:
             messages = [SystemMessage(content=prompt)]
             response = await asyncio.to_thread(self.gigachat.invoke, messages)
-
+            logging.info(f"Ответ GigaChat: [НАЧАЛО] {response.content} [КОНЕЦ]")
             action = None
             for attempt in range(3):
                 try:
@@ -872,7 +877,7 @@ class KnowledgeAgent:
 
                 case "rebuild_categories":
                     await self._send_status("🏗️ Перестраиваю категории...", request_id)
-                    return await tool_rebuild_categories(self.obs_loader, self.name_meta_dir)
+                    return await tool_rebuild_categories(self.obs_loader, self.name_meta_dir, self.articles_path)
 
                 case "general_question":
                     await self._send_status("💬 Формирую ответ на вопрос...", request_id)

@@ -823,7 +823,7 @@ async def send_message(request: Request):
     pending_requests[request_id] = data["chat_id"]
 
     data["user_id"] = user["user_id"]
-    data["type_agent"] = "pm" # О Великий gateway
+    data["type_agent"] = data.get("type_agent", "pm") # О Великий gateway
     data["request_id"] = request_id
     logger.info(f"Что летит при отправке сообщений {data['chat_id']}, {data['message']}")
 

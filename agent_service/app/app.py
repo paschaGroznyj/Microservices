@@ -17,7 +17,7 @@ from agent_pm.summary_period import extract_json
 import asyncio
 from httpx import AsyncClient
 # from agent_pm.pm_parser.arxiv_parser import ARXIVParser
-from agent_pm.core.config import KAFKA_BROKER, PORT_PM_AGENT, PORT_PARSERS_SERVICE, PORT_GATEWAY_PORT
+from agent_pm.core.config import KAFKA_BROKER, PORT_PM_AGENT, PORT_PARSERS_SERVICE, PORT_GATEWAY_PORT, OUROBOROS_API_URL
 from agent_pm.search_bot.searcher import searcher_main
 from agent_pm.core.db import AgentDB
 from agent_pm.scheduler_digest import start_digest_scheduler, start_interval_digest_scheduler
@@ -45,6 +45,60 @@ async def get_producer() -> AIOKafkaProducer:
         await producer.start()
     return producer
 
+async def handle_ouroboros_message(payload: dict, prod: AIOKafkaProducer):
+    """Перенаправление сообщения на Ouroboros API и возврат ответа в Kafka."""
+    start = time.perf_counter()
+
+    chat_id = payload.get("chat_id")
+    text = payload.get("message")
+    request_id = payload.get("request_id")
+
+    if not text or chat_id is None:
+        logging.warning(f"Некорректное сообщение для Ouroboros: {payload}")
+        return
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(
+                f"{OUROBOROS_API_URL}/api/command",
+                json={"cmd": text},
+            )
+            if resp.status_code == 200:
+                # Ouroboros отвечает асинхронно через WS, но /api/command
+                # возвращает {ok: true} сразу. Реальный ответ придёт через WS.
+                # Для синхронного ответа шлём заглушку — фронт получит реальный
+                # ответ через WebSocket broadcast.
+                response_text = "⏳ Ouroboros принял запрос, ответ придёт через WebSocket..."
+            else:
+                response_text = f"❌ Ouroboros API вернул {resp.status_code}"
+
+        bot_message = {
+            "user_id": -1,
+            "chat_id": chat_id,
+            "message": response_text,
+            "is_from_bot": True,
+            "type_agent": "ouroboros",
+            "action": "answer"
+        }
+
+        await prod.send_and_wait("chat-messages", value=bot_message)
+        logging.info(f"Ouroboros ответ в чат {chat_id}: {response_text[:50]}...")
+        logging.info(f"Время обработки: {time.perf_counter() - start:.4f}s")
+
+    except Exception as e:
+        logging.error(f"Ошибка обработки сообщения Ouroboros: {e}")
+        # Отправляем сообщение об ошибке в чат
+        error_message = {
+            "user_id": -1,
+            "chat_id": chat_id,
+            "message": f"❌ Ошибка связи с Ouroboros: {str(e)}",
+            "is_from_bot": True,
+            "type_agent": "ouroboros",
+            "action": "error"
+        }
+        await prod.send_and_wait("chat-messages", value=error_message)
+
+
 async def handle_message(payload: dict, prod: AIOKafkaProducer):
     """Обработка одного сообщения — запускается конкурентно."""
     start = time.perf_counter()
@@ -58,10 +112,16 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
 
     if is_from_bot or user_id == -1:
         return
-    if type_agent != "pm":
-        return
     if not text or chat_id is None:
         logging.warning(f"Некорректное сообщение: {payload}")
+        return
+
+    # Маршрутизация: ouroboros → Ouroboros API, pm → KnowledgeAgent
+    if type_agent == "ouroboros":
+        await handle_ouroboros_message(payload, prod)
+        return
+
+    if type_agent != "pm":
         return
 
     try:

@@ -1,9 +1,0 @@
-fastapi
-uvicorn[standard]
-jinja2
-python-jose[cryptography]
-pydantic
-httpx
-dotenv
-python-multipart
-starlette==0.52.1

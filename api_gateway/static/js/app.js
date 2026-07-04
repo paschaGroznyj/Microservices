@@ -82,6 +82,8 @@ class ChatAppSimple {
                 navItem.classList.add('active');
                 this.currentTab = navItem.dataset.tab;
                 console.log('🔄 Активная вкладка:', this.currentTab);
+                // Перерисовываем область ввода при переключении вкладки
+                this.renderMessageInput();
             });
         });
     }
@@ -384,8 +386,33 @@ class ChatAppSimple {
 
 </div>
 `;
+        } else if (this.currentTab === 'ouroboros') {
+            // 🐍 Чат с Ouroboros
+            container.innerHTML = `
+                <div class="message-input-wrapper">
+                    <div class="message-input-box">
+                        <textarea
+                            id="message-input"
+                            placeholder="Напишите Ouroboros..."
+                            rows="1"
+                        ></textarea>
+                        <button id="send-btn" disabled>
+                            <svg viewBox="0 0 24 24" class="send-icon">
+                                <path d="M12 5v14M5 12l7-7 7 7"
+                                      stroke="currentColor"
+                                      stroke-width="2"
+                                      fill="none"
+                                      stroke-linecap="round"
+                                      stroke-linejoin="round"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="input-footer">
+                    🐍 Ouroboros — становящаяся личность, а не просто ИИ
+                </div>
+            `;
         } else {
-            // 💬 Обычный чат (выбрана беседа)
             container.innerHTML = `
                 <div class="message-input-wrapper">
                     <div class="message-input-box">

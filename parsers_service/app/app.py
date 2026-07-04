@@ -17,13 +17,17 @@ import shutil
 import re
 from dataclasses import dataclass
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+import pytz
+
 from core.db import DataBase
 from core.repository import ResearchRepository
 from parsers.arxiv_all import start_search
-# from parsers.scholar_parser import PipelineConfig, ScholarParser
-# from parsers.ieee_parser_pw import IEEEParser
+from parsers.scholar_parser import PipelineConfig, ScholarParser
+from parsers.ieee_parser_pw import IEEEParser
 # from parsers.fluxicon_parser import FluxiconParser
-# from parsers.arxiv_parser import ARXIVParser
+from parsers.arxiv_parser import ARXIVParser
 from parsers.arxiv_api_parser import ArxivClient
 # from parsers.ieee_parser import IEEEParser
 
@@ -133,7 +137,7 @@ def load_last_end_date() -> datetime:
     """Загружает последнюю обработанную дату. Если нет — возвращает сегодня минус 14 дней."""
     if not STATE_FILE.exists():
         # Первый запуск: начать с 14 дней назад
-        return datetime.today() - timedelta(days=14)
+        return datetime.today() - timedelta(days=7)
 
     try:
         logger.info("Читаем State")
@@ -142,7 +146,7 @@ def load_last_end_date() -> datetime:
             return datetime.strptime(data["last_end_date"], "%Y-%m-%d")
     except (json.JSONDecodeError, KeyError, ValueError):
         logger.warning("Некорректный state.json — используем дату по умолчанию")
-        return datetime.today() - timedelta(days=14)
+        return datetime.today() - timedelta(days=7)
 
 
 def save_last_end_date(end_date: datetime):
@@ -286,32 +290,18 @@ async def perform_parsing_cycle():
         parsing_active = True
         logger.info("=== Начало цикла синхронизации ===")
 
-        # # # 1. Скачиваем существующие данные из OBS
         logger.info("Скачивание данных из OBS...")
-        # await obs.download_all_md()
         await obs.download_metadata()
 
-
-        # 2. Определяем диапазон дат
-        last_end = load_last_end_date()
-        logger.info(f'last_end_date: {last_end}')
-        start_date = last_end + timedelta(days=1)
-        end_date = start_date + timedelta(days=13)
-
-        today = datetime.today()
-        if start_date > today:
-            logger.info("Диапазон выходит за пределы текущей даты — пропускаем")
-            return
-
-        end_date = min(end_date, today) # Чтобы не брать дни из будущего
+        moscow_tz = pytz.timezone("Europe/Moscow")
+        today = datetime.now(moscow_tz).replace(tzinfo=None)
+        week_ago = today - timedelta(days=7)
 
         date_range = (
-            start_date.strftime("%Y-%m-%d"),
-            end_date.strftime("%Y-%m-%d")
+            week_ago.strftime("%Y-%m-%d"),
+            today.strftime("%Y-%m-%d")
         )
 
-        #
-        # date_range = ('2026-04-01', '2026-04-25')
         logger.info(f"Парсинг диапазона: {date_range}")
         link_ieee = (
             "https://ieeexplore.ieee.org/search/searchresult.jsp?"
@@ -320,8 +310,8 @@ async def perform_parsing_cycle():
             "refinements=PublicationTopics:Process%20Mining&"
             "ranges=2026_2026_Year&returnFacets=ALL"
         )
-        # cfg = PipelineConfig()
-        # cfg.max_pages = 60
+        cfg = PipelineConfig()
+        cfg.max_pages = 60
 
         params = SearchParams(
             keywords=[],
@@ -331,20 +321,20 @@ async def perform_parsing_cycle():
         )
 
         parsers = [
-            ArxivClient(params=params),
+            # ArxivClient(params=params),
             # ARXIVParser(date_range),
             # # FluxiconParser(date_range), # Почему то умер
             # ScholarParser(date_range=date_range, config=cfg),
             # IEEEParser(link_ieee, date_range=date_range),
         ]
 
+        # parsers = []
+
         pipeline = ParserPipeline(parsers)
         raw_articles = await pipeline.run()
 
         logger.info(f"Обработка {len(raw_articles)} статей...")
         _save_articles_and_metadata(raw_articles)
-
-        save_last_end_date(end_date)
 
         logger.info("Загрузка результатов в OBS...")
         # await obs.upload_all_md()
@@ -379,25 +369,34 @@ async def perform_parsing_cycle():
         parsing_active = False
 
 
-async def scheduled_parsing_loop():
-    while True:
-        # interval = int(SYNC_INTERVAL_SCHEDULER)
-        interval = int(SYNC_INTERVAL_SCHEDULER) * 60 * 24
-        logger.info(f"== Интервал == {interval}")
-        await perform_parsing_cycle()
-        await asyncio.sleep(interval)
+# async def scheduled_parsing_loop():
+#     while True:
+#         # interval = int(SYNC_INTERVAL_SCHEDULER)
+#         interval = int(SYNC_INTERVAL_SCHEDULER) * 60 * 24
+#         logger.info(f"== Интервал == {interval}")
+#         await perform_parsing_cycle()
+#         await asyncio.sleep(interval)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global parsing_active
-    # Startup
-    logger.info("Запуск фоновой задачи парсинга...")
-    # task = asyncio.create_task(scheduled_parsing_loop())
-    parsing_active = True
     await db.init_db_pool()
+
+    moscow_tz = pytz.timezone("Europe/Moscow")
+
+    scheduler = AsyncIOScheduler(timezone=moscow_tz)
+    scheduler.add_job(
+        perform_parsing_cycle,
+        trigger=CronTrigger(day_of_week="wed", hour=10, minute=49, timezone=moscow_tz),
+        id="weekly_parsing",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    scheduler.start()
+    logger.info("Планировщик запущен: парсинг каждый вторник в 10:28 МСК")
+
     yield
-    # Shutdown
-    parsing_active = False
+
+    scheduler.shutdown(wait=False)
     await db.pool.close()
 
 

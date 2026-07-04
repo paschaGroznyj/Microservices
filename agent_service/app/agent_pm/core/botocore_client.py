@@ -8,6 +8,11 @@ import json
 import re
 from pathlib import Path
 import mimetypes
+import unicodedata
+
+from .db import AgentDB
+
+database = AgentDB()
 
 load_dotenv()
 
@@ -33,6 +38,8 @@ class OBSWorker:
     @asynccontextmanager
     async def client(self):
         session = AioSession()
+        # await database.init_db_pool() # Только для теста
+
         async with session.create_client(**self.params) as client:
             yield client
 
@@ -43,30 +50,58 @@ class OBSWorker:
         if start == -1 or end == -1 or end < start:
             raise ValueError("JSON array not found in response")
 
-        return raw[start:end + 1]
+        json_str = raw[start:end + 1]
+        
+        # Фиксим невалидные escape-последовательности типа \e \p и т.д.
+        valid_escapes = {'n', 't', 'r', '"', '\\', '/', 'b', 'f', 'u'}
+        result = []
+        i = 0
+        while i < len(json_str):
+            if json_str[i] == '\\' and i + 1 < len(json_str):
+                next_ch = json_str[i + 1]
+                if next_ch not in valid_escapes:
+                    result.append('\\\\')  # экранируем сам бэкслеш
+                    i += 1
+                    continue
+            result.append(json_str[i])
+            i += 1
+        
+        return "".join(result)
 
     async def download_metadata(self):
 
         local_dir = self.name_meta_dir
+        local_path = local_dir / "metadata.json"
         os.makedirs(local_dir, exist_ok=True)
         print(self.bucket)
-        async with self.client() as client:
-            key = "metadata/metadata.json"
-            local_path = local_dir / "metadata.json"
-            try:
-                response = await client.get_object(Bucket=self.bucket, Key=key)
-            except:
-                print("Файла метаданных нет!")
-                return
-            data = await response["Body"].read()
-            raw_text = data.decode("utf-8", errors="ignore")
+        data = await database.get_metadata_as_json()
+        with open(local_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        # async with self.client() as client:
+        #     key = "metadata/metadata.json"
+        #     local_path = local_dir / "metadata.json"
+        #     try:
+        #         response = await client.get_object(Bucket=self.bucket, Key=key)
+        #     except:
+        #         print("Файла метаданных нет!")
+        #         return
+        #     data = await response["Body"].read()
+        #     raw_text = data.decode("utf-8", errors="ignore")
 
-            clean_json = self.extract_json_array(raw_text)
-            data = json.loads(clean_json, strict=False)
-            with open(local_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+        #     def fix_double_escaped(text: str) -> str:
+        #         while '\\\\' in text:
+        #             text = text.replace('\\\\', '\\')
+        #         return text
 
-            print("Downloaded metadata.json")
+        #     raw_text = data.decode("utf-8", errors="ignore")
+        #     raw_text = fix_double_escaped(raw_text)
+        #     clean_json = self.extract_json_array(raw_text)
+        #     data = json.loads(clean_json, strict=False)
+        #     with open(local_path, "w", encoding="utf-8") as f:
+        #         json.dump(data, f, ensure_ascii=False, indent=2)
+        #     await database.upsert_metadata(data)
+        #     print("Переложили json в БД")
+        #     print("Downloaded metadata.json")
 
 
     def clean_text(self, text: str) -> str:
@@ -222,23 +257,44 @@ class OBSWorker:
             else:
                 print(f"Синхронизация завершена. Скачано файлов: {files_downloaded}")
 
+
+    def _clean_text(self, text: str) -> str:
+        if not text:
+            return text
+        text = "".join(
+            ch for ch in text
+            if unicodedata.category(ch) != 'Cc' or ch in ('\n', '\t')
+        )
+        text = re.sub(r'[\r\n]+[0-9a-f]{4,6}[\r\n]+', ' ', text)
+        text = text.replace('\r', ' ')
+        text = re.sub(r' {3,}', ' ', text)
+        return text.strip()
+
     async def put_json(self):
+        # return # Убрать
         local_path = self.name_meta_dir / "metadata.json"
         with open(local_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        json_bytes = json.dumps(
-            data, ensure_ascii=False, indent=2
-        ).encode("utf-8")
+        # data — это список статей, чистим abstract в каждой
+        for item in data:
+            if item.get('abstract'):
+                item['abstract'] = self._clean_text(item['abstract'])
+        await database.upsert_metadata(data)
+        print("Положили в БД")
+        # json_bytes = json.dumps(
+        #     data, ensure_ascii=False, indent=2
+        # ).encode("utf-8")
 
-        async with self.client() as client:
-            await client.put_object(
-                Bucket=self.bucket,
-                Key="metadata/metadata.json",
-                Body=json_bytes,
-                ContentType="application/json"
-            )
-
+        # async with self.client() as client:
+        #     await client.put_object(
+        #         Bucket=self.bucket,
+        #         Key="metadata/metadata.json",
+        #         Body=json_bytes,
+        #         ContentType="application/json",
+        #         ContentLength=len(json_bytes),
+        #     )
+    
     async def upload_all_md(self):
         async with self.client() as client:
             for filename in os.listdir(self.name_doc_dir):

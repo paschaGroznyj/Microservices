@@ -8,13 +8,13 @@ from PyPDF2 import PdfReader
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from dotenv import load_dotenv
-from langchain.schema import SystemMessage
-from .core.agent_provider import get_model
+from langchain.schema import SystemMessage, HumanMessage
+from .core.agent_provider import get_async_gemini
 from .analyze_article import RelevanceAnalyzer
 
 load_dotenv()
 
-gigachat = get_model()
+gigachat = get_async_gemini()
 
 class MetadataUpdater:
     def __init__(self, metadata_file: Path, articles_path: Path, max_retries: int = 3, retry_delay: int = 10):
@@ -54,7 +54,7 @@ class MetadataUpdater:
             )
         }
 
-    def assess_relevance_and_category(self, item: Dict) -> Dict[str, Any]:
+    async def assess_relevance_and_category(self, item: Dict) -> Dict[str, Any]:
         """
         Оценивает релевантность статьи и возвращает категорию + метрики
         """
@@ -71,7 +71,7 @@ class MetadataUpdater:
         
         try:
             # Анализируем релевантность по тексту абстракта
-            result = self.analyzer.assess_relevance(
+            result = await self.analyzer.assess_relevance(
                 content=abstract, 
                 filename=file_name
             )
@@ -86,7 +86,7 @@ class MetadataUpdater:
                 }
             
             # Если релевантна - определяем категорию
-            category = self.get_category(abstract)
+            category = await self.get_category(abstract)
             return {
                 "is_relevant": True,
                 "overall_score": result["overall_score"],
@@ -102,14 +102,14 @@ class MetadataUpdater:
                 "reasoning": f"Ошибка анализа: {str(e)}"
             }
 
-    def get_category(self, content: str) -> Optional[str]:
+    async def get_category(self, content: str) -> Optional[str]:
         """Запрашивает категорию у LLM с базовой обработкой ответа."""
         categories_str = "\n".join(f"- {cat}" for cat in self.valid_categories)
 
         # Ограничиваем контент, чтобы не тратить токены
         prompt = f"""Выбери СТРОГО ОДНУ категорию из списка. 
 Категории: {categories_str}
-Текст: {content[:1500]}
+Текст: [text]
 Ответ только названием категории."""
 
         try:
@@ -131,7 +131,10 @@ class MetadataUpdater:
             #     )
             # ]
             messages = [SystemMessage(content=prompt)]
-            response_sum = gigachat.invoke(messages)
+            response_sum = await gigachat.ainvoke([
+            SystemMessage(content=prompt),
+            HumanMessage(content=content[:1500]),
+        ])
             # response_sum = self.llm(message)
             raw_content = response_sum.content
 
@@ -150,7 +153,7 @@ class MetadataUpdater:
             print(f"Ошибка запроса к LLM: {e}")
             raise e  # Пробрасываем ошибку выше, чтобы обработать её в цикле retry
 
-    def run(self):
+    async def run(self, rebuild_errors: bool = False):
         if not self.metadata_file.is_file():
             return "Файл с метаданными не найден."
 
@@ -161,11 +164,22 @@ class MetadataUpdater:
             return "Ошибка: Файл metadata.json поврежден."
         self._retry_failed_pdfs(metadata)
 
-        # Находим элементы без категории
-        items_to_process = [
-            item for item in metadata
-            if item.get('category') is None and item.get('abstract')
-        ]
+        # Находим элементы без категории или с ошибкой анализа
+        def _has_analysis_error(item: Dict) -> bool:
+            reasoning = item.get('relevance_reasoning', '')
+            return 'Ошибка анализа' in reasoning
+
+        if rebuild_errors:
+            items_to_process = [
+                item for item in metadata
+                if (_has_analysis_error(item) or item.get('category') is None)
+                and item.get('abstract')
+            ]
+        else:
+            items_to_process = [
+                item for item in metadata
+                if item.get('category') is None and item.get('abstract')
+            ]
 
         if not items_to_process:
             return "Все записи уже имеют категории."
@@ -183,7 +197,7 @@ class MetadataUpdater:
             for i, item in enumerate(items_to_process):
                 title = item.get('title', 'Без названия')[:40]
                 try:
-                    analysis = self.assess_relevance_and_category(item)
+                    analysis = await self.assess_relevance_and_category(item)
                     if analysis["is_relevant"]:
                         item['category'] = analysis["category"]
                         item['relevance_score'] = analysis["overall_score"]
@@ -360,18 +374,18 @@ class MetadataUpdater:
             raise e
 
 
-# Использование
-if __name__ == "__main__":
-    base_dir = Path(__file__).resolve().parent
-    json_file = base_dir / "knowledge_base" / "metadata.json"
+# # Использование
+# if __name__ == "__main__":
+#     base_dir = Path(__file__).resolve().parent
+#     json_file = base_dir / "knowledge_base" / "metadata.json"
 
-    # Создаем экземпляр класса
-    updater = MetadataUpdater(
-        metadata_file=json_file,
-        max_retries=3,  # Количество подходов
-        retry_delay=15  # Пауза между подходами (увеличил до 15 сек для 402 ошибок)
-    )
+#     # Создаем экземпляр класса
+#     updater = MetadataUpdater(
+#         metadata_file=json_file,
+#         max_retries=3,  # Количество подходов
+#         retry_delay=15  # Пауза между подходами (увеличил до 15 сек для 402 ошибок)
+#     )
 
-    result = updater.run()
-    print(result)
+#     result = updater.run()
+#     print(result)
 

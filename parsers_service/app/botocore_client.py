@@ -159,9 +159,10 @@ class OBSWorker:
                 Bucket=self.bucket,
                 Key="metadata/metadata.json",
                 Body=json_bytes,
-                ContentType="application/json"
+                ContentType="application/json",
+                ContentLength=len(json_bytes),  # <-- вот это
             )
-
+            
     async def upload_all_md(self):
         async with self.client() as client:
             for filename in os.listdir(self.name_doc_dir):

@@ -109,6 +109,8 @@ services:
 
       FERNET_KEY: ${FERNET_KEY}
 
+      CLOUD_LLM_ACCESS_KEY: ${CLOUD_LLM_ACCESS_KEY}
+
     volumes:
       - ./agent_service/config:/app/config
       - ./agent_service:/app

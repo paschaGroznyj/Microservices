@@ -11,12 +11,13 @@ from typing import Dict, Any, List, Optional
 import httpx
 from langchain.schema import SystemMessage
 
-from .core.agent_provider import get_model
+from .core.agent_provider import get_model, get_async_gemini
 from .core.botocore_client import OBSWorker
 from .core.config import (
     ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH,
     METADATA_FILE, PORT_GATEWAY_PORT
 )
+from datetime import datetime
 from .digest_email_handler import DigestEmailHandler
 from .monitor import StorageMonitor
 from .summary import SummaryGenerator
@@ -712,7 +713,7 @@ class KnowledgeAgent:
         self.auto_processor = AutoProcessor(
             self.articles_path, self.monitor, self.vector_db, self.summarizer
         )
-        self.gigachat = get_model()
+        self.gigachat = get_async_gemini()
         self.parser = PydanticOutputParser(pydantic_object=AgentAction)
         self.obs_loader = OBSWorker()
         self.email_handler = DigestEmailHandler()
@@ -763,8 +764,10 @@ class KnowledgeAgent:
     async def _analyze(self, user_input: str) -> Dict[str, Any]:
         state = await self.get_state()
         changes = await asyncio.to_thread(self.monitor.get_changes)
-
+        current_datetime = datetime.now().strftime('%d.%m.%Y %H:%M, %A')
         prompt = f"""Ты ИИ-агент по управлению базой знаний.
+
+Текущая дата и время: {current_datetime}
 
 ДОСТУПНЫЕ ИНСТРУМЕНТЫ:
 1. [search_db] - найти документы по запросу  
@@ -812,6 +815,14 @@ class KnowledgeAgent:
         try:
             messages = [SystemMessage(content=prompt)]
             response = await asyncio.to_thread(self.gigachat.invoke, messages)
+            token_usage = dict(response.response_metadata.get("token_usage", {}))
+            prompt_tokens = token_usage.get("prompt_tokens", 0)
+            completion_tokens = token_usage.get("completion_tokens", 0)
+            total_tokens = token_usage.get("total_tokens", 0)
+            precached_tokens = token_usage.get("precached_prompt_tokens", 0)
+            logging.info(f"💵ЗАТРАТЫ НА ВЫБОР ИНСТРУМЕНТА\n"
+            f"prompt={prompt_tokens} cached={precached_tokens} completion_tokens={completion_tokens}\n"
+            f"total={total_tokens}")
             logging.info(f"Ответ GigaChat: [НАЧАЛО] {response.content} [КОНЕЦ]")
             action = None
             for attempt in range(3):

@@ -8,10 +8,10 @@ from pydantic import BaseModel, Field
 from langchain.schema import SystemMessage, HumanMessage
 
 from .core.botocore_client import OBSWorker
-from .core.agent_provider import get_model
+from .core.agent_provider import get_async_gemini
 
 
-llm_client = get_model()
+llm_client = get_async_gemini()
 
 class QueryDateRange(BaseModel):
     start_date: Optional[str] = Field(default=None, description="YYYY-MM-DD")

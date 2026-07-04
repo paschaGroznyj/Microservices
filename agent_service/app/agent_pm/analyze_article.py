@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from typing import Dict, Any
 from datetime import datetime
 import re
-from langchain_core.messages import SystemMessage
+from langchain.schema import SystemMessage, HumanMessage
 
 class RelevanceScore(BaseModel):
     """Pydantic модель для структурированного вывода оценки релевантности"""
@@ -31,7 +31,7 @@ class RelevanceAnalyzer:
         """
         self.manager = llm_manager
     
-    def assess_relevance(self, content: str, filename: str = None) -> Dict[str, Any]:
+    async def assess_relevance(self, content: str, filename: str = None) -> Dict[str, Any]:
         """
         Оценивает релевантность статьи по 4 критериям Process Mining.
         
@@ -42,7 +42,7 @@ class RelevanceAnalyzer:
         Returns:
             dict с полями: status, is_relevant, overall_score, scores, reasoning
         """
-        prompt = SystemMessage(content=f"""Тебе на вход поступает текст статьи из "{filename or 'неизвестный файл'}".
+        system_prompt = """Тебе на вход поступает текст статьи из "{filename or 'неизвестный файл'}".
 
 Оцени релевантность для **Process Mining** по строгим критериям:
 
@@ -80,12 +80,14 @@ class RelevanceAnalyzer:
   "reasoning": "Кратко: 1-упомянут Celonis; 2-event logs; 3-кейс банка..."
 }}
 
-## Текст статьи:
-{content[:3500]}""")
+## Текст статьи:"""
         
         try:
             # Вызов LLM
-            response = self.manager.invoke([prompt])
+            response = await self.manager.ainvoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=content[:3500]),
+        ])
             print("ОТВЕТ", response.content)
             raw_output = response.content.strip()
             

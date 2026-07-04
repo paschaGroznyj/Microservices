@@ -56,3 +56,4 @@ DIGEST_RUN_MODE = os.getenv('DIGEST_RUN_MODE', 'scheduler')
 DIGEST_UPLOAD_TO_OBS = os.getenv('DIGEST_UPLOAD_TO_OBS', 'true')
 
 FERNET_KEY = os.getenv("FERNET_KEY")
+CLOUD_LLM_ACCESS_KEY = os.getenv("CLOUD_LLM_ACCESS_KEY")

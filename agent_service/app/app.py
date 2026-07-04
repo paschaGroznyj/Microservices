@@ -10,7 +10,8 @@ from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from contextlib import asynccontextmanager
-from agent_pm.async_agent import KnowledgeAgent
+# from agent_pm.async_agent import KnowledgeAgent
+from agent_pm.langchain_agent import KnowledgeAgent
 from langchain.schema import HumanMessage, SystemMessage
 from agent_pm.summary_period import extract_json
 import asyncio
@@ -21,6 +22,8 @@ from agent_pm.search_bot.searcher import searcher_main
 from agent_pm.core.db import AgentDB
 from agent_pm.scheduler_digest import start_digest_scheduler, start_interval_digest_scheduler
 
+
+from agent_pm.core.botocore_client import database
 logging.basicConfig(level=logging.INFO)
 
 db = AgentDB()
@@ -147,11 +150,12 @@ async def lifespan(app: FastAPI):
     global agent, digest_scheduler
 
     await db.init_db_pool()
+    await database.init_db_pool() # Для теста
 
     kafka_task = asyncio.create_task(kafka_consumer())
 
     agent = KnowledgeAgent(database=db, skip_startup_autoprocess=False)
-
+    await agent.make_reviews()
     # # Получаем сам объект scheduler, а не таск
     # digest_scheduler = await start_interval_digest_scheduler()
 

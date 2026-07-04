@@ -134,6 +134,24 @@ class DataBase:
                 keyword TEXT NOT NULL UNIQUE,
                 generated_at TIMESTAMP NOT NULL DEFAULT NOW()
             );
+
+            CREATE TABLE IF NOT EXISTS papers_metadata (
+                external_id     TEXT PRIMARY KEY,
+                source          TEXT,
+                title           TEXT,
+                date_sub        DATE,
+                url_article     TEXT,
+                pdf_url         TEXT,
+                authors         JSONB,
+                tags            TEXT[],
+                abstract        TEXT,
+                file_article    TEXT,
+                category        TEXT,
+                relevance_score FLOAT,
+                relevance_reasoning TEXT,
+                is_relevant     BOOLEAN,
+                pdf_downloaded  BOOLEAN
+            );
             
             CREATE INDEX IF NOT EXISTS ix_article_reviews_user_id ON article_reviews(user_id);
                     
@@ -171,3 +189,69 @@ class DataBase:
             ALTER TABLE search_requests ADD COLUMN IF NOT EXISTS error_message TEXT;
             ALTER TABLE articles ADD COLUMN IF NOT EXISTS translate TEXT;
         """)
+
+    async def upsert_metadata(self, records: list[dict]) -> None:
+        """Принимает список записей (бывший JSON-массив) и кладёт в БД"""
+        async with self.pool.acquire() as conn:
+            await conn.executemany("""
+                INSERT INTO papers_metadata (
+                    external_id, source, title, date_sub, url_article,
+                    pdf_url, authors, tags, abstract, file_article,
+                    category, relevance_score, relevance_reasoning,
+                    is_relevant, pdf_downloaded
+                ) VALUES (
+                    $1, $2, $3, $4, $5,
+                    $6, $7, $8, $9, $10,
+                    $11, $12, $13, $14, $15
+                )
+                ON CONFLICT (external_id) DO UPDATE SET
+                    source              = EXCLUDED.source,
+                    title               = EXCLUDED.title,
+                    date_sub            = EXCLUDED.date_sub,
+                    url_article         = EXCLUDED.url_article,
+                    pdf_url             = EXCLUDED.pdf_url,
+                    authors             = EXCLUDED.authors,
+                    tags                = EXCLUDED.tags,
+                    abstract            = EXCLUDED.abstract,
+                    file_article        = EXCLUDED.file_article,
+                    category            = EXCLUDED.category,
+                    relevance_score     = EXCLUDED.relevance_score,
+                    relevance_reasoning = EXCLUDED.relevance_reasoning,
+                    is_relevant         = EXCLUDED.is_relevant,
+                    pdf_downloaded      = EXCLUDED.pdf_downloaded
+            """, [
+                (
+                    r["external_id"],
+                    r.get("source"),
+                    r.get("title"),
+                    r.get("date_sub"),          # asyncpg сам разберёт строку "2025-10-01" как DATE
+                    r.get("url_article"),
+                    r.get("pdf_url"),
+                    json.dumps(r.get("authors", {})),  # JSONB
+                    r.get("tags", []),                  # TEXT[]
+                    r.get("abstract"),
+                    r.get("file_article"),
+                    r.get("category"),
+                    r.get("relevance_score"),
+                    r.get("relevance_reasoning"),
+                    r.get("is_relevant"),
+                    r.get("pdf_downloaded"),
+                )
+                for r in records
+            ])
+
+    async def get_metadata_as_json(self) -> list[dict]:
+        """Возвращает все строки в виде списка словарей — замена старого download_metadata"""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT
+                    external_id, source, title,
+                    date_sub::text AS date_sub,
+                    url_article, pdf_url,
+                    authors, tags, abstract,
+                    file_article, category,
+                    relevance_score, relevance_reasoning,
+                    is_relevant, pdf_downloaded
+                FROM papers_metadata
+            """)
+        return [dict(r) for r in rows]

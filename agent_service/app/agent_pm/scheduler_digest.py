@@ -12,7 +12,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from .core.agent_provider import get_model
+from .core.agent_provider import get_async_gemini
 from .core.botocore_client import OBSWorker
 from .email_sender import EmailSender
 from .core.config import (SMTP_HOST, SMTP_PORT, 
@@ -196,7 +196,7 @@ def run_scheduled_digest_job(
     )
 
     if llm_client is None:
-        llm_client = get_model()
+        llm_client = get_async_gemini()
 
     result = create_last_2_weeks_digest(
         json_path=json_path,

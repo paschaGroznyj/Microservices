@@ -87,7 +87,7 @@ class VectorDBManager:
     def delete_documents(self, file_paths: List[str]):
         self.rebuild_index(file_paths)
 
-    def similarity_search(self, query: str, k: int = 5, threshold: float = 0.7) -> List[Dict[str, Any]]:
+    def similarity_search(self, query: str, k: int = 5, threshold: float = 0.2) -> List[Dict[str, Any]]:
         if not self.vectorstore:
             return []
         docs_with_scores = self.vectorstore.similarity_search_with_relevance_scores(query, k=k * 3)

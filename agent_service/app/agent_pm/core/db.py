@@ -2,6 +2,8 @@ import asyncio
 import asyncpg
 import logging
 import os
+import json
+from datetime import date
 
 from .config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME, FERNET_KEY
 
@@ -15,6 +17,16 @@ EMB_DIM = "1024"
 from cryptography.fernet import Fernet
 
 fernet = Fernet(FERNET_KEY)
+
+def _coerce_tags(val) -> list:
+    if val is None:
+        return []
+    if isinstance(val, list):
+        return val
+    if isinstance(val, str):
+        # "tag1, tag2" -> ["tag1", "tag2"]
+        return [t.strip() for t in val.split(",") if t.strip()]
+    return list(val)
 
 class AgentDB:
     def __init__(self):
@@ -76,6 +88,24 @@ class AgentDB:
                 created_at TIMESTAMP NOT NULL DEFAULT NOW(),
                 updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
                 UNIQUE (article_id, embedding_model)
+            );
+
+            CREATE TABLE IF NOT EXISTS papers_metadata (
+                external_id     TEXT PRIMARY KEY,
+                source          TEXT,
+                title           TEXT,
+                date_sub        DATE,
+                url_article     TEXT,
+                pdf_url         TEXT,
+                authors         JSONB,
+                tags            TEXT[],
+                abstract        TEXT,
+                file_article    TEXT,
+                category        TEXT,
+                relevance_score FLOAT,
+                relevance_reasoning TEXT,
+                is_relevant     BOOLEAN,
+                pdf_downloaded  BOOLEAN
             );
         """)
 
@@ -603,4 +633,70 @@ class AgentDB:
                                    VALUES ($1)
                                    ON CONFLICT (keyword) DO NOTHING
                                    """, [(kw,) for kw in keywords])
+
+    async def upsert_metadata(self, records: list[dict]) -> None:
+        """Принимает список записей (бывший JSON-массив) и кладёт в БД"""
+        async with self.pool.acquire() as conn:
+            await conn.executemany("""
+                INSERT INTO papers_metadata (
+                    external_id, source, title, date_sub, url_article,
+                    pdf_url, authors, tags, abstract, file_article,
+                    category, relevance_score, relevance_reasoning,
+                    is_relevant, pdf_downloaded
+                ) VALUES (
+                    $1, $2, $3, $4, $5,
+                    $6, $7, $8, $9, $10,
+                    $11, $12, $13, $14, $15
+                )
+                ON CONFLICT (external_id) DO UPDATE SET
+                    source              = EXCLUDED.source,
+                    title               = EXCLUDED.title,
+                    date_sub            = EXCLUDED.date_sub,
+                    url_article         = EXCLUDED.url_article,
+                    pdf_url             = EXCLUDED.pdf_url,
+                    authors             = EXCLUDED.authors,
+                    tags                = EXCLUDED.tags,
+                    abstract            = EXCLUDED.abstract,
+                    file_article        = EXCLUDED.file_article,
+                    category            = EXCLUDED.category,
+                    relevance_score     = EXCLUDED.relevance_score,
+                    relevance_reasoning = EXCLUDED.relevance_reasoning,
+                    is_relevant         = EXCLUDED.is_relevant,
+                    pdf_downloaded      = EXCLUDED.pdf_downloaded
+            """, [
+                (
+                    r["external_id"],
+                    r.get("source"),
+                    r.get("title"),
+                    date.fromisoformat(r["date_sub"]) if r.get("date_sub") else None,  # <-- fix         # asyncpg сам разберёт строку "2025-10-01" как DATE
+                    r.get("url_article"),
+                    r.get("pdf_url"),
+                    json.dumps(r.get("authors", {})),  # JSONB
+                    _coerce_tags(r.get("tags")),                  # TEXT[]
+                    r.get("abstract"),
+                    r.get("file_article"),
+                    r.get("category"),
+                    r.get("relevance_score"),
+                    r.get("relevance_reasoning"),
+                    r.get("is_relevant"),
+                    r.get("pdf_downloaded"),
+                )
+                for r in records
+            ])
+
+    async def get_metadata_as_json(self) -> list[dict]:
+        """Возвращает все строки в виде списка словарей — замена старого download_metadata"""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT
+                    external_id, source, title,
+                    date_sub::text AS date_sub,
+                    url_article, pdf_url,
+                    authors, tags, abstract,
+                    file_article, category,
+                    relevance_score, relevance_reasoning,
+                    is_relevant, pdf_downloaded
+                FROM papers_metadata
+            """)
+        return [dict(r) for r in rows]
 

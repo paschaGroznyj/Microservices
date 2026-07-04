@@ -91,7 +91,14 @@ async def generate_review(llm, content: str, title: str, link: str):
             SystemMessage(content=SYSTEM_PROMPT),
             HumanMessage(content=safe_content)
         ])
-
+        token_usage = dict(response.response_metadata.get("token_usage", {}))
+        prompt_tokens = token_usage.get("prompt_tokens", 0)
+        completion_tokens = token_usage.get("completion_tokens", 0)
+        total_tokens = token_usage.get("total_tokens", 0)
+        precached_tokens = token_usage.get("precached_prompt_tokens", 0)
+        print(f"💵ЗАТРАТЫ НА ФОРМИРОВАНИЕ РЕВЬЮ\n"
+        f"prompt={prompt_tokens} cached={precached_tokens} completion_tokens={completion_tokens}\n"
+        f"total={total_tokens}")
         summary = response.content.strip()
         print(f"✨ Review generated for: {title[:30]}...")
         return summary

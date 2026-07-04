@@ -1,6 +1,6 @@
 import hashlib
 # from langchain.chat_models.gigachat import GigaChat
-from .core.agent_provider import get_model
+from .core.agent_provider import get_async_gemini
 from langchain.schema import SystemMessage, HumanMessage
 from .core.config import STORAGE_PATH, PATH_TO_GLOSSARY
 from typing import Dict, Any, List
@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-gigachat = get_model(temperature=0.3)
+gigachat = get_async_gemini()
 
 
 class SummaryGenerator:

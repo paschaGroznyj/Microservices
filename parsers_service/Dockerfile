@@ -17,13 +17,14 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 3. Создаём пользователя
-RUN useradd -m -u 1500 appuser
+RUN useradd -m -u 1002 appuser
 
 ## 4. Playwright: устанавливаем браузер от имени appuser
-#USER appuser
-#RUN playwright install chromium
-#USER root
+USER appuser
+RUN playwright install chromium
+USER root
 
+RUN pip uninstall -y frontend && pip install pymupdf
 # 5. Копируем код и настраиваем права
 COPY . .
 RUN mkdir -p /app/knowledge_base/articles /app/logs /app/pw_profile_scholar \

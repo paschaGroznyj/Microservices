@@ -10,12 +10,12 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, date
 from pydantic import BaseModel, Field
 from sklearn.metrics.pairwise import cosine_similarity
-from .core.agent_provider import get_model, get_embedd_model
+from .core.agent_provider import get_embedd_model
 
-from langchain.schema import SystemMessage
+from langchain.schema import SystemMessage, HumanMessage
 from .email_sender import EmailSender
 from .core.config import SMTP_HOST, SMTP_PORT, SMTP_LOGIN, SMTP_PASSWORD
-from langchain.schema import SystemMessage
+from .summary import SummaryGenerator
 
 # =============================================================================
 # 1. РАСШИРЕННАЯ СТРУКТУРА ДЛЯ СОСТАВНЫХ ФИЛЬТРОВ
@@ -185,7 +185,7 @@ class LLMCompositeExtractor:
         SOURCE = ["yandex_disk:ICPM", "googlescholar", "arxiv.org", "ieeexplore.ieee.org"]
 
         prompt = f"""
-        Проанализируй запрос дайджеста: "{query}"
+        Проанализируй запрос дайджеста: "[query]"
 
         Извлеки ВСЕ параметры фильтрации одновременно в JSON CompositeFilters:
 
@@ -222,7 +222,10 @@ class LLMCompositeExtractor:
         
         ВЕРНИ ТОЛЬКО VALID JSON:
         """
-        messages = [SystemMessage(content=prompt)]
+        messages = [
+            SystemMessage(content=prompt),
+            HumanMessage(content=query) 
+        ]
         response = llm_client.invoke(messages)
         
         json_str = extract_json(response.content)
@@ -284,10 +287,12 @@ class LLMCompositeExtractor:
             6. **Пример из статьи:** ...
             7. **Вывод:** ...
 
-        ## Текст статьи из PDF:
-        {article_text}."""
+        ## Текст статьи из PDF:"""
 
-        messages = [SystemMessage(content=prompt)]
+        messages = [
+            SystemMessage(content=prompt),
+            HumanMessage(content=article_text)  # ← добавить
+        ]
         response = llm_client.invoke(messages)
 
         return response.content
@@ -517,33 +522,41 @@ def agent_composite_digest_tool(query: str, llm_client, json_path="knowledge_bas
 
     return result
 
+
 # =============================================================================
 # 5. СОХРАНЕНИЕ ДАЙДЖЕСТА
 # =============================================================================
 def build_digest_content(articles: List[Dict], md_path: Path, query: str, llm_client) -> str:
     """Строит итоговый дайджест"""
-    content = [f"# 📋 Дайджест материалов внешних источников за период/по теме: '{query}'",
-               f"**Создан:** {datetime.now().strftime('%d.%m.%Y %H:%M')}",
-               f"**Найдено статей:** {len(articles)}"]
     start = time.time()
     existing_files = {
         md_file.name: md_file
         for md_file in md_path.rglob("*.md")
     }
-
+    sum = SummaryGenerator()
     # md_paths = find_matching_md_files(articles, md_path)
 
     # print(md_paths)
+    relevant_articles = [a for a in articles if a.get("category") != "Не релевантна PM"]
+    counter_relevant = len(relevant_articles)
 
+    # 1. Добавляем шапку в самое начало списка
+    content = [
+        f"# 📋 Дайджест материалов внешних источников за период/по теме: '{query}'",
+        f"**Создан:** {datetime.now().strftime('%d.%m.%Y %H:%M')}",
+        f"**Найдено статей:** {counter_relevant}",
+        "---" * 30,
+        ""
+    ]
     base_path = Path(__file__).resolve().parent
     articles_dir = base_path / "knowledge_base" / "articles"
-
+    counter_relevant = 0
     for i, article in enumerate(articles):
         
         category = article.get("category") or "Без категории"
         if category == "Не релевантна PM":
             continue
-
+        counter_relevant += 1
         filename = article.get("file_article")
         title = article.get("title", "N/A")
         url = article.get("url_article", "N/A")
@@ -587,11 +600,11 @@ def build_digest_content(articles: List[Dict], md_path: Path, query: str, llm_cl
             if article_md_path.exists():
                 with open(article_md_path, "r", encoding="utf-8") as f:
                     md_content = f.read()
-                md_content = (
-                    re.split(r'^---\s*$', md_content, maxsplit=2)[2]
-                    if '---' in md_content
-                    else md_content
-                )
+                # md_content = (
+                #     re.split(r'^---\s*$', md_content, maxsplit=2)[2]
+                #     if '---' in md_content
+                #     else md_content
+                # )
 
                 # summary = LLMCompositeExtractor.create_summary(
                 #     md_content[:2000],

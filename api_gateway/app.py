@@ -934,10 +934,14 @@ async def create_new_chat(request: Request):
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     logger.info(f'{user["user_id"]} текущий пользователь')
+
+    data = await request.json()
+    type_agent = data.get("type_agent", "pm")
+
     try:
         response = await app.state.http_client.post(
             f"{SERVICES['chats']['url']}/chat/new",
-            json={"user_id": user["user_id"]}
+            json={"user_id": user["user_id"], "type_agent": type_agent}
         )
 
         return Response(
@@ -951,6 +955,25 @@ async def create_new_chat(request: Request):
             status_code=502,
             detail=f"Chats service unreachable: {str(e)}"
         )
+
+# ========= Найти чат по типу (ouroboros) ========
+@app.get("/api/chats/by-type/{type_agent}")
+async def find_chat_by_type(type_agent: str, request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        response = await app.state.http_client.get(
+            f"{SERVICES['chats']['url']}/chat/by-type/{type_agent}",
+            headers={"X-User-Id": str(user["user_id"])}
+        )
+        return Response(
+            content=response.content,
+            status_code=response.status_code,
+            media_type="application/json"
+        )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Chats service unreachable: {str(e)}")
 
 # GET /api/feedback — история
 @app.get("/api/feedback")

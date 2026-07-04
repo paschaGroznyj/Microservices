@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from contextlib import asynccontextmanager
 # from agent_pm.async_agent import KnowledgeAgent
-from agent_pm.langchain_agent import KnowledgeAgent
+from agent_pm.langchain_agent import KnowledgeAgent, GATEWAY_URL
 from langchain.schema import HumanMessage, SystemMessage
 from agent_pm.summary_period import extract_json
 import asyncio
@@ -45,7 +45,9 @@ async def get_producer() -> AIOKafkaProducer:
     return producer
 
 async def handle_ouroboros_message(payload: dict, prod: AIOKafkaProducer):
-    """Перенаправление сообщения на Ouroboros API и возврат ответа в Kafka."""
+    """Перенаправление сообщения на Ouroboros API.
+    Статус 'думает' отправляется через WebSocket (bot_status), а не в Kafka —
+    чтобы не сохранять заглушку в БД."""
     start = time.perf_counter()
 
     chat_id = payload.get("chat_id")
@@ -56,6 +58,16 @@ async def handle_ouroboros_message(payload: dict, prod: AIOKafkaProducer):
         logging.warning(f"Некорректное сообщение для Ouroboros: {payload}")
         return
 
+    # Отправляем статус через WebSocket (не пишется в БД)
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as status_client:
+            await status_client.post(
+                f"{GATEWAY_URL}/internal/bot_status",
+                json={"request_id": request_id, "status": "Ouroboros думает..."},
+            )
+    except Exception:
+        pass  # статус — best-effort, не блокируем основной поток
+
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(
@@ -64,30 +76,26 @@ async def handle_ouroboros_message(payload: dict, prod: AIOKafkaProducer):
                 headers={"x-ouroboros-password": OUROBOROS_API_PASSWORD},
             )
             if resp.status_code == 200:
-                # Ouroboros отвечает асинхронно через WS, но /api/command
-                # возвращает {ok: true} сразу. Реальный ответ придёт через WS.
-                # Для синхронного ответа шлём заглушку — фронт получит реальный
-                # ответ через WebSocket broadcast.
-                response_text = "⏳ Ouroboros принял запрос, ответ придёт через WebSocket..."
+                # Ouroboros отвечает асинхронно через WS.
+                # Реальный ответ придёт через WebSocket broadcast от Ouroboros.
+                # Ничего не пишем в Kafka — заглушка не нужна.
+                logging.info(f"Ouroboros принял запрос для чата {chat_id}, ждём WS-ответ")
             else:
-                response_text = f"❌ Ouroboros API вернул {resp.status_code}"
+                # Ошибка — пишем в Kafka, чтобы пользователь увидел
+                error_msg = {
+                    "user_id": -1,
+                    "chat_id": chat_id,
+                    "message": f"❌ Ouroboros API вернул {resp.status_code}",
+                    "is_from_bot": True,
+                    "type_agent": "ouroboros",
+                    "action": "error"
+                }
+                await prod.send_and_wait("chat-messages", value=error_msg)
 
-        bot_message = {
-            "user_id": -1,
-            "chat_id": chat_id,
-            "message": response_text,
-            "is_from_bot": True,
-            "type_agent": "ouroboros",
-            "action": "answer"
-        }
-
-        await prod.send_and_wait("chat-messages", value=bot_message)
-        logging.info(f"Ouroboros ответ в чат {chat_id}: {response_text[:50]}...")
         logging.info(f"Время обработки: {time.perf_counter() - start:.4f}s")
 
     except Exception as e:
         logging.error(f"Ошибка обработки сообщения Ouroboros: {e}")
-        # Отправляем сообщение об ошибке в чат
         error_message = {
             "user_id": -1,
             "chat_id": chat_id,

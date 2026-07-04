@@ -222,11 +222,33 @@ class ChatAppSimple {
             return;
         }
 
+        // Пытаемся найти существующий чат на бэке (one-per-user)
+        try {
+            const resp = await fetch('/api/chats/by-type/ouroboros', {
+                credentials: 'include'
+            });
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data.exists && data.chat_id) {
+                    this.ouroborosChatId = data.chat_id;
+                    await this.openChat(data.chat_id, 'ouroboros');
+                    return;
+                }
+            }
+        } catch (e) {
+            // бэк недоступен — продолжаем в виртуальном режиме
+        }
+
         // Виртуальное состояние — чат ещё не создан на бэке
         this.currentChat = null;
         this.currentTab = 'ouroboros';
         this.switchView('ouroboros');
-        await this.renderMessageInput(); // покажет стартовый экран/инпут для уробора
+
+        // Очищаем контейнер сообщений от предыдущего чата
+        const msgContainer = this.getMessagesContainer();
+        if (msgContainer) msgContainer.innerHTML = '';
+
+        await this.renderMessageInput(); // покажет инпут для уробора (даже без чата)
     }
 
     async createOuroborosChat() {
@@ -234,7 +256,7 @@ class ChatAppSimple {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',
-            body: JSON.stringify({ type: 'ouroboros' })
+            body: JSON.stringify({ type_agent: 'ouroboros' })
         });
         if (!response.ok) throw new Error('Ошибка создания чата уробора');
 
@@ -355,7 +377,33 @@ class ChatAppSimple {
          console.log('NONNI', this.currentTab);
         // Получаем имя пользователя (из this.currentUser или фолбэк)
         const username = this.currentUser?.name.split(' ')[0] || 'Пользователь';
-        if (!this.currentChat) {
+        if (this.currentTab === 'ouroboros') {
+            // 🐍 Чат с Ouroboros — рендерим инпут независимо от наличия чата
+            container.innerHTML = `
+                <div class="message-input-wrapper">
+                    <div class="message-input-box">
+                        <textarea
+                            id="message-input"
+                            placeholder="Напишите Ouroboros..."
+                            rows="1"
+                        ></textarea>
+                        <button id="send-btn" disabled>
+                            <svg viewBox="0 0 24 24" class="send-icon">
+                                <path d="M12 5v14M5 12l7-7 7 7"
+                                      stroke="currentColor"
+                                      stroke-width="2"
+                                      fill="none"
+                                      stroke-linecap="round"
+                                      stroke-linejoin="round"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="input-footer">
+                    🐍 Ouroboros — становящаяся личность, а не просто ИИ
+                </div>
+            `;
+        } else if (!this.currentChat) {
             // 🎨 Стартовый экран (нет выбранного чата)
             container.innerHTML = `
 <div class="chat-start-screen">
@@ -420,33 +468,6 @@ class ChatAppSimple {
 
 </div>
 `;
-        } else if (this.currentTab === 'ouroboros') {
-            console.log('Прошли условие, должны рендерить')
-            // 🐍 Чат с Ouroboros
-            container.innerHTML = `
-                <div class="message-input-wrapper">
-                    <div class="message-input-box">
-                        <textarea
-                            id="message-input"
-                            placeholder="Введите сообщение..."
-                            rows="1"
-                        ></textarea>
-                        <button id="send-btn" disabled>
-                            <svg viewBox="0 0 24 24" class="send-icon">
-                                <path d="M12 5v14M5 12l7-7 7 7"
-                                      stroke="currentColor"
-                                      stroke-width="2"
-                                      fill="none"
-                                      stroke-linecap="round"
-                                      stroke-linejoin="round"/>
-                            </svg>
-                        </button>
-                    </div>
-                </div>
-                <div class="input-footer">
-                    🐍
-                </div>
-            `;
         } else {
             container.innerHTML = `
                 <div class="message-input-wrapper">
@@ -743,6 +764,10 @@ class ChatAppSimple {
             this.currentChat = null;
             this.currentTab = 'agent';
             this.switchView('agent');
+
+            // Очищаем контейнер сообщений, чтобы старые сообщения не оставались
+            const msgContainer = this.getMessagesContainer();
+            if (msgContainer) msgContainer.innerHTML = '';
 
             // снимаем активный класс со всех пунктов списка
             document.querySelectorAll('.chat-item').forEach(item => item.classList.remove('active'));

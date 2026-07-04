@@ -61,6 +61,14 @@ class DataBaseChats:
             ALTER TABLE chats ADD COLUMN IF NOT EXISTS tool_name TEXT;
             CREATE INDEX IF NOT EXISTS ix_chats_username ON chats(username);
             CREATE INDEX IF NOT EXISTS ix_chats_chat_id ON chats(chat_id);
+
+            -- Таблица типов чатов (один чат — один тип агента)
+            CREATE TABLE IF NOT EXISTS chat_types (
+                chat_id INTEGER NOT NULL,
+                username INTEGER NOT NULL,
+                type_agent TEXT NOT NULL DEFAULT 'pm',
+                PRIMARY KEY (chat_id, username)
+            );
             """
                            )
     async def add_message(self, username: int, message: str, chat_id: int, is_from_bot: bool, action: str = None):
@@ -246,5 +254,29 @@ class DataBaseChats:
             SET status = 'FAILED'
             WHERE id = $1
         """, message_id)
+
+    async def set_chat_type(self, chat_id: int, username: int, type_agent: str):
+        """Привязывает тип агента к чату."""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO chat_types (chat_id, username, type_agent)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (chat_id, username) DO UPDATE SET type_agent = $3
+            """, chat_id, username, type_agent)
+
+    async def get_chat_type(self, chat_id: int, username: int) -> str | None:
+        """Возвращает тип агента для чата или None."""
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval("""
+                SELECT type_agent FROM chat_types WHERE chat_id = $1 AND username = $2
+            """, chat_id, username)
+
+    async def find_chat_by_type(self, username: int, type_agent: str) -> int | None:
+        """Находит существующий чат пользователя с заданным типом агента."""
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval("""
+                SELECT chat_id FROM chat_types WHERE username = $1 AND type_agent = $2
+                ORDER BY chat_id DESC LIMIT 1
+            """, username, type_agent)
 
 

@@ -17,11 +17,10 @@ from agent_pm.summary_period import extract_json
 import asyncio
 from httpx import AsyncClient
 # from agent_pm.pm_parser.arxiv_parser import ARXIVParser
-from agent_pm.core.config import KAFKA_BROKER, PORT_PM_AGENT, PORT_PARSERS_SERVICE, PORT_GATEWAY_PORT, OUROBOROS_API_URL
+from agent_pm.core.config import KAFKA_BROKER, PORT_PM_AGENT, PORT_PARSERS_SERVICE, PORT_GATEWAY_PORT, OUROBOROS_API_URL, OUROBOROS_API_PASSWORD
 from agent_pm.search_bot.searcher import searcher_main
 from agent_pm.core.db import AgentDB
 from agent_pm.scheduler_digest import start_digest_scheduler, start_interval_digest_scheduler
-
 
 from agent_pm.core.botocore_client import database
 logging.basicConfig(level=logging.INFO)
@@ -62,6 +61,7 @@ async def handle_ouroboros_message(payload: dict, prod: AIOKafkaProducer):
             resp = await client.post(
                 f"{OUROBOROS_API_URL}/api/command",
                 json={"cmd": text},
+                headers={"x-ouroboros-password": OUROBOROS_API_PASSWORD},
             )
             if resp.status_code == 200:
                 # Ouroboros отвечает асинхронно через WS, но /api/command

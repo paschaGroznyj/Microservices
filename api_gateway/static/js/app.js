@@ -7,6 +7,7 @@ class ChatAppSimple {
         this.ws = null;
         this.chats = [];
         this.currentTab = 'agent'; // 'agent' | 'ouroboros' | 'arxiv'
+        this.ouroborosChatId = null;
         // this.init();
     }
 
@@ -68,22 +69,29 @@ class ChatAppSimple {
             const item = e.target.closest('.chat-item');
             if (!item) return;
             const chatId = Number(item.dataset.chatId);
-            this.openChat(chatId);
+            this.openChat(chatId, 'agent'); // тут именно обычные чаты
         });
 
         // Кнопка "Новый чат"
-        document.getElementById('new-chat-btn')?.addEventListener('click', () => this.createNewChat());
+        document.getElementById('new-chat-btn')?.addEventListener('click', () => this.startNewChat());
         document.getElementById('profile-button')?.addEventListener('click', () => this.attachProfileHandlers());
 
         // Переключение вкладок (Ассистент / Уробор / Поиск статей)
         document.querySelectorAll('.sb-nav .nav-item').forEach(navItem => {
-            navItem.addEventListener('click', () => {
+            navItem.addEventListener('click', async () => {
                 document.querySelectorAll('.sb-nav .nav-item').forEach(n => n.classList.remove('active'));
                 navItem.classList.add('active');
-                this.currentTab = navItem.dataset.tab;
-                console.log('🔄 Активная вкладка:', this.currentTab);
-                // Перерисовываем область ввода при переключении вкладки
-                this.renderMessageInput();
+
+                const tab = navItem.dataset.tab;
+                this.currentTab = tab;
+                this.switchView(tab);
+
+                if (tab === 'ouroboros') {
+                    await this.openOuroborosChat();
+                } else if (!this.currentChat) {
+                    // просто перерисуем стартовый экран/инпут под текущую вкладку
+                    await this.renderMessageInput();
+                }
             });
         });
     }
@@ -174,14 +182,19 @@ class ChatAppSimple {
     }
 
 
+    switchView(tab) {
+        document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
+        document.getElementById(`view-${tab}`)?.classList.remove('hidden');
+    }
+
     async loadChats() {
         try {
-            const response = await fetch('/api/chats', {
-                credentials: 'include'
-            });
-
+            const response = await fetch('/api/chats', { credentials: 'include' });
             if (response.ok) {
                 this.chats = await response.json();
+                // ищем существующий чат уробора среди чатов пользователя
+                const ouro = this.chats.find(c => c.type === 'ouroboros');
+                this.ouroborosChatId = ouro ? ouro.id : null;
                 this.renderChats(this.chats);
             }
         } catch (error) {
@@ -190,44 +203,65 @@ class ChatAppSimple {
     }
 
     renderChats(chats) {
-    const chatList = document.getElementById('chat-list');
+        const chatList = document.getElementById('chat-list');
+        const visible = chats.filter(c => c.type !== 'ouroboros'); // ← фильтр
+        chatList.innerHTML = [...visible].reverse().map(chat => `
+            <div class="chat-item ${chat.id === this.currentChat ? 'active' : ''}"
+                data-chat-id="${chat.id}" data-tab="agent">
+                <div class="chat-preview">
+                    ${chat.last_message || 'Нет сообщений'}
+                </div>
+            </div>
+        `).join('');
+    }
 
-    chatList.innerHTML = [...chats].reverse().map(chat => `
-    <div class="chat-item ${chat.id === this.currentChat ? 'active' : ''}"
-         data-chat-id="${chat.id}" data-tab="agent">
-        <div class="chat-preview">
-            ${chat.last_message || 'Нет сообщений'}
-        </div>
-        </div>
-    `).join('');
-}
+    async openOuroborosChat() {
+        // Реальный чат уже существует (получен раньше или создан в этой сессии)
+        if (this.ouroborosChatId) {
+            await this.openChat(this.ouroborosChatId, 'ouroboros');
+            return;
+        }
+
+        // Виртуальное состояние — чат ещё не создан на бэке
+        this.currentChat = null;
+        this.currentTab = 'ouroboros';
+        this.switchView('ouroboros');
+        await this.renderMessageInput(); // покажет стартовый экран/инпут для уробора
+    }
+
+    async createOuroborosChat() {
+        const response = await fetch('/api/chats/new', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ type: 'ouroboros' })
+        });
+        if (!response.ok) throw new Error('Ошибка создания чата уробора');
+
+        const data = await response.json();
+        this.ouroborosChatId = data.chat_id;
+        this.currentChat = data.chat_id;
+
+        // НЕ пушим в this.chats и НЕ рендерим в навбар — он туда не должен попасть
+        this.switchView('ouroboros');
+        this.connectWebSocket(data.chat_id);
+    }
 
 
-  async openChat(chatId) {
-      console.log('📂 openChat вызван с chatId:', chatId, 'type:', typeof chatId);
-      this.currentChat = chatId;
-      document.querySelector('.chat-main-inner')?.classList.add('chat-active');
-      //  ШПОРА
-      // <div className="chat-main-inner chat-active">
-      //     <!-- Теперь у контейнера ЕСТЬ класс chat-active -->
-      //     <div id="chat-messages">Сообщения</div>
-      // </div>
+  async openChat(chatId, tab = 'agent') {
+        this.currentChat = chatId;
+        this.currentTab = tab;
+        this.switchView(tab); 
+        document.querySelector('.chat-main-inner')?.classList.add('chat-active');
 
-      // document.getElementById('chat-title').textContent = 'GigaЧат';
-      document.getElementById('message-input').disabled = false;
-      document.getElementById('send-btn').disabled = false;
-      await this.renderMessageInput()
-      await this.loadMessages(chatId);
-      this.connectWebSocket(chatId);
+        await this.renderMessageInput();
+        await this.loadMessages(chatId);
+        this.connectWebSocket(chatId);
 
-      // 🔥 просто обновляем классы
-      document.querySelectorAll('.chat-item').forEach(item => {
-          item.classList.toggle(
-              'active',
-              Number(item.dataset.chatId) === chatId
-          );
-      });
-  }
+        document.querySelectorAll('.chat-item').forEach(item => {
+            item.classList.toggle('active', Number(item.dataset.chatId) === chatId);
+        });
+    }
 
     async loadMessages(chatId) {
         try {
@@ -245,7 +279,7 @@ class ChatAppSimple {
     }
 
     renderMessages(messages) {
-        const container = document.getElementById('chat-messages');
+        const container = this.getMessagesContainer(); // ← было document.getElementById('chat-messages')
         if (!container) return;
 
         container.innerHTML = '';
@@ -314,13 +348,13 @@ class ChatAppSimple {
     }
 
      async renderMessageInput() {
-        const container = document.getElementById('message-input-container');
+        const container = this.getInputContainer();
         container?.classList.add('rending');
         if (!container) return;
 
+         console.log('NONNI', this.currentTab);
         // Получаем имя пользователя (из this.currentUser или фолбэк)
         const username = this.currentUser?.name.split(' ')[0] || 'Пользователь';
-
         if (!this.currentChat) {
             // 🎨 Стартовый экран (нет выбранного чата)
             container.innerHTML = `
@@ -387,13 +421,14 @@ class ChatAppSimple {
 </div>
 `;
         } else if (this.currentTab === 'ouroboros') {
+            console.log('Прошли условие, должны рендерить')
             // 🐍 Чат с Ouroboros
             container.innerHTML = `
                 <div class="message-input-wrapper">
                     <div class="message-input-box">
                         <textarea
                             id="message-input"
-                            placeholder="Напишите Ouroboros..."
+                            placeholder="Введите сообщение..."
                             rows="1"
                         ></textarea>
                         <button id="send-btn" disabled>
@@ -409,7 +444,7 @@ class ChatAppSimple {
                     </div>
                 </div>
                 <div class="input-footer">
-                    🐍 Ouroboros — становящаяся личность, а не просто ИИ
+                    🐍
                 </div>
             `;
         } else {
@@ -486,10 +521,10 @@ class ChatAppSimple {
         }
 
     attachInputHandlers() {
-        const textarea = document.getElementById('message-input');
-        const sendBtn = document.getElementById('send-btn');
+        const container = this.getInputContainer();
+        const textarea = container?.querySelector('#message-input') || container?.querySelector('.message-input-box textarea');
+        const sendBtn = container?.querySelector('#send-btn') || container?.querySelector('.send-btn, button');
 
-        // 🔥 Если элементов нет (например, стартовый экран без textarea) — выходим
         if (!textarea || !sendBtn) {
             console.log('⚠️ Input elements not found, skipping handlers');
             return;
@@ -536,12 +571,14 @@ class ChatAppSimple {
 
        if (!this.currentChat) {
             try {
-                // Очищаем инпут ДО createNewChat, чтобы loadMessages
-                // не застал уже отправленное сообщение в UI
                 input.value = '';
                 input.style.height = "auto";
 
-                await this.createNewChat();
+                if (this.currentTab === 'ouroboros') {
+                    await this.createOuroborosChat();   // ← новый метод
+                } else {
+                    await this.createNewChat();
+                }
             } catch (err) {
                 console.error('❌ Failed to create chat:', err);
                 alert('Не удалось создать чат. Попробуйте ещё раз.');
@@ -583,6 +620,7 @@ class ChatAppSimple {
         }
     }
 
+
     connectWebSocket(chatId) {
         if (this.ws) {
             this.ws.close();
@@ -614,7 +652,7 @@ class ChatAppSimple {
     }
 
             updateStatus(statusText) {
-                const container = document.getElementById('chat-messages');
+                const container = this.getMessagesContainer();
                 if (!container) return;
                 console.log('Статус агента', statusText)
                 // Ищем существующий индикатор или создаём новый
@@ -636,7 +674,7 @@ class ChatAppSimple {
             }
 
            addMessage(message) {
-                const container = document.getElementById('chat-messages');
+                const container = this.getMessagesContainer();
                 if (!container) return;
 
                 const isBot = message.is_from_bot;
@@ -693,6 +731,26 @@ class ChatAppSimple {
                 }
 
                 container.scrollTop = container.scrollHeight;
+        }
+
+        startNewChat() {
+            // закрываем сокет прошлого чата, если был
+            if (this.ws) {
+                this.ws.close();
+                this.ws = null;
+            }
+
+            this.currentChat = null;
+            this.currentTab = 'agent';
+            this.switchView('agent');
+
+            // снимаем активный класс со всех пунктов списка
+            document.querySelectorAll('.chat-item').forEach(item => item.classList.remove('active'));
+
+            // убираем visual-состояние "открытого чата", если оно проставлялось
+            document.querySelector('.chat-main-inner')?.classList.remove('chat-active');
+
+            this.renderMessageInput(); // покажет стартовый экран (currentChat === null)
         }
 
         async createNewChat() {
@@ -771,6 +829,17 @@ class ChatAppSimple {
             return actionsDiv;
         }
 
+    getActiveView() {
+    return document.getElementById(`view-${this.currentTab}`);
+    }
+
+    getMessagesContainer() {
+        return this.getActiveView()?.querySelector('.chat-messages');
+    }
+
+    getInputContainer() {
+        return this.getActiveView()?.querySelector('.message-input-container');
+    }
 
 }
 
@@ -781,6 +850,8 @@ document.querySelectorAll('.hint-item').forEach(chip => {
         input.focus();
     });
 });
+
+
 // // Инициализация при загрузке страницы. Ждет пока построится HTML дерево, только потом запускает код
 // document.addEventListener('DOMContentLoaded', () => {
 //     // Если на странице есть элемент с id="chat-app"

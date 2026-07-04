@@ -111,6 +111,8 @@ services:
 
       CLOUD_LLM_ACCESS_KEY: ${CLOUD_LLM_ACCESS_KEY}
 
+      OUROBOROS_API_URL: ${OUROBOROS_API_URL:-http://localhost:8765}
+
     volumes:
       - ./agent_service/config:/app/config
       - ./agent_service:/app

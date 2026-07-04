@@ -25,6 +25,10 @@ class DBConsumer:
             "ds": {
                 "name": "Data Science IAD",
                 "gateway": "http://api_gateway_ds:1000"
+            },
+            "ouroboros": {
+                "name": "Ouroboros",
+                "gateway": "http://api_gateway:7000"
             }
         }
 

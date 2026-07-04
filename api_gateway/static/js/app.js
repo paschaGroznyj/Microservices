@@ -6,6 +6,7 @@ class ChatAppSimple {
         this.isUIInitialized = false;
         this.ws = null;
         this.chats = [];
+        this.currentTab = 'agent'; // 'agent' | 'ouroboros' | 'arxiv'
         // this.init();
     }
 
@@ -73,6 +74,16 @@ class ChatAppSimple {
         // Кнопка "Новый чат"
         document.getElementById('new-chat-btn')?.addEventListener('click', () => this.createNewChat());
         document.getElementById('profile-button')?.addEventListener('click', () => this.attachProfileHandlers());
+
+        // Переключение вкладок (Ассистент / Уробор / Поиск статей)
+        document.querySelectorAll('.sb-nav .nav-item').forEach(navItem => {
+            navItem.addEventListener('click', () => {
+                document.querySelectorAll('.sb-nav .nav-item').forEach(n => n.classList.remove('active'));
+                navItem.classList.add('active');
+                this.currentTab = navItem.dataset.tab;
+                console.log('🔄 Активная вкладка:', this.currentTab);
+            });
+        });
     }
 
 
@@ -527,7 +538,8 @@ class ChatAppSimple {
                 credentials: 'include',
                 body: JSON.stringify({
                     chat_id: this.currentChat,
-                    message: text
+                    message: text,
+                    type_agent: this.currentTab === 'ouroboros' ? 'ouroboros' : 'pm'
                 })
             });
 

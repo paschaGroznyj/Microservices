@@ -97,7 +97,6 @@ function renderCategories() {
 }
 
 function formatTime(dateString) {
-  console.log(dateString)
   const date = new Date(dateString);
 
   return date.toLocaleTimeString([], {

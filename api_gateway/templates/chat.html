@@ -130,18 +130,23 @@
                         <!-- Переключатель блоков -->
                         <button class="pill active" id="pill-agent" data-tab="agent">Ассистент</button>
                         <button class="pill" id="pill-arxiv" data-tab="arxiv">Статьи</button>
+                        <button class="pill" id="pill-ouroboros" data-tab="ouroboros">Ouroboros</button>
                     </div>
                 </div>
 
         <div class="content">
-            <div class="view" id="view-agent">
-                <div class="chat-main-inner">
-                    <div class="chat-messages" id="chat-messages">
-                        <!-- Сообщения будут здесь -->
+                <div class="view" id="view-agent">
+                    <div class="chat-main-inner">
+                        <div class="chat-messages"><!-- Сообщения будут здесь --></div>
+                        <div class="message-input-container"></div>
                     </div>
-                    <div id="message-input-container"></div>
                 </div>
-            </div>
+                <div class="view hidden" id="view-ouroboros">
+                    <div class="chat-main-inner">
+                        <div class="chat-messages"><!-- Сообщения будут здесь --></div>
+                        <div class="message-input-container"></div>
+                    </div>
+                </div>
                 <!-- Arxiv view -->
                 <div class="view hidden" id="view-arxiv">
                 <!-- Center search (initial state) -->

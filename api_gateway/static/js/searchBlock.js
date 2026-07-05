@@ -4,21 +4,6 @@ import app from './app.js';
 
 console.log("Search module loaded. User:");
 
-const PAPERS = [
-  {title:"Conformance Checking Using Automata-Based Alignment",authors:"van Dongen B., Carmona J., De Leoni M.",date:"2025-03-12",tags:[{l:"cs.AI",c:"cs"},{l:"PM",c:"pm"}],link:"https://arxiv.org", abstract: "Привет"},
-  {title:"Inductive Process Mining with Noise Handling for Unstructured Logs",authors:"Leemans S.J.J., Fahland D., van der Aalst W.",date:"2025-02-28",tags:[{l:"cs.SE",c:"cs"}],link:"https://arxiv.org", abstract: "Привет"},
-  {title:"Declarative Process Models and Sparse Event Logs",authors:"Maggi F.M., Di Ciccio C., Montali M.",date:"2025-02-14",tags:[{l:"cs.AI",c:"cs"},{l:"Declare",c:"pm"}],link:"https://arxiv.org", abstract: "Привет"},
-  {title:"Graph-Based Approaches for Object-Centric Process Mining",authors:"Esser S., Fahland D.",date:"2025-01-30",tags:[{l:"cs.DB",c:"cs"},{l:"PM",c:"pm"}],link:"https://arxiv.org", abstract: "Привет"},
-  {title:"Predictive Monitoring with LSTM Networks on Process Data",authors:"Tax N., Verenich I., La Rosa M.",date:"2025-01-18",tags:[{l:"stat.ML",c:"stat"},{l:"PM",c:"pm"}],link:"https://arxiv.org", abstract: "Привет"},
-  {title:"Event Abstraction via Hierarchical Clustering Techniques",authors:"Baier T., Mendling J., Weske M.",date:"2025-01-05",tags:[{l:"cs.AI",c:"cs"}],link:"https://arxiv.org", abstract: "Привет"},
-  {title:"Process Discovery from Low-Quality and Noisy Logs",authors:"Augusto A., Conforti R., Dumas M.",date:"2024-12-22",tags:[{l:"cs.SE",c:"cs"},{l:"PM",c:"pm"}],link:"https://arxiv.org", abstract: "Привет"},
-  {title:"Simulation-Based Conformance Metrics for Business Processes",authors:"Rozinat A., van der Aalst W.M.P.",date:"2024-12-10",tags:[{l:"cs.AI",c:"cs"}],link:"https://arxiv.org", abstract: "Привет"},
-  {title:"Federated Process Mining for Privacy-Preserving Analysis",authors:"Müller M., Zellner L., Rinderle-Ma S.",date:"2024-11-29",tags:[{l:"cs.CR",c:"cs"},{l:"PM",c:"pm"}],link:"https://arxiv.org", abstract: "Привет"},
-  {title:"Explainable AI Techniques Applied to Process Mining Results",authors:"Becker M., Richter F.",date:"2024-11-15",tags:[{l:"cs.AI",c:"cs"},{l:"stat.ML",c:"stat"}],link:"https://arxiv.org", abstract: "Привет"},
-  {title:"Online Process Mining for Streaming Event Data",authors:"van Zelst S.J., van Dongen B.",date:"2024-11-02",tags:[{l:"cs.DB",c:"cs"},{l:"PM",c:"pm"}],link:"https://arxiv.org", abstract: "Привет"},
-  {title:"Root Cause Analysis in Deviant Cases Using Process Mining",authors:"Swinnen J., Depaire B., Jans M.",date:"2024-10-20",tags:[{l:"cs.AI",c:"cs"}],link:"https://arxiv.org", abstract: "Привет"},
-];
-
 const TAG_PALETTE = [
   { bg: "#e8f0f8", text: "#1a3a52" },  // синий (accent)
   { bg: "#dff0e8", text: "#1a6644" },  // зелёный
@@ -422,7 +407,7 @@ function checkerTab(tab){
 
 function switchTab(tab) {
   // Переключаем видимость контента
-  ["agent", "arxiv"].forEach(t => {
+  ["agent", "arxiv", "ouroboros"].forEach(t => {
     const view = document.getElementById("view-" + t);
     const nav = document.getElementById("nav-" + t);
     const pill = document.getElementById("pill-" + t);
@@ -433,10 +418,18 @@ function switchTab(tab) {
   });
 
   checkerTab(tab);
+
   // Обновляем заголовок
   const titleEl = document.getElementById("main-title");
   if (titleEl) {
-      titleEl.textContent = tab === "agent" ? "Assistant Process Mining" : "Поиск статей";
+    const titles = {
+      "agent": "Assistant Process Mining",
+      "ouroboros": "Ouroboros",
+      "arxiv": "Поиск статей"
+    };
+    
+    // Если пришел неизвестный tab, можно поставить заголовок по умолчанию через ||
+    titleEl.textContent = titles[tab] || "Главная"; 
   }
 }
 
@@ -452,6 +445,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!target) return;
 
         const tabName = target.getAttribute('data-tab');
+        app.currentTab = tabName;
         console.log('Переключение таба:', tabName);
 
         // Вызываем функцию переключения

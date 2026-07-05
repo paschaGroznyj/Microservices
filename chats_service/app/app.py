@@ -166,7 +166,18 @@ async def create_chat(data: dict):
     if not user_id:
         raise HTTPException(status_code=400, detail="user_id required")
 
+    type_agent = data.get("type_agent", "pm")
+
+    # Для ouroboros — один чат на пользователя
+    if type_agent == "ouroboros":
+        existing = await db.find_chat_by_type(user_id, "ouroboros")
+        if existing:
+            return {"chat_id": existing}
+
     chat_id = await db.create_new_chat()
+
+    # Сохраняем тип чата
+    await db.set_chat_type(chat_id, user_id, type_agent)
 
     # (опционально) создаём первое сообщение
     await db.add_message(
@@ -178,6 +189,26 @@ async def create_chat(data: dict):
 
     return {"chat_id": chat_id}
 
+
+@app.get("/chat/by-type/{type_agent}")
+async def find_chat_by_type(type_agent: str, request: Request):
+    """Найти существующий чат пользователя по типу агента (ouroboros/pm)."""
+    auth_data = await get_auth_data(request)
+    token = get_token(auth_data)
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username = payload.get("sub")
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    user_id = int(request.headers.get("X-User-Id", 0))
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id required")
+
+    chat_id = await db.find_chat_by_type(user_id, type_agent)
+    if chat_id:
+        return {"chat_id": chat_id, "exists": True}
+    return {"chat_id": None, "exists": False}
 
 
 @app.get("/health")

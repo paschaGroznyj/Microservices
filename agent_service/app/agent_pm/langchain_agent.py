@@ -245,7 +245,11 @@ async def tool_summarize_file(
     return {"status": "error", "filename": filename}
 
 
-async def process_single_article_safe(article: dict, db, user_id: int, llm) -> bool:
+async def process_single_article_safe(
+    article: dict, db, user_id: int, llm,
+    obs_loader: Optional[OBSWorker] = None,
+    articles_path: Optional[Path] = None,
+) -> bool:
     article_id = article["article_id"]
     pdf_url = article["pdf_url"]
     title = article["title"]
@@ -255,13 +259,42 @@ async def process_single_article_safe(article: dict, db, user_id: int, llm) -> b
             raise ValueError("Недостаточно текста для анализа")
         review_text = await generate_review(llm, text_content, title, pdf_url)
         await db.save_review(user_id, article_id, review_text)
+
+        # Сохраняем ревью как .md и загружаем в OBS
+        if obs_loader and articles_path:
+            try:
+                import hashlib
+                url_hash = hashlib.sha256(title.encode()).hexdigest()[:12]
+                date_sub = article.get("date_sub", datetime.now().strftime("%Y-%m-%d"))
+                md_name = f"{date_sub}_{url_hash}.md"
+                md_path = articles_path / md_name
+                articles_path.mkdir(parents=True, exist_ok=True)
+
+                md_content = f"# {title}\n\n**Источник:** {pdf_url}\n\n{review_text}"
+                with open(md_path, "w", encoding="utf-8") as f:
+                    f.write(md_content)
+                logger.info(f"Review MD saved: {md_path.name}")
+
+                await obs_loader.upload_all_md()
+                logger.info(f"Review MD uploaded to OBS: articles/{md_name}")
+
+                # Сохраняем имя файла в статье для последующего использования
+                if "file_article" not in article or not article["file_article"]:
+                    article["file_article"] = md_name
+            except Exception as obs_err:
+                logger.warning(f"OBS upload failed for {article_id}: {obs_err}")
+
         return True
     except Exception as e:
         logger.error(f"Failed to process article {article_id} ({title}): {e}")
         return False
 
 
-async def tool_make_reviews_basket(db, user_id, llm_client) -> Dict[str, Any]:
+async def tool_make_reviews_basket(
+    db, user_id, llm_client,
+    obs_loader: Optional[OBSWorker] = None,
+    articles_path: Optional[Path] = None,
+) -> Dict[str, Any]:
     rows = await db.get_reviews(user_id)
     articles_data = [dict(row) for row in rows]
     articles_to_process = [a for a in articles_data if not a.get("review_text")]
@@ -272,7 +305,10 @@ async def tool_make_reviews_basket(db, user_id, llm_client) -> Dict[str, Any]:
         return {"status": "success", "basket_empty": False, "all_done": True, "total": len(articles_data)}
 
     tasks = [
-        process_single_article_safe(article=a, db=db, user_id=user_id, llm=llm_client)
+        process_single_article_safe(
+            article=a, db=db, user_id=user_id, llm=llm_client,
+            obs_loader=obs_loader, articles_path=articles_path,
+        )
         for a in articles_to_process
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -554,7 +590,10 @@ class KnowledgeAgent:
         @tool
         async def make_basket_reviews() -> str:
             """Создать ревью для статей из корзины избранного пользователя."""
-            result = await tool_make_reviews_basket(agent.db, user_id, agent.gigachat)
+            result = await tool_make_reviews_basket(
+                agent.db, user_id, agent.gigachat,
+                obs_loader=agent.obs_loader, articles_path=agent.articles_path,
+            )
             if result.get("basket_empty"):
                 return "Корзина пуста. Добавьте статьи в избранное, чтобы получить ревью."
             if result.get("all_done"):

@@ -157,47 +157,37 @@ def save_last_end_date(end_date: datetime):
         json.dump({"last_end_date": end_date.strftime("%Y-%m-%d")}, f, indent=2)
 
 
-def _read_existing_metadata() -> Dict[str, Dict]:
-    if not METADATA_PATH.exists():
-        return {}
+async def _read_existing_metadata() -> set:
+    """Возвращает множество external_id уже сохранённых в БД статей"""
     try:
-        with open(METADATA_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            return {item["external_id"]: item for item in data}
-    except (json.JSONDecodeError, KeyError, FileNotFoundError):
-        logger.warning("Не удалось прочитать metadata.json — создаём новый")
-        return {}
+        rows = await db.get_metadata_as_json()
+        return {row["external_id"] for row in rows}
+    except Exception as e:
+        logger.warning(f"Не удалось прочитать metadata из БД: {e}")
+        return set()
 
-def _save_articles_and_metadata(articles: List[Dict]):
-    """Сохраняет тексты статей и обновляет metadata.json без дубликатов и без text_article"""
+
+async def _save_articles_to_db(articles: List[Dict]):
+    """Сохраняет тексты статей на диск и метаданные в БД (papers_metadata) без дубликатов"""
     os.makedirs(ARTICLES_DIR, exist_ok=True)
     os.makedirs(PDFS_DIR, exist_ok=True)
 
-    existing_meta = _read_existing_metadata()
-    new_articles = []
-    skipped_count = 0
-    filtered_count = 0
+    existing_ids = await _read_existing_metadata()
+    new_records = []
 
     for art in articles:
         external_id = art["external_id"]
-        if external_id in existing_meta:
+        if external_id in existing_ids:
             logger.info(f"Пропускаем дубликат: {external_id} ({art.get('title', 'N/A')})")
             continue
-        text_body = art.get("text_article", "")
-        abstract_body = art.get("abstract", "")
 
-        combined_text = f"{abstract_body}\n{text_body}"
-
-        # if not is_process_mining_related(combined_text):
-        #     logger.debug(f"Отфильтровано (не PM): {external_id} - {art.get('title', 'N/A')}")
-        #     filtered_count += 1
-        #     continue
         logger.info("Проходим дальше по статье")
-        filename = art["file_article"]
+        filename = art.get("file_article")
         if not filename:
             filename = f"{external_id}.md"
         article_path = ARTICLES_DIR / filename
 
+        # Сохраняем текст статьи на диск (для OBS upload и review)
         with open(article_path, "w", encoding="utf-8") as f:
             f.write(art.get("text_article", ""))
 
@@ -210,19 +200,20 @@ def _save_articles_and_metadata(articles: List[Dict]):
                 f.write(pdf_bytes)
             logger.info(f"Сохранён PDF: {pdf_filename}")
 
+        # Формируем запись для БД (без текста статьи и PDF-байтов)
         meta_entry = {k: v for k, v in art.items() if k not in ("text_article", "pdf_bytes")}
-        existing_meta[external_id] = meta_arch = meta_entry
-        new_articles.append(meta_arch)
+        meta_entry["pdf_downloaded"] = bool(pdf_bytes) or bool(art.get("pdf_url"))
+        new_records.append(meta_entry)
+        existing_ids.add(external_id)
 
-    with open(METADATA_PATH, "w", encoding="utf-8") as f:
-        json.dump(
-            list(existing_meta.values()),
-            f,
-            ensure_ascii=False,
-            indent=2
-        )
-
-    logger.info(f"Сохранено {len(new_articles)} новых статей")
+    if new_records:
+        try:
+            await db.upsert_metadata(new_records)
+            logger.info(f"Сохранено {len(new_records)} новых статей в papers_metadata")
+        except Exception as e:
+            logger.error(f"Ошибка сохранения метаданных в БД: {e}")
+    else:
+        logger.info("Нет новых статей для сохранения")
 
 def _remove_directory(dir_path: str | Path, ignore_errors: bool = False) -> bool:
     """
@@ -290,9 +281,6 @@ async def perform_parsing_cycle():
         parsing_active = True
         logger.info("=== Начало цикла синхронизации ===")
 
-        logger.info("Скачивание данных из OBS...")
-        await obs.download_metadata()
-
         moscow_tz = pytz.timezone("Europe/Moscow")
         today = datetime.now(moscow_tz).replace(tzinfo=None)
         week_ago = today - timedelta(days=7)
@@ -315,7 +303,7 @@ async def perform_parsing_cycle():
 
         params = SearchParams(
             keywords=[],
-            date_start=date_range[0],  # ← берём из date_range, не хардкодим
+            date_start=date_range[0],
             date_end=date_range[1],
             limit=50,
         )
@@ -323,23 +311,19 @@ async def perform_parsing_cycle():
         parsers = [
             # ArxivClient(params=params),
             # ARXIVParser(date_range),
-            # # FluxiconParser(date_range), # Почему то умер
             # ScholarParser(date_range=date_range, config=cfg),
             # IEEEParser(link_ieee, date_range=date_range),
         ]
-
-        # parsers = []
 
         pipeline = ParserPipeline(parsers)
         raw_articles = await pipeline.run()
 
         logger.info(f"Обработка {len(raw_articles)} статей...")
-        _save_articles_and_metadata(raw_articles)
+        await _save_articles_to_db(raw_articles)
 
-        logger.info("Загрузка результатов в OBS...")
-        # await obs.upload_all_md()
-        # await obs.upload_all_pdfs()
-        await obs.put_json()
+        logger.info("Загрузка файлов статей в OBS...")
+        await obs.upload_all_md()
+        await obs.upload_all_pdfs()
 
         logger.info("=== Цикл синхронизации завершён ===")
 
@@ -426,9 +410,6 @@ async def run_icpm():
         try:
             parsing_active = True
             logger.info("=== Разовый запуск ICPM парсера ===")
-            await obs.put_json()
-            # await obs.download_all_md()
-            # await obs.download_metadata()
 
             icpm_url = os.getenv("YANDEX_DISK_ICPM_URL", "https://disk.yandex.ru/d/t3YC0BQjOA1sBA")
             icpm_date = os.getenv("ICPM_CONFERENCE_DATE", "2025-10-01")
@@ -439,10 +420,10 @@ async def run_icpm():
             raw_articles = await pipeline.run()
 
             logger.info(f"ICPM: обработка {len(raw_articles)} статей...")
-            _save_articles_and_metadata(raw_articles)
+            await _save_articles_to_db(raw_articles)
 
-            # await obs.upload_all_md()
-            # await obs.upload_all_pdfs()
+            await obs.upload_all_md()
+            await obs.upload_all_pdfs()
 
 
             logger.info("=== ICPM парсинг завершён ===")

@@ -2,6 +2,7 @@ import asyncio
 import asyncpg
 import logging
 import os
+import json
 from .config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME
 
 

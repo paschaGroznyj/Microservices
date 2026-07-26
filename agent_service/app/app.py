@@ -446,7 +446,7 @@ async def handle_tg_message(req: TgMessageRequest) -> TgMessageResponse:
             extracted_text = await asyncio.to_thread(parse_file, req.file_name, file_bytes)
             
             # 3. Формируем контекст для агента
-            file_prompt = f"\n\n📎 [Прикрепленный файл: {req.file_name}]\nСодержимое файла:\n```\n{extracted_text}\n```"
+            file_prompt = f"\n\n📎 [Прикрепленный файл: {req.file_name}]\nСодержимое файла:\n```\n{extracted_text[:30000]}\n```"
             enriched += file_prompt
             logging.info(f"СОДЕРЖИМОЕ ФАЙЛА: {extracted_text[:300]}")
         except Exception as e:

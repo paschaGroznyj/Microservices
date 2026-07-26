@@ -3,6 +3,7 @@ import asyncpg
 import logging
 import os
 import json
+from datetime import date
 from .config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME
 
 
@@ -10,6 +11,16 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
+
+def _coerce_tags(val) -> list:
+    if val is None:
+        return []
+    if isinstance(val, list):
+        return val
+    if isinstance(val, str):
+        # "tag1, tag2" -> ["tag1", "tag2"]
+        return [t.strip() for t in val.split(",") if t.strip()]
+    return list(val)
 
 
 class DataBase:
@@ -225,11 +236,11 @@ class DataBase:
                     r["external_id"],
                     r.get("source"),
                     r.get("title"),
-                    r.get("date_sub"),          # asyncpg сам разберёт строку "2025-10-01" как DATE
+                    date.fromisoformat(r["date_sub"]) if r.get("date_sub") else None,  # <-- fix         # asyncpg сам разберёт строку "2025-10-01" как DATE
                     r.get("url_article"),
                     r.get("pdf_url"),
                     json.dumps(r.get("authors", {})),  # JSONB
-                    r.get("tags", []),                  # TEXT[]
+                    _coerce_tags(r.get("tags")),                  # TEXT[]
                     r.get("abstract"),
                     r.get("file_article"),
                     r.get("category"),

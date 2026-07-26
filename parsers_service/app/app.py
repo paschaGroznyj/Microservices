@@ -5,6 +5,9 @@ from typing import List, Dict, Any, Optional
 from dataclasses import asdict
 from pydantic import BaseModel
 from fastapi import FastAPI, Response, HTTPException, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from typing import Optional
 from contextlib import asynccontextmanager
 import uvicorn
 import asyncio
@@ -33,6 +36,8 @@ from parsers.arxiv_api_parser import ArxivClient
 
 from parsers.yandex_disk_parser import YandexDiskParser
 from botocore_client import OBSWorker
+
+from universal.page_parser import browser_parser
 
 # Конфигурация
 from core.config import (
@@ -309,43 +314,21 @@ async def perform_parsing_cycle():
         )
 
         parsers = [
-            # ArxivClient(params=params),
+            ArxivClient(params=params),
             # ARXIVParser(date_range),
-            # ScholarParser(date_range=date_range, config=cfg),
-            # IEEEParser(link_ieee, date_range=date_range),
+            ScholarParser(date_range=date_range, config=cfg),
+            IEEEParser(link_ieee, date_range=date_range),
         ]
 
         pipeline = ParserPipeline(parsers)
         raw_articles = await pipeline.run()
 
-        logger.info(f"Обработка {len(raw_articles)} статей...")
-        await _save_articles_to_db(raw_articles)
+        # logger.info(f"Обработка {len(raw_articles)} статей...")
+        # await _save_articles_to_db(raw_articles)
+ 
+        # # Уведомляем агента — fire-and-forget, не ждём результата
+        # await _notify_agent(articles_count=len(raw_articles), service_port=8003)
 
-        logger.info("Загрузка файлов статей в OBS...")
-        await obs.upload_all_md()
-        await obs.upload_all_pdfs()
-
-        logger.info("=== Цикл синхронизации завершён ===")
-
-        try:
-            async with httpx.AsyncClient() as client:
-                logger.info(SERVICES['agent_service']['url'])
-                response = await client.post(
-                    f"{SERVICES['agent_service']['url']}/make_reviews",
-                    json={"status": "success"})
-                response.raise_for_status()
-
-                logger.info(f"Агент подтвердил задачу: {response.json()}")
-        except httpx.HTTPStatusError as e:
-            logger.error(f"Агент вернул ошибку: {e.response.status_code} - {e.response.text}")
-            raise HTTPException(status_code=502, detail=f"Agent service reported error: {e.response.text}")
-        except httpx.RequestError as e:
-            logger.error(f"Не удалось связаться с агентом: {e}")
-            raise HTTPException(status_code=503, detail=f"Agent service unreachable: {str(e)}")
-
-        logger.info("Удаляем лишнее")
-        _remove_directory(ARTICLES_DIR)
-        _remove_directory(PDFS_DIR)
 
     except Exception as e:
         logger.exception(f"Критическая ошибка в цикле парсинга: {e}")
@@ -364,7 +347,7 @@ async def perform_parsing_cycle():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.init_db_pool()
-
+    # await perform_parsing_cycle()
     moscow_tz = pytz.timezone("Europe/Moscow")
 
     scheduler = AsyncIOScheduler(timezone=moscow_tz)
@@ -545,7 +528,27 @@ async def select_favorites(request: Dict[str, Any]):
         })
 
     return {"articles": articles}
-
+  
+class ParsePageRequest(BaseModel):
+    urls: list[str]
+    headers: Optional[dict] = None
+ 
+ 
+@app.post("/parse/page")
+async def parse_page(req: ParsePageRequest) -> JSONResponse:
+    """
+    Парсит список страниц, возвращает единый текст агенту.
+    headers — агент генерирует сам (User-Agent, Accept-Language и т.п.)
+    """
+    parts: list[str] = []
+ 
+    for url in req.urls:
+        text = await browser_parser(url, req.headers)
+        parts.append(text)
+ 
+    combined = "\n\n" + "─" * 60 + "\n\n".join(parts)
+    return JSONResponse({"urls": req.urls, "text": combined})
+    
 @app.get("/health")
 async def health():
     status = "active" if parsing_active else "idle"

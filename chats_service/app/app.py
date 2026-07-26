@@ -92,7 +92,9 @@ async def get_current_user_from_cookie(token: str = Depends(get_token)):
 
 
 class ChatMessage(BaseModel):
-    user_id: int
+    user_id: int | None
+    username: str
+    tb_name: str
     message: str
     chat_id: int
     type_agent: str
@@ -118,6 +120,8 @@ async def shutdown():
 async def send_message(chat: ChatMessage):
     message = {
         "user_id": chat.user_id,
+        "tb_name": chat.tb_name,
+        "username": chat.username,
         "chat_id": chat.chat_id,
         "message": chat.message,
         "type_agent": chat.type_agent,
@@ -159,9 +163,24 @@ async def get_all_user_messages(limit: int = 50, offset: int = 0,  x_user_name: 
         logging.error(f"Ошибка в эндпоинте: {e}")
         raise HTTPException(status_code=500, detail="Не удалось загрузить историю чата")
 
+@app.get("/user/chats")
+async def get_user_chats(x_user_name: str = Header(..., alias="X-User-Name")):
+    try:
+        chats = await db.get_user_chats_summary(x_user_name)
+        sorted_chats = sorted(
+            chats, 
+            key=lambda x: x["timestamp"], 
+            reverse=True
+        )
+        return {"chats": sorted_chats}
+    except Exception as e:
+        logging.error(f"Ошибка в эндпоинте get_user_chats: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось загрузить список чатов")
+
 
 @app.post("/chat/new")
-async def create_chat(data: dict):
+async def create_chat(request: Request):
+    data = await request.json()
     user_id = data.get("user_id")
     if not user_id:
         raise HTTPException(status_code=400, detail="user_id required")
@@ -181,7 +200,7 @@ async def create_chat(data: dict):
 
     # (опционально) создаём первое сообщение
     await db.add_message(
-        username=user_id,
+        user_id=user_id,
         message="Чат создан",
         chat_id=chat_id,
         is_from_bot=True
@@ -191,21 +210,10 @@ async def create_chat(data: dict):
 
 
 @app.get("/chat/by-type/{type_agent}")
-async def find_chat_by_type(type_agent: str, request: Request):
+async def find_chat_by_type(type_agent: str, x_user_id: str = Header(..., alias="X-User-Id")):
     """Найти существующий чат пользователя по типу агента (ouroboros/pm)."""
-    auth_data = await get_auth_data(request)
-    token = get_token(auth_data)
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username = payload.get("sub")
-    except jwt.PyJWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-    user_id = int(request.headers.get("X-User-Id", 0))
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id required")
-
-    chat_id = await db.find_chat_by_type(user_id, type_agent)
+    chat_id = await db.find_chat_by_type(int(x_user_id), type_agent)
+    logging.info(f"Пытались найти чат, для {x_user_id}, {type_agent}, {chat_id}")
     if chat_id:
         return {"chat_id": chat_id, "exists": True}
     return {"chat_id": None, "exists": False}

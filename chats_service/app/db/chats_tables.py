@@ -2,6 +2,7 @@ import asyncio
 import asyncpg
 from app.core.config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME
 import logging
+from datetime import datetime, timezone
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,42 +49,66 @@ class DataBaseChats:
     @staticmethod
     async def __init_db(conn):
         await conn.execute("""
-                CREATE TABLE IF NOT EXISTS chats (
-                    id SERIAL PRIMARY KEY,
-                    username INTEGER NOT NULL,
-                    chat_id INTEGER NOT NULL,
-                    message_text TEXT,
-                    is_from_bot BOOLEAN,
-                    tool_name TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
+            CREATE TABLE IF NOT EXISTS chats (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                message_text TEXT,
+                is_from_bot BOOLEAN,
+                tool_name TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
             
+            -- Миграция: если таблица уже существовала со старой колонкой username
+            DO $$ 
+            BEGIN 
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name='chats' AND column_name='username'
+                ) THEN
+                    ALTER TABLE chats RENAME COLUMN username TO user_id;
+                END IF;
+            END $$;
+
             ALTER TABLE chats ADD COLUMN IF NOT EXISTS tool_name TEXT;
-            CREATE INDEX IF NOT EXISTS ix_chats_username ON chats(username);
+            DROP INDEX IF EXISTS ix_chats_username;
+            CREATE INDEX IF NOT EXISTS ix_chats_user_id ON chats(user_id);
             CREATE INDEX IF NOT EXISTS ix_chats_chat_id ON chats(chat_id);
 
             -- Таблица типов чатов (один чат — один тип агента)
-            CREATE TABLE IF NOT EXISTS chat_types (
+            CREATE TABLE IF NOT EXISTS chat_types_agent (
                 chat_id INTEGER NOT NULL,
-                username INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
                 type_agent TEXT NOT NULL DEFAULT 'pm',
-                PRIMARY KEY (chat_id, username)
+                PRIMARY KEY (chat_id, user_id)
             );
-            """
-                           )
-    async def add_message(self, username: int, message: str, chat_id: int, is_from_bot: bool, action: str = None):
-        if username is None or chat_id is None:
+
+            -- Миграция для id чатов
+            ALTER TABLE chat_types_agent ALTER COLUMN chat_id TYPE BIGINT USING chat_id::BIGINT;
+            ALTER TABLE chat_types_agent ALTER COLUMN user_id TYPE BIGINT USING user_id::BIGINT;
+
+            ALTER TABLE chats ALTER COLUMN user_id TYPE BIGINT USING user_id::BIGINT;
+            ALTER TABLE chats ALTER COLUMN chat_id TYPE BIGINT USING chat_id::BIGINT;
+
+        """)
+
+    async def add_message(self, user_id: int, message: str, chat_id: int, is_from_bot: bool, action: str = None):
+        if user_id is None or chat_id is None:
             logging.warning("Пропущено сообщение: отсутствует user_id или chat_id")
             return None
+        
+        # Генерируем точное время создания со значением UTC
+        now_utc = datetime.now(timezone.utc)
+        
         try:
             async with self.pool.acquire() as conn:
-               await conn.fetchval("""
-                    INSERT INTO chats (username, chat_id, message_text, is_from_bot, tool_name)
-                    VALUES ($1, $2, $3, $4, $5);
+                await conn.fetchval("""
+                    INSERT INTO chats (user_id, chat_id, message_text, is_from_bot, tool_name, created_at)
+                    VALUES ($1, $2, $3, $4, $5, $6);
                 """,
-                username, chat_id, message, is_from_bot, action)
+                user_id, chat_id, message, is_from_bot, action, now_utc)
         except asyncpg.UniqueViolationError:
-            logging.error(f"Сообщение не может быть добавлено")
+            logging.error("Сообщение не может быть добавлено")
 
     async def get_all_user_messages(self, username: str, limit: int = 50, offset: int = 0):
         """
@@ -94,18 +119,18 @@ class DataBaseChats:
                 rows = await conn.fetch("""
                     SELECT 
                         c.id, 
-                        c.username as user_id,
+                        c.user_id,
                         u.username,
                         c.chat_id, 
                         c.message_text as message, 
                         c.is_from_bot, 
                         c.created_at as timestamp
                     FROM chats c
-                    LEFT JOIN users u ON c.username = u.id
+                    LEFT JOIN users u ON c.user_id = u.id
                     WHERE c.chat_id IN (
                         SELECT DISTINCT chat_id 
                         FROM chats 
-                        WHERE username = (SELECT id FROM users WHERE username = $1)
+                        WHERE user_id = (SELECT id FROM users WHERE username = $1)
                     )
                     ORDER BY c.created_at ASC
                     LIMIT $2 OFFSET $3
@@ -113,7 +138,6 @@ class DataBaseChats:
 
                 messages = []
                 for row in rows:
-                    # Определяем имя отправителя
                     if row["user_id"] == -1:
                         sender_name = "AI Assistant"
                     elif row["username"]:
@@ -135,35 +159,36 @@ class DataBaseChats:
             logging.error(f"Ошибка при получении всех сообщений пользователя {username}: {e}")
             raise
 
-    # async def get_chat_messages(self, chat_id: int, limit: int = 50, offset: int = 0):
-    #     """
-    #     Возвращает список всех сообщений в чате (и от юзера, и от бота).
-    #     """
-    #     try:
-    #         async with self.pool.acquire() as conn:
-    #             rows = await conn.fetch("""
-    #                 SELECT id, username AS user_id, chat_id, message_text, is_from_bot, created_at
-    #                 FROM chats
-    #                 WHERE chat_id = $1
-    #                 ORDER BY created_at ASC
-    #                 LIMIT $2 OFFSET $3
-    #             """, chat_id, limit, offset)
-    #
-    #             # Преобразуем в список словарей
-    #             messages = []
-    #             for row in rows:
-    #                 messages.append({
-    #                     "id": row["id"],
-    #                     "user_id": row["user_id"],
-    #                     "chat_id": row["chat_id"],
-    #                     "message": row["message_text"],
-    #                     "is_from_bot": row["is_from_bot"],
-    #                     "created_at": row["created_at"].isoformat()
-    #                 })
-    #             return messages
-    #     except Exception as e:
-    #         logging.error(f"Ошибка при получении сообщений чата {chat_id}: {e}")
-    #         raise
+    async def get_user_chats_summary(self, username: str):
+        """Возвращает список чатов пользователя с их последними сообщениями."""
+        try:
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    WITH user_chats AS (
+                        SELECT DISTINCT chat_id 
+                        FROM chats 
+                        WHERE user_id = (SELECT id FROM users WHERE username = $1)
+                    )
+                    SELECT DISTINCT ON (c.chat_id)
+                        c.chat_id AS id,
+                        c.message_text AS last_message,
+                        c.created_at AS timestamp
+                    FROM chats c
+                    JOIN user_chats uc ON c.chat_id = uc.chat_id
+                    ORDER BY c.chat_id, c.created_at DESC
+                """, username)
+
+                return [
+                    {
+                        "id": row["id"],
+                        "last_message": row["last_message"],
+                        "timestamp": row["timestamp"].isoformat()
+                    }
+                    for row in rows
+                ]
+        except Exception as e:
+            logging.error(f"Ошибка при получении списка чатов пользователя {username}: {e}")
+            raise
 
     async def get_chat_messages(self, chat_id: int, username: str, limit: int = 50, offset: int = 0):
         """
@@ -174,18 +199,18 @@ class DataBaseChats:
                 rows = await conn.fetch("""
                     SELECT 
                         c.id, 
-                        c.username as user_id,
+                        c.user_id,
                         u.username as username,
                         c.chat_id, 
                         c.message_text, 
                         c.is_from_bot, 
                         c.created_at
                     FROM chats c
-                    LEFT JOIN users u ON c.username = u.id
+                    LEFT JOIN users u ON c.user_id = u.id
                     WHERE c.chat_id = $1 
                         AND (
-                            c.username = (SELECT id FROM users WHERE username = $2)
-                            OR c.username = -1
+                            c.user_id = (SELECT id FROM users WHERE username = $2)
+                            OR c.user_id = -1
                         )
                     ORDER BY c.created_at ASC
                     LIMIT $3 OFFSET $4
@@ -205,6 +230,7 @@ class DataBaseChats:
         except Exception as e:
             logging.error(f"Ошибка при получении сообщений чата {chat_id}: {e}")
             raise
+
     async def get_user_messages(self, user_id: int, limit: int = 50, offset: int = 0):
         """
         Получение всех сообщений пользователя (по всем чатам)
@@ -219,9 +245,9 @@ class DataBaseChats:
                         message_text as message,
                         is_from_bot,
                         created_at as timestamp
-                    FROM chats_messages
+                    FROM chats
                     WHERE user_id = $1
-                    ORDER BY created_at DESC  -- Сначала новые
+                    ORDER BY created_at DESC
                     LIMIT $2 OFFSET $3
                 """, user_id, limit, offset)
 
@@ -240,7 +266,7 @@ class DataBaseChats:
 
     async def get_stuck_messages(self, older_than_seconds: int):
         return await self.pool.fetch("""
-            SELECT id, chat_id, username
+            SELECT id, chat_id, user_id
             FROM chats
             WHERE is_from_bot = FALSE
               AND status = 'PROCESSING'
@@ -255,28 +281,26 @@ class DataBaseChats:
             WHERE id = $1
         """, message_id)
 
-    async def set_chat_type(self, chat_id: int, username: int, type_agent: str):
+    async def set_chat_type(self, chat_id: int, user_id: int, type_agent: str):
         """Привязывает тип агента к чату."""
         async with self.pool.acquire() as conn:
             await conn.execute("""
-                INSERT INTO chat_types (chat_id, username, type_agent)
+                INSERT INTO chat_types_agent (chat_id, user_id, type_agent)
                 VALUES ($1, $2, $3)
-                ON CONFLICT (chat_id, username) DO UPDATE SET type_agent = $3
-            """, chat_id, username, type_agent)
+                ON CONFLICT (chat_id, user_id) DO UPDATE SET type_agent = $3
+            """, chat_id, user_id, type_agent)
 
-    async def get_chat_type(self, chat_id: int, username: int) -> str | None:
+    async def get_chat_type(self, chat_id: int, user_id: int) -> str | None:
         """Возвращает тип агента для чата или None."""
         async with self.pool.acquire() as conn:
             return await conn.fetchval("""
-                SELECT type_agent FROM chat_types WHERE chat_id = $1 AND username = $2
-            """, chat_id, username)
+                SELECT type_agent FROM chat_types_agent WHERE chat_id = $1 AND user_id = $2
+            """, chat_id, user_id)
 
-    async def find_chat_by_type(self, username: int, type_agent: str) -> int | None:
+    async def find_chat_by_type(self, user_id: int, type_agent: str) -> int | None:
         """Находит существующий чат пользователя с заданным типом агента."""
         async with self.pool.acquire() as conn:
             return await conn.fetchval("""
-                SELECT chat_id FROM chat_types WHERE username = $1 AND type_agent = $2
+                SELECT chat_id FROM chat_types_agent WHERE user_id = $1 AND type_agent = $2
                 ORDER BY chat_id DESC LIMIT 1
-            """, username, type_agent)
-
-
+            """, user_id, type_agent)

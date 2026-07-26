@@ -27,30 +27,30 @@ class DigestEmailHandler:
             smtp_password=SMTP_PASSWORD,
         )
 
-    def execute(
+    async def execute(
         self,
         user_input: str,
-        gigachat,
+        llm,
         obs_loader,
         name_meta_dir,
         digest_path,
+        database
     ) -> Dict[str, Any]:
         """
         Сформировать дайджест и отправить на email.
 
         Возвращает dict с ключами status и message (совместим с _execute в agent.py).
         """
-        asyncio.run(obs_loader.run_download())
-        asyncio.run(obs_loader.download_reviews())
+        # await obs_loader.run_download()
+        # await obs_loader.download_reviews()
 
-        json_file = name_meta_dir / "metadata.json"
-        results = agent_composite_digest_tool(
-            llm_client=gigachat,
+        # json_file = name_meta_dir / "metadata.json"
+
+        results = await agent_composite_digest_tool(llm_client=llm,
             query=user_input,
-            json_path=json_file,
             md_folder=digest_path,
-        )
-
+            database=database)
+            
         if results["found_articles"] == 0:
             return {
                 "status": "error",
@@ -70,7 +70,7 @@ class DigestEmailHandler:
         count = results["found_articles"]
         filename = results.get("filename", "digest")
 
-        s3_key = asyncio.run(obs_loader.upload_single_digest_cond(digest_file, filename))
+        s3_key = await obs_loader.upload_single_digest_cond(digest_file, filename)
 
         bucket_endpoint = "https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru"
 

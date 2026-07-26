@@ -3,9 +3,12 @@ import asyncpg
 import logging
 import os
 import json
-from datetime import date
+from datetime import date, datetime, timezone
+from typing import List, Dict, Any
+from pathlib import Path
+import random
 
-from .config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME, FERNET_KEY
+from .config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME, FERNET_KEY, AGENT_POOL_PASSWORD
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,9 +31,34 @@ def _coerce_tags(val) -> list:
         return [t.strip() for t in val.split(",") if t.strip()]
     return list(val)
 
+
+SCHEMA_PATH = Path(__file__).parent / "sql_scripts"
+
+def load_sql_schema(folder_path: Path) -> str:
+    """Считывает SQL скрипты из папки."""
+    if not folder_path.is_dir():
+        raise FileNotFoundError(f"Директория со скриптами не найдена: {folder_path.resolve()}")
+
+    sql_parts = []
+    sql_files = sorted(folder_path.glob("*.sql"))
+
+    if not sql_files:
+        raise FileNotFoundError(f"В папке {folder_path.resolve()} не найдено ни одного .sql файла")
+        return ''
+
+    for file_path in sql_files:
+        content = file_path.read_text(encoding="utf-8").strip()
+        if content:
+            sql_parts.append(f"-- File: {file_path.name}\n{content}")
+
+    # Объединяем скрипты через перевод строки
+    return "\n\n".join(sql_parts)
+
+
 class AgentDB:
     def __init__(self):
         self.pool = None
+        self.readonly_pool = None  # отдельный пул для LLM-запросов
 
     async def init_db_pool(self):
         max_retries = 5
@@ -67,6 +95,15 @@ class AgentDB:
                 else:
                     raise
 
+    async def init_readonly_pool(self):
+        self.readonly_pool = await asyncpg.create_pool(
+            user="knowledge_manager",
+            password=AGENT_POOL_PASSWORD,
+            host=DB_HOST, port=DB_PORT, database=DB_NAME,
+            min_size=1, max_size=2,
+            command_timeout=10,  # жёсткий таймаут на запрос
+        )
+
     async def close(self):
         if self.pool:
             await self.pool.close()
@@ -76,37 +113,17 @@ class AgentDB:
         return "[" + ",".join(map(str, vector)) + "]"
 
     async def init_schema(self, conn: asyncpg.Connection):
+
+        FULL_sql = load_sql_schema(SCHEMA_PATH)
+
         await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS article_embeddings (
-                id BIGSERIAL PRIMARY KEY,
-                article_id BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
-                embedding vector(1024) NOT NULL,
-                embedding_model TEXT NOT NULL,
-                source_text TEXT,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                UNIQUE (article_id, embedding_model)
-            );
+        await conn.execute(FULL_sql)
 
-            CREATE TABLE IF NOT EXISTS papers_metadata (
-                external_id     TEXT PRIMARY KEY,
-                source          TEXT,
-                title           TEXT,
-                date_sub        DATE,
-                url_article     TEXT,
-                pdf_url         TEXT,
-                authors         JSONB,
-                tags            TEXT[],
-                abstract        TEXT,
-                file_article    TEXT,
-                category        TEXT,
-                relevance_score FLOAT,
-                relevance_reasoning TEXT,
-                is_relevant     BOOLEAN,
-                pdf_downloaded  BOOLEAN
-            );
+        await conn.execute("""
+            ALTER TABLE papers_metadata
+                ADD COLUMN IF NOT EXISTS review BOOLEAN,
+                ADD COLUMN IF NOT EXISTS text_review TEXT;
         """)
 
         await conn.execute("""
@@ -139,7 +156,7 @@ class AgentDB:
         await conn.execute("""
             ALTER TABLE request_articles
                 ADD COLUMN IF NOT EXISTS is_relevant BOOLEAN,
-                ADD COLUMN IF NOT EXISTS processed_at TIMESTAMP;
+                ADD COLUMN IF NOT EXISTS processed_at TIMESTAMP DEFAULT NOW();
         """)
 
         await conn.execute("""
@@ -157,6 +174,43 @@ class AgentDB:
         """)
 
 
+    async def get_agent_journal(self) -> str:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT id, entry_type, content, context, created_at 
+                FROM agent_journal 
+                ORDER BY created_at DESC 
+                LIMIT 10;
+            """)
+
+        if not rows:
+            return "Журнал агента пуст."
+
+        formatted_entries = []
+        
+        for row in rows:
+            # Красиво форматируем дату (YYYY-MM-DD HH:MM:SS)
+            created_str = row["created_at"].strftime("%Y-%m-%d %H:%M:%S") if row["created_at"] else "—"
+            
+            # Разбираем JSONB context
+            context_data = row["context"]
+            if context_data:
+                # Если asyncpg вернул dict — переводим в читаемый JSON, если строку — отдаем как есть
+                ctx_str = json.dumps(context_data, ensure_ascii=False) if isinstance(context_data, dict) else str(context_data)
+            else:
+                ctx_str = "без контекста"
+
+            # Собираем блок для отдельной записи
+            entry = (
+                f"• [{created_str}] ID: {row['id']} | Тип: [{row['entry_type']}]\n"
+                f"  Содержание: {row['content']}\n"
+                f"  Контекст: {ctx_str}"
+            )
+            formatted_entries.append(entry)
+
+        # Объединяем разделителем
+        return "\n\n".join(formatted_entries)
+            
 
     async def get_user_id_by_name(self, user_name: str) -> int | None:
         async with self.pool.acquire() as conn:
@@ -699,4 +753,292 @@ class AgentDB:
                 FROM papers_metadata
             """)
         return [dict(r) for r in rows]
+    
+    async def get_metadata_as_json_with_pdf(self) -> list[dict]:
+        """Возвращает все строки в виде списка словарей — замена старого download_metadata"""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT
+                    external_id, source, title,
+                    date_sub::text AS date_sub,
+                    url_article, pdf_url,
+                    authors, tags, abstract,
+                    file_article, category,
+                    relevance_score, relevance_reasoning,
+                    is_relevant, pdf_downloaded
+                FROM papers_metadata WHERE pdf_downloaded = True
+            """)
+        return [dict(r) for r in rows]
+    
+    async def update_pdf_downloaded_status(
+        self, external_id: str, downloaded: bool = True
+    ) -> None:
+        """Обновляет флаг pdf_downloaded для конкретной статьи по ее external_id"""
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE papers_metadata
+                SET pdf_downloaded = $1
+                WHERE external_id = $2
+            """,
+                downloaded,
+                external_id,
+            )
+
+    async def get_chat_history(self, chat_id: int, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Получить последние N сообщений из чата для восстановления контекста.
+        Возвращает список словарей с полями: message_text, is_from_bot, created_at
+        """
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT message_text, is_from_bot, created_at
+                FROM chats
+                WHERE chat_id = $1
+                ORDER BY created_at DESC
+                LIMIT $2
+            """, chat_id, limit)
+            
+            # Возвращаем в хронологическом порядке (от старых к новым)
+            return [dict(row) for row in reversed(rows)]
+            
+
+    async def ensure_user_exists(self, username: str, password: str = None, source: str = "telegram"):
+        DUMMY_PASSWORD_HASH = "EXTERNALLY_AUTHENTICATED_NO_LOGIN_POSSIBLE"
+        
+        try:
+            async with self.pool.acquire() as conn:
+                user_id = await conn.fetchval("""
+                    INSERT INTO users (username, password_hash, source)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT (username) DO NOTHING
+                    RETURNING id;
+                """, username, DUMMY_PASSWORD_HASH, source)
+
+                if user_id:
+                    logging.info(f"Создан новый пользователь {username} (source={source}) с id={user_id}")
+                    return user_id
+                
+                existing_id = await conn.fetchval(
+                    "SELECT id FROM users WHERE username = $1", username
+                )
+                return existing_id
+
+        except Exception as e:
+            logging.error(f"Ошибка при работе с пользователем {username}: {e}")
+            raise
+
+    async def add_message(self, user_id: int, message: str, chat_id: int, is_from_bot: bool, action: str = None):
+        """Добавить сообщение пользователя из ТГ"""
+        if user_id is None or chat_id is None:
+            logging.warning("Пропущено сообщение: отсутствует user_id или chat_id")
+            return None
+        
+        # Генерируем точное время создания со значением UTC
+        now_utc = datetime.now(timezone.utc)
+        
+        try:
+            async with self.pool.acquire() as conn:
+               await conn.fetchval("""
+                    INSERT INTO chats (user_id, chat_id, message_text, is_from_bot, tool_name, created_at)
+                    VALUES ($1, $2, $3, $4, $5, $6);
+                """,
+                user_id, chat_id, message, is_from_bot, action, now_utc)
+        except asyncpg.UniqueViolationError:
+            logging.error(f"Сообщение не может быть добавлено")
+
+# ============================== ОБЩЕНИЕ МЕЖДУ СЕРВИСАМИ ==============================
+
+    async def add_service_message(service_name, service_port, message):
+        _SQL_INSERT = """
+            INSERT INTO service_chats (service_name, service_port, message_text, status)
+            VALUES ($1, $2, $3, 'pending')
+            RETURNING id
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    _SQL_INSERT,
+                    service_name,
+                    service_port,
+                    message,
+                )
+                return row
+        except asyncpg.UniqueViolationError:
+            logging.error(f"Сообщение не может быть добавлено")
+    
+    async def update_service_status(message_id):
+        _SQL_UPDATE_STATUS = """
+            UPDATE service_chats SET status = $1, updated_at = NOW() WHERE id = $2
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute(_SQL_UPDATE_STATUS, "processing", message_id)
+        except asyncpg.UniqueViolationError:
+            logging.error(f"Сообщение не может быть добавлено")
+
+        
+    async def update_service_message(reply, status, message_id):
+        _SQL_UPDATE_DONE = """
+            UPDATE service_chats
+            SET reply_text = $1, status = $2, updated_at = NOW()
+            WHERE id = $3
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute(_SQL_UPDATE_DONE, reply, status, message_id)
+        except asyncpg.UniqueViolationError:
+            logging.error(f"Сообщение не может быть добавлено")
+
+# ==================== РАБОТА С СЕССИЯМИ ==========================
+
+    # ── session_summaries ──────────────────────────────────────────────────────────
+
+    async def session_start(self, chat_id: int) -> dict:
+        """
+        Создаёт новую запись сессии.
+        Генерит 6-значный session_id, фиксирует текущий MAX(id) из chats как start_msg_id.
+        Возвращает {"session_id": ..., "start_msg_id": ...}
+        """
+        _SQL_MAX_MSG = "SELECT COALESCE(MAX(id), 0) FROM chats WHERE chat_id = $1"
+        _SQL_INSERT  = """
+            INSERT INTO session_summaries (session_id, chat_id, start_msg_id)
+            VALUES ($1, $2, $3)
+            RETURNING id, session_id, start_msg_id
+        """
+        session_id = random.randint(100_000, 999_999)
+
+        try:
+            async with self.pool.acquire() as conn:
+                # Гарантируем уникальность session_id
+                while True:
+                    exists = await conn.fetchval(
+                        "SELECT 1 FROM session_summaries WHERE session_id = $1", session_id
+                    )
+                    if not exists:
+                        break
+                    session_id = random.randint(100_000, 999_999)
+
+                start_msg_id = await conn.fetchval(_SQL_MAX_MSG, chat_id)
+                row = await conn.fetchrow(_SQL_INSERT, session_id, chat_id, start_msg_id)
+
+            logging.info("Session start: session_id=%s chat_id=%s start_msg_id=%s",
+                        session_id, chat_id, start_msg_id)
+            return {"session_id": row["session_id"], "start_msg_id": row["start_msg_id"]}
+
+        except Exception as e:
+            logging.error("session_start failed: %s", e)
+            raise
+
+
+    async def session_end(self, chat_id: int, session_id: int, llm) -> dict:
+        """
+        Завершает сессию:
+        1. Берёт start_msg_id из записи сессии
+        2. Берёт текущий MAX(id) из chats как end_msg_id
+        3. Тянет все сообщения из диапазона [start_msg_id, end_msg_id]
+        4. Передаёт текст напрямую в LLM (не через агента) для генерации саммари
+        5. Обновляет запись: end_msg_id + summary_text
+        Возвращает {"session_id": ..., "summary_text": ...}
+        """
+        _SQL_GET_START = """
+            SELECT start_msg_id FROM session_summaries
+            WHERE session_id = $1 AND chat_id = $2
+        """
+        _SQL_MESSAGES = """
+            SELECT id, is_from_bot, message_text
+            FROM chats
+            WHERE chat_id = $1 AND id BETWEEN $2 AND $3
+            ORDER BY id ASC
+        """
+        _SQL_UPDATE = """
+            UPDATE session_summaries
+            SET end_msg_id   = $1,
+                summary_text = $2,
+                updated_at   = NOW()
+            WHERE session_id = $3 AND chat_id = $4
+            RETURNING id
+        """
+
+        try:
+            async with self.pool.acquire() as conn:
+                start_msg_id = await conn.fetchval(_SQL_GET_START, session_id, chat_id)
+                if start_msg_id is None:
+                    raise ValueError(f"Сессия session_id={session_id} chat_id={chat_id} не найдена")
+
+                end_msg_id = await conn.fetchval(
+                    "SELECT COALESCE(MAX(id), 0) FROM chats WHERE chat_id = $1", chat_id
+                )
+
+                messages = await conn.fetch(_SQL_MESSAGES, chat_id, start_msg_id, end_msg_id)
+
+            if not messages:
+                summary = "Сессия завершена, сообщений в диапазоне не найдено."
+            else:
+                # Формируем диалог для LLM
+                dialog_lines = []
+                for msg in messages:
+                    role = "Агент" if msg["is_from_bot"] else "Пользователь"
+                    text = (msg["message_text"] or "").strip()
+                    if text:
+                        dialog_lines.append(f"{role}: {text}")
+
+                dialog_text = "\n".join(dialog_lines)
+
+                # Прямой вызов LLM — без агентного цикла
+                from langchain.schema import SystemMessage, HumanMessage
+                response = llm.invoke([
+                    SystemMessage(content=(
+                        "Ты — ассистент. Прочитай диалог между пользователем и агентом. "
+                        "Составь краткое саммари сессии (3–7 предложений): "
+                        "о чём говорили, какие задачи решались, что было сделано, "
+                        "что осталось незавершённым. Пиши на русском, без лишних вступлений."
+                    )),
+                    HumanMessage(content=f"Диалог:\n{dialog_text}"),
+                ])
+                summary = response.content.strip()
+
+            async with self.pool.acquire() as conn:
+                await conn.fetchrow(_SQL_UPDATE, end_msg_id, summary, session_id, chat_id)
+
+            logging.info("Session end: session_id=%s chat_id=%s msgs=[%s..%s]",
+                        session_id, chat_id, start_msg_id, end_msg_id)
+            return {"session_id": session_id, "summary_text": summary}
+
+        except Exception as e:
+            logging.error("session_end failed: %s", e)
+            raise
+
+
+    async def get_last_session_summary(self, chat_id: int) -> dict | None:
+        """
+        Возвращает последнюю завершённую сессию для чата.
+        Подставляется в messages при каждом новом запросе.
+        None если сессий ещё нет или summary не сформировано.
+        """
+        _SQL = """
+            SELECT session_id, summary_text
+            FROM session_summaries
+            WHERE chat_id = $1
+            ORDER BY updated_at DESC
+            LIMIT 1
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                row = await conn.fetchrow(_SQL, chat_id)
+                if row is None:
+                    return None
+                return {"session_id": row["session_id"], "summary_text": row["summary_text"]}
+        except Exception as e:
+            logging.error("get_last_session_summary failed: %s", e)
+            return None
+
+                
+
+
+ 
+
+ 
+
+
 

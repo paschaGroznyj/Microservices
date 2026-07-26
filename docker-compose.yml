@@ -95,6 +95,7 @@ services:
       OUROBOROS_API_PASSWORD: ${OUROBOROS_API_PASSWORD}
 
       ADMINS_INFO: ${ADMINS_INFO}
+      AGENT_POOL_PASSWORD: ${AGENT_POOL_PASSWORD}
 
     extra_hosts:
       - "host.docker.internal:host-gateway"

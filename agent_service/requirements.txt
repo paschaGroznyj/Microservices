@@ -21,4 +21,7 @@ requests
 asyncpg
 PyPDF2
 cryptography
+websockets
+sqlparse
+python-docx
 

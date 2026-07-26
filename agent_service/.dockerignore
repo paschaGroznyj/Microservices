@@ -1,0 +1,19 @@
+# agent_service/.dockerignore
+venv/
+.venv/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+*.log
+config/*.local.*
+knowledge_base/
+articles/
+metadata/
+faiss_index/
+digests/
+hf-cache/
+.env
+.pytest_cache/
+.mypy_cache/
+node_modules/

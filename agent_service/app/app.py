@@ -2,10 +2,11 @@ import threading
 import time
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response, APIRouter
 import uvicorn
 import json
 import logging
+import base64
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
@@ -17,11 +18,13 @@ from agent_pm.summary_period import extract_json
 import asyncio
 from httpx import AsyncClient
 # from agent_pm.pm_parser.arxiv_parser import ARXIVParser
-from agent_pm.core.config import KAFKA_BROKER, PORT_PM_AGENT, PORT_PARSERS_SERVICE, PORT_GATEWAY_PORT, OUROBOROS_API_URL, OUROBOROS_API_PASSWORD
+from agent_pm.core.config import (KAFKA_BROKER, PORT_PM_AGENT, PORT_PARSERS_SERVICE, PORT_GATEWAY_PORT, 
+OUROBOROS_API_URL, OUROBOROS_API_PASSWORD, OUROBOROS_WS, OUROBOROS_RESPONSE_TIMEOUT)
 from agent_pm.search_bot.searcher import searcher_main
 from agent_pm.core.db import AgentDB
+from agent_pm.core.file_parsers import parse_file
 from agent_pm.scheduler_digest import start_digest_scheduler, start_interval_digest_scheduler
-
+import websockets
 from agent_pm.core.botocore_client import database
 logging.basicConfig(level=logging.INFO)
 
@@ -45,53 +48,83 @@ async def get_producer() -> AIOKafkaProducer:
     return producer
 
 async def handle_ouroboros_message(payload: dict, prod: AIOKafkaProducer):
-    """Перенаправление сообщения на Ouroboros API.
-    Статус 'думает' отправляется через WebSocket (bot_status), а не в Kafka —
-    чтобы не сохранять заглушку в БД."""
+    """Перенаправление сообщения на Ouroboros API + трансляция промежуточных мыслей."""
     start = time.perf_counter()
 
     chat_id = payload.get("chat_id")
     text = payload.get("message")
     request_id = payload.get("request_id")
+    tb_name = payload.get("tb_name")
+    username = payload.get("username")
 
     if not text or chat_id is None:
         logging.warning(f"Некорректное сообщение для Ouroboros: {payload}")
         return
 
-    # Отправляем статус через WebSocket (не пишется в БД)
-    try:
-        async with httpx.AsyncClient(timeout=2.0) as status_client:
-            await status_client.post(
-                f"{GATEWAY_URL}/internal/bot_status",
-                json={"request_id": request_id, "status": "Ouroboros думает..."},
-            )
-    except Exception:
-        pass  # статус — best-effort, не блокируем основной поток
+    message = f"[CatchPM, ТабельНомер: {tb_name}, Пользователь: {username}]\n" + text
+
+    async def send_status(status_text: str):
+        """Best-effort отправка статуса через WS-бродкаст гейтвея."""
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as status_client:
+                await status_client.post(
+                    f"{GATEWAY_URL}/internal/bot_status",
+                    json={"request_id": request_id, "status": status_text},
+                )
+        except Exception:
+            pass  # статус — best-effort, не блокируем основной поток
+
+    await send_status("Ouroboros думает...")
 
     try:
+        # 1. Отправляем команду
         async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(
                 f"{OUROBOROS_API_URL}/api/command",
-                json={"cmd": text},
+                json={"cmd": message},
                 headers={"x-ouroboros-password": OUROBOROS_API_PASSWORD},
             )
-            if resp.status_code == 200:
-                # Ouroboros отвечает асинхронно через WS.
-                # Реальный ответ придёт через WebSocket broadcast от Ouroboros.
-                # Ничего не пишем в Kafka — заглушка не нужна.
-                logging.info(f"Ouroboros принял запрос для чата {chat_id}, ждём WS-ответ")
-            else:
-                # Ошибка — пишем в Kafka, чтобы пользователь увидел
-                error_msg = {
-                    "user_id": -1,
-                    "chat_id": chat_id,
-                    "message": f"❌ Ouroboros API вернул {resp.status_code}",
-                    "is_from_bot": True,
-                    "type_agent": "ouroboros",
-                    "action": "error"
-                }
-                await prod.send_and_wait("chat-messages", value=error_msg)
 
+        if resp.status_code != 200:
+            error_msg = {
+                "user_id": -1,
+                "chat_id": chat_id,
+                "message": f"❌ Ouroboros API вернул {resp.status_code}",
+                "is_from_bot": True,
+                "type_agent": "ouroboros",
+                "action": "error"
+            }
+            await prod.send_and_wait("chat-messages", value=error_msg)
+            return
+
+        logging.info(f"Ouroboros принял запрос для чата {chat_id}, слушаем WS-ответ")
+
+        # 2. Слушаем WS: транслируем промежуточные мысли, ждём финальный ответ
+        final_content = await _listen_ouroboros_with_progress(send_status)
+
+        if final_content is None:
+            timeout_msg = {
+                "user_id": -1,
+                "chat_id": chat_id,
+                "message": "⏱️ Ouroboros не ответил вовремя",
+                "is_from_bot": True,
+                "type_agent": "ouroboros",
+                "action": "error"
+            }
+            await prod.send_and_wait("chat-messages", value=timeout_msg)
+            return
+
+        bot_message = {
+            "user_id": -1,
+            "chat_id": chat_id,
+            "message": final_content.strip(),
+            "is_from_bot": True,
+            "type_agent": "ouroboros",
+            "action": "answer"
+        }
+        await prod.send_and_wait("chat-messages", value=bot_message)
+
+        logging.info(f"Ouroboros ответ в чат {chat_id}: {final_content[:50]}...")
         logging.info(f"Время обработки: {time.perf_counter() - start:.4f}s")
 
     except Exception as e:
@@ -107,6 +140,53 @@ async def handle_ouroboros_message(payload: dict, prod: AIOKafkaProducer):
         await prod.send_and_wait("chat-messages", value=error_message)
 
 
+async def _listen_ouroboros_with_progress(send_status) -> str | None:
+    """Подключиться к WS Ouroboros, транслировать промежуточные мысли через send_status,
+    вернуть финальный ответ ассистента."""
+    try:
+        async with websockets.connect(
+            OUROBOROS_WS,
+            additional_headers={"x-ouroboros-password": OUROBOROS_API_PASSWORD},
+        ) as ws:
+            # Пропускаем первое сообщение (возможно, state/buffer)
+            try:
+                await asyncio.wait_for(ws.recv(), timeout=1)
+            except asyncio.TimeoutError:
+                pass
+
+            while True:
+                try:
+                    raw = await asyncio.wait_for(
+                        ws.recv(), timeout=OUROBOROS_RESPONSE_TIMEOUT
+                    )
+                except asyncio.TimeoutError:
+                    logging.warning("Ouroboros response timeout (%ds)", OUROBOROS_RESPONSE_TIMEOUT)
+                    return None
+
+                try:
+                    msg = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(msg, dict):
+                    continue
+
+                if msg.get("type") == "chat" and msg.get("role") == "assistant":
+                    content = msg.get("content", "")
+                    if not content:
+                        continue
+
+                    if msg.get("is_progress", False):
+                        # Промежуточная мысль — шлём как статус, не как сообщение в Kafka
+                        await send_status(content)
+                        continue
+
+                    # Финальный ответ
+                    return content
+    except Exception as e:
+        logging.error("WS connection to Ouroboros failed: %s", e)
+        return None
+
+
 async def handle_message(payload: dict, prod: AIOKafkaProducer):
     """Обработка одного сообщения — запускается конкурентно."""
     start = time.perf_counter()
@@ -117,13 +197,18 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     is_from_bot = payload.get("is_from_bot", False)
     type_agent = payload.get("type_agent")
     request_id = payload.get("request_id")
+    tb_name = payload.get("tb_name")
+    username = payload.get("username")
+
+    message = f"[CatchPM, ТабельНомер: {tb_name}, Пользователь: {username}]\n" + text
+    # message = f"[CatchPM, ТабельНомер: {tb_name}, Пользователь: Иванов Иван]\n" + text
 
     if is_from_bot or user_id == -1:
         return
     if not text or chat_id is None:
         logging.warning(f"Некорректное сообщение: {payload}")
         return
-
+    print("ВНУТРИ АГЕНТА", payload)
     # Маршрутизация: ouroboros → Ouroboros API, pm → KnowledgeAgent
     if type_agent == "ouroboros":
         await handle_ouroboros_message(payload, prod)
@@ -133,7 +218,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
         return
 
     try:
-        response = await agent.process_query(user_input=text, request_id=request_id, user_id=user_id, database=db)
+        response = await agent.process_query(user_input=message, request_id=request_id, user_id=user_id, chat_id=chat_id, database=db)
         # loop = asyncio.get_running_loop()
         # response = await loop.run_in_executor(
         #     None, agent.process_query, text, request_id
@@ -159,6 +244,32 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
 
     except Exception as e:
         logging.error(f"Ошибка обработки сообщения: {e}")
+
+async def _process_service_message(message_id: int, enriched_text: str):
+    """Обрабатывает сообщение сервиса в фоне, пишет ответ в service_chats."""
+    try:
+        await _db.update_service_status(message_id)
+ 
+        result = await _agent.process_query(
+            user_input=enriched_text,
+            request_id=None,
+            user_id=None,           # нет пользователя — это сервис
+            chat_id=None,
+            database=_db,
+            source="service",
+        )
+        reply = result.get("message", "Агент не вернул ответ.")
+        status = "done"
+ 
+    except Exception as e:
+        log.error("Ошибка обработки service message id=%s: %s", message_id, e, exc_info=True)
+        reply  = f"Ошибка агента: {e}"
+        status = "error"
+ 
+    async with _db.pool.acquire() as conn:
+        await conn.execute(_SQL_UPDATE_DONE, reply, status, message_id)
+ 
+    log.info("service_chats id=%s → status=%s | %.60s", message_id, status, reply)
 
 
 async def kafka_consumer():
@@ -218,12 +329,18 @@ async def lifespan(app: FastAPI):
     global agent, digest_scheduler
 
     await db.init_db_pool()
-    await database.init_db_pool() # Для теста
+    await db.init_readonly_pool() # Для теста
+
+    # from agent_pm.core.botocore_client import OBSWorker
+    # obs = OBSWorker()
+    # await obs.upload_all_md()
 
     kafka_task = asyncio.create_task(kafka_consumer())
 
     agent = KnowledgeAgent(database=db, skip_startup_autoprocess=False)
-    await agent.make_reviews()
+
+    connect_service_routers(agent, db)
+    # await agent.make_reviews()
     # # Получаем сам объект scheduler, а не таск
     # digest_scheduler = await start_interval_digest_scheduler()
 
@@ -246,8 +363,168 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+tg_router = APIRouter(prefix="/api/tg", tags=["telegram"])
+service_router = APIRouter(prefix="/service", tags=["service"])
+
+
+
+"""
+agent_service/api/tg_endpoint.py
+─────────────────────────────────
+Эндпоинт POST /api/tg/message для приёма сообщений из tg_bot контейнера.
+Подключается к app.py через app.include_router(tg_router).
+"""
+
+
+class TgMessageRequest(BaseModel):
+    message:   str
+    user_id:   int
+    username:  str
+    user_tag: str
+    chat_id:   int
+    chat_type: str = "private"   # "private" | "group"
+    file_b64: Optional[str] = None   # Base64 строка с содержимым файла
+    file_name: Optional[str] = None  # Имя файла (например, "document.pdf")
+
+
+class TgMessageResponse(BaseModel):
+    reply: str
+
 class ParsingMessage(BaseModel):
     status: str
+
+class ServiceMessageRequest(BaseModel):
+    service_name: str           # "parsers_service"
+    service_port: Optional[int] = None   # 8003
+    message: str                # текст команды для агента
+ 
+ 
+class ServiceMessageResponse(BaseModel):
+    status: str                 # "accepted"
+    message_id: int             # ID записи в service_chats
+
+_agent = None
+_db    = None
+
+
+def connect_service_routers(agent, db):
+    global _agent, _db
+    _agent = agent
+    _db    = db
+
+
+@tg_router.post("/message", response_model=TgMessageResponse)
+async def handle_tg_message(req: TgMessageRequest) -> TgMessageResponse:
+    """
+    Принимает сообщение из Telegram-бота, прогоняет через PM Agent,
+    возвращает текстовый ответ.
+    """
+    if _agent is None:
+        raise HTTPException(status_code=503, detail="Agent not initialized")
+    
+    try:
+        # Сразу дергаем ID пользователя из БД:
+        user_id_database = await _db.ensure_user_exists(username=req.user_tag, source="telegram")
+    except Exception as e:
+        logging.warning("Не удалось автоматически зарегистрировать TG юзера %s: %s", req.username, e)
+        raise HTTPException(status_code=500, detail="Failed to resolve user in database")
+
+    # Обогащаем текст мета-информацией (как делал ouroboros-мост)
+    enriched = (
+        f"[TG | user_id={req.user_id} | name={req.username} | chat={req.chat_type}] | chat_id={req.chat_id} | tag={req.user_tag}\n"
+        f"{req.message}"
+    )
+    
+    # Если передан файл в base64 — декодируем и парсим
+    if req.file_b64 and req.file_name:
+        logging.info(f"ПОЛУЧЕН ФАЙЛ ->")
+        try:
+            # 1. Декодируем base64 в байты
+            file_bytes = base64.b64decode(req.file_b64)
+            
+            # 2. Выносим тяжелый синхронный парсинг в separate thread (Task/Executor)
+            extracted_text = await asyncio.to_thread(parse_file, req.file_name, file_bytes)
+            
+            # 3. Формируем контекст для агента
+            file_prompt = f"\n\n📎 [Прикрепленный файл: {req.file_name}]\nСодержимое файла:\n```\n{extracted_text}\n```"
+            enriched += file_prompt
+            logging.info(f"СОДЕРЖИМОЕ ФАЙЛА: {extracted_text[:300]}")
+        except Exception as e:
+            logging.error("Ошибка при декодировании/парсинге файла %s: %s", req.file_name, e)
+            enriched += f"\n\n[Не удалось прочитать прикрепленный файл {req.file_name}: {e}]"
+
+    logging.info(
+        "TG message | user_id=%s name=%s chat_id=%s type=%s | %.60s",
+        req.user_id, req.username, req.chat_id, req.chat_type, req.message,
+    )
+    
+    try:
+        result = await _agent.process_query(
+            user_input=enriched,
+            request_id=None,       # статусы через Kafka не нужны
+            user_id=user_id_database,
+            chat_id=req.chat_id,          # чат в БД не создаём
+            database=_db,
+            source="telegram"
+        )
+        reply = result.get("message", "Агент не вернул ответ.")
+    except Exception as e:
+        logging.error("process_query failed for TG: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return TgMessageResponse(reply=reply)
+    # return TgMessageResponse(reply="NOTHING")
+
+@service_router.post("/message", response_model=ServiceMessageResponse, status_code=202)
+async def handle_service_message(req: ServiceMessageRequest):
+    """
+    Принимает команду от внешнего сервиса, сохраняет в service_chats,
+    запускает обработку агентом в фоне и сразу возвращает 202 Accepted.
+ 
+    Пример тела от parsers_service:
+        {
+          "service_name": "parsers_service",
+          "service_port": 8003,
+          "message": "Я сервис парсинга на порту 8003, подготовил для тебя 42 новые статьи.
+                      Посмотри papers_metadata и отбери релевантные (is_relevant IS NULL).
+                      Для каждой проставь is_relevant=true/false и relevance_score."
+        }
+    """
+    if _agent is None:
+        raise HTTPException(status_code=503, detail="Agent not initialized")
+ 
+    # 1. Записываем входящее сообщение в service_chats
+    row = await _db.add_service_message(req.service_name, req.service_port, req.message)
+    message_id = row["id"]
+ 
+    log.info(
+        "service_chats: новое сообщение id=%s от %s:%s | %.80s",
+        message_id, req.service_name, req.service_port, req.message,
+    )
+ 
+    # 2. Обогащаем текст для агента
+    enriched = (
+        f"[SERVICE | from={req.service_name} port={req.service_port} "
+        f"msg_id={message_id}]\n{req.message}"
+    )
+ 
+    # 3. Fire-and-forget — сразу возвращаем 202
+    task = asyncio.create_task(_process_service_message(message_id, enriched))
+ 
+    def _on_done(t: asyncio.Task):
+        if t.exception():
+            log.error("_process_service_message упал: %s", t.exception())
+ 
+    task.add_done_callback(_on_done)
+ 
+    return ServiceMessageResponse(status="accepted", message_id=message_id)
+
+
+routers = [tg_router, service_router]
+
+for rout in routers:
+    app.include_router(rout)
+
 
 @app.post("/make_reviews")
 async def make_reviews(parsing_status: ParsingMessage):
@@ -609,6 +886,6 @@ async def make_report(text: str, style: str):
 
 if __name__ == "__main__":
     # threading.Thread(target=kafka_consumer, daemon=True).start() # Поднятие консьюмера
-    uvicorn.run("app:app", host="0.0.0.0", port=int(PORT_PM_AGENT), log_level="info", reload=True)
+    uvicorn.run("app:app", host="0.0.0.0", port=int(PORT_PM_AGENT), log_level="info", reload=False)
     # uvicorn.run(app, host="127.0.0.1", port=int(PORT_PM_AGENT), log_level="info")
 

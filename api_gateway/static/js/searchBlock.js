@@ -445,7 +445,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!target) return;
 
         const tabName = target.getAttribute('data-tab');
-        app.currentTab = tabName;
+        // app.currentTab = tabName;
         console.log('Переключение таба:', tabName);
 
         // Вызываем функцию переключения

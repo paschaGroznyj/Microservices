@@ -88,6 +88,10 @@ html, body {
   overscroll-behavior: contain;
 }
 
+.chat-messages.hidden {
+    display: none;
+}
+
 /* Стилизация скроллбара сообщений */
 .chat-messages::-webkit-scrollbar {
   width: 6px;
@@ -568,13 +572,16 @@ html, body {
     width: 100%;
     max-width: 768px;
     display: flex;
-    align-items: flex-end;
+    align-items: flex-end; /* Выравнивает элементы по нижнему краю */
     gap: 8px;
     background: var(--bg-primary);
     border-radius: 24px;
-    padding: 8px 8px 8px 16px;
+    /* Важно: делаем padding снизу и сверху одинаковым, 
+       чтобы центрировать элементы в одну строку */
+    padding: 6px 6px 6px 16px; 
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
     transition: box-shadow 0.2s ease;
+    box-sizing: border-box;
 }
 
 .message-input-box:focus-within {
@@ -583,26 +590,23 @@ html, body {
 
 /* Поле ввода */
 #message-input {
-  width: 100%;
-  border: none;
-  outline: none;
-  resize: none;
-
-  background: transparent;
-
-  font-size: 15px;
-  line-height: 1.5;
-  font-family: inherit;
-  color: var(--text-primary);
-
-  padding: 12px 0;
-
-  max-height: 120px;
-  overflow-y: auto;
-
-  /* скрыть скроллбар */
-  scrollbar-width: none;       /* Firefox */
-  -ms-overflow-style: none;    /* IE / Edge старый */
+    flex: 1; /* Растягивается на всю ширину */
+    border: none;
+    outline: none;
+    resize: none;
+    background: transparent;
+    font-size: 15px;
+    line-height: 1.5; /* Высота строки ~22.5px */
+    font-family: inherit;
+    color: var(--text-primary);
+    
+    /* Уменьшаем padding, чтобы строка не была слишком высокой,
+       а кнопка визуально стояла на уровне текста */
+    padding: 8px 0; 
+    
+    max-height: 120px;
+    overflow-y: auto;
+    scrollbar-width: none;
 }
 
 /* Скрываем скроллбар для Chrome, Safari, Edge */

@@ -192,6 +192,7 @@ class ChatAppSimple {
             const response = await fetch('/api/chats', { credentials: 'include' });
             if (response.ok) {
                 this.chats = await response.json();
+                console.log(this.chats)
                 // ищем существующий чат уробора среди чатов пользователя
                 const ouro = this.chats.find(c => c.type === 'ouroboros');
                 this.ouroborosChatId = ouro ? ouro.id : null;
@@ -203,17 +204,29 @@ class ChatAppSimple {
     }
 
     renderChats(chats) {
-        const chatList = document.getElementById('chat-list');
-        const visible = chats.filter(c => c.type !== 'ouroboros'); // ← фильтр
-        chatList.innerHTML = [...visible].reverse().map(chat => `
-            <div class="chat-item ${chat.id === this.currentChat ? 'active' : ''}"
-                data-chat-id="${chat.id}" data-tab="agent">
-                <div class="chat-preview">
-                    ${chat.last_message || 'Нет сообщений'}
+            const chatList = document.getElementById('chat-list');
+            
+            // 1. Фильтруем
+            const visible = chats.filter(c => 
+                c.type !== 'ouroboros' && 
+                c.last_message && 
+                c.last_message.trim() !== '' && 
+                c.last_message !== 'Чат создан'
+            );
+
+            // 2. Сортируем по timestamp (новые вверху)
+            visible.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+            // 3. Рендерим
+            chatList.innerHTML = visible.map(chat => `
+                <div class="chat-item ${chat.id === this.currentChat ? 'active' : ''}"
+                    data-chat-id="${chat.id}" data-tab="agent">
+                    <div class="chat-preview">
+                        ${chat.last_message}
+                    </div>
                 </div>
-            </div>
-        `).join('');
-    }
+            `).join('');
+        }
 
     async openOuroborosChat() {
         // Реальный чат уже существует (получен раньше или создан в этой сессии)
@@ -227,8 +240,10 @@ class ChatAppSimple {
             const resp = await fetch('/api/chats/by-type/ouroboros', {
                 credentials: 'include'
             });
+            console.log(resp)
             if (resp.ok) {
                 const data = await resp.json();
+                console.log('ID чата с ouroboros ', data)
                 if (data.exists && data.chat_id) {
                     this.ouroborosChatId = data.chat_id;
                     await this.openChat(data.chat_id, 'ouroboros');
@@ -236,11 +251,12 @@ class ChatAppSimple {
                 }
             }
         } catch (e) {
+            console.log(e);
             // бэк недоступен — продолжаем в виртуальном режиме
         }
 
         // Виртуальное состояние — чат ещё не создан на бэке
-        this.currentChat = null;
+        this.currentChat = 'ouroborchik';
         this.currentTab = 'ouroboros';
         this.switchView('ouroboros');
 
@@ -271,32 +287,47 @@ class ChatAppSimple {
 
 
   async openChat(chatId, tab = 'agent') {
+        // Сначала переключаем view и устанавливаем состояние
         this.currentChat = chatId;
         this.currentTab = tab;
-        this.switchView(tab); 
+        this.switchView(tab);
+        
+        // Показываем контейнер сообщений и очищаем его ДО загрузки новых сообщений
+        const msgContainer = this.getMessagesContainer();
+        if (msgContainer) {
+            msgContainer.classList.remove('hidden');
+            msgContainer.innerHTML = ''; // Очищаем сразу, чтобы не было мерцания старого контента
+        }
+        
         document.querySelector('.chat-main-inner')?.classList.add('chat-active');
 
-        await this.renderMessageInput();
-        await this.loadMessages(chatId);
-        this.connectWebSocket(chatId);
-
+        // Подсвечиваем активный чат в списке
         document.querySelectorAll('.chat-item').forEach(item => {
             item.classList.toggle('active', Number(item.dataset.chatId) === chatId);
         });
+
+        // Загружаем сообщения и инпут параллельно
+        await Promise.all([
+            this.loadMessages(chatId),
+            this.renderMessageInput()
+        ]);
+        
+        // Подключаем WebSocket после загрузки
+        this.connectWebSocket(chatId);
     }
 
     async loadMessages(chatId) {
-        try {
-            const response = await fetch(`/api/chats/${chatId}/messages`, {
-                credentials: 'include'
-            });
+    const response = await fetch(`/api/chats/${chatId}/messages`);
 
-            if (response.ok) {
-                const data = await response.json();
-                this.renderMessages(data.messages);
+        if (response.ok) {
+            const data = await response.json();
+
+            if (chatId !== this.currentChat) {
+                console.log('Старый ответ проигнорирован');
+                return;
             }
-        } catch (error) {
-            console.error('Error loading messages:', error);
+
+            this.renderMessages(data.messages);
         }
     }
 
@@ -373,8 +404,6 @@ class ChatAppSimple {
         const container = this.getInputContainer();
         container?.classList.add('rending');
         if (!container) return;
-
-         console.log('NONNI', this.currentTab);
         // Получаем имя пользователя (из this.currentUser или фолбэк)
         const username = this.currentUser?.name.split(' ')[0] || 'Пользователь';
         if (this.currentTab === 'ouroboros') {
@@ -511,35 +540,22 @@ class ChatAppSimple {
     }
 
     attachHintActions() {
-            const input = document.getElementById('message-input');
+        const container = this.getInputContainer();
+        const input = container?.querySelector('#message-input, textarea');
+        if (!input) return;
 
-            if (!input) return;
-
-            document.querySelectorAll('.hint-item').forEach(chip => {
-
-                chip.addEventListener('click', () => {
-
-                    const prompt = chip.dataset.prompt;
-
-                    if (!prompt) return;
-
-                    input.value = prompt;
-
-                    // триггерим resize textarea
-                    input.dispatchEvent(new Event('input'));
-
-                    input.focus();
-
-                    // optional animation
-                    chip.classList.add('hint-clicked');
-
-                    setTimeout(() => {
-                        chip.classList.remove('hint-clicked');
-                    }, 300);
-                });
-
+        container.querySelectorAll('.hint-item').forEach(chip => {
+            chip.addEventListener('click', () => {
+                const prompt = chip.dataset.prompt;
+                if (!prompt) return;
+                input.value = prompt;
+                input.dispatchEvent(new Event('input'));
+                input.focus();
+                chip.classList.add('hint-clicked');
+                setTimeout(() => chip.classList.remove('hint-clicked'), 300);
             });
-        }
+        });
+    }
 
     attachInputHandlers() {
         const container = this.getInputContainer();
@@ -584,30 +600,36 @@ class ChatAppSimple {
         }
     }
 
-    async sendMessage() {
-        const input = document.getElementById('message-input');
+   async sendMessage() {
+        const inputContainer = this.getInputContainer();
+        const input = inputContainer?.querySelector('#message-input, textarea');
+        const sendBtn = inputContainer?.querySelector('#send-btn, button.send-btn, button');
+
+        if (!input) return;
+
         const text = input.value.trim();
-        console.log('input= ', input, 'text ', text)
         if (!text) return;
 
-       if (!this.currentChat) {
+        if (!this.currentChat) {
             try {
                 input.value = '';
                 input.style.height = "auto";
-
-                if (this.currentTab === 'ouroboros') {
-                    await this.createOuroborosChat();   // ← новый метод
-                } else {
-                    await this.createNewChat();
-                }
+                await this.createNewChat();
             } catch (err) {
                 console.error('❌ Failed to create chat:', err);
-                alert('Не удалось создать чат. Попробуйте ещё раз.');
+                alert('Не удалось создать чат с ассистентом. Попробуйте ещё раз.');
+                return;
+            }
+        } else if (this.currentChat == 'ouroborchik') {
+            try {
+                await this.createOuroborosChat();
+            } catch (err) {
+                console.error('❌ Failed to create chat:', err);
+                alert('Не удалось создать чат с Ouroboros. Попробуйте ещё раз.');
                 return;
             }
         }
 
-        // Оптимистичный рендер с temp id
         const tempId = `temp-${Date.now()}`;
         this.addMessage({
             message: text,
@@ -631,10 +653,8 @@ class ChatAppSimple {
             if (response.ok) {
                 input.value = '';
                 input.style.height = "auto";
-
-                const sendBtn = document.getElementById('send-btn');
-                sendBtn.classList.remove('active');
-                sendBtn.disabled = true;
+                sendBtn?.classList.remove('active');
+                if (sendBtn) sendBtn.disabled = true;
             }
         } catch (error) {
             console.error('Error sending message:', error);
@@ -644,6 +664,7 @@ class ChatAppSimple {
 
     connectWebSocket(chatId) {
         if (this.ws) {
+            console.log('Закрыли предыдущее соединение', this.ws)
             this.ws.close();
         }
 
@@ -675,22 +696,17 @@ class ChatAppSimple {
             updateStatus(statusText) {
                 const container = this.getMessagesContainer();
                 if (!container) return;
-                console.log('Статус агента', statusText)
-                // Ищем существующий индикатор или создаём новый
                 let statusEl = document.getElementById('agent-status-indicator');
-
                 if (!statusEl) {
                     statusEl = document.createElement('div');
                     statusEl.id = 'agent-status-indicator';
                     statusEl.className = 'agent-status';
                     container.appendChild(statusEl);
                 }
-
                 statusEl.innerHTML = `
                     <span class="status-spinner"></span>
-                    <span class="status-text">${statusText}</span>
+                    <span class="status-text">${this.escapeHtml(statusText)}</span>
                 `;
-
                 container.scrollTop = container.scrollHeight;
             }
 
@@ -767,7 +783,10 @@ class ChatAppSimple {
 
             // Очищаем контейнер сообщений, чтобы старые сообщения не оставались
             const msgContainer = this.getMessagesContainer();
-            if (msgContainer) msgContainer.innerHTML = '';
+            if (msgContainer) {
+                msgContainer.innerHTML = '';
+                msgContainer.classList.add('hidden');  
+            }
 
             // снимаем активный класс со всех пунктов списка
             document.querySelectorAll('.chat-item').forEach(item => item.classList.remove('active'));

@@ -823,6 +823,8 @@ async def send_message(request: Request):
     pending_requests[request_id] = data["chat_id"]
 
     data["user_id"] = user["user_id"]
+    data["tb_name"] = request.headers.get("X-Authentik-Username") # Передача табельника в chats_service -> promt Ouroboros
+    data["username"] = request.headers.get("X-Authentik-Name").encode('latin-1').decode('utf-8') # Передача имени в chats_service -> promt Ouroboros
     data["type_agent"] = data.get("type_agent", "pm") # О Великий gateway
     data["request_id"] = request_id
     logger.info(f"Что летит при отправке сообщений {data['chat_id']}, {data['message']}")
@@ -833,7 +835,7 @@ async def send_message(request: Request):
         "message": data["message"],
         "is_from_bot": False
     }
-
+    print("Перед отправкой сообщения", data)
     await broadcast(data["chat_id"], message) # Отравим сразу по вебсокету
     try:
         start = time.perf_counter()
@@ -860,46 +862,26 @@ async def get_chats(request: Request):
 
     try:
         start = time.perf_counter()
-
-        headers = {
-            "X-User-Name": user["username"]
-        }
+        headers = {"X-User-Name": user["username"]}
 
         response = await app.state.http_client.get(
-            f"{SERVICES['chats']['url']}/user/all/messages",
+            f"{SERVICES['chats']['url']}/user/chats",
             cookies=request.cookies,
-            params={"limit": 500},
             headers=headers
         )
+        
         elapsed = time.perf_counter() - start
         logging.info(f"Время подгрузки чатов = {elapsed:.4f}s")
+
         if response.status_code != 200:
             raise HTTPException(status_code=502, detail="Chats service error")
 
         data = response.json()
-        messages = data["messages"]
+        return data["chats"]
 
-        chats = {}
-        for msg in messages:
-            chat_id = msg["chat_id"]
-            if chat_id not in chats:
-                chats[chat_id] = {
-                    "id": chat_id,
-                    "last_message": msg["message"],
-                    "timestamp": msg["timestamp"]
-                }
-            else:
-                # сообщения уже отсортированы ASC
-                chats[chat_id]["last_message"] = msg["message"]
-                chats[chat_id]["timestamp"] = msg["timestamp"]
-
-        return list(chats.values())
-
-    except httpx.RequestError as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Chats service unreachable: {str(e)}"
-        )
+    except Exception as e:
+        logging.error(f"Ошибка получения чатов: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch chats")
 
 @app.get("/api/chats/{chat_id}/messages")
 async def get_messages(chat_id: int, request: Request):
@@ -935,7 +917,12 @@ async def create_new_chat(request: Request):
         raise HTTPException(status_code=401, detail="Not authenticated")
     logger.info(f'{user["user_id"]} текущий пользователь')
 
-    data = await request.json()
+    try:
+        data = await request.json()
+        logger.info(f"Тело с фронта {data}")
+    except Exception:
+        data = {}
+
     type_agent = data.get("type_agent", "pm")
 
     try:

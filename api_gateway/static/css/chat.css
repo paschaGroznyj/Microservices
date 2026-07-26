@@ -304,7 +304,6 @@ body {
 #message-input {
     flex: 1;
     padding: 1rem 1.2rem;
-    border: 2px solid rgba(102, 126, 234, 0.2);
     border-radius: 12px;
     font-size: 1rem;
     font-family: inherit;
@@ -312,12 +311,6 @@ body {
     background: rgba(248, 249, 250, 0.5);
 }
 
-#message-input:focus {
-    outline: none;
-    border-color: #667eea;
-    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
-    background: white;
-}
 
 #send-btn {
     padding: 1rem 2rem;
@@ -332,6 +325,7 @@ body {
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    margin-bottom: 1px;
 }
 
 #send-btn:disabled {

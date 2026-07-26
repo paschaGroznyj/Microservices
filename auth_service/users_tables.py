@@ -79,7 +79,8 @@ class DataBaseUser:
                 username VARCHAR(50) UNIQUE NOT NULL,
                 password_hash VARCHAR(255) NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                scholar_token VARCHAR(255)
+                scholar_token VARCHAR(255),
+                source VARCHAR(20) DEFAULT 'catchPM'
             );
 
             CREATE TABLE IF NOT EXISTS feedbacks (
@@ -102,7 +103,10 @@ class DataBaseUser:
             
             ALTER TABLE users ADD COLUMN IF NOT EXISTS scholar_token VARCHAR(255);
             
-            CREATE INDEX IF NOT EXISTS ix_users_username ON users(username);   
+            CREATE INDEX IF NOT EXISTS ix_users_username ON users(username);
+
+            ALTER TABLE users 
+            ADD COLUMN IF NOT EXISTS source VARCHAR(20) DEFAULT 'catchPM'; 
             """
         )
 
@@ -165,24 +169,22 @@ class DataBaseUser:
     #         logging.error(f"Юзер {username} уже существует (unique violation)")
     #         return None
 
-    async def add_user(self, username: str, password: str = None):
+    async def add_user(self, username: str, password: str = None, source: str = "catchPM"):
         DUMMY_PASSWORD_HASH = "EXTERNALLY_AUTHENTICATED_NO_LOGIN_POSSIBLE"
-    
+        
         try:
             async with self.pool.acquire() as conn:
-                # Используем ON CONFLICT, чтобы избежать ошибки UniqueViolation
                 user_id = await conn.fetchval("""
-                    INSERT INTO users (username, password_hash)
-                    VALUES ($1, $2)
+                    INSERT INTO users (username, password_hash, source)
+                    VALUES ($1, $2, $3)
                     ON CONFLICT (username) DO NOTHING
                     RETURNING id;
-                """, username, DUMMY_PASSWORD_HASH)
+                """, username, DUMMY_PASSWORD_HASH, source)
 
                 if user_id:
-                    logging.info(f"Создан новый пользователь {username} с id={user_id}")
+                    logging.info(f"Создан новый пользователь {username} (source={source}) с id={user_id}")
                     return user_id
                 
-                # Если вернул None, значит пользователь уже был
                 existing_id = await conn.fetchval(
                     "SELECT id FROM users WHERE username = $1", username
                 )

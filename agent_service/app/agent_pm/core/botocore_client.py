@@ -300,15 +300,14 @@ class OBSWorker:
             for filename in os.listdir(self.name_doc_dir):
                 if not filename.endswith(".md"):
                     continue
-
+                
                 local_path = self.name_doc_dir / filename
-                key = f"articles/{filename}"
+                key = f"PM/articles/{filename}"
 
                 with open(local_path, "rb") as f:
-                    data = f.read()
-
+                    data = f.read() 
                 await client.put_object(
-                    Bucket=self.bucket,
+                    Bucket=self.open_bucket,
                     Key=key,
                     Body=data,
                     ContentType="text/markdown",

@@ -17,17 +17,11 @@ load_dotenv()
 gigachat = get_async_gemini()
 
 class MetadataUpdater:
-    def __init__(self, metadata_file: Path, articles_path: Path, max_retries: int = 3, retry_delay: int = 10):
-        self.metadata_file = metadata_file
+    def __init__(self, database, articles_path: Path, max_retries: int = 3, retry_delay: int = 10):
+        self.database = database
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.articles_path = articles_path
-        # self.llm = InferenceClient(api_key=HF_TOKEN)
-        
-        # self.llm = GigaChat(
-        #     credentials=GIGACHAT_CREDENTIALS,  # Обязательный параметр
-        #     verify_ssl_certs=False,  # Отключаем проверку SSL
-        # )
 
         # Список допустимых категорий (для валидации, можно вынести в конфиг)
         self.valid_categories = [
@@ -60,7 +54,7 @@ class MetadataUpdater:
         """
         file_name = item.get('file_article', 'Без названия')
         abstract = item.get('abstract', '')
-        
+
         if not abstract:
             return {
                 "is_relevant": False,
@@ -68,15 +62,13 @@ class MetadataUpdater:
                 "category": None,
                 "reasoning": "Нет абстракта для анализа"
             }
-        
+
         try:
-            # Анализируем релевантность по тексту абстракта
             result = await self.analyzer.assess_relevance(
-                content=abstract, 
+                content=abstract,
                 filename=file_name
             )
-            
-            # Если не релевантна - пропускаем категоризацию
+
             if not result["is_relevant"]:
                 return {
                     "is_relevant": False,
@@ -84,8 +76,7 @@ class MetadataUpdater:
                     "category": None,
                     "reasoning": result["reasoning"]
                 }
-            
-            # Если релевантна - определяем категорию
+
             category = await self.get_category(abstract)
             return {
                 "is_relevant": True,
@@ -93,7 +84,7 @@ class MetadataUpdater:
                 "category": category,
                 "reasoning": result["reasoning"]
             }
-            
+
         except Exception as e:
             return {
                 "is_relevant": False,
@@ -106,43 +97,21 @@ class MetadataUpdater:
         """Запрашивает категорию у LLM с базовой обработкой ответа."""
         categories_str = "\n".join(f"- {cat}" for cat in self.valid_categories)
 
-        # Ограничиваем контент, чтобы не тратить токены
         prompt = f"""Выбери СТРОГО ОДНУ категорию из списка. 
 Категории: {categories_str}
 Текст: [text]
 Ответ только названием категории."""
 
         try:
-            # response = self.llm.chat.completions.create(
-            #     model="Qwen/Qwen3.5-397B-A17B",
-            #     max_tokens=1000,
-            #     messages=[{"role": "user", "content": prompt}],
-            #     temperature=0.5,
-            #     top_p=0.95
-            # )
-            #
-            # if not response.choices or not response.choices[0].message.content:
-            #     return None
-            #
-            # raw_content = response.choices[0].message.content.strip().strip('"\'')
-            # message = [
-            #     SystemMessage(
-            #         content=prompt
-            #     )
-            # ]
-            messages = [SystemMessage(content=prompt)]
             response_sum = await gigachat.ainvoke([
-            SystemMessage(content=prompt),
-            HumanMessage(content=content[:1500]),
-        ])
-            # response_sum = self.llm(message)
+                SystemMessage(content=prompt),
+                HumanMessage(content=content[:1500]),
+            ])
             raw_content = response_sum.content
 
-            # Точное совпадение
             if raw_content in self.valid_categories:
                 return raw_content
 
-            # Частичное совпадение (на случай мусора в ответе)
             for cat in self.valid_categories:
                 if cat in raw_content:
                     return cat
@@ -151,42 +120,37 @@ class MetadataUpdater:
 
         except Exception as e:
             print(f"Ошибка запроса к LLM: {e}")
-            raise e  # Пробрасываем ошибку выше, чтобы обработать её в цикле retry
+            raise e
 
     async def run(self, rebuild_errors: bool = False):
-        if not self.metadata_file.is_file():
-            return "Файл с метаданными не найден."
+        metadata = await self.database.get_metadata_as_json_with_pdf() # Берем статьи только с рабочими ссылками
 
-        try:
-            with open(self.metadata_file, 'r', encoding='utf-8') as f:
-                metadata = json.load(f)
-        except json.JSONDecodeError:
-            return "Ошибка: Файл metadata.json поврежден."
-        self._retry_failed_pdfs(metadata)
+        if not metadata:
+            return "В базе данных нет записей с метаданными."
 
-        # Находим элементы без категории или с ошибкой анализа
+        await self._retry_failed_pdfs(metadata)
+
         def _has_analysis_error(item: Dict) -> bool:
-            reasoning = item.get('relevance_reasoning', '')
+            reasoning = item.get('relevance_reasoning') or ''  # <-- Если None, вернет ''
             return 'Ошибка анализа' in reasoning
 
         if rebuild_errors:
             items_to_process = [
                 item for item in metadata
                 if (_has_analysis_error(item) or item.get('category') is None)
-                and item.get('abstract')
+                and (item.get('abstract') or '').strip()  # <-- Защита от None и пустых строк
             ]
         else:
             items_to_process = [
                 item for item in metadata
-                if item.get('category') is None and item.get('abstract')
+                if item.get('category') is None 
+                and (item.get('abstract') or '').strip()
             ]
-
         if not items_to_process:
             return "Все записи уже имеют категории."
 
         print(f"Найдено {len(items_to_process)} записей для обработки.")
 
-        # Основной цикл повторных попыток
         for attempt in range(1, self.max_retries + 1):
             print(f"\n--- Попытка {attempt} из {self.max_retries} ---")
 
@@ -206,15 +170,14 @@ class MetadataUpdater:
                         relevant_count += 1
                         processed_in_this_batch += 1
 
-                        # ← Качаем PDF только для релевантных
                         pdf_url = item.get('pdf_url', '')
                         if pdf_url:
                             text, pdf_bytes = self._fetch_pdf_text(pdf_url)
-                            # item['text_article'] = text
 
                             if pdf_bytes:
                                 pdf_path = self._save_pdf(item, pdf_bytes)
                                 item['file_article'] = str(pdf_path) if pdf_path else item.get('file_article', '')
+                                item['pdf_downloaded'] = True
 
                         status = f"[✅] {title} -> {analysis['category']} (score: {analysis['overall_score']})"
                     else:
@@ -230,15 +193,13 @@ class MetadataUpdater:
                     print(f"[ERR] {title} -> {str(e)[:50]}...")
                     failed_items.append(item)
 
-            self._save_metadata(metadata)
+            await self._save_metadata(metadata)
 
             print(f"Обработано успешно: {processed_in_this_batch}. Релевантно {relevant_count}. Ошибок/Пропусков: {len(failed_items)}")
 
-            # Если все обработали успешно — выходим
             if not failed_items:
                 return f"Успешно! Обработано {processed_in_this_batch} записей."
 
-            # Если остались ошибки и есть еще попытки — ждем и повторяем ТОЛЬКО для ошибок
             if attempt < self.max_retries:
                 print(f"Ждем {self.retry_delay} сек перед следующей попыткой для {len(failed_items)} элементов...")
                 time.sleep(self.retry_delay)
@@ -248,10 +209,9 @@ class MetadataUpdater:
 
         return "Завершено."
 
-    def _retry_failed_pdfs(self, metadata: list):
+    async def _retry_failed_pdfs(self, metadata: list):
         """Перекачивает PDF для релевантных статей у которых нет файла на диске или флаг pdf_downloaded=False."""
 
-        # Читаем что реально лежит в директории
         existing_md = set()
         if self.articles_path.exists():
             existing_md = {f.stem for f in self.articles_path.glob("*.md")}
@@ -261,15 +221,12 @@ class MetadataUpdater:
             if not item.get('is_relevant'):
                 continue
 
-            # Проверка 1: флаг
             flag_ok = item.get('pdf_downloaded', False)
 
-            # Проверка 2: файловая система
             file_article = item.get('file_article', '')
             expected_stem = Path(file_article).stem if file_article else None
             file_ok = expected_stem in existing_md if expected_stem else False
 
-            # Нужна дозакачка если хотя бы одна проверка не прошла
             if not flag_ok or not file_ok:
                 reason = []
                 if not flag_ok:
@@ -293,18 +250,18 @@ class MetadataUpdater:
 
             text, pdf_bytes = self._fetch_pdf_text(pdf_url)
             if pdf_bytes:
-                item['pdf_downloaded'] = True  # ← обновляем флаг
+                item['pdf_downloaded'] = True
                 pdf_path = self._save_pdf(item, pdf_bytes)
                 if pdf_path:
                     item['file_article'] = str(pdf_path.name)
                 retried += 1
                 print(f"  [✅] Дозакачан: {item.get('title', '')[:40]}")
             else:
-                item['pdf_downloaded'] = False  # ← явно фиксируем что снова не удалось
+                item['pdf_downloaded'] = False
                 print(f"  [❌] Снова не удалось: {item.get('title', '')[:40]}")
 
         if retried:
-            self._save_metadata(metadata)
+            await self._save_metadata(metadata)
             print(f"Дозакачано {retried} из {len(failed)}")
 
     def _fetch_pdf_text(self, pdf_url: str, max_pages: int = 4) -> Tuple[str, bytes]:
@@ -322,7 +279,7 @@ class MetadataUpdater:
                 page.extract_text() or ""
                 for page in reader.pages[:max_pages]
             )
-            time.sleep(3)  # вежливая пауза — как в ARXIVParser
+            time.sleep(3)
             return text, pdf_bytes
         except Exception as exc:
             print("Не удалось скачать PDF %s: %s", pdf_url, exc)
@@ -342,14 +299,12 @@ class MetadataUpdater:
             md_path = self.articles_path / md_name
             self.articles_path.mkdir(parents=True, exist_ok=True)
 
-            # Извлекаем текст из PDF байтов
             reader = PdfReader(BytesIO(pdf_bytes))
             text = "".join(
                 page.extract_text() or ""
                 for page in reader.pages[:4]
             )
 
-            # Сохраняем как текст, не бинарник
             with open(md_path, 'w', encoding='utf-8') as f:
                 f.write(text)
 
@@ -360,32 +315,10 @@ class MetadataUpdater:
             print(f"    [ERR] Не удалось сохранить MD: {e}")
             return None
 
-    def _save_metadata(self, metadata: List[Dict]):
-        """Атомарное сохранение файла."""
-        temp_file = self.metadata_file.with_suffix('.tmp')
+    async def _save_metadata(self, metadata: List[Dict]):
+        """Сохранение метаданных в БД через upsert."""
         try:
-            with open(temp_file, 'w', encoding='utf-8') as f:
-                json.dump(metadata, f, ensure_ascii=False, indent=2)
-            shutil.move(str(temp_file), str(self.metadata_file))
+            await self.database.upsert_metadata(metadata)
         except Exception as e:
-            if temp_file.exists():
-                temp_file.unlink()
-            print(f"Критическая ошибка сохранения: {e}")
+            print(f"Критическая ошибка сохранения в БД: {e}")
             raise e
-
-
-# # Использование
-# if __name__ == "__main__":
-#     base_dir = Path(__file__).resolve().parent
-#     json_file = base_dir / "knowledge_base" / "metadata.json"
-
-#     # Создаем экземпляр класса
-#     updater = MetadataUpdater(
-#         metadata_file=json_file,
-#         max_retries=3,  # Количество подходов
-#         retry_delay=15  # Пауза между подходами (увеличил до 15 сек для 402 ошибок)
-#     )
-
-#     result = updater.run()
-#     print(result)
-

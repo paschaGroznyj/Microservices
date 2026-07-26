@@ -97,7 +97,7 @@ class CompositeFilters(BaseModel):
     title: Optional[str] = Field(None)
     source: Optional[str] = Field(None, description="Источник: yandex_disk:ICPM, googlescholar, arxiv.org, ieeexplore.ieee.org")
     threshold: float = Field(0.3, description="Порог семантики")
-    limit: int = Field(50)
+    limit: int = Field(100)
     
     @property
     def has_date(self) -> bool:
@@ -301,35 +301,42 @@ class LLMCompositeExtractor:
 # 2. ГЛАВНАЯ ФУНКЦИЯ С СОСТАВНОЙ ФИЛЬТРАЦИЕЙ
 # =============================================================================
 
-def create_composite_digest(json_path: str, query: str, llm_client, md_folder: str = "digests"):
-    """
-    🧠 ПОЛНЫЙ ПАЙПЛАЙН: LLM → СОСТАВНЫЕ ФИЛЬТРЫ → md_files
-    """
+async def create_composite_digest(
+    json_path: str,
+    query: str,
+    llm_client,
+    database,
+    md_folder: str = "digests",
+):
     # 1. LLM выделяет ВСЕ параметры
-    filters = LLMCompositeExtractor.extract_composite_filters(query, llm_client)
-    
+    filters = LLMCompositeExtractor.extract_composite_filters(
+        query, llm_client
+    )
+
     # 2. Загрузка данных
-    articles = load_json_metadata(json_path)
+    articles = await database.get_metadata_as_json()
     if not articles:
         return {"error": "Нет статей"}
-    
-    # 3. Многоэтапная составная фильтрация
-    filtered = apply_composite_filters(articles, filters)
-    
+
+    # 3. Многоэтапная составная фильтрация (получаем срез и общее число)
+    filtered, total_found = apply_composite_filters(articles, filters)
+
     # 4. Результат
     md_paths = find_matching_md_files(filtered, Path(md_folder))
-    
+
     return filtered, {
-        'status': "created",
+        "status": "created",
         "created_at": datetime.now().isoformat(),
-        'query': query,
-        'composite_filters': filters.model_dump(),
-        'is_composite': filters.is_composite,
-        'found_articles': len(filtered),
-        'top_articles': filtered[:5],
-        'md_files': md_paths,
-        'action': 'summarize_batch' if md_paths else 'no_matches',
-        'filters': filters
+        "query": query,
+        "composite_filters": filters.model_dump(),
+        "is_composite": filters.is_composite,
+        "processed_articles": len(
+            filtered
+        ),  # <-- Сколько ушло в дайджест по лимиту
+        "top_articles": filtered[:5],
+        "md_files": md_paths,
+        "action": "summarize_batch" if md_paths else "no_matches",
+        "filters": filters,
     }
 
 def find_matching_md_files(articles: List[Dict], root_folder: Path) -> List[Path]:
@@ -355,43 +362,49 @@ def find_matching_md_files(articles: List[Dict], root_folder: Path) -> List[Path
 # 3. МНОГОЭТАПНАЯ СОСТАВНАЯ ФИЛЬТРАЦИЯ
 # =============================================================================
 
-def apply_composite_filters(articles: List[Dict], filters: CompositeFilters) -> List[Dict]:
-    """Применяет ВСЕ активные фильтры последовательно."""
+def apply_composite_filters(
+    articles: List[Dict], filters: CompositeFilters
+) -> tuple[List[Dict], int]:
+    """Применяет ВСЕ активные фильтры последовательно и возвращает (filtered_list, total_count)."""
     filtered = articles.copy()
-    
-    # print(f"Применение {len([f for f in [filters.date_range, filters.category, filters.topic, filters.title] if f])} фильтров:")
-    #
-    # 1️⃣ ДАТА (самый строгий фильтр - применяется первым)
-    if filters.has_date:
-        print("Фильтр по дате...")
-        filtered = date_filter(filtered, filters.date_range['start_date'], filters.date_range['end_date'])
 
-    # 2️⃣ ИСТОЧНИК (точный - второй по строгости)
+    # 1. ДАТА
+    if filters.has_date:
+        filtered = date_filter(
+            filtered,
+            filters.date_range["start_date"],
+            filters.date_range["end_date"],
+        )
+
+    # 2. ИСТОЧНИК
     if filters.has_source:
-        print(f"Фильтр по источнику: {filters.source}")
         filtered = source_filter(filtered, filters.source)
-    
-    # 3️⃣ КАТЕГОРИЯ (точная)
+
+    # 3. КАТЕГОРИЯ
     if filters.has_category:
-        print("Фильтр по категории...")
         filtered = category_filter(filtered, filters.category)
-    
-    # 4️⃣ НАЗВАНИЕ (точная)
+
+    # 4. НАЗВАНИЕ
     if filters.title:
-        print("Фильтр по названию...")
         filtered = title_filter(filtered, filters.title)
-    
-    # 5️⃣ ТЕМА (семантическая - последней, с учетом предыдущих фильтров)
+
+    # 5. ТЕМА
     if filters.has_topic:
-        print("Семантический фильтр...")
         filtered = semantic_filter(filtered, filters.topic, filters.threshold)
-    
+
     # Сортировка по релевантности
-    filtered.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
-    filtered = filtered[:filters.limit]
-    
-    print(f"Итог: {len(filtered)} статей после всех фильтров")
-    return filtered
+    filtered.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
+
+    # Запоминаем НАСТОЯЩЕЕ количество найденных статей ДО среза limit
+    total_found = len(filtered)
+
+    # Применяем лимит
+    limited_filtered = filtered[: filters.limit]
+
+    print(
+        f"Итог: найдено {total_found} статей, взято по лимиту ({filters.limit}): {len(limited_filtered)}"
+    )
+    return limited_filtered, total_found
 
 def source_filter(articles: List[Dict], source: str) -> List[Dict]:
     """Фильтр по источнику данных."""
@@ -485,20 +498,22 @@ def load_json_metadata(json_path: str) -> List[Dict]:
 # 4. ИНТЕГРАЦИЯ С АГЕНТОМ
 # =============================================================================
 
-def agent_composite_digest_tool(query: str, llm_client, json_path="knowledge_base/metadata.json", md_folder='digests', send_email: bool = True, email_sender: Optional[EmailSender] = None, base_download_url: str = "https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/PM/digests/"):
+async def agent_composite_digest_tool(query: str, llm_client, database, json_path="knowledge_base/metadata.json", md_folder='digests', send_email: bool = True, email_sender: Optional[EmailSender] = None, base_download_url: str = "https://cds-iad.obs.ru-moscow-1.hc.sbercloud.ru/PM/digests/"):
     """Инструмент для агента с поддержкой составных фильтров."""
     base_path = Path(__file__).resolve().parent
     
-    arts, result = create_composite_digest(json_path, query, llm_client, md_folder)
+    arts, result = await create_composite_digest(json_path, query, llm_client, database, md_folder)
 
     filter_slug = result['filters'].to_slug()
-    full_text = build_digest_content(arts, Path(md_folder), query, llm_client)
+    full_text, count_articles, without_review = build_digest_content(arts, Path(md_folder), query, llm_client) #
     
     digest_all_path = base_path / 'digests_all'
     output_path, filename = save_digest(full_text,  filter_type=filter_slug, output_dir=digest_all_path)
 
     result.update({'digest_file':str(output_path)})
     result.update({'filename': filename})
+    result.update({'found_articles': count_articles})
+    result.update({'without_review': without_review})
 
     recipient_email = extract_email_from_query(query)
     result.update({
@@ -548,6 +563,7 @@ def build_digest_content(articles: List[Dict], md_path: Path, query: str, llm_cl
         "---" * 30,
         ""
     ]
+    without_review = 0
     base_path = Path(__file__).resolve().parent
     articles_dir = base_path / "knowledge_base" / "articles"
     counter_relevant = 0
@@ -594,38 +610,12 @@ def build_digest_content(articles: List[Dict], md_path: Path, query: str, llm_cl
         # md_file = base_path / 'knowledge_base' / 'articles' / md_file
 
         else:
-            print(f"Генерируем через LLM: {filename}")
-            article_md_path = articles_dir / filename
-
-            if article_md_path.exists():
-                with open(article_md_path, "r", encoding="utf-8") as f:
-                    md_content = f.read()
-                # md_content = (
-                #     re.split(r'^---\s*$', md_content, maxsplit=2)[2]
-                #     if '---' in md_content
-                #     else md_content
-                # )
-
-                # summary = LLMCompositeExtractor.create_summary(
-                #     md_content[:2000],
-                #     filename,
-                #     llm_client
-                # )
-
-                summary = sum.generate_summary(md_content, filename=filename) # Заменил на Гигачат
-
-                digest_dir = Path(md_path / category)
-                digest_dir.mkdir(parents=True, exist_ok=True)
-
-                with open(digest_dir / filename, "w", encoding="utf-8") as f:
-                    f.write(summary['digest'])
-
-                content.append(summary['digest'])
+            without_review += 1
 
         content.append("---" * 30)
     finish = time.time()
     print(finish - start)
-    return "\n".join(content)
+    return "\n".join(content), counter_relevant, without_review # Число релеватных статей
 
 def save_digest(content: str, filter_type: str, output_dir: Path) -> Path:
     """Сохраняет дайджест"""

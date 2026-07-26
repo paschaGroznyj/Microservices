@@ -61,3 +61,7 @@ CLOUD_LLM_ACCESS_KEY = os.getenv("CLOUD_LLM_ACCESS_KEY")
 # Ouroboros API — для вкладки "Уробор" в чате
 OUROBOROS_API_URL = os.getenv("OUROBOROS_API_URL", "http://localhost:8765")
 OUROBOROS_API_PASSWORD = os.getenv("OUROBOROS_API_PASSWORD", "")
+OUROBOROS_WS = f"ws://ouroboros_web_app:8765/ws"
+OUROBOROS_RESPONSE_TIMEOUT = 120
+
+ADMINS_INFO = os.getenv("ADMINS_INFO")

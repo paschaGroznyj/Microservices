@@ -32,7 +32,7 @@ def get_embedd_model():
 @lru_cache
 def get_async_gemini():
     return ChatOpenAI(
-        model="deepseek-ai/DeepSeek-V4-Pro",
+        model="zai-org/GLM-5.2",
         base_url="https://foundation-models.api.cloud.ru/v1",
         api_key=CLOUD_LLM_ACCESS_KEY,
         model_kwargs={

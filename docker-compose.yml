@@ -34,28 +34,8 @@ services:
       start_period: 20s
 
     restart: unless-stopped
-
-#  broker: # Для локальной отладки
-#    image: apache/kafka:4.1.0
-#    container_name: broker
-#    ports:
-#      - "9092:9092"
-#      - "9093:9093"
-#    environment:
-#      KAFKA_NODE_ID: 1
-#      KAFKA_PROCESS_ROLES: broker,controller
-#      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-#      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
-#      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-#      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-#      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@broker:9093
-#      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-#      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-#      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-#      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-#      KAFKA_NUM_PARTITIONS: 3
-#    volumes:
-#      - kafka-data:/var/lib/kafka/data
+    networks:
+      - catchPM
 
   agent_service:
     build: ./agent_service
@@ -114,49 +94,29 @@ services:
       OUROBOROS_API_URL: ${OUROBOROS_API_URL:-http://localhost:8765}
       OUROBOROS_API_PASSWORD: ${OUROBOROS_API_PASSWORD}
 
+      ADMINS_INFO: ${ADMINS_INFO}
+
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./agent_service/config:/app/config
       - ./agent_service:/app
     restart: unless-stopped
+    networks:
+      - catchPM
 
 
-
-
-  # plug_service:
-  #   build: ./plug_service
-  #   container_name: plug_service
+  # token_service:
+  #   build: ./token_service
+  #   container_name: token_service
   #   ports:
-  #     - "19001:9001"
-  #   depends_on:
-  #     - broker
+  #     - "9004:9004"
   #   environment:
-  #     PORT_PLUG_AGENT: ${PORT_PLUG_AGENT}
-  #     KAFKA_BROKER: ${KAFKA_BROKER}
-
-  #     REDIS_HOST: ${REDIS_HOST}
-  #     REDIS_PORT: ${REDIS_PORT}
-  #     REDIS_KEY: ${REDIS_KEY}
+  #     INTERNAL_TOKEN_API_URL: ${INTERNAL_TOKEN_API_URL}
+  #     PORT_TOKEN_GENERATE_SERVICE: ${PORT_TOKEN_GENERATE_SERVICE}
+  #     TOKEN_TTL: ${TOKEN_TTL}
+  #     IAM_API_KEY: ${IAM_API_KEY}
   #   restart: unless-stopped
-
-  token_service:
-    build: ./token_service
-    container_name: token_service
-    ports:
-      - "9004:9004"
-    environment:
-      INTERNAL_TOKEN_API_URL: ${INTERNAL_TOKEN_API_URL}
-      PORT_TOKEN_GENERATE_SERVICE: ${PORT_TOKEN_GENERATE_SERVICE}
-      TOKEN_TTL: ${TOKEN_TTL}
-      IAM_API_KEY: ${IAM_API_KEY}
-    restart: unless-stopped
-
-  # selenium_chrome:
-  #     image: selenium/standalone-chrome:latest
-  #     shm_size: '2gb'
-  #     ports:
-  #       - "4444:4444"
 
   parsers_service:
    build: ./parsers_service
@@ -189,9 +149,9 @@ services:
     - postgres
    volumes:
      - ./parsers_service:/app
-
-
    restart: unless-stopped
+   networks:
+      - catchPM
 
 
   gateway:
@@ -210,6 +170,8 @@ services:
     volumes:
       - ./api_gateway:/app
     restart: unless-stopped
+    networks:
+      - catchPM
 
   auth_service:
     build: ./auth_service
@@ -233,6 +195,8 @@ services:
     volumes:
       - ./auth_service:/app
     restart: unless-stopped
+    networks:
+      - catchPM
 
   # postgres_old:
   #     image: postgres:15
@@ -294,45 +258,9 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s # Даем время на первый запуск и инициализацию
+    networks:
+      - catchPM
 
-  # chromadb:
-  #   image: chromadb/chroma
-  #   container_name: chromadb
-  #   ports:
-  #     - "9003:8000"
-
-
-
-  # rag_service:
-  #   container_name: rag_service
-  #   build: ./rag_service
-  #   command: uvicorn app.app:app --host 0.0.0.0 --port 8002
-  #   ports:
-  #     - "8002:8002"
-  #   environment:
-  #     HF_TOKEN: ${HF_TOKEN}
-  #     EMB_MODEL: ${EMB_MODEL}
-  #     DB_HOST: ${DB_HOST}
-  #     DB_PORT: ${DB_PORT}
-  #     DB_USER: ${DB_USER}
-  #     DB_PASSWORD: ${DB_PASSWORD}
-  #     DB_NAME: ${DB_NAME}
-  #     REDIS_HOST: ${REDIS_HOST}
-  #     REDIS_PORT: ${REDIS_PORT}
-  #     REDIS_KEY: ${REDIS_KEY}
-  #     VDB_TYPE: ${VDB_TYPE}
-  #     GC_AUTH_URL: ${GC_AUTH_URL}
-  #     GC_MODEL: ${GC_MODEL}
-  #     OBS_BUCKET: ${OBS_BUCKET}
-  #     OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
-  #     OBS_SECRET_KEY: ${OBS_SECRET_KEY}
-  #     OBS_REGION: ${OBS_REGION}
-  #     OBS_ENDPOINT: ${OBS_ENDPOINT}
-  #   depends_on:
-  #     - postgres
-  #     - token_service
-
-  
   chats_service:
     container_name: chats_service
     build: ./chats_service
@@ -356,6 +284,8 @@ services:
       - postgres
       - broker
     restart: unless-stopped
+    networks:
+      - catchPM
 
   chats-consumer:
     container_name: chats-consumer
@@ -377,27 +307,21 @@ services:
       - postgres
       - broker
     restart: unless-stopped
+    networks:
+      - catchPM
 
-#    Парсер — batch job, запуск: docker-compose run parser_service
-#  parser_service:
-#   build:
-#     context: ./agent_service
-#     dockerfile: Dockerfile.parser
-#   container_name: parser_service
-#   environment:
-#     DATE_RANGE_START: ${DATE_RANGE_START:-2026-01-01}
-#     DATE_RANGE_END: ${DATE_RANGE_END:-2026-01-30}
-#     STORAGE_PATH: /app/knowledge_base
-#     ARTICLES_FOLDER: articles
-#     METADATA_FILE: metadata.json
-#     LOG_LEVEL: INFO
-#     SCHOLAR_MAX_PAGES: ${SCHOLAR_MAX_PAGES:-2}
-#     MISTRAL_KEY: ${MISTRAL_KEY:-}
-#     MISTRAL_MODEL: ${MISTRAL_MODEL:-}
-#   volumes:
-#     - parser_data:/app/knowledge_base
-#     - parser_logs:/app/logs
-
+  tg_bot:
+      build: ./telegram_service 
+      container_name: tg_bot
+      network_mode: "host"  # Используем сеть сервера напрямую
+      # depends_on:
+      #   - agent_service
+      environment:
+        TELEGRAM_BOT_TOKEN:      ${TELEGRAM_BOT_TOKEN}
+        TELEGRAM_CHAT_IDS:        ${TELEGRAM_CHAT_IDS}
+        TELEGRAM_GROUPS_IDS:     ${TELEGRAM_GROUPS_IDS:-}
+        AGENT_SERVICE_URL:       http://127.0.0.1:9001  # Стучимся на 9001 порт хоста
+      restart: unless-stopped
 
 volumes:
   kafka-data:
@@ -409,5 +333,5 @@ volumes:
 #  parser_logs:
 
 networks:
-  default:
+  catchPM:
     name: pascha_microservices

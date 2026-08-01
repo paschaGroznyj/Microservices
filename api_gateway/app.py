@@ -994,10 +994,10 @@ async def post_feedback(request: Request):
     data = await request.json()
     data["user_id"] = user["user_id"]
     data["username"] = user["username"]
-    agent_url = SERVICES['auth']['url']
+    auth_url = SERVICES['auth']['url']
     try:
         response = await app.state.http_client.post(
-            f"{agent_url}/feedback",
+            f"{auth_url}/feedback",
             json=data,
             timeout=30.0
         )
@@ -1021,6 +1021,22 @@ async def post_feedback(request: Request):
     except httpx.RequestError as e:
         return {"ok": False}
 
+@app.get("/api/graph")
+async def get_graph_nodes(request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    agent_url = SERVICES['agent_service']['url']
+    try:
+        resp = await app.state.http_client.get( 
+            f"{agent_url}/internal/graph",
+            timeout=30.0
+        )
+        return resp.json()
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"PM Agent unreachable: {e}")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail="Graph data error")
 
 @app.on_event("startup")
 async def startup_event():

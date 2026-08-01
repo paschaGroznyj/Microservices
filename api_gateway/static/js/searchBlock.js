@@ -407,7 +407,7 @@ function checkerTab(tab){
 
 function switchTab(tab) {
   // Переключаем видимость контента
-  ["agent", "arxiv", "ouroboros"].forEach(t => {
+  ["agent", "arxiv", "graph"].forEach(t => {
     const view = document.getElementById("view-" + t);
     const nav = document.getElementById("nav-" + t);
     const pill = document.getElementById("pill-" + t);
@@ -423,8 +423,8 @@ function switchTab(tab) {
   const titleEl = document.getElementById("main-title");
   if (titleEl) {
     const titles = {
-      "agent": "Assistant Process Mining",
-      "ouroboros": "Ouroboros",
+      "agent": "Agent Process Mining",
+      "graph": "Граф",
       "arxiv": "Поиск статей"
     };
     

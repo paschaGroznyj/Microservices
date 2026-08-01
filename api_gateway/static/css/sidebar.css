@@ -1,252 +1,82 @@
-/* sidebar.css */
+/* ═══════════════════════════════════════════════
+   SIDEBAR
+════════════════════════════════════════════════ */
 
-/* Переменные */
-:root {
-  --spacing: 4px;
-  --text-sm: 14px;
-  --text-2: #6b6b66;
-  --surface: #ffffff;
-  --sidebar-width: 260px;
-  --sidebar-surface-primary: #f0eeea;
-  --sidebar-surface-secondary: #f2f2f2;
-  --border-light: #0d0d0d0d;
-  --text-primary: #6b6b66;
-  --text-secondary: #5d5d5d;
-  --text-tertiary: #8f8f8f;
-  --text: #1a1a18;
-  --icon-secondary: #5d5d5d;
-  --hover-bg: #0000000a;
-  --active-bg: #0000000f;
-  --header-height: 60px; /* высота навбара */
-  --border: rgba(0,0,0,0.09);
-  --border-mid: rgba(0,0,0,0.15);
-  --radius-sm: 6px;
-  --accent: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-}
-
-.dark {
-  --sidebar-surface-primary: #2b2b2b;
-  --sidebar-surface-secondary: #393939;
-  --border-light: #ffffff0d;
-  --text-primary: #fff;
-  --text-secondary: #f3f3f3;
-  --text-tertiary: #afafaf;
-  --icon-secondary: #a4a4a4;
-  --hover-bg: #ffffff26;
-  --active-bg: #ffffff1a;
-}
-
-/* Основной лейаут */
-#chat-app {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  overflow: hidden;
-}
-
-.navbar {
-  height: var(--header-height);
-  flex-shrink: 0;
-}
-
-.chat-layout {
-  display: flex;
-  flex: 1;
-  min-height: 0; /* важно для корректной работы flex */
-  overflow: hidden;
-}
-
-/* Сайдбар */
 .sidebar {
-  width: var(--sidebar-width);
-  background: var(--sidebar-surface-primary);
-  border-right: 1px solid var(--border-light);
+  width: 236px;
+  min-width: 236px;
   display: flex;
   flex-direction: column;
-  height: 100%;
-  z-index: 100;
-  /* overflow: hidden; меняем с auto на hidden */
-  position: relative;
-}
-
-/* Хедер сайдбара - фиксирован сверху */
-.sidebar-header {
-  padding: 12px 16px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-shrink: 0; /* предотвращает сжатие */
-  background: var(--sidebar-surface-primary);
-  z-index: 10;
-}
-
-.home-link {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--icon-secondary);
-  transition: background 0.2s;
-}
-
-.home-link:hover {
-  background: var(--hover-bg);
-}
-
-/* Верхняя секция с кнопками - тоже фиксирована */
-.sidebar-section:first-of-type {
-  padding: 8px 0;
-  flex-shrink: 0;
-  background: var(--sidebar-surface-primary);
-  z-index: 9;
-}
-
-/* Секция с чатами - скроллится */
-.sidebar-section:has(.chat-list) {
-  flex: 1;
-  min-height: 0; /* важно для скролла */
-  display: flex;
-  flex-direction: column;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--border);
   overflow: hidden;
+  transition: background var(--transition);
 }
 
-.section-header {
-  padding: 8px 16px;
-  font-size: 12px;
-  color: var(--text-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
+/* ── HEADER / BRAND ───────────────────────────── */
+.sidebar-header {
+  padding: 14px 14px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  min-height: 54px;
+}
+
+.brand-link {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--text-primary);
+  text-decoration: none;
+  font-family: var(--font-serif);
+  font-weight: 600;
+  font-size: 1.05rem;
+}
+
+.brand-link:hover { text-decoration: none; opacity: .85; }
+
+.brand-icon {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+/* ── ACTIONS ──────────────────────────────────── */
+.sidebar-actions {
+  padding: 10px 10px 6px;
   flex-shrink: 0;
 }
 
-.chat-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 4px 0;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border-light) transparent;
-}
-
-.chat-list::-webkit-scrollbar {
-  width: 6px;
-}
-
-.chat-list::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.chat-list::-webkit-scrollbar-thumb {
-  background: var(--border-light);
-  border-radius: 3px;
-}
-
-.chat-list::-webkit-scrollbar-thumb:hover {
-  background: var(--text-tertiary);
-}
-
-.sb-header {
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  border-bottom: 0.5px solid var(--border);
-}
-
-/* Пункты меню */
-.menu-item,
 .new-chat-btn {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-
-    width: 100%;
-
-    padding: 7px 9px;
-
-    border-radius: var(--radius-sm);
-
-    font-size: 12.5px;
-    font-family: inherit;
-
-    color: var(--text-2);
-
-    background: transparent;
-    border: 0.5px solid transparent;
-
-    cursor: pointer;
-
-    transition:
-        background 0.12s,
-        border-color 0.12s;
-
-    text-align: left;
-}
-.menu-item:hover,
-.new-chat-btn:hover {
-    background: rgba(0,0,0,0.04);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: all var(--transition);
+  border: 1px solid var(--border);
 }
 
 .new-chat-btn svg {
-    width: 14px;
-    height: 14px;
-    flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
 }
 
-.chat-item {
-  min-height: 36px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  margin: 2px 6px;
-  padding: 6px 10px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  cursor: pointer;
-  transition: background 0.2s;
-  text-decoration: none;
-  width: calc(100% - 12px);
-  border: none;
-  background: transparent;
-  font-family: inherit;
-  position: relative; /* важно для позиционирования шортката */
-  justify-content: flex-start; /* контент прижат к левому краю */
-  gap: 12px;
+.new-chat-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+  border-color: var(--accent);
 }
 
-.chat-preview {
-    flex: 1;              /* 🔥 Занимает всё оставшееся место */
-    min-width: 0;
-    font-size: 11.5px;
-    color: var(--text-2);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    opacity: 0.9;
-}
-
-/* СТиль названия приложения */
-.sb-brand {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text);
-  letter-spacing: -0.01em;
-  margin-bottom: 10px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.sb-brand-dot {
-  width: 6px; height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-}
-
-/* Поле выбора кнопок Агент-Поиск */
+/* ── NAV ──────────────────────────────────────── */
 .sb-nav {
-  padding: 8px;
+  padding: 4px 8px;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -255,178 +85,187 @@
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   padding: 7px 9px;
   border-radius: var(--radius-sm);
-  font-size: 12.5px;
-  color: var(--text-2);
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-secondary);
   cursor: pointer;
-  transition: background 0.12s;
-  border: 0.5px solid transparent;
-}
-.nav-item:hover { background: rgba(0,0,0,0.04); }
-.nav-item.active {
-  background: var(--surface);
-  color: var(--text);
-  border-color: var(--border);
-}
-.nav-item svg { width: 14px; height: 14px; flex-shrink: 0; }
-
-.chat-item:hover {
-  background: var(--hover-bg);
+  transition: all var(--transition);
 }
 
-.chat-item.active {
-  background: var(--active-bg);
-  position: relative;
-}
-
-.chat-item.active::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 3px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  border-radius: 0 3px 3px 0;
-  z-index: 1;
-}
-
-/* Иконки */
-.menu-icon {
-  width: 20px;
-  height: 20px;
-  color: var(--icon-secondary);
+.nav-item svg {
+  width: 15px;
+  height: 15px;
   flex-shrink: 0;
 }
 
-.menu-text {
+.nav-item:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+
+.nav-item.active {
+  background: var(--sidebar-active);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ── CHAT LIST ────────────────────────────────── */
+.sidebar-section {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 8px 8px 4px;
+}
+
+.section-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--text-muted);
+  padding: 0 4px 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between; /* текст слева, стрелка справа */
+  width: 100%;
+}
+
+.chat-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+
+.chat-item-skeleton {
+  padding: 8px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.chat-item {
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition);
+}
+
+.chat-preview {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  text-align: left;
-  font-family: inherit;
-  color: var(--text);
-  font-size: 12.5px;
+  line-height: 1.4;
 }
 
-/* Шорткаты */
-.menu-shortcut {
-  color: var(--text-tertiary);
-  font-size: 11px;
-  background: var(--hover-bg);
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-family: monospace;
-  opacity: 0;
-  transition: opacity 0.2s;
-  flex-shrink: 0;
+.chat-item:hover { background: var(--sidebar-hover); }
+.chat-item.active {
+  background: var(--sidebar-active);
+}
+.chat-item.active .chat-preview { color: var(--text-primary); font-weight: 500; }
+
+#chats-section.collapsed .chat-list {
+  display: none;
 }
 
-.menu-item:hover .menu-shortcut,
-.new-chat-btn:hover .menu-shortcut,
-.chat-item:hover .menu-shortcut {
-  opacity: 1;
-}
-
-/* Кнопка опций */
-.menu-options {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--icon-secondary);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  transition: background 0.2s;
-  flex-shrink: 0;
-}
-
-.menu-options:hover {
-  background: var(--hover-bg);
-}
-
-.menu-options svg {
-  width: 16px;
-  height: 16px;
-}
-
-/* Профиль внизу - фиксирован */
+/* ── PROFILE ──────────────────────────────────── */
 .profile-section {
-    margin-top: auto;
-    flex-shrink: 0;
-    border-top: 0.5px solid var(--border);
-    display: flex;
-    align-items: center;
-    gap: 9px;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 .profile-button {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 8px;
-  border-radius: 10px;
-  cursor: pointer;
+  gap: 9px;
   width: 100%;
-  background: transparent;
-  border: none;
-  color: var(--text-primary);
-  transition: background 0.2s;
+  padding: 7px 8px;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition);
 }
 
-.profile-button:hover {
-  background: var(--hover-bg);
-}
+.profile-button:hover { background: var(--sidebar-hover); }
 
 .avatar {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: var(--accent);
+  color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: white;
-  font-weight: 600;
+  font-size: 0.78rem;
+  font-weight: 700;
   flex-shrink: 0;
 }
 
 .profile-info {
   flex: 1;
-  text-align: left;
+  overflow: hidden;
 }
 
-.profile-name { font-size: 12px; font-weight: 500; color: var(--text); }
-
-.profile-plan {
-  font-size: 11px;
-  color: var(--text-tertiary);
+.profile-name {
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-/* Кнопка нового чата - особый стиль */
-/*.new-chat-btn {*/
-/*  justify-content: space-between;*/
-/*  width: calc(100% - 12px);*/
-/*  margin: 2px 6px;*/
-/*}*/
 
-/* Стили для загрузки чатов */
-.loading-chats {
-  padding: 16px;
-  text-align: center;
-  color: var(--text-tertiary);
-  font-size: 13px;
+.section-chevron {
+  width: 14px;
+  height: 14px;
+  stroke: #555555;
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+  transform: rotate(0deg); /* стрелка вниз — чаты открыты */
 }
 
-.empty-chats {
-  padding: 16px;
-  text-align: center;
-  color: var(--text-tertiary);
-  font-size: 13px;
+#chats-section.collapsed .section-chevron {
+  transform: rotate(90deg); /* стрелка влево — чаты свёрнуты */
+}
+
+/* ══════════════════════════════════════════════
+   MOBILE SIDEBAR
+══════════════════════════════════════════════ */
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 900;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    width: 260px;
+    min-width: 260px;
+    box-shadow: var(--shadow-lg);
+  }
+
+  .sidebar.open {
+    transform: translateX(0);
+  }
+
+  .sidebar-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 850;
+    background: rgba(0,0,0,.4);
+  }
+
+  .sidebar-overlay.visible {
+    display: block;
+  }
 }

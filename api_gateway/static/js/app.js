@@ -1,913 +1,1190 @@
-// Упрощенный SPA для авторизованных пользователей
-class ChatAppSimple {
+// CatchPM — Chat SPA (без Ouroboros)
+class ChatApp {
     constructor() {
-        this.currentUser = null;
-        this.currentChat = null;
-        this.isUIInitialized = false;
-        this.ws = null;
-        this.chats = [];
-        this.currentTab = 'agent'; // 'agent' | 'ouroboros' | 'arxiv'
-        this.ouroborosChatId = null;
-        // this.init();
+        this.currentUser   = null;
+        this.currentChat   = null;
+        this.isUIReady     = false;
+        this.ws            = null;
+        this.chats         = [];
+        this.currentTab    = 'agent'; // 'agent' | 'arxiv'
     }
 
+    /* ══════════════════════════════════════════
+       INIT
+    ══════════════════════════════════════════ */
     async init() {
-        // Проверяем авторизацию
         await this.checkAuth();
-
-        // Если не авторизован - редирект на страницу логина
         if (!this.currentUser) {
             window.location.href = '/login-page';
-            console.log('Вы не авторизованы')
             return;
         }
-        console.log('Вы авторизованы')
-        // Загружаем интерфейс чата
-        // this.setupUI();
         await this.loadChats();
-        await loadFeedbacks()
-        initMobileMenu(); // Вызовется только тогда, когда страница полностью будет загружена
+        // await loadFeedbacks();
+        initMobileMenu();
+        this.initTabSwitcher();
+        this.initHelp();
+        this.initChatsSectionToggle();
         await this.renderMessageInput();
     }
 
-    async checkAuth() {
-    try {
-        const response = await fetch('/api/auth/me', {
-            credentials: 'include'
+    /* ══════════════════════════════════════════
+       TAB SWITCHER (agent ↔ arxiv)
+    ══════════════════════════════════════════ */
+    initTabSwitcher() {
+    document.querySelectorAll('.pill[data-tab], .nav-item[data-tab]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const tab = btn.dataset.tab;
+            this.switchTab(tab);
         });
-        if (response.ok) {
-            const data = await response.json();
-            console.log('Данные пользователя:', data);
-            
-            // Ваш auth сервис возвращает напрямую объект пользователя
-            // { "username": "next", "user_id": 16, "authenticated": true }
-            this.currentUser = data;  // ← Без data.user!
-            
-            const usernameElement = document.getElementById('username');
-            if (usernameElement && this.currentUser.username) {
-                usernameElement.textContent = this.currentUser.username;
-            }
-            
-            return true;
-        } else {
-            console.log('Не авторизован, статус:', response.status);
-            return false;
-        }
-    } catch (error) {
-        console.log('Auth check error:', error);
-        return false;
-    }
+    });
 }
 
-    setupUI() {
+    switchTab(tab) {
+        if (this.currentTab === tab) return;
+        this.currentTab = tab;
 
-        if (this.isUIInitialized) return;
-        this.isUIInitialized = true;
-
-        // Клик по списку чатов (делегирование — вешается на родителя)
-        document.getElementById('chat-list')?.addEventListener('click', (e) => {
-            const item = e.target.closest('.chat-item');
-            if (!item) return;
-            const chatId = Number(item.dataset.chatId);
-            this.openChat(chatId, 'agent'); // тут именно обычные чаты
-        });
-
-        // Кнопка "Новый чат"
-        document.getElementById('new-chat-btn')?.addEventListener('click', () => this.startNewChat());
-        document.getElementById('profile-button')?.addEventListener('click', () => this.attachProfileHandlers());
-
-        // Переключение вкладок (Ассистент / Уробор / Поиск статей)
-        document.querySelectorAll('.sb-nav .nav-item').forEach(navItem => {
-            navItem.addEventListener('click', async () => {
-                document.querySelectorAll('.sb-nav .nav-item').forEach(n => n.classList.remove('active'));
-                navItem.classList.add('active');
-
-                const tab = navItem.dataset.tab;
-                this.currentTab = tab;
-                this.switchView(tab);
-
-                if (tab === 'ouroboros') {
-                    await this.openOuroborosChat();
-                } else if (!this.currentChat) {
-                    // просто перерисуем стартовый экран/инпут под текущую вкладку
-                    await this.renderMessageInput();
-                }
-            });
-        });
-    }
-
-
-    /* ───────────────────────────── */
-/* PROFILE MODAL */
-/* ───────────────────────────── */
-    attachProfileHandlers() {
-
-        const profileButton =
-            document.getElementById('profile-button');
-
-        const overlay =
-            document.getElementById('profile-overlay');
-
-        const closeBtn =
-            document.getElementById('profile-close-btn');
-
-        if (!profileButton || !overlay) return;
-        /* open */
-        profileButton.addEventListener('click', async () => {
-
-            overlay.classList.add('active');
-            /* stub request */
-            try {
-                await fetch('/api/profile/open', {
-                    method: 'POST',
-                    credentials: 'include',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        event: 'profile_open',
-                        timestamp: Date.now()
-                    })
-                });
-
-            } catch (e) {
-                console.log('profile analytics stub');
-            }
-        });
-
-        /* close button */
-        closeBtn?.addEventListener('click', () => {
-            overlay.classList.remove('active');
-        });
-
-        /* overlay close */
-        overlay.addEventListener('click', (e) => {
-            if (e.target === overlay) {
-                overlay.classList.remove('active');
-            }
-        });
-
-        /* ESC */
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') {
-                overlay.classList.remove('active');
-            }
-        });
-        /* save token */
-        document
-            .getElementById('save-token-btn')
-            ?.addEventListener('click', async () => {
-                const token =
-                    document.getElementById('scrapingdog-token')?.value;
-                console.log('save token', token);
-                /* gateway stub */
-                try {
-
-                    await fetch('/api/user/api-token', {
-                        method: 'POST',
-                        credentials: 'include',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            provider: 'scrapingdog',
-                            token
-                        })
-                    });
-
-                } catch (e) {
-                    console.log('token save stub');
-                }
-            });
-    }
-
-
-    switchView(tab) {
+        // Переключаем views
         document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
         document.getElementById(`view-${tab}`)?.classList.remove('hidden');
+
+        // Активный pill / nav-item
+        document.querySelectorAll('.pill[data-tab], .nav-item[data-tab]').forEach(n => {
+            n.classList.toggle('active', n.dataset.tab === tab);
+        });
+
+        // Таб-специфичная логика
+        if (tab === 'agent') {
+            this.renderMessageInput();
+        }
+        if (tab === 'graph') {
+            console.log('INIT GRAPH')
+            knowledgeGraph.init();
+        }
     }
 
+
+    /* ══════════════════════════════════════════
+       AUTH
+    ══════════════════════════════════════════ */
+    async checkAuth() {
+        try {
+            const res = await fetch('/api/auth/me', { credentials: 'include' });
+            if (!res.ok) return false;
+            const data = await res.json();
+            this.currentUser = data;
+
+            const el = document.getElementById('username');
+            if (el && data.username) el.textContent = data.username;
+            return true;
+        } catch (e) {
+            console.warn('Auth check error:', e);
+            return false;
+        }
+    }
+
+    /* ══════════════════════════════════════════
+       CHATS LIST
+    ══════════════════════════════════════════ */
     async loadChats() {
         try {
-            const response = await fetch('/api/chats', { credentials: 'include' });
-            if (response.ok) {
-                this.chats = await response.json();
-                console.log(this.chats)
-                // ищем существующий чат уробора среди чатов пользователя
-                const ouro = this.chats.find(c => c.type === 'ouroboros');
-                this.ouroborosChatId = ouro ? ouro.id : null;
+            const res = await fetch('/api/chats', { credentials: 'include' });
+            if (res.ok) {
+                this.chats = await res.json();
                 this.renderChats(this.chats);
             }
-        } catch (error) {
-            console.error('Error loading chats:', error);
+        } catch (e) {
+            console.error('loadChats error:', e);
         }
     }
 
     renderChats(chats) {
-            const chatList = document.getElementById('chat-list');
-            
-            // 1. Фильтруем
-            const visible = chats.filter(c => 
-                c.type !== 'ouroboros' && 
-                c.last_message && 
-                c.last_message.trim() !== '' && 
-                c.last_message !== 'Чат создан'
-            );
+        const list = document.getElementById('chat-list');
+        if (!list) return;
 
-            // 2. Сортируем по timestamp (новые вверху)
-            visible.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+        const stripHtml = (html) => {
+            const tmp = document.createElement('div');
+            tmp.innerHTML = html;
+            return tmp.textContent || tmp.innerText || '';
+        };
 
-            // 3. Рендерим
-            chatList.innerHTML = visible.map(chat => `
-                <div class="chat-item ${chat.id === this.currentChat ? 'active' : ''}"
-                    data-chat-id="${chat.id}" data-tab="agent">
-                    <div class="chat-preview">
-                        ${chat.last_message}
-                    </div>
-                </div>
-            `).join('');
-        }
+        const visible = chats
+            .filter(c => c.last_message && c.last_message.trim() && c.last_message !== 'Чат создан')
+            .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
-    async openOuroborosChat() {
-        // Реальный чат уже существует (получен раньше или создан в этой сессии)
-        if (this.ouroborosChatId) {
-            await this.openChat(this.ouroborosChatId, 'ouroboros');
-            return;
-        }
-
-        // Пытаемся найти существующий чат на бэке (one-per-user)
-        try {
-            const resp = await fetch('/api/chats/by-type/ouroboros', {
-                credentials: 'include'
-            });
-            console.log(resp)
-            if (resp.ok) {
-                const data = await resp.json();
-                console.log('ID чата с ouroboros ', data)
-                if (data.exists && data.chat_id) {
-                    this.ouroborosChatId = data.chat_id;
-                    await this.openChat(data.chat_id, 'ouroboros');
-                    return;
-                }
-            }
-        } catch (e) {
-            console.log(e);
-            // бэк недоступен — продолжаем в виртуальном режиме
-        }
-
-        // Виртуальное состояние — чат ещё не создан на бэке
-        this.currentChat = 'ouroborchik';
-        this.currentTab = 'ouroboros';
-        this.switchView('ouroboros');
-
-        // Очищаем контейнер сообщений от предыдущего чата
-        const msgContainer = this.getMessagesContainer();
-        if (msgContainer) msgContainer.innerHTML = '';
-
-        await this.renderMessageInput(); // покажет инпут для уробора (даже без чата)
+        list.innerHTML = visible.map(chat => `
+            <div class="chat-item ${chat.id === this.currentChat ? 'active' : ''}"
+                 data-chat-id="${chat.id}">
+                <div class="chat-preview">${stripHtml(chat.last_message)}</div>
+            </div>
+        `).join('');
     }
 
-    async createOuroborosChat() {
-        const response = await fetch('/api/chats/new', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({ type_agent: 'ouroboros' })
+    /* ══════════════════════════════════════════
+       UI SETUP (вешается один раз после рендера инпута)
+    ══════════════════════════════════════════ */
+    setupUI() {
+        if (this.isUIReady) return;
+        this.isUIReady = true;
+
+        // Список чатов — делегирование
+        document.getElementById('chat-list')?.addEventListener('click', (e) => {
+            const item = e.target.closest('.chat-item');
+            if (!item) return;
+            this.openChat(Number(item.dataset.chatId));
         });
-        if (!response.ok) throw new Error('Ошибка создания чата уробора');
 
-        const data = await response.json();
-        this.ouroborosChatId = data.chat_id;
-        this.currentChat = data.chat_id;
+        // Новый чат
+        document.getElementById('new-chat-btn')?.addEventListener('click', () => this.startNewChat());
 
-        // НЕ пушим в this.chats и НЕ рендерим в навбар — он туда не должен попасть
-        this.switchView('ouroboros');
-        this.connectWebSocket(data.chat_id);
+        // Профиль
+        document.getElementById('profile-button')?.addEventListener('click', () => this.attachProfileHandlers());
     }
 
-
-  async openChat(chatId, tab = 'agent') {
-        // Сначала переключаем view и устанавливаем состояние
+    /* ══════════════════════════════════════════
+       OPEN / CREATE CHAT
+    ══════════════════════════════════════════ */
+    async openChat(chatId) {
         this.currentChat = chatId;
-        this.currentTab = tab;
-        this.switchView(tab);
-        
-        // Показываем контейнер сообщений и очищаем его ДО загрузки новых сообщений
+
         const msgContainer = this.getMessagesContainer();
         if (msgContainer) {
             msgContainer.classList.remove('hidden');
-            msgContainer.innerHTML = ''; // Очищаем сразу, чтобы не было мерцания старого контента
+            msgContainer.innerHTML = '';
         }
-        
+
         document.querySelector('.chat-main-inner')?.classList.add('chat-active');
 
-        // Подсвечиваем активный чат в списке
         document.querySelectorAll('.chat-item').forEach(item => {
             item.classList.toggle('active', Number(item.dataset.chatId) === chatId);
         });
 
-        // Загружаем сообщения и инпут параллельно
+        // Переключаемся на вкладку агента если были на arxiv
+        if (this.currentTab !== 'agent') {
+            this.switchTab('agent');
+        }
+
         await Promise.all([
             this.loadMessages(chatId),
             this.renderMessageInput()
         ]);
-        
-        // Подключаем WebSocket после загрузки
+
         this.connectWebSocket(chatId);
     }
 
-    async loadMessages(chatId) {
-    const response = await fetch(`/api/chats/${chatId}/messages`);
+    async createNewChat() {
+        const res = await fetch('/api/chats/new', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include'
+        });
+        if (!res.ok) throw new Error('Ошибка создания чата');
 
-        if (response.ok) {
-            const data = await response.json();
+        const data = await res.json();
+        const chatId = data.chat_id;
 
-            if (chatId !== this.currentChat) {
-                console.log('Старый ответ проигнорирован');
-                return;
-            }
+        this.chats.push({ id: chatId, last_message: 'Новый чат', timestamp: new Date().toISOString() });
+        this.renderChats(this.chats);
+        await this.openChat(chatId);
+        return chatId;
+    }
 
-            this.renderMessages(data.messages);
+    startNewChat() {
+        if (this.ws) { this.ws.close(); this.ws = null; }
+
+        this.currentChat = null;
+
+        const msgContainer = this.getMessagesContainer();
+        if (msgContainer) {
+            msgContainer.innerHTML = '';
+            msgContainer.classList.add('hidden');
         }
+
+        document.querySelectorAll('.chat-item').forEach(i => i.classList.remove('active'));
+        document.querySelector('.chat-main-inner')?.classList.remove('chat-active');
+
+        // Переключаемся на агента если были на arxiv
+        if (this.currentTab !== 'agent') {
+            this.switchTab('agent');
+        }
+
+        this.renderMessageInput();
+    }
+
+    /* ══════════════════════════════════════════
+       MESSAGES
+    ══════════════════════════════════════════ */
+    async loadMessages(chatId) {
+        const res = await fetch(`/api/chats/${chatId}/messages`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (chatId !== this.currentChat) return; // гонка
+        this.renderMessages(data.messages);
     }
 
     renderMessages(messages) {
-        const container = this.getMessagesContainer(); // ← было document.getElementById('chat-messages')
+        const container = this.getMessagesContainer();
         if (!container) return;
-
         container.innerHTML = '';
-
-        messages.forEach(msg => {
-            const isBot = msg.is_from_bot;
-            const rawContent = msg.message || '';
-
-            const messageEl = document.createElement('div');
-            messageEl.className = isBot ? 'assistant-message' : 'user-message';
-
-            let content = rawContent;
-
-            if (isBot) {
-                    content = marked.parse(rawContent);
-
-                    if (typeof DOMPurify !== 'undefined') {
-                        content = DOMPurify.sanitize(content);
-                    }
-                    const tempDiv = document.createElement('div');
-                    tempDiv.innerHTML = content;
-                    const links = tempDiv.querySelectorAll('a');
-
-                    links.forEach(link => {
-                        link.setAttribute('target', '_blank');
-                        link.setAttribute('rel', 'noopener noreferrer');
-                    });
-                    content = tempDiv.innerHTML;
-                } else {
-                    content = this.escapeHtml(rawContent);
-                }
-
-            messageEl.innerHTML = `
-                ${content}
-                ${!isBot ? `
-                    <div class="timestamp">
-                        ${new Date(msg.created_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
-                    </div>
-                ` : ''}
-            `;
-
-            const actions = this.createMessageActions(msg.id, rawContent, isBot);
-
-            if (isBot) {
-                messageEl.appendChild(actions);
-                container.appendChild(messageEl);
-            } else {
-                const wrapper = document.createElement('div');
-                wrapper.className = 'user-message-wrapper';
-
-                wrapper.appendChild(messageEl);
-                wrapper.appendChild(actions);
-
-                container.appendChild(wrapper);
-            }
-        });
-
+        messages.forEach(msg => this.addMessage(msg, false));
         container.scrollTop = container.scrollHeight;
     }
 
-    // Вспомогательная функция для экранирования HTML (для пользовательских сообщений)
+    addMessage(message, scroll = true, animate = false) {
+        const container = this.getMessagesContainer();
+        if (!container) return;
+
+        const isBot      = message.is_from_bot;
+        const rawContent = message.message || '';
+
+        // Убираем статус-индикатор при ответе бота
+        if (isBot) document.getElementById('agent-status-indicator')?.remove();
+
+        const messageEl = document.createElement('div');
+        messageEl.className = isBot ? 'agent-message' : 'user-message';
+
+        let content = rawContent;
+        if (rawContent.trimStart().startsWith('<')) {
+            content = rawContent; // уже HTML — не трогаем
+        } else {
+            content = marked.parse(rawContent);
+        }
+        if (isBot) {
+            if (typeof DOMPurify !== 'undefined') content = DOMPurify.sanitize(content);
+            // открываем все ссылки в новой вкладке
+            const tmp = document.createElement('div');
+            tmp.innerHTML = content;
+            tmp.querySelectorAll('a').forEach(a => {
+                a.setAttribute('target', '_blank');
+                a.setAttribute('rel', 'noopener noreferrer');
+            });
+            content = tmp.innerHTML;
+        } else {
+            content = this.escapeHtml(rawContent);
+        }
+
+        const time = new Date(message.created_at || Date.now())
+            .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+        if (!isBot) {
+            messageEl.innerHTML = `<div class="message-text">${content}</div><div class="timestamp">${time}</div>`;
+        } else {
+            messageEl.dataset.id = message.id;
+            if (animate) {
+                messageEl.innerHTML = '';
+                this._streamRenderMessage(messageEl, rawContent, container);
+            } else {
+                messageEl.innerHTML = content;
+            }
+        }
+
+        const actions = this.createMessageActions(message.id, rawContent, isBot);
+
+        if (isBot) {
+            // Если есть placeholder и это стриминг — рендерим прямо внутрь него
+            const placeholder = document.getElementById('agent-response-placeholder');
+            if (animate && placeholder) {
+                // Рендерим el ПРЯМО в container, placeholder просто держит место
+                container.appendChild(messageEl);
+                messageEl.style.opacity = '0';
+                messageEl.style.transition = 'opacity 0.25s ease';
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(() => { messageEl.style.opacity = '1'; });
+                });
+            } else {
+                container.appendChild(messageEl);
+            }
+            if (!animate) {
+                // История — сразу вешаем actions и hljs
+                this._applyCodeHeaders(messageEl);
+                messageEl.appendChild(actions);
+            }
+            // При animate — actions и code-header вешает _streamRenderMessage в финале
+        } else {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'user-message-wrapper';
+            wrapper.appendChild(messageEl);
+            wrapper.appendChild(actions);
+            container.appendChild(wrapper);
+
+            // 🚀 Fly-анимация только для новых сообщений (scroll=true), не при загрузке истории
+            if (scroll) {
+                this._flyMessageFromInput(wrapper, container);
+            }
+        }
+
+        if (!isBot) {
+            // Скролл вниз только при загрузке истории (scroll=false).
+            // При новом сообщении (scroll=true) скроллом управляет _scrollToUserMessageAndReserve.
+            if (!scroll) container.scrollTop = container.scrollHeight;
+        } else if (scroll) {
+            // Сообщение агента — только для живых ws-сообщений (scroll=true)
+            const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+            if (distFromBottom < 80) {
+                container.scrollTop = container.scrollHeight;
+            } else {
+                this._showScrollArrow(container);
+            }
+        }
+    }
+
+    /* ══════════════════════════════════════════
+       SCROLL ARROW
+    ══════════════════════════════════════════ */
+    _initScrollArrow(container) {
+        // Создаём кнопку один раз — вешаем на body (position: fixed)
+        if (document.getElementById('scroll-to-bottom-btn')) return;
+
+        const btn = document.createElement('button');
+        btn.id = 'scroll-to-bottom-btn';
+        btn.className = 'scroll-to-bottom';
+        btn.innerHTML = `
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M8 3v10M3 9l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Новое сообщение`;
+        btn.addEventListener('click', () => {
+            container.scrollTop = container.scrollHeight;
+            btn.classList.remove('visible');
+        });
+
+        // Скрываем если пользователь сам доскроллил до низа
+        container.addEventListener('scroll', () => {
+            const dist = container.scrollHeight - container.scrollTop - container.clientHeight;
+            if (dist < 40) btn.classList.remove('visible');
+        }, { passive: true });
+
+        document.body.appendChild(btn);
+    }
+
+    _showScrollArrow(container) {
+        this._initScrollArrow(container);
+        const btn = document.getElementById('scroll-to-bottom-btn');
+        if (btn) btn.classList.add('visible');
+    }
+
+    /**
+     * FLIP-анимация: wrapper вылетает из зоны инпута наверх к chat-messages.
+     * @param {HTMLElement} wrapper   — .user-message-wrapper только что добавленный в DOM
+     * @param {HTMLElement} container — .chat-messages
+     */
+    _flyMessageFromInput(wrapper, container) {
+        // ── LAST: текущая позиция враппера (уже в DOM) ──
+        const lastRect = wrapper.getBoundingClientRect();
+
+        // ── FIRST: берём нижнюю границу инпут-контейнера ──
+        const inputField = this.getInputContainer()?.querySelector('#message-input');
+        const inputRect  = inputField?.getBoundingClientRect();
+        if (!inputRect) return;
+
+        // Стартовая Y — верхний край поля ввода ("рождаемся" там)
+        const startY = inputRect.top;
+
+        // Дельта: насколько надо сдвинуть вниз чтобы wrapper оказался у инпута
+        const deltaY = startY - lastRect.top;
+
+        // ── INVERT: мгновенно смещаем в стартовую позицию без transition ──
+        wrapper.style.transition = 'none';
+        wrapper.style.transform  = `translateY(${deltaY}px)`;
+        wrapper.style.opacity    = '0.6';
+
+        // ── PLAY: в следующем кадре — плавно возвращаем на место ──
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                wrapper.style.transition = 'transform 0.38s cubic-bezier(0.22, 0.61, 0.36, 1), opacity 0.28s ease';
+                wrapper.style.transform  = 'translateY(0)';
+                wrapper.style.opacity    = '1';
+
+                // Чистим инлайн-стили после окончания анимации
+                wrapper.addEventListener('transitionend', () => {
+                    wrapper.style.transition = '';
+                    wrapper.style.transform  = '';
+                    wrapper.style.opacity    = '';
+                }, { once: true });
+            });
+        });
+    }
+
+
     escapeHtml(text) {
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
     }
 
-     async renderMessageInput() {
+    /* ══════════════════════════════════════════
+       SEND
+    ══════════════════════════════════════════ */
+    async sendMessage() {
         const container = this.getInputContainer();
-        container?.classList.add('rending');
+        const field   = container?.querySelector('#message-input');
+        const sendBtn = container?.querySelector('#send-btn');
+        if (!field) return;
+
+        const text = this.getInputText();
+        if (!text) return;
+
+        // Создаём чат если нет
+        if (!this.currentChat) {
+            try {
+                await this.createNewChat();
+            } catch (err) {
+                console.error('❌ createNewChat failed:', err);
+                alert('Не удалось создать чат. Попробуйте ещё раз.');
+                return;
+            }
+        }
+
+        // Оптимистичный рендер
+        this.addMessage({ message: text, is_from_bot: false, id: `temp-${Date.now()}`, created_at: new Date().toISOString() });
+
+        // 🎯 После fly-анимации: скролл + резерв места под ответ бота
+        this._scrollToUserMessageAndReserve();
+
+        this.clearInput(field);
+        sendBtn?.classList.remove('active');
+        if (sendBtn) sendBtn.disabled = true;
+
+        try {
+            // Ждём WS-соединения (актуально для новых чатов)
+            await this._waitForWS();
+            await fetch('/api/chats/send_message', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ chat_id: this.currentChat, message: text, type_agent: 'pm' })
+            });
+        } catch (err) {
+            console.error('sendMessage error:', err);
+        }
+    }
+
+    /**
+     * После отправки сообщения пользователя:
+     * 1. Скроллит chat-messages так, чтобы сообщение было у верхней границы (+ небольшой margin)
+     * 2. Создаёт растущий placeholder под ответ бота
+     * 3. Удаляет placeholder когда бот начинает отвечать
+     */
+    _scrollToUserMessageAndReserve() {
+        const msgContainer = this.getMessagesContainer();
+        if (!msgContainer) return;
+
+        // Находим последний wrapper пользователя
+        const wrappers = msgContainer.querySelectorAll('.user-message-wrapper');
+        const lastWrapper = wrappers[wrappers.length - 1];
+        if (!lastWrapper) return;
+
+        const TOP_MARGIN = 16; // px от верхней границы chat-messages
+
+        // Ждём окончания fly-анимации (0.38s = 380ms) и скроллим
+        setTimeout(() => {
+            const containerRect = msgContainer.getBoundingClientRect();
+            const wrapperRect   = lastWrapper.getBoundingClientRect();
+
+            // Целевой scrollTop: сообщение оказывается у верха + отступ
+            const targetScrollTop = msgContainer.scrollTop
+                + (wrapperRect.top - containerRect.top)
+                - TOP_MARGIN;
+
+            msgContainer.scrollTo({ top: targetScrollTop, behavior: 'smooth' });
+
+            // Создаём placeholder под ответ бота
+            this._createBotPlaceholder(msgContainer);
+        }, 400); // чуть позже fly-анимации
+    }
+
+    /**
+     * Создаёт placeholder-блок под ответ бота.
+     * Блок растёт вместе с контентом контейнера.
+     * Удаляется автоматически когда бот начинает реально отвечать.
+     */
+    _createBotPlaceholder(msgContainer) {
+        // Убираем предыдущий если был
+        document.getElementById('agent-response-placeholder')?.remove();
+
+        const placeholder = document.createElement('div');
+        placeholder.id = 'agent-response-placeholder';
+        placeholder.className = 'agent-placeholder';
+        msgContainer.appendChild(placeholder);
+
+        // Скроллим контейнер чтобы placeholder был виден снизу
+        msgContainer.scrollTop = msgContainer.scrollHeight;
+
+        // Таймаут-гард: убрать через 30с если бот так и не ответил
+        setTimeout(() => {
+            const ph = document.getElementById('agent-response-placeholder');
+            if (ph) ph.remove();
+        }, 30000);
+    }
+
+    /** Убирает placeholder — вызывается явно из WS-обработчика */
+    _removeBotPlaceholder() {
+        const ph = document.getElementById('agent-response-placeholder');
+        if (!ph) return;
+        ph.classList.add('placeholder-hide');
+        setTimeout(() => ph.remove(), 300);
+    }
+
+    /* ══════════════════════════════════════════
+       WEBSOCKET
+    ══════════════════════════════════════════ */
+    connectWebSocket(chatId) {
+        if (this.ws) this.ws.close();
+
+        this._pendingBotEl    = null;  // текущий элемент ответа бота (стриминг)
+        this._pendingBotText  = '';    // накопленный текст
+
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        this.ws = new WebSocket(`${protocol}//${window.location.host}/ws/chat/${chatId}`);
+
+        this.ws.onopen = () => console.log(`✅ WS connected chat=${chatId}`);
+
+        this.ws.onmessage = (event) => {
+            const msg = JSON.parse(event.data);
+
+            if (msg.type === 'agent_status') {
+                this.updateStatus(msg.status);
+                return;
+            }
+
+            // Дедупликация: пользовательское сообщение уже показано оптимистично
+            if (!msg.is_from_bot) {
+                const dup = [...document.querySelectorAll('.user-message')].find(el =>
+                    el.textContent?.trim().includes(msg.message?.trim())
+                );
+                if (dup) return;
+                this.addMessage(msg, true, false);
+                return;
+            }
+
+            // ── Стриминг ответа бота ──────────────────────────────
+            // msg.chunk  — фрагмент текста (стриминг)
+            // msg.done   — финальный флаг (конец ответа)
+            // msg.message — полный текст (если сервер шлёт сразу целиком)
+
+            const container = this.getMessagesContainer();
+            if (!container) return;
+
+            if (msg.chunk !== undefined) {
+                // Режим стриминга: накапливаем чанки в один элемент
+                if (!this._pendingBotEl) {
+                    this._pendingBotEl   = document.createElement('div');
+                    this._pendingBotEl.className = 'agent-message';
+                    this._pendingBotEl.dataset.id = msg.id || '';
+                    this._pendingBotEl.style.opacity = '0';
+                    this._pendingBotEl.style.transition = 'opacity 0.25s ease';
+                    container.appendChild(this._pendingBotEl);
+                    requestAnimationFrame(() => requestAnimationFrame(() => {
+                        if (this._pendingBotEl) this._pendingBotEl.style.opacity = '1';
+                    }));
+                    // Placeholder живёт пока идёт стриминг — убираем только здесь, при первом чанке
+                    this._removeBotPlaceholder();
+                    document.getElementById('agent-status-indicator')?.remove();
+                }
+
+                this._pendingBotText += msg.chunk;
+
+                let html = marked.parse(this._pendingBotText);
+                if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
+                    ADD_TAGS: ['table','thead','tbody','tr','th','td'],
+                    ADD_ATTR: ['colspan','rowspan','align']
+                });
+                this._pendingBotEl.innerHTML = html;
+
+                const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+                if (distFromBottom < 80) container.scrollTop = container.scrollHeight;
+
+            } else if (msg.done || msg.message !== undefined) {
+                // Финал стриминга или целое сообщение
+                const fullText = msg.message ?? this._pendingBotText;
+
+                if (this._pendingBotEl) {
+                    // Дорисовываем финальный вариант
+                    let html = marked.parse(fullText);
+                    if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
+                        ADD_TAGS: ['table','thead','tbody','tr','th','td'],
+                        ADD_ATTR: ['colspan','rowspan','align']
+                    });
+                    this._pendingBotEl.innerHTML = html;
+                    this._applyCodeHeaders(this._pendingBotEl);
+                    const actions = this.createMessageActions(this._pendingBotEl.dataset.id, fullText, true);
+                    this._pendingBotEl.appendChild(actions);
+                    this._pendingBotEl.style.transition = '';
+                    this._pendingBotEl.style.opacity    = '';
+                    this._pendingBotEl = null;
+                    this._pendingBotText = '';
+                } else {
+                    // Целое сообщение без стриминга — обычный addMessage
+                    this.addMessage({ ...msg, message: fullText }, true, true);
+                }
+
+                // Убираем placeholder если ещё жив (целое сообщение без стриминга)
+                this._removeBotPlaceholder();
+                document.getElementById('agent-status-indicator')?.remove();
+            }
+        };
+
+        this.ws.onerror = (e) => console.warn('WS error:', e);
+
+        this.ws.onclose = () => {
+            // Если стриминг оборвался — финализируем что накопили
+            if (this._pendingBotEl && this._pendingBotText) {
+                this._applyCodeHeaders(this._pendingBotEl);
+                this._pendingBotEl.style.transition = '';
+                this._pendingBotEl.style.opacity    = '';
+                this._pendingBotEl = null;
+                this._pendingBotText = '';
+            }
+            this._removeBotPlaceholder();
+        };
+    }
+
+    updateStatus(statusText) {
+        const container = this.getMessagesContainer();
         if (!container) return;
-        // Получаем имя пользователя (из this.currentUser или фолбэк)
-        const username = this.currentUser?.name.split(' ')[0] || 'Пользователь';
-        if (this.currentTab === 'ouroboros') {
-            // 🐍 Чат с Ouroboros — рендерим инпут независимо от наличия чата
-            container.innerHTML = `
-                <div class="message-input-wrapper">
-                    <div class="message-input-box">
-                        <textarea
-                            id="message-input"
-                            placeholder="Напишите Ouroboros..."
-                            rows="1"
-                        ></textarea>
-                        <button id="send-btn" disabled>
-                            <svg viewBox="0 0 24 24" class="send-icon">
-                                <path d="M12 5v14M5 12l7-7 7 7"
-                                      stroke="currentColor"
-                                      stroke-width="2"
-                                      fill="none"
-                                      stroke-linecap="round"
-                                      stroke-linejoin="round"/>
-                            </svg>
-                        </button>
-                    </div>
-                </div>
-                <div class="input-footer">
-                    🐍 Ouroboros — становящаяся личность, а не просто ИИ
-                </div>
-            `;
-        } else if (!this.currentChat) {
-            // 🎨 Стартовый экран (нет выбранного чата)
+
+        let statusEl = document.getElementById('agent-status-indicator');
+        if (!statusEl) {
+            statusEl = document.createElement('div');
+            statusEl.id = 'agent-status-indicator';
+            statusEl.className = 'agent-status';
+            container.appendChild(statusEl);
+        }
+        statusEl.innerHTML = `
+            <span class="status-spinner"></span>
+            <span class="status-text">${this.escapeHtml(statusText)}</span>
+        `;
+    }
+
+    /* ══════════════════════════════════════════
+       RENDER INPUT
+    ══════════════════════════════════════════ */
+    async renderMessageInput() {
+        const container = this.getInputContainer();
+        if (!container) return;
+
+        // Гард: не перерисовывать если экран уже соответствует состоянию
+        const hasStart     = !!container.querySelector('.chat-start-screen');
+        const hasActive    = !!container.querySelector('.chat-input-area');
+        const renderedChat = container.dataset.renderedChat;
+
+        // Стартовый экран уже есть и чат не выбран — пропускаем
+        if (!this.currentChat && hasStart) return;
+        // Инпут активного чата уже есть И это тот же чат — пропускаем
+        if (this.currentChat && hasActive && renderedChat === String(this.currentChat)) return;
+        // Если чат выбран, но рендерился стартовый — рендерим инпут (смена состояния)
+
+        container.classList.add('rending');
+
+        const username = this.currentUser?.name?.split(' ')[0]
+                      || this.currentUser?.username
+                      || 'друг';
+
+        if (!this.currentChat) {
+            // ── СТАРТОВЫЙ ЭКРАН ──────────────────────
             container.innerHTML = `
 <div class="chat-start-screen">
 
-    <!-- PROCESS MINING BACKGROUND -->
-    <div class="process-bg">
-        <svg viewBox="0 0 1200 700" preserveAspectRatio="none">
+    <div class="start-body">
+        <div class="start-header">
+            <p class="start-greeting">Привет, <span class="username">${this.escapeHtml(username)}</span> 👋</p>
+            <h1 class="start-title">Чем могу помочь?</h1>
+        </div>
 
-            <!-- connections -->
-            <path class="process-line"
-                  d="M120 180 C240 120, 320 280, 450 220 S680 80, 820 180 S1040 320, 1140 220" />
-
-            <path class="process-line"
-                  d="M80 480 C200 420, 340 560, 500 470 S760 300, 980 430" />
-
-            <path class="process-line"
-                  d="M240 120 C360 220, 520 160, 620 300 S860 540, 1040 500" />
-
-
-        </svg>
-    </div>
-
-    <div class="start-header">
-        <h2>
-            <span class="greeting">Привет,</span>
-            <span class="username">${username}</span>
-        </h2>
-
-        <p class="start-subtitle">
-            Поищем что-нибудь интересное?
-        </p>
-    </div>
-
-    <div class="message-input-wrapper-start">
-        <div class="message-input-box-start">
-            <textarea
-                id="message-input"
-                placeholder="Введите запрос..."
-                rows="1"
-            ></textarea>
-
-            <button class="send-btn" id="send-btn" disabled>
-                <svg viewBox="0 0 24 24" class="send-icon">
-                    <path d="M12 5v14M5 12l7-7 7 7"
-                          stroke="currentColor"
-                          stroke-width="2"
-                          fill="none"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"/>
-                </svg>
-            </button>
+        <div class="start-input-area">
+            <div class="start-input-box" id="start-input-box">
+                <div
+                    class="start-input-field"
+                    id="message-input"
+                    contenteditable="true"
+                    data-placeholder="Спросите что-нибудь..."
+                    role="textbox"
+                    aria-multiline="true"
+                    aria-label="Поле ввода"
+                ></div>
+                <div class="start-input-footer">
+                    <div class="start-hints-inline">
+                        <button class="hint-chip" data-prompt="Найди последние статьи по Process Mining">🔍 Последние статьи</button>
+                        <button class="hint-chip" data-prompt="Сделай дайджест новых статей за этот месяц">📊 Дайджест</button>
+                        <button class="hint-chip" data-prompt="Что такое conformance checking?">💡 Conformance checking</button>
+                        <button class="hint-chip" data-prompt="Покажи топ статей по теме обнаружение процессов">⭐ Топ статей</button>
+                    </div>
+                    <button class="start-send-btn" id="send-btn" disabled aria-label="Отправить">
+                        <svg viewBox="0 0 24 24" fill="none">
+                            <path d="M5 12h14M13 6l6 6-6 6"
+                                  stroke="currentColor" stroke-width="2"
+                                  stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
         </div>
     </div>
 
-    <div class="start-hints">
-        <span class="hint-item">🔍 Найти информацию</span>
-        <span class="hint-item" data-prompt="Найди статьи по process mining">
-            📊 Process Mining
-        </span>
-        <span class="hint-item">⭐ Сохранить в избранное</span>
-    </div>
+    <p class="start-footer-note">ИИ может ошибаться — перепроверяйте важную информацию</p>
 
-</div>
-`;
+</div>`;
         } else {
+            // ── АКТИВНЫЙ ЧАТ ─────────────────────────
             container.innerHTML = `
-                <div class="message-input-wrapper">
-                    <div class="message-input-box">
-                        <textarea
-                            id="message-input"
-                            placeholder="Введите сообщение..."
-                            rows="1"
-                        ></textarea>
-                        <button id="send-btn" disabled>
-                            <svg viewBox="0 0 24 24" class="send-icon">
-                                <path d="M12 5v14M5 12l7-7 7 7"
-                                      stroke="currentColor"
-                                      stroke-width="2"
-                                      fill="none"
-                                      stroke-linecap="round"
-                                      stroke-linejoin="round"/>
-                            </svg>
-                        </button>
-                    </div>
-                </div>
-                <div class="input-footer">
-                    ИИ постарается ответить на ваши запросы, но это не точно
-                </div>
-            `;
+<div class="chat-input-area">
+    <div class="chat-input-box" id="chat-input-box">
+
+        <div
+            class="chat-input-field"
+            id="message-input"
+            contenteditable="true"
+            data-placeholder="Напишите сообщение..."
+            role="textbox"
+            aria-multiline="true"
+            aria-label="Поле ввода"
+        ></div>
+
+        <div class="chat-input-footer">
+            <button class="attach-btn" id="attach-btn" title="Прикрепить файл" type="button">
+                <svg viewBox="0 0 24 24" fill="none">
+                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19
+                             a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
+                          stroke="currentColor" stroke-width="2"
+                          stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </button>
+
+            <span class="input-footer-note">ИИ может ошибаться — перепроверяйте важную информацию</span>
+
+            <button class="chat-send-btn" id="send-btn" disabled aria-label="Отправить">
+                <svg viewBox="0 0 24 24" fill="none">
+                    <path d="M5 12h14M13 6l6 6-6 6"
+                          stroke="currentColor" stroke-width="2"
+                          stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </button>
+        </div>
+
+    </div>
+</div>`;
         }
-        setTimeout(() => {
-        const chatMessages = document.getElementById('chat-messages');
-        console.log('🔍 chat-messages после рендера:', {
-            exists: !!chatMessages,
-            element: chatMessages,
-            parent: chatMessages?.parentElement?.id
-        });
-        }, 50);
 
         this.setupUI();
         this.attachInputHandlers();
         this.attachHintActions();
         this.attachProfileHandlers();
-        setTimeout(() => container?.classList.remove('rending'), 200);
+
+        // Посимвольная анимация start-header
+        // Запоминаем для какого чата отрендерили
+        container.dataset.renderedChat = this.currentChat ? String(this.currentChat) : '';
+
+        if (!this.currentChat) {
+            this._animateStartHeader(container);
+        }
+
+        setTimeout(() => container.classList.remove('rending'), 0);
+    }
+
+    /* ══════════════════════════════════════════
+       TYPEWRITER: start-header
+    ══════════════════════════════════════════ */
+    /* ══════════════════════════════════════════
+       TYPEWRITER: agent-message (пословно)
+    ══════════════════════════════════════════ */
+    async _streamRenderMessage(el, rawText, container) {
+    let accumulated = '';
+    const tokens = rawText.split(/(\s+)/);
+    const BATCH = 2;   // слов за тик
+    const DELAY = 22;  // мс между тиками
+
+    let userScrolled = false;
+    const onScroll = () => {
+        const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+        userScrolled = distFromBottom > 60;
+    };
+    container.addEventListener('scroll', onScroll, { passive: true });
+
+    for (let i = 0; i < tokens.length; i += BATCH) {
+        accumulated += tokens.slice(i, i + BATCH).join('');
+
+        let html = marked.parse(accumulated);
+        if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html);
+
+        const tmp = document.createElement('div');
+        tmp.innerHTML = html;
+        tmp.querySelectorAll('a').forEach(a => {
+            a.setAttribute('target', '_blank');
+            a.setAttribute('rel', 'noopener noreferrer');
+        });
+
+        el.innerHTML = tmp.innerHTML;
+        // Сбрасываем флаг highlighted — финал перекрасит чисто
+        el.querySelectorAll('pre code').forEach(b => {
+            delete b.dataset.highlighted;
+        });
+
+        // Автоскролл только если юзер не отмотал вверх
+        if (!userScrolled && container) {
+            container.scrollTop = container.scrollHeight;
+        }
+
+        await this._sleep(DELAY);
+    }
+
+    // Снимаем листенер после стриминга
+    container.removeEventListener('scroll', onScroll);
+
+        this._applyCodeHeaders(el);
+
+        // Вешаем кнопку копирования сообщения — она была затёрта стримингом
+        const existingActions = el.querySelector('.message-actions');
+        if (!existingActions) {
+            const msgId = el.dataset.id;
+            const actions = this.createMessageActions(msgId, rawText, true);
+            el.appendChild(actions);
+        }
+
+        // Убираем placeholder — el уже в container
+        const placeholder = document.getElementById('agent-response-placeholder');
+        if (placeholder) {
+            placeholder.classList.add('placeholder-hide');
+            setTimeout(() => placeholder.remove(), 300);
+        }
+        // Финальный fade-in если opacity ещё не сброшен
+        el.style.transition = '';
+        el.style.opacity = '';
+    }
+
+    _applyCodeHeaders(el) {
+        el.querySelectorAll('pre code').forEach(block => {
+            if (block.dataset.highlighted) return;
+            hljs.highlightElement(block);
+
+            const pre = block.parentElement;
+            if (!pre || pre.querySelector('.code-header')) return;
+
+            const langClass = [...block.classList].find(c => c.startsWith('language-'));
+            const lang = langClass ? langClass.replace('language-', '') : 'code';
+
+            const copyIcon = `<svg viewBox="0 0 24 24" fill="none" width="14" height="14">
+                <rect x="9" y="9" width="11" height="13" rx="2" stroke="currentColor" stroke-width="1.8"/>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+                    stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>`;
+            const checkIcon = `<svg viewBox="0 0 24 24" fill="none" width="14" height="14">
+                <path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>`;
+
+            const copyCodeBtn = document.createElement('button');
+            copyCodeBtn.className = 'code-copy-btn';
+            copyCodeBtn.title = 'Копировать код';
+            copyCodeBtn.innerHTML = copyIcon;
+            copyCodeBtn.addEventListener('click', async () => {
+                await navigator.clipboard.writeText(block.innerText);
+                copyCodeBtn.innerHTML = checkIcon;
+                copyCodeBtn.classList.add('copied');
+                setTimeout(() => {
+                    copyCodeBtn.innerHTML = copyIcon;
+                    copyCodeBtn.classList.remove('copied');
+                }, 1500);
+            });
+
+            const header = document.createElement('div');
+            header.className = 'code-header';
+            header.innerHTML = `<span class="code-lang">${lang}</span>`;
+            header.appendChild(copyCodeBtn);
+
+            pre.style.position = 'relative';
+            pre.insertBefore(header, block);
+        });
+    }
+
+
+    _sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    /** Ждёт пока this.ws перейдёт в OPEN (max 5s) */
+    _waitForWS(timeout = 5000) {
+        return new Promise((resolve, reject) => {
+            if (!this.ws) return resolve(); // нет WS — пропускаем
+            if (this.ws.readyState === WebSocket.OPEN) return resolve();
+            const deadline = Date.now() + timeout;
+            const check = () => {
+                if (!this.ws || this.ws.readyState === WebSocket.OPEN) return resolve();
+                if (Date.now() > deadline) return reject(new Error('WS connect timeout'));
+                setTimeout(check, 50);
+            };
+            check();
+        });
+    }
+
+    _animateStartHeader(container) {
+        const header = container.querySelector('.start-header');
+        if (!header) return;
+
+        // Оборачиваем каждый символ в <span class="letter">
+        // Пробел заменяем на неразрывный чтобы не схлопывался между inline-block
+        const wrap = (el) => {
+            el.childNodes.forEach(node => {
+                if (node.nodeType === Node.TEXT_NODE) {
+                    const frag = document.createDocumentFragment();
+                    [...node.textContent].forEach(ch => {
+                        const s = document.createElement('span');
+                        s.className = 'letter';
+                        s.textContent = ch === ' ' ? '\u00A0' : ch;
+                        frag.appendChild(s);
+                    });
+                    node.replaceWith(frag);
+                } else if (node.nodeType === Node.ELEMENT_NODE) {
+                    wrap(node);
+                }
+            });
+        };
+
+        header.querySelectorAll('.start-greeting, .start-title').forEach(wrap);
+
+        // Назначаем transition-delay по порядку
+        let i = 0;
+        header.querySelectorAll('.letter').forEach(s => {
+            s.style.transitionDelay = `${i * 28}ms`;
+            i++;
+        });
+
+        // Запускаем в следующем кадре
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => header.classList.add('animate'));
+        });
+    }
+
+    /* ══════════════════════════════════════════
+       INPUT HANDLERS
+    ══════════════════════════════════════════ */
+    // Получить текст из поля — поддержка и textarea и contenteditable
+    getInputText() {
+        const container = this.getInputContainer();
+        const field = container?.querySelector('#message-input');
+        if (!field) return '';
+        if (field.tagName === 'TEXTAREA') return field.value.trim();
+        return (field.innerText || field.textContent || '').trim();
+    }
+
+    setInputText(field, text) {
+        if (field.tagName === 'TEXTAREA') {
+            field.value = text;
+            field.dispatchEvent(new Event('input'));
+        } else {
+            field.innerText = text;
+            field.dispatchEvent(new Event('input'));
+            // Ставим курсор в конец
+            const range = document.createRange();
+            const sel   = window.getSelection();
+            range.selectNodeContents(field);
+            range.collapse(false);
+            sel.removeAllRanges();
+            sel.addRange(range);
+        }
+    }
+
+    clearInput(field) {
+        if (field.tagName === 'TEXTAREA') {
+            field.value = '';
+            field.style.height = 'auto';
+        } else {
+            field.innerText = '';
+        }
+    }
+
+    attachInputHandlers() {
+        const container = this.getInputContainer();
+        const field   = container?.querySelector('#message-input');
+        const sendBtn = container?.querySelector('#send-btn');
+        if (!field || !sendBtn) return;
+
+        const onInput = () => {
+            const hasText = this.getInputText().length > 0;
+            sendBtn.classList.toggle('active', hasText);
+            sendBtn.disabled = !hasText;
+        };
+
+        field.addEventListener('input', onInput);
+
+        field.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                if (!sendBtn.disabled) this.sendMessage();
+            }
+        });
+
+        // Placeholder для contenteditable
+        if (field.contentEditable === 'true') {
+            field.addEventListener('focus', () => field.classList.add('focused'));
+            field.addEventListener('blur',  () => field.classList.remove('focused'));
+        }
+
+        sendBtn.onclick = () => this.sendMessage();
+
+        // Кнопка прикрепления файла — заглушка
+        const attachBtn = container?.querySelector('#attach-btn');
+        if (attachBtn) {
+            attachBtn.addEventListener('click', () => {
+                this.showToast('📎 Загрузка файлов появится совсем скоро!');
+            });
+        }
+    }
+
+    /* ══════════════════════════════════════════
+       HELP OVERLAY
+    ══════════════════════════════════════════ */
+    /* ══════════════════════════════════════════
+       CHATS SECTION TOGGLE
+    ══════════════════════════════════════════ */
+    initChatsSectionToggle() {
+        // Делегируем на document — кнопка гарантированно найдётся
+        document.addEventListener('click', (e) => {
+            const btn = e.target.closest('#chats-section-toggle');
+            if (!btn) return;
+            const section = document.getElementById('chats-section');
+            if (!section) return;
+            const isCollapsed = section.classList.toggle('collapsed');
+            btn.setAttribute('aria-expanded', String(!isCollapsed));
+        });
+    }
+
+    initHelp() {
+        const overlay  = document.getElementById('help-overlay');
+        const openBtn  = document.getElementById('open-help');
+        const closeBtn = document.getElementById('help-close');
+        if (!overlay || !openBtn) return;
+
+        // Управление только через класс help-visible
+        // display:none/flex задаётся в CSS (.help-page / .help-page.help-visible)
+        // атрибут [hidden] в HTML нужен только как дефолт до первого открытия,
+        // его убираем при первом open и больше не трогаем
+
+        const open = () => {
+            overlay.removeAttribute('hidden');          // снять дефолтный [hidden] если есть
+            overlay.classList.add('help-visible');      // display:flex + opacity:1
+        };
+
+        const close = () => {
+            overlay.classList.remove('help-visible');   // display:none + opacity:0
+        };
+
+        openBtn.addEventListener('click', open);
+        closeBtn?.addEventListener('click', close);
+
+        // Закрыть по Escape
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && overlay.classList.contains('help-visible')) close();
+        });
+    }
+
+    showToast(text) {
+        let toast = document.getElementById('pm-toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'pm-toast';
+            document.body.appendChild(toast);
+        }
+        toast.textContent = text;
+        toast.classList.add('visible');
+        clearTimeout(this._toastTimer);
+        this._toastTimer = setTimeout(() => toast.classList.remove('visible'), 3000);
     }
 
     attachHintActions() {
         const container = this.getInputContainer();
-        const input = container?.querySelector('#message-input, textarea');
-        if (!input) return;
+        const field = container?.querySelector('#message-input');
+        if (!field) return;
 
-        container.querySelectorAll('.hint-item').forEach(chip => {
+        container.querySelectorAll('.hint-chip, .hint-item').forEach(chip => {
             chip.addEventListener('click', () => {
                 const prompt = chip.dataset.prompt;
                 if (!prompt) return;
-                input.value = prompt;
-                input.dispatchEvent(new Event('input'));
-                input.focus();
+                this.setInputText(field, prompt);
+                field.focus();
                 chip.classList.add('hint-clicked');
                 setTimeout(() => chip.classList.remove('hint-clicked'), 300);
             });
         });
     }
 
-    attachInputHandlers() {
-        const container = this.getInputContainer();
-        const textarea = container?.querySelector('#message-input') || container?.querySelector('.message-input-box textarea');
-        const sendBtn = container?.querySelector('#send-btn') || container?.querySelector('.send-btn, button');
+    /* ══════════════════════════════════════════
+       PROFILE MODAL
+    ══════════════════════════════════════════ */
+    attachProfileHandlers() {
+        const btn     = document.getElementById('profile-button');
+        const overlay = document.getElementById('profile-overlay');
+        const close   = document.getElementById('profile-close-btn');
+        if (!btn || !overlay) return;
 
-        if (!textarea || !sendBtn) {
-            console.log('⚠️ Input elements not found, skipping handlers');
-            return;
-        }
+        btn.onclick = () => overlay.classList.add('active');
+        close?.addEventListener('click', () => overlay.classList.remove('active'));
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.classList.remove('active'); });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.classList.remove('active'); });
 
-        // 🔥 Очищаем старые клонированные события (на всякий случай)
-        const newTextarea = textarea.cloneNode(true);
-        textarea.parentNode.replaceChild(newTextarea, textarea);
+        document.getElementById('save-token-btn')?.addEventListener('click', async () => {
+            const token = document.getElementById('scrapingdog-token')?.value;
+            try {
+                await fetch('/api/user/api-token', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ provider: 'scrapingdog', token })
+                });
+            } catch (e) { console.log('token save stub'); }
+        });
+    }
 
-        // 🔥 Вешаем события на НОВЫЕ элементы
-        newTextarea.addEventListener('input', () => this.handleInputResize(newTextarea, sendBtn));
+    /* ══════════════════════════════════════════
+       ACTIONS (copy)
+    ══════════════════════════════════════════ */
+    createMessageActions(messageId, messageText, isBot) {
+        const div = document.createElement('div');
+        div.className = isBot ? 'message-actions' : 'user-actions';
+        div.dataset.messageId = messageId;
 
-        newTextarea.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                this.sendMessage();
-            }
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'action-button copy-button';
+        copyBtn.title = 'Копировать';
+
+        const iconSVG = `<svg class="action-icon" viewBox="0 0 24 24" fill="none">
+            <rect x="9" y="9" width="11" height="13" rx="2" stroke="currentColor" stroke-width="1.8"/>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+                stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        </svg>`;
+
+        copyBtn.innerHTML = iconSVG;
+
+        copyBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await navigator.clipboard.writeText(messageText);
+                    const checkSVG = `<svg class="action-icon" viewBox="0 0 24 24" fill="none">
+                <path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>`;
+            copyBtn.innerHTML = checkSVG;
+            copyBtn.classList.add('copied');
+            setTimeout(() => {
+                copyBtn.classList.remove('copied');
+                copyBtn.innerHTML = iconSVG;
+            }, 1500);
         });
 
-        // Клик по кнопке отправки
-        sendBtn.onclick = () => this.sendMessage();
-
-        console.log('✅ Input handlers attached');
+        div.appendChild(copyBtn);
+        return div;
     }
 
-    handleInputResize(textarea, sendBtn) {
-        textarea.style.height = "auto";
-        textarea.style.height = textarea.scrollHeight + "px";
-
-        if (textarea.value.trim().length > 0) {
-            sendBtn.classList.add('active');
-            sendBtn.disabled = false;
-        } else {
-            sendBtn.classList.remove('active');
-            sendBtn.disabled = true;
-        }
-    }
-
-   async sendMessage() {
-        const inputContainer = this.getInputContainer();
-        const input = inputContainer?.querySelector('#message-input, textarea');
-        const sendBtn = inputContainer?.querySelector('#send-btn, button.send-btn, button');
-
-        if (!input) return;
-
-        const text = input.value.trim();
-        if (!text) return;
-
-        if (!this.currentChat) {
-            try {
-                input.value = '';
-                input.style.height = "auto";
-                await this.createNewChat();
-            } catch (err) {
-                console.error('❌ Failed to create chat:', err);
-                alert('Не удалось создать чат с ассистентом. Попробуйте ещё раз.');
-                return;
-            }
-        } else if (this.currentChat == 'ouroborchik') {
-            try {
-                await this.createOuroborosChat();
-            } catch (err) {
-                console.error('❌ Failed to create chat:', err);
-                alert('Не удалось создать чат с Ouroboros. Попробуйте ещё раз.');
-                return;
-            }
-        }
-
-        const tempId = `temp-${Date.now()}`;
-        this.addMessage({
-            message: text,
-            is_from_bot: false,
-            id: tempId,
-            created_at: new Date().toISOString()
-        });
-
-        try {
-            const response = await fetch('/api/chats/send_message', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                credentials: 'include',
-                body: JSON.stringify({
-                    chat_id: this.currentChat,
-                    message: text,
-                    type_agent: this.currentTab === 'ouroboros' ? 'ouroboros' : 'pm'
-                })
-            });
-
-            if (response.ok) {
-                input.value = '';
-                input.style.height = "auto";
-                sendBtn?.classList.remove('active');
-                if (sendBtn) sendBtn.disabled = true;
-            }
-        } catch (error) {
-            console.error('Error sending message:', error);
-        }
-    }
-
-
-    connectWebSocket(chatId) {
-        if (this.ws) {
-            console.log('Закрыли предыдущее соединение', this.ws)
-            this.ws.close();
-        }
-
-	console.log("🧩 CONNECT WS chatId =", chatId);
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const WS_HOST = window.location.host; // на gateway
-
-        this.ws = new WebSocket(
-        `${protocol}//${WS_HOST}/ws/chat/${chatId}`
-        );
-        this.ws.onmessage = (event) => {
-            const message = JSON.parse(event.data);
-            if (message.type === 'agent_status') {
-                this.updateStatus(message.status);
-            } else {
-                // Проверяем: есть ли уже такое сообщение от пользователя (оптимистичный рендер)
-                if (!message.is_from_bot) {
-                    const existing = [...document.querySelectorAll('.user-message-wrapper')].find(el => {
-                        const msgEl = el.querySelector('.user-message');
-                        return msgEl?.textContent?.trim().includes(message.message?.trim());
-                    });
-                    if (existing) return; // уже есть — пропускаем
-                }
-                this.addMessage(message);
-            }
-        };
-    }
-
-            updateStatus(statusText) {
-                const container = this.getMessagesContainer();
-                if (!container) return;
-                let statusEl = document.getElementById('agent-status-indicator');
-                if (!statusEl) {
-                    statusEl = document.createElement('div');
-                    statusEl.id = 'agent-status-indicator';
-                    statusEl.className = 'agent-status';
-                    container.appendChild(statusEl);
-                }
-                statusEl.innerHTML = `
-                    <span class="status-spinner"></span>
-                    <span class="status-text">${this.escapeHtml(statusText)}</span>
-                `;
-                container.scrollTop = container.scrollHeight;
-            }
-
-           addMessage(message) {
-                const container = this.getMessagesContainer();
-                if (!container) return;
-
-                const isBot = message.is_from_bot;
-                const rawContent = message.message || '';
-
-                if (isBot) {
-                    const statusEl = document.getElementById('agent-status-indicator');
-                    if (statusEl) statusEl.remove();
-                }
-
-                const messageEl = document.createElement('div');
-                messageEl.className = isBot ? 'assistant-message' : 'user-message';
-
-                let content = rawContent;
-
-                if (isBot) {
-                    content = marked.parse(rawContent);
-
-                    if (typeof DOMPurify !== 'undefined') {
-                        content = DOMPurify.sanitize(content);
-                    }
-                    const tempDiv = document.createElement('div');
-                    tempDiv.innerHTML = content;
-                    const links = tempDiv.querySelectorAll('a');
-
-                    links.forEach(link => {
-                        link.setAttribute('target', '_blank');
-                        link.setAttribute('rel', 'noopener noreferrer');
-                    });
-                    content = tempDiv.innerHTML;
-                } else {
-                    content = this.escapeHtml(rawContent);
-                }
-
-                messageEl.innerHTML = `
-                    ${content}
-                    ${!isBot ? `<div class="timestamp">${new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</div>` : ''}
-                `;
-
-                const actions = this.createMessageActions(message.id, rawContent, isBot);
-
-                if (isBot) {
-                    messageEl.dataset.id = message.id;
-                    messageEl.appendChild(actions);
-                    container.appendChild(messageEl);
-                } else {
-                    const wrapper = document.createElement('div');
-                    wrapper.className = 'user-message-wrapper';
-
-                    wrapper.appendChild(messageEl);
-                    wrapper.appendChild(actions);
-
-                    container.appendChild(wrapper);
-                }
-
-                container.scrollTop = container.scrollHeight;
-        }
-
-        startNewChat() {
-            // закрываем сокет прошлого чата, если был
-            if (this.ws) {
-                this.ws.close();
-                this.ws = null;
-            }
-
-            this.currentChat = null;
-            this.currentTab = 'agent';
-            this.switchView('agent');
-
-            // Очищаем контейнер сообщений, чтобы старые сообщения не оставались
-            const msgContainer = this.getMessagesContainer();
-            if (msgContainer) {
-                msgContainer.innerHTML = '';
-                msgContainer.classList.add('hidden');  
-            }
-
-            // снимаем активный класс со всех пунктов списка
-            document.querySelectorAll('.chat-item').forEach(item => item.classList.remove('active'));
-
-            // убираем visual-состояние "открытого чата", если оно проставлялось
-            document.querySelector('.chat-main-inner')?.classList.remove('chat-active');
-
-            this.renderMessageInput(); // покажет стартовый экран (currentChat === null)
-        }
-
-        async createNewChat() {
-        try {
-            const response = await fetch("/api/chats/new", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                credentials: "include"
-            });
-
-            if (!response.ok) {
-                throw new Error("Ошибка создания чата");
-            }
-
-            const data = await response.json();
-            const chatId = data.chat_id;
-
-            const newChat = {
-            id: chatId,
-            last_message: 'Новый чат',
-            timestamp: new Date().toISOString()
-                    };
-
-            this.chats.push(newChat);
-
-            this.renderChats(this.chats);
-
-            // 🔓 сразу открываем новый чат
-            await this.openChat(chatId);
-
-            return chatId;
-
-        } catch (err) {
-            console.error(err);
-            alert("Не удалось создать чат");
-        }
-    }
-        /**
-         * Создает кнопки действий для сообщения
-         */
-        createMessageActions(messageId, messageText, isBot) {
-            const actionsDiv = document.createElement('div');
-            actionsDiv.className = isBot ? 'message-actions' : 'user-actions';
-            actionsDiv.dataset.messageId = messageId;
-
-            const copyButton = document.createElement('button');
-            copyButton.className = 'action-button copy-button';
-            copyButton.title = 'Копировать';
-
-            copyButton.innerHTML = `
-                <svg class="action-icon" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"> <path d="M6 5V3C6 2.44772 6.44772 2 7 2H16C16.5523 2 17 2.44772 17 3V14C17 14.5523 16.5523 15 16 15H14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/> <rect x="3" y="5" width="11" height="13" rx="2" stroke="currentColor" stroke-width="1.5"/> </svg>
-            `;
-
-            copyButton.addEventListener('click', async (e) => {
-                e.stopPropagation();
-
-                await navigator.clipboard.writeText(messageText);
-
-                copyButton.classList.add('copied');
-
-                copyButton.innerHTML = `
-                    <svg class="action-icon" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"> <path d="M6 5V3C6 2.44772 6.44772 2 7 2H16C16.5523 2 17 2.44772 17 3V14C17 14.5523 16.5523 15 16 15H14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/> <rect x="3" y="5" width="11" height="13" rx="2" stroke="currentColor" stroke-width="1.5"/> </svg>
-                `;
-
-                setTimeout(() => {
-                    copyButton.classList.remove('copied');
-
-                    copyButton.innerHTML = `
-                        <svg class="action-icon" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"> <path d="M6 5V3C6 2.44772 6.44772 2 7 2H16C16.5523 2 17 2.44772 17 3V14C17 14.5523 16.5523 15 16 15H14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/> <rect x="3" y="5" width="11" height="13" rx="2" stroke="currentColor" stroke-width="1.5"/> </svg>
-                    `;
-                }, 1500);
-            });
-
-            actionsDiv.appendChild(copyButton);
-
-            return actionsDiv;
-        }
-
-    getActiveView() {
-    return document.getElementById(`view-${this.currentTab}`);
-    }
-
+    /* ══════════════════════════════════════════
+       HELPERS
+    ══════════════════════════════════════════ */
     getMessagesContainer() {
-        return this.getActiveView()?.querySelector('.chat-messages');
+        return document.getElementById('view-agent')?.querySelector('.chat-messages');
     }
 
     getInputContainer() {
-        return this.getActiveView()?.querySelector('.message-input-container');
+        return document.getElementById('view-agent')?.querySelector('.message-input-container');
     }
-
 }
 
-document.querySelectorAll('.hint-item').forEach(chip => {
-    chip.addEventListener('click', () => {
-        console.log('Клик по process mining')
-        input.value = chip.dataset.prompt;
-        input.focus();
-    });
-});
-
-
-// // Инициализация при загрузке страницы. Ждет пока построится HTML дерево, только потом запускает код
-// document.addEventListener('DOMContentLoaded', () => {
-//     // Если на странице есть элемент с id="chat-app"
-//     if (document.getElementById('chat-app')) {
-//         window.chatApp = new ChatAppSimple();
-//     }
-//     initMobileMenu(); // Вызовется только тогда, когда страница полностью будет загружена
-// });
-
-
-const app = new ChatAppSimple();
-
-app.init()
-// Экспортируем именно экземпляр (объект), а не класс
+/* ── Точка входа ──────────────────────────── */
+const app = new ChatApp();
+app.init();
 export default app;

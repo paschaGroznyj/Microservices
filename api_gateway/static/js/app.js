@@ -18,6 +18,10 @@ class ChatApp {
             window.location.href = '/login-page';
             return;
         }
+
+        // Передаём username в ToolsPanel для проверки прав
+        window.ToolsPanel?.setUser(this.currentUser.username);
+
         await this.loadChats();
         // await loadFeedbacks();
         initMobileMenu();
@@ -26,6 +30,7 @@ class ChatApp {
         this.initChatsSectionToggle();
         await this.renderMessageInput();
     }
+
 
     /* ══════════════════════════════════════════
        TAB SWITCHER (agent ↔ arxiv)
@@ -410,6 +415,9 @@ class ChatApp {
         div.textContent = text;
         return div.innerHTML;
     }
+    generateChatId() {
+        return Math.floor(100000 + Math.random() * 900000);
+    }
 
     /* ══════════════════════════════════════════
        SEND
@@ -425,12 +433,18 @@ class ChatApp {
 
         // Создаём чат если нет
         if (!this.currentChat) {
-            try {
-                await this.createNewChat();
-            } catch (err) {
-                console.error('❌ createNewChat failed:', err);
-                alert('Не удалось создать чат. Попробуйте ещё раз.');
-                return;
+            this.currentChat = this.generateChatId();
+            // Добавляем в список сразу с текстом первого сообщения
+            this.chats.push({ id: this.currentChat, last_message: text, timestamp: new Date().toISOString() });
+            this.renderChats(this.chats);
+            await this.openChat(this.currentChat);
+        } else {
+            // Обновляем last_message у существующего чата
+            const existing = this.chats.find(c => c.id === this.currentChat);
+            if (existing) {
+                existing.last_message = text;
+                existing.timestamp = new Date().toISOString();
+                this.renderChats(this.chats);
             }
         }
 
@@ -451,7 +465,13 @@ class ChatApp {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
-                body: JSON.stringify({ chat_id: this.currentChat, message: text, type_agent: 'pm' })
+                body: JSON.stringify({
+                    chat_id:        this.currentChat,
+                    message:        text,
+                    type_agent:     'pm',
+                    selected_tools: window.ToolsPanel?.getSelectedCategories() ?? [],
+                    context_size:   window.ToolsPanel?.getContextSize()   ?? 'medium'
+                })
             });
         } catch (err) {
             console.error('sendMessage error:', err);
@@ -702,12 +722,7 @@ class ChatApp {
                     aria-label="Поле ввода"
                 ></div>
                 <div class="start-input-footer">
-                    <div class="start-hints-inline">
-                        <button class="hint-chip" data-prompt="Найди последние статьи по Process Mining">🔍 Последние статьи</button>
-                        <button class="hint-chip" data-prompt="Сделай дайджест новых статей за этот месяц">📊 Дайджест</button>
-                        <button class="hint-chip" data-prompt="Что такое conformance checking?">💡 Conformance checking</button>
-                        <button class="hint-chip" data-prompt="Покажи топ статей по теме обнаружение процессов">⭐ Топ статей</button>
-                    </div>
+                    <!-- tools-trigger вставляется сюда через ToolsPanel.inject() -->
                     <button class="start-send-btn" id="send-btn" disabled aria-label="Отправить">
                         <svg viewBox="0 0 24 24" fill="none">
                             <path d="M5 12h14M13 6l6 6-6 6"
@@ -768,6 +783,9 @@ class ChatApp {
         this.attachInputHandlers();
         this.attachHintActions();
         this.attachProfileHandlers();
+
+        // Инжектируем кнопку тулов в футер инпута
+        window.ToolsPanel?.inject(container);
 
         // Посимвольная анимация start-header
         // Запоминаем для какого чата отрендерили

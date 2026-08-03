@@ -153,13 +153,14 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 14px;
+  padding: 7px 14px 7px 25px;
   border-radius: 99px;
   border: 1.5px solid var(--border);
   background: var(--surface);
   font-size: .8rem;
   color: var(--text-secondary);
   transition: all var(--transition);
+  justify-content: center;
 }
 
 .basket-btn svg { width: 14px; height: 14px; }
@@ -295,7 +296,11 @@
   font-weight: 600;
   line-height: 1.35;
   color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+
 
 .card-authors {
   font-size: .75rem;

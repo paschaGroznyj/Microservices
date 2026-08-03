@@ -22,7 +22,8 @@ from config import (
     PORT_PM_AGENT, PORT_DB_CONSUMER,
     PORT_AUTH_SERVICE, PORT_CHATS_SERVICE,
     PORT_CRB_SERVICE, SECRET_KEY, ALGORITHM,
-    PORT_GATEWAY_PORT, PORT_PARSERS_SERVICE
+    PORT_GATEWAY_PORT, PORT_PARSERS_SERVICE,
+    ADMIN_USERNAMES
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -501,6 +502,27 @@ async def me(request: Request):
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Auth service dead: {str(e)}")
 
+
+@app.get("/api/auth/permissions")
+async def get_permissions(request: Request):
+    """
+    Возвращает права текущего пользователя.
+    Вызывается из tools-panel.js после checkAuth().
+    Ответ: { "is_admin": bool }
+    """
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    return JSONResponse(
+        content={"is_admin": user["username"] in ADMIN_USERNAMES},
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma":        "no-cache",
+        }
+    )
+
+
 @app.post("/api/profile/token")
 async def token(request: Request):
     """Получение Scholar токена с сохранение в БД"""
@@ -817,7 +839,7 @@ async def send_message(request: Request):
 
     # Получаем данные из запроса
     data = await request.json()
-
+    logging.info(data)
     request_id = str(uuid.uuid4()) # Генерация id для передачи его агенту с последующей реализацией ОС о его действиях
     # Запоминаем связь ДО отправки агенту
     pending_requests[request_id] = data["chat_id"]

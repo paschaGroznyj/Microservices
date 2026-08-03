@@ -1,0 +1,230 @@
+/* ═══════════════════════════════════════════════
+   TOOLS PANEL — выпадающая панель выбора тулов
+   Зависит от CSS-переменных из theme.css
+════════════════════════════════════════════════ */
+
+/* ── Кнопка-триггер (расширяет .attach-btn) ─── */
+.tools-trigger-btn {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.tools-trigger-btn.active,
+.tools-trigger-btn:hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+/* Бейдж с числом / предупреждением */
+.tp-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 99px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  background: var(--accent);
+  color: #fff;
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
+.tp-badge--warn {
+  background: #ef4444;
+}
+
+/* ── Панель ──────────────────────────────────── */
+.tools-panel {
+  position: fixed;
+  z-index: 9990;
+  width: 310px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+  animation: tp-appear 0.17s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  transform-origin: bottom left;
+}
+
+.tools-panel.tp-hiding {
+  animation: tp-hide 0.17s ease forwards;
+}
+
+@keyframes tp-appear {
+  from { opacity: 0; transform: scale(0.94) translateY(6px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0);   }
+}
+
+@keyframes tp-hide {
+  to { opacity: 0; transform: scale(0.94) translateY(6px); }
+}
+
+/* ── Секция (контекст / инструменты) ─────────── */
+.tp-section {
+  padding: 12px 14px;
+}
+
+.tp-section-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: .7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+  user-select: none;
+}
+
+.tp-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 0 14px;
+}
+
+/* ── Размер контекста ────────────────────────── */
+.tp-context-row {
+  display: flex;
+  gap: 6px;
+}
+
+.tp-context-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 7px 4px;
+  border-radius: 10px;
+  border: 1.5px solid var(--border);
+  background: var(--surface2);
+  cursor: pointer;
+  transition: border-color .15s, background .15s, color .15s;
+  font-size: .82rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.tp-context-btn .tp-context-label {
+  font-size: .62rem;
+  font-weight: 400;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.tp-context-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+
+.tp-context-btn.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  color: var(--accent);
+}
+
+.tp-context-btn.active .tp-context-label {
+  color: var(--accent);
+}
+
+/* ── Строка категории ────────────────────────── */
+.tp-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 6px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background .12s;
+  user-select: none;
+}
+
+.tp-row:hover {
+  background: var(--hover-bg);
+}
+
+.tp-row--admin {
+  opacity: .65;
+}
+
+.tp-row--admin:hover {
+  opacity: 1;
+}
+
+.tp-row-icon {
+  font-size: 1.15rem;
+  flex-shrink: 0;
+  width: 22px;
+  text-align: center;
+}
+
+.tp-row-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.tp-row-label {
+  font-size: .85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.tp-row-desc {
+  font-size: .7rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 190px;
+}
+
+/* ── Кастомный чекбокс ───────────────────────── */
+.tp-checkbox {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 1.5px solid var(--border);
+  background: var(--surface2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: border-color .15s, background .15s;
+  color: #fff;
+}
+
+.tp-checkbox.checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+/* Скрытый нативный input */
+.tp-hidden-cb {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 0;
+  height: 0;
+}
+
+/* ── Мобильный override ──────────────────────── */
+@media (max-width: 768px) {
+  .tools-panel {
+    width: calc(100vw - 24px);
+    left: 12px !important;
+    right: 12px;
+  }
+}

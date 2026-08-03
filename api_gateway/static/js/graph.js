@@ -170,12 +170,12 @@ class KnowledgeGraph {
 
         const visEdges = edges.map(e => ({
             ...e,
+            width:  e.type === 'wiki_link' ? 5 : (e.width || 1.0),   // ← добавлено
             color: { color: this._edgeColor(), opacity: 0.5 },
             font:  { color: this._edgeColor(), size: 5, strokeWidth: 0 },
             arrows: e.arrows || (e.type === 'relation' ? 'to' : undefined),
             smooth: { type: 'curvedCW', roundness: 0.1 },
         }));
-
         this.allNodes = new vis.DataSet(visNodes);
         this.allEdges = new vis.DataSet(visEdges);
     }
@@ -224,8 +224,8 @@ class KnowledgeGraph {
                 stabilization: { iterations: 150, updateInterval: 25 },
             },
             edges: {
-                width:        0.5,
-                selectionWidth: 0.3,
+                width:        2.5,
+                selectionWidth: 1.0,
                 arrows:       { to: { enabled: true, scaleFactor: 0.4 } },
                 smooth:       { type: 'curvedCW', roundness: 0.1 },
                 font:         { size: 4, color: isDark ? '#666' : '#999', strokeWidth: 0 },

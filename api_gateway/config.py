@@ -26,3 +26,7 @@ PORT_GATEWAY_PORT = os.getenv("PORT_GATEWAY_PORT")
 PORT_PARSERS_SERVICE = os.getenv("PORT_PARSERS_SERVICE")
 
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
+
+ADMIN_USERNAMES: set[str] = {
+    "pisoldatkin-2149725",
+}

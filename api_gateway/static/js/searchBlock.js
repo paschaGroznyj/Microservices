@@ -406,30 +406,33 @@ function checkerTab(tab){
 }
 
 function switchTab(tab) {
-  // Переключаем видимость контента
-  ["agent", "arxiv", "graph"].forEach(t => {
-    const view = document.getElementById("view-" + t);
-    const nav = document.getElementById("nav-" + t);
-    const pill = document.getElementById("pill-" + t);
+  const TABS = ["agent", "arxiv", "graph"];
 
+  TABS.forEach(t => {
+    // view-блок
+    const view = document.getElementById("view-" + t);
     if (view) view.classList.toggle("hidden", t !== tab);
-    if (nav) nav.classList.toggle("active", t === tab);
-    if (pill) pill.classList.toggle("active", t === tab);
+
+    // nav-item в сайдбаре (data-tab="arxiv" etc.)
+    const navItems = document.querySelectorAll(`.nav-item[data-tab="${t}"]`);
+    navItems.forEach(el => el.classList.toggle("active", t === tab));
+
+    // pill в хедере (data-tab="arxiv" etc.)
+    const pills = document.querySelectorAll(`.pill[data-tab="${t}"]`);
+    pills.forEach(el => el.classList.toggle("active", t === tab));
   });
 
   checkerTab(tab);
 
-  // Обновляем заголовок
+  // Обновляем заголовок в шапке
   const titleEl = document.getElementById("main-title");
   if (titleEl) {
     const titles = {
       "agent": "Agent Process Mining",
-      "graph": "Граф",
-      "arxiv": "Поиск статей"
+      "arxiv": "Поиск статей",
+      "graph":  "Граф знаний",
     };
-    
-    // Если пришел неизвестный tab, можно поставить заголовок по умолчанию через ||
-    titleEl.textContent = titles[tab] || "Главная"; 
+    titleEl.textContent = titles[tab] || "CatchPM";
   }
 }
 
@@ -589,12 +592,6 @@ function initCardOverlay() {
           <div class="flip-abstract" id="flip-abstract"></div>
           <div class="flip-footer">
             <a class="flip-link" id="flip-link" target="_blank">Открыть на arxiv.org ↗</a>
-            <button class="flip-translate-btn" id="flip-translate-btn" data-action="translate">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5">
-                <path d="M3 5h12M9 3v2M7 19l4-9 4 9M6 17h8M16 5l5 5-5 5M21 10h-5"/>
-              </svg>
-              Перевести
-            </button>
           </div>
         </div>
       </div>
@@ -602,52 +599,20 @@ function initCardOverlay() {
   `;
 
   // Клик по затемнению — закрыть
-    overlay.addEventListener("click", async (e) => {
+  overlay.addEventListener("click", (e) => {
     if (e.target.closest("[data-action='close']") || e.target === overlay) {
       closeCard();
-      return;
     }
-
-    if (e.target.closest("[data-action='translate']")) {
-    const btn = e.target.closest("[data-action='translate']");
-    const articleId = overlay.dataset.articleId;  // ← берём с оверлея
-
-    btn.textContent = "Загрузка...";
-    btn.disabled = true;
-    console.log('Отправить перед для статьи: ', articleId)
-    try {
-      const response = await fetch('/api/translate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ article_id: articleId })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        document.getElementById("flip-abstract").textContent = data.translated_abstract;
-        btn.textContent = "✓ Переведено";
-
-        // Сохраняем в currentPapers чтобы не запрашивать повторно
-          const articleId = overlay.dataset.articleId;
-          const paperIndex = currentPapers.findIndex(p => String(p.article_id) === String(articleId));
-          if (paperIndex !== -1) {
-            currentPapers[paperIndex].translated_abstract = data.translated_abstract;
-          }
-
-      } else {
-        btn.textContent = "Ошибка";
-        btn.disabled = false;
-      }
-    } catch (err) {
-      btn.textContent = "Ошибка";
-      btn.disabled = false;
-    }
-  }
-
   });
 
   document.body.appendChild(overlay);
+}
+
+function renderMarkdown(text) {
+  if (typeof marked === "undefined" || typeof DOMPurify === "undefined") {
+    return text;
+  }
+  return DOMPurify.sanitize(marked.parse(text || ""));
 }
 
 function openCard(paper) {
@@ -657,27 +622,13 @@ function openCard(paper) {
   document.getElementById("flip-authors").textContent = paper.authors;
   document.getElementById("flip-meta").textContent = paper.date;
 
-  const translateBtn = document.getElementById("flip-translate-btn");
-   if (paper.translated_abstract) {
-    // Перевод уже есть — показываем сразу
-    document.getElementById("flip-abstract").textContent = paper.translated_abstract;
-   translateBtn.innerHTML = `
-    ✓ Переведено
-  `;
-    translateBtn.disabled = true;
-  } else {
-    // Показываем оригинал и активную кнопку
-    document.getElementById("flip-abstract").textContent = paper.abstract || "Аннотация недоступна.";
-    document.getElementById("flip-link").textContent = 'Ссылка на ' + sourceLinkLabel(paper.source);
-     translateBtn.innerHTML = `
-    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-      <path d="m10.5 21 5.25-11.25L21 21m-9-3h7.5M3 5.621a48.474 48.474 0 0 1 6-.371m0 0c1.12 0 2.233.038 3.334.114M9 5.25V3m3.334 2.364C11.176 10.658 7.69 15.08 3 17.502m9.334-12.138c.896.061 1.785.147 2.666.257m-4.589 8.495a18.023 18.023 0 0 1-3.827-5.802" />
-    </svg>
-    Перевести
-  `;
-    translateBtn.disabled = false;
-  }
+  // Рендерим аннотацию через Markdown
+  const abstractEl = document.getElementById("flip-abstract");
+  const abstractText = paper.translated_abstract || paper.abstract || "Аннотация недоступна.";
+  abstractEl.innerHTML = renderMarkdown(abstractText);
+
   document.getElementById("flip-link").href = paper.link;
+  document.getElementById("flip-link").textContent = 'Ссылка на ' + sourceLinkLabel(paper.source);
 
   // Сбрасываем состояние flip-inner на случай повторного открытия
   const inner = document.getElementById("card-flip-inner");

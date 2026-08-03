@@ -750,10 +750,15 @@
 .start-input-footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   padding: 8px 12px 10px 14px;
-  gap: 8px;
+  gap: 4px;
   border-top: 1px solid var(--border);
+}
+
+/* send-btn всегда прижат к правому краю */
+.start-input-footer .start-send-btn {
+  margin-left: auto;
 }
 
 /* Хинты внутри инпута */

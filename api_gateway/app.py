@@ -1,5 +1,5 @@
 # gateway/app.py
-from fastapi import FastAPI, HTTPException, Request, Depends, Form, Cookie, Response
+from fastapi import FastAPI, HTTPException, Request, Depends, Form, Cookie, Response, File, UploadFile
 from fastapi.websockets import WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -875,6 +875,85 @@ async def send_message(request: Request):
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Chats service unreachable: {str(e)}")
 
+@app.post("/api/chats/upload_files")
+async def upload_files(
+    request: Request,
+    chat_id: str = Form(...),
+    message_id: str = Form(...),
+    files: list[UploadFile] = File(...),
+):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    # Форвардим multipart как есть, не читая целиком в память по одному файлу
+    files_payload = []
+    for f in files:
+        content = await f.read()
+        files_payload.append(("files", (f.filename, content, f.content_type)))
+
+    data = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "user_id": str(user["user_id"]),
+    }
+
+    try:
+        response = await app.state.http_client.post(
+            f"{SERVICES['agent_service']['url']}/web/upload_files",  # прямой урл сервиса агента
+            data=data,
+            files=files_payload,
+            timeout=30.0,
+        )
+        return Response(
+            content=response.content,
+            status_code=response.status_code,
+            media_type="application/json",
+        )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Agent service unreachable: {str(e)}")
+
+@app.get("/api/chats/{chat_id}/files/{message_id}/{file_name}")
+async def download_chat_file(chat_id: int, message_id: str, file_name: str, request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    # 1. Резолвим путь через chats_service
+    try:
+        resolve_resp = await app.state.http_client.get(
+            f"{SERVICES['chats']['url']}/internal/resolve_file",
+            params={"chat_id": chat_id, "message_id": message_id, "file_name": file_name},
+        )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Chats service unreachable: {e}")
+
+    if resolve_resp.status_code != 200:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    path = resolve_resp.json()["path"]
+
+    # 2. Стримим файл с agent_service
+    try:
+        agent_resp = await app.state.http_client.get(
+            f"{SERVICES['agent_service']['url']}/web/file",
+            params={"path": path},
+        )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Agent service unreachable: {e}")
+
+    if agent_resp.status_code != 200:
+        raise HTTPException(status_code=agent_resp.status_code, detail="Failed to fetch file")
+
+    return Response(
+        content=agent_resp.content,
+        media_type=agent_resp.headers.get("content-type", "application/octet-stream"),
+        headers={
+            "Content-Disposition": agent_resp.headers.get(
+                "content-disposition", f'attachment; filename="{file_name}"'
+            )
+        },
+    )
 
 @app.get("/api/chats")
 async def get_chats(request: Request):

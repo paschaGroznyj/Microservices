@@ -271,15 +271,20 @@ class ChatApp {
             .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
         if (!isBot) {
-            messageEl.innerHTML = `<div class="message-text">${content}</div><div class="timestamp">${time}</div>`;
+            // Рендерим прикреплённые файлы над текстом сообщения
+            const filesHtml = this._renderMessageFiles(message.files);
+            messageEl.innerHTML = `${filesHtml}<div class="message-text">${content}</div><div class="timestamp">${time}</div>`;
         } else {
             messageEl.dataset.id = message.id;
-            if (animate) {
-                messageEl.innerHTML = '';
-                this._streamRenderMessage(messageEl, rawContent, container);
-            } else {
-                messageEl.innerHTML = content;
+            messageEl.innerHTML = content;
+            // Файлы агента из истории — вставляем после текста, перед actions
+            if (message.files?.length) {
+                messageEl.appendChild(
+                    this._renderBotFiles(message.files, message.message_id)
+                );
             }
+            document.getElementById('agent-response-placeholder')?.remove();
+
         }
 
         const actions = this.createMessageActions(message.id, rawContent, isBot);
@@ -415,6 +420,196 @@ class ChatApp {
         div.textContent = text;
         return div.innerHTML;
     }
+
+    /* ══════════════════════════════════════════
+       RENDER FILES IN HISTORY MESSAGE
+    ══════════════════════════════════════════ */
+    /**
+     * Строит HTML-блок с чипами файлов для исторического сообщения.
+     * Если файлов > 3 — показываем первые 3, остальные скрываем за кнопкой.
+     *
+     * @param {Array<{name: string, ext: string}>|undefined} files
+     * @returns {string} HTML-строка или '' если файлов нет
+     */
+    _renderMessageFiles(files) {
+        if (!files || files.length === 0) return '';
+
+        const EXT_LABEL = {
+            pdf:'PDF', docx:'DOC', doc:'DOC',
+            xlsx:'XLS', xls:'XLS', csv:'CSV',
+            pptx:'PPT', ppt:'PPT',
+            txt:'TXT', md:'MD',
+            png:'PNG', jpg:'JPG', jpeg:'JPG', gif:'GIF', webp:'WEBP', svg:'SVG',
+            mp4:'MP4', mov:'MOV', avi:'AVI',
+            zip:'ZIP', rar:'RAR', '7z':'7Z',
+            json:'JSON', xml:'XML', html:'HTML', py:'PY',
+            js:'JS', ts:'TS', css:'CSS',
+        };
+        const EXT_COLOR = {
+            pdf:'red', doc:'blue', docx:'blue',
+            xls:'green', xlsx:'green', csv:'green',
+            ppt:'orange', pptx:'orange',
+            png:'purple', jpg:'purple', jpeg:'purple',
+            gif:'purple', webp:'purple', svg:'purple',
+            mp4:'pink', mov:'pink', avi:'pink',
+            zip:'gray', rar:'gray', '7z':'gray',
+            json:'yellow', xml:'yellow',
+            py:'teal', js:'yellow', ts:'blue', css:'purple',
+        };
+
+        const getLabel = (ext) => EXT_LABEL[ext] || ext.toUpperCase().slice(0, 4) || 'FILE';
+        const getColor = (ext) => EXT_COLOR[ext] || 'gray';
+
+        const makeChip = (f) => {
+            const ext   = (f.ext || '').toLowerCase();
+            const label = getLabel(ext);
+            const color = getColor(ext);
+            const name  = this.escapeHtml(f.name || 'файл');
+            return `<div class="fa-chip fa-chip--${color} fa-chip--readonly" title="${name}">
+<span class="fa-chip__icon" aria-hidden="true">
+  <svg viewBox="0 0 36 44" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M4 0h20l12 12v28a4 4 0 0 1-4 4H4a4 4 0 0 1-4-4V4a4 4 0 0 1 4-4z" class="fa-chip__bg"/>
+    <path d="M24 0l12 12H28a4 4 0 0 1-4-4V0z" class="fa-chip__fold"/>
+    <text x="18" y="32" text-anchor="middle" class="fa-chip__text">${label}</text>
+  </svg>
+</span>
+<span class="fa-chip__name">${name}</span>
+</div>`;
+        };
+
+        const VISIBLE_LIMIT = 3;
+        const visible  = files.slice(0, VISIBLE_LIMIT);
+        const hidden   = files.slice(VISIBLE_LIMIT);
+
+        let chipsHtml = visible.map(makeChip).join('');
+
+        let collapseHtml = '';
+        if (hidden.length > 0) {
+            const hiddenChips = hidden.map(makeChip).join('');
+            const uid = `fa-collapse-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+            collapseHtml = `
+<div class="fa-chips-hidden" id="${uid}" style="display:none;">${hiddenChips}</div>
+<button class="fa-chips-toggle" type="button"
+        onclick="(function(btn){
+            var box = document.getElementById('${uid}');
+            var open = box.style.display !== 'none';
+            box.style.display = open ? 'none' : 'flex';
+            btn.textContent = open ? '+${hidden.length} файл${hidden.length === 1 ? '' : hidden.length < 5 ? 'а' : 'ов'}' : 'Скрыть';
+        })(this)">+${hidden.length} файл${hidden.length === 1 ? '' : hidden.length < 5 ? 'а' : 'ов'}</button>`;
+        }
+
+        return `<div class="fa-message-files">${chipsHtml}${collapseHtml}</div>`;
+    }
+    /* ══════════════════════════════════════════
+       RENDER BOT FILES (под сообщением агента, над кнопкой копировать)
+    ══════════════════════════════════════════ */
+    /**
+     * Строит DOM-узел с чипами файлов агента.
+     * Каждый чип — <a download> → GET /api/chats/{chat_id}/files/{message_id}/{name}
+     * При > 3 файлах — показываем первые 3, остальные прячем за «+N файлов».
+     *
+     * @param {Array<{name: string, ext: string}>} files
+     * @param {string|undefined} messageId
+     * @returns {HTMLElement}
+     */
+    _renderBotFiles(files, messageId) {
+        console.log('ВНУТРИ РЕНДИНДА ФАЙЛОВ ', files, messageId)
+        const EXT_LABEL = {
+            pdf:'PDF', docx:'DOC', doc:'DOC',
+            xlsx:'XLS', xls:'XLS', csv:'CSV',
+            pptx:'PPT', ppt:'PPT',
+            txt:'TXT', md:'MD',
+            png:'PNG', jpg:'JPG', jpeg:'JPG', gif:'GIF', webp:'WEBP', svg:'SVG',
+            mp4:'MP4', mov:'MOV', avi:'AVI',
+            zip:'ZIP', rar:'RAR', '7z':'7Z',
+            json:'JSON', xml:'XML', html:'HTML', py:'PY',
+            js:'JS', ts:'TS', css:'CSS',
+        };
+        const EXT_COLOR = {
+            pdf:'red', doc:'blue', docx:'blue',
+            xls:'green', xlsx:'green', csv:'green',
+            ppt:'orange', pptx:'orange',
+            png:'purple', jpg:'purple', jpeg:'purple',
+            gif:'purple', webp:'purple', svg:'purple',
+            mp4:'pink', mov:'pink', avi:'pink',
+            zip:'gray', rar:'gray', '7z':'gray',
+            json:'yellow', xml:'yellow',
+            py:'teal', js:'yellow', ts:'blue', css:'purple',
+        };
+
+        const getLabel = (ext) => EXT_LABEL[ext] || ext.toUpperCase().slice(0, 4) || 'FILE';
+        const getColor = (ext) => EXT_COLOR[ext] || 'gray';
+
+        const makeChip = (f) => {
+            const ext   = (f.ext || '').toLowerCase();
+            const label = getLabel(ext);
+            const color = getColor(ext);
+            const name  = f.name || 'файл';
+            const safeName = this.escapeHtml(name);
+
+            // URL через gateway — авторизация по куке, проверка в chats_service
+            const url = messageId
+                ? `/api/chats/${this.currentChat}/files/${encodeURIComponent(messageId)}/${encodeURIComponent(name)}`
+                : '#';
+
+            const chip = document.createElement('a');
+            chip.className = `fa-chip fa-chip--${color} fa-chip--bot`;
+            chip.href      = url;
+            chip.download  = name;
+            chip.title     = name;
+            chip.setAttribute('rel', 'noopener noreferrer');
+
+            chip.innerHTML = `
+<span class="fa-chip__icon" aria-hidden="true">
+  <svg viewBox="0 0 36 44" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M4 0h20l12 12v28a4 4 0 0 1-4 4H4a4 4 0 0 1-4-4V4a4 4 0 0 1 4-4z" class="fa-chip__bg"/>
+    <path d="M24 0l12 12H28a4 4 0 0 1-4-4V0z" class="fa-chip__fold"/>
+    <text x="18" y="32" text-anchor="middle" class="fa-chip__text">${label}</text>
+  </svg>
+</span>
+<span class="fa-chip__name">${safeName}</span>
+<span class="fa-chip__dl-icon" aria-hidden="true">
+  <svg viewBox="0 0 14 14" fill="none">
+    <path d="M7 2v7M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5"
+          stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>`;
+            return chip;
+        };
+
+        const VISIBLE_LIMIT = 3;
+        const visible = files.slice(0, VISIBLE_LIMIT);
+        const hidden  = files.slice(VISIBLE_LIMIT);
+
+        const wrap = document.createElement('div');
+        wrap.className = 'fa-bot-files';
+
+        visible.forEach(f => wrap.appendChild(makeChip(f)));
+
+        if (hidden.length > 0) {
+            const hiddenWrap = document.createElement('div');
+            hiddenWrap.className = 'fa-chips-hidden';
+            hiddenWrap.style.display = 'none';
+            hidden.forEach(f => hiddenWrap.appendChild(makeChip(f)));
+            wrap.appendChild(hiddenWrap);
+
+            const count   = hidden.length;
+            const suffix  = count === 1 ? '' : count < 5 ? 'а' : 'ов';
+            const toggle  = document.createElement('button');
+            toggle.className   = 'fa-chips-toggle';
+            toggle.type        = 'button';
+            toggle.textContent = `+${count} файл${suffix}`;
+            toggle.addEventListener('click', () => {
+                const isOpen = hiddenWrap.style.display !== 'none';
+                hiddenWrap.style.display = isOpen ? 'none' : 'flex';
+                toggle.textContent = isOpen ? `+${count} файл${suffix}` : 'Скрыть';
+            });
+            wrap.appendChild(toggle);
+        }
+
+        return wrap;
+    }
+
     generateChatId() {
         return Math.floor(100000 + Math.random() * 900000);
     }
@@ -448,8 +643,9 @@ class ChatApp {
             }
         }
 
-        // Оптимистичный рендер
-        this.addMessage({ message: text, is_from_bot: false, id: `temp-${Date.now()}`, created_at: new Date().toISOString() });
+        // Оптимистичный рендер — передаём файлы до upload/clear
+        const _optimisticFiles = window.FileAttach?.getFilesMeta() ?? [];
+        this.addMessage({ message: text, is_from_bot: false, id: `temp-${Date.now()}`, created_at: new Date().toISOString(), files: _optimisticFiles });
 
         // 🎯 После fly-анимации: скролл + резерв места под ответ бота
         this._scrollToUserMessageAndReserve();
@@ -458,9 +654,13 @@ class ChatApp {
         sendBtn?.classList.remove('active');
         if (sendBtn) sendBtn.disabled = true;
 
+        // Сбрасываем флаг: ответ ещё не пришёл
+        this._botAnswered = false;
+
         try {
             // Ждём WS-соединения (актуально для новых чатов)
             await this._waitForWS();
+            const msgId = `msg-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
             await fetch('/api/chats/send_message', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -468,11 +668,21 @@ class ChatApp {
                 body: JSON.stringify({
                     chat_id:        this.currentChat,
                     message:        text,
+                    message_id:     msgId,
                     type_agent:     'pm',
                     selected_tools: window.ToolsPanel?.getSelectedCategories() ?? [],
-                    context_size:   window.ToolsPanel?.getContextSize()   ?? 'medium'
+                    context_size:   window.ToolsPanel?.getContextSize()   ?? 'medium',
+                    has_files:      (window.FileAttach?.getFiles().length ?? 0) > 0,
+                    files: window.FileAttach?.getFilesMeta() ?? []
                 })
             });
+            // Загружаем прикреплённые файлы отдельным запросом
+            await window.FileAttach?.upload(this.currentChat, msgId);
+            window.FileAttach?.clear();
+            // Убираем подсветку attach-btn
+            this.getInputContainer()
+                ?.querySelector('#attach-btn')
+                ?.classList.remove('has-files');
         } catch (err) {
             console.error('sendMessage error:', err);
         }
@@ -518,6 +728,9 @@ class ChatApp {
      * Удаляется автоматически когда бот начинает реально отвечать.
      */
     _createBotPlaceholder(msgContainer) {
+        // Не создаём если ответ уже пришёл (race: бот ответил быстрее 400ms)
+        if (this._botAnswered) return;
+
         // Убираем предыдущий если был
         document.getElementById('agent-response-placeholder')?.remove();
 
@@ -565,7 +778,7 @@ class ChatApp {
                 this.updateStatus(msg.status);
                 return;
             }
-
+            console.log('Сообщение от агента', msg)
             // Дедупликация: пользовательское сообщение уже показано оптимистично
             if (!msg.is_from_bot) {
                 const dup = [...document.querySelectorAll('.user-message')].find(el =>
@@ -597,6 +810,7 @@ class ChatApp {
                         if (this._pendingBotEl) this._pendingBotEl.style.opacity = '1';
                     }));
                     // Placeholder живёт пока идёт стриминг — убираем только здесь, при первом чанке
+                    this._botAnswered = true;
                     this._removeBotPlaceholder();
                     document.getElementById('agent-status-indicator')?.remove();
                 }
@@ -616,7 +830,6 @@ class ChatApp {
             } else if (msg.done || msg.message !== undefined) {
                 // Финал стриминга или целое сообщение
                 const fullText = msg.message ?? this._pendingBotText;
-
                 if (this._pendingBotEl) {
                     // Дорисовываем финальный вариант
                     let html = marked.parse(fullText);
@@ -625,6 +838,12 @@ class ChatApp {
                         ADD_ATTR: ['colspan','rowspan','align']
                     });
                     this._pendingBotEl.innerHTML = html;
+                    // Рендерим файлы агента между текстом и кнопкой копировать
+                    if (msg.files?.length) {
+                        this._pendingBotEl.appendChild(
+                            this._renderBotFiles(msg.files, msg.message_id)
+                        );
+                    }
                     this._applyCodeHeaders(this._pendingBotEl);
                     const actions = this.createMessageActions(this._pendingBotEl.dataset.id, fullText, true);
                     this._pendingBotEl.appendChild(actions);
@@ -638,6 +857,7 @@ class ChatApp {
                 }
 
                 // Убираем placeholder если ещё жив (целое сообщение без стриминга)
+                this._botAnswered = true;
                 this._removeBotPlaceholder();
                 document.getElementById('agent-status-indicator')?.remove();
             }
@@ -723,6 +943,14 @@ class ChatApp {
                 ></div>
                 <div class="start-input-footer">
                     <!-- tools-trigger вставляется сюда через ToolsPanel.inject() -->
+                    <button class="attach-btn" id="start-attach-btn" title="Прикрепить файл" type="button">
+                        <svg viewBox="0 0 24 24" fill="none">
+                            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19
+                                     a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
+                                  stroke="currentColor" stroke-width="2"
+                                  stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
                     <button class="start-send-btn" id="send-btn" disabled aria-label="Отправить">
                         <svg viewBox="0 0 24 24" fill="none">
                             <path d="M5 12h14M13 6l6 6-6 6"
@@ -1038,13 +1266,10 @@ class ChatApp {
 
         sendBtn.onclick = () => this.sendMessage();
 
-        // Кнопка прикрепления файла — заглушка
-        const attachBtn = container?.querySelector('#attach-btn');
-        if (attachBtn) {
-            attachBtn.addEventListener('click', () => {
-                this.showToast('📎 Загрузка файлов появится совсем скоро!');
-            });
-        }
+        // Кнопка прикрепления файла
+        const attachBtn = container?.querySelector('#attach-btn')
+                       || container?.querySelector('#start-attach-btn');
+        window.FileAttach?.init(attachBtn, container);
     }
 
     /* ══════════════════════════════════════════

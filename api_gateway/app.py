@@ -955,6 +955,74 @@ async def download_chat_file(chat_id: int, message_id: str, file_name: str, requ
         },
     )
 
+@app.post("/api/chats/{chat_id}/delete")
+async def delete_chat(chat_id: int, request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    try:
+        response = await app.state.http_client.post(
+            f"{SERVICES['chats']['url']}/chat/delete",
+            json={"chat_id": chat_id, "user_id": user["user_id"]}
+        )
+        return Response(
+            content=response.content,
+            status_code=response.status_code,
+            media_type="application/json"
+        )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Chats service unreachable: {str(e)}")
+
+
+@app.post("/api/chats/{chat_id}/rename")
+async def rename_chat(chat_id: int, request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    data = await request.json()
+    new_title = (data.get("new_title") or "").strip()
+    if not new_title:
+        raise HTTPException(status_code=400, detail="new_title required")
+
+    try:
+        response = await app.state.http_client.post(
+            f"{SERVICES['chats']['url']}/chat/rename",
+            json={"chat_id": chat_id, "user_id": user["user_id"], "new_title": new_title}
+        )
+        return Response(
+            content=response.content,
+            status_code=response.status_code,
+            media_type="application/json"
+        )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Chats service unreachable: {str(e)}")
+
+
+@app.post("/api/chats/{chat_id}/favorite")
+async def favorite_chat(chat_id: int, request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    data = await request.json()
+    is_favorite = bool(data.get("is_favorite", True))
+
+    try:
+        response = await app.state.http_client.post(
+            f"{SERVICES['chats']['url']}/chat/favorite",
+            json={"chat_id": chat_id, "user_id": user["user_id"], "is_favorite": is_favorite}
+        )
+        return Response(
+            content=response.content,
+            status_code=response.status_code,
+            media_type="application/json"
+        )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Chats service unreachable: {str(e)}")
+
+
 @app.get("/api/chats")
 async def get_chats(request: Request):
     user = await get_current_user(request)

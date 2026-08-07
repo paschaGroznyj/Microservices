@@ -169,6 +169,8 @@ class ToolsPanel {
       } else {
         chatFooter.appendChild(btn);
       }
+      // Синхронизируем badge сразу при вставке
+      this._updateTriggerBadge(btn);
     }
 
     // ── стартовый экран ───────────────────────
@@ -177,6 +179,8 @@ class ToolsPanel {
       const btn     = this._makeBtn();
       const sendBtn = startFooter.querySelector(".start-send-btn");
       sendBtn ? startFooter.insertBefore(btn, sendBtn) : startFooter.appendChild(btn);
+      // Синхронизируем badge сразу при вставке
+      this._updateTriggerBadge(btn);
     }
   }
 
@@ -306,9 +310,14 @@ class ToolsPanel {
       toolsSection.appendChild(row);
     });
 
-    panel.appendChild(ctxSection);
-    panel.appendChild(divider);
-    panel.appendChild(toolsSection);
+    // Весь контент — в скролл-контейнер, чтобы при нехватке высоты
+    // появлялась прокрутка, а не панель уходила за экран.
+    const scrollBody = document.createElement("div");
+    scrollBody.className = "tp-scroll-body";
+    scrollBody.appendChild(ctxSection);
+    scrollBody.appendChild(divider);
+    scrollBody.appendChild(toolsSection);
+    panel.appendChild(scrollBody);
 
     document.body.appendChild(panel);
     this._positionPanel(panel, triggerBtn);
@@ -326,22 +335,41 @@ class ToolsPanel {
   }
 
   _positionPanel(panel, triggerBtn) {
-    const rect   = triggerBtn.getBoundingClientRect();
-    const MARGIN = 8;
+    const rect    = triggerBtn.getBoundingClientRect();
+    const MARGIN  = 8;
+    const vh      = window.innerHeight;
 
-    panel.style.cssText = "visibility:hidden;display:block;";
-    const ph = panel.offsetHeight;
-    const pw = panel.offsetWidth;
+    // Измеряем размеры панели без ограничений по высоте
+    panel.style.cssText = "visibility:hidden;position:fixed;top:0;left:0;max-height:none;";
+    const naturalH = panel.scrollHeight;   // полная высота без обрезки
+    const pw       = panel.offsetWidth;
     panel.style.cssText = "";
 
-    let top  = rect.top - ph - MARGIN + window.scrollY;
-    let left = rect.left + window.scrollX;
+    const spaceAbove = rect.top - MARGIN;
+    const spaceBelow = vh - rect.bottom - MARGIN;
 
+    // Предпочитаем открыться СВЕРХУ, fallback — снизу
+    let openAbove = spaceAbove >= spaceBelow;
+    // Если сверху совсем мало (< 120px) и снизу больше — снизу
+    if (openAbove && spaceAbove < 120 && spaceBelow > spaceAbove) openAbove = false;
+
+    let maxH, top;
+    if (openAbove) {
+      maxH = Math.min(naturalH, spaceAbove);
+      top  = rect.top - maxH - MARGIN + window.scrollY;
+    } else {
+      maxH = Math.min(naturalH, spaceBelow);
+      top  = rect.bottom + MARGIN + window.scrollY;
+    }
+
+    // Горизонталь — прижимаем к правому краю кнопки, не выходим за viewport
+    let left = rect.right - pw + window.scrollX;
+    if (left < MARGIN) left = MARGIN;
     if (left + pw > window.innerWidth - MARGIN) left = window.innerWidth - pw - MARGIN;
-    if (top < MARGIN) top = rect.bottom + MARGIN + window.scrollY;
 
-    panel.style.top  = `${top}px`;
-    panel.style.left = `${left}px`;
+    panel.style.top     = `${top}px`;
+    panel.style.left    = `${left}px`;
+    panel.style.maxHeight = `${maxH}px`;
   }
 
   _close() {
@@ -364,21 +392,30 @@ class ToolsPanel {
   }
 
   _updateTriggerBadge(btn) {
-    let badge  = btn.querySelector(".tp-badge");
-    const all  = TOOL_CATEGORIES.filter(c => !c.adminOnly || this._isAdmin).length;
-    const sel  = this._selected.size;
+    const all = TOOL_CATEGORIES.filter(c => !c.adminOnly || this._isAdmin).length;
+    const sel = this._selected.size;
 
-    if (sel === 0) {
-      if (!badge) { badge = document.createElement("span"); btn.appendChild(badge); }
-      badge.className   = "tp-badge tp-badge--warn";
-      badge.textContent = "0";
-    } else if (sel < all) {
-      if (!badge) { badge = document.createElement("span"); btn.appendChild(badge); }
-      badge.className   = "tp-badge";
-      badge.textContent = sel;
-    } else {
-      badge?.remove();
-    }
+    // Обновляем ВСЕ кнопки-триггеры в DOM (их может быть 2: стартовый + активный чат)
+    const targets = btn
+      ? [btn, ...document.querySelectorAll(".tools-trigger-btn")].filter(
+          (b, i, arr) => arr.indexOf(b) === i   // dedupe
+        )
+      : document.querySelectorAll(".tools-trigger-btn");
+
+    targets.forEach(target => {
+      let badge = target.querySelector(".tp-badge");
+      if (sel === 0) {
+        if (!badge) { badge = document.createElement("span"); target.appendChild(badge); }
+        badge.className   = "tp-badge tp-badge--warn";
+        badge.textContent = "0";
+      } else if (sel < all) {
+        if (!badge) { badge = document.createElement("span"); target.appendChild(badge); }
+        badge.className   = "tp-badge";
+        badge.textContent = sel;
+      } else {
+        badge?.remove();
+      }
+    });
   }
 
   _checkSVG() {

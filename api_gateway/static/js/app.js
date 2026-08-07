@@ -105,9 +105,9 @@ class ChatApp {
 
     renderChats(chats) {
         const list = document.getElementById('chat-list');
+        const favList = document.getElementById('chat-favorites-list');
         if (!list) return;
 
-        // Безопасное экранирование спецсимволов HTML
         const escapeHtml = (str) => {
             return (str || '')
                 .replace(/&/g, '&amp;')
@@ -117,45 +117,68 @@ class ChatApp {
                 .replace(/'/g, '&#039;');
         };
 
-        // Извлечение чистого текста без выполнения скриптов/HTML
         const stripHtml = (html) => {
             if (!html) return '';
-            // Безопасный парсинг через DOMParser (не парсит/не исполняет <img>, <script> и т.д.)
             const doc = new DOMParser().parseFromString(html, 'text/html');
             return doc.body.textContent || '';
         };
 
-        const getPreviewText = (chat) => {
+        // Если есть renamed_title — показываем его как единственную строку (без preview).
+        // Если нет — показываем последнее сообщение как единственную строку.
+        const getDisplayLine = (chat) => {
+            const renamed = (chat.renamed_title || '').trim();
+            if (renamed) return { title: escapeHtml(renamed), preview: null };
+
             const raw = (chat.last_message || '').trim();
-            if (!raw || raw === 'Чат создан') {
-                return '[Пустое сообщение]';
-            }
-            
-            // 1. Очищаем от HTML тегов
+            if (!raw || raw === 'Чат создан') return { title: 'Новый чат', preview: null };
             const plainText = stripHtml(raw).trim();
-            
-            // 2. Обрезаем до 80 символов
-            const truncated = plainText.length > 80 ? plainText.slice(0, 80) + '...' : plainText;
-            
-            // 3. Экранируем перед вставкой в innerHTML шаблона
-            return escapeHtml(truncated);
+            const truncated = plainText.length > 60 ? plainText.slice(0, 60) + '...' : plainText;
+            return { title: null, preview: escapeHtml(truncated) };
         };
 
-        const visible = chats
+        const sorted = (Array.isArray(chats) ? chats : [])
+            .filter(chat => chat && !chat.is_deleted)
             .slice()
             .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
-        list.innerHTML = visible.map(chat => `
-            <div class="chat-item ${chat.id === this.currentChat ? 'active' : ''}"
-                data-chat-id="${escapeHtml(String(chat.id))}">
-                <div class="chat-preview">${getPreviewText(chat)}</div>
-                <button class="chat-item-menu-btn" data-menu-chat-id="${escapeHtml(String(chat.id))}" title="Действия" type="button">
-                    <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14">
-                        <circle cx="4" cy="10" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="16" cy="10" r="1.5"/>
-                    </svg>
-                </button>
-            </div>
-        `).join('');
+        const buildList = (items) => {
+            if (!items.length) {
+                return '<div class="chat-item-skeleton">Нет чатов</div>';
+            }
+            return items.map(chat => {
+                const { title, preview } = getDisplayLine(chat);
+                const lineHtml = title
+                    ? `<div class="chat-line chat-line--title">${title}</div>`
+                    : `<div class="chat-line chat-line--preview">${preview}</div>`;
+                return `
+                <div class="chat-item ${chat.id === this.currentChat ? 'active' : ''}"
+                    data-chat-id="${escapeHtml(String(chat.id))}">
+                    ${lineHtml}
+                    <button class="chat-item-menu-btn" data-menu-chat-id="${escapeHtml(String(chat.id))}" title="Действия" type="button">
+                        <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14" style="transform:rotate(90deg)">
+                            <circle cx="10" cy="4" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="10" cy="16" r="1.5"/>
+                        </svg>
+                    </button>
+                </div>`;
+            }).join('');
+        };
+
+        const favorites = sorted.filter(c => c.is_favorite);
+        const regular   = sorted.filter(c => !c.is_favorite);
+
+        // Секция избранного — показываем/скрываем целиком
+        const favSection = document.getElementById('favorites-section');
+        if (favList) {
+            if (favorites.length) {
+                favList.innerHTML = buildList(favorites);
+                if (favSection) favSection.style.display = 'flex';
+            } else {
+                favList.innerHTML = '';
+                if (favSection) favSection.style.display = 'none';
+            }
+        }
+
+        list.innerHTML = buildList(regular);
     }
 
     /* ══════════════════════════════════════════
@@ -165,33 +188,30 @@ class ChatApp {
         if (this.isUIReady) return;
         this.isUIReady = true;
 
-        // Список чатов — делегирование
-        document.getElementById('chat-list')?.addEventListener('click', (e) => {
-            // ⋯ кнопка — открываем dropdown
+        const handleChatListClick = (e) => {
             const menuBtn = e.target.closest('.chat-item-menu-btn');
             if (menuBtn) {
                 e.stopPropagation();
                 this._toggleChatDropdown(menuBtn);
                 return;
             }
-            // клик по самому чату
+
             const item = e.target.closest('.chat-item');
             if (!item) return;
             this.openChat(Number(item.dataset.chatId));
-        });
+        };
 
-        // Закрываем dropdown при клике вне
+        document.getElementById('chat-list')?.addEventListener('click', handleChatListClick);
+        document.getElementById('chat-favorites-list')?.addEventListener('click', handleChatListClick);
+
         document.addEventListener('click', (e) => {
             if (!e.target.closest('.chat-item-dropdown') && !e.target.closest('.chat-item-menu-btn')) {
                 document.querySelectorAll('.chat-item-dropdown').forEach(d => d.remove());
             }
         });
 
-        // Новый чат
         document.getElementById('new-chat-btn')?.addEventListener('click', () => this.startNewChat());
-
-        // Профиль
-        document.getElementById('profile-button')?.addEventListener('click', () => this.attachProfileHandlers());
+        document.getElementById('profile-btn')?.addEventListener('click', () => this.attachProfileHandlers());
     }
 
     /* ══════════════════════════════════════════
@@ -669,35 +689,196 @@ class ChatApp {
        CHAT DROPDOWN (три точки)
     ══════════════════════════════════════════ */
     _toggleChatDropdown(btn) {
-        // Закрываем любой открытый
         const existing = document.querySelector('.chat-item-dropdown');
         if (existing) {
             existing.remove();
-            // Если это тот же чат — просто закрыли
             if (existing.dataset.forChat === btn.dataset.menuChatId) return;
         }
 
         const chatId = Number(btn.dataset.menuChatId);
+        const chat = this.chats.find(c => Number(c.id) === chatId) || {};
 
         const dropdown = document.createElement('div');
         dropdown.className = 'chat-item-dropdown';
         dropdown.dataset.forChat = btn.dataset.menuChatId;
 
-        const deleteBtn = document.createElement('button');
-        deleteBtn.className = 'chat-item-dropdown-delete';
-        deleteBtn.type = 'button';
-        deleteBtn.textContent = 'Удалить';
-        deleteBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            dropdown.remove();
-            this._deleteChat(chatId);
+        const makeItem = (className, text, iconSvg, onClick) => {
+            const item = document.createElement('button');
+            item.className = className;
+            item.type = 'button';
+            item.innerHTML = `<span class="chat-item-dropdown-icon" aria-hidden="true">${iconSvg}</span><span class="chat-item-dropdown-text">${text}</span>`;
+            item.addEventListener('click', (e) => {
+                e.stopPropagation();
+                dropdown.remove();
+                onClick();
+            });
+            return item;
+        };
+
+        const iconEdit = '<svg viewBox="0 0 24 24" fill="none"><path d="M4 20h4l10-10a2 2 0 0 0-4-4L4 16v4z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        const iconStar = '<svg viewBox="0 0 24 24" fill="none"><path d="M12 3.8l2.56 5.2 5.74.84-4.15 4.05.98 5.72L12 16.9 6.87 19.6l.98-5.72L3.7 9.84l5.74-.84L12 3.8z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>';
+        const iconTrash = '<svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16M9 7V5h6v2m-8 0l1 12h8l1-12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+        dropdown.appendChild(makeItem('chat-item-dropdown-action', 'Переименовать', iconEdit, () => this._renameChat(chatId, chat)));
+        dropdown.appendChild(makeItem('chat-item-dropdown-action', chat.is_favorite ? 'Убрать из избранного' : 'В избранное', iconStar, () => this._favoriteChat(chatId, !chat.is_favorite)));
+        dropdown.appendChild(makeItem('chat-item-dropdown-delete', 'Удалить', iconTrash, () => this._deleteChat(chatId)));
+
+        // Позиционируем dropdown через fixed, чтобы он не выходил за viewport
+        // даже когда chat-item находится в самом низу скролл-контейнера.
+        document.body.appendChild(dropdown);
+
+        // Сначала вставляем без координат, чтобы измерить высоту.
+        dropdown.style.visibility = 'hidden';
+        dropdown.style.top = '0px';
+        dropdown.style.left = '0px';
+
+        requestAnimationFrame(() => {
+            const btnRect      = btn.getBoundingClientRect();
+            const ddHeight     = dropdown.offsetHeight;
+            const ddWidth      = dropdown.offsetWidth;
+            const viewportH    = window.innerHeight;
+
+            const spaceBelow   = viewportH - btnRect.bottom;
+            const spaceAbove   = btnRect.top;
+
+            let top;
+            if (spaceBelow >= ddHeight + 4 || spaceBelow >= spaceAbove) {
+                // показываем снизу
+                top = btnRect.bottom + 4;
+            } else {
+                // не влезает снизу — показываем сверху
+                top = btnRect.top - ddHeight - 4;
+            }
+
+            // Не выходить за правый край
+            let left = btnRect.right - ddWidth;
+            if (left < 4) left = 4;
+
+            dropdown.style.top        = `${top}px`;
+            dropdown.style.left       = `${left}px`;
+            dropdown.style.visibility = '';
         });
+    }
 
-        dropdown.appendChild(deleteBtn);
+    async _renameChat(chatId, chat) {
+        const initialTitle = (chat?.renamed_title || `Чат ${chatId}`).trim();
+        const newTitle = await this._askChatRename(initialTitle);
+        if (newTitle === null) return;
 
-        // Позиционируем относительно кнопки
-        const chatItem = btn.closest('.chat-item');
-        chatItem.appendChild(dropdown);
+        try {
+            await fetch(`/api/chats/${chatId}/rename`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ new_title: newTitle })
+            });
+            this.chats = this.chats.map(c => c.id === chatId ? { ...c, renamed_title: newTitle } : c);
+            this.renderChats(this.chats);
+        } catch (err) {
+            console.error('renameChat error:', err);
+        }
+    }
+
+    _askChatRename(initialTitle) {
+        return new Promise((resolve) => {
+            document.querySelector('.sidebar-rename-overlay')?.remove();
+
+            const overlay = document.createElement('div');
+            overlay.className = 'sidebar-rename-overlay';
+
+            const modal = document.createElement('div');
+            modal.className = 'sidebar-rename-modal';
+
+            const title = document.createElement('div');
+            title.className = 'sidebar-rename-title';
+            title.textContent = 'Переименовать чат';
+
+            const input = document.createElement('input');
+            input.className = 'sidebar-rename-input';
+            input.type = 'text';
+            input.maxLength = 120;
+            input.value = initialTitle || '';
+
+            const actions = document.createElement('div');
+            actions.className = 'sidebar-rename-actions';
+
+            const cancelBtn = document.createElement('button');
+            cancelBtn.className = 'sidebar-rename-btn sidebar-rename-cancel';
+            cancelBtn.type = 'button';
+            cancelBtn.textContent = 'Отмена';
+
+            const saveBtn = document.createElement('button');
+            saveBtn.className = 'sidebar-rename-btn sidebar-rename-save';
+            saveBtn.type = 'button';
+            saveBtn.textContent = 'Сохранить';
+
+            actions.appendChild(cancelBtn);
+            actions.appendChild(saveBtn);
+
+            modal.appendChild(title);
+            modal.appendChild(input);
+            modal.appendChild(actions);
+            overlay.appendChild(modal);
+            document.body.appendChild(overlay);
+
+            const cleanup = (value) => {
+                document.removeEventListener('keydown', onKeydown, true);
+                overlay.remove();
+                resolve(value);
+            };
+
+            const submit = () => {
+                const value = (input.value || '').trim();
+                if (!value) return;
+                cleanup(value);
+            };
+
+            const onKeydown = (e) => {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    cleanup(null);
+                }
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    submit();
+                }
+            };
+
+            document.addEventListener('keydown', onKeydown, true);
+
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) cleanup(null);
+            });
+            cancelBtn.addEventListener('click', () => cleanup(null));
+            saveBtn.addEventListener('click', submit);
+
+            setTimeout(() => {
+                input.focus();
+                input.select();
+            }, 0);
+        });
+    }
+
+    async _favoriteChat(chatId, isFavorite) {
+        try {
+            await fetch(`/api/chats/${chatId}/favorite`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ is_favorite: isFavorite })
+            });
+
+            const card = document.querySelector(`.chat-item[data-chat-id="${chatId}"]`);
+            if (card) {
+                card.classList.add('chat-item-moving');
+                setTimeout(() => card.classList.remove('chat-item-moving'), 280);
+            }
+
+            this.chats = this.chats.map(c => c.id === chatId ? { ...c, is_favorite: isFavorite } : c);
+            this.renderChats(this.chats);
+        } catch (err) {
+            console.error('favoriteChat error:', err);
+        }
     }
 
     _deleteChat(chatId) {
@@ -710,7 +891,13 @@ class ChatApp {
 
         overlay.innerHTML = `
 <div class="delete-chat-modal">
-    <p class="delete-chat-modal__text">Вы действительно хотите удалить чат?</p>
+    <div class="delete-chat-modal__icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 7h16M9 7V5h6v2m-8 0l1 12h8l1-12"/>
+        </svg>
+    </div>
+    <div class="delete-chat-modal__title">Удалить чат?</div>
+    <p class="delete-chat-modal__text">Это действие необратимо. История сообщений будет удалена.</p>
     <div class="delete-chat-modal__actions">
         <button class="delete-chat-modal__cancel" type="button">Отмена</button>
         <button class="delete-chat-modal__confirm" type="button">Удалить</button>
@@ -731,12 +918,31 @@ class ChatApp {
             } catch (err) {
                 console.error('deleteChat error:', err);
             }
-            // Убираем из локального списка и перерисовываем
+            // Убираем из локального списка и перерисовываем только сайдбар
             this.chats = this.chats.filter(c => c.id !== chatId);
             this.renderChats(this.chats);
-            // Если удалили текущий чат — сбрасываем состояние
+            // Сбрасываем интерфейс ТОЛЬКО если удалили именно открытый чат
             if (this.currentChat === chatId) {
-                this.startNewChat();
+                this.currentChat = null;
+                if (this.ws) { 
+                    this.ws.close(); 
+                    this.ws = null; 
+                }
+                
+                document.querySelectorAll('.chat-item').forEach(i => i.classList.remove('active'));
+
+                const chatMainInner = document.querySelector('.chat-main-inner');
+                const chatMessages = document.querySelector('.chat-messages');
+                chatMainInner?.classList.remove('chat-active');
+
+                if (chatMessages) {
+                    chatMessages.innerHTML = ''; 
+                }
+                const inputContainer = this.getInputContainer();
+                if (inputContainer) {
+                    delete inputContainer.dataset.renderedChat;
+                }
+                await this.renderMessageInput();
             }
         });
 

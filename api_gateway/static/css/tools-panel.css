@@ -49,7 +49,7 @@
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.1);
   overflow: hidden;
   animation: tp-appear 0.17s cubic-bezier(0.22, 0.61, 0.36, 1) both;
-  transform-origin: bottom left;
+  transform-origin: bottom right;
 }
 
 .tools-panel.tp-hiding {

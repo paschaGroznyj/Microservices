@@ -2,25 +2,30 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# ��������� �����������
-RUN apt-get update && apt-get install -y \
+# Копируем uv из официального образа
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+# Разрешаем uv ставить пакеты в системный Python контейнера
+ENV UV_SYSTEM_PYTHON=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
+# Системные зависимости
+RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Python �����������
+# Создаем пользователя заранее
+RUN useradd -m -u 1500 appuser
+
+# Установка зависимостей (кэшируется Docker'ом)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN uv pip install --no-cache -r requirements.txt
 
-# ��� ����������
-COPY . .
-
-
-RUN useradd -m -u 1500 appuser && chown -R appuser:appuser /app
+# Копируем исходный код сразу с нужными правами
+COPY --chown=appuser:appuser . .
 
 USER appuser
-
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/app
 
 EXPOSE 7000
 

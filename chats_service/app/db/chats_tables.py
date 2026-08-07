@@ -3,6 +3,7 @@ import asyncpg
 from app.core.config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME
 import logging
 from datetime import datetime, timezone
+import json
 
 logging.basicConfig(
     level=logging.INFO,
@@ -56,6 +57,7 @@ class DataBaseChats:
                 message_text TEXT,
                 is_from_bot BOOLEAN,
                 tool_name TEXT,
+                tool_trace TEXT,
                 created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             );
             
@@ -83,6 +85,18 @@ class DataBaseChats:
                 PRIMARY KEY (chat_id, user_id)
             );
 
+            -- Метаданные для рендера левого сайдбара
+            CREATE TABLE IF NOT EXISTS chat_sidebar_meta (
+                chat_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+                is_favorite BOOLEAN NOT NULL DEFAULT FALSE,
+                renamed_title TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (chat_id, user_id)
+            );
+
             -- Миграция для id чатов
             ALTER TABLE chat_types_agent ALTER COLUMN chat_id TYPE BIGINT USING chat_id::BIGINT;
             ALTER TABLE chat_types_agent ALTER COLUMN user_id TYPE BIGINT USING user_id::BIGINT;
@@ -90,25 +104,79 @@ class DataBaseChats:
             ALTER TABLE chats ALTER COLUMN user_id TYPE BIGINT USING user_id::BIGINT;
             ALTER TABLE chats ALTER COLUMN chat_id TYPE BIGINT USING chat_id::BIGINT;
 
+            ALTER TABLE chats ADD COLUMN IF NOT EXISTS selected_tools TEXT[];
+            ALTER TABLE chats ADD COLUMN IF NOT EXISTS context_size TEXT;
+
         """)
 
-    async def add_message(self, user_id: int, message: str, chat_id: int, is_from_bot: bool, action: str = None):
+        await conn.execute("""
+            ALTER TABLE chats ADD COLUMN IF NOT EXISTS message_id TEXT;
+            CREATE INDEX IF NOT EXISTS ix_chats_message_id ON chats(message_id);
+
+            CREATE TABLE IF NOT EXISTS chat_files (
+                id SERIAL PRIMARY KEY,
+                message_id TEXT NOT NULL,
+                chat_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                file_name TEXT NOT NULL,
+                file_ext TEXT,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS ix_chat_files_message_id ON chat_files(message_id);
+            CREATE INDEX IF NOT EXISTS ix_chat_files_chat_id ON chat_files(chat_id);
+
+            ALTER TABLE chat_files ADD COLUMN IF NOT EXISTS source TEXT;
+            ALTER TABLE chat_files ADD COLUMN IF NOT EXISTS file_path TEXT;
+            CREATE INDEX IF NOT EXISTS ix_chat_files_source ON chat_files(source);
+
+            ALTER TABLE chats ADD COLUMN IF NOT EXISTS tool_trace TEXT;
+        """)
+    async def add_message(
+        self,
+        user_id: int,
+        message: str,
+        chat_id: int,
+        is_from_bot: bool,
+        message_id: str | None = None,
+        attached_files: list[dict] | None = None,
+        action: str = None,
+        selected_tools: list[str] | None = None,
+        context_size: str | None = None,
+        tool_trace: str | None = None
+    ):
         if user_id is None or chat_id is None:
             logging.warning("Пропущено сообщение: отсутствует user_id или chat_id")
             return None
-        
-        # Генерируем точное время создания со значением UTC
+
         now_utc = datetime.now(timezone.utc)
-        
         try:
             async with self.pool.acquire() as conn:
-                await conn.fetchval("""
-                    INSERT INTO chats (user_id, chat_id, message_text, is_from_bot, tool_name, created_at)
-                    VALUES ($1, $2, $3, $4, $5, $6);
-                """,
-                user_id, chat_id, message, is_from_bot, action, now_utc)
+                async with conn.transaction():
+                    await conn.execute("""
+                        INSERT INTO chats (
+                            user_id, chat_id, message_text, is_from_bot,
+                            tool_name, selected_tools, context_size, message_id, created_at, tool_trace
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
+                    """,
+                    user_id, chat_id, message, is_from_bot,
+                    action, selected_tools, context_size, message_id, now_utc, tool_trace)
+
+                    if attached_files:
+                        source = "agent" if is_from_bot else "user"
+                        await conn.executemany("""
+                            INSERT INTO chat_files (message_id, chat_id, user_id, file_name, file_ext, source, file_path)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7);
+                        """, [
+                            (
+                                message_id, chat_id, user_id,
+                                f["name"], f["name"].rsplit(".", 1)[-1].lower() if "." in f["name"] else None,
+                                source, f.get("path"),
+                            )
+                            for f in attached_files
+                        ])
         except asyncpg.UniqueViolationError:
-            logging.error("Сообщение не может быть добавлено")
+            logging.error("Сообщение не может быть добавлено (дубликат message_id)")
 
     async def get_all_user_messages(self, username: str, limit: int = 50, offset: int = 0):
         """
@@ -159,22 +227,69 @@ class DataBaseChats:
             logging.error(f"Ошибка при получении всех сообщений пользователя {username}: {e}")
             raise
 
+    async def ensure_sidebar_meta_for_user(self, username: str):
+        """Создаёт дефолтные метаданные сайдбара для всех чатов пользователя."""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO chat_sidebar_meta (chat_id, user_id, is_deleted, is_favorite, renamed_title)
+                SELECT DISTINCT c.chat_id, c.user_id, FALSE, FALSE, NULL
+                FROM chats c
+                WHERE c.user_id = (SELECT id FROM users WHERE username = $1)
+                ON CONFLICT (chat_id, user_id) DO NOTHING
+            """, username)
+
+    async def mark_chat_deleted(self, chat_id: int, user_id: int):
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO chat_sidebar_meta (chat_id, user_id, is_deleted, is_favorite, renamed_title)
+                VALUES ($1, $2, TRUE, FALSE, NULL)
+                ON CONFLICT (chat_id, user_id)
+                DO UPDATE SET is_deleted = TRUE, updated_at = CURRENT_TIMESTAMP
+            """, chat_id, user_id)
+
+    async def rename_chat(self, chat_id: int, user_id: int, new_title: str):
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO chat_sidebar_meta (chat_id, user_id, is_deleted, is_favorite, renamed_title)
+                VALUES ($1, $2, FALSE, FALSE, $3)
+                ON CONFLICT (chat_id, user_id)
+                DO UPDATE SET renamed_title = $3, updated_at = CURRENT_TIMESTAMP
+            """, chat_id, user_id, new_title)
+
+    async def set_chat_favorite(self, chat_id: int, user_id: int, is_favorite: bool):
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO chat_sidebar_meta (chat_id, user_id, is_deleted, is_favorite, renamed_title)
+                VALUES ($1, $2, FALSE, $3, NULL)
+                ON CONFLICT (chat_id, user_id)
+                DO UPDATE SET is_favorite = $3, updated_at = CURRENT_TIMESTAMP
+            """, chat_id, user_id, is_favorite)
+
     async def get_user_chats_summary(self, username: str):
-        """Возвращает список чатов пользователя с их последними сообщениями."""
+        """Возвращает список чатов пользователя с их последними сообщениями и метаданными сайдбара."""
         try:
+            await self.ensure_sidebar_meta_for_user(username)
             async with self.pool.acquire() as conn:
                 rows = await conn.fetch("""
-                    WITH user_chats AS (
-                        SELECT DISTINCT chat_id 
-                        FROM chats 
-                        WHERE user_id = (SELECT id FROM users WHERE username = $1)
+                    WITH target_user AS (
+                        SELECT id AS user_id FROM users WHERE username = $1
+                    ),
+                    user_chats AS (
+                        SELECT DISTINCT c.chat_id, c.user_id
+                        FROM chats c
+                        JOIN target_user tu ON tu.user_id = c.user_id
                     )
                     SELECT DISTINCT ON (c.chat_id)
                         c.chat_id AS id,
                         c.message_text AS last_message,
-                        c.created_at AS timestamp
+                        c.created_at AS timestamp,
+                        COALESCE(m.is_deleted, FALSE) AS is_deleted,
+                        COALESCE(m.is_favorite, FALSE) AS is_favorite,
+                        m.renamed_title AS renamed_title
                     FROM chats c
-                    JOIN user_chats uc ON c.chat_id = uc.chat_id
+                    JOIN user_chats uc ON c.chat_id = uc.chat_id AND c.user_id = uc.user_id
+                    LEFT JOIN chat_sidebar_meta m ON m.chat_id = uc.chat_id AND m.user_id = uc.user_id
+                    WHERE COALESCE(m.is_deleted, FALSE) = FALSE
                     ORDER BY c.chat_id, c.created_at DESC
                 """, username)
 
@@ -182,7 +297,10 @@ class DataBaseChats:
                     {
                         "id": row["id"],
                         "last_message": row["last_message"],
-                        "timestamp": row["timestamp"].isoformat()
+                        "timestamp": row["timestamp"].isoformat(),
+                        "is_deleted": row["is_deleted"],
+                        "is_favorite": row["is_favorite"],
+                        "renamed_title": row["renamed_title"]
                     }
                     for row in rows
                 ]
@@ -192,7 +310,8 @@ class DataBaseChats:
 
     async def get_chat_messages(self, chat_id: int, username: str, limit: int = 50, offset: int = 0):
         """
-        Возвращает сообщения в чате для пользователя (и сообщения бота)
+        Возвращает сообщения в чате для пользователя (и сообщения бота),
+        вместе со списком прикреплённых файлов на каждое сообщение.
         """
         try:
             async with self.pool.acquire() as conn:
@@ -204,7 +323,20 @@ class DataBaseChats:
                         c.chat_id, 
                         c.message_text, 
                         c.is_from_bot, 
-                        c.created_at
+                        c.message_id,
+                        c.created_at,
+                        COALESCE(
+                            (
+                                SELECT json_agg(
+                                    json_build_object('name', f.file_name, 'ext', f.file_ext,
+                                    'source', f.source)
+                                    ORDER BY f.id ASC
+                                )
+                                FROM chat_files f
+                                WHERE f.message_id = c.message_id
+                            ),
+                            '[]'::json
+                        ) AS files
                     FROM chats c
                     LEFT JOIN users u ON c.user_id = u.id
                     WHERE c.chat_id = $1 
@@ -218,13 +350,19 @@ class DataBaseChats:
 
                 messages = []
                 for row in rows:
+                    files = row["files"]
+                    if isinstance(files, str):
+                        files = json.loads(files)
+
                     messages.append({
                         "id": row["id"],
                         "user_id": row["user_id"],
                         "chat_id": row["chat_id"],
                         "message": row["message_text"],
                         "is_from_bot": row["is_from_bot"],
-                        "created_at": row["created_at"].isoformat()
+                        "message_id": row["message_id"],
+                        "created_at": row["created_at"].isoformat(),
+                        "files": files or [],
                     })
                 return messages
         except Exception as e:
@@ -303,4 +441,4 @@ class DataBaseChats:
             return await conn.fetchval("""
                 SELECT chat_id FROM chat_types_agent WHERE user_id = $1 AND type_agent = $2
                 ORDER BY chat_id DESC LIMIT 1
-            """, user_id, type_agent)
+            """, user_id, type_agent)   

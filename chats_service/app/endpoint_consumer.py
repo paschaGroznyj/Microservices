@@ -13,6 +13,18 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_files_for_ws(attached_files: list[dict] | None) -> list[dict] | None:
+    """Убираем служебный path — фронту нужны только name/ext."""
+    if not attached_files:
+        return None
+    return [
+        {
+            "name": f["name"],
+            "ext": f["name"].rsplit(".", 1)[-1].lower() if "." in f["name"] else None,
+        }
+        for f in attached_files
+    ]
+
 class DBConsumer:
     def __init__(self):
         self.db = DataBaseChats()
@@ -20,14 +32,6 @@ class DBConsumer:
         self.agents = {
             "pm": {
                 "name": "Agent PM",
-                "gateway": "http://api_gateway:7000"
-            },
-            "ds": {
-                "name": "Data Science IAD",
-                "gateway": "http://api_gateway_ds:1000"
-            },
-            "ouroboros": {
-                "name": "Ouroboros",
                 "gateway": "http://api_gateway:7000"
             }
         }
@@ -52,9 +56,25 @@ class DBConsumer:
             message = payload.get("message")
             is_from_bot = payload.get("is_from_bot", False)
             action = payload.get("action")
+            selected_tools = payload.get("selected_tools")
+            context_size = payload.get("context_size")
+            message_id = payload.get("message_id")
+            attached_files = payload.get("attached_files")
+            tool_trace = payload.get("tool_trace")
             logging.info(payload)
             # Сохраняем в БД
-            await self.db.add_message(user_id, message, chat_id, is_from_bot, action)
+            await self.db.add_message(
+                user_id=user_id,
+                message=message[:20000],
+                chat_id=chat_id,
+                is_from_bot=is_from_bot,
+                action=action,
+                selected_tools=selected_tools or None,
+                context_size=context_size,
+                message_id=message_id,
+                attached_files=attached_files,
+                tool_trace=tool_trace
+            )
             logger.info(f"Сообщение сохранено в БД: chat={chat_id}, user={user_id}")
             elapsed = time.perf_counter() - start
             logging.info(f"Message Service. Время чтобы вытащить из кафки и положить в БД = {elapsed:.4f}s")
@@ -63,7 +83,10 @@ class DBConsumer:
                 type_agent = payload.get("type_agent", "pm")
                 logging.info(type_agent)
                 gateway_url = self.agents[type_agent]["gateway"]
-                await self.send_to_main_service(chat_id, payload, gateway_url)
+                ws_payload = dict(payload)
+                ws_payload["files"] = _sanitize_files_for_ws(attached_files) # Адаптивно, чтобы и для файлов пользователя
+
+                await self.send_to_main_service(chat_id, ws_payload, gateway_url)
 
         except Exception as e:
             logger.error(f"Ошибка обработки сообщения: {e}")

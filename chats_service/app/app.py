@@ -99,6 +99,12 @@ class ChatMessage(BaseModel):
     chat_id: int
     type_agent: str
     request_id: str
+    selected_tools: list
+    context_size: str
+    message_id: str
+    has_files: bool
+    files: list
+    
 
 @app.on_event("startup")
 async def startup():
@@ -126,7 +132,12 @@ async def send_message(chat: ChatMessage):
         "message": chat.message,
         "type_agent": chat.type_agent,
         "is_from_bot": False,
-        "request_id": chat.request_id
+        "request_id": chat.request_id,
+        "selected_tools": chat.selected_tools,
+        "context_size": chat.context_size,
+        "message_id": chat.message_id,
+        "has_files": chat.has_files,
+        "files": chat.files
     }
     logging.info(message)
     start = time.perf_counter()
@@ -163,19 +174,71 @@ async def get_all_user_messages(limit: int = 50, offset: int = 0,  x_user_name: 
         logging.error(f"Ошибка в эндпоинте: {e}")
         raise HTTPException(status_code=500, detail="Не удалось загрузить историю чата")
 
+class ChatSidebarAction(BaseModel):
+    chat_id: int
+    user_id: int
+
+
+class ChatRenameAction(BaseModel):
+    chat_id: int
+    user_id: int
+    new_title: str
+
+
+class ChatFavoriteAction(BaseModel):
+    chat_id: int
+    user_id: int
+    is_favorite: bool
+
+
 @app.get("/user/chats")
 async def get_user_chats(x_user_name: str = Header(..., alias="X-User-Name")):
     try:
         chats = await db.get_user_chats_summary(x_user_name)
         sorted_chats = sorted(
-            chats, 
-            key=lambda x: x["timestamp"], 
+            chats,
+            key=lambda x: x["timestamp"],
             reverse=True
         )
         return {"chats": sorted_chats}
     except Exception as e:
         logging.error(f"Ошибка в эндпоинте get_user_chats: {e}")
         raise HTTPException(status_code=500, detail="Не удалось загрузить список чатов")
+
+
+@app.post("/chat/delete")
+async def delete_chat(action: ChatSidebarAction):
+    try:
+        await db.mark_chat_deleted(action.chat_id, action.user_id)
+        return {"ok": True}
+    except Exception as e:
+        logging.error(f"Ошибка удаления чата {action.chat_id}: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось пометить чат на удаление")
+
+
+@app.post("/chat/rename")
+async def rename_chat(action: ChatRenameAction):
+    try:
+        new_title = (action.new_title or "").strip()
+        if not new_title:
+            raise HTTPException(status_code=400, detail="new_title required")
+        await db.rename_chat(action.chat_id, action.user_id, new_title)
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Ошибка переименования чата {action.chat_id}: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось переименовать чат")
+
+
+@app.post("/chat/favorite")
+async def favorite_chat(action: ChatFavoriteAction):
+    try:
+        await db.set_chat_favorite(action.chat_id, action.user_id, action.is_favorite)
+        return {"ok": True}
+    except Exception as e:
+        logging.error(f"Ошибка избранного для чата {action.chat_id}: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось обновить избранное")
 
 
 @app.post("/chat/new")
@@ -217,6 +280,22 @@ async def find_chat_by_type(type_agent: str, x_user_id: str = Header(..., alias=
     if chat_id:
         return {"chat_id": chat_id, "exists": True}
     return {"chat_id": None, "exists": False}
+
+
+@app.get("/internal/resolve_file")
+async def resolve_file(chat_id: int, message_id: str, file_name: str):
+    """Только для gateway. Отдаёт путь на диске agent_service для скачивания."""
+    row = await db.pool.fetchrow("""
+        SELECT file_path, source
+        FROM chat_files
+        WHERE chat_id = $1 AND message_id = $2 AND file_name = $3
+        LIMIT 1
+    """, chat_id, message_id, file_name)
+
+    if not row or row["source"] != "agent" or not row["file_path"]:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    return {"path": row["file_path"]}
 
 
 @app.get("/health")

@@ -28,6 +28,7 @@ class ChatApp {
         this.initTabSwitcher();
         this.initHelp();
         this.initChatsSectionToggle();
+        this.initVisibilityReconnect();
         await this.renderMessageInput();
     }
 
@@ -106,20 +107,53 @@ class ChatApp {
         const list = document.getElementById('chat-list');
         if (!list) return;
 
+        // Безопасное экранирование спецсимволов HTML
+        const escapeHtml = (str) => {
+            return (str || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        };
+
+        // Извлечение чистого текста без выполнения скриптов/HTML
         const stripHtml = (html) => {
-            const tmp = document.createElement('div');
-            tmp.innerHTML = html;
-            return tmp.textContent || tmp.innerText || '';
+            if (!html) return '';
+            // Безопасный парсинг через DOMParser (не парсит/не исполняет <img>, <script> и т.д.)
+            const doc = new DOMParser().parseFromString(html, 'text/html');
+            return doc.body.textContent || '';
+        };
+
+        const getPreviewText = (chat) => {
+            const raw = (chat.last_message || '').trim();
+            if (!raw || raw === 'Чат создан') {
+                return '[Пустое сообщение]';
+            }
+            
+            // 1. Очищаем от HTML тегов
+            const plainText = stripHtml(raw).trim();
+            
+            // 2. Обрезаем до 80 символов
+            const truncated = plainText.length > 80 ? plainText.slice(0, 80) + '...' : plainText;
+            
+            // 3. Экранируем перед вставкой в innerHTML шаблона
+            return escapeHtml(truncated);
         };
 
         const visible = chats
-            .filter(c => c.last_message && c.last_message.trim() && c.last_message !== 'Чат создан')
+            .slice()
             .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
         list.innerHTML = visible.map(chat => `
             <div class="chat-item ${chat.id === this.currentChat ? 'active' : ''}"
-                 data-chat-id="${chat.id}">
-                <div class="chat-preview">${stripHtml(chat.last_message)}</div>
+                data-chat-id="${escapeHtml(String(chat.id))}">
+                <div class="chat-preview">${getPreviewText(chat)}</div>
+                <button class="chat-item-menu-btn" data-menu-chat-id="${escapeHtml(String(chat.id))}" title="Действия" type="button">
+                    <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14">
+                        <circle cx="4" cy="10" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="16" cy="10" r="1.5"/>
+                    </svg>
+                </button>
             </div>
         `).join('');
     }
@@ -133,9 +167,24 @@ class ChatApp {
 
         // Список чатов — делегирование
         document.getElementById('chat-list')?.addEventListener('click', (e) => {
+            // ⋯ кнопка — открываем dropdown
+            const menuBtn = e.target.closest('.chat-item-menu-btn');
+            if (menuBtn) {
+                e.stopPropagation();
+                this._toggleChatDropdown(menuBtn);
+                return;
+            }
+            // клик по самому чату
             const item = e.target.closest('.chat-item');
             if (!item) return;
             this.openChat(Number(item.dataset.chatId));
+        });
+
+        // Закрываем dropdown при клике вне
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.chat-item-dropdown') && !e.target.closest('.chat-item-menu-btn')) {
+                document.querySelectorAll('.chat-item-dropdown').forEach(d => d.remove());
+            }
         });
 
         // Новый чат
@@ -166,6 +215,9 @@ class ChatApp {
         // Переключаемся на вкладку агента если были на arxiv
         if (this.currentTab !== 'agent') {
             this.switchTab('agent');
+
+            const titleEl = document.getElementById("main-title");
+            titleEl.textContent = 'Agent Process Mining';
         }
 
         await Promise.all([
@@ -239,8 +291,7 @@ class ChatApp {
         if (!container) return;
 
         const isBot      = message.is_from_bot;
-        const rawContent = message.message || '';
-
+        const rawContent = message.message || 'Тут было пусто';
         // Убираем статус-индикатор при ответе бота
         if (isBot) document.getElementById('agent-status-indicator')?.remove();
 
@@ -277,14 +328,18 @@ class ChatApp {
         } else {
             messageEl.dataset.id = message.id;
             messageEl.innerHTML = content;
-            // Файлы агента из истории — вставляем после текста, перед actions
-            if (message.files?.length) {
-                messageEl.appendChild(
-                    this._renderBotFiles(message.files, message.message_id)
-                );
+            if (animate) {
+                messageEl.innerHTML = '';
+                this._streamRenderMessage(messageEl, rawContent, container, message.files, message.message_id);
+            } else {
+                // Файлы агента из истории — вставляем после текста, перед actions
+                if (message.files?.length) {
+                    messageEl.appendChild(
+                        this._renderBotFiles(message.files, message.message_id)
+                    );
+                }
             }
             document.getElementById('agent-response-placeholder')?.remove();
-
         }
 
         const actions = this.createMessageActions(message.id, rawContent, isBot);
@@ -610,6 +665,84 @@ class ChatApp {
         return wrap;
     }
 
+    /* ══════════════════════════════════════════
+       CHAT DROPDOWN (три точки)
+    ══════════════════════════════════════════ */
+    _toggleChatDropdown(btn) {
+        // Закрываем любой открытый
+        const existing = document.querySelector('.chat-item-dropdown');
+        if (existing) {
+            existing.remove();
+            // Если это тот же чат — просто закрыли
+            if (existing.dataset.forChat === btn.dataset.menuChatId) return;
+        }
+
+        const chatId = Number(btn.dataset.menuChatId);
+
+        const dropdown = document.createElement('div');
+        dropdown.className = 'chat-item-dropdown';
+        dropdown.dataset.forChat = btn.dataset.menuChatId;
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'chat-item-dropdown-delete';
+        deleteBtn.type = 'button';
+        deleteBtn.textContent = 'Удалить';
+        deleteBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            dropdown.remove();
+            this._deleteChat(chatId);
+        });
+
+        dropdown.appendChild(deleteBtn);
+
+        // Позиционируем относительно кнопки
+        const chatItem = btn.closest('.chat-item');
+        chatItem.appendChild(dropdown);
+    }
+
+    _deleteChat(chatId) {
+        // Убираем старую модалку если была
+        document.getElementById('delete-chat-modal-overlay')?.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'delete-chat-modal-overlay';
+        overlay.className = 'delete-chat-modal-overlay';
+
+        overlay.innerHTML = `
+<div class="delete-chat-modal">
+    <p class="delete-chat-modal__text">Вы действительно хотите удалить чат?</p>
+    <div class="delete-chat-modal__actions">
+        <button class="delete-chat-modal__cancel" type="button">Отмена</button>
+        <button class="delete-chat-modal__confirm" type="button">Удалить</button>
+    </div>
+</div>`;
+
+        overlay.querySelector('.delete-chat-modal__cancel').addEventListener('click', () => overlay.remove());
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.remove(); }, { once: true });
+
+        overlay.querySelector('.delete-chat-modal__confirm').addEventListener('click', async () => {
+            overlay.remove();
+            try {
+                await fetch(`/api/chats/${chatId}/delete`, {
+                    method: 'POST',
+                    credentials: 'include',
+                });
+            } catch (err) {
+                console.error('deleteChat error:', err);
+            }
+            // Убираем из локального списка и перерисовываем
+            this.chats = this.chats.filter(c => c.id !== chatId);
+            this.renderChats(this.chats);
+            // Если удалили текущий чат — сбрасываем состояние
+            if (this.currentChat === chatId) {
+                this.startNewChat();
+            }
+        });
+
+        document.body.appendChild(overlay);
+    }
+
     generateChatId() {
         return Math.floor(100000 + Math.random() * 900000);
     }
@@ -761,7 +894,12 @@ class ChatApp {
        WEBSOCKET
     ══════════════════════════════════════════ */
     connectWebSocket(chatId) {
-        if (this.ws) this.ws.close();
+        this._wsIntentionalClose = false;
+        if (this.ws) {
+            this._wsIntentionalClose = true;
+            this.ws.close();
+            this._wsIntentionalClose = false;
+        }
 
         this._pendingBotEl    = null;  // текущий элемент ответа бота (стриминг)
         this._pendingBotText  = '';    // накопленный текст
@@ -769,7 +907,7 @@ class ChatApp {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         this.ws = new WebSocket(`${protocol}//${window.location.host}/ws/chat/${chatId}`);
 
-        this.ws.onopen = () => console.log(`✅ WS connected chat=${chatId}`);
+        // this.ws.onopen = () => console.log(`✅ WS connected chat=${chatId}`);
 
         this.ws.onmessage = (event) => {
             const msg = JSON.parse(event.data);
@@ -844,6 +982,9 @@ class ChatApp {
                             this._renderBotFiles(msg.files, msg.message_id)
                         );
                     }
+                    if (msg.message_id) {
+                        this._pendingBotEl.dataset.id = msg.message_id;
+                    }
                     this._applyCodeHeaders(this._pendingBotEl);
                     const actions = this.createMessageActions(this._pendingBotEl.dataset.id, fullText, true);
                     this._pendingBotEl.appendChild(actions);
@@ -875,6 +1016,18 @@ class ChatApp {
                 this._pendingBotText = '';
             }
             this._removeBotPlaceholder();
+
+            // Автопереподключение: если чат открыт и закрытие не было намеренным
+            if (this.currentChat && !this._wsIntentionalClose) {
+                // console.warn(`WS closed for chat=${this.currentChat}, reconnecting in 2s...`);
+                clearTimeout(this._wsReconnectTimer);
+                this._wsReconnectTimer = setTimeout(() => {
+                    if (this.currentChat && !this._wsIntentionalClose) {
+                        console.log(`WS reconnecting chat=${this.currentChat}`);
+                        this.connectWebSocket(this.currentChat);
+                    }
+                }, 2000);
+            }
         };
     }
 
@@ -1032,52 +1185,56 @@ class ChatApp {
     /* ══════════════════════════════════════════
        TYPEWRITER: agent-message (пословно)
     ══════════════════════════════════════════ */
-    async _streamRenderMessage(el, rawText, container) {
-    let accumulated = '';
-    const tokens = rawText.split(/(\s+)/);
-    const BATCH = 2;   // слов за тик
-    const DELAY = 22;  // мс между тиками
+    async _streamRenderMessage(el, rawText, container, files, messageId) {
+        let accumulated = '';
+        const tokens = rawText.split(/(\s+)/);
+        const BATCH = 2;
+        const DELAY = 22;
 
-    let userScrolled = false;
-    const onScroll = () => {
-        const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-        userScrolled = distFromBottom > 60;
-    };
-    container.addEventListener('scroll', onScroll, { passive: true });
+        let userScrolled = false;
+        const onScroll = () => {
+            const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+            userScrolled = distFromBottom > 60;
+        };
+        container.addEventListener('scroll', onScroll, { passive: true });
 
-    for (let i = 0; i < tokens.length; i += BATCH) {
-        accumulated += tokens.slice(i, i + BATCH).join('');
+        for (let i = 0; i < tokens.length; i += BATCH) {
+            accumulated += tokens.slice(i, i + BATCH).join('');
 
-        let html = marked.parse(accumulated);
-        if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html);
+            let html = marked.parse(accumulated);
+            if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html);
 
-        const tmp = document.createElement('div');
-        tmp.innerHTML = html;
-        tmp.querySelectorAll('a').forEach(a => {
-            a.setAttribute('target', '_blank');
-            a.setAttribute('rel', 'noopener noreferrer');
-        });
+            const tmp = document.createElement('div');
+            tmp.innerHTML = html;
+            tmp.querySelectorAll('a').forEach(a => {
+                a.setAttribute('target', '_blank');
+                a.setAttribute('rel', 'noopener noreferrer');
+            });
 
-        el.innerHTML = tmp.innerHTML;
-        // Сбрасываем флаг highlighted — финал перекрасит чисто
-        el.querySelectorAll('pre code').forEach(b => {
-            delete b.dataset.highlighted;
-        });
+            el.innerHTML = tmp.innerHTML;
+            el.querySelectorAll('pre code').forEach(b => {
+                delete b.dataset.highlighted;
+            });
 
-        // Автоскролл только если юзер не отмотал вверх
-        if (!userScrolled && container) {
-            container.scrollTop = container.scrollHeight;
+            if (!userScrolled && container) {
+                container.scrollTop = container.scrollHeight;
+            }
+
+            await this._sleep(DELAY);
         }
 
-        await this._sleep(DELAY);
-    }
-
-    // Снимаем листенер после стриминга
-    container.removeEventListener('scroll', onScroll);
+        container.removeEventListener('scroll', onScroll);
 
         this._applyCodeHeaders(el);
 
-        // Вешаем кнопку копирования сообщения — она была затёрта стримингом
+        // 🎯 Файлы агента — добавляем ПОСЛЕ цикла, раз цикл больше не перезапишет innerHTML
+        if (files?.length) {
+            const existingFiles = el.querySelector('.fa-bot-files');
+            if (!existingFiles) {
+                el.appendChild(this._renderBotFiles(files, messageId));
+            }
+        }
+
         const existingActions = el.querySelector('.message-actions');
         if (!existingActions) {
             const msgId = el.dataset.id;
@@ -1085,13 +1242,11 @@ class ChatApp {
             el.appendChild(actions);
         }
 
-        // Убираем placeholder — el уже в container
         const placeholder = document.getElementById('agent-response-placeholder');
         if (placeholder) {
             placeholder.classList.add('placeholder-hide');
             setTimeout(() => placeholder.remove(), 300);
         }
-        // Финальный fade-in если opacity ещё не сброшен
         el.style.transition = '';
         el.style.opacity = '';
     }
@@ -1272,12 +1427,38 @@ class ChatApp {
         window.FileAttach?.init(attachBtn, container);
     }
 
+
     /* ══════════════════════════════════════════
-       HELP OVERLAY
+       VISIBILITY / ONLINE RECONNECT
     ══════════════════════════════════════════ */
-    /* ══════════════════════════════════════════
-       CHATS SECTION TOGGLE
-    ══════════════════════════════════════════ */
+    initVisibilityReconnect() {
+        // Переподключаемся когда вкладка снова становится активной
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible' && this.currentChat) {
+                const wsAlive = this.ws &&
+                    (this.ws.readyState === WebSocket.OPEN ||
+                     this.ws.readyState === WebSocket.CONNECTING);
+                if (!wsAlive) {
+                    console.log(`[WS] Tab became visible, ws is dead — reconnecting chat=${this.currentChat}`);
+                    this.connectWebSocket(this.currentChat);
+                }
+            }
+        });
+
+        // Переподключаемся при восстановлении сети
+        window.addEventListener('online', () => {
+            if (this.currentChat) {
+                const wsAlive = this.ws &&
+                    (this.ws.readyState === WebSocket.OPEN ||
+                     this.ws.readyState === WebSocket.CONNECTING);
+                if (!wsAlive) {
+                    console.log(`[WS] Network back online — reconnecting chat=${this.currentChat}`);
+                    this.connectWebSocket(this.currentChat);
+                }
+            }
+        });
+    }
+
     initChatsSectionToggle() {
         // Делегируем на document — кнопка гарантированно найдётся
         document.addEventListener('click', (e) => {

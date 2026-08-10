@@ -217,8 +217,30 @@ class ChatApp {
     /* ══════════════════════════════════════════
        OPEN / CREATE CHAT
     ══════════════════════════════════════════ */
-    async openChat(chatId) {
+        async openChat(chatId) {
+        // Сохраняем статус уходящего чата перед сносом DOM
+        if (this.currentChat && this.currentChat !== chatId) {
+            if (!this._chatStatuses) this._chatStatuses = {};
+            // Главный статус PMыча
+            const mainStatusEl = document.getElementById('agent-status-indicator');
+            if (mainStatusEl) {
+                this._chatStatuses[this.currentChat] = {
+                    main: mainStatusEl.querySelector('.status-text')?.textContent || '',
+                    subagents: this.subagentStates ? { ...this.subagentStates } : {}
+                };
+            } else {
+                // Сохраняем только субагентов если они есть
+                if (this.subagentStates && Object.keys(this.subagentStates).length) {
+                    this._chatStatuses[this.currentChat] = {
+                        main: '',
+                        subagents: { ...this.subagentStates }
+                    };
+                }
+            }
+        }
+
         this.currentChat = chatId;
+        this.subagentStates = {};
 
         const msgContainer = this.getMessagesContainer();
         if (msgContainer) {
@@ -246,6 +268,28 @@ class ChatApp {
         ]);
 
         this.connectWebSocket(chatId);
+
+        // Если в чате уже есть финальное сообщение от бота — статус не нужен,
+        // чистим сохранённое состояние и выходим
+        const hasBotMessage = this.getMessagesContainer()
+            ?.querySelector('.agent-message');
+
+        if (hasBotMessage) {
+            // Ответ уже есть — статус неуместен, удаляем сохранённое
+            if (this._chatStatuses) delete this._chatStatuses[chatId];
+            this._clearAllStatuses();
+            return;
+        }
+
+        // Восстанавливаем сохранённый статус если есть (чат ещё в процессе)
+        const savedState = this._chatStatuses?.[chatId];
+        if (savedState) {
+            if (savedState.main) this._updateMainStatus(savedState.main);
+            if (savedState.subagents && Object.keys(savedState.subagents).length) {
+                this.subagentStates = savedState.subagents;
+                this._restoreSubagentStatuses(savedState.subagents);
+            }
+        }
     }
 
     async createNewChat() {
@@ -312,8 +356,8 @@ class ChatApp {
 
         const isBot      = message.is_from_bot;
         const rawContent = message.message || 'Тут было пусто';
-        // Убираем статус-индикатор при ответе бота
-        if (isBot) document.getElementById('agent-status-indicator')?.remove();
+        // Убираем статус-индикатор при ответе бота (через метод, чтобы захватить субагентов)
+        if (isBot) this._clearAllStatuses();
 
         const messageEl = document.createElement('div');
         messageEl.className = isBot ? 'agent-message' : 'user-message';
@@ -359,7 +403,7 @@ class ChatApp {
                     );
                 }
             }
-            document.getElementById('agent-response-placeholder')?.remove();
+            this._removeBotPlaceholder();
         }
 
         const actions = this.createMessageActions(message.id, rawContent, isBot);
@@ -924,24 +968,12 @@ class ChatApp {
             // Сбрасываем интерфейс ТОЛЬКО если удалили именно открытый чат
             if (this.currentChat === chatId) {
                 this.currentChat = null;
-                if (this.ws) { 
-                    this.ws.close(); 
-                    this.ws = null; 
-                }
-                
+                if (this.ws) { this.ws.close(); this.ws = null; }
                 document.querySelectorAll('.chat-item').forEach(i => i.classList.remove('active'));
-
-                const chatMainInner = document.querySelector('.chat-main-inner');
-                const chatMessages = document.querySelector('.chat-messages');
-                chatMainInner?.classList.remove('chat-active');
-
-                if (chatMessages) {
-                    chatMessages.innerHTML = ''; 
-                }
+                document.querySelector('.chat-main-inner')?.classList.remove('chat-active');
+                // Сбрасываем dataset чтобы renderMessageInput не пропустил рендер
                 const inputContainer = this.getInputContainer();
-                if (inputContainer) {
-                    delete inputContainer.dataset.renderedChat;
-                }
+                if (inputContainer) delete inputContainer.dataset.renderedChat;
                 await this.renderMessageInput();
             }
         });
@@ -1009,6 +1041,7 @@ class ChatApp {
                     message:        text,
                     message_id:     msgId,
                     type_agent:     'pm',
+                    agent_model:    window.ModelPicker?.getModel() ?? 'universal',
                     selected_tools: window.ToolsPanel?.getSelectedCategories() ?? [],
                     context_size:   window.ToolsPanel?.getContextSize()   ?? 'medium',
                     has_files:      (window.FileAttach?.getFiles().length ?? 0) > 0,
@@ -1070,8 +1103,8 @@ class ChatApp {
         // Не создаём если ответ уже пришёл (race: бот ответил быстрее 400ms)
         if (this._botAnswered) return;
 
-        // Убираем предыдущий если был
-        document.getElementById('agent-response-placeholder')?.remove();
+        // Убираем предыдущий если был (вместе с его гардом)
+        this._removeBotPlaceholder();
 
         const placeholder = document.createElement('div');
         placeholder.id = 'agent-response-placeholder';
@@ -1081,20 +1114,26 @@ class ChatApp {
         // Скроллим контейнер чтобы placeholder был виден снизу
         msgContainer.scrollTop = msgContainer.scrollHeight;
 
-        // Таймаут-гард: убрать через 30с если бот так и не ответил
-        setTimeout(() => {
-            const ph = document.getElementById('agent-response-placeholder');
-            if (ph) ph.remove();
-        }, 30000);
+        // Таймаут-гард: убрать через 60с если бот так и не ответил.
+        // Сохраняем id таймера чтобы _removeBotPlaceholder мог его отменить.
+        this._placeholderGuardTimer = setTimeout(() => {
+            this._removeBotPlaceholder();
+        }, 60000);
     }
 
     /** Убирает placeholder — вызывается явно из WS-обработчика */
     _removeBotPlaceholder() {
+        // Отменяем гард-таймер чтобы он не убил следующий placeholder
+        if (this._placeholderGuardTimer) {
+            clearTimeout(this._placeholderGuardTimer);
+            this._placeholderGuardTimer = null;
+        }
         const ph = document.getElementById('agent-response-placeholder');
         if (!ph) return;
         ph.classList.add('placeholder-hide');
         setTimeout(() => ph.remove(), 300);
     }
+
 
     /* ══════════════════════════════════════════
        WEBSOCKET
@@ -1156,7 +1195,7 @@ class ChatApp {
                     // Placeholder живёт пока идёт стриминг — убираем только здесь, при первом чанке
                     this._botAnswered = true;
                     this._removeBotPlaceholder();
-                    document.getElementById('agent-status-indicator')?.remove();
+                   this._clearAllStatuses();
                 }
 
                 this._pendingBotText += msg.chunk;
@@ -1206,7 +1245,9 @@ class ChatApp {
                 // Убираем placeholder если ещё жив (целое сообщение без стриминга)
                 this._botAnswered = true;
                 this._removeBotPlaceholder();
-                document.getElementById('agent-status-indicator')?.remove();
+                this._clearAllStatuses();
+                // Чистим статус этого чата из памяти — ответ получен
+                if (this._chatStatuses) delete this._chatStatuses[this.currentChat];
             }
         };
 
@@ -1232,7 +1273,7 @@ class ChatApp {
                         console.log(`WS reconnecting chat=${this.currentChat}`);
                         this.connectWebSocket(this.currentChat);
                     }
-                }, 2000);
+                }, 60000);
             }
         };
     }
@@ -1241,17 +1282,143 @@ class ChatApp {
         const container = this.getMessagesContainer();
         if (!container) return;
 
-        let statusEl = document.getElementById('agent-status-indicator');
-        if (!statusEl) {
-            statusEl = document.createElement('div');
-            statusEl.id = 'agent-status-indicator';
-            statusEl.className = 'agent-status';
-            container.appendChild(statusEl);
+        // Определяем: субагент [name] или PMыч
+        const subMatch = statusText.match(/^\[([^\]]+)\]\s*(.*)/);
+        if (subMatch) {
+            this._updateSubagentStatus(subMatch[1], subMatch[2], container);
+        } else {
+            this._updateMainStatus(statusText, container);
         }
-        statusEl.innerHTML = `
+    }
+
+     _updateMainStatus(statusText, container) {
+        container = container || this.getMessagesContainer();
+        if (!container) return;
+
+        let el = document.getElementById('agent-status-indicator');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'agent-status-indicator';
+            el.className = 'agent-status agent-status--main';
+            container.appendChild(el);
+        }
+        el.innerHTML = `
             <span class="status-spinner"></span>
             <span class="status-text">${this.escapeHtml(statusText)}</span>
         `;
+    }
+
+    _updateSubagentStatus(agentName, text, container) {
+        container = container || this.getMessagesContainer();
+        if (!container) return;
+
+        if (!this.subagentStates) this.subagentStates = {};
+
+        // Общий wrap для всех субагентов — вставляем перед статусом PMыча
+        let wrap = document.getElementById('subagent-status-wrap');
+        if (!wrap) {
+            wrap = document.createElement('div');
+            wrap.id = 'subagent-status-wrap';
+            wrap.className = 'subagent-status-wrap';
+            const mainStatus = document.getElementById('agent-status-indicator');
+            if (mainStatus) {
+                container.insertBefore(wrap, mainStatus);
+            } else {
+                container.appendChild(wrap);
+            }
+        }
+
+        const blockId = `subagent-status-${agentName}`;
+        let block = document.getElementById(blockId);
+        if (!block) {
+            block = document.createElement('details');
+            block.id = blockId;
+            block.className = 'subagent-status-block';
+            block.open = true;
+
+            const summary = document.createElement('summary');
+            summary.className = 'subagent-status-summary';
+            summary.innerHTML = `
+                <span class="subagent-summary-arrow">▶</span>
+                <span class="subagent-badge">${this.escapeHtml(agentName)}</span>
+                <span class="subagent-status-text" id="${blockId}-text"></span>
+            `;
+            const log = document.createElement('div');
+            log.className = 'subagent-log';
+            log.id = `${blockId}-log`;
+            block.appendChild(summary);
+            block.appendChild(log);
+            wrap.appendChild(block);
+
+            this.subagentStates[agentName] = { steps: [], done: false };
+        }
+
+        // Обновляем текст в summary
+        const textEl = document.getElementById(`${blockId}-text`);
+        if (textEl) textEl.textContent = text;
+
+        // Добавляем шаг в лог
+        const logEl = document.getElementById(`${blockId}-log`);
+        if (logEl) {
+            const step = document.createElement('div');
+            step.className = 'subagent-log-step';
+            step.textContent = text;
+            logEl.appendChild(step);
+        }
+
+        // Сохраняем состояние
+        if (this.subagentStates[agentName]) {
+            this.subagentStates[agentName].steps.push(text);
+            if (text.startsWith('✅')) {
+                this.subagentStates[agentName].done = true;
+                block.classList.add('subagent-status-block--done');
+                // Сворачиваем завершённый блок через небольшую паузу
+                setTimeout(() => { block.open = false; }, 1200);
+            }
+        }
+
+        container.scrollTop = container.scrollHeight;
+    }
+
+    _restoreSubagentStatuses(states) {
+        const container = this.getMessagesContainer();
+        if (!container) return;
+
+        // Убираем старый wrap если есть
+        document.getElementById('subagent-status-wrap')?.remove();
+
+        const wrap = document.createElement('div');
+        wrap.id = 'subagent-status-wrap';
+        wrap.className = 'subagent-status-wrap subagent-status-wrap--restored';
+
+        for (const [agentName, state] of Object.entries(states)) {
+            if (!state.steps.length) continue;
+            const block = document.createElement('details');
+            block.id = `subagent-status-${agentName}`;
+            block.className = 'subagent-status-block' + (state.done ? ' subagent-status-block--done' : '');
+            block.open = false; // восстановленные — свёрнуты
+
+            const lastStep = state.steps[state.steps.length - 1] || '';
+            block.innerHTML = `
+                <summary class="subagent-status-summary">
+                    <span class="subagent-summary-arrow">▶</span>
+                    <span class="subagent-badge">${this.escapeHtml(agentName)}</span>
+                    <span class="subagent-status-text">${this.escapeHtml(lastStep)}</span>
+                </summary>
+                <div class="subagent-log">
+                    ${state.steps.map(s => `<div class="subagent-log-step">${this.escapeHtml(s)}</div>`).join('')}
+                </div>
+            `;
+            wrap.appendChild(block);
+        }
+
+        if (wrap.children.length) container.appendChild(wrap);
+    }
+
+    _clearAllStatuses() {
+        document.getElementById('agent-status-indicator')?.remove();
+        document.getElementById('subagent-status-wrap')?.remove();
+        this.subagentStates = {};
     }
 
     /* ══════════════════════════════════════════
@@ -1371,8 +1538,9 @@ class ChatApp {
         this.attachHintActions();
         this.attachProfileHandlers();
 
-        // Инжектируем кнопку тулов в футер инпута
+        // Инжектируем кнопку тулов и пикер модели в футер инпута
         window.ToolsPanel?.inject(container);
+        window.ModelPicker?.inject(container);
 
         // Посимвольная анимация start-header
         // Запоминаем для какого чата отрендерили
@@ -1448,11 +1616,9 @@ class ChatApp {
             el.appendChild(actions);
         }
 
-        const placeholder = document.getElementById('agent-response-placeholder');
-        if (placeholder) {
-            placeholder.classList.add('placeholder-hide');
-            setTimeout(() => placeholder.remove(), 300);
-        }
+        // Убираем placeholder и статусы через методы (с clearTimeout гарда)
+        this._removeBotPlaceholder();
+        this._clearAllStatuses();
         el.style.transition = '';
         el.style.opacity = '';
     }
@@ -1666,14 +1832,26 @@ class ChatApp {
     }
 
     initChatsSectionToggle() {
-        // Делегируем на document — кнопка гарантированно найдётся
+        // Делегируем на document — кнопки гарантированно найдутся
         document.addEventListener('click', (e) => {
-            const btn = e.target.closest('#chats-section-toggle');
-            if (!btn) return;
-            const section = document.getElementById('chats-section');
-            if (!section) return;
-            const isCollapsed = section.classList.toggle('collapsed');
-            btn.setAttribute('aria-expanded', String(!isCollapsed));
+            // Ваши чаты — toggle
+            const chatsBtn = e.target.closest('#chats-section-toggle');
+            if (chatsBtn) {
+                const section = document.getElementById('chats-section');
+                if (!section) return;
+                const isCollapsed = section.classList.toggle('collapsed');
+                chatsBtn.setAttribute('aria-expanded', String(!isCollapsed));
+                return;
+            }
+
+            // Избранное — toggle
+            const favBtn = e.target.closest('#favorites-toggle');
+            if (favBtn) {
+                const section = document.getElementById('favorites-section');
+                if (!section) return;
+                const isCollapsed = section.classList.toggle('collapsed');
+                favBtn.setAttribute('aria-expanded', String(!isCollapsed));
+            }
         });
     }
 

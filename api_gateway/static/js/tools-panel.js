@@ -429,3 +429,266 @@ class ToolsPanel {
 /* ── Синглтон ──────────────────────────────────────────────────────────── */
 window.ToolsPanel = new ToolsPanel();
 export default window.ToolsPanel;
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MODEL PICKER — выбор агента (Кодер / Дизайнер / Универсал)
+   API:
+     ModelPicker.getModel()        → 'coder' | 'designer' | 'universal'
+     ModelPicker.inject(container) → void
+   Выбор хранится в localStorage.
+══════════════════════════════════════════════════════════════════════════ */
+
+const MP_MODELS = [
+  {
+    id:     'coder',
+    label:  'Кодер',
+    // Tabler: code — терминальные скобки с косой чертой
+    svg: `<svg viewBox="0 0 24 24" fill="none" width="20" height="20"
+               stroke="currentColor" stroke-width="1.75"
+               stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="7 8 3 12 7 16"/>
+            <polyline points="17 8 21 12 17 16"/>
+            <line x1="14" y1="4" x2="10" y2="20"/>
+          </svg>`,
+    // Маленькая версия для кнопки-триггера (16px)
+    svgSm: `<svg viewBox="0 0 24 24" fill="none" width="15" height="15"
+               stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="7 8 3 12 7 16"/>
+              <polyline points="17 8 21 12 17 16"/>
+              <line x1="14" y1="4" x2="10" y2="20"/>
+            </svg>`,
+    hint:   'Пишет код и собирает парсеры. Всегда вернётся за обратной связью.',
+    accent: '#6366f1',
+  },
+  {
+    id:     'designer',
+    label:  'Дизайнер',
+    // Tabler: palette — круг с цветовыми точками
+    svg: `<svg viewBox="0 0 24 24" fill="none" width="20" height="20"
+               stroke="currentColor" stroke-width="1.75"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2a10 10 0 0 1 0 20c-1.657 0-3-1.343-3-3
+                     0-.828.336-1.578.879-2.121A3 3 0 0 0 8 14.5
+                     c0-1.657 1.343-3 3-3"/>
+            <circle cx="8"  cy="9"  r="1.2" fill="currentColor" stroke="none"/>
+            <circle cx="12" cy="6"  r="1.2" fill="currentColor" stroke="none"/>
+            <circle cx="16" cy="9"  r="1.2" fill="currentColor" stroke="none"/>
+          </svg>`,
+    svgSm: `<svg viewBox="0 0 24 24" fill="none" width="15" height="15"
+               stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2a10 10 0 0 1 0 20c-1.657 0-3-1.343-3-3
+                       0-.828.336-1.578.879-2.121A3 3 0 0 0 8 14.5
+                       c0-1.657 1.343-3 3-3"/>
+              <circle cx="8"  cy="9"  r="1.2" fill="currentColor" stroke="none"/>
+              <circle cx="12" cy="6"  r="1.2" fill="currentColor" stroke="none"/>
+              <circle cx="16" cy="9"  r="1.2" fill="currentColor" stroke="none"/>
+            </svg>`,
+    hint:   'Генерирует презентации и отчёты. Иногда путается в деталях.',
+    accent: '#ec4899',
+  },
+  {
+    id:     'universal',
+    label:  'Универсал',
+    // Tabler: adjustments-horizontal — три горизонтальных слайдера
+    svg: `<svg viewBox="0 0 24 24" fill="none" width="20" height="20"
+               stroke="currentColor" stroke-width="1.75"
+               stroke-linecap="round" stroke-linejoin="round">
+            <line x1="4"  y1="6"  x2="20" y2="6"/>
+            <line x1="4"  y1="12" x2="20" y2="12"/>
+            <line x1="4"  y1="18" x2="20" y2="18"/>
+            <circle cx="9"  cy="6"  r="2" fill="var(--surface)" stroke="currentColor"/>
+            <circle cx="15" cy="12" r="2" fill="var(--surface)" stroke="currentColor"/>
+            <circle cx="9"  cy="18" r="2" fill="var(--surface)" stroke="currentColor"/>
+          </svg>`,
+    svgSm: `<svg viewBox="0 0 24 24" fill="none" width="15" height="15"
+               stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round">
+              <line x1="4"  y1="6"  x2="20" y2="6"/>
+              <line x1="4"  y1="12" x2="20" y2="12"/>
+              <line x1="4"  y1="18" x2="20" y2="18"/>
+              <circle cx="9"  cy="6"  r="2" fill="var(--surface)" stroke="currentColor"/>
+              <circle cx="15" cy="12" r="2" fill="var(--surface)" stroke="currentColor"/>
+              <circle cx="9"  cy="18" r="2" fill="var(--surface)" stroke="currentColor"/>
+            </svg>`,
+    hint:   'И то, и то. Но регулярно возвращается без ответа.',
+    accent: '#10b981',
+  },
+];
+
+const MP_STORAGE_KEY = 'mp_selected_model';
+
+class ModelPickerClass {
+  constructor() {
+    this._selected      = localStorage.getItem(MP_STORAGE_KEY) ?? 'universal';
+    this._panel         = null;
+    this._storedTrigger = null;
+  }
+
+  /* ── Публичный API ──────────────────────────────────────────────────── */
+
+  getModel() { return this._selected; }
+
+  inject(container) {
+    this._injectInto(container.querySelector('.chat-input-footer'),  '#attach-btn');
+    this._injectInto(container.querySelector('.start-input-footer'), '#start-attach-btn');
+  }
+
+  /* ── Внутренние ─────────────────────────────────────────────────────── */
+
+  _injectInto(footer, attachSel) {
+    if (!footer) return;
+    if (footer.querySelector('.mp-trigger-btn')) return;
+
+    const btn       = this._makeBtn();
+    const attachBtn = footer.querySelector(attachSel) ?? footer.querySelector('.attach-btn');
+
+    if (attachBtn?.nextSibling) {
+      footer.insertBefore(btn, attachBtn.nextSibling);
+    } else if (attachBtn) {
+      attachBtn.after(btn);
+    } else {
+      footer.prepend(btn);
+    }
+
+    this._syncBtn(btn);
+  }
+
+  _makeBtn() {
+    const btn       = document.createElement('button');
+    btn.type        = 'button';
+    btn.className   = 'mp-trigger-btn attach-btn';
+    btn.title       = 'Выбор модели агента';
+    btn.addEventListener('click', (e) => { e.stopPropagation(); this._toggle(btn); });
+    return btn;
+  }
+
+  _syncBtn(btn) {
+    const m = MP_MODELS.find(x => x.id === this._selected) ?? MP_MODELS[2];
+    // Только иконка — круглая кнопка как attach-btn, без текста
+    btn.innerHTML = m.svgSm;
+    btn.dataset.modelId = m.id;
+    btn.title = `Модель: ${m.label}`;
+    btn.style.setProperty('--mp-accent', m.accent);
+  }
+
+  _syncAllBtns() {
+    document.querySelectorAll('.mp-trigger-btn').forEach(b => this._syncBtn(b));
+  }
+
+  /* ── Дропдаун ───────────────────────────────────────────────────────── */
+
+  _toggle(triggerBtn) {
+    if (this._panel) { this._close(); return; }
+    this._open(triggerBtn);
+  }
+
+  _open(triggerBtn) {
+    // Закрываем чужие оверлеи
+    document.querySelectorAll('.tools-panel').forEach(p => p.classList.add('tp-hiding'));
+    document.querySelectorAll('.chat-item-dropdown').forEach(d => d.remove());
+
+    const panel = document.createElement('div');
+    panel.className = 'mp-panel';
+    panel.innerHTML = `
+      <div class="mp-panel-title">Выбор модели</div>
+      ${MP_MODELS.map(m => `
+        <button class="mp-option${m.id === this._selected ? ' mp-option--active' : ''}"
+                data-model="${m.id}" style="--mp-accent:${m.accent}" type="button">
+          <span class="mp-option-icon">${m.svg}</span>
+          <span class="mp-option-info">
+            <span class="mp-option-label">${m.label}</span>
+            <span class="mp-option-hint">${m.hint}</span>
+          </span>
+          <span class="mp-option-check">
+            <svg viewBox="0 0 16 16" fill="none" width="13" height="13">
+              <polyline points="2 12 6 15 14 4"
+                        stroke="currentColor" stroke-width="2.2"
+                        stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </span>
+        </button>
+      `).join('')}
+    `;
+
+    panel.querySelectorAll('.mp-option').forEach(opt => {
+      opt.addEventListener('click', () => {
+        this._select(opt.dataset.model);
+        this._close();
+      });
+    });
+
+    document.body.appendChild(panel);
+    this._panel         = panel;
+    this._storedTrigger = triggerBtn;
+    triggerBtn.classList.add('active');
+
+    requestAnimationFrame(() => this._position(panel, triggerBtn));
+
+    this._outsideHandler = (e) => {
+      if (!panel.contains(e.target) && e.target !== triggerBtn) this._close();
+    };
+    this._escHandler = (e) => { if (e.key === 'Escape') this._close(); };
+    setTimeout(() => {
+      document.addEventListener('click',   this._outsideHandler);
+      document.addEventListener('keydown', this._escHandler);
+    }, 0);
+  }
+
+  _close() {
+    if (!this._panel) return;
+    const dying = this._panel;
+    // Сразу блокируем клики — панель не должна перекрывать UI во время анимации
+    dying.style.pointerEvents = 'none';
+    dying.classList.add('mp-panel--hiding');
+    // Страховка: если animationend не выстрелит — убиваем через таймаут
+    const forceRemove = setTimeout(() => dying.remove(), 300);
+    dying.addEventListener('animationend', () => { clearTimeout(forceRemove); dying.remove(); }, { once: true });
+    this._panel = null;
+    this._storedTrigger?.classList.remove('active');
+    this._storedTrigger = null;
+    document.removeEventListener('click',   this._outsideHandler);
+    document.removeEventListener('keydown', this._escHandler);
+  }
+
+  _select(modelId) {
+    this._selected = modelId;
+    localStorage.setItem(MP_STORAGE_KEY, modelId);
+    this._syncAllBtns();
+  }
+
+  _position(panel, triggerBtn) {
+    const MARGIN = 8;
+    const vh     = window.innerHeight;
+    const rect   = triggerBtn.getBoundingClientRect();
+
+    panel.style.cssText = 'visibility:hidden;position:fixed;top:0;left:0;';
+    const naturalH = panel.scrollHeight;
+    const pw       = panel.offsetWidth;
+    panel.style.cssText = '';
+
+    const spaceAbove = rect.top - MARGIN;
+    const spaceBelow = vh - rect.bottom - MARGIN;
+    const openAbove  = spaceAbove >= spaceBelow || spaceAbove >= naturalH;
+
+    let top, maxH;
+    if (openAbove) {
+      maxH = Math.min(naturalH, spaceAbove);
+      top  = rect.top - maxH - MARGIN + window.scrollY;
+    } else {
+      maxH = Math.min(naturalH, spaceBelow);
+      top  = rect.bottom + MARGIN + window.scrollY;
+    }
+
+    let left = rect.right - pw + window.scrollX;
+    if (left < MARGIN)                          left = MARGIN;
+    if (left + pw > window.innerWidth - MARGIN) left = window.innerWidth - pw - MARGIN;
+
+    panel.style.top       = `${top}px`;
+    panel.style.left      = `${left}px`;
+    panel.style.maxHeight = `${maxH}px`;
+  }
+}
+
+window.ModelPicker = new ModelPickerClass();

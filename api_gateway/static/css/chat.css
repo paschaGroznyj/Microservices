@@ -928,6 +928,11 @@ pre {
    Появляется сразу после сообщения пользователя,
    резервирует место под ответ бота, затем тихо исчезает.
 ══════════════════════════════════════════════ */
+/* ══════════════════════════════════════════════
+   BOT RESPONSE PLACEHOLDER
+   Появляется сразу после сообщения пользователя,
+   резервирует место под ответ бота, затем тихо исчезает.
+══════════════════════════════════════════════ */
 .agent-placeholder {
   max-width: 720px;
   width: 100%;
@@ -944,4 +949,122 @@ pre {
 
 .agent-placeholder.placeholder-hide {
   opacity: 0;
+}
+
+/* ══════════════════════════════════════════════
+   SUBAGENT STATUS
+══════════════════════════════════════════════ */
+.subagent-status-wrap {
+  max-width: 720px;
+  margin: 0 auto;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 24px;
+}
+
+.subagent-status-block {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2, var(--surface));
+  font-size: .80rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  transition: border-color 0.25s, opacity 0.25s;
+}
+
+.subagent-status-block--done {
+  border-color: var(--accent);
+  opacity: 0.65;
+}
+
+.subagent-status-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+/* Убираем дефолтный маркер details */
+.subagent-status-summary::-webkit-details-marker { display: none; }
+.subagent-status-summary::marker { display: none; }
+
+/* Стрелка раскрытия */
+.subagent-summary-arrow {
+  font-size: 0.60rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: transform 0.2s;
+  display: inline-block;
+}
+
+.subagent-status-block[open] .subagent-summary-arrow {
+  transform: rotate(90deg);
+}
+
+/* Бейдж с именем агента */
+.subagent-badge {
+  background: var(--accent);
+  color: #fff;
+  border-radius: 4px;
+  padding: 1px 7px;
+  font-size: 0.70rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  flex-shrink: 0;
+  text-transform: lowercase;
+}
+
+.subagent-status-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+
+/* Лог шагов внутри details */
+.subagent-log {
+  padding: 4px 12px 8px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border-top: 1px solid var(--border);
+}
+
+.subagent-log-step {
+  font-size: 0.73rem;
+  color: var(--text-muted);
+  opacity: 0.75;
+  line-height: 1.5;
+}
+
+.subagent-log-step:last-child {
+  opacity: 1;
+  font-weight: 500;
+  color: var(--text);
+}
+
+/* Главный статус PMыча — чуть ниже субагентов */
+.agent-status--main {
+  margin-top: 2px;
+}
+
+/* Restored-состояние (при возврате в чат) — чуть тусклее */
+.subagent-status-wrap--restored {
+  opacity: 0.70;
+}
+
+/* Анимация появления нового блока субагента */
+@keyframes subagent-fadein {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.subagent-status-block {
+  animation: subagent-fadein 0.18s ease;
 }

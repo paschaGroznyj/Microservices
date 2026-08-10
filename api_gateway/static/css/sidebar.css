@@ -156,14 +156,74 @@
 .favorites-section {
   display: none; /* скрыта по умолчанию, JS показывает когда есть избранное */
   flex-direction: column;
-  gap: 4px;
+  gap: 0;
   margin-bottom: 6px;
+}
+
+/* Заголовок секции избранного — кнопка сворачивания */
+.favorites-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--text-muted);
+  padding: 4px 6px 6px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: color var(--transition);
+  flex-shrink: 0;
+}
+
+.favorites-header:hover {
+  color: var(--text-secondary);
+}
+
+.favorites-chevron {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+  color: var(--text-muted);
+}
+
+.favorites-section.collapsed .favorites-chevron {
+  transform: rotate(-90deg);
 }
 
 .chat-list-favorites {
   max-height: 180px;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
+  /* Единый стиль скроллбара с .chat-list */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  transition: max-height 0.2s ease, opacity 0.15s ease;
+  opacity: 1;
+}
+
+.favorites-section.collapsed .chat-list-favorites {
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+}
+
+.chat-list-favorites::-webkit-scrollbar {
+  width: 4px;
+}
+
+.chat-list-favorites::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chat-list-favorites::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
 }
 
 /* единая строка в chat-item: либо renamed_title, либо preview сообщения */
@@ -653,5 +713,22 @@
 
   .sidebar-overlay.visible {
     display: block;
+  }
+
+  /* ── Кнопка ⋯ на мобильных: всегда видима, крупнее зона тапа ── */
+  .chat-item-menu-btn {
+    display: flex !important;  /* всегда показываем — hover на тач нет */
+    width: 32px;
+    height: 32px;
+    right: 4px;
+    border-radius: 7px;
+    /* padding увеличивает зону тапа без изменения видимого размера */
+    padding: 5px;
+    box-sizing: border-box;
+  }
+
+  /* Компенсируем отступ справа в chat-line, чтобы текст не лез под кнопку */
+  .chat-line {
+    padding-right: 32px;
   }
 }

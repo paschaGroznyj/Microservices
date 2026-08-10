@@ -103,7 +103,13 @@
             <!-- CHAT LIST -->
             <div class="sidebar-section" id="chats-section">
                 <div class="favorites-section" id="favorites-section">
-                    <div class="section-label-static">Избранное</div>
+                    <button class="favorites-header" id="favorites-toggle" aria-expanded="true">
+                        Избранное
+                        <svg class="favorites-chevron" viewBox="0 0 16 16" fill="none">
+                            <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.8"
+                                stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
                     <div id="chat-favorites-list" class="chat-list chat-list-favorites">
                         <div class="chat-item-skeleton">Пока нет избранных</div>
                     </div>

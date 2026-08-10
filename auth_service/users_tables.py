@@ -262,7 +262,7 @@ class DataBaseUser:
             agent_requests = await conn.fetchval("""
                                                  SELECT COUNT(c.id)
                                                  FROM chats c
-                                                          JOIN users u ON u.id = c.username
+                                                          JOIN users u ON u.id = c.user_id
                                                  WHERE u.username = $1
                                                    AND c.is_from_bot = FALSE
                                                  """, username)
@@ -287,7 +287,7 @@ class DataBaseUser:
                                          FROM chats
                                          WHERE chat_id IN (SELECT DISTINCT chat_id
                                                            FROM chats
-                                                                    JOIN users ON chats.username = users.id
+                                                                    JOIN users ON chats.user_id = users.id
                                                            WHERE users.username = $1)
                                            AND tool_name IS NOT NULL
                                          GROUP BY tool_name
@@ -298,7 +298,7 @@ class DataBaseUser:
                                             SELECT LEAST(
                                                            (SELECT MIN(c.created_at)
                                                             FROM chats c
-                                                                     JOIN users u ON c.username = u.id
+                                                                     JOIN users u ON c.user_id = u.id
                                                             WHERE u.username = $1),
                                                            (SELECT MIN(s.created_at)
                                                             FROM search_requests s

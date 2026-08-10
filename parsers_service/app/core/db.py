@@ -148,6 +148,8 @@ class DataBase:
             );
 
             CREATE TABLE IF NOT EXISTS papers_metadata (
+                id                  BIGSERIAL PRIMARY KEY, -- Порядковый номер (1, 2, 3...)
+                external_id         TEXT UNIQUE NOT NULL,
                 external_id     TEXT PRIMARY KEY,
                 source          TEXT,
                 title           TEXT,
@@ -164,7 +166,8 @@ class DataBase:
                 is_relevant     BOOLEAN,
                 pdf_downloaded  BOOLEAN
             );
-            
+
+                        
             CREATE INDEX IF NOT EXISTS ix_article_reviews_user_id ON article_reviews(user_id);
                     
             CREATE INDEX IF NOT EXISTS ix_research_users_user_name

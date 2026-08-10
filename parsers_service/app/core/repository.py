@@ -415,7 +415,7 @@ class ResearchRepository:
 
     async def get_articles_by_keywords(
             self,
-            keywords: list[list[str]],  # Теперь ожидаем список списков
+            keywords: list[list[str]],  # Ожидаем список списков
             categories: list[str],
             user_name: str
     ) -> list[dict]:
@@ -443,24 +443,28 @@ class ResearchRepository:
 
         async with self.db.pool.acquire() as conn:
             rows = await conn.fetch("""
-                                    SELECT DISTINCT 
-                                            a.id           AS article_id,
-                                            a.source       AS source,            -- Добавлено
-                                            a.external_id  AS external_id,       -- Добавлено
-                                            a.title        AS title,
-                                            a.date_sub     AS date_sub,          -- Унифицировано с первым запросом (было date)
-                                            a.url_article  AS url_article,       -- Унифицировано (было link)
-                                            a.pdf_url      AS pdf_url,           -- Добавлено
-                                            a.authors_json AS authors_json,      -- Унифицировано (было authors)
-                                            a.tags_json    AS tags_json,         -- Унифицировано (было tags)
-                                            a.abstract     AS abstract,
-                                            a.category     AS category
-                                    FROM articles a
-                                    WHERE to_tsvector('english', a.title) @@ to_tsquery('english', $1)
-                                       OR to_tsvector('english', a.abstract) @@ to_tsquery('english', $1)
-                                    ORDER BY a.date_sub DESC
-                                    LIMIT 50;
-                                    """, final_ts_query)
+                SELECT DISTINCT 
+                    pm.id           AS article_id,
+                    pm.source       AS source,
+                    pm.external_id  AS external_id,
+                    pm.title        AS title,
+                    pm.date_sub     AS date_sub,
+                    pm.url_article  AS url_article,
+                    pm.pdf_url      AS pdf_url,
+                    pm.authors      AS authors_json,
+                    pm.tags         AS tags_json,
+                    r.review_text   AS abstract,    -- Подтягиваем текст ревью вместо абстракта
+                    pm.category     AS category
+                FROM papers_metadata pm
+                JOIN reviews r ON pm.external_id = r.external_id
+                WHERE pm.is_relevant = TRUE          -- Вытаскиваем только релевантные
+                AND (
+                    to_tsvector('english', pm.title) @@ to_tsquery('english', $1)
+                OR to_tsvector('english', r.review_text) @@ to_tsquery('english', $1)
+                )
+                ORDER BY pm.date_sub DESC
+                LIMIT 50;
+            """, final_ts_query)
 
             return [dict(row) for row in rows]
 

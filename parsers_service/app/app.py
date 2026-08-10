@@ -434,6 +434,8 @@ async def run_icpm():
 async def search_articles(data: FavoriteStatus):
     return await research.toggle_favorite(data.username, data.article_id, data.is_favorite)
     logger.info(f"{data.username}, {data.article_id}, {data.is_favorite}")
+
+    
 @app.post("/search/articles")
 async def search_articles(request: Request):
     """
@@ -460,6 +462,12 @@ async def search_articles(request: Request):
         )
         dataclass_articles = []
         for article in articles:
+            
+            tags_val = article.get('tags_json')
+            tags = tags_val if isinstance(tags_val, list) else json.loads(tags_val or '[]')
+
+            authors_val = article.get('authors_json')
+            authors = authors_val if isinstance(authors_val, (dict, list)) else json.loads(authors_val or '{}')
 
             dataclass_articles.append(
                 Article(
@@ -469,8 +477,8 @@ async def search_articles(request: Request):
                     date_sub=article.get('date_sub'),
                     url_article=article.get('url_article'),
                     pdf_url=article.get('pdf_url'),
-                    authors=json.loads(article.get('authors_json') or '[]'),
-                    tags=json.loads(article.get('tags_json') or '[]'),
+                    authors=authors,
+                    tags=tags,
                     abstract=article.get('abstract'),
                     category=article.get('category'),
                     source=article.get('source'),

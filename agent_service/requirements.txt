@@ -24,4 +24,5 @@ cryptography
 websockets
 sqlparse
 python-docx
+python-multipart
 

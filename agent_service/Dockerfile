@@ -8,7 +8,12 @@ RUN apt-get update && apt-get install -y \
     curl \
     net-tools \
     dnsutils \
-    ca-certificates \ 
+    ca-certificates \
+    git \
+    tree \
+    grep \
+    findutils \
+    coreutils \
     && rm -rf /var/lib/apt/lists/*
 
 # ca-certificates только для локальной отладки

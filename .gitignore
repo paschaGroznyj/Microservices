@@ -3,4 +3,8 @@
 telegram/*.session
 venv
 __pycache__/
-
+agent_sandbox/fonts
+agent_service/app/agent_pm/knowledge_base
+agent_service/app/agent_pm/digests
+agent_service/app/agent_pm/faiss_index
+agent_service/app/agent_pm/digests_all

@@ -17,3 +17,6 @@ playwright==1.58.0
 pathlib
 fastapi
 uvicorn[standard]
+aiokafka
+beautifulsoup4
+apscheduler

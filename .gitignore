@@ -10,3 +10,7 @@ agent_service/app/agent_pm/faiss_index
 agent_service/app/agent_pm/digests_all
 agent_service/sandbox
 agent_service/generated_files
+
+parsers_service/pw_profile_scholar
+parsers_service/Default/
+parsers_service/app/knowledge_base

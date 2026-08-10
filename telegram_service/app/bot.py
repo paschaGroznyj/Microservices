@@ -25,6 +25,11 @@ from telegram import Update, Message, MessageEntity
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
+
+import uvicorn
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
 # ── Config ─────────────────────────────────────────────────────────────────────
 
 TELEGRAM_BOT_TOKEN  = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -53,6 +58,226 @@ logging.basicConfig(
 log = logging.getLogger("tg_bot")
 
 
+api = FastAPI(title="TG Bot Push API")
+
+# Глобальная ссылка на bot instance — заполняется в main() после старта Application
+_bot_app: Application | None = None
+
+# Храним message_id последнего "Думаю..." сообщения по chat_id,
+# чтобы уметь его редактировать вместо отправки нового
+_thinking_messages: dict[int, int] = {}
+
+
+class PushMessageRequest(BaseModel):
+    chat_id: int
+    text: str
+    parse_mode: str = "HTML"
+    edit_thinking: bool = False  # если True — редактирует последнее "Думаю..." вместо нового сообщения
+
+
+class PushMessageResponse(BaseModel):
+    ok: bool
+    message_ids: list[int] = []
+    error: str | None = None
+
+
+import re
+
+TELEGRAM_MAX_LEN = 4000  # чуть меньше лимита 4096, с запасом на HTML-разметку
+
+def split_message_safely(text: str, max_len: int = TELEGRAM_MAX_LEN) -> list[str]:
+    """
+    Делит текст на чанки, не превышая max_len, стараясь резать по границам
+    абзацев/строк, а не посередине HTML-тега.
+    """
+    if len(text) <= max_len:
+        return [text]
+
+    chunks = []
+    remaining = text
+
+    while len(remaining) > max_len:
+        # Ищем лучшую точку разреза в пределах max_len:
+        # сначала пробуем по двойному переносу (абзац), потом по одинарному,
+        # потом просто по пробелу — но НЕ разрешаем резать внутри тега
+        cut = _find_safe_cut(remaining, max_len)
+        chunks.append(remaining[:cut].rstrip())
+        remaining = remaining[cut:].lstrip()
+
+    if remaining:
+        chunks.append(remaining)
+
+    return _fix_unclosed_tags(chunks)
+
+
+def _find_safe_cut(text: str, max_len: int) -> int:
+    window = text[:max_len]
+
+    # Не резать посередине открытого тега вида "<b" без закрывающего ">"
+    last_lt = window.rfind("<")
+    last_gt = window.rfind(">")
+    if last_lt > last_gt:
+        # внутри окна есть незакрытый "<" — обрезаем до него
+        window = window[:last_lt]
+
+    for separator in ["\n\n", "\n", ". ", " "]:
+        idx = window.rfind(separator)
+        if idx > max_len * 0.5:  # не резать слишком рано, если разделитель есть хоть где-то приемлемо
+            return idx + len(separator)
+
+    return len(window) if window else max_len  # крайний случай — жёсткий разрез
+
+
+def _fix_unclosed_tags(chunks: list[str]) -> list[str]:
+    """
+    Простая защита: если в чанке остались незакрытые парные HTML-теги
+    (b, i, u, s, code, pre), закрываем их в конце чанка и открываем заново
+    в начале следующего — чтобы Telegram не падал на parse_mode=HTML.
+    """
+    SUPPORTED_TAGS = ["b", "i", "u", "s", "code", "pre"]
+    fixed = []
+    open_tags: list[str] = []
+
+    for chunk in chunks:
+        # закрываем то, что было открыто в предыдущем чанке
+        prefix = "".join(f"<{t}>" for t in open_tags)
+        chunk_with_prefix = prefix + chunk
+
+        # находим все теги в текущем чанке, обновляем стек открытых
+        for tag in SUPPORTED_TAGS:
+            opens = len(re.findall(f"<{tag}>", chunk_with_prefix))
+            closes = len(re.findall(f"</{tag}>", chunk_with_prefix))
+            if opens > closes and tag not in open_tags:
+                open_tags.append(tag)
+            elif closes >= opens and tag in open_tags:
+                open_tags.remove(tag)
+
+        suffix = "".join(f"</{t}>" for t in reversed(open_tags))
+        fixed.append(chunk_with_prefix + suffix)
+
+    return fixed
+
+def telegram_role(message, chat_id) -> dict:
+    return {
+        "text": message, 
+        "chat_id": chat_id, 
+        "user_name": "Telegram bot", 
+        "user_tag": "", 
+        "user_id": -2
+    }
+
+@api.post("/push_message", response_model=PushMessageResponse)
+async def push_message(req: PushMessageRequest):
+    if _bot_app is None:
+        raise HTTPException(status_code=503, detail="Bot ещё не инициализирован")
+
+    if not req.text:
+        text = "Это сервис Телеграм-БОТ, ты вернул пустой ответ пользователю, продолжи свою мысль"
+        role = telegram_role(text, req.chat_id)
+
+        await ask_pm_agent(
+            text=text,
+            user_id=role["user_id"], 
+            user_name=role["user_name"], 
+            user_tag=role["user_tag"],
+            chat_id=role["chat_id"],
+            file_b64='',    
+            file_name='' 
+        )
+        return PushMessageResponse(ok=False, error="Empty text, agent re-prompted")
+        
+    chunks = split_message_safely(req.text)
+    
+
+    sent_ids = []
+
+    try:
+        if req.edit_thinking and chat_id_has_thinking(req.chat_id):
+            # Первый чанк — редактируем существующее сообщение
+            thinking_id = _thinking_messages.pop(req.chat_id)
+            try:
+                await _bot_app.bot.edit_message_text(
+                    chat_id=req.chat_id,
+                    message_id=thinking_id,
+                    text=chunks[0],
+                    parse_mode=req.parse_mode,
+                )
+                sent_ids.append(thinking_id)
+                chunks = chunks[1:]  # остальные чанки шлём как новые сообщения
+            except Exception as e:
+                log.warning(f"Не удалось отредактировать thinking-сообщение: {e}, отправляю новое")
+
+        for chunk in chunks:
+            msg = await _bot_app.bot.send_message(
+                chat_id=req.chat_id,
+                text=chunk,
+                parse_mode=req.parse_mode,
+            )
+            sent_ids.append(msg.message_id)
+
+        return PushMessageResponse(ok=True, message_ids=sent_ids)
+
+    except Exception as e:
+        log.error(f"push_message failed для chat_id={req.chat_id}: {e}", exc_info=True)
+        text = f"Это сервис Телеграм-БОТ, ты вернул сообщение с ошибкой. Исправь. Ошибка: {str(e)[:300]}"
+        role = telegram_role(text, req.chat_id)
+        
+        # 3. Исправлен доступ к словарю через []
+        await ask_pm_agent(
+            text=text,
+            user_id=role["user_id"], 
+            user_name=role["user_name"], 
+            user_tag=role["user_tag"],
+            chat_id=role["chat_id"],
+            file_b64='',    
+            file_name='' 
+        )
+        return PushMessageResponse(ok=False, error=str(e))
+
+class PushFileRequest(BaseModel):
+    chat_id: int
+    file_b64: str
+    filename: str
+    caption: str = ""
+
+
+@api.post("/push_file")
+async def push_file(req: PushFileRequest):
+    if _bot_app is None:
+        raise HTTPException(status_code=503, detail="Bot ещё не инициализирован")
+
+    try:
+        raw = base64.b64decode(req.file_b64)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Некорректный base64: {e}")
+
+    if len(raw) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=413, detail=f"Файл превышает лимит {MAX_FILE_SIZE} байт")
+
+    try:
+        from io import BytesIO
+        bio = BytesIO(raw)
+        bio.name = req.filename
+
+        ext = pathlib.Path(req.filename).suffix.lower()
+        if ext in (".png", ".jpg", ".jpeg", ".webp"):
+            await _bot_app.bot.send_photo(chat_id=req.chat_id, photo=bio, caption=req.caption)
+        else:
+            await _bot_app.bot.send_document(chat_id=req.chat_id, document=bio, filename=req.filename, caption=req.caption)
+
+        return {"ok": True}
+
+    except Exception as e:
+        log.error(f"push_file failed для chat_id={req.chat_id}: {e}", exc_info=True)
+        return {"ok": False, "error": str(e)}
+
+def chat_id_has_thinking(chat_id: int) -> bool:
+    return chat_id in _thinking_messages
+
+@api.get("/health")
+async def health():
+    return {"status": "ok", "bot_initialized": _bot_app is not None}
+
 # ── Access helpers ─────────────────────────────────────────────────────────────
 
 def _allowed(chat_id: int) -> bool:
@@ -67,6 +292,8 @@ def _strip_bot_tag(text: str, bot_username: str) -> tuple[str, bool]:
     if tag in text:
         return text.replace(tag, "").strip(), True
     return text, False
+
+
 
 
 # ── Agent Service call ─────────────────────────────────────────────────────────
@@ -91,10 +318,10 @@ async def ask_pm_agent(text: str,
         "file_name": file_name
     }
     try:
-        async with httpx.AsyncClient(timeout=180.0) as client:
+        async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.post(f"{AGENT_SERVICE_URL}/api/tg/message", json=payload)
             resp.raise_for_status()
-            return resp.json().get("reply", "Агент не вернул ответ.")
+            # return resp.json().get("reply", "Агент не вернул ответ.")
     except httpx.HTTPStatusError as e:
         log.error("agent_service HTTP %s: %s", e.response.status_code, e.response.text)
         return f"❌ Агент вернул ошибку {e.response.status_code}."
@@ -211,8 +438,8 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not full_text:
             return
         user = update.effective_user
-        print(full_text)
-        await msg.reply_text("⏳ Думаю...")
+        thinking_msg = await msg.reply_text("⏳ Думаю...")
+        _thinking_messages[chat_id] = thinking_msg.message_id
 
         reply = await ask_pm_agent(
             text=full_text,
@@ -225,13 +452,13 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             file_name=None 
         )
 
-        if len(reply) > 4000:
-            reply = reply[:4000] + "\n\n... (обрезано)"
-        try:
-            await msg.reply_text(reply, parse_mode=ParseMode.HTML)
-        except Exception as e:
-            log.info(f'Проблема с парсинго сообщения от агента, {e}')
-            await msg.reply_text(f'Ошибка парсинга сообщения от агента: {str(e)[:300]}')
+        # if len(reply) > 4000:
+        #     reply = reply[:4000] + "\n\n... (обрезано)"
+        # try:
+        #     await msg.reply_text(reply, parse_mode=ParseMode.HTML)
+        # except Exception as e:
+        #     log.info(f'Проблема с парсинго сообщения от агента, {e}')
+        #     await msg.reply_text(f'Ошибка парсинга сообщения от агента: {str(e)[:300]}')
     except Exception as e:
         await msg.reply_text(f'Что-то не так с сообщением: {str(e)[:300]}')
     # await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN_V2)
@@ -275,7 +502,9 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.effective_user
     logging.info(f"БИНАРНИК: {file_b64[:100]}")
-    await update.message.reply_text("⏳ Думаю...")
+
+    thinking_msg = await msg.reply_text("⏳ Думаю...")
+    _thinking_messages[chat_id] = thinking_msg.message_id
 
     reply = await ask_pm_agent(
         text=raw_text,
@@ -290,7 +519,11 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if len(reply) > 4000:
         reply = reply[:4000] + "\n\n... (обрезано)"
-    await update.message.reply_text(reply, parse_mode=ParseMode.HTML)
+    try:
+        await msg.reply_text(reply, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        log.info(f'Проблема с парсинго сообщения от агента, {e}')
+        await msg.reply_text(f'Ошибка парсинга сообщения от агента: {str(e)[:300]}')
 
 
 async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
@@ -299,16 +532,33 @@ async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
+async def run_both():
+    global _bot_app
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).concurrent_updates(True).build()
+
+    application.add_handler(CommandHandler("start", cmd_start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_message))
+    application.add_handler(MessageHandler(filters.Document.ALL, on_document))
+    application.add_error_handler(_on_error)
+
+    _bot_app = application
+
+    config = uvicorn.Config(api, host="0.0.0.0", port=8010, log_level="info")
+    server = uvicorn.Server(config)
+
+    async with application:
+        await application.start()
+        await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+        log.info("tg_bot запущен: polling + push API на :8010")
+        try:
+            await server.serve()  # блокирует, пока не остановят
+        finally:
+            await application.updater.stop()
+            await application.stop()
+
+
 def main():
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).concurrent_updates(True).build()
-
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_message))
-    app.add_handler(MessageHandler(filters.Document.ALL, on_document))
-    app.add_error_handler(_on_error)
-
-    log.info("tg_bot запущен. Polling...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    asyncio.run(run_both())
 
 
 if __name__ == "__main__":

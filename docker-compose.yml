@@ -96,15 +96,35 @@ services:
 
       ADMINS_INFO: ${ADMINS_INFO}
       AGENT_POOL_PASSWORD: ${AGENT_POOL_PASSWORD}
+      SANDBOX_SERVICE_URL: ${SANDBOX_SERVICE_URL}
+      TG_BOT_PUSH_URL: http://172.18.0.1:8010/push_message # docker network inspect pascha_microservices | grep Gateway
+      # sudo ufw allow from 172.18.0.0/16 to any port 8010 proto tcp
 
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"
     volumes:
-      - ./agent_service/config:/app/config
       - ./agent_service:/app
+      - ./agent_service/sandbox:/sandbox:rw
     restart: unless-stopped
     networks:
       - catchPM
+      - sandbox_net
+
+  tg_bot:
+      build: ./telegram_service 
+      container_name: tg_bot
+      network_mode: "host"  # Используем сеть сервера напрямую
+      # networks: [catchPM]
+      # depends_on:
+      #   - agent_service
+      # ports:
+      #   - "8010:8010"
+      environment:
+        TELEGRAM_BOT_TOKEN:      ${TELEGRAM_BOT_TOKEN}
+        TELEGRAM_CHAT_IDS:        ${TELEGRAM_CHAT_IDS}
+        TELEGRAM_GROUPS_IDS:     ${TELEGRAM_GROUPS_IDS:-}
+        AGENT_SERVICE_URL:       http://127.0.0.1:9001  # Стучимся на 9001 порт хоста
+      restart: unless-stopped
 
 
   # token_service:
@@ -311,18 +331,49 @@ services:
     networks:
       - catchPM
 
-  tg_bot:
-      build: ./telegram_service 
-      container_name: tg_bot
-      network_mode: "host"  # Используем сеть сервера напрямую
-      # depends_on:
-      #   - agent_service
-      environment:
-        TELEGRAM_BOT_TOKEN:      ${TELEGRAM_BOT_TOKEN}
-        TELEGRAM_CHAT_IDS:        ${TELEGRAM_CHAT_IDS}
-        TELEGRAM_GROUPS_IDS:     ${TELEGRAM_GROUPS_IDS:-}
-        AGENT_SERVICE_URL:       http://127.0.0.1:9001  # Стучимся на 9001 порт хоста
-      restart: unless-stopped
+
+
+  agent_sandbox:
+    build: ./agent_sandbox
+    container_name: agent_sandbox
+    read_only: true
+    ports:
+      - "8005:8005"
+    ipc: host
+    tmpfs:
+      - /tmp/exec:size=256m,uid=1500,mode=0700  # Увеличили для работы с файлами
+      - /tmp:size=2g,mode=1777,exec             # Увеличили до 2GB (1080p рендер много кеширует)
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - catchPM
+    mem_limit: 4g          # вместо deploy.resources.limits
+    memswap_limit: 4g
+    cpus: "3.0"
+    environment:
+      - OPENBLAS_NUM_THREADS=1
+      - OMP_NUM_THREADS=1
+      - MAIL_HOST=${MAIL_HOST}
+      - MAIL_PORT=${MAIL_PORT}
+      - MAIL_LOGIN=${MAIL_LOGIN}
+      - MAIL_PASSWORD=${MAIL_PASSWORD}
+      - MAIL_SMTP_PORT=${MAIL_SMTP_PORT}
+      - GITVERSE_TOKEN=${GITVERSE_TOKEN}
+      - KAFKA_BROKER=${KAFKA_BROKER}
+      # Убрали PLAYWRIGHT_BROWSERS_PATH отсюда, чтобы использовалось значение /opt/playwright-browsers из Dockerfile
+      # Если хотите оставить здесь, то замените на:
+      # - PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
+    volumes:
+      - ./agent_sandbox/fonts:/app/fonts:ro
+      - ./agent_sandbox/dev_utils:/app/dev_utils:ro
+      - ./agent_sandbox/result_parsing:/app/result_parsing:ro
+      - ./agent_sandbox/output:/tmp/output:rw
+    restart: unless-stopped
+
+
+  
 
 volumes:
   kafka-data:
@@ -336,3 +387,6 @@ volumes:
 networks:
   catchPM:
     name: pascha_microservices
+  
+  sandbox_net:
+      driver: bridge

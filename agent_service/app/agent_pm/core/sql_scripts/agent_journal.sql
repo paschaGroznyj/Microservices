@@ -13,6 +13,15 @@ CREATE TABLE IF NOT EXISTS agent_journal (
     updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE agent_journal
+    ADD COLUMN IF NOT EXISTS user_id BIGINT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_journal_user_id
+    ON agent_journal (user_id);
+
+CREATE INDEX IF NOT EXISTS idx_agent_journal_user_type
+    ON agent_journal (user_id, entry_type, updated_at DESC);
+
 -- ── Индексы ───────────────────────────────────────────────────────────────────
 
 CREATE INDEX IF NOT EXISTS idx_agent_journal_type

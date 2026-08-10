@@ -15,6 +15,16 @@ CREATE TABLE IF NOT EXISTS session_summaries (
     updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS chat_rolling_summary (
+    chat_id     BIGINT PRIMARY KEY,
+    summary_text TEXT NOT NULL,
+    covers_messages INTEGER NOT NULL DEFAULT 0,  -- сколько сообщений уже засаммаризовано, для дебага
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE chat_rolling_summary
+    ADD COLUMN IF NOT EXISTS covered_up_to_id BIGINT NOT NULL DEFAULT 0;
+
 CREATE INDEX IF NOT EXISTS idx_session_summaries_chat_id
     ON session_summaries (chat_id, created_at DESC);
 

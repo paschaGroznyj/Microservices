@@ -9,12 +9,12 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from dotenv import load_dotenv
 from langchain.schema import SystemMessage, HumanMessage
-from .core.agent_provider import get_async_gemini
+from .core.agent_provider import get_llm_model
 from .analyze_article import RelevanceAnalyzer
 
 load_dotenv()
 
-gigachat = get_async_gemini()
+gigachat = get_llm_model()
 
 class MetadataUpdater:
     def __init__(self, database, articles_path: Path, max_retries: int = 3, retry_delay: int = 10):

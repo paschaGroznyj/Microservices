@@ -2,13 +2,13 @@ import json
 import re
 
 from langchain.schema import SystemMessage, HumanMessage
-from core.agent_provider import get_async_gemini
+from core.agent_provider import get_llm_model
 
 
 
 class LLMProcessor:
     def __init__(self, model=None):
-        self.model = model or get_async_gemini()
+        self.model = model or get_llm_model()
 
     def _extract_json(self, text: str) -> dict:
         text = (text or "").strip()

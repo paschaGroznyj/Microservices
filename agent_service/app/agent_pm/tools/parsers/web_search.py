@@ -17,7 +17,7 @@ def make_web_search():
             query: str,
             categories: Optional[List[str]] = None,
             engines: Optional[List[str]] = None,
-            max_results: int = 5
+            max_results: int = 10
     ) -> str:
         """
         Выполняет поиск информации в интернете через внутренний шлюз SearXNG.
@@ -26,7 +26,7 @@ def make_web_search():
         :param query: Поисковый запрос (до 512 символов).
         :param categories: Категории поиска, например ["general"] или ["it"]. Нельзя использовать вместе с engines.
         :param engines: Список конкретных движков, например ["google cse", "yandex", "duckduckgo"].
-        :param max_results: Количество результатов от 1 до 20 (по умолчанию 5).
+        :param max_results: Количество результатов от 1 до 20 (по умолчанию 10).
         """
         if not SEARXNG_API_TOKEN:
             return "❌ Ошибка: Не задан SEARXNG_API_TOKEN в переменных окружения."

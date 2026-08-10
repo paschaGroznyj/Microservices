@@ -1,0 +1,44 @@
+-- Проверка типов столбцов
+SELECT
+    column_name,
+    data_type,
+    column_default,
+    is_nullable
+FROM
+    information_schema.columns
+WHERE
+    table_name = 'papers_metadata'
+ORDER BY
+    ordinal_position;
+
+-- Положить csv на диск
+COPY (
+    SELECT * FROM papers_metadata WHERE external_id = 'arxiv_2607.17783' LIMIT 1
+) TO '/tmp/export_limit_4.csv'
+WITH (FORMAT csv, HEADER true, DELIMITER ',');
+
+
+Права для агента
+CREATE ROLE agent_readonly WITH LOGIN PASSWORD '...';
+GRANT CONNECT ON DATABASE micro_services TO agent_readonly;
+GRANT USAGE ON SCHEMA public TO agent_readonly;
+GRANT SELECT ON papers_metadata, users, chats, reviews TO agent_readonly;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO agent_readonly;
+
+GRANT INSERT, UPDATE ON reviews TO agent_readonly;
+GRANT USAGE, SELECT ON SEQUENCE reviews_id_seq TO agent_readonly;
+GRANT UPDATE (review_flag) ON papers_metadata TO agent_readonly;
+
+-- 1. Права на таблицу знаний: SELECT, INSERT, UPDATE
+GRANT SELECT, INSERT, UPDATE ON knowledge TO agent_readonly;
+
+-- 2. Права на последовательность для knowledge.id (нужно для INSERT)
+GRANT USAGE, SELECT ON SEQUENCE knowledge_id_seq TO agent_readonly;
+
+-- 3. Права на инкубатор удаления: SELECT, INSERT
+GRANT SELECT, INSERT ON knowledge_review TO agent_readonly;
+
+-- 4. Права на последовательность для knowledge_review.id (нужно для INSERT)
+GRANT USAGE, SELECT ON SEQUENCE knowledge_review_id_seq TO agent_readonly;
+
+GRANT INSERT ON papers_metadata TO agent_readonly;

@@ -16,6 +16,7 @@ logging.basicConfig(
 )
 
 EMB_DIM = "1024"
+MAX_COUNT_JOURNAL = 9 # Максимальное 
 
 from cryptography.fernet import Fernet
 
@@ -59,6 +60,7 @@ class AgentDB:
     def __init__(self):
         self.pool = None
         self.readonly_pool = None  # отдельный пул для LLM-запросов
+        self.base_agent_pool = None
 
     async def init_db_pool(self):
         max_retries = 5
@@ -95,9 +97,18 @@ class AgentDB:
                 else:
                     raise
 
-    async def init_readonly_pool(self):
+    async def init_agent_admin_pool(self):
         self.readonly_pool = await asyncpg.create_pool(
             user="knowledge_manager",
+            password=AGENT_POOL_PASSWORD,
+            host=DB_HOST, port=DB_PORT, database=DB_NAME,
+            min_size=1, max_size=2,
+            command_timeout=10,  # жёсткий таймаут на запрос
+        )
+    
+    async def init_agent_base_pool(self):
+        self.base_agent_pool = await asyncpg.create_pool(
+            user="my_journal",
             password=AGENT_POOL_PASSWORD,
             host=DB_HOST, port=DB_PORT, database=DB_NAME,
             min_size=1, max_size=2,
@@ -174,42 +185,69 @@ class AgentDB:
         """)
 
 
-    async def get_agent_journal(self) -> str:
+    async def get_agent_journal(self, user_id: int | None = None) -> str:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("""
-                SELECT id, entry_type, content, context, created_at 
-                FROM agent_journal 
-                ORDER BY created_at DESC 
-                LIMIT 10;
-            """)
+                SELECT id, entry_type, content, context, created_at, updated_at
+            FROM (
+                -- personal identity конкретно этого пользователя
+                SELECT id, entry_type, content, context, created_at, updated_at,
+                       1 AS priority, updated_at AS sort_key
+                FROM agent_journal
+                WHERE entry_type = 'identity'
+                  AND user_id = $1
+
+                UNION ALL
+
+                -- по 2 последних от каждого НЕ-identity типа для этого юзера
+                -- (или общих, если user_id IS NULL в записи)
+                SELECT id, entry_type, content, context, created_at, updated_at,
+                       2 AS priority, updated_at AS sort_key
+                FROM (
+                    SELECT id, entry_type, content, context, created_at, updated_at,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY entry_type
+                               ORDER BY updated_at DESC
+                           ) AS rn
+                    FROM agent_journal
+                    WHERE id != 1
+                      AND entry_type != 'identity'
+                      AND (user_id = $1 OR user_id IS NULL)
+                ) ranked
+                WHERE rn <= 2
+            ) combined
+            GROUP BY id, entry_type, content, context,
+                    created_at, updated_at, priority, sort_key
+            ORDER BY priority ASC, sort_key DESC
+            LIMIT 15;
+            """, user_id)
+
+            count = await conn.fetchval(
+                "SELECT count(id) FROM agent_journal WHERE user_id = $1 OR user_id IS NULL;",
+                user_id,
+            )
 
         if not rows:
             return "Журнал агента пуст."
 
         formatted_entries = []
-        
-        for row in rows:
-            # Красиво форматируем дату (YYYY-MM-DD HH:MM:SS)
-            created_str = row["created_at"].strftime("%Y-%m-%d %H:%M:%S") if row["created_at"] else "—"
-            
-            # Разбираем JSONB context
-            context_data = row["context"]
-            if context_data:
-                # Если asyncpg вернул dict — переводим в читаемый JSON, если строку — отдаем как есть
-                ctx_str = json.dumps(context_data, ensure_ascii=False) if isinstance(context_data, dict) else str(context_data)
-            else:
-                ctx_str = "без контекста"
+        head_str = ''
+        if count > MAX_COUNT_JOURNAL:
+            head_str = f"Записей в журнале уже больше порога = {MAX_COUNT_JOURNAL}. Пора бы делать summary и дроппать лишние строки\n\n"
 
-            # Собираем блок для отдельной записи
+        for row in rows:
+            created_str = row["created_at"].strftime("%Y-%m-%d %H:%M:%S") if row["created_at"] else "—"
+            updated_str = row["updated_at"].strftime("%Y-%m-%d %H:%M:%S") if row["updated_at"] else "—"
+            context_data = row["context"]
+            ctx_str = json.dumps(context_data, ensure_ascii=False) if isinstance(context_data, dict) else (str(context_data) if context_data else "без контекста")
             entry = (
-                f"• [{created_str}] ID: {row['id']} | Тип: [{row['entry_type']}]\n"
+                f"• [{created_str}] [{updated_str}] ID: {row['id']} | Тип: [{row['entry_type']}]\n"
                 f"  Содержание: {row['content']}\n"
                 f"  Контекст: {ctx_str}"
             )
             formatted_entries.append(entry)
 
-        # Объединяем разделителем
-        return "\n\n".join(formatted_entries)
+        return head_str + "\n\n".join(formatted_entries)
             
 
     async def get_user_id_by_name(self, user_name: str) -> int | None:
@@ -792,11 +830,11 @@ class AgentDB:
         """
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("""
-                SELECT message_text, is_from_bot, created_at
+                SELECT id, message_text, is_from_bot, created_at, tool_trace
                 FROM chats
                 WHERE chat_id = $1
                 ORDER BY created_at DESC
-                LIMIT $2
+                LIMIT $2 OFFSET 1
             """, chat_id, limit)
             
             # Возвращаем в хронологическом порядке (от старых к новым)
@@ -1032,6 +1070,330 @@ class AgentDB:
         except Exception as e:
             logging.error("get_last_session_summary failed: %s", e)
             return None
+
+    # async def add_tokens(self, user_id: int, message: str, chat_id: int, is_from_bot: bool, action: str = None):
+    #     """Добавить сообщение пользователя из ТГ"""
+    #     if user_id is None or chat_id is None:
+    #         logging.warning("Пропущено сообщение: отсутствует user_id или chat_id")
+    #         return None
+        
+    #     # Генерируем точное время создания со значением UTC
+    #     now_utc = datetime.now(timezone.utc)
+        
+    #     try:
+    #         async with self.pool.acquire() as conn:
+    #            await conn.fetchval("""
+    #                 INSERT INTO chats (user_id, chat_id, message_text, is_from_bot, tool_name, created_at)
+    #                 VALUES ($1, $2, $3, $4, $5, $6);
+    #             """,
+    #             user_id, chat_id, message, is_from_bot, action, now_utc)
+    #     except asyncpg.UniqueViolationError:
+    #         logging.error(f"Сообщение не может быть добавлено")
+
+    # ── code_library: сохранение ──────────────────────────────────
+
+    async def save_to_code_library(
+        self,
+        title: str,
+        description: str,
+        code_type: str,
+        tags: list[str],
+        author: str,
+        path: str,
+        run_id: str | None = None,
+    ) -> int:
+        """
+        Документирует переиспользуемый скрипт в таблицу code_library.
+        Динамически тянет схему таблицы перед вставкой.
+        Возвращает id созданной записи.
+        """
+        async with self.pool.acquire() as conn:
+            # Динамически проверяем схему (без get_db_schema)
+            columns = await conn.fetch("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'code_library'
+                ORDER BY ordinal_position
+            """)
+            column_names = {row["column_name"] for row in columns}
+
+        if "title" not in column_names:
+            raise RuntimeError(
+                "Таблица code_library не найдена или не содержит ожидаемых колонок. "
+                "Убедитесь что DDL применён."
+            )
+
+        async with self.pool.acquire() as conn:
+            record_id = await conn.fetchval("""
+                INSERT INTO code_library (
+                    title,
+                    description,
+                    code_type,
+                    tags,
+                    author,
+                    path,
+                    run_id,
+                    created_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+                RETURNING id
+            """,
+                title,
+                description,
+                code_type,
+                tags,          # asyncpg передаёт list[str] → TEXT[]
+                author,
+                path,
+                run_id,
+            )
+
+        logging.info(
+            "code_library: сохранён скрипт id=%s title=%r author=%s",
+            record_id, title, author
+        )
+        return record_id
+
+
+# ── code_library: поиск ──────────────────────────────────────
+    async def _exact_path_search(
+        self,
+        path: str,
+        code_type: str | None = None,
+        tags: list[str] | None = None,
+        author: str | None = None,
+        limit: int = 5,
+    ) -> list[dict]:
+        """Точный поиск по полю path (точное совпадение или ILIKE без %)."""
+        conditions = ["path = $1"]
+        params: list = [path]
+        idx = 2
+
+        if code_type is not None:
+            conditions.append(f"code_type = ${idx}")
+            params.append(code_type); idx += 1
+        if tags:
+            conditions.append(f"tags @> ${idx}::text[]")
+            params.append(tags); idx += 1
+        if author is not None:
+            conditions.append(f"author = ${idx}")
+            params.append(author); idx += 1
+
+        params.append(limit)
+        limit_placeholder = f"${idx}"
+        where_clause = " AND ".join(conditions)
+
+        sql = f"""
+            SELECT id, title, description, code_type, tags, author, path,
+                run_id, use_count, last_used_at, created_at,
+                1.0 AS score
+            FROM code_library
+            WHERE {where_clause}
+            ORDER BY use_count DESC, created_at DESC
+            LIMIT {limit_placeholder}
+        """
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+
+        return [self._row_to_dict(r, search_type="exact_path") for r in rows]
+
+    async def _like_search(
+        self,
+        query: str,
+        code_type: str | None = None,
+        tags: list[str] | None = None,
+        author: str | None = None,
+        limit: int = 5,
+        path: str | None = None,
+    ) -> list[dict]:
+        conditions = ["(title ILIKE $1 OR description ILIKE $1 OR path ILIKE $1)"]
+        params: list = [f"%{query}%"]
+        idx = 2
+
+        if path is not None:
+            conditions.append(f"path = ${idx}")
+            params.append(path); idx += 1
+        if code_type is not None:
+            conditions.append(f"code_type = ${idx}")
+            params.append(code_type); idx += 1
+        if tags:
+            conditions.append(f"tags @> ${idx}::text[]")
+            params.append(tags); idx += 1
+        if author is not None:
+            conditions.append(f"author = ${idx}")
+            params.append(author); idx += 1
+
+        params.append(limit)
+        limit_placeholder = f"${idx}"
+        where_clause = " AND ".join(conditions)
+
+        sql = f"""
+            SELECT id, title, description, code_type, tags, author, path,
+                run_id, use_count, last_used_at, created_at,
+                similarity(title, $1) AS score
+            FROM code_library
+            WHERE {where_clause}
+            ORDER BY score DESC, use_count DESC
+            LIMIT {limit_placeholder}
+        """
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+
+        return [self._row_to_dict(r, search_type="like") for r in rows]
+    
+    async def _fts_search(
+        self,
+        query: str,
+        code_type: str | None = None,
+        tags: list[str] | None = None,
+        author: str | None = None,
+        limit: int = 5,
+        path: str | None = None,
+    ) -> list[dict]:
+        """
+        BM25-подобный поиск по code_library через websearch_to_tsquery ('russian').
+        Дополнительные фильтры: code_type, tags (GIN @>), author, path.
+        """
+        limit = max(1, min(limit, 50))
+
+        conditions = ["tsv @@ q.tsq"]
+        params: list = [query]
+        idx = 2
+
+        if path is not None:
+            conditions.append(f"path = ${idx}")
+            params.append(path)
+            idx += 1
+
+        if code_type is not None:
+            conditions.append(f"code_type = ${idx}")
+            params.append(code_type)
+            idx += 1
+
+        if tags:
+            conditions.append(f"tags @> ${idx}::text[]")
+            params.append(tags)
+            idx += 1
+
+        if author is not None:
+            conditions.append(f"author = ${idx}")
+            params.append(author)
+            idx += 1
+
+        params.append(limit)
+        limit_placeholder = f"${idx}"
+        where_clause = " AND ".join(conditions)
+
+        sql = f"""
+            WITH q AS (
+                SELECT websearch_to_tsquery('russian', $1) AS tsq
+            )
+            SELECT
+                cl.id, cl.title, cl.description, cl.code_type,
+                cl.tags, cl.author, cl.path, cl.run_id,
+                cl.use_count, cl.last_used_at, cl.created_at,
+                ts_rank_cd(cl.tsv, q.tsq, 32) AS score
+            FROM code_library cl, q
+            WHERE {where_clause}
+            ORDER BY score DESC, use_count DESC
+            LIMIT {limit_placeholder}
+        """
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+
+        return [self._row_to_dict(r, search_type="bm25") for r in rows]
+
+    @staticmethod
+    def _row_to_dict(r, search_type: str) -> dict:
+        return {
+            "id":           r["id"],
+            "title":        r["title"],
+            "description":  r["description"],
+            "code_type":    r["code_type"],
+            "tags":         list(r["tags"] or []),
+            "author":       r["author"],
+            "path":         r["path"],
+            "run_id":       r["run_id"],
+            "use_count":    r["use_count"],
+            "last_used_at": r["last_used_at"].isoformat() if r["last_used_at"] else None,
+            "created_at":   r["created_at"].isoformat() if r["created_at"] else None,
+            "score":        float(r["score"] or 0),
+            "search_type":  search_type,
+        }
+
+    async def search_code_library(
+        self,
+        query: str,
+        code_type: str | None = None,
+        tags: list[str] | None = None,
+        author: str | None = None,
+        limit: int = 5,
+        path: str | None = None,
+    ) -> list[dict]:
+        limit = int(limit) if not isinstance(limit, int) else limit
+        
+        # 1. Если передан точный путь к файлу — сначала ищем строго по нему
+        if path:
+            rows = await self._exact_path_search(path, code_type, tags, author, limit)
+            if rows:
+                return rows
+
+        # 2. Основной полнотекстовый поиск (FTS)
+        rows = await self._fts_search(query, code_type, tags, author, limit, path=path)
+        
+        # 3. Фолбэк на LIKE поиск, если FTS ничего не нашел
+        if not rows:
+            rows = await self._like_search(query, code_type, tags, author, limit, path=path)
+            
+        return rows
+
+
+# ── code_library: инкремент use_count ────────────────────────
+
+    async def touch_code_library(self, library_id: int) -> None:
+        """
+        Обновляет last_used_at и инкрементирует use_count.
+        Вызывается из тулзы edit_and_run после каждого использования скрипта.
+        """
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE code_library
+                SET
+                    use_count    = use_count + 1,
+                    last_used_at = NOW()
+                WHERE id = $1
+            """, library_id)
+
+        logging.info("code_library: touch id=%s", library_id)
+
+    # Суммаризация сообщений, которые были отброшены фильтром на токены
+    async def get_rolling_summary(self, chat_id: int) -> str | None:
+        row = await self.pool.fetchrow(
+            "SELECT summary_text FROM chat_rolling_summary WHERE chat_id = $1", chat_id
+        )
+        return row["summary_text"] if row else None
+
+    async def upsert_rolling_summary(self, chat_id: int, summary_text: str, covers_messages: int) -> None:
+        await self.pool.execute("""
+            INSERT INTO chat_rolling_summary (chat_id, summary_text, covers_messages, updated_at)
+            VALUES ($1, $2, $3, NOW())
+            ON CONFLICT (chat_id) DO UPDATE
+            SET summary_text = $2, covers_messages = $3, updated_at = NOW()
+        """, chat_id, summary_text, covers_messages)
+
+    async def get_rolling_summary(self, chat_id: int) -> dict | None:
+        row = await self.pool.fetchrow(
+            "SELECT summary_text, covered_up_to_id FROM chat_rolling_summary WHERE chat_id = $1", chat_id
+        )
+        return dict(row) if row else None
+
+    async def upsert_rolling_summary(self, chat_id: int, summary_text: str, covered_up_to_id: int) -> None:
+        await self.pool.execute("""
+            INSERT INTO chat_rolling_summary (chat_id, summary_text, covered_up_to_id, updated_at)
+            VALUES ($1, $2, $3, NOW())
+            ON CONFLICT (chat_id) DO UPDATE
+            SET summary_text = $2, covered_up_to_id = $3, updated_at = NOW()
+        """, chat_id, summary_text, covered_up_to_id)
 
                 
 

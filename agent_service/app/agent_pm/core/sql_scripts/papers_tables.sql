@@ -37,3 +37,5 @@ CREATE TABLE IF NOT EXISTS reviews (
     created_at      TIMESTAMP NOT NULL DEFAULT NOW(),
     UNIQUE (external_id)                        -- одно ревью на статью
 );
+
+GRANT SELECT, INSERT, UPDATE ON papers_metadata TO knowledge_manager;

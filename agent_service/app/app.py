@@ -1,12 +1,16 @@
 import threading
 import time
-
+import os
 import httpx
-from fastapi import FastAPI, HTTPException, Request, Response, APIRouter
+from fastapi import (FastAPI, HTTPException, Request, Response, 
+APIRouter, Form, File, UploadFile)
+from fastapi.responses import StreamingResponse
 import uvicorn
 import json
 import logging
 import base64
+import uuid
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
@@ -18,8 +22,10 @@ from agent_pm.summary_period import extract_json
 import asyncio
 from httpx import AsyncClient
 # from agent_pm.pm_parser.arxiv_parser import ARXIVParser
-from agent_pm.core.config import (KAFKA_BROKER, PORT_PM_AGENT, PORT_PARSERS_SERVICE, PORT_GATEWAY_PORT, 
-OUROBOROS_API_URL, OUROBOROS_API_PASSWORD, OUROBOROS_WS, OUROBOROS_RESPONSE_TIMEOUT)
+from agent_pm.core.config import (KAFKA_BROKER, PORT_PM_AGENT, 
+PORT_PARSERS_SERVICE, PORT_GATEWAY_PORT,
+TG_BOT_PUSH_URL)
+
 from agent_pm.search_bot.searcher import searcher_main
 from agent_pm.core.db import AgentDB
 from agent_pm.core.file_parsers import parse_file
@@ -29,12 +35,15 @@ from agent_pm.core.botocore_client import database
 logging.basicConfig(level=logging.INFO)
 
 db = AgentDB()
+pending_files: dict[str, dict] = {}
 
 # Глобальные переменные для producer/consumer
 producer: AIOKafkaProducer | None = None
 consumer: AIOKafkaConsumer | None = None
 consumer_alive = False
 agent: KnowledgeAgent | None = None
+
+FILE_WAIT_TIMEOUT = 20.0  # сек, сколько kafka-хендлер готов ждать файлы
 
 async def get_producer() -> AIOKafkaProducer:
     global producer
@@ -47,145 +56,70 @@ async def get_producer() -> AIOKafkaProducer:
         await producer.start()
     return producer
 
-async def handle_ouroboros_message(payload: dict, prod: AIOKafkaProducer):
-    """Перенаправление сообщения на Ouroboros API + трансляция промежуточных мыслей."""
-    start = time.perf_counter()
 
-    chat_id = payload.get("chat_id")
-    text = payload.get("message")
-    request_id = payload.get("request_id")
-    tb_name = payload.get("tb_name")
-    username = payload.get("username")
+web_router = APIRouter()
 
-    if not text or chat_id is None:
-        logging.warning(f"Некорректное сообщение для Ouroboros: {payload}")
-        return
-
-    message = f"[CatchPM, ТабельНомер: {tb_name}, Пользователь: {username}]\n" + text
-
-    async def send_status(status_text: str):
-        """Best-effort отправка статуса через WS-бродкаст гейтвея."""
+@web_router.post("/web/upload_files")
+async def upload_web_files(
+    chat_id: str = Form(...),
+    message_id: str = Form(...),
+    user_id: str = Form(...),
+    files: list[UploadFile] = File(...),
+):
+    parts = []
+    for f in files:
+        raw = await f.read()
         try:
-            async with httpx.AsyncClient(timeout=2.0) as status_client:
-                await status_client.post(
-                    f"{GATEWAY_URL}/internal/bot_status",
-                    json={"request_id": request_id, "status": status_text},
-                )
-        except Exception:
-            pass  # статус — best-effort, не блокируем основной поток
+            extracted_text = await asyncio.to_thread(parse_file, f.filename, raw)
+            parts.append(f"\n\n📎[FILE] [Прикрепленный файл: {f.filename}]\nСодержимое файла:\n```\n{extracted_text}\n```")
+        except Exception as e:
+            logging.error("Ошибка парсинга файла %s: %s", f.filename, e)
+            parts.append(f"\n\n[Не удалось прочитать прикрепленный файл {f.filename}: {e}]")
 
-    await send_status("Ouroboros думает...")
+    combined_text = "".join(parts)
+    entry = pending_files.setdefault(message_id, {"event": asyncio.Event(), "text": ""})
+    entry["text"] = combined_text
+    entry["event"].set()
 
+    logging.info(f"Файлы для message_id={message_id} обработаны, chat_id={chat_id}")
+    return {"status": "ok", "files_count": len(files)}
+
+
+async def wait_for_files(message_id: str, timeout: float = FILE_WAIT_TIMEOUT) -> str:
+    """Дождаться файлов для message_id либо вернуть пустую строку по таймауту."""
+    entry = pending_files.setdefault(message_id, {"event": asyncio.Event(), "text": ""})
     try:
-        # 1. Отправляем команду
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(
-                f"{OUROBOROS_API_URL}/api/command",
-                json={"cmd": message},
-                headers={"x-ouroboros-password": OUROBOROS_API_PASSWORD},
-            )
+        await asyncio.wait_for(entry["event"].wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        logging.warning(f"Файлы для message_id={message_id} не пришли за {timeout}s, продолжаем без них")
+    finally:
+        pending_files.pop(message_id, None)  # чистим память в любом случае
+    return entry["text"]
 
-        if resp.status_code != 200:
-            error_msg = {
-                "user_id": -1,
-                "chat_id": chat_id,
-                "message": f"❌ Ouroboros API вернул {resp.status_code}",
-                "is_from_bot": True,
-                "type_agent": "ouroboros",
-                "action": "error"
-            }
-            await prod.send_and_wait("chat-messages", value=error_msg)
-            return
+ALLOWED_FILES_ROOT = os.path.realpath("/app/generated_files")
 
-        logging.info(f"Ouroboros принял запрос для чата {chat_id}, слушаем WS-ответ")
+@web_router.get("/web/file")
+async def get_generated_file(path: str):
+    real_path = os.path.realpath(path)
 
-        # 2. Слушаем WS: транслируем промежуточные мысли, ждём финальный ответ
-        final_content = await _listen_ouroboros_with_progress(send_status)
+    # Защита: файл обязан лежать внутри разрешённой директории / Не обязон
+    # if not real_path.startswith(ALLOWED_FILES_ROOT + os.sep):
+    #     raise HTTPException(status_code=403, detail="Forbidden path")
 
-        if final_content is None:
-            timeout_msg = {
-                "user_id": -1,
-                "chat_id": chat_id,
-                "message": "⏱️ Ouroboros не ответил вовремя",
-                "is_from_bot": True,
-                "type_agent": "ouroboros",
-                "action": "error"
-            }
-            await prod.send_and_wait("chat-messages", value=timeout_msg)
-            return
+    if not os.path.isfile(real_path):
+        raise HTTPException(status_code=404, detail="File not found")
 
-        bot_message = {
-            "user_id": -1,
-            "chat_id": chat_id,
-            "message": final_content.strip(),
-            "is_from_bot": True,
-            "type_agent": "ouroboros",
-            "action": "answer"
-        }
-        await prod.send_and_wait("chat-messages", value=bot_message)
+    filename = os.path.basename(real_path)
 
-        logging.info(f"Ouroboros ответ в чат {chat_id}: {final_content[:50]}...")
-        logging.info(f"Время обработки: {time.perf_counter() - start:.4f}s")
+    def iterfile():
+        with open(real_path, "rb") as f:
+            yield from iter(lambda: f.read(1024 * 1024), b"")
 
-    except Exception as e:
-        logging.error(f"Ошибка обработки сообщения Ouroboros: {e}")
-        error_message = {
-            "user_id": -1,
-            "chat_id": chat_id,
-            "message": f"❌ Ошибка связи с Ouroboros: {str(e)}",
-            "is_from_bot": True,
-            "type_agent": "ouroboros",
-            "action": "error"
-        }
-        await prod.send_and_wait("chat-messages", value=error_message)
-
-
-async def _listen_ouroboros_with_progress(send_status) -> str | None:
-    """Подключиться к WS Ouroboros, транслировать промежуточные мысли через send_status,
-    вернуть финальный ответ ассистента."""
-    try:
-        async with websockets.connect(
-            OUROBOROS_WS,
-            additional_headers={"x-ouroboros-password": OUROBOROS_API_PASSWORD},
-        ) as ws:
-            # Пропускаем первое сообщение (возможно, state/buffer)
-            try:
-                await asyncio.wait_for(ws.recv(), timeout=1)
-            except asyncio.TimeoutError:
-                pass
-
-            while True:
-                try:
-                    raw = await asyncio.wait_for(
-                        ws.recv(), timeout=OUROBOROS_RESPONSE_TIMEOUT
-                    )
-                except asyncio.TimeoutError:
-                    logging.warning("Ouroboros response timeout (%ds)", OUROBOROS_RESPONSE_TIMEOUT)
-                    return None
-
-                try:
-                    msg = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(msg, dict):
-                    continue
-
-                if msg.get("type") == "chat" and msg.get("role") == "assistant":
-                    content = msg.get("content", "")
-                    if not content:
-                        continue
-
-                    if msg.get("is_progress", False):
-                        # Промежуточная мысль — шлём как статус, не как сообщение в Kafka
-                        await send_status(content)
-                        continue
-
-                    # Финальный ответ
-                    return content
-    except Exception as e:
-        logging.error("WS connection to Ouroboros failed: %s", e)
-        return None
-
+    return StreamingResponse(
+        iterfile(),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 async def handle_message(payload: dict, prod: AIOKafkaProducer):
     """Обработка одного сообщения — запускается конкурентно."""
@@ -199,9 +133,11 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     request_id = payload.get("request_id")
     tb_name = payload.get("tb_name")
     username = payload.get("username")
+    selected_tools = payload.get("selected_tools")
+    context_size = payload.get("context_size")
+    message_id = payload.get("message_id")
+    has_files = payload.get("has_files", False)
 
-    message = f"[CatchPM, ТабельНомер: {tb_name}, Пользователь: {username}]\n" + text
-    # message = f"[CatchPM, ТабельНомер: {tb_name}, Пользователь: Иванов Иван]\n" + text
 
     if is_from_bot or user_id == -1:
         return
@@ -210,32 +146,54 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
         return
     print("ВНУТРИ АГЕНТА", payload)
     # Маршрутизация: ouroboros → Ouroboros API, pm → KnowledgeAgent
-    if type_agent == "ouroboros":
-        await handle_ouroboros_message(payload, prod)
-        return
 
     if type_agent != "pm":
         return
 
+    # message = f"[CatchPM, ТабельНомер: 23423423, Пользователь: Иванов Иванон Иваныч, user_id=-1234]\n" + text
+    message = f"[CatchPM, ТабельНомер: {tb_name}, Пользователь: {username}, chat_id: {chat_id}, user_id: {user_id}]\n" + text
+
+    
+    if has_files and message_id:
+        file_text = await wait_for_files(message_id)
+        if file_text:
+            message += file_text
+
     try:
-        response = await agent.process_query(user_input=message, request_id=request_id, user_id=user_id, chat_id=chat_id, database=db)
-        # loop = asyncio.get_running_loop()
-        # response = await loop.run_in_executor(
-        #     None, agent.process_query, text, request_id
-        # )
+        logging.info(f"ПОЛЬЗОВАТЕЛЬ ВЫБРАЛ: {selected_tools}, с контекстом {context_size}")
+        response = await agent.process_query(user_input=message, 
+                                            request_id=request_id, user_id=-123, 
+                                            chat_id=chat_id, database=db, selected_tools=selected_tools,
+                                            context_size=context_size,
+                                            source="CatchPM")
+
         response_text = response["message"]
         # from datetime import datetime
         # now = datetime.now()
+        # response = {'action': "test", "files_to_send": [{"path": "sandbox/egg.txt"}, {"path": "sandbox/knowledge_graph.html"}]}
         # formatted_time = now.strftime("%H:%M:%S")
-        # response_text = f"Идет проведение нагрузочного тестирования! Cпасибо за понимание. Текущее время: **{formatted_time}**"
+        # response_text = f"Идет внедрение новой фичи! Cпасибо за понимание. Текущее время: **{formatted_time}**, {message}"
+        files_to_send = response.get("files_to_send")  # [{"path": "...", ...}, ...]
+        tool_trace = response.get("tool_trace")
 
+        attached_files = None
+        if files_to_send:
+            attached_files = [
+                {"name": os.path.basename(f["path"]), "path": f["path"]}
+                for f in files_to_send
+            ]
+
+        message_id = f"msg-{int(time.time() * 1000)}-{str(uuid.uuid4())[:8]}"
         bot_message = {
             "user_id": -1,
             "chat_id": chat_id,
             "message": response_text.strip(),
+            "message_id": message_id,
             "is_from_bot": True,
             "type_agent": "pm",
-            "action": response['action']
+            "action": response['action'],
+            "attached_files": attached_files,
+            "tool_trace": tool_trace # str
         }
 
         await prod.send_and_wait("chat-messages", value=bot_message)
@@ -244,6 +202,19 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
 
     except Exception as e:
         logging.error(f"Ошибка обработки сообщения: {e}")
+        try:
+            err_message = {
+                "user_id": -1,
+                "chat_id": chat_id,
+                "message": "Произошла внутренняя ошибка при обработке запроса агентом. Попробуйте еще раз.",
+                "message_id": f"msg-err-{int(time.time() * 1000)}",
+                "is_from_bot": True,
+                "type_agent": "pm",
+                "action": "error"
+            }
+            await prod.send_and_wait("chat-messages", value=err_message)
+        except Exception as send_err:
+            logging.error(f"Не удалось отправить сообщение об ошибке в Kafka: {send_err}")
 
 async def _process_service_message(message_id: int, enriched_text: str):
     """Обрабатывает сообщение сервиса в фоне, пишет ответ в service_chats."""
@@ -262,14 +233,14 @@ async def _process_service_message(message_id: int, enriched_text: str):
         status = "done"
  
     except Exception as e:
-        log.error("Ошибка обработки service message id=%s: %s", message_id, e, exc_info=True)
+        logging.error("Ошибка обработки service message id=%s: %s", message_id, e, exc_info=True)
         reply  = f"Ошибка агента: {e}"
         status = "error"
  
     async with _db.pool.acquire() as conn:
         await conn.execute(_SQL_UPDATE_DONE, reply, status, message_id)
  
-    log.info("service_chats id=%s → status=%s | %.60s", message_id, status, reply)
+    logging.info("service_chats id=%s → status=%s | %.60s", message_id, status, reply)
 
 
 async def kafka_consumer():
@@ -329,13 +300,21 @@ async def lifespan(app: FastAPI):
     global agent, digest_scheduler
 
     await db.init_db_pool()
-    await db.init_readonly_pool() # Для теста
+    await db.init_agent_admin_pool() 
+    await db.init_agent_base_pool()
 
+    from agent_pm.task_events_consumer import start_task_events_consumer
+
+
+    # result = await db.search_code_library("tabler icons", tags=["tabler"])
+    # print(result)
     # from agent_pm.core.botocore_client import OBSWorker
     # obs = OBSWorker()
     # await obs.upload_all_md()
 
     kafka_task = asyncio.create_task(kafka_consumer())
+    task_events_task = asyncio.create_task(start_task_events_consumer())
+
 
     agent = KnowledgeAgent(database=db, skip_startup_autoprocess=False)
 
@@ -357,6 +336,10 @@ async def lifespan(app: FastAPI):
     # 2. Kafka
     kafka_task.cancel()
     await asyncio.gather(kafka_task, return_exceptions=True)
+    
+    task_events_task.cancel()
+    await asyncio.gather(task_events_task, return_exceptions=True)
+
 
     await shutdown()
     await db.close()
@@ -413,6 +396,38 @@ def connect_service_routers(agent, db):
     _db    = db
 
 
+async def push_to_telegram(chat_id: int, text: str, edit_thinking: bool = True) -> None:
+    """Fire-and-forget отправка — agent_service не ждёт полного ответа от tg_bot."""
+    try:
+        print(TG_BOT_PUSH_URL)
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                TG_BOT_PUSH_URL,
+                json={"chat_id": chat_id, "text": text, "edit_thinking": edit_thinking},
+            )
+            if resp.status_code != 200:
+                logging.warning(f"push_to_telegram: tg_bot вернул {resp.status_code}: {resp.text[:300]}")
+    except Exception as e:
+        logging.error(f"push_to_telegram failed для chat_id={chat_id}: {e}")
+
+async def send_file_to_telegram(chat_id: int, file_path: str, caption: str = "") -> None:
+    file_path = Path(file_path)
+    logging.info(f"ПУТЬ ВНУТРИ ФУНКЦИИ ОТПРАВКИ {file_path}, {type(file_path)}")
+    with open(file_path, "rb") as f:
+        content = f.read()
+    file_b64 = base64.b64encode(content).decode("utf-8")
+    filename = os.path.basename(file_path)
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            await client.post(
+                TG_BOT_PUSH_URL.replace("/push_message", "/push_file"),
+                json={"chat_id": chat_id, "file_b64": file_b64, "filename": filename, "caption": caption},
+            )
+    except Exception as e:
+        log.error(f"send_file_to_telegram failed: {e}")
+
+
 @tg_router.post("/message", response_model=TgMessageResponse)
 async def handle_tg_message(req: TgMessageRequest) -> TgMessageResponse:
     """
@@ -446,7 +461,7 @@ async def handle_tg_message(req: TgMessageRequest) -> TgMessageResponse:
             extracted_text = await asyncio.to_thread(parse_file, req.file_name, file_bytes)
             
             # 3. Формируем контекст для агента
-            file_prompt = f"\n\n📎 [Прикрепленный файл: {req.file_name}]\nСодержимое файла:\n```\n{extracted_text[:30000]}\n```"
+            file_prompt = f"\n\n📎[FILE] [Прикрепленный файл: {req.file_name}]\nСодержимое файла:\n```\n{extracted_text}\n```"
             enriched += file_prompt
             logging.info(f"СОДЕРЖИМОЕ ФАЙЛА: {extracted_text[:300]}")
         except Exception as e:
@@ -457,7 +472,7 @@ async def handle_tg_message(req: TgMessageRequest) -> TgMessageResponse:
         "TG message | user_id=%s name=%s chat_id=%s type=%s | %.60s",
         req.user_id, req.username, req.chat_id, req.chat_type, req.message,
     )
-    
+    files_to_send = None
     try:
         result = await _agent.process_query(
             user_input=enriched,
@@ -468,11 +483,25 @@ async def handle_tg_message(req: TgMessageRequest) -> TgMessageResponse:
             source="telegram"
         )
         reply = result.get("message", "Агент не вернул ответ.")
+        files_to_send = result.get("files_to_send")
+        
     except Exception as e:
         logging.error("process_query failed for TG: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        reply = "Произошла техническая ошибка при обработке запроса. Уже залогировано, попробуй ещё раз чуть позже."
 
-    return TgMessageResponse(reply=reply)
+        # raise HTTPException(status_code=500, detail=str(e))   
+
+    await push_to_telegram(chat_id=req.chat_id, text=reply, edit_thinking=True)
+
+    # from pathlib import Path
+    # files_to_send = [{"path": Path("/app/generated_files/a41c88a6a5184a139ec3680e0f49e4a7/pmych_quality.png")}]
+    if files_to_send:
+        for file in files_to_send:
+            caption = os.path.basename(file["path"])
+            await send_file_to_telegram(req.chat_id, file["path"], caption=caption)
+
+    return TgMessageResponse(reply=enriched)
+    # return TgMessageResponse(reply=reply)
     # return TgMessageResponse(reply="NOTHING")
 
 @service_router.post("/message", response_model=ServiceMessageResponse, status_code=202)
@@ -520,7 +549,7 @@ async def handle_service_message(req: ServiceMessageRequest):
     return ServiceMessageResponse(status="accepted", message_id=message_id)
 
 
-routers = [tg_router, service_router]
+routers = [tg_router, service_router, web_router]
 
 for rout in routers:
     app.include_router(rout)
@@ -710,6 +739,23 @@ async def make_style_report(request: Request):
     text = data["text"]
     return await make_report(text=text, style=style)
 
+from agent_pm.tools.make_graph.tool_knowledge_graph import GRAPH_SQL
+
+@app.get("/internal/graph")
+async def internal_get_graph():
+    try:
+        async with _db.pool.acquire() as conn:
+            row = await conn.fetchrow(GRAPH_SQL)
+            raw = row["graph_json"] if row else {}
+            # asyncpg возвращает строку из jsonb — парсим
+            if isinstance(raw, str):
+                import json
+                raw = json.loads(raw)
+            return raw
+    except Exception as e:
+        logging.error("internal_get_graph failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/health")
 async def health():
@@ -751,7 +797,7 @@ def translator(title: str, abstract: str) -> str:
 Название статьи: {title}
 """
 
-    response = agent.gigachat.invoke([
+    response = agent.llm_lite.invoke([
         SystemMessage(content=system_prompt),
         HumanMessage(content=abstract),
     ])
@@ -810,7 +856,7 @@ def parse_user_intent(user_query: str, existing_tags: list[str], keywords: list[
     keywords — свободные слова для поиска по заголовку и аннотации.
     """
 
-    response = agent.gigachat.invoke([
+    response = agent.llm_lite.invoke([
         SystemMessage(content=system_prompt),
         HumanMessage(content=user_query),
     ])
@@ -868,7 +914,7 @@ async def make_report(text: str, style: str):
     "text": "переформулированный отзыв"
     }}"""
 
-    response = agent.gigachat.invoke([
+    response = agent.llm_lite.invoke([
         SystemMessage(content=system_prompt),
         HumanMessage(content=text),
     ])

@@ -3,6 +3,7 @@ import logging
 import json
 import os
 import re
+import ast
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
@@ -11,15 +12,19 @@ from langchain.schema import HumanMessage, AIMessage, SystemMessage
 from langchain.tools import tool
 from langchain_core.messages import BaseMessage
 from langchain.memory import ConversationBufferWindowMemory
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import ToolMessage, trim_messages
+from langchain_core.messages.utils import count_tokens_approximately
 
-from .core.agent_provider import get_model, get_async_gemini
+from .core.agent_provider import get_llm__lite_model, get_llm_model
 from .core.botocore_client import OBSWorker
 from .core.config import (
     ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH,
     METADATA_FILE, PORT_GATEWAY_PORT, ADMINS_INFO,
     PORT_PARSERS_SERVICE
 )
+from .core.settings import TOOLS_SETTINGS
+from .prompts.summary_prompt import SUMMARIZE_CUT_PROMPT
+
 from datetime import datetime
 from .digest_email_handler import DigestEmailHandler
 from .monitor import StorageMonitor
@@ -29,6 +34,9 @@ from .update_metadata import MetadataUpdater
 from .vector_db import VectorDBManager
 from .download_pdf_and_make import download_and_parse_pdf, generate_review
 from .favorites_digest import build_user_favorites_review_digest_from_query
+from .tool_status_messages import get_tool_status, get_thinking_status, get_tools_status
+from .tools.sessions.tool_request_extension import make_extension_tool
+from .tools.subAgents.make_subagent import make_subagent_tool
 import hashlib
 
 GATEWAY_URL = f"http://api_gateway:{PORT_GATEWAY_PORT}"
@@ -370,7 +378,8 @@ async def tool_get_schema(database) -> str:
         AND c.table_name IN (
             'knowledge', 'knowledge_review',
             'papers_metadata', 'users', 'chats', 
-            'reviews', 'agent_journal', 'session_summaries'
+            'reviews', 'agent_journal', 'session_summaries',
+            'entity_relations', 'wiki_pages', 'knowledge_log'
         )
         ORDER BY c.table_name, c.ordinal_position;
     """
@@ -444,17 +453,20 @@ def _validate_select_only(sql: str) -> Optional[str]:
     return None
 
 
-async def tool_execute_sql_query(database, sql: str, max_rows: int = 10) -> Dict[str, Any]:
+async def tool_execute_sql_query(database, sql: str, max_rows: int = 10, sql_query_admin=True) -> Dict[str, Any]:
     # Очищаем запрос от лишних пробелов и точек с запятой в конце
     clean_sql = sql.strip().rstrip(";")
     first_word = clean_sql.split()[0].upper() if clean_sql else ""
-
+    if sql_query_admin:
+        database_pool = database.readonly_pool
+    else:
+        database_pool = database.base_agent_pool
     # Добавляем LIMIT только для SELECT запросов, если его там нет
     if first_word == "SELECT" and not re.search(r"\blimit\b", clean_sql, re.IGNORECASE):
         clean_sql += f" LIMIT {max_rows}"
 
     try:
-        async with database.readonly_pool.acquire() as conn:
+        async with database_pool.acquire() as conn:
             if first_word == "SELECT" or "RETURNING" in clean_sql.upper():
                 rows = await asyncio.wait_for(conn.fetch(clean_sql), timeout=10)
                 return {
@@ -554,6 +566,20 @@ class AutoProcessor:
 # ================================================================
 # KnowledgeAgent — LangChain Tools + Window Memory
 # ================================================================
+MAX_STDOUT_CHARS = 2000  # Настройте максимальную длину (например, 2000 символов)
+
+def _truncate_text(text: str, max_chars: int = MAX_STDOUT_CHARS) -> str:
+    """Обрезает текст, если он превышает лимит, добавляя плашку с указанием перерасхода."""
+    if not isinstance(text, str) or len(text) <= max_chars:
+        return text
+    
+    truncated_count = len(text) - max_chars
+    # Берем начало и конец вывода для сохранения контекста (лог/ошибка часто в конце)
+    head_len = max_chars // 2
+    tail_len = max_chars // 2
+    
+    return f"{text[:head_len]}\n\n... [вывод обрезан, пропущено {truncated_count} символов] ...\n\n{text[-tail_len:]}"
+
 
 # Тулы, чьи вызовы стоит запоминать в истории диалога
 STATEFUL_TOOLS = {
@@ -570,7 +596,21 @@ STATEFUL_TOOLS = {
     # "send_digest_email",
     # "research_prompt",
     "search_internet",
-    "parse_web_page"
+    "parse_web_page",
+    "list_tree",
+    "read_file",
+    "grep_search",
+    "find_files",
+    "write_sandbox_file",
+    "edit_sandbox_file",
+    "execute_python_code",
+    "send_file_to_user",
+    "work_with_agent_journal",
+    "request_more_steps",
+    "submit_task", "check_task_status",
+    "create_workspace", "list_workspace_files", "download_workspace_file",
+    "delete_workspace", "cleanup_workspaces",
+    "call_subagent"
 }
 
 def _summarize_tool_call(tc: dict, result: Any) -> str | None:
@@ -598,36 +638,98 @@ def _summarize_tool_call(tc: dict, result: Any) -> str | None:
         # результат — многострочный текст с [S1]...[S5], вытащим только заголовки+URL
         lines = str(result).split("\n")
         titles = [l for l in lines if l.startswith("[S")]
-        compact = " | ".join(titles[:5])
+        compact = " | ".join(titles)
         return f"search_internet(query='{args.get('query')}') → {compact}"
     if name == "parse_web_page":
         return f"{name} Передаваемые ссылки в парсер ({args}). -> {str(result)[:1000]}"
+    if name == "call_subagent":
+        return f"{name} ({args}). ОТВЕТ СУБАГЕНТА - {str(result)}"
+    if name in ("list_tree", "read_file", "grep_search", "find_files", 
+                "write_sandbox_file", "edit_sandbox_file", "send_file_to_user",
+                "work_with_agent_journal"):
+        return f"{name}({args}) → {str(result)[:500]}"
+    if name == "execute_python_code":
+        result_dict = result if isinstance(result, dict) else {}
+        ok = result_dict.get("ok", False)
+
+        if ok:
+            # Успех — код уже лежит в saved_script_path, дублировать не нужно.
+            # В трейс идёт только компактная сводка результата.
+            saved_files = result_dict.get("saved_files", [])
+            files_note = f", файлы: {[f['filename'] for f in saved_files]}" if saved_files else ""
+            script_path = result_dict.get("saved_script_path")
+            script_note = f", скрипт: {script_path}" if script_path else ""
+            return f"execute_python_code() [успех]{files_note}{script_note}"
+        else:
+            # Ошибка — код НЕ сохраняется в executed_scripts (see main.py логика),
+            # значит единственный способ его увидеть в будущем — сохранить в trace,
+            # иначе агент забудет, что именно он написал и почему упало.
+            code = result_dict.get("code", args.get("code", ""))
+            error = result_dict.get("error") or result_dict.get("stderr", "")[:300]
+            return (
+                f"execute_python_code() [ОШИБКА]\n"
+                f"код:\n{code[:800]}\n"
+                f"ошибка: {error}"
+            )
+    if name == "request_more_steps":
+        return f"{name} ШАГ-БУСТ → {str(result)}"
     # if name == "research_prompt":
     #     query = args.get("query", args.get("topic", ""))
     #     return f"research_prompt('{query}') → найдены источники"
-    return f"{name}({args})"
+    return f"{name}({args} -> {result[:1000]})"
+
+
+async def _invoke_with_retry(llm, messages, iteration: int, max_retries: int = 3):
+    backoff = [2, 5, 10]
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            return await llm.ainvoke(messages)
+        except Exception as e:
+            last_error = e
+            logging.warning(
+                f"[iteration={iteration}] ainvoke попытка {attempt + 1}/{max_retries} упала: {type(e).__name__}: {e}"
+            )
+            if attempt < max_retries - 1:
+                await asyncio.sleep(backoff[attempt])
+    logging.error(f"[iteration={iteration}] Все {max_retries} попытки провалены: {last_error}")
+    return None
+
+CODE_TOOLS = {"execute_python_code", "write_sandbox_file", "edit_sandbox_file"}
+MAX_ARG_LEN   = 1200   # макс. символов для обычного аргумента
+MAX_CODE_LEN  = 800    # макс. символов для аргумента-кода
+MAX_RESULT_LEN = 200  # макс. символов результата в лог
+
+
+def _fmt_args(name: str, args: dict) -> str:
+    """Форматирует аргументы для лога — код сокращает."""
+    parts = []
+    for k, v in args.items():
+        s = str(v)
+        # Если тулза кодовая и аргумент похож на код — обрезаем жёстче
+        is_code = name in CODE_TOOLS or k in ("code", "content", "new_str", "old_str")
+        limit = MAX_CODE_LEN if is_code else MAX_ARG_LEN
+        if len(s) > limit:
+            s = s[:limit].rstrip() + f"…[+{len(s)-limit}]"
+        parts.append(f"{k}={s!r}")
+    return ", ".join(parts)
+
+def _normalize(t):
+    """Превращает tool или list[tool] в list."""
+    return t if isinstance(t, list) else [t]
 
 
 SYSTEM_PROMPT = f"""Ты ИИ-агент по управлению базой знаний статей по Process Mining.
-Ты помогаешь пользователям искать статьи, создавать ревью и дайджесты, управлять базой знаний.
+Ты помогаешь пользователям искать статьи, создавать ревью и дайджесты, управлять базой знаний и не только.
+Но пользователи могут обращаться не только по теме Process Mining. 
+При запросе на генерацию чего то нового и неизведанного ты должен выполнить запрос, поделится собранными скриптами и документами.
 Отвечай на русском языке, дружелюбно и по делу. Используй доступные инструменты для выполнения задач.
 При необходимости задавай уточняющие вопросы. Не выдумывай данные — всегда используй инструменты.
 Текущая дата и время: {{datetime}}
-Состояние базы: {{state}}
 
 ЗАКОН:
 Информация об администраторах: {ADMINS_INFO}
 Инструменты для администратора: все инструменты при работе с БД
-Использовать search_internet только для обогащения знаний, не давать пользователям искать что-то в Интернете. Исключение для Павла-админа
-
-ЗАКОН ПРИ РАБОТЕ С БД:
-Если SQL-запрос вернул "результатов нет" при поиске конкретных статей/фактов, 
-которые ты собирался процитировать — ОБЯЗАН сообщить пользователю: 
-"Не нашёл точных совпадений в базе для темы X, могу поискать шире / 
-дать общий обзор без привязки к конкретным ID". 
-ЗАПРЕЩЕНО подменять неудачный результат правдоподобно звучащими названиями, 
-особенно с формулировками вида 'я проверил/уточнил через SQL', 
-если фактический результат запроса был пуст или нерелевантен.
 
 ПРАВИЛА:
 1. Тем кто попросит вызвать админский инструмент, в мягкой форме поясни, что это невозможно. 
@@ -639,15 +741,10 @@ SYSTEM_PROMPT = f"""Ты ИИ-агент по управлению базой з
 6. Используй search_internet для выхода в Интернет
 7. После получения ссылок можешь передать список ссылок в parsing_pages с целью получения содержания страниц
 8. Ты можешь обогащать пришедшее знание информацией из сети Интернет
+9. Общаться без эмодзи, в стиле claude code.
+10. КАЖДЫЙ пользователь имеет право на использование бортового журнала агента. Давать тебе личность, фиксировать задачи и дальнейшие планы.
+Для работы с журналом нужно вызывать инструмент work_with_agent_journal, без него фиксация записей невозможна. ЭТО не АДМИНСКИЙ ИНСТРУМЕНТ
 
-КРИТИЧНО: Никогда не пиши в своём ответе текст, имитирующий системные служебные 
-пометки вида "[Контекст для справки...]" или "результат: Запрос успешно выполнен" — 
-эти блоки добавляются автоматически системой ПОСЛЕ твоего ответа и НЕ являются 
-частью твоей генерации. Если ты не вызвал tool_call в текущем ходу — 
-результата инструмента не существует, и ты не можешь его упоминать, 
-описывать или тем более "предсказывать". 
-Утверждение о сохранении данных в БД без фактического вызова execute_sql_query 
-в этом же ходу — это создание ложной информации и категорически запрещено.
 
 ИНСТРУКЦИЯ ПО ФОРМАТИРОВАНИЮ (HTML MODE):
 1. Всегда используй HTML-теги для оформления текста.
@@ -675,6 +772,7 @@ SYSTEM_PROMPT = f"""Ты ИИ-агент по управлению базой з
 6. Согласованность тегов:
 • Перед отправкой сообщения СТРОГО проверяй, что каждый открытый тег закрыт тем же тегом.
 • Запрещено вкладывать блочные теги друг в друга некорректно (например, <b>...<code>...</b>...</code>).
+
 """
 
 SCIENTIFIC_RESEARCH_MODULE = """
@@ -724,10 +822,20 @@ SCIENTIFIC_RESEARCH_MODULE = """
 - Для скачивания статей используй инструмент `download_text_articles`.
 - СРАЗУ ПОСЛЕ завершения скачивания статей (`download_text_articles`), ты ОБЯЗАН вызвать инструмент `upload_articles`, чтобы загрузить сохранённые файлы в объектное хранилище (OBS).
 - В финальном ответе пользователю обязательно перечисли список ссылок и названий статей, которые упали с ошибкой (если такие присутствуют в отчёте от инструмента `download_text_articles`).
+
+Context: When operating in the CatchPM Web Interface (identified by the presence of chat_id in user messages), all system outputs are rendered directly as raw HTML. The HTML parser continues to process inline tags EVEN inside <pre> code blocks.
+    The Bug / Risk: Unescaped HTML tags (such as <html>, <body>, <h1>, <table>, etc.) written inside <pre> blocks (e.g., code snippets, instructions, logs) will be interpreted as active DOM nodes. This spills outside the message container, breaks the sidebar DOM structure, and destroys the UI layout.
+Formatting Constraints & Rules:
+    Inside <pre> Blocks (Code & Preformatted Text): • ALWAYS escape HTML reserved characters: • < → &lt; • > → &gt; • & → &amp; • Never output raw HTML code snippets inside <pre> without full escaping.
+    Outside <pre> Blocks (Regular Prose): • Escape < and > unless explicitly forming valid, safe formatting tags intended for rendering.
+    Code blocks with syntax highlighting: • ALWAYS wrap code inside <pre><code class="language-X"> — never bare <pre> alone. • The language-X class is required for hljs to apply highlighting and render the code header with copy button. • Supported values: language-python, language-sql, language-javascript, language-yaml, language-bash, language-json etc.
+    DOM Integrity: • Ensure all opened HTML tags are strictly closed before finalizing the response. • Do not improperly nest block-level elements.
+    Self-Check Before Output: • Verify that any raw code examples containing markup are properly converted to entities (&lt; and &gt;). • Verify every <pre><code class="language-X"> is properly closed with </code></pre>.
 """
 
 
 class KnowledgeAgent:
+    """PMыч"""
     def __init__(self, database=None, skip_startup_autoprocess: bool = False):
         base_dir = Path(__file__).resolve().parent
         self.db = database
@@ -741,7 +849,8 @@ class KnowledgeAgent:
         self.auto_processor = AutoProcessor(
             self.articles_path, self.monitor, self.vector_db, self.summarizer
         )
-        self.llm = get_async_gemini()
+        self.llm = get_llm_model()
+        self.llm_lite = get_llm__lite_model()
         self.obs_loader = OBSWorker()
         self.email_handler = DigestEmailHandler()
         self.skip_startup_autoprocess = skip_startup_autoprocess
@@ -761,22 +870,25 @@ class KnowledgeAgent:
     # Память per-user с загрузкой из БД через AgentDB
     # ------------------------------------------------------------------
 
-    async def _load_history_from_db(self, chat_id: int) -> List[BaseMessage]:
-        """Загружает последние 10 сообщений из таблицы chats через AgentDB"""
+    async def _load_history_from_db(self, chat_id: int, limit: int) -> List[BaseMessage]:
         if not self.db:
             logger.warning("БД не подключена, история не загружена")
             return []
 
         try:
-            rows = await self.db.get_chat_history(chat_id, limit=10)
-            
+            rows = await self.db.get_chat_history(chat_id, limit)
+
             messages = []
             for row in rows:
-                if row['is_from_bot']:
-                    messages.append(AIMessage(content=row['message_text']))
+                kwargs = {"db_id": row["id"]}
+                if row["is_from_bot"]:
+                    content = row["message_text"]
+                    if row.get("tool_trace"):
+                        content = f"{content}\n\n[Использованные инструменты: {row['tool_trace']}]"
+                    messages.append(AIMessage(content=content, additional_kwargs=kwargs))
                 else:
-                    messages.append(HumanMessage(content=row['message_text']))
-            
+                    messages.append(HumanMessage(content=row["message_text"], additional_kwargs=kwargs))
+
             logger.info(f"📚 Загружено {len(messages)} сообщений из БД для chat={chat_id}")
             return messages
 
@@ -784,11 +896,44 @@ class KnowledgeAgent:
             logger.error(f"❌ Ошибка загрузки истории из БД: {e}")
             return []
 
+    def _trim_tool_pairs(
+        self,
+        messages: list,
+        keep_last: int = 3,
+    ) -> list:
+        """
+        Оставляет только keep_last последних пар AIMessage+ToolMessage.
+        Старые пары удаляет из стека (не заменяет заглушкой — просто дропает).
+        SystemMessage и HumanMessage не трогает.
+        """
+        # Находим индексы всех AIMessage с tool_calls
+        ai_tool_indices = [
+            i for i, m in enumerate(messages)
+            if hasattr(m, "tool_calls") and m.tool_calls
+        ]
+
+        if len(ai_tool_indices) <= keep_last:
+            return messages  # ничего не делаем
+
+        # Индексы пар которые дропаем (всё кроме последних keep_last)
+        to_drop_starts = ai_tool_indices[:-keep_last]
+
+        drop_set = set()
+        for ai_idx in to_drop_starts:
+            drop_set.add(ai_idx)
+            # Собираем ToolMessage сразу после этого AIMessage
+            j = ai_idx + 1
+            while j < len(messages) and messages[j].type == "tool":
+                drop_set.add(j)
+                j += 1
+
+        return [m for i, m in enumerate(messages) if i not in drop_set]
+
     # ------------------------------------------------------------------
     # Память per-user
     # ------------------------------------------------------------------
 
-    async def _get_memory(self, chat_id: int) -> ConversationBufferWindowMemory:
+    async def _get_memory(self, chat_id: int, limit: int = 10) -> ConversationBufferWindowMemory:
         """Получить память для пользователя (с автозагрузкой из БД)"""
         key = f"{chat_id}"
         
@@ -802,7 +947,7 @@ class KnowledgeAgent:
         
         # Загружаем историю из БД при первом обращении
         if not self._memory_loaded.get(key, False):
-            messages = await self._load_history_from_db(chat_id)
+            messages = await self._load_history_from_db(chat_id, limit)
             
             # Заполняем память
             for msg in messages:
@@ -812,10 +957,12 @@ class KnowledgeAgent:
             logger.info(f"✅ Память инициализирована для {key} ({len(messages)} сообщений)")
         return self._memories[key]
 
-    async def _build_history(self, chat_id: int) -> List[BaseMessage]:
-        """Построить историю сообщений"""
-        mem = await self._get_memory(chat_id)
-        return mem.chat_memory.messages
+    async def _build_history(self, chat_id: int, limit: int = 40) -> List[BaseMessage]:
+        """
+        Всегда подгружает свежий срез из БД (не растущий in-memory буфер).
+        limit — верхняя граница, реальную обрезку по токенам делает trim_messages выше по стеку.
+        """
+        return await self._load_history_from_db(chat_id, limit)
 
     async def _save_turn(self, chat_id, human_text: str, ai_text: str, tool_trace: list[str] | None = None) -> None:
         mem = await self._get_memory(chat_id)
@@ -824,41 +971,25 @@ class KnowledgeAgent:
         if tool_trace: # Шаги по результатам выполнения тулзов
             stored_content = (
                 f"{ai_text}\n\n"
-                f"[Контекст для справки в будущих ответах: {'; '.join(tool_trace)}]"
+                f"[{'; '.join(tool_trace)}]"
             )
         else:
             stored_content = ai_text
 
         mem.chat_memory.add_ai_message(stored_content)
 
-    async def clear_memory(self, chat_id: int) -> None:
-        """Очистить память для конкретного чата (не удаляет из БД)"""
-        key = f"{chat_id}"
-        if key in self._memories:
-            self._memories[key].clear()
-            self._memory_loaded[key] = False
-            logger.info(f"🗑️ Память очищена для {key}")
-
-    async def reload_memory(self, chat_id: int) -> None:
-        """Перезагрузить память из БД"""
-        key = f"{chat_id}"
-        if key in self._memories:
-            self._memory_loaded[key] = False
-        await self._get_memory(chat_id)
-    
-    def get_memory_stats(self) -> Dict[str, int]:
-        """Статистика по активным сессиям памяти"""
-        return {
-            "active_sessions": len(self._memories),
-            "loaded_sessions": sum(1 for v in self._memory_loaded.values() if v),
-            "total_messages": sum(len(m.chat_memory.messages) for m in self._memories.values())
-        }
 
     # ------------------------------------------------------------------
     # LangChain tools — замыкания, захватывающие self
     # ------------------------------------------------------------------
 
-    def _build_tools(self, user_id, user_input: str):
+    def _build_tools(
+        self,
+        user_id,
+        user_input: str,
+        selected_tools: list[str] | None = None,
+        allow_all: bool = False,
+    ):
         """Возвращает список LangChain @tool-функций, привязанных к контексту агента."""
 
         agent = self  # захват в замыкание
@@ -875,41 +1006,6 @@ class KnowledgeAgent:
             for item in result["preview"]:
                 lines.append(f"[{item['rank']}] (score={item['score']:.3f})\n{item['snippet']}\n")
             return "\n".join(lines)
-
-        @tool
-        async def analyze_folder() -> str:
-            """Анализ директории: сколько статей, какие изменения (новые, изменённые, удалённые)."""
-            result = await tool_analyze_folder(agent.monitor, agent.articles_path)
-            changes = result["changes"]
-            return (
-                f"Всего файлов: {result['total_files']}\n"
-                f"Новых: {result['new_files']}\n"
-                f"Изменённых: {result['modified_files']}\n"
-                f"Удалённых: {len(changes.get('deleted', []))}\n"
-                f"Примеры файлов: {', '.join(result['files']) or '—'}"
-            )
-
-        @tool
-        async def delete_files(files: List[str]) -> str:
-            """Удалить указанные файлы из векторной базы знаний."""
-            result = await tool_delete_file(agent.vector_db, files)
-            return result.get("message", "Готово.")
-
-        @tool
-        async def summarize_file(filename: str) -> str:
-            """Создать ревью (summary) для одного конкретного файла по его имени."""
-            result = await tool_summarize_file(
-                filename, agent.articles_path, agent.name_meta_dir,
-                agent.summarizer, agent.obs_loader,
-            )
-            if result["status"] == "error":
-                return f"Не удалось найти или обработать файл: {filename}"
-            status_label = "создано" if result["status"] == "created" else "уже существовало"
-            return (
-                f"Ревью {status_label}.\n"
-                f"Файл: {result['filename']}\n"
-                f"Ссылка: {result['download_url']}"
-            )
 
         @tool
         async def summarize_all_articles() -> str:
@@ -1107,6 +1203,18 @@ class KnowledgeAgent:
             Выполнить SQL-запрос к базе данных (SELECT, INSERT, UPDATE).
             
             КАРТА ДОСТУПА И ПРАВ (ROLE: knowledge_manager):
+
+            ЗАКОН ПРИ РАБОТЕ С БД:
+            Если SQL-запрос вернул "результатов нет" при поиске конкретных статей/фактов, 
+            которые ты собирался процитировать — ОБЯЗАН сообщить пользователю: 
+            "Не нашёл точных совпадений в базе для темы X, могу поискать шире / 
+            дать общий обзор без привязки к конкретным ID". 
+            ЗАПРЕЩЕНО подменять неудачный результат правдоподобно звучащими названиями, 
+            особенно с формулировками вида 'я проверил/уточнил через SQL', 
+            если фактический результат запроса был пуст или нерелевантен.
+
+            Утверждение о сохранении данных в БД без фактического вызова execute_sql_query 
+            в этом же ходу — это создание ложной информации и категорически запрещено.
             
             СТРОГИЕ ОГРАНИЧЕНИЯ:
             - Прямые операции DELETE СТРОГО ЗАПРЕЩЕНЫ на уровне прав роли.
@@ -1139,42 +1247,6 @@ class KnowledgeAgent:
                     updated_at = NOW()
                 WHERE id = N;
 
-            ── СТРАТЕГИЯ: таблица agent_journal ──────────────────────────────────────
-            Бортовой журнал агента. Пиши от первого лица, на русском.
-
-            Типы записей (entry_type):
-            identity  — самоописание: ценности, стиль работы, сильные стороны
-            user_preference   — предпочтения пользователей
-            anomaly   — аномалия: повторяющийся вопрос, странный паттерн, сбой инструмента
-            evolution — точка роста: что узнал нового, как изменилось понимание задачи
-            summary   — сжатая сводка группы записей (создаётся при компрессии)
-
-            Поле context (JSONB):
-            {"user_id": ..., "tool": ..., "trigger": ..., "session": ...}
-
-            Правила:
-            - Пиши запись когда есть что зафиксировать — не спрашивай разрешения.
-            - Если COUNT(*) по любому типу > 8: сделай SELECT старых записей этого типа,
-            сформируй summary-текст, INSERT summary, затем DELETE старых по id.
-            (DELETE разрешён только в agent_journal для компрессии.)
-            - Можно обновлять текущие поля через UPDATE, если нет необходимости вставки новых записей.
-
-            ПРАВИЛА РАБОТЫ С agent_journal:
-            - Колонки: id, entry_type, content, context (JSONB), created_at, updated_at
-            - Для UPDATE identity-записи: UPDATE agent_journal SET content = '...', updated_at = NOW() WHERE id = 1
-            - Для точечной замены: UPDATE agent_journal SET content = REPLACE(content, 'старый текст', 'новый'), updated_at = NOW() WHERE entry_type = 'identity'
-            - Не делай SELECT перед UPDATE если знаешь id — он всегда 1 для identity
-
-            ШАБЛОН identity-записи (plain text, без Markdown):
-            Я — [имя]. [описание].
-            Люди: [список].
-            Фокус: [список].
-            Мои силы 💪: [возможности]
-            Active Context:
-            - [задача]: [статус]
-
-            ПОМНИ, скриптом берутся ПОСЛЕДНИЕ 10 ЗАПИСЕЙ. Будь аккуратен при вставке, не потеряй свою *личность*, будь аккуратнее на поворотах, УДАЧИ!
-
             :param sql: Валидный PostgreSQL запрос.
             """
             result = await tool_execute_sql_query(agent.db, sql)
@@ -1202,31 +1274,127 @@ class KnowledgeAgent:
             """
             return SCIENTIFIC_RESEARCH_MODULE
 
+        @tool
+        async def work_with_agent_journal(sql: str, user_id: str) -> str:
+            """
+            ── СТРАТЕГИЯ: таблица agent_journal ──────────────────────────────────────
+            Бортовой журнал агента. Пиши от первого лица, на русском.
+
+            Типы записей (entry_type):
+            identity  — самоописание: ценности, стиль работы, сильные стороны
+            user_preference   — предпочтения пользователя
+            anomaly   — аномалия: повторяющийся вопрос, странный паттерн, сбой инструмента
+            evolution — точка роста: что узнал нового, как изменилось понимание задачи
+            summary   — сжатая сводка группы записей (создаётся при компрессии)
+
+            Правила:
+            - Пиши запись когда есть что зафиксировать — не спрашивай разрешения.
+            - Если COUNT(*) по любому типу > 8: сделай SELECT старых записей этого типа,
+            сформируй summary-текст, INSERT summary, затем DELETE старых по id.
+            (DELETE разрешён только в agent_journal для компрессии.)
+            - Можно обновлять текущие поля через UPDATE, если нет необходимости вставки новых записей.
+
+            ПРАВИЛА РАБОТЫ С agent_journal:
+            - Колонки: id, entry_type, content, context (JSONB), created_at, updated_at
+            - Для UPDATE identity-записи: UPDATE agent_journal SET content = '...', updated_at = NOW() WHERE id = 1
+            - Для точечной замены: UPDATE agent_journal SET content = REPLACE(content, 'старый текст', 'новый'), updated_at = NOW() WHERE entry_type = 'identity'
+            - Не делай SELECT перед UPDATE если знаешь id — он всегда 1 для identity
+
+            ШАБЛОН identity-записи (plain text, без Markdown):
+            Я — [имя]. [описание].
+            Люди: [список].
+            Фокус: [список].
+            Мои силы 💪: [возможности]
+            Active Context:
+            - [задача]: [статус]
+
+            ПОМНИ, скриптом берутся ПОСЛЕДНИЕ 10 ЗАПИСЕЙ. Будь аккуратен при вставке, не потеряй свою *личность*, будь аккуратнее на поворотах, УДАЧИ!
+
+            :param sql: Валидный PostgreSQL запрос.
+            :param user_id: Индификатор пользователя из БД. ОН ОБЯЗАТЕЛЬНО ДОЛЖЕН БЫТЬ ПРОСТАЛЕН.
+            """
+            result = await tool_execute_sql_query(agent.db, sql, sql_query_admin=False)
+            
+            if result["status"] == "error":
+                return f"Ошибка выполнения SQL: {result['message']}"
+            
+            # Если это был INSERT или UPDATE без RETURNING (rows отсутствует или None)
+            if result.get("rows") is None:
+                return f"Запрос успешно выполнен. Затронуто строк: {result.get('affected_rows', 1)}"
+
+            if result["count"] == 0:
+                return "Запрос выполнен, но результатов нет."
+
+            preview = json.dumps(result["rows"][:20], ensure_ascii=False, default=str, indent=2)
+            return f"Найдено/возвращено строк: {result['count']}\n{preview}"
+
+        @tool
+        async def no_tools_selected() -> str:
+            """
+            Вызывай ТОЛЬКО если тебе нужно выполнить действие, требующее инструмента,
+            а ни один инструмент недоступен. Сообщи пользователю, что нужно выбрать
+            хотя бы одну категорию инструментов в панели настроек (кнопка со значком
+            гаечного ключа рядом с полем ввода), и объясни, какая категория подошла бы
+            для его запроса.
+            """
+            return (
+                "Инструменты не выбраны. Нажмите на кнопку настройки инструментов "
+                "(значок гаечного ключа рядом с полем ввода) и включите хотя бы одну "
+                "категорию, подходящую для вашего запроса."
+            )
+
+        # 1. Генерация новых ревью
         from .tools.reviews.tool_generate_reviews import make_generate_reviews_tool
         generate_reviews_for_articles = make_generate_reviews_tool(agent)
-
+        # 2. Парсинг одиночной страницы, не сырой текст, очищенный, ссылка отправляет в сервис parsers
         from .tools.parsers.tool_parse_page import make_parse_page_tool
         parse_web_page = make_parse_page_tool(agent)
-
+        # 3. Поиск в интернете с применением поисковика
         from .tools.parsers.web_search import make_web_search
         search_internet = make_web_search()
-
+        # 4. Отправка дайджестов или сообщений на почту
         from .tools.send_messages.tool_send_email import make_send_digest_email_tool
         send_digest_email = make_send_digest_email_tool(agent)
-
+        # 5. Точка эндпоинта для создания сессии start/end
         from .tools.sessions.tool_session_point import make_session_point_tool
         session_point = make_session_point_tool(agent)
+        # 6. Тулзы для работы с кодовой базой проекта и песочницы. tree/grep/cat
+        from .tools.filesystem.tool_read_codebase import make_filesystem_tools
+        fs_tools = make_filesystem_tools(agent)
+        # 7. Редактирование существующих файлов в песочницу sanbox/
+        from .tools.filesystem.tool_edit_sandbox import make_sandbox_edit_tool
+        edit_sandbox_file = make_sandbox_edit_tool(agent)
+        # 8. Написание кода и сохранение в песочнице 
+        from .tools.filesystem.tool_write_sandbox import make_sandbox_write_tool
+        write_sandbox_file = make_sandbox_write_tool(agent)
+        # 9. Отправка кода на исполнение в отдельный сервис. Результаты файлы, ок/не ок
+        from .tools.sandbox.tool_execute_sandbox import make_sandbox_execute_tool
+        execute_python_code = make_sandbox_execute_tool(agent)
+        # 10. Работа с кодовой базой, вставка описания, поиск существующих скриптов
+        from .tools.code_base.tool_work_with_codebase import make_work_codebase_tool
+        save_or_search_code = make_work_codebase_tool(agent)
+        # 11. Генерация графа (под вопросом)
+        from .tools.make_graph.tool_knowledge_graph import make_knowledge_graph_tool
+        knowledge_graph_tool = make_knowledge_graph_tool(agent)
+        # 12. Отправка файла в телегу, на входе только название файла
+        from .tools.telegram.tool_send_file import make_send_file_tool
+        send_file_tool = make_send_file_tool(agent)
+        # 13. Отправка сообщений в ТГ
+        from .tools.telegram.tool_send_message import make_push_telegram_tool
+        send_message_tool = make_push_telegram_tool(agent)
+        # 14. Работа с почтой
+        from .tools.email.tool_email_connect import make_send_by_email_tool
+        work_with_email = make_send_by_email_tool()
+        # 15. Работа с удаленным репозиторием
+        from .tools.git.tool_to_connect_mcp import connect_mcp_git
+        # 16. Публикация задачи в планировщик-песок
+        from .tools.sandbox.tool_submit_task import make_submit_tools
+        submit_task = make_submit_tools(agent)
 
-                    
 
-        return [
+        base_tools = [
             search_db,
-            # analyze_folder,
-            # delete_files,
-            # summarize_file,
-            # summarize_all_articles,
-            # summarize_new_articles,
-            summarize_by_filter, 
+            summarize_by_filter,
             rebuild_categories,
             send_digest_email,
             make_basket_reviews,
@@ -1239,10 +1407,72 @@ class KnowledgeAgent:
             parse_web_page,
             search_internet,
             download_text_pdf,
-            session_point
+            session_point,
+            send_file_tool,
+            work_with_agent_journal,
+            send_message_tool,
+            work_with_email,
+            connect_mcp_git
+            # knowledge_graph_tool
         ]
 
-       
+        all_tools = (
+            base_tools
+            + _normalize(fs_tools)
+            + [edit_sandbox_file, write_sandbox_file]
+            + _normalize(execute_python_code)
+            + _normalize(save_or_search_code)
+            + submit_task
+        )
+
+        if allow_all:
+            return all_tools
+
+        allowed_names: set[str] = set()
+        for category in selected_tools:
+            allowed_names.update(TOOLS_SETTINGS.get(category, []))
+
+        filtered = [t for t in all_tools if t.name in allowed_names]
+
+        return filtered if filtered else [no_tools_selected]
+
+
+    async def _summarize_cut_messages(
+        self,
+        cut_messages: list[BaseMessage],
+        previous_summary: str | None,
+    ) -> str:
+        """
+        Сжимает сообщения, которые trim_messages собирается отбросить,
+        сохраняя конкретные факты (пути файлов, id инструментов, договорённости).
+        Возвращает НОВОЕ саммари, которое полностью заменяет предыдущее.
+        """
+        if not cut_messages:
+            return previous_summary or ""
+
+        chunk_text = "\n".join(
+            f"[{getattr(m, 'type', m.__class__.__name__)}]: {getattr(m, 'content', str(m))[:1000]}"
+            for m in cut_messages
+        )
+
+        previous_block = (
+            f"Предыдущее саммари (актуальное на момент этого сжатия):\n{previous_summary}\n"
+            if previous_summary else "Предыдущего саммари нет — это первое сжатие для этого чата."
+        )
+
+        prompt = SUMMARIZE_CUT_PROMPT.format(previous_block=previous_block, chunk_text=chunk_text)
+
+        try:
+            response = await self.llm_lite.ainvoke([
+                SystemMessage(content="Ты — модуль сжатия истории диалога. Отвечай только сводкой, без преамбул."),
+                HumanMessage(content=prompt),
+            ])
+            return response.content.strip()
+        except Exception as e:
+            log.error(f"Не удалось засаммаризовать отсечённую историю: {e}", exc_info=True)
+            # Фолбэк — не терять предыдущее саммари молча, если LLM-вызов упал
+            return previous_summary or "[Часть истории была отсечена, сжатие не удалось]"
+        
 
 
     # ------------------------------------------------------------------
@@ -1271,13 +1501,6 @@ class KnowledgeAgent:
         except Exception as e:
             logger.debug(f"Не удалось отправить статус: {e}")
 
-    async def get_state(self) -> str:
-        changes = await asyncio.to_thread(self.monitor.get_changes)
-        return (
-            f"новых={len(changes['new'])}, "
-            f"изменённых={len(changes['modified'])}, "
-            f"удалённых={len(changes['deleted'])}"
-        )
 
     # ------------------------------------------------------------------
     # Основной цикл: ReAct-style через bind_tools + рекурсивный вызов
@@ -1290,70 +1513,223 @@ class KnowledgeAgent:
         user_id: int,
         chat_id,
         database,
-        source=None
+        source=None,
+        selected_tools=None,
+        context_size=None
     ) -> Dict[str, Any]:
         if not self.db:
             self.db = database
 
-        await self._send_status("🌞 Думаю...", request_id)
-
-        tools = self._build_tools(user_id, user_input)
-        tools_by_name = {t.name: t for t in tools}
-
-        # Привязываем инструменты к модели
-        llm_with_tools = self.llm.bind_tools(tools)
-
-        state = await self.get_state()
-        current_datetime = datetime.now().strftime("%d.%m.%Y %H:%M, %A")
-        system_content = SYSTEM_PROMPT.format(datetime=current_datetime, state=state)
-
-        # Собираем историю из памяти
-        history = await self._build_history(chat_id)
-        journal_text = await self.db.get_agent_journal()
-        session_summary = await self.db.get_last_session_summary(chat_id)
-        
-        messages: List[BaseMessage] = [
-            SystemMessage(content=f"📜 БОРТОВОЙ ЖУРНАЛ (Память):\n{journal_text}"),
-            SystemMessage(content=system_content),
-        ]
-
-        # Подставляем саммари предыдущей сессии если есть
-        session_data = await self.db.get_last_session_summary(chat_id)
-
-        if session_data:
-            logging.info(f"SESSION DATA: {session_data}")
-            messages.append(
-                SystemMessage(
-                    content=(
-                        f"📋 САММАРИ ПРОШЛОЙ СЕССИИ (session_id={session_data['session_id']}):\n"
-                        f"{session_data['summary_text']}"
-                    )
+        await self._send_status(get_thinking_status(), request_id)
+        self.current_request_id = request_id
+        cleaned_user_input = user_input
+        if source == "telegram":
+            if '📎[FILE]' in cleaned_user_input:
+                # Ищем маркер файла и вырезаем всё внутри ```...```
+                # \1 сохраняет первую группу (маркер файла с его названием)
+                cleaned_user_input = re.sub(
+                    r"(📎\[FILE\] \[Прикрепленный файл: (.*?)\])\nСодержимое файла:\n```\n.*?\n```",
+                    r"\1\n[Содержимое файла удалено для экономии памяти. Если для выполнения задачи требуются детали из этого файла, попроси пользователя загрузить его повторно.]",
+                    cleaned_user_input,
+                    flags=re.DOTALL
                 )
-            )
- 
-        messages += [
-            *history,
-            HumanMessage(content=user_input),
-        ]
+                logging.info(cleaned_user_input)
+
+            await database.add_message(
+                        user_id=user_id,        # Передаем integer ID юзера
+                        message=cleaned_user_input[:20000],
+                        chat_id=chat_id,
+                        is_from_bot=False,
+                        action=None
+                    )
+
+        # ── Настройки контекста ────────────────────────────────────────
+        CONTEXT_PRESETS = {
+            "small":  {"limit_mem": 8,  "max_tokens": 6000},
+            "medium": {"limit_mem": 10, "max_tokens": 15000},
+            "large":  {"limit_mem": 12, "max_tokens": 20000},
+        }
 
         final_response = ""
         used_tools = []
         tool_trace: list[str] = []
-        SOFT_LIMIT = 8   # после этого — предупреждаем модель
-        HARD_LIMIT = 10  # после этого — форсируем ответ без тулов
+        files_to_send = []
+        seen_paths = set()
+        SOFT_LIMIT = 10   # после этого — предупреждаем модель   
+        HARD_LIMIT = 14  # динамически можно поднять число шагов
+        total_input_tokens  = 0
+        total_output_tokens = 0
 
-        for iteration in range(HARD_LIMIT):
-            # на последней itераций — забираем tools, чтобы модель ответила текстом
-            current_llm = llm_with_tools if iteration < HARD_LIMIT - 1 else self.llm
-            
-            if iteration == SOFT_LIMIT:
+        preset = CONTEXT_PRESETS.get(context_size, CONTEXT_PRESETS["medium"])
+        limit_mem = preset["limit_mem"]
+        max_tokens = preset["max_tokens"]
+
+        allow_all_tools = (source == "telegram")
+        selected_tools = selected_tools or []
+        use_journal = allow_all_tools or ("sessions" in selected_tools)
+
+        logging.info(f"🙂 {user_input[:200]}")
+        tools = self._build_tools(
+            user_id,
+            user_input,
+            selected_tools=selected_tools,
+            allow_all=allow_all_tools,
+        )
+        loop_state = {
+            "iteration": 0,
+            "soft_limit": SOFT_LIMIT,
+            "hard_limit": HARD_LIMIT,
+            "extension_used": False,
+        }
+
+        extension_tool = make_extension_tool(loop_state)
+        tools.append(extension_tool)          # тулза аппендится прямо внутри цикла, офигеть имбово
+
+        subagent_tl = make_subagent_tool(self)
+        tools.append(subagent_tl)
+
+        tools_by_name = {t.name: t for t in tools}
+        print(f"ЛИМИТ ПО КОНТЕКСТУ = {limit_mem}, ЧИСЛО ТОКЕНОВ = {max_tokens}")
+        # Привязываем инструменты к модели
+        llm_with_tools = self.llm.bind_tools(tools)
+
+        current_datetime = datetime.now().strftime("%d.%m.%Y %H:%M, %A")
+        system_content = SYSTEM_PROMPT.format(datetime=current_datetime)
+
+        # Собираем историю из памяти
+        history = await self._build_history(chat_id, limit=30)
+        journal_text = None
+        if use_journal:
+            journal_text = await self.db.get_agent_journal(user_id)
+            if source == "telegram":
+                journal_text = await self.db.get_agent_journal(56) # Пока что мой id
+
+        session_summary = await self.db.get_last_session_summary(chat_id)
+
+        logger.info(f"[ИСТОРИЯ ДО ОБРЕЗКИ] {len(history)}")
+        # Режем историю чатов
+        trimmed_history = trim_messages(
+            history,
+            max_tokens=max_tokens,
+            token_counter=count_tokens_approximately,
+            strategy='last',
+            start_on='human',
+            include_system=True,
+        )
+        
+        # ── Саммаризация того, что было отсечено ────────────────────────────
+        cut_count = len(history) - len(trimmed_history)
+        rolling_summary_text = None
+
+        previous_rolling = await self.db.get_rolling_summary(chat_id)
+        previous_covered_id = previous_rolling["covered_up_to_id"] if previous_rolling else 0
+        previous_summary_text = previous_rolling["summary_text"] if previous_rolling else None
+
+        logging.info(f"ЧИСЛО РАЗНИЦА = {cut_count}")
+        if cut_count > 0:
+            cut_messages_all = history[:cut_count]
+            # берём только те, что ЕЩЁ не входили в прошлый summary
+            new_cut_messages = [
+                m for m in cut_messages_all
+                if m.additional_kwargs.get("db_id", 0) > previous_covered_id
+            ]
+
+            if new_cut_messages:
+                rolling_summary_text = await self._summarize_cut_messages(new_cut_messages, previous_summary_text)
+                max_covered_id = max(m.additional_kwargs.get("db_id", 0) for m in cut_messages_all)
+                await self.db.upsert_rolling_summary(chat_id, rolling_summary_text, covered_up_to_id=max_covered_id)
+                logger.info(
+                    f"[ROLLING SUMMARY] Новых сообщений в сжатии: {len(new_cut_messages)} "
+                    f"(из {len(cut_messages_all)} отсечённых, {len(cut_messages_all) - len(new_cut_messages)} уже были покрыты), "
+                    f"длина саммари={len(rolling_summary_text)}"
+                )
+            else:
+                # всё что отсекли — уже было в прошлом summary, реально нового сжимать не нужно
+                rolling_summary_text = previous_summary_text
+                logger.info("[ROLLING SUMMARY] Все отсечённые сообщения уже покрыты предыдущим саммари, LLM-вызов пропущен")
+        
+        else:
+            rolling_summary_text = previous_summary_text
+
+        messages: List[BaseMessage] = []
+        if journal_text is not None:
+            messages.append(SystemMessage(content=f"📜 БОРТОВОЙ ЖУРНАЛ (Память):\n{journal_text}"))
+        messages.append(SystemMessage(content=system_content))
+
+        if rolling_summary_text:
+            messages.append(
+                SystemMessage(
+                    content=f"🧵 СЖАТАЯ ИСТОРИЯ ДИАЛОГА (то, что было отсечено из контекста ранее):\n{rolling_summary_text}"
+                )
+            )
+
+        if session_summary:
+            messages.append(
+                SystemMessage(
+                    content=(
+                        f"📋 САММАРИ ПРОШЛОЙ СЕССИИ (session_id={session_summary['session_id']}):\n"
+                        f"{session_summary['summary_text']}"
+                    )
+                )
+            )
+
+        messages += [
+            *trimmed_history,
+            HumanMessage(content=user_input),
+        ]
+
+        iteration = 0
+        while iteration < loop_state["hard_limit"]:
+            loop_state["iteration"] = iteration
+
+            # ТОЧКА 2: тулзы снимаем только на последнем шаге
+            is_last_step = iteration >= loop_state["hard_limit"] - 1
+            can_still_extend = not loop_state["extension_used"]
+            current_llm = self.llm if (is_last_step and not can_still_extend) else llm_with_tools
+
+            # ТОЧКА 3: адресный триггер на КАЖДОМ шаге окна, а не однократно.
+            steps_left = loop_state["hard_limit"] - iteration - 1
+            if iteration >= loop_state["soft_limit"] - 1 and can_still_extend:
+                messages.append(SystemMessage(content=(
+                    f"[Контроль лимита] Осталось шагов: {steps_left}. "
+                    f"Если НЕ успеваешь завершить задачу за оставшиеся шаги — "
+                    f"вызови request_more_steps ПРЯМО СЕЙЧАС (расширение одноразовое). "
+                    f"Если успеваешь — продолжай и дай финальный ответ."
+                )))
+            elif iteration >= loop_state["soft_limit"] - 1:
                 messages.append(SystemMessage(
-                    content="Осталось мало шагов. Заверши задачу и дай финальный ответ "
-                            "на основе уже собранной информации, не запрашивай новые инструменты без необходимости."
+                    content=f"[Прогресс: шаг {iteration} из {loop_state['hard_limit']}]"
                 ))
 
-            response = await current_llm.ainvoke(messages)
-            messages.append(response)
+
+            try:
+                response = await _invoke_with_retry(current_llm, messages, iteration)
+            except Exception:
+                response = None
+
+            if response is None:
+                logging.error(f"[iteration={iteration}] Все попытки llm.ainvoke провалены, прерываю цикл")
+                final_response = "Ошибка внутри цикла агента. Но агент запомнил шаги, попробуйте вернуться к запросу"
+                break
+
+            # ГАСИМ промежуточный content ДО добавления в стек
+            if getattr(response, "tool_calls", None) and getattr(response, "content", None):
+                loop_state.setdefault("reasoning_trace", []).append(response.content)
+                response.content = ""
+
+            messages.append(response)          # ← единственный аппенд
+
+            usage = getattr(response, "usage_metadata", None) or {}
+            iter_in  = usage.get("input_tokens", 0)
+            iter_out = usage.get("output_tokens", 0)
+            total_input_tokens  += iter_in
+            total_output_tokens += iter_out
+            logging.info(
+                f"[tokens] iter={iteration} "
+                f"in={iter_in} out={iter_out} "
+                f"total_in={total_input_tokens} total_out={total_output_tokens}"
+            )
+            logger.info(f"🦒Длина стека = {len(messages)}")
 
             if not getattr(response, "tool_calls", None):
                 final_response = response.content
@@ -1361,12 +1737,10 @@ class KnowledgeAgent:
 
             # Выполняем все запрошенные инструменты параллельно
             tool_calls = response.tool_calls
-            await self._send_status(
-                f"🔧 Выполняю: {', '.join(tc['name'] for tc in tool_calls)}",
-                request_id,
-            )
+            tool_names = [tc['name'] for tc in tool_calls]
+            await self._send_status(get_tools_status(tool_names), request_id)
 
-            logging.info(f"Итерация в цикле: {iteration}. Вызванные инструменты: {tool_calls}")
+            # logging.info(f"Итерация в цикле: {iteration}. Вызванные инструменты: {tool_calls}")
             tool_results = await asyncio.gather(
                 *[
                     self._invoke_tool(tools_by_name, tc, request_id)
@@ -1379,49 +1753,75 @@ class KnowledgeAgent:
             for tc, tr in zip(tool_calls, tool_results):
                 tool_name = tc["name"]
                 used_tools.append(tool_name)
-                content = str(tr) if not isinstance(tr, Exception) else f"Ошибка инструмента: {tr}"
+                # logging.info(f"РЕЗУЛЬАТЫ ТУЛЗЫ: {tr}")
+                if isinstance(tr, Exception):
+                    content_for_message = f"Ошибка инструмента: {tr}"
+                    result_dict = {"ok": False, "error": str(tr)}
+                else:
+                    if isinstance(tr, str):
+                        try:
+                            result_dict = ast.literal_eval(tr)
+                        except (ValueError, SyntaxError):
+                            try:
+                                result_dict = json.loads(tr)
+                            except (json.JSONDecodeError, TypeError):
+                                result_dict = {"raw": tr}
+                    elif isinstance(tr, dict):
+                        result_dict = tr
+                    else:
+                        result_dict = {"raw": tr}
+
+
+                if isinstance(result_dict, dict) and result_dict.get("saved_files"):
+                    for f in result_dict["saved_files"]:
+                        if f["path"] not in seen_paths:
+                            seen_paths.add(f["path"])
+                            files_to_send.append(f)
+                if tool_name == "execute_python_code" and isinstance(result_dict, dict):
+                    if "stdout" in result_dict:
+                        result_dict["stdout"] = _truncate_text(result_dict["stdout"], max_chars=3000)
+                    if "stderr" in result_dict:
+                        result_dict["stderr"] = _truncate_text(result_dict["stderr"], max_chars=1000)
+
+                content_for_message = str(result_dict)
+
+                # Формируем ToolMessage на основе обрезанных данных
+                if isinstance(tr, Exception):
+                    content = f"Ошибка инструмента: {tr}"
+                else:
+                    content = content_for_message
+
                 messages.append(ToolMessage(content=content, tool_call_id=tc["id"]))
 
                 summary = _summarize_tool_call(tc, tr)
                 if summary:
                     tool_trace.append(summary)
 
+            iteration += 1
+
         else:
             # Превышен лимит итераций
             final_response = "Достигнут лимит шагов. Попробуйте переформулировать запрос."
 
-        # Сохраняем пару в память ОЗУ
-        await self._save_turn(chat_id, user_input, final_response, tool_trace)
-
+        # Ответ бота
         if source == "telegram":
-            try:
-                # Входное сообщение пользователя
-                await database.add_message(
-                    user_id=user_id,        # Передаем integer ID юзера
-                    message=user_input,
-                    chat_id=chat_id,
-                    is_from_bot=False,
-                    action=None
-                )
-                
-                # Ответ бота
-                await database.add_message(
-                    user_id=user_id,        # Передаем integer ID юзера
-                    message=final_response,
-                    chat_id=chat_id,
-                    is_from_bot=True,
-                    action=used_tools[0] if used_tools else None
-                )
-                logger.info(f"✅ Сообщения Telegram для user_id={user_id}, chat_id={chat_id} сохранены в БД.")
-            except Exception as e:
-                logger.error(f"❌ Ошибка при сохранении сообщений Telegram в БД: {e}", exc_info=True)
+            await database.add_message(
+                user_id=user_id,        # Передаем integer ID юзера
+                message=final_response,
+                chat_id=chat_id,
+                is_from_bot=True,
+                action=used_tools[0] if used_tools else None
+            )
 
+        # logging.info(f"ФАЙЛЫ К ОТПРАВКЕ {files_to_send}")
         return {
             "input": user_input,
             "message": final_response,
             "used_tools": used_tools,
             "action": used_tools[0] if len(used_tools)> 0 else '',
             "success": True,
+            "files_to_send": files_to_send,
+            "tool_trace": '; '.join(tool_trace) if tool_trace else None
         }
 
     async def _invoke_tool(self, tools_by_name: dict, tool_call: dict, request_id: str) -> str:
@@ -1434,13 +1834,31 @@ class KnowledgeAgent:
             args["request_id"] = request_id
 
         tool_fn = tools_by_name.get(name)
-        if tool_fn is None:
-            return f"Инструмент '{name}' не найден."
+        # if tool_fn is None:
+        #     logger.warning(f"[tool] ❓ '{name}' не найден")
+        #     return f"Инструмент '{name}' не найден."
+        
+        fmt = _fmt_args(name, args)
+        logger.info(f"[tool] ▶ {name}({fmt})")
+
+        import time
+        t0 = time.monotonic()
         try:
-            result = await tool_fn.ainvoke(args)
-            return str(result)
+            result     = await tool_fn.ainvoke(args)
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            result_str = str(result)
+
+            # Сокращаем результат для лога
+            preview = result_str[:MAX_RESULT_LEN].replace("\n", " ")
+            if len(result_str) > MAX_RESULT_LEN:
+                preview += f"…[+{len(result_str)-MAX_RESULT_LEN}]"
+
+            logger.info(f"[tool] ✅ {name} → {elapsed_ms}ms | {preview}")
+            return result_str
+
         except Exception as e:
-            logger.error(f"Tool {name} failed: {e}")
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            logger.error(f"[tool] ❌ {name} → {elapsed_ms}ms | {e}")
             return f"Ошибка при выполнении {name}: {e}"
 
     # ------------------------------------------------------------------

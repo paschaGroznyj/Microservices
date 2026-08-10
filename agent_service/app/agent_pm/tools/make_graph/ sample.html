@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PMыч — Граф знаний</title>
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #0d1117;
+  color: #c9d1d9;
+  overflow: hidden;
+  height: 100vh;
+}
+#header {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  background: #161b22; border-bottom: 1px solid #30363d;
+  padding: 12px 20px; display: flex; align-items: center; gap: 16px;
+}
+#header h1 { font-size: 18px; color: #58a6ff; }
+#stats { font-size: 13px; color: #8b949e; }
+#network { width: 100%; height: 100%; }
+#sidebar {
+  position: fixed; top: 60px; right: -440px; width: 420px; height: calc(100vh - 60px);
+  background: #161b22; border-left: 1px solid #30363d;
+  padding: 20px; overflow-y: auto; transition: right 0.3s; z-index: 90;
+}
+#sidebar.open { right: 0; }
+#sidebar h2 { font-size: 16px; color: #58a6ff; margin-bottom: 12px; }
+#sidebar .field { margin-bottom: 14px; }
+#sidebar .label { font-size: 11px; color: #8b949e; text-transform: uppercase; margin-bottom: 4px; }
+#sidebar .value { font-size: 14px; color: #c9d1d9; }
+#sidebar .text-preview {
+  background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+  padding: 12px; font-size: 13px; line-height: 1.5; max-height: 300px; overflow-y: auto;
+  white-space: pre-wrap; word-wrap: break-word;
+}
+.badge {
+  display: inline-block; padding: 2px 8px; border-radius: 12px;
+  font-size: 11px; font-weight: 600;
+}
+#filters {
+  position: fixed; bottom: 20px; left: 20px; z-index: 100;
+  background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+  padding: 12px 16px; font-size: 13px;
+}
+#filters label { display: flex; align-items: center; gap: 6px; margin: 4px 0; cursor: pointer; }
+#close-sidebar {
+  position: absolute; top: 16px; right: 16px;
+  background: none; border: none; color: #8b949e; font-size: 20px; cursor: pointer;
+}
+.legend-dot {
+  display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px;
+}
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>🧠 PMыч — Граф знаний</h1>
+  <span id="stats">17 знаний · 21 связь · 4 wiki-страницы</span>
+</div>
+
+<div id="network"></div>
+
+<div id="sidebar">
+  <button id="close-sidebar" onclick="document.getElementById('sidebar').classList.remove('open')">✕</button>
+  <div id="sidebar-content"></div>
+</div>
+
+<div id="filters">
+  <b style="color:#58a6ff">Фильтры:</b><br>
+  <label><input type="checkbox" id="f-user" checked> <span class="legend-dot" style="background:#56d364"></span>user-stated</label>
+  <label><input type="checkbox" id="f-agent" checked> <span class="legend-dot" style="background:#58a6ff"></span>agent-inference</label>
+  <label><input type="checkbox" id="f-doc" checked> <span class="legend-dot" style="background:#f0883e"></span>document</label>
+  <label><input type="checkbox" id="f-wiki" checked> <span class="legend-dot" style="background:#d29922"></span>wiki-pages</label>
+</div>
+
+<script>
+// ===== ДАННЫЕ ИЗ БАЗЫ =====
+const knowledgeData = [
+  
+];
+
+const wikiData = [
+  
+];
+
+const relationData = [
+  
+];
+
+// ===== VIS-NETWORK =====
+const colors = {
+  "user-stated":     { bg: "#1a4731", border: "#56d364" },
+  "agent-inference": { bg: "#0d2240", border: "#58a6ff" },
+  "document":        { bg: "#4a2c0e", border: "#f0883e" },
+  "third-party":     { bg: "#3a1a47", border: "#bc8cff" },
+  "wiki":            { bg: "#4a3c0e", border: "#d29922" }
+};
+
+const visNodes = [];
+
+knowledgeData.forEach(k => {
+  visNodes.push({
+    id: k.id,
+    label: "k" + k.id,
+    title: k.title,
+    group: k.provenance,
+    value: 10 + k.importance * 30,
+    shape: "dot",
+    color: {
+      background: colors[k.provenance]?.bg || "#30363d",
+      border: colors[k.provenance]?.border || "#8b949e",
+      highlight: { background: colors[k.provenance]?.border || "#58a6ff", border: "#ffffff" }
+    },
+    font: { color: "#c9d1d9", size: 12 },
+    shadow: { enabled: true, color: "rgba(0,0,0,0.3)", size: 10, x: 0, y: 0 },
+    fullData: k
+  });
+});
+
+wikiData.forEach(w => {
+  visNodes.push({
+    id: w.id,
+    label: "📖 " + w.title.substring(0, 20) + "...",
+    title: w.title,
+    group: "wiki",
+    value: 15 + w.importance * 30,
+    shape: "star",
+    color: {
+      background: colors["wiki"].bg,
+      border: colors["wiki"].border,
+      highlight: { background: "#d29922", border: "#ffffff" }
+    },
+    font: { color: "#d29922", size: 11 },
+    shadow: { enabled: true, color: "rgba(210,153,34,0.4)", size: 15, x: 0, y: 0 },
+    fullData: w,
+    isWiki: true
+  });
+});
+
+const visEdges = [];
+
+relationData.forEach(r => {
+  visEdges.push({
+    from: r.from,
+    to: r.to,
+    label: r.type,
+    value: r.score,
+    width: 1 + r.score * 3,
+    arrows: "to",
+    color: { color: "#30363d", highlight: "#58a6ff", opacity: 0.6 },
+    font: { color: "#8b949e", size: 9, strokeWidth: 0, background: "#161b22" },
+    smooth: { type: "curvedCW", roundness: 0.15 }
+  });
+});
+
+// Wiki → knowledge (пунктир)
+wikiData.forEach(w => {
+  w.sourceIds.forEach(sid => {
+    visEdges.push({
+      from: w.id,
+      to: sid,
+      dashes: true,
+      width: 1,
+      color: { color: "#d29922", opacity: 0.3, highlight: "#d29922" },
+      smooth: { type: "curvedCW", roundness: 0.2 }
+    });
+  });
+});
+
+const container = document.getElementById('network');
+const data = { nodes: new vis.DataSet(visNodes), edges: new vis.DataSet(visEdges) };
+
+const options = {
+  physics: {
+    barnesHut: {
+      gravitationalConstant: -8000,
+      centralGravity: 0.3,
+      springLength: 160,
+      springConstant: 0.04,
+      damping: 0.4
+    }
+  },
+  interaction: { hover: true, tooltipDelay: 120 },
+  layout: { improvedLayout: true }
+};
+
+const network = new vis.Network(container, data, options);
+
+// ===== SIDEBAR =====
+network.on("click", function(params) {
+  if (params.nodes.length > 0) {
+    const nodeId = params.nodes[0];
+    const node = visNodes.find(n => n.id == nodeId);
+    if (node && node.fullData) showSidebar(node);
+  }
+});
+
+function showSidebar(node) {
+  const sidebar = document.getElementById('sidebar');
+  const content = document.getElementById('sidebar-content');
+  const d = node.fullData;
+  const isWiki = node.isWiki;
+
+  content.innerHTML =
+    '<h2>' + (isWiki ? '📖 Wiki-page' : '💡 Knowledge') + ' #' + d.id + '</h2>' +
+    '<div class="field"><div class="label">Заголовок</div><div class="value">' + d.title + '</div></div>' +
+    '<div class="field"><div class="label">Тип (provenance)</div><div class="value"><span class="badge badge-' + d.provenance + '">' + d.provenance + '</span></div></div>' +
+    '<div class="field"><div class="label">Важность</div><div class="value">' + d.importance.toFixed(2) + ' / 1.0</div></div>' +
+    '<div class="field"><div class="label">Источник</div><div class="value">' + (d.source || '—') + '</div></div>' +
+    '<div class="field"><div class="label">Содержание</div><div class="text-preview">' + d.text + '</div></div>' +
+    (isWiki && d.sourceIds ? '<div class="field"><div class="label">Source IDs (knowledge)</div><div class="value">[' + d.sourceIds.join(', ') + ']</div></div>' : '');
+  sidebar.classList.add('open');
+}
+
+// ===== ФИЛЬТРЫ =====
+function applyFilters() {
+  const filters = {
+    "user-stated": document.getElementById('f-user').checked,
+    "agent-inference": document.getElementById('f-agent').checked,
+    "document": document.getElementById('f-doc').checked,
+    "wiki": document.getElementById('f-wiki').checked
+  };
+  visNodes.forEach(node => {
+    const visible = filters[node.group] !== false;
+    network.body.data.nodes.update({ id: node.id, hidden: !visible });
+  });
+}
+document.querySelectorAll('#filters input').forEach(input => {
+  input.addEventListener('change', applyFilters);
+});
+</script>
+</body>
+</html>

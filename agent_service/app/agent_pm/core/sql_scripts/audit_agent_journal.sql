@@ -28,7 +28,7 @@ BEGIN
     
     RETURN OLD; -- Разрешаем продолжить удаление
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 3. Привязываем триггер к таблице agent_journal

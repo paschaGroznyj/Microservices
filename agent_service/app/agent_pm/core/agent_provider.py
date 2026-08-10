@@ -1,19 +1,8 @@
 from functools import lru_cache
-from langchain.chat_models import GigaChat
 from langchain_gigachat.embeddings import GigaChatEmbeddings
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from .config import CLOUD_LLM_ACCESS_KEY
 
-
-@lru_cache
-def get_model(temperature: float = 0.5):
-    return GigaChat(
-        credentials="none",
-        auth_url="http://token_service:9004/api/v2/oauth", # Данный адрес контейнера является единственным источником истины для получения токена внутри ВМ cloud
-        verify_ssl_certs=False,
-        model="GigaChat-2-Max",
-        temperature=temperature
-    )
 
 @lru_cache
 def get_embedd_model():
@@ -30,9 +19,22 @@ def get_embedd_model():
 )
 
 @lru_cache
-def get_async_gemini():
+def get_llm__lite_model():
     return ChatOpenAI(
-        model="zai-org/GLM-5.2",
+        model="google/gemini-3-flash-preview",
+        base_url="https://foundation-models.api.cloud.ru/v1",
+        api_key=CLOUD_LLM_ACCESS_KEY,
+        model_kwargs={
+            "extra_headers": {
+                "X-Enable-Prompt-Cache": "true"
+            }
+        }
+    )
+
+@lru_cache
+def get_llm_model():
+    return ChatOpenAI(
+        model="anthropic/claude-sonnet-4.6",
         base_url="https://foundation-models.api.cloud.ru/v1",
         api_key=CLOUD_LLM_ACCESS_KEY,
         model_kwargs={

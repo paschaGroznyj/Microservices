@@ -57,6 +57,8 @@ def make_parse_page_tool(agent):
                 urls=["https://example1/", "https://example2/"],
                 headers={"User-Agent": "Mozilla/5.0", "Accept-Language": "ru-RU"}
             )
+        
+        Если не получается пробить защиту сайта, пробуй подменять заголовки, УСПЕХОВ!
         """
         parsers_url = agent.services["parsers"]["url"]
  

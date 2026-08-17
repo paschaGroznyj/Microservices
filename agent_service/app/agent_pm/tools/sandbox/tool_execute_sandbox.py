@@ -383,11 +383,24 @@ def make_sandbox_execute_tool(agent):
         """
         Выполняет системные команды в изолированной песочнице без использования оболочки (shell).
         Подходит для запуска сторонних бинарников (например, docker, curl, git).
-        
+
         ОБРАТИ ВНИМАНИЕ: Команды нужно передавать строго списком аргументов!
         Например: ["docker", "run", "--rm", "alpine", "echo", "hello"]
 
-        Если планируешь работать с файлами в рамках сессии, нужно создавать workspace через create_workspace (файлы внутри области будут жить только 3600 сек!)
+        Доступные возможности:
+        - git clone / git pull / git push (интернет есть, токены через env)
+        - docker build / docker run / docker compose up (DinD, демон доступен)
+        - curl, wget — сетевые запросы
+        - apt-get install — установка пакетов в рамках сессии
+
+        Если планируешь работать с файлами в рамках сессии, нужно создавать workspace
+        через create_workspace (файлы внутри области будут жить только 3600 сек!)
+
+        Docker-специфика:
+        - Демон доступен через unix:///var/run/docker.sock
+        - Для сборки образа: ["docker", "build", "-t", "my-image", "/path/to/context"]
+        - Для compose: ["docker", "compose", "-f", "/path/compose.yml", "up", "-d"]
+        - Kafka bootstrap внутри DinD: 172.28.0.10:9092
         """
         run_id = uuid.uuid4().hex
         _ensure_save_dir()

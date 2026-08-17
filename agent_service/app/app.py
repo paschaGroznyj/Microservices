@@ -303,7 +303,7 @@ async def lifespan(app: FastAPI):
     await db.init_agent_admin_pool() 
     await db.init_agent_base_pool()
 
-    from agent_pm.task_events_consumer import start_task_events_consumer
+    from agent_pm.consumers.task_events_consumer import start_task_events_consumer
 
 
     # result = await db.search_code_library("tabler icons", tags=["tabler"])

@@ -265,18 +265,11 @@ def make_subagent_tool(agent_instance):
                 "[SubAgent] '%s' итерация %d/%d",
                 agent_name, iteration + 1, capped_iter,
             )
-            if iteration == capped_iter - 1:
-                messages.append(SystemMessage(content=(
-                    "Ты на последнем шаге! Верни ответ Оркестратору, опиши, что успел, а что не успел."
-                    "Он в ожидании!"
-                )))
-
-            # На последней итерации снимаем тулзы — форсируем финальный текст.
-            is_last     = (iteration == capped_iter - 1)
-            current_llm = agent.llm if (is_last and filtered) else llm_with_tools
 
             try:
-                response = await current_llm.ainvoke(messages)
+                # Всегда используем llm_with_tools, чтобы не ломать схему API
+                # наличием ToolMessage в истории без объявленных инструментов.
+                response = await llm_with_tools.ainvoke(messages)
             except Exception as e:
                 logger.error(
                     "[SubAgent] '%s' ошибка LLM на итерации %d: %s",
@@ -286,14 +279,13 @@ def make_subagent_tool(agent_instance):
                 final_answer = f"Ошибка LLM субагента '{agent_name}': {e}"
                 break
 
-            # Гасим промежуточный content при наличии tool_calls —
-            # точно так же, как делает process_query
+            # Гасим промежуточный content при наличии tool_calls
             if getattr(response, "tool_calls", None) and getattr(response, "content", None):
                 response.content = ""
 
             messages.append(response)
 
-            # Нет tool_calls — субагент дал финальный ответ
+            # Нет tool_calls — субагент дал финальный ответ (штатный выход)
             if not getattr(response, "tool_calls", None):
                 final_answer = response.content or ""
                 logger.info(
@@ -312,10 +304,7 @@ def make_subagent_tool(agent_instance):
                 t_args = tc.get("args", {})
 
                 if t_name not in filtered_map:
-                    msg = (
-                        f"Инструмент '{t_name}' не входит в allowed_tools "
-                        f"субагента '{agent_name}'"
-                    )
+                    msg = f"Инструмент '{t_name}' не входит в allowed_tools субагента '{agent_name}'"
                     logger.warning("[SubAgent] '%s': %s", agent_name, msg)
                     return tc, msg
 
@@ -340,7 +329,6 @@ def make_subagent_tool(agent_instance):
             for tc, raw in pairs:
                 t_id = tc.get("id", f"call_{iteration}_{tc['name']}")
 
-                # Нормализуем результат в строку
                 if isinstance(raw, Exception):
                     content = json.dumps({"error": str(raw)}, ensure_ascii=False)
                 elif isinstance(raw, str):
@@ -353,27 +341,44 @@ def make_subagent_tool(agent_instance):
                 messages.append(ToolMessage(content=content, tool_call_id=t_id))
 
         else:
-            # for-else: max_iter исчерпан без break — берём последний AI-контент
-            last_ai = next(
-                (m for m in reversed(messages) if isinstance(m, AIMessage)),
-                None,
-            )
-            final_answer = (
-                (last_ai.content or "") if last_ai
-                else f"Субагент '{agent_name}' не вернул ответ (max_iter={capped_iter} исчерпан)."
-            )
+            # for-else: max_iter исчерпан без break. 
+            # Это значит, что на последней итерации агент вызвал тулзы, мы их выполнили, 
+            # но цикл закончился, и агент не успел прочитать результаты!
+            # Делаем ОДИН финальный вызов для синтеза ответа.
             logger.warning(
-                "[SubAgent] '%s' исчерпал max_iter=%d",
+                "[SubAgent] '%s' исчерпал max_iter=%d, запрашиваем финальный ответ",
                 agent_name, capped_iter,
             )
+            await send("Формирование финального ответа...")
+
+            # Используем HumanMessage, чтобы не нарушать чередование ролей
+            messages.append(HumanMessage(content=(
+                "ВНИМАНИЕ: Лимит шагов исчерпан. Обязательно верни текстовый ответ Оркестратору "
+                "на основе уже собранных данных. Опиши, что успел узнать, а что нет. "
+                "НЕ вызывай больше никаких инструментов!"
+            )))
+
+            try:
+                # Обязательно вызываем с тулзами, чтобы API не ругался на историю ToolMessage
+                final_resp = await llm_with_tools.ainvoke(messages)
+                
+                # Если упрямая модель всё равно вернула tool_calls вместо текста
+                if not final_resp.content and getattr(final_resp, "tool_calls", None):
+                    final_answer = f"Субагент '{agent_name}' не уложился в отведенное время."
+                else:
+                    final_answer = final_resp.content or f"Субагент '{agent_name}' не вернул ответ."
+                    
+            except Exception as e:
+                logger.error("[SubAgent] '%s' ошибка финализации: %s", agent_name, e)
+                final_answer = f"Ошибка финализации субагента: {e}"
 
         await send(f"{_STATUS_DONE} ({iteration + 1} итераций)")
 
         logger.info(
-            "[SubAgent] '%s' завершён | итераций=%d/%d | ответ=%.120s",
-            agent_name, iteration + 1, capped_iter, final_answer,
+            "[SubAgent] '%s' завершён | ответ=%.120s",
+            agent_name, final_answer,
         )
-        return final_answer or f"Субагент '{agent_name}' не вернул ответ."
+        return final_answer
 
     return call_subagent
 

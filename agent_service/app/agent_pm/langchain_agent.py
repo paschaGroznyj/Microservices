@@ -610,7 +610,7 @@ STATEFUL_TOOLS = {
     "submit_task", "check_task_status",
     "create_workspace", "list_workspace_files", "download_workspace_file",
     "delete_workspace", "cleanup_workspaces",
-    "call_subagent"
+    "call_subagent", "execute_shell_commands"
 }
 
 def _summarize_tool_call(tc: dict, result: Any) -> str | None:
@@ -1800,8 +1800,21 @@ class KnowledgeAgent:
             iteration += 1
 
         else:
-            # Превышен лимит итераций
-            final_response = "Достигнут лимит шагов. Попробуйте переформулировать запрос."
+            messages.append(HumanMessage(content=(
+                "ВНИМАНИЕ: Лимит шагов исчерпан. Обязательно верни текстовый ответ Пользователю"
+            )))
+
+            try:
+                result_response = await llm_with_tools.ainvoke(messages)
+                
+                # Если упрямая модель всё равно вернула tool_calls вместо текста
+                if not result_response.content and getattr(result_response, "tool_calls", None):
+                    final_response = f"Агент не уложился в отведенное время и пошел за инструментами. Попробуйте повторить запрос."
+                else:
+                    final_response = result_response.content or f"Достигнут лимит шагов. Попробуйте повторить запрос."
+                    
+            except Exception as e:
+                final_response = f"Ошибка агента: это не хеппи-энд"
 
         # Ответ бота
         if source == "telegram":

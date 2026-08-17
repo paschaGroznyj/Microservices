@@ -30,7 +30,7 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
     "parallelism": [
         "create_workspace",
         "list_workspace_files",
-        "download_workspace_file"
+        "download_workspace_file",
         "delete_workspace",
         "cleanup_workspaces",
         "submit_task",
@@ -49,9 +49,10 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
         "write_sandbox_file",
         "grep_search",
         "find_files",
-        "push_message_to_telegram",
+        # "push_message_to_telegram",
         "work_with_email",
-        "connect_mcp_git"
+        "connect_mcp_git",
+        "execute_shell_commands",
     ],
 }
 

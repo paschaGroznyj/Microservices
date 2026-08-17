@@ -103,18 +103,34 @@ def _save_output_files(files: list[dict], run_id: str) -> tuple[list[dict], list
     return saved, warnings
 
 
-async def _call_sandbox(code: str, timeout: int, stdin: str = "", workspace_id: str = None) -> dict:
+async def _call_sandbox(
+    code: str | None = None, 
+    commands: list[str] | None = None, 
+    is_shell: bool = False, 
+    timeout: int = 30, 
+    stdin: str = "", 
+    workspace_id: str | None = None
+) -> dict:
     try:
+        payload = {
+            "code": code,
+            "commands": commands,
+            "is_shell": is_shell,
+            "timeout": timeout,
+            "stdin": stdin,
+            "workspace_id": workspace_id
+        }
+        
         async with httpx.AsyncClient(timeout=timeout + HTTP_TIMEOUT_BUFFER) as client:
             resp = await client.post(
                 f"{SANDBOX_URL}/execute",
-                json={"code": code, "timeout": timeout, "stdin": stdin, "workspace_id": workspace_id},
+                json=payload,
             )
             resp.raise_for_status()
             return resp.json()
 
     except httpx.TimeoutException:
-        return {"ok": False, "error": "Sandbox-сервис не ответил вовремя (network-level timeout, отдельно от timeout исполнения кода)"}
+        return {"ok": False, "error": "Sandbox-сервис не ответил вовремя (network-level timeout)."}
     except httpx.ConnectError:
         return {"ok": False, "error": "Sandbox-сервис недоступен. Проверь, что agent_sandbox запущен."}
     except httpx.HTTPStatusError as e:
@@ -122,6 +138,50 @@ async def _call_sandbox(code: str, timeout: int, stdin: str = "", workspace_id: 
     except Exception as e:
         log.exception("Неожиданная ошибка при вызове sandbox-сервиса")
         return {"ok": False, "error": f"Внутренняя ошибка при вызове sandbox: {type(e).__name__}: {e}"}
+
+async def _process_sandbox_result(
+    result: dict, 
+    start_time: float, 
+    run_id: str, 
+    code_for_saving: str | None, 
+    reusable: bool
+) -> dict:
+    duration_ms = int((time.monotonic() - start_time) * 1000)
+
+    if not result.get("ok") and "stdout" not in result:
+        return {
+            "ok": False,
+            "error": result.get("error", "unknown error"),
+            "duration_ms": duration_ms,
+        }
+
+    raw_files = result.get("files", [])
+    saved_files, save_warnings = ([], [])
+    if raw_files:
+        saved_files, save_warnings = _save_output_files(raw_files, run_id)
+    
+    response = {
+        "ok": result.get("ok", False),
+        "stdout": result.get("stdout", ""),
+        "stderr": result.get("stderr", ""),
+        "exit_code": result.get("exit_code"),
+        "truncated": result.get("truncated", False),
+        "duration_ms": result.get("duration_ms", duration_ms),
+        "saved_files": [{"filename": f["filename"], "path": f["path"], "size_bytes": f["size_bytes"]} for f in saved_files],
+    }
+    
+    # Сохраняем скрипт, только если это был Python код
+    if code_for_saving:
+        saved_script_path = _save_script_if_ok(code_for_saving, run_id, result.get("ok", False), reusable)
+        logging.info(f"Сохраненный скрипт: {saved_script_path}")
+        response["saved_script_path"] = saved_script_path
+
+    if result.get("error"):
+        response["error"] = result["error"]
+    if save_warnings:
+        response["warnings"] = save_warnings
+
+    return response
 
 async def _call_sandbox_endpoint(method: str, path: str, **kwargs) -> dict:
     """Универсальный HTTP-клиент для workspace-эндпоинтов."""
@@ -279,6 +339,30 @@ def make_sandbox_execute_tool(agent):
 
         Для парсинга Telegram-ресурсов:
             - t.me/s/ отдаёт ~20 последних постов. Чтобы получить больше, нужно пагинировать через ?before=POST_ID
+
+        Готовый блок правил для системного промпта агента (системных инструкций `agent_service`). Его можно скопировать и вставить в секцию инструкций по обработке данных и работе с файлами:
+
+        ### 📋 Правила работы агента: Формирование выгрузок и обработка артефактов
+        #### 1. Маршрутизация файлов и работа с окружением
+
+        * **Запрет прямых путей:**
+        * Строго запрещено передавать в функцию отправки файлов (`send_file_to_user`) пути из рабочих директорий изолированного окружения (`/tmp/exec/workspaces/...`).
+
+        * **Корректный каталог артефактов:**
+        * Файл должен формироваться или копироваться в разрешённую целевую директорию (например, `output/...`, сохраняемую в `/app/generated_files`).
+        * Отправлять клиенту только пути, вернувшиеся и подтверждённые в поле `saved_files` результата выполнения инструмента.
+
+        #### 2. Обработка ошибок инфраструктуры
+
+        * Если выполнение кода вернуло `'ok': False`, ошибку окружения (например, `[Errno 2]`) или пустой `saved_files`:
+        * **Категорически запрещено** отвечать пользователю в духе *"Файл отправлен"* или *"Я сформировал файл"*.
+        * Агент обязан честно сообщить об инфраструктурной ошибке подготовки/выполнения среды и предложить повторную сборку.
+
+        PATH RULE: Internal workspace storage root is /tmp/exec/workspaces/{workspace_id}/output/. 
+        Never reference files using output/<filename> as a relative path. 
+        Always use the absolute path /tmp/exec/workspaces/{workspace_id}/output/<filename> or a direct relative filename <filename>.
+
+
         """
         timeout = MAX_TIMEOUT
         run_id = uuid.uuid4().hex
@@ -286,40 +370,37 @@ def make_sandbox_execute_tool(agent):
         _ensure_save_dir()
 
         start = time.monotonic()
-        result = await _call_sandbox(code, timeout, workspace_id=workspace_id)
-        duration_ms = int((time.monotonic() - start) * 1000)
+        result = await _call_sandbox(
+            code=code, 
+            timeout=timeout, 
+            workspace_id=workspace_id, 
+            is_shell=False
+        )
+        return await _process_sandbox_result(result, start, run_id, code_for_saving=code, reusable=reusable)
 
-        if not result.get("ok") and "stdout" not in result:
-            # сетевая ошибка / сервис недоступен — файлов точно нет
-            return str({
-                "ok": False,
-                "error": result.get("error", "unknown error"),
-                "duration_ms": duration_ms,
-            })
-
-        raw_files = result.get("files", [])
-        saved_files, save_warnings = ([], [])
-        if raw_files:
-            saved_files, save_warnings = _save_output_files(raw_files, run_id)
+    @tool
+    async def execute_shell_commands(commands: list[str], timeout: int = DEFAULT_TIMEOUT, workspace_id: str = None) -> dict:
+        """
+        Выполняет системные команды в изолированной песочнице без использования оболочки (shell).
+        Подходит для запуска сторонних бинарников (например, docker, curl, git).
         
-        saved_script_path = _save_script_if_ok(code, run_id, result.get("ok", False), reusable)
-        logging.info(f"Сохраненный скрипт, {saved_script_path}")
-        response = {
-            "ok": result.get("ok", False),
-            "stdout": result.get("stdout", ""),
-            "stderr": result.get("stderr", ""),
-            "exit_code": result.get("exit_code"),
-            "truncated": result.get("truncated", False),
-            "duration_ms": result.get("duration_ms", duration_ms),
-            "saved_files": [{"filename": f["filename"], "path": f["path"], "size_bytes": f["size_bytes"]} for f in saved_files],
-            "saved_script_path": saved_script_path
-        }
-        if result.get("error"):
-            response["error"] = result["error"]
-        if save_warnings:
-            response["warnings"] = save_warnings
+        ОБРАТИ ВНИМАНИЕ: Команды нужно передавать строго списком аргументов!
+        Например: ["docker", "run", "--rm", "alpine", "echo", "hello"]
 
-        return response
+        Если планируешь работать с файлами в рамках сессии, нужно создавать workspace через create_workspace (файлы внутри области будут жить только 3600 сек!)
+        """
+        run_id = uuid.uuid4().hex
+        _ensure_save_dir()
+        
+        start = time.monotonic()
+        result = await _call_sandbox(
+            commands=commands, 
+            timeout=timeout, 
+            workspace_id=workspace_id, 
+            is_shell=True
+        )
+        return await _process_sandbox_result(result, start, run_id, code_for_saving=None, reusable=False)
+
 
     @tool
     async def edit_and_run(
@@ -790,6 +871,7 @@ def make_sandbox_execute_tool(agent):
     
     return [
         execute_python_code,
+        execute_shell_commands,
         create_workspace,
         list_workspace_files,
         download_workspace_file,

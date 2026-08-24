@@ -3,18 +3,20 @@ services:
     image: apache/kafka:4.1.0
     container_name: broker
     ports:
-      - "9092:9092"
-      - "9093:9093"
+      - "127.0.0.1:9092:9092"
+      - "127.0.0.1:9093:9093"
+      - "9094:9094"
     mem_limit: 1g
     memswap_limit: 1g
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:9092
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:9092,EXTERNAL://172.18.0.1:9094
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@broker:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
@@ -22,7 +24,7 @@ services:
       KAFKA_NUM_PARTITIONS: 3
       KAFKA_HEAP_OPTS: "-Xmx512m -Xms128m"
       KAFKA_LOG_RETENTION_HOURS: 6
-      KAFKA_LOG_RETENTION_BYTES: 1073741824  # 512MB
+      KAFKA_LOG_RETENTION_BYTES: 1073741824
     volumes:
       - kafka-data:/var/lib/kafka/data
 
@@ -35,7 +37,8 @@ services:
 
     restart: unless-stopped
     networks:
-      - catchPM
+      catchPM:
+        ipv4_address: 172.28.0.10
 
   agent_service:
     build: ./agent_service
@@ -337,40 +340,60 @@ services:
     build: ./agent_sandbox
     container_name: agent_sandbox
     read_only: true
+    depends_on:
+      - broker
     ports:
       - "8005:8005"
     ipc: host
     tmpfs:
-      - /tmp/exec:size=256m,uid=1500,mode=0700  # Увеличили для работы с файлами
-      - /tmp:size=2g,mode=1777,exec             # Увеличили до 2GB (1080p рендер много кеширует)
+      - /tmp/exec:size=256m,uid=1500,mode=0700 
+      - /tmp:size=3g,mode=1777,exec,uid=1500       
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
     networks:
       - catchPM
-    mem_limit: 4g          # вместо deploy.resources.limits
+    mem_limit: 4g                     
     memswap_limit: 4g
-    cpus: "3.0"
+    cpus: "4.0"
     environment:
-      - OPENBLAS_NUM_THREADS=1
-      - OMP_NUM_THREADS=1
+      - OPENBLAS_NUM_THREADS=8
+      - OMP_NUM_THREADS=8
       - MAIL_HOST=${MAIL_HOST}
       - MAIL_PORT=${MAIL_PORT}
       - MAIL_LOGIN=${MAIL_LOGIN}
       - MAIL_PASSWORD=${MAIL_PASSWORD}
       - MAIL_SMTP_PORT=${MAIL_SMTP_PORT}
       - GITVERSE_TOKEN=${GITVERSE_TOKEN}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
       - KAFKA_BROKER=${KAFKA_BROKER}
-      # Убрали PLAYWRIGHT_BROWSERS_PATH отсюда, чтобы использовалось значение /opt/playwright-browsers из Dockerfile
-      # Если хотите оставить здесь, то замените на:
-      # - PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
+      - DOCKER_HOST=tcp://sandbox_dind:2375
     volumes:
       - ./agent_sandbox/fonts:/app/fonts:ro
       - ./agent_sandbox/dev_utils:/app/dev_utils:ro
       - ./agent_sandbox/result_parsing:/app/result_parsing:ro
-      - ./agent_sandbox/output:/tmp/output:rw
+      - ./agent_sandbox/workspaces:/tmp/exec/workspaces:rw
     restart: unless-stopped
+
+  sandbox_dind:
+    image: docker:24-dind
+    container_name: sandbox_dind
+    privileged: true 
+    environment:
+      - DOCKER_TLS_CERTDIR=
+    networks:
+      - catchPM
+    ports:
+      - "2375:2375"
+      - "18000-18050:18000-18050" # <--- Выделяем 50 портов под сервисы
+      # - "127.0.0.1:28000-28050:18000-18050"
+    volumes:
+      - ./agent_sandbox/output:/tmp/output:rw
+      - dind_data:/var/lib/docker
+    restart: unless-stopped
+    mem_limit: 4g
+    cpus: "2.0"
 
 
   
@@ -380,6 +403,7 @@ volumes:
   llm_cache:
   postgres_data:
   neo4j_data:
+  dind_data:
   # redis_data:
 #  parser_data:
 #  parser_logs:
@@ -387,6 +411,11 @@ volumes:
 networks:
   catchPM:
     name: pascha_microservices
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+          gateway: 172.28.0.1
   
   sandbox_net:
       driver: bridge

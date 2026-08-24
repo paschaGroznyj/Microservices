@@ -39,3 +39,4 @@ CREATE TABLE IF NOT EXISTS reviews (
 );
 
 GRANT SELECT, INSERT, UPDATE ON papers_metadata TO knowledge_manager;
+GRANT USAGE, SELECT ON SEQUENCE papers_metadata_id_seq, reviews_id_seq TO knowledge_manager;

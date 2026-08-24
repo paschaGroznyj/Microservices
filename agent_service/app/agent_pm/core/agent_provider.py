@@ -21,7 +21,7 @@ def get_embedd_model():
 @lru_cache
 def get_llm__lite_model():
     return ChatOpenAI(
-        model="google/gemini-3-flash-preview",
+        model="anthropic/claude-haiku-4.5",
         base_url="https://foundation-models.api.cloud.ru/v1",
         api_key=CLOUD_LLM_ACCESS_KEY,
         model_kwargs={
@@ -34,7 +34,48 @@ def get_llm__lite_model():
 @lru_cache
 def get_llm_model():
     return ChatOpenAI(
-        model="anthropic/claude-sonnet-4.6",
+        # model="openai/gpt-5.3-codex",
+        model="anthropic/claude-opus-4.8",
+        # model="google/gemini-3.1-pro-preview",
+        base_url="https://foundation-models.api.cloud.ru/v1",
+        api_key=CLOUD_LLM_ACCESS_KEY,
+        model_kwargs={
+            "extra_headers": {
+                "X-Enable-Prompt-Cache": "true"
+            }
+        }
+    )
+
+@lru_cache
+def get_llm_model_gpt():
+    return ChatOpenAI(
+        model="openai/gpt-5.3-codex",
+        base_url="https://foundation-models.api.cloud.ru/v1",
+        api_key=CLOUD_LLM_ACCESS_KEY,
+        model_kwargs={
+            "extra_headers": {
+                "X-Enable-Prompt-Cache": "true"
+            }
+        }
+    )
+
+@lru_cache
+def get_llm_model_claude():
+    return ChatOpenAI(
+        model="anthropic/claude-opus-4.8",
+        base_url="https://foundation-models.api.cloud.ru/v1",
+        api_key=CLOUD_LLM_ACCESS_KEY,
+        model_kwargs={
+            "extra_headers": {
+                "X-Enable-Prompt-Cache": "true"
+            }
+        }
+    )
+
+@lru_cache
+def get_llm_model_gemini():
+    return ChatOpenAI(
+        model="google/gemini-3.1-pro-preview",
         base_url="https://foundation-models.api.cloud.ru/v1",
         api_key=CLOUD_LLM_ACCESS_KEY,
         model_kwargs={

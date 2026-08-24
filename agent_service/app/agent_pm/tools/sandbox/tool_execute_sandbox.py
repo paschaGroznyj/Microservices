@@ -17,6 +17,8 @@ import logging
 import os
 import time
 import uuid
+import io
+import zipfile
 
 import httpx
 from langchain.tools import tool
@@ -29,6 +31,14 @@ log = logging.getLogger(__name__)
 SANDBOX_URL = os.environ.get("SANDBOX_SERVICE_URL", "http://agent_sandbox:8005")
 SAVE_DIR = Path("/app/generated_files")
 SKILLS_PATH = Path("/app/app/agent_pm/SKILLS")
+
+ALLOWED_UPLOAD_ROOTS = (
+    "/sandbox",
+    "/app/generated_files"
+)
+
+MAX_LOCAL_UPLOAD_SIZE = 100 * 1024 * 1024  # 100 MB (совпадает с лимитом фабрики)
+
 
 DEFAULT_TIMEOUT = 10
 MAX_TIMEOUT = 120
@@ -198,6 +208,30 @@ async def _call_sandbox_endpoint(method: str, path: str, **kwargs) -> dict:
         }
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def _is_under_allowed_root(path: str) -> bool:
+    real = os.path.realpath(path)
+    return any(
+        real == os.path.realpath(root) or real.startswith(os.path.realpath(root) + os.sep)
+        for root in ALLOWED_UPLOAD_ROOTS
+    )
+
+
+def _zip_directory(dir_path: str) -> tuple[bytes, str]:
+    """Пакует папку в zip (in-memory). Возвращает (bytes, имя_архива.zip)."""
+    buf = io.BytesIO()
+    base = os.path.basename(os.path.normpath(dir_path))
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for root, _dirs, files in os.walk(dir_path):
+            for fname in files:
+                full = os.path.join(root, fname)
+                # arcname — путь внутри архива относительно самой папки
+                arcname = os.path.relpath(full, dir_path)
+                zf.write(full, arcname)
+    buf.seek(0)
+    return buf.read(), f"{base}.zip"
+
 
 def make_sandbox_execute_tool(agent):
 
@@ -395,6 +429,8 @@ def make_sandbox_execute_tool(agent):
 
         Если планируешь работать с файлами в рамках сессии, нужно создавать workspace
         через create_workspace (файлы внутри области будут жить только 3600 сек!)
+
+        Если ты иницилизируешь репозиторий .git внутри /tmp/exec/workspaces/<workspace_name>, он не будет удален по таймеру
 
         Docker-специфика:
         - Демон доступен через unix:///var/run/docker.sock
@@ -882,6 +918,101 @@ def make_sandbox_execute_tool(agent):
         ```
         """
     
+    @tool
+    async def upload_to_workspace(
+        local_path: str,
+        workspace_id: str,
+        dest: str = "",
+    ) -> dict:
+        """
+        Заливает локальный файл ИЛИ папку из файловой системы агента
+        в удалённый workspace фабрики (обратная операция к download_workspace_file).
+
+        Используй когда нужно перекинуть подготовленный локально артефакт
+        (скрипт, ассет, целую папку) в workspace, где он будет доступен для
+        execute_python_code / execute_shell_commands с тем же workspace_id.
+
+        Аргументы:
+            local_path:   путь к файлу или папке. Разрешены только корни:
+                          /sandbox, /app/generated_files, /tmp
+            workspace_id: ID целевого workspace (из create_workspace)
+            dest:         подпапка назначения внутри workspace, напр. "static/js".
+                          Пустая строка — корень workspace.
+
+        Поведение:
+            - файл  → заливается как есть в dest/
+            - папка → пакуется в zip и распаковывается на стороне фабрики в dest/
+                      (структура папки сохраняется)
+
+        Возвращает: {ok, written:[...], count} или {ok:False, error}
+        """
+        # 1. Валидация пути
+        if not _is_under_allowed_root(local_path):
+            return str({
+                "ok": False,
+                "error": f"Путь {local_path} вне разрешённых корней "
+                         f"{ALLOWED_UPLOAD_ROOTS}",
+            })
+        if not os.path.exists(local_path):
+            return str({"ok": False, "error": f"Путь не найден: {local_path}"})
+
+        # 2. Готовим payload: файл как есть или папку → zip
+        is_dir = os.path.isdir(local_path)
+        try:
+            if is_dir:
+                content, upload_name = _zip_directory(local_path)
+                unpack = "true"
+            else:
+                with open(local_path, "rb") as f:
+                    content = f.read()
+                upload_name = os.path.basename(local_path)
+                unpack = "false"
+        except OSError as e:
+            return str({"ok": False, "error": f"Не удалось прочитать {local_path}: {e}"})
+
+        if len(content) > MAX_LOCAL_UPLOAD_SIZE:
+            return str({
+                "ok": False,
+                "error": f"Размер {len(content)} байт превышает лимит "
+                         f"{MAX_LOCAL_UPLOAD_SIZE}",
+            })
+
+        # 3. Отправка multipart на фабрику
+        files = {"files": (upload_name, content, "application/octet-stream")}
+        data = {"dest": dest, "unpack": unpack}
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                resp = await client.post(
+                    f"{SANDBOX_URL}/workspace/{workspace_id}/upload",
+                    files=files,
+                    data=data,
+                )
+                resp.raise_for_status()
+                result = resp.json()
+        except httpx.HTTPStatusError as e:
+            return str({
+                "ok": False,
+                "error": f"HTTP {e.response.status_code}: {e.response.text[:300]}",
+            })
+        except httpx.ConnectError:
+            return str({"ok": False, "error": "Sandbox-сервис недоступен."})
+        except Exception as e:
+            return str({"ok": False, "error": f"{type(e).__name__}: {e}"})
+
+        log.info(
+            f"[workspace] Залито {upload_name} "
+            f"({'папка' if is_dir else 'файл'}, {len(content)} б) "
+            f"в {workspace_id}/{dest or '.'}"
+        )
+        return str({
+            "ok": True,
+            "source": local_path,
+            "kind": "dir" if is_dir else "file",
+            "workspace_id": workspace_id,
+            "dest": dest or ".",
+            "result": result,
+        })
+    
     return [
         execute_python_code,
         execute_shell_commands,
@@ -893,4 +1024,5 @@ def make_sandbox_execute_tool(agent):
         edit_and_run,
         presentation_design_skill,
         html_design_skill,
+        upload_to_workspace,
     ]

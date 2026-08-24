@@ -53,6 +53,9 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
         "work_with_email",
         "connect_mcp_git",
         "execute_shell_commands",
+        "upload_to_workspace",
+        "read_workspace_file",
+        "edit_workspace_file",
     ],
 }
 

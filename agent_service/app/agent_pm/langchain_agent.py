@@ -15,7 +15,8 @@ from langchain.memory import ConversationBufferWindowMemory
 from langchain_core.messages import ToolMessage, trim_messages
 from langchain_core.messages.utils import count_tokens_approximately
 
-from .core.agent_provider import get_llm__lite_model, get_llm_model
+from .core.agent_provider import (get_llm__lite_model, get_llm_model,
+get_llm_model_gpt, get_llm_model_claude, get_llm_model_gemini)
 from .core.botocore_client import OBSWorker
 from .core.config import (
     ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH,
@@ -610,7 +611,11 @@ STATEFUL_TOOLS = {
     "submit_task", "check_task_status",
     "create_workspace", "list_workspace_files", "download_workspace_file",
     "delete_workspace", "cleanup_workspaces",
-    "call_subagent", "execute_shell_commands"
+    "call_subagent", "execute_shell_commands",
+    "upload_to_workspace",
+
+    "read_workspace_file",
+    "edit_workspace_file",
 }
 
 def _summarize_tool_call(tc: dict, result: Any) -> str | None:
@@ -646,8 +651,8 @@ def _summarize_tool_call(tc: dict, result: Any) -> str | None:
         return f"{name} ({args}). ОТВЕТ СУБАГЕНТА - {str(result)}"
     if name in ("list_tree", "read_file", "grep_search", "find_files", 
                 "write_sandbox_file", "edit_sandbox_file", "send_file_to_user",
-                "work_with_agent_journal"):
-        return f"{name}({args}) → {str(result)[:500]}"
+                "work_with_agent_journal", "read_workspace_file", "edit_workspace_file"):
+        return f"{name}({args}) → {str(result)[:1000]}"
     if name == "execute_python_code":
         result_dict = result if isinstance(result, dict) else {}
         ok = result_dict.get("ok", False)
@@ -773,6 +778,13 @@ SYSTEM_PROMPT = f"""Ты ИИ-агент по управлению базой з
 • Перед отправкой сообщения СТРОГО проверяй, что каждый открытый тег закрыт тем же тегом.
 • Запрещено вкладывать блочные теги друг в друга некорректно (например, <b>...<code>...</b>...</code>).
 
+ШПАРГАЛКА ДЛЯ ДЕМО: ОБЯЗАТЕЛЬНО ПОСМОТРИ ТУДА ПРИ СБОРКЕ ПАРСЕРА, вызови инструмент просмотра схемы
+Запись id=16 в code_library обновлена.
+
+Что изменилось
+Старая версия (была): HTML-scraping arxiv.org/search по 15 keywords через ThreadPoolExecutor. Ловила 429/таймауты, отрабатывала 80-120с, зависела от вёрстки.
+
+Новая версия (стала): официальный Atom API export.arxiv.org/api/query.
 """
 
 SCIENTIFIC_RESEARCH_MODULE = """
@@ -849,7 +861,10 @@ class KnowledgeAgent:
         self.auto_processor = AutoProcessor(
             self.articles_path, self.monitor, self.vector_db, self.summarizer
         )
-        self.llm = get_llm_model()
+        self.AGENT_MODELS = {'coder': get_llm_model_gpt(),
+                            'designer': get_llm_model_claude(),
+                            'universal': get_llm_model_gemini()
+                            }
         self.llm_lite = get_llm__lite_model()
         self.obs_loader = OBSWorker()
         self.email_handler = DigestEmailHandler()
@@ -1390,6 +1405,9 @@ class KnowledgeAgent:
         # 16. Публикация задачи в планировщик-песок
         from .tools.sandbox.tool_submit_task import make_submit_tools
         submit_task = make_submit_tools(agent)
+        # 17. Чтение и точечная правка файлов внутри Фабрики
+        from .tools.sandbox.tool_workspace_codeedit import make_workspace_codeedit_tools
+        codeedit_tools = make_workspace_codeedit_tools(agent)
 
 
         base_tools = [
@@ -1423,6 +1441,7 @@ class KnowledgeAgent:
             + _normalize(execute_python_code)
             + _normalize(save_or_search_code)
             + submit_task
+            + codeedit_tools
         )
 
         if allow_all:
@@ -1469,7 +1488,7 @@ class KnowledgeAgent:
             ])
             return response.content.strip()
         except Exception as e:
-            log.error(f"Не удалось засаммаризовать отсечённую историю: {e}", exc_info=True)
+            logging.error(f"Не удалось засаммаризовать отсечённую историю: {e}", exc_info=True)
             # Фолбэк — не терять предыдущее саммари молча, если LLM-вызов упал
             return previous_summary or "[Часть истории была отсечена, сжатие не удалось]"
         
@@ -1513,6 +1532,7 @@ class KnowledgeAgent:
         user_id: int,
         chat_id,
         database,
+        agent_model,
         source=None,
         selected_tools=None,
         context_size=None
@@ -1549,6 +1569,8 @@ class KnowledgeAgent:
             "medium": {"limit_mem": 10, "max_tokens": 15000},
             "large":  {"limit_mem": 12, "max_tokens": 20000},
         }
+        logging.info(f'Выбрана модель {agent_model}')
+        llm = self.AGENT_MODELS[agent_model]
 
         final_response = ""
         used_tools = []
@@ -1591,7 +1613,7 @@ class KnowledgeAgent:
         tools_by_name = {t.name: t for t in tools}
         print(f"ЛИМИТ ПО КОНТЕКСТУ = {limit_mem}, ЧИСЛО ТОКЕНОВ = {max_tokens}")
         # Привязываем инструменты к модели
-        llm_with_tools = self.llm.bind_tools(tools)
+        llm_with_tools = llm.bind_tools(tools)
 
         current_datetime = datetime.now().strftime("%d.%m.%Y %H:%M, %A")
         system_content = SYSTEM_PROMPT.format(datetime=current_datetime)
@@ -1685,7 +1707,7 @@ class KnowledgeAgent:
             # ТОЧКА 2: тулзы снимаем только на последнем шаге
             is_last_step = iteration >= loop_state["hard_limit"] - 1
             can_still_extend = not loop_state["extension_used"]
-            current_llm = self.llm if (is_last_step and not can_still_extend) else llm_with_tools
+            current_llm = llm if (is_last_step and not can_still_extend) else llm_with_tools
 
             # ТОЧКА 3: адресный триггер на КАЖДОМ шаге окна, а не однократно.
             steps_left = loop_state["hard_limit"] - iteration - 1

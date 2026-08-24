@@ -137,6 +137,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     context_size = payload.get("context_size")
     message_id = payload.get("message_id")
     has_files = payload.get("has_files", False)
+    agent_model = payload.get("agent_model")
 
 
     if is_from_bot or user_id == -1:
@@ -165,12 +166,13 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                                             request_id=request_id, user_id=-123, 
                                             chat_id=chat_id, database=db, selected_tools=selected_tools,
                                             context_size=context_size,
-                                            source="CatchPM")
+                                            source="CatchPM",
+                                            agent_model=agent_model)
 
         response_text = response["message"]
         # from datetime import datetime
         # now = datetime.now()
-        # response = {'action': "test", "files_to_send": [{"path": "sandbox/egg.txt"}, {"path": "sandbox/knowledge_graph.html"}]}
+        # response = {'action': "test"}
         # formatted_time = now.strftime("%H:%M:%S")
         # response_text = f"Идет внедрение новой фичи! Cпасибо за понимание. Текущее время: **{formatted_time}**, {message}"
         files_to_send = response.get("files_to_send")  # [{"path": "...", ...}, ...]

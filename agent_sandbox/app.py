@@ -36,8 +36,11 @@ from pathlib import Path
 from typing import Optional
 from aiokafka import AIOKafkaProducer
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+
+import zipfile
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("sandbox")
@@ -51,8 +54,8 @@ MAX_TIMEOUT = 3600
 MAX_OUTPUT_SIZE = 20_000
 WORKDIR = "/tmp/exec"
 WORKSPACES_DIR = "/tmp/exec/workspaces"
-MAX_MEMORY_MB = 3072
-MAX_CPU_SECONDS = 200
+MAX_MEMORY_MB = 8192
+MAX_CPU_SECONDS = 3600
 
 OUTPUT_DIR_NAME = "output"
 MAX_FILE_SIZE_FOR_RETURN = 50 * 1024 * 1024
@@ -65,6 +68,11 @@ WORKSPACE_CLEANUP_INTERVAL = 3600
 KAFKA_BROKER = os.getenv("KAFKA_BROKER")
 KAFKA_TASK_EVENTS_TOPIC = "task-events"
 
+# Лимиты приёма (defense in depth)
+MAX_UPLOAD_SIZE = 100 * 1024 * 1024      # 100 MB на один файл
+MAX_UPLOAD_FILES = 50                     # не больше 50 файлов за раз
+
+MAX_FILE_SIZE_FOR_EDIT = 200_000
 # ── Хранилище задач (in-memory) ────────────────────────────────────
 # task_id → {status, result, error, workspace_id, chat_id, label, ...}
 _tasks: dict[str, dict] = {}
@@ -112,7 +120,9 @@ class OutputFile(BaseModel):
 
 
 class ExecuteRequest(BaseModel):
-    code: str = Field(..., description="Python код для исполнения")
+    code: str | None = Field(None, description="Python код для исполнения")
+    commands: list[str] | None = Field(None, description="Список команд для выполнения (например, ['docker', 'ps'])")
+    is_shell: bool = Field(False, description="Флаг, указывающий, что нужно выполнить системные команды вместо Python-кода")
     timeout: int = Field(default=DEFAULT_TIMEOUT, ge=1, le=MAX_TIMEOUT)
     stdin: str = ""
     workspace_id: str | None = None
@@ -159,13 +169,20 @@ class TaskStatusResponse(BaseModel):
     started_at: float | None = None
     completed_at: float | None = None
 
+class WorkspaceEditRequest(BaseModel):
+    path: str = Field(..., description="Относительный путь к файлу внутри workspace")
+    old_str: str = Field(..., description="Точный фрагмент для замены (ровно 1 вхождение)")
+    new_str: str = Field(..., description="Текст замены. Пустая строка удаляет old_str")
+
+
+
 
 # ── Утилиты ────────────────────────────────────────────────────────
 
 def _limit_resources():
     try:
         resource.setrlimit(resource.RLIMIT_CPU, (MAX_CPU_SECONDS, MAX_CPU_SECONDS))
-        resource.setrlimit(resource.RLIMIT_FSIZE, (30 * 1024 * 1024, 30 * 1024 * 1024))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (100 * 1024 * 1024, 100 * 1024 * 1024))
     except Exception as e:
         os.write(2, f"[sandbox] resource limit warning: {e}\n".encode())
 
@@ -234,6 +251,14 @@ def _list_workspace_files(workspace_id: str) -> list[dict]:
     return result
 
 
+def _safe_join(base: str, *paths: str) -> str:
+    """Джойн с защитой от path traversal. Бросает ValueError при выходе за base."""
+    target = os.path.realpath(os.path.join(base, *paths))
+    base_real = os.path.realpath(base)
+    if not (target == base_real or target.startswith(base_real + os.sep)):
+        raise ValueError(f"Path traversal detected: {paths}")
+    return target
+
 def _get_workspace_path(workspace_id: str) -> str | None:
     ws_path = os.path.join(WORKSPACES_DIR, workspace_id)
     if os.path.isdir(ws_path):
@@ -247,31 +272,42 @@ def _run_code_sync(code: str, timeout: int, run_dir: str, stdin: str = "", task_
     Синхронный запуск кода в subprocess.
     Используется и в /execute, и в /submit (через run_in_executor).
     """
-    run_dir = Path(run_dir)  # нормализуем в Path один раз
+    base_run_dir = Path(run_dir)
 
-    if task_id:
-        task_dir = run_dir / ".tasks" / task_id
-        task_dir.mkdir(parents=True, exist_ok=True)
+    # 1. Если task_id нет, генерируем временный ID для изолированного выполнения
+    exec_task_id = task_id or f"exec_{uuid.uuid4().hex[:8]}"
 
-        # output/ в task_dir — симлинк на общий workspace output/
-        workspace_output = run_dir / OUTPUT_DIR_NAME
-        workspace_output.mkdir(parents=True, exist_ok=True)
-        task_output_link = task_dir / OUTPUT_DIR_NAME
-        if not task_output_link.exists():
-            task_output_link.symlink_to(workspace_output)
+    # 2. Определяем целевую папку исполнения (всегда используем изолированный .tasks/)
+    task_dir = base_run_dir / ".tasks" / exec_task_id
+    task_dir.mkdir(parents=True, exist_ok=True)
 
-        script_path = task_dir / "script.py"
-        cwd = task_dir
+    # 3. Настраиваем общую папку output для воркспейса
+    if ws_path:
+        workspace_output = Path(ws_path) / OUTPUT_DIR_NAME
     else:
-        if ws_path:
-            workspace_output = Path(ws_path) / "output"
-        else:
-            workspace_output = run_dir / OUTPUT_DIR_NAME
-        script_path = run_dir / "script.py"
-        cwd = run_dir
-        workspace_output.mkdir(parents=True, exist_ok=True)
+        workspace_output = base_run_dir / OUTPUT_DIR_NAME
 
+    workspace_output.mkdir(parents=True, exist_ok=True)
 
+    # 4. Безопасно монтируем симлинк output/ внутрь таски
+    task_output_link = task_dir / OUTPUT_DIR_NAME
+    if not task_output_link.exists() and not task_output_link.is_symlink():
+        try:
+            task_output_link.symlink_to(workspace_output)
+        except OSError:
+            # Если симлинк не создался (например на Windows без прав), делаем фоллбэк
+            pass
+
+    script_path = task_dir / "script.py"
+    cwd = task_dir
+
+    try:
+        script_path.write_text(code, encoding="utf-8")
+    except OSError as e:
+        return {
+            "ok": False,
+            "error": f"Не удалось подготовить исполнение: {e}",
+        }
     try:
         script_path.write_text(code, encoding="utf-8")
     except OSError as e:
@@ -291,8 +327,8 @@ def _run_code_sync(code: str, timeout: int, run_dir: str, stdin: str = "", task_
                 "PATH": "/usr/local/bin:/usr/bin:/bin",
                 "PLAYWRIGHT_BROWSERS_PATH": "/opt/playwright-browsers",
                 "MPLCONFIGDIR": "/tmp",
-                "OPENBLAS_NUM_THREADS": "1",
-                "OMP_NUM_THREADS": "1",
+                "OPENBLAS_NUM_THREADS": os.getenv("OPENBLAS_NUM_THREADS"),
+                "OMP_NUM_THREADS": os.getenv("OMP_NUM_THREADS"),
                 "HOME": "/tmp",
                 "MAIL_HOST": os.getenv("MAIL_HOST", ""),
                 "MAIL_PORT": os.getenv("MAIL_PORT", ""),
@@ -300,6 +336,8 @@ def _run_code_sync(code: str, timeout: int, run_dir: str, stdin: str = "", task_
                 "MAIL_PASSWORD": os.getenv("MAIL_PASSWORD", ""),
                 "MAIL_SMTP_PORT": os.getenv("MAIL_SMTP_PORT", ""),
                 "GITVERSE_TOKEN": os.getenv("GITVERSE_TOKEN", ""),
+                "GITHUB_TOKEN": os.getenv("GITHUB_TOKEN", ""),
+                "DOCKER_HOST": os.getenv("DOCKER_HOST", "tcp://sandbox_dind:2375"),
             },
         )
         duration_ms = int((time.monotonic() - start) * 1000)
@@ -347,6 +385,110 @@ def _run_code_sync(code: str, timeout: int, run_dir: str, stdin: str = "", task_
         return {"ok": False, "error": f"Внутренняя ошибка сервиса: {type(e).__name__}: {e}"}
 
 
+def _run_commands_sync(commands: list[str], timeout: int, run_dir: str, stdin: str = "", task_id: str = None, ws_path: str = None) -> dict:
+    """
+    Синхронный запуск системных команд в subprocess без записи Python-скрипта.
+    Ожидает commands в виде списка: ["docker", "run", "--rm", "alpine", "echo", "hello"]
+    """
+    base_run_dir = Path(ws_path) if ws_path else Path(run_dir)
+
+    # 1. Если передана конкретная асинхронная таска — изолируем в .tasks/<task_id>
+    if task_id:
+        cwd = base_run_dir / ".tasks" / task_id
+        cwd.mkdir(parents=True, exist_ok=True)
+    else:
+        # Для обычных команд (git clone, bash и т.д.) выполняем прямо в корне воркспейса
+        cwd = base_run_dir
+        cwd.mkdir(parents=True, exist_ok=True)
+
+    # 2. Настраиваем общую папку output для результатов
+    workspace_output = base_run_dir / OUTPUT_DIR_NAME
+    workspace_output.mkdir(parents=True, exist_ok=True)
+
+    # 3. Если работаем внутри .tasks/<task_id>, гарантируем наличие симлинка на output/
+    if task_id:
+        task_output_link = cwd / OUTPUT_DIR_NAME
+        if not task_output_link.exists() and not task_output_link.is_symlink():
+            try:
+                task_output_link.symlink_to(workspace_output)
+            except OSError:
+                pass
+
+    start = time.monotonic()
+    try:
+        proc = subprocess.run(
+            commands,           # <--- ПЕРЕДАЕМ СПИСОК КОМАНД НАПРЯМУЮ
+            input=stdin,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=str(cwd),
+            preexec_fn=_limit_resources,
+            shell=False,    
+            env={
+                "PATH": "/usr/local/bin:/usr/bin:/bin",
+                "PLAYWRIGHT_BROWSERS_PATH": "/opt/playwright-browsers",
+                "MPLCONFIGDIR": "/tmp",
+                "OPENBLAS_NUM_THREADS": os.getenv("OPENBLAS_NUM_THREADS"),
+                "OMP_NUM_THREADS": os.getenv("OMP_NUM_THREADS"),
+                "HOME": "/tmp",
+                "MAIL_HOST": os.getenv("MAIL_HOST", ""),
+                "MAIL_PORT": os.getenv("MAIL_PORT", ""),
+                "MAIL_LOGIN": os.getenv("MAIL_LOGIN", ""),
+                "MAIL_PASSWORD": os.getenv("MAIL_PASSWORD", ""),
+                "MAIL_SMTP_PORT": os.getenv("MAIL_SMTP_PORT", ""),
+                "GITVERSE_TOKEN": os.getenv("GITVERSE_TOKEN", ""),
+                "GITHUB_TOKEN": os.getenv("GITHUB_TOKEN", ""),
+                "DOCKER_HOST": os.getenv("DOCKER_HOST", "tcp://sandbox_dind:2375"),
+            },
+        )
+        duration_ms = int((time.monotonic() - start) * 1000)
+
+        stdout, out_trunc = _truncate(proc.stdout)
+        stderr, err_trunc = _truncate(proc.stderr)
+
+        files, warnings = _collect_output_files(str(workspace_output))
+        if warnings:
+            stderr = (stderr + "\n[sandbox warnings] " + "; ".join(warnings)).strip()
+
+        return {
+            "ok": proc.returncode == 0,
+            "stdout": stdout,
+            "stderr": stderr,
+            "exit_code": proc.returncode,
+            "truncated": out_trunc or err_trunc,
+            "duration_ms": duration_ms,
+            "files": files,
+            "error": None,
+        }
+
+    except FileNotFoundError:
+        # При shell=False, если исполняемый файл (например, "docker") не найден,
+        # subprocess выбрасывает FileNotFoundError, а не возвращает код ошибки.
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return {
+            "ok": False, 
+            "error": f"Команда или бинарный файл не найдены: {commands[0]}", 
+            "duration_ms": duration_ms
+        }
+
+    except subprocess.TimeoutExpired:
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return {
+            "ok": False,
+            "error": f"Превышен таймаут исполнения ({timeout}с). Процесс прерван.",
+            "duration_ms": duration_ms,
+        }
+
+    except MemoryError:
+        return {"ok": False, "error": "Превышен лимит памяти при подготовке процесса"}
+
+    except OSError as e:
+        return {"ok": False, "error": f"Системная ошибка при исполнении: {e}"}
+
+    except Exception as e:
+        return {"ok": False, "error": f"Внутренняя ошибка сервиса: {type(e).__name__}: {e}"}
+
 # ── Workspace management ───────────────────────────────────────────
 
 def _create_workspace_dir() -> str:
@@ -368,6 +510,16 @@ def _touch_workspace(workspace_id: str):
         with open(os.path.join(ws_path, ".last_active"), "w") as f:
             f.write(str(time.time()))
 
+def _has_git(ws_path: str) -> bool:
+    # .git в корне
+    if os.path.exists(os.path.join(ws_path, ".git")):
+        return True
+    # .git в подпапках первого уровня (git clone создаёт подпапку repo/.git)
+    for entry in os.listdir(ws_path):
+        sub = os.path.join(ws_path, entry)
+        if os.path.isdir(sub) and os.path.exists(os.path.join(sub, ".git")):
+            return True
+    return False
 
 def _cleanup_expired_workspaces():
     """Удаляет workspace с истёкшим TTL."""
@@ -380,6 +532,10 @@ def _cleanup_expired_workspaces():
     for entry in os.listdir(WORKSPACES_DIR):
         ws_path = os.path.join(WORKSPACES_DIR, entry)
         if not os.path.isdir(ws_path):
+            continue
+
+        if _has_git(ws_path):
+            log.debug("[workspace] Пропущен %s (содержит .git)", entry)
             continue
 
         last_active_file = os.path.join(ws_path, ".last_active")
@@ -419,7 +575,12 @@ async def _workspace_cleanup_loop():
 
 @app.post("/execute", response_model=ExecuteResponse)
 async def execute(req: ExecuteRequest):
-    if len(req.code.encode("utf-8")) > MAX_CODE_SIZE:
+    if req.is_shell and not req.commands:
+        raise HTTPException(status_code=400, detail="Для is_shell=True необходимо передать список 'commands'")
+    if not req.is_shell and not req.code:
+        raise HTTPException(status_code=400, detail="Для выполнения Python необходимо передать 'code'")
+
+    if not req.is_shell and req.code and len(req.code.encode("utf-8")) > MAX_CODE_SIZE:
         raise HTTPException(status_code=413, detail=f"Code exceeds {MAX_CODE_SIZE} bytes")
 
     run_id = uuid.uuid4().hex
@@ -430,9 +591,14 @@ async def execute(req: ExecuteRequest):
         if ws_path is None:
             raise HTTPException(status_code=404, detail=f"Workspace {req.workspace_id} не найден")
 
-    result = await asyncio.to_thread(
-        _run_code_sync, req.code, req.timeout, run_dir, req.stdin, ws_path
-    )
+    if req.is_shell:
+        result = await asyncio.to_thread(
+            _run_commands_sync, req.commands, req.timeout, run_dir, req.stdin, None, ws_path
+        )
+    else:
+        result = await asyncio.to_thread(
+            _run_code_sync, req.code, req.timeout, run_dir, req.stdin, None, ws_path
+        )
 
     # Удаляем временный run_dir (изоляция — как раньше)
     try:
@@ -495,6 +661,247 @@ async def submit_task(req: SubmitRequest):
         workspace_id=req.workspace_id,
         message=f"Задача '{req.label}' поставлена в очередь",
     )
+
+
+@app.post("/workspace/{workspace_id}/upload")
+async def upload_to_workspace_endpoint(
+    workspace_id: str,
+    files: list[UploadFile] = File(...),
+    dest: str = Form(""),           # относительная подпапка внутри workspace, напр. "static/js"
+    unpack: bool = Form(False),     # если True и файл .zip — распаковать
+):
+    """
+    Заливает один/несколько файлов в workspace.
+    - dest: подпапка назначения внутри workspace (создаётся при необходимости)
+    - unpack: если True, каждый .zip распаковывается в dest (заливка папок)
+    """
+    ws_path = _get_workspace_path(workspace_id)
+    if ws_path is None:
+        raise HTTPException(status_code=404, detail="Workspace не найден")
+
+    if len(files) > MAX_UPLOAD_FILES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Слишком много файлов: {len(files)} (лимит {MAX_UPLOAD_FILES})",
+        )
+
+    # Директория назначения (с защитой от traversal)
+    try:
+        dest_dir = _safe_join(ws_path, dest) if dest else os.path.realpath(ws_path)
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    os.makedirs(dest_dir, exist_ok=True)
+
+    written = []
+    for uf in files:
+        raw = await uf.read()
+        if len(raw) > MAX_UPLOAD_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Файл {uf.filename} превышает лимит {MAX_UPLOAD_SIZE} байт",
+            )
+
+        safe_name = os.path.basename(uf.filename or "unnamed")
+
+        # Распаковка zip
+        if unpack and safe_name.lower().endswith(".zip"):
+            tmp_zip = _safe_join(dest_dir, safe_name)
+            with open(tmp_zip, "wb") as f:
+                f.write(raw)
+            try:
+                with zipfile.ZipFile(tmp_zip) as zf:
+                    # Проверяем каждую запись на traversal перед извлечением
+                    for member in zf.namelist():
+                        _safe_join(dest_dir, member)  # бросит ValueError при выходе за пределы
+                    zf.extractall(dest_dir)
+                    extracted = zf.namelist()
+                os.remove(tmp_zip)
+                written.append({
+                    "filename": safe_name,
+                    "unpacked": True,
+                    "members": len(extracted),
+                    "dest": os.path.relpath(dest_dir, ws_path),
+                })
+            except zipfile.BadZipFile:
+                raise HTTPException(status_code=400, detail=f"{safe_name} — не валидный zip")
+            except ValueError as e:
+                os.remove(tmp_zip)
+                raise HTTPException(status_code=403, detail=f"zip traversal: {e}")
+            continue
+
+        # Обычный файл
+        target = _safe_join(dest_dir, safe_name)
+        with open(target, "wb") as f:
+            f.write(raw)
+        written.append({
+            "filename": safe_name,
+            "unpacked": False,
+            "size_bytes": len(raw),
+            "path": os.path.relpath(target, ws_path),
+        })
+
+    # Обновляем активность, чтобы TTL не убил workspace
+    _touch_workspace(workspace_id)
+
+    return {
+        "ok": True,
+        "workspace_id": workspace_id,
+        "written": written,
+        "count": len(written),
+    }
+
+
+
+# ── GET /workspace/{wid}/read — чтение файла с окном offset/limit ────
+
+@app.get("/workspace/{workspace_id}/read")
+async def read_workspace_file_endpoint(
+    workspace_id: str,
+    path: str,
+    offset: int = 0,
+    limit: int = 0,
+):
+    """
+    Читает текстовый файл ВНУТРИ workspace.
+    Возвращает JSON с содержимым и метаданными (по аналогии с локальным read_file).
+    Поддерживает окно offset/limit для больших файлов.
+    """
+    ws_path = _get_workspace_path(workspace_id)
+    if ws_path is None:
+        raise HTTPException(status_code=404, detail=f"Workspace {workspace_id} не найден")
+
+    try:
+        target = _safe_join(ws_path, path)
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+    if not os.path.isfile(target):
+        raise HTTPException(status_code=404, detail=f"Файл '{path}' не найден в workspace")
+
+    size = os.path.getsize(target)
+    if size > MAX_FILE_SIZE_FOR_RETURN:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Файл слишком большой для чтения ({size} байт)",
+        )
+
+    try:
+        with open(target, encoding="utf-8", errors="replace") as f:
+            all_lines = f.readlines()
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Не удалось прочитать файл: {e}")
+
+    total_lines = len(all_lines)
+
+    # Явное окно от агента — приоритетнее автотрюка head/tail
+    if offset or limit:
+        start = max(offset, 0)
+        end = start + limit if limit > 0 else total_lines
+        window = all_lines[start:end]
+        content = "".join(window)
+        _touch_workspace(workspace_id)
+        return {
+            "ok": True,
+            "workspace_id": workspace_id,
+            "path": path,
+            "size": size,
+            "total_lines": total_lines,
+            "shown_lines": f"{start + 1}-{min(end, total_lines)}",
+            "truncated": end < total_lines,
+            "content": content,
+        }
+
+    # Без окна — весь файл целиком (лимит по размеру уже проверен выше)
+    content = "".join(all_lines)
+    _touch_workspace(workspace_id)
+    return {
+        "ok": True,
+        "workspace_id": workspace_id,
+        "path": path,
+        "size": size,
+        "total_lines": total_lines,
+        "truncated": False,
+        "content": content,
+    }
+
+
+# ── POST /workspace/{wid}/edit — точечная замена НА СТОРОНЕ ФАБРИКИ ──
+
+@app.post("/workspace/{workspace_id}/edit")
+async def edit_workspace_file_endpoint(workspace_id: str, req: WorkspaceEditRequest):
+    """
+    Точечное редактирование файла ВНУТРИ workspace (find & replace).
+    Вся логика read -> count -> replace -> write выполняется на фабрике
+    атомарно, агент шлёт только {path, old_str, new_str}.
+
+    Коды ответов:
+      404 — workspace или файл не найден
+      403 — path traversal
+      409 — old_str встречается != 1 раза (0 или >1) — замена неоднозначна
+      413 — файл слишком большой
+    """
+    ws_path = _get_workspace_path(workspace_id)
+    if ws_path is None:
+        raise HTTPException(status_code=404, detail=f"Workspace {workspace_id} не найден")
+
+    try:
+        target = _safe_join(ws_path, req.path)
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+    if not os.path.isfile(target):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Файл '{req.path}' не найден в workspace. Создай его через upload_to_workspace.",
+        )
+
+    size = os.path.getsize(target)
+    if size > MAX_FILE_SIZE_FOR_EDIT:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Файл слишком большой для редактирования ({size} байт)",
+        )
+
+    try:
+        with open(target, encoding="utf-8", errors="replace") as f:
+            content = f.read()
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Не удалось прочитать файл: {e}")
+
+    count = content.count(req.old_str)
+    if count == 0:
+        raise HTTPException(
+            status_code=409,
+            detail="old_str не найден в файле. Проверь точное совпадение "
+                   "(пробелы, отступы, переносы строк).",
+        )
+    if count > 1:
+        raise HTTPException(
+            status_code=409,
+            detail=f"old_str встречается {count} раз(а) — замена неоднозначна. "
+                   f"Добавь больше контекста в old_str, чтобы совпадение было уникальным.",
+        )
+
+    new_content = content.replace(req.old_str, req.new_str, 1)
+
+    try:
+        with open(target, "w", encoding="utf-8") as f:
+            f.write(new_content)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Не удалось записать файл: {e}")
+
+    _touch_workspace(workspace_id)
+
+    return {
+        "ok": True,
+        "workspace_id": workspace_id,
+        "path": req.path,
+        "old_len": len(req.old_str),
+        "new_len": len(req.new_str),
+        "occurrences_replaced": 1,
+        "size_after": len(new_content.encode("utf-8")),
+    }
+
 
 
 async def _run_task_background(req: SubmitRequest):
@@ -645,29 +1052,43 @@ async def list_workspace_files_endpoint(workspace_id: str):
 
 @app.get("/workspace/{workspace_id}/file/{filepath:path}")
 async def download_workspace_file_endpoint(workspace_id: str, filepath: str):
-    from fastapi import Response
     ws_path = _get_workspace_path(workspace_id)
-    if ws_path is None:
+    if ws_path is None or not os.path.exists(ws_path):
         raise HTTPException(status_code=404, detail="Workspace не найден")
 
-    target = os.path.join(ws_path, filepath)
-    # Защита от path traversal
-    if not os.path.realpath(target).startswith(os.path.realpath(ws_path)):
-        raise HTTPException(status_code=403, detail="Path traversal detected")
+    real_ws_path = os.path.realpath(ws_path)
 
+    # 1. Прямая проверка пути (как передали: "output/file.txt" или "sub/dir/file.txt")
+    target = os.path.abspath(os.path.join(ws_path, filepath))
+
+    # 2. Фоллбэк #1: Пробуем заглянуть в папку output/ если передали только имя файла
     if not os.path.isfile(target):
-        raise HTTPException(status_code=404, detail=f"Файл {filepath} не найден")
+        output_target = os.path.abspath(os.path.join(ws_path, "output", filepath))
+        if os.path.isfile(output_target):
+            target = output_target
 
-    with open(target, "rb") as f:
-        content = f.read()
+    # 3. Фоллбэк #2: Рекурсивный поиск по имени файла внутри всей папки workspace
+    if not os.path.isfile(target):
+        filename = os.path.basename(filepath)
+        found_files = list(Path(real_ws_path).rglob(filename))
+        
+        # Берем первый найденный файл
+        for file in found_files:
+            if file.is_file():
+                target = str(file.resolve())
+                break
 
-    from urllib.parse import quote
-    filename = os.path.basename(filepath)
+    # Защита от Path Traversal (обязательно после всех резолвов!)
+    if not os.path.realpath(target).startswith(real_ws_path) or not os.path.isfile(target):
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Файл '{filepath}' не найден в workspace '{workspace_id}'"
+        )
 
-    return Response(
-        content=content,
+    return FileResponse(
+        path=target,
+        filename=os.path.basename(target),
         media_type="application/octet-stream",
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
     )
 
 

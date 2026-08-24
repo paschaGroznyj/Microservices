@@ -20,3 +20,4 @@ uvicorn[standard]
 aiokafka
 beautifulsoup4
 apscheduler
+python-multipart

@@ -62,6 +62,12 @@ class DBConsumer:
             attached_files = payload.get("attached_files")
             tool_trace = payload.get("tool_trace")
             logging.info(payload)
+            
+            model_type = None
+            tokens_usage = None
+            if is_from_bot:
+                model_type = payload.get("agent_model")
+                tokens_usage = payload.get("tokens_usage")
             # Сохраняем в БД
             await self.db.add_message(
                 user_id=user_id,
@@ -73,7 +79,9 @@ class DBConsumer:
                 context_size=context_size,
                 message_id=message_id,
                 attached_files=attached_files,
-                tool_trace=tool_trace
+                tool_trace=tool_trace,
+                model_type=model_type,
+                tokens_usage=tokens_usage
             )
             logger.info(f"Сообщение сохранено в БД: chat={chat_id}, user={user_id}")
             elapsed = time.perf_counter() - start

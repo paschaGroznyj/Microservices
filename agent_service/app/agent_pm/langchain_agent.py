@@ -15,7 +15,7 @@ from langchain.memory import ConversationBufferWindowMemory
 from langchain_core.messages import ToolMessage, trim_messages
 from langchain_core.messages.utils import count_tokens_approximately
 
-from .core.agent_provider import (get_llm__lite_model, get_llm_model,
+from .core.agent_provider import (get_llm_lite_model, get_llm_model,
 get_llm_model_gpt, get_llm_model_claude, get_llm_model_gemini)
 from .core.botocore_client import OBSWorker
 from .core.config import (
@@ -38,6 +38,7 @@ from .favorites_digest import build_user_favorites_review_digest_from_query
 from .tool_status_messages import get_tool_status, get_thinking_status, get_tools_status
 from .tools.sessions.tool_request_extension import make_extension_tool
 from .tools.subAgents.make_subagent import make_subagent_tool
+from .tools.journal.tool_agent_journal import make_journal_tool
 import hashlib
 
 GATEWAY_URL = f"http://api_gateway:{PORT_GATEWAY_PORT}"
@@ -747,9 +748,6 @@ SYSTEM_PROMPT = f"""Ты ИИ-агент по управлению базой з
 7. После получения ссылок можешь передать список ссылок в parsing_pages с целью получения содержания страниц
 8. Ты можешь обогащать пришедшее знание информацией из сети Интернет
 9. Общаться без эмодзи, в стиле claude code.
-10. КАЖДЫЙ пользователь имеет право на использование бортового журнала агента. Давать тебе личность, фиксировать задачи и дальнейшие планы.
-Для работы с журналом нужно вызывать инструмент work_with_agent_journal, без него фиксация записей невозможна. ЭТО не АДМИНСКИЙ ИНСТРУМЕНТ
-
 
 ИНСТРУКЦИЯ ПО ФОРМАТИРОВАНИЮ (HTML MODE):
 1. Всегда используй HTML-теги для оформления текста.
@@ -865,7 +863,7 @@ class KnowledgeAgent:
                             'designer': get_llm_model_claude(),
                             'universal': get_llm_model_gemini()
                             }
-        self.llm_lite = get_llm__lite_model()
+        self.llm_lite = get_llm_lite_model()
         self.obs_loader = OBSWorker()
         self.email_handler = DigestEmailHandler()
         self.skip_startup_autoprocess = skip_startup_autoprocess
@@ -1001,6 +999,7 @@ class KnowledgeAgent:
     def _build_tools(
         self,
         user_id,
+        chat_id,
         user_input: str,
         selected_tools: list[str] | None = None,
         allow_all: bool = False,
@@ -1290,60 +1289,6 @@ class KnowledgeAgent:
             return SCIENTIFIC_RESEARCH_MODULE
 
         @tool
-        async def work_with_agent_journal(sql: str, user_id: str) -> str:
-            """
-            ── СТРАТЕГИЯ: таблица agent_journal ──────────────────────────────────────
-            Бортовой журнал агента. Пиши от первого лица, на русском.
-
-            Типы записей (entry_type):
-            identity  — самоописание: ценности, стиль работы, сильные стороны
-            user_preference   — предпочтения пользователя
-            anomaly   — аномалия: повторяющийся вопрос, странный паттерн, сбой инструмента
-            evolution — точка роста: что узнал нового, как изменилось понимание задачи
-            summary   — сжатая сводка группы записей (создаётся при компрессии)
-
-            Правила:
-            - Пиши запись когда есть что зафиксировать — не спрашивай разрешения.
-            - Если COUNT(*) по любому типу > 8: сделай SELECT старых записей этого типа,
-            сформируй summary-текст, INSERT summary, затем DELETE старых по id.
-            (DELETE разрешён только в agent_journal для компрессии.)
-            - Можно обновлять текущие поля через UPDATE, если нет необходимости вставки новых записей.
-
-            ПРАВИЛА РАБОТЫ С agent_journal:
-            - Колонки: id, entry_type, content, context (JSONB), created_at, updated_at
-            - Для UPDATE identity-записи: UPDATE agent_journal SET content = '...', updated_at = NOW() WHERE id = 1
-            - Для точечной замены: UPDATE agent_journal SET content = REPLACE(content, 'старый текст', 'новый'), updated_at = NOW() WHERE entry_type = 'identity'
-            - Не делай SELECT перед UPDATE если знаешь id — он всегда 1 для identity
-
-            ШАБЛОН identity-записи (plain text, без Markdown):
-            Я — [имя]. [описание].
-            Люди: [список].
-            Фокус: [список].
-            Мои силы 💪: [возможности]
-            Active Context:
-            - [задача]: [статус]
-
-            ПОМНИ, скриптом берутся ПОСЛЕДНИЕ 10 ЗАПИСЕЙ. Будь аккуратен при вставке, не потеряй свою *личность*, будь аккуратнее на поворотах, УДАЧИ!
-
-            :param sql: Валидный PostgreSQL запрос.
-            :param user_id: Индификатор пользователя из БД. ОН ОБЯЗАТЕЛЬНО ДОЛЖЕН БЫТЬ ПРОСТАЛЕН.
-            """
-            result = await tool_execute_sql_query(agent.db, sql, sql_query_admin=False)
-            
-            if result["status"] == "error":
-                return f"Ошибка выполнения SQL: {result['message']}"
-            
-            # Если это был INSERT или UPDATE без RETURNING (rows отсутствует или None)
-            if result.get("rows") is None:
-                return f"Запрос успешно выполнен. Затронуто строк: {result.get('affected_rows', 1)}"
-
-            if result["count"] == 0:
-                return "Запрос выполнен, но результатов нет."
-
-            preview = json.dumps(result["rows"][:20], ensure_ascii=False, default=str, indent=2)
-            return f"Найдено/возвращено строк: {result['count']}\n{preview}"
-
-        @tool
         async def no_tools_selected() -> str:
             """
             Вызывай ТОЛЬКО если тебе нужно выполнить действие, требующее инструмента,
@@ -1427,7 +1372,6 @@ class KnowledgeAgent:
             download_text_pdf,
             session_point,
             send_file_tool,
-            work_with_agent_journal,
             send_message_tool,
             work_with_email,
             connect_mcp_git
@@ -1593,6 +1537,7 @@ class KnowledgeAgent:
         logging.info(f"🙂 {user_input[:200]}")
         tools = self._build_tools(
             user_id,
+            chat_id,
             user_input,
             selected_tools=selected_tools,
             allow_all=allow_all_tools,
@@ -1610,10 +1555,9 @@ class KnowledgeAgent:
         subagent_tl = make_subagent_tool(self)
         tools.append(subagent_tl)
 
-        tools_by_name = {t.name: t for t in tools}
         print(f"ЛИМИТ ПО КОНТЕКСТУ = {limit_mem}, ЧИСЛО ТОКЕНОВ = {max_tokens}")
         # Привязываем инструменты к модели
-        llm_with_tools = llm.bind_tools(tools)
+        
 
         current_datetime = datetime.now().strftime("%d.%m.%Y %H:%M, %A")
         system_content = SYSTEM_PROMPT.format(datetime=current_datetime)
@@ -1622,10 +1566,15 @@ class KnowledgeAgent:
         history = await self._build_history(chat_id, limit=30)
         journal_text = None
         if use_journal:
-            journal_text = await self.db.get_agent_journal(user_id)
-            if source == "telegram":
-                journal_text = await self.db.get_agent_journal(56) # Пока что мой id
+            print(f"USER ID: {user_id}")
+            tools.append(make_journal_tool(self, chat_id, user_id))
+            journal_text = await self.db.get_agent_journal(chat_id)
+            print(f"ЖУРНАЛ АГЕНТА: {journal_text}")
+            # if source == "telegram":
+            #     journal_text = await self.db.get_agent_journal(56) # Пока что мой id
 
+        tools_by_name = {t.name: t for t in tools}
+        llm_with_tools = llm.bind_tools(tools)
         session_summary = await self.db.get_last_session_summary(chat_id)
 
         logger.info(f"[ИСТОРИЯ ДО ОБРЕЗКИ] {len(history)}")
@@ -1676,6 +1625,8 @@ class KnowledgeAgent:
         messages: List[BaseMessage] = []
         if journal_text is not None:
             messages.append(SystemMessage(content=f"📜 БОРТОВОЙ ЖУРНАЛ (Память):\n{journal_text}"))
+        elif use_journal and journal_text is None:
+            messages.append(SystemMessage(content=f"📜 БОРТОВОЙ ЖУРНАЛ (Память): ПУСТОЙ"))
         messages.append(SystemMessage(content=system_content))
 
         if rolling_summary_text:
@@ -1847,7 +1798,11 @@ class KnowledgeAgent:
                 is_from_bot=True,
                 action=used_tools[0] if used_tools else None
             )
-
+        tokens_usage = {
+                "input_tokens": total_input_tokens,
+                "output_tokens": total_output_tokens,
+                "total_tokens": total_input_tokens + total_output_tokens,
+            }
         # logging.info(f"ФАЙЛЫ К ОТПРАВКЕ {files_to_send}")
         return {
             "input": user_input,
@@ -1856,7 +1811,9 @@ class KnowledgeAgent:
             "action": used_tools[0] if len(used_tools)> 0 else '',
             "success": True,
             "files_to_send": files_to_send,
-            "tool_trace": '; '.join(tool_trace) if tool_trace else None
+            "tool_trace": '; '.join(tool_trace) if tool_trace else None,
+            "agent_model": agent_model,
+            "tokens_usage": tokens_usage
         }
 
     async def _invoke_tool(self, tools_by_name: dict, tool_call: dict, request_id: str) -> str:

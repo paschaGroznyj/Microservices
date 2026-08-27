@@ -107,6 +107,9 @@ class DataBaseChats:
             ALTER TABLE chats ADD COLUMN IF NOT EXISTS selected_tools TEXT[];
             ALTER TABLE chats ADD COLUMN IF NOT EXISTS context_size TEXT;
 
+            ALTER TABLE chats ADD COLUMN IF NOT EXISTS model_type VARCHAR(100);
+            ALTER TABLE chats ADD COLUMN IF NOT EXISTS tokens_usage JSONB;
+
         """)
 
         await conn.execute("""
@@ -142,11 +145,15 @@ class DataBaseChats:
         action: str = None,
         selected_tools: list[str] | None = None,
         context_size: str | None = None,
-        tool_trace: str | None = None
+        tool_trace: str | None = None,
+        model_type: str | None = None,
+        tokens_usage: dict | None = None,
     ):
         if user_id is None or chat_id is None:
             logging.warning("Пропущено сообщение: отсутствует user_id или chat_id")
             return None
+
+        tokens_usage_json = json.dumps(tokens_usage) if tokens_usage is not None else None
 
         now_utc = datetime.now(timezone.utc)
         try:
@@ -155,12 +162,12 @@ class DataBaseChats:
                     await conn.execute("""
                         INSERT INTO chats (
                             user_id, chat_id, message_text, is_from_bot,
-                            tool_name, selected_tools, context_size, message_id, created_at, tool_trace
+                            tool_name, selected_tools, context_size, message_id, created_at, tool_trace, model_type, tokens_usage
                         )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb);
                     """,
                     user_id, chat_id, message, is_from_bot,
-                    action, selected_tools, context_size, message_id, now_utc, tool_trace)
+                    action, selected_tools, context_size, message_id, now_utc, tool_trace, model_type, tokens_usage_json)
 
                     if attached_files:
                         source = "agent" if is_from_bot else "user"

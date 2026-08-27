@@ -163,7 +163,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     try:
         logging.info(f"ПОЛЬЗОВАТЕЛЬ ВЫБРАЛ: {selected_tools}, с контекстом {context_size}")
         response = await agent.process_query(user_input=message, 
-                                            request_id=request_id, user_id=-123, 
+                                            request_id=request_id, user_id=user_id, 
                                             chat_id=chat_id, database=db, selected_tools=selected_tools,
                                             context_size=context_size,
                                             source="CatchPM",
@@ -176,7 +176,6 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
         # formatted_time = now.strftime("%H:%M:%S")
         # response_text = f"Идет внедрение новой фичи! Cпасибо за понимание. Текущее время: **{formatted_time}**, {message}"
         files_to_send = response.get("files_to_send")  # [{"path": "...", ...}, ...]
-        tool_trace = response.get("tool_trace")
 
         attached_files = None
         if files_to_send:
@@ -195,7 +194,9 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             "type_agent": "pm",
             "action": response['action'],
             "attached_files": attached_files,
-            "tool_trace": tool_trace # str
+            "tool_trace": response.get("tool_trace"), # str,
+            "agent_model": response.get("agent_model"),
+            "tokens_usage": response.get("tokens_usage")
         }
 
         await prod.send_and_wait("chat-messages", value=bot_message)

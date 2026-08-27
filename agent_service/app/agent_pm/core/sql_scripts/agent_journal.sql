@@ -71,3 +71,12 @@ COMMENT ON COLUMN agent_journal.created_at IS
 
 COMMENT ON COLUMN agent_journal.updated_at IS
 'Время последнего обновления записи (UTC). Обновляется при компрессии summary.';
+
+ALTER TABLE agent_journal
+    ADD COLUMN IF NOT EXISTS chat_id BIGINT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_journal_chat_id
+    ON agent_journal (chat_id);
+
+CREATE INDEX IF NOT EXISTS idx_agent_journal_chat_type
+    ON agent_journal (chat_id, entry_type, updated_at DESC);

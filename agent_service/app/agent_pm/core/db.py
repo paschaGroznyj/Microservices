@@ -185,69 +185,134 @@ class AgentDB:
         """)
 
 
-    async def get_agent_journal(self, user_id: int | None = None) -> str:
+    # async def get_agent_journal(self, user_id: int | None = None) -> str:
+    #     async with self.pool.acquire() as conn:
+    #         rows = await conn.fetch("""
+    #             SELECT id, entry_type, content, context, created_at, updated_at
+    #         FROM (
+    #             -- personal identity конкретно этого пользователя
+    #             SELECT id, entry_type, content, context, created_at, updated_at,
+    #                    1 AS priority, updated_at AS sort_key
+    #             FROM agent_journal
+    #             WHERE entry_type = 'identity'
+    #               AND user_id = $1
+
+    #             UNION ALL
+
+    #             -- по 2 последних от каждого НЕ-identity типа для этого юзера
+    #             -- (или общих, если user_id IS NULL в записи)
+    #             SELECT id, entry_type, content, context, created_at, updated_at,
+    #                    2 AS priority, updated_at AS sort_key
+    #             FROM (
+    #                 SELECT id, entry_type, content, context, created_at, updated_at,
+    #                        ROW_NUMBER() OVER (
+    #                            PARTITION BY entry_type
+    #                            ORDER BY updated_at DESC
+    #                        ) AS rn
+    #                 FROM agent_journal
+    #                 WHERE id != 1
+    #                   AND entry_type != 'identity'
+    #                   AND (user_id = $1 OR user_id IS NULL)
+    #             ) ranked
+    #             WHERE rn <= 2
+    #         ) combined
+    #         GROUP BY id, entry_type, content, context,
+    #                 created_at, updated_at, priority, sort_key
+    #         ORDER BY priority ASC, sort_key DESC
+    #         LIMIT 15;
+    #         """, user_id)
+
+    #         count = await conn.fetchval(
+    #             "SELECT count(id) FROM agent_journal WHERE user_id = $1 OR user_id IS NULL;",
+    #             user_id,
+    #         )
+
+    #     if not rows:
+    #         return "Журнал агента пуст."
+
+    #     formatted_entries = []
+    #     head_str = ''
+    #     if count > MAX_COUNT_JOURNAL:
+    #         head_str = f"Записей в журнале уже больше порога = {MAX_COUNT_JOURNAL}. Пора бы делать summary и дроппать лишние строки\n\n"
+
+    #     for row in rows:
+    #         created_str = row["created_at"].strftime("%Y-%m-%d %H:%M:%S") if row["created_at"] else "—"
+    #         updated_str = row["updated_at"].strftime("%Y-%m-%d %H:%M:%S") if row["updated_at"] else "—"
+    #         context_data = row["context"]
+    #         ctx_str = json.dumps(context_data, ensure_ascii=False) if isinstance(context_data, dict) else (str(context_data) if context_data else "без контекста")
+    #         entry = (
+    #             f"• [{created_str}] [{updated_str}] ID: {row['id']} | Тип: [{row['entry_type']}]\n"
+    #             f"  Содержание: {row['content']}\n"
+    #             f"  Контекст: {ctx_str}"
+    #         )
+    #         formatted_entries.append(entry)
+
+    #     return head_str + "\n\n".join(formatted_entries)
+
+    async def get_agent_journal(self, chat_id: int | None = None) -> str:
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch("""
+            identity_row = await conn.fetchrow("""
                 SELECT id, entry_type, content, context, created_at, updated_at
-            FROM (
-                -- personal identity конкретно этого пользователя
-                SELECT id, entry_type, content, context, created_at, updated_at,
-                       1 AS priority, updated_at AS sort_key
                 FROM agent_journal
-                WHERE entry_type = 'identity'
-                  AND user_id = $1
+                WHERE entry_type = 'identity' AND chat_id = $1
+                LIMIT 1
+            """, chat_id)
 
-                UNION ALL
-
-                -- по 2 последних от каждого НЕ-identity типа для этого юзера
-                -- (или общих, если user_id IS NULL в записи)
-                SELECT id, entry_type, content, context, created_at, updated_at,
-                       2 AS priority, updated_at AS sort_key
+            other_rows = await conn.fetch("""
+                SELECT id, entry_type, content, context, created_at, updated_at
                 FROM (
                     SELECT id, entry_type, content, context, created_at, updated_at,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY entry_type
-                               ORDER BY updated_at DESC
-                           ) AS rn
+                        ROW_NUMBER() OVER (
+                            PARTITION BY entry_type
+                            ORDER BY updated_at DESC
+                        ) AS rn
                     FROM agent_journal
-                    WHERE id != 1
-                      AND entry_type != 'identity'
-                      AND (user_id = $1 OR user_id IS NULL)
+                    WHERE entry_type != 'identity'
+                    AND chat_id = $1
                 ) ranked
                 WHERE rn <= 2
-            ) combined
-            GROUP BY id, entry_type, content, context,
-                    created_at, updated_at, priority, sort_key
-            ORDER BY priority ASC, sort_key DESC
-            LIMIT 15;
-            """, user_id)
+                ORDER BY updated_at DESC
+                LIMIT 8
+            """, chat_id)
 
             count = await conn.fetchval(
-                "SELECT count(id) FROM agent_journal WHERE user_id = $1 OR user_id IS NULL;",
-                user_id,
+                "SELECT count(id) FROM agent_journal WHERE chat_id = $1;",
+                chat_id,
             )
 
-        if not rows:
+        if not identity_row and not other_rows:
             return "Журнал агента пуст."
 
-        formatted_entries = []
-        head_str = ''
-        if count > MAX_COUNT_JOURNAL:
-            head_str = f"Записей в журнале уже больше порога = {MAX_COUNT_JOURNAL}. Пора бы делать summary и дроппать лишние строки\n\n"
-
-        for row in rows:
+        def _format_entry(row) -> str:
             created_str = row["created_at"].strftime("%Y-%m-%d %H:%M:%S") if row["created_at"] else "—"
             updated_str = row["updated_at"].strftime("%Y-%m-%d %H:%M:%S") if row["updated_at"] else "—"
             context_data = row["context"]
-            ctx_str = json.dumps(context_data, ensure_ascii=False) if isinstance(context_data, dict) else (str(context_data) if context_data else "без контекста")
-            entry = (
+            ctx_str = (
+                json.dumps(context_data, ensure_ascii=False) if isinstance(context_data, dict)
+                else (str(context_data) if context_data else "без контекста")
+            )
+            return (
                 f"• [{created_str}] [{updated_str}] ID: {row['id']} | Тип: [{row['entry_type']}]\n"
                 f"  Содержание: {row['content']}\n"
                 f"  Контекст: {ctx_str}"
             )
-            formatted_entries.append(entry)
 
-        return head_str + "\n\n".join(formatted_entries)
+        parts = []
+
+        if count and count > MAX_COUNT_JOURNAL:
+            parts.append(
+                f"Записей в журнале уже больше порога = {MAX_COUNT_JOURNAL}. "
+                f"Пора бы делать summary и дроппать лишние строки\n"
+            )
+
+        if identity_row:
+            parts.append("── ЛИЧНОСТЬ ──\n" + _format_entry(identity_row))
+
+        if other_rows:
+            others_formatted = "\n\n".join(_format_entry(r) for r in other_rows)
+            parts.append(("── ОСТАЛЬНЫЕ ЗАПИСИ ──\n" if identity_row else "") + others_formatted)
+
+        return "\n\n".join(parts)
             
 
     async def get_user_id_by_name(self, user_name: str) -> int | None:

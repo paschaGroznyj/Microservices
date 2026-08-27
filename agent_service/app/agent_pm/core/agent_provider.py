@@ -19,7 +19,7 @@ def get_embedd_model():
 )
 
 @lru_cache
-def get_llm__lite_model():
+def get_llm_lite_model():
     return ChatOpenAI(
         model="anthropic/claude-haiku-4.5",
         base_url="https://foundation-models.api.cloud.ru/v1",

@@ -217,7 +217,7 @@ class ChatApp {
     /* ══════════════════════════════════════════
        OPEN / CREATE CHAT
     ══════════════════════════════════════════ */
-        async openChat(chatId) {
+    async openChat(chatId) {
         // Сохраняем статус уходящего чата перед сносом DOM
         if (this.currentChat && this.currentChat !== chatId) {
             if (!this._chatStatuses) this._chatStatuses = {};
@@ -310,7 +310,11 @@ class ChatApp {
     }
 
     startNewChat() {
-        if (this.ws) { this.ws.close(); this.ws = null; }
+        if (this.ws) {
+            this._wsIntentionalClose = true;
+            this.ws.close();
+            this.ws = null;
+        }
 
         this.currentChat = null;
 
@@ -968,7 +972,15 @@ class ChatApp {
             // Сбрасываем интерфейс ТОЛЬКО если удалили именно открытый чат
             if (this.currentChat === chatId) {
                 this.currentChat = null;
-                if (this.ws) { this.ws.close(); this.ws = null; }
+                if (this.ws) {
+                    this._wsIntentionalClose = true;
+                    this.ws.close();
+                    this.ws = null;
+                }
+                const messagesContainer = document.querySelector('.chat-messages');
+                if (messagesContainer) {
+                    messagesContainer.innerHTML = ''; 
+                }
                 document.querySelectorAll('.chat-item').forEach(i => i.classList.remove('active'));
                 document.querySelector('.chat-main-inner')?.classList.remove('chat-active');
                 // Сбрасываем dataset чтобы renderMessageInput не пропустил рендер
@@ -1057,6 +1069,13 @@ class ChatApp {
                 ?.classList.remove('has-files');
         } catch (err) {
             console.error('sendMessage error:', err);
+        } finally {
+            // Всегда разблокируем кнопку — даже при ошибке или WS-таймауте
+            if (sendBtn) {
+                sendBtn.disabled = false;
+                const hasText = this.getInputText().length > 0;
+                sendBtn.classList.toggle('active', hasText);
+            }
         }
     }
 
@@ -1141,9 +1160,18 @@ class ChatApp {
     connectWebSocket(chatId) {
         this._wsIntentionalClose = false;
         if (this.ws) {
+            // Сбрасываем флаг внутри onclose, а не синхронно — иначе к моменту
+            // срабатывания onclose флаг уже false и запускается лишний reconnect.
             this._wsIntentionalClose = true;
-            this.ws.close();
-            this._wsIntentionalClose = false;
+            const oldWs = this.ws;
+            const prevOnClose = oldWs.onclose;
+            oldWs.onclose = (e) => {
+                // Сначала выполняем оригинальный onclose (финализация стриминга и т.д.)
+                if (typeof prevOnClose === 'function') prevOnClose.call(oldWs, e);
+                // Только теперь сбрасываем флаг — после того как onclose отработал
+                this._wsIntentionalClose = false;
+            };
+            oldWs.close();
         }
 
         this._pendingBotEl    = null;  // текущий элемент ответа бота (стриминг)
@@ -1253,7 +1281,7 @@ class ChatApp {
 
         this.ws.onerror = (e) => console.warn('WS error:', e);
 
-        this.ws.onclose = () => {
+        this.ws.onclose = (event) => {
             // Если стриминг оборвался — финализируем что накопили
             if (this._pendingBotEl && this._pendingBotText) {
                 this._applyCodeHeaders(this._pendingBotEl);
@@ -1264,16 +1292,23 @@ class ChatApp {
             }
             this._removeBotPlaceholder();
 
-            // Автопереподключение: если чат открыт и закрытие не было намеренным
-            if (this.currentChat && !this._wsIntentionalClose) {
-                // console.warn(`WS closed for chat=${this.currentChat}, reconnecting in 2s...`);
+            // Автопереподключение:
+            // - только если закрытие не было намеренным (переключение чата / startNewChat)
+            // - только если не нормальное закрытие (code 1000) — сервер сам закрыл штатно
+            const isNormalClose = event.code === 1000;
+            if (this.currentChat && !this._wsIntentionalClose && !isNormalClose) {
                 clearTimeout(this._wsReconnectTimer);
+                this._wsReconnectAttempts = (this._wsReconnectAttempts || 0) + 1;
+                // Exponential backoff: 2s, 4s, 8s, 16s, cap 30s
+                const delay = Math.min(2000 * Math.pow(2, this._wsReconnectAttempts - 1), 30000);
                 this._wsReconnectTimer = setTimeout(() => {
                     if (this.currentChat && !this._wsIntentionalClose) {
-                        console.log(`WS reconnecting chat=${this.currentChat}`);
                         this.connectWebSocket(this.currentChat);
                     }
-                }, 60000);
+                }, delay);
+            } else {
+                // Штатное закрытие — сбрасываем счётчик попыток
+                this._wsReconnectAttempts = 0;
             }
         };
     }
@@ -1681,6 +1716,11 @@ class ChatApp {
             const deadline = Date.now() + timeout;
             const check = () => {
                 if (!this.ws || this.ws.readyState === WebSocket.OPEN) return resolve();
+                // Если WS уже мёртв — нет смысла ждать до таймаута
+                if (this.ws.readyState === WebSocket.CLOSED ||
+                    this.ws.readyState === WebSocket.CLOSING) {
+                    return reject(new Error('WS closed before open'));
+                }
                 if (Date.now() > deadline) return reject(new Error('WS connect timeout'));
                 setTimeout(check, 50);
             };

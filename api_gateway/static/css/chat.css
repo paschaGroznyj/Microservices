@@ -545,6 +545,19 @@
   pointer-events: none;
 }
 
+/* Нейтральный маркер-узел, куда уводится каретка после Shift+Enter —
+   гарантированно обычный текст, чтобы прервать залипший стиль. */
+.chat-input-field .fmt-reset {
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: normal;
+  font-style: normal;
+  text-decoration: none;
+  color: var(--text-primary);
+  background: none;
+  border: none;
+}
+
 /* Нижняя панель */
 .chat-input-footer {
   display: flex;
@@ -938,7 +951,8 @@ pre {
   width: 100%;
   margin: 0 auto;
   padding: 12px 24px 0;
-  min-height: 120px;
+  /* min-height убран: место под ответ агента больше не резервируем,
+     блок держит только высоту живого индикатора-волны. */
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -949,6 +963,57 @@ pre {
 
 .agent-placeholder.placeholder-hide {
   opacity: 0;
+}
+
+/* ── Живой индикатор: граф из трёх точек в рывковом вращении ─────
+   Крутится всё время ожидания и во время размышлений.
+   Паттерн: быстрый прокрут → пауза → быстрый прокрут → пауза.
+   На финале (.wave-flatten) вращение останавливается и блок плавно гаснет. */
+.wave-indicator {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 2px;
+  opacity: 1;
+  transition: opacity 0.45s ease;
+}
+.wave-indicator svg {
+  width: 52px;
+  height: 16px;
+  overflow: visible;
+}
+.wave-indicator .graph-spinner {
+  transform-origin: 26px 8px;
+  animation: graph-spin-burst 0.92s linear infinite;
+}
+.wave-indicator .graph-link {
+  stroke: var(--accent);
+  stroke-width: 1.8;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.9;
+}
+.wave-indicator .graph-dot {
+  fill: var(--accent);
+}
+@keyframes graph-spin-burst {
+  0%   { transform: rotate(0deg); }
+  22%  { transform: rotate(210deg); }   /* быстрый прокрут */
+  52%  { transform: rotate(210deg); }   /* пауза */
+  74%  { transform: rotate(360deg); }   /* быстрый прокрут */
+  100% { transform: rotate(360deg); }   /* пауза */
+}
+.wave-indicator.wave-flatten {
+  opacity: 0;
+}
+.wave-indicator.wave-flatten .graph-spinner {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wave-indicator .graph-spinner {
+    animation: none;
+  }
 }
 
 /* ══════════════════════════════════════════════
@@ -1067,4 +1132,171 @@ pre {
 
 .subagent-status-block {
   animation: subagent-fadein 0.18s ease;
+}
+
+/* ══════════════════════════════════════════════
+   REASONING — размышления модели между вызовами
+   инструментов. Два состояния:
+     .reasoning-live  — живой стрим текущей мысли
+                        (приглушённый, курсив, печатается сразу)
+     .reasoning-block — единый свёрток «Размышления»,
+                        куда после reasoning_end сливаются
+                        все мысли ответа (сворачиваемый).
+   Финальный ответ повышается до .live-block (обычный стиль).
+══════════════════════════════════════════════ */
+
+/* Финальный блок — наследует обычный стиль .agent-message, без декора. */
+.live-block {
+  animation: subagent-fadein 0.18s ease;
+}
+
+/* Живой стрим мысли: сразу в приглушённом стиле, чтобы визуально
+   отличаться от финального ответа ещё до прихода маркера kind. */
+.reasoning-live {
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--text-muted);
+  font-style: italic;
+  padding-left: 12px;
+  border-left: 2px solid color-mix(in srgb, var(--text-muted) 32%, transparent);
+  animation: subagent-fadein 0.18s ease;
+}
+.reasoning-live code {
+  font-family: var(--font-mono);
+  font-style: normal;
+  font-size: 0.82em;
+  background: color-mix(in srgb, var(--text-muted) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--text-muted) 18%, var(--border));
+  border-radius: 4px;
+  padding: 1px 4px;
+  color: var(--text-secondary);
+}
+
+/* ── Переход reasoning-live → reasoning-block («лопание пузыря») ──
+   Фаза 1: живой блок схлопывается и растворяется (pop-out),
+   как лопнувший мыльный пузырь — лёгкий раздув, затем сжатие в ноль.
+   Фаза 2: новый шаг в свёртке «надувается» из точки (pop-in).
+   transform-origin слева, чтобы движение шло от бордюра-акцента. */
+.reasoning-live--pop {
+  pointer-events: none;
+  transform-origin: 12px 50%;
+  animation: reasoning-bubble-pop 0.26s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+@keyframes reasoning-bubble-pop {
+  0%   { transform: scale(1);      opacity: 1; filter: blur(0); }
+  35%  { transform: scale(1.045);  opacity: 1; filter: blur(0); }
+  100% { transform: scale(0.62);   opacity: 0; filter: blur(3px); }
+}
+
+/* Новый шаг стартует «зажатым» (popin) — до команды надуться. */
+.reasoning-body .reasoning-step--popin {
+  transform: scale(0.7);
+  opacity: 0;
+  transform-origin: left center;
+}
+/* Надувание пузыря: из точки в полный размер с лёгким перелётом. */
+.reasoning-body .reasoning-step--pop {
+  animation: reasoning-step-inflate 0.34s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+@keyframes reasoning-step-inflate {
+  0%   { transform: scale(0.7);  opacity: 0; }
+  60%  { transform: scale(1.03); opacity: 1; }
+  100% { transform: scale(1);    opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reasoning-live--pop { animation: none; opacity: 0; }
+  .reasoning-body .reasoning-step--popin,
+  .reasoning-body .reasoning-step--pop {
+    animation: none;
+    transform: none;
+    opacity: 1;
+  }
+}
+
+/* ── Единый свёрток «Размышления» ─────────────── */
+.reasoning-block {
+  margin: 4px 0 14px;
+  border: 1px solid color-mix(in srgb, var(--text-muted) 22%, var(--border));
+  border-radius: var(--radius-md, 10px);
+  background: color-mix(in srgb, var(--text-muted) 4%, var(--surface));
+  overflow: hidden;
+  animation: subagent-fadein 0.2s ease;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.reasoning-block:hover {
+  border-color: color-mix(in srgb, var(--text-muted) 34%, var(--border));
+}
+
+.reasoning-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+  padding: 8px 12px;
+  font-size: 0.74rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--text-muted) 75%, var(--text-secondary));
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.reasoning-header:hover {
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text-muted) 6%, transparent);
+}
+
+/* SVG-каретка: chevron-right, доворачивается на 90° при раскрытии */
+.reasoning-caret {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--text-muted) 70%, var(--text-secondary));
+  transition: transform 0.18s ease;
+}
+.reasoning-block:not(.reasoning-collapsed) .reasoning-caret {
+  transform: rotate(90deg);
+}
+
+.reasoning-label {
+  text-transform: uppercase;
+}
+
+/* Тело свёртка: приглушённый текст, отступы по краям */
+.reasoning-body {
+  padding: 2px 14px 10px 34px;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--text-muted);
+  font-style: italic;
+}
+.reasoning-body .reasoning-step {
+  padding: 6px 0;
+}
+.reasoning-body .reasoning-step + .reasoning-step {
+  border-top: 1px dashed color-mix(in srgb, var(--text-muted) 20%, transparent);
+}
+.reasoning-body p { margin-bottom: 0.4em; }
+.reasoning-body p:last-child { margin-bottom: 0; }
+.reasoning-body code {
+  font-family: var(--font-mono);
+  font-style: normal;
+  font-size: 0.82em;
+  background: color-mix(in srgb, var(--text-muted) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--text-muted) 18%, var(--border));
+  border-radius: 4px;
+  padding: 1px 4px;
+  color: var(--text-secondary);
+}
+.reasoning-body pre {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 0.82em;
+  font-style: normal;
+  overflow-x: auto;
+}
+
+/* Свёрнутое состояние — тело скрыто */
+.reasoning-collapsed .reasoning-body {
+  display: none;
 }

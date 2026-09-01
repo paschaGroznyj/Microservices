@@ -121,6 +121,15 @@ class BotStatus(BaseModel):
     request_id: str
     status: str
 
+class BotStream(BaseModel):
+    request_id: str
+    chunk: str
+    id: str | None = None
+    # Тип чанка: "live" — живой текст (печатается в текущем блоке),
+    # "reasoning_end" — маркер сворачивания живого блока в reasoning,
+    # "final" / "final_commit" — фиксация финального ответа.
+    kind: str = "final"
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -191,6 +200,25 @@ async def bot_status(payload: BotStatus):
     await broadcast(chat_id, {
         "type": "agent_status",  # прописали проверку на фронте
         "status": payload.status
+    })
+
+    return {"ok": True}
+
+@app.post("/internal/bot_stream")
+async def bot_stream(payload: BotStream):
+    """Прямой канал стриминга финального ответа модели (минуя Kafka).
+    Резолвит chat_id по request_id и шлёт чанк на фронт по ws."""
+    chat_id = pending_requests.get(payload.request_id)
+
+    if not chat_id:
+        logger.warning(f"[stream] Неизвестный request_id: {payload.request_id}")
+        raise HTTPException(status_code=404, detail="request_id not found")
+
+    await broadcast(chat_id, {
+        "is_from_bot": True,
+        "chunk": payload.chunk,
+        "id": payload.id,
+        "kind": payload.kind,
     })
 
     return {"ok": True}
@@ -855,6 +883,10 @@ async def send_message(request: Request):
         "user_id": data["user_id"],
         "chat_id": data["chat_id"],
         "message": data["message"],
+        # Прокидываем клиентский message_id в WS-эхо — фронту он нужен
+        # для дедупа оптимистично отрисованного сообщения (особенно для
+        # длинного текста-чипа, где сверить по textContent нельзя).
+        "message_id": data.get("message_id"),
         "is_from_bot": False
     }
     print("Перед отправкой сообщения", data)

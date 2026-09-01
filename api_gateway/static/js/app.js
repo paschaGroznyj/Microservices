@@ -29,7 +29,19 @@ class ChatApp {
         this.initHelp();
         this.initChatsSectionToggle();
         this.initVisibilityReconnect();
+        this.initTextPreview();
         await this.renderMessageInput();
+    }
+
+    /* ══════════════════════════════════════════
+       TEXT PREVIEW — правый сайдбар просмотра
+       длинного текста. Регистрирует глобальную ссылку
+       (для inline-onclick чипов) и обработчик крестика.
+    ══════════════════════════════════════════ */
+    initTextPreview() {
+        window.__catchpmApp = this;
+        document.getElementById('text-preview-close')
+            ?.addEventListener('click', () => this.closeTextPreview());
     }
 
 
@@ -491,7 +503,15 @@ class ChatApp {
         if (!isBot) {
             // Рендерим прикреплённые файлы над текстом сообщения
             const filesHtml = this._renderMessageFiles(message.files);
-            messageEl.innerHTML = `${filesHtml}<div class="message-text">${content}</div><div class="timestamp">${time}</div>`;
+            // Длинный текст (>1000 символов) сворачиваем в чип-файлик,
+            // клик по которому открывает превью в правом сайдбаре.
+            const TEXT_COLLAPSE_LIMIT = 1000;
+            if (rawContent && rawContent.length > TEXT_COLLAPSE_LIMIT) {
+                const chipHtml = this._renderTextChip(rawContent);
+                messageEl.innerHTML = `${filesHtml}<div class="message-text">${chipHtml}</div><div class="timestamp">${time}</div>`;
+            } else {
+                messageEl.innerHTML = `${filesHtml}<div class="message-text">${content}</div><div class="timestamp">${time}</div>`;
+            }
         } else {
             messageEl.dataset.id = message.id;
             messageEl.innerHTML = content;
@@ -534,6 +554,9 @@ class ChatApp {
         } else {
             const wrapper = document.createElement('div');
             wrapper.className = 'user-message-wrapper';
+            // id сообщения на wrapper — нужен для дедупа WS-эха (в т.ч. для чипов,
+            // где textContent не содержит полного текста).
+            if (message.id) wrapper.dataset.messageId = message.id;
             wrapper.appendChild(messageEl);
             wrapper.appendChild(actions);
             container.appendChild(wrapper);
@@ -653,6 +676,77 @@ class ChatApp {
      * @param {Array<{name: string, ext: string}>|undefined} files
      * @returns {string} HTML-строка или '' если файлов нет
      */
+    /* ══════════════════════════════════════════
+       TEXT CHIP — свёрнутый длинный текст (>1000 симв.)
+       Рендерит чип в стиле прикреплённого файла. Оригинальный
+       текст кладём в data-атрибут (base64), чтобы клик открыл его
+       в правом сайдбаре без искажений. */
+    _renderTextChip(rawText) {
+        const chars = rawText.length;
+        const lines = rawText.split('\n').length;
+        // Первая непустая строка как «имя файла»
+        const firstLine = (rawText.split('\n').find(l => l.trim()) || 'Текст').trim();
+        const title = firstLine.length > 40 ? firstLine.slice(0, 40) + '…' : firstLine;
+        const safeTitle = this.escapeHtml(title);
+        const meta = `${chars} симв · ${lines} стр`;
+        // base64(utf8) — безопасно переносим любой текст через data-атрибут
+        let b64 = '';
+        try {
+            b64 = btoa(unescape(encodeURIComponent(rawText)));
+        } catch (e) {
+            b64 = '';
+        }
+        return `<div class="fa-chip fa-chip--text fa-chip--gray" role="button" tabindex="0"
+     title="Открыть текст" data-text-b64="${b64}"
+     onclick="window.__catchpmApp && window.__catchpmApp.openTextPreview(this)"
+     onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();window.__catchpmApp && window.__catchpmApp.openTextPreview(this);}">
+<span class="fa-chip__icon" aria-hidden="true">
+  <svg viewBox="0 0 36 44" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M4 0h20l12 12v28a4 4 0 0 1-4 4H4a4 4 0 0 1-4-4V4a4 4 0 0 1 4-4z" class="fa-chip__bg"/>
+    <path d="M24 0l12 12H28a4 4 0 0 1-4-4V0z" class="fa-chip__fold"/>
+    <text x="18" y="32" text-anchor="middle" class="fa-chip__text">TXT</text>
+  </svg>
+</span>
+<span class="fa-chip__name">${safeTitle}</span>
+<span class="fa-chip__meta">${meta}</span>
+</div>`;
+    }
+
+    /* Открывает правый сайдбар-превью с оригинальным текстом чипа. */
+    openTextPreview(chipEl) {
+        const b64 = chipEl?.dataset?.textB64 || '';
+        let text = '';
+        try {
+            text = decodeURIComponent(escape(atob(b64)));
+        } catch (e) {
+            text = '';
+        }
+        const panel = document.getElementById('text-preview-panel');
+        const body  = document.getElementById('text-preview-body');
+        const titleEl = document.getElementById('text-preview-title');
+        const view  = document.getElementById('view-agent');
+        if (!panel || !body || !view) return;
+
+        body.textContent = text;   // textContent — без интерпретации HTML, оригинальный вид
+        if (titleEl) {
+            const first = (text.split('\n').find(l => l.trim()) || 'Просмотр текста').trim();
+            titleEl.textContent = first.length > 60 ? first.slice(0, 60) + '…' : first;
+        }
+        panel.classList.add('open');
+        panel.setAttribute('aria-hidden', 'false');
+        body.scrollTop = 0;
+    }
+
+    /* Закрывает правый сайдбар-превью. Панель уезжает по той же анимации
+       (translateX 0 -> 100%), лента и поле ввода не двигаются. */
+    closeTextPreview() {
+        const panel = document.getElementById('text-preview-panel');
+        if (panel) {
+            panel.classList.remove('open');
+            panel.setAttribute('aria-hidden', 'true');
+        }
+    }
+
     _renderMessageFiles(files) {
         if (!files || files.length === 0) return '';
 
@@ -1125,9 +1219,13 @@ class ChatApp {
             }
         }
 
+        // Единый id сообщения: генерим ДО оптимистичного рендера, чтобы он
+        // попал в DOM (wrapper.dataset.messageId) и совпал с WS-эхом.
+        const msgId = `msg-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+
         // Оптимистичный рендер — передаём файлы до upload/clear
         const _optimisticFiles = window.FileAttach?.getFilesMeta() ?? [];
-        this.addMessage({ message: text, is_from_bot: false, id: `temp-${Date.now()}`, created_at: new Date().toISOString(), files: _optimisticFiles });
+        this.addMessage({ message: text, is_from_bot: false, id: msgId, created_at: new Date().toISOString(), files: _optimisticFiles });
 
         // 🎯 После fly-анимации: скролл + резерв места под ответ бота
         this._scrollToUserMessageAndReserve();
@@ -1139,10 +1237,16 @@ class ChatApp {
         // Сбрасываем флаг: ответ ещё не пришёл
         this._botAnswered = false;
 
+        // КРИТИЧНО: перед новым запросом добиваем возможный «хвост» прошлого
+        // стрима. Если предыдущий ответ не прошёл через _finalizeStream()
+        // (пришёл целиком, был обрыв WS без onclose, race переключения чата),
+        // то _pendingBotEl/_liveBlockEl всё ещё указывают на СТАРЫЙ DOM-элемент,
+        // и новые чанки мыслей дописались бы в предыдущее сообщение бота.
+        this._hardResetStreamState();
+
         try {
             // Ждём WS-соединения (актуально для новых чатов)
             await this._waitForWS();
-            const msgId = `msg-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
             await fetch('/api/chats/send_message', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1221,22 +1325,19 @@ class ChatApp {
         // Не создаём если ответ уже пришёл (race: бот ответил быстрее 400ms)
         if (this._botAnswered) return;
 
-        // Убираем предыдущий если был (вместе с его гардом)
+        // Убираем предыдущий если был
         this._removeBotPlaceholder();
 
         const placeholder = document.createElement('div');
         placeholder.id = 'agent-response-placeholder';
         placeholder.className = 'agent-placeholder';
+        // Живой индикатор: синусоида в движении. Крутится всё время ожидания
+        // и во время размышлений; на финале распрямляется в линию и гаснет.
+        placeholder.innerHTML = this._waveIndicatorSVG();
         msgContainer.appendChild(placeholder);
 
         // Скроллим контейнер чтобы placeholder был виден снизу
         msgContainer.scrollTop = msgContainer.scrollHeight;
-
-        // Таймаут-гард: убрать через 60с если бот так и не ответил.
-        // Сохраняем id таймера чтобы _removeBotPlaceholder мог его отменить.
-        this._placeholderGuardTimer = setTimeout(() => {
-            this._removeBotPlaceholder();
-        }, 60000);
     }
 
     /** Убирает placeholder — вызывается явно из WS-обработчика */
@@ -1291,6 +1392,14 @@ class ChatApp {
             console.log('Сообщение от агента', msg)
             // Дедупликация: пользовательское сообщение уже показано оптимистично
             if (!msg.is_from_bot) {
+                // Основной ключ дедупа — message_id (совпадает с клиентским msgId,
+                // который бэк возвращает в эхе). Надёжно для длинного текста-чипа,
+                // где textContent не содержит полного сообщения.
+                if (msg.message_id &&
+                    document.querySelector(`.user-message-wrapper[data-message-id="${msg.message_id}"]`)) {
+                    return;
+                }
+                // Fallback по тексту — для старых сообщений/эх без message_id.
                 const dup = [...document.querySelectorAll('.user-message')].find(el =>
                     el.textContent?.trim().includes(msg.message?.trim())
                 );
@@ -1298,6 +1407,11 @@ class ChatApp {
                 this.addMessage(msg, true, false);
                 return;
             }
+
+            // Финал стриминга: если уже был живой стриминг (_pendingBotEl),
+            // а пришло целое Kafka-сообщение того же ответа — не создаём новый
+            // пузырь через addMessage, а даём финализировать существующий ниже.
+            // (ветка msg.message при живом _pendingBotEl это уже делает корректно)
 
             // ── Стриминг ответа бота ──────────────────────────────
             // msg.chunk  — фрагмент текста (стриминг)
@@ -1307,88 +1421,120 @@ class ChatApp {
             const container = this.getMessagesContainer();
             if (!container) return;
 
+            // ── Управляющие маркеры стриминга (kind без нового текста) ──
+            // reasoning_end: живой блок был размышлением перед тулзой —
+            //                сворачиваем его в приглушённый reasoning-блок.
+            // final_commit:  живой блок оказался финальным ответом —
+            //                фиксируем его основным шрифтом (ждём Kafka done
+            //                для файлов/actions, поэтому тут просто помечаем).
+            if (msg.kind === 'reasoning_end') {
+                // Текущий живой блок был размышлением перед вызовом тулзы —
+                // сливаем его в общий свёрток «Размышления» (не плодим блоки).
+                this._commitReasoningBlock();
+                return;
+            }
+            if (msg.kind === 'final_commit') {
+                // Живой блок оказался финальным ответом — повышаем его стиль
+                // с приглушённого reasoning до основного. Реальная финализация
+                // (файлы, actions) придёт с Kafka-сообщением ниже.
+                this._promoteLiveToFinal();
+                this._streamIsFinal = true;
+                return;
+            }
+
             if (msg.chunk !== undefined) {
-                // Режим стриминга: накапливаем чанки в один элемент
-                if (!this._pendingBotEl) {
-                    this._pendingBotEl   = document.createElement('div');
-                    this._pendingBotEl.className = 'agent-message';
-                    this._pendingBotEl.dataset.id = msg.id || '';
-                    this._pendingBotEl.style.opacity = '0';
-                    this._pendingBotEl.style.transition = 'opacity 0.25s ease';
-                    container.appendChild(this._pendingBotEl);
-                    requestAnimationFrame(() => requestAnimationFrame(() => {
-                        if (this._pendingBotEl) this._pendingBotEl.style.opacity = '1';
-                    }));
-                    // Placeholder живёт пока идёт стриминг — убираем только здесь, при первом чанке
-                    this._botAnswered = true;
-                    this._removeBotPlaceholder();
-                   this._clearAllStatuses();
+                // Живой стриминг: чанк ДОПИСЫВАЕМ в буфер, без рендера.
+                // Отрисовкой занимается ровный RAF-цикл (_startStreamLoop).
+                // Печатаем СРАЗУ в приглушённом reasoning-стиле — если шаг
+                // окажется финалом, повысим стиль по маркеру final_commit.
+                if (!this._liveBlockEl) {
+                    // Обёртка ответа бота — создаём один раз на весь ответ.
+                    if (!this._pendingBotEl) {
+                        this._pendingBotEl = document.createElement('div');
+                        this._pendingBotEl.className = 'agent-message';
+                        this._pendingBotEl.dataset.id = msg.id || '';
+                        this._pendingBotEl.style.opacity = '0';
+                        this._pendingBotEl.style.transition = 'opacity 0.25s ease';
+                        container.appendChild(this._pendingBotEl);
+                        requestAnimationFrame(() => requestAnimationFrame(() => {
+                            if (this._pendingBotEl) this._pendingBotEl.style.opacity = '1';
+                        }));
+                        this._botAnswered = true;
+                        // Placeholder НЕ убираем здесь: волна-индикатор должна
+                        // крутиться и во время размышлений. Снос — в _finalizeStream.
+                        this._clearAllStatuses();
+                        this._streamingActive = true;
+                        this._streamIsFinal   = false;
+                    }
+                    // Живой блок печатается в reasoning-стиле (приглушённый,
+                    // курсив) — ПОКА не пришёл маркер final_commit. Если финал
+                    // уже объявлен (_streamIsFinal), создаём блок сразу в
+                    // обычном стиле .live-block, иначе финальные чанки, пришедшие
+                    // после маркера, отрисуются приглушённым reasoning-стилем.
+                    this._liveBlockEl = document.createElement('div');
+                    this._liveBlockEl.className = this._streamIsFinal ? 'live-block' : 'reasoning-live';
+                    this._pendingBotEl.appendChild(this._liveBlockEl);
+                    this._streamBuffer = '';
+                    this._streamShown  = '';
+                    this._streamDone   = false;
+                    this._startStreamLoop();
                 }
 
-                this._pendingBotText += msg.chunk;
-
-                let html = marked.parse(this._pendingBotText);
-                if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
-                    ADD_TAGS: ['table','thead','tbody','tr','th','td'],
-                    ADD_ATTR: ['colspan','rowspan','align']
-                });
-                this._pendingBotEl.innerHTML = html;
-
-                const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-                if (distFromBottom < 80) container.scrollTop = container.scrollHeight;
+                this._streamBuffer += msg.chunk;
 
             } else if (msg.done || msg.message !== undefined) {
-                // Финал стриминга или целое сообщение
+                // Финал стриминга или целое сообщение.
+                // fullText из Kafka может опережать то, что typewriter уже
+                // напечатал — поэтому докидываем «хвост» в буфер, чтобы цикл
+                // допечатал его плавно, а тяжёлую финализацию (файлы, actions,
+                // подсветка кода) выполняем ПОСЛЕ полного дренажа буфера.
                 const fullText = msg.message ?? this._pendingBotText;
-                if (this._pendingBotEl) {
-                    // Дорисовываем финальный вариант
-                    let html = marked.parse(fullText);
-                    if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
-                        ADD_TAGS: ['table','thead','tbody','tr','th','td'],
-                        ADD_ATTR: ['colspan','rowspan','align']
-                    });
-                    this._pendingBotEl.innerHTML = html;
-                    // Рендерим файлы агента между текстом и кнопкой копировать
-                    if (msg.files?.length) {
-                        this._pendingBotEl.appendChild(
-                            this._renderBotFiles(msg.files, msg.message_id)
-                        );
+
+                if (this._pendingBotEl && this._liveBlockEl) {
+                    // Синхронизируем буфер живого (финального) блока с эталонным
+                    // полным текстом. fullText из Kafka — это ТОЛЬКО финальный
+                    // ответ (без reasoning), а живой блок сейчас и есть финал.
+                    const alreadyQueued = (this._streamShown || '') + (this._streamBuffer || '');
+                    if (fullText.startsWith(alreadyQueued)) {
+                        this._streamBuffer += fullText.slice(alreadyQueued.length);
+                    } else if (fullText.length > alreadyQueued.length) {
+                        this._streamBuffer += fullText.slice(alreadyQueued.length);
                     }
-                    if (msg.message_id) {
-                        this._pendingBotEl.dataset.id = msg.message_id;
-                    }
-                    this._applyCodeHeaders(this._pendingBotEl);
-                    const actions = this.createMessageActions(this._pendingBotEl.dataset.id, fullText, true);
-                    this._pendingBotEl.appendChild(actions);
-                    this._pendingBotEl.style.transition = '';
-                    this._pendingBotEl.style.opacity    = '';
-                    this._pendingBotEl = null;
-                    this._pendingBotText = '';
+
+                    this._streamFinalData = {
+                        fullText,
+                        files: msg.files,
+                        message_id: msg.message_id,
+                    };
+                    this._streamDone = true;
+                    this._startStreamLoop();
                 } else {
                     // Целое сообщение без стриминга — обычный addMessage
                     this.addMessage({ ...msg, message: fullText }, true, true);
+                    this._botAnswered = true;
+                    this._removeBotPlaceholder();
+                    this._clearAllStatuses();
+                    this._streamingActive = false;
+                    if (this._chatStatuses) delete this._chatStatuses[this.currentChat];
                 }
-
-                // Убираем placeholder если ещё жив (целое сообщение без стриминга)
-                this._botAnswered = true;
-                this._removeBotPlaceholder();
-                this._clearAllStatuses();
-                // Чистим статус этого чата из памяти — ответ получен
-                if (this._chatStatuses) delete this._chatStatuses[this.currentChat];
             }
         };
 
         this.ws.onerror = (e) => console.warn('WS error:', e);
 
         this.ws.onclose = (event) => {
-            // Если стриминг оборвался — финализируем что накопили
-            if (this._pendingBotEl && this._pendingBotText) {
-                this._applyCodeHeaders(this._pendingBotEl);
-                this._pendingBotEl.style.transition = '';
-                this._pendingBotEl.style.opacity    = '';
-                this._pendingBotEl = null;
-                this._pendingBotText = '';
+            // Если стриминг оборвался — форсируем финализацию того, что накопили
+            if (this._pendingBotEl) {
+                this._streamDone = true;
+                if (!this._streamFinalData) {
+                    this._streamFinalData = {
+                        fullText: (this._streamShown || '') + (this._streamBuffer || ''),
+                    };
+                }
+                this._finalizeStream();
             }
+            this._liveBlockEl = null;
+            this._reasoningWrapEl = null;
             this._removeBotPlaceholder();
 
             // Автопереподключение:
@@ -1412,7 +1558,334 @@ class ChatApp {
         };
     }
 
+    /* ══════════════════════════════════════════
+       TYPEWRITER-СТРИМИНГ
+       Приём чанков отвязан от отрисовки: чанки копятся
+       в _streamBuffer, а ровный RAF-цикл каждый кадр
+       «подъедает» из буфера фиксированную порцию символов
+       и дорисовывает. Тяжёлый marked.parse троттлится.
+    ══════════════════════════════════════════ */
+
+    // Базовый темп: символов за кадр (~60fps → ~240 симв/сек).
+    // При переполнении буфера порция плавно растёт, чтобы не отставать
+    // от быстрой генерации, но не рвать плавность.
+    _streamTypewriterStep() {
+        const CHARS_PER_FRAME = 7;      // базовый темп (чуть быстрее, ~420 симв/сек)
+        const buffered = this._streamBuffer ? this._streamBuffer.length : 0;
+
+        // Автоускорение: чем больше накопилось, тем крупнее порция.
+        let step = CHARS_PER_FRAME;
+        if (buffered > 400)  step = Math.min(16, CHARS_PER_FRAME + Math.floor(buffered / 150));
+        if (buffered > 2000) step = Math.min(48, Math.floor(buffered / 50));
+
+        return step;
+    }
+
+    _startStreamLoop() {
+        if (this._streamRaf) return;  // цикл уже крутится
+
+        const RENDER_THROTTLE_MS = 70;  // не чаще — тяжёлый marked.parse
+        this._lastStreamRender = 0;
+
+        const tick = (ts) => {
+            if (!this._liveBlockEl) {
+                this._streamRaf = null;
+                return;
+            }
+
+            // Вытаскиваем порцию символов из буфера
+            const step = this._streamTypewriterStep();
+            if (this._streamBuffer && this._streamBuffer.length) {
+                const take = this._streamBuffer.slice(0, step);
+                this._streamShown  += take;
+                this._streamBuffer  = this._streamBuffer.slice(step);
+            }
+
+            // Троттлим тяжёлый Markdown-ре-рендер
+            if (!ts) ts = performance.now();
+            if (ts - this._lastStreamRender >= RENDER_THROTTLE_MS) {
+                this._renderStreamPartial();
+                this._lastStreamRender = ts;
+            }
+
+            // Условие завершения: сервер сказал done И буфер пуст
+            const drained = !this._streamBuffer || this._streamBuffer.length === 0;
+            if (this._streamDone && drained) {
+                this._renderStreamPartial();   // финальный partial-рендер текста
+                this._finalizeStream();        // файлы, actions, подсветка
+                this._streamRaf = null;
+                return;
+            }
+
+            this._streamRaf = requestAnimationFrame(tick);
+        };
+
+        this._streamRaf = requestAnimationFrame(tick);
+    }
+
+    _renderStreamPartial() {
+        // Рендерим только в ЖИВОЙ блок (reasoning-блоки уже свёрнуты выше).
+        if (!this._liveBlockEl) return;
+        const container = this.getMessagesContainer();
+
+        let html = marked.parse(this._streamShown || '');
+        if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
+            ADD_TAGS: ['table','thead','tbody','tr','th','td'],
+            ADD_ATTR: ['colspan','rowspan','align']
+        });
+        this._liveBlockEl.innerHTML = html;
+
+        if (container) {
+            const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+            if (distFromBottom < 80) container.scrollTop = container.scrollHeight;
+        }
+    }
+
+    /* SVG-каретка (Tabler chevron-right). Один стиль на весь свёрток —
+       поворачивается через CSS-transform при раскрытии. */
+    _reasoningCaretSVG() {
+        return `<svg class="reasoning-caret" viewBox="0 0 24 24" width="14" height="14" `
+             + `fill="none" stroke="currentColor" stroke-width="2" `
+             + `stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">`
+             + `<path d="M9 6l6 6-6 6"/></svg>`;
+    }
+
+    /* Живой индикатор ожидания/размышления: граф из трёх точек,
+       соединённых линией. Крутится рывками: быстрый прокрут → пауза →
+       быстрый прокрут → пауза (CSS keyframes).
+       На финале индикатор просто замирает и плавно гаснет. */
+    _waveIndicatorSVG() {
+        return `<div class="wave-indicator">`
+             + `<svg viewBox="0 0 52 16" width="52" height="16" aria-hidden="true">`
+             + `<g class="graph-spinner">`
+             + `<path class="graph-link" d="M8 12 L26 4 L44 12"/>`
+             + `<circle class="graph-dot" cx="8" cy="12" r="2.2"/>`
+             + `<circle class="graph-dot" cx="26" cy="4" r="2.2"/>`
+             + `<circle class="graph-dot" cx="44" cy="12" r="2.2"/>`
+             + `</g>`
+             + `</svg></div>`;
+    }
+
+    /* Финализация индикатора: останавливаем вращение и плавно гасим.
+       Индикатор живёт до рендера финального сообщения (_finalizeStream). */
+    _flattenWaveIndicator() {
+        const ind = document.querySelector('#agent-response-placeholder .wave-indicator');
+        if (!ind) return;
+        ind.classList.add('wave-flatten');
+    }
+
+    /* Гарантирует существование ЕДИНОГО свёртка «Размышления» для текущего
+       ответа и возвращает его .reasoning-body — контейнер, куда дописываются
+       все мысли между вызовами тулз. Не плодим блок на каждый шаг. */
+    _ensureReasoningWrap() {
+        if (this._reasoningWrapEl && this._pendingBotEl?.contains(this._reasoningWrapEl)) {
+            return this._reasoningWrapEl.querySelector('.reasoning-body');
+        }
+        const wrap = document.createElement('div');
+        wrap.className = 'reasoning-block reasoning-collapsed';
+        wrap.innerHTML = `
+            <div class="reasoning-header">
+                ${this._reasoningCaretSVG()}
+                <span class="reasoning-label">Размышления</span>
+            </div>
+            <div class="reasoning-body"></div>
+        `;
+        const header = wrap.querySelector('.reasoning-header');
+        header?.addEventListener('click', () => {
+            wrap.classList.toggle('reasoning-collapsed');
+        });
+        // Свёрток всегда выше живого блока
+        if (this._liveBlockEl) {
+            this._pendingBotEl.insertBefore(wrap, this._liveBlockEl);
+        } else {
+            this._pendingBotEl.appendChild(wrap);
+        }
+        this._reasoningWrapEl = wrap;
+        return wrap.querySelector('.reasoning-body');
+    }
+
+    /* Текущий живой блок был размышлением перед тулзой. Дописываем его текст
+       в ЕДИНЫЙ свёрток «Размышления» и убираем живой блок. Мысли из разных
+       шагов копятся в одном свёртке как параграфы, а не отдельными блоками. */
+    _commitReasoningBlock() {
+        if (!this._liveBlockEl) return;
+
+        // Дренаж буфера: забираем всю накопленную мысль сразу
+        this._streamShown = (this._streamShown || '') + (this._streamBuffer || '');
+        this._streamBuffer = '';
+        if (this._streamRaf) { cancelAnimationFrame(this._streamRaf); this._streamRaf = null; }
+
+        const text = this._streamShown;
+        const liveEl = this._liveBlockEl;
+        // Отвязываем ссылки СРАЗУ, чтобы новые чанки не сыпались в лопающийся блок.
+        // Сам DOM-узел (liveEl) убираем чуть позже — после анимации «лопания».
+        this._liveBlockEl = null;
+        this._streamShown = '';
+        this._streamDone  = false;
+
+        // Пустую мысль не сохраняем — живой блок просто убираем без пузыря.
+        if (!text.trim()) {
+            liveEl.remove();
+            return;
+        }
+
+        let html = marked.parse(text);
+        if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
+            ADD_TAGS: ['table','thead','tbody','tr','th','td'],
+            ADD_ATTR: ['colspan','rowspan','align']
+        });
+
+        const body = this._ensureReasoningWrap();
+        const step = document.createElement('div');
+        // Стартуем step в «зажатом» состоянии — анимация pop-in надует его,
+        // как только лопнет живой пузырь (см. класс .reasoning-step--popin).
+        step.className = 'reasoning-step reasoning-step--popin';
+        step.innerHTML = html;
+        body.appendChild(step);
+
+        const container = this.getMessagesContainer();
+        const nearBottom = () => {
+            if (!container) return false;
+            return (container.scrollHeight - container.scrollTop - container.clientHeight) < 120;
+        };
+        const stick = nearBottom();
+
+        // Фаза 1 — «лопание» живого пузыря: схлопывается и растворяется.
+        liveEl.classList.add('reasoning-live--pop');
+        const POP_MS = 260;
+        const removeLive = () => {
+            liveEl.remove();
+            // Фаза 2 — «надуваем» новый пузырь в свёртке.
+            step.classList.add('reasoning-step--pop');
+            if (stick && container) container.scrollTop = container.scrollHeight;
+        };
+        // reduce-motion / отсутствие поддержки анимаций — без задержек.
+        const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (reduce) {
+            liveEl.remove();
+            step.classList.add('reasoning-step--pop');
+            if (stick && container) container.scrollTop = container.scrollHeight;
+        } else {
+            let done = false;
+            const fire = () => { if (done) return; done = true; removeLive(); };
+            liveEl.addEventListener('animationend', fire, { once: true });
+            setTimeout(fire, POP_MS + 60);   // страховка, если animationend не придёт
+        }
+
+        if (stick && container) container.scrollTop = container.scrollHeight;
+    }
+
+    /* Живой блок оказался финальным ответом — повышаем его стиль
+       с приглушённого reasoning-live до обычного (основной шрифт). */
+    _promoteLiveToFinal() {
+        // Помечаем флаг ДО работы с блоком: если живого блока ещё нет (финальные
+        // чанки придут следом), новый блок создастся сразу как .live-block.
+        this._streamIsFinal = true;
+        if (this._liveBlockEl) {
+            this._liveBlockEl.className = 'live-block';
+            // Форсим немедленный ре-рендер уже видимого текста, чтобы новый
+            // (обычный) стиль применился сразу, а не «дожидался» финализации.
+            // Иначе финал визуально досыпается в приглушённом reasoning-стиле.
+            this._renderStreamPartial();
+        }
+    }
+
+    /* Жёсткий сброс всего стрим-состояния БЕЗ финализации DOM.
+       Вызывается перед отправкой нового сообщения: если ссылки на элементы
+       прошлого ответа ещё живы (finalizeStream не отработал), отвязываем их —
+       чтобы чанки нового ответа не дописывались в предыдущий пузырь бота.
+       DOM прошлого ответа при этом не трогаем (он уже показан пользователю),
+       только «дорисовываем» его в обычный стиль на случай залипшего reasoning. */
+    _hardResetStreamState() {
+        if (this._streamRaf) {
+            cancelAnimationFrame(this._streamRaf);
+            this._streamRaf = null;
+        }
+        // Если прошлый живой блок так и остался в reasoning-стиле — нормализуем,
+        // чтобы предыдущий ответ не выглядел как незавершённое размышление.
+        if (this._liveBlockEl && this._liveBlockEl.classList.contains('reasoning-live')) {
+            this._liveBlockEl.className = 'live-block';
+        }
+        this._pendingBotEl    = null;
+        this._liveBlockEl     = null;
+        this._reasoningWrapEl = null;
+        this._pendingBotText  = '';
+        this._streamBuffer    = '';
+        this._streamShown     = '';
+        this._streamDone      = false;
+        this._streamIsFinal   = false;
+        this._streamFinalData = null;
+        this._streamingActive = false;
+    }
+
+    _finalizeStream() {
+        if (!this._pendingBotEl) return;
+
+        const data = this._streamFinalData || {};
+        const fullText = data.fullText ?? this._streamShown ?? '';
+
+        // Финальный полный рендер финального ответа — в живой блок (если он есть).
+        // reasoning-блоки остаются выше нетронутыми.
+        const targetBlock = this._liveBlockEl || (() => {
+            const b = document.createElement('div');
+            b.className = 'live-block';
+            this._pendingBotEl.appendChild(b);
+            return b;
+        })();
+        // Гарантия: финальный ответ всегда в обычном стиле, даже если маркер
+        // final_commit не пришёл (например обрыв WS) — снимаем reasoning-стиль.
+        targetBlock.className = 'live-block';
+
+        let html = marked.parse(fullText);
+        if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
+            ADD_TAGS: ['table','thead','tbody','tr','th','td'],
+            ADD_ATTR: ['colspan','rowspan','align']
+        });
+        targetBlock.innerHTML = html;
+
+        // Файлы / actions вешаем на общую обёртку ответа
+        if (data.files?.length) {
+            this._pendingBotEl.appendChild(
+                this._renderBotFiles(data.files, data.message_id)
+            );
+        }
+        if (data.message_id) {
+            this._pendingBotEl.dataset.id = data.message_id;
+        }
+        this._applyCodeHeaders(this._pendingBotEl);
+        const actions = this.createMessageActions(this._pendingBotEl.dataset.id, fullText, true);
+        this._pendingBotEl.appendChild(actions);
+        this._pendingBotEl.style.transition = '';
+        this._pendingBotEl.style.opacity    = '';
+
+        // Сброс всего стрим-состояния
+        this._pendingBotEl    = null;
+        this._liveBlockEl     = null;
+        this._reasoningWrapEl = null;   // критично: иначе следующий ответ приклеится к старому свёртку
+        this._pendingBotText  = '';
+        this._streamBuffer    = '';
+        this._streamShown     = '';
+        this._streamDone      = false;
+        this._streamIsFinal   = false;
+        this._streamFinalData = null;
+        this._streamingActive = false;
+        if (this._streamRaf) { cancelAnimationFrame(this._streamRaf); this._streamRaf = null; }
+
+        // Финализация ответа: волна распрямляется в линию и гаснет,
+        // затем убираем placeholder; чистим статусы.
+        this._botAnswered = true;
+        this._flattenWaveIndicator();
+        setTimeout(() => this._removeBotPlaceholder(), 500);
+        this._clearAllStatuses();
+        if (this._chatStatuses) delete this._chatStatuses[this.currentChat];
+    }
+
     updateStatus(statusText) {
+        // Пока идёт живой стриминг финального ответа — статусы тулов больше
+        // не показываем и не воскрешаем. Асинхронные статусы, прилетевшие
+        // после первого чанка, игнорируем полностью.
+        if (this._streamingActive) return;
+
         const container = this.getMessagesContainer();
         if (!container) return;
 
@@ -1874,7 +2347,38 @@ class ChatApp {
         const field = container?.querySelector('#message-input');
         if (!field) return '';
         if (field.tagName === 'TEXTAREA') return field.value.trim();
-        return (field.innerText || field.textContent || '').trim();
+        return this._readInputWithChips(field).trim();
+    }
+
+    /* Собирает финальный текст из contenteditable, подставляя вместо
+       чипов-плейсхолдеров (свёрнутый длинный текст) их полное содержимое.
+       Чип хранит текст в this._pendingChips по data-chip-id. Так пользователь
+       может печатать текст ДО и ПОСЛЕ чипа — порядок сохранится. */
+    _readInputWithChips(field) {
+        if (!this._pendingChips || this._pendingChips.size === 0) {
+            return field.innerText || field.textContent || '';
+        }
+        let out = '';
+        const walk = (node) => {
+            node.childNodes.forEach((n) => {
+                if (n.nodeType === Node.TEXT_NODE) {
+                    out += n.textContent;
+                } else if (n.nodeType === Node.ELEMENT_NODE) {
+                    const chipId = n.getAttribute && n.getAttribute('data-chip-id');
+                    if (chipId && this._pendingChips.has(chipId)) {
+                        out += this._pendingChips.get(chipId);
+                    } else if (n.tagName === 'BR') {
+                        out += '\n';
+                    } else if (n.classList && n.classList.contains('fa-chip')) {
+                        // чип без активного id (edge) — пропускаем визуальную метку
+                    } else {
+                        walk(n);
+                    }
+                }
+            });
+        };
+        walk(field);
+        return out;
     }
 
     setInputText(field, text) {
@@ -1895,11 +2399,115 @@ class ChatApp {
     }
 
     clearInput(field) {
+        if (this._pendingChips) this._pendingChips.clear();
+        this._chipSeq = 0;
         if (field.tagName === 'TEXTAREA') {
             field.value = '';
             field.style.height = 'auto';
         } else {
-            field.innerText = '';
+            field.innerHTML = '';
+        }
+    }
+
+    /* Вставляет свёрнутый длинный текст как inline-чип в поле ввода.
+       Полный текст кладём в this._pendingChips (не в DOM), а в поле —
+       компактный неразрушаемый чип. Каретка встаёт ПОСЛЕ чипа, чтобы
+       можно было продолжить печатать. */
+    _insertInputChip(field, rawText) {
+        if (!this._pendingChips) this._pendingChips = new Map();
+        this._chipSeq = (this._chipSeq || 0) + 1;
+        const chipId = 'ic-' + Date.now() + '-' + this._chipSeq;
+        this._pendingChips.set(chipId, rawText);
+
+        const chars = rawText.length;
+        const lines = rawText.split('\n').length;
+        const firstLine = (rawText.split('\n').find(l => l.trim()) || 'Текст').trim();
+        const title = firstLine.length > 32 ? firstLine.slice(0, 32) + '…' : firstLine;
+        const safeTitle = this.escapeHtml(title);
+        let b64 = '';
+        try { b64 = btoa(unescape(encodeURIComponent(rawText))); } catch (e) { b64 = ''; }
+
+        const chip = document.createElement('span');
+        chip.className = 'fa-chip fa-chip--text fa-chip--gray input-chip';
+        chip.setAttribute('contenteditable', 'false');
+        chip.setAttribute('data-chip-id', chipId);
+        chip.setAttribute('data-text-b64', b64);
+        chip.setAttribute('title', 'Открыть текст');
+        chip.innerHTML =
+            '<span class="fa-chip__icon" aria-hidden="true">' +
+            '<svg viewBox="0 0 36 44" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+            '<path d="M4 0h20l12 12v28a4 4 0 0 1-4 4H4a4 4 0 0 1-4-4V4a4 4 0 0 1 4-4z" class="fa-chip__bg"/>' +
+            '<path d="M24 0l12 12H28a4 4 0 0 1-4-4V0z" class="fa-chip__fold"/>' +
+            '<text x="18" y="32" text-anchor="middle" class="fa-chip__text">TXT</text>' +
+            '</svg></span>' +
+            '<span class="fa-chip__name">' + safeTitle + '</span>' +
+            '<span class="fa-chip__meta">' + chars + ' симв · ' + lines + ' стр</span>';
+        chip.addEventListener('click', () => this.openTextPreview(chip));
+
+        // Вставляем чип в текущую позицию каретки
+        const sel = window.getSelection();
+        let range;
+        if (sel && sel.rangeCount && field.contains(sel.anchorNode)) {
+            range = sel.getRangeAt(0);
+            range.deleteContents();
+        } else {
+            range = document.createRange();
+            range.selectNodeContents(field);
+            range.collapse(false);
+        }
+        range.insertNode(chip);
+        // Пробел после чипа, чтобы каретка вышла из чипа и можно было печатать
+        const spacer = document.createTextNode('\u00A0');
+        chip.after(spacer);
+        range.setStartAfter(spacer);
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        field.focus();
+    }
+
+    /* Сбрасывает активное inline-форматирование в поле ввода: снимает
+       bold/italic/underline и «выводит» каретку из code/pre/span-обёрток,
+       вставляя нейтральный текстовый узел на текущую позицию. Вызывается
+       после Shift+Enter, чтобы залипший стиль прервался с новой строки. */
+    _resetInputFormatting() {
+        const sel = window.getSelection();
+        if (!sel || !sel.rangeCount) return;
+        // Снимаем возможные активные команды форматирования
+        ['bold', 'italic', 'underline', 'strikeThrough'].forEach(cmd => {
+            if (document.queryCommandState && document.queryCommandState(cmd)) {
+                document.execCommand(cmd, false, null);
+            }
+        });
+        // Каретка могла остаться внутри <code>/<pre>/<span>: поднимаем её
+        // на уровень поля, вставив пустой inline-контейнер обычного стиля.
+        const range = sel.getRangeAt(0);
+        let node = range.startContainer;
+        const field = document.getElementById('message-input');
+        if (!field) return;
+        let inFormatted = false;
+        while (node && node !== field) {
+            if (node.nodeType === 1) {
+                const tag = node.tagName.toLowerCase();
+                if (['code', 'pre', 'span', 'b', 'i', 'u', 'strong', 'em', 'font'].includes(tag)) {
+                    inFormatted = true;
+                }
+            }
+            node = node.parentNode;
+        }
+        if (inFormatted) {
+            // Вставляем нейтральный маркер-узел вне форматированной обёртки,
+            // ставим каретку в него — дальнейший ввод пойдёт обычным стилем.
+            const marker = document.createElement('span');
+            marker.className = 'fmt-reset';
+            marker.appendChild(document.createTextNode('\u200b')); // zero-width
+            // Вставляем в конец поля (после текущего блока)
+            field.appendChild(marker);
+            const r = document.createRange();
+            r.setStart(marker.firstChild, 1);
+            r.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(r);
         }
     }
 
@@ -1917,10 +2525,36 @@ class ChatApp {
 
         field.addEventListener('input', onInput);
 
+        // Вставка ДЛИННОГО текста (>1000 симв) в поле ввода: вместо простыни
+        // текста втыкаем компактный чип, полный текст храним отдельно.
+        // Пользователь может печатать текст до и после чипа.
+        const INPUT_COLLAPSE_LIMIT = 1000;
+        field.addEventListener('paste', (e) => {
+            if (field.contentEditable !== 'true') return;
+            const cd = e.clipboardData || window.clipboardData;
+            const pasted = cd ? cd.getData('text') : '';
+            if (pasted && pasted.length > INPUT_COLLAPSE_LIMIT) {
+                e.preventDefault();
+                this._insertInputChip(field, pasted);
+                onInput();
+            }
+            // короткий текст — стандартная вставка (плейн-текст форсится ниже)
+        });
+
         field.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 if (!sendBtn.disabled) this.sendMessage();
+                return;
+            }
+            // Shift+Enter в contenteditable: перенос строки + СБРОС активного
+            // форматирования, чтобы «залипший» стиль (код/SQL/HTML) прервался
+            // с новой строки. Вставленный ранее контент сохраняет свой стиль,
+            // но дальнейший ввод после Shift+Enter идёт обычным текстом.
+            if (e.key === 'Enter' && e.shiftKey && field.contentEditable === 'true') {
+                e.preventDefault();
+                document.execCommand('insertLineBreak');
+                this._resetInputFormatting();
             }
         });
 

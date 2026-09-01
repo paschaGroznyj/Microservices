@@ -1649,11 +1649,14 @@ class ChatApp {
     _waveIndicatorSVG() {
         return `<div class="wave-indicator">`
              + `<svg viewBox="0 0 52 16" width="52" height="16" aria-hidden="true">`
-             + `<g class="graph-spinner">`
+             + `<g class="graph-net">`
              + `<path class="graph-link" d="M8 12 L26 4 L44 12"/>`
-             + `<circle class="graph-dot" cx="8" cy="12" r="2.2"/>`
-             + `<circle class="graph-dot" cx="26" cy="4" r="2.2"/>`
-             + `<circle class="graph-dot" cx="44" cy="12" r="2.2"/>`
+             + `<circle class="graph-dot graph-dot-a" cx="8" cy="12" r="2.2"/>`
+             + `<circle class="graph-dot graph-dot-b" cx="26" cy="4" r="2.2"/>`
+             + `<circle class="graph-dot graph-dot-c" cx="44" cy="12" r="2.2"/>`
+             + `<circle class="graph-signal" r="2.6">`
+             + `<animateMotion dur="1.6s" repeatCount="indefinite" keyPoints="0;1;0" keyTimes="0;0.5;1" calcMode="linear" path="M8 12 L26 4 L44 12"/>`
+             + `</circle>`
              + `</g>`
              + `</svg></div>`;
     }

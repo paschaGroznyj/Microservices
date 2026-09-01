@@ -965,10 +965,10 @@ pre {
   opacity: 0;
 }
 
-/* ── Живой индикатор: граф из трёх точек в рывковом вращении ─────
-   Крутится всё время ожидания и во время размышлений.
-   Паттерн: быстрый прокрут → пауза → быстрый прокрут → пауза.
-   На финале (.wave-flatten) вращение останавливается и блок плавно гаснет. */
+/* ── Живой индикатор: граф с бегущим по нему сигналом ─────────────
+   Сигнал движется от узла A к узлу C и обратно (animateMotion по
+   graph-link). Узлы мягко мерцают со сдвигом фазы, линия чуть пульсирует.
+   Никакого вращения. На финале (.wave-flatten) всё замирает и гаснет. */
 .wave-indicator {
   display: inline-flex;
   align-items: center;
@@ -981,39 +981,56 @@ pre {
   height: 16px;
   overflow: visible;
 }
-.wave-indicator .graph-spinner {
-  transform-origin: 26px 8px;
-  animation: graph-spin-burst 0.92s linear infinite;
-}
 .wave-indicator .graph-link {
   stroke: var(--accent);
   stroke-width: 1.8;
   fill: none;
   stroke-linecap: round;
   stroke-linejoin: round;
-  opacity: 0.9;
+  animation: graph-link-pulse 1.6s ease-in-out infinite;
 }
 .wave-indicator .graph-dot {
   fill: var(--accent);
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: graph-dot-flicker 1.6s ease-in-out infinite;
 }
-@keyframes graph-spin-burst {
-  0%   { transform: rotate(0deg); }
-  22%  { transform: rotate(210deg); }   /* быстрый прокрут */
-  52%  { transform: rotate(210deg); }   /* пауза */
-  74%  { transform: rotate(360deg); }   /* быстрый прокрут */
-  100% { transform: rotate(360deg); }   /* пауза */
+.wave-indicator .graph-dot-a { animation-delay: 0s; }
+.wave-indicator .graph-dot-b { animation-delay: 0.4s; }
+.wave-indicator .graph-dot-c { animation-delay: 0.8s; }
+.wave-indicator .graph-signal {
+  fill: var(--accent);
+  filter: drop-shadow(0 0 3px var(--accent));
+  animation: graph-signal-glow 1.6s ease-in-out infinite;
+}
+@keyframes graph-dot-flicker {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50%      { opacity: 1;    transform: scale(1.15); }
+}
+@keyframes graph-link-pulse {
+  0%, 100% { opacity: 0.4; }
+  50%      { opacity: 0.9; }
+}
+@keyframes graph-signal-glow {
+  0%, 100% { opacity: 0.6; }
+  50%      { opacity: 1; }
 }
 .wave-indicator.wave-flatten {
   opacity: 0;
 }
-.wave-indicator.wave-flatten .graph-spinner {
+.wave-indicator.wave-flatten .graph-dot,
+.wave-indicator.wave-flatten .graph-link,
+.wave-indicator.wave-flatten .graph-signal {
   animation: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .wave-indicator .graph-spinner {
+  .wave-indicator .graph-dot,
+  .wave-indicator .graph-link,
+  .wave-indicator .graph-signal {
     animation: none;
   }
+  .wave-indicator .graph-signal { display: none; }
 }
 
 /* ══════════════════════════════════════════════

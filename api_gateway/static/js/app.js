@@ -554,6 +554,9 @@ class ChatApp {
         } else {
             const wrapper = document.createElement('div');
             wrapper.className = 'user-message-wrapper';
+            // id сообщения на wrapper — нужен для дедупа WS-эха (в т.ч. для чипов,
+            // где textContent не содержит полного текста).
+            if (message.id) wrapper.dataset.messageId = message.id;
             wrapper.appendChild(messageEl);
             wrapper.appendChild(actions);
             container.appendChild(wrapper);
@@ -731,19 +734,17 @@ class ChatApp {
         }
         panel.classList.add('open');
         panel.setAttribute('aria-hidden', 'false');
-        view.classList.add('preview-open');
         body.scrollTop = 0;
     }
 
-    /* Закрывает правый сайдбар-превью. */
+    /* Закрывает правый сайдбар-превью. Панель уезжает по той же анимации
+       (translateX 0 -> 100%), лента и поле ввода не двигаются. */
     closeTextPreview() {
         const panel = document.getElementById('text-preview-panel');
-        const view  = document.getElementById('view-agent');
         if (panel) {
             panel.classList.remove('open');
             panel.setAttribute('aria-hidden', 'true');
         }
-        if (view) view.classList.remove('preview-open');
     }
 
     _renderMessageFiles(files) {
@@ -1218,9 +1219,13 @@ class ChatApp {
             }
         }
 
+        // Единый id сообщения: генерим ДО оптимистичного рендера, чтобы он
+        // попал в DOM (wrapper.dataset.messageId) и совпал с WS-эхом.
+        const msgId = `msg-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+
         // Оптимистичный рендер — передаём файлы до upload/clear
         const _optimisticFiles = window.FileAttach?.getFilesMeta() ?? [];
-        this.addMessage({ message: text, is_from_bot: false, id: `temp-${Date.now()}`, created_at: new Date().toISOString(), files: _optimisticFiles });
+        this.addMessage({ message: text, is_from_bot: false, id: msgId, created_at: new Date().toISOString(), files: _optimisticFiles });
 
         // 🎯 После fly-анимации: скролл + резерв места под ответ бота
         this._scrollToUserMessageAndReserve();
@@ -1242,7 +1247,6 @@ class ChatApp {
         try {
             // Ждём WS-соединения (актуально для новых чатов)
             await this._waitForWS();
-            const msgId = `msg-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
             await fetch('/api/chats/send_message', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1394,6 +1398,14 @@ class ChatApp {
             console.log('Сообщение от агента', msg)
             // Дедупликация: пользовательское сообщение уже показано оптимистично
             if (!msg.is_from_bot) {
+                // Основной ключ дедупа — message_id (совпадает с клиентским msgId,
+                // который бэк возвращает в эхе). Надёжно для длинного текста-чипа,
+                // где textContent не содержит полного сообщения.
+                if (msg.message_id &&
+                    document.querySelector(`.user-message-wrapper[data-message-id="${msg.message_id}"]`)) {
+                    return;
+                }
+                // Fallback по тексту — для старых сообщений/эх без message_id.
                 const dup = [...document.querySelectorAll('.user-message')].find(el =>
                     el.textContent?.trim().includes(msg.message?.trim())
                 );
@@ -2307,7 +2319,38 @@ class ChatApp {
         const field = container?.querySelector('#message-input');
         if (!field) return '';
         if (field.tagName === 'TEXTAREA') return field.value.trim();
-        return (field.innerText || field.textContent || '').trim();
+        return this._readInputWithChips(field).trim();
+    }
+
+    /* Собирает финальный текст из contenteditable, подставляя вместо
+       чипов-плейсхолдеров (свёрнутый длинный текст) их полное содержимое.
+       Чип хранит текст в this._pendingChips по data-chip-id. Так пользователь
+       может печатать текст ДО и ПОСЛЕ чипа — порядок сохранится. */
+    _readInputWithChips(field) {
+        if (!this._pendingChips || this._pendingChips.size === 0) {
+            return field.innerText || field.textContent || '';
+        }
+        let out = '';
+        const walk = (node) => {
+            node.childNodes.forEach((n) => {
+                if (n.nodeType === Node.TEXT_NODE) {
+                    out += n.textContent;
+                } else if (n.nodeType === Node.ELEMENT_NODE) {
+                    const chipId = n.getAttribute && n.getAttribute('data-chip-id');
+                    if (chipId && this._pendingChips.has(chipId)) {
+                        out += this._pendingChips.get(chipId);
+                    } else if (n.tagName === 'BR') {
+                        out += '\n';
+                    } else if (n.classList && n.classList.contains('fa-chip')) {
+                        // чип без активного id (edge) — пропускаем визуальную метку
+                    } else {
+                        walk(n);
+                    }
+                }
+            });
+        };
+        walk(field);
+        return out;
     }
 
     setInputText(field, text) {
@@ -2328,12 +2371,71 @@ class ChatApp {
     }
 
     clearInput(field) {
+        if (this._pendingChips) this._pendingChips.clear();
+        this._chipSeq = 0;
         if (field.tagName === 'TEXTAREA') {
             field.value = '';
             field.style.height = 'auto';
         } else {
-            field.innerText = '';
+            field.innerHTML = '';
         }
+    }
+
+    /* Вставляет свёрнутый длинный текст как inline-чип в поле ввода.
+       Полный текст кладём в this._pendingChips (не в DOM), а в поле —
+       компактный неразрушаемый чип. Каретка встаёт ПОСЛЕ чипа, чтобы
+       можно было продолжить печатать. */
+    _insertInputChip(field, rawText) {
+        if (!this._pendingChips) this._pendingChips = new Map();
+        this._chipSeq = (this._chipSeq || 0) + 1;
+        const chipId = 'ic-' + Date.now() + '-' + this._chipSeq;
+        this._pendingChips.set(chipId, rawText);
+
+        const chars = rawText.length;
+        const lines = rawText.split('\n').length;
+        const firstLine = (rawText.split('\n').find(l => l.trim()) || 'Текст').trim();
+        const title = firstLine.length > 32 ? firstLine.slice(0, 32) + '…' : firstLine;
+        const safeTitle = this.escapeHtml(title);
+        let b64 = '';
+        try { b64 = btoa(unescape(encodeURIComponent(rawText))); } catch (e) { b64 = ''; }
+
+        const chip = document.createElement('span');
+        chip.className = 'fa-chip fa-chip--text fa-chip--gray input-chip';
+        chip.setAttribute('contenteditable', 'false');
+        chip.setAttribute('data-chip-id', chipId);
+        chip.setAttribute('data-text-b64', b64);
+        chip.setAttribute('title', 'Открыть текст');
+        chip.innerHTML =
+            '<span class="fa-chip__icon" aria-hidden="true">' +
+            '<svg viewBox="0 0 36 44" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+            '<path d="M4 0h20l12 12v28a4 4 0 0 1-4 4H4a4 4 0 0 1-4-4V4a4 4 0 0 1 4-4z" class="fa-chip__bg"/>' +
+            '<path d="M24 0l12 12H28a4 4 0 0 1-4-4V0z" class="fa-chip__fold"/>' +
+            '<text x="18" y="32" text-anchor="middle" class="fa-chip__text">TXT</text>' +
+            '</svg></span>' +
+            '<span class="fa-chip__name">' + safeTitle + '</span>' +
+            '<span class="fa-chip__meta">' + chars + ' симв · ' + lines + ' стр</span>';
+        chip.addEventListener('click', () => this.openTextPreview(chip));
+
+        // Вставляем чип в текущую позицию каретки
+        const sel = window.getSelection();
+        let range;
+        if (sel && sel.rangeCount && field.contains(sel.anchorNode)) {
+            range = sel.getRangeAt(0);
+            range.deleteContents();
+        } else {
+            range = document.createRange();
+            range.selectNodeContents(field);
+            range.collapse(false);
+        }
+        range.insertNode(chip);
+        // Пробел после чипа, чтобы каретка вышла из чипа и можно было печатать
+        const spacer = document.createTextNode('\u00A0');
+        chip.after(spacer);
+        range.setStartAfter(spacer);
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        field.focus();
     }
 
     /* Сбрасывает активное inline-форматирование в поле ввода: снимает
@@ -2394,6 +2496,22 @@ class ChatApp {
         };
 
         field.addEventListener('input', onInput);
+
+        // Вставка ДЛИННОГО текста (>1000 симв) в поле ввода: вместо простыни
+        // текста втыкаем компактный чип, полный текст храним отдельно.
+        // Пользователь может печатать текст до и после чипа.
+        const INPUT_COLLAPSE_LIMIT = 1000;
+        field.addEventListener('paste', (e) => {
+            if (field.contentEditable !== 'true') return;
+            const cd = e.clipboardData || window.clipboardData;
+            const pasted = cd ? cd.getData('text') : '';
+            if (pasted && pasted.length > INPUT_COLLAPSE_LIMIT) {
+                e.preventDefault();
+                this._insertInputChip(field, pasted);
+                onInput();
+            }
+            // короткий текст — стандартная вставка (плейн-текст форсится ниже)
+        });
 
         field.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {

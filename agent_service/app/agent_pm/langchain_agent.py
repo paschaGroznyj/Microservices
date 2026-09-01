@@ -1515,10 +1515,11 @@ class KnowledgeAgent:
         }
         logging.info(f'Выбрана модель {agent_model}')
         llm = self.AGENT_MODELS[agent_model]
-
+ 
         final_response = ""
         used_tools = []
         tool_trace: list[str] = []
+        AUTO_SEND_FILE_TOOLS = {"send_file_to_user"}
         files_to_send = []
         seen_paths = set()
         SOFT_LIMIT = 10   # после этого — предупреждаем модель   
@@ -1746,10 +1747,17 @@ class KnowledgeAgent:
 
 
                 if isinstance(result_dict, dict) and result_dict.get("saved_files"):
-                    for f in result_dict["saved_files"]:
-                        if f["path"] not in seen_paths:
-                            seen_paths.add(f["path"])
-                            files_to_send.append(f)
+                    should_auto_send = (
+                        tool_name in AUTO_SEND_FILE_TOOLS
+                        or bool(result_dict.get("auto_send"))
+                    )
+
+                    if should_auto_send:
+                        for f in result_dict["saved_files"]:
+                            if f["path"] not in seen_paths:
+                                seen_paths.add(f["path"])
+                                files_to_send.append(f)
+
                 if tool_name == "execute_python_code" and isinstance(result_dict, dict):
                     if "stdout" in result_dict:
                         result_dict["stdout"] = _truncate_text(result_dict["stdout"], max_chars=3000)

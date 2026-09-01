@@ -1881,7 +1881,7 @@ class ChatApp {
             sendBtn.disabled = false;
             sendBtn.classList.add('active');
             sendBtn.setAttribute('aria-label', 'Остановить');
-            sendBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none"><path d="M6 4h8a6 6 0 1 1 0 12H9l-3 4v-4a6 6 0 0 1 0-12z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+            sendBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M9 9l6 6M15 9l-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
             return;
         }
         sendBtn.setAttribute('aria-label', 'Отправить');

@@ -317,42 +317,63 @@ class DataBaseChats:
 
     async def get_chat_messages(self, chat_id: int, username: str, limit: int = 50, offset: int = 0):
         """
-        Возвращает сообщения в чате для пользователя (и сообщения бота),
+        Возвращает страницу сообщений в чате для пользователя (и сообщения бота),
         вместе со списком прикреплённых файлов на каждое сообщение.
+
+        Пагинация "с конца": offset=0 -> последние `limit` сообщений,
+        offset=limit -> предыдущая пачка (более старые) и т.д.
+        Внутри страницы сообщения всегда отсортированы по created_at ASC
+        (хронологический порядок для рендера).
+
+        Возвращает dict:
+            {"messages": [...], "total_count": int, "has_more": bool}
         """
         try:
             async with self.pool.acquire() as conn:
-                rows = await conn.fetch("""
-                    SELECT 
-                        c.id, 
-                        c.user_id,
-                        u.username as username,
-                        c.chat_id, 
-                        c.message_text, 
-                        c.is_from_bot, 
-                        c.message_id,
-                        c.created_at,
-                        COALESCE(
-                            (
-                                SELECT json_agg(
-                                    json_build_object('name', f.file_name, 'ext', f.file_ext,
-                                    'source', f.source)
-                                    ORDER BY f.id ASC
-                                )
-                                FROM chat_files f
-                                WHERE f.message_id = c.message_id
-                            ),
-                            '[]'::json
-                        ) AS files
+                total_count = await conn.fetchval("""
+                    SELECT COUNT(*)
                     FROM chats c
-                    LEFT JOIN users u ON c.user_id = u.id
-                    WHERE c.chat_id = $1 
+                    WHERE c.chat_id = $1
                         AND (
                             c.user_id = (SELECT id FROM users WHERE username = $2)
                             OR c.user_id = -1
                         )
-                    ORDER BY c.created_at ASC
-                    LIMIT $3 OFFSET $4
+                """, chat_id, username)
+
+                rows = await conn.fetch("""
+                    SELECT * FROM (
+                        SELECT 
+                            c.id, 
+                            c.user_id,
+                            u.username as username,
+                            c.chat_id, 
+                            c.message_text, 
+                            c.is_from_bot, 
+                            c.message_id,
+                            c.created_at,
+                            COALESCE(
+                                (
+                                    SELECT json_agg(
+                                        json_build_object('name', f.file_name, 'ext', f.file_ext,
+                                        'source', f.source)
+                                        ORDER BY f.id ASC
+                                    )
+                                    FROM chat_files f
+                                    WHERE f.message_id = c.message_id
+                                ),
+                                '[]'::json
+                            ) AS files
+                        FROM chats c
+                        LEFT JOIN users u ON c.user_id = u.id
+                        WHERE c.chat_id = $1 
+                            AND (
+                                c.user_id = (SELECT id FROM users WHERE username = $2)
+                                OR c.user_id = -1
+                            )
+                        ORDER BY c.created_at DESC, c.id DESC
+                        LIMIT $3 OFFSET $4
+                    ) sub
+                    ORDER BY sub.created_at ASC, sub.id ASC
                 """, chat_id, username, limit, offset)
 
                 messages = []
@@ -371,7 +392,13 @@ class DataBaseChats:
                         "created_at": row["created_at"].isoformat(),
                         "files": files or [],
                     })
-                return messages
+
+                has_more = (offset + len(messages)) < (total_count or 0)
+                return {
+                    "messages": messages,
+                    "total_count": total_count or 0,
+                    "has_more": has_more,
+                }
         except Exception as e:
             logging.error(f"Ошибка при получении сообщений чата {chat_id}: {e}")
             raise

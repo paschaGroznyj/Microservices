@@ -339,11 +339,23 @@ class ChatApp {
        MESSAGES
     ══════════════════════════════════════════ */
     async loadMessages(chatId) {
-        const res = await fetch(`/api/chats/${chatId}/messages`);
+        const PAGE_SIZE = 50;
+        const res = await fetch(`/api/chats/${chatId}/messages?limit=${PAGE_SIZE}&offset=0`);
         if (!res.ok) return;
         const data = await res.json();
         if (chatId !== this.currentChat) return; // гонка
+
+        // Состояние пагинации по конкретному чату
+        this._pagination = {
+            chatId,
+            pageSize: PAGE_SIZE,
+            loaded: (data.messages || []).length,
+            hasMore: !!data.has_more,
+            loading: false,
+        };
+
         this.renderMessages(data.messages);
+        this._initHistoryScrollLoader();
     }
 
     renderMessages(messages) {
@@ -352,6 +364,93 @@ class ChatApp {
         container.innerHTML = '';
         messages.forEach(msg => this.addMessage(msg, false));
         container.scrollTop = container.scrollHeight;
+    }
+
+    /**
+     * Дозагрузка более старых сообщений при скролле вверх.
+     * offset считается "с конца": уже загружено `loaded` последних сообщений,
+     * следующая пачка — offset=loaded.
+     */
+    async loadOlderMessages() {
+        const p = this._pagination;
+        if (!p || p.loading || !p.hasMore) return;
+        if (p.chatId !== this.currentChat) return;
+
+        const container = this.getMessagesContainer();
+        if (!container) return;
+
+        p.loading = true;
+
+        // Anchor: запоминаем позицию, чтобы после вставки сверху
+        // видимая часть чата не "прыгнула".
+        const prevScrollHeight = container.scrollHeight;
+        const prevScrollTop = container.scrollTop;
+
+        try {
+            const res = await fetch(
+                `/api/chats/${p.chatId}/messages?limit=${p.pageSize}&offset=${p.loaded}`
+            );
+            if (!res.ok) { p.loading = false; return; }
+            const data = await res.json();
+            if (p.chatId !== this.currentChat) return; // чат переключили пока грузили
+
+            const older = data.messages || [];
+            if (!older.length) {
+                p.hasMore = false;
+                p.loading = false;
+                return;
+            }
+
+            // Собираем узлы старых сообщений в отдельный фрагмент и вставляем
+            // ПЕРЕД текущими, в верх контейнера.
+            const buffer = document.createDocumentFragment();
+            const staging = document.createElement('div');
+            older.forEach(msg => this._renderMessageInto(staging, msg));
+            while (staging.firstChild) buffer.appendChild(staging.firstChild);
+            container.insertBefore(buffer, container.firstChild);
+
+            p.loaded += older.length;
+            p.hasMore = !!data.has_more;
+
+            // Восстанавливаем позицию скролла
+            const newScrollHeight = container.scrollHeight;
+            container.scrollTop = prevScrollTop + (newScrollHeight - prevScrollHeight);
+        } catch (e) {
+            console.error('[pagination] loadOlderMessages error', e);
+        } finally {
+            p.loading = false;
+        }
+    }
+
+    /**
+     * Рендерит одно сообщение из истории в произвольный контейнер
+     * (используется для вставки старых сообщений сверху).
+     */
+    _renderMessageInto(targetContainer, message) {
+        const realContainer = this.getMessagesContainer();
+        // addMessage жёстко пишет в getMessagesContainer(); временно подменяем,
+        // чтобы переиспользовать всю логику рендера без дублирования.
+        const origGetter = this.getMessagesContainer;
+        this.getMessagesContainer = () => targetContainer;
+        try {
+            this.addMessage(message, false);
+        } finally {
+            this.getMessagesContainer = origGetter;
+        }
+    }
+
+    _initHistoryScrollLoader() {
+        const container = this.getMessagesContainer();
+        if (!container) return;
+        if (container._historyLoaderBound) return;
+        container._historyLoaderBound = true;
+
+        container.addEventListener('scroll', () => {
+            // Триггерим подгрузку, когда почти доскроллили до верха
+            if (container.scrollTop < 120) {
+                this.loadOlderMessages();
+            }
+        }, { passive: true });
     }
 
     addMessage(message, scroll = true, animate = false) {

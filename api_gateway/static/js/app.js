@@ -1313,7 +1313,9 @@ class ChatApp {
             if (!container) return;
 
             if (msg.chunk !== undefined) {
-                // Режим стриминга: накапливаем чанки в один элемент
+                // Режим стриминга: чанк только ДОПИСЫВАЕМ в буфер, без рендера.
+                // Отрисовкой занимается ровный RAF-цикл (_startStreamLoop) —
+                // так плавность отвязана от рваного ритма сети.
                 if (!this._pendingBotEl) {
                     this._pendingBotEl   = document.createElement('div');
                     this._pendingBotEl.className = 'agent-message';
@@ -1327,72 +1329,72 @@ class ChatApp {
                     // Placeholder живёт пока идёт стриминг — убираем только здесь, при первом чанке
                     this._botAnswered = true;
                     this._removeBotPlaceholder();
-                   this._clearAllStatuses();
+                    this._clearAllStatuses();
+                    // Флаг: стриминг пошёл — статусы тулов больше не показываем
+                    this._streamingActive = true;
+                    // Инициализируем буфер и запускаем typewriter-цикл
+                    this._streamBuffer   = '';
+                    this._streamShown    = '';
+                    this._streamDone     = false;
+                    this._startStreamLoop();
                 }
 
-                this._pendingBotText += msg.chunk;
-
-                let html = marked.parse(this._pendingBotText);
-                if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
-                    ADD_TAGS: ['table','thead','tbody','tr','th','td'],
-                    ADD_ATTR: ['colspan','rowspan','align']
-                });
-                this._pendingBotEl.innerHTML = html;
-
-                const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-                if (distFromBottom < 80) container.scrollTop = container.scrollHeight;
+                this._streamBuffer += msg.chunk;
 
             } else if (msg.done || msg.message !== undefined) {
-                // Финал стриминга или целое сообщение
+                // Финал стриминга или целое сообщение.
+                // fullText из Kafka может опережать то, что typewriter уже
+                // напечатал — поэтому докидываем «хвост» в буфер, чтобы цикл
+                // допечатал его плавно, а тяжёлую финализацию (файлы, actions,
+                // подсветка кода) выполняем ПОСЛЕ полного дренажа буфера.
                 const fullText = msg.message ?? this._pendingBotText;
+
                 if (this._pendingBotEl) {
-                    // Дорисовываем финальный вариант
-                    let html = marked.parse(fullText);
-                    if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
-                        ADD_TAGS: ['table','thead','tbody','tr','th','td'],
-                        ADD_ATTR: ['colspan','rowspan','align']
-                    });
-                    this._pendingBotEl.innerHTML = html;
-                    // Рендерим файлы агента между текстом и кнопкой копировать
-                    if (msg.files?.length) {
-                        this._pendingBotEl.appendChild(
-                            this._renderBotFiles(msg.files, msg.message_id)
-                        );
+                    // Синхронизируем буфер с эталонным полным текстом:
+                    // всё, что ещё не показано и не лежит в буфере — дописываем.
+                    const alreadyQueued = (this._streamShown || '') + (this._streamBuffer || '');
+                    if (fullText.startsWith(alreadyQueued)) {
+                        this._streamBuffer += fullText.slice(alreadyQueued.length);
+                    } else if (fullText.length > alreadyQueued.length) {
+                        // Рассинхрон (редкий) — просто догоняем остатком по длине
+                        this._streamBuffer += fullText.slice(alreadyQueued.length);
                     }
-                    if (msg.message_id) {
-                        this._pendingBotEl.dataset.id = msg.message_id;
-                    }
-                    this._applyCodeHeaders(this._pendingBotEl);
-                    const actions = this.createMessageActions(this._pendingBotEl.dataset.id, fullText, true);
-                    this._pendingBotEl.appendChild(actions);
-                    this._pendingBotEl.style.transition = '';
-                    this._pendingBotEl.style.opacity    = '';
-                    this._pendingBotEl = null;
-                    this._pendingBotText = '';
+
+                    // Данные для финализации кладём на объект — их применит
+                    // _finalizeStream(), когда буфер опустеет.
+                    this._streamFinalData = {
+                        fullText,
+                        files: msg.files,
+                        message_id: msg.message_id,
+                    };
+                    this._streamDone = true;
+                    // Гарантируем, что цикл жив (мог не стартовать, если done
+                    // пришёл до первого chunk — но тогда _pendingBotEl уже есть)
+                    this._startStreamLoop();
                 } else {
                     // Целое сообщение без стриминга — обычный addMessage
                     this.addMessage({ ...msg, message: fullText }, true, true);
+                    this._botAnswered = true;
+                    this._removeBotPlaceholder();
+                    this._clearAllStatuses();
+                    this._streamingActive = false;
+                    if (this._chatStatuses) delete this._chatStatuses[this.currentChat];
                 }
-
-                // Убираем placeholder если ещё жив (целое сообщение без стриминга)
-                this._botAnswered = true;
-                this._removeBotPlaceholder();
-                this._clearAllStatuses();
-                // Чистим статус этого чата из памяти — ответ получен
-                if (this._chatStatuses) delete this._chatStatuses[this.currentChat];
             }
         };
 
         this.ws.onerror = (e) => console.warn('WS error:', e);
 
         this.ws.onclose = (event) => {
-            // Если стриминг оборвался — финализируем что накопили
-            if (this._pendingBotEl && this._pendingBotText) {
-                this._applyCodeHeaders(this._pendingBotEl);
-                this._pendingBotEl.style.transition = '';
-                this._pendingBotEl.style.opacity    = '';
-                this._pendingBotEl = null;
-                this._pendingBotText = '';
+            // Если стриминг оборвался — форсируем финализацию того, что накопили
+            if (this._pendingBotEl) {
+                this._streamDone = true;
+                if (!this._streamFinalData) {
+                    this._streamFinalData = {
+                        fullText: (this._streamShown || '') + (this._streamBuffer || ''),
+                    };
+                }
+                this._finalizeStream();
             }
             this._removeBotPlaceholder();
 
@@ -1417,7 +1419,140 @@ class ChatApp {
         };
     }
 
+    /* ══════════════════════════════════════════
+       TYPEWRITER-СТРИМИНГ
+       Приём чанков отвязан от отрисовки: чанки копятся
+       в _streamBuffer, а ровный RAF-цикл каждый кадр
+       «подъедает» из буфера фиксированную порцию символов
+       и дорисовывает. Тяжёлый marked.parse троттлится.
+    ══════════════════════════════════════════ */
+
+    // Базовый темп: символов за кадр (~60fps → ~240 симв/сек).
+    // При переполнении буфера порция плавно растёт, чтобы не отставать
+    // от быстрой генерации, но не рвать плавность.
+    _streamTypewriterStep() {
+        const CHARS_PER_FRAME = 4;      // базовый темп
+        const buffered = this._streamBuffer ? this._streamBuffer.length : 0;
+
+        // Автоускорение: чем больше накопилось, тем крупнее порция.
+        // >400 симв в буфере → умножаем шаг, cap на разумном пределе.
+        let step = CHARS_PER_FRAME;
+        if (buffered > 400)  step = Math.min(12, CHARS_PER_FRAME + Math.floor(buffered / 200));
+        if (buffered > 2000) step = Math.min(40, Math.floor(buffered / 60));
+
+        return step;
+    }
+
+    _startStreamLoop() {
+        if (this._streamRaf) return;  // цикл уже крутится
+
+        const RENDER_THROTTLE_MS = 70;  // не чаще — тяжёлый marked.parse
+        this._lastStreamRender = 0;
+
+        const tick = (ts) => {
+            if (!this._pendingBotEl) {
+                this._streamRaf = null;
+                return;
+            }
+
+            // Вытаскиваем порцию символов из буфера
+            const step = this._streamTypewriterStep();
+            if (this._streamBuffer && this._streamBuffer.length) {
+                const take = this._streamBuffer.slice(0, step);
+                this._streamShown  += take;
+                this._streamBuffer  = this._streamBuffer.slice(step);
+            }
+
+            // Троттлим тяжёлый Markdown-ре-рендер
+            if (!ts) ts = performance.now();
+            if (ts - this._lastStreamRender >= RENDER_THROTTLE_MS) {
+                this._renderStreamPartial();
+                this._lastStreamRender = ts;
+            }
+
+            // Условие завершения: сервер сказал done И буфер пуст
+            const drained = !this._streamBuffer || this._streamBuffer.length === 0;
+            if (this._streamDone && drained) {
+                this._renderStreamPartial();   // финальный partial-рендер текста
+                this._finalizeStream();        // файлы, actions, подсветка
+                this._streamRaf = null;
+                return;
+            }
+
+            this._streamRaf = requestAnimationFrame(tick);
+        };
+
+        this._streamRaf = requestAnimationFrame(tick);
+    }
+
+    _renderStreamPartial() {
+        if (!this._pendingBotEl) return;
+        const container = this.getMessagesContainer();
+
+        let html = marked.parse(this._streamShown || '');
+        if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
+            ADD_TAGS: ['table','thead','tbody','tr','th','td'],
+            ADD_ATTR: ['colspan','rowspan','align']
+        });
+        this._pendingBotEl.innerHTML = html;
+
+        if (container) {
+            const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+            if (distFromBottom < 80) container.scrollTop = container.scrollHeight;
+        }
+    }
+
+    _finalizeStream() {
+        if (!this._pendingBotEl) return;
+
+        const data = this._streamFinalData || {};
+        const fullText = data.fullText ?? this._streamShown ?? '';
+
+        // Финальный полный рендер (идеальная вёрстка из полного текста)
+        let html = marked.parse(fullText);
+        if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
+            ADD_TAGS: ['table','thead','tbody','tr','th','td'],
+            ADD_ATTR: ['colspan','rowspan','align']
+        });
+        this._pendingBotEl.innerHTML = html;
+
+        if (data.files?.length) {
+            this._pendingBotEl.appendChild(
+                this._renderBotFiles(data.files, data.message_id)
+            );
+        }
+        if (data.message_id) {
+            this._pendingBotEl.dataset.id = data.message_id;
+        }
+        this._applyCodeHeaders(this._pendingBotEl);
+        const actions = this.createMessageActions(this._pendingBotEl.dataset.id, fullText, true);
+        this._pendingBotEl.appendChild(actions);
+        this._pendingBotEl.style.transition = '';
+        this._pendingBotEl.style.opacity    = '';
+
+        // Сброс всего стрим-состояния
+        this._pendingBotEl    = null;
+        this._pendingBotText  = '';
+        this._streamBuffer    = '';
+        this._streamShown     = '';
+        this._streamDone      = false;
+        this._streamFinalData = null;
+        this._streamingActive = false;
+        if (this._streamRaf) { cancelAnimationFrame(this._streamRaf); this._streamRaf = null; }
+
+        // Финализация ответа: убираем placeholder, чистим статусы
+        this._botAnswered = true;
+        this._removeBotPlaceholder();
+        this._clearAllStatuses();
+        if (this._chatStatuses) delete this._chatStatuses[this.currentChat];
+    }
+
     updateStatus(statusText) {
+        // Пока идёт живой стриминг финального ответа — статусы тулов больше
+        // не показываем и не воскрешаем. Асинхронные статусы, прилетевшие
+        // после первого чанка, игнорируем полностью.
+        if (this._streamingActive) return;
+
         const container = this.getMessagesContainer();
         if (!container) return;
 

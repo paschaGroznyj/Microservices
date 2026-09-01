@@ -2218,8 +2218,26 @@ class ChatApp {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 if (!sendBtn.disabled) this.sendMessage();
+                return;
+            }
+            // Shift+Enter в contenteditable: вставляем ЧИСТЫЙ перенос строки,
+            // а не <div>/форматированный блок (иначе стиль наследуется дальше).
+            if (e.key === 'Enter' && e.shiftKey && field.contentEditable === 'true') {
+                e.preventDefault();
+                document.execCommand('insertLineBreak');
             }
         });
+
+        // Вставка как PLAIN TEXT: иначе код/SQL/HTML прилетает форматированными
+        // узлами (<pre>/<code>/<span style>), курсор остаётся внутри них и
+        // весь последующий ввод залипает в том же стиле.
+        if (field.contentEditable === 'true') {
+            field.addEventListener('paste', (e) => {
+                e.preventDefault();
+                const text = (e.clipboardData || window.clipboardData).getData('text/plain');
+                document.execCommand('insertText', false, text);
+            });
+        }
 
         // Placeholder для contenteditable
         if (field.contentEditable === 'true') {

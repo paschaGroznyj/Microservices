@@ -23,7 +23,7 @@ from .core.config import (
     METADATA_FILE, PORT_GATEWAY_PORT, ADMINS_INFO,
     PORT_PARSERS_SERVICE
 )
-from .core.settings import TOOLS_SETTINGS
+from .core.settings import TOOLS_SETTINGS, UNIVERSAL_TOOLS
 from .prompts.summary_prompt import SUMMARIZE_CUT_PROMPT
 
 from datetime import datetime
@@ -1447,9 +1447,19 @@ class KnowledgeAgent:
         for category in selected_tools:
             allowed_names.update(TOOLS_SETTINGS.get(category, []))
 
+        # Универсальные тулы добавляются всегда, вне зависимости от выбранных
+        # категорий — они не привязаны к режиму (напр. анализ изображений).
+        allowed_names.update(UNIVERSAL_TOOLS)
+
         filtered = [t for t in all_tools if t.name in allowed_names]
 
-        return filtered if filtered else [no_tools_selected]
+        # Даже если пользователь не выбрал ни одной категории, универсальные
+        # тулы должны остаться доступны — не подменяем их заглушкой.
+        universal_present = [t for t in all_tools if t.name in UNIVERSAL_TOOLS]
+        if not filtered:
+            return universal_present or [no_tools_selected]
+
+        return filtered
 
 
     async def _summarize_cut_messages(

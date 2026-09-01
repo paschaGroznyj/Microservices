@@ -965,43 +965,55 @@ pre {
   opacity: 0;
 }
 
-/* ── Живой индикатор: синусоида в движении ──────────
+/* ── Живой индикатор: граф из трёх точек в рывковом вращении ─────
    Крутится всё время ожидания и во время размышлений.
-   На финале (.wave-flatten) путь распрямляется в линию
-   (d меняется из JS) и блок плавно гаснет. */
+   Паттерн: быстрый прокрут → пауза → быстрый прокрут → пауза.
+   На финале (.wave-flatten) вращение останавливается и блок плавно гаснет. */
 .wave-indicator {
   display: inline-flex;
   align-items: center;
   padding: 4px 2px;
   opacity: 1;
-  transition: opacity 0.5s ease 0.35s;
+  transition: opacity 0.45s ease;
 }
 .wave-indicator svg {
   width: 52px;
   height: 16px;
   overflow: visible;
 }
-.wave-indicator path {
+.wave-indicator .graph-spinner {
+  transform-origin: 26px 8px;
+  animation: graph-spin-burst 0.92s linear infinite;
+}
+.wave-indicator .graph-link {
   stroke: var(--accent);
-  stroke-width: 2;
+  stroke-width: 1.8;
   fill: none;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-dasharray: 9 7;
-  animation: wave-flow 1.1s linear infinite;
-  /* transition на d — для плавного распрямления при .wave-flatten */
-  transition: d 0.4s ease;
+  opacity: 0.9;
 }
-@keyframes wave-flow {
-  to { stroke-dashoffset: -32; }
+.wave-indicator .graph-dot {
+  fill: var(--accent);
+}
+@keyframes graph-spin-burst {
+  0%   { transform: rotate(0deg); }
+  22%  { transform: rotate(210deg); }   /* быстрый прокрут */
+  52%  { transform: rotate(210deg); }   /* пауза */
+  74%  { transform: rotate(360deg); }   /* быстрый прокрут */
+  100% { transform: rotate(360deg); }   /* пауза */
 }
 .wave-indicator.wave-flatten {
   opacity: 0;
 }
-.wave-indicator.wave-flatten path {
+.wave-indicator.wave-flatten .graph-spinner {
   animation: none;
-  stroke-dasharray: none;
-  stroke-dashoffset: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wave-indicator .graph-spinner {
+    animation: none;
+  }
 }
 
 /* ══════════════════════════════════════════════

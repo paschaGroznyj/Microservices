@@ -1325,7 +1325,7 @@ class ChatApp {
         // Не создаём если ответ уже пришёл (race: бот ответил быстрее 400ms)
         if (this._botAnswered) return;
 
-        // Убираем предыдущий если был (вместе с его гардом)
+        // Убираем предыдущий если был
         this._removeBotPlaceholder();
 
         const placeholder = document.createElement('div');
@@ -1338,12 +1338,6 @@ class ChatApp {
 
         // Скроллим контейнер чтобы placeholder был виден снизу
         msgContainer.scrollTop = msgContainer.scrollHeight;
-
-        // Таймаут-гард: убрать через 60с если бот так и не ответил.
-        // Сохраняем id таймера чтобы _removeBotPlaceholder мог его отменить.
-        this._placeholderGuardTimer = setTimeout(() => {
-            this._removeBotPlaceholder();
-        }, 60000);
     }
 
     /** Убирает placeholder — вызывается явно из WS-обработчика */
@@ -1656,25 +1650,27 @@ class ChatApp {
              + `<path d="M9 6l6 6-6 6"/></svg>`;
     }
 
-    /* Живой индикатор ожидания/размышления: синусоида в движении.
-       Обёртка .wave-indicator несёт анимацию бегущей волны (stroke-dashoffset),
-       на финале ей добавляется .wave-flatten — путь распрямляется в линию
-       (через JS setAttribute d) и блок плавно гаснет. */
+    /* Живой индикатор ожидания/размышления: граф из трёх точек,
+       соединённых линией. Крутится рывками: быстрый прокрут → пауза →
+       быстрый прокрут → пауза (CSS keyframes).
+       На финале индикатор просто замирает и плавно гаснет. */
     _waveIndicatorSVG() {
         return `<div class="wave-indicator">`
              + `<svg viewBox="0 0 52 16" width="52" height="16" aria-hidden="true">`
-             + `<path d="M2 8 Q8 2 14 8 T26 8 T38 8 T50 8"/>`
+             + `<g class="graph-spinner">`
+             + `<path class="graph-link" d="M8 12 L26 4 L44 12"/>`
+             + `<circle class="graph-dot" cx="8" cy="12" r="2.2"/>`
+             + `<circle class="graph-dot" cx="26" cy="4" r="2.2"/>`
+             + `<circle class="graph-dot" cx="44" cy="12" r="2.2"/>`
+             + `</g>`
              + `</svg></div>`;
     }
 
-    /* Распрямляет синусоиду в прямую линию и гасит индикатор.
-       Свойство d в CSS-анимациях нестабильно между браузерами, поэтому
-       меняем путь через setAttribute + CSS-transition на самом path. */
+    /* Финализация индикатора: останавливаем вращение и плавно гасим.
+       Индикатор живёт до рендера финального сообщения (_finalizeStream). */
     _flattenWaveIndicator() {
         const ind = document.querySelector('#agent-response-placeholder .wave-indicator');
         if (!ind) return;
-        const path = ind.querySelector('path');
-        if (path) path.setAttribute('d', 'M2 8 L50 8');
         ind.classList.add('wave-flatten');
     }
 

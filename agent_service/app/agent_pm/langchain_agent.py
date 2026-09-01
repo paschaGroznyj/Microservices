@@ -1047,6 +1047,7 @@ class KnowledgeAgent:
         user_input: str,
         selected_tools: list[str] | None = None,
         allow_all: bool = False,
+        images: list[dict] | None = None,
     ):
         """Возвращает список LangChain @tool-функций, привязанных к контексту агента."""
 
@@ -1399,8 +1400,15 @@ class KnowledgeAgent:
         codeedit_tools = make_workspace_codeedit_tools(agent)
 
 
+        # Тул анализа изображений (JPEG/PNG) через claude-opus-4.8.
+        # base64 картинок захватывается в замыкание тула из images —
+        # модель передаёт только промпт, base64 не идёт в контекст.
+        from .tools.vision.tool_analyze_image import make_analyze_image_tool
+        analyze_image = make_analyze_image_tool(agent, images)
+
         base_tools = [
             search_db,
+            analyze_image,
             summarize_by_filter,
             rebuild_categories,
             send_digest_email,
@@ -1562,7 +1570,8 @@ class KnowledgeAgent:
         agent_model,
         source=None,
         selected_tools=None,
-        context_size=None
+        context_size=None,
+        images=None,
     ) -> Dict[str, Any]:
         if not self.db:
             self.db = database
@@ -1627,6 +1636,7 @@ class KnowledgeAgent:
             user_input,
             selected_tools=selected_tools,
             allow_all=allow_all_tools,
+            images=images,
         )
         loop_state = {
             "iteration": 0,

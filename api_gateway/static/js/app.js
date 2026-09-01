@@ -1232,6 +1232,13 @@ class ChatApp {
         // Сбрасываем флаг: ответ ещё не пришёл
         this._botAnswered = false;
 
+        // КРИТИЧНО: перед новым запросом добиваем возможный «хвост» прошлого
+        // стрима. Если предыдущий ответ не прошёл через _finalizeStream()
+        // (пришёл целиком, был обрыв WS без onclose, race переключения чата),
+        // то _pendingBotEl/_liveBlockEl всё ещё указывают на СТАРЫЙ DOM-элемент,
+        // и новые чанки мыслей дописались бы в предыдущее сообщение бота.
+        this._hardResetStreamState();
+
         try {
             // Ждём WS-соединения (актуально для новых чатов)
             await this._waitForWS();
@@ -1741,6 +1748,34 @@ class ChatApp {
             // Иначе финал визуально досыпается в приглушённом reasoning-стиле.
             this._renderStreamPartial();
         }
+    }
+
+    /* Жёсткий сброс всего стрим-состояния БЕЗ финализации DOM.
+       Вызывается перед отправкой нового сообщения: если ссылки на элементы
+       прошлого ответа ещё живы (finalizeStream не отработал), отвязываем их —
+       чтобы чанки нового ответа не дописывались в предыдущий пузырь бота.
+       DOM прошлого ответа при этом не трогаем (он уже показан пользователю),
+       только «дорисовываем» его в обычный стиль на случай залипшего reasoning. */
+    _hardResetStreamState() {
+        if (this._streamRaf) {
+            cancelAnimationFrame(this._streamRaf);
+            this._streamRaf = null;
+        }
+        // Если прошлый живой блок так и остался в reasoning-стиле — нормализуем,
+        // чтобы предыдущий ответ не выглядел как незавершённое размышление.
+        if (this._liveBlockEl && this._liveBlockEl.classList.contains('reasoning-live')) {
+            this._liveBlockEl.className = 'live-block';
+        }
+        this._pendingBotEl    = null;
+        this._liveBlockEl     = null;
+        this._reasoningWrapEl = null;
+        this._pendingBotText  = '';
+        this._streamBuffer    = '';
+        this._streamShown     = '';
+        this._streamDone      = false;
+        this._streamIsFinal   = false;
+        this._streamFinalData = null;
+        this._streamingActive = false;
     }
 
     _finalizeStream() {

@@ -545,20 +545,17 @@
   pointer-events: none;
 }
 
-/* Сброс форматирования вставленного контента: даже если внутрь поля
-   попадут стилизованные узлы (code/pre/span), они рендерятся как
-   обычный текст и не «залипают» на последующий ввод. */
-.chat-input-field * {
-  font-family: inherit !important;
-  font-size: inherit !important;
-  font-weight: inherit !important;
-  font-style: inherit !important;
-  color: inherit !important;
-  background: none !important;
-  border: none !important;
-  padding: 0 !important;
-  margin: 0 !important;
-  white-space: pre-wrap !important;
+/* Нейтральный маркер-узел, куда уводится каретка после Shift+Enter —
+   гарантированно обычный текст, чтобы прервать залипший стиль. */
+.chat-input-field .fmt-reset {
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: normal;
+  font-style: normal;
+  text-decoration: none;
+  color: var(--text-primary);
+  background: none;
+  border: none;
 }
 
 /* Нижняя панель */

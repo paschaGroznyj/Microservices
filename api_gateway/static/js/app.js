@@ -29,7 +29,19 @@ class ChatApp {
         this.initHelp();
         this.initChatsSectionToggle();
         this.initVisibilityReconnect();
+        this.initTextPreview();
         await this.renderMessageInput();
+    }
+
+    /* ══════════════════════════════════════════
+       TEXT PREVIEW — правый сайдбар просмотра
+       длинного текста. Регистрирует глобальную ссылку
+       (для inline-onclick чипов) и обработчик крестика.
+    ══════════════════════════════════════════ */
+    initTextPreview() {
+        window.__catchpmApp = this;
+        document.getElementById('text-preview-close')
+            ?.addEventListener('click', () => this.closeTextPreview());
     }
 
 
@@ -491,7 +503,15 @@ class ChatApp {
         if (!isBot) {
             // Рендерим прикреплённые файлы над текстом сообщения
             const filesHtml = this._renderMessageFiles(message.files);
-            messageEl.innerHTML = `${filesHtml}<div class="message-text">${content}</div><div class="timestamp">${time}</div>`;
+            // Длинный текст (>1000 символов) сворачиваем в чип-файлик,
+            // клик по которому открывает превью в правом сайдбаре.
+            const TEXT_COLLAPSE_LIMIT = 1000;
+            if (rawContent && rawContent.length > TEXT_COLLAPSE_LIMIT) {
+                const chipHtml = this._renderTextChip(rawContent);
+                messageEl.innerHTML = `${filesHtml}<div class="message-text">${chipHtml}</div><div class="timestamp">${time}</div>`;
+            } else {
+                messageEl.innerHTML = `${filesHtml}<div class="message-text">${content}</div><div class="timestamp">${time}</div>`;
+            }
         } else {
             messageEl.dataset.id = message.id;
             messageEl.innerHTML = content;
@@ -653,6 +673,79 @@ class ChatApp {
      * @param {Array<{name: string, ext: string}>|undefined} files
      * @returns {string} HTML-строка или '' если файлов нет
      */
+    /* ══════════════════════════════════════════
+       TEXT CHIP — свёрнутый длинный текст (>1000 симв.)
+       Рендерит чип в стиле прикреплённого файла. Оригинальный
+       текст кладём в data-атрибут (base64), чтобы клик открыл его
+       в правом сайдбаре без искажений. */
+    _renderTextChip(rawText) {
+        const chars = rawText.length;
+        const lines = rawText.split('\n').length;
+        // Первая непустая строка как «имя файла»
+        const firstLine = (rawText.split('\n').find(l => l.trim()) || 'Текст').trim();
+        const title = firstLine.length > 40 ? firstLine.slice(0, 40) + '…' : firstLine;
+        const safeTitle = this.escapeHtml(title);
+        const meta = `${chars} симв · ${lines} стр`;
+        // base64(utf8) — безопасно переносим любой текст через data-атрибут
+        let b64 = '';
+        try {
+            b64 = btoa(unescape(encodeURIComponent(rawText)));
+        } catch (e) {
+            b64 = '';
+        }
+        return `<div class="fa-chip fa-chip--text fa-chip--gray" role="button" tabindex="0"
+     title="Открыть текст" data-text-b64="${b64}"
+     onclick="window.__catchpmApp && window.__catchpmApp.openTextPreview(this)"
+     onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();window.__catchpmApp && window.__catchpmApp.openTextPreview(this);}">
+<span class="fa-chip__icon" aria-hidden="true">
+  <svg viewBox="0 0 36 44" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M4 0h20l12 12v28a4 4 0 0 1-4 4H4a4 4 0 0 1-4-4V4a4 4 0 0 1 4-4z" class="fa-chip__bg"/>
+    <path d="M24 0l12 12H28a4 4 0 0 1-4-4V0z" class="fa-chip__fold"/>
+    <text x="18" y="32" text-anchor="middle" class="fa-chip__text">TXT</text>
+  </svg>
+</span>
+<span class="fa-chip__name">${safeTitle}</span>
+<span class="fa-chip__meta">${meta}</span>
+</div>`;
+    }
+
+    /* Открывает правый сайдбар-превью с оригинальным текстом чипа. */
+    openTextPreview(chipEl) {
+        const b64 = chipEl?.dataset?.textB64 || '';
+        let text = '';
+        try {
+            text = decodeURIComponent(escape(atob(b64)));
+        } catch (e) {
+            text = '';
+        }
+        const panel = document.getElementById('text-preview-panel');
+        const body  = document.getElementById('text-preview-body');
+        const titleEl = document.getElementById('text-preview-title');
+        const view  = document.getElementById('view-agent');
+        if (!panel || !body || !view) return;
+
+        body.textContent = text;   // textContent — без интерпретации HTML, оригинальный вид
+        if (titleEl) {
+            const first = (text.split('\n').find(l => l.trim()) || 'Просмотр текста').trim();
+            titleEl.textContent = first.length > 60 ? first.slice(0, 60) + '…' : first;
+        }
+        panel.classList.add('open');
+        panel.setAttribute('aria-hidden', 'false');
+        view.classList.add('preview-open');
+        body.scrollTop = 0;
+    }
+
+    /* Закрывает правый сайдбар-превью. */
+    closeTextPreview() {
+        const panel = document.getElementById('text-preview-panel');
+        const view  = document.getElementById('view-agent');
+        if (panel) {
+            panel.classList.remove('open');
+            panel.setAttribute('aria-hidden', 'true');
+        }
+        if (view) view.classList.remove('preview-open');
+    }
+
     _renderMessageFiles(files) {
         if (!files || files.length === 0) return '';
 
@@ -1361,10 +1454,12 @@ class ChatApp {
                         this._streamIsFinal   = false;
                     }
                     // Живой блок печатается в reasoning-стиле (приглушённый,
-                    // курсив). Класс .reasoning-live — визуально совпадает с
-                    // будущим свёрнутым состоянием, но без header/сворачивания.
+                    // курсив) — ПОКА не пришёл маркер final_commit. Если финал
+                    // уже объявлен (_streamIsFinal), создаём блок сразу в
+                    // обычном стиле .live-block, иначе финальные чанки, пришедшие
+                    // после маркера, отрисуются приглушённым reasoning-стилем.
                     this._liveBlockEl = document.createElement('div');
-                    this._liveBlockEl.className = 'reasoning-live';
+                    this._liveBlockEl.className = this._streamIsFinal ? 'live-block' : 'reasoning-live';
                     this._pendingBotEl.appendChild(this._liveBlockEl);
                     this._streamBuffer = '';
                     this._streamShown  = '';
@@ -1636,6 +1731,9 @@ class ChatApp {
     /* Живой блок оказался финальным ответом — повышаем его стиль
        с приглушённого reasoning-live до обычного (основной шрифт). */
     _promoteLiveToFinal() {
+        // Помечаем флаг ДО работы с блоком: если живого блока ещё нет (финальные
+        // чанки придут следом), новый блок создастся сразу как .live-block.
+        this._streamIsFinal = true;
         if (this._liveBlockEl) {
             this._liveBlockEl.className = 'live-block';
             // Форсим немедленный ре-рендер уже видимого текста, чтобы новый
@@ -1659,6 +1757,9 @@ class ChatApp {
             this._pendingBotEl.appendChild(b);
             return b;
         })();
+        // Гарантия: финальный ответ всегда в обычном стиле, даже если маркер
+        // final_commit не пришёл (например обрыв WS) — снимаем reasoning-стиль.
+        targetBlock.className = 'live-block';
 
         let html = marked.parse(fullText);
         if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
@@ -2200,6 +2301,51 @@ class ChatApp {
         }
     }
 
+    /* Сбрасывает активное inline-форматирование в поле ввода: снимает
+       bold/italic/underline и «выводит» каретку из code/pre/span-обёрток,
+       вставляя нейтральный текстовый узел на текущую позицию. Вызывается
+       после Shift+Enter, чтобы залипший стиль прервался с новой строки. */
+    _resetInputFormatting() {
+        const sel = window.getSelection();
+        if (!sel || !sel.rangeCount) return;
+        // Снимаем возможные активные команды форматирования
+        ['bold', 'italic', 'underline', 'strikeThrough'].forEach(cmd => {
+            if (document.queryCommandState && document.queryCommandState(cmd)) {
+                document.execCommand(cmd, false, null);
+            }
+        });
+        // Каретка могла остаться внутри <code>/<pre>/<span>: поднимаем её
+        // на уровень поля, вставив пустой inline-контейнер обычного стиля.
+        const range = sel.getRangeAt(0);
+        let node = range.startContainer;
+        const field = document.getElementById('message-input');
+        if (!field) return;
+        let inFormatted = false;
+        while (node && node !== field) {
+            if (node.nodeType === 1) {
+                const tag = node.tagName.toLowerCase();
+                if (['code', 'pre', 'span', 'b', 'i', 'u', 'strong', 'em', 'font'].includes(tag)) {
+                    inFormatted = true;
+                }
+            }
+            node = node.parentNode;
+        }
+        if (inFormatted) {
+            // Вставляем нейтральный маркер-узел вне форматированной обёртки,
+            // ставим каретку в него — дальнейший ввод пойдёт обычным стилем.
+            const marker = document.createElement('span');
+            marker.className = 'fmt-reset';
+            marker.appendChild(document.createTextNode('\u200b')); // zero-width
+            // Вставляем в конец поля (после текущего блока)
+            field.appendChild(marker);
+            const r = document.createRange();
+            r.setStart(marker.firstChild, 1);
+            r.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(r);
+        }
+    }
+
     attachInputHandlers() {
         const container = this.getInputContainer();
         const field   = container?.querySelector('#message-input');
@@ -2220,24 +2366,16 @@ class ChatApp {
                 if (!sendBtn.disabled) this.sendMessage();
                 return;
             }
-            // Shift+Enter в contenteditable: вставляем ЧИСТЫЙ перенос строки,
-            // а не <div>/форматированный блок (иначе стиль наследуется дальше).
+            // Shift+Enter в contenteditable: перенос строки + СБРОС активного
+            // форматирования, чтобы «залипший» стиль (код/SQL/HTML) прервался
+            // с новой строки. Вставленный ранее контент сохраняет свой стиль,
+            // но дальнейший ввод после Shift+Enter идёт обычным текстом.
             if (e.key === 'Enter' && e.shiftKey && field.contentEditable === 'true') {
                 e.preventDefault();
                 document.execCommand('insertLineBreak');
+                this._resetInputFormatting();
             }
         });
-
-        // Вставка как PLAIN TEXT: иначе код/SQL/HTML прилетает форматированными
-        // узлами (<pre>/<code>/<span style>), курсор остаётся внутри них и
-        // весь последующий ввод залипает в том же стиле.
-        if (field.contentEditable === 'true') {
-            field.addEventListener('paste', (e) => {
-                e.preventDefault();
-                const text = (e.clipboardData || window.clipboardData).getData('text/plain');
-                document.execCommand('insertText', false, text);
-            });
-        }
 
         // Placeholder для contenteditable
         if (field.contentEditable === 'true') {

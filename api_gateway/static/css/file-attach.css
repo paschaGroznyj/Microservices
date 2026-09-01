@@ -42,6 +42,28 @@
   animation: fa-chip-pop .18s cubic-bezier(.34,1.56,.64,1) both;
 }
 
+/* ── Чип длинного текста (свёрнутый блок >1000 символов) ──
+   Тот же визуал, что у файла, но кликабельный и с превью в сайдбаре. */
+.fa-chip--text {
+  cursor: pointer;
+  max-width: 240px;
+  padding: 6px 12px 6px 6px;
+}
+.fa-chip--text:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface2));
+}
+.fa-chip--text .fa-chip__name {
+  max-width: 150px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.fa-chip--text .fa-chip__meta {
+  font-size: .68rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
 @keyframes fa-chip-pop {
   from { opacity: 0; transform: scale(.8); }
   to   { opacity: 1; transform: scale(1); }

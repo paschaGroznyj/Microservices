@@ -951,6 +951,45 @@ pre {
   opacity: 0;
 }
 
+/* ── Живой индикатор: синусоида в движении ──────────
+   Крутится всё время ожидания и во время размышлений.
+   На финале (.wave-flatten) путь распрямляется в линию
+   (d меняется из JS) и блок плавно гаснет. */
+.wave-indicator {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 2px;
+  opacity: 1;
+  transition: opacity 0.5s ease 0.35s;
+}
+.wave-indicator svg {
+  width: 52px;
+  height: 16px;
+  overflow: visible;
+}
+.wave-indicator path {
+  stroke: var(--accent);
+  stroke-width: 2;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 9 7;
+  animation: wave-flow 1.1s linear infinite;
+  /* transition на d — для плавного распрямления при .wave-flatten */
+  transition: d 0.4s ease;
+}
+@keyframes wave-flow {
+  to { stroke-dashoffset: -32; }
+}
+.wave-indicator.wave-flatten {
+  opacity: 0;
+}
+.wave-indicator.wave-flatten path {
+  animation: none;
+  stroke-dasharray: none;
+  stroke-dashoffset: 0;
+}
+
 /* ══════════════════════════════════════════════
    SUBAGENT STATUS
 ══════════════════════════════════════════════ */

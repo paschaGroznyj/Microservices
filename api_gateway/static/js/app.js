@@ -1227,6 +1227,9 @@ class ChatApp {
         const placeholder = document.createElement('div');
         placeholder.id = 'agent-response-placeholder';
         placeholder.className = 'agent-placeholder';
+        // Живой индикатор: синусоида в движении. Крутится всё время ожидания
+        // и во время размышлений; на финале распрямляется в линию и гаснет.
+        placeholder.innerHTML = this._waveIndicatorSVG();
         msgContainer.appendChild(placeholder);
 
         // Скроллим контейнер чтобы placeholder был виден снизу
@@ -1351,7 +1354,8 @@ class ChatApp {
                             if (this._pendingBotEl) this._pendingBotEl.style.opacity = '1';
                         }));
                         this._botAnswered = true;
-                        this._removeBotPlaceholder();
+                        // Placeholder НЕ убираем здесь: волна-индикатор должна
+                        // крутиться и во время размышлений. Снос — в _finalizeStream.
                         this._clearAllStatuses();
                         this._streamingActive = true;
                         this._streamIsFinal   = false;
@@ -1538,6 +1542,28 @@ class ChatApp {
              + `<path d="M9 6l6 6-6 6"/></svg>`;
     }
 
+    /* Живой индикатор ожидания/размышления: синусоида в движении.
+       Обёртка .wave-indicator несёт анимацию бегущей волны (stroke-dashoffset),
+       на финале ей добавляется .wave-flatten — путь распрямляется в линию
+       (через JS setAttribute d) и блок плавно гаснет. */
+    _waveIndicatorSVG() {
+        return `<div class="wave-indicator">`
+             + `<svg viewBox="0 0 52 16" width="52" height="16" aria-hidden="true">`
+             + `<path d="M2 8 Q8 2 14 8 T26 8 T38 8 T50 8"/>`
+             + `</svg></div>`;
+    }
+
+    /* Распрямляет синусоиду в прямую линию и гасит индикатор.
+       Свойство d в CSS-анимациях нестабильно между браузерами, поэтому
+       меняем путь через setAttribute + CSS-transition на самом path. */
+    _flattenWaveIndicator() {
+        const ind = document.querySelector('#agent-response-placeholder .wave-indicator');
+        if (!ind) return;
+        const path = ind.querySelector('path');
+        if (path) path.setAttribute('d', 'M2 8 L50 8');
+        ind.classList.add('wave-flatten');
+    }
+
     /* Гарантирует существование ЕДИНОГО свёртка «Размышления» для текущего
        ответа и возвращает его .reasoning-body — контейнер, куда дописываются
        все мысли между вызовами тулз. Не плодим блок на каждый шаг. */
@@ -1612,6 +1638,10 @@ class ChatApp {
     _promoteLiveToFinal() {
         if (this._liveBlockEl) {
             this._liveBlockEl.className = 'live-block';
+            // Форсим немедленный ре-рендер уже видимого текста, чтобы новый
+            // (обычный) стиль применился сразу, а не «дожидался» финализации.
+            // Иначе финал визуально досыпается в приглушённом reasoning-стиле.
+            this._renderStreamPartial();
         }
     }
 
@@ -1665,9 +1695,11 @@ class ChatApp {
         this._streamingActive = false;
         if (this._streamRaf) { cancelAnimationFrame(this._streamRaf); this._streamRaf = null; }
 
-        // Финализация ответа: убираем placeholder, чистим статусы
+        // Финализация ответа: волна распрямляется в линию и гаснет,
+        // затем убираем placeholder; чистим статусы.
         this._botAnswered = true;
-        this._removeBotPlaceholder();
+        this._flattenWaveIndicator();
+        setTimeout(() => this._removeBotPlaceholder(), 500);
         this._clearAllStatuses();
         if (this._chatStatuses) delete this._chatStatuses[this.currentChat];
     }

@@ -1160,6 +1160,48 @@ pre {
   color: var(--text-secondary);
 }
 
+/* ── Переход reasoning-live → reasoning-block («лопание пузыря») ──
+   Фаза 1: живой блок схлопывается и растворяется (pop-out),
+   как лопнувший мыльный пузырь — лёгкий раздув, затем сжатие в ноль.
+   Фаза 2: новый шаг в свёртке «надувается» из точки (pop-in).
+   transform-origin слева, чтобы движение шло от бордюра-акцента. */
+.reasoning-live--pop {
+  pointer-events: none;
+  transform-origin: 12px 50%;
+  animation: reasoning-bubble-pop 0.26s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+@keyframes reasoning-bubble-pop {
+  0%   { transform: scale(1);      opacity: 1; filter: blur(0); }
+  35%  { transform: scale(1.045);  opacity: 1; filter: blur(0); }
+  100% { transform: scale(0.62);   opacity: 0; filter: blur(3px); }
+}
+
+/* Новый шаг стартует «зажатым» (popin) — до команды надуться. */
+.reasoning-body .reasoning-step--popin {
+  transform: scale(0.7);
+  opacity: 0;
+  transform-origin: left center;
+}
+/* Надувание пузыря: из точки в полный размер с лёгким перелётом. */
+.reasoning-body .reasoning-step--pop {
+  animation: reasoning-step-inflate 0.34s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+@keyframes reasoning-step-inflate {
+  0%   { transform: scale(0.7);  opacity: 0; }
+  60%  { transform: scale(1.03); opacity: 1; }
+  100% { transform: scale(1);    opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reasoning-live--pop { animation: none; opacity: 0; }
+  .reasoning-body .reasoning-step--popin,
+  .reasoning-body .reasoning-step--pop {
+    animation: none;
+    transform: none;
+    opacity: 1;
+  }
+}
+
 /* ── Единый свёрток «Размышления» ─────────────── */
 .reasoning-block {
   margin: 4px 0 14px;

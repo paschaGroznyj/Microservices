@@ -1720,13 +1720,18 @@ class ChatApp {
         if (this._streamRaf) { cancelAnimationFrame(this._streamRaf); this._streamRaf = null; }
 
         const text = this._streamShown;
-        // Живой блок убираем в любом случае — он либо уходит в свёрток, либо пуст
-        this._liveBlockEl.remove();
+        const liveEl = this._liveBlockEl;
+        // Отвязываем ссылки СРАЗУ, чтобы новые чанки не сыпались в лопающийся блок.
+        // Сам DOM-узел (liveEl) убираем чуть позже — после анимации «лопания».
         this._liveBlockEl = null;
         this._streamShown = '';
         this._streamDone  = false;
 
-        if (!text.trim()) return;   // пустую мысль не сохраняем
+        // Пустую мысль не сохраняем — живой блок просто убираем без пузыря.
+        if (!text.trim()) {
+            liveEl.remove();
+            return;
+        }
 
         let html = marked.parse(text);
         if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
@@ -1736,15 +1741,42 @@ class ChatApp {
 
         const body = this._ensureReasoningWrap();
         const step = document.createElement('div');
-        step.className = 'reasoning-step';
+        // Стартуем step в «зажатом» состоянии — анимация pop-in надует его,
+        // как только лопнет живой пузырь (см. класс .reasoning-step--popin).
+        step.className = 'reasoning-step reasoning-step--popin';
         step.innerHTML = html;
         body.appendChild(step);
 
         const container = this.getMessagesContainer();
-        if (container) {
-            const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-            if (distFromBottom < 120) container.scrollTop = container.scrollHeight;
+        const nearBottom = () => {
+            if (!container) return false;
+            return (container.scrollHeight - container.scrollTop - container.clientHeight) < 120;
+        };
+        const stick = nearBottom();
+
+        // Фаза 1 — «лопание» живого пузыря: схлопывается и растворяется.
+        liveEl.classList.add('reasoning-live--pop');
+        const POP_MS = 260;
+        const removeLive = () => {
+            liveEl.remove();
+            // Фаза 2 — «надуваем» новый пузырь в свёртке.
+            step.classList.add('reasoning-step--pop');
+            if (stick && container) container.scrollTop = container.scrollHeight;
+        };
+        // reduce-motion / отсутствие поддержки анимаций — без задержек.
+        const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (reduce) {
+            liveEl.remove();
+            step.classList.add('reasoning-step--pop');
+            if (stick && container) container.scrollTop = container.scrollHeight;
+        } else {
+            let done = false;
+            const fire = () => { if (done) return; done = true; removeLive(); };
+            liveEl.addEventListener('animationend', fire, { once: true });
+            setTimeout(fire, POP_MS + 60);   // страховка, если animationend не придёт
         }
+
+        if (stick && container) container.scrollTop = container.scrollHeight;
     }
 
     /* Живой блок оказался финальным ответом — повышаем его стиль

@@ -153,9 +153,10 @@ async def send_message(chat: ChatMessage):
 
 
 @app.get("/chat/{chat_id}/messages")
-async def get_chat_messages(chat_id: int, limit: int = 1000, offset: int = 0,  x_user_name: str = Header(..., alias="X-User-Name")):
+async def get_chat_messages(chat_id: int, limit: int = 2000, offset: int = 0,  x_user_name: str = Header(..., alias="X-User-Name")):
     try:
         messages = await db.get_chat_messages(chat_id, x_user_name, limit=limit, offset=offset)
+        logging.info(f"🦧Число сообщений в чате {chat_id}, {len(messages)}")
         return {
             "chat_id": chat_id,
             "total": len(messages),

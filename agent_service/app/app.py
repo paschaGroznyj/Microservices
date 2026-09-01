@@ -37,11 +37,16 @@ logging.basicConfig(level=logging.INFO)
 db = AgentDB()
 pending_files: dict[str, dict] = {}
 
+class StopMessagePayload(BaseModel):
+    request_id: str
+    user_id: Optional[int] = None
+
 # Глобальные переменные для producer/consumer
 producer: AIOKafkaProducer | None = None
 consumer: AIOKafkaConsumer | None = None
 consumer_alive = False
 agent: KnowledgeAgent | None = None
+active_tasks: dict[str, asyncio.Task] = {}
 
 FILE_WAIT_TIMEOUT = 20.0  # сек, сколько kafka-хендлер готов ждать файлы
 
@@ -160,6 +165,10 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
         if file_text:
             message += file_text
 
+    current_task = asyncio.current_task()
+    if request_id and current_task:
+        active_tasks[request_id] = current_task
+
     try:
         logging.info(f"ПОЛЬЗОВАТЕЛЬ ВЫБРАЛ: {selected_tools}, с контекстом {context_size}")
         response = await agent.process_query(user_input=message, 
@@ -203,6 +212,23 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
         logging.info(f"Ответ в чат {chat_id}: {response_text[:50]}...")
         logging.info(f"Время обработки: {time.perf_counter() - start:.4f}s")
 
+    except asyncio.CancelledError:
+        logging.info(f"Run cancelled by user: request_id={request_id} chat_id={chat_id}")
+        try:
+            stop_message = {
+                "user_id": -1,
+                "chat_id": chat_id,
+                "message": "Остановлено пользователем…",
+                "message_id": f"msg-stop-{int(time.time() * 1000)}",
+                "is_from_bot": True,
+                "type_agent": "pm",
+                "action": "stopped"
+            }
+            await prod.send_and_wait("chat-messages", value=stop_message)
+        except Exception as send_err:
+            logging.error(f"Не удалось отправить stop-сообщение в Kafka: {send_err}")
+        raise
+
     except Exception as e:
         logging.error(f"Ошибка обработки сообщения: {e}")
         try:
@@ -218,6 +244,10 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             await prod.send_and_wait("chat-messages", value=err_message)
         except Exception as send_err:
             logging.error(f"Не удалось отправить сообщение об ошибке в Kafka: {send_err}")
+    finally:
+        if request_id:
+            active_tasks.pop(request_id, None)
+
 
 async def _process_service_message(message_id: int, enriched_text: str):
     """Обрабатывает сообщение сервиса в фоне, пишет ответ в service_chats."""
@@ -297,6 +327,14 @@ async def kafka_moment():
     finally:
         await shutdown()
 
+
+@web_router.post("/internal/stop_message")
+async def internal_stop_message(payload: StopMessagePayload):
+    task = active_tasks.get(payload.request_id)
+    if not task:
+        return {"ok": False, "status": "not_found"}
+    task.cancel()
+    return {"ok": True, "status": "cancelling", "request_id": payload.request_id}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

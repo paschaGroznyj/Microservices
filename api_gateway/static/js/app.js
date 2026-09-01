@@ -7,6 +7,8 @@ class ChatApp {
         this.ws            = null;
         this.chats         = [];
         this.currentTab    = 'agent'; // 'agent' | 'arxiv'
+        this._runState = 'idle';      // idle | running | stopping
+        this._activeRequestId = null;
     }
 
     /* ══════════════════════════════════════════
@@ -1199,18 +1201,21 @@ class ChatApp {
         const sendBtn = container?.querySelector('#send-btn');
         if (!field) return;
 
+        if (this._runState === 'running') {
+            await this.stopCurrentRun();
+            return;
+        }
+        if (this._runState !== 'idle') return;
+
         const text = this.getInputText();
         if (!text) return;
 
-        // Создаём чат если нет
         if (!this.currentChat) {
             this.currentChat = this.generateChatId();
-            // Добавляем в список сразу с текстом первого сообщения
             this.chats.push({ id: this.currentChat, last_message: text, timestamp: new Date().toISOString() });
             this.renderChats(this.chats);
             await this.openChat(this.currentChat);
         } else {
-            // Обновляем last_message у существующего чата
             const existing = this.chats.find(c => c.id === this.currentChat);
             if (existing) {
                 existing.last_message = text;
@@ -1219,35 +1224,22 @@ class ChatApp {
             }
         }
 
-        // Единый id сообщения: генерим ДО оптимистичного рендера, чтобы он
-        // попал в DOM (wrapper.dataset.messageId) и совпал с WS-эхом.
         const msgId = `msg-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
-
-        // Оптимистичный рендер — передаём файлы до upload/clear
         const _optimisticFiles = window.FileAttach?.getFilesMeta() ?? [];
         this.addMessage({ message: text, is_from_bot: false, id: msgId, created_at: new Date().toISOString(), files: _optimisticFiles });
-
-        // 🎯 После fly-анимации: скролл + резерв места под ответ бота
         this._scrollToUserMessageAndReserve();
 
         this.clearInput(field);
         sendBtn?.classList.remove('active');
-        if (sendBtn) sendBtn.disabled = true;
-
-        // Сбрасываем флаг: ответ ещё не пришёл
         this._botAnswered = false;
-
-        // КРИТИЧНО: перед новым запросом добиваем возможный «хвост» прошлого
-        // стрима. Если предыдущий ответ не прошёл через _finalizeStream()
-        // (пришёл целиком, был обрыв WS без onclose, race переключения чата),
-        // то _pendingBotEl/_liveBlockEl всё ещё указывают на СТАРЫЙ DOM-элемент,
-        // и новые чанки мыслей дописались бы в предыдущее сообщение бота.
         this._hardResetStreamState();
 
+        this._runState = 'running';
+        this._setSendButtonMode('stop');
+
         try {
-            // Ждём WS-соединения (актуально для новых чатов)
             await this._waitForWS();
-            await fetch('/api/chats/send_message', {
+            const resp = await fetch('/api/chats/send_message', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
@@ -1263,22 +1255,20 @@ class ChatApp {
                     files: window.FileAttach?.getFilesMeta() ?? []
                 })
             });
-            // Загружаем прикреплённые файлы отдельным запросом
+            try {
+                const j = await resp.clone().json();
+                this._activeRequestId = j?.request_id || null;
+            } catch (_) {
+                this._activeRequestId = null;
+            }
             await window.FileAttach?.upload(this.currentChat, msgId);
             window.FileAttach?.clear();
-            // Убираем подсветку attach-btn
-            this.getInputContainer()
-                ?.querySelector('#attach-btn')
-                ?.classList.remove('has-files');
+            this.getInputContainer()?.querySelector('#attach-btn')?.classList.remove('has-files');
         } catch (err) {
             console.error('sendMessage error:', err);
-        } finally {
-            // Всегда разблокируем кнопку — даже при ошибке или WS-таймауте
-            if (sendBtn) {
-                sendBtn.disabled = false;
-                const hasText = this.getInputText().length > 0;
-                sendBtn.classList.toggle('active', hasText);
-            }
+            this._runState = 'idle';
+            this._setSendButtonMode('send');
+            this._activeRequestId = null;
         }
     }
 
@@ -1516,6 +1506,7 @@ class ChatApp {
                     this._clearAllStatuses();
                     this._streamingActive = false;
                     if (this._chatStatuses) delete this._chatStatuses[this.currentChat];
+                    this._onRunFinished();
                 }
             }
         };
@@ -1536,6 +1527,7 @@ class ChatApp {
             this._liveBlockEl = null;
             this._reasoningWrapEl = null;
             this._removeBotPlaceholder();
+            this._onRunFinished();
 
             // Автопереподключение:
             // - только если закрытие не было намеренным (переключение чата / startNewChat)
@@ -1878,6 +1870,48 @@ class ChatApp {
         setTimeout(() => this._removeBotPlaceholder(), 500);
         this._clearAllStatuses();
         if (this._chatStatuses) delete this._chatStatuses[this.currentChat];
+        this._onRunFinished();
+    }
+
+    _setSendButtonMode(mode = 'send') {
+        const container = this.getInputContainer();
+        const sendBtn = container?.querySelector('#send-btn');
+        if (!sendBtn) return;
+        if (mode === 'stop') {
+            sendBtn.disabled = false;
+            sendBtn.classList.add('active');
+            sendBtn.setAttribute('aria-label', 'Остановить');
+            sendBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none"><path d="M6 4h8a6 6 0 1 1 0 12H9l-3 4v-4a6 6 0 0 1 0-12z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+            return;
+        }
+        sendBtn.setAttribute('aria-label', 'Отправить');
+        sendBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+        const hasText = this.getInputText().length > 0;
+        sendBtn.disabled = !hasText;
+        sendBtn.classList.toggle('active', hasText);
+    }
+
+    async stopCurrentRun() {
+        if (this._runState !== 'running') return;
+        this._runState = 'stopping';
+        try {
+            if (this._activeRequestId) {
+                await fetch('/api/chats/stop_message', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ request_id: this._activeRequestId })
+                });
+            }
+        } catch (e) {
+            console.warn('stopCurrentRun error:', e);
+        }
+    }
+
+    _onRunFinished() {
+        this._runState = 'idle';
+        this._activeRequestId = null;
+        this._setSendButtonMode('send');
     }
 
     updateStatus(statusText) {
@@ -2518,6 +2552,11 @@ class ChatApp {
         if (!field || !sendBtn) return;
 
         const onInput = () => {
+            if (this._runState !== "idle") {
+                sendBtn.disabled = false;
+                sendBtn.classList.add('active');
+                return;
+            }
             const hasText = this.getInputText().length > 0;
             sendBtn.classList.toggle('active', hasText);
             sendBtn.disabled = !hasText;
@@ -2544,7 +2583,7 @@ class ChatApp {
         field.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                if (!sendBtn.disabled) this.sendMessage();
+                if (this._runState === "idle" && !sendBtn.disabled) this.sendMessage();
                 return;
             }
             // Shift+Enter в contenteditable: перенос строки + СБРОС активного
@@ -2565,6 +2604,7 @@ class ChatApp {
         }
 
         sendBtn.onclick = () => this.sendMessage();
+        this._setSendButtonMode(this._runState === "idle" ? "send" : "stop");
 
         // Кнопка прикрепления файла
         const attachBtn = container?.querySelector('#attach-btn')

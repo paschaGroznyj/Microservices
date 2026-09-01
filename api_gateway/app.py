@@ -620,6 +620,9 @@ async def get_current_user_info(request: Request):
     )
 pending_requests: dict[str, int] = {}
 
+class StopMessageRequest(BaseModel):
+    request_id: str
+
 @app.post("/api/favorites")
 async def favorites(request: Request):
     """Обработка звездочек избранного"""
@@ -899,13 +902,41 @@ async def send_message(request: Request):
         )
         elapsed = time.perf_counter() - start
         logging.info(f"Время на отправку сообщения пользователя в микросервис = {elapsed:.4f}s")
+        body = {}
+        try:
+            body = response.json()
+        except Exception:
+            body = {}
+        body["request_id"] = request_id
+        return JSONResponse(content=body, status_code=response.status_code)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Chats service unreachable: {str(e)}")
+
+
+@app.post("/api/chats/stop_message")
+async def stop_message(request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    data = await request.json()
+    request_id = data.get("request_id")
+    if not request_id:
+        raise HTTPException(status_code=400, detail="request_id required")
+
+    try:
+        response = await app.state.http_client.post(
+            f"{SERVICES['agent_service']['url']}/internal/stop_message",
+            json={"request_id": request_id, "user_id": user["user_id"]},
+            timeout=10.0
+        )
         return Response(
             content=response.content,
             status_code=response.status_code,
             media_type="application/json"
         )
     except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"Chats service unreachable: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"Agent service unreachable: {str(e)}")
 
 @app.post("/api/chats/upload_files")
 async def upload_files(

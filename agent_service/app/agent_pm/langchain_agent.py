@@ -16,7 +16,8 @@ from langchain_core.messages import ToolMessage, trim_messages
 from langchain_core.messages.utils import count_tokens_approximately
 
 from .core.agent_provider import (get_llm_lite_model, get_llm_model,
-get_llm_model_gpt, get_llm_model_claude, get_llm_model_gemini)
+get_llm_model_gpt, get_llm_model_claude, get_llm_model_gemini,
+get_llm_lite_model_gpt_mini, get_llm_lite_model_gemini_flash)
 from .core.botocore_client import OBSWorker
 from .core.config import (
     ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH,
@@ -908,6 +909,13 @@ class KnowledgeAgent:
                             'universal': get_llm_model_gemini()
                             }
         self.llm_lite = get_llm_lite_model()
+        # Цепочка фолбэков для лайт-модели (суммаризация и прочие служебные
+        # вызовы, летящие с фронта): по умолчанию haiku, при отказе —
+        # gpt-5-mini, затем gemini-3-flash-preview.
+        self.llm_lite_fallbacks = [
+            get_llm_lite_model_gpt_mini(),
+            get_llm_lite_model_gemini_flash(),
+        ]
         self.obs_loader = OBSWorker()
         self.email_handler = DigestEmailHandler()
         self.skip_startup_autoprocess = skip_startup_autoprocess
@@ -1048,6 +1056,7 @@ class KnowledgeAgent:
         selected_tools: list[str] | None = None,
         allow_all: bool = False,
         images: list[dict] | None = None,
+        agent_model: str | None = None,
     ):
         """Возвращает список LangChain @tool-функций, привязанных к контексту агента."""
 
@@ -1404,7 +1413,7 @@ class KnowledgeAgent:
         # base64 картинок захватывается в замыкание тула из images —
         # модель передаёт только промпт, base64 не идёт в контекст.
         from .tools.vision.tool_analyze_image import make_analyze_image_tool
-        analyze_image = make_analyze_image_tool(agent, images)
+        analyze_image = make_analyze_image_tool(agent, images, agent_model=agent_model)
 
         base_tools = [
             search_db,
@@ -1462,6 +1471,35 @@ class KnowledgeAgent:
         return filtered
 
 
+    async def _lite_ainvoke(self, messages: list[BaseMessage]):
+        """Вызов лайт-модели с цепочкой фолбэков.
+
+        По умолчанию haiku (self.llm_lite). Если отказал — по очереди
+        gpt-5-mini и gemini-3-flash-preview (self.llm_lite_fallbacks).
+        Возвращает ответ первой успешной модели. Если упали все —
+        пробрасывает последнее исключение.
+        """
+        chain = [self.llm_lite, *getattr(self, "llm_lite_fallbacks", [])]
+        last_error: Exception | None = None
+        for i, model in enumerate(chain):
+            try:
+                resp = await model.ainvoke(messages)
+                if i > 0:
+                    logging.warning(
+                        f"Лайт-модель: сработал фолбэк #{i} "
+                        f"({getattr(model, 'model_name', getattr(model, 'model', '?'))})"
+                    )
+                return resp
+            except Exception as e:
+                last_error = e
+                logging.error(
+                    f"Лайт-модель #{i} "
+                    f"({getattr(model, 'model_name', getattr(model, 'model', '?'))}) "
+                    f"упала: {type(e).__name__}: {e}"
+                )
+        # Все модели цепочки провалились
+        raise last_error if last_error else RuntimeError("Лайт-модель: пустая цепочка")
+
     async def _summarize_cut_messages(
         self,
         cut_messages: list[BaseMessage],
@@ -1488,7 +1526,7 @@ class KnowledgeAgent:
         prompt = SUMMARIZE_CUT_PROMPT.format(previous_block=previous_block, chunk_text=chunk_text)
 
         try:
-            response = await self.llm_lite.ainvoke([
+            response = await self._lite_ainvoke([
                 SystemMessage(content="Ты — модуль сжатия истории диалога. Отвечай только сводкой, без преамбул."),
                 HumanMessage(content=prompt),
             ])
@@ -1647,6 +1685,7 @@ class KnowledgeAgent:
             selected_tools=selected_tools,
             allow_all=allow_all_tools,
             images=images,
+            agent_model=agent_model,
         )
         loop_state = {
             "iteration": 0,

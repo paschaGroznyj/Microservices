@@ -25,18 +25,36 @@ from langchain.schema import HumanMessage
 log = logging.getLogger(__name__)
 
 
-def make_analyze_image_tool(agent, images: list[dict] | None = None):
+def make_analyze_image_tool(agent, images: list[dict] | None = None,
+                            agent_model: str | None = None):
     """
     Фабрика тула анализа изображений.
 
-    :param agent: экземпляр KnowledgeAgent — берём llm-дизайнера (claude-opus-4.8).
+    :param agent: экземпляр KnowledgeAgent — источник AGENT_MODELS.
     :param images: список картинок текущего запроса, каждая:
         {"filename": str, "mime_type": "image/png"|"image/jpeg", "b64": "<base64>"}
         base64 БЕЗ префикса data: (или с ним — обработаем оба случая).
+    :param agent_model: активная модель основного цикла ('coder' | 'designer' |
+        'universal'). Определяет, какой vision-моделью распознавать картинку:
+          - coder      → gpt (get_llm_model_gpt): если пользователь работает в
+                         gpt-режиме, распознаём тоже через gpt;
+          - universal  → gemini (умеет в картинки);
+          - designer   → claude (мультимодальный opus).
+        Если модель неизвестна/не задана — фолбэк на designer (claude).
     """
     images = images or []
-    # llm-дизайнер (claude-opus-4.8) уже живёт в экземпляре агента и умеет в картинки
-    vision_llm = agent.AGENT_MODELS["designer"]
+
+    # Выбор vision-модели по активной модели основного цикла.
+    # coder — свой gpt; universal — gemini; всё остальное — claude (designer).
+    VISION_BY_MODEL = {
+        "coder": "coder",
+        "universal": "universal",
+        "designer": "designer",
+    }
+    vision_key = VISION_BY_MODEL.get(agent_model or "", "designer")
+    vision_llm = agent.AGENT_MODELS.get(vision_key) or agent.AGENT_MODELS["designer"]
+    log.info("analyze_image: agent_model=%s → vision-модель '%s'",
+             agent_model, vision_key)
 
     # Краткая опись картинок для подсказки модели в docstring не вставить (он статичен),
     # поэтому кладём в имена — модель видит их из текста сообщения ([IMAGE #N: ...]).

@@ -1319,12 +1319,16 @@ class ChatApp {
             //                фиксируем его основным шрифтом (ждём Kafka done
             //                для файлов/actions, поэтому тут просто помечаем).
             if (msg.kind === 'reasoning_end') {
+                // Текущий живой блок был размышлением перед вызовом тулзы —
+                // сливаем его в общий свёрток «Размышления» (не плодим блоки).
                 this._commitReasoningBlock();
                 return;
             }
             if (msg.kind === 'final_commit') {
-                // Помечаем текущий живой блок как финальный. Реальная
-                // финализация (файлы, actions) придёт с Kafka-сообщением ниже.
+                // Живой блок оказался финальным ответом — повышаем его стиль
+                // с приглушённого reasoning до основного. Реальная финализация
+                // (файлы, actions) придёт с Kafka-сообщением ниже.
+                this._promoteLiveToFinal();
                 this._streamIsFinal = true;
                 return;
             }
@@ -1332,8 +1336,8 @@ class ChatApp {
             if (msg.chunk !== undefined) {
                 // Живой стриминг: чанк ДОПИСЫВАЕМ в буфер, без рендера.
                 // Отрисовкой занимается ровный RAF-цикл (_startStreamLoop).
-                // Пока не знаем, чем окажется блок (reasoning или финал) —
-                // печатаем его в «живом» стиле, а тип решится маркером kind.
+                // Печатаем СРАЗУ в приглушённом reasoning-стиле — если шаг
+                // окажется финалом, повысим стиль по маркеру final_commit.
                 if (!this._liveBlockEl) {
                     // Обёртка ответа бота — создаём один раз на весь ответ.
                     if (!this._pendingBotEl) {
@@ -1352,10 +1356,11 @@ class ChatApp {
                         this._streamingActive = true;
                         this._streamIsFinal   = false;
                     }
-                    // Живой блок — отдельный контейнер внутри обёртки.
-                    // Reasoning-блоки остаются выше него, финал — в нём же.
+                    // Живой блок печатается в reasoning-стиле (приглушённый,
+                    // курсив). Класс .reasoning-live — визуально совпадает с
+                    // будущим свёрнутым состоянием, но без header/сворачивания.
                     this._liveBlockEl = document.createElement('div');
-                    this._liveBlockEl.className = 'live-block';
+                    this._liveBlockEl.className = 'reasoning-live';
                     this._pendingBotEl.appendChild(this._liveBlockEl);
                     this._streamBuffer = '';
                     this._streamShown  = '';
@@ -1417,6 +1422,7 @@ class ChatApp {
                 this._finalizeStream();
             }
             this._liveBlockEl = null;
+            this._reasoningWrapEl = null;
             this._removeBotPlaceholder();
 
             // Автопереподключение:
@@ -1523,27 +1529,64 @@ class ChatApp {
         }
     }
 
-    /* Сворачивает текущий живой блок в приглушённый reasoning-блок.
-       Вызывается по маркеру kind="reasoning_end". Дренит буфер синхронно
-       (мысль показываем целиком, без ожидания typewriter), затем меняет
-       стиль блока на .reasoning-block (курсив, мельче, сворачиваемый). */
+    /* SVG-каретка (Tabler chevron-right). Один стиль на весь свёрток —
+       поворачивается через CSS-transform при раскрытии. */
+    _reasoningCaretSVG() {
+        return `<svg class="reasoning-caret" viewBox="0 0 24 24" width="14" height="14" `
+             + `fill="none" stroke="currentColor" stroke-width="2" `
+             + `stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">`
+             + `<path d="M9 6l6 6-6 6"/></svg>`;
+    }
+
+    /* Гарантирует существование ЕДИНОГО свёртка «Размышления» для текущего
+       ответа и возвращает его .reasoning-body — контейнер, куда дописываются
+       все мысли между вызовами тулз. Не плодим блок на каждый шаг. */
+    _ensureReasoningWrap() {
+        if (this._reasoningWrapEl && this._pendingBotEl?.contains(this._reasoningWrapEl)) {
+            return this._reasoningWrapEl.querySelector('.reasoning-body');
+        }
+        const wrap = document.createElement('div');
+        wrap.className = 'reasoning-block reasoning-collapsed';
+        wrap.innerHTML = `
+            <div class="reasoning-header">
+                ${this._reasoningCaretSVG()}
+                <span class="reasoning-label">Размышления</span>
+            </div>
+            <div class="reasoning-body"></div>
+        `;
+        const header = wrap.querySelector('.reasoning-header');
+        header?.addEventListener('click', () => {
+            wrap.classList.toggle('reasoning-collapsed');
+        });
+        // Свёрток всегда выше живого блока
+        if (this._liveBlockEl) {
+            this._pendingBotEl.insertBefore(wrap, this._liveBlockEl);
+        } else {
+            this._pendingBotEl.appendChild(wrap);
+        }
+        this._reasoningWrapEl = wrap;
+        return wrap.querySelector('.reasoning-body');
+    }
+
+    /* Текущий живой блок был размышлением перед тулзой. Дописываем его текст
+       в ЕДИНЫЙ свёрток «Размышления» и убираем живой блок. Мысли из разных
+       шагов копятся в одном свёртке как параграфы, а не отдельными блоками. */
     _commitReasoningBlock() {
         if (!this._liveBlockEl) return;
 
-        // Дренаж буфера: показываем всю накопленную мысль сразу
+        // Дренаж буфера: забираем всю накопленную мысль сразу
         this._streamShown = (this._streamShown || '') + (this._streamBuffer || '');
         this._streamBuffer = '';
         if (this._streamRaf) { cancelAnimationFrame(this._streamRaf); this._streamRaf = null; }
 
         const text = this._streamShown;
-        // Пустую мысль не оставляем блоком
-        if (!text.trim()) {
-            this._liveBlockEl.remove();
-            this._liveBlockEl = null;
-            this._streamShown = '';
-            this._streamDone  = false;
-            return;
-        }
+        // Живой блок убираем в любом случае — он либо уходит в свёрток, либо пуст
+        this._liveBlockEl.remove();
+        this._liveBlockEl = null;
+        this._streamShown = '';
+        this._streamDone  = false;
+
+        if (!text.trim()) return;   // пустую мысль не сохраняем
 
         let html = marked.parse(text);
         if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
@@ -1551,32 +1594,24 @@ class ChatApp {
             ADD_ATTR: ['colspan','rowspan','align']
         });
 
-        // Превращаем живой блок в сворачиваемый reasoning-блок
-        const block = this._liveBlockEl;
-        block.className = 'reasoning-block reasoning-collapsed';
-        block.innerHTML = `
-            <div class="reasoning-header">
-                <span class="reasoning-caret">▸</span>
-                <span class="reasoning-label">Размышление</span>
-            </div>
-            <div class="reasoning-body">${html}</div>
-        `;
-        const header = block.querySelector('.reasoning-header');
-        header?.addEventListener('click', () => {
-            block.classList.toggle('reasoning-collapsed');
-            const caret = block.querySelector('.reasoning-caret');
-            if (caret) caret.textContent = block.classList.contains('reasoning-collapsed') ? '▸' : '▾';
-        });
-
-        // Живой блок закрыт — следующий chunk создаст новый
-        this._liveBlockEl = null;
-        this._streamShown = '';
-        this._streamDone  = false;
+        const body = this._ensureReasoningWrap();
+        const step = document.createElement('div');
+        step.className = 'reasoning-step';
+        step.innerHTML = html;
+        body.appendChild(step);
 
         const container = this.getMessagesContainer();
         if (container) {
             const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
             if (distFromBottom < 120) container.scrollTop = container.scrollHeight;
+        }
+    }
+
+    /* Живой блок оказался финальным ответом — повышаем его стиль
+       с приглушённого reasoning-live до обычного (основной шрифт). */
+    _promoteLiveToFinal() {
+        if (this._liveBlockEl) {
+            this._liveBlockEl.className = 'live-block';
         }
     }
 
@@ -1620,6 +1655,7 @@ class ChatApp {
         // Сброс всего стрим-состояния
         this._pendingBotEl    = null;
         this._liveBlockEl     = null;
+        this._reasoningWrapEl = null;   // критично: иначе следующий ответ приклеится к старому свёртку
         this._pendingBotText  = '';
         this._streamBuffer    = '';
         this._streamShown     = '';

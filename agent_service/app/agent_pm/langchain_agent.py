@@ -1518,15 +1518,19 @@ class KnowledgeAgent:
         """Отправка чанка напрямую в gateway (минуя Kafka).
 
         kind:
-          "final"         — чанк финального ответа (основной шрифт);
-          "reasoning"     — чанк размышления между тулзами (приглушённый блок);
-          "reasoning_end" — маркер конца одного reasoning-блока (chunk можно "").
+          "live"          — живой чанк текста. Фронт печатает его СРАЗУ в
+                            приглушённом reasoning-стиле (курсив, мельче), т.к.
+                            заранее неизвестно, финал это или размышление;
+          "reasoning_end" — маркер: живой блок был размышлением перед тулзой,
+                            фронт закрывает reasoning-блок (chunk = "");
+          "final_commit"  — маркер: живой блок оказался финальным ответом,
+                            фронт "повышает" его до основного стиля (chunk = "").
 
         Стриминг не должен ронять ответ — все ошибки глушим в debug."""
         if not request_id:
             return
-        # Для reasoning_end пустой chunk допустим (это маркер закрытия блока)
-        if not chunk and kind != "reasoning_end":
+        # Для управляющих маркеров пустой chunk допустим
+        if not chunk and kind not in ("reasoning_end", "final_commit"):
             return
         try:
             client = await self._get_http_client()
@@ -1563,7 +1567,9 @@ class KnowledgeAgent:
         if not self.db:
             self.db = database
 
-        await self._send_status(get_thinking_status(), request_id)
+        # Статус "думаю" больше НЕ шлём: пользователь видит реальный поток
+        # размышлений модели (живой reasoning-стрим), а не служебный индикатор.
+        # await self._send_status(get_thinking_status(), request_id)
         self.current_request_id = request_id
         cleaned_user_input = user_input
         if source == "telegram":

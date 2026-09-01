@@ -125,6 +125,10 @@ class BotStream(BaseModel):
     request_id: str
     chunk: str
     id: str | None = None
+    # Тип чанка: "live" — живой текст (печатается в текущем блоке),
+    # "reasoning_end" — маркер сворачивания живого блока в reasoning,
+    # "final" / "final_commit" — фиксация финального ответа.
+    kind: str = "final"
 
 app.add_middleware(
     CORSMiddleware,
@@ -214,6 +218,7 @@ async def bot_stream(payload: BotStream):
         "is_from_bot": True,
         "chunk": payload.chunk,
         "id": payload.id,
+        "kind": payload.kind,
     })
 
     return {"ok": True}

@@ -1312,30 +1312,54 @@ class ChatApp {
             const container = this.getMessagesContainer();
             if (!container) return;
 
+            // ── Управляющие маркеры стриминга (kind без нового текста) ──
+            // reasoning_end: живой блок был размышлением перед тулзой —
+            //                сворачиваем его в приглушённый reasoning-блок.
+            // final_commit:  живой блок оказался финальным ответом —
+            //                фиксируем его основным шрифтом (ждём Kafka done
+            //                для файлов/actions, поэтому тут просто помечаем).
+            if (msg.kind === 'reasoning_end') {
+                this._commitReasoningBlock();
+                return;
+            }
+            if (msg.kind === 'final_commit') {
+                // Помечаем текущий живой блок как финальный. Реальная
+                // финализация (файлы, actions) придёт с Kafka-сообщением ниже.
+                this._streamIsFinal = true;
+                return;
+            }
+
             if (msg.chunk !== undefined) {
-                // Режим стриминга: чанк только ДОПИСЫВАЕМ в буфер, без рендера.
-                // Отрисовкой занимается ровный RAF-цикл (_startStreamLoop) —
-                // так плавность отвязана от рваного ритма сети.
-                if (!this._pendingBotEl) {
-                    this._pendingBotEl   = document.createElement('div');
-                    this._pendingBotEl.className = 'agent-message';
-                    this._pendingBotEl.dataset.id = msg.id || '';
-                    this._pendingBotEl.style.opacity = '0';
-                    this._pendingBotEl.style.transition = 'opacity 0.25s ease';
-                    container.appendChild(this._pendingBotEl);
-                    requestAnimationFrame(() => requestAnimationFrame(() => {
-                        if (this._pendingBotEl) this._pendingBotEl.style.opacity = '1';
-                    }));
-                    // Placeholder живёт пока идёт стриминг — убираем только здесь, при первом чанке
-                    this._botAnswered = true;
-                    this._removeBotPlaceholder();
-                    this._clearAllStatuses();
-                    // Флаг: стриминг пошёл — статусы тулов больше не показываем
-                    this._streamingActive = true;
-                    // Инициализируем буфер и запускаем typewriter-цикл
-                    this._streamBuffer   = '';
-                    this._streamShown    = '';
-                    this._streamDone     = false;
+                // Живой стриминг: чанк ДОПИСЫВАЕМ в буфер, без рендера.
+                // Отрисовкой занимается ровный RAF-цикл (_startStreamLoop).
+                // Пока не знаем, чем окажется блок (reasoning или финал) —
+                // печатаем его в «живом» стиле, а тип решится маркером kind.
+                if (!this._liveBlockEl) {
+                    // Обёртка ответа бота — создаём один раз на весь ответ.
+                    if (!this._pendingBotEl) {
+                        this._pendingBotEl = document.createElement('div');
+                        this._pendingBotEl.className = 'agent-message';
+                        this._pendingBotEl.dataset.id = msg.id || '';
+                        this._pendingBotEl.style.opacity = '0';
+                        this._pendingBotEl.style.transition = 'opacity 0.25s ease';
+                        container.appendChild(this._pendingBotEl);
+                        requestAnimationFrame(() => requestAnimationFrame(() => {
+                            if (this._pendingBotEl) this._pendingBotEl.style.opacity = '1';
+                        }));
+                        this._botAnswered = true;
+                        this._removeBotPlaceholder();
+                        this._clearAllStatuses();
+                        this._streamingActive = true;
+                        this._streamIsFinal   = false;
+                    }
+                    // Живой блок — отдельный контейнер внутри обёртки.
+                    // Reasoning-блоки остаются выше него, финал — в нём же.
+                    this._liveBlockEl = document.createElement('div');
+                    this._liveBlockEl.className = 'live-block';
+                    this._pendingBotEl.appendChild(this._liveBlockEl);
+                    this._streamBuffer = '';
+                    this._streamShown  = '';
+                    this._streamDone   = false;
                     this._startStreamLoop();
                 }
 
@@ -1349,27 +1373,23 @@ class ChatApp {
                 // подсветка кода) выполняем ПОСЛЕ полного дренажа буфера.
                 const fullText = msg.message ?? this._pendingBotText;
 
-                if (this._pendingBotEl) {
-                    // Синхронизируем буфер с эталонным полным текстом:
-                    // всё, что ещё не показано и не лежит в буфере — дописываем.
+                if (this._pendingBotEl && this._liveBlockEl) {
+                    // Синхронизируем буфер живого (финального) блока с эталонным
+                    // полным текстом. fullText из Kafka — это ТОЛЬКО финальный
+                    // ответ (без reasoning), а живой блок сейчас и есть финал.
                     const alreadyQueued = (this._streamShown || '') + (this._streamBuffer || '');
                     if (fullText.startsWith(alreadyQueued)) {
                         this._streamBuffer += fullText.slice(alreadyQueued.length);
                     } else if (fullText.length > alreadyQueued.length) {
-                        // Рассинхрон (редкий) — просто догоняем остатком по длине
                         this._streamBuffer += fullText.slice(alreadyQueued.length);
                     }
 
-                    // Данные для финализации кладём на объект — их применит
-                    // _finalizeStream(), когда буфер опустеет.
                     this._streamFinalData = {
                         fullText,
                         files: msg.files,
                         message_id: msg.message_id,
                     };
                     this._streamDone = true;
-                    // Гарантируем, что цикл жив (мог не стартовать, если done
-                    // пришёл до первого chunk — но тогда _pendingBotEl уже есть)
                     this._startStreamLoop();
                 } else {
                     // Целое сообщение без стриминга — обычный addMessage
@@ -1396,6 +1416,7 @@ class ChatApp {
                 }
                 this._finalizeStream();
             }
+            this._liveBlockEl = null;
             this._removeBotPlaceholder();
 
             // Автопереподключение:
@@ -1431,14 +1452,13 @@ class ChatApp {
     // При переполнении буфера порция плавно растёт, чтобы не отставать
     // от быстрой генерации, но не рвать плавность.
     _streamTypewriterStep() {
-        const CHARS_PER_FRAME = 4;      // базовый темп
+        const CHARS_PER_FRAME = 7;      // базовый темп (чуть быстрее, ~420 симв/сек)
         const buffered = this._streamBuffer ? this._streamBuffer.length : 0;
 
         // Автоускорение: чем больше накопилось, тем крупнее порция.
-        // >400 симв в буфере → умножаем шаг, cap на разумном пределе.
         let step = CHARS_PER_FRAME;
-        if (buffered > 400)  step = Math.min(12, CHARS_PER_FRAME + Math.floor(buffered / 200));
-        if (buffered > 2000) step = Math.min(40, Math.floor(buffered / 60));
+        if (buffered > 400)  step = Math.min(16, CHARS_PER_FRAME + Math.floor(buffered / 150));
+        if (buffered > 2000) step = Math.min(48, Math.floor(buffered / 50));
 
         return step;
     }
@@ -1450,7 +1470,7 @@ class ChatApp {
         this._lastStreamRender = 0;
 
         const tick = (ts) => {
-            if (!this._pendingBotEl) {
+            if (!this._liveBlockEl) {
                 this._streamRaf = null;
                 return;
             }
@@ -1486,7 +1506,8 @@ class ChatApp {
     }
 
     _renderStreamPartial() {
-        if (!this._pendingBotEl) return;
+        // Рендерим только в ЖИВОЙ блок (reasoning-блоки уже свёрнуты выше).
+        if (!this._liveBlockEl) return;
         const container = this.getMessagesContainer();
 
         let html = marked.parse(this._streamShown || '');
@@ -1494,11 +1515,68 @@ class ChatApp {
             ADD_TAGS: ['table','thead','tbody','tr','th','td'],
             ADD_ATTR: ['colspan','rowspan','align']
         });
-        this._pendingBotEl.innerHTML = html;
+        this._liveBlockEl.innerHTML = html;
 
         if (container) {
             const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
             if (distFromBottom < 80) container.scrollTop = container.scrollHeight;
+        }
+    }
+
+    /* Сворачивает текущий живой блок в приглушённый reasoning-блок.
+       Вызывается по маркеру kind="reasoning_end". Дренит буфер синхронно
+       (мысль показываем целиком, без ожидания typewriter), затем меняет
+       стиль блока на .reasoning-block (курсив, мельче, сворачиваемый). */
+    _commitReasoningBlock() {
+        if (!this._liveBlockEl) return;
+
+        // Дренаж буфера: показываем всю накопленную мысль сразу
+        this._streamShown = (this._streamShown || '') + (this._streamBuffer || '');
+        this._streamBuffer = '';
+        if (this._streamRaf) { cancelAnimationFrame(this._streamRaf); this._streamRaf = null; }
+
+        const text = this._streamShown;
+        // Пустую мысль не оставляем блоком
+        if (!text.trim()) {
+            this._liveBlockEl.remove();
+            this._liveBlockEl = null;
+            this._streamShown = '';
+            this._streamDone  = false;
+            return;
+        }
+
+        let html = marked.parse(text);
+        if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
+            ADD_TAGS: ['table','thead','tbody','tr','th','td'],
+            ADD_ATTR: ['colspan','rowspan','align']
+        });
+
+        // Превращаем живой блок в сворачиваемый reasoning-блок
+        const block = this._liveBlockEl;
+        block.className = 'reasoning-block reasoning-collapsed';
+        block.innerHTML = `
+            <div class="reasoning-header">
+                <span class="reasoning-caret">▸</span>
+                <span class="reasoning-label">Размышление</span>
+            </div>
+            <div class="reasoning-body">${html}</div>
+        `;
+        const header = block.querySelector('.reasoning-header');
+        header?.addEventListener('click', () => {
+            block.classList.toggle('reasoning-collapsed');
+            const caret = block.querySelector('.reasoning-caret');
+            if (caret) caret.textContent = block.classList.contains('reasoning-collapsed') ? '▸' : '▾';
+        });
+
+        // Живой блок закрыт — следующий chunk создаст новый
+        this._liveBlockEl = null;
+        this._streamShown = '';
+        this._streamDone  = false;
+
+        const container = this.getMessagesContainer();
+        if (container) {
+            const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+            if (distFromBottom < 120) container.scrollTop = container.scrollHeight;
         }
     }
 
@@ -1508,14 +1586,23 @@ class ChatApp {
         const data = this._streamFinalData || {};
         const fullText = data.fullText ?? this._streamShown ?? '';
 
-        // Финальный полный рендер (идеальная вёрстка из полного текста)
+        // Финальный полный рендер финального ответа — в живой блок (если он есть).
+        // reasoning-блоки остаются выше нетронутыми.
+        const targetBlock = this._liveBlockEl || (() => {
+            const b = document.createElement('div');
+            b.className = 'live-block';
+            this._pendingBotEl.appendChild(b);
+            return b;
+        })();
+
         let html = marked.parse(fullText);
         if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
             ADD_TAGS: ['table','thead','tbody','tr','th','td'],
             ADD_ATTR: ['colspan','rowspan','align']
         });
-        this._pendingBotEl.innerHTML = html;
+        targetBlock.innerHTML = html;
 
+        // Файлы / actions вешаем на общую обёртку ответа
         if (data.files?.length) {
             this._pendingBotEl.appendChild(
                 this._renderBotFiles(data.files, data.message_id)
@@ -1532,10 +1619,12 @@ class ChatApp {
 
         // Сброс всего стрим-состояния
         this._pendingBotEl    = null;
+        this._liveBlockEl     = null;
         this._pendingBotText  = '';
         this._streamBuffer    = '';
         this._streamShown     = '';
         this._streamDone      = false;
+        this._streamIsFinal   = false;
         this._streamFinalData = null;
         this._streamingActive = false;
         if (this._streamRaf) { cancelAnimationFrame(this._streamRaf); this._streamRaf = null; }

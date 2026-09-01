@@ -1508,16 +1508,36 @@ class KnowledgeAgent:
         except Exception as e:
             logger.debug(f"Не удалось отправить статус: {e}")
 
-    async def _send_chunk(self, chunk: str, request_id: str, msg_id: str | None = None) -> None:
-        """Отправка чанка финального ответа напрямую в gateway (минуя Kafka).
+    async def _send_chunk(
+        self,
+        chunk: str,
+        request_id: str,
+        msg_id: str | None = None,
+        kind: str = "final",
+    ) -> None:
+        """Отправка чанка напрямую в gateway (минуя Kafka).
+
+        kind:
+          "final"         — чанк финального ответа (основной шрифт);
+          "reasoning"     — чанк размышления между тулзами (приглушённый блок);
+          "reasoning_end" — маркер конца одного reasoning-блока (chunk можно "").
+
         Стриминг не должен ронять ответ — все ошибки глушим в debug."""
-        if not request_id or not chunk:
+        if not request_id:
+            return
+        # Для reasoning_end пустой chunk допустим (это маркер закрытия блока)
+        if not chunk and kind != "reasoning_end":
             return
         try:
             client = await self._get_http_client()
             await client.post(
                 f"{GATEWAY_URL}/internal/bot_stream",
-                json={"request_id": request_id, "chunk": chunk, "id": msg_id},
+                json={
+                    "request_id": request_id,
+                    "chunk": chunk,
+                    "id": msg_id,
+                    "kind": kind,
+                },
                 timeout=2,
             )
         except Exception as e:
@@ -1735,21 +1755,23 @@ class KnowledgeAgent:
                 ))
 
 
-            # ── Стриминг финального ответа ────────────────────────────
-            # Стримим ТОЛЬКО финал (шаг без tool_calls). Заранее неизвестно,
-            # будет ли этот шаг финалом, поэтому чанки копим в буфер и шлём
-            # на фронт по мере поступления, а если шаг окажется reasoning'ом
-            # перед тулзой (tool_calls непуст) — отправленное затрётся финалом,
-            # но такого не случится: reasoning-текст у модели с tool_calls
-            # приходит редко и до tool_call-чанков. Чтобы не светить его,
-            # держим флаг streamed_any и, если в конце оказались tool_calls,
-            # НЕ финализируем — фронтовый placeholder перезатрёт при следующем.
+            # ── Живой стриминг текста модели ──────────────────────────
+            # Заранее неизвестно, окажется ли текущий шаг финалом (без
+            # tool_calls) или reasoning'ом перед вызовом тулзы. Поэтому
+            # чанки шлём оптимистично с kind="live" — фронт печатает их в
+            # текущем "живом" блоке. Как только шаг завершился и стал ясен
+            # его тип, шлём УПРАВЛЯЮЩИЙ маркер:
+            #   • есть tool_calls  → kind="reasoning_end": фронт сворачивает
+            #     живой блок в приглушённый reasoning-блок (курсив, мельче);
+            #   • нет tool_calls   → kind="final_commit": фронт фиксирует
+            #     живой блок как финальный ответ (основной шрифт).
             stream_state = {"sent": False}
 
             async def _on_chunk(text: str):
-                # Отправляем чанк на фронт немедленно (живой стриминг).
                 stream_state["sent"] = True
-                await self._send_chunk(text, request_id, msg_id=str(request_id))
+                await self._send_chunk(
+                    text, request_id, msg_id=str(request_id), kind="live"
+                )
 
             try:
                 response = await _astream_collect(
@@ -1763,10 +1785,26 @@ class KnowledgeAgent:
                 final_response = "Ошибка внутри цикла агента. Но агент запомнил шаги, попробуйте вернуться к запросу"
                 break
 
-            # ГАСИМ промежуточный content ДО добавления в стек
-            if getattr(response, "tool_calls", None) and getattr(response, "content", None):
+            _has_tool_calls = bool(getattr(response, "tool_calls", None))
+            _had_text = bool(getattr(response, "content", None))
+
+            if _has_tool_calls and _had_text:
+                # Это был reasoning перед тулзой. Оставляем его на фронте,
+                # но переклассифицируем живой блок в свёрнутый reasoning-блок.
                 loop_state.setdefault("reasoning_trace", []).append(response.content)
+                if stream_state["sent"]:
+                    await self._send_chunk(
+                        "", request_id, msg_id=str(request_id), kind="reasoning_end"
+                    )
+                # В стек reasoning не тащим (как и раньше) — гасим content
                 response.content = ""
+            elif _has_tool_calls and not _had_text:
+                # Шаг без текста (сразу tool_calls). Если что-то всё же
+                # успело улететь как live (пустой мусор) — закрываем блок.
+                if stream_state["sent"]:
+                    await self._send_chunk(
+                        "", request_id, msg_id=str(request_id), kind="reasoning_end"
+                    )
 
             messages.append(response)          # ← единственный аппенд
 
@@ -1784,12 +1822,21 @@ class KnowledgeAgent:
 
             if not getattr(response, "tool_calls", None):
                 final_response = response.content
+                # Финальный шаг: фиксируем живой блок как финальный ответ.
+                # Если что-то стримилось (обычный случай) — шлём маркер
+                # final_commit, чтобы фронт закрепил блок основным шрифтом.
+                if stream_state["sent"]:
+                    await self._send_chunk(
+                        "", request_id, msg_id=str(request_id), kind="final_commit"
+                    )
                 break
 
             # Выполняем все запрошенные инструменты параллельно
             tool_calls = response.tool_calls
             tool_names = [tc['name'] for tc in tool_calls]
-            await self._send_status(get_tools_status(tool_names), request_id)
+            # Статусы тулов больше НЕ шлём: пользователь видит реальный поток
+            # размышлений модели (reasoning-блоки), а не служебные индикаторы.
+            # await self._send_status(get_tools_status(tool_names), request_id)
 
             # logging.info(f"Итерация в цикле: {iteration}. Вызванные инструменты: {tool_calls}")
             tool_results = await asyncio.gather(

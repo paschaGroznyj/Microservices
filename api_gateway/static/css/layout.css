@@ -136,16 +136,10 @@
 
 #view-agent {
   background: var(--bg);
-}
-
-/* Когда открыт правый сайдбар-превью — раскладываем view-agent в строку:
-   слева чат (chat-main-inner), справа панель просмотра текста. */
-#view-agent.preview-open {
-  flex-direction: row;
-}
-#view-agent.preview-open .chat-main-inner {
-  flex: 1 1 auto;
-  min-width: 0;
+  /* Якорь для абсолютного позиционирования сайдбара-превью.
+     Сайдбар выезжает ПОВЕРХ ленты сообщений и НЕ участвует во флексе,
+     поэтому чат и поле ввода не смещаются и не пропадают. */
+  position: relative;
 }
 
 .view.hidden { display: none; }
@@ -156,22 +150,26 @@
    Рендер как txt на белом фоне, оригинальный вид.
 ══════════════════════════════════════════════ */
 .text-preview-panel {
-  flex: 0 0 0;
-  width: 0;
-  min-width: 0;
-  overflow: hidden;
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  width: 46%;
+  max-width: 720px;
   display: flex;
   flex-direction: column;
   background: var(--bg);
   border-left: 1px solid var(--border);
-  transition: width .26s cubic-bezier(0.22, 0.61, 0.36, 1),
-              flex-basis .26s cubic-bezier(0.22, 0.61, 0.36, 1);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.12);
+  transform: translateX(100%);
+  transition: transform .26s cubic-bezier(0.22, 0.61, 0.36, 1);
+  pointer-events: none;
 }
 
 .text-preview-panel.open {
-  flex: 0 0 46%;
-  width: 46%;
-  max-width: 720px;
+  transform: translateX(0);
+  pointer-events: auto;
 }
 
 .text-preview-header {
@@ -229,11 +227,7 @@
 }
 
 @media (max-width: 900px) {
-  .text-preview-panel.open {
-    position: absolute;
-    inset: 0;
-    z-index: 40;
-    flex: none;
+  .text-preview-panel {
     width: 100%;
     max-width: none;
   }

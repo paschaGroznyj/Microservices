@@ -883,6 +883,10 @@ async def send_message(request: Request):
         "user_id": data["user_id"],
         "chat_id": data["chat_id"],
         "message": data["message"],
+        # Прокидываем клиентский message_id в WS-эхо — фронту он нужен
+        # для дедупа оптимистично отрисованного сообщения (особенно для
+        # длинного текста-чипа, где сверить по textContent нельзя).
+        "message_id": data.get("message_id"),
         "is_from_bot": False
     }
     print("Перед отправкой сообщения", data)

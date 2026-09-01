@@ -440,6 +440,7 @@ def _run_commands_sync(commands: list[str], timeout: int, run_dir: str, stdin: s
                 "GITVERSE_TOKEN": os.getenv("GITVERSE_TOKEN", ""),
                 "GITHUB_TOKEN": os.getenv("GITHUB_TOKEN", ""),
                 "DOCKER_HOST": os.getenv("DOCKER_HOST", "tcp://sandbox_dind:2375"),
+                "KAFKA_BROKER_DIND": os.getenv("KAFKA_BROKER_DIND", "")
             },
         )
         duration_ms = int((time.monotonic() - start) * 1000)

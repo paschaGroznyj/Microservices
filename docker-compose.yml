@@ -12,7 +12,7 @@ services:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:9092,EXTERNAL://172.18.0.1:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://172.28.0.10:9092,EXTERNAL://172.18.0.1:9094
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@broker:9093
@@ -113,21 +113,21 @@ services:
       - catchPM
       - sandbox_net
 
-  tg_bot:
-      build: ./telegram_service 
-      container_name: tg_bot
-      network_mode: "host"  # Используем сеть сервера напрямую
-      # networks: [catchPM]
-      # depends_on:
-      #   - agent_service
-      # ports:
-      #   - "8010:8010"
-      environment:
-        TELEGRAM_BOT_TOKEN:      ${TELEGRAM_BOT_TOKEN}
-        TELEGRAM_CHAT_IDS:        ${TELEGRAM_CHAT_IDS}
-        TELEGRAM_GROUPS_IDS:     ${TELEGRAM_GROUPS_IDS:-}
-        AGENT_SERVICE_URL:       http://127.0.0.1:9001  # Стучимся на 9001 порт хоста
-      restart: unless-stopped
+  # tg_bot:
+  #     build: ./telegram_service 
+  #     container_name: tg_bot
+  #     network_mode: "host"  # Используем сеть сервера напрямую
+  #     # networks: [catchPM]
+  #     # depends_on:
+  #     #   - agent_service
+  #     # ports:
+  #     #   - "8010:8010"
+  #     environment:
+  #       TELEGRAM_BOT_TOKEN:      ${TELEGRAM_BOT_TOKEN}
+  #       TELEGRAM_CHAT_IDS:        ${TELEGRAM_CHAT_IDS}
+  #       TELEGRAM_GROUPS_IDS:     ${TELEGRAM_GROUPS_IDS:-}
+  #       AGENT_SERVICE_URL:       http://127.0.0.1:9001  # Стучимся на 9001 порт хоста
+  #     restart: unless-stopped
 
 
   # token_service:
@@ -248,8 +248,9 @@ services:
         postgres
         -c autovacuum=on
         -c max_connections=300
-        -c autovacuum_vacuum_scale_factor=0.1
-        -c autovacuum_vacuum_threshold=1000
+        -c autovacuum_vacuum_scale_factor=0.2
+        -c autovacuum_vacuum_threshold=5000
+        -c autovacuum_vacuum_cost_delay=20ms
         -c min_wal_size=500MB
         -c max_wal_size=2GB
         -c wal_keep_size=0
@@ -267,6 +268,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       # - ./init.sql:/docker-entrypoint-initdb.d/init.sql
       - ./backups:/backups
+      - wal_archive:/var/lib/postgresql/wal_archive
 
     logging:
       # Ограничение размера логов, чтобы контейнер не раздувало
@@ -282,6 +284,14 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s # Даем время на первый запуск и инициализацию
+    
+    command: >
+      postgres
+      -c wal_level=replica
+      -c archive_mode=on
+      -c archive_command='test ! -f /var/lib/postgresql/wal_archive/%f && cp %p /var/lib/postgresql/wal_archive/%f'
+      -c max_wal_size=2GB
+      -c min_wal_size=500MB
     networks:
       - catchPM
 
@@ -369,6 +379,7 @@ services:
       - GITHUB_TOKEN=${GITHUB_TOKEN}
       - KAFKA_BROKER=${KAFKA_BROKER}
       - DOCKER_HOST=tcp://sandbox_dind:2375
+      - KAFKA_BROKER_DIND=172.28.0.10:9092    # для контейнеров, которые agent_sandbox поднимает внутри dind
     volumes:
       - ./agent_sandbox/fonts:/app/fonts:ro
       - ./agent_sandbox/dev_utils:/app/dev_utils:ro
@@ -404,6 +415,7 @@ volumes:
   postgres_data:
   neo4j_data:
   dind_data:
+  wal_archive:
   # redis_data:
 #  parser_data:
 #  parser_logs:

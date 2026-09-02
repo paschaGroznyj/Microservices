@@ -1477,16 +1477,18 @@ class ChatApp {
         // Один оверлей на весь UI — пересоздаём при каждом открытии.
         document.getElementById('image-lightbox')?.remove();
 
-        // Уникальное имя для скачивания: img_{первые 8 символов image_key}.{ext}.
-        // Расширение берём из исходного name (там уже .jpg/.png от тула).
-        // Так файлы не перетирают друг друга (все они по умолчанию generated_0.jpg),
-        // остаются короткими и читабельными. Полный image_key кладём в title.
+        // Расширение для имени файла берём из исходного name (там .jpg/.png от тула).
         const rawName = name || 'image';
         let ext = rawName.includes('.') ? rawName.split('.').pop().toLowerCase() : 'jpg';
         if (!/^[a-z0-9]{2,5}$/.test(ext)) ext = 'jpg';
-        const dlName = imageKey
-            ? `img_${String(imageKey).slice(0, 8)}.${ext}`
-            : rawName;
+
+        // Уникальное имя для скачивания: img_{первые 8 символов image_key}.{ext}.
+        // image_key (вариант Б) НЕ полагается на WS-пейлоад: если он не пришёл
+        // аргументом, добираем его из заголовка X-Image-Key ответа /image/...
+        // (см. загрузку через fetch ниже). До этого показываем rawName.
+        const buildDlName = (key) => (key
+            ? `img_${String(key).slice(0, 8)}.${ext}`
+            : rawName);
 
         const overlay = document.createElement('div');
         overlay.id = 'image-lightbox';
@@ -1497,23 +1499,26 @@ class ChatApp {
 
         const img = document.createElement('img');
         img.className = 'image-lightbox__img';
-        img.src = url;
         img.alt = this.escapeHtml(rawName);
 
         const bar = document.createElement('div');
         bar.className = 'image-lightbox__bar';
+        const dlName0 = buildDlName(imageKey);
         bar.innerHTML = `
-<span class="image-lightbox__name" title="${this.escapeHtml(imageKey || dlName)}">${this.escapeHtml(dlName)}</span>
+<span class="image-lightbox__name" title="${this.escapeHtml(imageKey || dlName0)}">${this.escapeHtml(dlName0)}</span>
 <span class="image-lightbox__dim" title="Разрешение">…</span>
-<a class="image-lightbox__dl" href="${url}" download="${this.escapeHtml(dlName)}" title="Скачать">
+<a class="image-lightbox__dl" href="${url}" download="${this.escapeHtml(dlName0)}" title="Скачать">
   <svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
 </a>
 <button class="image-lightbox__close" type="button" title="Закрыть" aria-label="Закрыть">
   <svg viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
 </button>`;
 
-        // Разрешение проставляем после загрузки картинки (natural размеры).
+        const nameEl = bar.querySelector('.image-lightbox__name');
         const dimEl = bar.querySelector('.image-lightbox__dim');
+        const dlEl = bar.querySelector('.image-lightbox__dl');
+
+        // Разрешение проставляем после загрузки картинки (natural размеры).
         const setDim = () => {
             if (img.naturalWidth && img.naturalHeight) {
                 dimEl.textContent = `${img.naturalWidth}×${img.naturalHeight}`;
@@ -1521,9 +1526,41 @@ class ChatApp {
                 dimEl.textContent = '';
             }
         };
-        if (img.complete) setDim();
         img.addEventListener('load', setDim);
         img.addEventListener('error', () => { dimEl.textContent = ''; });
+
+        // Обновляем имя/скачивание по image_key из заголовка X-Image-Key.
+        const applyKey = (key) => {
+            if (!key) return;
+            const dlName = buildDlName(key);
+            nameEl.textContent = dlName;
+            nameEl.title = key;
+            dlEl.setAttribute('download', dlName);
+        };
+
+        // Грузим картинку через fetch, чтобы прочитать X-Image-Key из ответа
+        // (браузер не отдаёт заголовки для обычного <img src>). Blob-URL идёт
+        // и в <img>, и в href скачивания — чтобы скачивался тот же байт-в-байт
+        // файл под уникальным именем.
+        if (imageKey) {
+            // Ключ уже есть — незачем ходить через fetch, ставим src напрямую.
+            img.src = url;
+        } else {
+            fetch(url, { credentials: 'same-origin' })
+                .then((resp) => {
+                    const key = resp.headers.get('X-Image-Key');
+                    return resp.blob().then((blob) => ({ key, blob }));
+                })
+                .then(({ key, blob }) => {
+                    const objUrl = URL.createObjectURL(blob);
+                    img.src = objUrl;
+                    dlEl.setAttribute('href', objUrl);
+                    applyKey(key);
+                    // objUrl живёт до закрытия оверлея — освобождаем в close().
+                    overlay._objUrl = objUrl;
+                })
+                .catch(() => { img.src = url; });  // фолбэк на прямой src
+        }
 
         box.appendChild(bar);
         box.appendChild(img);
@@ -1534,6 +1571,7 @@ class ChatApp {
             overlay.classList.add('image-lightbox--hide');
             setTimeout(() => overlay.remove(), 200);
             document.removeEventListener('keydown', onKey);
+            if (overlay._objUrl) { URL.revokeObjectURL(overlay._objUrl); overlay._objUrl = null; }
         };
         const onKey = (e) => { if (e.key === 'Escape') close(); };
 

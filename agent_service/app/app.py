@@ -177,11 +177,21 @@ async def get_db_image(
     ~30 мин и чистится по TTL, поэтому превью в чате обязано браться отсюда,
     иначе после уборки в галерее будет пусто (404 от /web/file).
 
-    Поиск строки:
-      - по image_id (точный, приоритетный), либо
-      - по паре (message_id, file_name) — так фронт достаёт нужную картинку,
-        привязанную к конкретному сообщению бота.
+    Поиск строки (file_name в WHERE НЕ участвует — он всегда generated_0.jpg
+    и для картинок бесполезен ни как якорь, ни как уникальное имя):
+      - image_key (точный, приоритетный), либо
+      - image_id (точный), либо
+      - message_id — последняя по времени (created_at DESC), что и нужно фронту:
+        одно сообщение бота = одна актуальная картинка.
+
+    Уникальный ключ image_key возвращаем в заголовке X-Image-Key — фронт из него
+    строит уникальное имя файла для скачивания (не завися от WS-пейлоада, куда
+    image_key может не доехать). Разрешение фронт снимает сам (naturalWidth).
     """
+    logging.info(
+        f"/web/db_image: message_id={message_id}, image_id={image_id}, "
+        f"image_key={image_key} (file_name={file_name} — игнорируется для картинок)"
+    )
     pool = getattr(db, "pool", None)
     if pool is None:
         raise HTTPException(status_code=503, detail="DB pool not ready")
@@ -191,28 +201,21 @@ async def get_db_image(
         async with pool.acquire() as conn:
             if image_key:
                 row = await conn.fetchrow(
-                    "SELECT file_name, mime_type, image_data "
+                    "SELECT file_name, mime_type, image_data, image_key "
                     "FROM generated_images WHERE image_key::text = $1 LIMIT 1",
                     str(image_key).strip(),
                 )
             elif image_id is not None:
                 row = await conn.fetchrow(
-                    "SELECT file_name, mime_type, image_data "
+                    "SELECT file_name, mime_type, image_data, image_key "
                     "FROM generated_images WHERE id = $1",
                     image_id,
                 )
-            elif message_id and file_name:
-                # последняя по времени на случай совпадений имени в одном сообщении
-                row = await conn.fetchrow(
-                    "SELECT file_name, mime_type, image_data "
-                    "FROM generated_images "
-                    "WHERE message_id = $1 AND file_name = $2 "
-                    "ORDER BY created_at DESC, id DESC LIMIT 1",
-                    message_id, file_name,
-                )
             elif message_id:
+                # Точное совпадение по message_id; если картинок несколько —
+                # берём последнюю по времени генерации.
                 row = await conn.fetchrow(
-                    "SELECT file_name, mime_type, image_data "
+                    "SELECT file_name, mime_type, image_data, image_key "
                     "FROM generated_images "
                     "WHERE message_id = $1 "
                     "ORDER BY created_at DESC, id DESC LIMIT 1",
@@ -228,12 +231,15 @@ async def get_db_image(
     raw = bytes(row["image_data"])
     mime = row["mime_type"] or "image/png"
     fname = row["file_name"] or "image.png"
+    img_key = str(row["image_key"]) if row["image_key"] else ""
     return Response(
         content=raw,
         media_type=mime,
         headers={
             "Content-Disposition": f'inline; filename="{fname}"',
             "Cache-Control": "public, max-age=86400",
+            "X-Image-Key": img_key,
+            "Access-Control-Expose-Headers": "X-Image-Key",
         },
     )
 

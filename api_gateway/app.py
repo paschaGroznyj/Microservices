@@ -982,9 +982,13 @@ async def get_chat_db_image(chat_id: int, message_id: str, file_name: str, reque
 
     В отличие от /files/... (который резолвит путь и стримит файл с диска —
     а он живёт лишь ~30 мин), этот эндпоинт проксирует /web/db_image
-    agent_service и берёт бинарник напрямую из таблицы. Привязка — по паре
-    (message_id, file_name), поэтому картинка всегда доступна, даже когда
-    эфемерный файл на хосте уже вычищен по TTL."""
+    agent_service и берёт бинарник напрямую из таблицы. Привязка — по
+    message_id (последняя по времени картинка сообщения); file_name в поиске
+    НЕ участвует (он всегда generated_0.jpg). file_name остаётся в пути роута
+    лишь ради обратной совместимости старых URL, в agent_service не передаётся.
+
+    Уникальный image_key приходит из agent_service в заголовке X-Image-Key —
+    пробрасываем его наружу, фронт строит из него имя файла для скачивания."""
     user = await get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -992,7 +996,7 @@ async def get_chat_db_image(chat_id: int, message_id: str, file_name: str, reque
     try:
         agent_resp = await app.state.http_client.get(
             f"{SERVICES['agent_service']['url']}/web/db_image",
-            params={"message_id": message_id, "file_name": file_name, "image_key": image_key},
+            params={"message_id": message_id, "image_key": image_key},
         )
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Agent service unreachable: {e}")
@@ -1003,7 +1007,11 @@ async def get_chat_db_image(chat_id: int, message_id: str, file_name: str, reque
     return Response(
         content=agent_resp.content,
         media_type=agent_resp.headers.get("content-type", "image/png"),
-        headers={"Cache-Control": "public, max-age=86400"},
+        headers={
+            "Cache-Control": "public, max-age=86400",
+            "X-Image-Key": agent_resp.headers.get("X-Image-Key", ""),
+            "Access-Control-Expose-Headers": "X-Image-Key",
+        },
     )
 
 

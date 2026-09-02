@@ -943,7 +943,7 @@ class ChatApp {
             });
 
             // Клик — превью в лайтбоксе.
-            card.addEventListener('click', () => this._openImageLightbox(url, name));
+            card.addEventListener('click', () => this._openImageLightbox(url, name, f.image_key));
 
             const overlay = document.createElement('div');
             overlay.className = 'fa-image-card__overlay';
@@ -1473,9 +1473,20 @@ class ChatApp {
     }
 
     /** Открывает картинку в модальном лайтбоксе (превью в общем стиле). */
-    _openImageLightbox(url, name) {
+    _openImageLightbox(url, name, imageKey) {
         // Один оверлей на весь UI — пересоздаём при каждом открытии.
         document.getElementById('image-lightbox')?.remove();
+
+        // Уникальное имя для скачивания: img_{первые 8 символов image_key}.{ext}.
+        // Расширение берём из исходного name (там уже .jpg/.png от тула).
+        // Так файлы не перетирают друг друга (все они по умолчанию generated_0.jpg),
+        // остаются короткими и читабельными. Полный image_key кладём в title.
+        const rawName = name || 'image';
+        let ext = rawName.includes('.') ? rawName.split('.').pop().toLowerCase() : 'jpg';
+        if (!/^[a-z0-9]{2,5}$/.test(ext)) ext = 'jpg';
+        const dlName = imageKey
+            ? `img_${String(imageKey).slice(0, 8)}.${ext}`
+            : rawName;
 
         const overlay = document.createElement('div');
         overlay.id = 'image-lightbox';
@@ -1487,18 +1498,32 @@ class ChatApp {
         const img = document.createElement('img');
         img.className = 'image-lightbox__img';
         img.src = url;
-        img.alt = this.escapeHtml(name || 'image');
+        img.alt = this.escapeHtml(rawName);
 
         const bar = document.createElement('div');
         bar.className = 'image-lightbox__bar';
         bar.innerHTML = `
-<span class="image-lightbox__name">${this.escapeHtml(name || 'image')}</span>
-<a class="image-lightbox__dl" href="${url}" download="${this.escapeHtml(name || 'image')}" title="Скачать">
+<span class="image-lightbox__name" title="${this.escapeHtml(imageKey || dlName)}">${this.escapeHtml(dlName)}</span>
+<span class="image-lightbox__dim" title="Разрешение">…</span>
+<a class="image-lightbox__dl" href="${url}" download="${this.escapeHtml(dlName)}" title="Скачать">
   <svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
 </a>
 <button class="image-lightbox__close" type="button" title="Закрыть" aria-label="Закрыть">
   <svg viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
 </button>`;
+
+        // Разрешение проставляем после загрузки картинки (natural размеры).
+        const dimEl = bar.querySelector('.image-lightbox__dim');
+        const setDim = () => {
+            if (img.naturalWidth && img.naturalHeight) {
+                dimEl.textContent = `${img.naturalWidth}×${img.naturalHeight}`;
+            } else {
+                dimEl.textContent = '';
+            }
+        };
+        if (img.complete) setDim();
+        img.addEventListener('load', setDim);
+        img.addEventListener('error', () => { dimEl.textContent = ''; });
 
         box.appendChild(bar);
         box.appendChild(img);

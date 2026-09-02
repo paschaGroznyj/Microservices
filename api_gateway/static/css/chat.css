@@ -1538,6 +1538,13 @@ pre {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.image-lightbox__dim {
+  flex: 0 0 auto;
+  font-size: 0.78em;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255,255,255,0.55);
+  white-space: nowrap;
+}
 .image-lightbox__dl,
 .image-lightbox__close {
   display: inline-flex;

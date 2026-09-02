@@ -110,6 +110,62 @@ def _extract_image_data_uri(message: dict) -> str | None:
     return None
 
 
+async def _persist_generated_image(
+    agent,
+    *,
+    raw: bytes,
+    ext: str,
+    fname: str,
+    fpath: str,
+    prompt: str,
+    model: str,
+    aspect_ratio: str,
+    temperature: float,
+) -> int | None:
+    """Пишет сгенерированную картинку (бинарник + метаданные) в generated_images.
+
+    Таблица создаётся chats_service, но живёт в общей БД — используем основной
+    пул агента (agent.db.pool). Возвращает id новой строки или None при ошибке.
+    Ошибка записи в БД НЕ должна ронять генерацию — картинка уже на диске.
+    """
+    db = getattr(agent, "db", None)
+    pool = getattr(db, "pool", None) if db else None
+    if pool is None:
+        log.warning("generate_image: нет пула БД — картинка не записана в generated_images")
+        return None
+
+    mime = mimetypes.guess_type(fname)[0] or ("image/jpeg" if ext in (".jpg", ".jpeg") else "image/png")
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO generated_images
+                    (chat_id, user_id, message_id, file_name, file_path, mime_type,
+                     prompt, model, aspect_ratio, temperature, image_data, byte_size)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                RETURNING id;
+                """,
+                getattr(agent, "current_chat_id", None),
+                getattr(agent, "current_user_id", None),
+                getattr(agent, "current_message_id", None),
+                fname,
+                fpath,
+                mime,
+                prompt,
+                model,
+                aspect_ratio,
+                float(temperature),
+                raw,
+                len(raw),
+            )
+        new_id = row["id"] if row else None
+        log.info("generate_image: записано в generated_images id=%s (%d байт)", new_id, len(raw))
+        return new_id
+    except Exception as e:
+        log.error("generate_image: не смог записать в generated_images: %s", e, exc_info=True)
+        return None
+
+
 def _data_uri_to_bytes(data_uri: str) -> tuple[bytes, str]:
     """data:image/jpeg;base64,XXXX → (bytes, ext). ext вида '.jpg'."""
     m = re.match(r"data:(?P<mime>[^;]+);base64,(?P<b64>.+)", data_uri, re.DOTALL)
@@ -251,6 +307,7 @@ def make_generate_image_tool(agent, images: list[dict] | None = None):
         os.makedirs(batch_dir, exist_ok=True)
 
         saved: list[str] = []
+        db_records: list[dict] = []   # [{id, path}] — для отчёта и памяти агента
         errors: list[str] = []
 
         async with httpx.AsyncClient(timeout=180.0) as client:
@@ -278,6 +335,16 @@ def make_generate_image_tool(agent, images: list[dict] | None = None):
                     saved.append(fpath)
                     agent._pending_generated_images.append(fpath)
                     log.info("generate_image: сохранено %s (%d байт)", fpath, len(raw))
+
+                    # Пишем бинарник + метаданные в БД (generated_images),
+                    # чтобы к картинке можно было вернуться позже через SQL.
+                    rec_id = await _persist_generated_image(
+                        agent,
+                        raw=raw, ext=ext, fname=fname, fpath=fpath,
+                        prompt=prompt.strip(), model=cfg["model"],
+                        aspect_ratio=aspect_ratio, temperature=temperature,
+                    )
+                    db_records.append({"id": rec_id, "path": fpath})
                 except Exception as e:
                     log.error("generate_image: ошибка генерации #%d: %s", i, e, exc_info=True)
                     errors.append(f"#{i}: {type(e).__name__}: {e}")
@@ -290,12 +357,147 @@ def make_generate_image_tool(agent, images: list[dict] | None = None):
 
         lines = [f"Сгенерировано изображений: {len(saved)} (модель {cfg['model']}, "
                  f"temperature={temperature}, aspect_ratio={aspect_ratio})."]
-        for p in saved:
-            lines.append(f"  • {p}")
+        # Печатаем путь + id записи в generated_images. ЭТО ВАЖНО для памяти:
+        # id и путь оседают в tool_trace, поэтому в следующих ходах агент знает,
+        # какую именно картинку он сгенерировал и как её достать из БД.
+        for rec in db_records:
+            if rec["id"] is not None:
+                lines.append(f"  • {rec['path']}  (generated_images.id={rec['id']})")
+            else:
+                lines.append(f"  • {rec['path']}  (в БД не записано)")
         if errors:
             lines.append("Часть генераций не удалась:")
             lines.extend(f"  ! {e}" for e in errors)
         lines.append("Файлы отправлены пользователю в интерфейс (превью доступно).")
+        lines.append(
+            "Картинки сохранены во внутреннем хранилище (prompt + model + aspect_ratio + "
+            "created_at + сам бинарник). Чтобы вернуться к ранее сгенерированному "
+            "изображению в следующих ходах — вызови тул find_generated_image: либо по "
+            "ключевым словам из описания (query), либо по точному пути (file_path из "
+            "отчёта выше). Он вернёт путь к бинарнику, который можно передать в "
+            "source_images для правки (image-to-image). НЕ используй SQL для доступа "
+            "к этому хранилищу."
+        )
         return "\n".join(lines)
 
     return generate_image
+
+
+def make_find_generated_image_tool(agent):
+    """
+    Фабрика тула поиска РАНЕЕ сгенерированных изображений.
+
+    Даёт агенту доступ к таблице generated_images БЕЗ SQL: все запросы —
+    хардкод внутри тула через пул агента (agent.db.pool). Для обычного
+    сценария пользователя это единственный способ вернуться к картинке —
+    прямой execute_sql_query в generated_images делать не нужно (это
+    админский путь).
+
+    Агент может искать двумя способами:
+      • по ключевым словам из описания (query → ILIKE по prompt);
+      • по точному пути (file_path из отчёта generate_image).
+    Поиск ограничен текущим чатом (agent.current_chat_id), если он известен.
+    """
+
+    @tool
+    async def find_generated_image(
+        query: str | None = None,
+        file_path: str | None = None,
+        limit: int = 5,
+    ) -> str:
+        """
+        Ищет ранее сгенерированные (тобой же) изображения во внутреннем
+        хранилище и возвращает их пути, чтобы можно было вернуться к картинке
+        (например передать file_path в source_images тула generate_image для
+        правки — image-to-image).
+
+        Параметры:
+          query     — ключевые слова из описания картинки (напр. "поп-арт кот").
+                      Ищет по тексту промпта, по которому картинка была создана.
+          file_path — точный путь к файлу (если ты его уже знаешь из прошлого
+                      отчёта generate_image). Возвращает эту конкретную запись.
+          limit     — сколько последних совпадений вернуть (1–20, по умолчанию 5).
+
+        Если оба аргумента пусты — вернёт последние сгенерированные картинки
+        в текущем чате (по времени, свежие первыми).
+
+        Возвращает список: путь, промпт, модель, соотношение сторон, время.
+        НЕ требует и НЕ использует SQL — всё внутри тула.
+        """
+        db = getattr(agent, "db", None)
+        pool = getattr(db, "pool", None) if db else None
+        if pool is None:
+            return "Хранилище сгенерированных изображений недоступно (нет пула БД)."
+
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            limit = 5
+        limit = max(1, min(limit, 20))
+
+        chat_id = getattr(agent, "current_chat_id", None)
+
+        # ── Хардкод-запросы, параметризованные, без пользовательского SQL ──
+        conds: list[str] = []
+        params: list = []
+        idx = 1
+
+        if file_path:
+            conds.append(f"file_path = ${idx}")
+            params.append(file_path)
+            idx += 1
+        if query and query.strip():
+            conds.append(f"prompt ILIKE ${idx}")
+            params.append(f"%{query.strip()}%")
+            idx += 1
+        if chat_id is not None:
+            conds.append(f"chat_id = ${idx}")
+            params.append(chat_id)
+            idx += 1
+
+        where = (" WHERE " + " AND ".join(conds)) if conds else ""
+        sql = (
+            "SELECT id, file_path, file_name, prompt, model, aspect_ratio, "
+            "       temperature, byte_size, created_at "
+            "FROM generated_images"
+            + where
+            + f" ORDER BY created_at DESC LIMIT {limit};"
+        )
+
+        try:
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(sql, *params)
+        except Exception as e:
+            log.error("find_generated_image: ошибка запроса: %s", e, exc_info=True)
+            return f"Не удалось обратиться к хранилищу изображений: {type(e).__name__}: {e}"
+
+        if not rows:
+            hint = []
+            if query:
+                hint.append(f"по ключевым словам «{query}»")
+            if file_path:
+                hint.append(f"по пути «{file_path}»")
+            scope = " ".join(hint) if hint else "в этом чате"
+            return (
+                f"Ранее сгенерированных изображений {scope} не нашёл. "
+                "Возможно, картинка ещё не создавалась — используй generate_image."
+            )
+
+        out = [f"Найдено сгенерированных изображений: {len(rows)}"]
+        for r in rows:
+            exists = os.path.isfile(r["file_path"]) if r["file_path"] else False
+            flag = "" if exists else "  [файл на диске отсутствует — только запись]"
+            prompt_short = (r["prompt"] or "")[:160]
+            out.append(
+                f"\n• id={r['id']}  {r['file_path']}{flag}\n"
+                f"  промпт: {prompt_short}\n"
+                f"  модель: {r['model']}  aspect: {r['aspect_ratio']}  "
+                f"temp: {r['temperature']}  создано: {r['created_at']}"
+            )
+        out.append(
+            "\nЧтобы отредактировать одну из них — передай её file_path в аргумент "
+            "source_images тула generate_image."
+        )
+        return "\n".join(out)
+
+    return find_generated_image

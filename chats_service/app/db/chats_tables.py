@@ -134,6 +134,28 @@ class DataBaseChats:
             CREATE INDEX IF NOT EXISTS ix_chat_files_source ON chat_files(source);
 
             ALTER TABLE chats ADD COLUMN IF NOT EXISTS tool_trace TEXT;
+
+            -- Сгенерированные изображения (generate_image): сам бинарник + метаданные.
+            -- Пишет agent_service (свой пул), читает агент через SQL, когда нужно
+            -- вернуться к ранее сгенерированной картинке (image-to-image / повторная выдача).
+            CREATE TABLE IF NOT EXISTS generated_images (
+                id SERIAL PRIMARY KEY,
+                chat_id BIGINT,
+                user_id BIGINT,
+                message_id TEXT,
+                file_name TEXT NOT NULL,
+                file_path TEXT,
+                mime_type TEXT,
+                prompt TEXT NOT NULL,
+                model TEXT,
+                aspect_ratio TEXT,
+                temperature REAL,
+                image_data BYTEA NOT NULL,
+                byte_size INTEGER,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS ix_generated_images_chat_id ON generated_images(chat_id);
+            CREATE INDEX IF NOT EXISTS ix_generated_images_created_at ON generated_images(created_at DESC);
         """)
     async def add_message(
         self,

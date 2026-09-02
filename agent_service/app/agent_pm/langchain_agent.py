@@ -600,6 +600,9 @@ STATEFUL_TOOLS = {
     # "research_prompt",
     "search_internet",
     "parse_web_page",
+    "generate_image",
+    "find_generated_image",
+    "analyze_image",
     "list_tree",
     "read_file",
     "grep_search",
@@ -649,6 +652,29 @@ def _summarize_tool_call(tc: dict, result: Any) -> str | None:
         return f"search_internet(query='{args.get('query')}') → {compact}"
     if name == "parse_web_page":
         return f"{name} Передаваемые ссылки в парсер ({args}). -> {str(result)[:1000]}"
+    if name == "generate_image":
+        # КРИТИЧНО для памяти: в trace должны осесть промпт и результат
+        # (пути + id записей в generated_images), иначе в следующем ходе агент
+        # не вспомнит, что и по какому описанию он нарисовал, и куда картинка легла.
+        gi_prompt = str(args.get("prompt", ""))[:300]
+        gi_aspect = args.get("aspect_ratio", "16:9")
+        return (
+            f"generate_image(prompt='{gi_prompt}', aspect_ratio={gi_aspect}, "
+            f"n={args.get('n', 1)}) →\n{str(result)[:1200]}"
+        )
+    if name == "find_generated_image":
+        return (
+            f"find_generated_image(query={args.get('query')!r}, "
+            f"file_path={args.get('file_path')!r}) →\n{str(result)[:1200]}"
+        )
+    if name == "analyze_image":
+        # Запоминаем, что именно спрашивали у vision-модели и её вывод —
+        # чтобы в дальнейшем диалоге агент помнил содержимое картинки.
+        ai_prompt = str(args.get("prompt", ""))[:300]
+        return (
+            f"analyze_image(prompt='{ai_prompt}', "
+            f"image_index={args.get('image_index', 0)}) →\n{str(result)[:1200]}"
+        )
     if name == "call_subagent":
         return f"{name} ({args}). ОТВЕТ СУБАГЕНТА - {str(result)}"
     if name in ("list_tree", "read_file", "grep_search", "find_files", 
@@ -1418,13 +1444,21 @@ class KnowledgeAgent:
         # Тул генерации изображений (gemini-3.1-flash-image-preview).
         # Пресет качества из карточки #127. Сгенерированные файлы копятся
         # в agent._pending_generated_images и авто-отправляются пользователю.
-        from .tools.content.tool_generate_image import make_generate_image_tool
+        from .tools.content.tool_generate_image import (
+            make_generate_image_tool,
+            make_find_generated_image_tool,
+        )
         generate_image = make_generate_image_tool(agent, images)
+        # Поиск ранее сгенерированных картинок БЕЗ SQL (хардкод-запросы в туле):
+        # по ключевым словам из промпта или по точному пути. Так агент помнит,
+        # что он рисовал, и может вернуться к картинке (image-to-image).
+        find_generated_image = make_find_generated_image_tool(agent)
 
         base_tools = [
             search_db,
             analyze_image,
             generate_image,
+            find_generated_image,
             summarize_by_filter,
             rebuild_categories,
             send_digest_email,
@@ -1635,6 +1669,11 @@ class KnowledgeAgent:
         # размышлений модели (живой reasoning-стрим), а не служебный индикатор.
         # await self._send_status(get_thinking_status(), request_id)
         self.current_request_id = request_id
+        # Контекст текущего хода — нужен generate_image, чтобы записать
+        # сгенерированную картинку в БД с привязкой к чату/пользователю.
+        self.current_chat_id = chat_id
+        self.current_user_id = user_id
+        self.current_message_id = None  # message_id генерится позже, в app.py; необязателен
         cleaned_user_input = user_input
         if source == "telegram":
             if '📎[FILE]' in cleaned_user_input:

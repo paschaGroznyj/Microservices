@@ -62,7 +62,13 @@ class DBConsumer:
             selected_tools = payload.get("selected_tools")
             context_size = payload.get("context_size")
             message_id = payload.get("message_id")
-            attached_files = payload.get("attached_files")
+            # Ботовое сообщение приходит с ключом attached_files (из agent_service),
+            # а сообщение пользователя — с ключом files (метаданные из getFilesMeta()
+            # на фронте, продюсер send_message кладёт их как chat.files). Раньше
+            # user-файлы терялись: консюмер читал только attached_files → в chat_files
+            # для юзера ничего не писалось, и чипы пропадали после F5. Берём files
+            # как фолбэк, чтобы вложения пользователя тоже сохранялись.
+            attached_files = payload.get("attached_files") or payload.get("files")
             tool_trace = payload.get("tool_trace")
             logging.info(payload)
             

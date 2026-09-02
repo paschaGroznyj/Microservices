@@ -976,6 +976,37 @@ async def upload_files(
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Agent service unreachable: {str(e)}")
 
+@app.get("/api/chats/{chat_id}/image/{message_id}/{file_name}")
+async def get_chat_db_image(chat_id: int, message_id: str, file_name: str, request: Request):
+    """Отдаёт сгенерированную картинку из БД (generated_images) для превью в чате.
+
+    В отличие от /files/... (который резолвит путь и стримит файл с диска —
+    а он живёт лишь ~30 мин), этот эндпоинт проксирует /web/db_image
+    agent_service и берёт бинарник напрямую из таблицы. Привязка — по паре
+    (message_id, file_name), поэтому картинка всегда доступна, даже когда
+    эфемерный файл на хосте уже вычищен по TTL."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    try:
+        agent_resp = await app.state.http_client.get(
+            f"{SERVICES['agent_service']['url']}/web/db_image",
+            params={"message_id": message_id, "file_name": file_name},
+        )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Agent service unreachable: {e}")
+
+    if agent_resp.status_code != 200:
+        raise HTTPException(status_code=agent_resp.status_code, detail="Image not found")
+
+    return Response(
+        content=agent_resp.content,
+        media_type=agent_resp.headers.get("content-type", "image/png"),
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 @app.get("/api/chats/{chat_id}/files/{message_id}/{file_name}")
 async def download_chat_file(chat_id: int, message_id: str, file_name: str, request: Request):
     user = await get_current_user(request)

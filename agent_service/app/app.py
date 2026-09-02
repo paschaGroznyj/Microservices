@@ -163,6 +163,74 @@ async def get_generated_file(path: str):
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
+
+@web_router.get("/web/db_image")
+async def get_db_image(
+    message_id: str | None = None,
+    file_name: str | None = None,
+    image_id: int | None = None,
+):
+    """Отдаёт бинарник картинки НАПРЯМУЮ из таблицы generated_images (BYTEA).
+
+    Источник истины — БД, а НЕ диск. Эфемерный файл в generated_files живёт
+    ~30 мин и чистится по TTL, поэтому превью в чате обязано браться отсюда,
+    иначе после уборки в галерее будет пусто (404 от /web/file).
+
+    Поиск строки:
+      - по image_id (точный, приоритетный), либо
+      - по паре (message_id, file_name) — так фронт достаёт нужную картинку,
+        привязанную к конкретному сообщению бота.
+    """
+    pool = getattr(db, "pool", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="DB pool not ready")
+
+    row = None
+    try:
+        async with pool.acquire() as conn:
+            if image_id is not None:
+                row = await conn.fetchrow(
+                    "SELECT file_name, mime_type, image_data "
+                    "FROM generated_images WHERE id = $1",
+                    image_id,
+                )
+            elif message_id and file_name:
+                # последняя по времени на случай совпадений имени в одном сообщении
+                row = await conn.fetchrow(
+                    "SELECT file_name, mime_type, image_data "
+                    "FROM generated_images "
+                    "WHERE message_id = $1 AND file_name = $2 "
+                    "ORDER BY created_at DESC, id DESC LIMIT 1",
+                    message_id, file_name,
+                )
+            elif message_id:
+                row = await conn.fetchrow(
+                    "SELECT file_name, mime_type, image_data "
+                    "FROM generated_images "
+                    "WHERE message_id = $1 "
+                    "ORDER BY created_at DESC, id DESC LIMIT 1",
+                    message_id,
+                )
+    except Exception as e:
+        logging.error(f"/web/db_image: ошибка запроса: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="DB query failed")
+
+    if not row or not row["image_data"]:
+        raise HTTPException(status_code=404, detail="Image not found in DB")
+
+    raw = bytes(row["image_data"])
+    mime = row["mime_type"] or "image/png"
+    fname = row["file_name"] or "image.png"
+    return Response(
+        content=raw,
+        media_type=mime,
+        headers={
+            "Content-Disposition": f'inline; filename="{fname}"',
+            "Cache-Control": "public, max-age=86400",
+        },
+    )
+
+
 async def handle_message(payload: dict, prod: AIOKafkaProducer):
     """Обработка одного сообщения — запускается конкурентно."""
     start = time.perf_counter()

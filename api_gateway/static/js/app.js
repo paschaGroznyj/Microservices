@@ -909,8 +909,16 @@ class ChatApp {
         const makeImageCard = (f) => {
             const name = f.name || 'image';
             const safeName = this.escapeHtml(name);
+            // Сгенерированные тулом картинки (kind==='image') тянем ИЗ БД
+            // (generated_images), а не с диска: эфемерный файл живёт ~30 мин
+            // и чистится по TTL, после чего /files/... вернёт 404. Эндпоинт
+            // /image/... проксирует бинарник из таблицы по (message_id, name).
+            // Обычные вложения (kind иной) оставляем на файловом пути.
+            const isGenerated = f.kind === 'image';
             const url = messageId
-                ? `/api/chats/${this.currentChat}/files/${encodeURIComponent(messageId)}/${encodeURIComponent(name)}`
+                ? (isGenerated
+                    ? `/api/chats/${this.currentChat}/image/${encodeURIComponent(messageId)}/${encodeURIComponent(name)}`
+                    : `/api/chats/${this.currentChat}/files/${encodeURIComponent(messageId)}/${encodeURIComponent(name)}`)
                 : '#';
 
             const card = document.createElement('div');

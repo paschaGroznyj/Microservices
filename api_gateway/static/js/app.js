@@ -895,12 +895,80 @@ class ChatApp {
             return chip;
         };
 
-        const VISIBLE_LIMIT = 3;
-        const visible = files.slice(0, VISIBLE_LIMIT);
-        const hidden  = files.slice(VISIBLE_LIMIT);
+        // Картинка? kind==='image' (сгенерированные тулом generate_image)
+        // ИЛИ расширение растрового изображения — рисуем превью-карточку.
+        const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif']);
+        const isImageFile = (f) => {
+            let ext = (f.ext || '').toLowerCase();
+            if (!ext && f.name && f.name.includes('.')) {
+                ext = f.name.split('.').pop().toLowerCase();
+            }
+            return f.kind === 'image' || IMAGE_EXTS.has(ext);
+        };
+
+        const makeImageCard = (f) => {
+            const name = f.name || 'image';
+            const safeName = this.escapeHtml(name);
+            const url = messageId
+                ? `/api/chats/${this.currentChat}/files/${encodeURIComponent(messageId)}/${encodeURIComponent(name)}`
+                : '#';
+
+            const card = document.createElement('div');
+            card.className = 'fa-image-card';
+            card.title = name;
+
+            const img = document.createElement('img');
+            img.className = 'fa-image-card__img';
+            img.alt = safeName;
+            img.loading = 'lazy';
+            img.src = url;
+            // Пока грузится src — держим скелетон; снимаем по load/error.
+            card.classList.add('fa-image-card--loading');
+            img.addEventListener('load', () => card.classList.remove('fa-image-card--loading'));
+            img.addEventListener('error', () => {
+                card.classList.remove('fa-image-card--loading');
+                card.classList.add('fa-image-card--error');
+            });
+
+            // Клик — превью в лайтбоксе.
+            card.addEventListener('click', () => this._openImageLightbox(url, name));
+
+            const overlay = document.createElement('div');
+            overlay.className = 'fa-image-card__overlay';
+            overlay.innerHTML = `
+<span class="fa-image-card__zoom" aria-hidden="true">
+  <svg viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="1.8"/><path d="M20 20l-3.5-3.5M11 8v6M8 11h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+</span>`;
+
+            const skel = document.createElement('div');
+            skel.className = 'fa-image-card__skeleton';
+            skel.innerHTML = '<div class="fa-pixel-grid"></div>';
+
+            card.appendChild(skel);
+            card.appendChild(img);
+            card.appendChild(overlay);
+            return card;
+        };
+
+        // Разделяем на картинки и обычные файлы.
+        const imageFiles = files.filter(isImageFile);
+        const otherFiles = files.filter(f => !isImageFile(f));
 
         const wrap = document.createElement('div');
         wrap.className = 'fa-bot-files';
+
+        if (imageFiles.length) {
+            // Пришли реальные картинки — снимаем скелетон генерации.
+            this._removeImageGenSkeleton();
+            const gallery = document.createElement('div');
+            gallery.className = 'fa-image-gallery';
+            imageFiles.forEach(f => gallery.appendChild(makeImageCard(f)));
+            wrap.appendChild(gallery);
+        }
+
+        const VISIBLE_LIMIT = 3;
+        const visible = otherFiles.slice(0, VISIBLE_LIMIT);
+        const hidden  = otherFiles.slice(VISIBLE_LIMIT);
 
         visible.forEach(f => wrap.appendChild(makeChip(f)));
 
@@ -1343,6 +1411,91 @@ class ChatApp {
         setTimeout(() => ph.remove(), 300);
     }
 
+    /* ══════════════════════════════════════════
+       ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ: скелетон + лайтбокс
+    ══════════════════════════════════════════ */
+
+    /** Показывает пиксельный скелетон генерации картинки в ленте.
+     *  Живёт, пока тул generate_image работает; снимается, когда пришли
+     *  реальные файлы (в _renderBotFiles) или ответ финализирован. */
+    _showImageGenSkeleton() {
+        const container = this.getMessagesContainer();
+        if (!container) return;
+        if (document.getElementById('image-gen-skeleton')) return;
+
+        const skel = document.createElement('div');
+        skel.id = 'image-gen-skeleton';
+        skel.className = 'fa-image-gen-skeleton';
+        skel.innerHTML = `
+<div class="fa-image-card fa-image-card--gen">
+  <div class="fa-image-card__skeleton">
+    <div class="fa-pixel-grid"></div>
+    <div class="fa-gen-scan"></div>
+  </div>
+  <div class="fa-gen-caption">
+    <span class="fa-gen-dot"></span>
+    <span class="fa-gen-caption__text">Генерация изображения…</span>
+  </div>
+</div>`;
+        container.appendChild(skel);
+        container.scrollTop = container.scrollHeight;
+    }
+
+    _removeImageGenSkeleton() {
+        const el = document.getElementById('image-gen-skeleton');
+        if (!el) return;
+        el.classList.add('fa-image-gen-skeleton--hide');
+        setTimeout(() => el.remove(), 250);
+    }
+
+    /** Открывает картинку в модальном лайтбоксе (превью в общем стиле). */
+    _openImageLightbox(url, name) {
+        // Один оверлей на весь UI — пересоздаём при каждом открытии.
+        document.getElementById('image-lightbox')?.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'image-lightbox';
+        overlay.className = 'image-lightbox';
+
+        const box = document.createElement('div');
+        box.className = 'image-lightbox__box';
+
+        const img = document.createElement('img');
+        img.className = 'image-lightbox__img';
+        img.src = url;
+        img.alt = this.escapeHtml(name || 'image');
+
+        const bar = document.createElement('div');
+        bar.className = 'image-lightbox__bar';
+        bar.innerHTML = `
+<span class="image-lightbox__name">${this.escapeHtml(name || 'image')}</span>
+<a class="image-lightbox__dl" href="${url}" download="${this.escapeHtml(name || 'image')}" title="Скачать">
+  <svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+</a>
+<button class="image-lightbox__close" type="button" title="Закрыть" aria-label="Закрыть">
+  <svg viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+</button>`;
+
+        box.appendChild(bar);
+        box.appendChild(img);
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+
+        const close = () => {
+            overlay.classList.add('image-lightbox--hide');
+            setTimeout(() => overlay.remove(), 200);
+            document.removeEventListener('keydown', onKey);
+        };
+        const onKey = (e) => { if (e.key === 'Escape') close(); };
+
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+        bar.querySelector('.image-lightbox__close').addEventListener('click', close);
+        bar.querySelector('.image-lightbox__dl').addEventListener('click', (e) => e.stopPropagation());
+        document.addEventListener('keydown', onKey);
+
+        requestAnimationFrame(() => overlay.classList.add('image-lightbox--shown'));
+    }
+
 
     /* ══════════════════════════════════════════
        WEBSOCKET
@@ -1377,6 +1530,11 @@ class ChatApp {
 
             if (msg.type === 'agent_status') {
                 this.updateStatus(msg.status);
+                // Скелетон генерации: показываем, когда статус — про рисование.
+                const st = (msg.status || '').toLowerCase();
+                if (/генерир|рису|картин|композиц|детал.*свет/.test(st)) {
+                    this._showImageGenSkeleton();
+                }
                 return;
             }
             console.log('Сообщение от агента', msg)
@@ -1815,6 +1973,10 @@ class ChatApp {
 
     _finalizeStream() {
         if (!this._pendingBotEl) return;
+
+        // Страховка: если генерация картинки завершилась (успех или ошибка),
+        // а превью так и не пришло — снимаем висящий скелетон на финале.
+        this._removeImageGenSkeleton();
 
         const data = this._streamFinalData || {};
         const fullText = data.fullText ?? this._streamShown ?? '';

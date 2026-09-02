@@ -21,6 +21,8 @@ def _sanitize_files_for_ws(attached_files: list[dict] | None) -> list[dict] | No
         {
             "name": f["name"],
             "ext": f["name"].rsplit(".", 1)[-1].lower() if "." in f["name"] else None,
+            # kind пробрасываем на фронт: "image" — рисуем превью, иначе файл-чип.
+            "kind": f.get("kind"),
         }
         for f in attached_files
     ]

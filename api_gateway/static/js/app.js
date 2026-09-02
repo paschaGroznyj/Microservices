@@ -914,14 +914,15 @@ class ChatApp {
             // и чистится по TTL, после чего /files/... вернёт 404. Эндпоинт
             // /image/... проксирует бинарник из таблицы по (message_id, name).
             // Обычные вложения (kind иной) оставляем на файловом пути.
-            const isGenerated = f.kind === 'image';
-            const imageKeyQs = isGenerated && f.image_key
+            // Любой файл-картинку тянем из БД через /image/... — эндпоинт умеет
+            // искать и по image_key, и по паре (message_id, file_name). Это чинит
+            // legacy-записи (kind/image_key = NULL), у которых файл на диске уже
+            // вычищен по TTL: раньше они шли в /files/... и падали в 404.
+            const imageKeyQs = f.image_key
                 ? `?image_key=${encodeURIComponent(f.image_key)}`
                 : '';
             const url = messageId
-                ? (isGenerated
-                    ? `/api/chats/${this.currentChat}/image/${encodeURIComponent(messageId)}/${encodeURIComponent(name)}${imageKeyQs}`
-                    : `/api/chats/${this.currentChat}/files/${encodeURIComponent(messageId)}/${encodeURIComponent(name)}`)
+                ? `/api/chats/${this.currentChat}/image/${encodeURIComponent(messageId)}/${encodeURIComponent(name)}${imageKeyQs}`
                 : '#';
 
             const card = document.createElement('div');

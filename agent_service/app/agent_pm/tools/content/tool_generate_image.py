@@ -56,26 +56,37 @@ MAX_IMAGES_PER_CALL = 10
 EPHEMERAL_TTL_MINUTES = 30
 
 
+# Расширения, которые считаем сгенерированными картинками и вправе чистить
+# по TTL. ВАЖНО: трогаем ТОЛЬКО эти файлы — остальные артефакты в
+# generated_files (документы, csv, отчёты других тулов) НЕ удаляем.
+_CLEANABLE_IMAGE_EXTS = (".png", ".gif", ".jpeg", ".jpg", ".webp")
+
+
 def _cleanup_stale_generated_files() -> None:
-    """Best-effort уборка папки GENERATED_ROOT: удаляет батч-директории старше
-    EPHEMERAL_TTL_MINUTES. Картинки давно в БД — файлы на диске лишь транспорт.
-    Не роняет генерацию при любой ошибке ФС."""
-    import shutil
+    """Best-effort уборка GENERATED_ROOT: рекурсивно удаляет ТОЛЬКО файлы-картинки
+    (_CLEANABLE_IMAGE_EXTS) старше EPHEMERAL_TTL_MINUTES. Бинарник давно в БД —
+    файл на диске лишь транспорт для превью. Директории и любые НЕ-картиночные
+    файлы не трогаем. Не роняет генерацию при любой ошибке ФС."""
     import time as _t
     try:
         if not os.path.isdir(GENERATED_ROOT):
             return
         cutoff = _t.time() - EPHEMERAL_TTL_MINUTES * 60
-        for name in os.listdir(GENERATED_ROOT):
-            full = os.path.join(GENERATED_ROOT, name)
-            try:
-                if not os.path.isdir(full):
+        removed = 0
+        for root, _dirs, files in os.walk(GENERATED_ROOT):
+            for name in files:
+                if not name.lower().endswith(_CLEANABLE_IMAGE_EXTS):
+                    continue  # чужой файл — не наш, не трогаем
+                full = os.path.join(root, name)
+                try:
+                    if os.path.getmtime(full) < cutoff:
+                        os.remove(full)
+                        removed += 1
+                except OSError:
                     continue
-                if os.path.getmtime(full) < cutoff:
-                    shutil.rmtree(full, ignore_errors=True)
-                    log.info("generate_image: удалён устаревший эфемерный батч %s", full)
-            except OSError:
-                continue
+        if removed:
+            log.info("generate_image: удалено устаревших картинок из %s: %d",
+                     GENERATED_ROOT, removed)
     except Exception as e:
         log.warning("generate_image: уборка GENERATED_ROOT не удалась: %s", e)
 

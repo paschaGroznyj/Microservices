@@ -1307,6 +1307,19 @@ class ChatApp {
 
         try {
             await this._waitForWS();
+
+            // ВАЖНО: файлы заливаем ДО отправки сообщения. Иначе на сервере
+            // возникает гонка — kafka-сообщение долетает мгновенно и
+            // wait_for_files стартует раньше, чем upload_files успеет
+            // закодировать/сохранить картинку (для тяжёлых png не влезали
+            // в 20с ожидания → images=[] → analyze/generate работали впустую).
+            // Текстовые файлы лёгкие и успевали случайно — отсюда «git.txt
+            // подгрузился, а картинка нет». Теперь порядок детерминирован.
+            const _hasFiles = (window.FileAttach?.getFiles().length ?? 0) > 0;
+            if (_hasFiles) {
+                await window.FileAttach?.upload(this.currentChat, msgId);
+            }
+
             const resp = await fetch('/api/chats/send_message', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1319,7 +1332,7 @@ class ChatApp {
                     agent_model:    window.ModelPicker?.getModel() ?? 'universal',
                     selected_tools: window.ToolsPanel?.getSelectedCategories() ?? [],
                     context_size:   window.ToolsPanel?.getContextSize()   ?? 'medium',
-                    has_files:      (window.FileAttach?.getFiles().length ?? 0) > 0,
+                    has_files:      _hasFiles,
                     files: window.FileAttach?.getFilesMeta() ?? []
                 })
             });
@@ -1329,7 +1342,6 @@ class ChatApp {
             } catch (_) {
                 this._activeRequestId = null;
             }
-            await window.FileAttach?.upload(this.currentChat, msgId);
             window.FileAttach?.clear();
             this.getInputContainer()?.querySelector('#attach-btn')?.classList.remove('has-files');
         } catch (err) {

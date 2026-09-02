@@ -19,9 +19,12 @@ tools/content/tool_generate_image.py
   - дефолтный quality-промпт добавляется к system, чтобы результат был
     качественным даже при коротком пользовательском промпте
 
-Результат: бинарники сохраняются в /app/generated_files/<uuid>/ и
-регистрируются в agent._pending_generated_images, откуда langchain_agent
-кладёт их в files_to_send / отдаёт фронту через /web/file.
+Хранение (по требованию Павла): ЕДИНСТВЕННЫЙ источник истины —
+таблица generated_images (бинарник BYTEA + метаданные). Постоянного
+накопления в /app/generated_files больше нет. На диск кладётся ТОЛЬКО
+эфемерный файл текущего хода — он нужен транспорту, который отдаёт превью
+фронту через files_to_send/web/file. При возврате к старой картинке
+(find_generated_image) бинарник материализуется из БД во временный файл.
 """
 
 import os
@@ -38,12 +41,43 @@ from ...core.agent_provider import get_image_gen_config
 
 log = logging.getLogger(__name__)
 
-# Куда складываем сгенерированные бинарники (тот же корень, что и остальные
-# генерируемые файлы — его отдаёт эндпоинт /web/file).
+# Корень для ЭФЕМЕРНЫХ файлов транспорта: сюда кладётся картинка только
+# ради текущей отдачи фронту (/web/file превью). Долговременное хранилище —
+# таблица generated_images (BYTEA). Файлы в этой папке можно чистить в любой
+# момент: при возврате к картинке она берётся из БД, а не с диска.
 GENERATED_ROOT = "/app/generated_files"
 
 # Жёсткий потолок генераций внутри одного вызова тула.
 MAX_IMAGES_PER_CALL = 10
+
+# Сколько минут держать эфемерный файл на диске, прежде чем он считается
+# мусором и подлежит удалению. Источник истины — БД (generated_images),
+# поэтому файл нужен лишь на время, пока фронт тянет превью через /web/file.
+EPHEMERAL_TTL_MINUTES = 30
+
+
+def _cleanup_stale_generated_files() -> None:
+    """Best-effort уборка папки GENERATED_ROOT: удаляет батч-директории старше
+    EPHEMERAL_TTL_MINUTES. Картинки давно в БД — файлы на диске лишь транспорт.
+    Не роняет генерацию при любой ошибке ФС."""
+    import shutil
+    import time as _t
+    try:
+        if not os.path.isdir(GENERATED_ROOT):
+            return
+        cutoff = _t.time() - EPHEMERAL_TTL_MINUTES * 60
+        for name in os.listdir(GENERATED_ROOT):
+            full = os.path.join(GENERATED_ROOT, name)
+            try:
+                if not os.path.isdir(full):
+                    continue
+                if os.path.getmtime(full) < cutoff:
+                    shutil.rmtree(full, ignore_errors=True)
+                    log.info("generate_image: удалён устаревший эфемерный батч %s", full)
+            except OSError:
+                continue
+    except Exception as e:
+        log.warning("generate_image: уборка GENERATED_ROOT не удалась: %s", e)
 
 # Дефолтный quality-промпт (system). Универсальные требования качества из #127.
 DEFAULT_QUALITY_SYSTEM = (
@@ -65,6 +99,81 @@ _ASPECT_HINT = {
 }
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp"}
+
+
+def _coerce_str_list(val) -> list[str]:
+    """Приводит аргумент к list[str]. LLM часто шлёт JSON-строкой ("['a.png']")
+    или CSV ("a.png, b.png") — не даём итерации разбежаться по символам."""
+    if val is None:
+        return []
+    if isinstance(val, list):
+        return [str(x).strip() for x in val if str(x).strip()]
+    s = str(val).strip()
+    if not s:
+        return []
+    try:
+        import json as _json
+        parsed = _json.loads(s)
+        if isinstance(parsed, list):
+            return [str(x).strip() for x in parsed if str(x).strip()]
+        return [str(parsed).strip()]
+    except Exception:
+        return [p.strip() for p in s.strip("[]").split(",") if p.strip()]
+
+
+def _coerce_int_list(val) -> list[int]:
+    """Приводит аргумент к list[int]. Терпит "[0]", "0", "0,1", [0], 0."""
+    if val is None:
+        return []
+    if isinstance(val, int):
+        return [val]
+    if isinstance(val, list):
+        out = []
+        for x in val:
+            try:
+                out.append(int(str(x).strip()))
+            except (TypeError, ValueError):
+                continue
+        return out
+    s = str(val).strip()
+    if not s:
+        return []
+    try:
+        import json as _json
+        parsed = _json.loads(s)
+        if isinstance(parsed, list):
+            return _coerce_int_list(parsed)
+        return [int(parsed)]
+    except Exception:
+        out = []
+        for p in s.strip("[]").split(","):
+            p = p.strip()
+            if not p:
+                continue
+            try:
+                out.append(int(p))
+            except ValueError:
+                continue
+        return out
+
+
+def _materialize_from_db(image_data, file_name: str | None, rec_id) -> str | None:
+    """Пишет бинарник из БД во временный файл (для передачи в source_images).
+    Возвращает путь или None. Файл эфемерный — БД остаётся источником истины."""
+    if not image_data:
+        return None
+    try:
+        raw = bytes(image_data)
+        ext = os.path.splitext(file_name or "")[1].lower() or ".jpg"
+        tmp_dir = os.path.join(GENERATED_ROOT, "_from_db")
+        os.makedirs(tmp_dir, exist_ok=True)
+        path = os.path.join(tmp_dir, f"img_{rec_id}{ext}")
+        with open(path, "wb") as f:
+            f.write(raw)
+        return path
+    except Exception as e:
+        log.error("find_generated_image: не смог материализовать id=%s из БД: %s", rec_id, e)
+        return None
 
 
 def _read_image_as_data_uri(path: str) -> str | None:
@@ -252,6 +361,19 @@ def make_generate_image_tool(agent, images: list[dict] | None = None):
             temperature = 0.4
         temperature = max(0.0, min(temperature, 1.0))
 
+        # ── Нормализация аргументов-списков ──────────────────────────
+        # LLM часто передаёт списки СТРОКОЙ ("[0]", "0", "0,1", "['a.png']")
+        # вместо настоящего list. Приводим к list, иначе итерация пойдёт по
+        # символам строки и индексы «уедут вне диапазона» (баг из лога).
+        source_images = _coerce_str_list(source_images)
+        source_user_image_indexes = _coerce_int_list(source_user_image_indexes)
+
+        log.info(
+            "generate_image: source_images=%s, source_user_image_indexes=%s, "
+            "доступно картинок из интерфейса=%d",
+            source_images, source_user_image_indexes, len(images),
+        )
+
         # ── Собираем source-картинки для image-to-image ──────────────
         source_data_uris: list[str] = []
         if source_images:
@@ -267,12 +389,19 @@ def make_generate_image_tool(agent, images: list[dict] | None = None):
                     img = images[idx]
                     b64 = (img.get("b64") or "").strip()
                     if not b64:
+                        log.warning("generate_image: у картинки #%s пустой b64", idx)
                         continue
                     mime = img.get("mime_type") or "image/png"
                     uri = b64 if b64.startswith("data:") else f"data:{mime};base64,{b64}"
                     source_data_uris.append(uri)
+                    log.info("generate_image: взята пользовательская картинка #%s (%s)",
+                             idx, img.get("filename"))
                 else:
-                    log.warning("generate_image: индекс пользовательской картинки %s вне диапазона", idx)
+                    log.warning(
+                        "generate_image: индекс пользовательской картинки %s вне диапазона "
+                        "(доступно %d). Картинка из интерфейса не подхватилась.",
+                        idx, len(images),
+                    )
 
         # ── system-промпт: базовое качество + опц. арт-дирекшен + aspect ─
         system_parts = [DEFAULT_QUALITY_SYSTEM]
@@ -301,6 +430,9 @@ def make_generate_image_tool(agent, images: list[dict] | None = None):
             "Content-Type": "application/json",
         }
         url = cfg["base_url"].rstrip("/") + "/chat/completions"
+
+        # Уборка старых эфемерных батчей: источник истины — БД, файлы временны.
+        _cleanup_stale_generated_files()
 
         # Директория под текущий вызов.
         batch_dir = os.path.join(GENERATED_ROOT, uuid.uuid4().hex)
@@ -458,7 +590,7 @@ def make_find_generated_image_tool(agent):
         where = (" WHERE " + " AND ".join(conds)) if conds else ""
         sql = (
             "SELECT id, file_path, file_name, prompt, model, aspect_ratio, "
-            "       temperature, byte_size, created_at "
+            "       temperature, byte_size, image_data, created_at "
             "FROM generated_images"
             + where
             + f" ORDER BY created_at DESC LIMIT {limit};"
@@ -485,18 +617,23 @@ def make_find_generated_image_tool(agent):
 
         out = [f"Найдено сгенерированных изображений: {len(rows)}"]
         for r in rows:
-            exists = os.path.isfile(r["file_path"]) if r["file_path"] else False
-            flag = "" if exists else "  [файл на диске отсутствует — только запись]"
+            # Хранилище — БД, а не диск. Если файла на диске нет (его почистили
+            # или это другой инстанс) — материализуем бинарник из image_data во
+            # временный файл, чтобы его можно было передать в source_images.
+            usable_path = r["file_path"]
+            if not (usable_path and os.path.isfile(usable_path)):
+                usable_path = _materialize_from_db(r["image_data"], r["file_name"], r["id"])
+            flag = "" if usable_path else "  [бинарник недоступен]"
             prompt_short = (r["prompt"] or "")[:160]
             out.append(
-                f"\n• id={r['id']}  {r['file_path']}{flag}\n"
+                f"\n• id={r['id']}  {usable_path or '(нет пути)'}{flag}\n"
                 f"  промпт: {prompt_short}\n"
                 f"  модель: {r['model']}  aspect: {r['aspect_ratio']}  "
                 f"temp: {r['temperature']}  создано: {r['created_at']}"
             )
         out.append(
-            "\nЧтобы отредактировать одну из них — передай её file_path в аргумент "
-            "source_images тула generate_image."
+            "\nЧтобы отредактировать одну из них — передай указанный путь (file_path) "
+            "в аргумент source_images тула generate_image."
         )
         return "\n".join(out)
 

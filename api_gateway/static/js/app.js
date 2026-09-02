@@ -915,9 +915,12 @@ class ChatApp {
             // /image/... проксирует бинарник из таблицы по (message_id, name).
             // Обычные вложения (kind иной) оставляем на файловом пути.
             const isGenerated = f.kind === 'image';
+            const imageKeyQs = isGenerated && f.image_key
+                ? `?image_key=${encodeURIComponent(f.image_key)}`
+                : '';
             const url = messageId
                 ? (isGenerated
-                    ? `/api/chats/${this.currentChat}/image/${encodeURIComponent(messageId)}/${encodeURIComponent(name)}`
+                    ? `/api/chats/${this.currentChat}/image/${encodeURIComponent(messageId)}/${encodeURIComponent(name)}${imageKeyQs}`
                     : `/api/chats/${this.currentChat}/files/${encodeURIComponent(messageId)}/${encodeURIComponent(name)}`)
                 : '#';
 

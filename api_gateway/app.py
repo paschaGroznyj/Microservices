@@ -977,7 +977,7 @@ async def upload_files(
         raise HTTPException(status_code=502, detail=f"Agent service unreachable: {str(e)}")
 
 @app.get("/api/chats/{chat_id}/image/{message_id}/{file_name}")
-async def get_chat_db_image(chat_id: int, message_id: str, file_name: str, request: Request):
+async def get_chat_db_image(chat_id: int, message_id: str, file_name: str, request: Request, image_key: str | None = None):
     """Отдаёт сгенерированную картинку из БД (generated_images) для превью в чате.
 
     В отличие от /files/... (который резолвит путь и стримит файл с диска —
@@ -992,7 +992,7 @@ async def get_chat_db_image(chat_id: int, message_id: str, file_name: str, reque
     try:
         agent_resp = await app.state.http_client.get(
             f"{SERVICES['agent_service']['url']}/web/db_image",
-            params={"message_id": message_id, "file_name": file_name},
+            params={"message_id": message_id, "file_name": file_name, "image_key": image_key},
         )
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Agent service unreachable: {e}")

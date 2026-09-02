@@ -2054,14 +2054,25 @@ class KnowledgeAgent:
         # Они складываются в self._pending_generated_images в течение хода —
         # добавляем их в files_to_send с пометкой kind=image, чтобы фронт
         # отрисовал превью, а не карточку-файл.
-        for gen_path in getattr(self, "_pending_generated_images", []):
-            if gen_path not in seen_paths:
-                seen_paths.add(gen_path)
-                files_to_send.append({
-                    "path": gen_path,
-                    "name": os.path.basename(gen_path),
-                    "kind": "image",
-                })
+        for gen_item in getattr(self, "_pending_generated_images", []):
+            if isinstance(gen_item, dict):
+                dedup = gen_item.get("image_key") or gen_item.get("name")
+                if dedup and dedup not in seen_paths:
+                    seen_paths.add(dedup)
+                    files_to_send.append({
+                        "image_key": gen_item.get("image_key"),
+                        "name": gen_item.get("name") or "image.jpg",
+                        "kind": "image",
+                    })
+            else:
+                gen_path = gen_item
+                if gen_path not in seen_paths:
+                    seen_paths.add(gen_path)
+                    files_to_send.append({
+                        "path": gen_path,
+                        "name": os.path.basename(gen_path),
+                        "kind": "image",
+                    })
 
         # logging.info(f"ФАЙЛЫ К ОТПРАВКЕ {files_to_send}")
         return {

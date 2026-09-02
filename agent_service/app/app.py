@@ -169,6 +169,7 @@ async def get_db_image(
     message_id: str | None = None,
     file_name: str | None = None,
     image_id: int | None = None,
+    image_key: str | None = None,
 ):
     """Отдаёт бинарник картинки НАПРЯМУЮ из таблицы generated_images (BYTEA).
 
@@ -188,7 +189,13 @@ async def get_db_image(
     row = None
     try:
         async with pool.acquire() as conn:
-            if image_id is not None:
+            if image_key:
+                row = await conn.fetchrow(
+                    "SELECT file_name, mime_type, image_data "
+                    "FROM generated_images WHERE image_key::text = $1 LIMIT 1",
+                    str(image_key).strip(),
+                )
+            elif image_id is not None:
                 row = await conn.fetchrow(
                     "SELECT file_name, mime_type, image_data "
                     "FROM generated_images WHERE id = $1",
@@ -295,16 +302,21 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
 
         attached_files = None
         if files_to_send:
-            attached_files = [
-                {
-                    "name": os.path.basename(f["path"]),
-                    "path": f["path"],
-                    # kind=image для сгенерированных картинок (generate_image) —
-                    # фронт по нему рисует превью-изображение вместо файл-чипа.
-                    "kind": f.get("kind"),
-                }
-                for f in files_to_send
-            ]
+            attached_files = []
+            for f in files_to_send:
+                if f.get("kind") == "image":
+                    attached_files.append({
+                        "name": f.get("name") or "image.jpg",
+                        "path": f.get("path"),
+                        "kind": "image",
+                        "image_key": f.get("image_key"),
+                    })
+                else:
+                    attached_files.append({
+                        "name": os.path.basename(f["path"]),
+                        "path": f["path"],
+                        "kind": f.get("kind"),
+                    })
 
         message_id = f"msg-{int(time.time() * 1000)}-{str(uuid.uuid4())[:8]}"
         bot_message = {

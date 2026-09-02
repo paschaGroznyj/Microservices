@@ -319,6 +319,37 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                     })
 
         message_id = f"msg-{int(time.time() * 1000)}-{str(uuid.uuid4())[:8]}"
+
+        # Дозаполняем message_id в generated_images по image_key.
+        # message_id бота генерится ЗДЕСЬ (после process_query), поэтому тул
+        # физически не мог записать его в generated_images (там оставался NULL).
+        # Связываем постфактум по image_key — он создаётся в туле и доходит до
+        # обоих концов (generated_images и chat_files). Без этого фолбэк-поиск
+        # картинки по паре (message_id, file_name) в /web/db_image давал 404.
+        if attached_files:
+            image_keys = [
+                f.get("image_key")
+                for f in attached_files
+                if f.get("kind") == "image" and f.get("image_key")
+            ]
+            if image_keys:
+                try:
+                    async with db.pool.acquire() as conn:
+                        await conn.execute(
+                            "UPDATE generated_images SET message_id = $1 "
+                            "WHERE image_key::text = ANY($2::text[]) "
+                            "AND message_id IS NULL",
+                            message_id, image_keys,
+                        )
+                    logging.info(
+                        f"generated_images: message_id={message_id} проставлен "
+                        f"для image_key={image_keys}"
+                    )
+                except Exception as link_err:
+                    logging.error(
+                        f"Не удалось привязать message_id к generated_images: {link_err}"
+                    )
+
         bot_message = {
             "user_id": -1,
             "chat_id": chat_id,

@@ -31,6 +31,36 @@ def get_llm_lite_model():
         }
     )
 
+
+@lru_cache
+def get_llm_lite_model_gpt_mini():
+    """Фолбэк №1 для лайт-модели, если haiku отказал."""
+    return ChatOpenAI(
+        model="openai/gpt-5-mini",
+        base_url="https://foundation-models.api.cloud.ru/v1",
+        api_key=CLOUD_LLM_ACCESS_KEY,
+        model_kwargs={
+            "extra_headers": {
+                "X-Enable-Prompt-Cache": "true"
+            }
+        }
+    )
+
+
+@lru_cache
+def get_llm_lite_model_gemini_flash():
+    """Фолбэк №2 для лайт-модели, если и haiku, и gpt-mini отказали."""
+    return ChatOpenAI(
+        model="google/gemini-3-flash-preview",
+        base_url="https://foundation-models.api.cloud.ru/v1",
+        api_key=CLOUD_LLM_ACCESS_KEY,
+        model_kwargs={
+            "extra_headers": {
+                "X-Enable-Prompt-Cache": "true"
+            }
+        }
+    )
+
 @lru_cache
 def get_llm_model():
     return ChatOpenAI(

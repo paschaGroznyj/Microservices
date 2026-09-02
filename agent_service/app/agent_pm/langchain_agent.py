@@ -16,14 +16,15 @@ from langchain_core.messages import ToolMessage, trim_messages
 from langchain_core.messages.utils import count_tokens_approximately
 
 from .core.agent_provider import (get_llm_lite_model, get_llm_model,
-get_llm_model_gpt, get_llm_model_claude, get_llm_model_gemini)
+get_llm_model_gpt, get_llm_model_claude, get_llm_model_gemini,
+get_llm_lite_model_gpt_mini, get_llm_lite_model_gemini_flash)
 from .core.botocore_client import OBSWorker
 from .core.config import (
     ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH,
     METADATA_FILE, PORT_GATEWAY_PORT, ADMINS_INFO,
     PORT_PARSERS_SERVICE
 )
-from .core.settings import TOOLS_SETTINGS
+from .core.settings import TOOLS_SETTINGS, UNIVERSAL_TOOLS
 from .prompts.summary_prompt import SUMMARIZE_CUT_PROMPT
 
 from datetime import datetime
@@ -908,6 +909,13 @@ class KnowledgeAgent:
                             'universal': get_llm_model_gemini()
                             }
         self.llm_lite = get_llm_lite_model()
+        # Цепочка фолбэков для лайт-модели (суммаризация и прочие служебные
+        # вызовы, летящие с фронта): по умолчанию haiku, при отказе —
+        # gpt-5-mini, затем gemini-3-flash-preview.
+        self.llm_lite_fallbacks = [
+            get_llm_lite_model_gpt_mini(),
+            get_llm_lite_model_gemini_flash(),
+        ]
         self.obs_loader = OBSWorker()
         self.email_handler = DigestEmailHandler()
         self.skip_startup_autoprocess = skip_startup_autoprocess
@@ -1047,6 +1055,8 @@ class KnowledgeAgent:
         user_input: str,
         selected_tools: list[str] | None = None,
         allow_all: bool = False,
+        images: list[dict] | None = None,
+        agent_model: str | None = None,
     ):
         """Возвращает список LangChain @tool-функций, привязанных к контексту агента."""
 
@@ -1399,8 +1409,15 @@ class KnowledgeAgent:
         codeedit_tools = make_workspace_codeedit_tools(agent)
 
 
+        # Тул анализа изображений (JPEG/PNG) через claude-opus-4.8.
+        # base64 картинок захватывается в замыкание тула из images —
+        # модель передаёт только промпт, base64 не идёт в контекст.
+        from .tools.vision.tool_analyze_image import make_analyze_image_tool
+        analyze_image = make_analyze_image_tool(agent, images, agent_model=agent_model)
+
         base_tools = [
             search_db,
+            analyze_image,
             summarize_by_filter,
             rebuild_categories,
             send_digest_email,
@@ -1439,10 +1456,49 @@ class KnowledgeAgent:
         for category in selected_tools:
             allowed_names.update(TOOLS_SETTINGS.get(category, []))
 
+        # Универсальные тулы добавляются всегда, вне зависимости от выбранных
+        # категорий — они не привязаны к режиму (напр. анализ изображений).
+        allowed_names.update(UNIVERSAL_TOOLS)
+
         filtered = [t for t in all_tools if t.name in allowed_names]
 
-        return filtered if filtered else [no_tools_selected]
+        # Даже если пользователь не выбрал ни одной категории, универсальные
+        # тулы должны остаться доступны — не подменяем их заглушкой.
+        universal_present = [t for t in all_tools if t.name in UNIVERSAL_TOOLS]
+        if not filtered:
+            return universal_present or [no_tools_selected]
 
+        return filtered
+
+
+    async def _lite_ainvoke(self, messages: list[BaseMessage]):
+        """Вызов лайт-модели с цепочкой фолбэков.
+
+        По умолчанию haiku (self.llm_lite). Если отказал — по очереди
+        gpt-5-mini и gemini-3-flash-preview (self.llm_lite_fallbacks).
+        Возвращает ответ первой успешной модели. Если упали все —
+        пробрасывает последнее исключение.
+        """
+        chain = [self.llm_lite, *getattr(self, "llm_lite_fallbacks", [])]
+        last_error: Exception | None = None
+        for i, model in enumerate(chain):
+            try:
+                resp = await model.ainvoke(messages)
+                if i > 0:
+                    logging.warning(
+                        f"Лайт-модель: сработал фолбэк #{i} "
+                        f"({getattr(model, 'model_name', getattr(model, 'model', '?'))})"
+                    )
+                return resp
+            except Exception as e:
+                last_error = e
+                logging.error(
+                    f"Лайт-модель #{i} "
+                    f"({getattr(model, 'model_name', getattr(model, 'model', '?'))}) "
+                    f"упала: {type(e).__name__}: {e}"
+                )
+        # Все модели цепочки провалились
+        raise last_error if last_error else RuntimeError("Лайт-модель: пустая цепочка")
 
     async def _summarize_cut_messages(
         self,
@@ -1470,7 +1526,7 @@ class KnowledgeAgent:
         prompt = SUMMARIZE_CUT_PROMPT.format(previous_block=previous_block, chunk_text=chunk_text)
 
         try:
-            response = await self.llm_lite.ainvoke([
+            response = await self._lite_ainvoke([
                 SystemMessage(content="Ты — модуль сжатия истории диалога. Отвечай только сводкой, без преамбул."),
                 HumanMessage(content=prompt),
             ])
@@ -1562,7 +1618,8 @@ class KnowledgeAgent:
         agent_model,
         source=None,
         selected_tools=None,
-        context_size=None
+        context_size=None,
+        images=None,
     ) -> Dict[str, Any]:
         if not self.db:
             self.db = database
@@ -1627,6 +1684,8 @@ class KnowledgeAgent:
             user_input,
             selected_tools=selected_tools,
             allow_all=allow_all_tools,
+            images=images,
+            agent_model=agent_model,
         )
         loop_state = {
             "iteration": 0,

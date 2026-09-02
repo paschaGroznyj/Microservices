@@ -72,8 +72,31 @@ async def upload_web_files(
     files: list[UploadFile] = File(...),
 ):
     parts = []
+    images: list[dict] = []          # картинки JPEG/PNG для vision-тула
+    IMAGE_MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
+
     for f in files:
         raw = await f.read()
+        ext = os.path.splitext(f.filename or "")[1].lower()
+
+        # Картинки не парсим в текст — кладём base64 отдельно, чтобы vision-тул
+        # дёргал строку из pending_files, а контекст модели не засорялся.
+        if ext in IMAGE_MIME:
+            b64 = base64.b64encode(raw).decode("ascii")
+            idx = len(images)
+            images.append({
+                "filename": f.filename,
+                "mime_type": IMAGE_MIME[ext],
+                "b64": b64,
+            })
+            # В текст сообщения — только лёгкий маркер с индексом.
+            parts.append(
+                f"\n\n🖼️[IMAGE #{idx}: {f.filename}] "
+                f"(изображение загружено, для анализа вызови тул analyze_image "
+                f"с image_index={idx})"
+            )
+            continue
+
         try:
             extracted_text = await asyncio.to_thread(parse_file, f.filename, raw)
             parts.append(f"\n\n📎[FILE] [Прикрепленный файл: {f.filename}]\nСодержимое файла:\n```\n{extracted_text}\n```")
@@ -82,24 +105,38 @@ async def upload_web_files(
             parts.append(f"\n\n[Не удалось прочитать прикрепленный файл {f.filename}: {e}]")
 
     combined_text = "".join(parts)
-    entry = pending_files.setdefault(message_id, {"event": asyncio.Event(), "text": ""})
+    entry = pending_files.setdefault(
+        message_id, {"event": asyncio.Event(), "text": "", "images": []}
+    )
     entry["text"] = combined_text
+    entry["images"] = images
     entry["event"].set()
 
-    logging.info(f"Файлы для message_id={message_id} обработаны, chat_id={chat_id}")
-    return {"status": "ok", "files_count": len(files)}
+    logging.info(
+        f"Файлы для message_id={message_id} обработаны, chat_id={chat_id}, "
+        f"картинок={len(images)}"
+    )
+    return {"status": "ok", "files_count": len(files), "images_count": len(images)}
 
 
-async def wait_for_files(message_id: str, timeout: float = FILE_WAIT_TIMEOUT) -> str:
-    """Дождаться файлов для message_id либо вернуть пустую строку по таймауту."""
-    entry = pending_files.setdefault(message_id, {"event": asyncio.Event(), "text": ""})
+async def wait_for_files(message_id: str, timeout: float = FILE_WAIT_TIMEOUT) -> tuple[str, list[dict]]:
+    """Дождаться файлов для message_id.
+
+    Возвращает кортеж (text, images):
+      text   — извлечённый текст текстовых/офисных файлов (или пустая строка),
+      images — список картинок JPEG/PNG с base64 для vision-тула (или []).
+    По таймауту возвращает ("", []).
+    """
+    entry = pending_files.setdefault(
+        message_id, {"event": asyncio.Event(), "text": "", "images": []}
+    )
     try:
         await asyncio.wait_for(entry["event"].wait(), timeout=timeout)
     except asyncio.TimeoutError:
         logging.warning(f"Файлы для message_id={message_id} не пришли за {timeout}s, продолжаем без них")
     finally:
         pending_files.pop(message_id, None)  # чистим память в любом случае
-    return entry["text"]
+    return entry.get("text", ""), entry.get("images", [])
 
 ALLOWED_FILES_ROOT = os.path.realpath("/app/generated_files")
 
@@ -160,8 +197,9 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     message = f"[CatchPM, ТабельНомер: {tb_name}, Пользователь: {username}, chat_id: {chat_id}, user_id: {user_id}]\n" + text
 
     
+    images: list[dict] = []
     if has_files and message_id:
-        file_text = await wait_for_files(message_id)
+        file_text, images = await wait_for_files(message_id)
         if file_text:
             message += file_text
 
@@ -176,7 +214,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                                             chat_id=chat_id, database=db, selected_tools=selected_tools,
                                             context_size=context_size,
                                             source="CatchPM",
-                                            agent_model=agent_model)
+                                            agent_model=agent_model,
+                                            images=images)
 
         response_text = response["message"]
         # from datetime import datetime

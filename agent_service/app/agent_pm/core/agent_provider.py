@@ -115,6 +115,26 @@ def get_llm_model_gemini():
         }
     )
 
+
+# ── Генерация изображений ──────────────────────────────────────────
+# Модель и пресет подтверждены карточкой знаний #127 (HQ-baroque preset):
+#   google/gemini-3.1-flash-image-preview + temperature 0.4 + quality-промпт.
+# Работаем НЕ через langchain-обёртку, а сырым OpenAI-совместимым POST
+# на /v1/chat/completions, т.к. картинка возвращается в
+# choices[0].message.images[0].image_url.url (base64/data-URL), а
+# ChatOpenAI это поле не отдаёт.
+IMAGE_GEN_MODEL = "google/gemini-3.1-flash-image-preview"
+IMAGE_GEN_BASE_URL = "https://foundation-models.api.cloud.ru/v1"
+
+
+def get_image_gen_config() -> dict:
+    """Конфиг клиента генерации изображений (endpoint + ключ + модель)."""
+    return {
+        "model": IMAGE_GEN_MODEL,
+        "base_url": IMAGE_GEN_BASE_URL,
+        "api_key": CLOUD_LLM_ACCESS_KEY,
+    }
+
 # ================== ДЛЯ ЛОКАЛЬНОЙ ОТЛАДКИ ================
 # auth_url меняется на http://host.docker.internal:9004/api/v2/oauth при работе с докером
 # auth_url меняется на http://localhost:9004/api/v2/oauth при работе без докера

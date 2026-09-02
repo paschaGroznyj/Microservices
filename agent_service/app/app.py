@@ -228,7 +228,13 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
         attached_files = None
         if files_to_send:
             attached_files = [
-                {"name": os.path.basename(f["path"]), "path": f["path"]}
+                {
+                    "name": os.path.basename(f["path"]),
+                    "path": f["path"],
+                    # kind=image для сгенерированных картинок (generate_image) —
+                    # фронт по нему рисует превью-изображение вместо файл-чипа.
+                    "kind": f.get("kind"),
+                }
                 for f in files_to_send
             ]
 

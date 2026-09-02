@@ -1415,9 +1415,16 @@ class KnowledgeAgent:
         from .tools.vision.tool_analyze_image import make_analyze_image_tool
         analyze_image = make_analyze_image_tool(agent, images, agent_model=agent_model)
 
+        # Тул генерации изображений (gemini-3.1-flash-image-preview).
+        # Пресет качества из карточки #127. Сгенерированные файлы копятся
+        # в agent._pending_generated_images и авто-отправляются пользователю.
+        from .tools.content.tool_generate_image import make_generate_image_tool
+        generate_image = make_generate_image_tool(agent, images)
+
         base_tools = [
             search_db,
             analyze_image,
+            generate_image,
             summarize_by_filter,
             rebuild_categories,
             send_digest_email,
@@ -1664,6 +1671,9 @@ class KnowledgeAgent:
         AUTO_SEND_FILE_TOOLS = {"send_file_to_user"}
         files_to_send = []
         seen_paths = set()
+        # Сбрасываем аккумулятор сгенерированных картинок на КАЖДЫЙ запрос,
+        # чтобы generate_image не тащил файлы из прошлого хода.
+        self._pending_generated_images = []
         SOFT_LIMIT = 10   # после этого — предупреждаем модель   
         HARD_LIMIT = 14  # динамически можно поднять число шагов
         total_input_tokens  = 0
@@ -2000,6 +2010,20 @@ class KnowledgeAgent:
                 "output_tokens": total_output_tokens,
                 "total_tokens": total_input_tokens + total_output_tokens,
             }
+
+        # Авто-отправка изображений, сгенерированных тулом generate_image.
+        # Они складываются в self._pending_generated_images в течение хода —
+        # добавляем их в files_to_send с пометкой kind=image, чтобы фронт
+        # отрисовал превью, а не карточку-файл.
+        for gen_path in getattr(self, "_pending_generated_images", []):
+            if gen_path not in seen_paths:
+                seen_paths.add(gen_path)
+                files_to_send.append({
+                    "path": gen_path,
+                    "name": os.path.basename(gen_path),
+                    "kind": "image",
+                })
+
         # logging.info(f"ФАЙЛЫ К ОТПРАВКЕ {files_to_send}")
         return {
             "input": user_input,

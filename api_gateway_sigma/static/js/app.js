@@ -10,6 +10,45 @@ class ChatApp {
         this._runState = 'idle';      // idle | running | stopping
         this._activeRequestId = null;
         this._statusPollTimer = null;
+        this.INPUT_MAX_CHARS = 5000;  // жёсткий предел длины поля ввода
+    }
+
+    /* Обрезает содержимое поля ввода до INPUT_MAX_CHARS символов.
+       Учитывает полный текст с раскрытыми чипами (getInputText). Если
+       перебор — усекаем хвостовой текстовый узел, сохраняя чипы. */
+    _enforceInputLimit(field) {
+        if (!field) return;
+        const max = this.INPUT_MAX_CHARS;
+        if (this.getInputText().length <= max) return;
+
+        // Пока превышаем лимит — режем по одному символу с конца последнего
+        // текстового узла. Чипы (свёрнутый текст) не трогаем как атомарные.
+        let guard = 0;
+        while (this.getInputText().length > max && guard < 100000) {
+            guard++;
+            let lastText = null;
+            const findLast = (node) => {
+                node.childNodes.forEach((n) => {
+                    if (n.nodeType === Node.TEXT_NODE && n.textContent.length > 0) {
+                        lastText = n;
+                    } else if (n.nodeType === Node.ELEMENT_NODE &&
+                               !(n.getAttribute && n.getAttribute('data-chip-id'))) {
+                        findLast(n);
+                    }
+                });
+            };
+            findLast(field);
+            if (!lastText) break;
+            lastText.textContent = lastText.textContent.slice(0, -1);
+        }
+        // Ставим каретку в конец
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(field);
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        this.showToast('Достигнут предел ' + max + ' символов');
     }
 
     /* ══════════════════════════════════════════
@@ -2598,12 +2637,15 @@ class ChatApp {
         if (!field || !sendBtn) return;
 
         const onInput = () => {
+            // Жёсткий предел длины ввода — обрезаем всё, что сверх лимита.
+            this._enforceInputLimit(field);
             if (this._runState !== "idle") {
                 sendBtn.disabled = false;
                 sendBtn.classList.add('active');
                 return;
             }
-            const hasText = this.getInputText().length > 0;
+            const len = this.getInputText().length;
+            const hasText = len > 0;
             sendBtn.classList.toggle('active', hasText);
             sendBtn.disabled = !hasText;
         };
@@ -2617,13 +2659,48 @@ class ChatApp {
         field.addEventListener('paste', (e) => {
             if (field.contentEditable !== 'true') return;
             const cd = e.clipboardData || window.clipboardData;
+
+            // ── Блокируем вставку изображений/файлов через Ctrl+V ──────
+            // Картинка из буфера приходит как элемент в cd.items с kind='file'
+            // и type='image/...'. Такой контент вставлять запрещено —
+            // отменяем событие и показываем тост.
+            if (cd) {
+                const items = cd.items ? Array.from(cd.items) : [];
+                const hasImage =
+                    (cd.files && cd.files.length > 0 &&
+                        Array.from(cd.files).some(f => f.type && f.type.startsWith('image/'))) ||
+                    items.some(it => it.kind === 'file' && it.type && it.type.startsWith('image/'));
+                if (hasImage) {
+                    e.preventDefault();
+                    this.showToast('Вставка изображений в поле ввода недоступна');
+                    return;
+                }
+            }
+
             const pasted = cd ? cd.getData('text') : '';
-            if (pasted && pasted.length > INPUT_COLLAPSE_LIMIT) {
+            if (!pasted) return;
+
+            // ── Учитываем лимит 5000 символов ──────────────────────────
+            const remaining = this.INPUT_MAX_CHARS - this.getInputText().length;
+            if (remaining <= 0) {
                 e.preventDefault();
-                this._insertInputChip(field, pasted);
+                this.showToast('Достигнут предел ' + this.INPUT_MAX_CHARS + ' символов');
+                return;
+            }
+            const clipped = pasted.length > remaining ? pasted.slice(0, remaining) : pasted;
+
+            if (clipped.length > INPUT_COLLAPSE_LIMIT) {
+                e.preventDefault();
+                this._insertInputChip(field, clipped);
+                onInput();
+            } else if (clipped.length < pasted.length) {
+                // Текст пришлось урезать под лимит — вставляем вручную усечённый.
+                e.preventDefault();
+                document.execCommand('insertText', false, clipped);
+                this.showToast('Текст обрезан до предела ' + this.INPUT_MAX_CHARS + ' символов');
                 onInput();
             }
-            // короткий текст — стандартная вставка (плейн-текст форсится ниже)
+            // короткий текст в пределах лимита — стандартная вставка (плейн-текст ниже)
         });
 
         field.addEventListener('keydown', (e) => {
@@ -2640,6 +2717,24 @@ class ChatApp {
                 e.preventDefault();
                 document.execCommand('insertLineBreak');
                 this._resetInputFormatting();
+            }
+        });
+
+        // ── Блокируем drag&drop файлов/картинок в поле ввода ──────────
+        // Drop идёт мимо paste-обработчика, поэтому глушим отдельно: если
+        // в переносимых данных есть файлы — отменяем дроп.
+        field.addEventListener('dragover', (e) => {
+            const dt = e.dataTransfer;
+            if (dt && Array.from(dt.types || []).includes('Files')) {
+                e.preventDefault();
+                dt.dropEffect = 'none';
+            }
+        });
+        field.addEventListener('drop', (e) => {
+            const dt = e.dataTransfer;
+            if (dt && dt.files && dt.files.length > 0) {
+                e.preventDefault();
+                this.showToast('Перетаскивание файлов в поле ввода недоступно');
             }
         });
 

@@ -34,6 +34,24 @@ import websockets
 from agent_pm.core.botocore_client import database
 logging.basicConfig(level=logging.INFO)
 
+
+class _DropInternalBotStreamLogs(logging.Filter):
+    """Suppress noisy httpx per-chunk logs for /internal/bot_stream only."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return True
+        if "HTTP Request:" in msg and "/internal/bot_stream" in msg:
+            return False
+        return True
+
+
+_httpx_filter = _DropInternalBotStreamLogs()
+logging.getLogger("httpx").addFilter(_httpx_filter)
+logging.getLogger("httpcore").addFilter(_httpx_filter)
+
 db = AgentDB()
 pending_files: dict[str, dict] = {}
 

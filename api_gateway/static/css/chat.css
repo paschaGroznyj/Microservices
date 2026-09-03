@@ -506,10 +506,17 @@
   background: var(--surface);
 }
 
+/* Когда внутри стартовый экран — контейнер должен занимать ВСЮ рабочую
+   область .chat-main-inner, а не только нижнюю полосу под инпут.
+   Иначе фон .chat-start-screen (inset:0) покрывает лишь узкую зону
+   (пустые поля слева/сверху), а приписка bottom считается от неё же. */
 .message-input-container:has(.chat-start-screen) {
   border-top: none;
   background: transparent;
   padding: 0;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
 }
 /* ══════════════════════════════════════════════
    ACTIVE CHAT INPUT  (modern, like start screen)
@@ -896,7 +903,10 @@
 .start-footer-note {
   position: absolute;
   z-index: 2;
-  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 16px;
+  margin: 0;
   padding: 6px 12px;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);

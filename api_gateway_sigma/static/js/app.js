@@ -9,6 +9,7 @@ class ChatApp {
         this.currentTab    = 'agent'; // 'agent' | 'graph'
         this._runState = 'idle';      // idle | running | stopping
         this._activeRequestId = null;
+        this._statusPollTimer = null;
     }
 
     /* ══════════════════════════════════════════
@@ -1328,6 +1329,8 @@ class ChatApp {
             } catch (_) {
                 this._activeRequestId = null;
             }
+            // SIGMA: WS отключён, поэтому финал ответа забираем polling-ом статуса.
+            this._startStatusPolling(this.currentChat);
         } catch (err) {
             console.error('sendMessage error:', err);
             this._runState = 'idle';
@@ -1931,9 +1934,61 @@ class ChatApp {
     }
 
     _onRunFinished() {
+        if (this._statusPollTimer) {
+            clearInterval(this._statusPollTimer);
+            this._statusPollTimer = null;
+        }
         this._runState = 'idle';
         this._activeRequestId = null;
         this._setSendButtonMode('send');
+    }
+
+    _startStatusPolling(chatId) {
+        if (!chatId) return;
+        if (this._statusPollTimer) {
+            clearInterval(this._statusPollTimer);
+            this._statusPollTimer = null;
+        }
+
+        const POLL_MS = 800;
+        this._statusPollTimer = setInterval(async () => {
+            // если ран уже завершён локально — polling больше не нужен
+            if (this._runState === 'idle') {
+                clearInterval(this._statusPollTimer);
+                this._statusPollTimer = null;
+                return;
+            }
+
+            try {
+                const resp = await fetch(`/api/chats/${chatId}/status`, {
+                    method: 'GET',
+                    credentials: 'include',
+                    cache: 'no-store'
+                });
+                if (!resp.ok) return;
+
+                const state = await resp.json();
+                if (state?.status === 'done') {
+                    // Сообщение уже сохранено в БД chats-consumer'ом —
+                    // просто перечитываем историю чата и завершаем run.
+                    if (chatId === this.currentChat) {
+                        await this.loadMessages(chatId);
+                    }
+                    this._onRunFinished();
+                    return;
+                }
+
+                if (state?.status === 'idle') {
+                    // На всякий случай: если done уже отдан/протух, перечитаем историю.
+                    if (chatId === this.currentChat) {
+                        await this.loadMessages(chatId);
+                    }
+                    this._onRunFinished();
+                }
+            } catch (_) {
+                // Молчаливо ждём следующий тик polling
+            }
+        }, POLL_MS);
     }
 
     updateStatus(statusText) {

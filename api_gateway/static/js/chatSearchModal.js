@@ -27,11 +27,19 @@ function setLiftPx(px = 0) {
   modal.style.setProperty('--cse-lift-px', `${lift}px`);
 }
 
+const CSE_TOP_SAFE_VH = 0.10; // минимальный безопасный отступ верхней грани модалки
+
 function calcMaxLiftPx() {
-  // Верхний предел подъёма: от центра до «рабочего» уровня 12vh.
-  const centerY = window.innerHeight * 0.5;
-  const topY = window.innerHeight * 0.12;
-  return Math.max(0, centerY - topY);
+  // Предел подъёма считаем по РЕАЛЬНОЙ верхней грани модалки, а не по её центру.
+  // Модалка центрируется через translateY(-50%), поэтому верхняя грань = top - height/2.
+  // Гарантируем, что верхняя грань не поднимется выше CSE_TOP_SAFE_VH от края экрана.
+  const vh = window.innerHeight;
+  const centerY = vh * 0.5;
+  const modalHeight = modal ? modal.getBoundingClientRect().height : 0;
+  const minTopEdge = vh * CSE_TOP_SAFE_VH;
+  // top = centerY - lift; верхняя грань = top - modalHeight/2 >= minTopEdge
+  // => lift <= centerY - modalHeight/2 - minTopEdge
+  return Math.max(0, centerY - modalHeight / 2 - minTopEdge);
 }
 
 function applyLiftByResultsCount(count) {

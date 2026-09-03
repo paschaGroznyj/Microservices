@@ -2221,15 +2221,6 @@ class ChatApp {
         ></div>
 
         <div class="chat-input-footer">
-            <button class="attach-btn" id="attach-btn" title="Прикрепить файл" type="button">
-                <svg viewBox="0 0 24 24" fill="none">
-                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19
-                             a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
-                          stroke="currentColor" stroke-width="2"
-                          stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-            </button>
-
             <span class="input-footer-note">ИИ может ошибаться — перепроверяйте важную информацию</span>
 
             <button class="chat-send-btn" id="send-btn" disabled aria-label="Отправить">

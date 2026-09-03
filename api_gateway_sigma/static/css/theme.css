@@ -176,8 +176,11 @@ input, textarea {
   height: 30px;
   padding: 0;
   border-radius: 15px;              /* половина высоты — капсула */
-  background: var(--surface3);
-  border: 1px solid var(--border);
+  /* В общем стиле с .chat-send-btn active: подложка = --btn-primary-bg,
+     ползунок = --btn-primary-text. Переменные сами инвертируются по теме:
+     светлая — тёмная подложка + светлый ползунок, тёмная — наоборот. */
+  background: var(--btn-primary-bg);
+  border: 1px solid var(--btn-primary-bg);
   box-shadow: none;
   display: flex;
   align-items: center;
@@ -196,14 +199,15 @@ input, textarea {
   width: 24px;
   height: 24px;
   border-radius: 50%;
-  background: var(--text-primary);
+  background: var(--btn-primary-text);
   box-shadow: var(--shadow-sm);
   transition: left var(--transition), background var(--transition);
   z-index: 1;
 }
 
 .theme-toggle:hover {
-  border-color: var(--accent);
+  /* как .chat-send-btn:hover — подсветка яркостью, без смены палитры */
+  filter: brightness(1.1);
   transform: none;
   box-shadow: none;
 }
@@ -215,7 +219,9 @@ input, textarea {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  color: var(--text-secondary);
+  /* иконка на подложке — в цвет ползунка, приглушённо */
+  color: var(--btn-primary-text);
+  opacity: .65;
   transition: opacity var(--transition);
   z-index: 0;
 }

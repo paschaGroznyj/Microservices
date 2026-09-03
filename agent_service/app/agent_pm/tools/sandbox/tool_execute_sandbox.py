@@ -233,6 +233,56 @@ def _zip_directory(dir_path: str) -> tuple[bytes, str]:
     return buf.read(), f"{base}.zip"
 
 
+_MIME_EXT = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+}
+
+
+async def _fetch_generated_image(agent, image_key: str):
+    """Тянет сгенерированную картинку из generated_images по image_key.
+
+    Возвращает (content: bytes, upload_name: str, err: str|None).
+    upload_name — имя файла для заливки в workspace: file_name из БД, если он
+    осмысленный, иначе {image_key}.{ext по mime_type}.
+    """
+    db = getattr(agent, "db", None)
+    pool = getattr(db, "pool", None) if db else None
+    if pool is None:
+        return None, None, "нет пула БД — картинки из хранилища недоступны"
+    key = str(image_key).strip()
+    if not key:
+        return None, None, "пустой image_key"
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT image_data, mime_type, file_name FROM generated_images "
+                "WHERE image_key::text = $1 LIMIT 1",
+                key,
+            )
+    except Exception as e:
+        return None, None, f"ошибка чтения из БД: {type(e).__name__}: {e}"
+    if not row or not row["image_data"]:
+        return None, None, f"картинка image_key={key} не найдена в generated_images"
+
+    content = bytes(row["image_data"])
+    mime = (row["mime_type"] or "image/jpeg").lower()
+    ext = _MIME_EXT.get(mime, ".jpg")
+
+    raw_name = (row["file_name"] or "").strip()
+    safe_name = os.path.basename(raw_name) if raw_name else ""
+    if safe_name and os.path.splitext(safe_name)[1].lower() in _MIME_EXT.values():
+        upload_name = safe_name
+    elif safe_name:
+        upload_name = safe_name + ext
+    else:
+        upload_name = f"{key}{ext}"
+    return content, upload_name, None
+
+
 def make_sandbox_execute_tool(agent):
 
     @tool
@@ -920,98 +970,180 @@ def make_sandbox_execute_tool(agent):
     
     @tool
     async def upload_to_workspace(
-        local_path: str,
         workspace_id: str,
+        local_path: str | None = None,
+        image_keys: list[str] | None = None,
         dest: str = "",
     ) -> dict:
         """
-        Заливает локальный файл ИЛИ папку из файловой системы агента
-        в удалённый workspace фабрики (обратная операция к download_workspace_file).
+        Заливает артефакты в удалённый workspace фабрики, где они станут
+        доступны для execute_python_code / execute_shell_commands с тем же
+        workspace_id (обратная операция к download_workspace_file).
 
-        Используй когда нужно перекинуть подготовленный локально артефакт
-        (скрипт, ассет, целую папку) в workspace, где он будет доступен для
-        execute_python_code / execute_shell_commands с тем же workspace_id.
+        Два источника, можно комбинировать (хотя бы один обязателен):
+
+            local_path — путь к ЛОКАЛЬНОМУ файлу или папке в файловой системе
+                         агента. Разрешены корни: /sandbox, /app/generated_files.
+                         файл → заливается как есть; папка → пакуется в zip и
+                         распаковывается на фабрике (структура сохраняется).
+
+            image_keys — список image_key (UUID) СГЕНЕРИРОВАННЫХ тобой картинок
+                         из хранилища generated_images. Именно так сгенерированные
+                         через generate_image изображения попадают на УДАЛЁННУЮ
+                         ФАБРИКУ: бинарник картинки лежит в БД (BYTEA), физического
+                         файла у агента нет, поэтому обычным local_path его не
+                         передать. Тул сам достаёт байты из БД и заливает их файлом
+                         в workspace. Используй это, когда нужно вставить
+                         сгенерированную картинку в презентацию/документ, который
+                         собирается python-скриптом на фабрике. image_key берётся
+                         из отчёта generate_image или из find_generated_image.
 
         Аргументы:
-            local_path:   путь к файлу или папке. Разрешены только корни:
-                          /sandbox, /app/generated_files, /tmp
             workspace_id: ID целевого workspace (из create_workspace)
-            dest:         подпапка назначения внутри workspace, напр. "static/js".
-                          Пустая строка — корень workspace.
+            local_path:   опционально — локальный файл/папка (см. выше)
+            image_keys:   опционально — список image_key из generated_images
+            dest:         подпапка назначения внутри workspace, напр. "assets/img".
+                          Пустая строка — корень workspace. Применяется к обоим
+                          источникам.
 
-        Поведение:
-            - файл  → заливается как есть в dest/
-            - папка → пакуется в zip и распаковывается на стороне фабрики в dest/
-                      (структура папки сохраняется)
-
-        Возвращает: {ok, written:[...], count} или {ok:False, error}
+        Возвращает: {ok, workspace_id, dest, uploaded:[...],
+                     images: {image_key: "dest/имя_файла"}, result}
+        Карта images говорит, под каким путём в workspace лежит каждая картинка —
+        именно эти пути подставляй в python-код сборки презентации.
         """
-        # 1. Валидация пути
-        if not _is_under_allowed_root(local_path):
-            return str({
-                "ok": False,
-                "error": f"Путь {local_path} вне разрешённых корней "
-                         f"{ALLOWED_UPLOAD_ROOTS}",
-            })
-        if not os.path.exists(local_path):
-            return str({"ok": False, "error": f"Путь не найден: {local_path}"})
-
-        # 2. Готовим payload: файл как есть или папку → zip
-        is_dir = os.path.isdir(local_path)
-        try:
-            if is_dir:
-                content, upload_name = _zip_directory(local_path)
-                unpack = "true"
+        local_path = (local_path or "").strip() or None
+        # Нормализация image_keys (LLM может прислать строкой/JSON/CSV)
+        keys: list[str] = []
+        if image_keys is not None:
+            if isinstance(image_keys, list):
+                keys = [str(k).strip() for k in image_keys if str(k).strip()]
             else:
-                with open(local_path, "rb") as f:
-                    content = f.read()
-                upload_name = os.path.basename(local_path)
-                unpack = "false"
-        except OSError as e:
-            return str({"ok": False, "error": f"Не удалось прочитать {local_path}: {e}"})
+                s = str(image_keys).strip()
+                if s:
+                    try:
+                        import json as _json
+                        parsed = _json.loads(s)
+                        if isinstance(parsed, list):
+                            keys = [str(k).strip() for k in parsed if str(k).strip()]
+                        else:
+                            keys = [str(parsed).strip()]
+                    except Exception:
+                        keys = [p.strip() for p in s.strip("[]").split(",") if p.strip()]
 
-        if len(content) > MAX_LOCAL_UPLOAD_SIZE:
+        if not local_path and not keys:
             return str({
                 "ok": False,
-                "error": f"Размер {len(content)} байт превышает лимит "
-                         f"{MAX_LOCAL_UPLOAD_SIZE}",
+                "error": "Не указан ни local_path, ни image_keys — нечего заливать.",
             })
 
-        # 3. Отправка multipart на фабрику
-        files = {"files": (upload_name, content, "application/octet-stream")}
-        data = {"dest": dest, "unpack": unpack}
+        # Собираем список payload'ов: (upload_name, bytes, unpack, source_label,
+        # image_key|None)
+        payloads: list[tuple] = []
+
+        # 1) Локальный файл/папка
+        if local_path:
+            if not _is_under_allowed_root(local_path):
+                return str({
+                    "ok": False,
+                    "error": f"Путь {local_path} вне разрешённых корней "
+                             f"{ALLOWED_UPLOAD_ROOTS}",
+                })
+            if not os.path.exists(local_path):
+                return str({"ok": False, "error": f"Путь не найден: {local_path}"})
+            is_dir = os.path.isdir(local_path)
+            try:
+                if is_dir:
+                    content, upload_name = _zip_directory(local_path)
+                    unpack = "true"
+                else:
+                    with open(local_path, "rb") as f:
+                        content = f.read()
+                    upload_name = os.path.basename(local_path)
+                    unpack = "false"
+            except OSError as e:
+                return str({"ok": False, "error": f"Не удалось прочитать {local_path}: {e}"})
+            if len(content) > MAX_LOCAL_UPLOAD_SIZE:
+                return str({
+                    "ok": False,
+                    "error": f"Размер {len(content)} байт превышает лимит "
+                             f"{MAX_LOCAL_UPLOAD_SIZE}",
+                })
+            payloads.append((upload_name, content, unpack, local_path, None))
+
+        # 2) Картинки из generated_images по image_key
+        img_errors: list[str] = []
+        for k in keys:
+            content, upload_name, err = await _fetch_generated_image(agent, k)
+            if err:
+                img_errors.append(f"image_key={k}: {err}")
+                continue
+            if len(content) > MAX_LOCAL_UPLOAD_SIZE:
+                img_errors.append(f"image_key={k}: превышает лимит {MAX_LOCAL_UPLOAD_SIZE} б")
+                continue
+            payloads.append((upload_name, content, "false", f"image_key={k}", k))
+
+        if not payloads:
+            return str({
+                "ok": False,
+                "error": "Ни один источник не удалось подготовить.",
+                "image_errors": img_errors,
+            })
+
+        # 3) Заливаем каждый payload на фабрику (unpack различается для zip/файла,
+        #    поэтому отдельным POST на элемент)
+        uploaded: list[dict] = []
+        images_map: dict[str, str] = {}
+        last_result = None
+        dest_prefix = (dest.rstrip("/") + "/") if dest else ""
         try:
             async with httpx.AsyncClient(timeout=120) as client:
-                resp = await client.post(
-                    f"{SANDBOX_URL}/workspace/{workspace_id}/upload",
-                    files=files,
-                    data=data,
-                )
-                resp.raise_for_status()
-                result = resp.json()
+                for upload_name, content, unpack, label, key in payloads:
+                    files = {"files": (upload_name, content, "application/octet-stream")}
+                    data = {"dest": dest, "unpack": unpack}
+                    resp = await client.post(
+                        f"{SANDBOX_URL}/workspace/{workspace_id}/upload",
+                        files=files,
+                        data=data,
+                    )
+                    resp.raise_for_status()
+                    last_result = resp.json()
+                    ws_path = f"{dest_prefix}{upload_name}" if unpack == "false" else (dest or ".")
+                    uploaded.append({
+                        "source": label,
+                        "name": upload_name,
+                        "kind": "dir" if unpack == "true" else "file",
+                        "path": ws_path,
+                        "bytes": len(content),
+                    })
+                    if key is not None:
+                        images_map[key] = ws_path
+                    log.info(
+                        f"[workspace] Залито {upload_name} ({label}, {len(content)} б) "
+                        f"в {workspace_id}/{dest or '.'}"
+                    )
         except httpx.HTTPStatusError as e:
             return str({
                 "ok": False,
                 "error": f"HTTP {e.response.status_code}: {e.response.text[:300]}",
+                "uploaded_before_error": uploaded,
             })
         except httpx.ConnectError:
             return str({"ok": False, "error": "Sandbox-сервис недоступен."})
         except Exception as e:
             return str({"ok": False, "error": f"{type(e).__name__}: {e}"})
 
-        log.info(
-            f"[workspace] Залито {upload_name} "
-            f"({'папка' if is_dir else 'файл'}, {len(content)} б) "
-            f"в {workspace_id}/{dest or '.'}"
-        )
-        return str({
+        out = {
             "ok": True,
-            "source": local_path,
-            "kind": "dir" if is_dir else "file",
             "workspace_id": workspace_id,
             "dest": dest or ".",
-            "result": result,
-        })
+            "uploaded": uploaded,
+            "count": len(uploaded),
+            "images": images_map,
+            "result": last_result,
+        }
+        if img_errors:
+            out["image_errors"] = img_errors
+        return str(out)
     
     return [
         execute_python_code,

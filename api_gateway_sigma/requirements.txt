@@ -7,3 +7,4 @@ httpx
 dotenv
 starlette==0.52.1
 aiokafka
+python-multipart

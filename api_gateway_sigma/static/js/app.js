@@ -2159,8 +2159,10 @@ class ChatApp {
 
         container.classList.add('rending');
 
+        const profileName = document.querySelector('.profile-name')?.textContent?.trim();
         const username = this.currentUser?.name?.split(' ')[0]
                       || this.currentUser?.username
+                      || profileName
                       || 'друг';
 
         if (!this.currentChat) {

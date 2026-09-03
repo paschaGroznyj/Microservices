@@ -164,8 +164,11 @@ class ToolsPanel {
     if (chatFooter && !chatFooter.querySelector(".tools-trigger-btn")) {
       const btn       = this._makeBtn();
       const attachBtn = chatFooter.querySelector(".attach-btn");
+      const sendBtn   = chatFooter.querySelector(".chat-send-btn");
       if (attachBtn?.nextSibling) {
         chatFooter.insertBefore(btn, attachBtn.nextSibling);
+      } else if (sendBtn) {
+        chatFooter.insertBefore(btn, sendBtn);
       } else {
         chatFooter.appendChild(btn);
       }
@@ -544,10 +547,14 @@ class ModelPickerClass {
     const btn       = this._makeBtn();
     const attachBtn = footer.querySelector(attachSel) ?? footer.querySelector('.attach-btn');
 
+    const sendBtn = footer.querySelector('.chat-send-btn, .start-send-btn');
+
     if (attachBtn?.nextSibling) {
       footer.insertBefore(btn, attachBtn.nextSibling);
     } else if (attachBtn) {
       attachBtn.after(btn);
+    } else if (sendBtn) {
+      footer.insertBefore(btn, sendBtn);
     } else {
       footer.prepend(btn);
     }

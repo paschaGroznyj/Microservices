@@ -282,7 +282,7 @@ async def register_page(request: Request):
     })
 
 
-@app.get("/without-register-page", response_class=RedirectResponse)
+@app.api_route("/without-register-page", methods=["GET", "POST"], response_class=RedirectResponse)
 async def without_register_page(request: Request):
     """Сразу перенаправляем на гостевой вход, форма не нужна"""
     return RedirectResponse(url="/without-register-web", status_code=303)
@@ -808,8 +808,21 @@ async def send_message(request: Request):
     pending_requests[request_id] = data["chat_id"]
 
     data["user_id"] = user["user_id"]
-    data["tb_name"] = request.headers.get("X-Authentik-Username") # Передача табельника в chats_service -> promt Ouroboros
-    data["username"] = request.headers.get("X-Authentik-Name").encode('latin-1').decode('utf-8') # Передача имени в chats_service -> promt Ouroboros
+
+    # Поддерживаем оба режима:
+    # 1) через authentik (заголовки X-Authentik-*)
+    # 2) через встроенную форму логина (JWT-cookie без заголовков)
+    auth_tb_name = request.headers.get("X-Authentik-Username")
+    raw_auth_name = request.headers.get("X-Authentik-Name")
+
+    data["tb_name"] = auth_tb_name or user["username"]
+    if raw_auth_name:
+        try:
+            data["username"] = raw_auth_name.encode("latin-1").decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            data["username"] = raw_auth_name
+    else:
+        data["username"] = user["username"]
     data["type_agent"] = data.get("type_agent", "pm") # О Великий gateway
     data["request_id"] = request_id
     logger.info(f"Что летит при отправке сообщений {data['chat_id']}, {data['message']}")

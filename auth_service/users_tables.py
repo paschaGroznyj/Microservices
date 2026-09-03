@@ -125,11 +125,21 @@ class DataBaseUser:
                 if not user_in_db:
                     return None
 
-                is_valid = await asyncio.to_thread(
-                    bcrypt.checkpw,
-                    password.encode('utf-8'),
-                    user_in_db["password_hash"].encode('utf-8')
-                )
+                stored_hash = user_in_db["password_hash"]
+                # Внешние (authentik) юзеры и любые не-bcrypt значения не имеют
+                # валидного пароля — bcrypt.checkpw на них бросает
+                # ValueError: Invalid salt. Отбиваем это как обычный отказ входа.
+                if not stored_hash or not stored_hash.startswith("$2"):
+                    return None
+
+                try:
+                    is_valid = await asyncio.to_thread(
+                        bcrypt.checkpw,
+                        password.encode('utf-8'),
+                        stored_hash.encode('utf-8')
+                    )
+                except ValueError:
+                    return None
                 if is_valid:
                     if back_user_id == True:
                         user_id = await conn.fetchrow("""
@@ -169,9 +179,31 @@ class DataBaseUser:
     #         logging.error(f"Юзер {username} уже существует (unique violation)")
     #         return None
 
-    async def add_user(self, username: str, password: str = None, source: str = "catchPM"):
+    async def add_user(self, username: str, password: str = None,
+                       source: str = "catchPM", external: bool = False):
+        """
+        Создание пользователя.
+
+        external=False (парольная регистрация через форму логина/регистрации):
+            - хешируем РЕАЛЬНЫЙ пароль (bcrypt), чтобы потом можно было залогиниться;
+            - при занятом username возвращаем None (регистрация под чужим ником
+              и вход в его аккаунт невозможны).
+
+        external=True (authentik, пароля нет):
+            - пишем dummy-хеш (парольный вход по нему невозможен: bcrypt.checkpw
+              на него вернёт False/ошибку, но такой юзер и не логинится паролем);
+            - идемпотентно: при существующем username возвращаем его id
+              (нужно для повторных входов через authentik).
+        """
         DUMMY_PASSWORD_HASH = "EXTERNALLY_AUTHENTICATED_NO_LOGIN_POSSIBLE"
-        
+
+        if external:
+            password_hash = DUMMY_PASSWORD_HASH
+        else:
+            if not password:
+                raise ValueError("Пароль обязателен для парольной регистрации")
+            password_hash = await asyncio.to_thread(self._hash_password, password)
+
         try:
             async with self.pool.acquire() as conn:
                 user_id = await conn.fetchval("""
@@ -179,16 +211,24 @@ class DataBaseUser:
                     VALUES ($1, $2, $3)
                     ON CONFLICT (username) DO NOTHING
                     RETURNING id;
-                """, username, DUMMY_PASSWORD_HASH, source)
+                """, username, password_hash, source)
 
                 if user_id:
-                    logging.info(f"Создан новый пользователь {username} (source={source}) с id={user_id}")
+                    logging.info(f"Создан новый пользователь {username} (source={source}, external={external}) с id={user_id}")
                     return user_id
-                
-                existing_id = await conn.fetchval(
-                    "SELECT id FROM users WHERE username = $1", username
-                )
-                return existing_id
+
+                # username уже занят
+                if external:
+                    # authentik: идемпотентный возврат существующего id
+                    existing_id = await conn.fetchval(
+                        "SELECT id FROM users WHERE username = $1", username
+                    )
+                    logging.info(f"authentik: пользователь {username} уже существует, id={existing_id}")
+                    return existing_id
+
+                # парольная регистрация: НЕ отдаём чужой id
+                logging.warning(f"Регистрация отклонена: username {username} уже занят")
+                return None
 
         except Exception as e:
             logging.error(f"Ошибка при работе с пользователем {username}: {e}")

@@ -21,7 +21,6 @@
     <link rel="stylesheet" href="/static/css/layout.css">
     <link rel="stylesheet" href="/static/css/sidebar.css">
     <link rel="stylesheet" href="/static/css/chat.css">
-    <link rel="stylesheet" href="/static/css/search.css">
     <link rel="stylesheet" href="/static/css/modals.css">
     <link rel="stylesheet" href="/static/css/feedback.css">
     <link rel="stylesheet" href="/static/css/graph.css">
@@ -75,14 +74,6 @@
                         <path d="M5 13.5v1M11 13.5v1" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
                     </svg>
                     Агент
-                </div>
-
-                <div class="nav-item" data-tab="arxiv">
-                    <svg viewBox="0 0 16 16" fill="none">
-                        <rect x="2.5" y="1.5" width="11" height="13" rx="1" stroke="currentColor" stroke-width="1.2"/>
-                        <path d="M5 5.5h6M5 8h4M5 10.5h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-                    </svg>
-                    Статьи
                 </div>
 
                 <div class="nav-item" data-tab="graph">
@@ -181,7 +172,6 @@
                     <!-- TAB PILLS (desktop) -->
                     <div class="tab-pills">
                         <button class="pill active" data-tab="agent">Агент</button>
-                        <button class="pill" data-tab="arxiv">Статьи</button>
                     </div>
                 </div>
             </header>
@@ -208,47 +198,6 @@
                         </div>
                         <pre class="text-preview-body" id="text-preview-body"></pre>
                     </aside>
-                </div>
-
-                <!-- ARXIV VIEW -->
-                <div class="view hidden" id="view-arxiv">
-                    <!-- CENTER STATE -->
-                    <div class="center-state" id="center-state">
-                        <div class="cs-icon">
-                            <div class="search-orbit"></div>
-                            <svg viewBox="0 0 20 20" fill="none">
-                                <circle class="lens" cx="9" cy="9" r="5.5"/>
-                                <path class="handle" d="M13 13L17 17"/>
-                            </svg>
-                        </div>
-                        <div class="cs-title">Поиск статей на arXiv и Scholar</div>
-                        <div class="cs-sub">Введите тему — карточки со статьями появятся прямо здесь</div>
-                        <div class="cs-form">
-                            <input class="cs-input" id="center-input" placeholder="process mining, conformance..."/>
-                            <div class="results-meta hidden" id="results-meta">—</div>
-                            <button class="basket-btn hidden" id="basket-btn">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-                                    <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
-                                </svg>
-                                Избранное
-                                <span class="basket-count" id="basket-count">0</span>
-                            </button>
-                        </div>
-                        <div class="cs-hints">
-                            <span class="hint-chip" data-query="process mining">process mining</span>
-                            <span class="hint-chip" data-query="conformance checking">conformance checking</span>
-                            <span class="hint-chip" data-query="computer vision">computer vision</span>
-                            <span class="hint-chip" data-query="predictive monitoring">predictive monitoring</span>
-                        </div>
-                    </div>
-
-
-                    <!-- RESULTS STATE -->
-                    <div class="results-state hidden" id="results-state">
-                        <div class="cards-wrap" id="cards-wrap">
-                            <div class="cards-grid" id="cards-grid"></div>
-                        </div>
-                    </div>
                 </div>
 
                 <!-- GRAPH VIEW -->
@@ -345,33 +294,6 @@
             <form method="post" action="/logout-web" style="display:inline;">
                 <button type="submit" class="btn btn-danger">Выйти</button>
             </form>
-        </div>
-    </div>
-</div>
-
-<!-- BASKET OVERLAY -->
-<div class="basket-overlay" id="basket-overlay">
-    <div class="basket-panel">
-        <div class="basket-panel-header">
-            <div class="basket-panel-title">
-                <svg viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
-                </svg>
-                Избранные статьи
-            </div>
-            <div style="display:flex;align-items:center;gap:12px">
-                <span class="basket-panel-count" id="basket-panel-count">0 статей</span>
-                <button class="basket-close" id="close-basket">✕</button>
-            </div>
-        </div>
-        <div class="basket-panel-body" id="basket-panel-body">
-            <div class="basket-empty" id="basket-empty">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                    <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
-                </svg>
-                <div class="basket-empty-text">Нажмите ★ на карточке чтобы добавить статью</div>
-            </div>
-            <div class="basket-cards" id="basket-cards"></div>
         </div>
     </div>
 </div>

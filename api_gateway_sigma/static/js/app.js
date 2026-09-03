@@ -6,7 +6,7 @@ class ChatApp {
         this.isUIReady     = false;
         this.ws            = null;
         this.chats         = [];
-        this.currentTab    = 'agent'; // 'agent' | 'arxiv'
+        this.currentTab    = 'agent'; // 'agent' | 'graph'
         this._runState = 'idle';      // idle | running | stopping
         this._activeRequestId = null;
     }
@@ -48,7 +48,7 @@ class ChatApp {
 
 
     /* ══════════════════════════════════════════
-       TAB SWITCHER (agent ↔ arxiv)
+       TAB SWITCHER (agent ↔ graph)
     ══════════════════════════════════════════ */
     initTabSwitcher() {
     document.querySelectorAll('.pill[data-tab], .nav-item[data-tab]').forEach(btn => {
@@ -268,7 +268,7 @@ class ChatApp {
             item.classList.toggle('active', Number(item.dataset.chatId) === chatId);
         });
 
-        // Переключаемся на вкладку агента если были на arxiv
+        // Переключаемся на вкладку агента если были не на ней
         if (this.currentTab !== 'agent') {
             this.switchTab('agent');
 
@@ -280,8 +280,6 @@ class ChatApp {
             this.loadMessages(chatId),
             this.renderMessageInput()
         ]);
-
-        this.connectWebSocket(chatId);
 
         // Если в чате уже есть финальное сообщение от бота — статус не нужен,
         // чистим сохранённое состояние и выходим
@@ -324,12 +322,6 @@ class ChatApp {
     }
 
     startNewChat() {
-        if (this.ws) {
-            this._wsIntentionalClose = true;
-            this.ws.close();
-            this.ws = null;
-        }
-
         this.currentChat = null;
 
         const msgContainer = this.getMessagesContainer();
@@ -341,7 +333,7 @@ class ChatApp {
         document.querySelectorAll('.chat-item').forEach(i => i.classList.remove('active'));
         document.querySelector('.chat-main-inner')?.classList.remove('chat-active');
 
-        // Переключаемся на агента если были на arxiv
+        // Переключаемся на агента если были не на ней
         if (this.currentTab !== 'agent') {
             this.switchTab('agent');
         }
@@ -1247,11 +1239,6 @@ class ChatApp {
             // Сбрасываем интерфейс ТОЛЬКО если удалили именно открытый чат
             if (this.currentChat === chatId) {
                 this.currentChat = null;
-                if (this.ws) {
-                    this._wsIntentionalClose = true;
-                    this.ws.close();
-                    this.ws = null;
-                }
                 const messagesContainer = document.querySelector('.chat-messages');
                 if (messagesContainer) {
                     messagesContainer.innerHTML = ''; 
@@ -1573,211 +1560,9 @@ class ChatApp {
        WEBSOCKET
     ══════════════════════════════════════════ */
     connectWebSocket(chatId) {
-        this._wsIntentionalClose = false;
-        if (this.ws) {
-            // Сбрасываем флаг внутри onclose, а не синхронно — иначе к моменту
-            // срабатывания onclose флаг уже false и запускается лишний reconnect.
-            this._wsIntentionalClose = true;
-            const oldWs = this.ws;
-            const prevOnClose = oldWs.onclose;
-            oldWs.onclose = (e) => {
-                // Сначала выполняем оригинальный onclose (финализация стриминга и т.д.)
-                if (typeof prevOnClose === 'function') prevOnClose.call(oldWs, e);
-                // Только теперь сбрасываем флаг — после того как onclose отработал
-                this._wsIntentionalClose = false;
-            };
-            oldWs.close();
-        }
-
-        this._pendingBotEl    = null;  // текущий элемент ответа бота (стриминг)
-        this._pendingBotText  = '';    // накопленный текст
-
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        this.ws = new WebSocket(`${protocol}//${window.location.host}/ws/chat/${chatId}`);
-
-        // this.ws.onopen = () => console.log(`✅ WS connected chat=${chatId}`);
-
-        this.ws.onmessage = (event) => {
-            const msg = JSON.parse(event.data);
-
-            if (msg.type === 'agent_status') {
-                this.updateStatus(msg.status);
-                // Скелетон генерации: показываем, когда статус — про рисование.
-                const st = (msg.status || '').toLowerCase();
-                if (/генерир|рису|картин|композиц|детал.*свет/.test(st)) {
-                    this._showImageGenSkeleton();
-                }
-                return;
-            }
-            console.log('Сообщение от агента', msg)
-            // Дедупликация: пользовательское сообщение уже показано оптимистично
-            if (!msg.is_from_bot) {
-                // Основной ключ дедупа — message_id (совпадает с клиентским msgId,
-                // который бэк возвращает в эхе). Надёжно для длинного текста-чипа,
-                // где textContent не содержит полного сообщения.
-                if (msg.message_id &&
-                    document.querySelector(`.user-message-wrapper[data-message-id="${msg.message_id}"]`)) {
-                    return;
-                }
-                // Fallback по тексту — для старых сообщений/эх без message_id.
-                const dup = [...document.querySelectorAll('.user-message')].find(el =>
-                    el.textContent?.trim().includes(msg.message?.trim())
-                );
-                if (dup) return;
-                this.addMessage(msg, true, false);
-                return;
-            }
-
-            // Финал стриминга: если уже был живой стриминг (_pendingBotEl),
-            // а пришло целое Kafka-сообщение того же ответа — не создаём новый
-            // пузырь через addMessage, а даём финализировать существующий ниже.
-            // (ветка msg.message при живом _pendingBotEl это уже делает корректно)
-
-            // ── Стриминг ответа бота ──────────────────────────────
-            // msg.chunk  — фрагмент текста (стриминг)
-            // msg.done   — финальный флаг (конец ответа)
-            // msg.message — полный текст (если сервер шлёт сразу целиком)
-
-            const container = this.getMessagesContainer();
-            if (!container) return;
-
-            // ── Управляющие маркеры стриминга (kind без нового текста) ──
-            // reasoning_end: живой блок был размышлением перед тулзой —
-            //                сворачиваем его в приглушённый reasoning-блок.
-            // final_commit:  живой блок оказался финальным ответом —
-            //                фиксируем его основным шрифтом (ждём Kafka done
-            //                для файлов/actions, поэтому тут просто помечаем).
-            if (msg.kind === 'reasoning_end') {
-                // Текущий живой блок был размышлением перед вызовом тулзы —
-                // сливаем его в общий свёрток «Размышления» (не плодим блоки).
-                this._commitReasoningBlock();
-                return;
-            }
-            if (msg.kind === 'final_commit') {
-                // Живой блок оказался финальным ответом — повышаем его стиль
-                // с приглушённого reasoning до основного. Реальная финализация
-                // (файлы, actions) придёт с Kafka-сообщением ниже.
-                this._promoteLiveToFinal();
-                this._streamIsFinal = true;
-                return;
-            }
-
-            if (msg.chunk !== undefined) {
-                // Живой стриминг: чанк ДОПИСЫВАЕМ в буфер, без рендера.
-                // Отрисовкой занимается ровный RAF-цикл (_startStreamLoop).
-                // Печатаем СРАЗУ в приглушённом reasoning-стиле — если шаг
-                // окажется финалом, повысим стиль по маркеру final_commit.
-                if (!this._liveBlockEl) {
-                    // Обёртка ответа бота — создаём один раз на весь ответ.
-                    if (!this._pendingBotEl) {
-                        this._pendingBotEl = document.createElement('div');
-                        this._pendingBotEl.className = 'agent-message';
-                        this._pendingBotEl.dataset.id = msg.id || '';
-                        this._pendingBotEl.style.opacity = '0';
-                        this._pendingBotEl.style.transition = 'opacity 0.25s ease';
-                        container.appendChild(this._pendingBotEl);
-                        requestAnimationFrame(() => requestAnimationFrame(() => {
-                            if (this._pendingBotEl) this._pendingBotEl.style.opacity = '1';
-                        }));
-                        this._botAnswered = true;
-                        // Placeholder НЕ убираем здесь: волна-индикатор должна
-                        // крутиться и во время размышлений. Снос — в _finalizeStream.
-                        this._clearAllStatuses();
-                        this._streamingActive = true;
-                        this._streamIsFinal   = false;
-                    }
-                    // Живой блок печатается в reasoning-стиле (приглушённый,
-                    // курсив) — ПОКА не пришёл маркер final_commit. Если финал
-                    // уже объявлен (_streamIsFinal), создаём блок сразу в
-                    // обычном стиле .live-block, иначе финальные чанки, пришедшие
-                    // после маркера, отрисуются приглушённым reasoning-стилем.
-                    this._liveBlockEl = document.createElement('div');
-                    this._liveBlockEl.className = this._streamIsFinal ? 'live-block' : 'reasoning-live';
-                    this._pendingBotEl.appendChild(this._liveBlockEl);
-                    this._streamBuffer = '';
-                    this._streamShown  = '';
-                    this._streamDone   = false;
-                    this._startStreamLoop();
-                }
-
-                this._streamBuffer += msg.chunk;
-
-            } else if (msg.done || msg.message !== undefined) {
-                // Финал стриминга или целое сообщение.
-                // fullText из Kafka может опережать то, что typewriter уже
-                // напечатал — поэтому докидываем «хвост» в буфер, чтобы цикл
-                // допечатал его плавно, а тяжёлую финализацию (файлы, actions,
-                // подсветка кода) выполняем ПОСЛЕ полного дренажа буфера.
-                const fullText = msg.message ?? this._pendingBotText;
-
-                if (this._pendingBotEl && this._liveBlockEl) {
-                    // Синхронизируем буфер живого (финального) блока с эталонным
-                    // полным текстом. fullText из Kafka — это ТОЛЬКО финальный
-                    // ответ (без reasoning), а живой блок сейчас и есть финал.
-                    const alreadyQueued = (this._streamShown || '') + (this._streamBuffer || '');
-                    if (fullText.startsWith(alreadyQueued)) {
-                        this._streamBuffer += fullText.slice(alreadyQueued.length);
-                    } else if (fullText.length > alreadyQueued.length) {
-                        this._streamBuffer += fullText.slice(alreadyQueued.length);
-                    }
-
-                    this._streamFinalData = {
-                        fullText,
-                        files: msg.files,
-                        message_id: msg.message_id,
-                    };
-                    this._streamDone = true;
-                    this._startStreamLoop();
-                } else {
-                    // Целое сообщение без стриминга — обычный addMessage
-                    this.addMessage({ ...msg, message: fullText }, true, true);
-                    this._botAnswered = true;
-                    this._removeBotPlaceholder();
-                    this._clearAllStatuses();
-                    this._streamingActive = false;
-                    if (this._chatStatuses) delete this._chatStatuses[this.currentChat];
-                    this._onRunFinished();
-                }
-            }
-        };
-
-        this.ws.onerror = (e) => console.warn('WS error:', e);
-
-        this.ws.onclose = (event) => {
-            // Если стриминг оборвался — форсируем финализацию того, что накопили
-            if (this._pendingBotEl) {
-                this._streamDone = true;
-                if (!this._streamFinalData) {
-                    this._streamFinalData = {
-                        fullText: (this._streamShown || '') + (this._streamBuffer || ''),
-                    };
-                }
-                this._finalizeStream();
-            }
-            this._liveBlockEl = null;
-            this._reasoningWrapEl = null;
-            this._removeBotPlaceholder();
-            this._onRunFinished();
-
-            // Автопереподключение:
-            // - только если закрытие не было намеренным (переключение чата / startNewChat)
-            // - только если не нормальное закрытие (code 1000) — сервер сам закрыл штатно
-            const isNormalClose = event.code === 1000;
-            if (this.currentChat && !this._wsIntentionalClose && !isNormalClose) {
-                clearTimeout(this._wsReconnectTimer);
-                this._wsReconnectAttempts = (this._wsReconnectAttempts || 0) + 1;
-                // Exponential backoff: 2s, 4s, 8s, 16s, cap 30s
-                const delay = Math.min(2000 * Math.pow(2, this._wsReconnectAttempts - 1), 30000);
-                this._wsReconnectTimer = setTimeout(() => {
-                    if (this.currentChat && !this._wsIntentionalClose) {
-                        this.connectWebSocket(this.currentChat);
-                    }
-                }, delay);
-            } else {
-                // Штатное закрытие — сбрасываем счётчик попыток
-                this._wsReconnectAttempts = 0;
-            }
-        };
+        // WS отключен: sigma использует polling /api/chats/{chat_id}/messages
+        this.ws = null;
+        return;
     }
 
     /* ══════════════════════════════════════════
@@ -2533,25 +2318,9 @@ class ChatApp {
     _sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
-
-    /** Ждёт пока this.ws перейдёт в OPEN (max 5s) */
+    /** WS отключен в sigma — ожидание не требуется */
     _waitForWS(timeout = 5000) {
-        return new Promise((resolve, reject) => {
-            if (!this.ws) return resolve(); // нет WS — пропускаем
-            if (this.ws.readyState === WebSocket.OPEN) return resolve();
-            const deadline = Date.now() + timeout;
-            const check = () => {
-                if (!this.ws || this.ws.readyState === WebSocket.OPEN) return resolve();
-                // Если WS уже мёртв — нет смысла ждать до таймаута
-                if (this.ws.readyState === WebSocket.CLOSED ||
-                    this.ws.readyState === WebSocket.CLOSING) {
-                    return reject(new Error('WS closed before open'));
-                }
-                if (Date.now() > deadline) return reject(new Error('WS connect timeout'));
-                setTimeout(check, 50);
-            };
-            check();
-        });
+        return Promise.resolve();
     }
 
     _animateStartHeader(container) {
@@ -2826,37 +2595,11 @@ class ChatApp {
         sendBtn.onclick = () => this.sendMessage();
         this._setSendButtonMode(this._runState === "idle" ? "send" : "stop");
     }
-
-
     /* ══════════════════════════════════════════
-       VISIBILITY / ONLINE RECONNECT
+       VISIBILITY / ONLINE RECONNECT (disabled in sigma)
     ══════════════════════════════════════════ */
     initVisibilityReconnect() {
-        // Переподключаемся когда вкладка снова становится активной
-        document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible' && this.currentChat) {
-                const wsAlive = this.ws &&
-                    (this.ws.readyState === WebSocket.OPEN ||
-                     this.ws.readyState === WebSocket.CONNECTING);
-                if (!wsAlive) {
-                    console.log(`[WS] Tab became visible, ws is dead — reconnecting chat=${this.currentChat}`);
-                    this.connectWebSocket(this.currentChat);
-                }
-            }
-        });
-
-        // Переподключаемся при восстановлении сети
-        window.addEventListener('online', () => {
-            if (this.currentChat) {
-                const wsAlive = this.ws &&
-                    (this.ws.readyState === WebSocket.OPEN ||
-                     this.ws.readyState === WebSocket.CONNECTING);
-                if (!wsAlive) {
-                    console.log(`[WS] Network back online — reconnecting chat=${this.currentChat}`);
-                    this.connectWebSocket(this.currentChat);
-                }
-            }
-        });
+        // WS отключен: переподключение не требуется
     }
 
     initChatsSectionToggle() {

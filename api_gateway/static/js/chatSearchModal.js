@@ -158,17 +158,23 @@ function onInput() {
   const q = input.value.trim();
   clearTimeout(debounceTimer);
 
-  // Поднимаем только при найденных чатах (после renderResults).
+  // Поле полностью пустое — только тогда возвращаем модалку в центр.
   if (!q.length) {
-    setLiftPx(0);
-  }
-
-  if (q.length < MIN_CHARS) {
+    currentReqId++; // отменяем висящие ответы
     setLiftPx(0);
     setHint(`Введите минимум ${MIN_CHARS} символа для поиска`);
     return;
   }
-  setHint('Поиск…');
+
+  // Слишком короткий запрос: НЕ трогаем текущее положение и НЕ затираем
+  // список — просто ждём, пока пользователь доберёт символы.
+  // Позицию меняем строго по факту нового результата поиска.
+  if (q.length < MIN_CHARS) {
+    return;
+  }
+
+  // Идёт поиск: список и высота модалки остаются как есть,
+  // renderResults пересчитает положение только когда придут новые данные.
   debounceTimer = setTimeout(() => doSearch(q), DEBOUNCE_MS);
 }
 

@@ -211,23 +211,7 @@ async function sendFeedback(text) {
   } catch(e) { console.error("Ошибка отправки:", e); }
 }
 
-// ── WebSocket — получаем новые отзывы ─────────────────────
-function initFeedbackSocket(username) {
-  // Переиспользуем userSocket если уже есть, иначе отдельный
-  // Здесь слушаем тип feedback_new
-  if (window.userSocket) {
-    const origOnMessage = window.userSocket.onmessage;
-    window.userSocket.onmessage = (event) => {
-      if (origOnMessage) origOnMessage(event);
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === "feedback_new") {
-          onNewFeedback(data.feedback);
-        }
-      } catch {}
-    };
-  }
-}
+// SIGMA: WebSocket-канал удалён, live-обновление отзывов не используется.
 
 function onNewFeedback(fb) {
   counts_feedback++;

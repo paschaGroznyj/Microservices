@@ -893,7 +893,7 @@ async def poll_chat_status(chat_id: int, request: Request):
 async def poll_user_events(request: Request):
     """Опрос пользовательских событий (релевантные статьи, ошибки парсера и т.п.).
 
-    Заменяет старый userSocket. Возвращает и очищает накопленные события:
+    Возвращает и очищает накопленные события:
       {"events": [ {...}, ... ]}
     """
     user = await get_current_user(request)

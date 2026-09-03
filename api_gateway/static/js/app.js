@@ -2343,6 +2343,8 @@ class ChatApp {
             container.innerHTML = `
 <div class="chat-start-screen">
 
+    <div class="start-scrim"></div>
+
     <div class="start-body">
         <div class="start-header">
             <p class="start-greeting">Привет, <span class="username">${this.escapeHtml(username)}</span> 👋</p>
@@ -2441,6 +2443,7 @@ class ChatApp {
 
         if (!this.currentChat) {
             this._animateStartHeader(container);
+            this._revealStartBackground(container);
         }
 
         setTimeout(() => container.classList.remove('rending'), 0);
@@ -2622,6 +2625,32 @@ class ChatApp {
         requestAnimationFrame(() => {
             requestAnimationFrame(() => header.classList.add('animate'));
         });
+    }
+
+    /* ══════════════════════════════════════════
+       Плавное появление фонового изображения старта.
+       Ставит .bg-ready на .chat-start-screen ТОЛЬКО после того,
+       как активная для текущей темы картинка (day/night) реально
+       загружена — чтобы не было резкого "прыжка" необлитого фона.
+    ══════════════════════════════════════════ */
+    _revealStartBackground(container) {
+        const screen = container.querySelector('.chat-start-screen');
+        if (!screen) return;
+
+        const theme = document.documentElement.getAttribute('data-theme') || 'light';
+        const src = theme === 'dark' ? '/static/img/night.jpg' : '/static/img/day.jpg';
+
+        const reveal = () => requestAnimationFrame(() => {
+            requestAnimationFrame(() => screen.classList.add('bg-ready'));
+        });
+
+        const img = new Image();
+        img.onload = reveal;
+        img.onerror = reveal;   // даже если картинка не загрузилась — не блокируем UI
+        img.src = src;
+
+        // Если картинка уже в кеше — onload может не сработать, подстрахуемся
+        if (img.complete) reveal();
     }
 
     /* ══════════════════════════════════════════

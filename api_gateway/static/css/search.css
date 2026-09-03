@@ -648,10 +648,6 @@
   background: rgba(0, 0, 0, .35);
   backdrop-filter: blur(3px);
   -webkit-backdrop-filter: blur(3px);
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding-top: 12vh;
   opacity: 0;
   pointer-events: none;
   transition: opacity .25s ease;
@@ -661,6 +657,9 @@
 .chat-search-overlay.closing { opacity: 0; }
 
 .chat-search-modal {
+  position: fixed;
+  top: 12vh;
+  left: 50%;
   width: min(680px, 92vw);
   max-height: 70vh;
   display: flex;
@@ -670,12 +669,12 @@
   border-radius: var(--radius-lg, 18px);
   box-shadow: var(--shadow-lg);
   overflow: hidden;
-  transform: translateY(-12px) scale(.98);
+  transform: translateX(-50%) translateY(-12px) scale(.98);
   transition: transform .25s ease;
 }
 
 .chat-search-overlay.active .chat-search-modal {
-  transform: translateY(0) scale(1);
+  transform: translateX(-50%) translateY(0) scale(1);
 }
 
 .cse-input-row {

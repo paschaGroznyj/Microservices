@@ -498,9 +498,10 @@
   background: var(--surface);
 }
 
-/* Когда внутри рендерится стартовый экран — контейнер должен покрывать
-   ВСЮ рабочую область .chat-main-inner (а не только нижнюю полосу инпута),
-   иначе фон .chat-start-screen (inset:0) ограничен узкой зоной. */
+/* Когда внутри рендерится стартовый экран — контейнер покрывает
+   всю область .content (inset:0). Чтобы фон уходил ПОД прозрачную
+   шапку .main-header, растягиваем сам стартовый фон вверх (см. ниже
+   .chat-main:has(.chat-start-screen) — фон рисуется на уровне chat-main). */
 .message-input-container:has(.chat-start-screen) {
   border-top: none;
   background: transparent;
@@ -508,6 +509,26 @@
   position: absolute;
   inset: 0;
   z-index: 0;
+}
+
+/* Пока активен стартовый экран — прозрачим промежуточные фоны,
+   чтобы full-bleed фон был виден целиком, а прозрачная шапка
+   реально лежала ПОВЕРХ картинки, а не над пустым var(--bg). */
+.chat-main:has(.chat-start-screen) .content,
+.chat-main:has(.chat-start-screen) #view-agent,
+.chat-main:has(.chat-start-screen) .view {
+  background: transparent;
+}
+
+/* .content обычно overflow:hidden — для стартового экрана разрешаем
+   фону выходить вверх под шапку. */
+.chat-main:has(.chat-start-screen) .content {
+  overflow: visible;
+}
+
+/* Растягиваем фоновый контейнер старта вверх под шапку (54px). */
+.chat-main:has(.chat-start-screen) .message-input-container {
+  top: -54px;
 }
 /* ══════════════════════════════════════════════
    ACTIVE CHAT INPUT  (modern, like start screen)
@@ -917,20 +938,29 @@
   transform: scale(1.05);
 }
 
-/* Подпись внизу */
+/* Подпись внизу — без стекла, в общей палитре.
+   Светлая тема: тёмный текст; тёмная тема: светлый текст.
+   Лёгкая тень для читаемости поверх любого фонового фото. */
 .start-footer-note {
   position: absolute;
   z-index: 2;
   bottom: 14px;
-  padding: 6px 12px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
-  background: color-mix(in srgb, var(--surface) 62%, transparent);
-  backdrop-filter: blur(5px);
-  -webkit-backdrop-filter: blur(5px);
-  font-size: .72rem;
-  color: color-mix(in srgb, var(--text-muted) 84%, #ffffff 16%);
+  padding: 4px 12px;
+  border: none;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  font-size: .74rem;
+  font-weight: 500;
+  letter-spacing: .01em;
+  color: #1a1f2b;
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.55);
   text-align: center;
+}
+
+[data-theme="dark"] .start-footer-note {
+  color: #eef1f6;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
 }
 
 /* ── Мобильный override ───────────────────── */

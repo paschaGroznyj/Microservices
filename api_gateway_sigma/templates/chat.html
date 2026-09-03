@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>CatchPM</title>
+    <link rel="icon" type="image/svg+xml" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none"><rect x="3" y="4" width="10" height="9" rx="2" stroke="%238b4513" stroke-width="1.5"/><circle cx="6" cy="8" r="1" fill="%238b4513"/><circle cx="10" cy="8" r="1" fill="%238b4513"/><path d="M8 4V2" stroke="%238b4513" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="1.5" r="0.5" fill="%238b4513"/><path d="M5 13v1M11 13v1" stroke="%238b4513" stroke-width="1.5" stroke-linecap="round"/></svg>' />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.5/dist/purify.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css" id="hljs-theme-light">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" id="hljs-theme-dark" disabled>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
+    <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+
+    <link rel="stylesheet" href="/static/css/theme.css">
+    <link rel="stylesheet" href="/static/css/layout.css">
+    <link rel="stylesheet" href="/static/css/sidebar.css">
+    <link rel="stylesheet" href="/static/css/chat.css">
+    <link rel="stylesheet" href="/static/css/file-attach.css">
+    <link rel="stylesheet" href="/static/css/modals.css">
+    <link rel="stylesheet" href="/static/css/feedback.css">
+    <link rel="stylesheet" href="/static/css/graph.css">
+    <link rel="stylesheet" href="/static/css/tools-panel.css">
+
+</head>
+<body>
+
+
+
+<div id="chat-app">
+    <div class="chat-layout">
+
+        <!-- ══════════════════════════════
+             SIDEBAR
+        ══════════════════════════════ -->
+        <aside class="sidebar">
+
+            <div class="sidebar-header">
+                <a href="/" class="brand-link" title="CatchPM">
+                    <svg class="brand-icon" viewBox="0 0 20 20" fill="none">
+                        <rect x="3" y="5" width="14" height="12" rx="2.5" stroke="currentColor" stroke-width="1.5"/>
+                        <circle cx="7.5" cy="11" r="1.2" fill="currentColor"/>
+                        <circle cx="12.5" cy="11" r="1.2" fill="currentColor"/>
+                        <path d="M10 5V3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                        <circle cx="10" cy="2.2" r="0.8" fill="currentColor"/>
+                        <path d="M7 17v1.5M13 17v1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    </svg>
+                    <span class="brand-name">CatchPM Sigma</span>
+                </a>
+            </div>
+
+            <div class="sidebar-actions">
+                <button id="new-chat-btn" class="new-chat-btn">
+                    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M10 4V16M4 10H16" stroke-linecap="round"/>
+                    </svg>
+                    <span>Новый чат</span>
+                </button>
+            </div>
+
+            <!-- NAV TABS -->
+            <nav class="sb-nav">
+                <div class="nav-item active" data-tab="agent">
+                    <svg viewBox="0 0 16 16" fill="none">
+                        <rect x="2.5" y="3.5" width="11" height="10" rx="2" stroke="currentColor" stroke-width="1.2"/>
+                        <circle cx="5.5" cy="9" r="1" fill="currentColor"/>
+                        <circle cx="10.5" cy="9" r="1" fill="currentColor"/>
+                        <path d="M8 3.5V2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                        <circle cx="8" cy="1.5" r="0.5" fill="currentColor"/>
+                        <path d="M5 13.5v1M11 13.5v1" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                    </svg>
+                    Агент
+                </div>
+
+<!-- Вкладка "Граф" временно отключена
+                <div class="nav-item" data-tab="graph">
+                    <svg viewBox="0 0 16 16" fill="none">
+                        <circle cx="3.5" cy="8"   r="2" stroke="currentColor" stroke-width="1.2"/>
+                        <circle cx="12.5" cy="4"  r="2" stroke="currentColor" stroke-width="1.2"/>
+                        <circle cx="12.5" cy="12" r="2" stroke="currentColor" stroke-width="1.2"/>
+                        <path d="M5.4 7.1l5.2-2.2M5.4 8.9l5.2 2.2"
+                            stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                    </svg>
+                    Граф
+                </div>
+                -->
+
+
+
+            </nav>
+
+            <!-- CHAT LIST -->
+            <div class="sidebar-section" id="chats-section">
+                <div class="favorites-section" id="favorites-section">
+                    <button class="favorites-header" id="favorites-toggle" aria-expanded="true">
+                        Избранное
+                        <svg class="favorites-chevron" viewBox="0 0 16 16" fill="none">
+                            <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.8"
+                                stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                    <div id="chat-favorites-list" class="chat-list chat-list-favorites">
+                        <div class="chat-item-skeleton">Пока нет избранных</div>
+                    </div>
+                </div>
+                 <button class="section-label" id="chats-section-toggle" aria-expanded="true">
+                    Ваши чаты
+                    <svg class="section-chevron" viewBox="0 0 16 16" fill="none">
+                        <path d="M4 6l4 4 4-4" stroke="#555555" stroke-width="1.8"
+                            stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </button>
+                <div id="chat-list" class="chat-list">
+                    <div class="chat-item-skeleton">Загрузка...</div>
+                </div>
+            </div>
+
+           
+            <!-- PROFILE -->
+            <div class="profile-section">
+                <button class="profile-button" id="profile-btn">
+                    <div class="avatar">{{ user.username[0]|upper }}</div>
+                    <div class="profile-info">
+                        <div class="profile-name">{{ user.username }}</div>
+                    </div>
+                </button>
+            </div>
+
+        </aside>
+
+        <!-- ══════════════════════════════
+             MAIN CONTENT
+        ══════════════════════════════ -->
+        <main class="chat-main">
+
+            <!-- TOPBAR -->
+            <header class="main-header">
+                <button class="mobile-menu-toggle" id="mobile-menu-toggle" aria-label="Меню">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 12h18M3 6h18M3 18h18" stroke-linecap="round"/>
+                    </svg>
+                </button>
+
+                <div class="main-title" id="main-title">Agent Process Mining</div>
+
+                <div class="header-actions">
+                    <!-- <button class="feedback-trigger" id="feedback-trigger" aria-label="Обратная связь" title="Обратная связь">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                        </svg>
+                    </button> -->
+
+                    <button class="info-btn" id="open-help" aria-label="Помощь" title="Руководство">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                            <circle cx="12" cy="12" r="10"/>
+                            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01"/>
+                        </svg>
+                    </button>
+
+                    <!-- THEME TOGGLE — встроен в header-actions -->
+                    <button class="theme-toggle" id="theme-toggle" aria-label="Переключить тему" title="Светлая / Тёмная тема">
+                        <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                            <circle cx="12" cy="12" r="5"/>
+                            <path d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+                        </svg>
+                        <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                        </svg>
+                    </button>
+
+                </div>
+            </header>
+
+            <!-- VIEWS -->
+            <div class="content">
+
+                <!-- AGENT VIEW -->
+                <div class="view" id="view-agent">
+                    <div class="chat-main-inner">
+                        <div class="chat-messages hidden"></div>
+                        <div class="message-input-container"></div>
+                    </div>
+
+                    <!-- ПРАВЫЙ САЙДБАР-ПРЕВЬЮ ДЛИННОГО ТЕКСТА -->
+                    <aside class="text-preview-panel" id="text-preview-panel" aria-hidden="true">
+                        <div class="text-preview-header">
+                            <span class="text-preview-title" id="text-preview-title">Просмотр текста</span>
+                            <button class="text-preview-close" id="text-preview-close" type="button" title="Закрыть" aria-label="Закрыть">
+                                <svg viewBox="0 0 20 20" fill="none" width="18" height="18">
+                                    <path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                                </svg>
+                            </button>
+                        </div>
+                        <pre class="text-preview-body" id="text-preview-body"></pre>
+                    </aside>
+                </div>
+
+                <!-- GRAPH VIEW -->
+                <div class="view hidden" id="view-graph">
+                    <div id="graph-section" style="height:100%;display:flex;flex-direction:column;"></div>
+                </div>
+
+            </div>
+
+            <!-- FEEDBACK PANEL -->
+            <div class="feedback-panel" id="feedback-panel">
+                <div class="fb-header">
+                    <div class="fb-header-left">
+                        <div class="fb-header-icon">
+                            <svg viewBox="0 0 16 16" fill="none">
+                                <path d="M14 10a1.33 1.33 0 0 1-1.33 1.33H4.67L2 14V4a1.33 1.33 0 0 1 1.33-1.33h9.34A1.33 1.33 0 0 1 14 4v6z"
+                                    stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </div>
+                        <div class="fb-title">Обратная связь</div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:8px">
+                        <span class="fb-count" id="fb-count">0 отзывов</span>
+                        <button class="fb-close" id="fb-close">✕</button>
+                    </div>
+                </div>
+                <div class="fb-feed" id="fb-feed">
+                    <div class="fb-empty" id="fb-empty">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                        </svg>
+                        Пока нет отзывов
+                    </div>
+                </div>
+                <div class="fb-form">
+                    <div class="fb-controls-row" id="fb-controls-row">
+                        <div class="fb-divider" id="fb-divider"></div>
+                        <div class="fb-style-wrap">
+                            <button class="fb-style-pill" id="fb-style-pill" disabled>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                                <span id="fb-style-label">✨ Обычный</span>
+                            </button>
+                            <div class="fb-style-dropdown" id="fb-style-dropdown"></div>
+                        </div>
+                    </div>
+                    <div class="fb-input-row">
+                        <button class="fb-agent-toggle" id="fb-agent-btn" title="Режим стилизации">
+                            <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
+                                <rect x="3" y="4" width="10" height="9" rx="2" stroke="currentColor" stroke-width="1.5"/>
+                                <circle cx="6" cy="8" r="1" fill="currentColor"/>
+                                <circle cx="10" cy="8" r="1" fill="currentColor"/>
+                                <path d="M8 4V2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                <circle cx="8" cy="1.5" r="0.5" fill="currentColor"/>
+                                <path d="M5 13v1M11 13v1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                            </svg>
+                        </button>
+                        <textarea class="fb-textarea" id="fb-input" placeholder="Напишите ваш отзыв..." rows="1"></textarea>
+                        <button class="fb-send" id="fb-send" disabled>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 5v14M5 12l7-7 7 7" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+</div>
+
+<!-- ══════════════════════════════════════
+     MODALS & OVERLAYS
+══════════════════════════════════════ -->
+
+<!-- LOGOUT MODAL -->
+<div class="modal-overlay" id="logout-modal" hidden>
+    <div class="modal-card">
+        <div class="modal-header">
+            <h3>Подтверждение выхода</h3>
+            <button class="modal-close" id="modal-close" type="button">
+                <svg width="18" height="18" viewBox="0 0 24 24">
+                    <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+            </button>
+        </div>
+        <div class="modal-body">
+            <p>Вы действительно хотите выйти из аккаунта <strong>{{ user.username }}</strong>?</p>
+            <p class="modal-hint">Сессия будет завершена.</p>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" id="modal-cancel" type="button">Отмена</button>
+            <form method="post" action="/logout-web" style="display:inline;">
+                <button type="submit" class="btn btn-danger">Выйти</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+
+<!-- PROFILE OVERLAY -->
+<div class="profile-overlay" id="profile-overlay" role="dialog" aria-modal="true">
+    <div class="profile-panel" id="profile-panel">
+        <div class="profile-header">
+            <div class="profile-header-left">
+                <div class="profile-header-icon">
+                    <svg viewBox="0 0 16 16" fill="none">
+                        <circle cx="8" cy="5.5" r="2.5" stroke="currentColor" stroke-width="1.3"/>
+                        <path d="M2.5 13.5c0-2.76 2.46-5 5.5-5s5.5 2.24 5.5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                    </svg>
+                </div>
+                <div>
+                    <div class="profile-title">Профиль</div>
+                    <div class="profile-subtitle" id="modal-subtitle">Загружается...</div>
+                </div>
+            </div>
+            <button class="profile-close" id="profile-close" aria-label="Закрыть">✕</button>
+        </div>
+        <div class="profile-body">
+            <div class="profile-hero">
+                <div class="avatar-lg" id="modal-avatar">A<div class="avatar-badge"></div></div>
+                <div class="hero-info">
+                    <div class="hero-username" id="modal-username">username</div>
+                    <div class="hero-name" id="modal-name">Имя Фамилия</div>
+                    <div class="hero-meta">
+                        <span class="joined-badge" id="modal-joined">с янв 2024</span>
+                    </div>
+                </div>
+            </div>
+            <div>
+                <div class="section-label">Статистика</div>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-chats">—</div>
+                        <div class="stat-label">Запросов к ассистенту</div>
+                        <div class="stat-sub">за всё время</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-search">—</div>
+                        <div class="stat-label">Поисков статей</div>
+                        <div class="stat-sub">arXiv + Scholar</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-saved">—</div>
+                        <div class="stat-label">В избранном</div>
+                        <div class="stat-sub">статей сохранено</div>
+                    </div>
+                </div>
+            </div>
+            <!-- <div>
+                <div class="section-label">Активность</div>
+                <div class="activity-bar">
+                    <div class="bar-list"></div>
+                </div>
+            </div> -->
+            <div>
+                <div class="section-label">API Scholar</div>
+                <div class="token-section">
+                    <div class="token-header">
+                        <span class="token-title">api.scrapingdog.com</span>
+                        <span class="token-status" id="token-status">
+                            <span class="token-dot inactive" id="token-dot"></span>
+                            <span id="token-status-text">не установлен</span>
+                        </span>
+                    </div>
+                    <div class="token-row">
+                        <input class="token-input" type="password" id="token-input"
+                            placeholder="xxxxxxxxxxxxxxxxxxxx" maxlength="50" autocomplete="off"/>
+                        <button class="token-save" id="token-save-btn">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <path d="M5 13l4 4L19 7"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="token-hint">Токен хранится локально, не передаётся на сервер без запроса.</div>
+                </div>
+            </div>
+        </div>
+        <div class="profile-footer">
+            <button class="logout-btn" id="logout-btn">
+                <svg viewBox="0 0 16 16" fill="none">
+                    <path d="M6 14H3a1 1 0 01-1-1V3a1 1 0 011-1h3M10 11l3-3-3-3M13 8H6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                Выйти из приложения
+            </button>
+            <span class="version-tag">v1.5.0</span>
+        </div>
+    </div>
+</div>
+
+<div class="toast-token" id="toast-token"></div>
+<div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+<!-- ══════════════════════════════════════════
+     HELP PAGE — полноэкранная инструкция
+     Открывается по #open-help, закрывается крестиком / Escape
+     Тема синхронизируется через data-theme на <html>
+══════════════════════════════════════════ -->
+<div class="help-page" id="help-overlay" role="dialog" aria-modal="true" aria-label="Руководство по CatchPM" hidden>
+
+    <!-- Кнопка закрыть — поверх всего контента -->
+    <button class="help-close" id="help-close" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" fill="none">
+            <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+    </button>
+
+    <!-- Скроллируемый контент -->
+    <div class="help-scroll">
+
+        <!-- HEADER -->
+        <header class="hi-header">
+            <div class="hi-header-left">
+                <div class="hi-eyebrow">Агентная платформа · Process Mining</div>
+                <h1 class="hi-title">Catch<em>PM</em></h1>
+                <p class="hi-header-desc">
+                    Интеллектуальная система управления знаниями на базе больших языковых моделей.
+                    Автоматизирует сбор, анализ и синтез научной литературы по Process Mining —
+                    от парсинга источников до отправки дайджестов.
+                </p>
+            </div>
+            <div class="hi-header-right">
+                <div class="hi-status-badge">
+                    <div class="hi-status-dot"></div>
+                    В эксплуатации
+                </div>
+                <a href="https://catchpm.uva-advanced.ru/" class="hi-link" target="_blank">catchpm.uva-advanced.ru ↗</a>
+                <a href="https://gitverse.ru/pascha_groznyj/Microservices" class="hi-link" target="_blank">Gitverse · исходный код ↗</a>
+            </div>
+        </header>
+
+        <!-- Разделитель-градиент -->
+        <!-- <div class="hi-rule"></div> -->
+
+        <!-- MAIN -->
+        <main class="hi-main">
+
+            <!-- Meta -->
+            <div class="hi-meta">
+                <span class="hi-meta-item">Cloud.ru · Российский контур</span>
+                <div class="hi-meta-sep"></div>
+                <span class="hi-meta-item">PostgreSQL + pgvector</span>
+                <div class="hi-meta-sep"></div>
+                <span class="hi-meta-item">LLM: claude-sonnet-4-6</span>
+                <div class="hi-meta-sep"></div>
+                <!-- <span class="hi-meta-item">Разработчик: Павел Солдаткин</span> -->
+            </div>
+
+            <!-- TWO COLUMNS -->
+            <div class="hi-columns">
+
+                <!-- LEFT -->
+                <div class="hi-col">
+
+                    <div class="hi-section">
+                        <h2 class="hi-h2">Что такое CatchPM</h2>
+                        <p class="hi-p">
+                            CatchPM — агентная система, работающая поверх базы данных PostgreSQL с векторным расширением pgvector. Агент понимает естественный язык, самостоятельно выбирает инструменты и выполняет многошаговые задачи: от поиска по смыслу запроса до формирования структурированных отчётов.
+                        </p>
+                        <p class="hi-p">
+                            Система ориентирована на центр компетенций Process Mining: автоматически отслеживает новые публикации, оценивает их релевантность, генерирует ревью и собирает тематические дайджесты для рассылки команде.
+                        </p>
+                        <div class="hi-pull-quote">
+                            <p>«Аналог LLM Wiki по Карпати — живая база знаний на SQL, которая растёт и синтезирует информацию по мере работы с ней.»</p>
+                        </div>
+                    </div>
+
+                    <div class="hi-section">
+                        <h2 class="hi-h2">Ключевые возможности</h2>
+
+                        <h3 class="hi-h3">Работа с базой данных</h3>
+                        <p class="hi-p">Агент напрямую обращается к PostgreSQL: выполняет SELECT/INSERT/UPDATE, строит аналитику по корпусу статей, отслеживает историю изменений через audit-лог. Векторный поиск pgvector обеспечивает семантический поиск по всему корпусу знаний.</p>
+
+                        <h3 class="hi-h3">Автоматизация парсеров</h3>
+                        <p class="hi-p">По запросу на естественном языке система собирает и запускает парсер нужного источника: научные архивы, новостные ленты, корпоративные порталы. Готовые скрипты сохраняются в библиотеку кода и переиспользуются без повторной генерации.</p>
+
+                        <h3 class="hi-h3">Генерация документов</h3>
+                        <p class="hi-p">Из песочницы — Excel, PDF, PPTX, PNG-дашборды, HTML-страницы. Всё создаётся программно на Python, без сторонних SaaS. Результат — готовый файл, который сразу отправляется пользователю.</p>
+                    </div>
+
+                </div>
+
+                <!-- RIGHT -->
+                <div class="hi-col">
+
+                    <div class="hi-section">
+                        <h2 class="hi-h2">Функциональность</h2>
+                        <div class="hi-cap-grid">
+                            <div class="hi-cap-item"><strong>Семантический поиск</strong>Поиск статей и знаний по смыслу запроса через pgvector</div>
+                            <div class="hi-cap-item"><strong>Ревью статей</strong>Автоматическая генерация аналитических рецензий по PDF</div>
+                            <div class="hi-cap-item"><strong>Дайджесты</strong>Сборка тематических подборок и рассылка на email</div>
+                            <div class="hi-cap-item"><strong>Библиотека кода</strong>BM25-поиск и переиспользование готовых скриптов</div>
+                            <div class="hi-cap-item"><strong>Бортовой журнал</strong>Долгосрочная память агента с компрессией сессий</div>
+                            <div class="hi-cap-item"><strong>SQL-Wiki</strong>Синтез знаний в тематические страницы поверх корпуса</div>
+                        </div>
+                    </div>
+
+                    <div class="hi-section">
+                        <h2 class="hi-h2">Технический стек</h2>
+                        <table class="hi-stack-table">
+                            <tr><td>Контур</td><td>Cloud.ru (российская инфраструктура)</td></tr>
+                            <tr><td>База данных</td><td>PostgreSQL + pgvector</td></tr>
+                            <tr><td>LLM</td><td>claude-sonnet-4-6 via Cloud.ru API</td></tr>
+                            <tr><td>Эмбеддинги</td><td>BAAI/bge-m3</td></tr>
+                            <tr><td>Фреймворк</td><td>LangChain · Python 3.10</td></tr>
+                            <tr><td>Интерфейс</td><td>Web UI</td></tr>
+                            <tr><td>Репозиторий</td><td>Gitverse (Microservices)</td></tr>
+                        </table>
+                    </div>
+
+                    <!-- <div class="hi-section">
+                        <h2 class="hi-h2">Как начать работу</h2>
+                        <div class="hi-steps">
+                            <div class="hi-step">
+                                <div class="hi-step-num">1</div>
+                                <div class="hi-step-text">Получить доступ к контуру Cloud.ru у администратора системы</div>
+                            </div>
+                            <div class="hi-step">
+                                <div class="hi-step-num">2</div>
+                                <div class="hi-step-text">Перейти по адресу <strong>catchpm.uva-advanced.ru</strong> и пройти аутентификацию</div>
+                            </div>
+                            <div class="hi-step">
+                                <div class="hi-step-num">3</div>
+                                <div class="hi-step-text">Искать статьи, формировать дайджесты, задавать вопросы базе знаний в Telegram или Web-интерфейсе</div>
+                            </div>
+                        </div>
+                    </div> -->
+
+                </div>
+            </div>
+
+        </main>
+
+        <!-- FOOTER -->
+        <footer class="hi-footer">
+            <div class="hi-footer-brand">CatchPM</div>
+            <div class="hi-footer-links">
+                <a href="https://catchpm.uva-advanced.ru/" target="_blank">Web UI</a>
+                <a href="https://gitverse.ru/pascha_groznyj/Microservices" target="_blank">Gitverse</a>
+                <a href="https://cloud.ru" target="_blank">Cloud.ru</a>
+            </div>
+            <div class="hi-footer-copy">© 2026 · Команда ЦК PM</div>
+        </footer>
+
+    </div><!-- /help-scroll -->
+</div><!-- /help-page -->
+
+<!-- SCRIPTS -->
+<script src="/static/js/theme.js"></script>
+<script src="/static/js/modalWindow.js"></script>
+<script src="/static/js/mobile.js"></script>
+<script src="/static/js/mode_modal_info.js"></script>
+<script src="/static/js/profileModal.js"></script>
+<script src="/static/js/graph.js"></script>
+<!-- <script src="/static/js/feedback_button.js"></script> -->
+<script type="module" src="/static/js/tools-panel.js"></script>
+<script type="module" src="/static/js/app.js"></script>
+
+</body>
+</html>

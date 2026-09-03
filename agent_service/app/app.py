@@ -34,6 +34,24 @@ import websockets
 from agent_pm.core.botocore_client import database
 logging.basicConfig(level=logging.INFO)
 
+
+class _DropInternalBotStreamLogs(logging.Filter):
+    """Suppress noisy httpx per-chunk logs for /internal/bot_stream only."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return True
+        if "HTTP Request:" in msg and "/internal/bot_stream" in msg:
+            return False
+        return True
+
+
+_httpx_filter = _DropInternalBotStreamLogs()
+logging.getLogger("httpx").addFilter(_httpx_filter)
+logging.getLogger("httpcore").addFilter(_httpx_filter)
+
 db = AgentDB()
 pending_files: dict[str, dict] = {}
 
@@ -333,6 +351,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     message_id = payload.get("message_id")
     has_files = payload.get("has_files", False)
     agent_model = payload.get("agent_model")
+    gateway_target = payload.get("gateway_target", "main")
 
 
     if is_from_bot or user_id == -1:
@@ -368,7 +387,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                                             context_size=context_size,
                                             source="CatchPM",
                                             agent_model=agent_model,
-                                            images=images)
+                                            images=images,
+                                            gateway_target=gateway_target)
 
         response_text = response["message"]
         # from datetime import datetime
@@ -439,7 +459,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             "attached_files": attached_files,
             "tool_trace": response.get("tool_trace"), # str,
             "agent_model": response.get("agent_model"),
-            "tokens_usage": response.get("tokens_usage")
+            "tokens_usage": response.get("tokens_usage"),
+            "gateway_target": gateway_target
         }
 
         await prod.send_and_wait("chat-messages", value=bot_message)
@@ -456,7 +477,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                 "message_id": f"msg-stop-{int(time.time() * 1000)}",
                 "is_from_bot": True,
                 "type_agent": "pm",
-                "action": "stopped"
+                "action": "stopped",
+                "gateway_target": gateway_target
             }
             await prod.send_and_wait("chat-messages", value=stop_message)
         except Exception as send_err:
@@ -473,7 +495,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                 "message_id": f"msg-err-{int(time.time() * 1000)}",
                 "is_from_bot": True,
                 "type_agent": "pm",
-                "action": "error"
+                "action": "error",
+                "gateway_target": gateway_target
             }
             await prod.send_and_wait("chat-messages", value=err_message)
         except Exception as send_err:
@@ -1036,6 +1059,74 @@ async def internal_get_graph():
 async def health():
     status = "ok" if consumer_alive else "error"
     return {"service": "llm-bot", "status": status}
+
+
+# ── Доступность LLM-провайдеров ────────────────────────────────────
+# Модели тоггла (coder/designer/universal) физически ходят в разные
+# провайдеры через один шлюз cloud.ru. Фронт (ModelPicker) показывает
+# бейдж доступности, чтобы юзер понимал: если модель не отвечает — это
+# провайдер лёг, а не агент завис. Пингуем каждую модель минимальным
+# chat-запросом (1 токен), результат кешируем на _PROVIDERS_TTL сек,
+# чтобы не долбить шлюз на каждый polling фронта.
+from agent_pm.core.agent_provider import (
+    get_llm_model_gpt, get_llm_model_claude, get_llm_model_gemini,
+)
+
+_PROVIDERS_TTL = 30.0  # сек — как часто реально перепроверяем провайдеров
+_providers_cache: dict = {"ts": 0.0, "data": None}
+_providers_lock = asyncio.Lock()
+
+# id модели в UI -> человекочитаемое имя + фабрика llm
+_PROVIDER_MODELS = {
+    "coder":     ("openai/gpt-5.3-codex",           get_llm_model_gpt),
+    "designer":  ("anthropic/claude-opus-4.8",      get_llm_model_claude),
+    "universal": ("google/gemini-3.1-pro-preview",  get_llm_model_gemini),
+}
+
+
+async def _ping_provider(model_id: str, model_name: str, factory) -> dict:
+    """Минимальный вызов модели. up=True если провайдер ответил без ошибки."""
+    try:
+        llm = factory()
+        # 1 токен, короткий таймаут — нам важен только факт живости
+        await asyncio.wait_for(
+            llm.ainvoke(
+                [HumanMessage(content="ping")],
+                max_tokens=1,
+            ),
+            timeout=8.0,
+        )
+        return {"id": model_id, "name": model_name, "up": True}
+    except asyncio.TimeoutError:
+        return {"id": model_id, "name": model_name, "up": False, "reason": "timeout"}
+    except Exception as e:
+        return {"id": model_id, "name": model_name, "up": False, "reason": str(e)[:120]}
+
+
+@app.get("/internal/providers_status")
+async def internal_providers_status():
+    """Доступность провайдеров под каждой моделью тоггла.
+
+    Отдаёт {"providers": {model_id: {up: bool, name, reason?}}, "cached_at": ts}.
+    Результат кешируется на _PROVIDERS_TTL сек (двойная проверка под локом,
+    чтобы параллельные polling-запросы не порождали пачку пингов)."""
+    now = time.time()
+    if _providers_cache["data"] and (now - _providers_cache["ts"]) < _PROVIDERS_TTL:
+        return {"providers": _providers_cache["data"], "cached_at": _providers_cache["ts"]}
+
+    async with _providers_lock:
+        now = time.time()
+        if _providers_cache["data"] and (now - _providers_cache["ts"]) < _PROVIDERS_TTL:
+            return {"providers": _providers_cache["data"], "cached_at": _providers_cache["ts"]}
+
+        results = await asyncio.gather(*[
+            _ping_provider(mid, name, factory)
+            for mid, (name, factory) in _PROVIDER_MODELS.items()
+        ])
+        providers = {r["id"]: r for r in results}
+        _providers_cache["data"] = providers
+        _providers_cache["ts"] = time.time()
+        return {"providers": providers, "cached_at": _providers_cache["ts"]}
 
 class SearchIntent(BaseModel):
     is_search: bool = Field(

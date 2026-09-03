@@ -21,7 +21,7 @@ get_llm_lite_model_gpt_mini, get_llm_lite_model_gemini_flash)
 from .core.botocore_client import OBSWorker
 from .core.config import (
     ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH,
-    METADATA_FILE, PORT_GATEWAY_PORT, ADMINS_INFO,
+    METADATA_FILE, PORT_GATEWAY_PORT, PORT_GATEWAY_SIGMA_PORT, ADMINS_INFO,
     PORT_PARSERS_SERVICE
 )
 from .core.settings import TOOLS_SETTINGS, UNIVERSAL_TOOLS
@@ -43,6 +43,7 @@ from .tools.journal.tool_agent_journal import make_journal_tool
 import hashlib
 
 GATEWAY_URL = f"http://api_gateway:{PORT_GATEWAY_PORT}"
+GATEWAY_SIGMA_URL = f"http://api_gateway_sigma:{PORT_GATEWAY_SIGMA_PORT}"
 
 logger = logging.getLogger(__name__)
 
@@ -1592,13 +1593,19 @@ class KnowledgeAgent:
         if self._http_client and not self._http_client.is_closed:
             await self._http_client.aclose()
 
+    def _resolve_gateway_url(self) -> str:
+        target = (getattr(self, "_gateway_target", "main") or "main").lower()
+        if target == "sigma":
+            return GATEWAY_SIGMA_URL
+        return GATEWAY_URL
+
     async def _send_status(self, status: str, request_id: str) -> None:
         if not request_id:
             return
         try:
             client = await self._get_http_client()
             await client.post(
-                f"{GATEWAY_URL}/internal/bot_status",
+                f"{self._resolve_gateway_url()}/internal/bot_status",
                 json={"request_id": request_id, "status": status},
                 timeout=2,
             )
@@ -1626,13 +1633,15 @@ class KnowledgeAgent:
         Стриминг не должен ронять ответ — все ошибки глушим в debug."""
         if not request_id:
             return
+        if (getattr(self, "_gateway_target", "main") or "main").lower() == "sigma":
+            return
         # Для управляющих маркеров пустой chunk допустим
         if not chunk and kind not in ("reasoning_end", "final_commit"):
             return
         try:
             client = await self._get_http_client()
             await client.post(
-                f"{GATEWAY_URL}/internal/bot_stream",
+                f"{self._resolve_gateway_url()}/internal/bot_stream",
                 json={
                     "request_id": request_id,
                     "chunk": chunk,
@@ -1661,6 +1670,7 @@ class KnowledgeAgent:
         selected_tools=None,
         context_size=None,
         images=None,
+        gateway_target: str = "main",
     ) -> Dict[str, Any]:
         if not self.db:
             self.db = database
@@ -1669,6 +1679,7 @@ class KnowledgeAgent:
         # размышлений модели (живой reasoning-стрим), а не служебный индикатор.
         # await self._send_status(get_thinking_status(), request_id)
         self.current_request_id = request_id
+        self._gateway_target = gateway_target or "main"
         # Контекст текущего хода — нужен generate_image, чтобы записать
         # сгенерированную картинку в БД с привязкой к чату/пользователю.
         self.current_chat_id = chat_id

@@ -23,6 +23,44 @@ router = APIRouter(prefix='/auth', tags=['Auth'])
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
+# Ограничения длины логина/пароля.
+# USERNAME_MAX=50 жёстко завязан на схему БД: users.username VARCHAR(50).
+# Ввод длиннее упирался в Postgres (value too long) -> 500; теперь режем
+# на уровне приложения и отдаём аккуратный 400.
+# PASSWORD_MAX=72 — предел bcrypt: всё после 72 байт тихо игнорируется,
+# поэтому длиннее принимать нельзя (иначе часть пароля не проверяется).
+USERNAME_MIN = 3
+USERNAME_MAX = 50
+PASSWORD_MIN = 6
+PASSWORD_MAX = 72
+
+
+def validate_credentials(username: str, password: str, *, check_password: bool = True):
+    """Проверка длины логина/пароля. Кидает HTTPException 400 при нарушении.
+
+    check_password=False — для логина (не навязываем правила длины старым
+    паролям, проверяем только логин, чтобы длинный username не ронял БД).
+    """
+    uname = (username or "").strip()
+    if not (USERNAME_MIN <= len(uname) <= USERNAME_MAX):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Логин должен быть от {USERNAME_MIN} до {USERNAME_MAX} символов"
+        )
+    if check_password:
+        # bcrypt считает в байтах — проверяем длину в байтах UTF-8.
+        pwd_bytes = len((password or "").encode("utf-8"))
+        if pwd_bytes < PASSWORD_MIN:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Пароль должен быть не короче {PASSWORD_MIN} символов"
+            )
+        if pwd_bytes > PASSWORD_MAX:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Пароль должен быть не длиннее {PASSWORD_MAX} символов"
+            )
+
 SERVICES = {
     "agent_service": {
         "url": f"http://agent_service:{PORT_PM_AGENT}",
@@ -98,6 +136,7 @@ async def get_current_user(token: str = Depends(get_token)):
 
 @app.post("/register")
 async def register(form_data: OAuth2PasswordRequestForm = Depends()):
+    validate_credentials(form_data.username, form_data.password)
     user_id = await db.add_user(form_data.username, form_data.password)
     if user_id:
         return {"msg": f"Пользователь {form_data.username} зарегистрирован", "user_id": user_id}
@@ -106,6 +145,9 @@ async def register(form_data: OAuth2PasswordRequestForm = Depends()):
 
 @app.post("/login")
 async def login(response: Response, form_data: OAuth2PasswordRequestForm = Depends()):
+    # На логине проверяем только длину логина (чтобы >50 символов не упёрлись
+    # в VARCHAR(50) и не дали 500). Правила длины пароля на логин не навязываем.
+    validate_credentials(form_data.username, form_data.password, check_password=False)
     # Проверка пользователя
     user_id = await db.check_user_password(form_data.username, form_data.password, back_user_id=True)
     if not user_id:
@@ -141,17 +183,18 @@ async def guest_login(response: Response):
 @app.post("/authentik")
 async def guest_login(request: Request):
     """Вход через никнейм authentik"""
-    import uuid
     data = await request.json()
-    password = str(uuid.uuid4()) # Рандом пароль, все равно проверка по нику, просто добавляем пользователя в БД
     logging.info(f"Прилетел username: {data['username']}")
-    user_id = await db.add_user(data["username"], password)
+    # Внешняя аутентификация: пароля нет, пишем dummy-хеш.
+    # Идемпотентно — при повторном входе вернётся id существующего юзера.
+    user_id = await db.add_user(data["username"], external=True, source="authentik")
     return {"user_id": user_id}
     
 
 @app.post("/register-and-login")
 async def register_and_login(response: Response, form_data: OAuth2PasswordRequestForm = Depends()):
     """Регистрация + автоматический логин (оптимизированный обработчик)"""
+    validate_credentials(form_data.username, form_data.password)
     user_id = await db.add_user(form_data.username, form_data.password)
     if not user_id:
         raise HTTPException(status_code=400, detail="Пользователь уже существует")

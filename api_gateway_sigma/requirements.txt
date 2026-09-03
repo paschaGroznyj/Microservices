@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+jinja2
+python-jose[cryptography]
+pydantic
+httpx
+dotenv
+starlette==0.52.1
+aiokafka
+python-multipart

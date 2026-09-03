@@ -1,0 +1,226 @@
+/* ═══════════════════════════════════════════════
+   CATCHPM — AUTH PAGES (login / register)
+   Единый стиль с theme.css (переменные оттуда)
+════════════════════════════════════════════════ */
+
+.auth-page {
+  min-height: 100dvh;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background:
+    radial-gradient(1200px 600px at 100% -10%, rgba(139,69,19,.08), transparent 60%),
+    radial-gradient(900px 500px at -10% 110%, rgba(74,124,89,.07), transparent 60%),
+    var(--bg);
+  overflow-y: auto;
+}
+
+/* ── КАРТОЧКА ─────────────────────────────────── */
+.auth-card {
+  width: 100%;
+  max-width: 400px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 40px 36px 32px;
+  animation: auth-in .35s ease both;
+}
+
+@keyframes auth-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── ШАПКА ────────────────────────────────────── */
+.auth-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 26px;
+}
+
+.auth-logo {
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+}
+.auth-logo svg { width: 30px; height: 30px; }
+
+.auth-title {
+  font-family: var(--font-serif);
+  font-size: 1.55rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: .2px;
+}
+
+.auth-subtitle {
+  font-size: .875rem;
+  color: var(--text-secondary);
+  text-align: center;
+  line-height: 1.5;
+}
+
+/* ── ФОРМА ────────────────────────────────────── */
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.auth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.auth-label {
+  font-size: .8rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  padding-left: 2px;
+}
+
+.auth-input {
+  width: 100%;
+  padding: 12px 14px;
+  font-size: .95rem;
+  color: var(--text-primary);
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-md);
+  outline: none;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.auth-input::placeholder { color: var(--text-muted); }
+.auth-input:focus {
+  border-color: var(--input-focus);
+  box-shadow: 0 0 0 3px rgba(139,69,19,.12);
+}
+
+/* поле с кнопкой показать пароль */
+.auth-input-wrap { position: relative; }
+.auth-input-wrap .auth-input { padding-right: 42px; }
+.auth-eye {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: var(--text-muted);
+  transition: color var(--transition), background var(--transition);
+}
+.auth-eye:hover { color: var(--accent); background: var(--surface2); }
+.auth-eye svg { width: 18px; height: 18px; }
+.auth-eye .eye-off { display: none; }
+.auth-eye.is-visible .eye-on  { display: none; }
+.auth-eye.is-visible .eye-off { display: block; }
+
+/* ── КНОПКИ ───────────────────────────────────── */
+.auth-btn {
+  width: 100%;
+  padding: 12px 16px;
+  font-size: .95rem;
+  font-weight: 600;
+  border-radius: var(--radius-md);
+  transition: background var(--transition), transform var(--transition), box-shadow var(--transition);
+}
+.auth-btn-primary {
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-text);
+  box-shadow: var(--shadow-sm);
+}
+.auth-btn-primary:hover {
+  background: var(--btn-primary-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+.auth-btn-primary:active { transform: translateY(0); }
+
+.auth-btn-ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+}
+.auth-btn-ghost:hover {
+  background: var(--surface2);
+  color: var(--accent);
+  border-color: var(--accent-muted);
+}
+
+/* ── РАЗДЕЛИТЕЛЬ ──────────────────────────────── */
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0 16px;
+  color: var(--text-muted);
+  font-size: .78rem;
+}
+.auth-divider::before,
+.auth-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* ── ФУТЕР КАРТОЧКИ (ссылка на другую страницу) ─ */
+.auth-foot {
+  margin-top: 20px;
+  text-align: center;
+  font-size: .875rem;
+  color: var(--text-secondary);
+}
+.auth-foot a {
+  color: var(--accent);
+  font-weight: 600;
+}
+.auth-foot a:hover { text-decoration: underline; }
+
+/* ── СООБЩЕНИЯ (ошибка / инфо) ────────────────── */
+.auth-alert {
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  font-size: .85rem;
+  line-height: 1.45;
+  margin-bottom: 4px;
+}
+.auth-alert-error {
+  background: rgba(192,57,43,.10);
+  color: var(--danger);
+  border: 1px solid rgba(192,57,43,.28);
+}
+.auth-alert-info {
+  background: rgba(74,124,89,.10);
+  color: var(--accent2);
+  border: 1px solid rgba(74,124,89,.28);
+}
+
+/* ── THEME TOGGLE в углу ──────────────────────── */
+.auth-theme {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 10;
+}
+
+@media (max-width: 480px) {
+  .auth-card { padding: 30px 22px 26px; border-radius: var(--radius-md); }
+  .auth-title { font-size: 1.35rem; }
+}

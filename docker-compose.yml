@@ -53,6 +53,7 @@ services:
     environment:
       PORT_PM_AGENT: ${PORT_PM_AGENT}
       PORT_GATEWAY_PORT: ${PORT_GATEWAY_PORT}
+      PORT_GATEWAY_SIGMA_PORT: ${PORT_GATEWAY_SIGMA_PORT:-7010}
       PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
       KAFKA_BROKER: ${KAFKA_BROKER}
 
@@ -187,12 +188,41 @@ services:
       PORT_AUTH_SERVICE: ${PORT_AUTH_SERVICE}
       PORT_CHATS_SERVICE: ${PORT_CHATS_SERVICE}
       PORT_GATEWAY_PORT: ${PORT_GATEWAY_PORT}
+      PORT_GATEWAY_SIGMA_PORT: ${PORT_GATEWAY_SIGMA_PORT:-7010}
       PORT_PM_AGENT: ${PORT_PM_AGENT}
       PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
       SECRET_KEY: ${SECRET_KEY}
       ALGORITHM: ${ALGORITHM}
     volumes:
       - ./api_gateway:/app
+    restart: unless-stopped
+    networks:
+      - catchPM
+
+  # SIGMA-фронт: копия gateway без WebSocket и без загрузки файлов.
+  # Обратный канал агент→фронт заменён на GET-polling + собственный
+  # Kafka-consumer (group_id=sigma-gateway-group). Kafka общая с основным
+  # gateway. Порт 7010 (nginx на хосте настраивается отдельно).
+  gateway_sigma:
+    build: ./api_gateway_sigma
+    container_name: api_gateway_sigma
+    command: uvicorn app:app --host 0.0.0.0 --port 7010
+    ports:
+      - "7010:7010"
+    environment:
+      PORT_AUTH_SERVICE: ${PORT_AUTH_SERVICE}
+      PORT_CHATS_SERVICE: ${PORT_CHATS_SERVICE}
+      PORT_GATEWAY_PORT: ${PORT_GATEWAY_SIGMA_PORT:-7010}
+      PORT_PM_AGENT: ${PORT_PM_AGENT}
+      PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
+      SECRET_KEY: ${SECRET_KEY}
+      ALGORITHM: ${ALGORITHM}
+      KAFKA_BROKER: ${KAFKA_BROKER}
+    volumes:
+      - ./api_gateway_sigma:/app
+    depends_on:
+      broker:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - catchPM
@@ -327,6 +357,7 @@ services:
     command: python -m app.endpoint_consumer
     environment:
       PORT_CHATS_SERVICE: ${PORT_CHATS_SERVICE}
+      PORT_GATEWAY_SIGMA_PORT: ${PORT_GATEWAY_SIGMA_PORT:-7010}
       SECRET_KEY: ${SECRET_KEY}
       ALGORITHM: ${ALGORITHM}
       DB_HOST: ${DB_HOST}

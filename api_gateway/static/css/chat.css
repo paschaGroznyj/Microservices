@@ -506,17 +506,13 @@
   background: var(--surface);
 }
 
-/* Когда внутри стартовый экран — контейнер должен занимать ВСЮ рабочую
-   область .chat-main-inner, а не только нижнюю полосу под инпут.
-   Иначе фон .chat-start-screen (inset:0) покрывает лишь узкую зону
-   (пустые поля слева/сверху), а приписка bottom считается от неё же. */
+/* Когда внутри стартовый экран — оставляем контейнер прозрачным,
+   но не выдёргиваем его из потока. Сам стартовый экран рендерится
+   отдельным слоем (.chat-start-screen-layer) в .chat-main-inner через JS. */
 .message-input-container:has(.chat-start-screen) {
   border-top: none;
   background: transparent;
   padding: 0;
-  position: absolute;
-  inset: 0;
-  z-index: 0;
 }
 /* ══════════════════════════════════════════════
    ACTIVE CHAT INPUT  (modern, like start screen)
@@ -677,17 +673,17 @@
    START SCREEN  (full-height, modern)
 ══════════════════════════════════════════════ */
 
-/* Контейнер занимает весь message-input-container */
-.chat-start-screen {
+
+/* Слой стартового экрана рендерится JS как sibling к message-input-container.
+   Это надёжнее, чем привязка через :has() у input-контейнера. */
+.chat-start-screen-layer {
   position: absolute;
   inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 24px 16px 32px;
-  overflow-y: auto;
-  overflow-x: hidden;
+  z-index: 0;
+}
+
+.chat-main-inner.chat-active .chat-start-screen-layer {
+  display: none;
 }
 
 /* Два фоновых слоя (день/ночь) на всю область, без движения.

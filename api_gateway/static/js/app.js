@@ -2322,7 +2322,7 @@ class ChatApp {
         if (!container) return;
 
         // Гард: не перерисовывать если экран уже соответствует состоянию
-        const hasStart     = !!container.querySelector('.chat-start-screen');
+        const hasStart     = !!document.querySelector('.chat-start-screen-layer .chat-start-screen');
         const hasActive    = !!container.querySelector('.chat-input-area');
         const renderedChat = container.dataset.renderedChat;
 
@@ -2330,7 +2330,6 @@ class ChatApp {
         if (!this.currentChat && hasStart) return;
         // Инпут активного чата уже есть И это тот же чат — пропускаем
         if (this.currentChat && hasActive && renderedChat === String(this.currentChat)) return;
-        // Если чат выбран, но рендерился стартовый — рендерим инпут (смена состояния)
 
         container.classList.add('rending');
 
@@ -2338,9 +2337,18 @@ class ChatApp {
                       || this.currentUser?.username
                       || 'друг';
 
+        const chatInner = document.querySelector('.chat-main-inner');
+        chatInner?.querySelector('.chat-start-screen-layer')?.remove();
+
+        let injectTarget = container;
+
         if (!this.currentChat) {
             // ── СТАРТОВЫЙ ЭКРАН ──────────────────────
-            container.innerHTML = `
+            container.innerHTML = '';
+
+            const layer = document.createElement('div');
+            layer.className = 'chat-start-screen-layer';
+            layer.innerHTML = `
 <div class="chat-start-screen">
 
     <div class="start-body">
@@ -2385,6 +2393,9 @@ class ChatApp {
     <p class="start-footer-note">ИИ может ошибаться — перепроверяйте важную информацию</p>
 
 </div>`;
+
+            chatInner?.appendChild(layer);
+            injectTarget = layer;
         } else {
             // ── АКТИВНЫЙ ЧАТ ─────────────────────────
             container.innerHTML = `
@@ -2432,15 +2443,14 @@ class ChatApp {
         this.attachProfileHandlers();
 
         // Инжектируем кнопку тулов и пикер модели в футер инпута
-        window.ToolsPanel?.inject(container);
-        window.ModelPicker?.inject(container);
+        window.ToolsPanel?.inject(injectTarget);
+        window.ModelPicker?.inject(injectTarget);
 
-        // Посимвольная анимация start-header
         // Запоминаем для какого чата отрендерили
         container.dataset.renderedChat = this.currentChat ? String(this.currentChat) : '';
 
         if (!this.currentChat) {
-            this._animateStartHeader(container);
+            this._animateStartHeader(injectTarget);
         }
 
         setTimeout(() => container.classList.remove('rending'), 0);

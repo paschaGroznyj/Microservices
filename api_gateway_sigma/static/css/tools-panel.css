@@ -366,6 +366,57 @@
   line-height: 1.35;
 }
 
+/* ── Бейдж доступности провайдера ──────────────────────────────
+   Показывает, что модель может быть недоступна из-за провайдера,
+   а не из-за агента. Состояния через data-state: up / down / unknown. */
+.mp-option-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 3px;
+  font-size: .64rem;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: .01em;
+}
+
+.mp-status-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.mp-option-status[data-state="up"] {
+  color: #16a34a;
+}
+.mp-option-status[data-state="up"] .mp-status-dot {
+  background: #16a34a;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #16a34a 20%, transparent);
+}
+
+.mp-option-status[data-state="down"] {
+  color: #dc2626;
+}
+.mp-option-status[data-state="down"] .mp-status-dot {
+  background: #dc2626;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #dc2626 20%, transparent);
+}
+
+.mp-option-status[data-state="unknown"] {
+  color: var(--text-muted);
+}
+.mp-option-status[data-state="unknown"] .mp-status-dot {
+  background: var(--text-muted);
+  animation: mp-status-pulse 1s ease-in-out infinite;
+}
+
+@keyframes mp-status-pulse {
+  0%, 100% { opacity: .35; }
+  50%      { opacity: 1; }
+}
+
 /* Галочка активной опции */
 .mp-option-check {
   flex-shrink: 0;

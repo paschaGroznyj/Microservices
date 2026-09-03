@@ -1248,6 +1248,28 @@ async def get_graph_nodes(request: Request):
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=e.response.status_code, detail="Graph data error")
 
+
+@app.get("/api/providers/status")
+async def get_providers_status(request: Request):
+    """Доступность LLM-провайдеров под моделями тоггла (для ModelPicker).
+
+    Проксирует /internal/providers_status agent_service. При недоступности
+    самого агента отдаёт мягкий 200 с providers=null, чтобы фронт показал
+    нейтральное состояние, а не рушился."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    agent_url = SERVICES['agent_service']['url']
+    try:
+        resp = await app.state.http_client.get(
+            f"{agent_url}/internal/providers_status",
+            timeout=15.0
+        )
+        return resp.json()
+    except httpx.RequestError:
+        # агент недоступен — не 502, а нейтральный ответ для UI
+        return {"providers": None, "cached_at": None}
+
 @app.on_event("startup")
 async def startup_event():
     """Запуск Service Discovery при старте"""

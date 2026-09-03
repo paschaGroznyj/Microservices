@@ -523,16 +523,95 @@ const MP_MODELS = [
 
 const MP_STORAGE_KEY = 'mp_selected_model';
 
+// Доступность провайдеров под моделями. Тянется с /api/providers/status
+// (проксирует agent_service). Бейдж в опции показывает, что модель может быть
+// недоступна из-за ПРОВАЙДЕРА, а не из-за агента. Кешируем на клиенте, чтобы
+// повторные открытия панели не дёргали сеть — бэкенд и так кеширует на 30с.
+const MP_PROVIDERS_URL      = '/api/providers/status';
+const MP_PROVIDERS_TTL_MS   = 25000;
+
 class ModelPickerClass {
   constructor() {
     this._selected      = localStorage.getItem(MP_STORAGE_KEY) ?? 'universal';
     this._panel         = null;
     this._storedTrigger = null;
+    // Кеш доступности провайдеров: {providers: {id: {up, name, reason}}, ts}
+    this._providers     = null;
+    this._providersTs   = 0;
+    this._providersReq  = null;   // in-flight промис, чтобы не слать дубли
   }
 
   /* ── Публичный API ──────────────────────────────────────────────────── */
 
   getModel() { return this._selected; }
+
+  /* Тянет доступность провайдеров с бэка (с TTL-кешем и дедупом запросов).
+     Возвращает объект providers ({id: {up, name, reason?}}) или null. */
+  async _fetchProviders(force = false) {
+    const now = Date.now();
+    if (!force && this._providers && (now - this._providersTs) < MP_PROVIDERS_TTL_MS) {
+      return this._providers;
+    }
+    if (this._providersReq) return this._providersReq;
+
+    this._providersReq = (async () => {
+      try {
+        const resp = await fetch(MP_PROVIDERS_URL, { credentials: 'same-origin' });
+        if (!resp.ok) throw new Error('status ' + resp.status);
+        const data = await resp.json();
+        this._providers   = data?.providers ?? null;
+        this._providersTs = Date.now();
+        return this._providers;
+      } catch (_) {
+        // сеть/агент недоступны — оставляем нейтральное состояние (null)
+        this._providers   = null;
+        this._providersTs = Date.now();
+        return null;
+      } finally {
+        this._providersReq = null;
+      }
+    })();
+    return this._providersReq;
+  }
+
+  /* Проставляет состояние бейджа в уже отрисованной опции панели. */
+  _applyProviderBadge(optEl, prov) {
+    const badge = optEl.querySelector('.mp-option-status');
+    if (!badge) return;
+    const dot   = badge.querySelector('.mp-status-dot');
+    const label = badge.querySelector('.mp-status-label');
+
+    if (!prov) {
+      // нет данных (агент недоступен / ещё грузится) — нейтрально
+      badge.dataset.state = 'unknown';
+      if (label) label.textContent = 'Проверка…';
+      badge.title = 'Проверка доступности провайдера';
+      return;
+    }
+    if (prov.up) {
+      badge.dataset.state = 'up';
+      if (label) label.textContent = 'Доступен';
+      badge.title = prov.name ? `Провайдер ${prov.name}: доступен` : 'Провайдер доступен';
+    } else {
+      badge.dataset.state = 'down';
+      if (label) label.textContent = 'Недоступен';
+      badge.title = (prov.name ? `Провайдер ${prov.name}: недоступен` : 'Провайдер недоступен')
+                  + (prov.reason ? ` (${prov.reason})` : '');
+    }
+  }
+
+  /* Обновляет бейджи всех опций в открытой панели по кешу/фетчу. */
+  async _refreshPanelBadges() {
+    if (!this._panel) return;
+    const opts = this._panel.querySelectorAll('.mp-option');
+    // сперва — то, что уже есть в кеше (мгновенно), потом освежаем сетью
+    const paint = (providers) => {
+      opts.forEach(opt => this._applyProviderBadge(opt, providers?.[opt.dataset.model] ?? null));
+    };
+    paint(this._providers);
+    const providers = await this._fetchProviders();
+    if (this._panel) paint(providers);
+  }
 
   inject(container) {
     this._injectInto(container.querySelector('.chat-input-footer'),  '#attach-btn');
@@ -604,6 +683,10 @@ class ModelPickerClass {
           <span class="mp-option-info">
             <span class="mp-option-label">${m.label}</span>
             <span class="mp-option-hint">${m.hint}</span>
+            <span class="mp-option-status" data-state="unknown">
+              <span class="mp-status-dot"></span>
+              <span class="mp-status-label">Проверка…</span>
+            </span>
           </span>
           <span class="mp-option-check">
             <svg viewBox="0 0 16 16" fill="none" width="13" height="13">
@@ -627,6 +710,9 @@ class ModelPickerClass {
     this._panel         = panel;
     this._storedTrigger = triggerBtn;
     triggerBtn.classList.add('active');
+
+    // Подтягиваем доступность провайдеров и раскрашиваем бейджи
+    this._refreshPanelBadges();
 
     requestAnimationFrame(() => this._position(panel, triggerBtn));
 

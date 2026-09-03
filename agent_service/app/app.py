@@ -1060,6 +1060,74 @@ async def health():
     status = "ok" if consumer_alive else "error"
     return {"service": "llm-bot", "status": status}
 
+
+# ── Доступность LLM-провайдеров ────────────────────────────────────
+# Модели тоггла (coder/designer/universal) физически ходят в разные
+# провайдеры через один шлюз cloud.ru. Фронт (ModelPicker) показывает
+# бейдж доступности, чтобы юзер понимал: если модель не отвечает — это
+# провайдер лёг, а не агент завис. Пингуем каждую модель минимальным
+# chat-запросом (1 токен), результат кешируем на _PROVIDERS_TTL сек,
+# чтобы не долбить шлюз на каждый polling фронта.
+from agent_pm.core.agent_provider import (
+    get_llm_model_gpt, get_llm_model_claude, get_llm_model_gemini,
+)
+
+_PROVIDERS_TTL = 30.0  # сек — как часто реально перепроверяем провайдеров
+_providers_cache: dict = {"ts": 0.0, "data": None}
+_providers_lock = asyncio.Lock()
+
+# id модели в UI -> человекочитаемое имя + фабрика llm
+_PROVIDER_MODELS = {
+    "coder":     ("openai/gpt-5.3-codex",           get_llm_model_gpt),
+    "designer":  ("anthropic/claude-opus-4.8",      get_llm_model_claude),
+    "universal": ("google/gemini-3.1-pro-preview",  get_llm_model_gemini),
+}
+
+
+async def _ping_provider(model_id: str, model_name: str, factory) -> dict:
+    """Минимальный вызов модели. up=True если провайдер ответил без ошибки."""
+    try:
+        llm = factory()
+        # 1 токен, короткий таймаут — нам важен только факт живости
+        await asyncio.wait_for(
+            llm.ainvoke(
+                [HumanMessage(content="ping")],
+                max_tokens=1,
+            ),
+            timeout=8.0,
+        )
+        return {"id": model_id, "name": model_name, "up": True}
+    except asyncio.TimeoutError:
+        return {"id": model_id, "name": model_name, "up": False, "reason": "timeout"}
+    except Exception as e:
+        return {"id": model_id, "name": model_name, "up": False, "reason": str(e)[:120]}
+
+
+@app.get("/internal/providers_status")
+async def internal_providers_status():
+    """Доступность провайдеров под каждой моделью тоггла.
+
+    Отдаёт {"providers": {model_id: {up: bool, name, reason?}}, "cached_at": ts}.
+    Результат кешируется на _PROVIDERS_TTL сек (двойная проверка под локом,
+    чтобы параллельные polling-запросы не порождали пачку пингов)."""
+    now = time.time()
+    if _providers_cache["data"] and (now - _providers_cache["ts"]) < _PROVIDERS_TTL:
+        return {"providers": _providers_cache["data"], "cached_at": _providers_cache["ts"]}
+
+    async with _providers_lock:
+        now = time.time()
+        if _providers_cache["data"] and (now - _providers_cache["ts"]) < _PROVIDERS_TTL:
+            return {"providers": _providers_cache["data"], "cached_at": _providers_cache["ts"]}
+
+        results = await asyncio.gather(*[
+            _ping_provider(mid, name, factory)
+            for mid, (name, factory) in _PROVIDER_MODELS.items()
+        ])
+        providers = {r["id"]: r for r in results}
+        _providers_cache["data"] = providers
+        _providers_cache["ts"] = time.time()
+        return {"providers": providers, "cached_at": _providers_cache["ts"]}
+
 class SearchIntent(BaseModel):
     is_search: bool = Field(
         description="True если пользователь хочет найти статьи, False если просто общается"

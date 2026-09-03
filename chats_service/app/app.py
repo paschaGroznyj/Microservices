@@ -105,6 +105,7 @@ class ChatMessage(BaseModel):
     has_files: bool
     files: list
     agent_model: str
+    gateway_target: str = "main"
     
 
 @app.on_event("startup")
@@ -140,6 +141,7 @@ async def send_message(chat: ChatMessage):
         "has_files": chat.has_files,
         "files": chat.files,
         "agent_model": chat.agent_model,
+        "gateway_target": chat.gateway_target,
     }
     logging.info(message)
     start = time.perf_counter()

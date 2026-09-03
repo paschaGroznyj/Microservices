@@ -19,6 +19,11 @@ const openBtn = document.getElementById('chat-search-btn');
 let debounceTimer = null;
 let currentReqId = 0;
 
+function setLifted(isLifted) {
+  if (!overlay) return;
+  overlay.classList.toggle('lifted', Boolean(isLifted));
+}
+
 function escapeHtml(str) {
   return String(str ?? '')
     .replace(/&/g, '&amp;')
@@ -115,6 +120,12 @@ async function doSearch(query) {
 function onInput() {
   const q = input.value.trim();
   clearTimeout(debounceTimer);
+
+  // Поведение по ТЗ:
+  // пусто -> модалка в центре;
+  // есть ввод -> анимированно поднимается вверх.
+  setLifted(q.length > 0);
+
   if (q.length < MIN_CHARS) {
     setHint(`Введите минимум ${MIN_CHARS} символа для поиска`);
     return;
@@ -128,6 +139,7 @@ function openModal() {
   overlay.classList.add('active');
   document.body.classList.add('cse-open');
   input.value = '';
+  setLifted(false);
   setHint(`Введите минимум ${MIN_CHARS} символа для поиска`);
   // фокус после старта transition
   setTimeout(() => input.focus(), 60);
@@ -137,6 +149,7 @@ function closeModal() {
   if (!overlay) return;
   overlay.classList.remove('active');
   overlay.classList.add('closing');
+  overlay.classList.remove('lifted');
   document.body.classList.remove('cse-open');
   clearTimeout(debounceTimer);
   currentReqId++; // отменяем висящие ответы
@@ -165,5 +178,16 @@ document.addEventListener('keydown', (e) => {
     closeModal();
   }
 });
+
+if (input) {
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      input.value = '';
+      setLifted(false);
+      setHint(`Введите минимум ${MIN_CHARS} символа для поиска`);
+    }
+  });
+}
 
 console.log('Chat search modal loaded.');

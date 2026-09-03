@@ -658,7 +658,7 @@
 
 .chat-search-modal {
   position: fixed;
-  top: 12vh;
+  top: 50%;
   left: 50%;
   width: min(680px, 92vw);
   max-height: 70vh;
@@ -669,11 +669,17 @@
   border-radius: var(--radius-lg, 18px);
   box-shadow: var(--shadow-lg);
   overflow: hidden;
-  transform: translateX(-50%) translateY(-12px) scale(.98);
-  transition: transform .25s ease;
+  transform: translateX(-50%) translateY(-50%) scale(.98);
+  transition: top .25s ease, transform .25s ease;
 }
 
 .chat-search-overlay.active .chat-search-modal {
+  transform: translateX(-50%) translateY(-50%) scale(1);
+}
+
+/* Когда есть ввод — поднимаем модалку к рабочему уровню */
+.chat-search-overlay.active.lifted .chat-search-modal {
+  top: 12vh;
   transform: translateX(-50%) translateY(0) scale(1);
 }
 

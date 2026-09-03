@@ -45,6 +45,15 @@
   z-index: 10;
 }
 
+/* На стартовом экране шапка накладывается поверх фона,
+   не отъедая отдельную полосу по высоте. */
+.chat-main.start-screen-mode .main-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+}
+
 .main-title {
   font-family: var(--font-serif);
   font-size: 1rem;

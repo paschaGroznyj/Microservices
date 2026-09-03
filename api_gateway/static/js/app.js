@@ -2325,6 +2325,16 @@ class ChatApp {
         const hasStart     = !!container.querySelector('.chat-start-screen');
         const hasActive    = !!container.querySelector('.chat-input-area');
         const renderedChat = container.dataset.renderedChat;
+        const chatMain = document.querySelector('.chat-main');
+
+        // Синхронизация режимов перед гард-выходами
+        if (!this.currentChat) {
+            container.classList.add('start-screen-host');
+            chatMain?.classList.add('start-screen-mode');
+        } else {
+            container.classList.remove('start-screen-host');
+            chatMain?.classList.remove('start-screen-mode');
+        }
 
         // Стартовый экран уже есть и чат не выбран — пропускаем
         if (!this.currentChat && hasStart) return;
@@ -2340,6 +2350,8 @@ class ChatApp {
 
         if (!this.currentChat) {
             // ── СТАРТОВЫЙ ЭКРАН ──────────────────────
+            container.classList.add('start-screen-host');
+            document.querySelector('.chat-main')?.classList.add('start-screen-mode');
             container.innerHTML = `
 <div class="chat-start-screen">
 
@@ -2389,6 +2401,8 @@ class ChatApp {
 </div>`;
         } else {
             // ── АКТИВНЫЙ ЧАТ ─────────────────────────
+            container.classList.remove('start-screen-host');
+            document.querySelector('.chat-main')?.classList.remove('start-screen-mode');
             container.innerHTML = `
 <div class="chat-input-area">
     <div class="chat-input-box" id="chat-input-box">

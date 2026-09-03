@@ -35,8 +35,11 @@ class DBConsumer:
         self.agents = {
             "pm": {
                 "name": "Agent PM",
-                "gateway": "http://api_gateway:7000"
             }
+        }
+        self.gateway_urls = {
+            "main": "http://api_gateway:7000",
+            "sigma": "http://api_gateway_sigma:7010",
         }
 
     async def init(self):
@@ -70,7 +73,11 @@ class DBConsumer:
             # как фолбэк, чтобы вложения пользователя тоже сохранялись.
             attached_files = payload.get("attached_files") or payload.get("files")
             tool_trace = payload.get("tool_trace")
+            gateway_target = (payload.get("gateway_target") or "main").lower()
+            if gateway_target not in self.gateway_urls:
+                gateway_target = "main"
             logging.info(payload)
+            logging.info(f"gateway_target={gateway_target}")
             
             model_type = None
             tokens_usage = None
@@ -90,7 +97,8 @@ class DBConsumer:
                 attached_files=attached_files,
                 tool_trace=tool_trace,
                 model_type=model_type,
-                tokens_usage=tokens_usage
+                tokens_usage=tokens_usage,
+                gateway_target=gateway_target
             )
             logger.info(f"Сообщение сохранено в БД: chat={chat_id}, user={user_id}")
             elapsed = time.perf_counter() - start
@@ -99,9 +107,10 @@ class DBConsumer:
             if is_from_bot:
                 type_agent = payload.get("type_agent", "pm")
                 logging.info(type_agent)
-                gateway_url = self.agents[type_agent]["gateway"]
+                gateway_url = self.gateway_urls[gateway_target]
                 ws_payload = dict(payload)
                 ws_payload["files"] = _sanitize_files_for_ws(attached_files) # Адаптивно, чтобы и для файлов пользователя
+                ws_payload["gateway_target"] = gateway_target
 
                 await self.send_to_main_service(chat_id, ws_payload, gateway_url)
 

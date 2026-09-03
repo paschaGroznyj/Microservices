@@ -26,7 +26,6 @@ from config import (
 )
 
 from sigma_status_store import status_store
-from sigma_consumer import SigmaConsumer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -46,20 +45,10 @@ async def lifespan(app: FastAPI):
         follow_redirects=True
     )
 
-    # Поднимаем собственный Kafka-consumer в отдельной consumer-group.
-    # Он ловит финальные bot_message и отмечает готовность ответа в status_store,
-    # чтобы фронт-polling (GET /api/chats/{id}/status) не ходил в БД на каждый тик.
-    app.state.sigma_consumer = SigmaConsumer(
-        bootstrap_servers=KAFKA_BROKER,
-        store=status_store,
-    )
-    await app.state.sigma_consumer.start()
-
     yield
 
     # Shutdown
     logger.info("Shutting down API Gateway SIGMA...")
-    await app.state.sigma_consumer.stop()
     await app.state.http_client.aclose()
 app = FastAPI(title="API Gateway SIGMA", lifespan=lifespan)
 # app = FastAPI(title="API Gateway", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -170,10 +159,10 @@ async def bot_status(payload: BotStatus):
 
 @app.post("/internal/bot_message")
 async def receive_bot_message(bot_msg: BotMessage):
-    """SIGMA no-op: финал доставляется собственным Kafka-consumer'ом, а не HTTP-push.
-    Эндпоинт оставлен как заглушка на случай ошибочной настройки обратного адреса."""
-    logging.debug(f"[sigma] bot_message проигнорирован (no-op) для chat_id={bot_msg.chat_id}")
-    return {"ok": True, "note": "sigma-noop"}
+    """Получаем финальное сообщение бота от chats-consumer и помечаем chat done для polling."""
+    logging.info(f"[sigma] bot_message chat_id={bot_msg.chat_id}")
+    status_store.mark_done(bot_msg.chat_id, bot_msg.message)
+    return {"ok": True}
 
 
 # Service Discovery функция

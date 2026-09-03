@@ -441,7 +441,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             "attached_files": attached_files,
             "tool_trace": response.get("tool_trace"), # str,
             "agent_model": response.get("agent_model"),
-            "tokens_usage": response.get("tokens_usage")
+            "tokens_usage": response.get("tokens_usage"),
+            "gateway_target": gateway_target
         }
 
         await prod.send_and_wait("chat-messages", value=bot_message)
@@ -458,7 +459,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                 "message_id": f"msg-stop-{int(time.time() * 1000)}",
                 "is_from_bot": True,
                 "type_agent": "pm",
-                "action": "stopped"
+                "action": "stopped",
+                "gateway_target": gateway_target
             }
             await prod.send_and_wait("chat-messages", value=stop_message)
         except Exception as send_err:
@@ -475,7 +477,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                 "message_id": f"msg-err-{int(time.time() * 1000)}",
                 "is_from_bot": True,
                 "type_agent": "pm",
-                "action": "error"
+                "action": "error",
+                "gateway_target": gateway_target
             }
             await prod.send_and_wait("chat-messages", value=err_message)
         except Exception as send_err:

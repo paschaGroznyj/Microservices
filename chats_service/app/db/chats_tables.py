@@ -109,6 +109,7 @@ class DataBaseChats:
 
             ALTER TABLE chats ADD COLUMN IF NOT EXISTS model_type VARCHAR(100);
             ALTER TABLE chats ADD COLUMN IF NOT EXISTS tokens_usage JSONB;
+            ALTER TABLE chats ADD COLUMN IF NOT EXISTS gateway_target TEXT;
 
         """)
 
@@ -181,6 +182,7 @@ class DataBaseChats:
         tool_trace: str | None = None,
         model_type: str | None = None,
         tokens_usage: dict | None = None,
+        gateway_target: str | None = None,
     ):
         if user_id is None or chat_id is None:
             logging.warning("Пропущено сообщение: отсутствует user_id или chat_id")
@@ -195,12 +197,12 @@ class DataBaseChats:
                     await conn.execute("""
                         INSERT INTO chats (
                             user_id, chat_id, message_text, is_from_bot,
-                            tool_name, selected_tools, context_size, message_id, created_at, tool_trace, model_type, tokens_usage
+                            tool_name, selected_tools, context_size, message_id, created_at, tool_trace, model_type, tokens_usage, gateway_target
                         )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb);
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13);
                     """,
                     user_id, chat_id, message, is_from_bot,
-                    action, selected_tools, context_size, message_id, now_utc, tool_trace, model_type, tokens_usage_json)
+                    action, selected_tools, context_size, message_id, now_utc, tool_trace, model_type, tokens_usage_json, gateway_target)
 
                     if attached_files:
                         source = "agent" if is_from_bot else "user"

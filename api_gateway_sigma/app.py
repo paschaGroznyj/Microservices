@@ -201,7 +201,8 @@ async def get_current_user(request: Request):
                 return {
                     "username": authentik_user, 
                     "user_id": user_id,
-                    "authenticated": True}
+                    "authenticated": True,
+                    "source": "authentik"}
         except httpx.RequestError as e:
             raise HTTPException(status_code=502, detail=f"Auth service unreachable: {str(e)}")
         # return user
@@ -224,7 +225,8 @@ async def get_current_user(request: Request):
         return {
             "username": username,
             "user_id": user_id,
-            "authenticated": True
+            "authenticated": True,
+            "source": "internal"
         }
     except JWTError as e:
         logger.warning(f"Ошибка декодирования токена: {e}")
@@ -420,9 +422,18 @@ async def gateway_health():
 # Выход из системы
 @app.post("/logout-web", response_class=RedirectResponse)
 async def logout_web(request: Request):
-    """Выход из системы (обработка HTML формы)"""
+    """Выход из системы (обработка HTML формы).
+
+    Куда редиректим после выхода:
+      - authentik-юзер (есть заголовок X-Authentik-Username) -> в магазин
+        приложений uva для SSO-выхода;
+      - внутренний (парольный) юзер -> на нашу страницу логина /login-page.
+    """
+    authentik_user = request.headers.get("X-Authentik-Username")
+    redirect_url = "https://uva-advanced.ru" if authentik_user else "/login-page"
+
     response = RedirectResponse(
-        url="/?message=exit",
+        url=redirect_url,
         status_code=303
     )
 
@@ -536,7 +547,8 @@ async def get_current_user_info(request: Request):
         "username": user["username"],
         "user_id": user["user_id"],
         "authenticated": True,
-        "name": name
+        "name": name,
+        "source": user.get("source", "internal")
     }
 
     return Response(

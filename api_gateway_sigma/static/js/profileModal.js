@@ -215,8 +215,17 @@ document.addEventListener('click', async (e) => {
     if (confirm('Выйти из приложения?')) {
       localStorage.removeItem('scholar_api_token');
       showToast('Выход...');
-      setTimeout(() => { 
-          window.location.href = 'https://uva-advanced.ru'; 
+      // Выход делаем через бэкенд: POST /logout-web удаляет cookie с токеном
+      // и сам решает, куда редиректить — на /login-page для внутренних
+      // (парольных) юзеров или на uva для authentik-юзеров (SSO-выход).
+      // Хардкод window.location на uva убран: он не чистил cookie и всегда
+      // вёл в магазин приложений, даже когда заголовков authentik нет.
+      setTimeout(() => {
+          const form = document.createElement('form');
+          form.method = 'POST';
+          form.action = '/logout-web';
+          document.body.appendChild(form);
+          form.submit();
       }, 800);
     }
   }

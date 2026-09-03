@@ -191,6 +191,22 @@ async def get_all_user_messages(limit: int = 50, offset: int = 0,  x_user_name: 
         logging.error(f"Ошибка в эндпоинте: {e}")
         raise HTTPException(status_code=500, detail="Не удалось загрузить историю чата")
 
+
+@app.get("/user/messages/search")
+async def search_messages(q: str = "", limit: int = 30, x_user_name: str = Header(..., alias="X-User-Name")):
+    """Живой поиск по сообщениям пользователя. Требует минимум 2 символа в q."""
+    query = (q or "").strip()
+    if len(query) < 2:
+        return {"results": [], "query": query}
+    try:
+        limit = max(1, min(limit, 50))
+        results = await db.search_user_messages(x_user_name, query, limit=limit)
+        return {"results": results, "query": query}
+    except Exception as e:
+        logging.error(f"Ошибка в эндпоинте search_messages: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось выполнить поиск по сообщениям")
+
+
 class ChatSidebarAction(BaseModel):
     chat_id: int
     user_id: int

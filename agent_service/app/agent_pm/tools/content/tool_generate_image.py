@@ -64,32 +64,41 @@ _CLEANABLE_IMAGE_EXTS = (".png", ".gif", ".jpeg", ".jpg", ".webp")
 
 
 def _cleanup_stale_generated_files() -> None:
-    """Best-effort уборка GENERATED_ROOT: рекурсивно удаляет ТОЛЬКО файлы-картинки
-    (_CLEANABLE_IMAGE_EXTS) старше EPHEMERAL_TTL_MINUTES. Бинарник давно в БД —
-    файл на диске лишь транспорт для превью. Директории и любые НЕ-картиночные
-    файлы не трогаем. Не роняет генерацию при любой ошибке ФС."""
-    import time as _t
-    try:
-        if not os.path.isdir(GENERATED_ROOT):
-            return
-        cutoff = _t.time() - EPHEMERAL_TTL_MINUTES * 60
-        removed = 0
-        for root, _dirs, files in os.walk(GENERATED_ROOT):
-            for name in files:
-                if not name.lower().endswith(_CLEANABLE_IMAGE_EXTS):
-                    continue  # чужой файл — не наш, не трогаем
-                full = os.path.join(root, name)
-                try:
-                    if os.path.getmtime(full) < cutoff:
-                        os.remove(full)
-                        removed += 1
-                except OSError:
-                    continue
-        if removed:
-            log.info("generate_image: удалено устаревших картинок из %s: %d",
-                     GENERATED_ROOT, removed)
-    except Exception as e:
-        log.warning("generate_image: уборка GENERATED_ROOT не удалась: %s", e)
+    """DISABLED. Жёсткая TTL-очистка сгенерированных картинок отключена.
+
+    Почему отключено: диск-фолбэк в /web/db_image (ветка
+    feature/image-disk-fallback) отдаёт превью прямо с диска для картинок,
+    которых нет в generated_images (артефакты в /app/generated_files,
+    /sandbox). Если удалять файлы по TTL, такие превью снова начнут ловить
+    404. Для картинок с записью в БД удаление файла было безопасным, но
+    отличить их здесь без обращения к БД нельзя, поэтому уборку убираем
+    целиком — пусть чисткой диска занимается внешний TTL песочницы/тома.
+
+    Тело сохранено ниже закомментированным на случай возврата поведения.
+    """
+    return  # no-op: очистка намеренно отключена
+    # import time as _t
+    # try:
+    #     if not os.path.isdir(GENERATED_ROOT):
+    #         return
+    #     cutoff = _t.time() - EPHEMERAL_TTL_MINUTES * 60
+    #     removed = 0
+    #     for root, _dirs, files in os.walk(GENERATED_ROOT):
+    #         for name in files:
+    #             if not name.lower().endswith(_CLEANABLE_IMAGE_EXTS):
+    #                 continue  # чужой файл — не наш, не трогаем
+    #             full = os.path.join(root, name)
+    #             try:
+    #                 if os.path.getmtime(full) < cutoff:
+    #                     os.remove(full)
+    #                     removed += 1
+    #             except OSError:
+    #                 continue
+    #     if removed:
+    #         log.info("generate_image: удалено устаревших картинок из %s: %d",
+    #                  GENERATED_ROOT, removed)
+    # except Exception as e:
+    #     log.warning("generate_image: уборка GENERATED_ROOT не удалась: %s", e)
 
 # Дефолтный quality-промпт (system). Универсальные требования качества из #127.
 DEFAULT_QUALITY_SYSTEM = (

@@ -1598,14 +1598,6 @@ class ChatApp {
     }
 
 
-    /* ══════════════════════════════════════════
-       WEBSOCKET
-    ══════════════════════════════════════════ */
-    connectWebSocket(chatId) {
-        // WS отключен: sigma использует polling /api/chats/{chat_id}/messages
-        this.ws = null;
-        return;
-    }
 
     /* ══════════════════════════════════════════
        TYPEWRITER-СТРИМИНГ

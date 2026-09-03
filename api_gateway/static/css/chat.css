@@ -696,7 +696,7 @@
   align-items: center;
   justify-content: center;
   padding: 24px 16px 32px;
-  overflow-y: auto;
+  overflow-y: hidden;
   overflow-x: hidden;
 }
 
@@ -983,11 +983,9 @@
      justify-content:center, .start-body центрирован флексом.
      Правим только внутренние размеры/типографику. */
 
-  /* Убираем вертикальный скролл стартового экрана на мобилке:
-     контент центрируется и не должен создавать прокрутку.
-     Паддинги поджаты, чтобы блок гарантированно влезал в 100dvh. */
+  /* overflow-y: hidden теперь стоит в базовом правиле .chat-start-screen
+     (глобально, для ПК и мобилки). Здесь только поджимаем паддинги. */
   .chat-start-screen {
-    overflow-y: hidden;
     padding: 16px 14px 20px;
   }
 

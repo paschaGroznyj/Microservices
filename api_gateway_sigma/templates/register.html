@@ -50,14 +50,15 @@
             <div class="auth-field">
                 <label class="auth-label" for="username">Логин</label>
                 <input class="auth-input" id="username" name="username" type="text"
-                       placeholder="Придумайте логин" autocomplete="username" required autofocus>
+                       placeholder="Придумайте логин" autocomplete="username" required autofocus
+                       minlength="3" maxlength="50">
             </div>
 
             <div class="auth-field">
                 <label class="auth-label" for="password">Пароль</label>
                 <div class="auth-input-wrap">
                     <input class="auth-input" id="password" name="password" type="password"
-                           placeholder="Минимум 6 символов" autocomplete="new-password" minlength="6" required>
+                           placeholder="Минимум 6 символов" autocomplete="new-password" minlength="6" maxlength="72" required>
                     <button class="auth-eye" type="button" data-target="password" aria-label="Показать пароль">
                         <svg class="eye-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>
@@ -73,7 +74,8 @@
                 <label class="auth-label" for="password2">Повторите пароль</label>
                 <div class="auth-input-wrap">
                     <input class="auth-input" id="password2" type="password"
-                           placeholder="••••••••" autocomplete="new-password" required>
+                           placeholder="••••••••" autocomplete="new-password" required
+                           minlength="6" maxlength="72">
                     <button class="auth-eye" type="button" data-target="password2" aria-label="Показать пароль">
                         <svg class="eye-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>

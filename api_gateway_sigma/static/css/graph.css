@@ -1,0 +1,264 @@
+/* ══════════════════════════════════════════════
+   GRAPH.CSS — Knowledge Graph
+   Тема: светлая / тёмная через data-theme="dark"
+══════════════════════════════════════════════ */
+
+/* ── Обёртка секции ────────────────────────────── */
+.graph-wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-primary);
+  position: relative;
+}
+
+/* ── Тулбар ────────────────────────────────────── */
+.graph-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px 6px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--input-border, #e5e7eb);
+}
+
+.graph-search {
+  flex: 1;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--input-border, #e5e7eb);
+  background: var(--input-bg, #f9fafb);
+  color: var(--text-primary, #111);
+  font-size: 0.8rem;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.graph-search:focus {
+  border-color: var(--accent, #2563eb);
+}
+
+.graph-btn {
+  height: 32px;
+  width: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--input-border, #e5e7eb);
+  background: var(--input-bg, #f9fafb);
+  color: var(--text-secondary, #555);
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.graph-btn:hover {
+  background: var(--sidebar-hover, #f0f0f0);
+}
+
+.graph-stats {
+  font-size: 0.7rem;
+  color: var(--text-muted, #9ca3af);
+  white-space: nowrap;
+  padding-left: 4px;
+}
+
+/* ── Легенда ───────────────────────────────────── */
+.graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 14px;
+  flex-shrink: 0;
+}
+
+.legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px 3px 6px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text-secondary, #555);
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  white-space: nowrap;
+}
+.legend-chip:hover {
+  background: var(--sidebar-hover, #f0f0f0);
+}
+.legend-chip.active {
+  border-color: var(--accent, #2563eb);
+  background: var(--surface2);
+  color: var(--accent, #2563eb);
+  font-weight: 600;
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid transparent;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+/* ── Канвас ────────────────────────────────────── */
+.graph-canvas {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+/* vis-network рисует canvas внутри, нужен 100% */
+.graph-canvas canvas {
+  display: block;
+}
+
+.graph-loading,
+.graph-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  color: var(--text-muted, #9ca3af);
+}
+.graph-error { color: #ef4444; }
+
+/* ── Боковая панель ────────────────────────────── */
+.graph-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 320px;
+  background: var(--surface, #fff);
+  border-left: 1px solid var(--border, #e5e7eb);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 10;
+  box-shadow: -4px 0 16px rgba(0,0,0,0.06);
+  transition: transform 0.2s ease;
+}
+.graph-panel.hidden {
+  transform: translateX(340px);
+  /* visibility: hidden через transform — панель уходит вправо */
+}
+
+/* Переопределяем display:none из .hidden если он есть глобально */
+.graph-panel.hidden {
+  display: flex !important;
+  pointer-events: none;
+}
+.graph-panel:not(.hidden) {
+  pointer-events: auto;
+}
+
+.graph-panel-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  background: none;
+  border: none;
+  font-size: 1rem;
+  color: var(--text-muted, #9ca3af);
+  cursor: pointer;
+  line-height: 1;
+  padding: 4px;
+  border-radius: 4px;
+  transition: color 0.15s;
+}
+.graph-panel-close:hover { color: var(--text-primary, #111); }
+
+.graph-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 16px 24px;
+}
+
+/* ── Контент панели ────────────────────────────── */
+.gp-header {
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+}
+
+.gp-type-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+}
+
+.gp-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary, #111);
+  margin: 0 0 8px;
+  line-height: 1.4;
+  padding-right: 24px; /* не лезть под кнопку закрытия */
+}
+
+.gp-meta {
+  font-size: 0.75rem;
+  color: var(--text-muted, #9ca3af);
+  margin-bottom: 3px;
+}
+.gp-meta b { color: var(--text-secondary, #555); }
+
+.gp-content {
+  font-size: 0.82rem;
+  color: var(--text-secondary, #444);
+  line-height: 1.65;
+}
+.gp-content h1, .gp-content h2, .gp-content h3 {
+  font-size: 0.88rem;
+  font-weight: 600;
+  margin: 12px 0 6px;
+  color: var(--text-primary, #111);
+}
+.gp-content p  { margin: 0 0 8px; }
+.gp-content ul { padding-left: 18px; margin: 0 0 8px; }
+.gp-content code {
+  background: var(--bg-secondary, #f3f4f6);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.78rem;
+}
+
+.gp-source {
+  margin-top: 14px;
+  font-size: 0.75rem;
+}
+.gp-source a {
+  color: var(--accent, #2563eb);
+  text-decoration: none;
+}
+.gp-source a:hover { text-decoration: underline; }
+
+/* ── Адаптив ───────────────────────────────────── */
+@media (max-width: 600px) {
+  .graph-panel {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--border-color, #e5e7eb);
+    top: auto;
+    height: 55%;
+    box-shadow: 0 -4px 16px rgba(0,0,0,0.08);
+  }
+  .graph-panel.hidden {
+    transform: translateY(110%);
+  }
+  .graph-stats { display: none; }
+}

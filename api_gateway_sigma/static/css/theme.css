@@ -1,0 +1,200 @@
+/* ═══════════════════════════════════════════════
+   CATCHPM — THEME VARIABLES
+   Светлая тема (default) + тёмная по [data-theme="dark"]
+════════════════════════════════════════════════ */
+
+/* ── LIGHT ────────────────────────────────────── */
+:root,
+[data-theme="light"] {
+  --bg:            #faf9f7;
+  --surface:       #ffffff;
+  --surface2:      #f3f1ee;
+  --surface3:      #ede9e3;
+  --border:        #e0dbd4;
+  --border-light:  #ede9e3;
+
+  --accent:        #8b4513;
+  --accent-hover:  #7a3b10;
+  --accent-muted:  #c17f3a;
+  --accent2:       #4a7c59;
+  --accent2-hover: #3d6849;
+
+  --text-primary:   #1a1612;
+  --text-secondary: #5c5650;
+  --text-muted:     #9e9890;
+  --text-on-accent: #ffffff;
+
+  --sidebar-bg:    #f3f1ee;
+  --sidebar-hover: #e8e3dc;
+  --sidebar-active:#ddd8cf;
+
+  --input-bg:      #ffffff;
+  --input-border:  #d8d3cb;
+  --input-focus:   #8b4513;
+
+  --msg-user-bg:   #1a1612;
+  --msg-user-text: #f3f1ee;
+  --msg-bot-bg:    transparent;
+  --msg-bot-text:  #1a1612;
+
+  --btn-primary-bg:   #1a1612;
+  --btn-primary-text: #faf9f7;
+  --btn-primary-hover:#2d2822;
+
+  --danger:        #c0392b;
+  --danger-hover:  #a93226;
+
+  --shadow-sm:     0 1px 3px rgba(26,22,18,.08);
+  --shadow-md:     0 4px 16px rgba(26,22,18,.10);
+  --shadow-lg:     0 8px 32px rgba(26,22,18,.14);
+
+  --radius-sm:     6px;
+  --radius-md:     10px;
+  --radius-lg:     16px;
+  --radius-xl:     22px;
+
+  --font-serif:    'Playfair Display', Georgia, serif;
+  --font-sans:     'Inter', system-ui, sans-serif;
+  --font-mono:     'JetBrains Mono', 'Fira Code', monospace;
+
+  --transition:    0.18s ease;
+
+  /* hljs */
+  --hljs-bg: #f6f8fa;
+}
+
+/* ── DARK ─────────────────────────────────────── */
+[data-theme="dark"] {
+  --bg:            #0d0d0d;
+  --surface:       #141414;
+  --surface2:      #1a1a1a;
+  --surface3:      #222222;
+  --border:        #2a2a2a;
+  --border-light:  #222222;
+
+  --accent:        #cc785c;
+  --accent-hover:  #b8684e;
+  --accent-muted:  #a0614a;
+  --accent2:       #8fa68a;
+  --accent2-hover: #7a9175;
+
+  --text-primary:   #e8e4df;
+  --text-secondary: #8a8580;
+  --text-muted:     #555555;
+  --text-on-accent: #0d0d0d;
+
+  --sidebar-bg:    #111111;
+  --sidebar-hover: #1e1e1e;
+  --sidebar-active:#252525;
+
+  --input-bg:      #1a1a1a;
+  --input-border:  #2e2e2e;
+  --input-focus:   #cc785c;
+
+  --msg-user-bg:   #e8e4df;
+  --msg-user-text: #0d0d0d;
+  --msg-bot-bg:    transparent;
+  --msg-bot-text:  #e8e4df;
+
+  --btn-primary-bg:   #e8e4df;
+  --btn-primary-text: #0d0d0d;
+  --btn-primary-hover:#d4cfc8;
+
+  --danger:        #e05252;
+  --danger-hover:  #c94444;
+
+  --shadow-sm:     0 1px 3px rgba(0,0,0,.3);
+  --shadow-md:     0 4px 16px rgba(0,0,0,.4);
+  --shadow-lg:     0 8px 32px rgba(0,0,0,.5);
+
+  --hljs-bg: #1e1e1e;
+}
+
+/* ═══════════════════════════════════════════════
+   GLOBAL RESET & BASE
+════════════════════════════════════════════════ */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 15px;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--bg);
+  color: var(--text-primary);
+  line-height: 1.6;
+  overflow: hidden;
+  height: 100dvh;
+  transition: background var(--transition), color var(--transition);
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover { text-decoration: underline; }
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+input, textarea {
+  font-family: inherit;
+}
+
+/* ── SCROLLBAR ────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 99px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ═══════════════════════════════════════════════
+   THEME TOGGLE BUTTON — в header-actions, не фиксированный
+════════════════════════════════════════════════ */
+.theme-toggle {
+  /* встраивается в поток header-actions */
+  position: static;
+  z-index: auto;
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  box-shadow: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  transition: all var(--transition);
+}
+
+.theme-toggle:hover {
+  background: var(--surface2);
+  border-color: var(--border);
+  color: var(--accent);
+  transform: none;
+  box-shadow: none;
+}
+
+.theme-icon { width: 17px; height: 17px; transition: opacity var(--transition); }
+
+/* В светлой теме — показываем луну, прячем солнце */
+[data-theme="light"] .theme-icon-sun  { display: none; }
+[data-theme="light"] .theme-icon-moon { display: block; }
+
+/* В тёмной теме — показываем солнце, прячем луну */
+[data-theme="dark"] .theme-icon-sun  { display: block; }
+[data-theme="dark"] .theme-icon-moon { display: none; }

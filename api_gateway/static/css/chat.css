@@ -682,6 +682,19 @@
   z-index: 0;
 }
 
+/* Сам стартовый экран занимает весь слой */
+.chat-start-screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px max(32px, env(safe-area-inset-bottom, 0px));
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
 .chat-main-inner.chat-active .chat-start-screen-layer {
   display: none;
 }
@@ -917,7 +930,35 @@
 /* ── Мобильный override ───────────────────── */
 @media (max-width: 768px) {
   .start-title { font-size: 1.5rem; }
-  .start-input-field { min-height: 44px; padding: 14px 16px 6px; }
+  .start-body {
+    max-width: 100%;
+    gap: 18px;
+    padding: 0 8px;
+    margin-top: -12px;
+  }
+  .start-input-box {
+    border-radius: 14px;
+  }
+  .start-input-field {
+    min-height: 44px;
+    max-height: 160px;
+    padding: 14px 14px 6px;
+    font-size: .95rem;
+  }
+  .start-input-footer {
+    padding: 8px 10px 10px 10px;
+    gap: 2px;
+  }
+  .start-send-btn {
+    width: 38px;
+    height: 38px;
+  }
+  .start-footer-note {
+    bottom: max(10px, env(safe-area-inset-bottom, 0px));
+    font-size: .68rem;
+    max-width: calc(100% - 20px);
+    white-space: normal;
+  }
   .hint-chip:nth-child(n+3) { display: none; }
 }
 

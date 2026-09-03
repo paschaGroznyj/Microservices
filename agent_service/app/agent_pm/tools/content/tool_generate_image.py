@@ -48,6 +48,46 @@ log = logging.getLogger(__name__)
 # момент: при возврате к картинке она берётся из БД, а не с диска.
 GENERATED_ROOT = "/app/generated_files"
 
+# Whitelist-корни для чтения source-картинок с диска (image-to-image).
+# Читаем ТОЛЬКО отсюда — защита от path-traversal. Совпадает с ALLOWED_FILES_ROOTS
+# в agent_service/app.py и ALLOWED_IMAGE_ROOTS в tool_analyze_image.
+ALLOWED_SOURCE_ROOTS = [
+    os.path.realpath("/app/generated_files"),
+    os.path.realpath("/sandbox"),
+]
+
+
+def _is_within_source_roots(real_path: str) -> bool:
+    for root in ALLOWED_SOURCE_ROOTS:
+        if real_path == root or real_path.startswith(root + os.sep):
+            return True
+    return False
+
+
+def _resolve_source_path(path_or_name: str) -> str | None:
+    """Резолвит source-картинку строго внутри whitelist-корней.
+
+    Принимает как полный путь (внутри /sandbox|/app/generated_files), так и
+    просто имя файла — тогда ищет по basename рекурсивно. basename берётся
+    принудительно, чтобы нельзя было протащить обход директорий.
+    """
+    raw = (path_or_name or "").strip()
+    if not raw:
+        return None
+    real = os.path.realpath(raw)
+    if _is_within_source_roots(real) and os.path.isfile(real):
+        return real
+    safe_name = os.path.basename(raw)
+    if not safe_name:
+        return None
+    import glob as _glob
+    for root in ALLOWED_SOURCE_ROOTS:
+        for cand in _glob.glob(os.path.join(root, "**", safe_name), recursive=True):
+            real = os.path.realpath(cand)
+            if _is_within_source_roots(real) and os.path.isfile(real):
+                return real
+    return None
+
 # Жёсткий потолок генераций внутри одного вызова тула.
 MAX_IMAGES_PER_CALL = 10
 
@@ -196,21 +236,29 @@ def _materialize_from_db(image_data, file_name: str | None, rec_id) -> str | Non
 
 
 def _read_image_as_data_uri(path: str) -> str | None:
-    """Читает картинку с диска и возвращает data-URL (или None при ошибке)."""
+    """Читает картинку с диска (СТРОГО из whitelist-корней) и возвращает
+    data-URL или None при ошибке.
+
+    Путь/имя резолвится через _resolve_source_path: разрешены только файлы
+    внутри /sandbox и /app/generated_files (можно указать полный путь или
+    просто имя файла — тогда ищется по basename рекурсивно). Так закрыт
+    path-traversal — чужой путь вернёт None.
+    """
+    real = _resolve_source_path(path)
+    if not real:
+        log.warning("generate_image: файл не найден или вне whitelist: %s", path)
+        return None
     try:
-        if not os.path.isfile(path):
-            log.warning("generate_image: файл не найден: %s", path)
-            return None
-        ext = os.path.splitext(path)[1].lower()
+        ext = os.path.splitext(real)[1].lower()
         if ext not in IMAGE_EXT:
-            log.warning("generate_image: неподдерживаемое расширение %s (%s)", ext, path)
+            log.warning("generate_image: неподдерживаемое расширение %s (%s)", ext, real)
             return None
-        mime = mimetypes.guess_type(path)[0] or "image/png"
-        with open(path, "rb") as f:
+        mime = mimetypes.guess_type(real)[0] or "image/png"
+        with open(real, "rb") as f:
             b64 = base64.b64encode(f.read()).decode("ascii")
         return f"data:{mime};base64,{b64}"
     except Exception as e:
-        log.error("generate_image: не смог прочитать %s: %s", path, e)
+        log.error("generate_image: не смог прочитать %s: %s", real, e)
         return None
 
 
@@ -345,8 +393,12 @@ def make_generate_image_tool(agent, images: list[dict] | None = None):
           temperature   — 0.2–1.0, по умолчанию 0.4 (ниже = строже следует промпту).
           aspect_ratio  — "16:9" | "9:16" | "1:1" | "4:3" | "3:4" (по умолчанию 16:9).
           n             — сколько картинок сгенерировать (1–10, по умолчанию 1).
-          source_images — legacy: список путей к картинкам внутри песочницы
-                          (backward compatibility).
+          source_images — список путей ИЛИ имён файлов картинок для
+                          image-to-image, читаемых с диска СТРОГО из
+                          разрешённых папок: /sandbox и /app/generated_files.
+                          Можно указать полный путь внутри них или просто имя
+                          файла (ищется по имени рекурсивно). Пути вне этих
+                          папок игнорируются (защита от обхода директорий).
           source_image_keys — опционально: список image_key из generated_images
                           для image-to-image без диска (предпочтительный путь).
           source_user_image_indexes — опционально: индексы картинок, которые

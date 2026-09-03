@@ -18,11 +18,118 @@ tools/vision/tool_analyze_image.py
     # добавить analyze_image в base_tools
 """
 
+import os
+import glob
+import base64
 import logging
+import mimetypes
+
 from langchain.tools import tool
 from langchain.schema import HumanMessage
 
 log = logging.getLogger(__name__)
+
+# Whitelist-корни для чтения картинок с диска (те же, что у /web/file в
+# agent_service). Читать разрешено ТОЛЬКО файлы внутри этих директорий —
+# защита от path-traversal (../../etc/passwd и т.п.).
+ALLOWED_IMAGE_ROOTS = [
+    os.path.realpath("/app/generated_files"),
+    os.path.realpath("/sandbox"),
+]
+
+# Поддерживаемые расширения картинок для чтения с диска.
+_IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+
+
+def _is_within_allowed_roots(real_path: str) -> bool:
+    """True, если real_path лежит внутри одного из whitelist-корней."""
+    for root in ALLOWED_IMAGE_ROOTS:
+        if real_path == root or real_path.startswith(root + os.sep):
+            return True
+    return False
+
+
+def _resolve_local_image(path_or_name: str) -> str | None:
+    """Резолвит картинку по пути/имени строго внутри whitelist-корней.
+
+    Логика (как в agent_service._resolve_in_whitelist):
+      1. Если передан абсолютный путь внутри разрешённого корня и файл
+         существует — берём его.
+      2. Иначе ищем по basename рекурсивно в whitelist-корнях (первое
+         совпадение). basename берётся принудительно, чтобы в имени нельзя
+         было протащить разделители пути / обход директорий.
+    Возвращает абсолютный путь или None.
+    """
+    raw = (path_or_name or "").strip()
+    if not raw:
+        return None
+
+    # 1) Пробуем как есть (абсолютный/относительный путь)
+    real = os.path.realpath(raw)
+    if _is_within_allowed_roots(real) and os.path.isfile(real):
+        return real
+
+    # 2) Ищем по basename в whitelist-корнях
+    safe_name = os.path.basename(raw)
+    if not safe_name:
+        return None
+    for root in ALLOWED_IMAGE_ROOTS:
+        for cand in glob.glob(os.path.join(root, "**", safe_name), recursive=True):
+            real = os.path.realpath(cand)
+            if _is_within_allowed_roots(real) and os.path.isfile(real):
+                return real
+    return None
+
+
+def _local_image_as_data_uri(path_or_name: str) -> tuple[str | None, str | None]:
+    """Читает локальную картинку из whitelist и возвращает (data_uri, err).
+
+    При успехе err=None; при ошибке data_uri=None, err — текст для модели.
+    """
+    real = _resolve_local_image(path_or_name)
+    if not real:
+        return None, (
+            f"Файл «{path_or_name}» не найден в разрешённых папках "
+            f"(/sandbox, /app/generated_files) или путь недопустим."
+        )
+    ext = os.path.splitext(real)[1].lower()
+    if ext not in _IMAGE_EXT:
+        return None, f"«{path_or_name}»: неподдерживаемое расширение {ext} (только JPEG/PNG/WEBP/GIF)."
+    try:
+        mime = mimetypes.guess_type(real)[0] or "image/png"
+        with open(real, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+        return f"data:{mime};base64,{b64}", None
+    except Exception as e:
+        log.error("analyze_image: не смог прочитать %s: %s", real, e)
+        return None, f"Ошибка чтения «{path_or_name}»: {e}"
+
+
+async def _db_image_as_data_uri(agent, image_key: str) -> tuple[str | None, str | None]:
+    """Тянет картинку из generated_images по image_key. (data_uri, err)."""
+    db = getattr(agent, "db", None)
+    pool = getattr(db, "pool", None) if db else None
+    if pool is None:
+        return None, "Хранилище сгенерированных изображений недоступно (нет пула БД)."
+    key = str(image_key).strip()
+    if not key:
+        return None, "Пустой image_key."
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT image_data, mime_type FROM generated_images "
+                "WHERE image_key::text = $1 LIMIT 1",
+                key,
+            )
+        if not row or not row["image_data"]:
+            return None, f"Картинка с image_key={key} не найдена в хранилище."
+        raw = bytes(row["image_data"])
+        mime = row["mime_type"] or "image/jpeg"
+        b64 = base64.b64encode(raw).decode("ascii")
+        return f"data:{mime};base64,{b64}", None
+    except Exception as e:
+        log.error("analyze_image: не смог прочитать image_key=%s из БД: %s", key, e)
+        return None, f"Ошибка чтения image_key={key} из хранилища: {e}"
 
 
 def make_analyze_image_tool(agent, images: list[dict] | None = None,
@@ -61,23 +168,101 @@ def make_analyze_image_tool(agent, images: list[dict] | None = None,
     n_images = len(images)
 
     @tool
-    async def analyze_image(prompt: str, image_index: int = 0) -> str:
+    async def analyze_image(
+        prompt: str,
+        image_index: int = 0,
+        local_path: str | None = None,
+        source_image_keys: list[str] | None = None,
+    ) -> str:
         """
-        Анализирует изображение (JPEG/PNG), приложенное пользователем к текущему
-        сообщению, и отвечает на вопрос о нём: описать, распознать текст/диаграмму,
-        извлечь данные из графика/таблицы, оценить содержимое схемы и т.п.
+        Анализирует изображение (JPEG/PNG/WEBP/GIF) и отвечает на вопрос о нём:
+        описать, распознать текст/диаграмму, извлечь данные из графика/таблицы,
+        оценить содержимое схемы и т.п.
 
-        Картинки уже загружены на сервер — тебе НЕ нужно передавать base64.
-        В тексте сообщения они помечены маркерами вида [IMAGE #0: file.png].
-        Ты передаёшь ТОЛЬКО:
-          prompt      — что именно сделать с изображением (вопрос/задача для vision-модели)
-          image_index — номер картинки из маркера (0 — первая, по умолчанию 0)
+        Источник картинки выбирается по ОДНОМУ из параметров (в порядке приоритета):
 
-        Если картинок несколько — вызывай тул отдельно на каждый нужный индекс.
+          1. source_image_keys — список image_key (UUID) ранее СГЕНЕРИРОВАННЫХ
+             картинок из хранилища generated_images. Удобно, чтобы посмотреть на
+             картинку, которую ты сам нарисовал через generate_image (её image_key
+             был в отчёте / find_generated_image). Можно передать несколько —
+             будут проанализированы по очереди в одном ответе.
+
+          2. local_path — путь ИЛИ имя файла картинки на диске сервера. Читается
+             СТРОГО из разрешённых папок: /sandbox и /app/generated_files
+             (можно указать полный путь внутри них или просто имя файла — тогда
+             ищется по имени рекурсивно). Пригодится для картинок, которые сделал
+             другой тул (скриншот, отрисованный график, сохранённый ассет).
+
+          3. image_index — картинка, которую ПОЛЬЗОВАТЕЛЬ приложил к текущему
+             сообщению. В тексте сообщения они помечены маркерами [IMAGE #0: file].
+             base64 таких картинок уже на сервере — передавать его НЕ нужно.
+             Номер из маркера (0 — первая, по умолчанию 0).
+
+        Параметр prompt — что именно сделать с изображением — обязателен всегда.
+
+        Если нужно проанализировать несколько картинок из разных источников —
+        вызывай тул отдельно для каждой (кроме source_image_keys, где список
+        обрабатывается за один вызов).
         """
+        # ── Нормализация source_image_keys (LLM может прислать строкой) ──
+        keys: list[str] = []
+        if source_image_keys is not None:
+            if isinstance(source_image_keys, list):
+                keys = [str(k).strip() for k in source_image_keys if str(k).strip()]
+            else:
+                s = str(source_image_keys).strip()
+                if s:
+                    try:
+                        import json as _json
+                        parsed = _json.loads(s)
+                        if isinstance(parsed, list):
+                            keys = [str(k).strip() for k in parsed if str(k).strip()]
+                        else:
+                            keys = [str(parsed).strip()]
+                    except Exception:
+                        keys = [p.strip() for p in s.strip("[]").split(",") if p.strip()]
+
+        async def _run_vision(data_uri: str, label: str) -> str:
+            """Один прогон vision-модели по data_uri, возврат текста/ошибки."""
+            try:
+                msg = HumanMessage(content=[
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": data_uri}},
+                ])
+                resp = await vision_llm.ainvoke([msg])
+                content = resp.content if hasattr(resp, "content") else str(resp)
+                log.info("analyze_image: обработана картинка %s", label)
+                return content
+            except Exception as e:
+                log.error("analyze_image failed (%s): %s", label, e, exc_info=True)
+                return f"Ошибка анализа изображения ({label}): {e}"
+
+        # ── Источник 1: image_key из хранилища generated_images ──────────
+        if keys:
+            results: list[str] = []
+            for k in keys:
+                data_uri, err = await _db_image_as_data_uri(agent, k)
+                if err:
+                    results.append(f"[image_key={k}] {err}")
+                    continue
+                out = await _run_vision(data_uri, f"image_key={k}")
+                results.append(f"[image_key={k}]\n{out}")
+            return "\n\n".join(results)
+
+        # ── Источник 2: локальный путь/имя в /sandbox|/app/generated_files ─
+        if local_path and str(local_path).strip():
+            data_uri, err = _local_image_as_data_uri(str(local_path))
+            if err:
+                return err
+            return await _run_vision(data_uri, f"local:{os.path.basename(str(local_path))}")
+
+        # ── Источник 3: картинка, приложенная пользователем к сообщению ──
         if not images:
-            return ("К текущему сообщению не приложено ни одного изображения "
-                    "(JPEG/PNG). Попроси пользователя загрузить картинку.")
+            return ("К текущему сообщению не приложено ни одного изображения, "
+                    "и не указан ни local_path, ни source_image_keys. "
+                    "Передай local_path (файл в /sandbox или /app/generated_files), "
+                    "source_image_keys (сгенерированные картинки) или попроси "
+                    "пользователя загрузить картинку.")
 
         if image_index < 0 or image_index >= n_images:
             avail = ", ".join(
@@ -93,20 +278,7 @@ def make_analyze_image_tool(agent, images: list[dict] | None = None,
 
         mime = img.get("mime_type") or "image/png"
         data_uri = b64 if b64.startswith("data:") else f"data:{mime};base64,{b64}"
-
-        try:
-            msg = HumanMessage(content=[
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": data_uri}},
-            ])
-            resp = await vision_llm.ainvoke([msg])
-            content = resp.content if hasattr(resp, "content") else str(resp)
-            fname = img.get("filename", f"image_{image_index}")
-            log.info("analyze_image: обработана картинка %s (%d байт b64)",
-                     fname, len(b64))
-            return content
-        except Exception as e:
-            log.error("analyze_image failed: %s", e, exc_info=True)
-            return f"Ошибка анализа изображения: {e}"
+        fname = img.get("filename", f"image_{image_index}")
+        return await _run_vision(data_uri, f"user#{image_index}:{fname}")
 
     return analyze_image

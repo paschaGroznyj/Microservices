@@ -657,8 +657,9 @@
 .chat-search-overlay.closing { opacity: 0; }
 
 .chat-search-modal {
+  --cse-lift-px: 0px;
   position: fixed;
-  top: 50%;
+  top: calc(50% - var(--cse-lift-px));
   left: 50%;
   width: min(680px, 92vw);
   max-height: 70vh;
@@ -675,12 +676,6 @@
 
 .chat-search-overlay.active .chat-search-modal {
   transform: translateX(-50%) translateY(-50%) scale(1);
-}
-
-/* Когда есть ввод — поднимаем модалку к рабочему уровню */
-.chat-search-overlay.active.lifted .chat-search-modal {
-  top: 12vh;
-  transform: translateX(-50%) translateY(0) scale(1);
 }
 
 .cse-input-row {

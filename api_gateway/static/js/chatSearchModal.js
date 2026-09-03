@@ -19,12 +19,12 @@ const openBtn = document.getElementById('chat-search-btn');
 let debounceTimer = null;
 let currentReqId = 0;
 let lastResultsCount = 0;
+const CSE_ITEM_LIFT_COEFF = 0.50;
 
 function setLiftPx(px = 0) {
-  if (!overlay || !modal) return;
+  if (!modal) return;
   const lift = Math.max(0, Math.round(Number(px) || 0));
   modal.style.setProperty('--cse-lift-px', `${lift}px`);
-  overlay.classList.toggle('lifted', lift > 0);
 }
 
 function calcMaxLiftPx() {
@@ -45,7 +45,7 @@ function applyLiftByResultsCount(count) {
 
   const firstItem = resultsBox?.querySelector('.cse-item');
   const itemHeight = firstItem ? firstItem.getBoundingClientRect().height : 52;
-  const desiredLift = itemHeight * safeCount;
+  const desiredLift = itemHeight * safeCount * CSE_ITEM_LIFT_COEFF;
   const maxLift = calcMaxLiftPx();
   setLiftPx(Math.min(desiredLift, maxLift));
 }

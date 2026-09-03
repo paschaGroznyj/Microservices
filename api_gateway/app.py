@@ -996,7 +996,10 @@ async def get_chat_db_image(chat_id: int, message_id: str, file_name: str, reque
     try:
         agent_resp = await app.state.http_client.get(
             f"{SERVICES['agent_service']['url']}/web/db_image",
-            params={"message_id": message_id, "image_key": image_key},
+            # file_name нужен для диск-фолбэка на стороне agent_service:
+            # если картинки нет в generated_images, она резолвится по имени
+            # СТРОГО в whitelist-корнях (/app/generated_files, /sandbox).
+            params={"message_id": message_id, "image_key": image_key, "file_name": file_name},
         )
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Agent service unreachable: {e}")
@@ -1010,7 +1013,8 @@ async def get_chat_db_image(chat_id: int, message_id: str, file_name: str, reque
         headers={
             "Cache-Control": "public, max-age=86400",
             "X-Image-Key": agent_resp.headers.get("X-Image-Key", ""),
-            "Access-Control-Expose-Headers": "X-Image-Key",
+            "X-Image-Source": agent_resp.headers.get("X-Image-Source", "db"),
+            "Access-Control-Expose-Headers": "X-Image-Key, X-Image-Source",
         },
     )
 

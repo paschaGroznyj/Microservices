@@ -138,15 +138,52 @@ async def wait_for_files(message_id: str, timeout: float = FILE_WAIT_TIMEOUT) ->
         pending_files.pop(message_id, None)  # чистим память в любом случае
     return entry.get("text", ""), entry.get("images", [])
 
-ALLOWED_FILES_ROOT = os.path.realpath("/app/generated_files")
+# Whitelist корней, из которых разрешено отдавать файлы с диска.
+# Любой запрошенный путь обязан лежать ВНУТРИ одного из этих корней —
+# иначе 403 (защита от path-traversal вида ../../etc/passwd).
+ALLOWED_FILES_ROOTS = [
+    os.path.realpath("/app/generated_files"),
+    os.path.realpath("/sandbox"),
+]
+# Обратная совместимость: часть кода ссылается на единичный корень.
+ALLOWED_FILES_ROOT = ALLOWED_FILES_ROOTS[0]
+
+
+def _is_within_allowed_roots(real_path: str) -> bool:
+    """True, если real_path лежит внутри одного из whitelist-корней."""
+    for root in ALLOWED_FILES_ROOTS:
+        if real_path == root or real_path.startswith(root + os.sep):
+            return True
+    return False
+
+
+def _resolve_in_whitelist(file_name: str) -> str | None:
+    """Ищет файл по basename в whitelist-корнях (рекурсивно).
+
+    Возвращает абсолютный путь первого совпадения внутри разрешённых
+    корней либо None. basename берётся принудительно, чтобы в имени
+    нельзя было протащить разделители пути / обход директорий.
+    """
+    import glob as _glob
+
+    safe_name = os.path.basename((file_name or "").strip())
+    if not safe_name:
+        return None
+    for root in ALLOWED_FILES_ROOTS:
+        for cand in _glob.glob(os.path.join(root, "**", safe_name), recursive=True):
+            real = os.path.realpath(cand)
+            if _is_within_allowed_roots(real) and os.path.isfile(real):
+                return real
+    return None
+
 
 @web_router.get("/web/file")
 async def get_generated_file(path: str):
     real_path = os.path.realpath(path)
 
-    # Защита: файл обязан лежать внутри разрешённой директории / Не обязон
-    # if not real_path.startswith(ALLOWED_FILES_ROOT + os.sep):
-    #     raise HTTPException(status_code=403, detail="Forbidden path")
+    # Защита: файл обязан лежать внутри одного из разрешённых корней.
+    if not _is_within_allowed_roots(real_path):
+        raise HTTPException(status_code=403, detail="Forbidden path")
 
     if not os.path.isfile(real_path):
         raise HTTPException(status_code=404, detail="File not found")
@@ -226,7 +263,42 @@ async def get_db_image(
         raise HTTPException(status_code=500, detail="DB query failed")
 
     if not row or not row["image_data"]:
-        raise HTTPException(status_code=404, detail="Image not found in DB")
+        # ── DISK FALLBACK ──────────────────────────────────────────────
+        # Картинка НЕ найдена в generated_images. Это нормальный кейс для
+        # изображений, которые агент положил только на диск (в /sandbox или
+        # /app/generated_files) и вернул как обычный файл-вложение, БЕЗ записи
+        # в БД. Такие файлы фронт всё равно просит через /image/... (по
+        # растровому расширению), поэтому раньше они ловили 404.
+        #
+        # Резолвим файл по basename СТРОГО в whitelist-корнях и стримим его.
+        # Никакого произвольного path здесь нет — только имя файла, поиск
+        # ограничен ALLOWED_FILES_ROOTS.
+        disk_path = _resolve_in_whitelist(file_name)
+        if disk_path:
+            logging.info(f"/web/db_image: not in DB, disk fallback -> {disk_path}")
+            ext = os.path.splitext(disk_path)[1].lower().lstrip(".")
+            mime_map = {
+                "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                "webp": "image/webp", "gif": "image/gif",
+            }
+            disk_mime = mime_map.get(ext, "application/octet-stream")
+            disk_name = os.path.basename(disk_path)
+
+            def iterfile():
+                with open(disk_path, "rb") as f:
+                    yield from iter(lambda: f.read(1024 * 1024), b"")
+
+            return StreamingResponse(
+                iterfile(),
+                media_type=disk_mime,
+                headers={
+                    "Content-Disposition": f'inline; filename="{disk_name}"',
+                    "Cache-Control": "public, max-age=86400",
+                    "X-Image-Source": "disk",
+                    "Access-Control-Expose-Headers": "X-Image-Key, X-Image-Source",
+                },
+            )
+        raise HTTPException(status_code=404, detail="Image not found in DB or disk whitelist")
 
     raw = bytes(row["image_data"])
     mime = row["mime_type"] or "image/png"

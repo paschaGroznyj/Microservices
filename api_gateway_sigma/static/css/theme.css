@@ -163,38 +163,69 @@ input, textarea {
 /* ═══════════════════════════════════════════════
    THEME TOGGLE BUTTON — в header-actions, не фиксированный
 ════════════════════════════════════════════════ */
+/* Pill-тоггл (капсула) с бегунком: тёмная дорожка, светлый кружок ездит
+   влево/вправо, активная иконка (солнце/луна) показывается сбоку.
+   HTML и theme.js не меняются — обе иконки лежат внутри кнопки, положение
+   бегунка и видимость иконок управляются через [data-theme]. */
 .theme-toggle {
   /* встраивается в поток header-actions */
-  position: static;
+  position: relative;
   z-index: auto;
   flex-shrink: 0;
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
-  background: transparent;
-  border: 1px solid transparent;
+  width: 60px;
+  height: 30px;
+  padding: 0;
+  border-radius: 15px;              /* половина высоты — капсула */
+  background: var(--surface3);
+  border: 1px solid var(--border);
   box-shadow: none;
   display: flex;
   align-items: center;
-  justify-content: center;
-  color: var(--text-secondary);
-  transition: all var(--transition);
+  justify-content: flex-start;      /* активная иконка прижата к краю */
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+}
+
+/* Бегунок (кружок) — псевдоэлемент. Светлый в тёмной теме, тёмный в светлой. */
+.theme-toggle::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--text-primary);
+  box-shadow: var(--shadow-sm);
+  transition: left var(--transition), background var(--transition);
+  z-index: 1;
 }
 
 .theme-toggle:hover {
-  background: var(--surface2);
-  border-color: var(--border);
-  color: var(--accent);
+  border-color: var(--accent);
   transform: none;
   box-shadow: none;
 }
 
-.theme-icon { width: 17px; height: 17px; transition: opacity var(--transition); }
+/* Иконка активной темы: размещается на противоположной от бегунка стороне */
+.theme-icon {
+  width: 15px;
+  height: 15px;
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-secondary);
+  transition: opacity var(--transition);
+  z-index: 0;
+}
 
-/* В светлой теме — показываем луну, прячем солнце */
+/* ── Светлая тема: бегунок слева, справа иконка луны ── */
+[data-theme="light"] .theme-toggle::before { left: 3px; }
 [data-theme="light"] .theme-icon-sun  { display: none; }
-[data-theme="light"] .theme-icon-moon { display: block; }
+[data-theme="light"] .theme-icon-moon { display: block; right: 8px; left: auto; }
 
-/* В тёмной теме — показываем солнце, прячем луну */
-[data-theme="dark"] .theme-icon-sun  { display: block; }
+/* ── Тёмная тема: бегунок справа, слева иконка солнца ── */
+[data-theme="dark"] .theme-toggle::before { left: 33px; }
+[data-theme="dark"] .theme-icon-sun  { display: block; left: 8px; right: auto; }
 [data-theme="dark"] .theme-icon-moon { display: none; }

@@ -18,10 +18,36 @@ const openBtn = document.getElementById('chat-search-btn');
 
 let debounceTimer = null;
 let currentReqId = 0;
+let lastResultsCount = 0;
 
-function setLifted(isLifted) {
-  if (!overlay) return;
-  overlay.classList.toggle('lifted', Boolean(isLifted));
+function setLiftPx(px = 0) {
+  if (!overlay || !modal) return;
+  const lift = Math.max(0, Math.round(Number(px) || 0));
+  modal.style.setProperty('--cse-lift-px', `${lift}px`);
+  overlay.classList.toggle('lifted', lift > 0);
+}
+
+function calcMaxLiftPx() {
+  // Верхний предел подъёма: от центра до «рабочего» уровня 12vh.
+  const centerY = window.innerHeight * 0.5;
+  const topY = window.innerHeight * 0.12;
+  return Math.max(0, centerY - topY);
+}
+
+function applyLiftByResultsCount(count) {
+  const safeCount = Number(count) || 0;
+  lastResultsCount = safeCount;
+
+  if (safeCount < 1) {
+    setLiftPx(0);
+    return;
+  }
+
+  const firstItem = resultsBox?.querySelector('.cse-item');
+  const itemHeight = firstItem ? firstItem.getBoundingClientRect().height : 52;
+  const desiredLift = itemHeight * safeCount;
+  const maxLift = calcMaxLiftPx();
+  setLiftPx(Math.min(desiredLift, maxLift));
 }
 
 function escapeHtml(str) {
@@ -72,6 +98,7 @@ function setHint(msg) {
 function renderResults(items, query) {
   if (!items || !items.length) {
     setHint('Ничего не найдено');
+    applyLiftByResultsCount(0);
     return;
   }
   const html = items.map((item) => {
@@ -85,6 +112,8 @@ function renderResults(items, query) {
       </button>`;
   }).join('');
   resultsBox.innerHTML = html;
+
+  applyLiftByResultsCount(items.length);
 
   resultsBox.querySelectorAll('.cse-item').forEach((el) => {
     el.addEventListener('click', () => {
@@ -121,12 +150,13 @@ function onInput() {
   const q = input.value.trim();
   clearTimeout(debounceTimer);
 
-  // Поведение по ТЗ:
-  // пусто -> модалка в центре;
-  // есть ввод -> анимированно поднимается вверх.
-  setLifted(q.length > 0);
+  // Поднимаем только при найденных чатах (после renderResults).
+  if (!q.length) {
+    setLiftPx(0);
+  }
 
   if (q.length < MIN_CHARS) {
+    setLiftPx(0);
     setHint(`Введите минимум ${MIN_CHARS} символа для поиска`);
     return;
   }
@@ -139,7 +169,7 @@ function openModal() {
   overlay.classList.add('active');
   document.body.classList.add('cse-open');
   input.value = '';
-  setLifted(false);
+  setLiftPx(0);
   setHint(`Введите минимум ${MIN_CHARS} символа для поиска`);
   // фокус после старта transition
   setTimeout(() => input.focus(), 60);
@@ -149,7 +179,7 @@ function closeModal() {
   if (!overlay) return;
   overlay.classList.remove('active');
   overlay.classList.add('closing');
-  overlay.classList.remove('lifted');
+  setLiftPx(0);
   document.body.classList.remove('cse-open');
   clearTimeout(debounceTimer);
   currentReqId++; // отменяем висящие ответы
@@ -168,6 +198,11 @@ if (overlay) {
   });
 }
 
+window.addEventListener('resize', () => {
+  if (!overlay || !overlay.classList.contains('active')) return;
+  applyLiftByResultsCount(lastResultsCount);
+});
+
 // Ctrl+K / Cmd+K открывает, Escape закрывает
 document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
@@ -184,7 +219,7 @@ if (input) {
     if (e.key === 'Escape') {
       e.preventDefault();
       input.value = '';
-      setLifted(false);
+      setLiftPx(0);
       setHint(`Введите минимум ${MIN_CHARS} символа для поиска`);
     }
   });

@@ -979,27 +979,14 @@
 
 /* ── Мобильный override ───────────────────── */
 @media (max-width: 768px) {
-  .chat-start-screen {
-    padding:
-      calc(12px + env(safe-area-inset-top, 0px))
-      12px
-      calc(14px + env(safe-area-inset-bottom, 0px));
-    justify-content: flex-start;
-  }
-
+  /* Раскладку НЕ трогаем: .chat-start-screen остаётся
+     justify-content:center, .start-body центрирован флексом.
+     Правим только внутренние размеры/типографику. */
   .start-body {
-    max-width: min(100%, 560px);
-    gap: 20px;
-    margin-top: clamp(54px, 11vh, 92px);
+    gap: 24px;
   }
 
   .start-title { font-size: 1.5rem; }
-
-  .start-input-area {
-    width: 100%;
-    max-width: 92vw;
-    margin: 0 auto;
-  }
 
   .start-input-box {
     border-radius: 14px;
@@ -1041,15 +1028,6 @@
 }
 
 @media (max-width: 480px) {
-  .start-body {
-    max-width: 94vw;
-    margin-top: clamp(48px, 9vh, 80px);
-  }
-
-  .start-input-area {
-    max-width: 94vw;
-  }
-
   .start-footer-note {
     font-size: .62rem;
     opacity: .8;

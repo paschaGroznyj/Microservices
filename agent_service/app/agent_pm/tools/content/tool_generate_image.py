@@ -547,7 +547,7 @@ def make_generate_image_tool(agent, images: list[dict] | None = None):
                         errors.append(f"#{i}: в ответе нет изображения")
                         continue
                     raw, ext = _data_uri_to_bytes(data_uri)
-                    fname = f"generated_{i}{ext}"
+                    fname = f"{uuid.uuid4().hex[:20]}{ext}"
 
                     # Пишем бинарник + метаданные ТОЛЬКО в БД (без file_path).
                     # Для текущего ответа фронту передаём image_key + name, а загрузка

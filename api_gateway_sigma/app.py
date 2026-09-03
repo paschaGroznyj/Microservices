@@ -825,6 +825,7 @@ async def send_message(request: Request):
         data["username"] = user["username"]
     data["type_agent"] = data.get("type_agent", "pm") # О Великий gateway
     data["request_id"] = request_id
+    data["gateway_target"] = "sigma"
     logger.info(f"Что летит при отправке сообщений {data['chat_id']}, {data['message']}")
 
     # SIGMA: WS-эхо убрано. Помечаем в store, что для этого чата ожидается

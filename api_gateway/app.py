@@ -880,6 +880,7 @@ async def send_message(request: Request):
     data["username"] = request.headers.get("X-Authentik-Name").encode('latin-1').decode('utf-8') # Передача имени в chats_service -> promt Ouroboros
     data["type_agent"] = data.get("type_agent", "pm") # О Великий gateway
     data["request_id"] = request_id
+    data["gateway_target"] = "main"
     logger.info(f"Что летит при отправке сообщений {data['chat_id']}, {data['message']}")
 
     message = {

@@ -333,6 +333,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     message_id = payload.get("message_id")
     has_files = payload.get("has_files", False)
     agent_model = payload.get("agent_model")
+    gateway_target = payload.get("gateway_target", "main")
 
 
     if is_from_bot or user_id == -1:
@@ -368,7 +369,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                                             context_size=context_size,
                                             source="CatchPM",
                                             agent_model=agent_model,
-                                            images=images)
+                                            images=images,
+                                            gateway_target=gateway_target)
 
         response_text = response["message"]
         # from datetime import datetime

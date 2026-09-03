@@ -823,12 +823,24 @@
 }
 
 .start-input-box {
-  background: var(--input-bg);
-  border: 1.5px solid var(--input-border);
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid rgba(255, 255, 255, 0.44);
   border-radius: 16px;
-  box-shadow: var(--shadow-md);
-  transition: border-color var(--transition), box-shadow var(--transition);
+  box-shadow:
+    0 12px 34px rgba(15, 23, 42, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.34);
+  backdrop-filter: blur(12px) saturate(118%);
+  -webkit-backdrop-filter: blur(12px) saturate(118%);
+  transition: border-color var(--transition), box-shadow var(--transition), background var(--transition);
   overflow: hidden;
+}
+
+[data-theme="dark"] .start-input-box {
+  background: rgba(15, 23, 37, 0.56);
+  border-color: rgba(255, 255, 255, 0.18);
+  box-shadow:
+    0 12px 34px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 
 .start-input-box:focus-within {
@@ -866,7 +878,13 @@
   justify-content: flex-start;
   padding: 8px 12px 10px 14px;
   gap: 4px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid rgba(255, 255, 255, 0.34);
+  background: color-mix(in srgb, rgba(255,255,255,0.26) 86%, transparent);
+}
+
+[data-theme="dark"] .start-input-footer {
+  border-top-color: rgba(255, 255, 255, 0.12);
+  background: color-mix(in srgb, rgba(15,23,37,0.38) 90%, transparent);
 }
 
 /* send-btn всегда прижат к правому краю */

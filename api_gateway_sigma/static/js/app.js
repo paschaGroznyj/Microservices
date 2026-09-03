@@ -2199,7 +2199,14 @@ class ChatApp {
         container.classList.add('rending');
 
         const profileName = document.querySelector('.profile-name')?.textContent?.trim();
-        const username = this.currentUser?.name?.split(' ')[0]
+        // name может прийти как литерал "Unknown" (когда бэк не получил
+        // заголовок X-Authentik-Name) — такое значение считаем невалидным,
+        // чтобы сработал фолбэк на username / profile-name из сайдбара.
+        const rawName = this.currentUser?.name?.trim();
+        const firstName = (rawName && rawName !== 'Unknown')
+            ? rawName.split(' ')[0]
+            : '';
+        const username = firstName
                       || this.currentUser?.username
                       || profileName
                       || 'друг';

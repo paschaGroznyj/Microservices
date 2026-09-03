@@ -163,6 +163,87 @@ async def get_generated_file(path: str):
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
+
+@web_router.get("/web/db_image")
+async def get_db_image(
+    message_id: str | None = None,
+    file_name: str | None = None,
+    image_id: int | None = None,
+    image_key: str | None = None,
+):
+    """Отдаёт бинарник картинки НАПРЯМУЮ из таблицы generated_images (BYTEA).
+
+    Источник истины — БД, а НЕ диск. Эфемерный файл в generated_files живёт
+    ~30 мин и чистится по TTL, поэтому превью в чате обязано браться отсюда,
+    иначе после уборки в галерее будет пусто (404 от /web/file).
+
+    Поиск строки (file_name в WHERE НЕ участвует — он всегда generated_0.jpg
+    и для картинок бесполезен ни как якорь, ни как уникальное имя):
+      - image_key (точный, приоритетный), либо
+      - image_id (точный), либо
+      - message_id — последняя по времени (created_at DESC), что и нужно фронту:
+        одно сообщение бота = одна актуальная картинка.
+
+    Уникальный ключ image_key возвращаем в заголовке X-Image-Key — фронт из него
+    строит уникальное имя файла для скачивания (не завися от WS-пейлоада, куда
+    image_key может не доехать). Разрешение фронт снимает сам (naturalWidth).
+    """
+    logging.info(
+        f"/web/db_image: message_id={message_id}, image_id={image_id}, "
+        f"image_key={image_key} (file_name={file_name} — игнорируется для картинок)"
+    )
+    pool = getattr(db, "pool", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="DB pool not ready")
+
+    row = None
+    try:
+        async with pool.acquire() as conn:
+            if image_key:
+                row = await conn.fetchrow(
+                    "SELECT file_name, mime_type, image_data, image_key "
+                    "FROM generated_images WHERE image_key::text = $1 LIMIT 1",
+                    str(image_key).strip(),
+                )
+            elif image_id is not None:
+                row = await conn.fetchrow(
+                    "SELECT file_name, mime_type, image_data, image_key "
+                    "FROM generated_images WHERE id = $1",
+                    image_id,
+                )
+            elif message_id:
+                # Точное совпадение по message_id; если картинок несколько —
+                # берём последнюю по времени генерации.
+                row = await conn.fetchrow(
+                    "SELECT file_name, mime_type, image_data, image_key "
+                    "FROM generated_images "
+                    "WHERE message_id = $1 "
+                    "ORDER BY created_at DESC, id DESC LIMIT 1",
+                    message_id,
+                )
+    except Exception as e:
+        logging.error(f"/web/db_image: ошибка запроса: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="DB query failed")
+
+    if not row or not row["image_data"]:
+        raise HTTPException(status_code=404, detail="Image not found in DB")
+
+    raw = bytes(row["image_data"])
+    mime = row["mime_type"] or "image/png"
+    fname = row["file_name"] or "image.png"
+    img_key = str(row["image_key"]) if row["image_key"] else ""
+    return Response(
+        content=raw,
+        media_type=mime,
+        headers={
+            "Content-Disposition": f'inline; filename="{fname}"',
+            "Cache-Control": "public, max-age=86400",
+            "X-Image-Key": img_key,
+            "Access-Control-Expose-Headers": "X-Image-Key",
+        },
+    )
+
+
 async def handle_message(payload: dict, prod: AIOKafkaProducer):
     """Обработка одного сообщения — запускается конкурентно."""
     start = time.perf_counter()
@@ -227,12 +308,54 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
 
         attached_files = None
         if files_to_send:
-            attached_files = [
-                {"name": os.path.basename(f["path"]), "path": f["path"]}
-                for f in files_to_send
-            ]
+            attached_files = []
+            for f in files_to_send:
+                if f.get("kind") == "image":
+                    attached_files.append({
+                        "name": f.get("name") or "image.jpg",
+                        "path": f.get("path"),
+                        "kind": "image",
+                        "image_key": f.get("image_key"),
+                    })
+                else:
+                    attached_files.append({
+                        "name": os.path.basename(f["path"]),
+                        "path": f["path"],
+                        "kind": f.get("kind"),
+                    })
 
         message_id = f"msg-{int(time.time() * 1000)}-{str(uuid.uuid4())[:8]}"
+
+        # Дозаполняем message_id в generated_images по image_key.
+        # message_id бота генерится ЗДЕСЬ (после process_query), поэтому тул
+        # физически не мог записать его в generated_images (там оставался NULL).
+        # Связываем постфактум по image_key — он создаётся в туле и доходит до
+        # обоих концов (generated_images и chat_files). Без этого фолбэк-поиск
+        # картинки по паре (message_id, file_name) в /web/db_image давал 404.
+        if attached_files:
+            image_keys = [
+                f.get("image_key")
+                for f in attached_files
+                if f.get("kind") == "image" and f.get("image_key")
+            ]
+            if image_keys:
+                try:
+                    async with db.pool.acquire() as conn:
+                        await conn.execute(
+                            "UPDATE generated_images SET message_id = $1 "
+                            "WHERE image_key::text = ANY($2::text[]) "
+                            "AND message_id IS NULL",
+                            message_id, image_keys,
+                        )
+                    logging.info(
+                        f"generated_images: message_id={message_id} проставлен "
+                        f"для image_key={image_keys}"
+                    )
+                except Exception as link_err:
+                    logging.error(
+                        f"Не удалось привязать message_id к generated_images: {link_err}"
+                    )
+
         bot_message = {
             "user_id": -1,
             "chat_id": chat_id,

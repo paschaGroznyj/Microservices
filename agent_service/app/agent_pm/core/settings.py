@@ -26,6 +26,7 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
         "send_file_to_user",
         "presentation_design_skill",
         "html_design_skill",
+        "generate_image",
     ],
     "parallelism": [
         "create_workspace",

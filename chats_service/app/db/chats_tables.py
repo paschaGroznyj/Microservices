@@ -130,9 +130,42 @@ class DataBaseChats:
 
             ALTER TABLE chat_files ADD COLUMN IF NOT EXISTS source TEXT;
             ALTER TABLE chat_files ADD COLUMN IF NOT EXISTS file_path TEXT;
+            ALTER TABLE chat_files ADD COLUMN IF NOT EXISTS file_kind TEXT;
+            ALTER TABLE chat_files ADD COLUMN IF NOT EXISTS image_key TEXT;
             CREATE INDEX IF NOT EXISTS ix_chat_files_source ON chat_files(source);
 
             ALTER TABLE chats ADD COLUMN IF NOT EXISTS tool_trace TEXT;
+
+            -- Сгенерированные изображения (generate_image): бинарник + метаданные.
+            -- Источник истины: БД. На диск ничего постоянного не сохраняем.
+            CREATE TABLE IF NOT EXISTS generated_images (
+                id SERIAL PRIMARY KEY,
+                image_key UUID NOT NULL UNIQUE,
+                chat_id BIGINT,
+                user_id BIGINT,
+                message_id TEXT,
+                file_name TEXT NOT NULL,
+                mime_type TEXT,
+                prompt TEXT NOT NULL,
+                model TEXT,
+                aspect_ratio TEXT,
+                temperature REAL,
+                image_data BYTEA NOT NULL,
+                byte_size INTEGER,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- Миграции для уже существующей таблицы generated_images
+            CREATE EXTENSION IF NOT EXISTS pgcrypto;
+            ALTER TABLE generated_images ADD COLUMN IF NOT EXISTS image_key UUID;
+            UPDATE generated_images SET image_key = gen_random_uuid() WHERE image_key IS NULL;
+            ALTER TABLE generated_images ALTER COLUMN image_key SET NOT NULL;
+            ALTER TABLE generated_images DROP COLUMN IF EXISTS file_path;
+
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_generated_images_image_key ON generated_images(image_key);
+            CREATE INDEX IF NOT EXISTS ix_generated_images_chat_id ON generated_images(chat_id);
+            CREATE INDEX IF NOT EXISTS ix_generated_images_message_id ON generated_images(message_id);
+            CREATE INDEX IF NOT EXISTS ix_generated_images_created_at ON generated_images(created_at DESC);
         """)
     async def add_message(
         self,
@@ -172,13 +205,13 @@ class DataBaseChats:
                     if attached_files:
                         source = "agent" if is_from_bot else "user"
                         await conn.executemany("""
-                            INSERT INTO chat_files (message_id, chat_id, user_id, file_name, file_ext, source, file_path)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7);
+                            INSERT INTO chat_files (message_id, chat_id, user_id, file_name, file_ext, source, file_path, file_kind, image_key)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
                         """, [
                             (
                                 message_id, chat_id, user_id,
                                 f["name"], f["name"].rsplit(".", 1)[-1].lower() if "." in f["name"] else None,
-                                source, f.get("path"),
+                                source, f.get("path"), f.get("kind"), f.get("image_key"),
                             )
                             for f in attached_files
                         ])
@@ -355,7 +388,7 @@ class DataBaseChats:
                                 (
                                     SELECT json_agg(
                                         json_build_object('name', f.file_name, 'ext', f.file_ext,
-                                        'source', f.source)
+                                        'source', f.source, 'kind', f.file_kind, 'image_key', f.image_key)
                                         ORDER BY f.id ASC
                                     )
                                     FROM chat_files f

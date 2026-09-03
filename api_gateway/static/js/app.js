@@ -895,12 +895,92 @@ class ChatApp {
             return chip;
         };
 
-        const VISIBLE_LIMIT = 3;
-        const visible = files.slice(0, VISIBLE_LIMIT);
-        const hidden  = files.slice(VISIBLE_LIMIT);
+        // Картинка? kind==='image' (сгенерированные тулом generate_image)
+        // ИЛИ расширение растрового изображения — рисуем превью-карточку.
+        const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif']);
+        const isImageFile = (f) => {
+            let ext = (f.ext || '').toLowerCase();
+            if (!ext && f.name && f.name.includes('.')) {
+                ext = f.name.split('.').pop().toLowerCase();
+            }
+            return f.kind === 'image' || IMAGE_EXTS.has(ext);
+        };
+
+        const makeImageCard = (f) => {
+            const name = f.name || 'image';
+            const safeName = this.escapeHtml(name);
+            // Сгенерированные тулом картинки (kind==='image') тянем ИЗ БД
+            // (generated_images), а не с диска: эфемерный файл живёт ~30 мин
+            // и чистится по TTL, после чего /files/... вернёт 404. Эндпоинт
+            // /image/... проксирует бинарник из таблицы по (message_id, name).
+            // Обычные вложения (kind иной) оставляем на файловом пути.
+            // Любой файл-картинку тянем из БД через /image/... — эндпоинт умеет
+            // искать и по image_key, и по паре (message_id, file_name). Это чинит
+            // legacy-записи (kind/image_key = NULL), у которых файл на диске уже
+            // вычищен по TTL: раньше они шли в /files/... и падали в 404.
+            const imageKeyQs = f.image_key
+                ? `?image_key=${encodeURIComponent(f.image_key)}`
+                : '';
+            const url = messageId
+                ? `/api/chats/${this.currentChat}/image/${encodeURIComponent(messageId)}/${encodeURIComponent(name)}${imageKeyQs}`
+                : '#';
+
+            const card = document.createElement('div');
+            card.className = 'fa-image-card';
+            card.title = name;
+
+            const img = document.createElement('img');
+            img.className = 'fa-image-card__img';
+            img.alt = safeName;
+            img.loading = 'lazy';
+            img.src = url;
+            // Пока грузится src — держим скелетон; снимаем по load/error.
+            card.classList.add('fa-image-card--loading');
+            img.addEventListener('load', () => card.classList.remove('fa-image-card--loading'));
+            img.addEventListener('error', () => {
+                card.classList.remove('fa-image-card--loading');
+                card.classList.add('fa-image-card--error');
+            });
+
+            // Клик — превью в лайтбоксе.
+            card.addEventListener('click', () => this._openImageLightbox(url, name, f.image_key));
+
+            const overlay = document.createElement('div');
+            overlay.className = 'fa-image-card__overlay';
+            overlay.innerHTML = `
+<span class="fa-image-card__zoom" aria-hidden="true">
+  <svg viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="1.8"/><path d="M20 20l-3.5-3.5M11 8v6M8 11h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+</span>`;
+
+            const skel = document.createElement('div');
+            skel.className = 'fa-image-card__skeleton';
+            skel.innerHTML = '<div class="fa-pixel-grid"></div>';
+
+            card.appendChild(skel);
+            card.appendChild(img);
+            card.appendChild(overlay);
+            return card;
+        };
+
+        // Разделяем на картинки и обычные файлы.
+        const imageFiles = files.filter(isImageFile);
+        const otherFiles = files.filter(f => !isImageFile(f));
 
         const wrap = document.createElement('div');
         wrap.className = 'fa-bot-files';
+
+        if (imageFiles.length) {
+            // Пришли реальные картинки — снимаем скелетон генерации.
+            this._removeImageGenSkeleton();
+            const gallery = document.createElement('div');
+            gallery.className = 'fa-image-gallery';
+            imageFiles.forEach(f => gallery.appendChild(makeImageCard(f)));
+            wrap.appendChild(gallery);
+        }
+
+        const VISIBLE_LIMIT = 3;
+        const visible = otherFiles.slice(0, VISIBLE_LIMIT);
+        const hidden  = otherFiles.slice(VISIBLE_LIMIT);
 
         visible.forEach(f => wrap.appendChild(makeChip(f)));
 
@@ -1239,6 +1319,19 @@ class ChatApp {
 
         try {
             await this._waitForWS();
+
+            // ВАЖНО: файлы заливаем ДО отправки сообщения. Иначе на сервере
+            // возникает гонка — kafka-сообщение долетает мгновенно и
+            // wait_for_files стартует раньше, чем upload_files успеет
+            // закодировать/сохранить картинку (для тяжёлых png не влезали
+            // в 20с ожидания → images=[] → analyze/generate работали впустую).
+            // Текстовые файлы лёгкие и успевали случайно — отсюда «git.txt
+            // подгрузился, а картинка нет». Теперь порядок детерминирован.
+            const _hasFiles = (window.FileAttach?.getFiles().length ?? 0) > 0;
+            if (_hasFiles) {
+                await window.FileAttach?.upload(this.currentChat, msgId);
+            }
+
             const resp = await fetch('/api/chats/send_message', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1251,7 +1344,7 @@ class ChatApp {
                     agent_model:    window.ModelPicker?.getModel() ?? 'universal',
                     selected_tools: window.ToolsPanel?.getSelectedCategories() ?? [],
                     context_size:   window.ToolsPanel?.getContextSize()   ?? 'medium',
-                    has_files:      (window.FileAttach?.getFiles().length ?? 0) > 0,
+                    has_files:      _hasFiles,
                     files: window.FileAttach?.getFilesMeta() ?? []
                 })
             });
@@ -1261,7 +1354,6 @@ class ChatApp {
             } catch (_) {
                 this._activeRequestId = null;
             }
-            await window.FileAttach?.upload(this.currentChat, msgId);
             window.FileAttach?.clear();
             this.getInputContainer()?.querySelector('#attach-btn')?.classList.remove('has-files');
         } catch (err) {
@@ -1343,6 +1435,154 @@ class ChatApp {
         setTimeout(() => ph.remove(), 300);
     }
 
+    /* ══════════════════════════════════════════
+       ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ: скелетон + лайтбокс
+    ══════════════════════════════════════════ */
+
+    /** Показывает пиксельный скелетон генерации картинки в ленте.
+     *  Живёт, пока тул generate_image работает; снимается, когда пришли
+     *  реальные файлы (в _renderBotFiles) или ответ финализирован. */
+    _showImageGenSkeleton() {
+        const container = this.getMessagesContainer();
+        if (!container) return;
+        if (document.getElementById('image-gen-skeleton')) return;
+
+        const skel = document.createElement('div');
+        skel.id = 'image-gen-skeleton';
+        skel.className = 'fa-image-gen-skeleton';
+        skel.innerHTML = `
+<div class="fa-image-card fa-image-card--gen">
+  <div class="fa-image-card__skeleton">
+    <div class="fa-pixel-grid"></div>
+    <div class="fa-gen-scan"></div>
+  </div>
+  <div class="fa-gen-caption">
+    <span class="fa-gen-dot"></span>
+    <span class="fa-gen-caption__text">Генерация изображения…</span>
+  </div>
+</div>`;
+        container.appendChild(skel);
+        container.scrollTop = container.scrollHeight;
+    }
+
+    _removeImageGenSkeleton() {
+        const el = document.getElementById('image-gen-skeleton');
+        if (!el) return;
+        el.classList.add('fa-image-gen-skeleton--hide');
+        setTimeout(() => el.remove(), 250);
+    }
+
+    /** Открывает картинку в модальном лайтбоксе (превью в общем стиле). */
+    _openImageLightbox(url, name, imageKey) {
+        // Один оверлей на весь UI — пересоздаём при каждом открытии.
+        document.getElementById('image-lightbox')?.remove();
+
+        // Расширение для имени файла берём из исходного name (там .jpg/.png от тула).
+        const rawName = name || 'image';
+        let ext = rawName.includes('.') ? rawName.split('.').pop().toLowerCase() : 'jpg';
+        if (!/^[a-z0-9]{2,5}$/.test(ext)) ext = 'jpg';
+
+        // Уникальное имя для скачивания: img_{первые 8 символов image_key}.{ext}.
+        // image_key (вариант Б) НЕ полагается на WS-пейлоад: если он не пришёл
+        // аргументом, добираем его из заголовка X-Image-Key ответа /image/...
+        // (см. загрузку через fetch ниже). До этого показываем rawName.
+        const buildDlName = (key) => (key
+            ? `img_${String(key).slice(0, 8)}.${ext}`
+            : rawName);
+
+        const overlay = document.createElement('div');
+        overlay.id = 'image-lightbox';
+        overlay.className = 'image-lightbox';
+
+        const box = document.createElement('div');
+        box.className = 'image-lightbox__box';
+
+        const img = document.createElement('img');
+        img.className = 'image-lightbox__img';
+        img.alt = this.escapeHtml(rawName);
+
+        const bar = document.createElement('div');
+        bar.className = 'image-lightbox__bar';
+        const dlName0 = buildDlName(imageKey);
+        bar.innerHTML = `
+<span class="image-lightbox__name" title="${this.escapeHtml(imageKey || dlName0)}">${this.escapeHtml(dlName0)}</span>
+<span class="image-lightbox__dim" title="Разрешение">…</span>
+<a class="image-lightbox__dl" href="${url}" download="${this.escapeHtml(dlName0)}" title="Скачать">
+  <svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+</a>
+<button class="image-lightbox__close" type="button" title="Закрыть" aria-label="Закрыть">
+  <svg viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+</button>`;
+
+        const nameEl = bar.querySelector('.image-lightbox__name');
+        const dimEl = bar.querySelector('.image-lightbox__dim');
+        const dlEl = bar.querySelector('.image-lightbox__dl');
+
+        // Разрешение проставляем после загрузки картинки (natural размеры).
+        const setDim = () => {
+            if (img.naturalWidth && img.naturalHeight) {
+                dimEl.textContent = `${img.naturalWidth}×${img.naturalHeight}`;
+            } else {
+                dimEl.textContent = '';
+            }
+        };
+        img.addEventListener('load', setDim);
+        img.addEventListener('error', () => { dimEl.textContent = ''; });
+
+        // Обновляем имя/скачивание по image_key из заголовка X-Image-Key.
+        const applyKey = (key) => {
+            if (!key) return;
+            const dlName = buildDlName(key);
+            nameEl.textContent = dlName;
+            nameEl.title = key;
+            dlEl.setAttribute('download', dlName);
+        };
+
+        // Грузим картинку через fetch, чтобы прочитать X-Image-Key из ответа
+        // (браузер не отдаёт заголовки для обычного <img src>). Blob-URL идёт
+        // и в <img>, и в href скачивания — чтобы скачивался тот же байт-в-байт
+        // файл под уникальным именем.
+        if (imageKey) {
+            // Ключ уже есть — незачем ходить через fetch, ставим src напрямую.
+            img.src = url;
+        } else {
+            fetch(url, { credentials: 'same-origin' })
+                .then((resp) => {
+                    const key = resp.headers.get('X-Image-Key');
+                    return resp.blob().then((blob) => ({ key, blob }));
+                })
+                .then(({ key, blob }) => {
+                    const objUrl = URL.createObjectURL(blob);
+                    img.src = objUrl;
+                    dlEl.setAttribute('href', objUrl);
+                    applyKey(key);
+                    // objUrl живёт до закрытия оверлея — освобождаем в close().
+                    overlay._objUrl = objUrl;
+                })
+                .catch(() => { img.src = url; });  // фолбэк на прямой src
+        }
+
+        box.appendChild(bar);
+        box.appendChild(img);
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+
+        const close = () => {
+            overlay.classList.add('image-lightbox--hide');
+            setTimeout(() => overlay.remove(), 200);
+            document.removeEventListener('keydown', onKey);
+            if (overlay._objUrl) { URL.revokeObjectURL(overlay._objUrl); overlay._objUrl = null; }
+        };
+        const onKey = (e) => { if (e.key === 'Escape') close(); };
+
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+        bar.querySelector('.image-lightbox__close').addEventListener('click', close);
+        bar.querySelector('.image-lightbox__dl').addEventListener('click', (e) => e.stopPropagation());
+        document.addEventListener('keydown', onKey);
+
+        requestAnimationFrame(() => overlay.classList.add('image-lightbox--shown'));
+    }
+
 
     /* ══════════════════════════════════════════
        WEBSOCKET
@@ -1377,6 +1617,11 @@ class ChatApp {
 
             if (msg.type === 'agent_status') {
                 this.updateStatus(msg.status);
+                // Скелетон генерации: показываем, когда статус — про рисование.
+                const st = (msg.status || '').toLowerCase();
+                if (/генерир|рису|картин|композиц|детал.*свет/.test(st)) {
+                    this._showImageGenSkeleton();
+                }
                 return;
             }
             console.log('Сообщение от агента', msg)
@@ -1815,6 +2060,10 @@ class ChatApp {
 
     _finalizeStream() {
         if (!this._pendingBotEl) return;
+
+        // Страховка: если генерация картинки завершилась (успех или ошибка),
+        // а превью так и не пришло — снимаем висящий скелетон на финале.
+        this._removeImageGenSkeleton();
 
         const data = this._streamFinalData || {};
         const fullText = data.fullText ?? this._streamShown ?? '';

@@ -66,6 +66,13 @@
   padding: 2px 6px;
   border-radius: 5px;
   color: var(--accent);
+  /* длинные пути/идентификаторы не должны вылезать за правую границу */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+  /* при переносе каждая часть плашки сохраняет padding и рамку (в т.ч. правую) */
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 /* ── CODE BLOCK ───────────────────────────────── */
@@ -74,12 +81,13 @@
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 0;
-  overflow: hidden;
+  /* было overflow:hidden — оно резало горизонтальный скролл кода и
+     обрезало длинные строки справа. Скролл живёт на pre code. */
+  overflow: visible;
   margin: .9em 0;
   font-size: .83rem;
   line-height: 1.6;
   box-shadow: var(--shadow-md);
-  overflow-x: auto;
   max-width: 100%;
 }
 
@@ -92,9 +100,14 @@
   padding: 14px 16px;
   color: inherit;
   font-size: 0.95em;
+  /* локальный горизонтальный скролл именно на коде — длинные строки
+     не распирают контейнер и не вылезают за границу бабла */
   overflow-x: auto;
+  max-width: 100%;
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
+  /* нижние углы под скроллбаром совпадают с радиусом pre */
+  border-radius: 0 0 12px 12px;
 
   white-space: pre;
   word-break: normal;

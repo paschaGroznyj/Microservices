@@ -227,6 +227,26 @@
     left: 12px !important;
     right: 12px;
   }
+
+  /* Панель, открытая на СТАРТОВОМ экране (поле ввода по центру):
+     JS даёт минимум 10px сверху и ограничивает max-height доступным
+     местом. Секции сворачиваем в скролл, чтобы влезли в эту высоту. */
+  .tools-panel.tp-on-start {
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .tools-panel.tp-on-start .tp-scroll-body {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    min-height: 0;
+  }
+
+  .tools-panel.tp-on-start .tp-section {
+    overflow-y: visible;
+  }
 }
 
 /* ═══════════════════════════════════════════════

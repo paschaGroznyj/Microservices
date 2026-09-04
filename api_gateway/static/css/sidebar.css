@@ -255,17 +255,57 @@
   color: var(--text-muted);
 }
 
-#chats-section.collapsed .section-chevron {
+.your-chats-block.collapsed .section-chevron {
   transform: rotate(-90deg);
+}
+
+/* Блок "Ваши чаты" — независимая единица, коллапсится отдельно от избранного */
+.your-chats-block {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.your-chats-block.collapsed {
+  flex: 0 0 auto;
 }
 
 .chat-list {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   gap: 1px;
   min-height: 0;
+  /* Анимация скрытия/появления "Ваши чаты" */
+  transition: max-height 0.2s ease, opacity 0.15s ease;
+  opacity: 1;
+  max-height: 2000px;
+  /* Единый стиль скроллбара с .chat-list-favorites — небольшой ползунок */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.your-chats-block.collapsed .chat-list {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+}
+
+/* Идентичный небольшой ползунок для обоих списков */
+.chat-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.chat-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chat-list::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
 }
 
 
@@ -322,7 +362,9 @@
   border: 1px solid #e5e7eb;
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0,0,0,.12);
-  z-index: 600;
+  /* Выше мобильного сайдбара (z-index: 900) и его оверлея (850),
+     чтобы на мобилке dropdown был поверх сайдбара, а не за ним. */
+  z-index: 1000;
   min-width: 160px;
   overflow: hidden;
   animation: dropdown-in .12s ease both;
@@ -626,13 +668,7 @@
 }
 .chat-item.active .chat-preview { color: var(--text-primary); font-weight: 500; }
 
-#chats-section.collapsed {
-  flex: 0 0 auto;
-}
 
-#chats-section.collapsed .chat-list {
-  display: none;
-}
 
 /* ── PROFILE ──────────────────────────────────── */
 .profile-section {

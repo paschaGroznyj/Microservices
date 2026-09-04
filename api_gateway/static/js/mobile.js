@@ -37,13 +37,23 @@ function initMobileMenu() {
         toggleSidebar(false);
     });
 
-    // Клик по пункту меню — закрыть (опционально)
-    document.querySelectorAll('.chat-item, .new-chat-btn').forEach(item => {
-        item.addEventListener('click', () => {
-            if (window.innerWidth <= 768) {
-                toggleSidebar(false);
-            }
-        });
+    // Клик по пункту меню — закрыть (опционально).
+    // Делегируем на document, потому что .chat-item рендерятся динамически,
+    // а querySelectorAll ловит только элементы, существующие на момент init.
+    document.addEventListener('click', (e) => {
+        if (window.innerWidth > 768) return;
+
+        // Тап по кнопке "⋯" (или её содержимому) НЕ должен закрывать сайдбар —
+        // это открытие/закрытие dropdown действий над чатом.
+        if (e.target.closest('.chat-item-menu-btn')) return;
+        // Клик внутри самого выпадающего меню — тоже не трогаем сайдбар.
+        if (e.target.closest('.chat-item-dropdown')) return;
+
+        // Закрываем сайдбар только при осмысленном переходе:
+        // выбор чата или создание нового.
+        if (e.target.closest('.chat-item') || e.target.closest('.new-chat-btn')) {
+            toggleSidebar(false);
+        }
     });
 
     // Закрытие по Escape

@@ -2942,12 +2942,14 @@ class ChatApp {
     initChatsSectionToggle() {
         // Делегируем на document — кнопки гарантированно найдутся
         document.addEventListener('click', (e) => {
-            // Ваши чаты — toggle
+            // Ваши чаты — toggle (независимо от избранного)
             const chatsBtn = e.target.closest('#chats-section-toggle');
             if (chatsBtn) {
-                const section = document.getElementById('chats-section');
-                if (!section) return;
-                const isCollapsed = section.classList.toggle('collapsed');
+                // Коллапсим ТОЛЬКО блок "Ваши чаты", а не весь #chats-section,
+                // чтобы избранное оставалось отдельной независимой единицей.
+                const block = document.getElementById('your-chats-block');
+                if (!block) return;
+                const isCollapsed = block.classList.toggle('collapsed');
                 chatsBtn.setAttribute('aria-expanded', String(!isCollapsed));
                 return;
             }

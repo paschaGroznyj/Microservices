@@ -244,7 +244,7 @@ async def homepage(request: Request):
 
     if not user:
         # Не авторизован - показываем приветственную страницу
-        return templates.TemplateResponse("welcome.html", {
+        return templates.TemplateResponse("login.html", {
             "request": request,
             "user": None
         })
@@ -304,7 +304,7 @@ async def without_register_web(request: Request):
         else:
             error_detail = response.json().get("detail", "Ошибка гостевого входа")
             return templates.TemplateResponse(
-                "welcome.html",
+                "login.html",
                 {"request": request, "error": error_detail},
                 status_code=400
             )

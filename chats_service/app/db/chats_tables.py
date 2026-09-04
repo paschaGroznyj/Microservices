@@ -269,6 +269,76 @@ class DataBaseChats:
             logging.error(f"Ошибка при получении всех сообщений пользователя {username}: {e}")
             raise
 
+    async def search_user_messages(self, username: str, query: str, limit: int = 30):
+        """
+        Живой поиск по сообщениям пользователя во всех его (не удалённых) чатах.
+        Возвращает по одному лучшему совпадению на чат: chat_id, заголовок для
+        сайдбара (renamed_title или превью), фрагмент найденного сообщения (snippet),
+        флаг is_from_bot и время. ILIKE по message_text, группировка по chat_id.
+        """
+        try:
+            q = (query or "").strip()
+            if len(q) < 2:
+                return []
+            # экранируем спецсимволы LIKE, чтобы % и _ искались буквально
+            escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = f"%{escaped}%"
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    WITH target_user AS (
+                        SELECT id AS user_id FROM users WHERE username = $1
+                    ),
+                    matches AS (
+                        SELECT DISTINCT ON (c.chat_id)
+                            c.chat_id,
+                            c.message_text,
+                            c.is_from_bot,
+                            c.created_at
+                        FROM chats c
+                        JOIN target_user tu ON tu.user_id = c.user_id
+                        LEFT JOIN chat_sidebar_meta m
+                               ON m.chat_id = c.chat_id AND m.user_id = c.user_id
+                        WHERE COALESCE(m.is_deleted, FALSE) = FALSE
+                          AND c.message_text ILIKE $2 ESCAPE '\\'
+                        ORDER BY c.chat_id, c.created_at DESC
+                    )
+                    SELECT
+                        mt.chat_id,
+                        mt.message_text,
+                        mt.is_from_bot,
+                        mt.created_at,
+                        meta.renamed_title,
+                        (
+                            SELECT c2.message_text
+                            FROM chats c2
+                            JOIN target_user tu2 ON tu2.user_id = c2.user_id
+                            WHERE c2.chat_id = mt.chat_id
+                            ORDER BY c2.created_at DESC
+                            LIMIT 1
+                        ) AS last_message
+                    FROM matches mt
+                    LEFT JOIN chat_sidebar_meta meta
+                           ON meta.chat_id = mt.chat_id
+                          AND meta.user_id = (SELECT user_id FROM target_user)
+                    ORDER BY mt.created_at DESC
+                    LIMIT $3
+                """, username, pattern, limit)
+
+                results = []
+                for row in rows:
+                    results.append({
+                        "chat_id": row["chat_id"],
+                        "renamed_title": row["renamed_title"],
+                        "last_message": row["last_message"],
+                        "snippet": row["message_text"],
+                        "is_from_bot": row["is_from_bot"],
+                        "timestamp": row["created_at"].isoformat(),
+                    })
+                return results
+        except Exception as e:
+            logging.error(f"Ошибка при поиске по сообщениям пользователя {username}: {e}")
+            raise
+
     async def ensure_sidebar_meta_for_user(self, username: str):
         """Создаёт дефолтные метаданные сайдбара для всех чатов пользователя."""
         async with self.pool.acquire() as conn:

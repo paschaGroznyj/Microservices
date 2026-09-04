@@ -2325,6 +2325,16 @@ class ChatApp {
         const hasStart     = !!container.querySelector('.chat-start-screen');
         const hasActive    = !!container.querySelector('.chat-input-area');
         const renderedChat = container.dataset.renderedChat;
+        const chatMain = document.querySelector('.chat-main');
+
+        // Синхронизация режимов перед гард-выходами
+        if (!this.currentChat) {
+            container.classList.add('start-screen-host');
+            chatMain?.classList.add('start-screen-mode');
+        } else {
+            container.classList.remove('start-screen-host');
+            chatMain?.classList.remove('start-screen-mode');
+        }
 
         // Стартовый экран уже есть и чат не выбран — пропускаем
         if (!this.currentChat && hasStart) return;
@@ -2340,8 +2350,12 @@ class ChatApp {
 
         if (!this.currentChat) {
             // ── СТАРТОВЫЙ ЭКРАН ──────────────────────
+            container.classList.add('start-screen-host');
+            document.querySelector('.chat-main')?.classList.add('start-screen-mode');
             container.innerHTML = `
 <div class="chat-start-screen">
+
+    <div class="start-scrim"></div>
 
     <div class="start-body">
         <div class="start-header">
@@ -2387,6 +2401,8 @@ class ChatApp {
 </div>`;
         } else {
             // ── АКТИВНЫЙ ЧАТ ─────────────────────────
+            container.classList.remove('start-screen-host');
+            document.querySelector('.chat-main')?.classList.remove('start-screen-mode');
             container.innerHTML = `
 <div class="chat-input-area">
     <div class="chat-input-box" id="chat-input-box">
@@ -2441,6 +2457,7 @@ class ChatApp {
 
         if (!this.currentChat) {
             this._animateStartHeader(container);
+            this._revealStartBackground(container);
         }
 
         setTimeout(() => container.classList.remove('rending'), 0);
@@ -2622,6 +2639,32 @@ class ChatApp {
         requestAnimationFrame(() => {
             requestAnimationFrame(() => header.classList.add('animate'));
         });
+    }
+
+    /* ══════════════════════════════════════════
+       Плавное появление фонового изображения старта.
+       Ставит .bg-ready на .chat-start-screen ТОЛЬКО после того,
+       как активная для текущей темы картинка (day/night) реально
+       загружена — чтобы не было резкого "прыжка" необлитого фона.
+    ══════════════════════════════════════════ */
+    _revealStartBackground(container) {
+        const screen = container.querySelector('.chat-start-screen');
+        if (!screen) return;
+
+        const theme = document.documentElement.getAttribute('data-theme') || 'light';
+        const src = theme === 'dark' ? '/static/img/night.jpg' : '/static/img/day.jpg';
+
+        const reveal = () => requestAnimationFrame(() => {
+            requestAnimationFrame(() => screen.classList.add('bg-ready'));
+        });
+
+        const img = new Image();
+        img.onload = reveal;
+        img.onerror = reveal;   // даже если картинка не загрузилась — не блокируем UI
+        img.src = src;
+
+        // Если картинка уже в кеше — onload может не сработать, подстрахуемся
+        if (img.complete) reveal();
     }
 
     /* ══════════════════════════════════════════
@@ -2899,12 +2942,14 @@ class ChatApp {
     initChatsSectionToggle() {
         // Делегируем на document — кнопки гарантированно найдутся
         document.addEventListener('click', (e) => {
-            // Ваши чаты — toggle
+            // Ваши чаты — toggle (независимо от избранного)
             const chatsBtn = e.target.closest('#chats-section-toggle');
             if (chatsBtn) {
-                const section = document.getElementById('chats-section');
-                if (!section) return;
-                const isCollapsed = section.classList.toggle('collapsed');
+                // Коллапсим ТОЛЬКО блок "Ваши чаты", а не весь #chats-section,
+                // чтобы избранное оставалось отдельной независимой единицей.
+                const block = document.getElementById('your-chats-block');
+                if (!block) return;
+                const isCollapsed = block.classList.toggle('collapsed');
                 chatsBtn.setAttribute('aria-expanded', String(!isCollapsed));
                 return;
             }

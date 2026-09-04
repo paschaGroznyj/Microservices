@@ -288,18 +288,20 @@ class DataBaseChats:
                     WITH target_user AS (
                         SELECT id AS user_id FROM users WHERE username = $1
                     ),
-                    matches AS (
-                        SELECT DISTINCT ON (c.chat_id)
-                            c.chat_id,
-                            c.message_text,
-                            c.is_from_bot,
-                            c.created_at
+                    user_chats AS (
+                        SELECT DISTINCT c.chat_id
                         FROM chats c
                         JOIN target_user tu ON tu.user_id = c.user_id
+                    ),
+                    matches AS (
+                        SELECT DISTINCT ON (c.chat_id)
+                            c.chat_id, c.message_text, c.is_from_bot, c.created_at
+                        FROM chats c
+                        JOIN user_chats uc ON uc.chat_id = c.chat_id
                         LEFT JOIN chat_sidebar_meta m
-                               ON m.chat_id = c.chat_id AND m.user_id = c.user_id
+                            ON m.chat_id = c.chat_id AND m.user_id = uc.chat_id  -- см. ниже
                         WHERE COALESCE(m.is_deleted, FALSE) = FALSE
-                          AND c.message_text ILIKE $2 ESCAPE '\\'
+                        AND c.message_text ILIKE $2 ESCAPE '\'
                         ORDER BY c.chat_id, c.created_at DESC
                     )
                     SELECT

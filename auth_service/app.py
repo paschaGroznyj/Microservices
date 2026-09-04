@@ -11,7 +11,8 @@ from datetime import datetime, timedelta, timezone
 import httpx
 from datetime import datetime, timezone
 
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_DAYS = 14
+COOKIE_MAX_AGE_SECONDS = 14 * 24 * 60 * 60
 BASE_DIR = Path(__file__).parent
 
 
@@ -96,7 +97,7 @@ def get_auth_data():
 
 def create_access_token(data: dict) -> str:
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + timedelta(days=30)
+    expire = datetime.now(timezone.utc) + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
     to_encode.update({"exp": expire})
     auth_data = get_auth_data()
     encode_jwt = jwt.encode(to_encode, auth_data['secret_key'], algorithm=auth_data['algorithm'])
@@ -156,7 +157,12 @@ async def login(response: Response, form_data: OAuth2PasswordRequestForm = Depen
         "sub": form_data.username,
         "user_id": user_id["id"]
     })
-    response.set_cookie(key="users_access_token", value=access_token, httponly=True)
+    response.set_cookie(
+        key="users_access_token",
+        value=access_token,
+        httponly=True,
+        max_age=COOKIE_MAX_AGE_SECONDS
+    )
     return {"access_token": access_token, "token_type": "bearer"}
 
 
@@ -175,7 +181,7 @@ async def guest_login(response: Response):
         key="users_access_token",
         value=access_token,
         httponly=True,
-        max_age=3600
+        max_age=COOKIE_MAX_AGE_SECONDS
     )
     return {"access_token": access_token, "token_type": "bearer", "user_id": user_id}
 
@@ -207,7 +213,7 @@ async def register_and_login(response: Response, form_data: OAuth2PasswordReques
         key="users_access_token",
         value=access_token,
         httponly=True,
-        max_age=3600
+        max_age=COOKIE_MAX_AGE_SECONDS
     )
     return {"access_token": access_token, "token_type": "bearer", "user_id": user_id}
 

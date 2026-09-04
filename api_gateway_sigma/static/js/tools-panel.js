@@ -217,6 +217,11 @@ class ToolsPanel {
 
     const panel = document.createElement("div");
     panel.className = "tools-panel";
+    // Маркер: панель открыта на стартовом экране (поле ввода по центру).
+    // Нужен, чтобы на мобилке дать отступ сверху и скролл секциям.
+    if (document.querySelector(".chat-main.start-screen-mode")) {
+      panel.classList.add("tp-on-start");
+    }
     panel.setAttribute("role", "dialog");
     panel.setAttribute("aria-label", "Настройка инструментов");
     this._panelEl = panel;
@@ -364,6 +369,19 @@ class ToolsPanel {
     } else {
       maxH = Math.min(naturalH, spaceBelow);
       top  = rect.bottom + MARGIN + window.scrollY;
+    }
+
+    // На стартовом экране мобилки поле ввода по центру → панель, открытая
+    // вверх, может упереться в верх экрана. Гарантируем минимум 10px сверху
+    // и позволяем секциям скроллиться (maxH ограничен доступным местом).
+    if (panel.classList.contains("tp-on-start") && window.innerWidth <= 768) {
+      const TOP_MIN = 10;
+      if (openAbove) {
+        const avail = rect.top - MARGIN - TOP_MIN;
+        maxH = Math.min(naturalH, Math.max(avail, 0));
+        top  = rect.top - maxH - MARGIN + window.scrollY;
+        if (top - window.scrollY < TOP_MIN) top = TOP_MIN + window.scrollY;
+      }
     }
 
     // Горизонталь — прижимаем к правому краю кнопки, не выходим за viewport

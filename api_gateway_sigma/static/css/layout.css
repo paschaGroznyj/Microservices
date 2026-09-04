@@ -35,11 +35,36 @@
   padding: 0 14px 0 18px;
   height: 54px;
   min-height: 54px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 42%, transparent);
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
   flex-shrink: 0;
   position: relative;
   z-index: 10;
+}
+
+/* На стартовом экране шапка накладывается поверх фона,
+   не отъедая отдельную полосу по высоте. */
+.chat-main.start-screen-mode .main-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  background: rgba(255, 255, 255, 0.44);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.32);
+  backdrop-filter: blur(6px) saturate(115%);
+  -webkit-backdrop-filter: blur(6px) saturate(115%);
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.05);
+}
+
+[data-theme="dark"] .chat-main.start-screen-mode .main-header {
+  background: rgba(15, 23, 37, 0.40);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(7px) saturate(115%);
+  -webkit-backdrop-filter: blur(7px) saturate(115%);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.30);
 }
 
 .main-title {

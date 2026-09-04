@@ -114,15 +114,17 @@
                         <div class="chat-item-skeleton">Пока нет избранных</div>
                     </div>
                 </div>
-                 <button class="section-label" id="chats-section-toggle" aria-expanded="true">
-                    Ваши чаты
-                    <svg class="section-chevron" viewBox="0 0 16 16" fill="none">
-                        <path d="M4 6l4 4 4-4" stroke="#555555" stroke-width="1.8"
-                            stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
-                </button>
-                <div id="chat-list" class="chat-list">
-                    <div class="chat-item-skeleton">Загрузка...</div>
+                <div class="your-chats-block" id="your-chats-block">
+                    <button class="section-label" id="chats-section-toggle" aria-expanded="true">
+                        Ваши чаты
+                        <svg class="section-chevron" viewBox="0 0 16 16" fill="none">
+                            <path d="M4 6l4 4 4-4" stroke="#555555" stroke-width="1.8"
+                                stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                    <div id="chat-list" class="chat-list">
+                        <div class="chat-item-skeleton">Загрузка...</div>
+                    </div>
                 </div>
             </div>
 
@@ -185,11 +187,6 @@
                         </svg>
                     </button>
 
-                    <!-- TAB PILLS (desktop) -->
-                    <div class="tab-pills">
-                        <button class="pill active" data-tab="agent">Агент</button>
-                        <button class="pill" data-tab="arxiv">Статьи</button>
-                    </div>
                 </div>
             </header>
 

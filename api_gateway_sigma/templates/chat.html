@@ -26,6 +26,7 @@
     <link rel="stylesheet" href="/static/css/feedback.css">
     <link rel="stylesheet" href="/static/css/graph.css">
     <link rel="stylesheet" href="/static/css/tools-panel.css">
+    <link rel="stylesheet" href="/static/css/search.css">
 
 </head>
 <body>
@@ -106,15 +107,17 @@
                         <div class="chat-item-skeleton">Пока нет избранных</div>
                     </div>
                 </div>
-                 <button class="section-label" id="chats-section-toggle" aria-expanded="true">
-                    Ваши чаты
-                    <svg class="section-chevron" viewBox="0 0 16 16" fill="none">
-                        <path d="M4 6l4 4 4-4" stroke="#555555" stroke-width="1.8"
-                            stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
-                </button>
-                <div id="chat-list" class="chat-list">
-                    <div class="chat-item-skeleton">Загрузка...</div>
+                <div class="your-chats-block" id="your-chats-block">
+                    <button class="section-label" id="chats-section-toggle" aria-expanded="true">
+                        Ваши чаты
+                        <svg class="section-chevron" viewBox="0 0 16 16" fill="none">
+                            <path d="M4 6l4 4 4-4" stroke="#555555" stroke-width="1.8"
+                                stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                    <div id="chat-list" class="chat-list">
+                        <div class="chat-item-skeleton">Загрузка...</div>
+                    </div>
                 </div>
             </div>
 
@@ -126,6 +129,12 @@
                     <div class="profile-info">
                         <div class="profile-name">{{ user.username }}</div>
                     </div>
+                </button>
+                <button class="chat-search-btn" id="chat-search-btn" title="Поиск по чатам" aria-label="Поиск по чатам">
+                    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6">
+                        <circle cx="9" cy="9" r="6" stroke-linecap="round"/>
+                        <path d="M14 14l4 4" stroke-linecap="round"/>
+                    </svg>
                 </button>
             </div>
 
@@ -391,6 +400,27 @@
 <div class="sidebar-overlay" id="sidebar-overlay"></div>
 
 <!-- ══════════════════════════════════════════
+     CHAT SEARCH — модалка живого поиска по сообщениям
+     Открывается по #chat-search-btn / Ctrl+K, блюрит фон
+══════════════════════════════════════════ -->
+<div class="chat-search-overlay" id="chat-search-overlay" role="dialog" aria-modal="true" aria-label="Поиск по чатам">
+    <div class="chat-search-modal" id="chat-search-modal">
+        <div class="cse-input-row">
+            <svg class="cse-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6">
+                <circle cx="9" cy="9" r="6" stroke-linecap="round"/>
+                <path d="M14 14l4 4" stroke-linecap="round"/>
+            </svg>
+            <input class="cse-input" id="chat-search-input" type="text" autocomplete="off"
+                   placeholder="Поиск по сообщениям чатов…" maxlength="200"/>
+            <button class="cse-close" id="chat-search-close" aria-label="Закрыть">✕</button>
+        </div>
+        <div class="cse-results" id="chat-search-results">
+            <div class="cse-hint" id="chat-search-hint">Введите минимум 2 символа для поиска</div>
+        </div>
+    </div>
+</div>
+
+<!-- ══════════════════════════════════════════
      HELP PAGE — полноэкранная инструкция
      Открывается по #open-help, закрывается крестиком / Escape
      Тема синхронизируется через data-theme на <html>
@@ -554,6 +584,7 @@
 <!-- <script src="/static/js/feedback_button.js"></script> -->
 <script type="module" src="/static/js/tools-panel.js"></script>
 <script type="module" src="/static/js/app.js"></script>
+<script type="module" src="/static/js/chatSearchModal.js"></script>
 
 </body>
 </html>

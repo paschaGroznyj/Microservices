@@ -1103,6 +1103,38 @@ async def get_chats(request: Request):
         logging.error(f"Ошибка получения чатов: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch chats")
 
+
+@app.get("/api/chats/search")
+async def search_chats(request: Request, q: str = "", limit: int = 30):
+    """Живой поиск по сообщениям пользователя. Прокси на chats_service.
+    Требует минимум 2 символа — иначе сразу пустой результат без похода в сервис."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    query = (q or "").strip()
+    if len(query) < 2:
+        return {"results": [], "query": query}
+
+    try:
+        headers = {"X-User-Name": user["username"]}
+        response = await app.state.http_client.get(
+            f"{SERVICES['chats']['url']}/user/messages/search",
+            params={"q": query, "limit": max(1, min(limit, 50))},
+            cookies=request.cookies,
+            headers=headers,
+        )
+        if response.status_code != 200:
+            raise HTTPException(status_code=502, detail="Chats service error")
+        return response.json()
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Ошибка поиска по чатам: {e}")
+        raise HTTPException(status_code=500, detail="Failed to search chats")
+
+
 @app.get("/api/chats/{chat_id}/messages")
 async def get_messages(chat_id: int, request: Request):
     """Получение сообщений чата (для SPA)"""

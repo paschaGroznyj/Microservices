@@ -30,6 +30,8 @@ from sigma_status_store import status_store
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+COOKIE_MAX_AGE_SECONDS = 14 * 24 * 60 * 60
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -297,7 +299,7 @@ async def without_register_web(request: Request):
                 key="users_access_token",
                 value=token,
                 httponly=True,
-                max_age=3600,
+                max_age=COOKIE_MAX_AGE_SECONDS,
                 secure=False
             )
             return resp
@@ -340,7 +342,7 @@ async def login_web(
                 key="users_access_token",
                 value=token,
                 httponly=True,
-                max_age=3600,
+                max_age=COOKIE_MAX_AGE_SECONDS,
                 secure=False
             )
             return resp
@@ -391,7 +393,7 @@ async def register_web(
             key="users_access_token",
             value=token,
             httponly=True,
-            max_age=3600,
+            max_age=COOKIE_MAX_AGE_SECONDS,
             secure=False
         )
         return resp

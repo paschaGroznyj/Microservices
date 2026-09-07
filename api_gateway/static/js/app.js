@@ -63,6 +63,16 @@ class ChatApp {
         if (this.currentTab === tab) return;
         this.currentTab = tab;
 
+        // Если уходим со стартового экрана в "Граф" без выбранного чата,
+        // снимаем стартовый режим у .chat-main, иначе шапка остаётся
+        // абсолютной/прозрачной и перекрывает контент графа.
+        const chatMain = document.querySelector('.chat-main');
+        const inputContainer = this.getInputContainer();
+        if (tab === 'graph') {
+            chatMain?.classList.remove('start-screen-mode');
+            inputContainer?.classList.remove('start-screen-host');
+        }
+
         // Переключаем views
         document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
         document.getElementById(`view-${tab}`)?.classList.remove('hidden');

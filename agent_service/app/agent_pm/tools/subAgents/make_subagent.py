@@ -222,9 +222,12 @@ def make_subagent_tool(agent_instance):
         try:
             all_tools = agent._build_tools(
                 user_id=0,
+                chat_id=getattr(agent, "current_chat_id", 0) or 0,
                 user_input=task,
                 selected_tools=[],
                 allow_all=True,
+                images=None,
+                agent_model=getattr(agent, "current_agent_model", "universal"),
             )
         except Exception as e:
             logger.error("[SubAgent] Не удалось получить тулзы: %s", e)
@@ -242,12 +245,24 @@ def make_subagent_tool(agent_instance):
                 agent_name, missing,
             )
 
+        if not filtered:
+            await send(_STATUS_ERROR)
+            return (
+                f"Для субагента '{agent_name}' не переданы валидные инструменты: "
+                f"allowed_tools={sorted(allowed_set)}. "
+                f"Проверьте TOOLS_SETTINGS/allowed_tools."
+            )
+
         # ── 3. Привязываем тулзы к LLM ───────────────────────────────────────
-        llm_with_tools = (
-            agent.llm.bind_tools(filtered)
-            if filtered
-            else agent.llm
+        base_llm = (
+            getattr(agent, "llm", None)
+            or agent.AGENT_MODELS.get(getattr(agent, "current_agent_model", "universal"))
+            or agent.AGENT_MODELS.get("universal")
+            or agent.AGENT_MODELS.get("designer")
+            or agent.AGENT_MODELS.get("coder")
         )
+        llm_with_tools = base_llm.bind_tools(filtered)
+
 
         # ── 4. Начальный стек сообщений ───────────────────────────────────────
         messages = [

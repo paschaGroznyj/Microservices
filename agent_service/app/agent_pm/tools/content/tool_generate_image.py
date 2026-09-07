@@ -319,9 +319,9 @@ async def _persist_generated_image(
                 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                 RETURNING id, image_key;
                 """,
-                getattr(agent, "current_chat_id", None),
-                getattr(agent, "current_user_id", None),
-                getattr(agent, "current_message_id", None),
+                agent._ctx_get("chat_id", getattr(agent, "current_chat_id", None)),
+                agent._ctx_get("user_id", getattr(agent, "current_user_id", None)),
+                agent._ctx_get("message_id", getattr(agent, "current_message_id", None)),
                 fname,
                 mime,
                 prompt,
@@ -358,19 +358,15 @@ def make_generate_image_tool(agent, images: list[dict] | None = None):
     """
     Фабрика тула генерации изображений.
 
-    :param agent: экземпляр KnowledgeAgent. Используем его как хранилище
-        сгенерированных путей (agent._pending_generated_images) и, при
-        необходимости, source-картинок пользователя.
+    :param agent: экземпляр KnowledgeAgent. Используем request-local
+        буфер сгенерированных картинок (через ContextVar) и, при
+        необходимости, source-картинки пользователя.
     :param images: картинки, загруженные пользователем в текущем сообщении
         (тот же список, что у analyze_image): [{filename, mime_type, b64}].
         Доступны для image-to-image по индексу.
     """
     images = images or []
     cfg = get_image_gen_config()
-
-    # Аккумулятор путей сгенерированных картинок для текущего инстанса агента.
-    if not hasattr(agent, "_pending_generated_images"):
-        agent._pending_generated_images = []
 
     @tool
     async def generate_image(
@@ -564,7 +560,7 @@ def make_generate_image_tool(agent, images: list[dict] | None = None):
                         continue
 
                     db_records.append({"id": rec_id, "image_key": image_key, "file_name": fname})
-                    agent._pending_generated_images.append({
+                    agent._ctx_append_pending_image({
                         "image_key": image_key,
                         "name": fname,
                         "kind": "image",
@@ -624,7 +620,7 @@ def make_find_generated_image_tool(agent):
       • по ключевым словам из описания (query → ILIKE по prompt);
       • по уникальному ключу image_key;
       • по id записи generated_images.
-    Поиск ограничен текущим чатом (agent.current_chat_id), если он известен.
+    Поиск ограничен текущим чатом (request-local chat_id), если он известен.
     """
 
     @tool
@@ -664,7 +660,7 @@ def make_find_generated_image_tool(agent):
             limit = 5
         limit = max(1, min(limit, 20))
 
-        chat_id = getattr(agent, "current_chat_id", None)
+        chat_id = agent._ctx_get("chat_id", getattr(agent, "current_chat_id", None))
 
         # ── Хардкод-запросы, параметризованные, без пользовательского SQL ──
         conds: list[str] = []

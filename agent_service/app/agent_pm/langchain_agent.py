@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import json
+import contextvars
 import os
 import re
 import ast
@@ -40,6 +41,7 @@ from .tool_status_messages import get_tool_status, get_thinking_status, get_tool
 from .tools.sessions.tool_request_extension import make_extension_tool
 from .tools.subAgents.make_subagent import make_subagent_tool
 from .tools.journal.tool_agent_journal import make_journal_tool
+from .judge import judge_final_answer
 import hashlib
 
 GATEWAY_URL = f"http://api_gateway:{PORT_GATEWAY_PORT}"
@@ -958,6 +960,12 @@ class KnowledgeAgent:
 
         self._http_client: Optional[httpx.AsyncClient] = None
 
+        # Request-local контекст для параллельных запросов.
+        # Никакого разделяемого mutable-состояния между тасками.
+        self._request_ctx: contextvars.ContextVar = contextvars.ContextVar(
+            "agent_request_ctx", default=None
+        )
+
     # ------------------------------------------------------------------
     # Память per-user с загрузкой из БД через AgentDB
     # ------------------------------------------------------------------
@@ -1603,8 +1611,26 @@ class KnowledgeAgent:
         if self._http_client and not self._http_client.is_closed:
             await self._http_client.aclose()
 
+    def _ctx_get(self, key: str, default=None):
+        """Читает request-local значение из ContextVar."""
+        ctx = self._request_ctx.get()
+        if isinstance(ctx, dict):
+            return ctx.get(key, default)
+        return default
+
+    def _ctx_append_pending_image(self, item: dict) -> None:
+        """Складывает сгенерированную картинку в request-local буфер."""
+        ctx = self._request_ctx.get()
+        if not isinstance(ctx, dict):
+            return
+        ctx.setdefault("pending_generated_images", []).append(item)
+
     def _resolve_gateway_url(self) -> str:
-        target = (getattr(self, "_gateway_target", "main") or "main").lower()
+        target = (
+            self._ctx_get("gateway_target", None)
+            or getattr(self, "_gateway_target", "main")
+            or "main"
+        ).lower()
         if target == "sigma":
             return GATEWAY_SIGMA_URL
         return GATEWAY_URL
@@ -1688,428 +1714,448 @@ class KnowledgeAgent:
         # Статус "думаю" больше НЕ шлём: пользователь видит реальный поток
         # размышлений модели (живой reasoning-стрим), а не служебный индикатор.
         # await self._send_status(get_thinking_status(), request_id)
+        # Request-local контекст для текущего хода.
+        # Это устраняет гонки при параллельной обработке разных чатов.
+        ctx_token = self._request_ctx.set({
+            "request_id": request_id,
+            "gateway_target": gateway_target or "main",
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "message_id": None,
+            "agent_model": agent_model,
+            "pending_generated_images": [],
+        })
+
+        # Legacy-поля оставляем как fallback для старого кода,
+        # но новый код читает только из request-local контекста.
         self.current_request_id = request_id
         self._gateway_target = gateway_target or "main"
-        # Контекст текущего хода — нужен generate_image, чтобы записать
-        # сгенерированную картинку в БД с привязкой к чату/пользователю.
         self.current_chat_id = chat_id
         self.current_user_id = user_id
         self.current_message_id = None  # message_id генерится позже, в app.py; необязателен
         cleaned_user_input = user_input
-        if source == "telegram":
-            if '📎[FILE]' in cleaned_user_input:
-                # Ищем маркер файла и вырезаем всё внутри ```...```
-                # \1 сохраняет первую группу (маркер файла с его названием)
-                cleaned_user_input = re.sub(
-                    r"(📎\[FILE\] \[Прикрепленный файл: (.*?)\])\nСодержимое файла:\n```\n.*?\n```",
-                    r"\1\n[Содержимое файла удалено для экономии памяти. Если для выполнения задачи требуются детали из этого файла, попроси пользователя загрузить его повторно.]",
-                    cleaned_user_input,
-                    flags=re.DOTALL
-                )
-                logging.info(cleaned_user_input)
-
-            await database.add_message(
-                        user_id=user_id,        # Передаем integer ID юзера
-                        message=cleaned_user_input[:20000],
-                        chat_id=chat_id,
-                        is_from_bot=False,
-                        action=None
+        try:
+            if source == "telegram":
+                if '📎[FILE]' in cleaned_user_input:
+                    # Ищем маркер файла и вырезаем всё внутри ```...```
+                    # \1 сохраняет первую группу (маркер файла с его названием)
+                    cleaned_user_input = re.sub(
+                        r"(📎\[FILE\] \[Прикрепленный файл: (.*?)\])\nСодержимое файла:\n```\n.*?\n```",
+                        r"\1\n[Содержимое файла удалено для экономии памяти. Если для выполнения задачи требуются детали из этого файла, попроси пользователя загрузить его повторно.]",
+                        cleaned_user_input,
+                        flags=re.DOTALL
                     )
+                    logging.info(cleaned_user_input)
 
-        # ── Настройки контекста ────────────────────────────────────────
-        CONTEXT_PRESETS = {
-            "small":  {"limit_mem": 8,  "max_tokens": 6000},
-            "medium": {"limit_mem": 10, "max_tokens": 15000},
-            "large":  {"limit_mem": 12, "max_tokens": 20000},
-        }
-        logging.info(f'Выбрана модель {agent_model}')
-        llm = self.AGENT_MODELS[agent_model]
-        # Текущая модель нужна субагентам для корректного выбора LLM
-        # при изолированном запуске через call_subagent.
-        self.current_agent_model = agent_model
+                await database.add_message(
+                            user_id=user_id,        # Передаем integer ID юзера
+                            message=cleaned_user_input[:20000],
+                            chat_id=chat_id,
+                            is_from_bot=False,
+                            action=None
+                        )
+
+            # ── Настройки контекста ────────────────────────────────────────
+            CONTEXT_PRESETS = {
+                "small":  {"limit_mem": 8,  "max_tokens": 6000},
+                "medium": {"limit_mem": 10, "max_tokens": 15000},
+                "large":  {"limit_mem": 12, "max_tokens": 20000},
+            }
+            logging.info(f'Выбрана модель {agent_model}')
+            llm = self.AGENT_MODELS[agent_model]
+            # Текущая модель нужна субагентам для корректного выбора LLM
+            # при изолированном запуске через call_subagent.
+            self.current_agent_model = agent_model
  
-        final_response = ""
-        used_tools = []
-        tool_trace: list[str] = []
-        AUTO_SEND_FILE_TOOLS = {"send_file_to_user"}
-        files_to_send = []
-        seen_paths = set()
-        # Сбрасываем аккумулятор сгенерированных картинок на КАЖДЫЙ запрос,
-        # чтобы generate_image не тащил файлы из прошлого хода.
-        self._pending_generated_images = []
-        SOFT_LIMIT = 10   # после этого — предупреждаем модель   
-        HARD_LIMIT = 14  # динамически можно поднять число шагов
-        total_input_tokens  = 0
-        total_output_tokens = 0
+            final_response = ""
+            used_tools = []
+            tool_trace: list[str] = []
+            AUTO_SEND_FILE_TOOLS = {"send_file_to_user"}
+            files_to_send = []
+            seen_paths = set()
+            # request-local pending_generated_images уже инициализирован в ContextVar
+            # при старте process_query.
+            SOFT_LIMIT = 10   # после этого — предупреждаем модель   
+            HARD_LIMIT = 14  # динамически можно поднять число шагов
+            total_input_tokens  = 0
+            total_output_tokens = 0
 
-        preset = CONTEXT_PRESETS.get(context_size, CONTEXT_PRESETS["medium"])
-        limit_mem = preset["limit_mem"]
-        max_tokens = preset["max_tokens"]
+            preset = CONTEXT_PRESETS.get(context_size, CONTEXT_PRESETS["medium"])
+            limit_mem = preset["limit_mem"]
+            max_tokens = preset["max_tokens"]
 
-        allow_all_tools = (source == "telegram")
-        selected_tools = selected_tools or []
-        use_journal = allow_all_tools or ("sessions" in selected_tools)
+            allow_all_tools = (source == "telegram")
+            selected_tools = selected_tools or []
+            use_journal = allow_all_tools or ("sessions" in selected_tools)
 
-        logging.info(f"🙂 {user_input[:200]}")
-        tools = self._build_tools(
-            user_id,
-            chat_id,
-            user_input,
-            selected_tools=selected_tools,
-            allow_all=allow_all_tools,
-            images=images,
-            agent_model=agent_model,
-        )
-        loop_state = {
-            "iteration": 0,
-            "soft_limit": SOFT_LIMIT,
-            "hard_limit": HARD_LIMIT,
-            "extension_used": False,
-        }
-
-        extension_tool = make_extension_tool(loop_state)
-        tools.append(extension_tool)          # тулза аппендится прямо внутри цикла, офигеть имбово
-
-        subagent_tl = make_subagent_tool(self)
-        tools.append(subagent_tl)
-
-        print(f"ЛИМИТ ПО КОНТЕКСТУ = {limit_mem}, ЧИСЛО ТОКЕНОВ = {max_tokens}")
-        # Привязываем инструменты к модели
-        
-
-        current_datetime = datetime.now().strftime("%d.%m.%Y %H:%M, %A")
-        system_content = SYSTEM_PROMPT.format(datetime=current_datetime)
-
-        # Собираем историю из памяти
-        history = await self._build_history(chat_id, limit=30)
-        journal_text = None
-        if use_journal:
-            print(f"USER ID: {user_id}")
-            tools.append(make_journal_tool(self, chat_id, user_id))
-            journal_text = await self.db.get_agent_journal(chat_id)
-            print(f"ЖУРНАЛ АГЕНТА: {journal_text}")
-            # if source == "telegram":
-            #     journal_text = await self.db.get_agent_journal(56) # Пока что мой id
-
-        tools_by_name = {t.name: t for t in tools}
-        llm_with_tools = llm.bind_tools(tools)
-        session_summary = await self.db.get_last_session_summary(chat_id)
-
-        logger.info(f"[ИСТОРИЯ ДО ОБРЕЗКИ] {len(history)}")
-        # Режем историю чатов
-        trimmed_history = trim_messages(
-            history,
-            max_tokens=max_tokens,
-            token_counter=count_tokens_approximately,
-            strategy='last',
-            start_on='human',
-            include_system=True,
-        )
-        
-        # ── Саммаризация того, что было отсечено ────────────────────────────
-        cut_count = len(history) - len(trimmed_history)
-        rolling_summary_text = None
-
-        previous_rolling = await self.db.get_rolling_summary(chat_id)
-        previous_covered_id = previous_rolling["covered_up_to_id"] if previous_rolling else 0
-        previous_summary_text = previous_rolling["summary_text"] if previous_rolling else None
-
-        logging.info(f"ЧИСЛО РАЗНИЦА = {cut_count}")
-        if cut_count > 0:
-            cut_messages_all = history[:cut_count]
-            # берём только те, что ЕЩЁ не входили в прошлый summary
-            new_cut_messages = [
-                m for m in cut_messages_all
-                if m.additional_kwargs.get("db_id", 0) > previous_covered_id
-            ]
-
-            if new_cut_messages:
-                rolling_summary_text = await self._summarize_cut_messages(new_cut_messages, previous_summary_text)
-                max_covered_id = max(m.additional_kwargs.get("db_id", 0) for m in cut_messages_all)
-                await self.db.upsert_rolling_summary(chat_id, rolling_summary_text, covered_up_to_id=max_covered_id)
-                logger.info(
-                    f"[ROLLING SUMMARY] Новых сообщений в сжатии: {len(new_cut_messages)} "
-                    f"(из {len(cut_messages_all)} отсечённых, {len(cut_messages_all) - len(new_cut_messages)} уже были покрыты), "
-                    f"длина саммари={len(rolling_summary_text)}"
-                )
-            else:
-                # всё что отсекли — уже было в прошлом summary, реально нового сжимать не нужно
-                rolling_summary_text = previous_summary_text
-                logger.info("[ROLLING SUMMARY] Все отсечённые сообщения уже покрыты предыдущим саммари, LLM-вызов пропущен")
-        
-        else:
-            rolling_summary_text = previous_summary_text
-
-        messages: List[BaseMessage] = []
-        if journal_text is not None:
-            messages.append(SystemMessage(content=f"📜 БОРТОВОЙ ЖУРНАЛ (Память):\n{journal_text}"))
-        elif use_journal and journal_text is None:
-            messages.append(SystemMessage(content=f"📜 БОРТОВОЙ ЖУРНАЛ (Память): ПУСТОЙ"))
-        messages.append(SystemMessage(content=system_content))
-
-        if rolling_summary_text:
-            messages.append(
-                SystemMessage(
-                    content=f"🧵 СЖАТАЯ ИСТОРИЯ ДИАЛОГА (то, что было отсечено из контекста ранее):\n{rolling_summary_text}"
-                )
+            logging.info(f"🙂 {user_input[:200]}")
+            tools = self._build_tools(
+                user_id,
+                chat_id,
+                user_input,
+                selected_tools=selected_tools,
+                allow_all=allow_all_tools,
+                images=images,
+                agent_model=agent_model,
             )
-
-        if session_summary:
-            messages.append(
-                SystemMessage(
-                    content=(
-                        f"📋 САММАРИ ПРОШЛОЙ СЕССИИ (session_id={session_summary['session_id']}):\n"
-                        f"{session_summary['summary_text']}"
-                    )
-                )
-            )
-
-        messages += [
-            *trimmed_history,
-            HumanMessage(content=user_input),
-        ]
-
-        iteration = 0
-        while iteration < loop_state["hard_limit"]:
-            loop_state["iteration"] = iteration
-
-            # ТОЧКА 2: тулзы снимаем только на последнем шаге
-            is_last_step = iteration >= loop_state["hard_limit"] - 1
-            can_still_extend = not loop_state["extension_used"]
-            current_llm = llm if (is_last_step and not can_still_extend) else llm_with_tools
-
-            # ТОЧКА 3: адресный триггер на КАЖДОМ шаге окна, а не однократно.
-            steps_left = loop_state["hard_limit"] - iteration - 1
-            if iteration >= loop_state["soft_limit"] - 1 and can_still_extend:
-                messages.append(SystemMessage(content=(
-                    f"[Контроль лимита] Осталось шагов: {steps_left}. "
-                    f"Если НЕ успеваешь завершить задачу за оставшиеся шаги — "
-                    f"вызови request_more_steps ПРЯМО СЕЙЧАС (расширение одноразовое). "
-                    f"Если успеваешь — продолжай и дай финальный ответ."
-                )))
-            elif iteration >= loop_state["soft_limit"] - 1:
-                messages.append(SystemMessage(
-                    content=f"[Прогресс: шаг {iteration} из {loop_state['hard_limit']}]"
-                ))
-
-
-            # ── Живой стриминг текста модели ──────────────────────────
-            # Заранее неизвестно, окажется ли текущий шаг финалом (без
-            # tool_calls) или reasoning'ом перед вызовом тулзы. Поэтому
-            # чанки шлём оптимистично с kind="live" — фронт печатает их в
-            # текущем "живом" блоке. Как только шаг завершился и стал ясен
-            # его тип, шлём УПРАВЛЯЮЩИЙ маркер:
-            #   • есть tool_calls  → kind="reasoning_end": фронт сворачивает
-            #     живой блок в приглушённый reasoning-блок (курсив, мельче);
-            #   • нет tool_calls   → kind="final_commit": фронт фиксирует
-            #     живой блок как финальный ответ (основной шрифт).
-            stream_state = {"sent": False}
-
-            async def _on_chunk(text: str):
-                stream_state["sent"] = True
-                await self._send_chunk(
-                    text, request_id, msg_id=str(request_id), kind="live"
-                )
-
-            try:
-                response = await _astream_collect(
-                    current_llm, messages, on_chunk=_on_chunk, iteration=iteration
-                )
-            except Exception:
-                response = None
-
-            if response is None:
-                logging.error(f"[iteration={iteration}] Все попытки llm провалены, прерываю цикл")
-                final_response = "Ошибка внутри цикла агента. Но агент запомнил шаги, попробуйте вернуться к запросу"
-                break
-
-            _has_tool_calls = bool(getattr(response, "tool_calls", None))
-            _had_text = bool(getattr(response, "content", None))
-
-            if _has_tool_calls and _had_text:
-                # Это был reasoning перед тулзой. Оставляем его на фронте,
-                # но переклассифицируем живой блок в свёрнутый reasoning-блок.
-                loop_state.setdefault("reasoning_trace", []).append(response.content)
-                if stream_state["sent"]:
-                    await self._send_chunk(
-                        "", request_id, msg_id=str(request_id), kind="reasoning_end"
-                    )
-                # В стек reasoning не тащим (как и раньше) — гасим content
-                response.content = ""
-            elif _has_tool_calls and not _had_text:
-                # Шаг без текста (сразу tool_calls). Если что-то всё же
-                # успело улететь как live (пустой мусор) — закрываем блок.
-                if stream_state["sent"]:
-                    await self._send_chunk(
-                        "", request_id, msg_id=str(request_id), kind="reasoning_end"
-                    )
-
-            messages.append(response)          # ← единственный аппенд
-
-            usage = getattr(response, "usage_metadata", None) or {}
-            iter_in  = usage.get("input_tokens", 0)
-            iter_out = usage.get("output_tokens", 0)
-            total_input_tokens  += iter_in
-            total_output_tokens += iter_out
-            logging.info(
-                f"[tokens] iter={iteration} "
-                f"in={iter_in} out={iter_out} "
-                f"total_in={total_input_tokens} total_out={total_output_tokens}"
-            )
-            logger.info(f"🦒Длина стека = {len(messages)}")
-
-            if not getattr(response, "tool_calls", None):
-                final_response = response.content
-                # Финальный шаг: фиксируем живой блок как финальный ответ.
-                # Если что-то стримилось (обычный случай) — шлём маркер
-                # final_commit, чтобы фронт закрепил блок основным шрифтом.
-                if stream_state["sent"]:
-                    await self._send_chunk(
-                        "", request_id, msg_id=str(request_id), kind="final_commit"
-                    )
-                break
-
-            # Выполняем все запрошенные инструменты параллельно
-            tool_calls = response.tool_calls
-            tool_names = [tc['name'] for tc in tool_calls]
-            # Статусы тулов больше НЕ шлём: пользователь видит реальный поток
-            # размышлений модели (reasoning-блоки), а не служебные индикаторы.
-            # await self._send_status(get_tools_status(tool_names), request_id)
-
-            # logging.info(f"Итерация в цикле: {iteration}. Вызванные инструменты: {tool_calls}")
-            tool_results = await asyncio.gather(
-                *[
-                    self._invoke_tool(tools_by_name, tc, request_id)
-                    for tc in tool_calls
-                ],
-                return_exceptions=True,
-            )
-            # logging.info(f"Результаты тулзов: {tool_results}")
-
-            for tc, tr in zip(tool_calls, tool_results):
-                tool_name = tc["name"]
-                used_tools.append(tool_name)
-                # logging.info(f"РЕЗУЛЬАТЫ ТУЛЗЫ: {tr}")
-                if isinstance(tr, Exception):
-                    content_for_message = f"Ошибка инструмента: {tr}"
-                    result_dict = {"ok": False, "error": str(tr)}
-                else:
-                    if isinstance(tr, str):
-                        try:
-                            result_dict = ast.literal_eval(tr)
-                        except (ValueError, SyntaxError):
-                            try:
-                                result_dict = json.loads(tr)
-                            except (json.JSONDecodeError, TypeError):
-                                result_dict = {"raw": tr}
-                    elif isinstance(tr, dict):
-                        result_dict = tr
-                    else:
-                        result_dict = {"raw": tr}
-
-
-                if isinstance(result_dict, dict) and result_dict.get("saved_files"):
-                    should_auto_send = (
-                        tool_name in AUTO_SEND_FILE_TOOLS
-                        or bool(result_dict.get("auto_send"))
-                    )
-
-                    if should_auto_send:
-                        for f in result_dict["saved_files"]:
-                            if f["path"] not in seen_paths:
-                                seen_paths.add(f["path"])
-                                files_to_send.append(f)
-
-                if tool_name == "execute_python_code" and isinstance(result_dict, dict):
-                    if "stdout" in result_dict:
-                        result_dict["stdout"] = _truncate_text(result_dict["stdout"], max_chars=3000)
-                    if "stderr" in result_dict:
-                        result_dict["stderr"] = _truncate_text(result_dict["stderr"], max_chars=1000)
-
-                content_for_message = str(result_dict)
-
-                # Формируем ToolMessage на основе обрезанных данных
-                if isinstance(tr, Exception):
-                    content = f"Ошибка инструмента: {tr}"
-                else:
-                    content = content_for_message
-
-                messages.append(ToolMessage(content=content, tool_call_id=tc["id"]))
-
-                summary = _summarize_tool_call(tc, tr)
-                if summary:
-                    tool_trace.append(summary)
-
-            iteration += 1
-
-        else:
-            messages.append(HumanMessage(content=(
-                "ВНИМАНИЕ: Лимит шагов исчерпан. Обязательно верни текстовый ответ Пользователю"
-            )))
-
-            try:
-                result_response = await llm_with_tools.ainvoke(messages)
-                
-                # Если упрямая модель всё равно вернула tool_calls вместо текста
-                if not result_response.content and getattr(result_response, "tool_calls", None):
-                    final_response = f"Агент не уложился в отведенное время и пошел за инструментами. Попробуйте повторить запрос."
-                else:
-                    final_response = result_response.content or f"Достигнут лимит шагов. Попробуйте повторить запрос."
-                    
-            except Exception as e:
-                final_response = f"Ошибка агента: это не хеппи-энд"
-
-        # Ответ бота
-        if source == "telegram":
-            await database.add_message(
-                user_id=user_id,        # Передаем integer ID юзера
-                message=final_response,
-                chat_id=chat_id,
-                is_from_bot=True,
-                action=used_tools[0] if used_tools else None
-            )
-        tokens_usage = {
-                "input_tokens": total_input_tokens,
-                "output_tokens": total_output_tokens,
-                "total_tokens": total_input_tokens + total_output_tokens,
+            loop_state = {
+                "iteration": 0,
+                "soft_limit": SOFT_LIMIT,
+                "hard_limit": HARD_LIMIT,
+                "extension_used": False,
+                # LLM-as-judge может завернуть финальный ответ ТОЛЬКО ОДИН раз
+                # за весь запрос. После первой ревизии флаг ставится в True и
+                # повторная проверка уже не заворачивает (иначе риск зацикливания).
+                "judge_used": False,
             }
 
-        # Авто-отправка изображений, сгенерированных тулом generate_image.
-        # Они складываются в self._pending_generated_images в течение хода —
-        # добавляем их в files_to_send с пометкой kind=image, чтобы фронт
-        # отрисовал превью, а не карточку-файл.
-        for gen_item in getattr(self, "_pending_generated_images", []):
-            if isinstance(gen_item, dict):
-                dedup = gen_item.get("image_key") or gen_item.get("name")
-                if dedup and dedup not in seen_paths:
-                    seen_paths.add(dedup)
-                    files_to_send.append({
-                        "image_key": gen_item.get("image_key"),
-                        "name": gen_item.get("name") or "image.jpg",
-                        "kind": "image",
-                    })
-            else:
-                gen_path = gen_item
-                if gen_path not in seen_paths:
-                    seen_paths.add(gen_path)
-                    files_to_send.append({
-                        "path": gen_path,
-                        "name": os.path.basename(gen_path),
-                        "kind": "image",
-                    })
+            extension_tool = make_extension_tool(loop_state)
+            tools.append(extension_tool)          # тулза аппендится прямо внутри цикла, офигеть имбово
 
-        # logging.info(f"ФАЙЛЫ К ОТПРАВКЕ {files_to_send}")
-        return {
-            "input": user_input,
-            "message": final_response,
-            "used_tools": used_tools,
-            "action": used_tools[0] if len(used_tools)> 0 else '',
-            "success": True,
-            "files_to_send": files_to_send,
-            "tool_trace": '; '.join(tool_trace) if tool_trace else None,
-            "agent_model": agent_model,
-            "tokens_usage": tokens_usage
-        }
+            subagent_tl = make_subagent_tool(self)
+            tools.append(subagent_tl)
+
+            print(f"ЛИМИТ ПО КОНТЕКСТУ = {limit_mem}, ЧИСЛО ТОКЕНОВ = {max_tokens}")
+            # Привязываем инструменты к модели
+        
+
+            current_datetime = datetime.now().strftime("%d.%m.%Y %H:%M, %A")
+            system_content = SYSTEM_PROMPT.format(datetime=current_datetime)
+
+            # Собираем историю из памяти
+            history = await self._build_history(chat_id, limit=30)
+            journal_text = None
+            if use_journal:
+                print(f"USER ID: {user_id}")
+                tools.append(make_journal_tool(self, chat_id, user_id))
+                journal_text = await self.db.get_agent_journal(chat_id)
+                print(f"ЖУРНАЛ АГЕНТА: {journal_text}")
+                # if source == "telegram":
+                #     journal_text = await self.db.get_agent_journal(56) # Пока что мой id
+
+            tools_by_name = {t.name: t for t in tools}
+            llm_with_tools = llm.bind_tools(tools)
+            session_summary = await self.db.get_last_session_summary(chat_id)
+
+            logger.info(f"[ИСТОРИЯ ДО ОБРЕЗКИ] {len(history)}")
+            # Режем историю чатов
+            trimmed_history = trim_messages(
+                history,
+                max_tokens=max_tokens,
+                token_counter=count_tokens_approximately,
+                strategy='last',
+                start_on='human',
+                include_system=True,
+            )
+        
+            # ── Саммаризация того, что было отсечено ────────────────────────────
+            cut_count = len(history) - len(trimmed_history)
+            rolling_summary_text = None
+
+            previous_rolling = await self.db.get_rolling_summary(chat_id)
+            previous_covered_id = previous_rolling["covered_up_to_id"] if previous_rolling else 0
+            previous_summary_text = previous_rolling["summary_text"] if previous_rolling else None
+
+            logging.info(f"ЧИСЛО РАЗНИЦА = {cut_count}")
+            if cut_count > 0:
+                cut_messages_all = history[:cut_count]
+                # берём только те, что ЕЩЁ не входили в прошлый summary
+                new_cut_messages = [
+                    m for m in cut_messages_all
+                    if m.additional_kwargs.get("db_id", 0) > previous_covered_id
+                ]
+
+                if new_cut_messages:
+                    rolling_summary_text = await self._summarize_cut_messages(new_cut_messages, previous_summary_text)
+                    max_covered_id = max(m.additional_kwargs.get("db_id", 0) for m in cut_messages_all)
+                    await self.db.upsert_rolling_summary(chat_id, rolling_summary_text, covered_up_to_id=max_covered_id)
+                    logger.info(
+                        f"[ROLLING SUMMARY] Новых сообщений в сжатии: {len(new_cut_messages)} "
+                        f"(из {len(cut_messages_all)} отсечённых, {len(cut_messages_all) - len(new_cut_messages)} уже были покрыты), "
+                        f"длина саммари={len(rolling_summary_text)}"
+                    )
+                else:
+                    # всё что отсекли — уже было в прошлом summary, реально нового сжимать не нужно
+                    rolling_summary_text = previous_summary_text
+                    logger.info("[ROLLING SUMMARY] Все отсечённые сообщения уже покрыты предыдущим саммари, LLM-вызов пропущен")
+        
+            else:
+                rolling_summary_text = previous_summary_text
+
+            messages: List[BaseMessage] = []
+            if journal_text is not None:
+                messages.append(SystemMessage(content=f"📜 БОРТОВОЙ ЖУРНАЛ (Память):\n{journal_text}"))
+            elif use_journal and journal_text is None:
+                messages.append(SystemMessage(content=f"📜 БОРТОВОЙ ЖУРНАЛ (Память): ПУСТОЙ"))
+            messages.append(SystemMessage(content=system_content))
+
+            if rolling_summary_text:
+                messages.append(
+                    SystemMessage(
+                        content=f"🧵 СЖАТАЯ ИСТОРИЯ ДИАЛОГА (то, что было отсечено из контекста ранее):\n{rolling_summary_text}"
+                    )
+                )
+
+            if session_summary:
+                messages.append(
+                    SystemMessage(
+                        content=(
+                            f"📋 САММАРИ ПРОШЛОЙ СЕССИИ (session_id={session_summary['session_id']}):\n"
+                            f"{session_summary['summary_text']}"
+                        )
+                    )
+                )
+
+            messages += [
+                *trimmed_history,
+                HumanMessage(content=user_input),
+            ]
+
+            iteration = 0
+            while iteration < loop_state["hard_limit"]:
+                loop_state["iteration"] = iteration
+
+                # ТОЧКА 2: тулзы снимаем только на последнем шаге
+                is_last_step = iteration >= loop_state["hard_limit"] - 1
+                can_still_extend = not loop_state["extension_used"]
+                current_llm = llm if (is_last_step and not can_still_extend) else llm_with_tools
+
+                # ТОЧКА 3: адресный триггер на КАЖДОМ шаге окна, а не однократно.
+                steps_left = loop_state["hard_limit"] - iteration - 1
+                if iteration >= loop_state["soft_limit"] - 1 and can_still_extend:
+                    messages.append(SystemMessage(content=(
+                        f"[Контроль лимита] Осталось шагов: {steps_left}. "
+                        f"Если НЕ успеваешь завершить задачу за оставшиеся шаги — "
+                        f"вызови request_more_steps ПРЯМО СЕЙЧАС (расширение одноразовое). "
+                        f"Если успеваешь — продолжай и дай финальный ответ."
+                    )))
+                elif iteration >= loop_state["soft_limit"] - 1:
+                    messages.append(SystemMessage(
+                        content=f"[Прогресс: шаг {iteration} из {loop_state['hard_limit']}]"
+                    ))
+
+
+                # ── Живой стриминг текста модели ──────────────────────────
+                # Заранее неизвестно, окажется ли текущий шаг финалом (без
+                # tool_calls) или reasoning'ом перед вызовом тулзы. Поэтому
+                # чанки шлём оптимистично с kind="live" — фронт печатает их в
+                # текущем "живом" блоке. Как только шаг завершился и стал ясен
+                # его тип, шлём УПРАВЛЯЮЩИЙ маркер:
+                #   • есть tool_calls  → kind="reasoning_end": фронт сворачивает
+                #     живой блок в приглушённый reasoning-блок (курсив, мельче);
+                #   • нет tool_calls   → kind="final_commit": фронт фиксирует
+                #     живой блок как финальный ответ (основной шрифт).
+                stream_state = {"sent": False}
+
+                async def _on_chunk(text: str):
+                    stream_state["sent"] = True
+                    await self._send_chunk(
+                        text, request_id, msg_id=str(request_id), kind="live"
+                    )
+
+                try:
+                    response = await _astream_collect(
+                        current_llm, messages, on_chunk=_on_chunk, iteration=iteration
+                    )
+                except Exception:
+                    response = None
+
+                if response is None:
+                    logging.error(f"[iteration={iteration}] Все попытки llm провалены, прерываю цикл")
+                    final_response = "Ошибка внутри цикла агента. Но агент запомнил шаги, попробуйте вернуться к запросу"
+                    break
+
+                _has_tool_calls = bool(getattr(response, "tool_calls", None))
+                _had_text = bool(getattr(response, "content", None))
+
+                if _has_tool_calls and _had_text:
+                    # Это был reasoning перед тулзой. Оставляем его на фронте,
+                    # но переклассифицируем живой блок в свёрнутый reasoning-блок.
+                    loop_state.setdefault("reasoning_trace", []).append(response.content)
+                    if stream_state["sent"]:
+                        await self._send_chunk(
+                            "", request_id, msg_id=str(request_id), kind="reasoning_end"
+                        )
+                    # В стек reasoning не тащим (как и раньше) — гасим content
+                    response.content = ""
+                elif _has_tool_calls and not _had_text:
+                    # Шаг без текста (сразу tool_calls). Если что-то всё же
+                    # успело улететь как live (пустой мусор) — закрываем блок.
+                    if stream_state["sent"]:
+                        await self._send_chunk(
+                            "", request_id, msg_id=str(request_id), kind="reasoning_end"
+                        )
+
+                messages.append(response)          # ← единственный аппенд
+
+                usage = getattr(response, "usage_metadata", None) or {}
+                iter_in  = usage.get("input_tokens", 0)
+                iter_out = usage.get("output_tokens", 0)
+                total_input_tokens  += iter_in
+                total_output_tokens += iter_out
+                logging.info(
+                    f"[tokens] iter={iteration} "
+                    f"in={iter_in} out={iter_out} "
+                    f"total_in={total_input_tokens} total_out={total_output_tokens}"
+                )
+                logger.info(f"🦒Длина стека = {len(messages)}")
+
+                if not getattr(response, "tool_calls", None):
+                    final_response = response.content
+                    # Финальный шаг: фиксируем живой блок как финальный ответ.
+                    # Если что-то стримилось (обычный случай) — шлём маркер
+                    # final_commit, чтобы фронт закрепил блок основным шрифтом.
+                    if stream_state["sent"]:
+                        await self._send_chunk(
+                            "", request_id, msg_id=str(request_id), kind="final_commit"
+                        )
+                    break
+
+                # Выполняем все запрошенные инструменты параллельно
+                tool_calls = response.tool_calls
+                tool_names = [tc['name'] for tc in tool_calls]
+                # Статусы тулов больше НЕ шлём: пользователь видит реальный поток
+                # размышлений модели (reasoning-блоки), а не служебные индикаторы.
+                # await self._send_status(get_tools_status(tool_names), request_id)
+
+                # logging.info(f"Итерация в цикле: {iteration}. Вызванные инструменты: {tool_calls}")
+                tool_results = await asyncio.gather(
+                    *[
+                        self._invoke_tool(tools_by_name, tc, request_id)
+                        for tc in tool_calls
+                    ],
+                    return_exceptions=True,
+                )
+                # logging.info(f"Результаты тулзов: {tool_results}")
+
+                for tc, tr in zip(tool_calls, tool_results):
+                    tool_name = tc["name"]
+                    used_tools.append(tool_name)
+                    # logging.info(f"РЕЗУЛЬАТЫ ТУЛЗЫ: {tr}")
+                    if isinstance(tr, Exception):
+                        content_for_message = f"Ошибка инструмента: {tr}"
+                        result_dict = {"ok": False, "error": str(tr)}
+                    else:
+                        if isinstance(tr, str):
+                            try:
+                                result_dict = ast.literal_eval(tr)
+                            except (ValueError, SyntaxError):
+                                try:
+                                    result_dict = json.loads(tr)
+                                except (json.JSONDecodeError, TypeError):
+                                    result_dict = {"raw": tr}
+                        elif isinstance(tr, dict):
+                            result_dict = tr
+                        else:
+                            result_dict = {"raw": tr}
+
+
+                    if isinstance(result_dict, dict) and result_dict.get("saved_files"):
+                        should_auto_send = (
+                            tool_name in AUTO_SEND_FILE_TOOLS
+                            or bool(result_dict.get("auto_send"))
+                        )
+
+                        if should_auto_send:
+                            for f in result_dict["saved_files"]:
+                                if f["path"] not in seen_paths:
+                                    seen_paths.add(f["path"])
+                                    files_to_send.append(f)
+
+                    if tool_name == "execute_python_code" and isinstance(result_dict, dict):
+                        if "stdout" in result_dict:
+                            result_dict["stdout"] = _truncate_text(result_dict["stdout"], max_chars=3000)
+                        if "stderr" in result_dict:
+                            result_dict["stderr"] = _truncate_text(result_dict["stderr"], max_chars=1000)
+
+                    content_for_message = str(result_dict)
+
+                    # Формируем ToolMessage на основе обрезанных данных
+                    if isinstance(tr, Exception):
+                        content = f"Ошибка инструмента: {tr}"
+                    else:
+                        content = content_for_message
+
+                    messages.append(ToolMessage(content=content, tool_call_id=tc["id"]))
+
+                    summary = _summarize_tool_call(tc, tr)
+                    if summary:
+                        tool_trace.append(summary)
+
+                iteration += 1
+
+            else:
+                messages.append(HumanMessage(content=(
+                    "ВНИМАНИЕ: Лимит шагов исчерпан. Обязательно верни текстовый ответ Пользователю"
+                )))
+
+                try:
+                    result_response = await llm_with_tools.ainvoke(messages)
+                
+                    # Если упрямая модель всё равно вернула tool_calls вместо текста
+                    if not result_response.content and getattr(result_response, "tool_calls", None):
+                        final_response = f"Агент не уложился в отведенное время и пошел за инструментами. Попробуйте повторить запрос."
+                    else:
+                        final_response = result_response.content or f"Достигнут лимит шагов. Попробуйте повторить запрос."
+                    
+                except Exception as e:
+                    final_response = f"Ошибка агента: это не хеппи-энд"
+
+            # Ответ бота
+            if source == "telegram":
+                await database.add_message(
+                    user_id=user_id,        # Передаем integer ID юзера
+                    message=final_response,
+                    chat_id=chat_id,
+                    is_from_bot=True,
+                    action=used_tools[0] if used_tools else None
+                )
+            tokens_usage = {
+                    "input_tokens": total_input_tokens,
+                    "output_tokens": total_output_tokens,
+                    "total_tokens": total_input_tokens + total_output_tokens,
+                }
+
+            # Авто-отправка изображений, сгенерированных тулом generate_image.
+            # Берём request-local буфер из ContextVar, чтобы файлы разных чатов
+            # не смешивались при параллельной обработке.
+            pending_images = self._ctx_get("pending_generated_images", [])
+            for gen_item in pending_images:
+                if isinstance(gen_item, dict):
+                    dedup = gen_item.get("image_key") or gen_item.get("name")
+                    if dedup and dedup not in seen_paths:
+                        seen_paths.add(dedup)
+                        files_to_send.append({
+                            "image_key": gen_item.get("image_key"),
+                            "name": gen_item.get("name") or "image.jpg",
+                            "kind": "image",
+                        })
+                else:
+                    gen_path = gen_item
+                    if gen_path not in seen_paths:
+                        seen_paths.add(gen_path)
+                        files_to_send.append({
+                            "path": gen_path,
+                            "name": os.path.basename(gen_path),
+                            "kind": "image",
+                        })
+
+            # logging.info(f"ФАЙЛЫ К ОТПРАВКЕ {files_to_send}")
+            return {
+                "input": user_input,
+                "message": final_response,
+                "used_tools": used_tools,
+                "action": used_tools[0] if len(used_tools)> 0 else '',
+                "success": True,
+                "files_to_send": files_to_send,
+                "tool_trace": '; '.join(tool_trace) if tool_trace else None,
+                "agent_model": agent_model,
+                "tokens_usage": tokens_usage
+            }
+        finally:
+            # Очищаем request-local контекст текущего хода.
+            self._request_ctx.reset(ctx_token)
+
 
     async def _invoke_tool(self, tools_by_name: dict, tool_call: dict, request_id: str) -> str:
         """Вызвать один инструмент по его имени и аргументам."""

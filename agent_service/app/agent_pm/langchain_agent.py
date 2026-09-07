@@ -2001,7 +2001,41 @@ class KnowledgeAgent:
                 logger.info(f"🦒Длина стека = {len(messages)}")
 
                 if not getattr(response, "tool_calls", None):
-                    final_response = response.content
+                    final_response = response.content or ""
+
+                    # LLM-as-judge: проверяем финальный ответ перед commit.
+                    # Судья может завернуть ответ только один раз за запрос.
+                    if not loop_state.get("judge_used", False):
+                        judge_result = await judge_final_answer(
+                            llm=llm,
+                            user_input=user_input,
+                            final_response=final_response,
+                            tool_trace=tool_trace,
+                        )
+
+                        if judge_result.get("verdict") == "revise":
+                            loop_state["judge_used"] = True
+
+                            # Это не финал, а возврат на доработку: закрываем live-блок
+                            # как reasoning, чтобы фронт не фиксировал его финальным.
+                            if stream_state["sent"]:
+                                await self._send_chunk(
+                                    "", request_id, msg_id=str(request_id), kind="reasoning_end"
+                                )
+
+                            reason = (judge_result.get("reason") or "").strip()
+                            missing = (judge_result.get("missing") or "").strip()
+                            messages.append(HumanMessage(content=(
+                                "[JUDGE] Финальный ответ не принят. Доработай ответ и верни "
+                                "пользователю корректный итоговый результат. "
+                                "Избегай лишних шагов и инструментов, если можно ответить сразу.\n"
+                                f"Причина: {reason or 'не указана'}\n"
+                                f"Что исправить: {missing or 'улучшить релевантность и полноту ответа'}"
+                            )))
+
+                            iteration += 1
+                            continue
+
                     # Финальный шаг: фиксируем живой блок как финальный ответ.
                     # Если что-то стримилось (обычный случай) — шлём маркер
                     # final_commit, чтобы фронт закрепил блок основным шрифтом.

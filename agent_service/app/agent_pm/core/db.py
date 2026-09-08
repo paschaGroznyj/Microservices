@@ -270,9 +270,8 @@ class AgentDB:
                     WHERE entry_type != 'identity'
                     AND chat_id = $1
                 ) ranked
-                WHERE rn <= 2
                 ORDER BY updated_at DESC
-                LIMIT 8
+                LIMIT 10
             """, chat_id)
 
             count = await conn.fetchval(

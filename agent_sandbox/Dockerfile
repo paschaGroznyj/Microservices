@@ -11,6 +11,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     NPM_CONFIG_CACHE=/tmp/npm_cache \
     XDG_DATA_HOME=/tmp/.local/share \
     XDG_CONFIG_HOME=/tmp/.config \
+    XDG_CACHE_HOME=/tmp/.cache \
+    HOME=/tmp \
     UV_SYSTEM_PYTHON=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -25,6 +27,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
     chromium-driver \
     iproute2 \
+    libreoffice \
+    libreoffice-impress \
+    libreoffice-draw \
     && rm -rf /var/lib/apt/lists/*
 
 
@@ -61,10 +66,9 @@ RUN npm install --no-save animejs
 RUN npm install -g @playwright/mcp@latest ctx7 skillui
 
 # --- Предварительное создание временных папок и каталога пользователя ---
-RUN mkdir -p /tmp/matplotlib_cache /tmp/npm_cache /tmp/.local /tmp/.config /home/sandboxrunner/.local && \
-    chmod 1777 /tmp/matplotlib_cache /tmp/npm_cache /tmp/.local /tmp/.config && \
+RUN mkdir -p /tmp/matplotlib_cache /tmp/npm_cache /tmp/.local /tmp/.config /tmp/.cache /home/sandboxrunner/.local && \
+    chmod 1777 /tmp/matplotlib_cache /tmp/npm_cache /tmp/.local /tmp/.config /tmp/.cache && \
     chown -R sandboxrunner:sandboxrunner /app /opt/playwright-browsers /home/sandboxrunner
-
     
 RUN npx -y skills add -y emilkowalski/skills
 

@@ -1,3 +1,4 @@
+import json
 COMPRESSION_THRESHOLD = 8
 KEEP_RECENT = 3
 

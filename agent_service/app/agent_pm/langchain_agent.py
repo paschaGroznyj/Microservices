@@ -1735,25 +1735,25 @@ class KnowledgeAgent:
         self.current_message_id = None  # message_id генерится позже, в app.py; необязателен
         cleaned_user_input = user_input
         try:
-            if source == "telegram":
-                if '📎[FILE]' in cleaned_user_input:
-                    # Ищем маркер файла и вырезаем всё внутри ```...```
-                    # \1 сохраняет первую группу (маркер файла с его названием)
-                    cleaned_user_input = re.sub(
-                        r"(📎\[FILE\] \[Прикрепленный файл: (.*?)\])\nСодержимое файла:\n```\n.*?\n```",
-                        r"\1\n[Содержимое файла удалено для экономии памяти. Если для выполнения задачи требуются детали из этого файла, попроси пользователя загрузить его повторно.]",
-                        cleaned_user_input,
-                        flags=re.DOTALL
-                    )
-                    logging.info(cleaned_user_input)
+            # if source == "telegram":
+            #     if '📎[FILE]' in cleaned_user_input:
+            #         # Ищем маркер файла и вырезаем всё внутри ```...```
+            #         # \1 сохраняет первую группу (маркер файла с его названием)
+            #         cleaned_user_input = re.sub(
+            #             r"(📎\[FILE\] \[Прикрепленный файл: (.*?)\])\nСодержимое файла:\n```\n.*?\n```",
+            #             r"\1\n[Содержимое файла удалено для экономии памяти. Если для выполнения задачи требуются детали из этого файла, попроси пользователя загрузить его повторно.]",
+            #             cleaned_user_input,
+            #             flags=re.DOTALL
+            #         )
+            #         logging.info(cleaned_user_input)
 
-                await database.add_message(
-                            user_id=user_id,        # Передаем integer ID юзера
-                            message=cleaned_user_input[:20000],
-                            chat_id=chat_id,
-                            is_from_bot=False,
-                            action=None
-                        )
+            #     await database.add_message(
+            #                 user_id=user_id,        # Передаем integer ID юзера
+            #                 message=cleaned_user_input[:20000],
+            #                 chat_id=chat_id,
+            #                 is_from_bot=False,
+            #                 action=None
+            #             )
 
             # ── Настройки контекста ────────────────────────────────────────
             CONTEXT_PRESETS = {
@@ -1803,10 +1803,6 @@ class KnowledgeAgent:
                 "soft_limit": SOFT_LIMIT,
                 "hard_limit": HARD_LIMIT,
                 "extension_used": False,
-                # LLM-as-judge может завернуть финальный ответ ТОЛЬКО ОДИН раз
-                # за весь запрос. После первой ревизии флаг ставится в True и
-                # повторная проверка уже не заворачивает (иначе риск зацикливания).
-                "judge_used": False,
             }
 
             extension_tool = make_extension_tool(loop_state)
@@ -1911,239 +1907,235 @@ class KnowledgeAgent:
                 HumanMessage(content=user_input),
             ]
 
-            iteration = 0
-            while iteration < loop_state["hard_limit"]:
-                loop_state["iteration"] = iteration
+            async def agent_event_loop(messages: list):
+                nonlocal total_input_tokens, total_output_tokens # Не видит из-за +=
+                iteration = 0
+                while iteration < loop_state["hard_limit"]:
+                    loop_state["iteration"] = iteration
 
-                # ТОЧКА 2: тулзы снимаем только на последнем шаге
-                is_last_step = iteration >= loop_state["hard_limit"] - 1
-                can_still_extend = not loop_state["extension_used"]
-                current_llm = llm if (is_last_step and not can_still_extend) else llm_with_tools
+                    # ТОЧКА 2: тулзы снимаем только на последнем шаге
+                    is_last_step = iteration >= loop_state["hard_limit"] - 1
+                    can_still_extend = not loop_state["extension_used"]
+                    current_llm = llm if (is_last_step and not can_still_extend) else llm_with_tools
 
-                # ТОЧКА 3: адресный триггер на КАЖДОМ шаге окна, а не однократно.
-                steps_left = loop_state["hard_limit"] - iteration - 1
-                if iteration >= loop_state["soft_limit"] - 1 and can_still_extend:
-                    messages.append(SystemMessage(content=(
-                        f"[Контроль лимита] Осталось шагов: {steps_left}. "
-                        f"Если НЕ успеваешь завершить задачу за оставшиеся шаги — "
-                        f"вызови request_more_steps ПРЯМО СЕЙЧАС (расширение одноразовое). "
-                        f"Если успеваешь — продолжай и дай финальный ответ."
-                    )))
-                elif iteration >= loop_state["soft_limit"] - 1:
-                    messages.append(SystemMessage(
-                        content=f"[Прогресс: шаг {iteration} из {loop_state['hard_limit']}]"
-                    ))
+                    # ТОЧКА 3: адресный триггер на КАЖДОМ шаге окна, а не однократно.
+                    steps_left = loop_state["hard_limit"] - iteration - 1
+                    if iteration >= loop_state["soft_limit"] - 1 and can_still_extend:
+                        messages.append(SystemMessage(content=(
+                            f"[Контроль лимита] Осталось шагов: {steps_left}. "
+                            f"Если НЕ успеваешь завершить задачу за оставшиеся шаги — "
+                            f"вызови request_more_steps ПРЯМО СЕЙЧАС (расширение одноразовое). "
+                            f"Если успеваешь — продолжай и дай финальный ответ."
+                        )))
+                    elif iteration >= loop_state["soft_limit"] - 1:
+                        messages.append(SystemMessage(
+                            content=f"[Прогресс: шаг {iteration} из {loop_state['hard_limit']}]"
+                        ))
 
 
-                # ── Живой стриминг текста модели ──────────────────────────
-                # Заранее неизвестно, окажется ли текущий шаг финалом (без
-                # tool_calls) или reasoning'ом перед вызовом тулзы. Поэтому
-                # чанки шлём оптимистично с kind="live" — фронт печатает их в
-                # текущем "живом" блоке. Как только шаг завершился и стал ясен
-                # его тип, шлём УПРАВЛЯЮЩИЙ маркер:
-                #   • есть tool_calls  → kind="reasoning_end": фронт сворачивает
-                #     живой блок в приглушённый reasoning-блок (курсив, мельче);
-                #   • нет tool_calls   → kind="final_commit": фронт фиксирует
-                #     живой блок как финальный ответ (основной шрифт).
-                stream_state = {"sent": False}
+                    # ── Живой стриминг текста модели ──────────────────────────
+                    # Заранее неизвестно, окажется ли текущий шаг финалом (без
+                    # tool_calls) или reasoning'ом перед вызовом тулзы. Поэтому
+                    # чанки шлём оптимистично с kind="live" — фронт печатает их в
+                    # текущем "живом" блоке. Как только шаг завершился и стал ясен
+                    # его тип, шлём УПРАВЛЯЮЩИЙ маркер:
+                    #   • есть tool_calls  → kind="reasoning_end": фронт сворачивает
+                    #     живой блок в приглушённый reasoning-блок (курсив, мельче);
+                    #   • нет tool_calls   → kind="final_commit": фронт фиксирует
+                    #     живой блок как финальный ответ (основной шрифт).
+                    stream_state = {"sent": False}
 
-                async def _on_chunk(text: str):
-                    stream_state["sent"] = True
-                    await self._send_chunk(
-                        text, request_id, msg_id=str(request_id), kind="live"
+                    async def _on_chunk(text: str):
+                        stream_state["sent"] = True
+                        await self._send_chunk(
+                            text, request_id, msg_id=str(request_id), kind="live"
+                        )
+
+                    try:
+                        response = await _astream_collect(
+                            current_llm, messages, on_chunk=_on_chunk, iteration=iteration
+                        )
+                    except Exception:
+                        response = None
+
+                    if response is None:
+                        logging.error(f"[iteration={iteration}] Все попытки llm провалены, прерываю цикл")
+                        final_response = "Ошибка внутри цикла агента. Но агент запомнил шаги, попробуйте вернуться к запросу"
+                        break
+
+                    _has_tool_calls = bool(getattr(response, "tool_calls", None))
+                    _had_text = bool(getattr(response, "content", None))
+
+                    if _has_tool_calls and _had_text:
+                        # Это был reasoning перед тулзой. Оставляем его на фронте,
+                        # но переклассифицируем живой блок в свёрнутый reasoning-блок.
+                        loop_state.setdefault("reasoning_trace", []).append(response.content)
+                        if stream_state["sent"]:
+                            await self._send_chunk(
+                                "", request_id, msg_id=str(request_id), kind="reasoning_end"
+                            )
+                        # В стек reasoning не тащим (как и раньше) — гасим content
+                        response.content = ""
+                    elif _has_tool_calls and not _had_text:
+                        # Шаг без текста (сразу tool_calls). Если что-то всё же
+                        # успело улететь как live (пустой мусор) — закрываем блок.
+                        if stream_state["sent"]:
+                            await self._send_chunk(
+                                "", request_id, msg_id=str(request_id), kind="reasoning_end"
+                            )
+
+                    messages.append(response)          # ← единственный аппенд
+
+                    usage = getattr(response, "usage_metadata", None) or {}
+                    iter_in  = usage.get("input_tokens", 0)
+                    iter_out = usage.get("output_tokens", 0)
+                    total_input_tokens  += iter_in
+                    total_output_tokens += iter_out
+                    logging.info(
+                        f"[tokens] iter={iteration} "
+                        f"in={iter_in} out={iter_out} "
+                        f"total_in={total_input_tokens} total_out={total_output_tokens}"
                     )
+                    logger.info(f"🦒Длина стека = {len(messages)}")
 
-                try:
-                    response = await _astream_collect(
-                        current_llm, messages, on_chunk=_on_chunk, iteration=iteration
+                    if not getattr(response, "tool_calls", None):
+                        final_response = response.content or ""
+
+                        # Финальный шаг: фиксируем живой блок как финальный ответ.
+                        # Если что-то стримилось (обычный случай) — шлём маркер
+                        # final_commit, чтобы фронт закрепил блок основным шрифтом.
+                        if stream_state["sent"]:
+                            await self._send_chunk(
+                                "", request_id, msg_id=str(request_id), kind="final_commit"
+                            )
+                        break
+
+                    # Выполняем все запрошенные инструменты параллельно
+                    tool_calls = response.tool_calls
+                    tool_names = [tc['name'] for tc in tool_calls]
+                    # Статусы тулов больше НЕ шлём: пользователь видит реальный поток
+                    # размышлений модели (reasoning-блоки), а не служебные индикаторы.
+                    # await self._send_status(get_tools_status(tool_names), request_id)
+
+                    # logging.info(f"Итерация в цикле: {iteration}. Вызванные инструменты: {tool_calls}")
+                    tool_results = await asyncio.gather(
+                        *[
+                            self._invoke_tool(tools_by_name, tc, request_id)
+                            for tc in tool_calls
+                        ],
+                        return_exceptions=True,
                     )
-                except Exception:
-                    response = None
+                    # logging.info(f"Результаты тулзов: {tool_results}")
 
-                if response is None:
-                    logging.error(f"[iteration={iteration}] Все попытки llm провалены, прерываю цикл")
-                    final_response = "Ошибка внутри цикла агента. Но агент запомнил шаги, попробуйте вернуться к запросу"
-                    break
-
-                _has_tool_calls = bool(getattr(response, "tool_calls", None))
-                _had_text = bool(getattr(response, "content", None))
-
-                if _has_tool_calls and _had_text:
-                    # Это был reasoning перед тулзой. Оставляем его на фронте,
-                    # но переклассифицируем живой блок в свёрнутый reasoning-блок.
-                    loop_state.setdefault("reasoning_trace", []).append(response.content)
-                    if stream_state["sent"]:
-                        await self._send_chunk(
-                            "", request_id, msg_id=str(request_id), kind="reasoning_end"
-                        )
-                    # В стек reasoning не тащим (как и раньше) — гасим content
-                    response.content = ""
-                elif _has_tool_calls and not _had_text:
-                    # Шаг без текста (сразу tool_calls). Если что-то всё же
-                    # успело улететь как live (пустой мусор) — закрываем блок.
-                    if stream_state["sent"]:
-                        await self._send_chunk(
-                            "", request_id, msg_id=str(request_id), kind="reasoning_end"
-                        )
-
-                messages.append(response)          # ← единственный аппенд
-
-                usage = getattr(response, "usage_metadata", None) or {}
-                iter_in  = usage.get("input_tokens", 0)
-                iter_out = usage.get("output_tokens", 0)
-                total_input_tokens  += iter_in
-                total_output_tokens += iter_out
-                logging.info(
-                    f"[tokens] iter={iteration} "
-                    f"in={iter_in} out={iter_out} "
-                    f"total_in={total_input_tokens} total_out={total_output_tokens}"
-                )
-                logger.info(f"🦒Длина стека = {len(messages)}")
-
-                if not getattr(response, "tool_calls", None):
-                    final_response = response.content or ""
-
-                    # LLM-as-judge: проверяем финальный ответ перед commit.
-                    # Судья может завернуть ответ только один раз за запрос.
-                    if not loop_state.get("judge_used", False):
-                        judge_result = await judge_final_answer(
-                            llm=llm,
-                            user_input=user_input,
-                            final_response=final_response,
-                            tool_trace=tool_trace,
-                        )
-
-                        if judge_result.get("verdict") == "revise":
-                            loop_state["judge_used"] = True
-
-                            # Это не финал, а возврат на доработку: закрываем live-блок
-                            # как reasoning, чтобы фронт не фиксировал его финальным.
-                            if stream_state["sent"]:
-                                await self._send_chunk(
-                                    "", request_id, msg_id=str(request_id), kind="reasoning_end"
-                                )
-
-                            reason = (judge_result.get("reason") or "").strip()
-                            missing = (judge_result.get("missing") or "").strip()
-                            messages.append(HumanMessage(content=(
-                                "[JUDGE] Финальный ответ не принят. Доработай ответ и верни "
-                                "пользователю корректный итоговый результат. "
-                                "Избегай лишних шагов и инструментов, если можно ответить сразу.\n"
-                                f"Причина: {reason or 'не указана'}\n"
-                                f"Что исправить: {missing or 'улучшить релевантность и полноту ответа'}"
-                            )))
-
-                            iteration += 1
-                            continue
-
-                    # Финальный шаг: фиксируем живой блок как финальный ответ.
-                    # Если что-то стримилось (обычный случай) — шлём маркер
-                    # final_commit, чтобы фронт закрепил блок основным шрифтом.
-                    if stream_state["sent"]:
-                        await self._send_chunk(
-                            "", request_id, msg_id=str(request_id), kind="final_commit"
-                        )
-                    break
-
-                # Выполняем все запрошенные инструменты параллельно
-                tool_calls = response.tool_calls
-                tool_names = [tc['name'] for tc in tool_calls]
-                # Статусы тулов больше НЕ шлём: пользователь видит реальный поток
-                # размышлений модели (reasoning-блоки), а не служебные индикаторы.
-                # await self._send_status(get_tools_status(tool_names), request_id)
-
-                # logging.info(f"Итерация в цикле: {iteration}. Вызванные инструменты: {tool_calls}")
-                tool_results = await asyncio.gather(
-                    *[
-                        self._invoke_tool(tools_by_name, tc, request_id)
-                        for tc in tool_calls
-                    ],
-                    return_exceptions=True,
-                )
-                # logging.info(f"Результаты тулзов: {tool_results}")
-
-                for tc, tr in zip(tool_calls, tool_results):
-                    tool_name = tc["name"]
-                    used_tools.append(tool_name)
-                    # logging.info(f"РЕЗУЛЬАТЫ ТУЛЗЫ: {tr}")
-                    if isinstance(tr, Exception):
-                        content_for_message = f"Ошибка инструмента: {tr}"
-                        result_dict = {"ok": False, "error": str(tr)}
-                    else:
-                        if isinstance(tr, str):
-                            try:
-                                result_dict = ast.literal_eval(tr)
-                            except (ValueError, SyntaxError):
-                                try:
-                                    result_dict = json.loads(tr)
-                                except (json.JSONDecodeError, TypeError):
-                                    result_dict = {"raw": tr}
-                        elif isinstance(tr, dict):
-                            result_dict = tr
+                    for tc, tr in zip(tool_calls, tool_results):
+                        tool_name = tc["name"]
+                        used_tools.append(tool_name)
+                        # logging.info(f"РЕЗУЛЬАТЫ ТУЛЗЫ: {tr}")
+                        if isinstance(tr, Exception):
+                            content_for_message = f"Ошибка инструмента: {tr}"
+                            result_dict = {"ok": False, "error": str(tr)}
                         else:
-                            result_dict = {"raw": tr}
+                            if isinstance(tr, str):
+                                try:
+                                    result_dict = ast.literal_eval(tr)
+                                except (ValueError, SyntaxError):
+                                    try:
+                                        result_dict = json.loads(tr)
+                                    except (json.JSONDecodeError, TypeError):
+                                        result_dict = {"raw": tr}
+                            elif isinstance(tr, dict):
+                                result_dict = tr
+                            else:
+                                result_dict = {"raw": tr}
 
 
-                    if isinstance(result_dict, dict) and result_dict.get("saved_files"):
-                        should_auto_send = (
-                            tool_name in AUTO_SEND_FILE_TOOLS
-                            or bool(result_dict.get("auto_send"))
-                        )
+                        if isinstance(result_dict, dict) and result_dict.get("saved_files"):
+                            should_auto_send = (
+                                tool_name in AUTO_SEND_FILE_TOOLS
+                                or bool(result_dict.get("auto_send"))
+                            )
 
-                        if should_auto_send:
-                            for f in result_dict["saved_files"]:
-                                if f["path"] not in seen_paths:
-                                    seen_paths.add(f["path"])
-                                    files_to_send.append(f)
+                            if should_auto_send:
+                                for f in result_dict["saved_files"]:
+                                    if f["path"] not in seen_paths:
+                                        seen_paths.add(f["path"])
+                                        files_to_send.append(f)
 
-                    if tool_name == "execute_python_code" and isinstance(result_dict, dict):
-                        if "stdout" in result_dict:
-                            result_dict["stdout"] = _truncate_text(result_dict["stdout"], max_chars=3000)
-                        if "stderr" in result_dict:
-                            result_dict["stderr"] = _truncate_text(result_dict["stderr"], max_chars=1000)
+                        if tool_name == "execute_python_code" and isinstance(result_dict, dict):
+                            if "stdout" in result_dict:
+                                result_dict["stdout"] = _truncate_text(result_dict["stdout"], max_chars=3000)
+                            if "stderr" in result_dict:
+                                result_dict["stderr"] = _truncate_text(result_dict["stderr"], max_chars=1000)
 
-                    content_for_message = str(result_dict)
+                        content_for_message = str(result_dict)
 
-                    # Формируем ToolMessage на основе обрезанных данных
-                    if isinstance(tr, Exception):
-                        content = f"Ошибка инструмента: {tr}"
-                    else:
-                        content = content_for_message
+                        # Формируем ToolMessage на основе обрезанных данных
+                        if isinstance(tr, Exception):
+                            content = f"Ошибка инструмента: {tr}"
+                        else:
+                            content = content_for_message
 
-                    messages.append(ToolMessage(content=content, tool_call_id=tc["id"]))
+                        messages.append(ToolMessage(content=content, tool_call_id=tc["id"]))
 
-                    summary = _summarize_tool_call(tc, tr)
-                    if summary:
-                        tool_trace.append(summary)
+                        summary = _summarize_tool_call(tc, tr)
+                        if summary:
+                            tool_trace.append(summary)
 
-                iteration += 1
+                    iteration += 1
 
-            else:
-                messages.append(HumanMessage(content=(
-                    "ВНИМАНИЕ: Лимит шагов исчерпан. Обязательно верни текстовый ответ Пользователю"
-                )))
+                else:
+                    messages.append(HumanMessage(content=(
+                        "ВНИМАНИЕ: Лимит шагов исчерпан. Обязательно верни текстовый ответ Пользователю"
+                    )))
 
-                try:
-                    result_response = await llm_with_tools.ainvoke(messages)
-                
-                    # Если упрямая модель всё равно вернула tool_calls вместо текста
-                    if not result_response.content and getattr(result_response, "tool_calls", None):
-                        final_response = f"Агент не уложился в отведенное время и пошел за инструментами. Попробуйте повторить запрос."
-                    else:
-                        final_response = result_response.content or f"Достигнут лимит шагов. Попробуйте повторить запрос."
+                    try:
+                        result_response = await llm_with_tools.ainvoke(messages)
                     
-                except Exception as e:
-                    final_response = f"Ошибка агента: это не хеппи-энд"
+                        # Если упрямая модель всё равно вернула tool_calls вместо текста
+                        if not result_response.content and getattr(result_response, "tool_calls", None):
+                            final_response = f"Агент не уложился в отведенное время и пошел за инструментами. Попробуйте повторить запрос."
+                        else:
+                            final_response = result_response.content or f"Достигнут лимит шагов. Попробуйте повторить запрос."
+                        
+                    except Exception as e:
+                        final_response = f"Ошибка агента: это не хеппи-энд"
+                
+                return final_response, tool_trace
+
+            # LLM-as-judge: проверяем финальный ответ перед commit.
+            # Судья может завернуть ответ только один раз за запрос.
+            final_response, tool_trace = await agent_event_loop(messages=messages)
+
+            if loop_state["iteration"] >= loop_state["soft_limit"]:
+                judge_result = await judge_final_answer(
+                    llm=llm,
+                    user_input=user_input,
+                    final_response=final_response,
+                    tool_trace=tool_trace,
+                )
+                logging.info(f"🛑 ВЕРДИКТ СУДЬИ: {judge_result}")
+                if judge_result.get("verdict") == "revise":
+                    reason = (judge_result.get("reason") or "").strip()
+                    missing = (judge_result.get("missing") or "").strip()
+                    messages.append(HumanMessage(content=(
+                        "[JUDGE] Финальный ответ не принят. Доработай ответ и верни "
+                        "пользователю корректный итоговый результат. "
+                        "Избегай лишних шагов и инструментов, если можно ответить сразу.\n"
+                        f"Причина: {reason or 'не указана'}\n"
+                        f"Что исправить: {missing or 'улучшить релевантность и полноту ответа'}"
+                    )))
+                    final_response, tool_trace = await agent_event_loop(messages=messages)
+
 
             # Ответ бота
-            if source == "telegram":
-                await database.add_message(
-                    user_id=user_id,        # Передаем integer ID юзера
-                    message=final_response,
-                    chat_id=chat_id,
-                    is_from_bot=True,
-                    action=used_tools[0] if used_tools else None
-                )
+            # if source == "telegram":
+            #     await database.add_message(
+            #         user_id=user_id,        # Передаем integer ID юзера
+            #         message=final_response,
+            #         chat_id=chat_id,
+            #         is_from_bot=True,
+            #         action=used_tools[0] if used_tools else None
+            #     )
             tokens_usage = {
                     "input_tokens": total_input_tokens,
                     "output_tokens": total_output_tokens,

@@ -191,7 +191,7 @@ def make_subagent_tool(agent_instance):
         # ── Получаем request_id из агента (нужен для _send_status) ──────────
         # agent.current_request_id должен быть выставлен в process_query
         # перед стартом агентного цикла.
-        request_id: str = getattr(agent, "current_request_id", "") or ""
+        request_id: str = agent._ctx_get("request_id", getattr(agent, "current_request_id", "")) or ""
 
         async def send(text: str) -> None:
             """Fire-and-forget статус с [agent_name]-префиксом."""
@@ -222,12 +222,12 @@ def make_subagent_tool(agent_instance):
         try:
             all_tools = agent._build_tools(
                 user_id=0,
-                chat_id=getattr(agent, "current_chat_id", 0) or 0,
+                chat_id=agent._ctx_get("chat_id", getattr(agent, "current_chat_id", 0)) or 0,
                 user_input=task,
                 selected_tools=[],
                 allow_all=True,
                 images=None,
-                agent_model=getattr(agent, "current_agent_model", "universal"),
+                agent_model=agent._ctx_get("agent_model", getattr(agent, "current_agent_model", "universal")),
             )
         except Exception as e:
             logger.error("[SubAgent] Не удалось получить тулзы: %s", e)
@@ -256,7 +256,7 @@ def make_subagent_tool(agent_instance):
         # ── 3. Привязываем тулзы к LLM ───────────────────────────────────────
         base_llm = (
             getattr(agent, "llm", None)
-            or agent.AGENT_MODELS.get(getattr(agent, "current_agent_model", "universal"))
+            or agent.AGENT_MODELS.get(agent._ctx_get("agent_model", getattr(agent, "current_agent_model", "universal")))
             or agent.AGENT_MODELS.get("universal")
             or agent.AGENT_MODELS.get("designer")
             or agent.AGENT_MODELS.get("coder")

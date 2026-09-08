@@ -41,6 +41,12 @@
   color: var(--accent);
 }
 
+.brand-icon-img {
+  display: block;
+  object-fit: contain;
+  border-radius: 6px;
+}
+
 /* ── ACTIONS ──────────────────────────────────── */
 .sidebar-actions {
   padding: 10px 10px 6px;
@@ -99,6 +105,14 @@
   width: 15px;
   height: 15px;
   flex-shrink: 0;
+}
+
+.nav-item .nav-icon-img {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  object-fit: contain;
+  border-radius: 4px;
 }
 
 .nav-item:hover {

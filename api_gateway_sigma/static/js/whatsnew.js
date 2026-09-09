@@ -32,11 +32,29 @@
   // ── Ассеты героев (заполним, когда сгенерируем PNG) ──────────────────────
   // Формат: { light: "/static/img/heroes/xxx.png", dark: "/static/img/heroes/xxx_night.png" }
   // Пока null => показываем плейсхолдер с табличкой [>_].
+  // Один PNG на обе темы: light и dark указывают на один и тот же файл.
+  // Для героев с боковым "выглядыванием" (peek) поза зависит от стороны слайда:
+  // поля peekLeft/peekRight — картинки под соответствующий край.
+  const HERO_BASE = "/static/img/onboarding/heroes/";
   const HERO_ASSETS = {
-    duo:      null,   // оба кота обнимаются, показывают на интерфейс
-    duo_peek: null,   // оба выглядывают из-за края
-    black:    null,   // чёрный кот
-    white:    null,   // белый кот
+    // Дуэт: обнимаются (центр/full) — под слайды 2, 5 и финал.
+    duo:      { light: HERO_BASE + "duo_hug.png",  dark: HERO_BASE + "duo_hug.png" },
+    // Оба выглядывают из-за края.
+    duo_peek: { light: HERO_BASE + "duo_peek.png", dark: HERO_BASE + "duo_peek.png" },
+    // Чёрный кот: idle + peek с обеих сторон.
+    black: {
+      light:     HERO_BASE + "hero_black_idle.png",
+      dark:      HERO_BASE + "hero_black_idle.png",
+      peekLeft:  HERO_BASE + "hero_black_peek_l.png",
+      peekRight: HERO_BASE + "hero_black_peek_r.png",
+    },
+    // Белый кот: idle + peek с обеих сторон.
+    white: {
+      light:     HERO_BASE + "hero_white_idle.png",
+      dark:      HERO_BASE + "hero_white_idle.png",
+      peekLeft:  HERO_BASE + "hero_white_peek_l.png",
+      peekRight: HERO_BASE + "hero_white_peek_r.png",
+    },
   };
 
   // Определяем базовый интерфейс это или Sigma (по хосту).
@@ -99,12 +117,20 @@
     const box = h("div", { class: cls, "data-hero-slot": side }, []);
     const asset = assetKey ? HERO_ASSETS[assetKey] : null;
 
-    if (asset && asset.light) {
+    // Для peek-режима у одиночных котов берём позу под нужный край, если есть.
+    let srcLight = asset && asset.light;
+    let srcDark  = asset && (asset.dark || asset.light);
+    if (asset && mode === "peek") {
+      const peek = side === "left" ? asset.peekLeft : asset.peekRight;
+      if (peek) { srcLight = peek; srcDark = peek; }
+    }
+
+    if (srcLight) {
       const img = h("img", {
         class: "wn-hero-img js-theme-icon",
-        src: asset.light,
-        "data-icon-light": asset.light,
-        "data-icon-dark": asset.dark || asset.light,
+        src: srcLight,
+        "data-icon-light": srcLight,
+        "data-icon-dark": srcDark || srcLight,
         alt: "CatchPM герой",
       }, []);
       box.appendChild(img);

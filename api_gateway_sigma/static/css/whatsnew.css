@@ -308,18 +308,26 @@
   bottom: 0;
   width: 300px;
   max-width: 70%;
+  height: auto;          /* высоту задаёт картинка, слот не коллапсирует */
   transform: translateX(-50%);
   pointer-events: none;
   z-index: 3;
+  display: flex;
   justify-content: center;
   align-items: flex-end;
 }
+/* В центральном слоте картинка не должна ужиматься базовым max-height:92% —
+   высоту задают модификаторы bottom/scene. */
+.wn-hero--center .wn-hero-img { max-height: none; }
 /* Duo снизу (duo_peek, слайд «Главная»): два кота выглядывают из-за нижнего
    края. Слот прижат к самому низу сцены (bottom:0), картинка стоит НИЖНЕЙ
    кромкой на дне слота (origin снизу), поэтому translateY НЕ уводим вниз —
    иначе кот уходит за кромку и пропадает. Таскается по горизонтали (dx). */
+.wn-hero--center.wn-hero--bottom {
+  bottom: 4px;   /* приподнять слот над кромкой, чтобы duo был виден целиком */
+}
 .wn-hero--center.wn-hero--bottom .wn-hero-img {
-  max-height: 150px;
+  max-height: 120px;
   transform: translate(var(--wn-hero-dx, 0px), var(--wn-hero-dy, 0px));
   animation: wn-hero-in-bottom 0.5s cubic-bezier(.2,.7,.2,1);
 }
@@ -334,15 +342,21 @@
    только на пустой низ, а НЕ на текстовый блок. Низ картинки (стол/ПК) может
    слегка уходить за нижнюю кромку — это нормально. БЕЗ анимации и БЕЗ drag. */
 .wn-hero--center.wn-hero--scene {
-  width: 300px;
-  max-width: 62%;
-  bottom: -14px;   /* чуть притопить, чтобы низ ушёл за кромку, а не на текст */
+  width: 230px;
+  max-width: 52%;
+  bottom: 6px;   /* приподнято над кромкой, чтобы весь силуэт был виден */
 }
 .wn-hero--center.wn-hero--scene .wn-hero-img {
-  max-height: 118px;
-  transform: translateY(0);
-  animation: none;   /* эффект движения не нужен — статичная картинка */
+  max-height: 92px;
+  /* Анимация появления снизу (как у боковых котов, но по вертикали):
+     стартует из-за нижней кромки и въезжает вверх. */
+  transform: translateY(var(--wn-hero-dy, 0px));
+  animation: wn-hero-in-scene 0.5s cubic-bezier(.2,.7,.2,1);
   filter: drop-shadow(0 4px 8px rgba(0,0,0,0.14));
+}
+@keyframes wn-hero-in-scene {
+  from { opacity: 0; transform: translateY(calc(60px + var(--wn-hero-dy, 0px))); }
+  to   { opacity: 1; transform: translateY(var(--wn-hero-dy, 0px)); }
 }
 
 /* Когда снизу стоит сцена-дуэт (scene), резервируем место под неё:

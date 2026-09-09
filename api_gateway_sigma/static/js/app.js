@@ -420,6 +420,8 @@ class ChatApp {
         container.innerHTML = '';
         messages.forEach(msg => this.addMessage(msg, false));
         container.scrollTop = container.scrollHeight;
+        this._initMessagesFade(container);
+        container._syncFade && container._syncFade();
     }
 
     /**
@@ -624,6 +626,9 @@ class ChatApp {
                 this._showScrollArrow(container);
             }
         }
+
+        // Пересчёт тумана по краям после добавления сообщения.
+        container._syncFade && container._syncFade();
     }
 
     /* ══════════════════════════════════════════
@@ -2977,6 +2982,33 @@ class ChatApp {
     ══════════════════════════════════════════ */
     getMessagesContainer() {
         return document.getElementById('view-agent')?.querySelector('.chat-messages');
+    }
+
+    /* Туман по краям области сообщений: fade-top когда есть что скрыть сверху,
+       fade-bottom когда контент уходит вниз под message-input-container.
+       Вешается один раз на контейнер; классы переставляются по scrollTop. */
+    _initMessagesFade(container) {
+        container = container || this.getMessagesContainer();
+        if (!container || container._fadeBound) return;
+        container._fadeBound = true;
+
+        const sync = () => {
+            const scrollable = container.scrollHeight - container.clientHeight > 4;
+            const atTop = container.scrollTop <= 4;
+            const atBottom =
+                container.scrollHeight - container.scrollTop - container.clientHeight <= 4;
+            container.classList.toggle('fade-top', scrollable && !atTop);
+            container.classList.toggle('fade-bottom', scrollable && !atBottom);
+        };
+
+        container.addEventListener('scroll', sync, { passive: true });
+        container._syncFade = sync;
+        // Пересчёт при изменении содержимого/размеров (новые сообщения, ресайз)
+        if (window.ResizeObserver) {
+            const ro = new ResizeObserver(sync);
+            ro.observe(container);
+        }
+        sync();
     }
 
     getInputContainer() {

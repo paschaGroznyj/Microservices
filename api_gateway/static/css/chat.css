@@ -25,16 +25,18 @@
           mask-image: linear-gradient(to bottom, #0000 0, #000 48px);
 }
 
-/* Только нижний fade (в самом верху списка) — сообщения уходят под инпут */
+/* Только нижний fade (в самом верху списка) — сообщения уходят под инпут.
+   Полоса узкая (~28px) с более плотным началом: промежуточная точка на
+   ~40% альфы делает затухание резче в начале, чем линейное. */
 .chat-messages.fade-bottom:not(.fade-top) {
-  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 52px), #0000 100%);
-          mask-image: linear-gradient(to bottom, #000 calc(100% - 52px), #0000 100%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), rgba(0,0,0,0.4) calc(100% - 11px), #0000 100%);
+          mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), rgba(0,0,0,0.4) calc(100% - 11px), #0000 100%);
 }
 
 /* Оба края (проскроллено в середине) */
 .chat-messages.fade-top.fade-bottom {
-  -webkit-mask-image: linear-gradient(to bottom, #0000 0, #000 48px, #000 calc(100% - 52px), #0000 100%);
-          mask-image: linear-gradient(to bottom, #0000 0, #000 48px, #000 calc(100% - 52px), #0000 100%);
+  -webkit-mask-image: linear-gradient(to bottom, #0000 0, #000 48px, #000 calc(100% - 28px), rgba(0,0,0,0.4) calc(100% - 11px), #0000 100%);
+          mask-image: linear-gradient(to bottom, #0000 0, #000 48px, #000 calc(100% - 28px), rgba(0,0,0,0.4) calc(100% - 11px), #0000 100%);
 }
 
 .chat-messages.hidden { display: none; }
@@ -557,7 +559,7 @@
 ══════════════════════════════════════════════ */
 .message-input-container {
   flex-shrink: 0;
-  padding: 14px 16px 18px;
+  padding: 0 16px 18px;
   /* Без рамки и заливки — сливается с фоном chat-main-inner,
      чтобы сообщения растворялись в туман прямо у верхней границы
      .chat-input-field, без резкой линии. */

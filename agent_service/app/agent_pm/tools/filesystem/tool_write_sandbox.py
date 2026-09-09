@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 
 SANDBOX_ROOT = "/sandbox"
 MAX_CONTENT_SIZE = 200_000  # 200KB на файл, tmpfs у нас всего 64MB
-MAX_FILES_IN_SANDBOX = 200   # защита от захламления
+MAX_FILES_IN_SANDBOX = 500   # защита от захламления
 
 def _valid_sandbox_path(path: str) -> str | None:
     """Только внутри /sandbox, без выхода через .."""

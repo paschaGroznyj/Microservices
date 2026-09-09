@@ -12,8 +12,8 @@ from .journal_compression import maybe_compress_journal
 log = logging.getLogger(__name__)
 
 VALID_ENTRY_TYPES = {"identity", "user_preference", "anomaly", "evolution", "summary"}
-VALID_ACTIONS = {"insert", "update", "delete"}
-
+# VALID_ACTIONS = {"insert", "update", "delete"}
+VALID_ACTIONS = {"insert", "update"}
 
 async def handle_journal_operation(
         db,

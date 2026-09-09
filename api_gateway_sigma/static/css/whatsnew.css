@@ -316,17 +316,18 @@
   bottom: 0;
   width: 300px;
   max-width: 70%;
-  height: auto;          /* высоту задаёт картинка, слот не коллапсирует */
+  height: 200px;         /* ЯВНАЯ высота: absolute+bottom без top/height схлопывался в 0 → картинка была невидима */
   transform: translateX(-50%);
   pointer-events: none;
-  z-index: 3;
+  z-index: 6;            /* выше overflow-контента сцены */
   display: flex;
   justify-content: center;
   align-items: flex-end;
+  overflow: visible;
 }
 /* В центральном слоте картинка не должна ужиматься базовым max-height:92% —
    высоту задают модификаторы bottom/scene. */
-.wn-hero--center .wn-hero-img { max-height: none; }
+.wn-hero--center .wn-hero-img { max-height: none; opacity: 1; }
 /* Duo снизу (duo_peek, слайд «Главная»): два кота выглядывают из-за нижнего
    края. Слот прижат к самому низу сцены (bottom:0), картинка стоит НИЖНЕЙ
    кромкой на дне слота (origin снизу), поэтому translateY НЕ уводим вниз —

@@ -282,11 +282,11 @@
    чтобы не было рывка «появился по центру → прыгнул вбок». --wn-hero-dy
    добавляет вертикальный drag-offset поверх горизонтального смещения. */
 .wn-hero--peek.wn-hero--left  .wn-hero-img {
-  transform: translate(-34%, var(--wn-hero-dy, 0px));
+  transform: translate(calc(-34% + var(--wn-hero-dx, 0px)), var(--wn-hero-dy, 0px));
   animation: wn-hero-in-left 0.5s cubic-bezier(.2,.7,.2,1);
 }
 .wn-hero--peek.wn-hero--right .wn-hero-img {
-  transform: translate(34%, var(--wn-hero-dy, 0px));
+  transform: translate(calc(34% + var(--wn-hero-dx, 0px)), var(--wn-hero-dy, 0px));
   animation: wn-hero-in-right 0.5s cubic-bezier(.2,.7,.2,1);
 }
 @keyframes wn-hero-in-left {
@@ -314,28 +314,33 @@
   justify-content: center;
   align-items: flex-end;
 }
+/* Duo снизу: приподняли (было 30% → 12%), чтобы лапки было видно.
+   Таскается по горизонтали (--wn-hero-dx). */
 .wn-hero--center.wn-hero--bottom .wn-hero-img {
   max-height: 190px;
-  transform: translateY(calc(30% + var(--wn-hero-dy, 0px)));
+  transform: translate(var(--wn-hero-dx, 0px), calc(12% + var(--wn-hero-dy, 0px)));
   animation: wn-hero-in-bottom 0.5s cubic-bezier(.2,.7,.2,1);
 }
 @keyframes wn-hero-in-bottom {
-  from { opacity: 0; transform: translateY(calc(70% + var(--wn-hero-dy, 0px))); }
-  to   { opacity: 1; transform: translateY(calc(30% + var(--wn-hero-dy, 0px))); }
+  from { opacity: 0; transform: translate(var(--wn-hero-dx, 0px), calc(55% + var(--wn-hero-dy, 0px))); }
+  to   { opacity: 1; transform: translate(var(--wn-hero-dx, 0px), calc(12% + var(--wn-hero-dy, 0px))); }
 }
+
+/* Боковые коты при drag вверх должны проходить над сценой (до крестика). */
+.wn-hero--peek { z-index: 5; }
 
 /* Курсор/интерактивность для перетаскиваемых котов */
 .wn-hero-drag {
   cursor: grab;
   pointer-events: auto;
-  touch-action: pan-x;   /* вертикальный жест ловим сами, горизонт. свайп странице */
+  touch-action: none;   /* и вертикальный, и горизонтальный жест ловим сами */
   -webkit-user-select: none;
   user-select: none;
   -webkit-user-drag: none;
 }
 .wn-hero-drag:active { cursor: grabbing; }
-/* Во время таскания глушим CSS-анимацию въезда, чтобы не конфликтовала с
-   инлайновым --wn-hero-dy (иначе значение перезапишется анимацией). */
+/* После первого касания класс остаётся насовсем: анимация въезда выключается,
+   кот фиксируется на месте отпускания и НЕ проигрывает анимацию повторно. */
 .wn-hero-img.wn-hero-dragging { animation: none !important; transition: none !important; }
 
 /* ── Ряд иконок (слайды «Инструменты» / «Выбор модели») ── */

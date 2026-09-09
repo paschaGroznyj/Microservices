@@ -113,24 +113,38 @@
     } catch (e) { return "друг"; }
   }
 
-  // ── Drag героя по вертикали (мышь + тач) ──────────────────────────────────
-  // Позволяет таскать выглядывающего кота вверх/вниз. Смещение хранится в
-  // CSS-переменной --wn-hero-dy на самом <img>; базовый transform задаётся
-  // классами в CSS через translate(..., var(--wn-hero-dy, 0px)).
-  const HERO_DRAG_MIN = -70;   // вверх (px)
-  const HERO_DRAG_MAX = 70;    // вниз (px)
-  function makeHeroDraggable(img) {
-    let startY = 0, baseDy = 0, dragging = false, moved = false;
-    const getDy = () => parseFloat(img.style.getPropertyValue("--wn-hero-dy")) || 0;
-    const setDy = (v) => {
-      const clamped = Math.max(HERO_DRAG_MIN, Math.min(HERO_DRAG_MAX, v));
-      img.style.setProperty("--wn-hero-dy", clamped + "px");
+  // ── Drag героя (мышь + тач) ───────────────────────────────────────────────
+  // axis="y" — боковые коты (peek), таскаются по вертикали вплоть до крестика
+  //            закрытия сверху (широкий диапазон вверх).
+  // axis="x" — duo снизу, таскается влево/вправо.
+  // Смещение хранится в CSS-переменных --wn-hero-dy / --wn-hero-dx на <img>;
+  // базовый transform задаётся классами в CSS через
+  // translate(..., var(--wn-hero-dx,0), var(--wn-hero-dy,0)).
+  // ВАЖНО: анимация въезда играет ОДИН раз при первом показе слайда. Класс
+  // wn-hero-dragging насовсем гасит animation после первого взаимодействия,
+  // чтобы кот не «прыгал» назад в анимацию при отпускании.
+  const HERO_DRAG_Y_MIN = -240;  // вверх (px) — дотянуть до крестика закрытия
+  const HERO_DRAG_Y_MAX = 60;    // вниз (px)
+  const HERO_DRAG_X_MIN = -140;  // влево (px)
+  const HERO_DRAG_X_MAX = 140;   // вправо (px)
+  function makeHeroDraggable(img, axis) {
+    const vertical = axis !== "x";
+    const prop = vertical ? "--wn-hero-dy" : "--wn-hero-dx";
+    const lo = vertical ? HERO_DRAG_Y_MIN : HERO_DRAG_X_MIN;
+    const hi = vertical ? HERO_DRAG_Y_MAX : HERO_DRAG_X_MAX;
+    let start = 0, base = 0, dragging = false;
+    const getV = () => parseFloat(img.style.getPropertyValue(prop)) || 0;
+    const setV = (v) => {
+      const clamped = Math.max(lo, Math.min(hi, v));
+      img.style.setProperty(prop, clamped + "px");
     };
     function onDown(e) {
-      dragging = true; moved = false;
-      startY = (e.touches ? e.touches[0].clientY : e.clientY);
-      baseDy = getDy();
-      img.classList.add("wn-hero-dragging");   // отключает анимацию въезда на время таскания
+      dragging = true;
+      const pt = e.touches ? e.touches[0] : e;
+      start = vertical ? pt.clientY : pt.clientX;
+      base = getV();
+      // Гасим анимацию НАСОВСЕМ: после первого касания кот больше не въезжает.
+      img.classList.add("wn-hero-dragging");
       window.addEventListener("mousemove", onMove, { passive: false });
       window.addEventListener("touchmove", onMove, { passive: false });
       window.addEventListener("mouseup", onUp);
@@ -138,15 +152,15 @@
     }
     function onMove(e) {
       if (!dragging) return;
-      const y = (e.touches ? e.touches[0].clientY : e.clientY);
-      const delta = y - startY;
-      if (Math.abs(delta) > 2) moved = true;
-      setDy(baseDy + delta);
+      const pt = e.touches ? e.touches[0] : e;
+      const cur = vertical ? pt.clientY : pt.clientX;
+      setV(base + (cur - start));
       if (e.cancelable) e.preventDefault();   // не скроллить страницу пальцем
     }
     function onUp() {
       dragging = false;
-      img.classList.remove("wn-hero-dragging");
+      // Класс wn-hero-dragging НЕ снимаем — анимация должна остаться выключенной,
+      // позиция фиксируется на месте отпускания.
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("touchmove", onMove);
       window.removeEventListener("mouseup", onUp);
@@ -180,12 +194,13 @@
         alt: "CatchPM герой",
       }, []);
       box.appendChild(img);
-      // Выглядывающих котов (сбоку peek или снизу bottom) можно таскать
-      // по вертикали мышью/пальцем.
+      // Боковые коты (peek) — таскаются по вертикали (до крестика).
+      // Duo снизу (bottom) — таскается влево/вправо.
       if (mode === "peek" || mode === "bottom") {
         box.style.pointerEvents = "auto";
-        img.classList.add("wn-hero-drag");
-        makeHeroDraggable(img);
+        const axis = mode === "bottom" ? "x" : "y";
+        img.classList.add(axis === "x" ? "wn-hero-drag wn-hero-drag--x" : "wn-hero-drag");
+        makeHeroDraggable(img, axis);
       }
     } else {
       // Плейсхолдер с табличкой [>_]

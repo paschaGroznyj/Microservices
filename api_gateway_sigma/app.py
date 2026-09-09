@@ -494,6 +494,70 @@ async def get_permissions(request: Request):
     )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# What's New (обновления приложения) + Onboarding (демо-модалка).
+# Аутентификация — на стороне gateway (get_current_user по куке), в auth_service
+# проксируем уже готовый user_id в теле (как /profile/me).
+# ─────────────────────────────────────────────────────────────────────────────
+@app.get("/api/whatsnew/pending")
+async def whatsnew_pending(request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    auth_url = SERVICES['auth']['url']
+    try:
+        response = await app.state.http_client.post(
+            f"{auth_url}/whatsnew/pending",
+            json={"user_id": user["user_id"]},
+            timeout=10.0
+        )
+        return JSONResponse(content=response.json(), status_code=response.status_code)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Auth service dead: {str(e)}")
+
+
+@app.post("/api/whatsnew/demo/seen")
+async def whatsnew_demo_seen(request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    auth_url = SERVICES['auth']['url']
+    try:
+        response = await app.state.http_client.post(
+            f"{auth_url}/whatsnew/demo/seen",
+            json={"user_id": user["user_id"]},
+            timeout=10.0
+        )
+        return JSONResponse(content=response.json(), status_code=response.status_code)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Auth service dead: {str(e)}")
+
+
+@app.post("/api/whatsnew/updates/seen")
+async def whatsnew_update_seen(request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    data = await request.json()
+    update_id = data.get("update_id")
+    if update_id is None:
+        raise HTTPException(status_code=400, detail="update_id обязателен")
+
+    auth_url = SERVICES['auth']['url']
+    try:
+        response = await app.state.http_client.post(
+            f"{auth_url}/whatsnew/updates/seen",
+            json={"user_id": user["user_id"], "update_id": update_id},
+            timeout=10.0
+        )
+        return JSONResponse(content=response.json(), status_code=response.status_code)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Auth service dead: {str(e)}")
+
+
 @app.post("/api/profile/token")
 async def token(request: Request):
     """Получение Scholar токена с сохранение в БД"""

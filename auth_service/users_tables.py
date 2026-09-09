@@ -116,6 +116,47 @@ class DataBaseUser:
                                ADD COLUMN IF NOT EXISTS is_guest BOOLEAN DEFAULT FALSE;
                            """)
 
+        # ─────────────────────────────────────────────────────────────────────
+        # What's New (обновления приложения) + Onboarding (демо-модалка).
+        # Механика "показать один раз":
+        #   - app_updates: каталог релизов, наполняется руками (add_app_update).
+        #   - user_seen_updates: какое обновление какой юзер уже закрыл.
+        #     Непросмотренные = published-обновления, которых нет в этой таблице
+        #     для данного user_id. Новый релиз автоматически "новый" для всех.
+        #   - user_onboarding: одна отметка на юзера о просмотре демо-онбординга.
+        #     "Новизну" юзера определяем именно этой таблицей (demo_seen=FALSE
+        #     или отсутствие строки), а не датой регистрации.
+        # ─────────────────────────────────────────────────────────────────────
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS app_updates (
+                id           SERIAL PRIMARY KEY,
+                version      VARCHAR(50),                       -- '1.4.0' / тег релиза (опц.)
+                title        TEXT NOT NULL,                     -- заголовок обновления
+                body         TEXT NOT NULL,                     -- HTML-описание релиза
+                is_published BOOLEAN NOT NULL DEFAULT FALSE,    -- показывать пользователям
+                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_app_updates_published
+                ON app_updates (is_published, created_at);
+
+            CREATE TABLE IF NOT EXISTS user_seen_updates (
+                user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                update_id  INTEGER NOT NULL REFERENCES app_updates(id) ON DELETE CASCADE,
+                seen_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, update_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_user_seen_updates_user
+                ON user_seen_updates (user_id);
+
+            CREATE TABLE IF NOT EXISTS user_onboarding (
+                user_id      INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                demo_seen    BOOLEAN NOT NULL DEFAULT FALSE,
+                demo_seen_at TIMESTAMP
+            );
+        """)
+
     async def check_user_password(self, username: str, password: str = None, back_user_id=False):
         async with self.pool.acquire() as conn:
             if password:
@@ -379,6 +420,82 @@ class DataBaseUser:
                     "token_bool": token_bool
                 }
             }
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # What's New (обновления) + Onboarding (демо-модалка)
+    # ─────────────────────────────────────────────────────────────────────────
+    async def get_pending_whatsnew(self, user_id: int) -> dict:
+        """
+        Что показать юзеру при входе:
+          - demo: показать ли онбординг-демо (True, если нет отметки demo_seen);
+          - updates: список published-обновлений, которые юзер ещё не закрыл
+                     (по возрастанию created_at — показываем от старых к новым).
+        """
+        async with self.pool.acquire() as conn:
+            demo_seen = await conn.fetchval("""
+                SELECT demo_seen FROM user_onboarding WHERE user_id = $1
+            """, user_id)
+            # Нет строки -> демо ещё не видел -> показываем.
+            demo = not bool(demo_seen)
+
+            rows = await conn.fetch("""
+                SELECT au.id, au.version, au.title, au.body, au.created_at
+                FROM app_updates au
+                WHERE au.is_published = TRUE
+                  AND NOT EXISTS (
+                      SELECT 1 FROM user_seen_updates su
+                      WHERE su.update_id = au.id AND su.user_id = $1
+                  )
+                ORDER BY au.created_at ASC, au.id ASC
+            """, user_id)
+
+            updates = []
+            for r in rows:
+                item = dict(r)
+                if item.get("created_at"):
+                    item["created_at"] = item["created_at"].isoformat()
+                updates.append(item)
+
+            return {"demo": demo, "updates": updates}
+
+    async def mark_demo_seen(self, user_id: int) -> bool:
+        """Отметить, что юзер закрыл онбординг-демо (идемпотентно)."""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO user_onboarding (user_id, demo_seen, demo_seen_at)
+                VALUES ($1, TRUE, NOW())
+                ON CONFLICT (user_id)
+                DO UPDATE SET demo_seen = TRUE,
+                              demo_seen_at = COALESCE(user_onboarding.demo_seen_at, NOW())
+            """, user_id)
+            return True
+
+    async def mark_update_seen(self, user_id: int, update_id: int) -> bool:
+        """Отметить, что юзер закрыл конкретное обновление (идемпотентно)."""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO user_seen_updates (user_id, update_id)
+                VALUES ($1, $2)
+                ON CONFLICT (user_id, update_id) DO NOTHING
+            """, user_id, update_id)
+            return True
+
+    async def add_app_update(self, title: str, body: str,
+                             version: str = None, is_published: bool = True) -> int:
+        """Завести новое обновление (наполнение каталога руками)."""
+        async with self.pool.acquire() as conn:
+            update_id = await conn.fetchval("""
+                INSERT INTO app_updates (version, title, body, is_published)
+                VALUES ($1, $2, $3, $4)
+                RETURNING id
+            """, version, title, body, is_published)
+            logging.info(f"Создано обновление id={update_id} (version={version}, published={is_published})")
+            return update_id
+
+    async def get_user_id_by_username(self, username: str) -> int | None:
+        """Достаём users.id по username (для эндпоинтов, где есть только sub из JWT)."""
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval("SELECT id FROM users WHERE username = $1", username)
 
     async def save_feedback(self, user_id: int, username: str, style: str,
                             original_text: str, original_category: str,

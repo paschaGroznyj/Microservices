@@ -175,7 +175,7 @@
   function heroSlot(side, mode, assetKey) {
     // side: "left" | "right"; mode: "full" | "peek" | "bottom"; assetKey: ключ HERO_ASSETS
     const cls = "wn-hero wn-hero--" + side + " wn-hero--" + (mode || "full");
-    const box = h("div", { class: cls, "data-hero-slot": side }, []);
+    const box = h("div", { class: cls, "data-hero-slot": side, "data-hero-asset": assetKey || "" }, []);
     const asset = assetKey ? HERO_ASSETS[assetKey] : null;
 
     // Для peek-режима у одиночных котов берём позу под нужный край, если есть.

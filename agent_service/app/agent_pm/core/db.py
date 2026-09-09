@@ -251,10 +251,12 @@ class AgentDB:
 
     async def get_agent_journal(self, chat_id: int | None = None) -> str:
         async with self.pool.acquire() as conn:
+            # В основной контекст тянем ТОЛЬКО активные (не архивные) записи.
             identity_row = await conn.fetchrow("""
                 SELECT id, entry_type, content, context, created_at, updated_at
                 FROM agent_journal
                 WHERE entry_type = 'identity' AND chat_id = $1
+                  AND is_archived = FALSE
                 LIMIT 1
             """, chat_id)
 
@@ -269,17 +271,28 @@ class AgentDB:
                     FROM agent_journal
                     WHERE entry_type != 'identity'
                     AND chat_id = $1
+                    AND is_archived = FALSE
                 ) ranked
                 ORDER BY updated_at DESC
                 LIMIT 10
             """, chat_id)
 
             count = await conn.fetchval(
-                "SELECT count(id) FROM agent_journal WHERE chat_id = $1;",
+                "SELECT count(id) FROM agent_journal WHERE chat_id = $1 AND is_archived = FALSE;",
                 chat_id,
             )
 
-        if not identity_row and not other_rows:
+            # Архивные записи: тянем компактно только id + краткое summary,
+            # чтобы модель на лету могла разархивировать нужную по id.
+            archived_rows = await conn.fetch("""
+                SELECT id, entry_type, archive_summary, updated_at
+                FROM agent_journal
+                WHERE chat_id = $1 AND is_archived = TRUE
+                ORDER BY updated_at DESC
+                LIMIT 50
+            """, chat_id)
+
+        if not identity_row and not other_rows and not archived_rows:
             return "Журнал агента пуст."
 
         def _format_entry(row) -> str:
@@ -310,6 +323,19 @@ class AgentDB:
         if other_rows:
             others_formatted = "\n\n".join(_format_entry(r) for r in other_rows)
             parts.append(("── ОСТАЛЬНЫЕ ЗАПИСИ ──\n" if identity_row else "") + others_formatted)
+
+        # Компактный реестр архива: id + одно предложение о содержимом.
+        # В основной контекст сами тексты не тянутся, но модель видит, что
+        # лежит в архиве, и может разархивировать нужную запись по id.
+        if archived_rows:
+            arch_lines = []
+            for r in archived_rows:
+                summ = (r["archive_summary"] or "").strip() or "(без описания)"
+                arch_lines.append(f"  ID: {r['id']} | [{r['entry_type']}] — {summ}")
+            parts.append(
+                "── В АРХИВЕ (свёрнуто, в контекст не тянется; разархивировать по id) ──\n"
+                + "\n".join(arch_lines)
+            )
 
         return "\n\n".join(parts)
             

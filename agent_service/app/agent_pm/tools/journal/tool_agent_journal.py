@@ -5,9 +5,11 @@ def make_journal_tool(agent, chat_id: int, user_id: int):
     @tool
     async def work_with_agent_journal(
         action: str,
-        entry_type: str,
-        content: str,
+        entry_type: str = "",
+        content: str = "",
         replace: str = "",
+        entry_id: int = 0,
+        archive_summary: str = "",
     ) -> str:
         """
         Работа с бортовым журналом (agent_journal) — ПАМЯТЬ ВНУТРИ ЭТОГО ЧАТА.
@@ -18,11 +20,25 @@ def make_journal_tool(agent, chat_id: int, user_id: int):
         Журнал привязан к конкретному чату — записи из других чатов не видны
         и не затрагиваются.
 
+        АРХИВ: записи можно свернуть в архив. Архивная запись НЕ тянется в
+        основной контекст (экономит токены), но остаётся видимой в компактном
+        реестре "── В АРХИВЕ ──" как "ID: N — краткое описание". По этому id
+        её можно вернуть обратно (unarchive).
+
         Аргументы:
-            action: "insert" — новая запись
-                    "update" — заменить часть текста в существующей записи
-                    "delete" — удалить существующую запись
-            entry_type: тип записи — один из:
+            action: "insert"    — новая запись
+                    "update"    — заменить часть текста в существующей записи
+                    "archive"   — свернуть запись в архив по её id
+                                  (нужны entry_id + archive_summary)
+                    "unarchive" — вернуть архивную запись в активный контекст
+                                  (нужен entry_id)
+            entry_id: id записи журнала — ТОЛЬКО для archive/unarchive.
+                      Берётся из блока "── В АРХИВЕ ──" (разархивация) или из
+                      "ID: N" активной записи (архивация).
+            archive_summary: одно короткое предложение о содержимом записи —
+                      ОБЯЗАТЕЛЬНО для archive. Именно оно показывается в реестре
+                      архива вместо полного текста.
+            entry_type: тип записи (для insert/update) — один из:
                 identity        — как вести себя в этом чате, стиль, роль
                 user_preference — предпочтения собеседника в этом чате
                 anomaly         — замеченная странность/повторяющаяся проблема
@@ -42,10 +58,14 @@ def make_journal_tool(agent, chat_id: int, user_id: int):
                 action="update", entry_type="user_preference",
                 replace="короткие ответы", content="развёрнутые ответы с примерами"
 
-            Убрать устаревший факт:
-                action="delete", entry_type="anomaly", replace="повторяющийся вопрос про X"
+            Свернуть запись в архив (по id из реестра):
+                action="archive", entry_id=157,
+                archive_summary="Ход по PoC graph-world: нарезка героя-кота и анимация ходьбы."
 
-        НЕ пиши SQL — только эти четыре параметра. Все операции выполняются
+            Вернуть запись из архива в контекст:
+                action="unarchive", entry_id=157
+
+        НЕ пиши SQL — только эти параметры. Все операции выполняются
         строго в рамках текущего чата, никакие другие записи не затрагиваются.
         """
         from .journal_handler import handle_journal_operation
@@ -58,6 +78,8 @@ def make_journal_tool(agent, chat_id: int, user_id: int):
             content=content,
             replace=replace or None,
             user_id=user_id,
+            entry_id=(entry_id or None),
+            archive_summary=(archive_summary or None),
         )
         return str(result)
 

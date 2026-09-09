@@ -109,8 +109,18 @@
       const res = await fetch("/api/auth/me", { credentials: "include" });
       if (!res.ok) return "друг";
       const d = await res.json();
-      const first = (d.name && String(d.name).split(" ")[0]) || d.username || "друг";
-      return first;
+
+      const rawName = (d.name || "").trim();
+      const firstFromName = (rawName && rawName !== "Unknown")
+        ? rawName.split(/\s+/)[0]
+        : "";
+      const username = (d.username || "").trim();
+
+      // Два сценария в Sigma:
+      // 1) authentik: показываем имя из X-Authentik-Name, если оно валидно;
+      // 2) login-page (internal): показываем username.
+      if (d.source === "authentik") return firstFromName || username || "друг";
+      return username || firstFromName || "друг";
     } catch (e) { return "друг"; }
   }
 
@@ -302,10 +312,10 @@
       node: h("div", {}, [
         h("img", {
           class: "wn-app-icon js-theme-icon",
-          src: "/static/img/icon_black.png",
-          "data-icon-light": "/static/img/icon_black.png",
-          "data-icon-dark": "/static/img/icon_white.png",
-          alt: "CatchPM icon",
+          src: IS_SIGMA ? "/static/img/icon_sigma_black.png" : "/static/img/icon_black.png",
+          "data-icon-light": IS_SIGMA ? "/static/img/icon_sigma_black.png" : "/static/img/icon_black.png",
+          "data-icon-dark": IS_SIGMA ? "/static/img/icon_sigma_white.png" : "/static/img/icon_white.png",
+          alt: IS_SIGMA ? "CatchPM Sigma icon" : "CatchPM icon",
         }, []),
         h("h3", { class: "wn-title",
           html: 'Привет, <span class="username">' + esc(username) + "</span> 👋" }, []),
@@ -449,10 +459,10 @@
       node: h("div", {}, [
         h("img", {
           class: "wn-app-icon js-theme-icon",
-          src: "/static/img/icon_black.png",
-          "data-icon-light": "/static/img/icon_black.png",
-          "data-icon-dark": "/static/img/icon_white.png",
-          alt: "CatchPM icon",
+          src: IS_SIGMA ? "/static/img/icon_sigma_black.png" : "/static/img/icon_black.png",
+          "data-icon-light": IS_SIGMA ? "/static/img/icon_sigma_black.png" : "/static/img/icon_black.png",
+          "data-icon-dark": IS_SIGMA ? "/static/img/icon_sigma_white.png" : "/static/img/icon_white.png",
+          alt: IS_SIGMA ? "CatchPM Sigma icon" : "CatchPM icon",
         }, []),
         h("h3", { class: "wn-title" }, ["Погнали!"]),
         h("p", { class: "wn-text center" }, [

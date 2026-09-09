@@ -347,6 +347,44 @@ async def get_feedback(request: Request):
 #         raise HTTPException(status_code=401, detail="Invalid token")
 
 
+@app.post("/whatsnew/pending")
+async def whatsnew_pending(request: Request):
+    """
+    Что показать юзеру при входе: онбординг-демо (для новых) и непросмотренные
+    published-обновления. Аутентификацию делает gateway (get_current_user по
+    куке), сюда прилетает уже готовый user_id в теле — как в /profile/me.
+    """
+    data = await request.json()
+    user_id = data.get("user_id")
+    if user_id is None:
+        raise HTTPException(status_code=400, detail="user_id обязателен")
+    result = await db.get_pending_whatsnew(user_id=int(user_id))
+    return result
+
+
+@app.post("/whatsnew/demo/seen")
+async def whatsnew_demo_seen(request: Request):
+    """Юзер закрыл онбординг-демо — больше не показываем."""
+    data = await request.json()
+    user_id = data.get("user_id")
+    if user_id is None:
+        raise HTTPException(status_code=400, detail="user_id обязателен")
+    await db.mark_demo_seen(user_id=int(user_id))
+    return {"status": "ok"}
+
+
+@app.post("/whatsnew/updates/seen")
+async def whatsnew_update_seen(request: Request):
+    """Юзер закрыл конкретное обновление — помечаем как просмотренное."""
+    data = await request.json()
+    user_id = data.get("user_id")
+    update_id = data.get("update_id")
+    if user_id is None or update_id is None:
+        raise HTTPException(status_code=400, detail="user_id и update_id обязательны")
+    await db.mark_update_seen(user_id=int(user_id), update_id=int(update_id))
+    return {"status": "ok"}
+
+
 @app.get("/health")
 async def health():
     status = "ok" if service_auth_alive else "error"

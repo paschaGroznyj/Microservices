@@ -314,31 +314,41 @@
   justify-content: center;
   align-items: flex-end;
 }
-/* Duo снизу: приподняли (было 30% → 12%), чтобы лапки было видно.
-   Таскается по горизонтали (--wn-hero-dx). */
+/* Duo снизу (duo_peek, слайд «Главная»): два кота выглядывают из-за нижнего
+   края. Слот прижат к самому низу сцены (bottom:0), картинка стоит НИЖНЕЙ
+   кромкой на дне слота (origin снизу), поэтому translateY НЕ уводим вниз —
+   иначе кот уходит за кромку и пропадает. Таскается по горизонтали (dx). */
 .wn-hero--center.wn-hero--bottom .wn-hero-img {
-  max-height: 190px;
-  transform: translate(var(--wn-hero-dx, 0px), calc(12% + var(--wn-hero-dy, 0px)));
+  max-height: 150px;
+  transform: translate(var(--wn-hero-dx, 0px), var(--wn-hero-dy, 0px));
   animation: wn-hero-in-bottom 0.5s cubic-bezier(.2,.7,.2,1);
 }
 @keyframes wn-hero-in-bottom {
-  from { opacity: 0; transform: translate(var(--wn-hero-dx, 0px), calc(55% + var(--wn-hero-dy, 0px))); }
-  to   { opacity: 1; transform: translate(var(--wn-hero-dx, 0px), calc(12% + var(--wn-hero-dy, 0px))); }
+  from { opacity: 0; transform: translate(var(--wn-hero-dx, 0px), calc(40px + var(--wn-hero-dy, 0px))); }
+  to   { opacity: 1; transform: translate(var(--wn-hero-dx, 0px), var(--wn-hero-dy, 0px)); }
 }
 
-/* ── Сцена-дуэт снизу (scene): широкая композиция (два кота за ПК),
-   размещается по центру внизу как duo, БЕЗ анимации и БЕЗ drag.
-   В отличие от duo_peek — шире и полностью видима (лапки не срезаны). */
+/* ── Сцена-дуэт снизу (scene): широкая композиция (два кота за ПК).
+   ВАЖНО: слот .wn-hero--center — это absolute-оверлей поверх текста, поэтому
+   scene держим КОМПАКТНОЙ и прижимаем к самому низу окна, чтобы она наезжала
+   только на пустой низ, а НЕ на текстовый блок. Низ картинки (стол/ПК) может
+   слегка уходить за нижнюю кромку — это нормально. БЕЗ анимации и БЕЗ drag. */
 .wn-hero--center.wn-hero--scene {
-  width: 460px;
-  max-width: 92%;
+  width: 300px;
+  max-width: 62%;
+  bottom: -14px;   /* чуть притопить, чтобы низ ушёл за кромку, а не на текст */
 }
 .wn-hero--center.wn-hero--scene .wn-hero-img {
-  max-height: 210px;
-  /* Стоит на нижней кромке, чуть выступает вверх — виден весь силуэт. */
+  max-height: 118px;
   transform: translateY(0);
   animation: none;   /* эффект движения не нужен — статичная картинка */
+  filter: drop-shadow(0 4px 8px rgba(0,0,0,0.14));
 }
+
+/* Когда снизу стоит сцена-дуэт (scene), резервируем место под неё:
+   текст заканчивается выше, поэтому картинка наезжает только на пустой
+   нижний отступ, а не на строки. */
+.wn-stage--scene-hero .wn-scroll { padding-bottom: 118px; }
 
 /* Боковые коты при drag вверх должны проходить над сценой (до крестика). */
 .wn-hero--peek { z-index: 5; }

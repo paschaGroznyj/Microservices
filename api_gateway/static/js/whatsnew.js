@@ -533,6 +533,9 @@
         const hero = s.hero;
         const isCenter = hero && hero.side === "center";
         stage.classList.toggle("wn-stage--center-hero", !!isCenter);
+        // Для сцены-дуэта (scene) резервируем место внизу под картинку,
+        // чтобы текст заканчивался выше и картинка его не перекрывала.
+        stage.classList.toggle("wn-stage--scene-hero", !!(hero && hero.mode === "scene"));
 
         if (hero && hero.side === "left") stage.appendChild(heroSlot("left", hero.mode, hero.asset));
 

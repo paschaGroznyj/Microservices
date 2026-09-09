@@ -55,8 +55,8 @@
       peekLeft:  HERO_BASE + "hero_white_peek_l.png",
       peekRight: HERO_BASE + "hero_white_peek_r.png",
     },
-    // Сцена Sigma: два кота за ПК с символом Σ (нарезано из общего листа).
-    sigma_scene: { light: HERO_BASE + "scene_sigma.png", dark: HERO_BASE + "scene_sigma.png" },
+    // Сцена Sigma: отдельный обновлённый ассет.
+    sigma_scene: { light: HERO_BASE + "scene_sigma_v2.png", dark: HERO_BASE + "scene_sigma_v2.png" },
     // Сцена админа: кот в короне/плаще + кот за терминалом, "admin mode".
     admin_scene: { light: HERO_BASE + "scene_admin.png", dark: HERO_BASE + "scene_admin.png" },
   };
@@ -196,11 +196,10 @@
       }, []);
       box.appendChild(img);
       // Боковые коты (peek) — таскаются по вертикали (до крестика).
-      // Duo снизу (bottom) — таскается влево/вправо.
-      // Сцена (scene) — статичная широкая картинка, drag НЕ нужен.
-      if (mode === "peek" || mode === "bottom") {
+      // Duo снизу (bottom) и сцены (scene) — таскаются влево/вправо.
+      if (mode === "peek" || mode === "bottom" || mode === "scene") {
         box.style.pointerEvents = "auto";
-        const axis = mode === "bottom" ? "x" : "y";
+        const axis = mode === "peek" ? "y" : "x";
         img.classList.add(axis === "x" ? "wn-hero-drag wn-hero-drag--x" : "wn-hero-drag");
         makeHeroDraggable(img, axis);
       }
@@ -352,7 +351,7 @@
     slides.push({
       hero: { side: "center", mode: "scene", asset: "sigma_scene" },
       node: h("div", {}, [
-        h("h3", { class: "wn-title" }, ["Два интерфейса: базовый и Sigma"]),
+        h("h3", { class: "wn-title wn-title--sidebar-header" }, ["Два интерфейса: базовый и Sigma"]),
         h("img", { class: "wn-shot", src: "/static/img/onboarding/two_interfaces.png",
           alt: "Базовый и Sigma", onerror: "this.style.display='none'" }, []),
         h("p", { class: "wn-text" }, [

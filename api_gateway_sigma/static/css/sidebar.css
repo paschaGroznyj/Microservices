@@ -35,10 +35,16 @@
 .brand-link:hover { text-decoration: none; opacity: .85; }
 
 .brand-icon {
-  width: 24px;
-  height: 24px;
+  width: 30px;
+  height: 30px;
   flex-shrink: 0;
   color: var(--accent);
+}
+
+.brand-icon-img {
+  display: block;
+  object-fit: contain;
+  border-radius: 6px;
 }
 
 /* ── ACTIONS ──────────────────────────────────── */
@@ -99,6 +105,14 @@
   width: 15px;
   height: 15px;
   flex-shrink: 0;
+}
+
+.nav-item .nav-icon-img {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  object-fit: contain;
+  border-radius: 5px;
 }
 
 .nav-item:hover {

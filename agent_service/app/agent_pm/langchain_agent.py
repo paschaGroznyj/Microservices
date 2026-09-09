@@ -984,7 +984,7 @@ class KnowledgeAgent:
                 if row["is_from_bot"]:
                     content = row["message_text"]
                     if row.get("tool_trace"):
-                        content = f"{content}\n\n[Использованные инструменты: {row['tool_trace']}]"
+                        content = f"{content}\n\n[{row['tool_trace']}]"
                     messages.append(AIMessage(content=content, additional_kwargs=kwargs))
                 else:
                     messages.append(HumanMessage(content=row["message_text"], additional_kwargs=kwargs))
@@ -1777,6 +1777,7 @@ class KnowledgeAgent:
             # при старте process_query.
             SOFT_LIMIT = 10   # после этого — предупреждаем модель   
             HARD_LIMIT = 14  # динамически можно поднять число шагов
+            JUDGE_LIMIT = 5
             total_input_tokens  = 0
             total_output_tokens = 0
 
@@ -1802,6 +1803,7 @@ class KnowledgeAgent:
                 "iteration": 0,
                 "soft_limit": SOFT_LIMIT,
                 "hard_limit": HARD_LIMIT,
+                "judge_limit": JUDGE_LIMIT,
                 "extension_used": False,
             }
 
@@ -1825,7 +1827,7 @@ class KnowledgeAgent:
                 print(f"USER ID: {user_id}")
                 tools.append(make_journal_tool(self, chat_id, user_id))
                 journal_text = await self.db.get_agent_journal(chat_id)
-                print(f"ЖУРНАЛ АГЕНТА: {journal_text}")
+                print(f"ЖУРНАЛ АГЕНТА: длина = {len(journal_text)   }")
                 # if source == "telegram":
                 #     journal_text = await self.db.get_agent_journal(56) # Пока что мой id
 
@@ -2106,7 +2108,7 @@ class KnowledgeAgent:
             # Судья может завернуть ответ только один раз за запрос.
             final_response, tool_trace = await agent_event_loop(messages=messages)
 
-            if loop_state["iteration"] >= loop_state["soft_limit"]:
+            if loop_state["iteration"] >= loop_state["judge_limit"]:
                 judge_result = await judge_final_answer(
                     llm=llm,
                     user_input=user_input,

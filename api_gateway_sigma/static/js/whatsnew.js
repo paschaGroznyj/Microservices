@@ -200,7 +200,11 @@
       if (mode === "peek" || mode === "bottom" || mode === "scene") {
         box.style.pointerEvents = "auto";
         const axis = mode === "peek" ? "y" : "x";
-        img.classList.add(axis === "x" ? "wn-hero-drag wn-hero-drag--x" : "wn-hero-drag");
+        if (axis === "x") {
+          img.classList.add("wn-hero-drag", "wn-hero-drag--x");
+        } else {
+          img.classList.add("wn-hero-drag");
+        }
         makeHeroDraggable(img, axis);
       }
     } else {
@@ -547,7 +551,8 @@
         if (isCenter) stage.appendChild(heroSlot("center", hero.mode, hero.asset));
 
         // Кнопки
-        backBtn.style.visibility = idx === 0 ? "hidden" : "visible";
+        backBtn.disabled = idx === 0;
+        backBtn.setAttribute("aria-disabled", backBtn.disabled ? "true" : "false");
         nextBtn.textContent = (idx === total - 1) ? "Поехали" : "Далее";
         skipBtn.style.display = (idx === total - 1) ? "none" : "";
 

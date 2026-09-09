@@ -489,6 +489,16 @@
   border-color: var(--border, #e0dbd4);
 }
 .wn-btn-secondary:hover { border-color: var(--accent, #8b4513); color: var(--accent, #8b4513); }
+.wn-btn-secondary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  border-color: var(--border, #e0dbd4);
+  color: var(--text-muted, #9e9890);
+}
+.wn-btn-secondary:disabled:hover {
+  border-color: var(--border, #e0dbd4);
+  color: var(--text-muted, #9e9890);
+}
 .wn-btn-ghost {
   background: transparent;
   color: var(--text-muted, #9e9890);

@@ -35,7 +35,8 @@
   padding: 0 14px 0 18px;
   height: 54px;
   min-height: 54px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 42%, transparent);
+  /* Нижняя рамка убрана — граница задаётся туманом области сообщений. */
+  border-bottom: none;
   background: transparent;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;

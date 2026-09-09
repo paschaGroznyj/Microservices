@@ -1,0 +1,189 @@
+/* whatsnew.css — Онбординг-демо + What's New (обновления).
+   Опирается на общие переменные темы: --accent, --surface, --border,
+   --text-*, --radius-*. Работает и в light, и в dark. */
+
+.wn-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(3px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.28s ease;
+}
+.wn-overlay.active   { opacity: 1; pointer-events: all; }
+.wn-overlay.closing  { opacity: 0; }
+
+.wn-card {
+  width: 100%;
+  max-width: 460px;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #e0dbd4);
+  border-radius: var(--radius-lg, 16px);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+  transform: translateY(14px) scale(0.985);
+  opacity: 0;
+  transition: transform 0.28s cubic-bezier(.2,.7,.2,1), opacity 0.28s ease;
+}
+.wn-overlay.active .wn-card { transform: translateY(0) scale(1); opacity: 1; }
+
+/* ── Онбординг ── */
+.wn-hero {
+  position: relative;
+  height: 168px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(120% 140% at 50% 0%,
+      color-mix(in srgb, var(--accent, #8b4513) 22%, transparent) 0%,
+      transparent 70%),
+    var(--surface2, #f3f1ee);
+  border-bottom: 1px solid var(--border, #e0dbd4);
+}
+.wn-hero-ph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  background: var(--surface, #fff);
+  border: 2px dashed color-mix(in srgb, var(--accent, #8b4513) 55%, transparent);
+}
+.wn-hero-emoji {
+  font-family: var(--font-serif, "Playfair Display", serif);
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--accent, #8b4513);
+  letter-spacing: 0.3px;
+}
+
+.wn-body { padding: 22px 24px 8px; text-align: center; }
+
+.wn-title {
+  font-family: var(--font-serif, "Playfair Display", serif);
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-primary, #1a1612);
+  margin: 0 0 8px;
+}
+.wn-text {
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--text-secondary, #5c5650);
+  margin: 0;
+}
+
+.wn-dots {
+  display: flex;
+  gap: 7px;
+  justify-content: center;
+  margin: 18px 0 4px;
+}
+.wn-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--border, #e0dbd4);
+  transition: all 0.25s ease;
+}
+.wn-dot.active {
+  width: 20px;
+  border-radius: 4px;
+  background: var(--accent, #8b4513);
+}
+
+/* ── Footer / кнопки ── */
+.wn-footer {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 16px 24px 20px;
+}
+.wn-card-onboarding .wn-footer { justify-content: space-between; }
+
+.wn-btn {
+  font-family: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 9px 18px;
+  border-radius: var(--radius-md, 10px);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+.wn-btn-primary {
+  background: var(--accent, #8b4513);
+  color: #fff;
+}
+.wn-btn-primary:hover { background: var(--accent-hover, #7a3b10); }
+.wn-btn-ghost {
+  background: transparent;
+  color: var(--text-muted, #9e9890);
+  border-color: transparent;
+}
+.wn-btn-ghost:hover { color: var(--text-secondary, #5c5650); }
+
+/* ── Модалка обновления ── */
+.wn-card-update .wn-title { text-align: left; padding: 0 24px; margin-top: 4px; }
+
+.wn-update-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px 6px;
+}
+.wn-update-head-left { display: flex; align-items: center; gap: 10px; }
+
+.wn-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent, #8b4513) 14%, transparent);
+  color: var(--accent, #8b4513);
+}
+.wn-update-date { font-size: 0.74rem; color: var(--text-muted, #9e9890); }
+
+.wn-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px; height: 30px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted, #9e9890);
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+.wn-close:hover { background: var(--surface2, #f3f1ee); color: var(--text-primary, #1a1612); }
+.wn-close svg { width: 18px; height: 18px; }
+
+.wn-update-body {
+  padding: 12px 24px 4px;
+  max-height: 46vh;
+  overflow-y: auto;
+  font-size: 0.88rem;
+  line-height: 1.6;
+  color: var(--text-secondary, #5c5650);
+}
+.wn-update-body p { margin: 0 0 10px; }
+.wn-update-body ul, .wn-update-body ol { margin: 0 0 10px; padding-left: 20px; }
+.wn-update-body li { margin-bottom: 4px; }
+.wn-update-body strong { color: var(--text-primary, #1a1612); }
+.wn-update-body a { color: var(--accent, #8b4513); }
+
+@media (max-width: 520px) {
+  .wn-card { max-width: 100%; }
+  .wn-hero { height: 140px; }
+}

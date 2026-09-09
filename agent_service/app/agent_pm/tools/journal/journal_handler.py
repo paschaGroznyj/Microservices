@@ -13,7 +13,11 @@ log = logging.getLogger(__name__)
 
 VALID_ENTRY_TYPES = {"identity", "user_preference", "anomaly", "evolution", "summary"}
 # VALID_ACTIONS = {"insert", "update", "delete"}
-VALID_ACTIONS = {"insert", "update"}
+VALID_ACTIONS = {"insert", "update", "archive", "unarchive"}
+
+# Для archive/unarchive entry_type не проверяется (операция по id), поэтому
+# для них разрешаем служебное значение-заглушку.
+_ID_ACTIONS = {"archive", "unarchive"}
 
 async def handle_journal_operation(
         db,
@@ -24,6 +28,8 @@ async def handle_journal_operation(
         content: str,
         replace: str | None = None,
         user_id: int | None = None,
+        entry_id: int | None = None,
+        archive_summary: str | None = None,
     ) -> dict:
     """
     Выполняет одну операцию с agent_journal в рамках конкретного chat_id.
@@ -40,6 +46,23 @@ async def handle_journal_operation(
     """
     if action not in VALID_ACTIONS:
         return {"ok": False, "error": f"Недопустимое action: {action}. Разрешены: {VALID_ACTIONS}"}
+
+    # archive/unarchive работают по id записи, а не по entry_type/content.
+    if action in _ID_ACTIONS:
+        if entry_id is None:
+            return {"ok": False, "error": f"Для action={action} обязателен параметр entry_id (id записи журнала)"}
+        try:
+            entry_id = int(entry_id)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": f"entry_id должен быть целым числом, получено: {entry_id!r}"}
+        try:
+            if action == "archive":
+                return await _do_archive(db, chat_id, entry_id, archive_summary)
+            else:
+                return await _do_unarchive(db, chat_id, entry_id)
+        except Exception as e:
+            log.error(f"Ошибка операции journal action={action} chat_id={chat_id}: {e}", exc_info=True)
+            return {"ok": False, "error": f"Внутренняя ошибка: {type(e).__name__}: {e}"}
 
     if entry_type not in VALID_ENTRY_TYPES:
         return {"ok": False, "error": f"Недопустимый entry_type: {entry_type}. Разрешены: {VALID_ENTRY_TYPES}"}
@@ -126,3 +149,62 @@ async def _do_delete(db, chat_id: int, entry_type: str, replace: str) -> dict:
     await db.pool.execute("DELETE FROM agent_journal WHERE id = $1", row["id"])
 
     return {"ok": True, "action": "delete", "id": row["id"]}
+
+
+async def _do_archive(db, chat_id: int, entry_id: int, archive_summary: str | None) -> dict:
+    """
+    Помечает запись is_archived=TRUE и пишет краткое одно-предложение summary.
+    Запись перестаёт тянуться в основной контекст get_agent_journal,
+    но остаётся видимой в компактном реестре архива (id + summary).
+    """
+    if not archive_summary or not archive_summary.strip():
+        return {"ok": False, "error": "Для archive обязателен archive_summary — одно короткое предложение о содержимом записи"}
+
+    row = await db.pool.fetchrow("""
+        SELECT id, is_archived FROM agent_journal
+        WHERE id = $1 AND chat_id = $2
+        LIMIT 1
+    """, entry_id, chat_id)
+
+    if not row:
+        return {"ok": False, "error": f"Запись id={entry_id} не найдена под chat_id={chat_id}"}
+
+    if row["is_archived"]:
+        # уже в архиве — просто обновим summary, идемпотентно
+        await db.pool.execute("""
+            UPDATE agent_journal
+            SET archive_summary = $1, updated_at = NOW()
+            WHERE id = $2
+        """, archive_summary.strip(), entry_id)
+        return {"ok": True, "action": "archive", "id": entry_id, "already_archived": True, "summary": archive_summary.strip()}
+
+    await db.pool.execute("""
+        UPDATE agent_journal
+        SET is_archived = TRUE, archive_summary = $1, updated_at = NOW()
+        WHERE id = $2
+    """, archive_summary.strip(), entry_id)
+
+    return {"ok": True, "action": "archive", "id": entry_id, "summary": archive_summary.strip()}
+
+
+async def _do_unarchive(db, chat_id: int, entry_id: int) -> dict:
+    """Возвращает запись в активный контекст (is_archived=FALSE)."""
+    row = await db.pool.fetchrow("""
+        SELECT id, is_archived FROM agent_journal
+        WHERE id = $1 AND chat_id = $2
+        LIMIT 1
+    """, entry_id, chat_id)
+
+    if not row:
+        return {"ok": False, "error": f"Запись id={entry_id} не найдена под chat_id={chat_id}"}
+
+    if not row["is_archived"]:
+        return {"ok": True, "action": "unarchive", "id": entry_id, "already_active": True}
+
+    await db.pool.execute("""
+        UPDATE agent_journal
+        SET is_archived = FALSE, updated_at = NOW()
+        WHERE id = $1
+    """, entry_id)
+
+    return {"ok": True, "action": "unarchive", "id": entry_id}

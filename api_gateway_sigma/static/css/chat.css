@@ -558,8 +558,11 @@
 .message-input-container {
   flex-shrink: 0;
   padding: 14px 16px 18px;
-  border-top: 1px solid var(--border);
-  background: var(--surface);
+  /* Без рамки и заливки — сливается с фоном chat-main-inner,
+     чтобы сообщения растворялись в туман прямо у верхней границы
+     .chat-input-field, без резкой линии. */
+  border-top: none;
+  background: transparent;
 }
 
 /* Когда внутри рендерится стартовый экран — контейнер покрывает

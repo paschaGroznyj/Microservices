@@ -81,14 +81,26 @@
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 0;
-  /* было overflow:hidden — оно резало горизонтальный скролл кода и
-     обрезало длинные строки справа. Скролл живёт на pre code. */
-  overflow: visible;
+  /* Контейнер никогда не должен распирать бабл на мобильных. */
+  overflow-x: auto;
+  overflow-y: hidden;
   margin: .9em 0;
   font-size: .83rem;
   line-height: 1.6;
   box-shadow: var(--shadow-md);
   max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+/* Подстраховка: если markdown отрисован как <pre> без вложенного <code>,
+   текст тоже не должен вылезать вправо. */
+.agent-message pre:not(:has(code)) {
+  padding: 12px 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 /* Шапка блока — язык через data-lang на pre */
@@ -425,6 +437,18 @@
     word-break: break-word;
     overflow-wrap: anywhere;
     overflow-x: hidden;
+  }
+
+  /* Иногда markdown приходит как <pre>...</pre> без вложенного <code>.
+     Для такого случая тоже форсим переносы, чтобы строка не уходила вправо. */
+  .agent-message pre {
+    white-space: pre-wrap;
+    word-break: break-all;
+    overflow-wrap: anywhere;
+  }
+
+  .agent-message pre code {
+    word-break: break-all;
   }
 
   .user-message {

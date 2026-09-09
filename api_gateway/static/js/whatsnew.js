@@ -329,9 +329,6 @@
       hero: { side: "center", mode: "bottom", asset: "duo_peek" },
       node: h("div", {}, [
         h("h3", { class: "wn-title" }, ["Главная страница"]),
-        h("img", { class: "wn-shot", src: "/static/img/onboarding/main_screen.png",
-          alt: "Главная страница CatchPM",
-          onerror: "this.style.display='none'" }, []),
         h("p", { class: "wn-text" }, [
           "Слева — сайдбар управления. Здесь всё, чтобы держать работу под рукой:",
         ]),
@@ -356,8 +353,6 @@
       hero: { side: "center", mode: "scene", asset: "sigma_scene" },
       node: h("div", {}, [
         h("h3", { class: "wn-title wn-title--sidebar-header" }, ["Два интерфейса: базовый и Sigma"]),
-        h("img", { class: "wn-shot", src: "/static/img/onboarding/two_interfaces.png",
-          alt: "Базовый и Sigma", onerror: "this.style.display='none'" }, []),
         h("p", { class: "wn-text" }, [
           "Существует две версии интерфейса. Функционал агента в них одинаковый — " +
           "различия только в оболочке и способе входа.",

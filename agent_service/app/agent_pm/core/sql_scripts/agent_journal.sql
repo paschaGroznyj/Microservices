@@ -5,16 +5,23 @@
 -- ─────────────────────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS agent_journal (
-    id          BIGSERIAL    PRIMARY KEY,
-    entry_type  TEXT         NOT NULL,   -- 'identity' | 'emotion' | 'anomaly' | 'evolution' | 'summary'
-    content     TEXT         NOT NULL,   -- свободный текст на русском
-    context     JSONB,                   -- {"user_id": ..., "tool": ..., "trigger": ..., "session": ...}
-    created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    id              BIGSERIAL    PRIMARY KEY,
+    entry_type      TEXT         NOT NULL,   -- 'identity' | 'emotion' | 'anomaly' | 'evolution' | 'summary'
+    content         TEXT         NOT NULL,   -- свободный текст на русском
+    context         JSONB,                   -- {"user_id": ..., "tool": ..., "trigger": ..., "session": ...}
+    is_archived     BOOLEAN      NOT NULL DEFAULT FALSE,  -- запись свёрнута в архив и НЕ тянется в контекст
+    archive_summary TEXT,                    -- одно короткое предложение о содержимом архивной записи
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
 ALTER TABLE agent_journal
     ADD COLUMN IF NOT EXISTS user_id BIGINT;
+
+-- ── Архивация записей (миграция для уже существующих БД) ──────────────────────
+ALTER TABLE agent_journal
+    ADD COLUMN IF NOT EXISTS is_archived BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS archive_summary TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_agent_journal_user_id
     ON agent_journal (user_id);
@@ -66,6 +73,15 @@ COMMENT ON COLUMN agent_journal.context IS
   trigger   — что вызвало запись (например "compression_threshold" или "user_request");
   session   — идентификатор сессии (chat_id или request_id)';
 
+COMMENT ON COLUMN agent_journal.is_archived IS
+'Флаг архивации. TRUE — запись свёрнута в архив: не тянется в основной контекст
+(экономит токены), но остаётся видимой в компактном реестре архива (id + archive_summary).
+Архивация/разархивация выполняется моделью по id через тул work_with_agent_journal.';
+
+COMMENT ON COLUMN agent_journal.archive_summary IS
+'Одно короткое предложение о содержимом архивной записи. Показывается в реестре
+архива вместо полного текста, чтобы модель могла разархивировать нужную запись по id.';
+
 COMMENT ON COLUMN agent_journal.created_at IS
 'Время создания записи (UTC)';
 
@@ -80,3 +96,9 @@ CREATE INDEX IF NOT EXISTS idx_agent_journal_chat_id
 
 CREATE INDEX IF NOT EXISTS idx_agent_journal_chat_type
     ON agent_journal (chat_id, entry_type, updated_at DESC);
+
+-- Быстрый доступ к активным (не архивным) записям чата — именно они тянутся
+-- в контекст get_agent_journal. Частичный индекс (только is_archived = FALSE).
+CREATE INDEX IF NOT EXISTS idx_agent_journal_chat_active
+    ON agent_journal (chat_id)
+    WHERE is_archived = FALSE;

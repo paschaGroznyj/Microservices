@@ -326,6 +326,20 @@
   to   { opacity: 1; transform: translate(var(--wn-hero-dx, 0px), calc(12% + var(--wn-hero-dy, 0px))); }
 }
 
+/* ── Сцена-дуэт снизу (scene): широкая композиция (два кота за ПК),
+   размещается по центру внизу как duo, БЕЗ анимации и БЕЗ drag.
+   В отличие от duo_peek — шире и полностью видима (лапки не срезаны). */
+.wn-hero--center.wn-hero--scene {
+  width: 460px;
+  max-width: 92%;
+}
+.wn-hero--center.wn-hero--scene .wn-hero-img {
+  max-height: 210px;
+  /* Стоит на нижней кромке, чуть выступает вверх — виден весь силуэт. */
+  transform: translateY(0);
+  animation: none;   /* эффект движения не нужен — статичная картинка */
+}
+
 /* Боковые коты при drag вверх должны проходить над сценой (до крестика). */
 .wn-hero--peek { z-index: 5; }
 

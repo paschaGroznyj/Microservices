@@ -55,9 +55,10 @@
       peekLeft:  HERO_BASE + "hero_white_peek_l.png",
       peekRight: HERO_BASE + "hero_white_peek_r.png",
     },
-    // Сцена Sigma: один герой + два экрана ПК. PNG перегенерится отдельно —
-    // пока файла нет, слот отрисует плейсхолдер (light=null).
-    sigma_scene: { light: null, dark: null },
+    // Сцена Sigma: два кота за ПК с символом Σ (нарезано из общего листа).
+    sigma_scene: { light: HERO_BASE + "scene_sigma.png", dark: HERO_BASE + "scene_sigma.png" },
+    // Сцена админа: кот в короне/плаще + кот за терминалом, "admin mode".
+    admin_scene: { light: HERO_BASE + "scene_admin.png", dark: HERO_BASE + "scene_admin.png" },
   };
 
   // Определяем базовый интерфейс это или Sigma (по хосту).
@@ -196,6 +197,7 @@
       box.appendChild(img);
       // Боковые коты (peek) — таскаются по вертикали (до крестика).
       // Duo снизу (bottom) — таскается влево/вправо.
+      // Сцена (scene) — статичная широкая картинка, drag НЕ нужен.
       if (mode === "peek" || mode === "bottom") {
         box.style.pointerEvents = "auto";
         const axis = mode === "bottom" ? "x" : "y";
@@ -348,7 +350,7 @@
     // Герой + картинка перегенерятся отдельно (один герой + два экрана ПК).
     // Пока картинки нет — wn-shot с onerror скрывается, слайд не ломается.
     slides.push({
-      hero: { side: "center", mode: "bottom", asset: "sigma_scene" },
+      hero: { side: "center", mode: "scene", asset: "sigma_scene" },
       node: h("div", {}, [
         h("h3", { class: "wn-title" }, ["Два интерфейса: базовый и Sigma"]),
         h("img", { class: "wn-shot", src: "/static/img/onboarding/two_interfaces.png",
@@ -416,8 +418,10 @@
     });
 
     // ── Слайд 6. Возможности администратора ──
+    // Сцена-дуэт снизу: кот в короне/плаще + кот за терминалом "admin mode"
+    // (scene_admin.png), статичная, без анимации/drag.
     slides.push({
-      hero: { side: "right", mode: "peek", asset: "black" },
+      hero: { side: "center", mode: "scene", asset: "admin_scene" },
       node: h("div", {}, [
         h("h3", { class: "wn-title" }, ["Режим администратора"]),
         h("p", { class: "wn-text" }, [

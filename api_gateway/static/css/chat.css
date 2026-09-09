@@ -568,6 +568,14 @@
   background: transparent;
 }
 
+/* На мобилке убираем лишний нижний зазор: контейнер прижат к нижней
+   границе вьюпорта, но на iOS безопасная зона сохраняется через env(). */
+@media (max-width: 768px) {
+  .message-input-container {
+    padding-bottom: max(0px, env(safe-area-inset-bottom, 0px));
+  }
+}
+
 /* Когда внутри рендерится стартовый экран — контейнер покрывает
    всю область .content. */
 .message-input-container.start-screen-host {

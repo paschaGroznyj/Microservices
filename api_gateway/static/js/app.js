@@ -2973,6 +2973,21 @@ class ChatApp {
                 favBtn.setAttribute('aria-expanded', String(!isCollapsed));
             }
         });
+
+        // Верхний туман появляется только при прокрутке общего списка.
+        // В начальном положении сверху fade нет (только постоянный fade справа).
+        const scrollHost = document.getElementById('chats-section');
+        if (scrollHost) {
+            const syncScrolled = () => {
+                if (scrollHost.scrollTop > 4) {
+                    scrollHost.setAttribute('data-scrolled', '');
+                } else {
+                    scrollHost.removeAttribute('data-scrolled');
+                }
+            };
+            scrollHost.addEventListener('scroll', syncScrolled, { passive: true });
+            syncScrolled();
+        }
     }
 
     initHelp() {

@@ -574,6 +574,19 @@
   .message-input-container {
     padding-bottom: max(0px, env(safe-area-inset-bottom, 0px));
   }
+
+  /* На мобильных убираем верхний fade: он даёт тонкую полоску-артефакт
+     под шапкой на некоторых GPU/браузерах. */
+  .chat-messages.fade-top:not(.fade-bottom) {
+    -webkit-mask-image: none;
+            mask-image: none;
+  }
+
+  /* Когда активны оба края — на мобильных оставляем только нижний fade. */
+  .chat-messages.fade-top.fade-bottom {
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), rgba(0,0,0,0.4) calc(100% - 11px), #0000 100%);
+            mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), rgba(0,0,0,0.4) calc(100% - 11px), #0000 100%);
+  }
 }
 
 /* Когда внутри рендерится стартовый экран — контейнер покрывает

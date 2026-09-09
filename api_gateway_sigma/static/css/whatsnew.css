@@ -267,16 +267,113 @@
   object-fit: contain;
   filter: drop-shadow(0 8px 14px rgba(0,0,0,0.18));
   transition: transform 0.4s cubic-bezier(.2,.7,.2,1), opacity 0.35s ease;
+  /* Базовый transform по умолчанию (full-режим сбоку): только вертикальный
+     drag-offset. Peek/bottom переопределяют ниже своими keyframes. */
+  transform: translateY(var(--wn-hero-dy, 0px));
   animation: wn-hero-in 0.45s cubic-bezier(.2,.7,.2,1);
 }
 @keyframes wn-hero-in {
   from { opacity: 0; transform: translateY(10px); }
-  to   { opacity: 1; transform: translateY(0); }
+  to   { opacity: 1; transform: translateY(var(--wn-hero-dy, 0px)); }
 }
 
-/* Выглядывание из-за края: смещаем героя частично за границу сцены */
-.wn-hero--peek.wn-hero--left  .wn-hero-img { transform: translateX(-34%); }
-.wn-hero--peek.wn-hero--right .wn-hero-img { transform: translateX(34%); }
+/* Выглядывание из-за края: смещаем героя частично за границу сцены.
+   Сдвиг вбок заложен в самих keyframes (стартует уже из-за края и въезжает),
+   чтобы не было рывка «появился по центру → прыгнул вбок». --wn-hero-dy
+   добавляет вертикальный drag-offset поверх горизонтального смещения. */
+.wn-hero--peek.wn-hero--left  .wn-hero-img {
+  transform: translate(-34%, var(--wn-hero-dy, 0px));
+  animation: wn-hero-in-left 0.5s cubic-bezier(.2,.7,.2,1);
+}
+.wn-hero--peek.wn-hero--right .wn-hero-img {
+  transform: translate(34%, var(--wn-hero-dy, 0px));
+  animation: wn-hero-in-right 0.5s cubic-bezier(.2,.7,.2,1);
+}
+@keyframes wn-hero-in-left {
+  from { opacity: 0; transform: translate(-72%, var(--wn-hero-dy, 0px)); }
+  to   { opacity: 1; transform: translate(-34%, var(--wn-hero-dy, 0px)); }
+}
+@keyframes wn-hero-in-right {
+  from { opacity: 0; transform: translate(72%, var(--wn-hero-dy, 0px)); }
+  to   { opacity: 1; transform: translate(34%, var(--wn-hero-dy, 0px)); }
+}
+
+/* ── Центральный герой снизу (bottom): два кота выглядывают из-за нижнего
+   края по центру. Слот позиционируется оверлеем поверх сцены, не влияя на
+   flex-поток текста. --wn-hero-dy — вертикальный drag-offset. */
+.wn-stage--center-hero { position: relative; }
+.wn-hero--center {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 300px;
+  max-width: 70%;
+  transform: translateX(-50%);
+  pointer-events: none;
+  z-index: 3;
+  justify-content: center;
+  align-items: flex-end;
+}
+.wn-hero--center.wn-hero--bottom .wn-hero-img {
+  max-height: 190px;
+  transform: translateY(calc(30% + var(--wn-hero-dy, 0px)));
+  animation: wn-hero-in-bottom 0.5s cubic-bezier(.2,.7,.2,1);
+}
+@keyframes wn-hero-in-bottom {
+  from { opacity: 0; transform: translateY(calc(70% + var(--wn-hero-dy, 0px))); }
+  to   { opacity: 1; transform: translateY(calc(30% + var(--wn-hero-dy, 0px))); }
+}
+
+/* Курсор/интерактивность для перетаскиваемых котов */
+.wn-hero-drag {
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: pan-x;   /* вертикальный жест ловим сами, горизонт. свайп странице */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.wn-hero-drag:active { cursor: grabbing; }
+/* Во время таскания глушим CSS-анимацию въезда, чтобы не конфликтовала с
+   инлайновым --wn-hero-dy (иначе значение перезапишется анимацией). */
+.wn-hero-img.wn-hero-dragging { animation: none !important; transition: none !important; }
+
+/* ── Ряд иконок (слайды «Инструменты» / «Выбор модели») ── */
+.wn-iconrow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  justify-content: center;
+  margin: 14px 0 12px;
+}
+.wn-iconchip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  min-width: 74px;
+  padding: 12px 10px;
+  border-radius: var(--radius-md, 10px);
+  background: var(--surface2, #f3f1ee);
+  border: 1px solid var(--border, #e0dbd4);
+}
+.wn-iconchip-ic {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  color: var(--wn-chip-accent, var(--accent, #8b4513));
+  background: color-mix(in srgb, var(--wn-chip-accent, var(--accent, #8b4513)) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--wn-chip-accent, var(--accent, #8b4513)) 30%, transparent);
+}
+.wn-iconchip-lb {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--text-secondary, #5c5650);
+  text-align: center;
+}
 
 /* Плейсхолдер, пока картинок нет */
 .wn-hero-ph {

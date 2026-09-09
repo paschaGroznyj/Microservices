@@ -55,6 +55,9 @@
       peekLeft:  HERO_BASE + "hero_white_peek_l.png",
       peekRight: HERO_BASE + "hero_white_peek_r.png",
     },
+    // Сцена Sigma: один герой + два экрана ПК. PNG перегенерится отдельно —
+    // пока файла нет, слот отрисует плейсхолдер (light=null).
+    sigma_scene: { light: null, dark: null },
   };
 
   // Определяем базовый интерфейс это или Sigma (по хосту).
@@ -110,9 +113,52 @@
     } catch (e) { return "друг"; }
   }
 
+  // ── Drag героя по вертикали (мышь + тач) ──────────────────────────────────
+  // Позволяет таскать выглядывающего кота вверх/вниз. Смещение хранится в
+  // CSS-переменной --wn-hero-dy на самом <img>; базовый transform задаётся
+  // классами в CSS через translate(..., var(--wn-hero-dy, 0px)).
+  const HERO_DRAG_MIN = -70;   // вверх (px)
+  const HERO_DRAG_MAX = 70;    // вниз (px)
+  function makeHeroDraggable(img) {
+    let startY = 0, baseDy = 0, dragging = false, moved = false;
+    const getDy = () => parseFloat(img.style.getPropertyValue("--wn-hero-dy")) || 0;
+    const setDy = (v) => {
+      const clamped = Math.max(HERO_DRAG_MIN, Math.min(HERO_DRAG_MAX, v));
+      img.style.setProperty("--wn-hero-dy", clamped + "px");
+    };
+    function onDown(e) {
+      dragging = true; moved = false;
+      startY = (e.touches ? e.touches[0].clientY : e.clientY);
+      baseDy = getDy();
+      img.classList.add("wn-hero-dragging");   // отключает анимацию въезда на время таскания
+      window.addEventListener("mousemove", onMove, { passive: false });
+      window.addEventListener("touchmove", onMove, { passive: false });
+      window.addEventListener("mouseup", onUp);
+      window.addEventListener("touchend", onUp);
+    }
+    function onMove(e) {
+      if (!dragging) return;
+      const y = (e.touches ? e.touches[0].clientY : e.clientY);
+      const delta = y - startY;
+      if (Math.abs(delta) > 2) moved = true;
+      setDy(baseDy + delta);
+      if (e.cancelable) e.preventDefault();   // не скроллить страницу пальцем
+    }
+    function onUp() {
+      dragging = false;
+      img.classList.remove("wn-hero-dragging");
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("touchend", onUp);
+    }
+    img.addEventListener("mousedown", onDown);
+    img.addEventListener("touchstart", onDown, { passive: true });
+  }
+
   // ── Рендер hero-слота (картинка кота или плейсхолдер) ─────────────────────
   function heroSlot(side, mode, assetKey) {
-    // side: "left" | "right"; mode: "full" | "peek"; assetKey: ключ HERO_ASSETS
+    // side: "left" | "right"; mode: "full" | "peek" | "bottom"; assetKey: ключ HERO_ASSETS
     const cls = "wn-hero wn-hero--" + side + " wn-hero--" + (mode || "full");
     const box = h("div", { class: cls, "data-hero-slot": side }, []);
     const asset = assetKey ? HERO_ASSETS[assetKey] : null;
@@ -134,6 +180,13 @@
         alt: "CatchPM герой",
       }, []);
       box.appendChild(img);
+      // Выглядывающих котов (сбоку peek или снизу bottom) можно таскать
+      // по вертикали мышью/пальцем.
+      if (mode === "peek" || mode === "bottom") {
+        box.style.pointerEvents = "auto";
+        img.classList.add("wn-hero-drag");
+        makeHeroDraggable(img);
+      }
     } else {
       // Плейсхолдер с табличкой [>_]
       box.appendChild(h("div", { class: "wn-hero-ph" }, [
@@ -143,6 +196,51 @@
     }
     return box;
   }
+
+  // ── Ряд иконок (для слайдов «Инструменты» / «Выбор модели») ──────────────
+  // items: [{ svg, label, accent? }]. Рисует горизонтальную галерею.
+  function iconRow(items) {
+    return h("div", { class: "wn-iconrow" },
+      items.map((it) => {
+        const chip = h("div", { class: "wn-iconchip" }, []);
+        if (it.accent) chip.style.setProperty("--wn-chip-accent", it.accent);
+        chip.appendChild(h("span", { class: "wn-iconchip-ic", html: it.svg }, []));
+        if (it.label) chip.appendChild(h("span", { class: "wn-iconchip-lb" }, [it.label]));
+        return chip;
+      }));
+  }
+
+  // SVG иконки, синхронные с реальными кнопками интерфейса.
+  const ICON_TOOLS_TRIGGER = '<svg viewBox="0 0 24 24" fill="none" width="24" height="24">' +
+    '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77' +
+    'a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91' +
+    'a6 6 0 0 1 7.94-7.94l-3.76 3.76z" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+  // Иконки моделей (из tools-panel.js MP_MODELS: coder/designer/universal).
+  const MODEL_ICONS = [
+    { label: "Кодер", accent: "#6366f1", svg:
+      '<svg viewBox="0 0 24 24" fill="none" width="24" height="24" stroke="currentColor" ' +
+      'stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">' +
+      '<polyline points="7 8 3 12 7 16"/><polyline points="17 8 21 12 17 16"/>' +
+      '<line x1="14" y1="4" x2="10" y2="20"/></svg>' },
+    { label: "Дизайнер", accent: "#ec4899", svg:
+      '<svg viewBox="0 0 24 24" fill="none" width="24" height="24" stroke="currentColor" ' +
+      'stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M12 2a10 10 0 0 1 0 20c-1.657 0-3-1.343-3-3 0-.828.336-1.578.879-2.121' +
+      'A3 3 0 0 0 8 14.5c0-1.657 1.343-3 3-3"/>' +
+      '<circle cx="8" cy="9" r="1.2" fill="currentColor" stroke="none"/>' +
+      '<circle cx="12" cy="6" r="1.2" fill="currentColor" stroke="none"/>' +
+      '<circle cx="16" cy="9" r="1.2" fill="currentColor" stroke="none"/></svg>' },
+    { label: "Универсал", accent: "#10b981", svg:
+      '<svg viewBox="0 0 24 24" fill="none" width="24" height="24" stroke="currentColor" ' +
+      'stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">' +
+      '<line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/>' +
+      '<line x1="4" y1="18" x2="20" y2="18"/>' +
+      '<circle cx="9" cy="6" r="2" fill="var(--surface)" stroke="currentColor"/>' +
+      '<circle cx="15" cy="12" r="2" fill="var(--surface)" stroke="currentColor"/>' +
+      '<circle cx="9" cy="18" r="2" fill="var(--surface)" stroke="currentColor"/></svg>' },
+  ];
 
   // Центральная картинка героев (под основным текстом, напр. на финале).
   function heroCenter(assetKey) {
@@ -206,8 +304,9 @@
     });
 
     // ── Слайд 2. Главная страница: разбор интерфейса ──
+    // Два кота выглядывают снизу по центру (duo_peek, режим bottom).
     slides.push({
-      hero: { side: "right", mode: "full", asset: "duo" },
+      hero: { side: "center", mode: "bottom", asset: "duo_peek" },
       node: h("div", {}, [
         h("h3", { class: "wn-title" }, ["Главная страница"]),
         h("img", { class: "wn-shot", src: "/static/img/onboarding/main_screen.png",
@@ -231,10 +330,14 @@
     });
 
     // ── Слайд 3. Sigma vs CatchPM ──
+    // Герой + картинка перегенерятся отдельно (один герой + два экрана ПК).
+    // Пока картинки нет — wn-shot с onerror скрывается, слайд не ломается.
     slides.push({
-      hero: { side: "left", mode: "peek", asset: "black" },
+      hero: { side: "center", mode: "bottom", asset: "sigma_scene" },
       node: h("div", {}, [
         h("h3", { class: "wn-title" }, ["Два интерфейса: базовый и Sigma"]),
+        h("img", { class: "wn-shot", src: "/static/img/onboarding/two_interfaces.png",
+          alt: "Базовый и Sigma", onerror: "this.style.display='none'" }, []),
         h("p", { class: "wn-text" }, [
           "Существует две версии интерфейса. Функционал агента в них одинаковый — " +
           "различия только в оболочке и способе входа.",
@@ -259,11 +362,9 @@
       hero: { side: "right", mode: "peek", asset: "white" },
       node: h("div", {}, [
         h("h3", { class: "wn-title" }, ["Инструменты агента"]),
-        h("img", { class: "wn-shot", src: "/static/img/onboarding/tools_panel.png",
-          alt: "Панель инструментов",
-          onerror: "this.style.display='none'" }, []),
+        iconRow([{ svg: ICON_TOOLS_TRIGGER, label: "Инструменты" }]),
         h("p", { class: "wn-text" }, [
-          "Кнопка инструментов в поле ввода открывает набор возможностей, " +
+          "Эта кнопка в поле ввода открывает набор возможностей, " +
           "сгруппированных по категориям. Включайте только то, что нужно под задачу:",
         ]),
         h("div", { class: "wn-cats" }, [
@@ -279,12 +380,10 @@
 
     // ── Слайд 5. Выбор модели ──
     slides.push({
-      hero: { side: "left", mode: "full", asset: "duo" },
+      hero: { side: "left", mode: "peek", asset: "black" },
       node: h("div", {}, [
         h("h3", { class: "wn-title" }, ["Выбор модели"]),
-        h("img", { class: "wn-shot", src: "/static/img/onboarding/model_picker.png",
-          alt: "Выбор модели",
-          onerror: "this.style.display='none'" }, []),
+        iconRow(MODEL_ICONS),
         h("p", { class: "wn-text" }, [
           "В поле ввода рядом с инструментами — переключатель модели. Под задачу " +
           "выбирайте подходящую:",
@@ -410,15 +509,21 @@
         progress.querySelectorAll(".wn-progress-seg").forEach((seg, i) =>
           seg.classList.toggle("filled", i <= idx));
 
-        // Сцена: [heroLeft?] [scroll] [heroRight?]
+        // Сцена: [heroLeft?] [scroll] [heroRight?]  либо  [scroll + heroBottom(overlay)]
         stage.innerHTML = "";
         const hero = s.hero;
+        const isCenter = hero && hero.side === "center";
+        stage.classList.toggle("wn-stage--center-hero", !!isCenter);
+
         if (hero && hero.side === "left") stage.appendChild(heroSlot("left", hero.mode, hero.asset));
 
         const scroll = h("div", { class: "wn-scroll" }, [s.node]);
         stage.appendChild(scroll);
 
         if (hero && hero.side === "right") stage.appendChild(heroSlot("right", hero.mode, hero.asset));
+
+        // Центральный герой снизу — оверлеем поверх сцены (не влияет на flex-поток).
+        if (isCenter) stage.appendChild(heroSlot("center", hero.mode, hero.asset));
 
         // Кнопки
         backBtn.style.visibility = idx === 0 ? "hidden" : "visible";

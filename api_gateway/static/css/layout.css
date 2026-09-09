@@ -277,7 +277,14 @@
 @media (max-width: 768px) {
   .mobile-menu-toggle { display: flex; }
   .tab-pills { display: none; }
-  .main-header { padding: 0 10px; }
+  /* Непрозрачный фон шапки на мобилке: контент уходит под сплошную
+     шапку, тонкий сабпиксельный шов на стыке с областью сообщений
+     перекрывается фоном. Стартовый экран не затрагивается (у него
+     свой .start-screen-mode override с absolute-позиционированием). */
+  .chat-main:not(.start-screen-mode) .main-header {
+    padding: 0 10px;
+    background: var(--bg);
+  }
 }
 
 /* ══════════════════════════════════════════════

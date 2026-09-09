@@ -27,8 +27,30 @@ from config import (
 
 from sigma_status_store import status_store
 
+import re
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ── Валидация логина/пароля: только латиница ──────────────────────────────
+# Кириллица в username ломает работу дальше по системе, поэтому режем ещё
+# на входе гейтвея (в дополнение к клиентской проверке в формах).
+# username: латинские буквы, цифры, . _ -  (длина 3..50)
+# password: только печатные ASCII-символы (латиница/цифры/пунктуация), 6..72
+_USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{3,50}$")
+
+
+def _validate_credentials(username: str, password: str) -> Optional[str]:
+    """Возвращает текст ошибки, если данные невалидны, иначе None."""
+    if not _USERNAME_RE.match(username or ""):
+        return ("Логин может содержать только латинские буквы, цифры и символы "
+                ". _ - (длина 3–50)")
+    # Пароль: запрещаем любые не-ASCII (в т.ч. кириллицу)
+    if not password or not password.isascii():
+        return "Пароль может содержать только латинские буквы, цифры и символы"
+    if not (6 <= len(password) <= 72):
+        return "Пароль должен быть длиной от 6 до 72 символов"
+    return None
 
 COOKIE_MAX_AGE_SECONDS = 14 * 24 * 60 * 60
 
@@ -323,6 +345,16 @@ async def login_web(
 ):
     auth_url = SERVICES['auth']['url']
     """Обработка HTML формы логина"""
+
+    # Серверная валидация: только латиница в логине и пароле
+    cred_error = _validate_credentials(username, password)
+    if cred_error:
+        return templates.TemplateResponse(
+            "login.html",
+            {"request": request, "error": cred_error, "message": None},
+            status_code=400
+        )
+
     try:
         start = time.perf_counter()
         response = await app.state.http_client.post(
@@ -377,6 +409,15 @@ async def register_web(
         password: str = Form(...)
 ):
     auth_url = SERVICES['auth']['url']
+
+    # Серверная валидация: только латиница в логине и пароле
+    cred_error = _validate_credentials(username, password)
+    if cred_error:
+        return templates.TemplateResponse(
+            "register.html",
+            {"request": request, "error": cred_error},
+            status_code=400
+        )
 
     # try:
     response = await app.state.http_client.post(

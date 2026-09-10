@@ -1,0 +1,559 @@
+/* whatsnew.css — Онбординг-демо (7 слайдов) + What's New (обновления).
+   Опирается на общие переменные темы: --accent, --surface, --border,
+   --text-*, --radius-*. Работает и в light, и в dark.
+
+   Размер модалки ФИКСИРОВАН под самый большой слайд, чтобы не было
+   прыжков окна между слайдами. Контент скроллится внутри .wn-scroll. */
+
+.wn-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.28s ease;
+}
+.wn-overlay.active   { opacity: 1; pointer-events: all; }
+.wn-overlay.closing  { opacity: 0; }
+
+/* ── Карточка ── */
+.wn-card {
+  position: relative;
+  width: 100%;
+  max-width: 640px;
+  /* фиксированная высота => нет прыжков между слайдами */
+  height: 560px;
+  max-height: calc(100vh - 40px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #e0dbd4);
+  border-radius: var(--radius-lg, 16px);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.32);
+  overflow: hidden;
+  transform: translateY(14px) scale(0.985);
+  opacity: 0;
+  transition: transform 0.3s cubic-bezier(.2,.7,.2,1), opacity 0.28s ease;
+}
+.wn-overlay.active .wn-card { transform: translateY(0) scale(1); opacity: 1; }
+
+/* ── Верхняя панель: прогресс + закрыть ── */
+.wn-topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px 10px;
+  flex-shrink: 0;
+}
+.wn-progress {
+  flex: 1;
+  display: flex;
+  gap: 6px;
+}
+.wn-progress-seg {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--surface3, #ede9e3);
+  overflow: hidden;
+  transition: background 0.25s ease;
+}
+.wn-progress-seg.filled { background: var(--accent, #8b4513); }
+
+.wn-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px; height: 30px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted, #9e9890);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.18s ease;
+}
+.wn-close:hover { background: var(--surface2, #f3f1ee); color: var(--text-primary, #1a1612); }
+.wn-close svg { width: 18px; height: 18px; }
+
+/* ── Сцена слайда: hero-слоты по краям + контент по центру ── */
+.wn-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+/* Контент слайда — скроллится внутри, но полоса прокрутки скрыта,
+   чтобы не появлялась некрасивая «висящая» полоса между слайдами. */
+.wn-scroll {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 8px 34px 20px;
+  text-align: center;
+  scrollbar-width: none;          /* Firefox */
+  -ms-overflow-style: none;       /* IE / старый Edge */
+}
+.wn-scroll::-webkit-scrollbar { width: 0; height: 0; display: none; }  /* WebKit */
+
+/* Иконка приложения на первом слайде */
+.wn-app-icon {
+  width: 64px;
+  height: 64px;
+  margin: 4px auto 14px;
+  display: block;
+  border-radius: 16px;
+  object-fit: contain;
+}
+
+.wn-title {
+  font-family: var(--font-serif, "Playfair Display", serif);
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--text-primary, #1a1612);
+  margin: 0 0 12px;
+  line-height: 1.25;
+}
+.wn-title .username {
+  color: var(--accent, #8b4513);
+}
+
+.wn-text {
+  font-size: 0.92rem;
+  line-height: 1.62;
+  color: var(--text-secondary, #5c5650);
+  margin: 0 0 12px;
+  text-align: left;
+}
+.wn-text.center { text-align: center; }
+
+/* Список фич внутри слайда */
+.wn-list {
+  list-style: none;
+  margin: 8px 0 4px;
+  padding: 0;
+  text-align: left;
+}
+.wn-list li {
+  position: relative;
+  padding: 7px 0 7px 26px;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  color: var(--text-secondary, #5c5650);
+  border-bottom: 1px solid var(--border-light, #ede9e3);
+}
+.wn-list li:last-child { border-bottom: none; }
+.wn-list li::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 13px;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--accent, #8b4513);
+}
+.wn-list li b, .wn-list li strong { color: var(--text-primary, #1a1612); font-weight: 600; }
+
+/* ── Категории инструментов (сгруппированы как в панели тулов) ── */
+.wn-cats {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0 4px;
+  text-align: left;
+}
+.wn-cat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md, 10px);
+  background: var(--surface2, #f6f4f1);
+  border: 1px solid var(--border-light, #ede9e3);
+}
+.wn-cat-label {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-primary, #1a1612);
+}
+.wn-cat-desc {
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--text-secondary, #5c5650);
+}
+
+/* ── Центральная картинка героев (под текстом, напр. на финале) ── */
+.wn-hero-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 18px auto 4px;
+}
+.wn-hero-center-img {
+  max-width: 82%;
+  max-height: 220px;
+  object-fit: contain;
+  filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.2));
+  animation: wn-hero-in 0.45s cubic-bezier(.2,.7,.2,1);
+}
+.wn-hero-ph--center {
+  width: 220px;
+  height: 150px;
+  margin: 0 auto;
+}
+
+/* Инфо-плашки (напр. про Sigma vs CatchPM) */
+.wn-note {
+  display: block;
+  margin: 12px 0 4px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md, 10px);
+  background: color-mix(in srgb, var(--accent, #8b4513) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent, #8b4513) 22%, transparent);
+  font-size: 0.84rem;
+  line-height: 1.55;
+  color: var(--text-secondary, #5c5650);
+  text-align: left;
+}
+.wn-note b { color: var(--text-primary, #1a1612); }
+.wn-note code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--surface2, #f3f1ee);
+  color: var(--accent, #8b4513);
+}
+
+/* Скрин интерфейса внутри слайда */
+.wn-shot {
+  width: 100%;
+  border-radius: var(--radius-md, 10px);
+  border: 1px solid var(--border, #e0dbd4);
+  margin: 6px 0 10px;
+  display: block;
+}
+
+/* ── Hero-слоты (коты) ────────────────────────────────────────────────
+   Два слота — левый и правый. Скрипт кладёт картинку кота в нужный слот
+   и переключает модификаторы:
+     .wn-hero--full     — герой целиком, сбоку
+     .wn-hero--peek     — герой выглядывает из-за края (частично за кадром)
+   data-hero-slot="left|right" управляет стороной.
+*/
+.wn-hero {
+  position: relative;
+  flex-shrink: 0;
+  width: 132px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  pointer-events: none;
+}
+.wn-hero:empty { display: none; }
+
+.wn-hero-img {
+  max-width: 100%;
+  max-height: 92%;
+  object-fit: contain;
+  filter: drop-shadow(0 8px 14px rgba(0,0,0,0.18));
+  transition: transform 0.4s cubic-bezier(.2,.7,.2,1), opacity 0.35s ease;
+  /* Базовый transform по умолчанию (full-режим сбоку): только вертикальный
+     drag-offset. Peek/bottom переопределяют ниже своими keyframes. */
+  transform: translateY(var(--wn-hero-dy, 0px));
+  animation: wn-hero-in 0.45s cubic-bezier(.2,.7,.2,1);
+}
+@keyframes wn-hero-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(var(--wn-hero-dy, 0px)); }
+}
+
+/* Выглядывание из-за края: смещаем героя частично за границу сцены.
+   Сдвиг вбок заложен в самих keyframes (стартует уже из-за края и въезжает),
+   чтобы не было рывка «появился по центру → прыгнул вбок». --wn-hero-dy
+   добавляет вертикальный drag-offset поверх горизонтального смещения. */
+.wn-hero--peek.wn-hero--left  .wn-hero-img {
+  transform: translate(calc(-34% + var(--wn-hero-dx, 0px)), var(--wn-hero-dy, 0px));
+  animation: wn-hero-in-left 0.5s cubic-bezier(.2,.7,.2,1);
+}
+.wn-hero--peek.wn-hero--right .wn-hero-img {
+  transform: translate(calc(34% + var(--wn-hero-dx, 0px)), var(--wn-hero-dy, 0px));
+  animation: wn-hero-in-right 0.5s cubic-bezier(.2,.7,.2,1);
+}
+@keyframes wn-hero-in-left {
+  from { opacity: 0; transform: translate(-72%, var(--wn-hero-dy, 0px)); }
+  to   { opacity: 1; transform: translate(-34%, var(--wn-hero-dy, 0px)); }
+}
+@keyframes wn-hero-in-right {
+  from { opacity: 0; transform: translate(72%, var(--wn-hero-dy, 0px)); }
+  to   { opacity: 1; transform: translate(34%, var(--wn-hero-dy, 0px)); }
+}
+
+/* ── Заголовок как в sidebar-header/main-title (для слайда Sigma) ── */
+.wn-title--sidebar-header {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── Центральный герой снизу (bottom): два кота выглядывают из-за нижнего
+   края по центру. Слот позиционируется оверлеем поверх сцены, не влияя на
+   flex-поток текста. --wn-hero-dy — вертикальный drag-offset. */
+.wn-stage--center-hero { position: relative; }
+.wn-hero--center {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 300px;
+  max-width: 70%;
+  height: 200px;         /* ЯВНАЯ высота: absolute+bottom без top/height схлопывался в 0 → картинка была невидима */
+  transform: translateX(-50%);
+  pointer-events: none;
+  z-index: 6;            /* выше overflow-контента сцены */
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  overflow: visible;
+}
+/* В центральном слоте картинка не должна ужиматься базовым max-height:92% —
+   высоту задают модификаторы bottom/scene. */
+.wn-hero--center .wn-hero-img { max-height: none; opacity: 1; }
+/* Duo снизу (duo_peek, слайд «Главная»): два кота выглядывают из-за нижнего
+   края. Слот прижат к самому низу сцены (bottom:0), картинка стоит НИЖНЕЙ
+   кромкой на дне слота (origin снизу), поэтому translateY НЕ уводим вниз —
+   иначе кот уходит за кромку и пропадает. Таскается по горизонтали (dx). */
+.wn-hero--center.wn-hero--bottom {
+  bottom: 10px;   /* ещё выше, чтобы duo гарантированно был виден */
+}
+.wn-hero--center.wn-hero--bottom .wn-hero-img {
+  max-height: 138px;
+  transform: translate(var(--wn-hero-dx, 0px), var(--wn-hero-dy, 0px));
+  animation: wn-hero-in-bottom 0.5s cubic-bezier(.2,.7,.2,1);
+}
+@keyframes wn-hero-in-bottom {
+  from { opacity: 0; transform: translate(var(--wn-hero-dx, 0px), calc(44px + var(--wn-hero-dy, 0px))); }
+  to   { opacity: 1; transform: translate(var(--wn-hero-dx, 0px), var(--wn-hero-dy, 0px)); }
+}
+
+/* ── Сцена-дуэт снизу (scene): широкая композиция (два кота за ПК).
+   ВАЖНО: слот .wn-hero--center — это absolute-оверлей поверх текста, поэтому
+   scene держим КОМПАКТНОЙ и прижимаем к самому низу окна, чтобы она наезжала
+   только на пустой низ, а НЕ на текстовый блок. Низ картинки (стол/ПК) может
+   слегка уходить за нижнюю кромку — это нормально. */
+.wn-hero--center.wn-hero--scene {
+  width: 210px;
+  max-width: 48%;
+  bottom: 14px;   /* ещё выше, как просил */
+}
+.wn-hero--center.wn-hero--scene .wn-hero-img {
+  max-height: 84px;
+  transform: translate(var(--wn-hero-dx, 0px), var(--wn-hero-dy, 0px));
+  animation: wn-hero-in-scene 0.5s cubic-bezier(.2,.7,.2,1);
+  filter: drop-shadow(0 4px 8px rgba(0,0,0,0.14));
+}
+@keyframes wn-hero-in-scene {
+  from { opacity: 0; transform: translate(var(--wn-hero-dx, 0px), calc(62px + var(--wn-hero-dy, 0px))); }
+  to   { opacity: 1; transform: translate(var(--wn-hero-dx, 0px), var(--wn-hero-dy, 0px)); }
+}
+
+/* Когда снизу стоит сцена-дуэт (scene), резервируем место под неё:
+   текст заканчивается выше, поэтому картинка наезжает только на пустой
+   нижний отступ, а не на строки. */
+.wn-stage--scene-hero .wn-scroll { padding-bottom: 126px; }
+
+/* Боковые коты при drag вверх должны проходить над сценой (до крестика). */
+.wn-hero--peek { z-index: 5; }
+
+/* Курсор/интерактивность для перетаскиваемых котов */
+.wn-hero-drag {
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;   /* и вертикальный, и горизонтальный жест ловим сами */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.wn-hero-drag:active { cursor: grabbing; }
+/* После первого касания класс остаётся насовсем: анимация въезда выключается,
+   кот фиксируется на месте отпускания и НЕ проигрывает анимацию повторно. */
+.wn-hero-img.wn-hero-dragging { animation: none !important; transition: none !important; }
+
+/* ── Ряд иконок (слайды «Инструменты» / «Выбор модели») ── */
+.wn-iconrow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  justify-content: center;
+  margin: 14px 0 12px;
+}
+.wn-iconchip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  min-width: 74px;
+  padding: 12px 10px;
+  border-radius: var(--radius-md, 10px);
+  background: var(--surface2, #f3f1ee);
+  border: 1px solid var(--border, #e0dbd4);
+}
+.wn-iconchip-ic {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  color: var(--wn-chip-accent, var(--accent, #8b4513));
+  background: color-mix(in srgb, var(--wn-chip-accent, var(--accent, #8b4513)) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--wn-chip-accent, var(--accent, #8b4513)) 30%, transparent);
+}
+.wn-iconchip-lb {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--text-secondary, #5c5650);
+  text-align: center;
+}
+
+/* Плейсхолдер, пока картинок нет */
+.wn-hero-ph {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  width: 100%;
+  height: 78%;
+  padding-bottom: 10px;
+  border-radius: 14px;
+  border: 2px dashed color-mix(in srgb, var(--accent, #8b4513) 45%, transparent);
+  background: color-mix(in srgb, var(--accent, #8b4513) 6%, transparent);
+}
+.wn-hero-ph .wn-hero-tag {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--accent, #8b4513);
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--surface, #fff);
+  border: 1px solid color-mix(in srgb, var(--accent, #8b4513) 40%, transparent);
+}
+.wn-hero-ph .wn-hero-cap {
+  font-size: 0.68rem;
+  color: var(--text-muted, #9e9890);
+  text-align: center;
+  padding: 0 4px;
+}
+
+/* ── Footer / навигация ── */
+.wn-footer {
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 22px 18px;
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-light, #ede9e3);
+}
+.wn-footer-left { display: flex; gap: 8px; }
+
+.wn-btn {
+  font-family: inherit;
+  font-size: 0.86rem;
+  font-weight: 600;
+  padding: 10px 20px;
+  border-radius: var(--radius-md, 10px);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+.wn-btn-primary {
+  background: var(--accent, #8b4513);
+  color: #fff;
+}
+.wn-btn-primary:hover { background: var(--accent-hover, #7a3b10); }
+.wn-btn-secondary {
+  background: transparent;
+  color: var(--text-secondary, #5c5650);
+  border-color: var(--border, #e0dbd4);
+}
+.wn-btn-secondary:hover { border-color: var(--accent, #8b4513); color: var(--accent, #8b4513); }
+.wn-btn-secondary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  border-color: var(--border, #e0dbd4);
+  color: var(--text-muted, #9e9890);
+}
+.wn-btn-secondary:disabled:hover {
+  border-color: var(--border, #e0dbd4);
+  color: var(--text-muted, #9e9890);
+}
+.wn-btn-ghost {
+  background: transparent;
+  color: var(--text-muted, #9e9890);
+  border-color: transparent;
+}
+.wn-btn-ghost:hover { color: var(--text-secondary, #5c5650); }
+
+/* ── Модалка обновления (What's New) — тот же каркас, компактнее ── */
+.wn-card-update { height: auto; max-height: calc(100vh - 40px); max-width: 480px; }
+.wn-card-update .wn-stage { display: block; }
+.wn-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent, #8b4513) 14%, transparent);
+  color: var(--accent, #8b4513);
+}
+.wn-update-date { font-size: 0.74rem; color: var(--text-muted, #9e9890); margin-left: 8px; }
+.wn-update-body {
+  text-align: left;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--text-secondary, #5c5650);
+}
+.wn-update-body p { margin: 0 0 10px; }
+.wn-update-body ul, .wn-update-body ol { margin: 0 0 10px; padding-left: 20px; }
+.wn-update-body strong { color: var(--text-primary, #1a1612); }
+.wn-update-body a { color: var(--accent, #8b4513); }
+
+/* ── Адаптив под мобилки ── */
+@media (max-width: 680px) {
+  .wn-overlay { padding: 0; }
+  .wn-card {
+    max-width: 100%;
+    width: 100%;
+    height: 100%;
+    max-height: 100%;
+    border-radius: 0;
+    border: none;
+  }
+  /* На узком экране прячем боковые слоты, кот выглядывает снизу-справа */
+  .wn-hero {
+    position: absolute;
+    bottom: 66px;
+    width: 96px;
+    height: 120px;
+    z-index: 2;
+  }
+  .wn-hero--left  { left: 4px;  right: auto; }
+  .wn-hero--right { right: 4px; left: auto; }
+  .wn-hero-img { max-height: 120px; }
+  .wn-hero-ph { display: none; }        /* плейсхолдеры на мобилке не мешаем */
+  .wn-scroll { padding: 8px 18px 20px; }
+  .wn-title { font-size: 1.2rem; }
+}

@@ -13,6 +13,31 @@
   display: flex;
   flex-direction: column;
   gap: 20px;
+  /* Туман по краям: сообщения плавно растворяются, уходя за верхний край
+     и под message-input-container снизу. Состояния ставит JS классами
+     .fade-top / .fade-bottom (по аналогии с сайдбаром). */
+  transition: -webkit-mask-image 0.2s ease, mask-image 0.2s ease;
+}
+
+/* Только верхний fade (доскроллено до низа). Зеркально нижнему:
+   узкая полоса ~28px с плотным началом (точка на ~40% альфы у самого края). */
+.chat-messages.fade-top:not(.fade-bottom) {
+  -webkit-mask-image: linear-gradient(to bottom, #0000 0, rgba(0,0,0,0.4) 11px, #000 28px);
+          mask-image: linear-gradient(to bottom, #0000 0, rgba(0,0,0,0.4) 11px, #000 28px);
+}
+
+/* Только нижний fade (в самом верху списка) — сообщения уходят под инпут.
+   Полоса узкая (~28px) с более плотным началом: промежуточная точка на
+   ~40% альфы делает затухание резче в начале, чем линейное. */
+.chat-messages.fade-bottom:not(.fade-top) {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), rgba(0,0,0,0.4) calc(100% - 11px), #0000 100%);
+          mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), rgba(0,0,0,0.4) calc(100% - 11px), #0000 100%);
+}
+
+/* Оба края (проскроллено в середине) */
+.chat-messages.fade-top.fade-bottom {
+  -webkit-mask-image: linear-gradient(to bottom, #0000 0, rgba(0,0,0,0.4) 11px, #000 28px, #000 calc(100% - 28px), rgba(0,0,0,0.4) calc(100% - 11px), #0000 100%);
+          mask-image: linear-gradient(to bottom, #0000 0, rgba(0,0,0,0.4) 11px, #000 28px, #000 calc(100% - 28px), rgba(0,0,0,0.4) calc(100% - 11px), #0000 100%);
 }
 
 .chat-messages.hidden { display: none; }
@@ -81,14 +106,26 @@
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 0;
-  /* было overflow:hidden — оно резало горизонтальный скролл кода и
-     обрезало длинные строки справа. Скролл живёт на pre code. */
-  overflow: visible;
+  /* Контейнер никогда не должен распирать бабл на мобильных. */
+  overflow-x: auto;
+  overflow-y: hidden;
   margin: .9em 0;
   font-size: .83rem;
   line-height: 1.6;
   box-shadow: var(--shadow-md);
   max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+/* Подстраховка: если markdown отрисован как <pre> без вложенного <code>,
+   текст тоже не должен вылезать вправо. */
+.agent-message pre:not(:has(code)) {
+  padding: 12px 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 /* Шапка блока — язык через data-lang на pre */
@@ -100,6 +137,11 @@
   padding: 14px 16px;
   color: inherit;
   font-size: 0.95em;
+  /* ВАЖНО: без border-box ширина 100% + горизонтальные паддинги
+     переполняют контейнер на мобилках (текст/скролл "вылезает" вправо). */
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
   /* локальный горизонтальный скролл именно на коде — длинные строки
      не распирают контейнер и не вылезают за границу бабла */
   overflow-x: auto;
@@ -129,6 +171,42 @@
   font-style: italic;
   background: color-mix(in srgb, var(--accent) 5%, transparent);
   border-radius: 0 6px 6px 0;
+}
+
+/* ── TABLE ────────────────────────────────────── */
+/* marked рендерит Markdown-таблицы в <table>. display:block + overflow-x:auto
+   делают таблицу горизонтально прокручиваемой внутри бабла — на мобилке она
+   больше не срезается за правым краем экрана, а скроллится. border-collapse +
+   рамки ячеек возвращают видимые границы. */
+.agent-message table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: .8em 0;
+  font-size: .95rem;
+  -webkit-overflow-scrolling: touch;
+}
+
+.agent-message th,
+.agent-message td {
+  border: 1px solid var(--border);
+  padding: 7px 12px;
+  text-align: left;
+  vertical-align: top;
+  line-height: 1.5;
+}
+
+.agent-message th {
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  color: var(--text-primary);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.agent-message tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--border) 22%, transparent);
 }
 
 /* ── AGENT MESSAGE: пословная анимация ─────────── */
@@ -409,6 +487,31 @@
     font-size: .9rem;
   }
 
+  /* На узком экране уменьшаем внутренние поля code-блока, чтобы
+     длинные строки не упирались в правую границу пузыря. */
+  .agent-message pre code {
+    padding: 12px 10px;
+    font-size: 0.92em;
+    /* На мобилках длинные строки переносим, а не уводим в горизонтальный
+       скролл — иначе текст визуально "вылезает" за границу экрана. */
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    overflow-x: hidden;
+  }
+
+  /* Иногда markdown приходит как <pre>...</pre> без вложенного <code>.
+     Для такого случая тоже форсим переносы, чтобы строка не уходила вправо. */
+  .agent-message pre {
+    white-space: pre-wrap;
+    word-break: break-all;
+    overflow-wrap: anywhere;
+  }
+
+  .agent-message pre code {
+    word-break: break-all;
+  }
+
   .user-message {
     padding: 8px 12px;
     font-size: .9rem;
@@ -493,9 +596,37 @@
 ══════════════════════════════════════════════ */
 .message-input-container {
   flex-shrink: 0;
-  padding: 14px 16px 18px;
-  border-top: 1px solid var(--border);
-  background: var(--surface);
+  padding: 0 16px 18px;
+  /* Без рамки и заливки — сливается с фоном chat-main-inner,
+     чтобы сообщения растворялись в туман прямо у верхней границы
+     .chat-input-field, без резкой линии. */
+  border-top: none;
+  background: transparent;
+}
+
+/* На мобилке убираем лишний нижний зазор: контейнер прижат к нижней
+   границе вьюпорта, но на iOS безопасная зона сохраняется через env(). */
+@media (max-width: 768px) {
+  .message-input-container {
+    padding-bottom: max(0px, env(safe-area-inset-bottom, 0px));
+  }
+
+  /* На мобильных делаем туман уже, чем на десктопе:
+     вместо 28px используем 16px (с промежуточной точкой на 6px). */
+  .chat-messages.fade-top:not(.fade-bottom) {
+    -webkit-mask-image: linear-gradient(to bottom, #0000 0, rgba(0,0,0,0.32) 6px, #000 16px);
+            mask-image: linear-gradient(to bottom, #0000 0, rgba(0,0,0,0.32) 6px, #000 16px);
+  }
+
+  .chat-messages.fade-bottom:not(.fade-top) {
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), rgba(0,0,0,0.32) calc(100% - 6px), #0000 100%);
+            mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), rgba(0,0,0,0.32) calc(100% - 6px), #0000 100%);
+  }
+
+  .chat-messages.fade-top.fade-bottom {
+    -webkit-mask-image: linear-gradient(to bottom, #0000 0, rgba(0,0,0,0.32) 6px, #000 16px, #000 calc(100% - 16px), rgba(0,0,0,0.32) calc(100% - 6px), #0000 100%);
+            mask-image: linear-gradient(to bottom, #0000 0, rgba(0,0,0,0.32) 6px, #000 16px, #000 calc(100% - 16px), rgba(0,0,0,0.32) calc(100% - 6px), #0000 100%);
+  }
 }
 
 /* Когда внутри рендерится стартовый экран — контейнер покрывает

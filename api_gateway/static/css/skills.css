@@ -86,28 +86,23 @@
   background: var(--surface);
   color: var(--text-primary);
   border-radius: 10px;
-  padding: 8px 12px;
+  padding: 11px 18px;
   cursor: pointer;
-  font-size: .82rem;
+  font-size: .92rem;
+  font-weight: 550;
   transition: background .15s ease, border-color .15s ease, transform .1s ease;
 }
 .skills-btn:hover { border-color: var(--accent); }
 .skills-btn:active { transform: translateY(1px); }
 
-/* Список карточек */
+/* Список карточек — одна колонка на всю ширину области */
 .skills-list {
-  column-width: 340px;      /* авто-число колонок по ширине контейнера */
-  column-gap: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 .skills-list > .skill-card {
-  break-inside: avoid;      /* карточку не рвём между колонками */
-  -webkit-column-break-inside: avoid;
-  page-break-inside: avoid;
-  margin: 0 0 12px;         /* вертикальный зазор внутри колонки (gap у columns не работает по вертикали) */
-}
-/* Пустое состояние — единственный блок, растягиваем на всю ширину */
-.skills-list > .skills-empty {
-  column-span: all;
+  width: 100%;
 }
 
 /* Карточка скилла */
@@ -213,16 +208,16 @@
 .skill-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   border: none;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: .74rem;
+  font-size: .82rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: .04em;
-  padding: 4px 0;
+  padding: 7px 0;
   align-self: flex-start;
 }
 .skill-toggle:hover { color: var(--text-primary); }
@@ -236,6 +231,45 @@
   gap: 8px;
   margin-top: 2px;
 }
+
+/* Markdown-рендер тела скилла (при раскрытии) */
+.skill-body.md-content { white-space: normal; }
+.skill-body.md-content h1,
+.skill-body.md-content h2,
+.skill-body.md-content h3 { margin: .6em 0 .35em; line-height: 1.25; font-weight: 650; }
+.skill-body.md-content h1 { font-size: 1.08rem; }
+.skill-body.md-content h2 { font-size: 1.0rem; }
+.skill-body.md-content h3 { font-size: .92rem; }
+.skill-body.md-content p { margin: .4em 0; }
+.skill-body.md-content ul,
+.skill-body.md-content ol { margin: .4em 0; padding-left: 1.4em; }
+.skill-body.md-content li { margin: .18em 0; }
+.skill-body.md-content code {
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 5px;
+  font-size: .85em;
+}
+.skill-body.md-content pre {
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: .5em 0;
+}
+.skill-body.md-content pre code { background: transparent; border: none; padding: 0; }
+.skill-body.md-content a { color: var(--accent); text-decoration: underline; }
+.skill-body.md-content blockquote {
+  margin: .5em 0;
+  padding: .2em .9em;
+  border-left: 3px solid var(--border);
+  color: var(--text-secondary);
+}
+.skill-body.md-content table { border-collapse: collapse; margin: .5em 0; }
+.skill-body.md-content th,
+.skill-body.md-content td { border: 1px solid var(--border); padding: 4px 8px; font-size: .85em; }
 
 /* Пустое состояние — по центру всей области списка */
 .skills-empty {

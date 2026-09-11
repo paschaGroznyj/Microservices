@@ -66,7 +66,7 @@
           ? `<div class="skill-author"><svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"/></svg><span>${esc(authorName)}</span></div>`
           : '';
         return `
-        <div class="skill-card" draggable="true" data-skill-id="${s.id}" data-skill-body="${esc(s.body)}">
+        <div class="skill-card" draggable="true" data-skill-id="${s.id}" data-skill-body="${esc(s.body)}" data-skill-theme="${esc(s.theme||'')}" data-skill-tools="${esc((s.tools||[]).join(', '))}">
           <div class="skill-card__head">
             <span class="skill-theme">${esc(s.theme)}</span>
             <button class="skill-like${liked?' is-liked':''}" data-like="${s.id}" title="Лайк">
@@ -90,18 +90,47 @@
         const open = card.classList.toggle('is-open');
         const label = b.querySelector('.skill-toggle-label');
         if (label) label.textContent = open ? 'Свернуть' : 'Читать полностью';
+        if (open) this._renderBodyMd(card);
       }));
       list.querySelectorAll('[data-like]').forEach(b=>b.addEventListener('click',()=>this.like(Number(b.dataset.like))));
       list.querySelectorAll('[data-copy]').forEach(b=>b.addEventListener('click',()=>this.copyToChat(Number(b.dataset.copy))));
       list.querySelectorAll('.skill-card').forEach(card=>{
         card.addEventListener('dragstart', (e)=>{
-          const body = card.dataset.skillBody || '';
-          this._dragBody = body;
-          e.dataTransfer.setData('text/plain', body);
+          const txt = this._buildDragText(card);
+          this._dragBody = txt;
+          e.dataTransfer.setData('text/plain', txt);
           e.dataTransfer.effectAllowed = 'copy';
         });
         card.addEventListener('dragend', ()=>{ this._dragBody = ''; });
       });
+    },
+    _buildDragText(card){
+      const theme = card.dataset.skillTheme || '';
+      const tools = card.dataset.skillTools || '';
+      const body  = card.dataset.skillBody || '';
+      let out = '';
+      if (theme) out += `Тема скилла: ${theme}
+`;
+      out += `Рекомендуемые инструменты: ${tools || 'не указаны'}
+
+`;
+      out += `Тело скилла:
+${body}`;
+      return out;
+    },
+    _renderBodyMd(card){
+      const el = card.querySelector('.skill-body');
+      if (!el || el.dataset.mdDone === '1') return;
+      const raw = card.dataset.skillBody || '';
+      try {
+        if (typeof marked !== 'undefined') {
+          let html = marked.parse(raw);
+          if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html);
+          el.innerHTML = html;
+          el.classList.add('md-content');
+          el.dataset.mdDone = '1';
+        }
+      } catch (e) { /* fallback: остаётся предрендеренный esc-текст */ }
     },
     async like(skillId){
       const userId = this.app?.currentUser?.user_id;

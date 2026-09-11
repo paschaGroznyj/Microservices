@@ -431,6 +431,7 @@ function switchTab(tab) {
       "agent": "Agent Process Mining",
       "arxiv": "Поиск статей",
       "graph":  "Граф знаний",
+      "skills": "Магазин скиллов",
     };
     titleEl.textContent = titles[tab] || "CatchPM";
   }

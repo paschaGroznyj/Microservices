@@ -9,7 +9,10 @@
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 28px 0;
+  /* Верхний отступ = высота стеклянной шапки (54px) + базовый 28px,
+     чтобы первое сообщение в покое не пряталось под шапкой,
+     а при скролле текст уезжал под стекло. */
+  padding: 82px 0 28px;
   display: flex;
   flex-direction: column;
   gap: 20px;

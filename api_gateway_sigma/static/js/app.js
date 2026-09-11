@@ -10,7 +10,7 @@ class ChatApp {
         this._runState = 'idle';      // idle | running | stopping
         this._activeRequestId = null;
         this._statusPollTimer = null;
-        this.INPUT_MAX_CHARS = 5000;  // жёсткий предел длины поля ввода
+        this.INPUT_MAX_CHARS = 10000;  // жёсткий предел длины поля ввода
     }
 
     /* Обрезает содержимое поля ввода до INPUT_MAX_CHARS символов.
@@ -2750,7 +2750,7 @@ class ChatApp {
             const pasted = cd ? cd.getData('text') : '';
             if (!pasted) return;
 
-            // ── Учитываем лимит 5000 символов ──────────────────────────
+            // ── Учитываем лимит 10000 символов ──────────────────────────
             const remaining = this.INPUT_MAX_CHARS - this.getInputText().length;
             if (remaining <= 0) {
                 e.preventDefault();

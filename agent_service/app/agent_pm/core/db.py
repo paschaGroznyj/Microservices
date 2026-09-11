@@ -1485,16 +1485,17 @@ class AgentDB:
         published_by_user_id: int | None,
         published_by_name: str | None,
         tools: list[str] | None = None,
+        model_used: str | None = None,
     ) -> dict:
         tools = tools or []
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                INSERT INTO agent_skills (theme, body, published_by_user_id, published_by_name, tools)
-                VALUES ($1, $2, $3, $4, $5)
-                RETURNING id, theme, body, published_by_user_id, published_by_name, tools, likes_count, created_at
+                INSERT INTO agent_skills (theme, body, published_by_user_id, published_by_name, tools, model_used)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                RETURNING id, theme, body, published_by_user_id, published_by_name, tools, model_used, likes_count, created_at
                 """,
-                theme.strip(), body.strip(), published_by_user_id, published_by_name, tools,
+                theme.strip(), body.strip(), published_by_user_id, published_by_name, tools, model_used,
             )
             return dict(row)
 
@@ -1511,10 +1512,19 @@ class AgentDB:
         args = []
         idx = 1
 
-        if query:
-            where.append(f"(theme ILIKE ${idx} OR body ILIKE ${idx})")
-            args.append(f"%{query.strip()}%")
-            idx += 1
+        q = (query or "").strip()
+        if q:
+            # Полнотекстовый поиск по теме + телу скилла;
+            # plainto_tsquery безопасен к произвольному вводу (не кидает на спецсимволах).
+            # ILIKE-ветка — фолбэк на подстроки/частичные слова.
+            where.append(
+                f"(to_tsvector('russian', coalesce(theme,'') || ' ' || coalesce(body,'')) "
+                f"@@ plainto_tsquery('russian', ${idx}) "
+                f"OR theme ILIKE ${idx+1} OR body ILIKE ${idx+1})"
+            )
+            args.append(q)
+            args.append(f"%{q}%")
+            idx += 2
 
         if tool:
             where.append(f"${idx} = ANY(tools)")
@@ -1524,7 +1534,7 @@ class AgentDB:
         args.append(limit)
         sql = f"""
             SELECT id, theme, body, published_by_user_id, published_by_name, tools,
-                   likes_count, created_at
+                   model_used, likes_count, created_at
             FROM agent_skills
             WHERE {' AND '.join(where)}
             ORDER BY {order_sql}
@@ -1538,7 +1548,7 @@ class AgentDB:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT id, theme, body, published_by_user_id, published_by_name, tools, likes_count, created_at
+                SELECT id, theme, body, published_by_user_id, published_by_name, tools, model_used, likes_count, created_at
                 FROM agent_skills
                 WHERE id = $1
                 """,

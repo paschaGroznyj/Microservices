@@ -207,19 +207,25 @@
                 <!-- SKILLS VIEW -->
                 <div class="view hidden" id="view-skills">
                     <div class="skills-view" id="skills-view">
-                        <div class="skills-toolbar">
-                            <input id="skills-query" class="skills-input" placeholder="Поиск скиллов по теме..." />
-                            <select id="skills-sort" class="skills-select">
-                                <option value="new">Новые</option>
-                                <option value="popular">Популярные</option>
-                            </select>
-                            <button id="skills-refresh" class="skills-btn">Обновить</button>
+                        <div class="skills-header">
+                            <div class="skills-title-row">
+                                <h2 class="skills-title">Библиотека скиллов</h2>
+                                <span class="skills-count" id="skills-count"></span>
+                            </div>
+                            <p class="skills-subtitle">Скиллы публикуются только агентом. Здесь можно найти, прочитать, лайкнуть и перетащить скилл в чат.</p>
                         </div>
-                        <div class="skills-create">
-                            <input id="skills-theme" class="skills-input" placeholder="Тема скилла" />
-                            <input id="skills-tools" class="skills-input" placeholder="Инструменты через запятую" />
-                            <textarea id="skills-body" class="skills-textarea" placeholder="Тело скилла"></textarea>
-                            <button id="skills-create-btn" class="skills-btn skills-btn--primary">Опубликовать скилл</button>
+                        <div class="skills-toolbar">
+                            <div class="skills-search">
+                                <svg class="skills-search-icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zm9 17-4.35-4.35"/></svg>
+                                <input id="skills-query" class="skills-input" placeholder="Полнотекстовый поиск по скиллам..." />
+                            </div>
+                            <select id="skills-sort" class="skills-select">
+                                <option value="new">Сначала новые</option>
+                                <option value="popular">Сначала популярные</option>
+                            </select>
+                            <button id="skills-refresh" class="skills-btn skills-icon-btn" title="Обновить">
+                                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M20 11a8 8 0 1 0-.9 3.7M20 5v6h-6"/></svg>
+                            </button>
                         </div>
                         <div class="skills-list" id="skills-list"></div>
                     </div>

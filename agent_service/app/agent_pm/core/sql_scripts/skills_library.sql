@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS agent_skills (
     published_by_user_id BIGINT,
     published_by_name TEXT,
     tools TEXT[] NOT NULL DEFAULT '{}',
+    model_used TEXT,
     likes_count INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -21,3 +22,11 @@ CREATE TABLE IF NOT EXISTS agent_skill_likes (
 );
 
 CREATE INDEX IF NOT EXISTS ix_agent_skill_likes_user_id ON agent_skill_likes(user_id);
+
+-- Миграция для уже существующих инсталляций: колонка модели, которой сгенерирован скилл.
+ALTER TABLE agent_skills ADD COLUMN IF NOT EXISTS model_used TEXT;
+
+-- Полнотекстовый поиск по теме и телу скилла (russian + simple).
+CREATE INDEX IF NOT EXISTS ix_agent_skills_fts
+    ON agent_skills
+    USING GIN (to_tsvector('russian', coalesce(theme,'') || ' ' || coalesce(body,'')));

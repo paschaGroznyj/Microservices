@@ -71,4 +71,5 @@ ADMIN_ONLY_CATEGORIES = {"admin"}
 # изображений, которые не привязаны к конкретному режиму работы.
 UNIVERSAL_TOOLS: set[str] = {
     "analyze_image",
+    "manage_skills",
 }

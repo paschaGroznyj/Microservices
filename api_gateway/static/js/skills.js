@@ -1,41 +1,90 @@
 (function () {
-  function esc(s){return (s||'').replace(/[&<>\"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#039;'}[m]));}
+  function esc(s){return (s||'').replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));}
+
+  // SVG-иконки
+  const ICON_HEART_OUTLINE = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.8 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg>';
+  const ICON_HEART_FILLED  = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 21l-1.45-1.32C5.4 14.99 2 11.9 2 8.1 2 5.42 4.08 3.3 6.75 3.3c1.54 0 3.02.72 4 1.86A5.28 5.28 0 0 1 17.25 3.3C19.92 3.3 22 5.42 22 8.1c0 3.8-3.4 6.89-8.55 11.58L12 21z"/></svg>';
+  const ICON_CHEVRON       = '<svg class="chevron" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m6 9 6 6 6-6"/></svg>';
 
   const SkillsPanel = {
     app: null,
     inited: false,
+    _debounce: null,
+    _likedIds: new Set(),
     init(app){
       this.app = app;
       if (this.inited) return;
       this.inited = true;
       document.getElementById('skills-refresh')?.addEventListener('click', () => this.load());
       document.getElementById('skills-sort')?.addEventListener('change', () => this.load());
-      document.getElementById('skills-create-btn')?.addEventListener('click', () => this.create());
+      const q = document.getElementById('skills-query');
+      q?.addEventListener('input', () => {
+        clearTimeout(this._debounce);
+        this._debounce = setTimeout(() => this.load(), 250);
+      });
       this._bindDropToInput();
     },
     open(app){ this.init(app); this.load(); },
     async load(){
       const q = document.getElementById('skills-query')?.value || '';
       const sort = document.getElementById('skills-sort')?.value || 'new';
-      const res = await fetch(`/api/skills?query=${encodeURIComponent(q)}&sort_by=${encodeURIComponent(sort)}`, {credentials:'include'});
-      const data = res.ok ? await res.json() : {skills:[]};
-      this.render(data.skills || []);
+      let skills = [];
+      try {
+        const res = await fetch(`/api/skills?query=${encodeURIComponent(q)}&sort_by=${encodeURIComponent(sort)}`, {credentials:'include'});
+        const data = res.ok ? await res.json() : {skills:[]};
+        skills = data.skills || [];
+      } catch (e) { skills = []; }
+      this.render(skills);
     },
     render(skills){
       const list = document.getElementById('skills-list');
+      const countEl = document.getElementById('skills-count');
       if (!list) return;
-      if (!skills.length){ list.innerHTML = '<div class="chat-item-skeleton">Скиллы не найдены</div>'; return; }
-      list.innerHTML = skills.map(s => `
-        <div class="skill-card" draggable="true" data-skill-body="${esc(s.body)}">
-          <div class="skill-head"><span class="skill-theme">${esc(s.theme)}</span><span>❤️ ${s.likes_count || 0}</span></div>
-          <div class="skill-body">${esc((s.body||'').slice(0,700))}${(s.body||'').length>700?'...':''}</div>
-          <div class="skill-tools">Инструменты: ${esc((s.tools||[]).join(', ') || '—')}</div>
-          <div class="skill-actions">
-            <button class="skills-btn" data-like="${s.id}">Лайк</button>
-            <button class="skills-btn" data-copy="${s.id}">Копировать в чат</button>
+
+      if (countEl) countEl.textContent = skills.length ? `${skills.length}` : '';
+
+      if (!skills.length){
+        list.classList.remove('skills-list-grid');
+        list.innerHTML = `
+          <div class="skills-empty">
+            <svg viewBox="0 0 24 24" width="48" height="48" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M4 12h16M4 17h10"/></svg>
+            <div class="skills-empty__title">Пока пусто</div>
+            <div class="skills-empty__hint">Скиллы публикует агент в ходе работы. Как только появятся — они отобразятся здесь карточками.</div>
+          </div>`;
+        return;
+      }
+
+      list.innerHTML = skills.map(s => {
+        const liked = this._likedIds.has(s.id);
+        const model = s.model_used ? `<span class="skill-badge skill-badge--model">${esc(s.model_used)}</span>` : '';
+        const tools = (s.tools||[]).length
+          ? `<span class="skill-badge">${esc((s.tools||[]).join(', '))}</span>`
+          : '';
+        return `
+        <div class="skill-card" draggable="true" data-skill-id="${s.id}" data-skill-body="${esc(s.body)}">
+          <div class="skill-card__head">
+            <span class="skill-theme">${esc(s.theme)}</span>
+            <button class="skill-like${liked?' is-liked':''}" data-like="${s.id}" title="Лайк">
+              ${liked ? ICON_HEART_FILLED : ICON_HEART_OUTLINE}
+              <span class="skill-like-count">${s.likes_count || 0}</span>
+            </button>
           </div>
-        </div>
-      `).join('');
+          <div class="skill-meta">${model}${tools}</div>
+          <button class="skill-toggle" data-toggle="${s.id}">${ICON_CHEVRON}<span class="skill-toggle-label">Читать полностью</span></button>
+          <div class="skill-body">${esc(s.body||'')}</div>
+          <div class="skill-actions">
+            <button class="skills-btn" data-copy="${s.id}">Скопировать в чат</button>
+          </div>
+        </div>`;
+      }).join('');
+
+      list.querySelectorAll('[data-toggle]').forEach(b=>b.addEventListener('click',()=>{
+        const card = b.closest('.skill-card');
+        if (!card) return;
+        const open = card.classList.toggle('is-open');
+        const label = b.querySelector('.skill-toggle-label');
+        if (label) label.textContent = open ? 'Свернуть' : 'Читать полностью';
+      }));
       list.querySelectorAll('[data-like]').forEach(b=>b.addEventListener('click',()=>this.like(Number(b.dataset.like))));
       list.querySelectorAll('[data-copy]').forEach(b=>b.addEventListener('click',()=>this.copyToChat(Number(b.dataset.copy))));
       list.querySelectorAll('.skill-card').forEach(card=>{
@@ -45,30 +94,15 @@
         });
       });
     },
-    async create(){
-      const theme = document.getElementById('skills-theme')?.value || '';
-      const body = document.getElementById('skills-body')?.value || '';
-      const toolsRaw = document.getElementById('skills-tools')?.value || '';
-      const tools = toolsRaw.split(',').map(s=>s.trim()).filter(Boolean);
-      const res = await fetch('/api/skills', {
-        method:'POST', credentials:'include', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({theme, body, tools})
-      });
-      if (!res.ok) {
-        this.app?.showToast?.('Не удалось создать скилл');
-        return;
-      }
-      document.getElementById('skills-theme').value='';
-      document.getElementById('skills-body').value='';
-      document.getElementById('skills-tools').value='';
-      this.app?.showToast?.('Скилл опубликован');
-      this.load();
-    },
     async like(skillId){
       const userId = this.app?.currentUser?.user_id;
       if (!userId) { this.app?.showToast?.('Не найден user_id'); return; }
-      const res = await fetch(`/api/skills/${skillId}/like`, {method:'POST', credentials:'include', headers:{'Content-Type':'application/json'}, body: JSON.stringify({user_id: userId})});
-      if (!res.ok) this.app?.showToast?.('Не удалось поставить лайк');
+      try {
+        const res = await fetch(`/api/skills/${skillId}/like`, {method:'POST', credentials:'include', headers:{'Content-Type':'application/json'}, body: JSON.stringify({user_id: userId})});
+        if (!res.ok) { this.app?.showToast?.('Не удалось поставить лайк'); return; }
+        const data = await res.json().catch(()=>({}));
+        if (data.liked) this._likedIds.add(skillId); else this._likedIds.delete(skillId);
+      } catch (e) { /* ignore */ }
       this.load();
     },
     async copyToChat(skillId){

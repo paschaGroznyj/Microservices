@@ -1477,6 +1477,105 @@ class AgentDB:
         )
         return dict(row) if row else None
 
+
+    async def create_skill(
+        self,
+        theme: str,
+        body: str,
+        published_by_user_id: int | None,
+        published_by_name: str | None,
+        tools: list[str] | None = None,
+    ) -> dict:
+        tools = tools or []
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO agent_skills (theme, body, published_by_user_id, published_by_name, tools)
+                VALUES ($1, $2, $3, $4, $5)
+                RETURNING id, theme, body, published_by_user_id, published_by_name, tools, likes_count, created_at
+                """,
+                theme.strip(), body.strip(), published_by_user_id, published_by_name, tools,
+            )
+            return dict(row)
+
+    async def list_skills(
+        self,
+        query: str = "",
+        sort_by: str = "new",
+        tool: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        limit = max(1, min(int(limit), 200))
+        order_sql = "likes_count DESC, created_at DESC" if sort_by == "popular" else "created_at DESC"
+        where = ["1=1"]
+        args = []
+        idx = 1
+
+        if query:
+            where.append(f"(theme ILIKE ${idx} OR body ILIKE ${idx})")
+            args.append(f"%{query.strip()}%")
+            idx += 1
+
+        if tool:
+            where.append(f"${idx} = ANY(tools)")
+            args.append(tool.strip())
+            idx += 1
+
+        args.append(limit)
+        sql = f"""
+            SELECT id, theme, body, published_by_user_id, published_by_name, tools,
+                   likes_count, created_at
+            FROM agent_skills
+            WHERE {' AND '.join(where)}
+            ORDER BY {order_sql}
+            LIMIT ${idx}
+        """
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(sql, *args)
+            return [dict(r) for r in rows]
+
+    async def get_skill_by_id(self, skill_id: int) -> dict | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id, theme, body, published_by_user_id, published_by_name, tools, likes_count, created_at
+                FROM agent_skills
+                WHERE id = $1
+                """,
+                skill_id,
+            )
+            return dict(row) if row else None
+
+    async def toggle_skill_like(self, skill_id: int, user_id: int) -> dict:
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                exists = await conn.fetchval(
+                    "SELECT 1 FROM agent_skill_likes WHERE skill_id = $1 AND user_id = $2",
+                    skill_id, user_id,
+                )
+                if exists:
+                    await conn.execute(
+                        "DELETE FROM agent_skill_likes WHERE skill_id = $1 AND user_id = $2",
+                        skill_id, user_id,
+                    )
+                    await conn.execute(
+                        "UPDATE agent_skills SET likes_count = GREATEST(0, likes_count - 1), updated_at = NOW() WHERE id = $1",
+                        skill_id,
+                    )
+                    liked = False
+                else:
+                    await conn.execute(
+                        "INSERT INTO agent_skill_likes (skill_id, user_id) VALUES ($1, $2)",
+                        skill_id, user_id,
+                    )
+                    await conn.execute(
+                        "UPDATE agent_skills SET likes_count = likes_count + 1, updated_at = NOW() WHERE id = $1",
+                        skill_id,
+                    )
+                    liked = True
+
+                likes_count = await conn.fetchval("SELECT likes_count FROM agent_skills WHERE id = $1", skill_id)
+                return {"skill_id": skill_id, "liked": liked, "likes_count": likes_count}
     async def upsert_rolling_summary(self, chat_id: int, summary_text: str, covered_up_to_id: int) -> None:
         await self.pool.execute("""
             INSERT INTO chat_rolling_summary (chat_id, summary_text, covered_up_to_id, updated_at)

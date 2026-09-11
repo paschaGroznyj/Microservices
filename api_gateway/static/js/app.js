@@ -32,6 +32,7 @@ class ChatApp {
         this.initChatsSectionToggle();
         this.initVisibilityReconnect();
         this.initTextPreview();
+        window.SkillsPanel?.init(this);
         await this.renderMessageInput();
     }
 
@@ -89,6 +90,9 @@ class ChatApp {
         if (tab === 'graph') {
             console.log('INIT GRAPH')
             knowledgeGraph.init();
+        }
+        if (tab === 'skills') {
+            window.SkillsPanel?.open(this);
         }
     }
 

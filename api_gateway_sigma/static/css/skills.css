@@ -1,0 +1,14 @@
+.skills-view { padding: 16px; display:flex; flex-direction:column; gap:12px; height:100%; overflow:auto; }
+.skills-toolbar, .skills-create { display:flex; gap:8px; flex-wrap:wrap; }
+.skills-input, .skills-select, .skills-textarea { background:var(--surface); border:1px solid var(--border); color:var(--text-primary); border-radius:8px; padding:8px 10px; font-size:.84rem; }
+.skills-input { min-width:220px; }
+.skills-textarea { width:100%; min-height:120px; resize:vertical; }
+.skills-btn { border:1px solid var(--border); background:var(--surface); color:var(--text-primary); border-radius:8px; padding:8px 12px; cursor:pointer; }
+.skills-btn--primary { border-color:var(--accent); }
+.skills-list { display:flex; flex-direction:column; gap:8px; }
+.skill-card { border:1px solid var(--border); border-radius:10px; background:var(--surface); padding:10px; }
+.skill-head { display:flex; justify-content:space-between; gap:10px; font-size:.82rem; color:var(--text-secondary); margin-bottom:6px; }
+.skill-theme { font-weight:600; color:var(--text-primary); }
+.skill-body { white-space:pre-wrap; font-size:.85rem; color:var(--text-primary); margin-bottom:8px; }
+.skill-tools { font-size:.75rem; color:var(--text-secondary); margin-bottom:8px; }
+.skill-actions { display:flex; gap:6px; }

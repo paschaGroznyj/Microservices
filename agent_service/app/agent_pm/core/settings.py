@@ -41,6 +41,9 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
         "session_point",
         "work_with_agent_journal",
     ],
+    "skills": [
+        "manage_skills",
+    ],
     "admin": [
         "get_db_schema",
         "execute_sql_query",

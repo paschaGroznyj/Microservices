@@ -28,6 +28,7 @@
     <link rel="stylesheet" href="/static/css/tools-panel.css">
     <link rel="stylesheet" href="/static/css/file-attach.css">
     <link rel="stylesheet" href="/static/css/whatsnew.css">
+    <link rel="stylesheet" href="/static/css/skills.css">
 
 </head>
 <body>
@@ -71,6 +72,14 @@
                         <path d="M5 5.5h6M5 8h4M5 10.5h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
                     </svg>
                     Статьи
+                </div>
+
+
+                <div class="nav-item" data-tab="skills">
+                    <svg viewBox="0 0 16 16" fill="none">
+                        <path d="M9.2 1.7a2.3 2.3 0 1 0 3.1 3.1l1.2 1.2-1.4 1.4-1.2-1.2a2.3 2.3 0 0 0-3.1 3.1l-3.9 3.9a1.3 1.3 0 1 1-1.8-1.8l3.9-3.9a2.3 2.3 0 0 0 3.1-3.1l1.4-1.4-1.3-1.3z" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    Скиллы
                 </div>
 
                 <div class="nav-item" data-tab="graph">
@@ -244,6 +253,28 @@
                         <div class="cards-wrap" id="cards-wrap">
                             <div class="cards-grid" id="cards-grid"></div>
                         </div>
+                    </div>
+                </div>
+
+
+                <!-- SKILLS VIEW -->
+                <div class="view hidden" id="view-skills">
+                    <div class="skills-view" id="skills-view">
+                        <div class="skills-toolbar">
+                            <input id="skills-query" class="skills-input" placeholder="Поиск скиллов по теме..." />
+                            <select id="skills-sort" class="skills-select">
+                                <option value="new">Новые</option>
+                                <option value="popular">Популярные</option>
+                            </select>
+                            <button id="skills-refresh" class="skills-btn">Обновить</button>
+                        </div>
+                        <div class="skills-create">
+                            <input id="skills-theme" class="skills-input" placeholder="Тема скилла" />
+                            <input id="skills-tools" class="skills-input" placeholder="Инструменты через запятую" />
+                            <textarea id="skills-body" class="skills-textarea" placeholder="Тело скилла"></textarea>
+                            <button id="skills-create-btn" class="skills-btn skills-btn--primary">Опубликовать скилл</button>
+                        </div>
+                        <div class="skills-list" id="skills-list"></div>
                     </div>
                 </div>
 
@@ -651,6 +682,7 @@
 <script src="/static/js/file-attach.js"></script>
 <!-- <script src="/static/js/feedback_button.js"></script> -->
 <script type="module" src="/static/js/tools-panel.js"></script>
+<script src="/static/js/skills.js"></script>
 <script type="module" src="/static/js/app.js"></script>
 <script type="module" src="/static/js/searchBlock.js"></script>
 <script type="module" src="/static/js/chatSearchModal.js"></script>

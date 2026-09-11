@@ -1103,6 +1103,49 @@ async def _ping_provider(model_id: str, model_name: str, factory) -> dict:
         return {"id": model_id, "name": model_name, "up": False, "reason": str(e)[:120]}
 
 
+
+
+@app.get('/api/skills')
+async def api_list_skills(query: str = '', sort_by: str = 'new', tool: str | None = None, limit: int = 100):
+    skills = await db.list_skills(query=query, sort_by=sort_by, tool=tool, limit=limit)
+    return {'skills': skills}
+
+
+@app.post('/api/skills')
+async def api_create_skill(payload: dict):
+    if not (payload.get('theme') or '').strip() or not (payload.get('body') or '').strip():
+        raise HTTPException(status_code=400, detail='theme and body required')
+    row = await db.create_skill(
+        theme=payload.get('theme'),
+        body=payload.get('body'),
+        published_by_user_id=payload.get('published_by_user_id'),
+        published_by_name=payload.get('published_by_name'),
+        tools=payload.get('tools') or [],
+    )
+    return {'skill': row}
+
+
+@app.post('/api/skills/{skill_id}/like')
+async def api_like_skill(skill_id: int, payload: dict):
+    user_id = int(payload.get('user_id') or 0)
+    if user_id <= 0:
+        raise HTTPException(status_code=400, detail='user_id required')
+    result = await db.toggle_skill_like(skill_id=skill_id, user_id=user_id)
+    return result
+
+
+@app.get('/api/skills/{skill_id}/prompt')
+async def api_skill_prompt(skill_id: int):
+    row = await db.get_skill_by_id(skill_id)
+    if not row:
+        raise HTTPException(status_code=404, detail='Skill not found')
+    prompt = (
+        f"Тема скилла: {row['theme']}\n"
+        f"Рекомендуемые инструменты: {', '.join(row.get('tools') or []) or 'не указаны'}\n\n"
+        f"Тело скилла:\n{row['body']}"
+    )
+    return {'skill_id': skill_id, 'prompt': prompt, 'skill': row}
+
 @app.get("/internal/providers_status")
 async def internal_providers_status():
     """Доступность провайдеров под каждой моделью тоггла.
@@ -1128,7 +1171,9 @@ async def internal_providers_status():
         _providers_cache["ts"] = time.time()
         return {"providers": providers, "cached_at": _providers_cache["ts"]}
 
+
 class SearchIntent(BaseModel):
+
     is_search: bool = Field(
         description="True если пользователь хочет найти статьи, False если просто общается"
     )

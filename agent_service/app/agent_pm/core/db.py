@@ -1508,7 +1508,7 @@ class AgentDB:
     ) -> list[dict]:
         limit = max(1, min(int(limit), 200))
         order_sql = "likes_count DESC, created_at DESC" if sort_by == "popular" else "created_at DESC"
-        where = ["1=1"]
+        where = ["agent_skills.is_deleted = FALSE"]
         args = []
         idx = 1
 
@@ -1561,16 +1561,19 @@ class AgentDB:
                        agent_skills.likes_count, agent_skills.created_at
                 FROM agent_skills
                 LEFT JOIN users u ON u.id = agent_skills.published_by_user_id
-                WHERE agent_skills.id = $1
+                WHERE agent_skills.id = $1 AND agent_skills.is_deleted = FALSE
                 """,
                 skill_id,
             )
             return dict(row) if row else None
 
     async def delete_skill(self, skill_id: int) -> bool:
+        # Soft-delete: помечаем is_deleted=TRUE (как chats.is_deleted),
+        # физически строку не удаляем — лайки и история публикаций сохраняются.
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
-                "DELETE FROM agent_skills WHERE id = $1 RETURNING id",
+                "UPDATE agent_skills SET is_deleted = TRUE, updated_at = NOW() "
+                "WHERE id = $1 AND is_deleted = FALSE RETURNING id",
                 skill_id,
             )
             return bool(row)

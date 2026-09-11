@@ -30,3 +30,9 @@ ALTER TABLE agent_skills ADD COLUMN IF NOT EXISTS model_used TEXT;
 CREATE INDEX IF NOT EXISTS ix_agent_skills_fts
     ON agent_skills
     USING GIN (to_tsvector('russian', coalesce(theme,'') || ' ' || coalesce(body,'')));
+
+-- Soft-delete: удалённые скиллы не показываем при новых GET (как chats.is_deleted).
+ALTER TABLE agent_skills ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE INDEX IF NOT EXISTS ix_agent_skills_not_deleted
+    ON agent_skills(created_at DESC)
+    WHERE is_deleted = FALSE;

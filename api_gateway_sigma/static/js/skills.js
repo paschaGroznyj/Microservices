@@ -178,8 +178,55 @@ ${body}`;
       this._appendToInput(txt);
       this.app?.showToast?.('Скилл скопирован в чат');
     },
+    _confirmDelete(skillId){
+      // Красивая модалка подтверждения (вместо window.confirm).
+      return new Promise((resolve) => {
+        const card = document.querySelector(`.skill-card[data-skill-id="${skillId}"]`);
+        const theme = card?.dataset?.skillTheme || 'этот скилл';
+        const prev = document.getElementById('skill-confirm-overlay');
+        if (prev) prev.remove();
+
+        const overlay = document.createElement('div');
+        overlay.className = 'skill-confirm-overlay';
+        overlay.id = 'skill-confirm-overlay';
+        overlay.innerHTML = `
+          <div class="skill-confirm" role="dialog" aria-modal="true" aria-labelledby="skill-confirm-title">
+            <div class="skill-confirm__icon">
+              <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M3 6h18"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M10 11v6M14 11v6"/></svg>
+            </div>
+            <div class="skill-confirm__title" id="skill-confirm-title">Удалить скилл?</div>
+            <div class="skill-confirm__text">“${esc(theme)}” больше не будет показываться в магазине. Сама запись сохраняется в базе.</div>
+            <div class="skill-confirm__actions">
+              <button type="button" class="skill-confirm__btn skill-confirm__btn--cancel" data-act="cancel">Отмена</button>
+              <button type="button" class="skill-confirm__btn skill-confirm__btn--danger" data-act="ok">Удалить</button>
+            </div>
+          </div>`;
+
+        const close = (val) => {
+          overlay.classList.add('closing');
+          document.removeEventListener('keydown', onKey);
+          setTimeout(() => { overlay.remove(); resolve(val); }, 160);
+        };
+        const onKey = (e) => {
+          if (e.key === 'Escape') close(false);
+          else if (e.key === 'Enter') close(true);
+        };
+
+        overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(false); });
+        overlay.addEventListener('click', (e) => {
+          const act = e.target.closest('[data-act]')?.dataset?.act;
+          if (act === 'ok') close(true);
+          else if (act === 'cancel') close(false);
+        });
+        document.addEventListener('keydown', onKey);
+
+        document.body.appendChild(overlay);
+        requestAnimationFrame(() => overlay.classList.add('active'));
+        overlay.querySelector('.skill-confirm__btn--danger')?.focus();
+      });
+    },
     async deleteSkill(skillId){
-      const ok = window.confirm('Удалить этот скилл? Действие необратимо.');
+      const ok = await this._confirmDelete(skillId);
       if (!ok) return;
       try {
         const res = await fetch(`/api/skills/${skillId}`, { method: 'DELETE', credentials:'include' });

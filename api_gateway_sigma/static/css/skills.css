@@ -321,3 +321,87 @@
 .skills-select:focus + .skills-select-chevron {
   transform: rotate(180deg);
 }
+
+/* ── Модалка подтверждения удаления скилла ── */
+.skill-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(15, 18, 24, 0.42);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  opacity: 0;
+  transition: opacity .16s ease;
+}
+.skill-confirm-overlay.active { opacity: 1; }
+.skill-confirm-overlay.closing { opacity: 0; }
+
+.skill-confirm {
+  width: 100%;
+  max-width: 380px;
+  background: var(--card-bg, #fff);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color, rgba(0,0,0,.08));
+  border-radius: 16px;
+  padding: 24px 22px 18px;
+  text-align: center;
+  box-shadow: 0 18px 48px rgba(0,0,0,.28);
+  transform: translateY(8px) scale(.97);
+  transition: transform .18s cubic-bezier(.2,.8,.2,1);
+}
+.skill-confirm-overlay.active .skill-confirm { transform: translateY(0) scale(1); }
+
+.skill-confirm__icon {
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: #d84a4a;
+  background: color-mix(in srgb, #d84a4a 12%, transparent);
+}
+.skill-confirm__title {
+  font-size: 1.06rem;
+  font-weight: 650;
+  margin-bottom: 8px;
+}
+.skill-confirm__text {
+  font-size: .88rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin-bottom: 20px;
+}
+.skill-confirm__actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+.skill-confirm__btn {
+  flex: 1;
+  padding: 10px 16px;
+  border-radius: 10px;
+  font-size: .9rem;
+  font-weight: 550;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background .13s, border-color .13s, color .13s;
+}
+.skill-confirm__btn--cancel {
+  background: transparent;
+  border-color: var(--border-color, rgba(0,0,0,.14));
+  color: var(--text-primary);
+}
+.skill-confirm__btn--cancel:hover {
+  background: var(--hover-bg, rgba(0,0,0,.05));
+}
+.skill-confirm__btn--danger {
+  background: #d84a4a;
+  color: #fff;
+}
+.skill-confirm__btn--danger:hover { background: #c53f3f; }

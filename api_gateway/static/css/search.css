@@ -15,7 +15,7 @@
 
 .center-state.searched {
   flex: 0;
-  padding: 18px 24px 12px;
+  padding: 72px 24px 12px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
@@ -219,7 +219,8 @@
 .results-state {
   flex: 1;
   overflow-y: auto;
-  padding: 18px;
+  /* +54px под стеклянную шапку-оверлей */
+  padding: 72px 18px 18px;
 }
 
 .results-state.hidden { display: none; }

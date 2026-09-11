@@ -9,7 +9,10 @@
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 28px 0;
+  /* Верхний отступ = высота стеклянной шапки (54px) + базовый 28px,
+     чтобы первое сообщение в покое не пряталось под шапкой,
+     а при скролле текст уезжал под стекло. */
+  padding: 82px 0 28px;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -22,8 +25,8 @@
 /* Только верхний fade (доскроллено до низа). Зеркально нижнему:
    узкая полоса ~28px с плотным началом (точка на ~40% альфы у самого края). */
 .chat-messages.fade-top:not(.fade-bottom) {
-  -webkit-mask-image: linear-gradient(to bottom, #0000 0, rgba(0,0,0,0.4) 11px, #000 28px);
-          mask-image: linear-gradient(to bottom, #0000 0, rgba(0,0,0,0.4) 11px, #000 28px);
+  -webkit-mask-image: none;
+          mask-image: none;
 }
 
 /* Только нижний fade (в самом верху списка) — сообщения уходят под инпут.
@@ -36,8 +39,8 @@
 
 /* Оба края (проскроллено в середине) */
 .chat-messages.fade-top.fade-bottom {
-  -webkit-mask-image: linear-gradient(to bottom, #0000 0, rgba(0,0,0,0.4) 11px, #000 28px, #000 calc(100% - 28px), rgba(0,0,0,0.4) calc(100% - 11px), #0000 100%);
-          mask-image: linear-gradient(to bottom, #0000 0, rgba(0,0,0,0.4) 11px, #000 28px, #000 calc(100% - 28px), rgba(0,0,0,0.4) calc(100% - 11px), #0000 100%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), rgba(0,0,0,0.4) calc(100% - 11px), #0000 100%);
+          mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), rgba(0,0,0,0.4) calc(100% - 11px), #0000 100%);
 }
 
 .chat-messages.hidden { display: none; }
@@ -614,8 +617,8 @@
   /* На мобильных делаем туман уже, чем на десктопе:
      вместо 28px используем 16px (с промежуточной точкой на 6px). */
   .chat-messages.fade-top:not(.fade-bottom) {
-    -webkit-mask-image: linear-gradient(to bottom, #0000 0, rgba(0,0,0,0.32) 6px, #000 16px);
-            mask-image: linear-gradient(to bottom, #0000 0, rgba(0,0,0,0.32) 6px, #000 16px);
+    -webkit-mask-image: none;
+            mask-image: none;
   }
 
   .chat-messages.fade-bottom:not(.fade-top) {
@@ -624,8 +627,8 @@
   }
 
   .chat-messages.fade-top.fade-bottom {
-    -webkit-mask-image: linear-gradient(to bottom, #0000 0, rgba(0,0,0,0.32) 6px, #000 16px, #000 calc(100% - 16px), rgba(0,0,0,0.32) calc(100% - 6px), #0000 100%);
-            mask-image: linear-gradient(to bottom, #0000 0, rgba(0,0,0,0.32) 6px, #000 16px, #000 calc(100% - 16px), rgba(0,0,0,0.32) calc(100% - 6px), #0000 100%);
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), rgba(0,0,0,0.32) calc(100% - 6px), #0000 100%);
+            mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), rgba(0,0,0,0.32) calc(100% - 6px), #0000 100%);
   }
 }
 

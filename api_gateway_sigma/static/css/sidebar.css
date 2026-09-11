@@ -15,11 +15,11 @@
 
 /* ── HEADER / BRAND ───────────────────────────── */
 .sidebar-header {
-  padding: 14px 14px 10px;
+  padding: 0 14px;
+  height: 54px;
+  min-height: 54px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
-  min-height: 54px;
-  height: 54px;
   display: flex;
   align-items: center;
 }
@@ -61,7 +61,11 @@
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 7px 10px;
+  /* Фиксируем высоту, чтобы совпадала с nav-item в sigma */
+  height: 30px;
+  min-height: 30px;
+  box-sizing: border-box;
+  padding: 0 10px;
   border-radius: var(--radius-sm);
   font-size: 0.82rem;
   font-weight: 500;

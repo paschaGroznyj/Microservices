@@ -812,3 +812,10 @@
     padding-right: 32px;
   }
 }
+
+/* Drop-цель при перетаскивании карточки скилла на чат */
+.chat-item--drop {
+    outline: 2px dashed var(--accent, #6366f1);
+    outline-offset: -2px;
+    background: rgba(99, 102, 241, 0.10);
+}

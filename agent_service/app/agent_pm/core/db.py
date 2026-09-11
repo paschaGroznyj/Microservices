@@ -1532,12 +1532,18 @@ class AgentDB:
             idx += 1
 
         args.append(limit)
+        # Префиксуем колонки таблицей: JOIN добавляет users, во избежание неоднозначности.
+        where_j = [w.replace('theme', 'agent_skills.theme').replace('body', 'agent_skills.body').replace('tools', 'agent_skills.tools') for w in where]
         sql = f"""
-            SELECT id, theme, body, published_by_user_id, published_by_name, tools,
-                   model_used, likes_count, created_at
+            SELECT agent_skills.id, agent_skills.theme, agent_skills.body,
+                   agent_skills.published_by_user_id,
+                   COALESCE(agent_skills.published_by_name, u.username) AS published_by_name,
+                   agent_skills.tools, agent_skills.model_used,
+                   agent_skills.likes_count, agent_skills.created_at
             FROM agent_skills
-            WHERE {' AND '.join(where)}
-            ORDER BY {order_sql}
+            LEFT JOIN users u ON u.id = agent_skills.published_by_user_id
+            WHERE {' AND '.join(where_j)}
+            ORDER BY {order_sql.replace('created_at', 'agent_skills.created_at').replace('likes_count', 'agent_skills.likes_count')}
             LIMIT ${idx}
         """
         async with self.pool.acquire() as conn:
@@ -1548,9 +1554,14 @@ class AgentDB:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT id, theme, body, published_by_user_id, published_by_name, tools, model_used, likes_count, created_at
+                SELECT agent_skills.id, agent_skills.theme, agent_skills.body,
+                       agent_skills.published_by_user_id,
+                       COALESCE(agent_skills.published_by_name, u.username) AS published_by_name,
+                       agent_skills.tools, agent_skills.model_used,
+                       agent_skills.likes_count, agent_skills.created_at
                 FROM agent_skills
-                WHERE id = $1
+                LEFT JOIN users u ON u.id = agent_skills.published_by_user_id
+                WHERE agent_skills.id = $1
                 """,
                 skill_id,
             )

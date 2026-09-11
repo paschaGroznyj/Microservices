@@ -1431,6 +1431,80 @@ async def get_providers_status(request: Request):
     except httpx.RequestError:
         return {"providers": None, "cached_at": None}
 
+
+
+@app.get("/api/skills")
+async def api_list_skills(request: Request, query: str = "", sort_by: str = "new"):
+    """Прокси списка скиллов из agent_service."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    agent_url = SERVICES['agent_service']['url']
+    try:
+        resp = await app.state.http_client.get(
+            f"{agent_url}/api/skills",
+            params={"query": query, "sort_by": sort_by},
+            timeout=20.0,
+        )
+        return JSONResponse(status_code=resp.status_code, content=resp.json())
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"PM Agent unreachable: {e}")
+
+
+@app.post("/api/skills")
+async def api_create_skill(request: Request):
+    """Прокси создания скилла (публикация агентом)."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    payload = await request.json()
+    agent_url = SERVICES['agent_service']['url']
+    try:
+        resp = await app.state.http_client.post(
+            f"{agent_url}/api/skills",
+            json=payload,
+            timeout=30.0,
+        )
+        return JSONResponse(status_code=resp.status_code, content=resp.json())
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"PM Agent unreachable: {e}")
+
+
+@app.post("/api/skills/{skill_id}/like")
+async def api_like_skill(skill_id: int, request: Request):
+    """Прокси лайка/анлайка скилла."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    payload = await request.json()
+    agent_url = SERVICES['agent_service']['url']
+    try:
+        resp = await app.state.http_client.post(
+            f"{agent_url}/api/skills/{skill_id}/like",
+            json=payload,
+            timeout=20.0,
+        )
+        return JSONResponse(status_code=resp.status_code, content=resp.json())
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"PM Agent unreachable: {e}")
+
+
+@app.get("/api/skills/{skill_id}/prompt")
+async def api_skill_prompt(skill_id: int, request: Request):
+    """Прокси экспорта промпта скилла."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    agent_url = SERVICES['agent_service']['url']
+    try:
+        resp = await app.state.http_client.get(
+            f"{agent_url}/api/skills/{skill_id}/prompt",
+            timeout=20.0,
+        )
+        return JSONResponse(status_code=resp.status_code, content=resp.json())
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"PM Agent unreachable: {e}")
+
 @app.on_event("startup")
 async def startup_event():
     """Запуск Service Discovery при старте"""

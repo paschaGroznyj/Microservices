@@ -23,6 +23,7 @@
         this._debounce = setTimeout(() => this.load(), 250);
       });
       this._bindDropToInput();
+      this._bindDropToChats();
     },
     open(app){ this.init(app); this.load(); },
     async load(){
@@ -60,6 +61,10 @@
         const tools = (s.tools||[]).length
           ? `<span class="skill-badge">${esc((s.tools||[]).join(', '))}</span>`
           : '';
+        const authorName = s.published_by_name || '';
+        const author = authorName
+          ? `<div class="skill-author"><svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"/></svg><span>${esc(authorName)}</span></div>`
+          : '';
         return `
         <div class="skill-card" draggable="true" data-skill-id="${s.id}" data-skill-body="${esc(s.body)}">
           <div class="skill-card__head">
@@ -69,6 +74,7 @@
               <span class="skill-like-count">${s.likes_count || 0}</span>
             </button>
           </div>
+          ${author}
           <div class="skill-meta">${model}${tools}</div>
           <button class="skill-toggle" data-toggle="${s.id}">${ICON_CHEVRON}<span class="skill-toggle-label">Читать полностью</span></button>
           <div class="skill-body">${esc(s.body||'')}</div>
@@ -89,9 +95,12 @@
       list.querySelectorAll('[data-copy]').forEach(b=>b.addEventListener('click',()=>this.copyToChat(Number(b.dataset.copy))));
       list.querySelectorAll('.skill-card').forEach(card=>{
         card.addEventListener('dragstart', (e)=>{
-          e.dataTransfer.setData('text/plain', card.dataset.skillBody || '');
+          const body = card.dataset.skillBody || '';
+          this._dragBody = body;
+          e.dataTransfer.setData('text/plain', body);
           e.dataTransfer.effectAllowed = 'copy';
         });
+        card.addEventListener('dragend', ()=>{ this._dragBody = ''; });
       });
     },
     async like(skillId){
@@ -138,7 +147,46 @@
         e.preventDefault();
         this._appendToInput(txt);
       });
-    }
+    },
+    _bindDropToChats(){
+      // Перетаскивание карточки скилла на конкретный чат в сайдбаре:
+      // чат открывается и текст скилла вставляется в поле ввода.
+      const onDragOver = (e)=>{
+        const item = e.target.closest && e.target.closest('.chat-item');
+        if (!item) return;
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+        item.classList.add('chat-item--drop');
+      };
+      const onDragLeave = (e)=>{
+        const item = e.target.closest && e.target.closest('.chat-item');
+        if (item) item.classList.remove('chat-item--drop');
+      };
+      const onDrop = async (e)=>{
+        const item = e.target.closest && e.target.closest('.chat-item');
+        if (!item) return;
+        e.preventDefault();
+        item.classList.remove('chat-item--drop');
+        const txt = (e.dataTransfer && e.dataTransfer.getData('text/plain')) || this._dragBody || '';
+        if (!txt) return;
+        const chatId = Number(item.dataset.chatId);
+        if (Number.isFinite(chatId)) {
+          await this.app?.openChat?.(chatId);
+        }
+        this.app?.switchTab?.('agent');
+        await this.app?.renderMessageInput?.();
+        this._appendToInput(txt);
+        this.app?.showToast?.('Скилл добавлен в чат');
+      };
+      ['chat-list','chat-favorites-list'].forEach(id=>{
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('dragover', onDragOver);
+        el.addEventListener('dragleave', onDragLeave);
+        el.addEventListener('drop', onDrop);
+      });
+    },
+
   };
 
   window.SkillsPanel = SkillsPanel;

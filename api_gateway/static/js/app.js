@@ -83,6 +83,15 @@ class ChatApp {
             n.classList.toggle('active', n.dataset.tab === tab);
         });
 
+        // Заголовок шапки по активной вкладке
+        const titleEl = document.getElementById("main-title");
+        if (titleEl) {
+            if (tab === 'skills') titleEl.textContent = 'Магазин скиллов';
+            else if (tab === 'agent') titleEl.textContent = 'Agent Process Mining';
+            else if (tab === 'graph') titleEl.textContent = 'Граф';
+            else titleEl.textContent = 'CatchPM';
+        }
+
         // Таб-специфичная логика
         if (tab === 'agent') {
             this.renderMessageInput();

@@ -9,72 +9,78 @@
   box-sizing: border-box;
 }
 
-/* Шапка раздела */
-.skills-header { display: flex; flex-direction: column; gap: 4px; }
-.skills-title-row { display: flex; align-items: baseline; gap: 10px; }
-.skills-title {
-  margin: 0;
-  font-size: 1.15rem;
-  font-weight: 650;
-  color: var(--text-primary);
-}
-.skills-count {
-  font-size: .78rem;
-  color: var(--text-secondary);
-  background: var(--surface);
+/* Интро-карточка: краткое описание раздела */
+.skills-intro {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
   border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 2px 9px;
-}
-.skills-subtitle {
-  margin: 0;
-  font-size: .82rem;
+  border-radius: 12px;
+  background: var(--surface);
   color: var(--text-secondary);
-  max-width: 640px;
-  line-height: 1.4;
 }
+.skills-intro-icon { flex-shrink: 0; color: var(--accent); }
+.skills-intro-text { font-size: .82rem; line-height: 1.4; }
 
-/* Тулбар: поиск + сортировка + обновить */
+/* Тулбар в стиле graph-toolbar */
 .skills-toolbar {
   display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
   align-items: center;
+  gap: 8px;
+  padding-bottom: 6px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--input-border, var(--border));
+  flex-wrap: wrap;
 }
 .skills-search {
-  position: relative;
-  flex: 1 1 260px;
+  flex: 1;
   min-width: 220px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--input-border, var(--border));
+  background: var(--input-bg, var(--surface));
+  color: var(--text-primary, #111);
+  font-size: 0.8rem;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.skills-search:focus { border-color: var(--accent, #2563eb); }
+.skills-btn-refresh {
+  height: 32px;
+  width: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--input-border, var(--border));
+  background: var(--input-bg, var(--surface));
+  color: var(--text-secondary, #555);
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background 0.15s;
   display: flex;
   align-items: center;
+  justify-content: center;
 }
-.skills-search-icon {
-  position: absolute;
-  left: 10px;
-  color: var(--text-secondary);
-  pointer-events: none;
+.skills-btn-refresh:hover { background: var(--sidebar-hover, #f0f0f0); }
+.skills-count {
+  font-size: 0.7rem;
+  color: var(--text-muted, #9ca3af);
+  white-space: nowrap;
+  padding-left: 4px;
 }
-.skills-search .skills-input {
-  width: 100%;
-  padding-left: 34px;
-  box-sizing: border-box;
-}
-.skills-input,
-.skills-select {
+.skills-select,
+.skills-input {
   background: var(--surface);
   border: 1px solid var(--border);
   color: var(--text-primary);
-  border-radius: 10px;
-  padding: 9px 12px;
-  font-size: .84rem;
+  border-radius: 8px;
+  padding: 0 12px;
+  height: 32px;
+  font-size: .8rem;
   outline: none;
-  transition: border-color .15s ease, box-shadow .15s ease;
+  transition: border-color .15s ease;
 }
-.skills-input:focus,
-.skills-select:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
-}
+.skills-select:focus { border-color: var(--accent); }
 .skills-btn {
   border: 1px solid var(--border);
   background: var(--surface);
@@ -87,21 +93,21 @@
 }
 .skills-btn:hover { border-color: var(--accent); }
 .skills-btn:active { transform: translateY(1px); }
-.skills-icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 8px;
-  color: var(--text-secondary);
-}
-.skills-icon-btn:hover { color: var(--text-primary); }
 
 /* Список карточек */
 .skills-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 12px;
-  align-content: start;
+  column-width: 340px;      /* авто-число колонок по ширине контейнера */
+  column-gap: 12px;
+}
+.skills-list > .skill-card {
+  break-inside: avoid;      /* карточку не рвём между колонками */
+  -webkit-column-break-inside: avoid;
+  page-break-inside: avoid;
+  margin: 0 0 12px;         /* вертикальный зазор внутри колонки (gap у columns не работает по вертикали) */
+}
+/* Пустое состояние — единственный блок, растягиваем на всю ширину */
+.skills-list > .skills-empty {
+  column-span: all;
 }
 
 /* Карточка скилла */
@@ -155,6 +161,17 @@
 .skill-like.is-liked { color: #e0245e; }
 .skill-like.is-liked svg { transform: scale(1.08); }
 
+
+/* Автор скилла */
+.skill-author {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: .74rem;
+  color: var(--text-secondary);
+}
+.skill-author svg { opacity: .7; flex-shrink: 0; }
+
 /* Мета-строка: модель + инструменты */
 .skill-meta {
   display: flex;
@@ -187,7 +204,7 @@
   margin: 0;
 }
 .skill-card.is-open .skill-body {
-  max-height: 1200px;
+  max-height: 4000px;
   opacity: 1;
   margin: 2px 0;
 }
@@ -220,18 +237,49 @@
   margin-top: 2px;
 }
 
-/* Пустое состояние — по центру */
+/* Пустое состояние — по центру всей области списка */
 .skills-empty {
+  grid-column: 1 / -1;
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 10px;
-  min-height: 240px;
+  min-height: 320px;
   color: var(--text-secondary);
   text-align: center;
 }
 .skills-empty svg { opacity: .5; }
 .skills-empty__title { font-size: .95rem; font-weight: 600; color: var(--text-primary); }
 .skills-empty__hint { font-size: .82rem; max-width: 340px; line-height: 1.45; }
+
+
+.skills-select-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.skills-select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-right: 34px;
+  min-width: 170px;
+  cursor: pointer;
+}
+.skills-select::-ms-expand { display: none; }
+.skills-select-chevron {
+  position: absolute;
+  right: 11px;
+  color: var(--text-secondary);
+  pointer-events: none;
+  transition: transform .16s ease, color .16s ease;
+}
+.skills-select-wrap:hover .skills-select-chevron,
+.skills-select:focus + .skills-select-chevron {
+  color: var(--text-primary);
+}
+.skills-select:focus + .skills-select-chevron {
+  transform: rotate(180deg);
+}

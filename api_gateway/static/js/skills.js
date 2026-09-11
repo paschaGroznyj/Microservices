@@ -5,6 +5,8 @@
   const ICON_HEART_OUTLINE = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.8 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg>';
   const ICON_HEART_FILLED  = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 21l-1.45-1.32C5.4 14.99 2 11.9 2 8.1 2 5.42 4.08 3.3 6.75 3.3c1.54 0 3.02.72 4 1.86A5.28 5.28 0 0 1 17.25 3.3C19.92 3.3 22 5.42 22 8.1c0 3.8-3.4 6.89-8.55 11.58L12 21z"/></svg>';
   const ICON_CHEVRON       = '<svg class="chevron" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m6 9 6 6 6-6"/></svg>';
+  const ICON_COPY           = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M8 8h10v12H8z"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M6 16H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'
+  const ICON_TRASH          = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M3 6h18"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M10 11v6M14 11v6"/></svg>'
 
   const SkillsPanel = {
     app: null,
@@ -69,19 +71,24 @@
         <div class="skill-card" draggable="true" data-skill-id="${s.id}" data-skill-body="${esc(s.body)}" data-skill-theme="${esc(s.theme||'')}" data-skill-tools="${esc((s.tools||[]).join(', '))}">
           <div class="skill-card__head">
             <span class="skill-theme">${esc(s.theme)}</span>
-            <button class="skill-like${liked?' is-liked':''}" data-like="${s.id}" title="Лайк">
-              ${liked ? ICON_HEART_FILLED : ICON_HEART_OUTLINE}
-              <span class="skill-like-count">${s.likes_count || 0}</span>
-            </button>
+            <div class="skill-head-actions">
+              <button class="skill-like${liked?' is-liked':''}" data-like="${s.id}" title="Лайк">
+                ${liked ? ICON_HEART_FILLED : ICON_HEART_OUTLINE}
+                <span class="skill-like-count">${s.likes_count || 0}</span>
+              </button>
+              <button class="skill-icon-btn skill-icon-btn--copy" data-copy="${s.id}" title="Скопировать в чат" aria-label="Скопировать в чат">
+                ${ICON_COPY}
+              </button>
+              <button class="skill-icon-btn skill-icon-btn--delete" data-delete="${s.id}" title="Удалить скилл" aria-label="Удалить скилл">
+                ${ICON_TRASH}
+              </button>
+            </div>
           </div>
           ${author}
           <div class="skill-meta">${model}${tools}</div>
           <button class="skill-toggle" data-toggle="${s.id}">${ICON_CHEVRON}<span class="skill-toggle-label">Читать полностью</span></button>
           <div class="skill-body">${esc(s.body||'')}</div>
-          <div class="skill-actions">
-            <button class="skills-btn" data-copy="${s.id}">Скопировать в чат</button>
-          </div>
-        </div>`;
+</div>`;
       }).join('');
 
       list.querySelectorAll('[data-toggle]').forEach(b=>b.addEventListener('click',()=>{
@@ -94,6 +101,7 @@
       }));
       list.querySelectorAll('[data-like]').forEach(b=>b.addEventListener('click',()=>this.like(Number(b.dataset.like))));
       list.querySelectorAll('[data-copy]').forEach(b=>b.addEventListener('click',()=>this.copyToChat(Number(b.dataset.copy))));
+      list.querySelectorAll('[data-delete]').forEach(b=>b.addEventListener('click',()=>this.deleteSkill(Number(b.dataset.delete))));
       list.querySelectorAll('.skill-card').forEach(card=>{
         card.addEventListener('dragstart', (e)=>{
           const txt = this._buildDragText(card);
@@ -152,6 +160,29 @@ ${body}`;
       await this.app?.renderMessageInput?.();
       this._appendToInput(txt);
       this.app?.showToast?.('Скилл скопирован в чат');
+    },
+    async deleteSkill(skillId){
+      const ok = window.confirm('Удалить этот скилл? Действие необратимо.');
+      if (!ok) return;
+      try {
+        const res = await fetch(`/api/skills/${skillId}`, { method: 'DELETE', credentials:'include' });
+        if (res.status === 403) {
+          this.app?.showToast?.('Удалять скиллы может только администратор');
+          return;
+        }
+        if (res.status === 404) {
+          this.app?.showToast?.('Скилл не найден');
+          return;
+        }
+        if (!res.ok) {
+          this.app?.showToast?.('Не удалось удалить скилл');
+          return;
+        }
+        this.app?.showToast?.('Скилл удалён');
+        await this.load();
+      } catch (e) {
+        this.app?.showToast?.('Ошибка удаления скилла');
+      }
     },
     _appendToInput(text){
       const field = document.getElementById('message-input');

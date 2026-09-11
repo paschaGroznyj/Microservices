@@ -1483,6 +1483,26 @@ async def api_skill_prompt(skill_id: int, request: Request):
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"PM Agent unreachable: {e}")
 
+
+@app.delete("/api/skills/{skill_id}")
+async def api_delete_skill(skill_id: int, request: Request):
+    """Удаление скилла. Проверка прав только на сервере (ADMIN_USERNAMES)."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if user.get("username") not in ADMIN_USERNAMES:
+        raise HTTPException(status_code=403, detail="Only admin can delete skill")
+
+    agent_url = SERVICES['agent_service']['url']
+    try:
+        resp = await app.state.http_client.delete(
+            f"{agent_url}/api/skills/{skill_id}",
+            timeout=20.0,
+        )
+        return JSONResponse(status_code=resp.status_code, content=resp.json())
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"PM Agent unreachable: {e}")
+
 @app.on_event("startup")
 async def startup_event():
     """Запуск Service Discovery при старте"""

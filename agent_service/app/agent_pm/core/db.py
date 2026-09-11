@@ -1567,6 +1567,14 @@ class AgentDB:
             )
             return dict(row) if row else None
 
+    async def delete_skill(self, skill_id: int) -> bool:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "DELETE FROM agent_skills WHERE id = $1 RETURNING id",
+                skill_id,
+            )
+            return bool(row)
+
     async def toggle_skill_like(self, skill_id: int, user_id: int) -> dict:
         async with self.pool.acquire() as conn:
             async with conn.transaction():

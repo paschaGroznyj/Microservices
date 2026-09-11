@@ -81,20 +81,6 @@
   transition: border-color .15s ease;
 }
 .skills-select:focus { border-color: var(--accent); }
-.skills-btn {
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text-primary);
-  border-radius: 10px;
-  padding: 11px 18px;
-  cursor: pointer;
-  font-size: .92rem;
-  font-weight: 550;
-  transition: background .15s ease, border-color .15s ease, transform .1s ease;
-}
-.skills-btn:hover { border-color: var(--accent); }
-.skills-btn:active { transform: translateY(1px); }
-
 /* Список карточек — одна колонка на всю ширину области */
 .skills-list {
   display: flex;
@@ -128,6 +114,11 @@
   justify-content: space-between;
   gap: 10px;
 }
+.skill-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 .skill-theme {
   font-weight: 640;
   font-size: .96rem;
@@ -155,6 +146,25 @@
 .skill-like svg { display: block; transition: transform .15s ease; }
 .skill-like.is-liked { color: #e0245e; }
 .skill-like.is-liked svg { transform: scale(1.08); }
+
+.skill-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color .15s ease, background .15s ease, transform .1s ease;
+}
+.skill-icon-btn svg { display: block; }
+.skill-icon-btn:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--text-primary); }
+.skill-icon-btn:active { transform: scale(.94); }
+.skill-icon-btn--copy:hover { color: var(--accent); }
+.skill-icon-btn--delete:hover { color: #d84a4a; background: color-mix(in srgb, #d84a4a 12%, transparent); }
 
 
 /* Автор скилла */
@@ -225,12 +235,6 @@
   transition: transform .2s ease;
 }
 .skill-card.is-open .skill-toggle .chevron { transform: rotate(180deg); }
-
-.skill-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 2px;
-}
 
 /* Markdown-рендер тела скилла (при раскрытии) */
 .skill-body.md-content { white-space: normal; }

@@ -1146,6 +1146,14 @@ async def api_skill_prompt(skill_id: int):
     )
     return {'skill_id': skill_id, 'prompt': prompt, 'skill': row}
 
+
+@app.delete('/api/skills/{skill_id}')
+async def api_delete_skill(skill_id: int):
+    deleted = await db.delete_skill(skill_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail='Skill not found')
+    return {'ok': True, 'skill_id': skill_id}
+
 @app.get("/internal/providers_status")
 async def internal_providers_status():
     """Доступность провайдеров под каждой моделью тоггла.

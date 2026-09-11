@@ -16,6 +16,8 @@
     _likedIds: new Set(),
     _isAdmin: false,
     _adminLoaded: false,
+    _selectedIds: new Set(),
+    _selectedLimit: 5,
     init(app){
       this.app = app;
       if (this.inited) return;
@@ -29,12 +31,14 @@
       });
       this._bindDropToInput();
       this._bindDropToChats();
+      this._loadSelected().then(() => this._updateSelectedCounterUi()).catch(() => {});
     },
     open(app){ this.init(app); this.load(); },
     async load(){
       const q = document.getElementById('skills-query')?.value || '';
       const sort = document.getElementById('skills-sort')?.value || 'new';
       let skills = [];
+      await this._loadSelected();
       try {
         const res = await fetch(`/api/skills?query=${encodeURIComponent(q)}&sort_by=${encodeURIComponent(sort)}`, {credentials:'include'});
         const data = res.ok ? await res.json() : {skills:[]};
@@ -42,13 +46,14 @@
       } catch (e) { skills = []; }
       await this._fetchIsAdmin();
       this.render(skills);
+      this._updateSelectedCounterUi(skills.length);
     },
     render(skills){
       const list = document.getElementById('skills-list');
       const countEl = document.getElementById('skills-count');
       if (!list) return;
 
-      if (countEl) countEl.textContent = skills.length ? `${skills.length}` : '';
+      if (countEl) countEl.textContent = `${skills.length} • выбрано ${this._selectedIds.size}/${this._selectedLimit}`;
 
       if (!skills.length){
         list.classList.remove('skills-list-grid');
@@ -63,6 +68,7 @@
 
       list.innerHTML = skills.map(s => {
         const liked = this._likedIds.has(s.id);
+        const selected = this._selectedIds.has(Number(s.id));
         const model = s.model_used ? `<span class="skill-badge skill-badge--model">${esc(s.model_used)}</span>` : '';
         const tools = (s.tools||[]).length
           ? `<span class="skill-badge skill-badge--tools" title="${esc((s.tools||[]).join(', '))}">${esc((s.tools||[]).join(', '))}</span>`
@@ -73,7 +79,7 @@
           ? `<div class="skill-author"><svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"/></svg><span>${esc(authorName)}</span></div>`
           : '';
         return `
-        <div class="skill-card" draggable="true" data-skill-id="${s.id}" data-skill-body="${esc(s.body)}" data-skill-body-raw="${encodeURIComponent(s.body||'')}" data-skill-theme="${esc(s.theme||'')}" data-skill-tools="${esc((s.tools||[]).join(', '))}" data-skill-tools-csv="${encodeURIComponent((s.tools||[]).join(', '))}">
+        <div class="skill-card${selected?' is-selected':''}" draggable="true" data-skill-id="${s.id}" data-skill-body="${esc(s.body)}" data-skill-body-raw="${encodeURIComponent(s.body||'')}" data-skill-theme="${esc(s.theme||'')}" data-skill-tools="${esc((s.tools||[]).join(', '))}" data-skill-tools-csv="${encodeURIComponent((s.tools||[]).join(', '))}">
           <div class="skill-card__head">
             <span class="skill-theme">${esc(s.theme)}</span>
             <div class="skill-head-actions">
@@ -112,6 +118,12 @@
       list.querySelectorAll('[data-edit]').forEach(b=>b.addEventListener('click',()=>this.openEditSkill(Number(b.dataset.edit))));
       list.querySelectorAll('[data-delete]').forEach(b=>b.addEventListener('click',()=>this.deleteSkill(Number(b.dataset.delete))));
       list.querySelectorAll('.skill-card').forEach(card=>{
+        card.addEventListener('click', (e) => {
+          const interactive = e.target.closest('[data-like],[data-copy],[data-edit],[data-delete],[data-toggle],a,button,input,textarea,select');
+          if (interactive) return;
+          const id = Number(card.dataset.skillId);
+          if (id) this.toggleSelectedSkill(id);
+        });
         card.addEventListener('dragstart', (e)=>{
           const txt = this._buildDragText(card);
           this._dragBody = txt;
@@ -346,6 +358,65 @@ ${body}`;
         await this.load();
       } catch (e) {
         this.app?.showToast?.('Ошибка удаления скилла');
+      }
+    },
+    async _loadSelected(){
+      try {
+        const res = await fetch('/api/skills/selected', { credentials:'include' });
+        if (!res.ok) return;
+        const data = await res.json();
+        const ids = Array.isArray(data?.selected_ids) ? data.selected_ids : [];
+        this._selectedIds = new Set(ids.map(Number));
+      } catch (_) {}
+    },
+    _updateSelectedCounterUi(totalSkills){
+      const nav = document.getElementById('skills-selected-nav-count');
+      if (nav) nav.textContent = String(this._selectedIds.size || 0);
+      const countEl = document.getElementById('skills-count');
+      if (countEl) countEl.textContent = `${totalSkills || 0} • выбрано ${this._selectedIds.size}/${this._selectedLimit}`;
+    },
+    async toggleSelectedSkill(skillId){
+      try {
+        const res = await fetch(`/api/skills/${skillId}/select`, {
+          method:'POST',
+          credentials:'include',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({}),
+        });
+
+        if (res.status === 400) {
+          this.app?.showToast?.('Можно выбрать не более 5 скиллов');
+          await this._loadSelected();
+          this._updateSelectedCounterUi(document.querySelectorAll('.skill-card').length);
+          this.render(await this._readCurrentSkills());
+          return;
+        }
+        if (res.status === 404) {
+          this.app?.showToast?.('Скилл не найден');
+          return;
+        }
+        if (!res.ok) {
+          this.app?.showToast?.('Не удалось изменить выбор скилла');
+          return;
+        }
+
+        const data = await res.json().catch(()=>({}));
+        const ids = Array.isArray(data?.selected_ids) ? data.selected_ids : [];
+        this._selectedIds = new Set(ids.map(Number));
+        await this.load();
+      } catch (e) {
+        this.app?.showToast?.('Ошибка выбора скилла');
+      }
+    },
+    async _readCurrentSkills(){
+      const q = document.getElementById('skills-query')?.value || '';
+      const sort = document.getElementById('skills-sort')?.value || 'new';
+      try {
+        const res = await fetch(`/api/skills?query=${encodeURIComponent(q)}&sort_by=${encodeURIComponent(sort)}`, {credentials:'include'});
+        const data = res.ok ? await res.json() : {skills:[]};
+        return data.skills || [];
+      } catch (_) {
+        return [];
       }
     },
     _appendToInput(text){

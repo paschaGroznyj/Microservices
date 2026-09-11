@@ -1470,6 +1470,46 @@ async def api_create_skill(request: Request):
         raise HTTPException(status_code=502, detail=f"PM Agent unreachable: {e}")
 
 
+@app.get("/api/skills/selected")
+async def api_get_selected_skills(request: Request):
+    """Текущие выбранные скиллы пользователя (для подсветки после F5)."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user.get("user_id")
+    agent_url = SERVICES['agent_service']['url']
+    try:
+        resp = await app.state.http_client.get(
+            f"{agent_url}/api/skills/selected",
+            params={"user_id": user_id},
+            timeout=20.0,
+        )
+        return JSONResponse(status_code=resp.status_code, content=resp.json())
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"PM Agent unreachable: {e}")
+
+
+@app.post("/api/skills/{skill_id}/select")
+async def api_toggle_selected_skill(skill_id: int, request: Request):
+    """Тоггл выбранного скилла (лимит 5 на пользователя)."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    payload = await request.json()
+    payload["user_id"] = user.get("user_id")
+
+    agent_url = SERVICES['agent_service']['url']
+    try:
+        resp = await app.state.http_client.post(
+            f"{agent_url}/api/skills/{skill_id}/select",
+            json=payload,
+            timeout=20.0,
+        )
+        return JSONResponse(status_code=resp.status_code, content=resp.json())
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"PM Agent unreachable: {e}")
+
+
 @app.post("/api/skills/{skill_id}/like")
 async def api_like_skill(skill_id: int, request: Request):
     """Прокси лайка/анлайка скилла."""

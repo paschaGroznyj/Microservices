@@ -36,3 +36,16 @@ ALTER TABLE agent_skills ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DE
 CREATE INDEX IF NOT EXISTS ix_agent_skills_not_deleted
     ON agent_skills(created_at DESC)
     WHERE is_deleted = FALSE;
+
+
+-- Выбранные пользователем скиллы (активный набор до 5)
+CREATE TABLE IF NOT EXISTS agent_skill_selected (
+    skill_id BIGINT NOT NULL REFERENCES agent_skills(id) ON DELETE CASCADE,
+    user_id BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (skill_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_agent_skill_selected_user_id
+    ON agent_skill_selected(user_id, created_at DESC);

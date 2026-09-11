@@ -440,3 +440,15 @@
     vertical-align: top;
   }
 }
+
+
+.skill-card.is-selected {
+  border-color: color-mix(in srgb, #67cc98 62%, var(--border));
+  background: color-mix(in srgb, #b6f0cf 28%, var(--surface));
+}
+.skill-card.is-selected .skill-theme { color: #1f6b45; }
+.skill-card__head,
+.skill-body,
+.skill-author,
+.skill-meta,
+.skill-toggle { position: relative; z-index: 2; }

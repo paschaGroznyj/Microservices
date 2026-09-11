@@ -368,7 +368,16 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     # message = f"[CatchPM, ТабельНомер: 23423423, Пользователь: Иванов Иванон Иваныч, user_id=-1234]\n" + text
     message = f"[CatchPM, ТабельНомер: {tb_name}, Пользователь: {username}, chat_id: {chat_id}, user_id: {user_id}]\n" + text
 
-    
+    selected_skills = await db.get_selected_skills_for_user(int(user_id))
+    if selected_skills:
+        selected_chunks = []
+        for idx, sk in enumerate(selected_skills, start=1):
+            tools = ", ".join(sk.get("tools") or []) or "не указаны"
+            selected_chunks.append(
+                f"#{idx} [id={sk.get('id')}] {sk.get('theme')}\nИнструменты: {tools}\n{sk.get('body')}"
+            )
+        message += "\n\n[SELECTED_SKILLS_CONTEXT] Ниже скиллы, выбранные пользователем (до 5). Учитывай их как приоритетные инструкции, если они релевантны запросу:\n" + "\n\n".join(selected_chunks)
+
     images: list[dict] = []
     if has_files and message_id:
         file_text, images = await wait_for_files(message_id)
@@ -1123,6 +1132,30 @@ async def api_create_skill(payload: dict):
         tools=payload.get('tools') or [],
     )
     return {'skill': row}
+
+
+@app.get('/api/skills/selected')
+async def api_get_selected_skills(user_id: int):
+    if int(user_id or 0) <= 0:
+        raise HTTPException(status_code=400, detail='user_id required')
+    selected_ids = await db.get_selected_skill_ids(int(user_id))
+    return {'selected_ids': selected_ids, 'count': len(selected_ids), 'max_selected': 5}
+
+
+@app.post('/api/skills/{skill_id}/select')
+async def api_toggle_selected_skill(skill_id: int, payload: dict):
+    user_id = int(payload.get('user_id') or 0)
+    if user_id <= 0:
+        raise HTTPException(status_code=400, detail='user_id required')
+
+    result = await db.toggle_skill_selected(skill_id=skill_id, user_id=user_id, max_selected=5)
+    if not result.get('ok'):
+        if result.get('reason') == 'not_found':
+            raise HTTPException(status_code=404, detail='Skill not found')
+        if result.get('reason') == 'limit':
+            raise HTTPException(status_code=400, detail='Max 5 selected skills per user')
+        raise HTTPException(status_code=400, detail='Cannot toggle selected skill')
+    return result
 
 
 @app.post('/api/skills/{skill_id}/like')

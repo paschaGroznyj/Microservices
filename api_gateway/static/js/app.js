@@ -1369,7 +1369,7 @@ class ChatApp {
                     message:        text,
                     message_id:     msgId,
                     type_agent:     'pm',
-                    agent_model:    window.ModelPicker?.getModel() ?? 'universal',
+                    agent_model:    window.ModelPicker?.getModel() ?? 'coder',
                     selected_tools: window.ToolsPanel?.getSelectedCategories() ?? [],
                     context_size:   window.ToolsPanel?.getContextSize()   ?? 'medium',
                     has_files:      _hasFiles,

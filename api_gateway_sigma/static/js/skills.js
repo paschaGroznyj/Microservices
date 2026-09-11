@@ -146,7 +146,7 @@ ${body}`;
     async _fetchIsAdmin(force = false){
       if (!force && this._adminLoaded) return this._isAdmin;
       try {
-        const res = await fetch('/api/profile/is_admin', { method: 'POST', credentials:'include' });
+        const res = await fetch('/api/auth/permissions', { credentials:'include' });
         if (!res.ok) throw new Error('status ' + res.status);
         const data = await res.json();
         this._isAdmin = !!data?.is_admin;

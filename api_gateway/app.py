@@ -1506,6 +1506,27 @@ async def api_skill_prompt(skill_id: int, request: Request):
         raise HTTPException(status_code=502, detail=f"PM Agent unreachable: {e}")
 
 
+@app.put("/api/skills/{skill_id}")
+async def api_update_skill(skill_id: int, request: Request):
+    """Прокси редактирования скилла. Разрешено только автору скилла."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    payload = await request.json()
+    payload["user_id"] = user.get("user_id")
+
+    agent_url = SERVICES['agent_service']['url']
+    try:
+        resp = await app.state.http_client.put(
+            f"{agent_url}/api/skills/{skill_id}",
+            json=payload,
+            timeout=30.0,
+        )
+        return JSONResponse(status_code=resp.status_code, content=resp.json())
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"PM Agent unreachable: {e}")
+
+
 @app.delete("/api/skills/{skill_id}")
 async def api_delete_skill(skill_id: int, request: Request):
     """Удаление скилла. Проверка прав только на сервере (ADMIN_USERNAMES)."""

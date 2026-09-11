@@ -1147,6 +1147,33 @@ async def api_skill_prompt(skill_id: int):
     return {'skill_id': skill_id, 'prompt': prompt, 'skill': row}
 
 
+@app.put('/api/skills/{skill_id}')
+async def api_update_skill(skill_id: int, payload: dict):
+    user_id = int(payload.get('user_id') or 0)
+    theme = (payload.get('theme') or '').strip()
+    body = (payload.get('body') or '').strip()
+    tools = payload.get('tools') or []
+
+    if user_id <= 0:
+        raise HTTPException(status_code=400, detail='user_id required')
+    if not theme or not body:
+        raise HTTPException(status_code=400, detail='theme and body required')
+
+    row = await db.update_skill(
+        skill_id=skill_id,
+        user_id=user_id,
+        theme=theme,
+        body=body,
+        tools=tools,
+    )
+    if not row:
+        exists = await db.get_skill_by_id(skill_id)
+        if exists:
+            raise HTTPException(status_code=403, detail='Only skill author can edit it')
+        raise HTTPException(status_code=404, detail='Skill not found')
+    return {'ok': True, 'skill': row}
+
+
 @app.delete('/api/skills/{skill_id}')
 async def api_delete_skill(skill_id: int):
     deleted = await db.delete_skill(skill_id)

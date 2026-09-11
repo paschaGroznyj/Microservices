@@ -1567,6 +1567,36 @@ class AgentDB:
             )
             return dict(row) if row else None
 
+    async def update_skill(
+        self,
+        skill_id: int,
+        user_id: int,
+        theme: str,
+        body: str,
+        tools: list[str] | None = None,
+    ) -> dict | None:
+        tools = tools or []
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                UPDATE agent_skills
+                SET theme = $3,
+                    body = $4,
+                    tools = $5,
+                    updated_at = NOW()
+                WHERE id = $1
+                  AND published_by_user_id = $2
+                  AND is_deleted = FALSE
+                RETURNING id, theme, body, published_by_user_id, published_by_name, tools, model_used, likes_count, created_at
+                """,
+                skill_id,
+                user_id,
+                theme.strip(),
+                body.strip(),
+                tools,
+            )
+            return dict(row) if row else None
+
     async def delete_skill(self, skill_id: int) -> bool:
         # Soft-delete: помечаем is_deleted=TRUE (как chats.is_deleted),
         # физически строку не удаляем — лайки и история публикаций сохраняются.

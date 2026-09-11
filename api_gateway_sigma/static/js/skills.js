@@ -7,6 +7,7 @@
   const ICON_CHEVRON       = '<svg class="chevron" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m6 9 6 6 6-6"/></svg>';
   const ICON_COPY           = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M8 8h10v12H8z"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M6 16H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
   const ICON_TRASH          = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M3 6h18"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M10 11v6M14 11v6"/></svg>';
+  const ICON_EDIT           = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M12 20h9"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>';
 
   const SkillsPanel = {
     app: null,
@@ -64,14 +65,15 @@
         const liked = this._likedIds.has(s.id);
         const model = s.model_used ? `<span class="skill-badge skill-badge--model">${esc(s.model_used)}</span>` : '';
         const tools = (s.tools||[]).length
-          ? `<span class="skill-badge">${esc((s.tools||[]).join(', '))}</span>`
+          ? `<span class="skill-badge skill-badge--tools" title="${esc((s.tools||[]).join(', '))}">${esc((s.tools||[]).join(', '))}</span>`
           : '';
         const authorName = s.published_by_name || '';
+        const canEditOwn = Number(s.published_by_user_id || 0) === Number(this.app?.currentUser?.user_id || 0);
         const author = authorName
           ? `<div class="skill-author"><svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"/></svg><span>${esc(authorName)}</span></div>`
           : '';
         return `
-        <div class="skill-card" draggable="true" data-skill-id="${s.id}" data-skill-body="${esc(s.body)}" data-skill-theme="${esc(s.theme||'')}" data-skill-tools="${esc((s.tools||[]).join(', '))}">
+        <div class="skill-card" draggable="true" data-skill-id="${s.id}" data-skill-body="${esc(s.body)}" data-skill-body-raw="${encodeURIComponent(s.body||'')}" data-skill-theme="${esc(s.theme||'')}" data-skill-tools="${esc((s.tools||[]).join(', '))}" data-skill-tools-csv="${encodeURIComponent((s.tools||[]).join(', '))}">
           <div class="skill-card__head">
             <span class="skill-theme">${esc(s.theme)}</span>
             <div class="skill-head-actions">
@@ -82,6 +84,9 @@
               <button class="skill-icon-btn skill-icon-btn--copy" data-copy="${s.id}" title="Скопировать в чат" aria-label="Скопировать в чат">
                 ${ICON_COPY}
               </button>
+              ${canEditOwn ? `<button class="skill-icon-btn skill-icon-btn--edit" data-edit="${s.id}" title="Редактировать скилл" aria-label="Редактировать скилл">
+                ${ICON_EDIT}
+              </button>` : ''}
               ${this._isAdmin ? `<button class="skill-icon-btn skill-icon-btn--delete" data-delete="${s.id}" title="Удалить скилл" aria-label="Удалить скилл">
                 ${ICON_TRASH}
               </button>` : ''}
@@ -104,6 +109,7 @@
       }));
       list.querySelectorAll('[data-like]').forEach(b=>b.addEventListener('click',()=>this.like(Number(b.dataset.like))));
       list.querySelectorAll('[data-copy]').forEach(b=>b.addEventListener('click',()=>this.copyToChat(Number(b.dataset.copy))));
+      list.querySelectorAll('[data-edit]').forEach(b=>b.addEventListener('click',()=>this.openEditSkill(Number(b.dataset.edit))));
       list.querySelectorAll('[data-delete]').forEach(b=>b.addEventListener('click',()=>this.deleteSkill(Number(b.dataset.delete))));
       list.querySelectorAll('.skill-card').forEach(card=>{
         card.addEventListener('dragstart', (e)=>{
@@ -177,6 +183,100 @@ ${body}`;
       await this.app?.renderMessageInput?.();
       this._appendToInput(txt);
       this.app?.showToast?.('Скилл скопирован в чат');
+    },
+    async openEditSkill(skillId){
+      const card = document.querySelector(`.skill-card[data-skill-id="${skillId}"]`);
+      if (!card) return;
+
+      const initialTheme = card.dataset.skillTheme || '';
+      const initialBody = decodeURIComponent(card.dataset.skillBodyRaw || '');
+      const initialTools = decodeURIComponent(card.dataset.skillToolsCsv || '');
+
+      const result = await this._openEditModal({
+        theme: initialTheme,
+        body: initialBody,
+        tools: initialTools,
+      });
+      if (!result) return;
+
+      try {
+        const res = await fetch(`/api/skills/${skillId}`, {
+          method: 'PUT',
+          credentials: 'include',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify(result),
+        });
+        if (res.status === 403) {
+          this.app?.showToast?.('Редактировать можно только свои скиллы');
+          return;
+        }
+        if (res.status === 404) {
+          this.app?.showToast?.('Скилл не найден');
+          return;
+        }
+        if (!res.ok) {
+          this.app?.showToast?.('Не удалось обновить скилл');
+          return;
+        }
+        this.app?.showToast?.('Скилл обновлён');
+        await this.load();
+      } catch (e) {
+        this.app?.showToast?.('Ошибка обновления скилла');
+      }
+    },
+    _openEditModal(initial){
+      return new Promise((resolve) => {
+        const prev = document.getElementById('skill-edit-overlay');
+        if (prev) prev.remove();
+
+        const overlay = document.createElement('div');
+        overlay.className = 'skill-confirm-overlay';
+        overlay.id = 'skill-edit-overlay';
+        overlay.innerHTML = `
+          <div class="skill-confirm skill-edit" role="dialog" aria-modal="true" aria-labelledby="skill-edit-title">
+            <div class="skill-confirm__title" id="skill-edit-title">Редактирование скилла</div>
+            <div class="skill-edit__form">
+              <input id="skill-edit-theme" class="skill-edit__input" type="text" maxlength="200" placeholder="Тема" value="${esc(initial.theme || '')}">
+              <input id="skill-edit-tools" class="skill-edit__input" type="text" maxlength="1000" placeholder="Инструменты через запятую" value="${esc(initial.tools || '')}">
+              <textarea id="skill-edit-body" class="skill-edit__textarea" maxlength="10000" placeholder="Тело скилла в Markdown">${esc(initial.body || '')}</textarea>
+            </div>
+            <div class="skill-confirm__actions">
+              <button type="button" class="skill-confirm__btn skill-confirm__btn--cancel" data-act="cancel">Отмена</button>
+              <button type="button" class="skill-confirm__btn skill-confirm__btn--danger" data-act="ok">Сохранить</button>
+            </div>
+          </div>`;
+
+        const close = (val) => {
+          overlay.classList.add('closing');
+          document.removeEventListener('keydown', onKey);
+          setTimeout(() => { overlay.remove(); resolve(val); }, 160);
+        };
+        const onKey = (e) => {
+          if (e.key === 'Escape') close(null);
+        };
+
+        overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(null); });
+        overlay.addEventListener('click', (e) => {
+          const act = e.target.closest('[data-act]')?.dataset?.act;
+          if (act === 'cancel') return close(null);
+          if (act === 'ok') {
+            const theme = overlay.querySelector('#skill-edit-theme')?.value?.trim() || '';
+            const toolsCsv = overlay.querySelector('#skill-edit-tools')?.value || '';
+            const body = overlay.querySelector('#skill-edit-body')?.value?.trim() || '';
+            if (!theme || !body) {
+              this.app?.showToast?.('Тема и тело скилла обязательны');
+              return;
+            }
+            const tools = toolsCsv.split(',').map(x => x.trim()).filter(Boolean);
+            return close({ theme, body, tools });
+          }
+        });
+        document.addEventListener('keydown', onKey);
+
+        document.body.appendChild(overlay);
+        requestAnimationFrame(() => overlay.classList.add('active'));
+        overlay.querySelector('#skill-edit-theme')?.focus();
+      });
     },
     _confirmDelete(skillId){
       // Красивая модалка подтверждения (вместо window.confirm).

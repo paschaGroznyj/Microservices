@@ -405,3 +405,38 @@
   color: #fff;
 }
 .skill-confirm__btn--danger:hover { background: #c53f3f; }
+
+
+/* Редактирование скилла */
+.skill-icon-btn--edit:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.skill-edit { max-width: 560px; text-align: left; }
+.skill-edit__form { display: grid; gap: 10px; margin: 12px 0 16px; }
+.skill-edit__input,
+.skill-edit__textarea {
+  width: 100%;
+  border: 1px solid var(--border-color, var(--border));
+  background: var(--input-bg, var(--surface));
+  color: var(--text-primary);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: .88rem;
+  box-sizing: border-box;
+}
+.skill-edit__textarea { min-height: 180px; resize: vertical; line-height: 1.45; }
+
+/* Мобильный clamp для длинного текста инструментов */
+.skill-meta { min-width: 0; }
+.skill-badge--tools { max-width: 100%; }
+@media (max-width: 900px) {
+  .skill-meta { display: flex; width: 100%; min-width: 0; }
+  .skill-badge--model { flex: 0 0 auto; }
+  .skill-badge--tools {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: inline-block;
+    vertical-align: top;
+  }
+}

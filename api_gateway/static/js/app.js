@@ -2903,8 +2903,15 @@ class ChatApp {
         });
 
         field.addEventListener('keydown', (e) => {
+            const isMobileViewport = window.matchMedia && window.matchMedia('(max-width: 900px)').matches;
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
+                if (isMobileViewport && field.contentEditable === 'true') {
+                    document.execCommand('insertLineBreak');
+                    this._resetInputFormatting();
+                    onInput();
+                    return;
+                }
                 if (this._runState === "idle" && !sendBtn.disabled) this.sendMessage();
                 return;
             }
@@ -2916,6 +2923,7 @@ class ChatApp {
                 e.preventDefault();
                 document.execCommand('insertLineBreak');
                 this._resetInputFormatting();
+                onInput();
             }
         });
 

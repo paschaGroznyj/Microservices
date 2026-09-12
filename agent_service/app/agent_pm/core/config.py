@@ -65,6 +65,62 @@ OUROBOROS_API_PASSWORD = os.getenv("OUROBOROS_API_PASSWORD", "")
 OUROBOROS_WS = f"ws://ouroboros_web_app:8765/ws"
 OUROBOROS_RESPONSE_TIMEOUT = 120
 
+import json as _json
+import logging as _logging
+
+# ADMINS_INFO — JSON-массив объектов админов. КЛЮЧЕВОЕ поле: user_id (immutable id из auth).
+# Пример значения переменной окружения ADMINS_INFO (одной строкой, БЕЗ персональных данных):
+# ADMINS_INFO=[{"user_id": 1001, "name": "Admin One", "email": "admin1@example.com", "tg_id": 111111111, "tg_tag": "@admin_one", "catchPM_name": "admin-one", "description": "Platform administrator"}, {"user_id": 1002, "name": "Admin Two", "email": "admin2@example.com", "tg_id": 222222222, "tg_tag": "@admin_two", "catchPM_name": "admin-two", "description": "Product manager"}]
 ADMINS_INFO = os.getenv("ADMINS_INFO")
+
+
+def _parse_admins_info(raw):
+    """Парсит ADMINS_INFO (JSON) -> {user_id(int): admin_dict}. Устойчив к битому JSON."""
+    result = {}
+    if not raw:
+        return result
+    try:
+        data = _json.loads(raw)
+    except (ValueError, TypeError) as e:
+        _logging.getLogger(__name__).error("ADMINS_INFO: не удалось распарсить JSON: %s", e)
+        return result
+    if isinstance(data, dict):
+        data = [data]
+    if not isinstance(data, list):
+        _logging.getLogger(__name__).error("ADMINS_INFO: ожидался list/dict, получен %s", type(data).__name__)
+        return result
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        uid = item.get("user_id")
+        if uid is None:
+            continue
+        try:
+            uid = int(uid)
+        except (ValueError, TypeError):
+            continue
+        result[uid] = item
+    return result
+
+
+# Готовая карта админов по immutable user_id. Роль решается КОДОМ, не моделью.
+ADMINS_BY_USER_ID = _parse_admins_info(ADMINS_INFO)
+
+
+def resolve_role(user_id):
+    """Возвращает (role, admin_dict|None) строго по числовому user_id.
+
+    role: "admin" | "default_user". Никаких сопоставлений по имени/табельному/тегу —
+    только verified user_id, который приходит из auth. Так подмена
+    разделителя/ника не даёт эскалации.
+    """
+    try:
+        uid = int(user_id)
+    except (ValueError, TypeError):
+        return "default_user", None
+    admin = ADMINS_BY_USER_ID.get(uid)
+    if admin:
+        return "admin", admin
+    return "default_user", None
 AGENT_POOL_PASSWORD = os.getenv("AGENT_POOL_PASSWORD")
 TG_BOT_PUSH_URL = os.environ.get("TG_BOT_PUSH_URL")

@@ -627,6 +627,91 @@ STATEFUL_TOOLS = {
     "edit_workspace_file",
 }
 
+# ---------------------------------------------------------------------------
+# Фолбэк-парсер текстовых tool_call'ов (designer / Opus 4.8).
+#
+# Opus 4.8 через OpenAI-совместимый шлюз Cloud.ru на длинном/захламлённом
+# контексте иногда срывается из нативного function-calling и возвращает вызов
+# инструмента ТЕКСТОМ в content в антропиковском XML-формате:
+#     <function_calls><invoke name="tool"><parameter name="x">1</parameter>...
+# либо укороченно <invoke name="tool"> ... </invoke>.
+# Раннер такой content принимает за финал и отдаёт сырой XML в чат, а тулза
+# (например download_workspace_file / send_file_to_user) не исполняется.
+#
+# Здесь мы вытаскиваем такие инвоки из текста и превращаем в нормальные
+# tool_calls, чтобы дальше отработал штатный _invoke_tool. Значения параметров
+# по возможности приводим к python-типам (int/float/bool/json), иначе строка.
+# ---------------------------------------------------------------------------
+_INVOKE_RE = re.compile(
+    r'<invoke\s+name=["\']?(?P<name>[\w.\-]+)["\']?\s*>(?P<body>.*?)</invoke>',
+    re.DOTALL | re.IGNORECASE,
+)
+_PARAM_RE = re.compile(
+    r'<parameter\s+name=["\']?(?P<pname>[\w.\-]+)["\']?\s*>(?P<pval>.*?)</parameter>',
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _coerce_param_value(raw: str):
+    v = raw.strip()
+    low = v.lower()
+    if low == "true":
+        return True
+    if low == "false":
+        return False
+    if low in ("null", "none"):
+        return None
+    # число
+    try:
+        if re.fullmatch(r"-?\d+", v):
+            return int(v)
+        if re.fullmatch(r"-?\d+\.\d+", v):
+            return float(v)
+    except (ValueError, TypeError):
+        pass
+    # json (list/dict)
+    if v[:1] in ("[", "{"):
+        try:
+            return json.loads(v)
+        except (ValueError, TypeError):
+            pass
+    return v
+
+
+def parse_text_tool_calls(content) -> list[dict]:
+    """Достаёт tool_calls из текстового content (антропиковский XML-фолбэк).
+
+    Возвращает список в формате langchain tool_calls:
+        [{"name": str, "args": dict, "id": str, "type": "tool_call"}]
+    Пустой список — если инвоков в тексте нет.
+    """
+    if not content:
+        return []
+    if isinstance(content, list):
+        # мультимодальный content -> склеиваем текстовые части
+        text = "".join(
+            (c.get("text", "") if isinstance(c, dict) else str(c)) for c in content
+        )
+    else:
+        text = str(content)
+    if "<invoke" not in text:
+        return []
+    calls = []
+    for i, m in enumerate(_INVOKE_RE.finditer(text)):
+        name = m.group("name").strip()
+        body = m.group("body") or ""
+        args = {}
+        for pm in _PARAM_RE.finditer(body):
+            args[pm.group("pname").strip()] = _coerce_param_value(pm.group("pval"))
+        calls.append({
+            "name": name,
+            "args": args,
+            "id": f"txtfallback_{i}_{abs(hash(name + body)) % 10**8}",
+            "type": "tool_call",
+        })
+    return calls
+
+
 def _summarize_tool_call(tc: dict, result: Any) -> str | None:
     name = tc["name"]
     if name not in STATEFUL_TOOLS:
@@ -1957,6 +2042,26 @@ class KnowledgeAgent:
                         logging.error(f"[iteration={iteration}] Все попытки llm провалены, прерываю цикл")
                         final_response = "Ошибка внутри цикла агента. Но агент запомнил шаги, попробуйте вернуться к запросу"
                         break
+
+                    # ФОЛБЭК текстовых tool_call'ов (designer / Opus 4.8).
+                    # Если модель сорвалась из нативного function-calling и выплевнула
+                    # <invoke ...> ТЕКСТОМ в content (вместо structured tool_calls) —
+                    # распарсим его и подменим настоящими tool_calls, чтобы XML не
+                    # ушёл в чат сырым, а инструмент реально исполнился.
+                    # Срабатывает ТОЛЬКО когда native tool_calls ПУСТ (чтобы не дублировать).
+                    if not getattr(response, "tool_calls", None):
+                        _txt_calls = parse_text_tool_calls(getattr(response, "content", None))
+                        if _txt_calls:
+                            logging.warning(
+                                f"[iteration={iteration}] [tool-fallback] модель вернула "
+                                f"{len(_txt_calls)} tool_call(ов) ТЕКСТОМ в content "
+                                f"(model={agent_model}); подменяю на structured tool_calls: "
+                                f"{[c['name'] for c in _txt_calls]}"
+                            )
+                            response.tool_calls = _txt_calls
+                            # Гасим текст-суррогат: это был не финал, а сорванный
+                            # вызов инструмента — в чат его показывать нельзя.
+                            response.content = ""
 
                     _has_tool_calls = bool(getattr(response, "tool_calls", None))
                     _had_text = bool(getattr(response, "content", None))

@@ -478,7 +478,7 @@ def make_sandbox_execute_tool(agent):
         - apt-get install — установка пакетов в рамках сессии
 
         Если планируешь работать с файлами в рамках сессии, нужно создавать workspace
-        через create_workspace (файлы внутри области будут жить только 3600 сек!)
+        через create_workspace (файлы внутри области будут жить 10 часов)
 
         Если ты иницилизируешь репозиторий .git внутри /tmp/exec/workspaces/<workspace_name>, он не будет удален по таймеру
 
@@ -679,8 +679,19 @@ def make_sandbox_execute_tool(agent):
         - Когда каждый шаг — отдельный вызов execute_python_code,
           но файлы из шага 1 нужны в шаге 3
 
-        Workspace автоматически удаляется через 1 час неактивности.
-        Явное удаление — через delete_workspace.
+        ВАЖНО (работа с файлами/презами/медиа): если пользователь просит
+        собрать/прислать файл, презентацию, документ, видео или любой
+        артефакт, который надо ему отдать — СНАЧАЛА создай workspace через
+        этот тул, собери артефакт в нём (upload_to_workspace /
+        edit_workspace_file / execute_python_code с этим workspace_id), положи
+        результат в output/ и отправь через send_file_to_user по пути
+        /tmp/exec/workspaces/{workspace_id}/output/<filename>. Без workspace отдать
+        тяжёлые/составные файлы надёжно не получится.
+
+        ВСЕГДА создавай workspace и передавай его id в связке тяжелых операций генерации execute_python_code
+
+        Workspace автоматически удаляется через 10 часов неактивности, поэтому
+        в рамках диалога удалять область не обязательно.
 
         Возвращает: workspace_id, created_at, path
 
@@ -976,6 +987,10 @@ def make_sandbox_execute_tool(agent):
         dest: str = "",
     ) -> dict:
         """
+        Когда надо ОТДАТЬ пользователю презу/док/видео/архив: сначала
+        create_workspace, сюда залей исходники/ассеты, собери артефакт,
+        положи его в output/ и отправь через send_file_to_user.
+
         Заливает артефакты в удалённый workspace фабрики, где они станут
         доступны для execute_python_code / execute_shell_commands с тем же
         workspace_id (обратная операция к download_workspace_file).

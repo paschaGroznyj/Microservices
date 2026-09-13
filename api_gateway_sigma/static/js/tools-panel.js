@@ -40,14 +40,6 @@ const ICONS = {
           stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
   </svg>`,
 
-  parallelism: `<svg viewBox="0 0 24 24" fill="none" width="17" height="17">
-    <path d="M5 6a2 2 0 1 0 4 0a2 2 0 0 0-4 0" stroke="currentColor" stroke-width="2"/>
-    <path d="M5 18a2 2 0 1 0 4 0a2 2 0 0 0-4 0" stroke="currentColor" stroke-width="2"/>
-    <path d="M15 12a2 2 0 1 0 4 0a2 2 0 0 0-4 0" stroke="currentColor" stroke-width="2"/>
-    <path d="M7 8v8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-    <path d="M7 8a4 4 0 0 0 4 4h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-  </svg>`,
-
   sessions: `<svg viewBox="0 0 24 24" fill="none" width="17" height="17">
     <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
           stroke="currentColor" stroke-width="2"
@@ -78,12 +70,6 @@ const TOOL_CATEGORIES = [
     adminOnly:   false
   },
   {
-    id:          "parallelism",
-    label:       "Параллелизм ",
-    description: "Разбиение сложных задач",
-    adminOnly:   false
-  },
-  {
     id:          "content",
     label:       "Контент и файлы",
     description: "Генерация PPTX, DOCX, Excel, PNG",
@@ -91,8 +77,8 @@ const TOOL_CATEGORIES = [
   },
   {
     id:          "sessions",
-    label:       "Сессии и память",
-    description: "Управление историей диалогов",
+    label:       "Бортовой журнал агента",
+    description: "Бортовой журнал агента: долгосрочная память и точки сессий",
     adminOnly:   false
   },
   {

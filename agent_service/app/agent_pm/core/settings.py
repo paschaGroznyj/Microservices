@@ -28,15 +28,6 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
         "html_design_skill",
         "generate_image",
     ],
-    "parallelism": [
-        "create_workspace",
-        "list_workspace_files",
-        "download_workspace_file",
-        "delete_workspace",
-        "cleanup_workspaces",
-        "submit_task",
-        "check_task_status",
-    ],
     "sessions": [
         "session_point",
         "work_with_agent_journal",
@@ -57,9 +48,6 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
         "work_with_email",
         "connect_mcp_git",
         "execute_shell_commands",
-        "upload_to_workspace",
-        "read_workspace_file",
-        "edit_workspace_file",
     ],
 }
 
@@ -72,4 +60,19 @@ ADMIN_ONLY_CATEGORIES = {"admin"}
 UNIVERSAL_TOOLS: set[str] = {
     "analyze_image",
     "manage_skills",
+    # --- Работа с файлами/workspace доступна ВСЕГДА ---
+    # Без них агент не может собрать и отдать пользователю файл/презу/медиа
+    # без прожатой кнопки параллелизма. execute_shell_commands ОСТАЁТСЯ только в admin.
+    "create_workspace",
+    "list_workspace_files",
+    "download_workspace_file",
+    "upload_to_workspace",
+    "read_workspace_file",
+    "edit_workspace_file",
+    "send_file_to_user",
+    # --- Управление workspace + async-запуск (бывший parallelism) ---
+    "delete_workspace",
+    "cleanup_workspaces",
+    "submit_task",
+    "check_task_status",
 }

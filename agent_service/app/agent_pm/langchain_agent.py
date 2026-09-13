@@ -23,7 +23,7 @@ from .core.botocore_client import OBSWorker
 from .core.config import (
     ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH,
     METADATA_FILE, PORT_GATEWAY_PORT, PORT_GATEWAY_SIGMA_PORT, ADMINS_INFO,
-    PORT_PARSERS_SERVICE
+    PORT_PARSERS_SERVICE, get_role
 )
 from .core.settings import TOOLS_SETTINGS, UNIVERSAL_TOOLS
 from .prompts.summary_prompt import SUMMARIZE_CUT_PROMPT
@@ -807,7 +807,7 @@ Process Mining остаётся приоритетной предметной о
 Текущая дата и время: {{datetime}}
 
 ЗАКОН:
-Информация об администраторах: {ADMINS_INFO}
+{{role_block}}
 Инструменты для администратора: все инструменты при работе с БД
 
 ПРАВИЛА:
@@ -1738,26 +1738,6 @@ class KnowledgeAgent:
         self.current_message_id = None  # message_id генерится позже, в app.py; необязателен
         cleaned_user_input = user_input
         try:
-            # if source == "telegram":
-            #     if '📎[FILE]' in cleaned_user_input:
-            #         # Ищем маркер файла и вырезаем всё внутри ```...```
-            #         # \1 сохраняет первую группу (маркер файла с его названием)
-            #         cleaned_user_input = re.sub(
-            #             r"(📎\[FILE\] \[Прикрепленный файл: (.*?)\])\nСодержимое файла:\n```\n.*?\n```",
-            #             r"\1\n[Содержимое файла удалено для экономии памяти. Если для выполнения задачи требуются детали из этого файла, попроси пользователя загрузить его повторно.]",
-            #             cleaned_user_input,
-            #             flags=re.DOTALL
-            #         )
-            #         logging.info(cleaned_user_input)
-
-            #     await database.add_message(
-            #                 user_id=user_id,        # Передаем integer ID юзера
-            #                 message=cleaned_user_input[:20000],
-            #                 chat_id=chat_id,
-            #                 is_from_bot=False,
-            #                 action=None
-            #             )
-
             # ── Настройки контекста ────────────────────────────────────────
             CONTEXT_PRESETS = {
                 "small":  {"limit_mem": 8,  "max_tokens": 6000},
@@ -1821,7 +1801,10 @@ class KnowledgeAgent:
         
 
             current_datetime = datetime.now().strftime("%d.%m.%Y %H:%M, %A")
-            system_content = SYSTEM_PROMPT.format(datetime=current_datetime)
+
+            # РОЛЬ РЕШАЕТСЯ КОДОМ по verified user_id (не моделью, не по тексту/табельному/тегу).
+            role_block = get_role(user_id)
+            system_content = SYSTEM_PROMPT.format(datetime=current_datetime, role_block=role_block)
 
             # Собираем историю из памяти
             history = await self._build_history(chat_id, limit=30)
@@ -2131,16 +2114,6 @@ class KnowledgeAgent:
                     )))
                     final_response, tool_trace = await agent_event_loop(messages=messages)
 
-
-            # Ответ бота
-            # if source == "telegram":
-            #     await database.add_message(
-            #         user_id=user_id,        # Передаем integer ID юзера
-            #         message=final_response,
-            #         chat_id=chat_id,
-            #         is_from_bot=True,
-            #         action=used_tools[0] if used_tools else None
-            #     )
             tokens_usage = {
                     "input_tokens": total_input_tokens,
                     "output_tokens": total_output_tokens,

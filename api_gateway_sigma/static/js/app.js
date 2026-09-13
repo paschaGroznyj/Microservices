@@ -10,7 +10,7 @@ class ChatApp {
         this._runState = 'idle';      // idle | running | stopping
         this._activeRequestId = null;
         this._statusPollTimer = null;
-        this.INPUT_MAX_CHARS = 5000;  // жёсткий предел длины поля ввода
+        this.INPUT_MAX_CHARS = 10000;  // жёсткий предел длины поля ввода
     }
 
     /* Обрезает содержимое поля ввода до INPUT_MAX_CHARS символов.
@@ -72,6 +72,7 @@ class ChatApp {
         this.initChatsSectionToggle();
         this.initVisibilityReconnect();
         this.initTextPreview();
+        window.SkillsPanel?.init(this);
         await this.renderMessageInput();
     }
 
@@ -122,6 +123,15 @@ class ChatApp {
             n.classList.toggle('active', n.dataset.tab === tab);
         });
 
+        // Заголовок шапки по активной вкладке
+        const titleEl = document.getElementById("main-title");
+        if (titleEl) {
+            if (tab === 'skills') titleEl.textContent = 'Магазин скиллов';
+            else if (tab === 'agent') titleEl.textContent = 'Agent Process Mining';
+            else if (tab === 'graph') titleEl.textContent = 'Граф';
+            else titleEl.textContent = 'CatchPM';
+        }
+
         // Таб-специфичная логика
         if (tab === 'agent') {
             this.renderMessageInput();
@@ -129,6 +139,9 @@ class ChatApp {
         if (tab === 'graph') {
             console.log('INIT GRAPH')
             knowledgeGraph.init();
+        }
+        if (tab === 'skills') {
+            window.SkillsPanel?.open(this);
         }
     }
 
@@ -1370,7 +1383,7 @@ class ChatApp {
                     message:        text,
                     message_id:     msgId,
                     type_agent:     'pm',
-                    agent_model:    window.ModelPicker?.getModel() ?? 'universal',
+                    agent_model:    window.ModelPicker?.getModel() ?? 'coder',
                     selected_tools: window.ToolsPanel?.getSelectedCategories() ?? [],
                     context_size:   window.ToolsPanel?.getContextSize()   ?? 'medium',
                     has_files:      false,
@@ -2737,7 +2750,7 @@ class ChatApp {
             const pasted = cd ? cd.getData('text') : '';
             if (!pasted) return;
 
-            // ── Учитываем лимит 5000 символов ──────────────────────────
+            // ── Учитываем лимит 10000 символов ──────────────────────────
             const remaining = this.INPUT_MAX_CHARS - this.getInputText().length;
             if (remaining <= 0) {
                 e.preventDefault();
@@ -2761,8 +2774,15 @@ class ChatApp {
         });
 
         field.addEventListener('keydown', (e) => {
+            const isMobileViewport = window.matchMedia && window.matchMedia('(max-width: 900px)').matches;
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
+                if (isMobileViewport && field.contentEditable === 'true') {
+                    document.execCommand('insertLineBreak');
+                    this._resetInputFormatting();
+                    onInput();
+                    return;
+                }
                 if (this._runState === "idle" && !sendBtn.disabled) this.sendMessage();
                 return;
             }
@@ -2774,6 +2794,7 @@ class ChatApp {
                 e.preventDefault();
                 document.execCommand('insertLineBreak');
                 this._resetInputFormatting();
+                onInput();
             }
         });
 

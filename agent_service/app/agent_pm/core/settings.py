@@ -41,6 +41,9 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
         "session_point",
         "work_with_agent_journal",
     ],
+    "skills": [
+        "manage_skills",
+    ],
     "admin": [
         "get_db_schema",
         "execute_sql_query",
@@ -68,4 +71,5 @@ ADMIN_ONLY_CATEGORIES = {"admin"}
 # изображений, которые не привязаны к конкретному режиму работы.
 UNIVERSAL_TOOLS: set[str] = {
     "analyze_image",
+    "manage_skills",
 }

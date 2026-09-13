@@ -368,7 +368,16 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     # message = f"[CatchPM, ТабельНомер: 23423423, Пользователь: Иванов Иванон Иваныч, user_id=-1234]\n" + text
     message = f"[CatchPM, ТабельНомер: {tb_name}, Пользователь: {username}, chat_id: {chat_id}, user_id: {user_id}]\n" + text
 
-    
+    selected_skills = await db.get_selected_skills_for_user(int(user_id))
+    if selected_skills:
+        selected_chunks = []
+        for idx, sk in enumerate(selected_skills, start=1):
+            tools = ", ".join(sk.get("tools") or []) or "не указаны"
+            selected_chunks.append(
+                f"#{idx} [id={sk.get('id')}] {sk.get('theme')}\nИнструменты: {tools}\n{sk.get('body')}"
+            )
+        message += "\n\n[SELECTED_SKILLS_CONTEXT] Ниже скиллы, выбранные пользователем (до 5). Учитывай их как приоритетные инструкции, если они релевантны запросу:\n" + "\n\n".join(selected_chunks)
+
     images: list[dict] = []
     if has_files and message_id:
         file_text, images = await wait_for_files(message_id)
@@ -1103,6 +1112,108 @@ async def _ping_provider(model_id: str, model_name: str, factory) -> dict:
         return {"id": model_id, "name": model_name, "up": False, "reason": str(e)[:120]}
 
 
+
+
+@app.get('/api/skills')
+async def api_list_skills(query: str = '', sort_by: str = 'new', tool: str | None = None, limit: int = 100):
+    skills = await db.list_skills(query=query, sort_by=sort_by, tool=tool, limit=limit)
+    return {'skills': skills}
+
+
+@app.post('/api/skills')
+async def api_create_skill(payload: dict):
+    if not (payload.get('theme') or '').strip() or not (payload.get('body') or '').strip():
+        raise HTTPException(status_code=400, detail='theme and body required')
+    row = await db.create_skill(
+        theme=payload.get('theme'),
+        body=payload.get('body'),
+        published_by_user_id=payload.get('published_by_user_id'),
+        published_by_name=payload.get('published_by_name'),
+        tools=payload.get('tools') or [],
+    )
+    return {'skill': row}
+
+
+@app.get('/api/skills/selected')
+async def api_get_selected_skills(user_id: int):
+    if int(user_id or 0) <= 0:
+        raise HTTPException(status_code=400, detail='user_id required')
+    selected_ids = await db.get_selected_skill_ids(int(user_id))
+    return {'selected_ids': selected_ids, 'count': len(selected_ids), 'max_selected': 5}
+
+
+@app.post('/api/skills/{skill_id}/select')
+async def api_toggle_selected_skill(skill_id: int, payload: dict):
+    user_id = int(payload.get('user_id') or 0)
+    if user_id <= 0:
+        raise HTTPException(status_code=400, detail='user_id required')
+
+    result = await db.toggle_skill_selected(skill_id=skill_id, user_id=user_id, max_selected=5)
+    if not result.get('ok'):
+        if result.get('reason') == 'not_found':
+            raise HTTPException(status_code=404, detail='Skill not found')
+        if result.get('reason') == 'limit':
+            raise HTTPException(status_code=400, detail='Max 5 selected skills per user')
+        raise HTTPException(status_code=400, detail='Cannot toggle selected skill')
+    return result
+
+
+@app.post('/api/skills/{skill_id}/like')
+async def api_like_skill(skill_id: int, payload: dict):
+    user_id = int(payload.get('user_id') or 0)
+    if user_id <= 0:
+        raise HTTPException(status_code=400, detail='user_id required')
+    result = await db.toggle_skill_like(skill_id=skill_id, user_id=user_id)
+    return result
+
+
+@app.get('/api/skills/{skill_id}/prompt')
+async def api_skill_prompt(skill_id: int):
+    row = await db.get_skill_by_id(skill_id)
+    if not row:
+        raise HTTPException(status_code=404, detail='Skill not found')
+    prompt = (
+        f"Тема скилла: {row['theme']}\n"
+        f"Рекомендуемые инструменты: {', '.join(row.get('tools') or []) or 'не указаны'}\n\n"
+        f"Тело скилла:\n{row['body']}"
+    )
+    return {'skill_id': skill_id, 'prompt': prompt, 'skill': row}
+
+
+@app.put('/api/skills/{skill_id}')
+async def api_update_skill(skill_id: int, payload: dict):
+    user_id = int(payload.get('user_id') or 0)
+    theme = (payload.get('theme') or '').strip()
+    body = (payload.get('body') or '').strip()
+    tools = payload.get('tools') or []
+
+    if user_id <= 0:
+        raise HTTPException(status_code=400, detail='user_id required')
+    if not theme or not body:
+        raise HTTPException(status_code=400, detail='theme and body required')
+
+    row = await db.update_skill(
+        skill_id=skill_id,
+        user_id=user_id,
+        theme=theme,
+        body=body,
+        tools=tools,
+    )
+    if not row:
+        exists = await db.get_skill_by_id(skill_id)
+        if exists:
+            raise HTTPException(status_code=403, detail='Only skill author can edit it')
+        raise HTTPException(status_code=404, detail='Skill not found')
+    return {'ok': True, 'skill': row}
+
+
+@app.delete('/api/skills/{skill_id}')
+async def api_delete_skill(skill_id: int):
+    deleted = await db.delete_skill(skill_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail='Skill not found')
+    return {'ok': True, 'skill_id': skill_id}
+
 @app.get("/internal/providers_status")
 async def internal_providers_status():
     """Доступность провайдеров под каждой моделью тоггла.
@@ -1128,7 +1239,9 @@ async def internal_providers_status():
         _providers_cache["ts"] = time.time()
         return {"providers": providers, "cached_at": _providers_cache["ts"]}
 
+
 class SearchIntent(BaseModel):
+
     is_search: bool = Field(
         description="True если пользователь хочет найти статьи, False если просто общается"
     )

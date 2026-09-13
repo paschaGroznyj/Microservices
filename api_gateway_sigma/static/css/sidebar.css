@@ -816,3 +816,28 @@
     padding-right: 32px;
   }
 }
+
+/* Drop-цель при перетаскивании карточки скилла на чат */
+.chat-item--drop {
+    outline: 2px dashed var(--accent, #6366f1);
+    outline-offset: -2px;
+    background: rgba(99, 102, 241, 0.10);
+}
+
+
+.nav-badge {
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: #1f6b45;
+  background: color-mix(in srgb, #8fe6b6 60%, var(--surface));
+  border: 1px solid color-mix(in srgb, #67cc98 60%, var(--border));
+}
+.nav-item:not(.active) .nav-badge { opacity: .9; }

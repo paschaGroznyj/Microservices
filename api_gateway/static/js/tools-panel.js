@@ -546,7 +546,7 @@ const MP_PROVIDERS_TTL_MS   = 25000;
 
 class ModelPickerClass {
   constructor() {
-    this._selected      = localStorage.getItem(MP_STORAGE_KEY) ?? 'universal';
+    this._selected      = localStorage.getItem(MP_STORAGE_KEY) ?? 'coder';
     this._panel         = null;
     this._storedTrigger = null;
     // Кеш доступности провайдеров: {providers: {id: {up, name, reason}}, ts}
@@ -662,7 +662,7 @@ class ModelPickerClass {
   }
 
   _syncBtn(btn) {
-    const m = MP_MODELS.find(x => x.id === this._selected) ?? MP_MODELS[2];
+    const m = MP_MODELS.find(x => x.id === this._selected) ?? MP_MODELS[0];
     // Только иконка — круглая кнопка как attach-btn, без текста
     btn.innerHTML = m.svgSm;
     btn.dataset.modelId = m.id;

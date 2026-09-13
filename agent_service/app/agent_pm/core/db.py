@@ -1477,6 +1477,269 @@ class AgentDB:
         )
         return dict(row) if row else None
 
+
+    async def create_skill(
+        self,
+        theme: str,
+        body: str,
+        published_by_user_id: int | None,
+        published_by_name: str | None,
+        tools: list[str] | None = None,
+        model_used: str | None = None,
+    ) -> dict:
+        tools = tools or []
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO agent_skills (theme, body, published_by_user_id, published_by_name, tools, model_used)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                RETURNING id, theme, body, published_by_user_id, published_by_name, tools, model_used, likes_count, created_at
+                """,
+                theme.strip(), body.strip(), published_by_user_id, published_by_name, tools, model_used,
+            )
+            return dict(row)
+
+    async def list_skills(
+        self,
+        query: str = "",
+        sort_by: str = "new",
+        tool: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        limit = max(1, min(int(limit), 200))
+        order_sql = "likes_count DESC, created_at DESC" if sort_by == "popular" else "created_at DESC"
+        where = ["agent_skills.is_deleted = FALSE"]
+        args = []
+        idx = 1
+
+        q = (query or "").strip()
+        if q:
+            # Полнотекстовый поиск по теме + телу скилла;
+            # plainto_tsquery безопасен к произвольному вводу (не кидает на спецсимволах).
+            # ILIKE-ветка — фолбэк на подстроки/частичные слова.
+            where.append(
+                f"(to_tsvector('russian', coalesce(theme,'') || ' ' || coalesce(body,'')) "
+                f"@@ plainto_tsquery('russian', ${idx}) "
+                f"OR theme ILIKE ${idx+1} OR body ILIKE ${idx+1})"
+            )
+            args.append(q)
+            args.append(f"%{q}%")
+            idx += 2
+
+        if tool:
+            where.append(f"${idx} = ANY(tools)")
+            args.append(tool.strip())
+            idx += 1
+
+        args.append(limit)
+        # Префиксуем колонки таблицей: JOIN добавляет users, во избежание неоднозначности.
+        where_j = [w.replace('theme', 'agent_skills.theme').replace('body', 'agent_skills.body').replace('tools', 'agent_skills.tools') for w in where]
+        sql = f"""
+            SELECT agent_skills.id, agent_skills.theme, agent_skills.body,
+                   agent_skills.published_by_user_id,
+                   COALESCE(agent_skills.published_by_name, u.username) AS published_by_name,
+                   agent_skills.tools, agent_skills.model_used,
+                   agent_skills.likes_count, agent_skills.created_at
+            FROM agent_skills
+            LEFT JOIN users u ON u.id = agent_skills.published_by_user_id
+            WHERE {' AND '.join(where_j)}
+            ORDER BY {order_sql.replace('created_at', 'agent_skills.created_at').replace('likes_count', 'agent_skills.likes_count')}
+            LIMIT ${idx}
+        """
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(sql, *args)
+            return [dict(r) for r in rows]
+
+    async def get_skill_by_id(self, skill_id: int) -> dict | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT agent_skills.id, agent_skills.theme, agent_skills.body,
+                       agent_skills.published_by_user_id,
+                       COALESCE(agent_skills.published_by_name, u.username) AS published_by_name,
+                       agent_skills.tools, agent_skills.model_used,
+                       agent_skills.likes_count, agent_skills.created_at
+                FROM agent_skills
+                LEFT JOIN users u ON u.id = agent_skills.published_by_user_id
+                WHERE agent_skills.id = $1 AND agent_skills.is_deleted = FALSE
+                """,
+                skill_id,
+            )
+            return dict(row) if row else None
+
+    async def update_skill(
+        self,
+        skill_id: int,
+        user_id: int,
+        theme: str,
+        body: str,
+        tools: list[str] | None = None,
+    ) -> dict | None:
+        tools = tools or []
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                UPDATE agent_skills
+                SET theme = $3,
+                    body = $4,
+                    tools = $5,
+                    updated_at = NOW()
+                WHERE id = $1
+                  AND published_by_user_id = $2
+                  AND is_deleted = FALSE
+                RETURNING id, theme, body, published_by_user_id, published_by_name, tools, model_used, likes_count, created_at
+                """,
+                skill_id,
+                user_id,
+                theme.strip(),
+                body.strip(),
+                tools,
+            )
+            return dict(row) if row else None
+
+    async def delete_skill(self, skill_id: int) -> bool:
+        # Soft-delete: помечаем is_deleted=TRUE (как chats.is_deleted),
+        # физически строку не удаляем — лайки и история публикаций сохраняются.
+        # Дополнительно снимаем выбор скилла у всех пользователей,
+        # чтобы удалённый скилл не учитывался в selected-контексте.
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    "UPDATE agent_skills SET is_deleted = TRUE, updated_at = NOW() "
+                    "WHERE id = $1 AND is_deleted = FALSE RETURNING id",
+                    skill_id,
+                )
+                if not row:
+                    return False
+                await conn.execute(
+                    "DELETE FROM agent_skill_selected WHERE skill_id = $1",
+                    skill_id,
+                )
+                return True
+
+    async def get_selected_skill_ids(self, user_id: int) -> list[int]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT ss.skill_id
+                FROM agent_skill_selected ss
+                JOIN agent_skills s ON s.id = ss.skill_id
+                WHERE ss.user_id = $1
+                  AND s.is_deleted = FALSE
+                ORDER BY ss.created_at ASC
+                """,
+                user_id,
+            )
+            return [int(r["skill_id"]) for r in rows]
+
+    async def get_selected_skills_for_user(self, user_id: int) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT s.id, s.theme, s.body, s.tools, ss.created_at
+                FROM agent_skill_selected ss
+                JOIN agent_skills s ON s.id = ss.skill_id
+                WHERE ss.user_id = $1
+                  AND s.is_deleted = FALSE
+                ORDER BY ss.created_at ASC
+                LIMIT 5
+                """,
+                user_id,
+            )
+            return [dict(r) for r in rows]
+
+    async def toggle_skill_selected(self, skill_id: int, user_id: int, max_selected: int = 5) -> dict:
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                skill_exists = await conn.fetchval(
+                    "SELECT 1 FROM agent_skills WHERE id = $1 AND is_deleted = FALSE",
+                    skill_id,
+                )
+                if not skill_exists:
+                    return {"ok": False, "reason": "not_found"}
+
+                exists = await conn.fetchval(
+                    "SELECT 1 FROM agent_skill_selected WHERE skill_id = $1 AND user_id = $2",
+                    skill_id, user_id,
+                )
+
+                if exists:
+                    await conn.execute(
+                        "DELETE FROM agent_skill_selected WHERE skill_id = $1 AND user_id = $2",
+                        skill_id, user_id,
+                    )
+                    selected = False
+                else:
+                    count_selected = await conn.fetchval(
+                        """
+                        SELECT COUNT(*)::int
+                        FROM agent_skill_selected ss
+                        JOIN agent_skills s ON s.id = ss.skill_id
+                        WHERE ss.user_id = $1
+                          AND s.is_deleted = FALSE
+                        """,
+                        user_id,
+                    )
+                    if int(count_selected or 0) >= int(max_selected):
+                        selected_ids = await self.get_selected_skill_ids(user_id)
+                        return {
+                            "ok": False,
+                            "reason": "limit",
+                            "max_selected": max_selected,
+                            "selected_ids": selected_ids,
+                            "count": int(count_selected or 0),
+                        }
+                    await conn.execute(
+                        """
+                        INSERT INTO agent_skill_selected (skill_id, user_id)
+                        VALUES ($1, $2)
+                        ON CONFLICT (skill_id, user_id)
+                        DO UPDATE SET updated_at = NOW()
+                        """,
+                        skill_id, user_id,
+                    )
+                    selected = True
+
+                selected_ids = await self.get_selected_skill_ids(user_id)
+                return {
+                    "ok": True,
+                    "skill_id": skill_id,
+                    "selected": selected,
+                    "selected_ids": selected_ids,
+                    "count": len(selected_ids),
+                    "max_selected": max_selected,
+                }
+
+    async def toggle_skill_like(self, skill_id: int, user_id: int) -> dict:
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                exists = await conn.fetchval(
+                    "SELECT 1 FROM agent_skill_likes WHERE skill_id = $1 AND user_id = $2",
+                    skill_id, user_id,
+                )
+                if exists:
+                    await conn.execute(
+                        "DELETE FROM agent_skill_likes WHERE skill_id = $1 AND user_id = $2",
+                        skill_id, user_id,
+                    )
+                    await conn.execute(
+                        "UPDATE agent_skills SET likes_count = GREATEST(0, likes_count - 1), updated_at = NOW() WHERE id = $1",
+                        skill_id,
+                    )
+                    liked = False
+                else:
+                    await conn.execute(
+                        "INSERT INTO agent_skill_likes (skill_id, user_id) VALUES ($1, $2)",
+                        skill_id, user_id,
+                    )
+                    await conn.execute(
+                        "UPDATE agent_skills SET likes_count = likes_count + 1, updated_at = NOW() WHERE id = $1",
+                        skill_id,
+                    )
+                    liked = True
+
+                likes_count = await conn.fetchval("SELECT likes_count FROM agent_skills WHERE id = $1", skill_id)
+                return {"skill_id": skill_id, "liked": liked, "likes_count": likes_count}
     async def upsert_rolling_summary(self, chat_id: int, summary_text: str, covered_up_to_id: int) -> None:
         await self.pool.execute("""
             INSERT INTO chat_rolling_summary (chat_id, summary_text, covered_up_to_id, updated_at)

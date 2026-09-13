@@ -1376,7 +1376,6 @@ class KnowledgeAgent:
             2. Строго следуй полученным из него инструкциям и алгоритму.
             """
             return SCIENTIFIC_RESEARCH_MODULE
-
         @tool
         async def no_tools_selected() -> str:
             """
@@ -1446,6 +1445,9 @@ class KnowledgeAgent:
         # 17. Чтение и точечная правка файлов внутри Фабрики
         from .tools.sandbox.tool_workspace_codeedit import make_workspace_codeedit_tools
         codeedit_tools = make_workspace_codeedit_tools(agent)
+        # 18. Библиотека скиллов (вынесена в tools)
+        from .tools.skills.tool_manage_skills import make_manage_skills_tool
+        manage_skills = make_manage_skills_tool(agent, user_id)
 
 
         # Тул анализа изображений (JPEG/PNG) через claude-opus-4.8.
@@ -1495,6 +1497,7 @@ class KnowledgeAgent:
 
         all_tools = (
             base_tools
+            + [manage_skills]
             + _normalize(fs_tools)
             + [edit_sandbox_file, write_sandbox_file]
             + _normalize(execute_python_code)

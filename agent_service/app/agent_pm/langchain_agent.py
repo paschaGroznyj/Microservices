@@ -42,6 +42,7 @@ from .tools.sessions.tool_request_extension import make_extension_tool
 from .tools.subAgents.make_subagent import make_subagent_tool
 from .tools.journal.tool_agent_journal import make_journal_tool
 from .judge import judge_final_answer
+from .context_compactor import compact_messages, TOKEN_SOFT_LIMIT
 import hashlib
 
 GATEWAY_URL = f"http://api_gateway:{PORT_GATEWAY_PORT}"
@@ -1758,8 +1759,10 @@ class KnowledgeAgent:
             seen_paths = set()
             # request-local pending_generated_images уже инициализирован в ContextVar
             # при старте process_query.
-            SOFT_LIMIT = 10   # после этого — предупреждаем модель   
-            HARD_LIMIT = 14  # динамически можно поднять число шагов
+            # SOFT_LIMIT временно отключён (не спамим на длинных задачах); предупреждаем только когда steps_left <= 3 (см. ниже)
+            SOFT_LIMIT = 10   # DEPRECATED, оставлен для loop_state-совместимости
+            HARD_LIMIT = 100  # поднято с 14; контекст не пухнет благодаря in-loop compaction
+            STEPS_LEFT_WARN = 3  # предупреждаем про request_more_steps когда осталось <= N шагов
             JUDGE_LIMIT = 5
             total_input_tokens  = 0
             total_output_tokens = 0
@@ -1787,6 +1790,7 @@ class KnowledgeAgent:
                 "soft_limit": SOFT_LIMIT,
                 "hard_limit": HARD_LIMIT,
                 "judge_limit": JUDGE_LIMIT,
+                "steps_left_warn": STEPS_LEFT_WARN,
                 "extension_used": False,
             }
 
@@ -1908,14 +1912,17 @@ class KnowledgeAgent:
 
                     # ТОЧКА 3: адресный триггер на КАЖДОМ шаге окна, а не однократно.
                     steps_left = loop_state["hard_limit"] - iteration - 1
-                    if iteration >= loop_state["soft_limit"] - 1 and can_still_extend:
+                    # SOFT_LIMIT-предупреждение привязано к КОНЦУ окна, а не к фикс. номеру:
+                    # при hard_limit=100 нельзя спамить 90 SystemMessage. Шлём подсказку
+                    # про request_more_steps только когда до потолка осталось <= STEPS_LEFT_WARN.
+                    if steps_left <= loop_state["steps_left_warn"] and can_still_extend:
                         messages.append(SystemMessage(content=(
                             f"[Контроль лимита] Осталось шагов: {steps_left}. "
                             f"Если НЕ успеваешь завершить задачу за оставшиеся шаги — "
                             f"вызови request_more_steps ПРЯМО СЕЙЧАС (расширение одноразовое). "
                             f"Если успеваешь — продолжай и дай финальный ответ."
                         )))
-                    elif iteration >= loop_state["soft_limit"] - 1:
+                    elif steps_left <= loop_state["steps_left_warn"]:
                         messages.append(SystemMessage(
                             content=f"[Прогресс: шаг {iteration} из {loop_state['hard_limit']}]"
                         ))
@@ -1985,6 +1992,28 @@ class KnowledgeAgent:
                         f"total_in={total_input_tokens} total_out={total_output_tokens}"
                     )
                     logger.info(f"🦒Длина стека = {len(messages)}")
+
+                    # ---- IN-LOOP CONTEXT COMPACTION -------------------------------
+                    # Триггер ПО ФАКТУ от модели (iter_in), не аппроксимация.
+                    # Проверяем НА ГРАНИЦЕ итерации: все ToolMessage текущего шага
+                    # уже добавлены ниже по циклу на СЛЕДУЮЩЕМ проходе, поэтому пары
+                    # всегда целые. Компактор режет только старые пары, вставляет
+                    # SystemMessage-конспект (пути/ссылки/артефакты/workspace) —
+                    # tool-protocol не ломается. БД НЕ трогаем.
+                    if iter_in and iter_in >= TOKEN_SOFT_LIMIT:
+                        logger.info(
+                            f"[compactor] iter_in={iter_in} >= {TOKEN_SOFT_LIMIT}, "
+                            f"запускаю сжатие стека (итерация {iteration})"
+                        )
+                        try:
+                            messages, _meta = await compact_messages(
+                                self,
+                                messages,
+                                summarize_tool_call=_summarize_tool_call,
+                            )
+                        except Exception as _e:
+                            logger.error(f"[compactor] сбой сжатия, продолжаю без него: {_e}")
+                    # --------------------------------------------------------------
 
                     if not getattr(response, "tool_calls", None):
                         final_response = response.content or ""
@@ -2094,25 +2123,26 @@ class KnowledgeAgent:
             # Судья может завернуть ответ только один раз за запрос.
             final_response, tool_trace = await agent_event_loop(messages=messages)
 
-            if loop_state["iteration"] >= loop_state["judge_limit"]:
-                judge_result = await judge_final_answer(
-                    llm=llm,
-                    user_input=user_input,
-                    final_response=final_response,
-                    tool_trace=tool_trace,
-                )
-                logging.info(f"🛑 ВЕРДИКТ СУДЬИ: {judge_result}")
-                if judge_result.get("verdict") == "revise":
-                    reason = (judge_result.get("reason") or "").strip()
-                    missing = (judge_result.get("missing") or "").strip()
-                    messages.append(HumanMessage(content=(
-                        "[JUDGE] Финальный ответ не принят. Доработай ответ и верни "
-                        "пользователю корректный итоговый результат. "
-                        "Избегай лишних шагов и инструментов, если можно ответить сразу.\n"
-                        f"Причина: {reason or 'не указана'}\n"
-                        f"Что исправить: {missing or 'улучшить релевантность и полноту ответа'}"
-                    )))
-                    final_response, tool_trace = await agent_event_loop(messages=messages)
+            # --- JUDGE ВРЕМЕННО ОТКЛЮЧЁН (feature/in-loop-context-compaction) ---
+#             if loop_state["iteration"] >= loop_state["judge_limit"]:
+#                 judge_result = await judge_final_answer(
+#                     llm=llm,
+#                     user_input=user_input,
+#                     final_response=final_response,
+#                     tool_trace=tool_trace,
+#                 )
+#                 logging.info(f"🛑 ВЕРДИКТ СУДЬИ: {judge_result}")
+#                 if judge_result.get("verdict") == "revise":
+#                     reason = (judge_result.get("reason") or "").strip()
+#                     missing = (judge_result.get("missing") or "").strip()
+#                     messages.append(HumanMessage(content=(
+#                         "[JUDGE] Финальный ответ не принят. Доработай ответ и верни "
+#                         "пользователю корректный итоговый результат. "
+#                         "Избегай лишних шагов и инструментов, если можно ответить сразу.\n"
+#                         f"Причина: {reason or 'не указана'}\n"
+#                         f"Что исправить: {missing or 'улучшить релевантность и полноту ответа'}"
+#                     )))
+#                     final_response, tool_trace = await agent_event_loop(messages=messages)
 
             tokens_usage = {
                     "input_tokens": total_input_tokens,

@@ -462,7 +462,7 @@ const MP_MODELS = [
               <polyline points="17 8 21 12 17 16"/>
               <line x1="14" y1="4" x2="10" y2="20"/>
             </svg>`,
-    hint:   'Пишет код и собирает парсеры. Всегда вернётся за обратной связью.',
+    hint:   'Отлично пишет код и собирает парсеры. Не показывает ход своих рассуждений.',
     accent: '#6366f1',
   },
   {
@@ -489,7 +489,7 @@ const MP_MODELS = [
               <circle cx="12" cy="6"  r="1.2" fill="currentColor" stroke="none"/>
               <circle cx="16" cy="9"  r="1.2" fill="currentColor" stroke="none"/>
             </svg>`,
-    hint:   'Генерирует презентации и отчёты. Иногда путается в деталях.',
+    hint:   'Генерирует презентации и отчёты. Показывает ход своих мыслей.',
     accent: '#ec4899',
   },
   {
@@ -516,7 +516,7 @@ const MP_MODELS = [
               <circle cx="15" cy="12" r="2" fill="var(--surface)" stroke="currentColor"/>
               <circle cx="9"  cy="18" r="2" fill="var(--surface)" stroke="currentColor"/>
             </svg>`,
-    hint:   'И то, и то. Но регулярно возвращается без ответа.',
+    hint:   'Универсальная и более быстрая модель. Подходит для большинства задач.',
     accent: '#10b981',
   },
 ];

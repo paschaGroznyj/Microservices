@@ -55,6 +55,7 @@
   color: var(--accent);
 }
 .auth-logo svg { width: 30px; height: 30px; }
+.auth-logo-img { width: 32px; height: 32px; object-fit: contain; display: block; }
 
 .auth-title {
   font-family: var(--font-serif);

@@ -1728,6 +1728,9 @@ class KnowledgeAgent:
             "message_id": None,
             "agent_model": agent_model,
             "pending_generated_images": [],
+            # Защита от бесконечного polling check_task_status: >3 подряд блокируем
+            "check_status_streak": 0,
+            "last_tool_name": "",
         })
 
         # Legacy-поля оставляем как fallback для старого кода,
@@ -2195,6 +2198,42 @@ class KnowledgeAgent:
         """Вызвать один инструмент по его имени и аргументам."""
         name = tool_call["name"]
         args = tool_call.get("args", {})
+
+        # Анти-спам для check_task_status: разрешаем максимум 3 вызова подряд.
+        # На 4-й и далее не дёргаем sandbox, а возвращаем инъекцию в контекст модели,
+        # чтобы она завершала шаг ответом в чат и ждала асинхронного уведомления.
+        ctx = self._request_ctx.get()
+        if isinstance(ctx, dict):
+            last_tool_name = ctx.get("last_tool_name", "")
+            if name == "check_task_status":
+                streak = int(ctx.get("check_status_streak", 0))
+                streak = streak + 1 if last_tool_name == "check_task_status" else 1
+                ctx["check_status_streak"] = streak
+                ctx["last_tool_name"] = "check_task_status"
+
+                if streak > 3:
+                    logger.warning(
+                        "[tool] ⛔ check_task_status blocked: streak=%s request_id=%s",
+                        streak,
+                        request_id,
+                    )
+                    return str({
+                        "ok": False,
+                        "throttled": True,
+                        "tool": "check_task_status",
+                        "streak": streak,
+                        "message": (
+                            "Лимит polling: check_task_status вызван более 3 раз подряд. "
+                            "Не проверяй статус снова в этом цикле. "
+                            "Сформируй пользователю короткий ответ в чат: "
+                            "задача ещё выполняется, уведомление придёт автоматически; "
+                            "предложи продолжить диалог по другим вопросам."
+                        ),
+                    })
+            else:
+                # Любой другой инструмент сбрасывает серию подряд.
+                ctx["check_status_streak"] = 0
+                ctx["last_tool_name"] = name
 
         # Автоматически подмешиваем request_id, если инструмент его принимает
         if name == "download_text_articles":

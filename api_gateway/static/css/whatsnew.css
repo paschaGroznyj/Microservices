@@ -336,7 +336,7 @@
   bottom: 10px;   /* ещё выше, чтобы duo гарантированно был виден */
 }
 .wn-hero--center.wn-hero--bottom .wn-hero-img {
-  max-height: 138px;
+  max-height: 84px;
   transform: translate(var(--wn-hero-dx, 0px), var(--wn-hero-dy, 0px));
   animation: wn-hero-in-bottom 0.5s cubic-bezier(.2,.7,.2,1);
 }

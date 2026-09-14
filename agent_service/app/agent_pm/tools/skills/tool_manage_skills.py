@@ -12,6 +12,8 @@ def make_manage_skills_tool(agent, user_id: int):
         sort_by: str = "new",
         query: str = "",
         tool_filter: str = "",
+        old_str: str = "",
+        new_str: str = "",
     ) -> str:
         """
         Управление библиотекой скиллов.
@@ -20,6 +22,11 @@ def make_manage_skills_tool(agent, user_id: int):
         - list: показать список скиллов (sort_by=new|popular, query, tool_filter)
         - like: лайк/анлайк скилла (нужен skill_id)
         - export_prompt: отдать готовый промпт скилла для копирования в чат
+        - edit: точечная правка тела скилла через find & replace
+          (нужны skill_id, old_str, new_str). old_str должен встречаться
+          в body РОВНО один раз и точно совпадать по символам
+          (включая пробелы/переносы). Править может только автор скилла.
+          Пустой new_str удаляет найденный фрагмент.
 
         ФОРМАТ ТЕЛА СКИЛЛА (body) ПРИ create:
         body ОБЯЗАТЕЛЬНО пиши в Markdown. Фронт рендерит его как md при раскрытии карточки.
@@ -98,6 +105,38 @@ def make_manage_skills_tool(agent, user_id: int):
                 f"ИНСТРУКЦИЯ/ПРОМПТ:\n{r['body']}"
             )
 
-        return "Неизвестный action. Используй: create | list | like | export_prompt."
+        if act == "edit":
+            if int(skill_id or 0) <= 0:
+                return "Для edit нужен skill_id > 0."
+            if not old_str:
+                return "Для edit нужен непустой old_str (точный фрагмент body для замены)."
+            res = await agent.db.replace_skill_body(
+                skill_id=int(skill_id),
+                user_id=int(user_id),
+                old_str=old_str,
+                new_str=new_str,
+            )
+            status = res.get("status")
+            if status == "not_found":
+                return (
+                    "Скилл не найден или вы не являетесь его автором — редактировать нельзя."
+                )
+            if status == "no_match":
+                return (
+                    "old_str не найден в теле скилла. Скопируй точный фрагмент "
+                    "(с теми же пробелами/переносами), например через export_prompt."
+                )
+            if status == "ambiguous":
+                return (
+                    f"old_str встречается {res.get('count')} раз(а) — неоднозначно. "
+                    "Добавь больше окружающего контекста, чтобы фрагмент стал уникальным."
+                )
+            sk = res.get("skill") or {}
+            return (
+                f"Скилл обновлён: id={sk.get('id')}, тема={sk.get('theme')}. "
+                "Заменено 1 вхождение в теле скилла."
+            )
+
+        return "Неизвестный action. Используй: create | list | like | export_prompt | edit."
 
     return manage_skills

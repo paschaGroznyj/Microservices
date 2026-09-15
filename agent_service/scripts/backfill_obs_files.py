@@ -26,8 +26,10 @@ Backfill локальных файлов в OBS по дампу таблицы f
 
 ПОЛИТИКА (по договорённости):
   - Идём строго по записям JSON.
-  - Файла нет на диске  → лог [missing] + ПРОПУСК. Мусор в OBS не грузим.
-  - Дубликат ключа      → лог [skip-collision] + пропуск.
+  - Файла нет на диске       → лог [missing] + ПРОПУСК. Мусор в OBS не грузим.
+  - Дубликат ключа (коллизия) → НЕ скипается. Ключ дополняется id записи
+    (catchpm/{chat_id}/{run_id}__{name}__id{id}{ext}) и файл всё равно
+    грузится, с логом [collision-renamed].
 
 Пример:
   python agent_service/scripts/backfill_obs_files.py
@@ -48,9 +50,22 @@ from typing import Any
 from aiobotocore.session import AioSession
 from botocore.client import Config
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# У новых версий botocore/aiobotocore по умолчанию включён расчёт
+# дополнительной контрольной суммы (CRC32) с отправкой тела чанками
+# (aws-chunked + trailer). Huawei OBS (и/или прокси перед ним) это
+# не поддерживает корректно -> сервер пересчитывает sha256 от
+# изменённого тела -> XAmzContentSHA256Mismatch. Возвращаемся к
+# классической схеме (Content-MD5 / UNSIGNED-PAYLOAD, без chunked-trailer).
+os.environ.setdefault("AWS_REQUEST_CHECKSUM_CALCULATION", "when_required")
+os.environ.setdefault("AWS_RESPONSE_CHECKSUM_VALIDATION", "when_required")
+
 OBS_FILES_PREFIX = "catchpm"
 GENERATED_FILES_ROOT = "/app/generated_files"
-SANDBOX_ROOT = "/sandbox"
+SANDBOX_ROOT = "/app/sandbox"
 DEFAULT_DUMP = str(Path(__file__).with_name("files_dump.json"))
 
 
@@ -61,12 +76,15 @@ def _obs_params() -> dict:
         "aws_secret_access_key": os.getenv("OBS_SECRET_KEY"),
         "region_name": os.getenv("OBS_REGION"),
         "endpoint_url": os.getenv("OBS_ENDPOINT"),
-        "config": Config(s3={"addressing_style": "virtual"}),
+        "config": Config(
+            s3={"addressing_style": "virtual", "payload_signing_enabled": False},
+            signature_version="s3v4",
+        ),
     }
 
 
 def _bucket() -> str:
-    b = os.getenv("OBS_BUCKET")
+    b = os.getenv("OBS_OPEN_BUCKET")
     if not b:
         raise RuntimeError("OBS_BUCKET не задан")
     return b
@@ -92,8 +110,21 @@ def _run_id_and_name(local_path: str) -> tuple[str, str]:
 
 
 def build_obs_key(local_path: str, chat_id: Any, prefix: str = OBS_FILES_PREFIX) -> str:
+    """Тот же детерминированный ключ, что и в рантайме."""
     run_id, name = _run_id_and_name(local_path)
     return f"{prefix}/{chat_id}/{run_id}__{name}"
+
+
+def build_obs_key_unique(
+    local_path: str, chat_id: Any, row_id: Any, prefix: str = OBS_FILES_PREFIX, suffix: str = ""
+) -> str:
+    """Ключ для случая коллизии: тот же формат, но с id записи (и, при
+    необходимости, доп. суффиксом-счётчиком) перед расширением, чтобы
+    гарантированно не потерять файл."""
+    run_id, name = _run_id_and_name(local_path)
+    stem, ext = os.path.splitext(name)
+    tag = f"__id{row_id}" + (f"_{suffix}" if suffix else "")
+    return f"{prefix}/{chat_id}/{run_id}__{stem}{tag}{ext}"
 
 
 # Контейнерные корни (как пишется в БД внутри agent_service).
@@ -164,32 +195,46 @@ async def run(args: argparse.Namespace) -> int:
     for row in rows:
         file_path = row.get("file_path")
         chat_id = row.get("chat_id")
+        row_id = row.get("id")
         if not file_path:
             no_path += 1
-            print(f"[skip-no-path] id={row.get('id')} нет file_path")
+            print(f"[skip-no-path] id={row_id} нет file_path")
             continue
         if chat_id in (None, "", "-1"):
             no_chat += 1
-            print(f"[skip-no-chat] id={row.get('id')} file={file_path} chat_id={chat_id!r}")
+            print(f"[skip-no-chat] id={row_id} file={file_path} chat_id={chat_id!r}")
             continue
 
         fp = resolve_local_path(file_path, repo_root)
         if not fp.exists() or not fp.is_file():
             missing += 1
-            print(f"[missing] id={row.get('id')} db={file_path} host={fp} — нет на диске, пропуск")
+            print(f"[missing] id={row_id} db={file_path} host={fp} — нет на диске, пропуск")
             continue
 
         key = build_obs_key(file_path, chat_id, args.prefix)
         if key in seen:
             collisions += 1
-            print(f"[skip-collision] id={row.get('id')} {file_path} -> {key} (уже из {seen[key]})")
-            continue
+            orig_owner = seen[key]
+            # Коллизия НЕ скипается: гоним под уникальным ключом с id записи.
+            unique_key = build_obs_key_unique(file_path, chat_id, row_id, args.prefix)
+            bump = 0
+            while unique_key in seen:
+                bump += 1
+                unique_key = build_obs_key_unique(
+                    file_path, chat_id, row_id, args.prefix, suffix=str(bump)
+                )
+            print(
+                f"[collision-renamed] id={row_id} {file_path} -> {key} "
+                f"занят (владелец: {orig_owner}); грузим как {unique_key}"
+            )
+            key = unique_key
+
         seen[key] = file_path
         plan.append((fp, key, chat_id))
 
     print(
         f"[plan] rows={len(rows)} to_upload={len(plan)} "
-        f"missing={missing} no_path={no_path} no_chat={no_chat} collisions={collisions}"
+        f"missing={missing} no_path={no_path} no_chat={no_chat} collisions_renamed={collisions}"
     )
 
     if args.dry_run:

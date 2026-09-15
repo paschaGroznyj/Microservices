@@ -30,15 +30,17 @@
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  max-width: 140px;
-  padding: 4px 28px 4px 6px;  /* правый паддинг под крестик */
-  border-radius: 8px;
+  gap: 8px;
+  max-width: 150px;
+  padding: 5px 30px 5px 7px;  /* правый паддинг под крестик */
+  border-radius: 12px;        /* Claude pill: более круглый */
   border: 1px solid var(--border);
   background: var(--surface2);
+  font-family: var(--font-anthropic-sans);
   cursor: default;
   flex-shrink: 0;
-  transition: border-color .15s, background .15s;
+  box-shadow: 0 1px 2px rgba(0,0,0,.04);
+  transition: border-color .15s, background .15s, box-shadow .18s, transform .18s;
   animation: fa-chip-pop .18s cubic-bezier(.34,1.56,.64,1) both;
 }
 
@@ -72,6 +74,8 @@
 .fa-chip:hover {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 6%, var(--surface2));
+  box-shadow: 0 3px 10px rgba(0,0,0,.10);
+  transform: translateY(-1px);
 }
 
 /* ── SVG-иконка файла ─────────────────────────── */
@@ -116,12 +120,14 @@
 
 /* ── Имя файла ────────────────────────────────── */
 .fa-chip__name {
-  font-size: .72rem;
-  color: var(--text-secondary);
+  font-family: var(--font-anthropic-sans);
+  font-size: .75rem;
+  font-weight: 500;
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 78px;
+  max-width: 84px;
   line-height: 1.3;
 }
 
@@ -395,9 +401,9 @@
   }
 
   .fa-chip {
-    max-width: 120px;
-    padding: 3px 26px 3px 5px;
-    border-radius: 7px;
+    max-width: 130px;
+    padding: 4px 28px 4px 6px;
+    border-radius: 11px;
   }
 
   .fa-chip__icon,

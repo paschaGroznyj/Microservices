@@ -1,3 +1,20 @@
+/* ═══ ANTHROPIC FONTS (local woff2) ═══ */
+@font-face{font-family:"anthropic-sans";src:url("../fonts/anthropic/anthropic-sans.woff2")format("woff2");font-weight:300 800;font-style:normal;font-display:swap;font-feature-settings:"dlig" 0}
+@font-face{font-family:"anthropic-sans";src:url("../fonts/anthropic/anthropic-sans-italic.woff2")format("woff2");font-weight:300 800;font-style:italic;font-display:swap;font-feature-settings:"dlig" 0}
+@font-face{font-family:"anthropic-serif";src:url("../fonts/anthropic/anthropic-serif.woff2")format("woff2");font-weight:300 800;font-style:normal;font-display:swap}
+@font-face{font-family:"anthropic-serif";src:url("../fonts/anthropic/anthropic-serif-italic.woff2")format("woff2");font-weight:300 800;font-style:italic;font-display:swap}
+@font-face{font-family:"anthropic-mono";src:url("../fonts/anthropic/anthropic-mono.woff2")format("woff2");font-weight:300 800;font-style:normal;font-display:swap}
+@font-face{font-family:"anthropic-mono";src:url("../fonts/anthropic/anthropic-mono-italic.woff2")format("woff2");font-weight:300 800;font-style:italic;font-display:swap}
+/* serif fallbacks (size-adjust — чтобы текст не прыгал до загрузки woff2) */
+@font-face{font-family:"Anthropic Serif Fallback Georgia";src:local(Georgia);size-adjust:104.79%;ascent-override:94.71%;descent-override:24.57%;line-gap-override:0%}
+@font-face{font-family:"Anthropic Serif Fallback Times";src:local(Times New Roman),local(TimesNewRomanPSMT),local(Liberation Serif),local(LiberationSerif);size-adjust:114.99%;ascent-override:86.31%;descent-override:22.39%;line-gap-override:0%}
+
+:root{
+  --font-anthropic-sans: "anthropic-sans", system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-anthropic-serif: "anthropic-serif", "Anthropic Serif Fallback Georgia", "Anthropic Serif Fallback Times", Georgia, "Times New Roman", Times, serif;
+  --font-anthropic-mono: "anthropic-mono", ui-monospace, "JetBrains Mono", monospace;
+}
+
 /* ═══════════════════════════════════════════════
    CATCHPM — THEME VARIABLES
    Светлая тема (default) + тёмная по [data-theme="dark"]

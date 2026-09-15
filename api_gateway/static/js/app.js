@@ -532,13 +532,14 @@ class ChatApp {
             const filesHtml = this._renderMessageFiles(message.files);
             // Длинный текст (>1000 символов) сворачиваем в чип-файлик,
             // клик по которому открывает превью в правом сайдбаре.
+            // Длинный текст (Claude-style): рендерим обычным текстом,
+            // но помечаем как collapsible — CSS обрежет по высоте + mask,
+            // а кнопка «Показать больше/Свернуть» развернёт на месте.
             const TEXT_COLLAPSE_LIMIT = 1000;
-            if (rawContent && rawContent.length > TEXT_COLLAPSE_LIMIT) {
-                const chipHtml = this._renderTextChip(rawContent);
-                messageEl.innerHTML = `${filesHtml}<div class="message-text">${chipHtml}</div><div class="timestamp">${time}</div>`;
-            } else {
-                messageEl.innerHTML = `${filesHtml}<div class="message-text">${content}</div><div class="timestamp">${time}</div>`;
-            }
+            const isLong = rawContent && rawContent.length > TEXT_COLLAPSE_LIMIT;
+            const textCls = isLong ? 'message-text message-text--collapsible' : 'message-text';
+            const toggleHtml = isLong ? this._renderCollapseToggle() : '';
+            messageEl.innerHTML = `${filesHtml}<div class="${textCls}">${content}</div>${toggleHtml}<div class="timestamp">${time}</div>`;
         } else {
             messageEl.dataset.id = message.id;
             messageEl.innerHTML = content;
@@ -587,6 +588,9 @@ class ChatApp {
             wrapper.appendChild(messageEl);
             wrapper.appendChild(actions);
             container.appendChild(wrapper);
+
+            // Claude-collapsible: после вставки в DOM проверяем реальную высоту
+            this._initCollapsibles(wrapper);
 
             // 🚀 Fly-анимация только для новых сообщений (scroll=true), не при загрузке истории
             if (scroll) {
@@ -711,6 +715,44 @@ class ChatApp {
        Рендерит чип в стиле прикреплённого файла. Оригинальный
        текст кладём в data-атрибут (base64), чтобы клик открыл его
        в правом сайдбаре без искажений. */
+    _renderCollapseToggle() {
+        return `<button class="msg-collapse-toggle" type="button" aria-expanded="false" hidden
+        onclick="window.__catchpmApp && window.__catchpmApp._toggleCollapse(this)">
+    <span class="msg-collapse-toggle__label">Показать больше</span>
+    <svg class="msg-collapse-toggle__chevron" viewBox="0 0 12 12" width="12" height="12" fill="none" aria-hidden="true">
+      <path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </button>`;
+    }
+
+    _toggleCollapse(btn) {
+        const wrap = btn.closest('.user-message, .message-content, .user-message-wrapper') || btn.parentElement;
+        const text = wrap ? wrap.querySelector('.message-text--collapsible') : null;
+        if (!text) return;
+        const expanded = text.classList.toggle('is-expanded');
+        btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        const label = btn.querySelector('.msg-collapse-toggle__label');
+        if (label) label.textContent = expanded ? 'Свернуть' : 'Показать больше';
+    }
+
+    _initCollapsibles(root) {
+        const scope = root || document;
+        const blocks = scope.querySelectorAll('.message-text--collapsible:not([data-collapse-checked])');
+        blocks.forEach((el) => {
+            el.dataset.collapseChecked = '1';
+            const toggle = el.parentElement
+                ? el.parentElement.querySelector('.msg-collapse-toggle')
+                : null;
+            const overflow = el.scrollHeight - el.clientHeight > 4;
+            if (overflow) {
+                if (toggle) toggle.hidden = false;
+            } else {
+                el.classList.remove('message-text--collapsible');
+                if (toggle) toggle.remove();
+            }
+        });
+    }
+
     _renderTextChip(rawText) {
         const chars = rawText.length;
         const lines = rawText.split('\n').length;

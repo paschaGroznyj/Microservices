@@ -1,0 +1,179 @@
+/* ═══════════════════════════════════════════════════════════
+   CLAUDE-UI — общий слой для api_gateway и api_gateway_sigma
+   Портировано из боевого Claude Design System (CDS).
+   Содержит:
+     1) collapsible длинного текста юзера (Show more / Show less)
+     2) claude-pill переопределение файловых чипов (вариант B)
+   Подключать ПОСЛЕ chat.css и file-attach.css (переопределяет их).
+═══════════════════════════════════════════════════════════ */
+
+/* ─────────────────────────────────────────────────────────
+   CDS-токены (значения вытащены из c6a992d55.css)
+───────────────────────────────────────────────────────── */
+:root {
+  --cds-radius: .5rem;
+  --cds-radius-composer: .875rem;
+  --cds-pad-lg: 1rem;
+  --cds-pad-md: .75rem;
+  --cds-gap-xs: .5rem;
+  --cds-font-size-heading: .9375rem;
+  --cds-leading-heading: 1.25rem;
+  /* высота обрезки длинного сообщения (Claude: 200px) */
+  --msg-collapse-max: 200px;
+  /* высота зоны затухания снизу под mask */
+  --msg-collapse-fade: 3rem;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   1) COLLAPSIBLE ДЛИННОГО ТЕКСТА (Claude-style)
+   Разметка:
+     <div class="message-text message-text--collapsible">…</div>
+     <button class="msg-collapse-toggle" aria-expanded="false">…</button>
+═══════════════════════════════════════════════════════════ */
+.message-text--collapsible {
+  position: relative;
+  max-height: var(--msg-collapse-max);
+  overflow: hidden;
+  /* плавное затухание снизу — как у Claude */
+  -webkit-mask-image: linear-gradient(
+    to bottom, #000 calc(100% - var(--msg-collapse-fade)), transparent 100%);
+  mask-image: linear-gradient(
+    to bottom, #000 calc(100% - var(--msg-collapse-fade)), transparent 100%);
+  transition: max-height .28s cubic-bezier(.215,.61,.355,1);
+}
+
+/* Развёрнутое состояние — снимаем ограничение и маску */
+.message-text--collapsible.is-expanded {
+  max-height: none;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+/* Кнопка Показать больше / Свернуть — ghost-button в стиле CDS */
+.msg-collapse-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 3px 8px;
+  border: none;
+  border-radius: var(--cds-radius, .5rem);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-anthropic-sans);
+  font-size: .78rem;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+
+.msg-collapse-toggle:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+}
+
+.msg-collapse-toggle[hidden] { display: none; }
+
+/* Шеврон — поворачивается на 180° при раскрытии */
+.msg-collapse-toggle__chevron {
+  transition: transform .2s cubic-bezier(.215,.61,.355,1);
+}
+.msg-collapse-toggle[aria-expanded="true"] .msg-collapse-toggle__chevron {
+  transform: rotate(180deg);
+}
+
+/* В user-message кнопка выравнивается вправо, как само сообщение */
+.user-message .msg-collapse-toggle {
+  align-self: flex-end;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   2) CLAUDE-PILL — переопределение файловых чипов (вариант B)
+   Плоская капсула: скруглённая плашка, компактная иконка формата
+   слева цветным квадратом, имя + тип. Переопределяет .fa-chip.
+═══════════════════════════════════════════════════════════ */
+.fa-chip {
+  gap: 8px;
+  max-width: 260px;
+  padding: 7px 10px;                    /* без правого выступа под крестик */
+  border-radius: calc(var(--cds-radius) + .125rem);   /* ~.625rem, rounded-card */
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  transition: border-color .15s, background .15s, box-shadow .15s;
+}
+
+/* readonly / bot — тоже капсула, ровный паддинг */
+.fa-chip--readonly { padding: 7px 10px; }
+
+/* Иконка формата: цветной скруглённый квадрат вместо «листка» */
+.fa-chip__icon {
+  width: 30px;
+  height: 30px;
+  border-radius: calc(var(--cds-radius) - .0625rem);  /* ~.4375rem */
+  background: var(--fa-fold, #c7d0dc);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fa-label, #64748b) 22%, transparent);
+}
+
+/* Прячем «страничную» графику, оставляем только буквы формата */
+.fa-chip__icon svg {
+  width: 30px;
+  height: 30px;
+  overflow: hidden;
+}
+.fa-chip__bg,
+.fa-chip__fold { display: none; }
+
+/* Текст формата — по центру квадрата */
+.fa-chip__text {
+  font-family: var(--font-anthropic-mono, var(--font-mono, monospace));
+  font-size: 9px;
+  font-weight: 700;
+  fill: var(--fa-label, #64748b);
+  letter-spacing: .04em;
+}
+/* Перецентровка текста внутри 36×44 viewBox под наш квадрат */
+.fa-chip__icon svg .fa-chip__text {
+  transform: translateY(-4px);
+}
+
+/* Имя файла — крупнее, читаемее (CDS heading size) */
+.fa-chip__name {
+  font-family: var(--font-anthropic-sans);
+  font-size: .8125rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  max-width: 150px;
+  line-height: 1.2;
+}
+
+/* Мета длинного текста — вторичный тон */
+.fa-chip--text .fa-chip__meta {
+  font-family: var(--font-anthropic-sans);
+  font-size: .6875rem;
+  color: var(--text-secondary);
+}
+
+.fa-chip:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface2));
+  box-shadow: 0 1px 4px rgba(0,0,0,.08);
+}
+
+/* bot-pill: широкий, стрелка скачивания справа */
+.fa-chip--bot { padding: 8px 34px 8px 10px; }
+.fa-bot-files .fa-chip { min-height: 52px; }
+
+/* Крестик удаления — приподнят над капсулой */
+.fa-chip__remove { top: -7px; right: -7px; }
+
+/* Адаптив */
+@media (max-width: 768px) {
+  .fa-chip {
+    max-width: 200px;
+    padding: 6px 8px;
+  }
+  .fa-chip__icon,
+  .fa-chip__icon svg { width: 26px; height: 26px; }
+  .fa-chip__name { font-size: .75rem; max-width: 120px; }
+}

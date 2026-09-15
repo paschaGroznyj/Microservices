@@ -69,6 +69,90 @@
   background: color-mix(in srgb, var(--text-secondary) 12%, transparent); /* fill-ghost-hover */
   color: var(--text-primary);
 }
+
+/* ==== Claude-like skills toolbar (иконки + раскрывающийся поиск) ==== */
+.skills-toolbar { flex-direction: column; align-items: stretch; }
+.skills-toolbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: .5rem;
+  width: 100%;
+}
+.skills-icon-btn {
+  width: 32px; height: 32px; min-width: 32px;
+  border: none; border-radius: 8px;
+  background: transparent; color: var(--text-secondary);
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer; transition: background .15s ease, color .15s ease;
+}
+.skills-icon-btn:hover { background: color-mix(in srgb, var(--text-secondary) 12%, transparent); color: var(--text-primary); }
+.skills-icon-btn.is-active { color: var(--accent); }
+.skills-menu-wrap { position: relative; display: inline-flex; }
+.skills-menu[hidden] { display: none; }
+.skills-menu {
+  position: absolute; top: calc(100% + 4px); right: 0; z-index: 40;
+  min-width: 180px; padding: 4px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.18);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.skills-menu-item {
+  text-align: left; padding: 7px 10px; border: none; border-radius: 6px;
+  background: transparent; color: var(--text-primary);
+  font-size: .8125rem; cursor: pointer; transition: background .12s ease;
+}
+.skills-menu-item:hover { background: color-mix(in srgb, var(--text-secondary) 12%, transparent); }
+.skills-menu-item[aria-checked="true"] { color: var(--accent); font-weight: 500; }
+.skills-primary-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 32px; padding: 0 12px; border: none; border-radius: 8px;
+  background: var(--accent); color: #fff;
+  font-size: .8125rem; font-weight: 500; cursor: pointer;
+  transition: filter .15s ease;
+}
+.skills-primary-btn:hover { filter: brightness(1.08); }
+/* Режим поиска: строка поиска занимает место кнопок в том же ряду. */
+.skills-search-row[hidden] { display: none; }
+.skills-search-row { display: flex; gap: .5rem; width: 100%; justify-content: flex-end; }
+/* Поле поиска с крестиком-выходом. */
+.skills-search-field {
+  position: relative;
+  flex: 1;
+  min-width: 220px;
+  display: flex;
+  align-items: center;
+}
+.skills-search-field .skills-search {
+  flex: 1;
+  min-width: 0;
+  padding-right: 28px;
+}
+.skills-search-clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background .14s ease, color .14s ease;
+}
+.skills-search-clear:hover {
+  background: var(--sidebar-hover, rgba(0,0,0,.06));
+  color: var(--text-primary);
+}
+/* Когда тулбар в режиме поиска — прячем блок кнопок. */
+.skills-toolbar.searching .skills-toolbar-actions { display: none; }
+.skills-sort-hidden { display: none; }
+
 .skills-count {
   font-size: .6875rem;          /* caption */
   color: var(--text-muted, #9ca3af);
@@ -466,6 +550,18 @@
 /* Мобильный clamp для длинного текста инструментов */
 .skill-meta { min-width: 0; }
 .skill-badge--tools { max-width: 100%; }
+/* Выпадающие меню (фильтр/сорт) не должны вылезать за экран на мобилке. */
+@media (max-width: 768px) {
+  .skills-menu {
+    right: 0;
+    left: auto;
+    min-width: 160px;
+    max-width: calc(100vw - 24px);
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+}
+
 @media (max-width: 900px) {
   .skill-meta { display: flex; width: 100%; min-width: 0; }
   .skill-badge--model { flex: 0 0 auto; }

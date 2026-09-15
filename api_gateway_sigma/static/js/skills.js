@@ -18,25 +18,92 @@
     _adminLoaded: false,
     _selectedIds: new Set(),
     _selectedLimit: 5,
+    _sort: 'new',
+    _filter: 'all',
+    _allSkills: [],
     init(app){
       this.app = app;
       if (this.inited) return;
       this.inited = true;
-      document.getElementById('skills-refresh')?.addEventListener('click', () => this.load());
-      document.getElementById('skills-sort')?.addEventListener('change', () => this.load());
+
+      // Поиск: лупа раскрывает строку поиска (как у Claude)
+      const searchToggle = document.getElementById('skills-search-toggle');
+      const searchRow = document.getElementById('skills-search-row');
+      const toolbar = document.getElementById('skills-toolbar');
       const q = document.getElementById('skills-query');
+      const openSearch = () => {
+        this._closeAllMenus();
+        toolbar?.classList.add('searching');
+        searchRow?.removeAttribute('hidden');
+        searchToggle?.setAttribute('aria-expanded','true');
+        q?.focus();
+      };
+      const closeSearch = () => {
+        toolbar?.classList.remove('searching');
+        searchRow?.setAttribute('hidden','');
+        searchToggle?.setAttribute('aria-expanded','false');
+        if (q) q.value='';
+        this.load();
+      };
+      searchToggle?.addEventListener('click', () => {
+        if (searchRow?.hasAttribute('hidden')) openSearch(); else closeSearch();
+      });
+      // Крестик внутри поля — выход из режима поиска.
+      document.getElementById('skills-search-clear')?.addEventListener('click', () => closeSearch());
       q?.addEventListener('input', () => {
         clearTimeout(this._debounce);
         this._debounce = setTimeout(() => this.load(), 250);
       });
+      q?.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { closeSearch(); }
+      });
+
+      // Dropdown-меню фильтра и сортировки
+      this._bindMenu('skills-filter-btn', 'skills-filter-menu', 'filter', (val) => { this._filter = val; this._applyFilterSort(); });
+      this._bindMenu('skills-sort-btn', 'skills-sort-menu', 'sort', (val) => { this._sort = val; this.load(); });
+
+      // Закрытие меню по клику вне
+      document.addEventListener('click', (e) => {
+        if (!e.target.closest('.skills-menu-wrap')) this._closeAllMenus();
+      });
+
+      // Add — только админ (кнопка показывается в load после _fetchIsAdmin)
+      document.getElementById('skills-add-btn')?.addEventListener('click', () => this.openCreate?.());
+
       this._bindDropToInput();
       this._bindDropToChats();
       this._loadSelected().then(() => this._updateSelectedCounterUi()).catch(() => {});
     },
+    _bindMenu(btnId, menuId, dataAttr, onPick){
+      const btn = document.getElementById(btnId);
+      const menu = document.getElementById(menuId);
+      if (!btn || !menu) return;
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const willOpen = menu.hasAttribute('hidden');
+        this._closeAllMenus();
+        if (willOpen){ menu.removeAttribute('hidden'); btn.setAttribute('aria-expanded','true'); }
+      });
+      menu.querySelectorAll('.skills-menu-item').forEach(item => {
+        item.addEventListener('click', () => {
+          const val = item.dataset[dataAttr];
+          menu.querySelectorAll('.skills-menu-item').forEach(i => i.setAttribute('aria-checked', String(i===item)));
+          this._closeAllMenus();
+          // подсветка активности кнопки (отличной от дефолта)
+          const isDefault = (dataAttr==='sort' && val==='new') || (dataAttr==='filter' && val==='all');
+          btn.classList.toggle('is-active', !isDefault);
+          onPick(val);
+        });
+      });
+    },
+    _closeAllMenus(){
+      document.querySelectorAll('.skills-menu').forEach(m => m.setAttribute('hidden',''));
+      document.querySelectorAll('#skills-filter-btn, #skills-sort-btn').forEach(b => b.setAttribute('aria-expanded','false'));
+    },
     open(app){ this.init(app); this.load(); },
     async load(){
       const q = document.getElementById('skills-query')?.value || '';
-      const sort = document.getElementById('skills-sort')?.value || 'new';
+      const sort = this._sort || 'new';
       let skills = [];
       await this._loadSelected();
       try {
@@ -45,8 +112,18 @@
         skills = data.skills || [];
       } catch (e) { skills = []; }
       await this._fetchIsAdmin();
-      this.render(skills);
-      this._updateSelectedCounterUi(skills.length);
+      this._allSkills = skills;
+      // Кнопка Add: скиллы публикует агент, создания через UI нет — пока скрыта.
+      const addBtn = document.getElementById('skills-add-btn');
+      if (addBtn) addBtn.hidden = true;
+      this._applyFilterSort();
+    },
+    _applyFilterSort(){
+      let list = (this._allSkills || []).slice();
+      if (this._filter === 'liked') list = list.filter(s => this._likedIds.has(s.id));
+      else if (this._filter === 'selected') list = list.filter(s => this._selectedIds.has(s.id));
+      this.render(list);
+      this._updateSelectedCounterUi(list.length);
     },
     render(skills){
       const list = document.getElementById('skills-list');

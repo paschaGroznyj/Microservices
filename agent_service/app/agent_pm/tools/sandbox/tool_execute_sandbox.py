@@ -478,7 +478,7 @@ def make_sandbox_execute_tool(agent):
         - apt-get install — установка пакетов в рамках сессии
 
         Если планируешь работать с файлами в рамках сессии, нужно создавать workspace
-        через create_workspace (файлы внутри области будут жить только 3600 сек!)
+        через create_workspace (файлы внутри области будут жить 10 часов)
 
         Если ты иницилизируешь репозиторий .git внутри /tmp/exec/workspaces/<workspace_name>, он не будет удален по таймеру
 
@@ -688,8 +688,10 @@ def make_sandbox_execute_tool(agent):
         /tmp/exec/workspaces/{workspace_id}/output/<filename>. Без workspace отдать
         тяжёлые/составные файлы надёжно не получится.
 
-        Workspace автоматически удаляется через 1 час неактивности.
-        Явное удаление — через delete_workspace.
+        ВСЕГДА создавай workspace и передавай его id в связке тяжелых операций генерации execute_python_code
+
+        Workspace автоматически удаляется через 10 часов неактивности, поэтому
+        в рамках диалога удалять область не обязательно.
 
         Возвращает: workspace_id, created_at, path
 

@@ -1597,6 +1597,54 @@ class AgentDB:
             )
             return dict(row) if row else None
 
+    async def replace_skill_body(
+        self,
+        skill_id: int,
+        user_id: int,
+        old_str: str,
+        new_str: str,
+    ) -> dict:
+        """Точечная правка тела скилла через find & replace.
+
+        Заменяет РОВНО одно вхождение old_str на new_str в body скилла,
+        которым владеет user_id. Возвращает dict со статусом:
+          {"status": "ok", "skill": {...}}          — заменено
+          {"status": "not_found"}                    — скилл не найден / не автор
+          {"status": "no_match"}                     — old_str не встречается
+          {"status": "ambiguous", "count": N}        — old_str встречается >1 раза
+        Правка выполняется в транзакции: сначала читаем актуальный body
+        FOR UPDATE, проверяем уникальность вхождения, затем пишем.
+        """
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    "SELECT body FROM agent_skills "
+                    "WHERE id = $1 AND published_by_user_id = $2 "
+                    "AND is_deleted = FALSE FOR UPDATE",
+                    skill_id,
+                    user_id,
+                )
+                if not row:
+                    return {"status": "not_found"}
+                body = row["body"] or ""
+                cnt = body.count(old_str)
+                if cnt == 0:
+                    return {"status": "no_match"}
+                if cnt > 1:
+                    return {"status": "ambiguous", "count": cnt}
+                new_body = body.replace(old_str, new_str, 1)
+                updated = await conn.fetchrow(
+                    "UPDATE agent_skills SET body = $3, updated_at = NOW() "
+                    "WHERE id = $1 AND published_by_user_id = $2 "
+                    "AND is_deleted = FALSE "
+                    "RETURNING id, theme, body, published_by_user_id, "
+                    "published_by_name, tools, model_used, likes_count, created_at",
+                    skill_id,
+                    user_id,
+                    new_body,
+                )
+                return {"status": "ok", "skill": dict(updated)}
+
     async def delete_skill(self, skill_id: int) -> bool:
         # Soft-delete: помечаем is_deleted=TRUE (как chats.is_deleted),
         # физически строку не удаляем — лайки и история публикаций сохраняются.

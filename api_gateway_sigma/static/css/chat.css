@@ -19,7 +19,9 @@
   /* Туман по краям: сообщения плавно растворяются, уходя за верхний край
      и под message-input-container снизу. Состояния ставит JS классами
      .fade-top / .fade-bottom (по аналогии с сайдбаром). */
-  transition: -webkit-mask-image 0.2s ease, mask-image 0.2s ease;
+  /* PERF: туман убран (все fade-состояния = mask-image:none), поэтому
+     transition по mask-image ничего не анимирует, а лишь заставляет браузер
+     держать mask-слой на ленте. Убрано. */
 }
 
 /* Только верхний fade (доскроллено до низа). Зеркально нижнему:
@@ -460,7 +462,11 @@
 
 /* ── CHAT ACTIVE STATE ────────────────────────── */
 .chat-main-inner.chat-active .chat-start-screen {
+  /* PERF: display:none убирает из потока, но content-visibility:hidden
+     дополнительно гарантирует, что браузер не держит растровые
+     слои двух full-bleed фоновых фото во время скролла активного чата. */
   display: none;
+  content-visibility: hidden;
 }
 
 .chat-active {
@@ -900,6 +906,14 @@
 [data-theme="dark"]  .chat-start-screen.bg-ready::after  { opacity: 1; }
 
 .chat-start-screen.bg-ready .start-scrim { opacity: 1; }
+
+/* PERF: will-change нужен ТОЛЬКО на время fade-in фона. После того как JS
+   поставил .bg-ready и анимация отыграла — снимаем will-change,
+   чтобы не держать два постоянных GPU-слоя с full-bleed фото. */
+.chat-start-screen.bg-ready::before,
+.chat-start-screen.bg-ready::after {
+  will-change: auto;
+}
 
 /* Центральный блок (заголовок + инпут) — единый стеклянный контейнер */
 .start-body {

@@ -484,11 +484,19 @@ class ChatApp {
         if (container._historyLoaderBound) return;
         container._historyLoaderBound = true;
 
+        // rAF-throttle: scroll сыплется десятками событий/кадр, а чтение
+        // container.scrollTop форсит layout. Сводим к одной проверке на кадр.
+        let ticking = false;
         container.addEventListener('scroll', () => {
-            // Триггерим подгрузку, когда почти доскроллили до верха
-            if (container.scrollTop < 120) {
-                this.loadOlderMessages();
-            }
+            if (ticking) return;
+            ticking = true;
+            requestAnimationFrame(() => {
+                ticking = false;
+                // Триггерим подгрузку, когда почти доскроллили до верха
+                if (container.scrollTop < 120) {
+                    this.loadOlderMessages();
+                }
+            });
         }, { passive: true });
     }
 
@@ -3164,7 +3172,15 @@ class ChatApp {
             container.classList.toggle('fade-bottom', scrollable && !atBottom);
         };
 
-        container.addEventListener('scroll', sync, { passive: true });
+        // rAF-throttle на scroll: не чаще одного пересчёта layout на кадр.
+        let fadeTicking = false;
+        const onScrollSync = () => {
+            if (fadeTicking) return;
+            fadeTicking = true;
+            requestAnimationFrame(() => { fadeTicking = false; sync(); });
+        };
+
+        container.addEventListener('scroll', onScrollSync, { passive: true });
         container._syncFade = sync;
         // Пересчёт при изменении содержимого/размеров (новые сообщения, ресайз)
         if (window.ResizeObserver) {

@@ -114,15 +114,18 @@
 .feedback-trigger,
 .info-btn,
 .mobile-menu-toggle {
-  width: 34px;
-  height: 34px;
-  border-radius: var(--radius-sm);
-  display: flex;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-secondary);
-  flex-shrink: 0;
-  transition: all var(--transition);
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
 }
 
 .feedback-trigger svg,

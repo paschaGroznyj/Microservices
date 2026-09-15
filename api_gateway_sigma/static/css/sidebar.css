@@ -15,17 +15,20 @@
 
 /* ── HEADER / BRAND ───────────────────────────── */
 .sidebar-header {
-  padding: 0 14px;
+  padding: 0 12px 0 14px;
   height: 54px;
   min-height: 54px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .brand-link {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 9px;
   color: var(--text-primary);
@@ -33,9 +36,36 @@
   font-family: var(--font-serif);
   font-weight: 600;
   font-size: 1.05rem;
+  flex: 1;
 }
 
 .brand-link:hover { text-decoration: none; opacity: .85; }
+
+.sidebar-skills-btn {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
+}
+.sidebar-skills-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+.sidebar-skills-btn.active {
+  background: var(--sidebar-active);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
 
 .brand-icon {
   width: 30px;

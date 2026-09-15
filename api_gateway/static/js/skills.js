@@ -98,10 +98,12 @@
               </button>` : ''}
             </div>
           </div>
-          ${author}
-          <div class="skill-meta">${model}${tools}</div>
+          <div class="skill-meta">${author}${model}</div>
           <button class="skill-toggle" data-toggle="${s.id}">${ICON_CHEVRON}<span class="skill-toggle-label">Читать полностью</span></button>
-          <div class="skill-body">${esc(s.body||'')}</div>
+          <div class="skill-reveal">
+            ${tools ? `<div class="skill-tools-row">${tools}</div>` : ''}
+            <div class="skill-body">${esc(s.body||'')}</div>
+          </div>
 </div>`;
       }).join('');
 

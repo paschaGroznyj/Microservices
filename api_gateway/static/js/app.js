@@ -52,7 +52,7 @@ class ChatApp {
        TAB SWITCHER (agent ↔ arxiv)
     ══════════════════════════════════════════ */
     initTabSwitcher() {
-    document.querySelectorAll('.pill[data-tab], .nav-item[data-tab]').forEach(btn => {
+    document.querySelectorAll('.pill[data-tab], .nav-item[data-tab], .sidebar-skills-btn[data-tab]').forEach(btn => {
         btn.addEventListener('click', () => {
             const tab = btn.dataset.tab;
             this.switchTab(tab);
@@ -79,7 +79,7 @@ class ChatApp {
         document.getElementById(`view-${tab}`)?.classList.remove('hidden');
 
         // Активный pill / nav-item
-        document.querySelectorAll('.pill[data-tab], .nav-item[data-tab]').forEach(n => {
+        document.querySelectorAll('.pill[data-tab], .nav-item[data-tab], .sidebar-skills-btn[data-tab]').forEach(n => {
             n.classList.toggle('active', n.dataset.tab === tab);
         });
 
@@ -808,6 +808,8 @@ class ChatApp {
         if (!panel || !body || !view) return;
 
         body.textContent = text;   // textContent — без интерпретации HTML, оригинальный вид
+        // Поле редактируемое (contenteditable): правки чисто клиентские,
+        // никуда не сохраняются — просто чтобы можно было выделить/поправить перед копированием.
         if (titleEl) {
             const first = (text.split('\n').find(l => l.trim()) || 'Просмотр текста').trim();
             titleEl.textContent = first.length > 60 ? first.slice(0, 60) + '…' : first;

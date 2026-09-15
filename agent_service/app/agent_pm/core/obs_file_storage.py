@@ -31,6 +31,15 @@ from botocore.client import Config
 
 log = logging.getLogger(__name__)
 
+# botocore >= 1.36 по умолчанию (при TLS) шлёт PutObject как
+# STREAMING-UNSIGNED-PAYLOAD-TRAILER: chunked-тело + trailer-заголовок
+# x-amz-checksum-crc32. Это НЕ регулируется payload_signing_enabled —
+# отдельный механизм ("default request checksums"). OBS не умеет его
+# парсить и отвечает XAmzContentSHA256Mismatch. Откатываем на классику
+# (Content-MD5 / обычный UNSIGNED-PAYLOAD одним телом).
+os.environ.setdefault("AWS_REQUEST_CHECKSUM_CALCULATION", "when_required")
+os.environ.setdefault("AWS_RESPONSE_CHECKSUM_VALIDATION", "when_required")
+
 # Корневой префикс внутри бакета: obs://{OBS_BUCKET}/catchpm/
 OBS_FILES_PREFIX = "catchpm"
 
@@ -48,21 +57,47 @@ def _obs_params() -> dict:
     Параметры S3-клиента для OBS.
 
     Для S3-совместимых хранилищ (в т.ч. OBS/прокси) режим virtual-host +
-    payload signing иногда приводит к XAmzContentSHA256Mismatch на PutObject.
-    Используем более совместимые дефолты:
-      - path-style addressing
+    payload signing иногда приводит к XAmzContentSHA256Mismatch на PutObject —
+    это лечится отдельно, через checksum-переменные env выше, а НЕ через
+    смену addressing_style. Сам OBS-эндпоинт при этом требует именно
+    virtual-hosted style (bucket.endpoint/key) — path-style даёт
+    VirtualHostDomainRequired. Дефолты:
+      - virtual-host addressing
       - отключённый payload signing (UNSIGNED-PAYLOAD)
+      - отключённые дефолтные request-checksums (см. env выше)
     При необходимости можно переопределить через env:
       OBS_S3_ADDRESSING_STYLE=virtual|path
       OBS_PAYLOAD_SIGNING_ENABLED=true|false
     """
-    addressing_style = (os.getenv("OBS_S3_ADDRESSING_STYLE") or "path").strip().lower()
+    addressing_style = (os.getenv("OBS_S3_ADDRESSING_STYLE") or "virtual").strip().lower()
     if addressing_style not in {"path", "virtual"}:
-        addressing_style = "path"
+        addressing_style = "virtual"
 
     payload_signing_enabled = (os.getenv("OBS_PAYLOAD_SIGNING_ENABLED") or "false").strip().lower() in {
         "1", "true", "yes", "on"
     }
+
+    config_kwargs = dict(
+        signature_version="s3v4",
+        s3={
+            "addressing_style": addressing_style,
+            "payload_signing_enabled": payload_signing_enabled,
+        },
+    )
+    try:
+        # Доступно в botocore >= 1.36. Дублирует env-переменные выше на
+        # уровне Config — на случай если процесс уже успел проимпортить
+        # botocore до простановки os.environ.setdefault (например, при
+        # переиспользовании готовой сессии/интерпретатора).
+        config_kwargs["request_checksum_calculation"] = "when_required"
+        config_kwargs["response_checksum_validation"] = "when_required"
+        config = Config(**config_kwargs)
+    except TypeError:
+        # Старый botocore без этих параметров — не страшно, тогда
+        # достаточно env-переменных, которые он тоже читает.
+        config_kwargs.pop("request_checksum_calculation", None)
+        config_kwargs.pop("response_checksum_validation", None)
+        config = Config(**config_kwargs)
 
     return {
         "service_name": "s3",
@@ -70,18 +105,12 @@ def _obs_params() -> dict:
         "aws_secret_access_key": os.getenv("OBS_SECRET_KEY"),
         "region_name": os.getenv("OBS_REGION"),
         "endpoint_url": os.getenv("OBS_ENDPOINT"),
-        "config": Config(
-            signature_version="s3v4",
-            s3={
-                "addressing_style": addressing_style,
-                "payload_signing_enabled": payload_signing_enabled,
-            },
-        ),
+        "config": config,
     }
 
 
 def _bucket() -> str:
-    b = os.getenv("OBS_BUCKET")
+    b = os.getenv("OBS_OPEN_BUCKET")
     if not b:
         raise RuntimeError("OBS_BUCKET не задан в env")
     return b

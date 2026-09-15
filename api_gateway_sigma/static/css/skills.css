@@ -3,7 +3,7 @@
   padding: 82px 20px 28px;           /* уходит под стеклянный main-header */
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 8px;
   height: 100%;
   overflow: auto;
   box-sizing: border-box;
@@ -31,8 +31,8 @@
   justify-content: space-between;
   column-gap: .75rem;   /* --cds-gap-md */
   row-gap: .5rem;       /* --cds-gap-sm */
-  min-height: 5rem;     /* min-h-20 = spacing*20 */
-  padding-bottom: .5rem;
+  min-height: 0;
+  padding-bottom: .35rem;
   flex-shrink: 0;
   border-bottom: 1px solid var(--input-border, var(--border));
   flex-wrap: wrap;
@@ -126,7 +126,7 @@
 }
 .skill-card:hover::after { opacity: 0; }
 .skill-card.is-selected {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-color: transparent;
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 .skill-card.is-selected::after { display: none; }
@@ -482,7 +482,7 @@
 
 
 .skill-card.is-selected {
-  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  border-color: transparent;
   background: color-mix(in srgb, var(--accent) 9%, transparent);
 }
 .skill-card.is-selected .skill-theme { color: var(--text-primary); }

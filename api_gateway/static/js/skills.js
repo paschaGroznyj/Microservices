@@ -48,6 +48,8 @@
       searchToggle?.addEventListener('click', () => {
         if (searchRow?.hasAttribute('hidden')) openSearch(); else closeSearch();
       });
+      // Крестик внутри поля — выход из режима поиска.
+      document.getElementById('skills-search-clear')?.addEventListener('click', () => closeSearch());
       q?.addEventListener('input', () => {
         clearTimeout(this._debounce);
         this._debounce = setTimeout(() => this.load(), 250);

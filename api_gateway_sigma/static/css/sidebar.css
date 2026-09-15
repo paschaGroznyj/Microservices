@@ -798,6 +798,9 @@
    MOBILE SIDEBAR
 ══════════════════════════════════════════════ */
 @media (max-width: 768px) {
+  /* На мобилке сворачивание рулит бургер в main-header. */
+  .sidebar-collapse-btn { display: none; }
+
   .sidebar {
     position: fixed;
     top: 0;

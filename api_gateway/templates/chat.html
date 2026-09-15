@@ -292,14 +292,21 @@
                                         <button type="button" class="skills-menu-item" role="menuitemradio" data-sort="popular" aria-checked="false">Сначала популярные</button>
                                     </div>
                                 </div>
+                                <!-- Кнопка Add временно скрыта (скиллы публикует только агент)
                                 <button type="button" id="skills-add-btn" class="skills-primary-btn" aria-label="Добавить скилл" title="Добавить скилл" hidden>
                                     <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true"><path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
                                     <span>Add</span>
                                 </button>
+                                -->
                                 <span class="skills-count" id="skills-count"></span>
                             </div>
                             <div class="skills-search-row" id="skills-search-row" hidden>
-                                <input id="skills-query" class="skills-search" type="text" placeholder="Поиск по теме или содержанию…" autocomplete="off"/>
+                                <div class="skills-search-field">
+                                    <input id="skills-query" class="skills-search" type="text" placeholder="Поиск по теме или содержанию…" autocomplete="off"/>
+                                    <button type="button" id="skills-search-clear" class="skills-search-clear" aria-label="Закрыть поиск" title="Закрыть поиск">
+                                        <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true"><path d="M6 6l8 8M14 6l-8 8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+                                    </button>
+                                </div>
                                 <select id="skills-sort" class="skills-sort-hidden" aria-hidden="true" tabindex="-1"><option value="new">new</option><option value="popular">popular</option></select>
                             </div>
                         </div>

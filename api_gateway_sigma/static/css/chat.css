@@ -33,14 +33,16 @@
    Полоса узкая (~28px) с более плотным началом: промежуточная точка на
    ~40% альфы делает затухание резче в начале, чем линейное. */
 .chat-messages.fade-bottom:not(.fade-top) {
-  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), rgba(0,0,0,0.4) calc(100% - 11px), #0000 100%);
-          mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), rgba(0,0,0,0.4) calc(100% - 11px), #0000 100%);
+  /* Туман снизу убран: сообщения не затеняются перед уходом под инпут. */
+  -webkit-mask-image: none;
+          mask-image: none;
 }
 
 /* Оба края (проскроллено в середине) */
 .chat-messages.fade-top.fade-bottom {
-  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), rgba(0,0,0,0.4) calc(100% - 11px), #0000 100%);
-          mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), rgba(0,0,0,0.4) calc(100% - 11px), #0000 100%);
+  /* Туман снизу убран (верхнего края fade и так нет). */
+  -webkit-mask-image: none;
+          mask-image: none;
 }
 
 .chat-messages.hidden { display: none; }
@@ -237,18 +239,21 @@
 }
 
 .user-message {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
   max-width: 75%;
   padding: 10px 14px;
   border-radius: 14px 14px 3px 14px;
   background: var(--msg-user-bg);
   color: var(--msg-user-text);
-  font-family: var(--font-anthropic-serif);
+  font-family: var(--font-anthropic-sans);
   font-size: .875rem;
   line-height: 1.25rem;
   word-break: break-word;
 }
 
-.user-message .message-text { white-space: pre-wrap; }
+.user-message .message-text { white-space: pre-wrap; width: 100%; }
 
 .timestamp {
   font-size: .7rem;
@@ -625,13 +630,13 @@
   }
 
   .chat-messages.fade-bottom:not(.fade-top) {
-    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), rgba(0,0,0,0.32) calc(100% - 6px), #0000 100%);
-            mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), rgba(0,0,0,0.32) calc(100% - 6px), #0000 100%);
+    -webkit-mask-image: none;
+            mask-image: none;
   }
 
   .chat-messages.fade-top.fade-bottom {
-    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), rgba(0,0,0,0.32) calc(100% - 6px), #0000 100%);
-            mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), rgba(0,0,0,0.32) calc(100% - 6px), #0000 100%);
+    -webkit-mask-image: none;
+            mask-image: none;
   }
 }
 

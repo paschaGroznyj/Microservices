@@ -430,8 +430,13 @@ class ChatApp {
     renderMessages(messages) {
         const container = this.getMessagesContainer();
         if (!container) return;
+        // Облачко no-tools — чисто клиентское, в БД его нет. Polling делает
+        // полный re-render ленты из БД, поэтому сохраняем плашку и возвращаем
+        // её в конец после перерисовки, иначе она пропадёт после ответа агента.
+        const _hint = container.querySelector('.no-tools-hint');
         container.innerHTML = '';
         messages.forEach(msg => this.addMessage(msg, false));
+        if (_hint) container.appendChild(_hint);
         container.scrollTop = container.scrollHeight;
         this._initMessagesFade(container);
         container._syncFade && container._syncFade();

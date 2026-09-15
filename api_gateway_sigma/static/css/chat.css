@@ -1922,12 +1922,16 @@ pre {
    категорий инструментов. Закрывается по «Хорошо»/крестику.
 ══════════════════════════════════════════════ */
 .no-tools-hint {
-  align-self: flex-start;
+  /* Живёт в той же колонке 720px, что и сообщения, чтобы
+     левый край совпадал с текстом и не уходил за границу chat-messages. */
+  align-self: center;
+  width: 100%;
+  max-width: 720px;
+  box-sizing: border-box;
   position: relative;
   display: flex;
   gap: 12px;
-  max-width: min(560px, 90%);
-  margin: 4px 0 0;
+  margin: 4px auto 0;
   padding: 14px 40px 14px 16px;
   background: var(--surface2, #1b1c1f);
   border: 1px solid var(--border, rgba(255,255,255,.12));

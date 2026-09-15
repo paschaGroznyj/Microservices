@@ -199,7 +199,7 @@
 .skill-card::after {
   content: "";
   position: absolute;
-  left: 12px; right: 12px; bottom: 0;
+  left: 12px; right: 12px; bottom: -1px;
   height: 1px;
   background: var(--border);
   opacity: .5;
@@ -325,8 +325,9 @@
   transition: max-height .25s ease, opacity .2s ease, margin .2s ease;
   margin: 0;
 }
-.skill-card.is-open .skill-reveal {
-  max-height: 4000px;
+.skill-card.is-open .skill-reveal,
+.skill-card.is-editing .skill-reveal {
+  max-height: none;
   opacity: 1;
   margin: 2px 0;
 }
@@ -530,6 +531,68 @@
 .skill-confirm__btn--danger:hover { background: #c53f3f; }
 
 
+/* Inline-редактирование скилла прямо в раскрытой карточке */
+.skill-inline-edit {
+  display: grid;
+  gap: 6px;
+  padding: 4px 0 2px;
+}
+.skill-inline-edit__label {
+  font-size: .7rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: .02em;
+}
+.skill-inline-edit__input,
+.skill-inline-edit__textarea {
+  width: 100%;
+  border: 1px solid var(--border-color, var(--border));
+  background: var(--input-bg, var(--surface));
+  color: var(--text-primary);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: .84rem;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+.skill-inline-edit__input:focus,
+.skill-inline-edit__textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.skill-inline-edit__textarea {
+  min-height: 160px;
+  resize: vertical;
+  line-height: 1.45;
+}
+.skill-inline-edit__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+.skill-inline-edit__btn {
+  padding: 7px 16px;
+  border-radius: 8px;
+  font-size: .82rem;
+  font-weight: 550;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background .13s, border-color .13s, color .13s;
+}
+.skill-inline-edit__btn--cancel {
+  background: transparent;
+  border-color: var(--border-color, rgba(0,0,0,.14));
+  color: var(--text-primary);
+}
+.skill-inline-edit__btn--cancel:hover { background: var(--hover-bg, rgba(0,0,0,.05)); }
+.skill-inline-edit__btn--save {
+  background: var(--accent);
+  color: #fff;
+}
+.skill-inline-edit__btn--save:hover { filter: brightness(.95); }
+.skill-inline-edit__btn:disabled { opacity: .6; cursor: default; }
+
 /* Редактирование скилла */
 .skill-icon-btn--edit:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .skill-edit { max-width: 560px; text-align: left; }
@@ -579,7 +642,11 @@
 
 .skill-card.is-selected {
   border-color: transparent;
-  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  background: color-mix(in srgb, #16a34a 10%, transparent);
+}
+[data-theme="dark"] .skill-card.is-selected {
+  border-color: transparent;
+  background: color-mix(in srgb, #22c55e 12%, transparent);
 }
 .skill-card.is-selected .skill-theme { color: var(--text-primary); }
 .skill-card__head,

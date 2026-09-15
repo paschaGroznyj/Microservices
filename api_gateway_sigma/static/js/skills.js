@@ -18,25 +18,92 @@
     _adminLoaded: false,
     _selectedIds: new Set(),
     _selectedLimit: 5,
+    _sort: 'new',
+    _filter: 'all',
+    _allSkills: [],
     init(app){
       this.app = app;
       if (this.inited) return;
       this.inited = true;
-      document.getElementById('skills-refresh')?.addEventListener('click', () => this.load());
-      document.getElementById('skills-sort')?.addEventListener('change', () => this.load());
+
+      // Поиск: лупа раскрывает строку поиска (как у Claude)
+      const searchToggle = document.getElementById('skills-search-toggle');
+      const searchRow = document.getElementById('skills-search-row');
+      const toolbar = document.getElementById('skills-toolbar');
       const q = document.getElementById('skills-query');
+      const openSearch = () => {
+        this._closeAllMenus();
+        toolbar?.classList.add('searching');
+        searchRow?.removeAttribute('hidden');
+        searchToggle?.setAttribute('aria-expanded','true');
+        q?.focus();
+      };
+      const closeSearch = () => {
+        toolbar?.classList.remove('searching');
+        searchRow?.setAttribute('hidden','');
+        searchToggle?.setAttribute('aria-expanded','false');
+        if (q) q.value='';
+        this.load();
+      };
+      searchToggle?.addEventListener('click', () => {
+        if (searchRow?.hasAttribute('hidden')) openSearch(); else closeSearch();
+      });
+      // Крестик внутри поля — выход из режима поиска.
+      document.getElementById('skills-search-clear')?.addEventListener('click', () => closeSearch());
       q?.addEventListener('input', () => {
         clearTimeout(this._debounce);
         this._debounce = setTimeout(() => this.load(), 250);
       });
+      q?.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { closeSearch(); }
+      });
+
+      // Dropdown-меню фильтра и сортировки
+      this._bindMenu('skills-filter-btn', 'skills-filter-menu', 'filter', (val) => { this._filter = val; this._applyFilterSort(); });
+      this._bindMenu('skills-sort-btn', 'skills-sort-menu', 'sort', (val) => { this._sort = val; this.load(); });
+
+      // Закрытие меню по клику вне
+      document.addEventListener('click', (e) => {
+        if (!e.target.closest('.skills-menu-wrap')) this._closeAllMenus();
+      });
+
+      // Add — только админ (кнопка показывается в load после _fetchIsAdmin)
+      document.getElementById('skills-add-btn')?.addEventListener('click', () => this.openCreate?.());
+
       this._bindDropToInput();
       this._bindDropToChats();
       this._loadSelected().then(() => this._updateSelectedCounterUi()).catch(() => {});
     },
+    _bindMenu(btnId, menuId, dataAttr, onPick){
+      const btn = document.getElementById(btnId);
+      const menu = document.getElementById(menuId);
+      if (!btn || !menu) return;
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const willOpen = menu.hasAttribute('hidden');
+        this._closeAllMenus();
+        if (willOpen){ menu.removeAttribute('hidden'); btn.setAttribute('aria-expanded','true'); }
+      });
+      menu.querySelectorAll('.skills-menu-item').forEach(item => {
+        item.addEventListener('click', () => {
+          const val = item.dataset[dataAttr];
+          menu.querySelectorAll('.skills-menu-item').forEach(i => i.setAttribute('aria-checked', String(i===item)));
+          this._closeAllMenus();
+          // подсветка активности кнопки (отличной от дефолта)
+          const isDefault = (dataAttr==='sort' && val==='new') || (dataAttr==='filter' && val==='all');
+          btn.classList.toggle('is-active', !isDefault);
+          onPick(val);
+        });
+      });
+    },
+    _closeAllMenus(){
+      document.querySelectorAll('.skills-menu').forEach(m => m.setAttribute('hidden',''));
+      document.querySelectorAll('#skills-filter-btn, #skills-sort-btn').forEach(b => b.setAttribute('aria-expanded','false'));
+    },
     open(app){ this.init(app); this.load(); },
     async load(){
       const q = document.getElementById('skills-query')?.value || '';
-      const sort = document.getElementById('skills-sort')?.value || 'new';
+      const sort = this._sort || 'new';
       let skills = [];
       await this._loadSelected();
       try {
@@ -45,8 +112,18 @@
         skills = data.skills || [];
       } catch (e) { skills = []; }
       await this._fetchIsAdmin();
-      this.render(skills);
-      this._updateSelectedCounterUi(skills.length);
+      this._allSkills = skills;
+      // Кнопка Add: скиллы публикует агент, создания через UI нет — пока скрыта.
+      const addBtn = document.getElementById('skills-add-btn');
+      if (addBtn) addBtn.hidden = true;
+      this._applyFilterSort();
+    },
+    _applyFilterSort(){
+      let list = (this._allSkills || []).slice();
+      if (this._filter === 'liked') list = list.filter(s => this._likedIds.has(s.id));
+      else if (this._filter === 'selected') list = list.filter(s => this._selectedIds.has(s.id));
+      this.render(list);
+      this._updateSelectedCounterUi(list.length);
     },
     render(skills){
       const list = document.getElementById('skills-list');
@@ -98,16 +175,19 @@
               </button>` : ''}
             </div>
           </div>
-          ${author}
-          <div class="skill-meta">${model}${tools}</div>
+          <div class="skill-meta">${author}${model}</div>
           <button class="skill-toggle" data-toggle="${s.id}">${ICON_CHEVRON}<span class="skill-toggle-label">Читать полностью</span></button>
-          <div class="skill-body">${esc(s.body||'')}</div>
+          <div class="skill-reveal">
+            ${tools ? `<div class="skill-tools-row">${tools}</div>` : ''}
+            <div class="skill-body">${esc(s.body||'')}</div>
+          </div>
 </div>`;
       }).join('');
 
       list.querySelectorAll('[data-toggle]').forEach(b=>b.addEventListener('click',()=>{
         const card = b.closest('.skill-card');
         if (!card) return;
+        if (card.classList.contains('is-editing')) return; // не сворачиваем во время редактирования
         const open = card.classList.toggle('is-open');
         const label = b.querySelector('.skill-toggle-label');
         if (label) label.textContent = open ? 'Свернуть' : 'Читать полностью';
@@ -115,11 +195,12 @@
       }));
       list.querySelectorAll('[data-like]').forEach(b=>b.addEventListener('click',()=>this.like(Number(b.dataset.like))));
       list.querySelectorAll('[data-copy]').forEach(b=>b.addEventListener('click',()=>this.copyToChat(Number(b.dataset.copy))));
-      list.querySelectorAll('[data-edit]').forEach(b=>b.addEventListener('click',()=>this.openEditSkill(Number(b.dataset.edit))));
+      list.querySelectorAll('[data-edit]').forEach(b=>b.addEventListener('click',(e)=>{ e.stopPropagation(); this._enterInlineEdit(Number(b.dataset.edit)); }));
       list.querySelectorAll('[data-delete]').forEach(b=>b.addEventListener('click',()=>this.deleteSkill(Number(b.dataset.delete))));
       list.querySelectorAll('.skill-card').forEach(card=>{
         card.addEventListener('click', (e) => {
-          const interactive = e.target.closest('[data-like],[data-copy],[data-edit],[data-delete],[data-toggle],a,button,input,textarea,select');
+          if (card.classList.contains('is-editing')) return;
+          const interactive = e.target.closest('[data-like],[data-copy],[data-edit],[data-delete],[data-toggle],a,button,input,textarea,select,.skill-inline-edit');
           if (interactive) return;
           const id = Number(card.dataset.skillId);
           if (id) this.toggleSelectedSkill(id);
@@ -195,6 +276,90 @@ ${body}`;
       await this.app?.renderMessageInput?.();
       this._appendToInput(txt);
       this.app?.showToast?.('Скилл скопирован в чат');
+    },
+    _enterInlineEdit(skillId){
+      const card = document.querySelector(`.skill-card[data-skill-id="${skillId}"]`);
+      if (!card) return;
+      if (card.classList.contains('is-editing')) return;
+
+      // Раскрываем карточку полностью
+      card.classList.add('is-open');
+      const toggleLabel = card.querySelector('.skill-toggle-label');
+      if (toggleLabel) toggleLabel.textContent = 'Свернуть';
+
+      const reveal = card.querySelector('.skill-reveal');
+      if (!reveal) return;
+
+      const theme = card.dataset.skillTheme || '';
+      const body = decodeURIComponent(card.dataset.skillBodyRaw || '');
+      const tools = decodeURIComponent(card.dataset.skillToolsCsv || '');
+
+      card.classList.add('is-editing');
+      // Сохраняем исходный HTML reveal, чтобы вернуть при отмене
+      const prevHtml = reveal.innerHTML;
+
+      reveal.innerHTML = `
+        <div class="skill-inline-edit">
+          <label class="skill-inline-edit__label">Тема</label>
+          <input class="skill-inline-edit__input" data-inline="theme" type="text" maxlength="200" value="${esc(theme)}">
+          <label class="skill-inline-edit__label">Инструменты через запятую</label>
+          <input class="skill-inline-edit__input" data-inline="tools" type="text" maxlength="1000" value="${esc(tools)}">
+          <label class="skill-inline-edit__label">Тело скилла (Markdown)</label>
+          <textarea class="skill-inline-edit__textarea" data-inline="body" maxlength="10000">${esc(body)}</textarea>
+          <div class="skill-inline-edit__actions">
+            <button type="button" class="skill-inline-edit__btn skill-inline-edit__btn--cancel" data-inline-act="cancel">Отмена</button>
+            <button type="button" class="skill-inline-edit__btn skill-inline-edit__btn--save" data-inline-act="save">Сохранить</button>
+          </div>
+        </div>`;
+
+      const stop = (e) => e.stopPropagation();
+      reveal.querySelectorAll('input,textarea,button').forEach(el => el.addEventListener('click', stop));
+
+      const restore = () => {
+        card.classList.remove('is-editing');
+        reveal.innerHTML = prevHtml;
+        const bodyEl = reveal.querySelector('.skill-body');
+        if (bodyEl) { bodyEl.dataset.mdDone = ''; }
+        this._renderBodyMd(card);
+      };
+
+      reveal.querySelector('[data-inline-act="cancel"]')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        restore();
+      });
+
+      reveal.querySelector('[data-inline-act="save"]')?.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const newTheme = reveal.querySelector('[data-inline="theme"]')?.value?.trim() || '';
+        const newToolsCsv = reveal.querySelector('[data-inline="tools"]')?.value || '';
+        const newBody = reveal.querySelector('[data-inline="body"]')?.value?.trim() || '';
+        if (!newTheme || !newBody) {
+          this.app?.showToast?.('Тема и тело скилла обязательны');
+          return;
+        }
+        const newTools = newToolsCsv.split(',').map(x => x.trim()).filter(Boolean);
+        const saveBtn = reveal.querySelector('[data-inline-act="save"]');
+        if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Сохранение…'; }
+        try {
+          const res = await fetch(`/api/skills/${skillId}`, {
+            method: 'PUT',
+            credentials: 'include',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ theme: newTheme, body: newBody, tools: newTools }),
+          });
+          if (res.status === 403) { this.app?.showToast?.('Редактировать можно только свои скиллы'); return; }
+          if (res.status === 404) { this.app?.showToast?.('Скилл не найден'); return; }
+          if (!res.ok) { this.app?.showToast?.('Не удалось обновить скилл'); return; }
+          this.app?.showToast?.('Скилл обновлён');
+          await this.load();
+        } catch (err) {
+          this.app?.showToast?.('Ошибка обновления скилла');
+        } finally {
+          if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Сохранить'; }
+        }
+      });
+
+      reveal.querySelector('[data-inline="theme"]')?.focus();
     },
     async openEditSkill(skillId){
       const card = document.querySelector(`.skill-card[data-skill-id="${skillId}"]`);

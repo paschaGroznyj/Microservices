@@ -19,7 +19,9 @@
   /* Туман по краям: сообщения плавно растворяются, уходя за верхний край
      и под message-input-container снизу. Состояния ставит JS классами
      .fade-top / .fade-bottom (по аналогии с сайдбаром). */
-  transition: -webkit-mask-image 0.2s ease, mask-image 0.2s ease;
+  /* PERF: туман убран (все fade-состояния = mask-image:none), поэтому
+     transition по mask-image ничего не анимирует, а лишь заставляет браузер
+     держать mask-слой на ленте. Убрано. */
 }
 
 /* Только верхний fade (доскроллено до низа). Зеркально нижнему:
@@ -468,7 +470,11 @@
 
 /* ── CHAT ACTIVE STATE ────────────────────────── */
 .chat-main-inner.chat-active .chat-start-screen {
+  /* PERF: display:none убирает из потока, но content-visibility:hidden
+     дополнительно гарантирует, что браузер не держит растровые
+     слои двух full-bleed фоновых фото во время скролла активного чата. */
   display: none;
+  content-visibility: hidden;
 }
 
 .chat-active {
@@ -908,6 +914,14 @@
 [data-theme="dark"]  .chat-start-screen.bg-ready::after  { opacity: 1; }
 
 .chat-start-screen.bg-ready .start-scrim { opacity: 1; }
+
+/* PERF: will-change нужен ТОЛЬКО на время fade-in фона. После того как JS
+   поставил .bg-ready и анимация отыграла — снимаем will-change,
+   чтобы не держать два постоянных GPU-слоя с full-bleed фото. */
+.chat-start-screen.bg-ready::before,
+.chat-start-screen.bg-ready::after {
+  will-change: auto;
+}
 
 /* Центральный блок (заголовок + инпут) — единый стеклянный контейнер */
 .start-body {
@@ -1901,3 +1915,101 @@ pre {
 }
 .image-lightbox__dl svg,
 .image-lightbox__close svg { width: 18px; height: 18px; }
+
+/* ══════════════════════════════════════════════
+   NO-TOOLS HINT  (облачко-подсказка в ленте)
+   Появляется, когда запрос отправлен без выбранных
+   категорий инструментов. Закрывается по «Хорошо»/крестику.
+══════════════════════════════════════════════ */
+.no-tools-hint {
+  /* Живёт в той же колонке 720px, что и сообщения, чтобы
+     левый край совпадал с текстом и не уходил за границу chat-messages. */
+  align-self: center;
+  width: 100%;
+  max-width: 720px;
+  box-sizing: border-box;
+  position: relative;
+  display: flex;
+  gap: 12px;
+  margin: 4px auto 0;
+  padding: 14px 40px 14px 16px;
+  background: var(--surface2, #1b1c1f);
+  border: 1px solid var(--border, rgba(255,255,255,.12));
+  border-left: 3px solid var(--accent, #d97757);
+  border-radius: 14px;
+  box-shadow: var(--shadow-md, 0 8px 28px rgba(0,0,0,.35));
+  color: var(--text-primary, #ececec);
+  opacity: 0;
+  transform: translateY(8px) scale(.98);
+  transition: opacity .22s ease, transform .22s ease;
+}
+.no-tools-hint.no-tools-hint--in {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+.no-tools-hint.no-tools-hint--closing {
+  opacity: 0;
+  transform: translateY(6px) scale(.98);
+}
+.no-tools-hint__icon {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  color: var(--accent, #d97757);
+}
+.no-tools-hint__icon svg { width: 26px; height: 26px; }
+.no-tools-hint__body { display: flex; flex-direction: column; gap: 6px; }
+.no-tools-hint__title {
+  font-weight: 600;
+  font-size: .92rem;
+  line-height: 1.2;
+}
+.no-tools-hint__text {
+  font-size: .84rem;
+  line-height: 1.45;
+  color: var(--text-secondary, rgba(236,236,236,.72));
+}
+.no-tools-hint__ok {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 6px 16px;
+  font-size: .82rem;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent, #d97757);
+  border: none;
+  border-radius: 99px;
+  cursor: pointer;
+  transition: filter .15s ease;
+}
+.no-tools-hint__ok:hover { filter: brightness(1.08); }
+.no-tools-hint__close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--text-secondary, rgba(236,236,236,.6));
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.no-tools-hint__close:hover {
+  background: rgba(255,255,255,.08);
+  color: var(--text-primary, #ececec);
+}
+.no-tools-hint__close svg { width: 16px; height: 16px; }
+
+[data-theme="light"] .no-tools-hint {
+  background: #fff;
+  border-color: rgba(0,0,0,.1);
+  color: #1f2023;
+}
+[data-theme="light"] .no-tools-hint__text { color: rgba(31,32,35,.7); }
+[data-theme="light"] .no-tools-hint__close:hover { background: rgba(0,0,0,.06); }

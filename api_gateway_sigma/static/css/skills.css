@@ -3,17 +3,26 @@
   padding: 82px 20px 28px;           /* уходит под стеклянный main-header */
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 8px;
   height: 100%;
   overflow: auto;
   box-sizing: border-box;
+}
+/* Контент раздела скиллов — по ширине как .agent-message (720px, центр). */
+.skills-intro,
+.skills-toolbar,
+.skills-list {
+  width: 100%;
+  max-width: 720px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 /* Интро-карточка: краткое описание раздела */
 .skills-intro {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 10px 14px;
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -25,10 +34,14 @@
 
 /* Тулбар в стиле graph-toolbar */
 .skills-toolbar {
+  /* Claude Skills header: flex-wrap items-end justify-between gap-x-md gap-y-sm min-h-20 */
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-bottom: 6px;
+  align-items: flex-end;
+  justify-content: space-between;
+  column-gap: .75rem;   /* --cds-gap-md */
+  row-gap: .5rem;       /* --cds-gap-sm */
+  min-height: 0;
+  padding-bottom: .35rem;
   flex-shrink: 0;
   border-bottom: 1px solid var(--input-border, var(--border));
   flex-wrap: wrap;
@@ -36,47 +49,134 @@
 .skills-search {
   flex: 1;
   min-width: 220px;
-  height: 32px;
-  padding: 0 10px;
-  border-radius: 8px;
+  height: 26px;                 /* --cds-h-control */
+  padding: 0 .5rem;             /* --cds-pad-md */
+  border-radius: .25rem;        /* --cds-radius */
   border: 1px solid var(--input-border, var(--border));
   background: var(--input-bg, var(--surface));
   color: var(--text-primary, #111);
-  font-size: 0.8rem;
+  font-size: .8125rem;          /* --cds-font-size-body */
   outline: none;
   transition: border-color 0.15s;
 }
 .skills-search:focus { border-color: var(--accent, #2563eb); }
 .skills-btn-refresh {
-  height: 32px;
-  width: 32px;
-  border-radius: 8px;
-  border: 1px solid var(--input-border, var(--border));
-  background: var(--input-bg, var(--surface));
+  height: 26px;                 /* --cds-h-control */
+  width: 26px;                  /* aspect-square w-control */
+  border-radius: .25rem;        /* --cds-radius */
+  border: none;                 /* cds ghost */
+  background: transparent;
   color: var(--text-secondary, #555);
   font-size: 1rem;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 0.15s ease, color 0.15s ease;
   display: flex;
   align-items: center;
   justify-content: center;
 }
-.skills-btn-refresh:hover { background: var(--sidebar-hover, #f0f0f0); }
+.skills-btn-refresh:hover {
+  background: color-mix(in srgb, var(--text-secondary) 12%, transparent); /* fill-ghost-hover */
+  color: var(--text-primary);
+}
+
+/* ==== Claude-like skills toolbar (иконки + раскрывающийся поиск) ==== */
+.skills-toolbar { flex-direction: column; align-items: stretch; }
+.skills-toolbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: .5rem;
+  width: 100%;
+}
+.skills-icon-btn {
+  width: 32px; height: 32px; min-width: 32px;
+  border: none; border-radius: 8px;
+  background: transparent; color: var(--text-secondary);
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer; transition: background .15s ease, color .15s ease;
+}
+.skills-icon-btn:hover { background: color-mix(in srgb, var(--text-secondary) 12%, transparent); color: var(--text-primary); }
+.skills-icon-btn.is-active { color: var(--accent); }
+.skills-menu-wrap { position: relative; display: inline-flex; }
+.skills-menu[hidden] { display: none; }
+.skills-menu {
+  position: absolute; top: calc(100% + 4px); right: 0; z-index: 40;
+  min-width: 180px; padding: 4px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.18);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.skills-menu-item {
+  text-align: left; padding: 7px 10px; border: none; border-radius: 6px;
+  background: transparent; color: var(--text-primary);
+  font-size: .8125rem; cursor: pointer; transition: background .12s ease;
+}
+.skills-menu-item:hover { background: color-mix(in srgb, var(--text-secondary) 12%, transparent); }
+.skills-menu-item[aria-checked="true"] { color: var(--accent); font-weight: 500; }
+.skills-primary-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 32px; padding: 0 12px; border: none; border-radius: 8px;
+  background: var(--accent); color: #fff;
+  font-size: .8125rem; font-weight: 500; cursor: pointer;
+  transition: filter .15s ease;
+}
+.skills-primary-btn:hover { filter: brightness(1.08); }
+/* Режим поиска: строка поиска занимает место кнопок в том же ряду. */
+.skills-search-row[hidden] { display: none; }
+.skills-search-row { display: flex; gap: .5rem; width: 100%; justify-content: flex-end; }
+/* Поле поиска с крестиком-выходом. */
+.skills-search-field {
+  position: relative;
+  flex: 1;
+  min-width: 220px;
+  display: flex;
+  align-items: center;
+}
+.skills-search-field .skills-search {
+  flex: 1;
+  min-width: 0;
+  padding-right: 28px;
+}
+.skills-search-clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background .14s ease, color .14s ease;
+}
+.skills-search-clear:hover {
+  background: var(--sidebar-hover, rgba(0,0,0,.06));
+  color: var(--text-primary);
+}
+/* Когда тулбар в режиме поиска — прячем блок кнопок. */
+.skills-toolbar.searching .skills-toolbar-actions { display: none; }
+.skills-sort-hidden { display: none; }
+
 .skills-count {
-  font-size: 0.7rem;
+  font-size: .6875rem;          /* caption */
   color: var(--text-muted, #9ca3af);
   white-space: nowrap;
-  padding-left: 4px;
+  padding-left: .5rem;
 }
 .skills-select,
 .skills-input {
   background: var(--surface);
   border: 1px solid var(--border);
   color: var(--text-primary);
-  border-radius: 8px;
-  padding: 0 12px;
-  height: 32px;
-  font-size: .8rem;
+  border-radius: .25rem;        /* --cds-radius */
+  padding: 0 .5rem;             /* --cds-pad-md */
+  height: 26px;                 /* --cds-h-control */
+  font-size: .8125rem;          /* --cds-font-size-body */
   outline: none;
   transition: border-color .15s ease;
 }
@@ -85,34 +185,50 @@
 .skills-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 0;
 }
 .skills-list > .skill-card {
   width: 100%;
 }
 
-/* Карточка скилла */
+/* Карточка скилла — компактная строка в стиле Claude tabbed-list-row.
+   Наведение подсвечивает фон (ghost-hover), разделитель — тонкая линия снизу. */
 .skill-card {
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: var(--surface);
-  padding: 14px 16px;
+  position: relative;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  /* CDS tabbed-list-row: компактный паддинг (pad-sm/pad-md) */
+  padding: 9px 12px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
+  gap: 4px;
+  transition: background .14s ease, border-color .14s ease;
 }
+.skill-card::after {
+  content: "";
+  position: absolute;
+  left: 12px; right: 12px; bottom: -1px;
+  height: 1px;
+  background: var(--border);
+  opacity: .5;
+}
+.skills-list > .skill-card:last-child::after { display: none; }
 .skill-card:hover {
-  transform: translateY(-2px);
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
-  box-shadow: 0 8px 24px rgba(0, 0, 0, .10);
+  background: color-mix(in srgb, var(--text-secondary) 8%, transparent);
 }
+.skill-card:hover::after { opacity: 0; }
+.skill-card.is-selected {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.skill-card.is-selected::after { display: none; }
 
 .skill-card__head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
 }
 .skill-head-actions {
   display: inline-flex;
@@ -120,10 +236,12 @@
   gap: 4px;
 }
 .skill-theme {
-  font-weight: 640;
-  font-size: .96rem;
+  font-weight: 560;
+  font-size: .86rem;
   color: var(--text-primary);
-  line-height: 1.3;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Сердечко-лайк с SVG */
@@ -151,8 +269,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 22px;
+  height: 22px;
   border: none;
   border-radius: 8px;
   background: transparent;
@@ -172,7 +290,7 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: .74rem;
+  font-size: .7rem;
   color: var(--text-secondary);
 }
 .skill-author svg { opacity: .7; flex-shrink: 0; }
@@ -181,53 +299,68 @@
 .skill-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   align-items: center;
 }
 .skill-badge {
-  font-size: .7rem;
+  font-size: .64rem;
   color: var(--text-secondary);
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
-  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+  border: none;
   border-radius: 999px;
-  padding: 2px 9px;
+  padding: 1px 7px;
+  line-height: 1.5;
   white-space: nowrap;
 }
-.skill-badge--model { color: var(--accent); }
+.skill-badge--model { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 
-/* Тело: свёрнуто по умолчанию */
-.skill-body {
-  white-space: pre-wrap;
+/* Строка tools-бейджей — показывается только при полном раскрытии */
+.skill-tools-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.skill-badge--tools {
+  white-space: normal;
   word-break: break-word;
-  font-size: .84rem;
-  color: var(--text-primary);
-  line-height: 1.5;
+}
+
+/* Обёртка раскрываемой части (tools-бейджи + тело): свёрнуто по умолчанию */
+.skill-reveal {
   max-height: 0;
   overflow: hidden;
   opacity: 0;
   transition: max-height .25s ease, opacity .2s ease, margin .2s ease;
   margin: 0;
 }
-.skill-card.is-open .skill-body {
-  max-height: 4000px;
+.skill-card.is-open .skill-reveal,
+.skill-card.is-editing .skill-reveal {
+  max-height: none;
   opacity: 1;
   margin: 2px 0;
+}
+.skill-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: .82rem;
+  color: var(--text-primary);
+  line-height: 1.5;
 }
 
 /* Кнопка раскрытия в стиле section-label */
 .skill-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   border: none;
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--text-muted, var(--text-secondary));
   cursor: pointer;
-  font-size: .82rem;
+  font-size: .72rem;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .04em;
-  padding: 7px 0;
+  letter-spacing: .02em;
+  padding: 2px 0;
   align-self: flex-start;
 }
 .skill-toggle:hover { color: var(--text-primary); }
@@ -283,7 +416,7 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 8px;
   min-height: 320px;
   color: var(--text-secondary);
   text-align: center;
@@ -379,7 +512,7 @@
 }
 .skill-confirm__actions {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   justify-content: center;
 }
 .skill-confirm__btn {
@@ -407,6 +540,68 @@
 .skill-confirm__btn--danger:hover { background: #c53f3f; }
 
 
+/* Inline-редактирование скилла прямо в раскрытой карточке */
+.skill-inline-edit {
+  display: grid;
+  gap: 6px;
+  padding: 4px 0 2px;
+}
+.skill-inline-edit__label {
+  font-size: .7rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: .02em;
+}
+.skill-inline-edit__input,
+.skill-inline-edit__textarea {
+  width: 100%;
+  border: 1px solid var(--border-color, var(--border));
+  background: var(--input-bg, var(--surface));
+  color: var(--text-primary);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: .84rem;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+.skill-inline-edit__input:focus,
+.skill-inline-edit__textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.skill-inline-edit__textarea {
+  min-height: 160px;
+  resize: vertical;
+  line-height: 1.45;
+}
+.skill-inline-edit__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+.skill-inline-edit__btn {
+  padding: 7px 16px;
+  border-radius: 8px;
+  font-size: .82rem;
+  font-weight: 550;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background .13s, border-color .13s, color .13s;
+}
+.skill-inline-edit__btn--cancel {
+  background: transparent;
+  border-color: var(--border-color, rgba(0,0,0,.14));
+  color: var(--text-primary);
+}
+.skill-inline-edit__btn--cancel:hover { background: var(--hover-bg, rgba(0,0,0,.05)); }
+.skill-inline-edit__btn--save {
+  background: var(--accent);
+  color: #fff;
+}
+.skill-inline-edit__btn--save:hover { filter: brightness(.95); }
+.skill-inline-edit__btn:disabled { opacity: .6; cursor: default; }
+
 /* Редактирование скилла */
 .skill-icon-btn--edit:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .skill-edit { max-width: 560px; text-align: left; }
@@ -427,6 +622,18 @@
 /* Мобильный clamp для длинного текста инструментов */
 .skill-meta { min-width: 0; }
 .skill-badge--tools { max-width: 100%; }
+/* Выпадающие меню (фильтр/сорт) не должны вылезать за экран на мобилке. */
+@media (max-width: 768px) {
+  .skills-menu {
+    right: 0;
+    left: auto;
+    min-width: 160px;
+    max-width: calc(100vw - 24px);
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+}
+
 @media (max-width: 900px) {
   .skill-meta { display: flex; width: 100%; min-width: 0; }
   .skill-badge--model { flex: 0 0 auto; }
@@ -443,11 +650,16 @@
 
 
 .skill-card.is-selected {
-  border-color: color-mix(in srgb, #67cc98 62%, var(--border));
-  background: color-mix(in srgb, #b6f0cf 28%, var(--surface));
+  border-color: transparent;
+  background: color-mix(in srgb, #16a34a 10%, transparent);
 }
-.skill-card.is-selected .skill-theme { color: #1f6b45; }
+[data-theme="dark"] .skill-card.is-selected {
+  border-color: transparent;
+  background: color-mix(in srgb, #22c55e 12%, transparent);
+}
+.skill-card.is-selected .skill-theme { color: var(--text-primary); }
 .skill-card__head,
+.skill-reveal,
 .skill-body,
 .skill-author,
 .skill-meta,

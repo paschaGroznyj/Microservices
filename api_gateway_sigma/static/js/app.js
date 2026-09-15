@@ -68,6 +68,7 @@ class ChatApp {
         // await loadFeedbacks();
         initMobileMenu();
         this.initTabSwitcher();
+        this.initSidebarCollapse();
         this.initHelp();
         this.initChatsSectionToggle();
         this.initVisibilityReconnect();
@@ -92,13 +93,51 @@ class ChatApp {
        TAB SWITCHER (agent ↔ graph)
     ══════════════════════════════════════════ */
     initTabSwitcher() {
-    document.querySelectorAll('.pill[data-tab], .nav-item[data-tab]').forEach(btn => {
+    document.querySelectorAll('.pill[data-tab], .nav-item[data-tab], .sidebar-skills-btn[data-tab]').forEach(btn => {
         btn.addEventListener('click', () => {
             const tab = btn.dataset.tab;
             this.switchTab(tab);
         });
     });
 }
+
+    /* ════════════════════════════════
+       SIDEBAR COLLAPSE (desktop) — сворачивание
+       левой панели. Кнопка в шапке сайдбара
+       сворачивает, кнопка в topbar разворачивает.
+    ════════════════════════════════ */
+    initSidebarCollapse() {
+        const layout = document.querySelector('.chat-layout');
+        const collapseBtn = document.getElementById('sidebar-collapse-btn');
+        const expandBtn = document.getElementById('sidebar-expand-btn');
+        if (!layout) return;
+
+        const KEY = 'catchpm:sidebar-collapsed';
+        const apply = (collapsed) => {
+            layout.classList.toggle('sidebar-collapsed', collapsed);
+            if (expandBtn) expandBtn.hidden = !collapsed;
+            if (collapseBtn) collapseBtn.setAttribute('aria-expanded', String(!collapsed));
+            try { localStorage.setItem(KEY, collapsed ? '1' : '0'); } catch (e) {}
+        };
+
+        // На десктопе восстанавливаем состояние; на мобилке — отдельный механизм (mobile.js).
+        if (window.innerWidth > 768) {
+            let saved = '0';
+            try { saved = localStorage.getItem(KEY) || '0'; } catch (e) {}
+            apply(saved === '1');
+        }
+
+        collapseBtn?.addEventListener('click', () => apply(true));
+        expandBtn?.addEventListener('click', () => apply(false));
+
+        // Гамбургер в топбаре универсален: на десктопе он тоглит collapse,
+        // на мобилке (<=768) открытие оверлея рулит mobile.js — его не трогаем.
+        const topbarToggle = document.getElementById('mobile-menu-toggle');
+        topbarToggle?.addEventListener('click', () => {
+            if (window.innerWidth <= 768) return; // мобилка — отработает mobile.js
+            apply(!layout.classList.contains('sidebar-collapsed'));
+        });
+    }
 
     switchTab(tab) {
         if (this.currentTab === tab) return;
@@ -119,7 +158,7 @@ class ChatApp {
         document.getElementById(`view-${tab}`)?.classList.remove('hidden');
 
         // Активный pill / nav-item
-        document.querySelectorAll('.pill[data-tab], .nav-item[data-tab]').forEach(n => {
+        document.querySelectorAll('.pill[data-tab], .nav-item[data-tab], .sidebar-skills-btn[data-tab]').forEach(n => {
             n.classList.toggle('active', n.dataset.tab === tab);
         });
 
@@ -430,8 +469,13 @@ class ChatApp {
     renderMessages(messages) {
         const container = this.getMessagesContainer();
         if (!container) return;
+        // Облачко no-tools — чисто клиентское, в БД его нет. Polling делает
+        // полный re-render ленты из БД, поэтому сохраняем плашку и возвращаем
+        // её в конец после перерисовки, иначе она пропадёт после ответа агента.
+        const _hint = container.querySelector('.no-tools-hint');
         container.innerHTML = '';
         messages.forEach(msg => this.addMessage(msg, false));
+        if (_hint) container.appendChild(_hint);
         container.scrollTop = container.scrollHeight;
         this._initMessagesFade(container);
         container._syncFade && container._syncFade();
@@ -516,11 +560,19 @@ class ChatApp {
         if (container._historyLoaderBound) return;
         container._historyLoaderBound = true;
 
+        // rAF-throttle: scroll сыплется десятками событий/кадр, а чтение
+        // container.scrollTop форсит layout. Сводим к одной проверке на кадр.
+        let ticking = false;
         container.addEventListener('scroll', () => {
-            // Триггерим подгрузку, когда почти доскроллили до верха
-            if (container.scrollTop < 120) {
-                this.loadOlderMessages();
-            }
+            if (ticking) return;
+            ticking = true;
+            requestAnimationFrame(() => {
+                ticking = false;
+                // Триггерим подгрузку, когда почти доскроллили до верха
+                if (container.scrollTop < 120) {
+                    this.loadOlderMessages();
+                }
+            });
         }, { passive: true });
     }
 
@@ -832,6 +884,8 @@ class ChatApp {
         if (!panel || !body || !view) return;
 
         body.textContent = text;   // textContent — без интерпретации HTML, оригинальный вид
+        // Поле редактируемое (contenteditable): правки чисто клиентские,
+        // никуда не сохраняются — просто чтобы можно было выделить/поправить перед копированием.
         if (titleEl) {
             const first = (text.split('\n').find(l => l.trim()) || 'Просмотр текста').trim();
             titleEl.textContent = first.length > 60 ? first.slice(0, 60) + '…' : first;
@@ -1404,6 +1458,13 @@ class ChatApp {
         const msgId = `msg-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
         this.addMessage({ message: text, is_from_bot: false, id: msgId, created_at: new Date().toISOString(), files: [] });
         this._scrollToUserMessageAndReserve();
+
+        // Если ни одна категория инструментов не выбрана — агент работает
+        // с ограниченным функционалом. Подсказываем облачком прямо в ленте.
+        try {
+            const _selTools = window.ToolsPanel?.getSelectedCategories() ?? [];
+            if (_selTools.length === 0) this._showNoToolsHint();
+        } catch (_) {}
 
         this.clearInput(field);
         sendBtn?.classList.remove('active');
@@ -3043,6 +3104,56 @@ class ChatApp {
     /* ══════════════════════════════════════════
        HELPERS
     ══════════════════════════════════════════ */
+    /* ══════════════════════════════════════════
+       NO-TOOLS HINT (облачко в ленте)
+       Показывается когда юзер шлёт запрос, а ни одна
+       категория инструментов не выбрана. Закрывается
+       по «Хорошо» или крестику. Не дублируется.
+    ══════════════════════════════════════════ */
+    _showNoToolsHint() {
+        const container = this.getMessagesContainer();
+        if (!container) return;
+        // Не плодим — если облачко уже висит, просто обновим позицию (в конец)
+        const existing = container.querySelector('.no-tools-hint');
+        if (existing) { container.appendChild(existing); return; }
+
+        const hint = document.createElement('div');
+        hint.className = 'no-tools-hint';
+        hint.setAttribute('role', 'status');
+        hint.innerHTML = `
+            <button class="no-tools-hint__close" type="button" aria-label="Закрыть">
+                <svg viewBox="0 0 24 24" fill="none">
+                    <path d="M6 6l12 12M18 6L6 18" stroke="currentColor"
+                          stroke-width="2" stroke-linecap="round"/>
+                </svg>
+            </button>
+            <div class="no-tools-hint__icon">
+                <svg viewBox="0 0 24 24" fill="none">
+                    <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4l-6 6a1.5 1.5 0 0 0 2.1 2.1l6-6a4 4 0 0 0 5.4-5.4l-2.3 2.3-2.1-2.1 2.3-2.3z"
+                          stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                </svg>
+            </div>
+            <div class="no-tools-hint__body">
+                <div class="no-tools-hint__title">Инструменты не выбраны</div>
+                <div class="no-tools-hint__text">Сейчас агент отвечает с ограниченным функционалом: без поиска в интернете, работы с БД, парсинга и запуска кода. Нажмите на ключ рядом с полем ввода и выберите нужные категории, затем повторите запрос.</div>
+                <button class="no-tools-hint__ok" type="button">Хорошо</button>
+            </div>
+        `;
+
+        const close = () => {
+            hint.classList.add('no-tools-hint--closing');
+            setTimeout(() => hint.remove(), 220);
+        };
+        hint.querySelector('.no-tools-hint__close')?.addEventListener('click', close);
+        hint.querySelector('.no-tools-hint__ok')?.addEventListener('click', close);
+
+        container.appendChild(hint);
+        requestAnimationFrame(() => hint.classList.add('no-tools-hint--in'));
+        // Доскроллить, чтобы облачко было видно
+        const dist = container.scrollHeight - container.scrollTop - container.clientHeight;
+        if (dist < 200) container.scrollTop = container.scrollHeight;
+    }
+
     getMessagesContainer() {
         return document.getElementById('view-agent')?.querySelector('.chat-messages');
     }
@@ -3064,7 +3175,15 @@ class ChatApp {
             container.classList.toggle('fade-bottom', scrollable && !atBottom);
         };
 
-        container.addEventListener('scroll', sync, { passive: true });
+        // rAF-throttle на scroll: не чаще одного пересчёта layout на кадр.
+        let fadeTicking = false;
+        const onScrollSync = () => {
+            if (fadeTicking) return;
+            fadeTicking = true;
+            requestAnimationFrame(() => { fadeTicking = false; sync(); });
+        };
+
+        container.addEventListener('scroll', onScrollSync, { passive: true });
         container._syncFade = sync;
         // Пересчёт при изменении содержимого/размеров (новые сообщения, ресайз)
         if (window.ResizeObserver) {

@@ -114,15 +114,18 @@
 .feedback-trigger,
 .info-btn,
 .mobile-menu-toggle {
-  width: 34px;
-  height: 34px;
-  border-radius: var(--radius-sm);
-  display: flex;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-secondary);
-  flex-shrink: 0;
-  transition: all var(--transition);
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
 }
 
 .feedback-trigger svg,
@@ -279,6 +282,16 @@
   tab-size: 4;
 }
 
+/* Редактируемый режим: курсор-текст и аккуратная фокус-рамка,
+   чтобы было понятно, что текст можно править. */
+.text-preview-body[contenteditable="true"] {
+  cursor: text;
+  outline: none;
+}
+.text-preview-body[contenteditable="true"]:focus {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
 @media (max-width: 900px) {
   .text-preview-panel {
     width: 100%;
@@ -298,8 +311,11 @@
    MOBILE MENU TOGGLE
 ══════════════════════════════════════════════ */
 .mobile-menu-toggle { display: none; }
+/* Показываем топбарный бургер только когда сайдбар свёрнут — как кнопку "развернуть". */
+.chat-layout.sidebar-collapsed .mobile-menu-toggle { display: flex; }
 
 @media (max-width: 768px) {
+  /* На мобилке бургер всегда виден — открывает сайдбар оверлеем. */
   .mobile-menu-toggle { display: flex; }
   .tab-pills { display: none; }
   .chat-main:not(.start-screen-mode) .main-header {
@@ -703,3 +719,36 @@
   .hi-footer-links { gap: 16px; }
   .help-close { top: 14px; right: 14px; }
 }
+
+/* ═══════════════════════════════════════════════
+   COLLAPSIBLE SIDEBAR (desktop) — Claude-like
+════════════════════════════════════════════════ */
+.chat-layout.sidebar-collapsed .sidebar {
+  width: 0;
+  min-width: 0;
+  border-right-color: transparent;
+  opacity: 0;
+  pointer-events: none;
+}
+.sidebar {
+  transition: width .22s ease, min-width .22s ease, opacity .18s ease,
+              background var(--transition);
+}
+
+/* Кнопка «развернуть» в шапке — Claude ghost icon-button */
+.sidebar-expand-btn {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.sidebar-expand-btn:hover { background: var(--sidebar-hover); color: var(--text-primary); }
+.sidebar-expand-btn:active { background: var(--sidebar-active); }

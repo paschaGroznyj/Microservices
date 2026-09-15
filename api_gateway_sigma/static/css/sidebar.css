@@ -15,17 +15,20 @@
 
 /* ── HEADER / BRAND ───────────────────────────── */
 .sidebar-header {
-  padding: 0 14px;
+  padding: 0 12px 0 14px;
   height: 54px;
   min-height: 54px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .brand-link {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 9px;
   color: var(--text-primary);
@@ -33,9 +36,34 @@
   font-family: var(--font-serif);
   font-weight: 600;
   font-size: 1.05rem;
+  flex: 1;
 }
 
 .brand-link:hover { text-decoration: none; opacity: .85; }
+
+/* Кнопка сворачивания сайдбара — Claude ghost icon-button.
+   h-control/w-control aspect-square, rounded, hover: fill-ghost-hover. */
+.sidebar-collapse-btn {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+.sidebar-collapse-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+.sidebar-collapse-btn:active { background: var(--sidebar-active); }
+.sidebar-collapse-icon { display: block; }
+
 
 .brand-icon {
   width: 30px;
@@ -770,6 +798,9 @@
    MOBILE SIDEBAR
 ══════════════════════════════════════════════ */
 @media (max-width: 768px) {
+  /* На мобилке сворачивание рулит бургер в main-header. */
+  .sidebar-collapse-btn { display: none; }
+
   .sidebar {
     position: fixed;
     top: 0;

@@ -17,7 +17,9 @@ function initMobileMenu() {
     // Клик по гамбургеру
    if (toggleBtn) {
         toggleBtn.addEventListener("click", (e) => {
-            console.log('Регистриуем клик по гамбе')
+            // На десктопе (>768) гамбургер рулит collapse (app.js initSidebarCollapse),
+            // а не оверлеем — мобильную логику пропускаем.
+            if (window.innerWidth > 768) return;
             e.stopPropagation();
             toggleSidebar(!sidebar.classList.contains('open'));
         });

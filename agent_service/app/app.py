@@ -32,6 +32,7 @@ from agent_pm.core.file_parsers import parse_file
 from agent_pm.scheduler_digest import start_digest_scheduler, start_interval_digest_scheduler
 import websockets
 from agent_pm.core.botocore_client import database
+from agent_pm.core import obs_file_storage
 logging.basicConfig(level=logging.INFO)
 
 
@@ -196,15 +197,27 @@ def _resolve_in_whitelist(file_name: str) -> str | None:
 
 
 @web_router.get("/web/file")
-async def get_generated_file(path: str):
+async def get_generated_file(path: str, chat_id: int | None = None):
     real_path = os.path.realpath(path)
 
     # Защита: файл обязан лежать внутри одного из разрешённых корней.
     if not _is_within_allowed_roots(real_path):
         raise HTTPException(status_code=403, detail="Forbidden path")
 
+    # Файлы на хосте эфемерны (живут 30 мин, чистятся клинером).
+    # Если файл уже вычищен — тянем его обратно из OBS (источник истины)
+    # по детерминированному ключу catchpm/{chat_id}/{run_id}__{basename}.
     if not os.path.isfile(real_path):
-        raise HTTPException(status_code=404, detail="File not found")
+        restored = False
+        if chat_id is not None:
+            try:
+                obs_key = obs_file_storage.build_obs_key(real_path, chat_id)
+                local = await obs_file_storage.download_to_local(obs_key, real_path)
+                restored = bool(local) and os.path.isfile(real_path)
+            except Exception as _obs_err:
+                logging.error(f"OBS restore failed for {real_path}: {_obs_err}")
+        if not restored:
+            raise HTTPException(status_code=404, detail="File not found")
 
     filename = os.path.basename(real_path)
 
@@ -419,6 +432,13 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                         "image_key": f.get("image_key"),
                     })
                 else:
+                    # Не-image файл: заливаем в OBS (obs://{OBS_BUCKET}/catchpm/{chat_id}/...).
+                    # Ключ детерминирован от (chat_id + local_path), поэтому
+                    # /web/file сможет восстановить тот же ключ без маппинга в БД.
+                    try:
+                        await obs_file_storage.upload_user_file(f["path"], chat_id)
+                    except Exception as _obs_err:
+                        logging.error(f"OBS upload failed for {f.get('path')}: {_obs_err}")
                     attached_files.append({
                         "name": os.path.basename(f["path"]),
                         "path": f["path"],
@@ -621,6 +641,9 @@ async def lifespan(app: FastAPI):
 
     kafka_task = asyncio.create_task(kafka_consumer())
     task_events_task = asyncio.create_task(start_task_events_consumer())
+    # Клинер эфемерных файлов generated_files (TTL 30 мин):
+    # чистит и свежесозданные файлы, и скачанные из OBS. Источник истины — OBS.
+    obs_cleaner_task = asyncio.create_task(obs_file_storage.start_generated_files_cleaner())
 
 
     agent = KnowledgeAgent(database=db, skip_startup_autoprocess=False)
@@ -646,6 +669,9 @@ async def lifespan(app: FastAPI):
     
     task_events_task.cancel()
     await asyncio.gather(task_events_task, return_exceptions=True)
+
+    obs_cleaner_task.cancel()
+    await asyncio.gather(obs_cleaner_task, return_exceptions=True)
 
 
     await shutdown()

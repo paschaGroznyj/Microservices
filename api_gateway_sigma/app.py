@@ -1093,7 +1093,7 @@ async def download_chat_file(chat_id: int, message_id: str, file_name: str, requ
     try:
         agent_resp = await app.state.http_client.get(
             f"{SERVICES['agent_service']['url']}/web/file",
-            params={"path": path},
+            params={"path": path, "chat_id": chat_id},
         )
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Agent service unreachable: {e}")

@@ -44,13 +44,39 @@ CLEANER_INTERVAL_SECONDS = 5 * 60  # период запуска фоновог�
 
 
 def _obs_params() -> dict:
+    """
+    Параметры S3-клиента для OBS.
+
+    Для S3-совместимых хранилищ (в т.ч. OBS/прокси) режим virtual-host +
+    payload signing иногда приводит к XAmzContentSHA256Mismatch на PutObject.
+    Используем более совместимые дефолты:
+      - path-style addressing
+      - отключённый payload signing (UNSIGNED-PAYLOAD)
+    При необходимости можно переопределить через env:
+      OBS_S3_ADDRESSING_STYLE=virtual|path
+      OBS_PAYLOAD_SIGNING_ENABLED=true|false
+    """
+    addressing_style = (os.getenv("OBS_S3_ADDRESSING_STYLE") or "path").strip().lower()
+    if addressing_style not in {"path", "virtual"}:
+        addressing_style = "path"
+
+    payload_signing_enabled = (os.getenv("OBS_PAYLOAD_SIGNING_ENABLED") or "false").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+
     return {
         "service_name": "s3",
         "aws_access_key_id": os.getenv("OBS_ACCESS_KEY"),
         "aws_secret_access_key": os.getenv("OBS_SECRET_KEY"),
         "region_name": os.getenv("OBS_REGION"),
         "endpoint_url": os.getenv("OBS_ENDPOINT"),
-        "config": Config(s3={"addressing_style": "virtual"}),
+        "config": Config(
+            signature_version="s3v4",
+            s3={
+                "addressing_style": addressing_style,
+                "payload_signing_enabled": payload_signing_enabled,
+            },
+        ),
     }
 
 
@@ -105,7 +131,7 @@ async def upload_user_file(local_path: str, chat_id: int | str) -> Optional[str]
         with open(real, "rb") as f:
             body = f.read()
         async with AioSession().create_client(**_obs_params()) as client:
-            await client.put_object(Bucket=_bucket(), Key=key, Body=body)
+            await client.put_object(Bucket=_bucket(), Key=key, Body=body, ContentLength=len(body))
         log.info("[obs] uploaded %s → obs://%s/%s", real, _bucket(), key)
         return key
     except Exception as e:

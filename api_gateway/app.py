@@ -25,6 +25,7 @@ from config import (
     PORT_GATEWAY_PORT, PORT_PARSERS_SERVICE,
     ADMIN_USERNAMES
 )
+import presence
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -159,9 +160,11 @@ user_connections: dict[str, WebSocket] = {}
 async def websocket_user(websocket: WebSocket, username: str):
     await websocket.accept()
     user_connections[username] = websocket
+    await presence.touch("main", username)
     try:
         while True:
             await websocket.receive_text()
+            await presence.touch("main", username)
     except WebSocketDisconnect:
         user_connections.pop(username, None)
 
@@ -484,6 +487,59 @@ async def gateway_health():
             name: info["status"]
             for name, info in SERVICES.items()
         }
+    }
+
+
+# ────────────────────────────────────────────────────────
+# ONLINE PRESENCE (Вариант А: гейтвей не ходит в БД).
+# Счётчик — суммарно main + sigma из Redis. Оверлей — Redis-часть
+# склеивается с SQL-агрегатами от chats_service.
+# ────────────────────────────────────────────────────────
+@app.get("/api/presence/count")
+async def presence_count():
+    """Лёгкий публичный счётчик онлайн (суммарно main+sigma). Redis-only."""
+    m = await presence.count_online("main")
+    sg = await presence.count_online("sigma")
+    return {"online": m + sg, "main": m, "sigma": sg}
+
+
+@app.get("/api/presence/overlay")
+async def presence_overlay(request: Request):
+    """Подробный оверлей по клику. Гибрид: Redis (online/peak/имена) +
+    SQL-агрегаты из chats_service (топ-3 по сообщениям). Redis-данные не покидают гейтвей."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    m = await presence.count_online("main")
+    sg = await presence.count_online("sigma")
+    peak_m = await presence.peak_today("main")
+    peak_sg = await presence.peak_today("sigma")
+    names_m = await presence.online_usernames("main")
+    names_sg = await presence.online_usernames("sigma")
+    online_names = sorted(set(names_m) | set(names_sg))
+
+    top_users = []
+    messages_today = 0
+    try:
+        resp = await app.state.http_client.get(
+            f"{SERVICES['chats']['url']}/internal/stats/overlay",
+            params={"gw": "main", "top_n": 3},
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            top_users = data.get("top_users", [])
+            messages_today = data.get("messages_today", 0)
+    except Exception as e:
+        logging.error(f"presence_overlay: chats_service stats failed: {e}")
+
+    return {
+        "online": m + sg,
+        "by_gateway": {"main": m, "sigma": sg},
+        "peak_today": peak_m + peak_sg,
+        "online_usernames": online_names,
+        "top_users": top_users,
+        "messages_today": messages_today,
     }
 
 

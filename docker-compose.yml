@@ -179,6 +179,25 @@ services:
       - catchPM
 
 
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    command: ["redis-server", "--appendonly", "yes", "--save", "", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    mem_limit: 256m
+    networks:
+      - catchPM
+
   gateway:
     build: ./api_gateway
     container_name: api_gateway
@@ -193,8 +212,12 @@ services:
       PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
       SECRET_KEY: ${SECRET_KEY}
       ALGORITHM: ${ALGORITHM}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     volumes:
       - ./api_gateway:/app
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - catchPM
@@ -218,10 +241,13 @@ services:
       SECRET_KEY: ${SECRET_KEY}
       ALGORITHM: ${ALGORITHM}
       KAFKA_BROKER: ${KAFKA_BROKER}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     volumes:
       - ./api_gateway_sigma:/app
     depends_on:
       broker:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     restart: unless-stopped
     networks:
@@ -447,7 +473,7 @@ volumes:
   neo4j_data:
   dind_data:
   wal_archive:
-  # redis_data:
+  redis_data:
 #  parser_data:
 #  parser_logs:
 

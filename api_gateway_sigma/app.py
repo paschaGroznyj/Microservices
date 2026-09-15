@@ -26,6 +26,7 @@ from config import (
 )
 
 from sigma_status_store import status_store
+import presence
 
 import re
 
@@ -459,6 +460,57 @@ async def gateway_health():
             name: info["status"]
             for name, info in SERVICES.items()
         }
+    }
+
+
+# ────────────────────────────────────────────────────────
+# ONLINE PRESENCE (SIGMA). Счётчик суммарно main+sigma из Redis.
+# Оверлей — Redis-часть + SQL-агрегаты от chats_service (gw=sigma).
+# ────────────────────────────────────────────────────────
+@app.get("/api/presence/count")
+async def presence_count():
+    """Лёгкий публичный счётчик онлайн (суммарно main+sigma). Redis-only."""
+    m = await presence.count_online("main")
+    sg = await presence.count_online("sigma")
+    return {"online": m + sg, "main": m, "sigma": sg}
+
+
+@app.get("/api/presence/overlay")
+async def presence_overlay(request: Request):
+    """Подробный оверлей. Гибрид: Redis + SQL от chats_service."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    m = await presence.count_online("main")
+    sg = await presence.count_online("sigma")
+    peak_m = await presence.peak_today("main")
+    peak_sg = await presence.peak_today("sigma")
+    names_m = await presence.online_usernames("main")
+    names_sg = await presence.online_usernames("sigma")
+    online_names = sorted(set(names_m) | set(names_sg))
+
+    top_users = []
+    messages_today = 0
+    try:
+        resp = await app.state.http_client.get(
+            f"{SERVICES['chats']['url']}/internal/stats/overlay",
+            params={"gw": "sigma", "top_n": 3},
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            top_users = data.get("top_users", [])
+            messages_today = data.get("messages_today", 0)
+    except Exception as e:
+        logger.error(f"presence_overlay: chats_service stats failed: {e}")
+
+    return {
+        "online": m + sg,
+        "by_gateway": {"main": m, "sigma": sg},
+        "peak_today": peak_m + peak_sg,
+        "online_usernames": online_names,
+        "top_users": top_users,
+        "messages_today": messages_today,
     }
 
 
@@ -1007,6 +1059,7 @@ async def poll_chat_status(chat_id: int, request: Request):
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
+    await presence.touch("sigma", user["username"])
     state = status_store.get_chat_state(chat_id)
     return JSONResponse(content=state)
 

@@ -7,3 +7,4 @@ httpx
 dotenv
 python-multipart
 starlette==0.52.1
+redis

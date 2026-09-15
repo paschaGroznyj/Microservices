@@ -576,6 +576,43 @@ class DataBaseChats:
                 SELECT type_agent FROM chat_types_agent WHERE chat_id = $1 AND user_id = $2
             """, chat_id, user_id)
 
+    async def get_overlay_stats(self, top_n: int = 3):
+        """Агрегаты для оверлея онлайна за текущие сутки (UTC).
+        Топ-N пользователей по числу отправленных сообщений (не бот).
+        Гейтвей подмешивает сюда online/peak из Redis."""
+        try:
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch("""
+                    SELECT
+                        c.user_id,
+                        COALESCE(u.username, 'User ' || c.user_id::text) AS username,
+                        COUNT(*) AS msg_count
+                    FROM chats c
+                    LEFT JOIN users u ON c.user_id = u.id
+                    WHERE c.is_from_bot = FALSE
+                      AND c.user_id <> -1
+                      AND c.created_at >= date_trunc('day', now())
+                    GROUP BY c.user_id, u.username
+                    ORDER BY msg_count DESC
+                    LIMIT $1
+                """, top_n)
+                total = await conn.fetchval("""
+                    SELECT COUNT(*) FROM chats
+                    WHERE is_from_bot = FALSE
+                      AND user_id <> -1
+                      AND created_at >= date_trunc('day', now())
+                """)
+                return {
+                    "top_users": [
+                        {"username": r["username"], "messages": int(r["msg_count"])}
+                        for r in rows
+                    ],
+                    "messages_today": int(total or 0),
+                }
+        except Exception as e:
+            logging.error(f"Ошибка в get_overlay_stats: {e}")
+            return {"top_users": [], "messages_today": 0}
+
     async def find_chat_by_type(self, user_id: int, type_agent: str) -> int | None:
         """Находит существующий чат пользователя с заданным типом агента."""
         async with self.pool.acquire() as conn:

@@ -308,8 +308,11 @@
    MOBILE MENU TOGGLE
 ══════════════════════════════════════════════ */
 .mobile-menu-toggle { display: none; }
+/* Показываем топбарный бургер только когда сайдбар свёрнут — как кнопку "развернуть". */
+.chat-layout.sidebar-collapsed .mobile-menu-toggle { display: flex; }
 
 @media (max-width: 768px) {
+  /* На мобилке бургер всегда виден — открывает сайдбар оверлеем. */
   .mobile-menu-toggle { display: flex; }
   .tab-pills { display: none; }
   .chat-main:not(.start-screen-mode) .main-header {

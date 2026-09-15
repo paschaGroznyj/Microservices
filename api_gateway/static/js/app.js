@@ -89,6 +89,14 @@ class ChatApp {
 
         collapseBtn?.addEventListener('click', () => apply(true));
         expandBtn?.addEventListener('click', () => apply(false));
+
+        // Гамбургер в топбаре универсален: на десктопе он тоглит collapse,
+        // на мобилке (<=768) открытие оверлея рулит mobile.js — его не трогаем.
+        const topbarToggle = document.getElementById('mobile-menu-toggle');
+        topbarToggle?.addEventListener('click', () => {
+            if (window.innerWidth <= 768) return; // мобилка — отработает mobile.js
+            apply(!layout.classList.contains('sidebar-collapsed'));
+        });
     }
 
     switchTab(tab) {

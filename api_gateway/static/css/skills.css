@@ -25,14 +25,14 @@
 
 /* Тулбар в стиле graph-toolbar */
 .skills-toolbar {
-  /* Стиль Claude: flex-wrap items-end justify-between gap-x-md gap-y-sm min-h-20 */
+  /* Claude Skills header: flex-wrap items-end justify-between gap-x-md gap-y-sm min-h-20 */
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  column-gap: 12px;
-  row-gap: 8px;
-  min-height: 40px;
-  padding-bottom: 6px;
+  column-gap: .75rem;   /* --cds-gap-md */
+  row-gap: .5rem;       /* --cds-gap-sm */
+  min-height: 5rem;     /* min-h-20 = spacing*20 */
+  padding-bottom: .5rem;
   flex-shrink: 0;
   border-bottom: 1px solid var(--input-border, var(--border));
   flex-wrap: wrap;
@@ -40,47 +40,50 @@
 .skills-search {
   flex: 1;
   min-width: 220px;
-  height: 30px;
-  padding: 0 10px;
-  border-radius: 10px;
+  height: 26px;                 /* --cds-h-control */
+  padding: 0 .5rem;             /* --cds-pad-md */
+  border-radius: .25rem;        /* --cds-radius */
   border: 1px solid var(--input-border, var(--border));
   background: var(--input-bg, var(--surface));
   color: var(--text-primary, #111);
-  font-size: 0.8rem;
+  font-size: .8125rem;          /* --cds-font-size-body */
   outline: none;
   transition: border-color 0.15s;
 }
 .skills-search:focus { border-color: var(--accent, #2563eb); }
 .skills-btn-refresh {
-  height: 30px;
-  width: 30px;
-  border-radius: 10px;
-  border: 1px solid var(--input-border, var(--border));
-  background: var(--input-bg, var(--surface));
+  height: 26px;                 /* --cds-h-control */
+  width: 26px;                  /* aspect-square w-control */
+  border-radius: .25rem;        /* --cds-radius */
+  border: none;                 /* cds ghost */
+  background: transparent;
   color: var(--text-secondary, #555);
   font-size: 1rem;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 0.15s ease, color 0.15s ease;
   display: flex;
   align-items: center;
   justify-content: center;
 }
-.skills-btn-refresh:hover { background: var(--sidebar-hover, #f0f0f0); }
+.skills-btn-refresh:hover {
+  background: color-mix(in srgb, var(--text-secondary) 12%, transparent); /* fill-ghost-hover */
+  color: var(--text-primary);
+}
 .skills-count {
-  font-size: 0.7rem;
+  font-size: .6875rem;          /* caption */
   color: var(--text-muted, #9ca3af);
   white-space: nowrap;
-  padding-left: 4px;
+  padding-left: .5rem;
 }
 .skills-select,
 .skills-input {
   background: var(--surface);
   border: 1px solid var(--border);
   color: var(--text-primary);
-  border-radius: 8px;
-  padding: 0 12px;
-  height: 30px;
-  font-size: .8rem;
+  border-radius: .25rem;        /* --cds-radius */
+  padding: 0 .5rem;             /* --cds-pad-md */
+  height: 26px;                 /* --cds-h-control */
+  font-size: .8125rem;          /* --cds-font-size-body */
   outline: none;
   transition: border-color .15s ease;
 }

@@ -713,3 +713,36 @@
   .hi-footer-links { gap: 16px; }
   .help-close { top: 14px; right: 14px; }
 }
+
+/* ═══════════════════════════════════════════════
+   COLLAPSIBLE SIDEBAR (desktop) — Claude-like
+════════════════════════════════════════════════ */
+.chat-layout.sidebar-collapsed .sidebar {
+  width: 0;
+  min-width: 0;
+  border-right-color: transparent;
+  opacity: 0;
+  pointer-events: none;
+}
+.sidebar {
+  transition: width .22s ease, min-width .22s ease, opacity .18s ease,
+              background var(--transition);
+}
+
+/* Кнопка «развернуть» в шапке — Claude ghost icon-button */
+.sidebar-expand-btn {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.sidebar-expand-btn:hover { background: var(--sidebar-hover); color: var(--text-primary); }
+.sidebar-expand-btn:active { background: var(--sidebar-active); }

@@ -68,6 +68,7 @@ class ChatApp {
         // await loadFeedbacks();
         initMobileMenu();
         this.initTabSwitcher();
+        this.initSidebarCollapse();
         this.initHelp();
         this.initChatsSectionToggle();
         this.initVisibilityReconnect();
@@ -99,6 +100,36 @@ class ChatApp {
         });
     });
 }
+
+    /* ════════════════════════════════
+       SIDEBAR COLLAPSE (desktop) — сворачивание
+       левой панели. Кнопка в шапке сайдбара
+       сворачивает, кнопка в topbar разворачивает.
+    ════════════════════════════════ */
+    initSidebarCollapse() {
+        const layout = document.querySelector('.chat-layout');
+        const collapseBtn = document.getElementById('sidebar-collapse-btn');
+        const expandBtn = document.getElementById('sidebar-expand-btn');
+        if (!layout) return;
+
+        const KEY = 'catchpm:sidebar-collapsed';
+        const apply = (collapsed) => {
+            layout.classList.toggle('sidebar-collapsed', collapsed);
+            if (expandBtn) expandBtn.hidden = !collapsed;
+            if (collapseBtn) collapseBtn.setAttribute('aria-expanded', String(!collapsed));
+            try { localStorage.setItem(KEY, collapsed ? '1' : '0'); } catch (e) {}
+        };
+
+        // На десктопе восстанавливаем состояние; на мобилке — отдельный механизм (mobile.js).
+        if (window.innerWidth > 768) {
+            let saved = '0';
+            try { saved = localStorage.getItem(KEY) || '0'; } catch (e) {}
+            apply(saved === '1');
+        }
+
+        collapseBtn?.addEventListener('click', () => apply(true));
+        expandBtn?.addEventListener('click', () => apply(false));
+    }
 
     switchTab(tab) {
         if (this.currentTab === tab) return;

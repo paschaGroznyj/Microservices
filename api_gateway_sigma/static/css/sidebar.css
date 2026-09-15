@@ -41,30 +41,28 @@
 
 .brand-link:hover { text-decoration: none; opacity: .85; }
 
-.sidebar-skills-btn {
+/* Кнопка сворачивания сайдбара — Claude ghost icon-button.
+   h-control/w-control aspect-square, rounded, hover: fill-ghost-hover. */
+.sidebar-collapse-btn {
   width: 28px;
   height: 28px;
   min-width: 28px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  border: none;
+  border-radius: 6px;
   background: transparent;
   color: var(--text-secondary);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: background var(--transition), color var(--transition), border-color var(--transition);
+  transition: background var(--transition), color var(--transition);
 }
-.sidebar-skills-btn:hover {
+.sidebar-collapse-btn:hover {
   background: var(--sidebar-hover);
   color: var(--text-primary);
-  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
 }
-.sidebar-skills-btn.active {
-  background: var(--sidebar-active);
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
-}
+.sidebar-collapse-btn:active { background: var(--sidebar-active); }
+.sidebar-collapse-icon { display: block; }
 
 
 .brand-icon {

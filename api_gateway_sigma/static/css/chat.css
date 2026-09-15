@@ -35,14 +35,16 @@
    Полоса узкая (~28px) с более плотным началом: промежуточная точка на
    ~40% альфы делает затухание резче в начале, чем линейное. */
 .chat-messages.fade-bottom:not(.fade-top) {
-  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), rgba(0,0,0,0.4) calc(100% - 11px), #0000 100%);
-          mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), rgba(0,0,0,0.4) calc(100% - 11px), #0000 100%);
+  /* Туман снизу убран: сообщения не затеняются перед уходом под инпут. */
+  -webkit-mask-image: none;
+          mask-image: none;
 }
 
 /* Оба края (проскроллено в середине) */
 .chat-messages.fade-top.fade-bottom {
-  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), rgba(0,0,0,0.4) calc(100% - 11px), #0000 100%);
-          mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), rgba(0,0,0,0.4) calc(100% - 11px), #0000 100%);
+  /* Туман снизу убран (верхнего края fade и так нет). */
+  -webkit-mask-image: none;
+          mask-image: none;
 }
 
 .chat-messages.hidden { display: none; }
@@ -53,8 +55,9 @@
   width: 100%;
   margin: 0 auto;
   padding: 0 24px;
-  font-size: 1.1rem;
-  line-height: 1.72;
+  font-family: var(--font-anthropic-serif);
+  font-size: 1rem;
+  line-height: 1.5;
   color: var(--msg-bot-text);
   position: relative;
 }
@@ -63,14 +66,14 @@
 .agent-message h1,
 .agent-message h2,
 .agent-message h3 {
-  font-family: var(--font-serif);
+  font-family: var(--font-anthropic-serif);
   margin: 1.1em 0 .45em;
   color: var(--text-primary);
 }
 
-.agent-message h1 { font-size: 1.25rem; }
-.agent-message h2 { font-size: 1.1rem; }
-.agent-message h3 { font-size: .95rem; }
+.agent-message h1 { font-size: 1.375rem; line-height: 1.75rem; }
+.agent-message h2 { font-size: 1.0625rem; }
+.agent-message h3 { font-size: .9375rem; }
 
 .agent-message p { margin-bottom: .6em; }
 
@@ -89,8 +92,8 @@
 }
 /* ── CODE INLINE ──────────────────────────────── */
 .agent-message code {
-  font-family: var(--font-mono);
-  font-size: 1.05em;
+  font-family: var(--font-anthropic-mono);
+  font-size: .8125rem;
   background: color-mix(in srgb, var(--accent) 8%, var(--surface));
   border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
   padding: 2px 6px;
@@ -115,8 +118,9 @@
   overflow-x: auto;
   overflow-y: hidden;
   margin: .9em 0;
-  font-size: .83rem;
-  line-height: 1.6;
+  font-family: var(--font-anthropic-mono);
+  font-size: .8125rem;
+  line-height: 1.1875rem;
   box-shadow: var(--shadow-md);
   max-width: 100%;
   width: 100%;
@@ -237,17 +241,21 @@
 }
 
 .user-message {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
   max-width: 75%;
   padding: 10px 14px;
   border-radius: 14px 14px 3px 14px;
   background: var(--msg-user-bg);
   color: var(--msg-user-text);
-  font-size: .9rem;
-  line-height: 1.55;
+  font-family: var(--font-anthropic-sans);
+  font-size: .875rem;
+  line-height: 1.25rem;
   word-break: break-word;
 }
 
-.user-message .message-text { white-space: pre-wrap; }
+.user-message .message-text { white-space: pre-wrap; width: 100%; }
 
 .timestamp {
   font-size: .7rem;
@@ -628,13 +636,13 @@
   }
 
   .chat-messages.fade-bottom:not(.fade-top) {
-    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), rgba(0,0,0,0.32) calc(100% - 6px), #0000 100%);
-            mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), rgba(0,0,0,0.32) calc(100% - 6px), #0000 100%);
+    -webkit-mask-image: none;
+            mask-image: none;
   }
 
   .chat-messages.fade-top.fade-bottom {
-    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), rgba(0,0,0,0.32) calc(100% - 6px), #0000 100%);
-            mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), rgba(0,0,0,0.32) calc(100% - 6px), #0000 100%);
+    -webkit-mask-image: none;
+            mask-image: none;
   }
 }
 

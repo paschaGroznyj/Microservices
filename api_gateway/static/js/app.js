@@ -1387,6 +1387,13 @@ class ChatApp {
         this.addMessage({ message: text, is_from_bot: false, id: msgId, created_at: new Date().toISOString(), files: _optimisticFiles });
         this._scrollToUserMessageAndReserve();
 
+        // Если ни одна категория инструментов не выбрана — агент работает
+        // с ограниченным функционалом. Подсказываем облачком прямо в ленте.
+        try {
+            const _selTools = window.ToolsPanel?.getSelectedCategories() ?? [];
+            if (_selTools.length === 0) this._showNoToolsHint();
+        } catch (_) {}
+
         this.clearInput(field);
         sendBtn?.classList.remove('active');
         this._botAnswered = false;
@@ -3193,6 +3200,56 @@ class ChatApp {
     /* ══════════════════════════════════════════
        HELPERS
     ══════════════════════════════════════════ */
+    /* ══════════════════════════════════════════
+       NO-TOOLS HINT (облачко в ленте)
+       Показывается когда юзер шлёт запрос, а ни одна
+       категория инструментов не выбрана. Закрывается
+       по «Хорошо» или крестику. Не дублируется.
+    ══════════════════════════════════════════ */
+    _showNoToolsHint() {
+        const container = this.getMessagesContainer();
+        if (!container) return;
+        // Не плодим — если облачко уже висит, просто обновим позицию (в конец)
+        const existing = container.querySelector('.no-tools-hint');
+        if (existing) { container.appendChild(existing); return; }
+
+        const hint = document.createElement('div');
+        hint.className = 'no-tools-hint';
+        hint.setAttribute('role', 'status');
+        hint.innerHTML = `
+            <button class="no-tools-hint__close" type="button" aria-label="Закрыть">
+                <svg viewBox="0 0 24 24" fill="none">
+                    <path d="M6 6l12 12M18 6L6 18" stroke="currentColor"
+                          stroke-width="2" stroke-linecap="round"/>
+                </svg>
+            </button>
+            <div class="no-tools-hint__icon">
+                <svg viewBox="0 0 24 24" fill="none">
+                    <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4l-6 6a1.5 1.5 0 0 0 2.1 2.1l6-6a4 4 0 0 0 5.4-5.4l-2.3 2.3-2.1-2.1 2.3-2.3z"
+                          stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                </svg>
+            </div>
+            <div class="no-tools-hint__body">
+                <div class="no-tools-hint__title">Инструменты не выбраны</div>
+                <div class="no-tools-hint__text">Сейчас агент отвечает с ограниченным функционалом: без поиска в интернете, работы с БД, парсинга и запуска кода. Нажмите на ключ рядом с полем ввода и выберите нужные категории, затем повторите запрос.</div>
+                <button class="no-tools-hint__ok" type="button">Хорошо</button>
+            </div>
+        `;
+
+        const close = () => {
+            hint.classList.add('no-tools-hint--closing');
+            setTimeout(() => hint.remove(), 220);
+        };
+        hint.querySelector('.no-tools-hint__close')?.addEventListener('click', close);
+        hint.querySelector('.no-tools-hint__ok')?.addEventListener('click', close);
+
+        container.appendChild(hint);
+        requestAnimationFrame(() => hint.classList.add('no-tools-hint--in'));
+        // Доскроллить, чтобы облачко было видно
+        const dist = container.scrollHeight - container.scrollTop - container.clientHeight;
+        if (dist < 200) container.scrollTop = container.scrollHeight;
+    }
+
     getMessagesContainer() {
         return document.getElementById('view-agent')?.querySelector('.chat-messages');
     }

@@ -73,6 +73,46 @@
   });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeOverlay(); });
 
+  // Heartbeat присутствия: sigma не держит сокет, поэтому онлайн
+  // фиксируется отдельным пингом (не завязан на ожидание ответа бота).
+  async function pingPresence() {
+    try {
+      await fetch('/api/presence/ping', { method: 'POST', credentials: 'same-origin' });
+    } catch (e) { /* presence — не критичный путь */ }
+  }
+
+  // Немедленный выход из онлайна при закрытии/скрытии вкладки.
+  // sendBeacon доживает отправку даже когда страница выгружается —
+  // обычный fetch на unload браузер может оборвать. Same-origin =>
+  // куки с токеном уходят, бэкенд снимает юзера из online:sigma.
+  let left = false;
+  function leavePresence() {
+    if (left) return;
+    left = true;
+    try {
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon('/api/presence/leave');
+      } else {
+        fetch('/api/presence/leave', { method: 'POST', credentials: 'same-origin', keepalive: true });
+      }
+    } catch (e) { /* presence — не критичный путь */ }
+  }
+  // pagehide срабатывает и при закрытии вкладки, и при bfcache-переходе.
+  window.addEventListener('pagehide', leavePresence);
+  // visibilitychange: вкладку свернули/увели в фон — тоже снимаем.
+  // При возврате (visible) снова начинаем пинговать.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      leavePresence();
+    } else {
+      left = false;
+      pingPresence();
+    }
+  });
+
+  pingPresence();
+  setInterval(pingPresence, COUNT_INTERVAL);
+
   refreshCount();
   setInterval(refreshCount, COUNT_INTERVAL);
 })();

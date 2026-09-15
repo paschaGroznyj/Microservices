@@ -136,9 +136,16 @@
 }
 
 .feedback-trigger:hover,
-.info-btn:hover,
 .mobile-menu-toggle:hover {
   background: var(--surface2);
+  color: var(--accent);
+}
+
+.info-btn:hover {
+  background: rgba(255,255,255,.1);
+  border: 1px solid rgba(255,255,255,.16);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
   color: var(--accent);
 }
 

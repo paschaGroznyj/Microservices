@@ -467,6 +467,31 @@ async def gateway_health():
 # ONLINE PRESENCE (SIGMA). Счётчик суммарно main+sigma из Redis.
 # Оверлей — Redis-часть + SQL-агрегаты от chats_service (gw=sigma).
 # ────────────────────────────────────────────────────────
+@app.post("/api/presence/ping")
+async def presence_ping(request: Request):
+    """Heartbeat sigma-присутствия. Фронт дёргает его по таймеру (каждые 15с),
+    независимо от ожидания ответа бота (в отличие от poll_chat_status).
+    Без авторизации просто no-op (204)."""
+    user = await get_current_user(request)
+    if user:
+        await presence.touch("sigma", user["username"])
+    return Response(status_code=204)
+
+
+@app.post("/api/presence/leave")
+async def presence_leave(request: Request):
+    """Немедленный выход из онлайна sigma при закрытии вкладки.
+
+    Фронт шлёт сюда navigator.sendBeacon на pagehide/visibilitychange.
+    sendBeacon НЕ передаёт cookie кросс-доменно, но у нас same-origin —
+    куки с токеном приходят, get_current_user отрабатывает. Без юзера — no-op.
+    """
+    user = await get_current_user(request)
+    if user:
+        await presence.leave("sigma", user["username"])
+    return Response(status_code=204)
+
+
 @app.get("/api/presence/count")
 async def presence_count():
     """Лёгкий публичный счётчик онлайн (суммарно main+sigma). Redis-only."""

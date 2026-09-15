@@ -58,6 +58,22 @@ async def touch(gw: str, username: str) -> None:
         logger.debug("presence.touch failed: %s", e)
 
 
+async def leave(gw: str, username: str) -> None:
+    """Немедленно снять пользователя с онлайна интерфейса gw.
+
+    Нужно для sigma: там нет WebSocket, поэтому при закрытии вкладки
+    фронт шлёт beacon на /api/presence/leave, чтобы не ждать истечения
+    WINDOW-секунд (иначе юзер "висит" онлайн до минуты после ухода).
+    """
+    if _redis is None or not username:
+        return
+    key = f"online:{gw}"
+    try:
+        await _redis.zrem(key, username)
+    except Exception as e:
+        logger.debug("presence.leave failed: %s", e)
+
+
 async def count_online(gw: str) -> int:
     """Сколько пользователей онлайн сейчас на интерфейсе gw."""
     if _redis is None:

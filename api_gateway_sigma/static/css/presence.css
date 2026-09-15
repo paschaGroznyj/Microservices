@@ -4,15 +4,20 @@
 .presence-btn {
   display: inline-flex; align-items: center; gap: 6px;
   height: 34px; padding: 0 10px;
-  border: 1px solid var(--border-color, rgba(0,0,0,.1));
+  border: 1px solid transparent;
   border-radius: 9px;
-  background: var(--surface, rgba(255,255,255,.6));
+  background: transparent;
   color: var(--text-primary, #1a1a1a);
   cursor: pointer;
   font: inherit; font-size: 13px; font-weight: 600;
-  transition: background .15s ease, border-color .15s ease;
+  transition: background .15s ease, border-color .15s ease, backdrop-filter .15s ease;
 }
-.presence-btn:hover { background: var(--surface-hover, rgba(0,0,0,.04)); }
+.presence-btn:hover {
+  background: rgba(255,255,255,.1);
+  border-color: rgba(255,255,255,.16);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
 
 .presence-dot {
   width: 8px; height: 8px; border-radius: 50%;
@@ -73,3 +78,31 @@
 .presence-top .uname { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .presence-top .msgs { flex: 0 0 auto; font-size: 12px; color: var(--text-secondary, #888); font-variant-numeric: tabular-nums; }
 .presence-top .empty { color: var(--text-secondary, #999); font-size: 12.5px; }
+
+/* ── MOBILE: оверлей не помещается справа-вверху ──────────────
+   На узких экранах абсолютная панель шириной 260px уезжает за край
+   вьюпорта. Разворачиваем её в bottom-sheet: фикс к низу экрана,
+   на всю ширину, с safe-area под iOS-хоумбар. */
+@media (max-width: 600px) {
+  .presence-overlay {
+    position: fixed;
+    top: auto;
+    right: 12px;
+    left: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    width: auto;
+    max-width: none;
+    z-index: 1200;
+    padding: 16px 16px 14px;
+    border-radius: 16px;
+    box-shadow: 0 -6px 34px rgba(0,0,0,.24);
+    animation: presence-sheet .18s ease;
+  }
+  @keyframes presence-sheet {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .presence-overlay-now { font-size: 26px; }
+  .presence-overlay-sub { font-size: 12.5px; }
+  .presence-top li { font-size: 14px; padding: 2px 0; }
+}

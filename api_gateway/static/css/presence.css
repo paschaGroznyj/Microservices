@@ -4,15 +4,20 @@
 .presence-btn {
   display: inline-flex; align-items: center; gap: 6px;
   height: 34px; padding: 0 10px;
-  border: 1px solid var(--border-color, rgba(0,0,0,.1));
+  border: 1px solid transparent;
   border-radius: 9px;
-  background: var(--surface, rgba(255,255,255,.6));
+  background: transparent;
   color: var(--text-primary, #1a1a1a);
   cursor: pointer;
   font: inherit; font-size: 13px; font-weight: 600;
-  transition: background .15s ease, border-color .15s ease;
+  transition: background .15s ease, border-color .15s ease, backdrop-filter .15s ease;
 }
-.presence-btn:hover { background: var(--surface-hover, rgba(0,0,0,.04)); }
+.presence-btn:hover {
+  background: rgba(255,255,255,.1);
+  border-color: rgba(255,255,255,.16);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
 
 .presence-dot {
   width: 8px; height: 8px; border-radius: 50%;

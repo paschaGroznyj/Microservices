@@ -42,6 +42,7 @@ from .tools.sessions.tool_request_extension import make_extension_tool
 from .tools.subAgents.make_subagent import make_subagent_tool
 from .tools.journal.tool_agent_journal import make_journal_tool
 from .judge import judge_final_answer
+from .supervisor import run_supervisor
 from .context_compactor import compact_messages, TOKEN_SOFT_LIMIT
 import hashlib
 
@@ -1568,6 +1569,27 @@ class KnowledgeAgent:
         # Все модели цепочки провалились
         raise last_error if last_error else RuntimeError("Лайт-модель: пустая цепочка")
 
+    async def _main_ainvoke(self, messages: list[BaseMessage]):
+        """Вызов ОСНОВНОЙ (тяжёлой) LLM — той же, на которой работает агент.
+
+        Модель определяется текущим выбором пользователя (self.current_agent_model,
+        выставляется в начале run_agent). Нужен служебным модулям, которым важно
+        рассуждать на том же уровне, что и агент (например, фоновый супервизор цели),
+        а не на дешёвой лайт-модели.
+
+        Fallback: если по какой-то причине текущая модель не выбрана —
+        берём 'universal', а если и её нет — тихо деградируем на лайт-модель.
+        """
+        agent_model = getattr(self, "current_agent_model", None) or "universal"
+        model = self.AGENT_MODELS.get(agent_model)
+        if model is None:
+            logging.warning(
+                f"_main_ainvoke: модель '{agent_model}' не найдена в AGENT_MODELS, "
+                f"деградирую на лайт-модель"
+            )
+            return await self._lite_ainvoke(messages)
+        return await model.ainvoke(messages)
+
     async def _summarize_cut_messages(
         self,
         cut_messages: list[BaseMessage],
@@ -1771,6 +1793,9 @@ class KnowledgeAgent:
             HARD_LIMIT = 100  # поднято с 14; контекст не пухнет благодаря in-loop compaction
             STEPS_LEFT_WARN = 3  # предупреждаем про request_more_steps когда осталось <= N шагов
             JUDGE_LIMIT = 5
+            # ФОНОВЫЙ reasoning-супервизор цели: триггер каждые N шагов, неблокирующе.
+            SUPERVISOR_EVERY_N = 8   # как часто запускать фоновый надзор (0 = выкл)
+            SUPERVISOR_MIN_ITER = 4  # не трогаем первые шаги (агент только разогнался)
             total_input_tokens  = 0
             total_output_tokens = 0
 
@@ -1909,8 +1934,42 @@ class KnowledgeAgent:
             async def agent_event_loop(messages: list):
                 nonlocal total_input_tokens, total_output_tokens # Не видит из-за +=
                 iteration = 0
+                # ФОНОВЫЙ супервизор: храним текущий asyncio-таск (или None).
+                supervisor_task = None
                 while iteration < loop_state["hard_limit"]:
                     loop_state["iteration"] = iteration
+
+                    # ── ФОНОВЫЙ reasoning-СУПЕРВИЗОР ЦЕЛИ ─────────────────────
+                    # (а) ПОДХВАТ готового результата НЕБЛОКИРУЮЩЕ: если прошлый
+                    # таск уже завершён и вернул директиву — мягко подмешиваем
+                    # её SystemMessage-ом. Основной цикл НИКОГДА не ждёт супервизора.
+                    if supervisor_task is not None and supervisor_task.done():
+                        try:
+                            hint = supervisor_task.result()
+                        except Exception as _se:
+                            hint = None
+                            logger.error(f"[supervisor] таск упал: {_se}")
+                        supervisor_task = None
+                        if hint:
+                            messages.append(SystemMessage(content=(
+                                "[ФОНОВЫЙ КОНТРОЛЁР ЦЕЛИ] Внешний наблюдатель за твоей "
+                                "работой заметил возможное отклонение от цели. "
+                                "Это ПОДСКАЗКА, не приказ — учти, если по делу, "
+                                "иначе продолжай свой план:\n" + hint
+                            )))
+                            logger.info(f"[supervisor] директива подмешана на шаге {iteration}")
+
+                    # (б) ТРИГГЕР нового фонового прогона раз в N шагов,
+                    # только если предыдущий уже завершён (guard от накладки).
+                    # Читаем СНАПШОТ (копия среза), чтобы не читать мутируемый список.
+                    if (SUPERVISOR_EVERY_N > 0 and iteration >= SUPERVISOR_MIN_ITER
+                            and iteration % SUPERVISOR_EVERY_N == 0
+                            and supervisor_task is None):
+                        snapshot = list(messages)
+                        supervisor_task = asyncio.create_task(
+                            run_supervisor(self, user_input, snapshot, loop_state)
+                        )
+                    # ────────────────────────────────────────────────────────
 
                     # ТОЧКА 2: тулзы снимаем только на последнем шаге
                     is_last_step = iteration >= loop_state["hard_limit"] - 1
@@ -2124,6 +2183,15 @@ class KnowledgeAgent:
                     except Exception as e:
                         final_response = f"Ошибка агента: это не хеппи-энд"
                 
+                # СЛИВ ФОНОВОГО СУПЕРВИЗОРА: если остался незавершённый таск —
+                # отменяем, чтобы не тёк в фон (его вердикт уже не нужен).
+                if supervisor_task is not None and not supervisor_task.done():
+                    supervisor_task.cancel()
+                    try:
+                        await supervisor_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
                 return final_response, tool_trace
 
             # LLM-as-judge: проверяем финальный ответ перед commit.

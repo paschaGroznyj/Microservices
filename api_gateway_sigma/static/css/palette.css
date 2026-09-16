@@ -83,19 +83,36 @@
   -webkit-user-select: none; user-select: none;
 }
 
-/* dot-grid — декор. Прожектор двигается ТОЛЬКО из JS. */
+/* dot-grid — декор. Ровная тусклая сетка; без светового тумана. */
 .palette-dots {
-  position: absolute; inset: 14px;
+  position: absolute; inset: 8px;
   pointer-events: none;
-  background-image: radial-gradient(rgba(255,255,255,.55) 1.3px, transparent 1.4px);
-  background-size: 18px 18px;
-  background-position: 0 0;
-  -webkit-mask-image: radial-gradient(120px 120px at var(--mx, 50%) var(--my, 50%),
-                       rgba(0,0,0,1) 0%, rgba(0,0,0,.25) 55%, rgba(0,0,0,.08) 100%);
-  mask-image: radial-gradient(120px 120px at var(--mx, 50%) var(--my, 50%),
-              rgba(0,0,0,1) 0%, rgba(0,0,0,.25) 55%, rgba(0,0,0,.08) 100%);
-  opacity: .9;
 }
+/* Базовый слой: ровные белые точки по всему полю (всегда). */
+.palette-dots::before {
+  content: ""; position: absolute; inset: 0;
+  background-image: radial-gradient(rgba(255,255,255,.9) 0.9px, transparent 1.0px);
+  background-size: 9px 9px;
+  background-position: 0 0;
+  opacity: .32;
+}
+/* Верхний слой: КРУПНЫЕ точки (тот же шаг сетки) — показаны
+   только под маской-прожектором вокруг курсора => точки рядом
+   с курсором выглядят крупнее. ТОЛЬКО при перетаскивании (.dragging). */
+.palette-dots::after {
+  content: ""; position: absolute; inset: 0;
+  background-image: radial-gradient(rgba(255,255,255,.95) 1.8px, transparent 2.1px);
+  background-size: 9px 9px;
+  background-position: 0 0;
+  opacity: 0;
+  -webkit-mask-image: radial-gradient(42px 42px at var(--mx, 50%) var(--my, 50%),
+                       rgba(0,0,0,1) 0%, rgba(0,0,0,.6) 50%, rgba(0,0,0,0) 80%);
+  mask-image: radial-gradient(42px 42px at var(--mx, 50%) var(--my, 50%),
+              rgba(0,0,0,1) 0%, rgba(0,0,0,.6) 50%, rgba(0,0,0,0) 80%);
+  transition: opacity .12s ease;
+}
+/* Увеличенные точки у курсора — только во время захвата. */
+.palette-field.dragging .palette-dots::after { opacity: 1; }
 
 /* Ореол под точкой — только при захвате (.dragging), без hover. */
 .palette-blob {

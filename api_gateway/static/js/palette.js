@@ -98,13 +98,31 @@
   // ── генерация набора токенов из одного акцента ───────────────────
   // theme: 'light' | 'dark'. В dark инвертируем светлоту (H,S держим),
   // чтобы тот же тон читался на тёмном фоне.
+  // Карта нейтральных токенов относительно эталонного акцента #8b4513 (H=25).
+  // dH — сдвиг Hue от акцента (беж чуть желтее рыжего); s — целевая
+  // насыщенность (мягкая, 14..23%); lL — светлота в light, lD — в dark.
+  // Значения выведены из дефолтных беж/тёмных токенов theme.css: при H=25
+  // генератор воспроизводит исходную гамму 1:1.
+  const NEUTRALS = [
+    // key,             dH,   s,    lL,    lD
+    ['--bg',            15.0, 23.1, 97.5,  5.1],
+    ['--surface2',      11.0, 17.2, 94.3,  10.2],
+    ['--surface3',      11.0, 21.7, 91.0,  13.3],
+    ['--border',        10.0, 16.2, 85.5,  16.5],
+    ['--border-light',  11.0, 21.7, 91.0,  13.3],
+    ['--sidebar-bg',    11.0, 17.2, 94.3,  6.7],
+    ['--sidebar-hover', 10.0, 20.7, 88.6,  11.8],
+    ['--sidebar-active',13.6, 17.1, 83.9,  14.5],
+    ['--input-border',  11.9, 14.3, 82.2,  18.0],
+    ['--surface',       11.0, 12.0, 99.0,  7.8],
+  ];
+
   function buildTokens(accentHex, theme) {
     const hsl = hexToHsl(accentHex) || hexToHsl(DEFAULT_ACCENT);
     let { h, s, l } = hsl;
+    const hue = h; // исходный тон юзера — от него строим всю нейтральную гамму.
 
     if (theme === 'dark') {
-      // Инверсия светлоты + мягкая коррекция: очень тёмные тона
-      // поднимаем, очень светлые опускаем, чтобы не уходить в крайности.
       l = 100 - l;
       l = clamp(l, 45, 78);
       s = clamp(s, 25, 90);
@@ -117,13 +135,26 @@
     const muted = hslToHex(h, clamp(s - 12, 0, 100),
                            clamp(theme === 'dark' ? l - 4 : l + 18, 5, 92));
 
-    return {
+    const out = {
       '--accent': base,
       '--accent-hover': hover,
       '--accent-muted': muted,
       '--text-on-accent': textOn(base),
     };
+
+    // Нейтрали: тот же тон (hue + dH), мягкая насыщенность, фикс светлота.
+    // В dark снижаем s (тёмный фон легче уходит в цвет) — тонируем слабее.
+    const dark = (theme === 'dark');
+    for (const [key, dH, sN, lL, lD] of NEUTRALS) {
+      const hN = ((hue + dH) % 360 + 360) % 360;
+      const sVal = dark ? clamp(sN * 0.5, 0, 100) : sN;
+      const lVal = dark ? lD : lL;
+      out[key] = hslToHex(hN, sVal, lVal);
+    }
+
+    return out;
   }
+
 
   // ── применение к DOM ─────────────────────────────────────────────
   function currentTheme() {
@@ -140,7 +171,10 @@
   }
 
   function clearTokens() {
-    ['--accent', '--accent-hover', '--accent-muted', '--text-on-accent']
+    ['--accent', '--accent-hover', '--accent-muted', '--text-on-accent',
+     '--bg', '--surface', '--surface2', '--surface3', '--border',
+     '--border-light', '--sidebar-bg', '--sidebar-hover', '--sidebar-active',
+     '--input-border']
       .forEach(k => root.style.removeProperty(k));
   }
 
@@ -230,8 +264,12 @@
   }
 
   // При переключении light/dark пересчитать токены под новую тему.
+  // ВАЖНО: пересчитываем ДЛЯ ЛЮБОГО акцента, включая дефолтный.
+  // Раньше была жёсткая завязка accentHex !== DEFAULT_ACCENT: если юзер
+  // ничего не менял (либо выбрал цвет, равный дефолту), токены
+  // не пересчитывались — и сайдбары/чаты оставались со старой гаммой.
   function onThemeChange() {
-    if (accentHex && accentHex !== DEFAULT_ACCENT) applyTokens(accentHex);
+    if (accentHex) applyTokens(accentHex);
     else clearTokens();
   }
 

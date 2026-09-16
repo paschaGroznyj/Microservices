@@ -1438,6 +1438,9 @@ class KnowledgeAgent:
         # 14. Работа с почтой
         from .tools.email.tool_email_connect import make_send_by_email_tool
         work_with_email = make_send_by_email_tool()
+        # 14b. Универсальная отправка письма (текст + вложения, лимит 20МБ)
+        from .tools.email.tool_send_email_universal import make_send_email_tool
+        send_email = make_send_email_tool(agent)
         # 15. Работа с удаленным репозиторием
         from .tools.git.tool_to_connect_mcp import connect_mcp_git
         # 16. Публикация задачи в планировщик-песок
@@ -1492,6 +1495,7 @@ class KnowledgeAgent:
             send_file_tool,
             send_message_tool,
             work_with_email,
+            send_email,
             connect_mcp_git
             # knowledge_graph_tool
         ]

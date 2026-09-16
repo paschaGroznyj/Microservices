@@ -2244,9 +2244,9 @@ class KnowledgeAgent:
             args["request_id"] = request_id
 
         tool_fn = tools_by_name.get(name)
-        # if tool_fn is None:
-        #     logger.warning(f"[tool] ❓ '{name}' не найден")
-        #     return f"Инструмент '{name}' не найден."
+        if tool_fn is None:
+            logger.warning(f"[tool] ❓ '{name}' не найден")
+            return f"Инструмент '{name}' не найден. Следует прожать галочку на главной странице приложения. Гаечный ключ."
         
         fmt = _fmt_args(name, args)
         logger.info(f"[tool] ▶ {name}({fmt})")

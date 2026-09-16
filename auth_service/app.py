@@ -418,8 +418,8 @@ async def whatsnew_pending(request: Request):
     """
     data = await request.json()
     user_id = data.get("user_id")
-    if user_id == 56:
-        return {"demo": True, "updates": []}
+    # if user_id == 56:
+    #     return {"demo": True, "updates": []}
     if user_id is None:
         raise HTTPException(status_code=400, detail="user_id обязателен")
     result = await db.get_pending_whatsnew(user_id=int(user_id))

@@ -57,12 +57,12 @@ const ICONS = {
 
 /* ── Категории — только метаданные, без списка тулов ─────────────────── */
 const TOOL_CATEGORIES = [
-  {
-    id:          "pm_research",
-    label:       "Process Mining",
-    description: "Поиск статей, ревью, дайджесты, PDF",
-    adminOnly:   false
-  },
+  // {
+  //   id:          "pm_research",
+  //   label:       "Process Mining",
+  //   description: "Поиск статей, ревью, дайджесты, PDF",
+  //   adminOnly:   false
+  // },
   {
     id:          "internet",
     label:       "Интернет",

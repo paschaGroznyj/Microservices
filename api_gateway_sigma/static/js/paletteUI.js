@@ -116,12 +116,38 @@
   // ── 2D-драг точки ────────────────────────────────────────────────
   let dragging = false;
 
+  // Радиус скругления поля (синхронно с CSS border-radius:16px).
+  const FIELD_RADIUS = 16;
+
+  // Прижать точку к дуге скруглённого угла, чтобы курсор не уходил
+  // в прямой угол 90°. px — координаты относительно поля, w/h — его размер.
+  function clampToRounded(px, py, w, h) {
+    const rad = Math.min(FIELD_RADIUS, w / 2, h / 2);
+    let x = Math.min(w, Math.max(0, px));
+    let y = Math.min(h, Math.max(0, py));
+    // Центр ближайшего скруглённого угла (если точка в угловой зоне).
+    const inLeft = x < rad, inRight = x > w - rad;
+    const inTop = y < rad, inBot = y > h - rad;
+    if ((inLeft || inRight) && (inTop || inBot)) {
+      const ccx = inLeft ? rad : w - rad;
+      const ccy = inTop ? rad : h - rad;
+      const dx = x - ccx, dy = y - ccy;
+      const dist = Math.hypot(dx, dy);
+      if (dist > rad) {
+        x = ccx + dx / dist * rad;
+        y = ccy + dy / dist * rad;
+      }
+    }
+    return { x, y };
+  }
+
   function pointFromEvent(e) {
     const r = field.getBoundingClientRect();
     const cx = (e.touches ? e.touches[0].clientX : e.clientX);
     const cy = (e.touches ? e.touches[0].clientY : e.clientY);
-    nx = clamp01((cx - r.left) / r.width);
-    ny = clamp01((cy - r.top) / r.height);
+    const p = clampToRounded(cx - r.left, cy - r.top, r.width, r.height);
+    nx = clamp01(p.x / r.width);
+    ny = clamp01(p.y / r.height);
   }
 
   function applyFromXY() {

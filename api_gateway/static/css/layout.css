@@ -289,14 +289,14 @@
   tab-size: 4;
 }
 
-/* Редактируемый режим: курсор-текст и аккуратная фокус-рамка,
-   чтобы было понятно, что текст можно править. */
+/* Редактируемый режим: курсор-текст, без фокус-рамки. */
 .text-preview-body[contenteditable="true"] {
   cursor: text;
   outline: none;
 }
 .text-preview-body[contenteditable="true"]:focus {
-  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+  outline: none;
+  box-shadow: none;
 }
 
 @media (max-width: 900px) {

@@ -6,7 +6,8 @@ from fastapi import FastAPI, Depends, HTTPException, Request, status, APIRouter
 from fastapi.responses import Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from users_tables import DataBaseUser
-from config import SECRET_KEY, ALGORITHM, PORT_PM_AGENT
+from config import SECRET_KEY, ALGORITHM, PORT_PM_AGENT, REDIS_URL
+import json
 from datetime import datetime, timedelta, timezone
 import httpx
 from datetime import datetime, timezone
@@ -20,6 +21,40 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 
 db = DataBaseUser()
 service_auth_alive = False
+
+# Redis-кэш персональных настроек (палитра и т.п.). Не критичный путь:
+# если redis недоступен — просто ходим в Postgres, запрос не падает.
+PREFS_TTL = 600  # секунд
+try:
+    import redis.asyncio as aioredis
+    _redis = aioredis.from_url(REDIS_URL, decode_responses=True)
+except Exception as e:
+    logging.warning("auth: redis init failed: %s", e)
+    _redis = None
+
+
+def _prefs_key(user_id: int) -> str:
+    return f"prefs:{user_id}"
+
+
+async def _prefs_cache_get(user_id: int):
+    if _redis is None:
+        return None
+    try:
+        raw = await _redis.get(_prefs_key(user_id))
+        return json.loads(raw) if raw else None
+    except Exception as e:
+        logging.debug("prefs cache get failed: %s", e)
+        return None
+
+
+async def _prefs_cache_set(user_id: int, data: dict):
+    if _redis is None:
+        return
+    try:
+        await _redis.set(_prefs_key(user_id), json.dumps(data), ex=PREFS_TTL)
+    except Exception as e:
+        logging.debug("prefs cache set failed: %s", e)
 router = APIRouter(prefix='/auth', tags=['Auth'])
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
@@ -237,6 +272,33 @@ async def me(request: Request):
     token = data['token']
     result = await db.set_scholar_token(username=username, token=token)
     return result
+
+@app.post("/profile/preferences/get")
+async def preferences_get(request: Request):
+    """Персональные настройки юзера по user_id. Redis-cache → Postgres."""
+    data = await request.json()
+    user_id = data["user_id"]
+    cached = await _prefs_cache_get(user_id)
+    if cached is not None:
+        return cached
+    result = await db.get_user_preferences(user_id=user_id)
+    await _prefs_cache_set(user_id, result)
+    return result
+
+
+@app.post("/profile/preferences/set")
+async def preferences_set(request: Request):
+    """UPSERT палитры/extra по user_id + инвалидация кэша."""
+    data = await request.json()
+    user_id = data["user_id"]
+    palette = data.get("palette")  # None => не трогаем
+    extra = data.get("extra")
+    result = await db.upsert_user_preferences(
+        user_id=user_id, palette=palette, extra=extra
+    )
+    await _prefs_cache_set(user_id, result)
+    return result
+
 
 @app.post("/feedback")
 async def feedback(request: Request):

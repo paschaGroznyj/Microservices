@@ -699,6 +699,51 @@ async def token(request: Request):
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Auth service dead: {str(e)}")
 
+@app.get("/api/preferences")
+async def get_preferences(request: Request):
+    """Персональные настройки текущего юзера (палитра и т.п.)."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    auth_url = SERVICES['auth']['url']
+    try:
+        response = await app.state.http_client.post(
+            f"{auth_url}/profile/preferences/get",
+            json={"user_id": user["user_id"]},
+            timeout=10.0
+        )
+        return JSONResponse(content=response.json(), status_code=response.status_code)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Auth service dead: {str(e)}")
+
+
+@app.put("/api/preferences")
+async def put_preferences(request: Request):
+    """Сохранить палитру/настройки текущего юзера."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    data = await request.json()
+    payload = {"user_id": user["user_id"]}
+    if "palette" in data:
+        payload["palette"] = data["palette"]
+    if "extra" in data:
+        payload["extra"] = data["extra"]
+
+    auth_url = SERVICES['auth']['url']
+    try:
+        response = await app.state.http_client.post(
+            f"{auth_url}/profile/preferences/set",
+            json=payload,
+            timeout=10.0
+        )
+        return JSONResponse(content=response.json(), status_code=response.status_code)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Auth service dead: {str(e)}")
+
+
 async def get_first_last_name(request: Request):
     raw_name = request.headers.get("X-Authentik-Name")
     name = "Unknown"

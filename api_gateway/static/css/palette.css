@@ -65,6 +65,17 @@
   box-shadow: 0 10px 34px rgba(0,0,0,.20);
 }
 
+/* Dark: глубокий тёмный градиент вместо светло-бежевого,
+   чтобы карточка не светилась на тёмном фоне. */
+[data-theme="dark"] .palette-card {
+  border: 1px solid rgba(255,255,255,.08);
+  background:
+    radial-gradient(120% 130% at 82% 18%,
+      rgba(204,120,92,.28) 0%, rgba(193,127,58,.14) 40%, transparent 72%),
+    linear-gradient(105deg, #17120e 0%, #2a231d 48%, #3b201a 100%);
+  box-shadow: 0 10px 34px rgba(0,0,0,.45);
+}
+
 /* 2D-поле выбора цвета (замена range-ползунка) */
 .palette-field {
   position: relative;

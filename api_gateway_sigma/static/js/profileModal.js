@@ -70,7 +70,7 @@ function applyProfileData(data) {
   modalSubtitle.textContent = '@' + username;
 
   document.getElementById('stat-chats').textContent = stats.agent_requests;
-  document.getElementById('stat-saved').textContent = stats.favorites_count;
+
   // Рендер тулзов
   const tools = data?.stats?.tools || [];
   renderToolBars(tools);

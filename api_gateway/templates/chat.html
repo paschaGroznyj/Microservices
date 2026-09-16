@@ -31,7 +31,9 @@
     <link rel="stylesheet" href="/static/css/skills.css">
     <link rel="stylesheet" href="/static/css/claude-ui.css">
     <link rel="stylesheet" href="/static/css/presence.css">
+    <link rel="stylesheet" href="/static/css/palette.css">
 
+    <script src="/static/js/palette.js"></script>
 </head>
 <body>
 
@@ -499,11 +501,6 @@
                         <div class="stat-label">Запросов к ассистенту</div>
                         <div class="stat-sub">за всё время</div>
                     </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="stat-saved">—</div>
-                        <div class="stat-label">В избранном</div>
-                        <div class="stat-sub">статей сохранено</div>
-                    </div>
                 </div>
             </div>
             <!-- <div>
@@ -512,6 +509,10 @@
                     <div class="bar-list"></div>
                 </div>
             </div> -->
+            <div>
+                <div class="section-label">Цветовая схема</div>
+                <div id="palette-mount"></div>
+            </div>
         </div>
         <div class="profile-footer">
             <button class="logout-btn" id="logout-btn">
@@ -718,6 +719,7 @@
 <script type="module" src="/static/js/searchBlock.js"></script>
 <script type="module" src="/static/js/chatSearchModal.js"></script>
 <script src="/static/js/presence.js"></script>
+<script src="/static/js/paletteUI.js"></script>
 <script src="/static/js/whatsnew.js"></script>
 
 </body>

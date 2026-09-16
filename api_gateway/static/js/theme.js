@@ -20,6 +20,14 @@
     if (hljsLight)  hljsLight.disabled  = (theme === 'dark');
     if (hljsDark)   hljsDark.disabled   = (theme === 'light');
 
+    // Пересчитать пользовательскую палитру под новую тему: applyTokens
+    // проставляет инлайновые CSS-переменные на <html>, а они сильнее
+    // theme.css. Без этого при смене темы кастомные токены (--bg,
+    // --sidebar-bg и т.п.) остаются от прошлой темы.
+    if (window.UserPalette && typeof window.UserPalette.onThemeChange === 'function') {
+      window.UserPalette.onThemeChange();
+    }
+
     updateThemeIcons(theme);
   }
 

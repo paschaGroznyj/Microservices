@@ -157,6 +157,22 @@ class DataBaseUser:
             );
         """)
 
+        # ─────────────────────────────────────────────────────────────────────
+        # User preferences — универсальная таблица персональных настроек.
+        # Привязка по user_id (PK). palette — JSONB c оверрайдами CSS-токенов
+        # ({"--accent": "#rrggbb", ...}), сейчас красим только беж (--accent).
+        # extra — задел под любую другую персональную инфу без миграций.
+        # Читается на загрузке профиля, кэшируется в Redis (prefs:{user_id}).
+        # ─────────────────────────────────────────────────────────────────────
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                user_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                palette    JSONB NOT NULL DEFAULT '{}'::jsonb,
+                extra      JSONB NOT NULL DEFAULT '{}'::jsonb,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
     async def check_user_password(self, username: str, password: str = None, back_user_id=False):
         async with self.pool.acquire() as conn:
             if password:
@@ -304,6 +320,63 @@ class DataBaseUser:
         if row and row["scholar_token"]:
             return await asyncio.to_thread(self._decrypt_token, row["scholar_token"])
         return None
+
+    async def get_user_preferences(self, user_id: int) -> dict:
+        """Персональные настройки юзера. Нет строки — дефолт (пустая палитра)."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT palette, extra FROM user_preferences WHERE user_id = $1",
+                user_id
+            )
+        if not row:
+            return {"palette": {}, "extra": {}}
+        import json
+        palette = row["palette"]
+        extra = row["extra"]
+        # asyncpg отдаёт JSONB как str — приводим к dict.
+        if isinstance(palette, str):
+            palette = json.loads(palette)
+        if isinstance(extra, str):
+            extra = json.loads(extra)
+        return {"palette": palette or {}, "extra": extra or {}}
+
+    async def upsert_user_preferences(self, user_id: int,
+                                      palette: dict | None = None,
+                                      extra: dict | None = None) -> dict:
+        """UPSERT палитры/extra по user_id. Переданные поля перезаписываются
+        целиком, непереданные (None) — остаются как были."""
+        import json
+        set_parts = ["updated_at = CURRENT_TIMESTAMP"]
+        args = [user_id]
+        # Для INSERT нужны значения по умолчанию, для UPDATE — только присланные.
+        ins_palette = json.dumps(palette or {})
+        ins_extra = json.dumps(extra or {})
+        idx = 2
+        if palette is not None:
+            set_parts.append(f"palette = ${idx}::jsonb")
+            args.append(json.dumps(palette))
+            idx += 1
+        if extra is not None:
+            set_parts.append(f"extra = ${idx}::jsonb")
+            args.append(json.dumps(extra))
+            idx += 1
+        set_clause = ", ".join(set_parts)
+        sql = f"""
+            INSERT INTO user_preferences (user_id, palette, extra)
+            VALUES ($1, ${idx}::jsonb, ${idx + 1}::jsonb)
+            ON CONFLICT (user_id) DO UPDATE SET {set_clause}
+            RETURNING palette, extra;
+        """
+        args.extend([ins_palette, ins_extra])
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(sql, *args)
+        p = row["palette"]
+        e = row["extra"]
+        if isinstance(p, str):
+            p = json.loads(p)
+        if isinstance(e, str):
+            e = json.loads(e)
+        return {"palette": p or {}, "extra": e or {}}
 
     def _hash_password(self, password: str) -> str:
         """Синхронная функция для выполнения в executor"""

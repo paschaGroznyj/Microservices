@@ -75,4 +75,6 @@ UNIVERSAL_TOOLS: set[str] = {
     "cleanup_workspaces",
     "submit_task",
     "check_task_status",
+    # --- Универсальная отправка email (текст + вложения до 20МБ) ---
+    "send_email",
 }

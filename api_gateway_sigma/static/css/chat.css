@@ -714,7 +714,50 @@
   outline: none;
   word-break: break-word;
   scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
+  scrollbar-color: transparent transparent;
+}
+
+/* Деликатный скроллбар поля ввода: узкий, полупрозрачный, без стрелок,
+   проявляется только при наведении/скролле — чтобы не спорил с полем.
+   ВАЖНО: стилизуем и активный чат (.chat-input-field), и стартовый экран (.start-input-field). */
+.chat-input-field::-webkit-scrollbar,
+.start-input-field::-webkit-scrollbar {
+  width: 6px;
+}
+/* Убираем кнопки-стрелки на концах скроллбара (up/down). */
+.chat-input-field::-webkit-scrollbar-button,
+.start-input-field::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+.chat-input-field::-webkit-scrollbar-track,
+.start-input-field::-webkit-scrollbar-track {
+  background: transparent;
+}
+.chat-input-field::-webkit-scrollbar-thumb,
+.start-input-field::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+  transition: background-color .2s ease;
+}
+.chat-input-field:hover::-webkit-scrollbar-thumb,
+.chat-input-field:focus::-webkit-scrollbar-thumb,
+.start-input-field:hover::-webkit-scrollbar-thumb,
+.start-input-field:focus::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--border) 55%, transparent);
+}
+.chat-input-field::-webkit-scrollbar-thumb:hover,
+.start-input-field::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--border) 80%, transparent);
+}
+.chat-input-field:hover,
+.chat-input-field:focus,
+.start-input-field:hover,
+.start-input-field:focus {
+  scrollbar-color: color-mix(in srgb, var(--border) 55%, transparent) transparent;
 }
 
 .chat-input-field:empty:not(.focused)::before {

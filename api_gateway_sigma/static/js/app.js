@@ -2850,30 +2850,38 @@ class ChatApp {
                 }
             }
 
-            const pasted = cd ? cd.getData('text') : '';
-            if (!pasted) return;
+            // Берём именно plain-text из буфера, игнорируя text/html —
+            // иначе браузер вставит форматированный код (цвета/шрифты/pre)
+            // из IDE. Нам нужен только чистый текст.
+            const pasted = cd ? (cd.getData('text/plain') || cd.getData('text') || '') : '';
+            if (!pasted) {
+                // Нет текстовой части — блокируем дефолтную HTML-вставку.
+                e.preventDefault();
+                return;
+            }
+
+            // Вставку всегда обрабатываем вручную (plain-text), поэтому
+            // отменяем дефолтное поведение браузера в любом случае.
+            e.preventDefault();
 
             // ── Учитываем лимит 10000 символов ──────────────────────────
             const remaining = this.INPUT_MAX_CHARS - this.getInputText().length;
             if (remaining <= 0) {
-                e.preventDefault();
                 this.showToast('Достигнут предел ' + this.INPUT_MAX_CHARS + ' символов');
                 return;
             }
             const clipped = pasted.length > remaining ? pasted.slice(0, remaining) : pasted;
 
             if (clipped.length > INPUT_COLLAPSE_LIMIT) {
-                e.preventDefault();
                 this._insertInputChip(field, clipped);
-                onInput();
-            } else if (clipped.length < pasted.length) {
-                // Текст пришлось урезать под лимит — вставляем вручную усечённый.
-                e.preventDefault();
+            } else {
+                // Короткий текст — вставляем как обычный текст без форматирования.
                 document.execCommand('insertText', false, clipped);
-                this.showToast('Текст обрезан до предела ' + this.INPUT_MAX_CHARS + ' символов');
-                onInput();
             }
-            // короткий текст в пределах лимита — стандартная вставка (плейн-текст ниже)
+            if (clipped.length < pasted.length) {
+                this.showToast('Текст обрезан до предела ' + this.INPUT_MAX_CHARS + ' символов');
+            }
+            onInput();
         });
 
         field.addEventListener('keydown', (e) => {

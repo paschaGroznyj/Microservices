@@ -1,10 +1,6 @@
 const overlay = document.getElementById('profile-overlay');
 const profileBtn = document.getElementById('profile-btn');
 const closeBtn = document.getElementById('profile-close');
-const tokenInput = document.getElementById('token-input');
-const tokenSaveBtn = document.getElementById('token-save-btn');
-const tokenDot = document.getElementById('token-dot');
-const tokenStatusText = document.getElementById('token-status-text');
 const modalSubtitle = document.getElementById('modal-subtitle');
 const toast = document.getElementById('toast-token');
 
@@ -74,22 +70,7 @@ function applyProfileData(data) {
   modalSubtitle.textContent = '@' + username;
 
   document.getElementById('stat-chats').textContent = stats.agent_requests;
-  document.getElementById('stat-search').textContent = stats.search_requests;
   document.getElementById('stat-saved').textContent = stats.favorites_count;
-  console.log('token_bool', stats.token_bool)
-
-  const savedToken = stats.token_bool || '';
-  console.log('token', savedToken)
-  if (savedToken) {
-    tokenInput.value = 'привет_пользователь_pm:)';
-    tokenDot.classList.remove('inactive');
-    tokenStatusText.textContent = 'активен';
-  }
-  else {
-    tokenInput.value = '';
-    tokenDot.classList.add('inactive');
-    tokenStatusText.textContent = 'не активен';
-  }
   // Рендер тулзов
   const tools = data?.stats?.tools || [];
   renderToolBars(tools);
@@ -138,78 +119,6 @@ document.addEventListener('click', async (e) => {
   if (e.target.closest('#profile-btn')) openProfile();
   if (e.target.closest('#profile-close')) closeProfile();
   if (e.target === overlay) closeProfile();
-
-  // --- Логика сохранения токена ---
-  if (e.target.closest('#token-save-btn')) {
-    const btn = e.target.closest('#token-save-btn');
-    const val = tokenInput.value.trim();
-    
-    // Валидация
-    if (!val) { 
-        showToast('Введите токен'); 
-        return; 
-    }
-    if (val.length > 50) { 
-        showToast('Токен слишком длинный (макс. 50 символов)'); 
-        return; 
-    }
-
-    // Блокируем кнопку на время запроса
-    const originalContent = btn.innerHTML;
-    btn.disabled = true;
-    btn.style.opacity = '0.6';
-    btn.innerHTML = `
-    <svg class="animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-        <circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle>
-        <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"></path>
-    </svg>`;
-
-    try {
-        const res = await fetch('/api/profile/token', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ token: val })
-        });
-
-
-        let data = {};
-        try {
-            data = await res.json();
-        } catch (parseErr) {
-            console.warn("Response is not JSON", parseErr);
-        }
-
-        if (res.ok) {
-            localStorage.setItem('scholar_api_token', val);
-            
-            if (tokenDot) tokenDot.classList.remove('inactive');
-            if (tokenStatusText) tokenStatusText.textContent = 'активен';
-  
-            btn.classList.add('success');
-            showToast('Токен сохранён');
-
-            setTimeout(() => {
-                btn.classList.remove('success');
-                btn.disabled = false;
-                btn.style.opacity = '1';
-                btn.innerHTML = originalContent;
-            }, 2000);
-
-        } else {
-            const errorMsg = data.detail || data.error || 'Ошибка сервера';
-            showToast(`Ошибка: ${errorMsg}`);
-            btn.disabled = false;
-            btn.style.opacity = '1';
-            btn.innerHTML = originalContent;
-        }
-    } catch (err) {
-        console.error(err);
-        showToast('Нет соединения с сервером');
-        btn.disabled = false;
-        btn.style.opacity = '1';
-        btn.innerHTML = originalContent;
-    }
-  }
 
   if (e.target.closest('#logout-btn')) {
     if (confirm('Выйти из приложения?')) {

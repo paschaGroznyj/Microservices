@@ -30,6 +30,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice \
     libreoffice-impress \
     libreoffice-draw \
+    poppler-utils \
+    fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
 

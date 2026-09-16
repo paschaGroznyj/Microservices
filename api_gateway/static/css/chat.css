@@ -727,9 +727,9 @@
 /* Убираем кнопки-стрелки на концах скроллбара (up/down). */
 .chat-input-field::-webkit-scrollbar-button,
 .start-input-field::-webkit-scrollbar-button {
-  display: none;
-  width: 0;
-  height: 0;
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
 }
 .chat-input-field::-webkit-scrollbar-track,
 .start-input-field::-webkit-scrollbar-track {

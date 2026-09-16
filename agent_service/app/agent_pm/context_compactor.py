@@ -47,8 +47,8 @@ from langchain_core.messages import ToolMessage
 logger = logging.getLogger(__name__)
 
 # --- дефолты (перекрываются аргументами вызова) ----------------------------
-TOKEN_SOFT_LIMIT = 80_000   # порог по iter_in (факт от модели), НЕ аппроксимация
-KEEP_LAST_PAIRS  = 3        # сколько последних пар AIMessage+ToolMessage оставить дословно
+TOKEN_SOFT_LIMIT = 90_000   # порог по iter_in (факт от модели), НЕ аппроксимация
+KEEP_LAST_PAIRS  = 5        # сколько последних пар AIMessage+ToolMessage оставить дословно
 COMPACT_MARKER   = "\U0001F5DC СЖАТЫЙ КОНТЕКСТ ИТЕРАЦИЙ"  # 🗜, метка для дедупликации
 
 

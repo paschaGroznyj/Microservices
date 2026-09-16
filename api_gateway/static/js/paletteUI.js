@@ -1,8 +1,11 @@
 // paletteUI.js — UI цветовой палитры в профиле.
-// Строит выпадашку внутри #palette-mount (в profile-body), связывает
-// ползунок тона с window.UserPalette, рисует инерционный blob по dot-grid.
-// Красим пока ТОЛЬКО акцент: ползунок = Hue, S/L берём из текущего
-// эталонного бежа, чтобы гамма оставалась «в характере» бренда.
+// Строит выпадашку внутри #palette-mount (в profile-body). Управление —
+// 2D-пикер: кастомная белая точка (knob) на прямоугольной карте с dot-grid.
+//   ось X → Hue (0..360)
+//   ось Y → Saturation (верх — насыщеннее, низ — блёклее)
+// L держим из эталонного бежа, чтобы гамма оставалась «в характере» бренда.
+// Реакция ТОЛЬКО при захвате точки (pointerdown, пока зажато).
+// Никаких hover-анимаций — на простое наведение мышки карта не реагирует.
 (function () {
   const P = window.UserPalette;
   if (!P) return;
@@ -10,8 +13,12 @@
   const mount = document.getElementById('palette-mount');
   if (!mount) return;
 
-  // S/L эталона (беж #8b4513) — держим при кручении Hue.
+  // L эталона (беж #8b4513) — держим при движении по H/S.
   const baseHsl = P._util.hexToHsl(P.DEFAULT_ACCENT); // {h,s,l}
+
+  // Диапазон насыщенности по вертикали (верх → низ).
+  const S_MAX = 85;
+  const S_MIN = 12;
 
   mount.innerHTML = [
     '<div class="palette-section" id="palette-section">',
@@ -23,9 +30,12 @@
     '    </svg>',
     '  </button>',
     '  <div class="palette-pop">',
-    '    <div class="palette-card" id="palette-card">',
-    '      <div class="palette-dots" id="palette-dots"></div>',
-    '      <div class="palette-blob" id="palette-blob"></div>',
+    '    <div class="palette-card">',
+    '      <div class="palette-field" id="palette-field">',
+    '        <div class="palette-dots" id="palette-dots"></div>',
+    '        <div class="palette-blob" id="palette-blob"></div>',
+    '        <div class="palette-knob" id="palette-knob"></div>',
+    '      </div>',
     '      <div class="palette-card-inner">',
     '        <div class="palette-preview-row">',
     '          <div class="palette-preview-chip" id="palette-chip"></div>',
@@ -33,9 +43,6 @@
     '            <span class="palette-preview-title">Акцент интерфейса</span>',
     '            <span class="palette-preview-hex" id="palette-hex">#8b4513</span>',
     '          </div>',
-    '        </div>',
-    '        <div class="palette-hue-wrap">',
-    '          <input type="range" class="palette-hue" id="palette-hue" min="0" max="360" step="1" value="25">',
     '        </div>',
     '        <div class="palette-actions">',
     '          <button class="palette-btn palette-btn-save" id="palette-save" type="button">Сохранить</button>',
@@ -49,48 +56,109 @@
 
   const section = document.getElementById('palette-section');
   const toggle  = document.getElementById('palette-toggle');
-  const card    = document.getElementById('palette-card');
+  const field   = document.getElementById('palette-field');
   const dots    = document.getElementById('palette-dots');
   const blob    = document.getElementById('palette-blob');
+  const knob    = document.getElementById('palette-knob');
   const swatch  = document.getElementById('palette-swatch');
   const chip    = document.getElementById('palette-chip');
   const hexEl   = document.getElementById('palette-hex');
-  const hue     = document.getElementById('palette-hue');
   const saveBtn = document.getElementById('palette-save');
   const resetBtn= document.getElementById('palette-reset');
 
-  // hex из текущего hue (S/L эталона)
-  function hexFromHue(h) {
-    return P._util.hslToHex(h, baseHsl.s, baseHsl.l);
+  function clamp01(v) { return Math.min(1, Math.max(0, v)); }
+
+  // Нормированные координаты точки на карте (0..1). Центр = старт.
+  let nx = 0.5, ny = 0.5;
+
+  // X → Hue, Y → Saturation (верх ny=0 → S_MAX, низ ny=1 → S_MIN).
+  function hueFromX(x) { return x * 360; }
+  function satFromY(y) { return S_MAX - y * (S_MAX - S_MIN); }
+  function xFromHue(h) { return clamp01(h / 360); }
+  function yFromSat(s) { return clamp01((S_MAX - s) / (S_MAX - S_MIN)); }
+
+  function hexFromXY(x, y) {
+    return P._util.hslToHex(hueFromX(x), satFromY(y), baseHsl.l);
+  }
+
+  function placeKnob() {
+    knob.style.left = (nx * 100) + '%';
+    knob.style.top  = (ny * 100) + '%';
+    blob.style.left = (nx * 100) + '%';
+    blob.style.top  = (ny * 100) + '%';
+    dots.style.setProperty('--mx', (nx * 100) + '%');
+    dots.style.setProperty('--my', (ny * 100) + '%');
   }
 
   function syncVisual(hex) {
     swatch.style.background = hex;
     chip.style.background = hex;
     hexEl.textContent = hex.toUpperCase();
+    knob.style.background = hex;
   }
 
-  // Проставить ползунок под текущий акцент палитры
   function pullFromPalette() {
     const cur = P.getAccent() || P.DEFAULT_ACCENT;
     const hsl = P._util.hexToHsl(cur) || baseHsl;
-    hue.value = Math.round(hsl.h);
+    nx = xFromHue(hsl.h);
+    ny = yFromSat(hsl.s);
+    placeKnob();
     syncVisual(cur);
   }
   pullFromPalette();
 
-  // Разворот/сворачивание
   toggle.addEventListener('click', () => {
     const open = section.classList.toggle('open');
     toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) requestAnimationFrame(placeKnob);
   });
 
-  // Движение ползунка → мгновенный preview (без записи в БД)
-  hue.addEventListener('input', () => {
-    const hex = hexFromHue(Number(hue.value));
+  // ── 2D-драг точки ────────────────────────────────────────────────
+  let dragging = false;
+
+  function pointFromEvent(e) {
+    const r = field.getBoundingClientRect();
+    const cx = (e.touches ? e.touches[0].clientX : e.clientX);
+    const cy = (e.touches ? e.touches[0].clientY : e.clientY);
+    nx = clamp01((cx - r.left) / r.width);
+    ny = clamp01((cy - r.top) / r.height);
+  }
+
+  function applyFromXY() {
+    const hex = hexFromXY(nx, ny);
     P.setAccent(hex, { preview: true });
+    placeKnob();
     syncVisual(hex);
-  });
+  }
+
+  function onDown(e) {
+    dragging = true;
+    field.classList.add('dragging');
+    pointFromEvent(e);
+    applyFromXY();
+    e.preventDefault();
+  }
+
+  function onMove(e) {
+    if (!dragging) return;
+    pointFromEvent(e);
+    applyFromXY();
+    if (e.cancelable) e.preventDefault();
+  }
+
+  function onUp() {
+    if (!dragging) return;
+    dragging = false;
+    field.classList.remove('dragging');
+  }
+
+  field.addEventListener('mousedown', onDown);
+  field.addEventListener('touchstart', onDown, { passive: false });
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('touchmove', onMove, { passive: false });
+  window.addEventListener('mouseup', onUp);
+  window.addEventListener('touchend', onUp);
+  window.addEventListener('touchcancel', onUp);
 
   saveBtn.addEventListener('click', async () => {
     saveBtn.disabled = true;
@@ -104,41 +172,5 @@
     pullFromPalette();
   });
 
-  // Синк, если сервер прислал другой акцент (другое устройство)
   document.addEventListener('palette:changed', pullFromPalette);
-
-  // ── инерционный blob по dot-grid ─────────────────────────────────
-  let mx = 0.5, my = 0.5;   // цель (0..1)
-  let bx = 0.5, by = 0.5;   // текущее (инерция)
-  let raf = null, inside = false;
-
-  function onMove(e) {
-    const r = card.getBoundingClientRect();
-    const px = (e.touches ? e.touches[0].clientX : e.clientX) - r.left;
-    const py = (e.touches ? e.touches[0].clientY : e.clientY) - r.top;
-    mx = Math.min(1, Math.max(0, px / r.width));
-    my = Math.min(1, Math.max(0, py / r.height));
-    inside = true;
-    if (!raf) raf = requestAnimationFrame(tick);
-  }
-
-  function tick() {
-    // экспоненциальное сглаживание = ощущение инерции
-    bx += (mx - bx) * 0.18;
-    by += (my - by) * 0.18;
-    const r = card.getBoundingClientRect();
-    blob.style.left = (bx * r.width) + 'px';
-    blob.style.top  = (by * r.height) + 'px';
-    dots.style.setProperty('--mx', (bx * 100) + '%');
-    dots.style.setProperty('--my', (by * 100) + '%');
-    if (Math.abs(mx - bx) > 0.001 || Math.abs(my - by) > 0.001) {
-      raf = requestAnimationFrame(tick);
-    } else {
-      raf = null;
-    }
-  }
-
-  card.addEventListener('mousemove', onMove);
-  card.addEventListener('touchmove', onMove, { passive: true });
-  card.addEventListener('mouseleave', () => { inside = false; });
 })();

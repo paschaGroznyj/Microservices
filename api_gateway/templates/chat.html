@@ -30,6 +30,7 @@
     <link rel="stylesheet" href="/static/css/whatsnew.css">
     <link rel="stylesheet" href="/static/css/skills.css">
     <link rel="stylesheet" href="/static/css/claude-ui.css">
+    <link rel="stylesheet" href="/static/css/presence.css">
 
 </head>
 <body>
@@ -161,6 +162,29 @@
                 <div class="main-title" id="main-title">Agent Process Mining</div>
 
                 <div class="header-actions">
+                    <!-- ONLINE PRESENCE бейдж-счётчик + оверлей -->
+                    <div class="presence-wrap" id="presence-wrap">
+                        <button class="presence-btn" id="presence-btn" aria-label="Онлайн" title="Кто сейчас онлайн">
+                            <span class="presence-dot"></span>
+                            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                                <circle cx="9" cy="7" r="4"/>
+                                <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                                <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                            </svg>
+                            <span class="presence-count" id="presence-count">0</span>
+                        </button>
+                        <div class="presence-overlay" id="presence-overlay" hidden>
+                            <div class="presence-overlay-header">
+                                <span class="presence-overlay-title">Онлайн сейчас</span>
+                                <span class="presence-overlay-now" id="presence-overlay-now">0</span>
+                            </div>
+                            <div class="presence-overlay-sub" id="presence-overlay-sub">main 0 · sigma 0 · пик за сутки 0</div>
+                            <div class="presence-overlay-section">Топ-3 за сутки (по сообщениям)</div>
+                            <ol class="presence-top" id="presence-top"></ol>
+                        </div>
+                    </div>
+
                     <!-- <button class="feedback-trigger" id="feedback-trigger" aria-label="Обратная связь" title="Обратная связь">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
                             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
@@ -720,6 +744,7 @@
 <script type="module" src="/static/js/app.js"></script>
 <script type="module" src="/static/js/searchBlock.js"></script>
 <script type="module" src="/static/js/chatSearchModal.js"></script>
+<script src="/static/js/presence.js"></script>
 <script src="/static/js/whatsnew.js"></script>
 
 </body>

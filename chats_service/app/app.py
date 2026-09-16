@@ -331,6 +331,20 @@ async def resolve_file(chat_id: int, message_id: str, file_name: str):
     return {"path": row["file_path"]}
 
 
+@app.get("/internal/stats/overlay")
+async def overlay_stats(gw: str = "main", top_n: int = 3):
+    """Только для gateway. SQL-агрегаты для оверлея онлайна.
+    Гейтвей сам подмешивает online/peak из Redis. gw пока не фильтрует
+    выборку (топ — общий по системе), принимается для совместимости."""
+    try:
+        top_n = max(1, min(top_n, 10))
+        stats = await db.get_overlay_stats(top_n=top_n)
+        return stats
+    except Exception as e:
+        logging.error(f"Ошибка в overlay_stats: {e}")
+        raise HTTPException(status_code=500, detail="overlay stats failed")
+
+
 @app.get("/health")
 async def health():
     status = "ok" if service_message_alive else "error"

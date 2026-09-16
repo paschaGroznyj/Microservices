@@ -2987,17 +2987,30 @@ class ChatApp {
         // Вставка ДЛИННОГО текста (>1000 симв) в поле ввода: вместо простыни
         // текста втыкаем компактный чип, полный текст храним отдельно.
         // Пользователь может печатать текст до и после чипа.
+        // Короткий текст вставляется ПРИНУДИТЕЛЬНО как plain-text: без этого
+        // браузер тянет из буфера text/html (цвета/шрифты/pre-code из IDE),
+        // и в поле оказывается разноцветный код. Нам нужен только чистый текст.
         const INPUT_COLLAPSE_LIMIT = 1000;
         field.addEventListener('paste', (e) => {
             if (field.contentEditable !== 'true') return;
             const cd = e.clipboardData || window.clipboardData;
-            const pasted = cd ? cd.getData('text') : '';
-            if (pasted && pasted.length > INPUT_COLLAPSE_LIMIT) {
+            // Берём именно plain-text из буфера, игнорируя text/html.
+            const pasted = cd ? (cd.getData('text/plain') || cd.getData('text') || '') : '';
+            if (!pasted) {
+                // Нет текстовой части (например, только картинка/файл) —
+                // блокируем дефолтную HTML-вставку, файлами займётся FileAttach.
                 e.preventDefault();
-                this._insertInputChip(field, pasted);
-                onInput();
+                return;
             }
-            // короткий текст — стандартная вставка (плейн-текст форсится ниже)
+            e.preventDefault();
+            if (pasted.length > INPUT_COLLAPSE_LIMIT) {
+                // Длинный текст — сворачиваем в чип.
+                this._insertInputChip(field, pasted);
+            } else {
+                // Короткий — вставляем как обычный текст без форматирования.
+                document.execCommand('insertText', false, pasted);
+            }
+            onInput();
         });
 
         field.addEventListener('keydown', (e) => {

@@ -530,6 +530,11 @@
 .wn-update-body ul, .wn-update-body ol { margin: 0 0 10px; padding-left: 20px; }
 .wn-update-body strong { color: var(--text-primary, #1a1612); }
 .wn-update-body a { color: var(--accent, #8b4513); }
+.wn-update-body h3 { font-size: 1.02rem; font-weight: 700; margin: 16px 0 8px; color: var(--text-primary, #1a1612); }
+.wn-update-body h3:first-child { margin-top: 0; }
+.wn-update-body h4 { font-size: 0.9rem; font-weight: 700; margin: 14px 0 6px; color: var(--text-primary, #1a1612); }
+.wn-update-body li { margin: 0 0 4px; }
+.wn-update-body code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.82em; padding: 1px 5px; border-radius: 5px; background: var(--surface-2, rgba(139,69,19,0.08)); }
 
 /* ── Адаптив под мобилки ── */
 @media (max-width: 680px) {

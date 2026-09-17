@@ -87,6 +87,51 @@
     return d.innerHTML;
   }
 
+  // ── Мини-markdown для тела обновления ───────────────────────────
+  // Поддержка подмножества, реально используемого в changelog:
+  //   ## / ### заголовки, "- " списки, **bold**, *italic*, `code`, абзацы.
+  // Весь текст экранируется через esc() ДО вставки инлайн-токенов,
+  // поэтому в разметку попадают только разрешённые теги.
+  function wnInline(s) {
+    s = esc(s);
+    s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+    s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+    return s;
+  }
+
+  function wnRenderMarkdown(md) {
+    const lines = String(md || "").replace(/\r\n/g, "\n").split("\n");
+    const out = [];
+    let inList = false;
+    let para = [];
+    const flushPara = () => {
+      if (para.length) { out.push("<p>" + wnInline(para.join(" ")) + "</p>"); para = []; }
+    };
+    const closeList = () => { if (inList) { out.push("</ul>"); inList = false; } };
+    for (const raw of lines) {
+      const line = raw.replace(/\s+$/, "");
+      if (!line.trim()) { flushPara(); closeList(); continue; }
+      let m;
+      if ((m = line.match(/^###\s+(.*)$/))) {
+        flushPara(); closeList();
+        out.push("<h4>" + wnInline(m[1]) + "</h4>");
+      } else if ((m = line.match(/^##\s+(.*)$/))) {
+        flushPara(); closeList();
+        out.push("<h3>" + wnInline(m[1]) + "</h3>");
+      } else if ((m = line.match(/^[-*]\s+(.*)$/))) {
+        flushPara();
+        if (!inList) { out.push("<ul>"); inList = true; }
+        out.push("<li>" + wnInline(m[1]) + "</li>");
+      } else {
+        closeList();
+        para.push(line.trim());
+      }
+    }
+    flushPara(); closeList();
+    return out.join("");
+  }
+
   async function apiGet(url) {
     const res = await fetch(url, { method: "GET", headers: { "Accept": "application/json" }, credentials: "include" });
     if (!res.ok) throw new Error("HTTP " + res.status);
@@ -501,12 +546,15 @@
     requestAnimationFrame(() => ov.classList.add("active"));
   }
   function closeOverlay() {
-    if (!overlayEl) return;
+    if (!overlayEl) return Promise.resolve();
     overlayEl.classList.add("closing");
-    setTimeout(() => {
-      overlayEl.classList.remove("active", "closing");
-      overlayEl.innerHTML = "";
-    }, 280);
+    return new Promise((res) => {
+      setTimeout(() => {
+        overlayEl.classList.remove("active", "closing");
+        overlayEl.innerHTML = "";
+        res();
+      }, 280);
+    });
   }
 
   // Синхронизируем src героев/иконок с текущей темой (theme.js делает это на
@@ -579,7 +627,7 @@
         syncThemeIcons(stage);
       }
 
-      function finish() { closeOverlay(); resolve(); }
+      function finish() { closeOverlay().then(resolve); }
 
       nextBtn.addEventListener("click", () => {
         if (idx < total - 1) { idx++; render(); } else finish();
@@ -618,12 +666,13 @@
       const okBtn = h("button", { class: "wn-btn wn-btn-primary", type: "button" }, ["Понятно"]);
 
       const rawBody = update.body || "";
-      const safeBody = (window.DOMPurify ? window.DOMPurify.sanitize(rawBody) : rawBody);
+      const htmlBody = wnRenderMarkdown(rawBody);
+      const safeBody = (window.DOMPurify ? window.DOMPurify.sanitize(htmlBody) : htmlBody);
 
       const card = h("div", { class: "wn-card wn-card-update" }, [
         h("div", { class: "wn-topbar" }, [
           h("div", { class: "wn-progress", style: "flex:1;align-items:center;gap:8px;" }, [
-            h("span", { class: "wn-badge" }, [update.version ? "v" + update.version : "Обновление"]),
+            h("span", { class: "wn-badge" }, [update.version ? (/^v/i.test(update.version) ? update.version : "v" + update.version) : "Обновление"]),
             dateStr ? h("span", { class: "wn-update-date" }, [dateStr]) : null,
           ]),
           closeBtn,
@@ -640,7 +689,7 @@
         ]),
       ]);
 
-      function done() { closeOverlay(); resolve(); }
+      function done() { closeOverlay().then(resolve); }
       closeBtn.addEventListener("click", done);
       okBtn.addEventListener("click", done);
 

@@ -1,7 +1,7 @@
 # gateway/app.py  (SIGMA — вариант без WebSocket, GET-polling + собственный Kafka-consumer)
 from fastapi import FastAPI, HTTPException, Request, Depends, Form, Cookie, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from contextlib import asynccontextmanager
@@ -60,6 +60,10 @@ COOKIE_MAX_AGE_SECONDS = 14 * 24 * 60 * 60
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting up API Gateway SIGMA...")
+
+    # Привязываем текущий event loop к store, чтобы Kafka-consumer (крутится
+    # в отдельном потоке) мог взводить asyncio.Event для SSE-стримов.
+    status_store.bind_loop(asyncio.get_running_loop())
 
     app.state.http_client = httpx.AsyncClient(
         timeout=30.0,
@@ -1148,6 +1152,231 @@ async def poll_user_events(request: Request):
 
     events = status_store.pop_user_events(user["username"])
     return JSONResponse(content={"events": events})
+
+
+# ── SSE: push вместо polling ─────────────────────────────────────────────
+# Заголовки, критичные для корректного SSE через прокси:
+#   Cache-Control: no-cache      — не кэшировать поток
+#   X-Accel-Buffering: no        — отключить буферизацию в nginx (иначе
+#                                  события склеятся и придут пачкой в конце)
+#   Connection: keep-alive       — держать соединение
+# ── Redis pub/sub для стрима чанков от агента ────────────────────────────────
+# Агент публикует reasoning/answer-чанки в канал stream:{request_id};
+# SSE-стрим подписан на него и релеит фреймы браузеру. Redis уже
+# используется в presence.py — тот же REDIS_URL.
+import os as _os
+_REDIS_URL = _os.getenv("REDIS_URL", "redis://redis:6379/0")
+_sse_redis = None
+_sse_redis_failed = False
+
+
+async def _get_sse_redis():
+    """Ленивый async Redis-клиент для подписки на stream:{request_id}.
+    Fail-open: Redis лёг → None, SSE работает без чанков (только running/done)."""
+    global _sse_redis, _sse_redis_failed
+    if _sse_redis is not None:
+        return _sse_redis
+    if _sse_redis_failed:
+        return None
+    try:
+        import redis.asyncio as aioredis
+        _sse_redis = aioredis.from_url(_REDIS_URL, decode_responses=True)
+        return _sse_redis
+    except Exception as e:
+        _sse_redis_failed = True
+        logger.warning(f"[sigma-sse] Redis недоступен, стрим чанков отключён: {e}")
+        return None
+
+
+_SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
+
+# Как часто слать heartbeat-комментарий, чтобы прокси/браузер не рвали
+# idle-соединение, и общий потолок жизни одного стрима.
+_SSE_HEARTBEAT_SEC = 15
+_SSE_MAX_LIFETIME_SEC = 900
+
+
+def _sse_pack(event: str, data: dict) -> str:
+    """Собрать одно SSE-сообщение в формате text/event-stream."""
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+@app.get("/api/chats/{chat_id}/stream")
+async def stream_chat_status(chat_id: int, request: Request):
+    """SSE-замена polling'а GET /api/chats/{id}/status.
+
+    Держит одно соединение и пушит событие ровно в момент готовности ответа
+    (mark_done из Kafka-consumer взводит asyncio.Event в store). Никакого
+    опроса store в цикле — стрим спит на wait_chat_ready до появления финала.
+
+    События:
+      event: running  data: {"status":"running"}           — при подключении, если бот думает
+      event: done     data: {"status":"done","message":...} — финал готов
+      event: idle     data: {"status":"idle"}               — для чата ничего не ждётся
+      :heartbeat                                             — keep-alive комментарий
+
+    Фолбэк: если фронт не смог открыть SSE, остаётся старый GET .../status.
+    """
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    await presence.touch("sigma", user["username"])
+
+    async def event_gen():
+        started = time.time()
+        # Первичное состояние: если ответ уже готов/протух — отдаём сразу.
+        state = status_store.get_chat_state(chat_id)
+        if state.get("status") == "done":
+            yield _sse_pack("done", state)
+            return
+        if state.get("status") == "idle":
+            yield _sse_pack("idle", state)
+            return
+        # running — сообщаем и уходим ждать финал
+        yield _sse_pack("running", {"status": "running"})
+
+        # ── Подписка на Redis-канал чанков stream:{request_id} ──────────────
+        # Агент публикует туда live/reasoning_end/final_commit-фреймы.
+        # Параллельно ждём mark_done (финал через Kafka) — он главный
+        # сигнал завершения; чанки — необязательный живой текст.
+        request_id = status_store.get_chat_request_id(chat_id)
+        pubsub = None
+        chan = None
+        r = await _get_sse_redis()
+        if r is not None and request_id:
+            try:
+                pubsub = r.pubsub()
+                chan = f"stream:{request_id}"
+                await pubsub.subscribe(chan)
+            except Exception as e:
+                logger.debug(f"[sigma-sse] subscribe {request_id} не удался: {e}")
+                pubsub = None
+
+        async def _drain_chunks():
+            """Слить все накопившиеся чанки из pubsub без блокировки.
+            Каждый фрейм агента {chunk,id,kind} -> SSE-событие того же kind."""
+            out = []
+            if pubsub is None:
+                return out
+            while True:
+                try:
+                    msg = await pubsub.get_message(
+                        ignore_subscribe_messages=True, timeout=0.05
+                    )
+                except Exception:
+                    break
+                if not msg:
+                    break
+                try:
+                    frame = json.loads(msg["data"])
+                except Exception:
+                    continue
+                kind = frame.get("kind") or "live"
+                out.append(_sse_pack(kind, {
+                    "chunk": frame.get("chunk", ""),
+                    "id": frame.get("id"),
+                    "kind": kind,
+                }))
+            return out
+
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                remaining = _SSE_MAX_LIFETIME_SEC - (time.time() - started)
+                if remaining <= 0:
+                    # Потолок жизни стрима — пусть фронт переподключится.
+                    yield _sse_pack("timeout", {"status": "running"})
+                    break
+
+                # Пока ждём финал — часто подливаем живые чанки.
+                # Короткий таймаут ожидания mark_done, чтобы цикл быстро
+                # возвращался к вычитыванию pubsub (живой текст > редкого HB).
+                step = 0.25 if pubsub is not None else min(_SSE_HEARTBEAT_SEC, remaining)
+
+                # 1) слить чанки, что уже пришли
+                for frame in await _drain_chunks():
+                    yield frame
+
+                # 2) подождать финал (коротко)
+                ready = await status_store.wait_chat_ready(chat_id, timeout=step)
+                if ready:
+                    # долить хвост чанков перед финалом
+                    for frame in await _drain_chunks():
+                        yield frame
+                    final = status_store.get_chat_state(chat_id)
+                    if final.get("status") == "done":
+                        yield _sse_pack("done", final)
+                        break
+                    if final.get("status") == "idle":
+                        yield _sse_pack("idle", final)
+                        break
+                    continue
+
+                # 3) heartbeat только когда чанков нет (реже, чтоб не шуметь)
+                if pubsub is None:
+                    yield ": heartbeat\n\n"
+        finally:
+            if pubsub is not None:
+                try:
+                    await pubsub.unsubscribe(chan)
+                    await pubsub.aclose()
+                except Exception:
+                    pass
+
+    return StreamingResponse(
+        event_gen(), media_type="text/event-stream", headers=_SSE_HEADERS
+    )
+
+
+@app.get("/api/chats/user_events/stream")
+async def stream_user_events(request: Request):
+    """SSE-замена polling'а GET /api/chats/user_events.
+
+    Пушит накопленные и новые пользовательские события (релевантные статьи,
+    ошибки парсера, отзывы) по мере появления. Событие в store взводит
+    asyncio.Event — стрим просыпается и отдаёт всё, что накопилось.
+
+    События:
+      event: user_events  data: {"events":[...]}  — пачка событий
+      :heartbeat                                   — keep-alive
+    """
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    username = user["username"]
+
+    async def event_gen():
+        started = time.time()
+        # Сразу отдаём то, что уже накопилось до подключения.
+        pending = status_store.pop_user_events(username)
+        if pending:
+            yield _sse_pack("user_events", {"events": pending})
+
+        while True:
+            if await request.is_disconnected():
+                break
+            remaining = _SSE_MAX_LIFETIME_SEC - (time.time() - started)
+            if remaining <= 0:
+                break
+            wait = min(_SSE_HEARTBEAT_SEC, remaining)
+            ready = await status_store.wait_user_ready(username, timeout=wait)
+            if ready:
+                events = status_store.pop_user_events(username)
+                if events:
+                    yield _sse_pack("user_events", {"events": events})
+            else:
+                yield ": heartbeat\n\n"
+
+    return StreamingResponse(
+        event_gen(), media_type="text/event-stream", headers=_SSE_HEADERS
+    )
 
 
 @app.get("/api/chats/{chat_id}/image/{message_id}/{file_name}")

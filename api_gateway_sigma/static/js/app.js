@@ -9,7 +9,8 @@ class ChatApp {
         this.currentTab    = 'agent'; // 'agent' | 'graph'
         this._runState = 'idle';      // idle | running | stopping
         this._activeRequestId = null;
-        this._statusPollTimer = null;
+        this._statusPollTimer = null;  // фолбэк-таймер, если SSE недоступен
+        this._statusSse = null;        // активный EventSource стрима статуса
         this.INPUT_MAX_CHARS = 10000;  // жёсткий предел длины поля ввода
     }
 
@@ -2100,12 +2101,175 @@ class ChatApp {
             clearInterval(this._statusPollTimer);
             this._statusPollTimer = null;
         }
+        if (this._statusSse) {
+            this._statusSse.close();
+            this._statusSse = null;
+        }
         this._runState = 'idle';
         this._activeRequestId = null;
         this._setSendButtonMode('send');
     }
 
+    // Финал ответа готов: перечитываем историю чата и завершаем run.
+    //
+    // ВАЖНО про конфликт с живым стримом: пока шёл Redis-стрим, в DOM уже
+    // нарисованы _pendingBotEl (обёртка бота), свёрток «Размышления» и живой
+    // финальный блок. loadMessages() делает container.innerHTML = '' и
+    // перерисовывает ленту из БД — то есть живой блок будет снесён и заменён
+    // финальной версией из chats. Дубля не будет (innerHTML полностью
+    // очищается), но если RAF-цикл ещё не дорисовал _streamBuffer или
+    // _finalizeStream не отработал — висячие ссылки (_pendingBotEl,
+    // _streamRaf, _liveBlockEl) останутся живыми и СЛЕДУЮЩИЙ ответ приклеится
+    // к мёртвому пузырю. Поэтому перед перечиткой жёстко гасим стрим-состояние
+    // (RAF + все ссылки), не финализируя DOM: сам DOM всё равно будет заменён
+    // историей из БД.
+    async _handleRunDone(chatId) {
+        // Гасим стрим-состояние (RAF + ссылки) без финализации DOM — лента
+        // всё равно будет перерисована из БД ниже.
+        this._hardResetStreamState();
+        // _finalizeStream мы обошли, значит placeholder с волной-индикатором и
+        // статусы тулов надо снять здесь вручную, иначе индикатор зависнет
+        // поверх уже перечитанной истории.
+        this._botAnswered = true;
+        this._flattenWaveIndicator();
+        this._removeBotPlaceholder();
+        this._clearAllStatuses();
+        if (this._chatStatuses) delete this._chatStatuses[chatId];
+        if (chatId === this.currentChat) {
+            await this.loadMessages(chatId);
+        }
+        this._onRunFinished();
+    }
+
+    // Замена polling'а: держим один SSE (EventSource) и ждём push-события
+    // done/idle. Если браузер/сеть не дали открыть SSE — падаем на старый
+    // polling GET /api/chats/{id}/status (эндпоинт оставлен как фолбэк).
     _startStatusPolling(chatId) {
+        if (!chatId) return;
+        // подчистить прошлые подписки
+        if (this._statusPollTimer) {
+            clearInterval(this._statusPollTimer);
+            this._statusPollTimer = null;
+        }
+        if (this._statusSse) {
+            this._statusSse.close();
+            this._statusSse = null;
+        }
+
+        if (typeof EventSource === 'undefined') {
+            this._startStatusPollingFallback(chatId);
+            return;
+        }
+
+        let es;
+        try {
+            es = new EventSource(`/api/chats/${chatId}/stream`, { withCredentials: true });
+        } catch (_) {
+            this._startStatusPollingFallback(chatId);
+            return;
+        }
+        this._statusSse = es;
+
+        // ── Живой токен-стрим (Redis pub/sub → SSE) ───────────────────────
+        // Агент публикует фреймы в stream:{request_id}; sigma-гейтвей релеит
+        // их как SSE-события того же kind. Логика 1:1 с main-гейтвеем (WS),
+        // только транспорт другой (EventSource вместо WebSocket).
+        //
+        //   live          — фрагмент текста: дописываем в _streamBuffer,
+        //                   отрисовкой занимается RAF-цикл (_startStreamLoop).
+        //                   Печатается СРАЗУ в приглушённом reasoning-стиле,
+        //                   пока не пришёл final_commit.
+        //   reasoning_end — живой блок был размышлением перед тулзой: сворачиваем
+        //                   его в единый свёрток «Размышления» (chunk пустой).
+        //   final_commit  — живой блок оказался финальным ответом: повышаем
+        //                   стиль до основного (chunk пустой). Финализация
+        //                   (файлы, actions) придёт с 'done' из Kafka.
+        const onLive = (ev) => {
+            let frame;
+            try { frame = JSON.parse(ev.data); } catch (_) { return; }
+            const chunk = frame.chunk;
+            if (chunk === undefined || chunk === null || chunk === '') return;
+
+            const container = this.getMessagesContainer();
+            if (!container) return;
+
+            if (!this._liveBlockEl) {
+                // Обёртка ответа бота — создаём один раз на весь ответ.
+                if (!this._pendingBotEl) {
+                    this._pendingBotEl = document.createElement('div');
+                    this._pendingBotEl.className = 'agent-message';
+                    this._pendingBotEl.dataset.id = frame.id || '';
+                    this._pendingBotEl.style.opacity = '0';
+                    this._pendingBotEl.style.transition = 'opacity 0.25s ease';
+                    container.appendChild(this._pendingBotEl);
+                    requestAnimationFrame(() => requestAnimationFrame(() => {
+                        if (this._pendingBotEl) this._pendingBotEl.style.opacity = '1';
+                    }));
+                    this._botAnswered = true;
+                    // Placeholder НЕ убираем здесь: волна-индикатор крутится и
+                    // во время размышлений. Снос — в _finalizeStream.
+                    this._clearAllStatuses();
+                    this._streamingActive = true;
+                    this._streamIsFinal   = false;
+                }
+                // Живой блок печатается в reasoning-стиле, пока не пришёл
+                // final_commit. Если финал уже объявлен — сразу .live-block.
+                this._liveBlockEl = document.createElement('div');
+                this._liveBlockEl.className = this._streamIsFinal ? 'live-block' : 'reasoning-live';
+                this._pendingBotEl.appendChild(this._liveBlockEl);
+                this._streamBuffer = '';
+                this._streamShown  = '';
+                this._streamDone   = false;
+                this._startStreamLoop();
+            }
+
+            this._streamBuffer += chunk;
+        };
+
+        es.addEventListener('live', onLive);
+        es.addEventListener('reasoning_end', () => {
+            // Текущий живой блок был размышлением перед вызовом тулзы —
+            // сливаем его в общий свёрток «Размышления».
+            this._commitReasoningBlock();
+        });
+        es.addEventListener('final_commit', () => {
+            // Живой блок оказался финальным ответом — повышаем его стиль.
+            // Реальная финализация (файлы, actions) придёт с 'done' из Kafka.
+            this._promoteLiveToFinal();
+            this._streamIsFinal = true;
+        });
+
+        const onDone = async () => {
+            es.close();
+            if (this._statusSse === es) this._statusSse = null;
+            await this._handleRunDone(chatId);
+        };
+
+        es.addEventListener('done', onDone);
+        es.addEventListener('idle', onDone);
+        es.addEventListener('timeout', () => {
+            // Сервер закрыл стрим по потолку жизни. Если ран ещё идёт —
+            // EventSource сам переподключится; страхуемся ручным reopen.
+            if (this._runState === 'running' && this._statusSse === es) {
+                es.close();
+                this._statusSse = null;
+                this._startStatusPolling(chatId);
+            }
+        });
+        // 'running' игнорируем — индикатор уже показан оптимистично.
+
+        es.onerror = () => {
+            // EventSource сам ретраит соединение. Но если браузер вообще не
+            // смог подключиться ( es.readyState === CLOSED) — уходим в фолбэк.
+            if (es.readyState === EventSource.CLOSED && this._runState === 'running') {
+                if (this._statusSse === es) this._statusSse = null;
+                this._startStatusPollingFallback(chatId);
+            }
+        };
+    }
+
+    // Старый short-polling — фолбэк на случай недоступности SSE.
+    _startStatusPollingFallback(chatId) {
         if (!chatId) return;
         if (this._statusPollTimer) {
             clearInterval(this._statusPollTimer);
@@ -2130,22 +2294,10 @@ class ChatApp {
                 if (!resp.ok) return;
 
                 const state = await resp.json();
-                if (state?.status === 'done') {
+                if (state?.status === 'done' || state?.status === 'idle') {
                     // Сообщение уже сохранено в БД chats-consumer'ом —
-                    // просто перечитываем историю чата и завершаем run.
-                    if (chatId === this.currentChat) {
-                        await this.loadMessages(chatId);
-                    }
-                    this._onRunFinished();
-                    return;
-                }
-
-                if (state?.status === 'idle') {
-                    // На всякий случай: если done уже отдан/протух, перечитаем историю.
-                    if (chatId === this.currentChat) {
-                        await this.loadMessages(chatId);
-                    }
-                    this._onRunFinished();
+                    // перечитываем историю чата и завершаем run.
+                    await this._handleRunDone(chatId);
                 }
             } catch (_) {
                 // Молчаливо ждём следующий тик polling

@@ -17,3 +17,6 @@ parsers_service/app/knowledge_base
 
 agent_sandbox/workspaces
 agent_sandbox/result_parsing
+
+searxng
+documents

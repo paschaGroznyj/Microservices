@@ -40,6 +40,22 @@ ALLOWED_IMAGE_ROOTS = [
 # Поддерживаемые расширения картинок для чтения с диска.
 _IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
+# Соответствие magic-байтов -> media type. Vision-API cloud.ru валидирует
+# реальную сигнатуру файла, поэтому media type определяем ПО БАЙТАМ, а не по
+# расширению/значению из БД: сервис генерации отдаёт PNG под именем *.jpg,
+# из-за чего mimetypes.guess_type давал image/jpeg и запрос падал с 400
+# ("media type image/jpeg, but image appears to be image/png").
+def _sniff_media_type(data: bytes, fallback: str = "image/jpeg") -> str:
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    return fallback
+
 
 def _is_within_allowed_roots(real_path: str) -> bool:
     """True, если real_path лежит внутри одного из whitelist-корней."""
@@ -90,15 +106,22 @@ def _local_image_as_data_uri(path_or_name: str) -> tuple[str | None, str | None]
     if not real:
         return None, (
             f"Файл «{path_or_name}» не найден в разрешённых папках "
-            f"(/sandbox, /app/generated_files) или путь недопустим."
+            f"(/sandbox, /app/generated_files) или путь недопустим. "
+            f"Если картинка собрана/сгенерирована в workspace (output/...) — она ещё не "
+            f"в локальной ФС агента: сначала скачай её через download_workspace_file "
+            f"(он положит файл в /app/generated_files и вернёт path), затем передай этот path в local_path."
         )
     ext = os.path.splitext(real)[1].lower()
     if ext not in _IMAGE_EXT:
         return None, f"«{path_or_name}»: неподдерживаемое расширение {ext} (только JPEG/PNG/WEBP/GIF)."
     try:
-        mime = mimetypes.guess_type(real)[0] or "image/png"
         with open(real, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode("ascii")
+            raw = f.read()
+        # media type — СТРОГО по сигнатуре байтов, а не по расширению:
+        # файл может быть PNG под именем *.jpg — тогда guess_type солгал бы и запрос упал бы 400.
+        fallback = mimetypes.guess_type(real)[0] or "image/jpeg"
+        mime = _sniff_media_type(raw, fallback=fallback)
+        b64 = base64.b64encode(raw).decode("ascii")
         return f"data:{mime};base64,{b64}", None
     except Exception as e:
         log.error("analyze_image: не смог прочитать %s: %s", real, e)
@@ -124,7 +147,8 @@ async def _db_image_as_data_uri(agent, image_key: str) -> tuple[str | None, str 
         if not row or not row["image_data"]:
             return None, f"Картинка с image_key={key} не найдена в хранилище."
         raw = bytes(row["image_data"])
-        mime = row["mime_type"] or "image/jpeg"
+        # media type — по реальной сигнатуре байтов; mime_type из БД — лишь fallback.
+        mime = _sniff_media_type(raw, fallback=(row["mime_type"] or "image/jpeg"))
         b64 = base64.b64encode(raw).decode("ascii")
         return f"data:{mime};base64,{b64}", None
     except Exception as e:
@@ -192,6 +216,13 @@ def make_analyze_image_tool(agent, images: list[dict] | None = None,
              (можно указать полный путь внутри них или просто имя файла — тогда
              ищется по имени рекурсивно). Пригодится для картинок, которые сделал
              другой тул (скриншот, отрисованный график, сохранённый ассет).
+             ВАЖНО: файлы, собранные в workspace фабрики (output/... внутри
+             execute_python_code), напрямую НЕ видны этому тулу — он читает только
+             /app/generated_files и /sandbox. Сначала скачай картинку через
+             download_workspace_file (он положит её в /app/generated_files и вернёт
+             path), и только потом передавай этот path в local_path. Формат
+             (JPEG/PNG/...) определяется по сигнатуре байтов автоматически,
+             пересохранять png-как-jpg вручную НЕ нужно.
 
           3. image_index — картинка, которую ПОЛЬЗОВАТЕЛЬ приложил к текущему
              сообщению. В тексте сообщения они помечены маркерами [IMAGE #0: file].

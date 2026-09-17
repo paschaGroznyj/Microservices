@@ -823,6 +823,14 @@ Process Mining остаётся приоритетной предметной о
 8. Ты можешь обогащать пришедшее знание информацией из сети Интернет
 9. Общаться без эмодзи, в стиле claude code.
 10. Если для выполнения запроса нужен инструмент, а тебе доступен только no_tools_selected — НЕ пытайся ответить по памяти и НЕ выдумывай данные. Вызови no_tools_selected и попроси пользователя включить нужную категорию инструментов на главной странице (кнопка с гаечным ключом рядом с полем ввода), затем повторить запрос. Это относится к любым задачам, требующим поиска в интернете, работы с БД, парсинга, запуска кода или субагентов.
+11. ФИКСАЦИЯ АРТЕФАКТОВ В ШАПКЕ ОТВЕТА. Если в ходе выполнения задачи ты создал или получил долгоживущие артефакты — файлы (пути /sandbox/..., /app/generated_files/..., output/...), id воркспейсов фабрики, git-ветки/коммиты/PR, важные ссылки (URL) — начни свой ответ с компактного блока-шапки, где перечисли их фактами. Это критично: твоя память между сообщениями собирается из текста ответа, а tool trace в неё НЕ попадает. Что не зафиксировано в тексте ответа — будет потеряно, и в следующих сообщениях ты не вспомнишь ни путь, ни id воркспейса, ни хеш коммита.
+   Формат шапки (используй разметку текущего режима — HTML или Markdown; раздел пропускай, если по нему нечего писать):
+   Артефакты:
+   • Файлы: <пути дословно>
+   • Воркспейс: <id> (<что внутри>)
+   • Git: <ветка> / <коммит> / PR #<n> — <статус>
+   • Ссылки: <URL>
+   Шапку добавляй ТОЛЬКО когда реально есть что фиксировать (что-то создано/изменено/запушено). Для обычных коротких ответов, справок и разговоров без артефактов — шапка не нужна, не засоряй ответ.
 
 ИНСТРУКЦИЯ ПО ФОРМАТИРОВАНИЮ (HTML MODE):
 1. Всегда используй HTML-теги для оформления текста.
@@ -983,10 +991,19 @@ class KnowledgeAgent:
             for row in rows:
                 kwargs = {"db_id": row["id"]}
                 if row["is_from_bot"]:
-                    content = row["message_text"]
+                    # РАЗДЕЛЕНИЕ СООБЩЕНИЙ И TOOL TRACE.
+                    # В content кладём ТОЛЬКО чистую реплику агента (message_text).
+                    # tool_trace НЕ приклеиваем к content — иначе на длинных задачах
+                    # трейс раздувает каждый AIMessage до тысяч токенов, trim_messages
+                    # выкидывает целые пары human/ai, и реальная память по диалогу
+                    # схлопывается до 1-2 ходов. Трейс кладём отдельно в
+                    # additional_kwargs["tool_trace"] — он НЕ участвует в подсчёте
+                    # токенов основного окна (в content его нет), но доступен при
+                    # сжатии (_summarize_cut_messages), чтобы факты из трейса
+                    # (пути, workspace_id, ссылки) не терялись, а уходили в rolling summary.
                     if row.get("tool_trace"):
-                        content = f"{content}\n\n[{row['tool_trace']}]"
-                    messages.append(AIMessage(content=content, additional_kwargs=kwargs))
+                        kwargs["tool_trace"] = row["tool_trace"]
+                    messages.append(AIMessage(content=row["message_text"], additional_kwargs=kwargs))
                 else:
                     messages.append(HumanMessage(content=row["message_text"], additional_kwargs=kwargs))
 
@@ -1069,15 +1086,11 @@ class KnowledgeAgent:
         mem = await self._get_memory(chat_id)
         mem.chat_memory.add_user_message(human_text)
 
-        if tool_trace: # Шаги по результатам выполнения тулзов
-            stored_content = (
-                f"{ai_text}\n\n"
-                f"[{'; '.join(tool_trace)}]"
-            )
-        else:
-            stored_content = ai_text
-
-        mem.chat_memory.add_ai_message(stored_content)
+        # A1: в in-memory буфер кладём ТОЛЬКО чистую реплику агента, без склейки
+        # tool_trace в content (как и при загрузке из БД в _load_history_from_db).
+        # Трейс сохраняется отдельной колонкой в chats.tool_trace через _save_message
+        # и подтягивается в additional_kwargs при следующей загрузке истории.
+        mem.chat_memory.add_ai_message(ai_text)
 
 
     # ------------------------------------------------------------------
@@ -1581,10 +1594,19 @@ class KnowledgeAgent:
         if not cut_messages:
             return previous_summary or ""
 
-        chunk_text = "\n".join(
-            f"[{getattr(m, 'type', m.__class__.__name__)}]: {getattr(m, 'content', str(m))[:1000]}"
-            for m in cut_messages
-        )
+        # При A1 tool_trace больше не приклеен к content, а лежит отдельно в
+        # additional_kwargs["tool_trace"]. Чтобы факты из трейса (пути, workspace_id,
+        # ветки, ссылки) не терялись при сжатии отсечённых сообщений — подмешиваем
+        # компактный кусок трейса прямо в chunk_text (с жёсткой обрезкой на сообщение).
+        def _fmt_cut(m: BaseMessage) -> str:
+            role = getattr(m, "type", m.__class__.__name__)
+            body = str(getattr(m, "content", "") or "")[:1000]
+            trace = (getattr(m, "additional_kwargs", None) or {}).get("tool_trace")
+            if trace:
+                body = f"{body}\n  (tool_trace: {str(trace)[:1200]})"
+            return f"[{role}]: {body}"
+
+        chunk_text = "\n".join(_fmt_cut(m) for m in cut_messages)
 
         previous_block = (
             f"Предыдущее саммари (актуальное на момент этого сжатия):\n{previous_summary}\n"

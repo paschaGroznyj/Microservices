@@ -2111,7 +2111,30 @@ class ChatApp {
     }
 
     // Финал ответа готов: перечитываем историю чата и завершаем run.
+    //
+    // ВАЖНО про конфликт с живым стримом: пока шёл Redis-стрим, в DOM уже
+    // нарисованы _pendingBotEl (обёртка бота), свёрток «Размышления» и живой
+    // финальный блок. loadMessages() делает container.innerHTML = '' и
+    // перерисовывает ленту из БД — то есть живой блок будет снесён и заменён
+    // финальной версией из chats. Дубля не будет (innerHTML полностью
+    // очищается), но если RAF-цикл ещё не дорисовал _streamBuffer или
+    // _finalizeStream не отработал — висячие ссылки (_pendingBotEl,
+    // _streamRaf, _liveBlockEl) останутся живыми и СЛЕДУЮЩИЙ ответ приклеится
+    // к мёртвому пузырю. Поэтому перед перечиткой жёстко гасим стрим-состояние
+    // (RAF + все ссылки), не финализируя DOM: сам DOM всё равно будет заменён
+    // историей из БД.
     async _handleRunDone(chatId) {
+        // Гасим стрим-состояние (RAF + ссылки) без финализации DOM — лента
+        // всё равно будет перерисована из БД ниже.
+        this._hardResetStreamState();
+        // _finalizeStream мы обошли, значит placeholder с волной-индикатором и
+        // статусы тулов надо снять здесь вручную, иначе индикатор зависнет
+        // поверх уже перечитанной истории.
+        this._botAnswered = true;
+        this._flattenWaveIndicator();
+        this._removeBotPlaceholder();
+        this._clearAllStatuses();
+        if (this._chatStatuses) delete this._chatStatuses[chatId];
         if (chatId === this.currentChat) {
             await this.loadMessages(chatId);
         }
@@ -2146,6 +2169,75 @@ class ChatApp {
             return;
         }
         this._statusSse = es;
+
+        // ── Живой токен-стрим (Redis pub/sub → SSE) ───────────────────────
+        // Агент публикует фреймы в stream:{request_id}; sigma-гейтвей релеит
+        // их как SSE-события того же kind. Логика 1:1 с main-гейтвеем (WS),
+        // только транспорт другой (EventSource вместо WebSocket).
+        //
+        //   live          — фрагмент текста: дописываем в _streamBuffer,
+        //                   отрисовкой занимается RAF-цикл (_startStreamLoop).
+        //                   Печатается СРАЗУ в приглушённом reasoning-стиле,
+        //                   пока не пришёл final_commit.
+        //   reasoning_end — живой блок был размышлением перед тулзой: сворачиваем
+        //                   его в единый свёрток «Размышления» (chunk пустой).
+        //   final_commit  — живой блок оказался финальным ответом: повышаем
+        //                   стиль до основного (chunk пустой). Финализация
+        //                   (файлы, actions) придёт с 'done' из Kafka.
+        const onLive = (ev) => {
+            let frame;
+            try { frame = JSON.parse(ev.data); } catch (_) { return; }
+            const chunk = frame.chunk;
+            if (chunk === undefined || chunk === null || chunk === '') return;
+
+            const container = this.getMessagesContainer();
+            if (!container) return;
+
+            if (!this._liveBlockEl) {
+                // Обёртка ответа бота — создаём один раз на весь ответ.
+                if (!this._pendingBotEl) {
+                    this._pendingBotEl = document.createElement('div');
+                    this._pendingBotEl.className = 'agent-message';
+                    this._pendingBotEl.dataset.id = frame.id || '';
+                    this._pendingBotEl.style.opacity = '0';
+                    this._pendingBotEl.style.transition = 'opacity 0.25s ease';
+                    container.appendChild(this._pendingBotEl);
+                    requestAnimationFrame(() => requestAnimationFrame(() => {
+                        if (this._pendingBotEl) this._pendingBotEl.style.opacity = '1';
+                    }));
+                    this._botAnswered = true;
+                    // Placeholder НЕ убираем здесь: волна-индикатор крутится и
+                    // во время размышлений. Снос — в _finalizeStream.
+                    this._clearAllStatuses();
+                    this._streamingActive = true;
+                    this._streamIsFinal   = false;
+                }
+                // Живой блок печатается в reasoning-стиле, пока не пришёл
+                // final_commit. Если финал уже объявлен — сразу .live-block.
+                this._liveBlockEl = document.createElement('div');
+                this._liveBlockEl.className = this._streamIsFinal ? 'live-block' : 'reasoning-live';
+                this._pendingBotEl.appendChild(this._liveBlockEl);
+                this._streamBuffer = '';
+                this._streamShown  = '';
+                this._streamDone   = false;
+                this._startStreamLoop();
+            }
+
+            this._streamBuffer += chunk;
+        };
+
+        es.addEventListener('live', onLive);
+        es.addEventListener('reasoning_end', () => {
+            // Текущий живой блок был размышлением перед вызовом тулзы —
+            // сливаем его в общий свёрток «Размышления».
+            this._commitReasoningBlock();
+        });
+        es.addEventListener('final_commit', () => {
+            // Живой блок оказался финальным ответом — повышаем его стиль.
+            // Реальная финализация (файлы, actions) придёт с 'done' из Kafka.
+            this._promoteLiveToFinal();
+            this._streamIsFinal = true;
+        });
 
         const onDone = async () => {
             es.close();

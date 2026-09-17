@@ -139,6 +139,13 @@ class SigmaStatusStore:
         self._signal(self._get_chat_event(chat_id))
         logger.info(f"[sigma-store] chat {chat_id} -> done")
 
+    def get_chat_request_id(self, chat_id: int) -> str | None:
+        """request_id текущего running-хода чата — нужен SSE-стриму,
+        чтобы подписаться на Redis-канал stream:{request_id} с чанками."""
+        with self._lock:
+            st = self._chats.get(int(chat_id))
+            return (st or {}).get("request_id")
+
     def get_chat_state(self, chat_id: int) -> dict:
         """Вернуть текущее состояние для polling. Если done — отдаём один раз
         и сбрасываем в idle, чтобы повторный опрос не дублировал сообщение."""

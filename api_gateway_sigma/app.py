@@ -1160,6 +1160,34 @@ async def poll_user_events(request: Request):
 #   X-Accel-Buffering: no        — отключить буферизацию в nginx (иначе
 #                                  события склеятся и придут пачкой в конце)
 #   Connection: keep-alive       — держать соединение
+# ── Redis pub/sub для стрима чанков от агента ────────────────────────────────
+# Агент публикует reasoning/answer-чанки в канал stream:{request_id};
+# SSE-стрим подписан на него и релеит фреймы браузеру. Redis уже
+# используется в presence.py — тот же REDIS_URL.
+import os as _os
+_REDIS_URL = _os.getenv("REDIS_URL", "redis://redis:6379/0")
+_sse_redis = None
+_sse_redis_failed = False
+
+
+async def _get_sse_redis():
+    """Ленивый async Redis-клиент для подписки на stream:{request_id}.
+    Fail-open: Redis лёг → None, SSE работает без чанков (только running/done)."""
+    global _sse_redis, _sse_redis_failed
+    if _sse_redis is not None:
+        return _sse_redis
+    if _sse_redis_failed:
+        return None
+    try:
+        import redis.asyncio as aioredis
+        _sse_redis = aioredis.from_url(_REDIS_URL, decode_responses=True)
+        return _sse_redis
+    except Exception as e:
+        _sse_redis_failed = True
+        logger.warning(f"[sigma-sse] Redis недоступен, стрим чанков отключён: {e}")
+        return None
+
+
 _SSE_HEADERS = {
     "Cache-Control": "no-cache",
     "Connection": "keep-alive",
@@ -1212,29 +1240,94 @@ async def stream_chat_status(chat_id: int, request: Request):
         # running — сообщаем и уходим ждать финал
         yield _sse_pack("running", {"status": "running"})
 
-        while True:
-            if await request.is_disconnected():
-                break
-            remaining = _SSE_MAX_LIFETIME_SEC - (time.time() - started)
-            if remaining <= 0:
-                # Потолок жизни стрима — пусть фронт переподключится.
-                yield _sse_pack("timeout", {"status": "running"})
-                break
+        # ── Подписка на Redis-канал чанков stream:{request_id} ──────────────
+        # Агент публикует туда live/reasoning_end/final_commit-фреймы.
+        # Параллельно ждём mark_done (финал через Kafka) — он главный
+        # сигнал завершения; чанки — необязательный живой текст.
+        request_id = status_store.get_chat_request_id(chat_id)
+        pubsub = None
+        chan = None
+        r = await _get_sse_redis()
+        if r is not None and request_id:
+            try:
+                pubsub = r.pubsub()
+                chan = f"stream:{request_id}"
+                await pubsub.subscribe(chan)
+            except Exception as e:
+                logger.debug(f"[sigma-sse] subscribe {request_id} не удался: {e}")
+                pubsub = None
 
-            wait = min(_SSE_HEARTBEAT_SEC, remaining)
-            ready = await status_store.wait_chat_ready(chat_id, timeout=wait)
-            if ready:
-                final = status_store.get_chat_state(chat_id)
-                if final.get("status") == "done":
-                    yield _sse_pack("done", final)
+        async def _drain_chunks():
+            """Слить все накопившиеся чанки из pubsub без блокировки.
+            Каждый фрейм агента {chunk,id,kind} -> SSE-событие того же kind."""
+            out = []
+            if pubsub is None:
+                return out
+            while True:
+                try:
+                    msg = await pubsub.get_message(
+                        ignore_subscribe_messages=True, timeout=0.05
+                    )
+                except Exception:
                     break
-                if final.get("status") == "idle":
-                    yield _sse_pack("idle", final)
+                if not msg:
                     break
-                # ложное пробуждение — продолжаем ждать
-                continue
-            # таймаут ожидания — heartbeat, чтобы соединение не протухло
-            yield ": heartbeat\n\n"
+                try:
+                    frame = json.loads(msg["data"])
+                except Exception:
+                    continue
+                kind = frame.get("kind") or "live"
+                out.append(_sse_pack(kind, {
+                    "chunk": frame.get("chunk", ""),
+                    "id": frame.get("id"),
+                    "kind": kind,
+                }))
+            return out
+
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                remaining = _SSE_MAX_LIFETIME_SEC - (time.time() - started)
+                if remaining <= 0:
+                    # Потолок жизни стрима — пусть фронт переподключится.
+                    yield _sse_pack("timeout", {"status": "running"})
+                    break
+
+                # Пока ждём финал — часто подливаем живые чанки.
+                # Короткий таймаут ожидания mark_done, чтобы цикл быстро
+                # возвращался к вычитыванию pubsub (живой текст > редкого HB).
+                step = 0.25 if pubsub is not None else min(_SSE_HEARTBEAT_SEC, remaining)
+
+                # 1) слить чанки, что уже пришли
+                for frame in await _drain_chunks():
+                    yield frame
+
+                # 2) подождать финал (коротко)
+                ready = await status_store.wait_chat_ready(chat_id, timeout=step)
+                if ready:
+                    # долить хвост чанков перед финалом
+                    for frame in await _drain_chunks():
+                        yield frame
+                    final = status_store.get_chat_state(chat_id)
+                    if final.get("status") == "done":
+                        yield _sse_pack("done", final)
+                        break
+                    if final.get("status") == "idle":
+                        yield _sse_pack("idle", final)
+                        break
+                    continue
+
+                # 3) heartbeat только когда чанков нет (реже, чтоб не шуметь)
+                if pubsub is None:
+                    yield ": heartbeat\n\n"
+        finally:
+            if pubsub is not None:
+                try:
+                    await pubsub.unsubscribe(chan)
+                    await pubsub.aclose()
+                except Exception:
+                    pass
 
     return StreamingResponse(
         event_gen(), media_type="text/event-stream", headers=_SSE_HEADERS

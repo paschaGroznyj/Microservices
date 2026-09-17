@@ -48,6 +48,9 @@ import hashlib
 GATEWAY_URL = f"http://api_gateway:{PORT_GATEWAY_PORT}"
 GATEWAY_SIGMA_URL = f"http://api_gateway_sigma:{PORT_GATEWAY_SIGMA_PORT}"
 
+# Redis-канал для стриминга чанков на sigma-гейтвей (у sigma нет WS, стрим льётся через pub/sub).
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+
 logger = logging.getLogger(__name__)
 
 
@@ -969,6 +972,12 @@ class KnowledgeAgent:
 
         self._http_client: Optional[httpx.AsyncClient] = None
 
+        # Ленивый Redis-клиент для стриминга чанков на sigma-гейтвей (pub/sub).
+        # Поднимается при первом стриме на sigma; fail-open (Redis лёг — стрим не льётся,
+        # но ход не падает: финал всё равно доедет через Kafka).
+        self._redis = None
+        self._redis_failed = False
+
         # Request-local контекст для параллельных запросов.
         # Никакого разделяемого mutable-состояния между тасками.
         self._request_ctx: contextvars.ContextVar = contextvars.ContextVar(
@@ -1632,6 +1641,42 @@ class KnowledgeAgent:
     # HTTP helper
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Redis helper (стриминг чанков на sigma-гейтвей)
+    # ------------------------------------------------------------------
+
+    async def _get_redis(self):
+        """Ленивый async Redis-клиент для pub/sub-стрима на sigma.
+
+        Fail-open: если redis недоступен или пакет не стоит — возвращаем None
+        и больше не пытаемся (self._redis_failed), чтобы не дёргать его на каждый чанк.
+        Стрим — необязательный канал: финал всё равно доедет через Kafka."""
+        if self._redis is not None:
+            return self._redis
+        if self._redis_failed:
+            return None
+        try:
+            import redis.asyncio as aioredis
+            self._redis = aioredis.from_url(REDIS_URL, decode_responses=True)
+            return self._redis
+        except Exception as e:
+            self._redis_failed = True
+            logger.warning(f"[stream] Redis недоступен, стриминг на sigma отключён: {e}")
+            return None
+
+    async def _publish_sigma_stream(self, request_id: str, payload: dict) -> None:
+        """Опубликовать один стрим-фрейм в канал stream:{request_id}.
+
+        sigma-гейтвей подписан на этот канал и релеит фрейм в SSE. Все ошибки
+        глушим — стриминг не должен ронять ответ."""
+        r = await self._get_redis()
+        if r is None:
+            return
+        try:
+            await r.publish(f"stream:{request_id}", json.dumps(payload, ensure_ascii=False))
+        except Exception as e:
+            logger.debug(f"[stream] redis publish не удался: {e}")
+
     async def _get_http_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
             self._http_client = httpx.AsyncClient()
@@ -1699,21 +1744,30 @@ class KnowledgeAgent:
         Стриминг не должен ронять ответ — все ошибки глушим в debug."""
         if not request_id:
             return
-        if (getattr(self, "_gateway_target", "main") or "main").lower() == "sigma":
-            return
         # Для управляющих маркеров пустой chunk допустим
         if not chunk and kind not in ("reasoning_end", "final_commit"):
             return
+
+        target = (getattr(self, "_gateway_target", "main") or "main").lower()
+        payload = {
+            "request_id": request_id,
+            "chunk": chunk,
+            "id": msg_id,
+            "kind": kind,
+        }
+
+        # SIGMA: у гейтвея нет WebSocket — льём чанки через Redis pub/sub,
+        # sigma-гейтвей подписан на stream:{request_id} и релеит в SSE.
+        if target == "sigma":
+            await self._publish_sigma_stream(request_id, payload)
+            return
+
+        # MAIN: прямой HTTP в gateway → WebSocket (как раньше).
         try:
             client = await self._get_http_client()
             await client.post(
                 f"{self._resolve_gateway_url()}/internal/bot_stream",
-                json={
-                    "request_id": request_id,
-                    "chunk": chunk,
-                    "id": msg_id,
-                    "kind": kind,
-                },
+                json=payload,
                 timeout=2,
             )
         except Exception as e:

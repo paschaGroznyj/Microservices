@@ -85,6 +85,11 @@ def get_llm_model_gpt():
         model_kwargs={
             "extra_headers": {
                 "X-Enable-Prompt-Cache": "true"
+            },
+            # Просим reasoning-summary у gpt-5.3: cloud.ru отдаёт его в
+            # delta.reasoning (langchain кладёт в additional_kwargs["reasoning"]).
+            "extra_body": {
+                "reasoning_effort": "low"
             }
         }
     )
@@ -111,6 +116,11 @@ def get_llm_model_gemini():
         model_kwargs={
             "extra_headers": {
                 "X-Enable-Prompt-Cache": "true"
+            },
+            # Просим reasoning у gemini-3.1-pro: cloud.ru отдаёт его в
+            # delta.reasoning_content (additional_kwargs["reasoning_content"]).
+            "extra_body": {
+                "reasoning_effort": "low"
             }
         }
     )

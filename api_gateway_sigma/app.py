@@ -11,6 +11,7 @@ import logging
 import json
 import uuid
 from pathlib import Path
+from urllib.parse import quote
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
 from pydantic import BaseModel
@@ -1229,7 +1230,10 @@ async def download_chat_file(chat_id: int, message_id: str, file_name: str, requ
         media_type=agent_resp.headers.get("content-type", "application/octet-stream"),
         headers={
             "Content-Disposition": agent_resp.headers.get(
-                "content-disposition", f'attachment; filename="{file_name}"'
+                "content-disposition",
+                "attachment; "
+                f'filename="{file_name.encode("ascii", "replace").decode("ascii")}"; '
+                f"filename*=UTF-8''{quote(file_name, safe='')}",
             )
         },
     )

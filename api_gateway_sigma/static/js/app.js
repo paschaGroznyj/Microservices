@@ -9,7 +9,8 @@ class ChatApp {
         this.currentTab    = 'agent'; // 'agent' | 'graph'
         this._runState = 'idle';      // idle | running | stopping
         this._activeRequestId = null;
-        this._statusPollTimer = null;
+        this._statusPollTimer = null;  // фолбэк-таймер, если SSE недоступен
+        this._statusSse = null;        // активный EventSource стрима статуса
         this.INPUT_MAX_CHARS = 10000;  // жёсткий предел длины поля ввода
     }
 
@@ -2100,12 +2101,83 @@ class ChatApp {
             clearInterval(this._statusPollTimer);
             this._statusPollTimer = null;
         }
+        if (this._statusSse) {
+            this._statusSse.close();
+            this._statusSse = null;
+        }
         this._runState = 'idle';
         this._activeRequestId = null;
         this._setSendButtonMode('send');
     }
 
+    // Финал ответа готов: перечитываем историю чата и завершаем run.
+    async _handleRunDone(chatId) {
+        if (chatId === this.currentChat) {
+            await this.loadMessages(chatId);
+        }
+        this._onRunFinished();
+    }
+
+    // Замена polling'а: держим один SSE (EventSource) и ждём push-события
+    // done/idle. Если браузер/сеть не дали открыть SSE — падаем на старый
+    // polling GET /api/chats/{id}/status (эндпоинт оставлен как фолбэк).
     _startStatusPolling(chatId) {
+        if (!chatId) return;
+        // подчистить прошлые подписки
+        if (this._statusPollTimer) {
+            clearInterval(this._statusPollTimer);
+            this._statusPollTimer = null;
+        }
+        if (this._statusSse) {
+            this._statusSse.close();
+            this._statusSse = null;
+        }
+
+        if (typeof EventSource === 'undefined') {
+            this._startStatusPollingFallback(chatId);
+            return;
+        }
+
+        let es;
+        try {
+            es = new EventSource(`/api/chats/${chatId}/stream`, { withCredentials: true });
+        } catch (_) {
+            this._startStatusPollingFallback(chatId);
+            return;
+        }
+        this._statusSse = es;
+
+        const onDone = async () => {
+            es.close();
+            if (this._statusSse === es) this._statusSse = null;
+            await this._handleRunDone(chatId);
+        };
+
+        es.addEventListener('done', onDone);
+        es.addEventListener('idle', onDone);
+        es.addEventListener('timeout', () => {
+            // Сервер закрыл стрим по потолку жизни. Если ран ещё идёт —
+            // EventSource сам переподключится; страхуемся ручным reopen.
+            if (this._runState === 'running' && this._statusSse === es) {
+                es.close();
+                this._statusSse = null;
+                this._startStatusPolling(chatId);
+            }
+        });
+        // 'running' игнорируем — индикатор уже показан оптимистично.
+
+        es.onerror = () => {
+            // EventSource сам ретраит соединение. Но если браузер вообще не
+            // смог подключиться ( es.readyState === CLOSED) — уходим в фолбэк.
+            if (es.readyState === EventSource.CLOSED && this._runState === 'running') {
+                if (this._statusSse === es) this._statusSse = null;
+                this._startStatusPollingFallback(chatId);
+            }
+        };
+    }
+
+    // Старый short-polling — фолбэк на случай недоступности SSE.
+    _startStatusPollingFallback(chatId) {
         if (!chatId) return;
         if (this._statusPollTimer) {
             clearInterval(this._statusPollTimer);
@@ -2130,22 +2202,10 @@ class ChatApp {
                 if (!resp.ok) return;
 
                 const state = await resp.json();
-                if (state?.status === 'done') {
+                if (state?.status === 'done' || state?.status === 'idle') {
                     // Сообщение уже сохранено в БД chats-consumer'ом —
-                    // просто перечитываем историю чата и завершаем run.
-                    if (chatId === this.currentChat) {
-                        await this.loadMessages(chatId);
-                    }
-                    this._onRunFinished();
-                    return;
-                }
-
-                if (state?.status === 'idle') {
-                    // На всякий случай: если done уже отдан/протух, перечитаем историю.
-                    if (chatId === this.currentChat) {
-                        await this.loadMessages(chatId);
-                    }
-                    this._onRunFinished();
+                    // перечитываем историю чата и завершаем run.
+                    await this._handleRunDone(chatId);
                 }
             } catch (_) {
                 // Молчаливо ждём следующий тик polling

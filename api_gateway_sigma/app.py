@@ -1,7 +1,7 @@
 # gateway/app.py  (SIGMA — вариант без WebSocket, GET-polling + собственный Kafka-consumer)
 from fastapi import FastAPI, HTTPException, Request, Depends, Form, Cookie, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from contextlib import asynccontextmanager
@@ -60,6 +60,10 @@ COOKIE_MAX_AGE_SECONDS = 14 * 24 * 60 * 60
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting up API Gateway SIGMA...")
+
+    # Привязываем текущий event loop к store, чтобы Kafka-consumer (крутится
+    # в отдельном потоке) мог взводить asyncio.Event для SSE-стримов.
+    status_store.bind_loop(asyncio.get_running_loop())
 
     app.state.http_client = httpx.AsyncClient(
         timeout=30.0,
@@ -1148,6 +1152,138 @@ async def poll_user_events(request: Request):
 
     events = status_store.pop_user_events(user["username"])
     return JSONResponse(content={"events": events})
+
+
+# ── SSE: push вместо polling ─────────────────────────────────────────────
+# Заголовки, критичные для корректного SSE через прокси:
+#   Cache-Control: no-cache      — не кэшировать поток
+#   X-Accel-Buffering: no        — отключить буферизацию в nginx (иначе
+#                                  события склеятся и придут пачкой в конце)
+#   Connection: keep-alive       — держать соединение
+_SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
+
+# Как часто слать heartbeat-комментарий, чтобы прокси/браузер не рвали
+# idle-соединение, и общий потолок жизни одного стрима.
+_SSE_HEARTBEAT_SEC = 15
+_SSE_MAX_LIFETIME_SEC = 900
+
+
+def _sse_pack(event: str, data: dict) -> str:
+    """Собрать одно SSE-сообщение в формате text/event-stream."""
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+@app.get("/api/chats/{chat_id}/stream")
+async def stream_chat_status(chat_id: int, request: Request):
+    """SSE-замена polling'а GET /api/chats/{id}/status.
+
+    Держит одно соединение и пушит событие ровно в момент готовности ответа
+    (mark_done из Kafka-consumer взводит asyncio.Event в store). Никакого
+    опроса store в цикле — стрим спит на wait_chat_ready до появления финала.
+
+    События:
+      event: running  data: {"status":"running"}           — при подключении, если бот думает
+      event: done     data: {"status":"done","message":...} — финал готов
+      event: idle     data: {"status":"idle"}               — для чата ничего не ждётся
+      :heartbeat                                             — keep-alive комментарий
+
+    Фолбэк: если фронт не смог открыть SSE, остаётся старый GET .../status.
+    """
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    await presence.touch("sigma", user["username"])
+
+    async def event_gen():
+        started = time.time()
+        # Первичное состояние: если ответ уже готов/протух — отдаём сразу.
+        state = status_store.get_chat_state(chat_id)
+        if state.get("status") == "done":
+            yield _sse_pack("done", state)
+            return
+        if state.get("status") == "idle":
+            yield _sse_pack("idle", state)
+            return
+        # running — сообщаем и уходим ждать финал
+        yield _sse_pack("running", {"status": "running"})
+
+        while True:
+            if await request.is_disconnected():
+                break
+            remaining = _SSE_MAX_LIFETIME_SEC - (time.time() - started)
+            if remaining <= 0:
+                # Потолок жизни стрима — пусть фронт переподключится.
+                yield _sse_pack("timeout", {"status": "running"})
+                break
+
+            wait = min(_SSE_HEARTBEAT_SEC, remaining)
+            ready = await status_store.wait_chat_ready(chat_id, timeout=wait)
+            if ready:
+                final = status_store.get_chat_state(chat_id)
+                if final.get("status") == "done":
+                    yield _sse_pack("done", final)
+                    break
+                if final.get("status") == "idle":
+                    yield _sse_pack("idle", final)
+                    break
+                # ложное пробуждение — продолжаем ждать
+                continue
+            # таймаут ожидания — heartbeat, чтобы соединение не протухло
+            yield ": heartbeat\n\n"
+
+    return StreamingResponse(
+        event_gen(), media_type="text/event-stream", headers=_SSE_HEADERS
+    )
+
+
+@app.get("/api/chats/user_events/stream")
+async def stream_user_events(request: Request):
+    """SSE-замена polling'а GET /api/chats/user_events.
+
+    Пушит накопленные и новые пользовательские события (релевантные статьи,
+    ошибки парсера, отзывы) по мере появления. Событие в store взводит
+    asyncio.Event — стрим просыпается и отдаёт всё, что накопилось.
+
+    События:
+      event: user_events  data: {"events":[...]}  — пачка событий
+      :heartbeat                                   — keep-alive
+    """
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    username = user["username"]
+
+    async def event_gen():
+        started = time.time()
+        # Сразу отдаём то, что уже накопилось до подключения.
+        pending = status_store.pop_user_events(username)
+        if pending:
+            yield _sse_pack("user_events", {"events": pending})
+
+        while True:
+            if await request.is_disconnected():
+                break
+            remaining = _SSE_MAX_LIFETIME_SEC - (time.time() - started)
+            if remaining <= 0:
+                break
+            wait = min(_SSE_HEARTBEAT_SEC, remaining)
+            ready = await status_store.wait_user_ready(username, timeout=wait)
+            if ready:
+                events = status_store.pop_user_events(username)
+                if events:
+                    yield _sse_pack("user_events", {"events": events})
+            else:
+                yield ": heartbeat\n\n"
+
+    return StreamingResponse(
+        event_gen(), media_type="text/event-stream", headers=_SSE_HEADERS
+    )
 
 
 @app.get("/api/chats/{chat_id}/image/{message_id}/{file_name}")

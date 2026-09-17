@@ -205,6 +205,10 @@ class ChatApp {
             const renamed = (chat.renamed_title || '').trim();
             if (renamed) return { title: escapeHtml(renamed), preview: null };
 
+            // Автогенерированный заголовок (по первому обмену) — приоритетнее last_message.
+            const auto = (chat.auto_title || '').trim();
+            if (auto) return { title: escapeHtml(auto), preview: null };
+
             const raw = (chat.last_message || '').trim();
             if (!raw || raw === 'Чат создан') return { title: 'Новый чат', preview: null };
             const plainText = stripHtml(raw).trim();
@@ -1747,6 +1751,21 @@ class ChatApp {
                 const st = (msg.status || '').toLowerCase();
                 if (/генерир|рису|картин|композиц|детал.*свет/.test(st)) {
                     this._showImageGenSkeleton();
+                }
+                return;
+            }
+
+            // Автогенерированный заголовок чата — обновляем строку чата в сайдбаре в реалтайме.
+            if (msg.type === 'title_update') {
+                const cid = Number(msg.chat_id);
+                const t = (msg.auto_title || '').trim();
+                if (cid && t) {
+                    let touched = false;
+                    this.chats = (this.chats || []).map(c => {
+                        if (Number(c.id) === cid) { touched = true; return { ...c, auto_title: t }; }
+                        return c;
+                    });
+                    if (touched) this.renderChats(this.chats);
                 }
                 return;
             }

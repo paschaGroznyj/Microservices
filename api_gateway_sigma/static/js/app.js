@@ -246,6 +246,10 @@ class ChatApp {
             const renamed = (chat.renamed_title || '').trim();
             if (renamed) return { title: escapeHtml(renamed), preview: null };
 
+            // Автогенерированный заголовок (по первому обмену) — приоритетнее last_message.
+            const auto = (chat.auto_title || '').trim();
+            if (auto) return { title: escapeHtml(auto), preview: null };
+
             const raw = (chat.last_message || '').trim();
             if (!raw || raw === 'Чат создан') return { title: 'Новый чат', preview: null };
             const plainText = stripHtml(raw).trim();
@@ -2123,6 +2127,29 @@ class ChatApp {
     // к мёртвому пузырю. Поэтому перед перечиткой жёстко гасим стрим-состояние
     // (RAF + все ссылки), не финализируя DOM: сам DOM всё равно будет заменён
     // историей из БД.
+    // Достаёт auto_title из финального SSE-события 'done' и обновляет строку
+    // чата в сайдбаре немедленно, без перезапроса списка. auto_title кладётся
+    // в message бота только на первом обмене (см. chats_service consumer).
+    _applyAutoTitleFromDone(ev, chatId) {
+        try {
+            if (!ev || !ev.data) return;
+            const payload = JSON.parse(ev.data);
+            const msg = payload && payload.message;
+            const auto = (msg && msg.auto_title || '').trim();
+            const cid = Number(chatId);
+            if (!auto || !cid) return;
+            let touched = false;
+            this.chats = (this.chats || []).map(c => {
+                if (Number(c.id) === cid && !(c.renamed_title || '').trim()) {
+                    touched = true;
+                    return { ...c, auto_title: auto };
+                }
+                return c;
+            });
+            if (touched) this.renderChats(this.chats);
+        } catch (_) { /* fail-open: заголовок не критичен */ }
+    }
+
     async _handleRunDone(chatId) {
         // Гасим стрим-состояние (RAF + ссылки) без финализации DOM — лента
         // всё равно будет перерисована из БД ниже.
@@ -2239,9 +2266,12 @@ class ChatApp {
             this._streamIsFinal = true;
         });
 
-        const onDone = async () => {
+        const onDone = async (ev) => {
             es.close();
             if (this._statusSse === es) this._statusSse = null;
+            // Автогенерированный заголовок чата приходит в message финала —
+            // обновляем строку чата в сайдбаре в реалтайме (на первом обмене).
+            this._applyAutoTitleFromDone(ev, chatId);
             await this._handleRunDone(chatId);
         };
 

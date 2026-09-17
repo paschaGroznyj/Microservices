@@ -28,6 +28,7 @@ from .core.config import (
 from .core.settings import TOOLS_SETTINGS, UNIVERSAL_TOOLS
 from .prompts.summary_prompt import SUMMARIZE_CUT_PROMPT
 from .prompts.system_prompt import SYSTEM_PROMPT, SCIENTIFIC_RESEARCH_MODULE
+from .prompts.title_prompt import TITLE_SYSTEM_PROMPT, TITLE_USER_TEMPLATE
 
 from datetime import datetime
 from .digest_email_handler import DigestEmailHandler
@@ -1489,6 +1490,59 @@ class KnowledgeAgent:
         # Все модели цепочки провалились
         raise last_error if last_error else RuntimeError("Лайт-модель: пустая цепочка")
 
+    async def _maybe_generate_title(
+        self,
+        chat_id,
+        user_input: str,
+        final_response: str,
+    ):
+        """
+        Генерирует короткий заголовок чата по первому обмену (human+ai).
+
+        Запускается ТОЛЬКО на первом успешном ходе чата: к моменту вызова
+        в таблице chats ещё нет ни одного сообщения бота для этого chat_id
+        (текущий ответ ещё не сохранён — он пишется позже в chats_service).
+
+        Возвращает строку-заголовок либо None (если не первый ход /
+        не удалось сгенерировать). Fail-open: любая ошибка — вернуть None,
+        чат просто останется с фолбэк-заголовком (последнее сообщение).
+        """
+        try:
+            if not self.db or chat_id is None:
+                return None
+            # Первый ход = в chats ещё нет ответов бота для этого чата.
+            async with self.db.pool.acquire() as conn:
+                bot_count = await conn.fetchval(
+                    "SELECT COUNT(*) FROM chats WHERE chat_id = $1 AND is_from_bot = TRUE",
+                    chat_id,
+                )
+            if bot_count and int(bot_count) > 0:
+                return None  # не первый ход — заголовок уже был (или мог) сгенерен
+
+            u = (user_input or "").strip()[:2000]
+            a = (final_response or "").strip()[:2000]
+            if not u:
+                return None
+
+            prompt = TITLE_USER_TEMPLATE.format(user_msg=u, ai_msg=a)
+            resp = await self._lite_ainvoke([
+                SystemMessage(content=TITLE_SYSTEM_PROMPT),
+                HumanMessage(content=prompt),
+            ])
+            title = (getattr(resp, "content", "") or "").strip()
+            # Санитайз: убираем кавычки/переносы, режем длину.
+            title = title.replace(chr(34), "").replace(chr(10), " ").strip()
+            if title.endswith("."):
+                title = title[:-1].strip()
+            title = title[:80]
+            if not title:
+                return None
+            logging.info(f"[title] chat={chat_id} сгенерирован заголовок: {title!r}")
+            return title
+        except Exception as e:
+            logging.error(f"[title] не удалось сгенерировать заголовок чата: {e}")
+            return None
+
     async def _summarize_cut_messages(
         self,
         cut_messages: list[BaseMessage],
@@ -2161,6 +2215,9 @@ class KnowledgeAgent:
                         })
 
             # logging.info(f"ФАЙЛЫ К ОТПРАВКЕ {files_to_send}")
+            # Автогенерация заголовка чата по первому обмену (human+ai).
+            # Неблокирующе по сути: если не первый ход или ошибка — auto_title=None.
+            auto_title = await self._maybe_generate_title(chat_id, user_input, final_response)
             return {
                 "input": user_input,
                 "message": final_response,
@@ -2170,7 +2227,8 @@ class KnowledgeAgent:
                 "files_to_send": files_to_send,
                 "tool_trace": '; '.join(tool_trace) if tool_trace else None,
                 "agent_model": agent_model,
-                "tokens_usage": tokens_usage
+                "tokens_usage": tokens_usage,
+                "auto_title": auto_title
             }
         finally:
             # Очищаем request-local контекст текущего хода.

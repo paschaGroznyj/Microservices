@@ -112,6 +112,18 @@ class DBConsumer:
                 ws_payload["files"] = _sanitize_files_for_ws(attached_files) # Адаптивно, чтобы и для файлов пользователя
                 ws_payload["gateway_target"] = gateway_target
 
+                # Автогенерированный заголовок чата (agent_service кладёт auto_title
+                # в payload только на первом обмене). Пишем в СУБД и пушим
+                # событие title_update на фронт в реалтайме.
+                auto_title = payload.get("auto_title")
+                if auto_title:
+                    try:
+                        saved_title = await self.db.set_chat_auto_title(chat_id, user_id, auto_title)
+                        if saved_title:
+                            ws_payload["auto_title"] = saved_title
+                    except Exception as e:
+                        logger.error(f"Не удалось сохранить auto_title chat={chat_id}: {e}")
+
                 await self.send_to_main_service(chat_id, ws_payload, gateway_url)
 
         except Exception as e:

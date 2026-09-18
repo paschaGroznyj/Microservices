@@ -26,3 +26,4 @@ sqlparse
 python-docx
 python-multipart
 
+redis

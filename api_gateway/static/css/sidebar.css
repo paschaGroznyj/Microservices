@@ -3,8 +3,8 @@
 ════════════════════════════════════════════════ */
 
 .sidebar {
-  width: 236px;
-  min-width: 236px;
+  width: 250px;
+  min-width: 250px;
   display: flex;
   flex-direction: column;
   background: var(--sidebar-bg);
@@ -292,6 +292,15 @@
   opacity: 0;
 }
 
+/* Обёртка строки: занимает всю ширину chat-item; кнопка ⋯ ложится поверх
+   правого края (position:absolute). При наведении/активности, когда кнопка
+   видна, включается градиент-дымка справа — чтобы текст не подлезал под ⋯. */
+.chat-line-wrap {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+}
+
 /* единая строка в chat-item: либо renamed_title, либо preview сообщения */
 .chat-line {
   font-size: 0.8rem;
@@ -299,17 +308,45 @@
   overflow: hidden;
   text-overflow: ellipsis;
   line-height: 1.4;
-  padding-right: 20px; /* место под кнопку ⋯ */
 }
 
+/* Автозаголовок и preview — обычный (не жирный) вес по умолчанию. */
 .chat-line--title {
   color: var(--text-primary);
-  font-weight: 500;
+  font-weight: 400;
+}
+
+/* Только ручное переименование выделяется жирным. */
+.chat-line--renamed {
+  font-weight: 600;
 }
 
 .chat-line--preview {
   color: var(--text-secondary);
   font-weight: 400;
+}
+
+/* Дымка у правого края под кнопкой ⋯ — появляется вместе с кнопкой
+   (hover/active). Цвет дымки = ФОН СТРОКИ под ней (hover или active),
+   иначе на активном чате появляется заметная плашка. */
+.chat-item .chat-line-wrap::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 44px;
+  pointer-events: none;
+  opacity: 0;
+  background: linear-gradient(to right, transparent, var(--sidebar-hover) 90%);
+}
+.chat-item:hover .chat-line-wrap::after {
+  opacity: 1;
+  background: linear-gradient(to right, transparent, var(--sidebar-hover) 90%);
+}
+.chat-item.active .chat-line-wrap::after {
+  opacity: 1;
+  background: linear-gradient(to right, transparent, var(--sidebar-active) 90%);
 }
 
 
@@ -831,19 +868,38 @@
   /* ── Кнопка ⋯ на мобильных: всегда видима, крупнее зона тапа ── */
   .chat-item-menu-btn {
     display: flex !important;  /* всегда показываем — hover на тач нет */
-    width: 32px;
-    height: 32px;
+    width: 28px;
+    height: 28px;            /* не выше строки chat-item, иначе наложение на заголовок */
     right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
     border-radius: 7px;
     /* padding увеличивает зону тапа без изменения видимого размера */
-    padding: 5px;
+    padding: 4px;
     box-sizing: border-box;
   }
 
-  /* Компенсируем отступ справа в chat-line, чтобы текст не лез под кнопку */
-  .chat-line {
-    padding-right: 32px;
+  /* На мобилке кнопка ⋯ видна всегда — значит дымка тоже должна быть
+     постоянной. NB: hover-подсветки строки на тач нет, поэтому дымку
+     красим в ФОН сайдбара (--sidebar-bg), а не в --sidebar-hover — иначе тёмная
+     плашка выделяется на фоне строки. Шире и плавнее, чтобы не было шва. */
+  .chat-line-wrap::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 48px;
+    pointer-events: none;
+    background: linear-gradient(to right, transparent, var(--sidebar-bg) 55%);
   }
+
+  /* Под активным чатом фон строки = --sidebar-active, значит и дымку там
+     красим под него, чтобы совпадала с подложкой активной строки. */
+  .chat-item.active .chat-line-wrap::after {
+    background: linear-gradient(to right, transparent, var(--sidebar-active) 55%);
+  }
+
 }
 
 /* Drop-цель при перетаскивании карточки скилла на чат */

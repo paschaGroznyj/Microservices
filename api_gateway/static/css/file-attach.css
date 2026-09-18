@@ -236,6 +236,15 @@
   margin-bottom: 6px;
 }
 
+/* Чипы вложений над пузырём сообщения пользователя — выравниваем
+   по правому краю (как сам пузырь), т.к. wrapper центрирует column. */
+.user-message-wrapper > .fa-message-files {
+  justify-content: flex-end;
+  max-width: 75%;
+  margin-bottom: 8px;
+  align-self: flex-end;
+}
+
 /* Readonly-чип: без крестика, без hover-эффекта удаления */
 .fa-chip--readonly {
   cursor: default;

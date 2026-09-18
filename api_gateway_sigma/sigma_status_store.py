@@ -16,6 +16,7 @@ SIGMA store — потокобезопасное in-memory хранилище с
 """
 import threading
 import time
+import asyncio
 import logging
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,78 @@ class SigmaStatusStore:
         self._user_events: dict[str, list] = {}
         # известные онлайн-пользователи (для broadcast); пополняется при pop
         self._known_users: set[str] = set()
+
+        # ── SSE-поддержка (push вместо polling) ──────────────────────────
+        # chat_id -> asyncio.Event: взводится в mark_done(), чтобы SSE-стрим
+        # проснулся ровно в момент готовности ответа, без опроса store в цикле.
+        self._chat_ready: dict[int, asyncio.Event] = {}
+        # username -> asyncio.Event: взводится при push_user_event(), чтобы
+        # SSE user-events стрим просыпался при появлении новых событий.
+        self._user_ready: dict[str, asyncio.Event] = {}
+        # event loop гейтвея — нужен, чтобы взводить Event'ы из потока
+        # Kafka-consumer (он крутится в отдельном треде). Проставляется
+        # из lifespan через bind_loop().
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    # ── Привязка event loop и SSE-события ────────────────────────────────
+
+    def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Запомнить основной event loop гейтвея. Вызывается из lifespan.
+        Нужно, чтобы взводить asyncio.Event из потока Kafka-consumer."""
+        self._loop = loop
+
+    def _get_chat_event(self, chat_id: int) -> asyncio.Event:
+        with self._lock:
+            ev = self._chat_ready.get(int(chat_id))
+            if ev is None:
+                ev = asyncio.Event()
+                self._chat_ready[int(chat_id)] = ev
+            return ev
+
+    def _get_user_event(self, username: str) -> asyncio.Event:
+        with self._lock:
+            ev = self._user_ready.get(username)
+            if ev is None:
+                ev = asyncio.Event()
+                self._user_ready[username] = ev
+            return ev
+
+    def _signal(self, ev: asyncio.Event) -> None:
+        """Потокобезопасно взвести Event. Вызывается и из async-кода
+        гейтвея, и из потока Kafka-consumer (через loop.call_soon_threadsafe)."""
+        loop = self._loop
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(ev.set)
+        else:
+            # loop ещё не привязан (тесты/старт) — ставим напрямую
+            try:
+                ev.set()
+            except RuntimeError:
+                pass
+
+    async def wait_chat_ready(self, chat_id: int, timeout: float) -> bool:
+        """Спит до тех пор, пока mark_done не взведёт событие чата, либо
+        до таймаута. Возвращает True, если событие пришло; False по таймауту.
+        Использует SSE-эндпоинт вместо цикла опроса get_chat_state()."""
+        ev = self._get_chat_event(chat_id)
+        try:
+            await asyncio.wait_for(ev.wait(), timeout=timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
+        finally:
+            ev.clear()
+
+    async def wait_user_ready(self, username: str, timeout: float) -> bool:
+        """Спит до появления нового пользовательского события либо таймаута."""
+        ev = self._get_user_event(username)
+        try:
+            await asyncio.wait_for(ev.wait(), timeout=timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
+        finally:
+            ev.clear()
 
     # ── Состояние ответа бота ────────────────────────────────────────────
 
@@ -62,7 +135,16 @@ class SigmaStatusStore:
                 "request_id": prev.get("request_id"),
                 "ts": time.time(),
             }
+        # Разбудить SSE-стрим, ждущий этот чат (push вместо polling).
+        self._signal(self._get_chat_event(chat_id))
         logger.info(f"[sigma-store] chat {chat_id} -> done")
+
+    def get_chat_request_id(self, chat_id: int) -> str | None:
+        """request_id текущего running-хода чата — нужен SSE-стриму,
+        чтобы подписаться на Redis-канал stream:{request_id} с чанками."""
+        with self._lock:
+            st = self._chats.get(int(chat_id))
+            return (st or {}).get("request_id")
 
     def get_chat_state(self, chat_id: int) -> dict:
         """Вернуть текущее состояние для polling. Если done — отдаём один раз
@@ -87,6 +169,7 @@ class SigmaStatusStore:
             q.append({"event": event, "ts": time.time()})
             if len(q) > _MAX_USER_EVENTS:
                 del q[: len(q) - _MAX_USER_EVENTS]
+        self._signal(self._get_user_event(username))
 
     def broadcast_user_event(self, event: dict) -> None:
         """Разослать событие всем известным пользователям (напр. новый отзыв)."""
@@ -97,6 +180,8 @@ class SigmaStatusStore:
                 q.append({"event": event, "ts": time.time()})
                 if len(q) > _MAX_USER_EVENTS:
                     del q[: len(q) - _MAX_USER_EVENTS]
+        for username in targets:
+            self._signal(self._get_user_event(username))
 
     def pop_user_events(self, username: str) -> list:
         """Забрать и очистить накопленные события пользователя."""
@@ -119,6 +204,8 @@ class SigmaStatusStore:
                     dead.append(cid)
             for cid in dead:
                 self._chats.pop(cid, None)
+                # осиротевший Event тоже убираем, чтобы словарь не тёк
+                self._chat_ready.pop(cid, None)
 
 
 # Синглтон на процесс

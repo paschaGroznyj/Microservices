@@ -95,8 +95,7 @@ services:
 
       CLOUD_LLM_ACCESS_KEY: ${CLOUD_LLM_ACCESS_KEY}
 
-      OUROBOROS_API_URL: ${OUROBOROS_API_URL:-http://localhost:8765}
-      OUROBOROS_API_PASSWORD: ${OUROBOROS_API_PASSWORD}
+      SEARXNG_BASE_URL: ${SEARXNG_BASE_URL}
 
       ADMINS_INFO: ${ADMINS_INFO}
       AGENT_POOL_PASSWORD: ${AGENT_POOL_PASSWORD}
@@ -195,6 +194,22 @@ services:
       start_period: 5s
     restart: unless-stopped
     mem_limit: 256m
+    networks:
+      - catchPM
+  
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./searxng:/etc/searxng
+    environment:
+      - SEARXNG_REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
     networks:
       - catchPM
 

@@ -59,11 +59,7 @@ DIGEST_UPLOAD_TO_OBS = os.getenv('DIGEST_UPLOAD_TO_OBS', 'true')
 FERNET_KEY = os.getenv("FERNET_KEY")
 CLOUD_LLM_ACCESS_KEY = os.getenv("CLOUD_LLM_ACCESS_KEY")
 
-# Ouroboros API — для вкладки "Уробор" в чате
-OUROBOROS_API_URL = os.getenv("OUROBOROS_API_URL", "http://localhost:8765")
-OUROBOROS_API_PASSWORD = os.getenv("OUROBOROS_API_PASSWORD", "")
-OUROBOROS_WS = f"ws://ouroboros_web_app:8765/ws"
-OUROBOROS_RESPONSE_TIMEOUT = 120
+SEARXNG_BASE_URL = os.getenv("SEARXNG_BASE_URL")
 
 import json as _json
 import logging as _logging

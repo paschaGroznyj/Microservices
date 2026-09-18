@@ -33,7 +33,29 @@ from agent_pm.scheduler_digest import start_digest_scheduler, start_interval_dig
 import websockets
 from agent_pm.core.botocore_client import database
 from agent_pm.core import obs_file_storage
+from urllib.parse import quote
 logging.basicConfig(level=logging.INFO)
+
+
+def _content_disposition(filename: str, disposition: str = "attachment") -> str:
+    """
+    Собрать корректный заголовок Content-Disposition для имён с не-ASCII
+    символами (кириллица и т.п.) по RFC 6266.
+
+    Проблема: Starlette/uvicorn кодируют HTTP-заголовки в latin-1
+    (raw_headers = ...v.encode("latin-1")). Имя вроде "LFR_Метрики_2026.pptx"
+    в latin-1 не влезает -> UnicodeEncodeError -> 500 на /web/file.
+
+    Решение: ASCII-фолбэк в filename="..." (для старых клиентов) + filename*
+    с percent-encoding в UTF-8 (современные браузеры берут именно его).
+    """
+    fallback = filename.encode("ascii", "replace").decode("ascii")
+    quoted = quote(filename, safe="")
+    return (
+        f"{disposition}; "
+        f'filename="{fallback}"; '
+        f"filename*=UTF-8''{quoted}"
+    )
 
 
 class _DropInternalBotStreamLogs(logging.Filter):
@@ -228,7 +250,7 @@ async def get_generated_file(path: str, chat_id: int | None = None):
     return StreamingResponse(
         iterfile(),
         media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": _content_disposition(filename, "attachment")},
     )
 
 
@@ -323,7 +345,7 @@ async def get_db_image(
                 iterfile(),
                 media_type=disk_mime,
                 headers={
-                    "Content-Disposition": f'inline; filename="{disk_name}"',
+                    "Content-Disposition": _content_disposition(disk_name, "inline"),
                     "Cache-Control": "public, max-age=86400",
                     "X-Image-Source": "disk",
                     "Access-Control-Expose-Headers": "X-Image-Key, X-Image-Source",
@@ -339,7 +361,7 @@ async def get_db_image(
         content=raw,
         media_type=mime,
         headers={
-            "Content-Disposition": f'inline; filename="{fname}"',
+            "Content-Disposition": _content_disposition(fname, "inline"),
             "Cache-Control": "public, max-age=86400",
             "X-Image-Key": img_key,
             "Access-Control-Expose-Headers": "X-Image-Key",
@@ -489,7 +511,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             "tool_trace": response.get("tool_trace"), # str,
             "agent_model": response.get("agent_model"),
             "tokens_usage": response.get("tokens_usage"),
-            "gateway_target": gateway_target
+            "gateway_target": gateway_target,
+            "auto_title": response.get("auto_title"),
         }
 
         await prod.send_and_wait("chat-messages", value=bot_message)

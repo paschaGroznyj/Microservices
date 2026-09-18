@@ -84,20 +84,6 @@
    вьюпорта. Разворачиваем её в bottom-sheet: фикс к низу экрана,
    на всю ширину, с safe-area под iOS-хоумбар. */
 @media (max-width: 600px) {
-  .presence-overlay {
-    position: fixed;
-    top: auto;
-    right: 12px;
-    left: 12px;
-    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
-    width: auto;
-    max-width: none;
-    z-index: 1200;
-    padding: 16px 16px 14px;
-    border-radius: 16px;
-    box-shadow: 0 -6px 34px rgba(0,0,0,.24);
-    animation: presence-sheet .18s ease;
-  }
   @keyframes presence-sheet {
     from { opacity: 0; transform: translateY(12px); }
     to   { opacity: 1; transform: translateY(0); }

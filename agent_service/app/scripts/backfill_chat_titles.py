@@ -94,7 +94,7 @@ async def fetch_targets(pool, user_id, limit, overwrite):
     params = []
     if user_id is not None:
         params.append(user_id)
-        where.append(f"c.user_id = ${len(params)}")
+        where.append(f"c_m.user_id = ${len(params)}")
 
     overwrite_clause = "" if overwrite else "AND m.auto_title IS NULL"
 
@@ -103,16 +103,25 @@ async def fetch_targets(pool, user_id, limit, overwrite):
         params.append(limit)
         limit_clause = f"LIMIT ${len(params)}"
 
+    # q = f"""
+    #     SELECT DISTINCT c.chat_id, c.user_id
+    #     FROM chats c
+    #     LEFT JOIN chat_sidebar_meta m
+    #            ON m.chat_id = c.chat_id AND m.user_id = c.user_id
+    #     WHERE {' AND '.join(where)}
+    #       {overwrite_clause}
+    #     ORDER BY c.chat_id
+    #     {limit_clause}
+    # """
+    
     q = f"""
-        SELECT DISTINCT c.chat_id, c.user_id
-        FROM chats c
-        LEFT JOIN chat_sidebar_meta m
-               ON m.chat_id = c.chat_id AND m.user_id = c.user_id
-        WHERE {' AND '.join(where)}
-          {overwrite_clause}
-        ORDER BY c.chat_id
-        {limit_clause}
+    select DISTINCT c_m.chat_id, c_m.user_id
+    from chat_sidebar_meta c_m right join chats c 
+    on c_m.chat_id = c.chat_id
+    where {' AND '.join(where)} and auto_title is NULL and c.is_from_bot = TRUE
+    order by c_m.chat_id;
     """
+
     async with pool.acquire() as conn:
         rows = await conn.fetch(q, *params)
     return [(r["chat_id"], r["user_id"]) for r in rows]

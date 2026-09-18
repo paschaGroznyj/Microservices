@@ -28,6 +28,7 @@ from .core.config import (
 from .core.settings import TOOLS_SETTINGS, UNIVERSAL_TOOLS
 from .prompts.summary_prompt import SUMMARIZE_CUT_PROMPT
 from .prompts.system_prompt import SYSTEM_PROMPT, SCIENTIFIC_RESEARCH_MODULE
+from .title_generator import generate_chat_title, is_first_turn
 
 from datetime import datetime
 from .digest_email_handler import DigestEmailHandler
@@ -2161,6 +2162,18 @@ class KnowledgeAgent:
                         })
 
             # logging.info(f"ФАЙЛЫ К ОТПРАВКЕ {files_to_send}")
+            # Автогенерация заголовка чата по первому обмену (логика в title_generator.py).
+            # Fail-open: не первый ход / ошибка -> auto_title=None.
+            auto_title = None
+            try:
+                if self.db and chat_id is not None and await is_first_turn(self.db.pool, chat_id):
+                    auto_title = await generate_chat_title(
+                        self._lite_ainvoke, user_input, final_response
+                    )
+                    if auto_title:
+                        logging.info(f"[title] chat={chat_id} сгенерирован заголовок: {auto_title!r}")
+            except Exception as e:
+                logging.error(f"[title] ошибка автозаголовка chat={chat_id}: {e}")
             return {
                 "input": user_input,
                 "message": final_response,
@@ -2170,7 +2183,8 @@ class KnowledgeAgent:
                 "files_to_send": files_to_send,
                 "tool_trace": '; '.join(tool_trace) if tool_trace else None,
                 "agent_model": agent_model,
-                "tokens_usage": tokens_usage
+                "tokens_usage": tokens_usage,
+                "auto_title": auto_title
             }
         finally:
             # Очищаем request-local контекст текущего хода.

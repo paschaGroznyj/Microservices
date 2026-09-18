@@ -235,6 +235,21 @@ async def receive_bot_message(bot_msg: BotMessage):
 
     # Отправляем сообщение через WebSocket всем клиентам в чате
     await broadcast(bot_msg.chat_id, bot_msg.message)
+
+    # Автогенерированный заголовок чата: отдельное событие title_update,
+    # чтобы фронт обновил строку чата в сайдбаре без перезапроса списка.
+    try:
+        msg = bot_msg.message if isinstance(bot_msg.message, dict) else {}
+        auto_title = msg.get("auto_title")
+        if auto_title:
+            await broadcast(bot_msg.chat_id, {
+                "type": "title_update",
+                "chat_id": bot_msg.chat_id,
+                "auto_title": auto_title,
+            })
+    except Exception as e:
+        logging.warning(f"title_update broadcast не удался: {e}")
+
     elapsed = time.perf_counter() - start
     logging.info(f"Message Service. Время на отправку в сокет и сообщение от бота = {elapsed:.4f}s")
 

@@ -97,6 +97,10 @@ class DataBaseChats:
                 PRIMARY KEY (chat_id, user_id)
             );
 
+            -- Автогенерируемый заголовок чата (по первому обмену human+ai).
+            -- Приоритет отображения: renamed_title (ручной) > auto_title > last_message.
+            ALTER TABLE chat_sidebar_meta ADD COLUMN IF NOT EXISTS auto_title TEXT;
+
             -- Миграция для id чатов
             ALTER TABLE chat_types_agent ALTER COLUMN chat_id TYPE BIGINT USING chat_id::BIGINT;
             ALTER TABLE chat_types_agent ALTER COLUMN user_id TYPE BIGINT USING user_id::BIGINT;
@@ -361,6 +365,26 @@ class DataBaseChats:
                 DO UPDATE SET is_deleted = TRUE, updated_at = CURRENT_TIMESTAMP
             """, chat_id, user_id)
 
+    async def set_chat_auto_title(self, chat_id: int, user_id: int, auto_title: str):
+        """Записывает автогенерированный заголовок чата (только если ещё не задан).
+
+        Не затирает ручной renamed_title и не перезаписывает уже существующий
+        auto_title (заголовок генерится ровно один раз, по первому обмену).
+        Возвращает итоговый auto_title (записанный или уже бывший) либо None.
+        """
+        if not auto_title or user_id is None or chat_id is None:
+            return None
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                INSERT INTO chat_sidebar_meta (chat_id, user_id, is_deleted, is_favorite, auto_title)
+                VALUES ($1, $2, FALSE, FALSE, $3)
+                ON CONFLICT (chat_id, user_id)
+                DO UPDATE SET auto_title = COALESCE(chat_sidebar_meta.auto_title, EXCLUDED.auto_title),
+                              updated_at = CURRENT_TIMESTAMP
+                RETURNING auto_title
+            """, chat_id, user_id, auto_title)
+            return row["auto_title"] if row else None
+
     async def rename_chat(self, chat_id: int, user_id: int, new_title: str):
         async with self.pool.acquire() as conn:
             await conn.execute("""
@@ -399,7 +423,8 @@ class DataBaseChats:
                         c.created_at AS timestamp,
                         COALESCE(m.is_deleted, FALSE) AS is_deleted,
                         COALESCE(m.is_favorite, FALSE) AS is_favorite,
-                        m.renamed_title AS renamed_title
+                        m.renamed_title AS renamed_title,
+                        m.auto_title AS auto_title
                     FROM chats c
                     JOIN user_chats uc ON c.chat_id = uc.chat_id AND c.user_id = uc.user_id
                     LEFT JOIN chat_sidebar_meta m ON m.chat_id = uc.chat_id AND m.user_id = uc.user_id
@@ -414,7 +439,8 @@ class DataBaseChats:
                         "timestamp": row["timestamp"].isoformat(),
                         "is_deleted": row["is_deleted"],
                         "is_favorite": row["is_favorite"],
-                        "renamed_title": row["renamed_title"]
+                        "renamed_title": row["renamed_title"],
+                        "auto_title": row["auto_title"]
                     }
                     for row in rows
                 ]

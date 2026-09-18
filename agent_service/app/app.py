@@ -511,7 +511,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             "tool_trace": response.get("tool_trace"), # str,
             "agent_model": response.get("agent_model"),
             "tokens_usage": response.get("tokens_usage"),
-            "gateway_target": gateway_target
+            "gateway_target": gateway_target,
+            "auto_title": response.get("auto_title"),
         }
 
         await prod.send_and_wait("chat-messages", value=bot_message)

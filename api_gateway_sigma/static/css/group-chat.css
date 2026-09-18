@@ -138,53 +138,15 @@
 .gc-ctx-item--danger:hover { background: color-mix(in srgb, #dc4747 10%, transparent); }
 
 /* Поле ввода — как chat-input-box (те же токены/радиусы/тени) */
-.gc-input-container {
-  flex: 0 0 auto;
-  max-width: 720px;
-  width: 100%;
-  margin: 0 auto;
-  padding: 0 24px 20px;
-}
-.gc-input-wrapper {
-  background: var(--input-bg);
-  border: 1.5px solid var(--input-border);
-  border-radius: 16px;
-  box-shadow: var(--shadow-md);
-  overflow: hidden;
-  transition: border-color var(--transition), box-shadow var(--transition);
-}
-.gc-input-wrapper:focus-within {
-  border-color: var(--input-focus);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent), var(--shadow-md);
-}
-.gc-input {
-  width: 100%;
-  min-height: 24px;
-  max-height: 160px;
-  overflow-y: auto;
-  padding: 14px 18px 6px;
-  font-size: .95rem;
-  line-height: 1.6;
-  color: var(--text-primary);
-  outline: none;
-  word-break: break-word;
-}
+/* Поле ввода общего чата использует эталонные классы chat-input-area /
+   chat-input-box / chat-input-field / chat-input-footer / attach-btn /
+   send-btn из chat.css — геометрия, токены темы и состояние
+   disabled/active кнопки отправки наследуются оттуда 1:1.
+   send-btn.active -> background: var(--accent), color: #fff.
+   Здесь оставляем только placeholder для gc-input (contenteditable). */
+#gc-send-btn svg { width: 18px; height: 18px; }
 .gc-input:empty:before {
   content: attr(data-placeholder);
   color: var(--text-muted);
   pointer-events: none;
-}
-.gc-input-footer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px 8px 12px;
-  border-top: 1px solid var(--border);
-}
-.gc-input-footer .input-footer-note {
-  flex: 1;
-  text-align: center;
-  font-size: .68rem;
-  color: var(--text-muted);
-  user-select: none;
 }

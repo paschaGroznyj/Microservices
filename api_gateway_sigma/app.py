@@ -782,6 +782,7 @@ async def get_current_user_info(request: Request):
         "user_id": user["user_id"],
         "authenticated": True,
         "name": name,
+        "is_admin": user["username"] in ADMIN_USERNAMES,
         "source": user.get("source", "internal")
     }
 
@@ -1927,6 +1928,143 @@ async def startup_event():
     await discover_services()
     logger.info(f"Services status: { {name: info['status'] for name, info in SERVICES.items()} }")
 
+
+# ========== ОБЩИЙ ЧАТ (group chat, SSE-доставка) ==========
+# sigma не держит WS: события комнаты копятся в status_store и отдаются по SSE.
+class GroupSendBody(BaseModel):
+    message: str
+    client_msg_id: str | None = None
+
+
+class GroupMsgActionBody(BaseModel):
+    message_id: int
+
+
+class GroupEditBody(BaseModel):
+    message_id: int
+    new_text: str
+
+
+class GroupPinBody(BaseModel):
+    message_id: int
+    is_pinned: bool
+
+
+@app.post("/api/group/{room_uid}/send")
+async def group_send(room_uid: str, body: GroupSendBody, request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    payload = {
+        "room_uid": room_uid,
+        "user_id": user["user_id"],
+        "username": user.get("username"),
+        "message": body.message,
+        "client_msg_id": body.client_msg_id,
+        "gateway_target": "sigma",
+    }
+    resp = await app.state.http_client.post(f"{SERVICES['chats']['url']}/group/send", json=payload)
+    return resp.json()
+
+
+@app.get("/api/group/{room_uid}/messages")
+async def group_messages(room_uid: str, request: Request, limit: int = 50, offset: int = 0):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    resp = await app.state.http_client.get(
+        f"{SERVICES['chats']['url']}/group/{room_uid}/messages",
+        params={"limit": limit, "offset": offset},
+    )
+    return resp.json()
+
+
+@app.get("/api/group/{room_uid}/pinned")
+async def group_pinned(room_uid: str, request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    resp = await app.state.http_client.get(f"{SERVICES['chats']['url']}/group/{room_uid}/pinned")
+    return resp.json()
+
+
+@app.post("/api/group/message/delete")
+async def group_delete(body: GroupMsgActionBody, request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    is_admin = user.get("username") in ADMIN_USERNAMES
+    resp = await app.state.http_client.post(
+        f"{SERVICES['chats']['url']}/group/message/delete",
+        json={"message_id": body.message_id, "user_id": user["user_id"], "is_admin": is_admin},
+    )
+    return resp.json()
+
+
+@app.post("/api/group/message/edit")
+async def group_edit(body: GroupEditBody, request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    resp = await app.state.http_client.post(
+        f"{SERVICES['chats']['url']}/group/message/edit",
+        json={"message_id": body.message_id, "user_id": user["user_id"], "new_text": body.new_text},
+    )
+    return resp.json()
+
+
+@app.post("/api/group/message/pin")
+async def group_pin(body: GroupPinBody, request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if user.get("username") not in ADMIN_USERNAMES:
+        raise HTTPException(status_code=403, detail="Только админ может закреплять")
+    resp = await app.state.http_client.post(
+        f"{SERVICES['chats']['url']}/group/message/pin",
+        json={"message_id": body.message_id, "is_pinned": body.is_pinned},
+    )
+    return resp.json()
+
+
+@app.post("/internal/group_message")
+async def internal_group_message(request: Request):
+    """Приём события от group-chat-consumer -> в status_store для SSE-рассылки."""
+    body = await request.json()
+    room_uid = body.get("room_uid", "global")
+    status_store.push_group_event(room_uid, body)
+    return {"ok": True}
+
+
+@app.get("/api/group/{room_uid}/stream")
+async def stream_group(room_uid: str, request: Request):
+    """SSE-стрим событий общего чата. Новый клиент получает только
+    свежие события (с текущего курсора); история — через REST /messages."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    async def event_gen():
+        started = time.time()
+        cursor = status_store.group_cursor(room_uid)
+        while True:
+            if await request.is_disconnected():
+                break
+            remaining = _SSE_MAX_LIFETIME_SEC - (time.time() - started)
+            if remaining <= 0:
+                break
+            wait = min(_SSE_HEARTBEAT_SEC, remaining)
+            ready = await status_store.wait_group_ready(room_uid, timeout=wait)
+            if ready:
+                events, cursor = status_store.pop_group_events(room_uid, cursor)
+                for evt in events:
+                    yield _sse_pack("group", evt)
+            else:
+                yield ": heartbeat\n\n"
+
+    return StreamingResponse(
+        event_gen(), media_type="text/event-stream", headers=_SSE_HEADERS
+    )
 
 # ========== СТАТИЧЕСКИЕ ФАЙЛЫ ==========
 @app.get("/status")

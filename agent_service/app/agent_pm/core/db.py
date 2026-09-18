@@ -249,7 +249,7 @@ class AgentDB:
 
     #     return head_str + "\n\n".join(formatted_entries)
 
-    async def get_agent_journal(self, chat_id: int | None = None) -> str:
+    async def get_agent_journal(self, chat_id: str | None = None) -> str:
         async with self.pool.acquire() as conn:
             # В основной контекст тянем ТОЛЬКО активные (не архивные) записи.
             identity_row = await conn.fetchrow("""
@@ -913,7 +913,7 @@ class AgentDB:
                 external_id,
             )
 
-    async def get_chat_history(self, chat_id: int, limit: int = 10) -> List[Dict[str, Any]]:
+    async def get_chat_history(self, chat_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         """
         Получить последние N сообщений из чата для восстановления контекста.
         Возвращает список словарей с полями: message_text, is_from_bot, created_at
@@ -956,7 +956,7 @@ class AgentDB:
             logging.error(f"Ошибка при работе с пользователем {username}: {e}")
             raise
 
-    async def add_message(self, user_id: int, message: str, chat_id: int, is_from_bot: bool, action: str = None):
+    async def add_message(self, user_id: int, message: str, chat_id: str, is_from_bot: bool, action: str = None):
         """Добавить сообщение пользователя из ТГ"""
         if user_id is None or chat_id is None:
             logging.warning("Пропущено сообщение: отсутствует user_id или chat_id")
@@ -1022,7 +1022,7 @@ class AgentDB:
 
     # ── session_summaries ──────────────────────────────────────────────────────────
 
-    async def session_start(self, chat_id: int) -> dict:
+    async def session_start(self, chat_id: str) -> dict:
         """
         Создаёт новую запись сессии.
         Генерит 6-значный session_id, фиксирует текущий MAX(id) из chats как start_msg_id.
@@ -1059,7 +1059,7 @@ class AgentDB:
             raise
 
 
-    async def session_end(self, chat_id: int, session_id: int, llm) -> dict:
+    async def session_end(self, chat_id: str, session_id: int, llm) -> dict:
         """
         Завершает сессию:
         1. Берёт start_msg_id из записи сессии
@@ -1138,7 +1138,7 @@ class AgentDB:
             raise
 
 
-    async def get_last_session_summary(self, chat_id: int) -> dict | None:
+    async def get_last_session_summary(self, chat_id: str) -> dict | None:
         """
         Возвращает последнюю завершённую сессию для чата.
         Подставляется в messages при каждом новом запросе.
@@ -1457,13 +1457,13 @@ class AgentDB:
         logging.info("code_library: touch id=%s", library_id)
 
     # Суммаризация сообщений, которые были отброшены фильтром на токены
-    async def get_rolling_summary(self, chat_id: int) -> str | None:
+    async def get_rolling_summary(self, chat_id: str) -> str | None:
         row = await self.pool.fetchrow(
             "SELECT summary_text FROM chat_rolling_summary WHERE chat_id = $1", chat_id
         )
         return row["summary_text"] if row else None
 
-    async def upsert_rolling_summary(self, chat_id: int, summary_text: str, covers_messages: int) -> None:
+    async def upsert_rolling_summary(self, chat_id: str, summary_text: str, covers_messages: int) -> None:
         await self.pool.execute("""
             INSERT INTO chat_rolling_summary (chat_id, summary_text, covers_messages, updated_at)
             VALUES ($1, $2, $3, NOW())
@@ -1471,7 +1471,7 @@ class AgentDB:
             SET summary_text = $2, covers_messages = $3, updated_at = NOW()
         """, chat_id, summary_text, covers_messages)
 
-    async def get_rolling_summary(self, chat_id: int) -> dict | None:
+    async def get_rolling_summary(self, chat_id: str) -> dict | None:
         row = await self.pool.fetchrow(
             "SELECT summary_text, covered_up_to_id FROM chat_rolling_summary WHERE chat_id = $1", chat_id
         )
@@ -1788,7 +1788,7 @@ class AgentDB:
 
                 likes_count = await conn.fetchval("SELECT likes_count FROM agent_skills WHERE id = $1", skill_id)
                 return {"skill_id": skill_id, "liked": liked, "likes_count": likes_count}
-    async def upsert_rolling_summary(self, chat_id: int, summary_text: str, covered_up_to_id: int) -> None:
+    async def upsert_rolling_summary(self, chat_id: str, summary_text: str, covered_up_to_id: int) -> None:
         await self.pool.execute("""
             INSERT INTO chat_rolling_summary (chat_id, summary_text, covered_up_to_id, updated_at)
             VALUES ($1, $2, $3, NOW())

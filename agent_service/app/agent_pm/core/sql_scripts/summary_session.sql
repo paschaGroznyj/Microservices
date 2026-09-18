@@ -7,7 +7,7 @@
 CREATE TABLE IF NOT EXISTS session_summaries (
     id              BIGSERIAL    PRIMARY KEY,
     session_id      INTEGER      NOT NULL UNIQUE,   -- случайное 6-значное число
-    chat_id         BIGINT       NOT NULL,
+    chat_id         TEXT         NOT NULL,
     start_msg_id    INTEGER,                        -- id первого сообщения в chats
     end_msg_id      INTEGER,                        -- id последнего сообщения в chats
     summary_text    TEXT,                           -- LLM-сводка по диапазону
@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS session_summaries (
 );
 
 CREATE TABLE IF NOT EXISTS chat_rolling_summary (
-    chat_id     BIGINT PRIMARY KEY,
+    chat_id     TEXT PRIMARY KEY,
     summary_text TEXT NOT NULL,
     covers_messages INTEGER NOT NULL DEFAULT 0,  -- сколько сообщений уже засаммаризовано, для дебага
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -46,6 +46,20 @@ COMMENT ON COLUMN session_summaries.end_msg_id IS
 
 COMMENT ON COLUMN session_summaries.summary_text IS
 'LLM-сводка диалога за сессию. Заполняется при вызове session_point(end).';
+
+
+-- === Migration chat_id -> TEXT (UUID) ===
+DO $migr_ss$
+BEGIN
+    IF (SELECT data_type FROM information_schema.columns
+        WHERE table_name='session_summaries' AND column_name='chat_id') = 'bigint' THEN
+        ALTER TABLE session_summaries ALTER COLUMN chat_id TYPE TEXT USING chat_id::TEXT;
+    END IF;
+    IF (SELECT data_type FROM information_schema.columns
+        WHERE table_name='chat_rolling_summary' AND column_name='chat_id') = 'bigint' THEN
+        ALTER TABLE chat_rolling_summary ALTER COLUMN chat_id TYPE TEXT USING chat_id::TEXT;
+    END IF;
+END $migr_ss$;
 
 GRANT SELECT, INSERT, UPDATE ON session_summaries TO knowledge_manager;
 GRANT USAGE, SELECT ON SEQUENCE session_summaries_id_seq TO knowledge_manager;

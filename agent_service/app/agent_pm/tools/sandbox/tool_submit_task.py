@@ -44,7 +44,7 @@ def make_submit_tools(agent):
     async def submit_task(
         code: str,
         workspace_id: str,
-        chat_id: int,
+        chat_id: str,
         label: str,
         timeout: int = DEFAULT_TIMEOUT,
     ) -> dict:

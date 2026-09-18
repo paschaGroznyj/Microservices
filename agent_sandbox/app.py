@@ -147,7 +147,7 @@ class SubmitRequest(BaseModel):
     timeout: int = Field(default=DEFAULT_TIMEOUT, ge=1, le=MAX_TIMEOUT)
     workspace_id: str = Field(..., description="ID persistent workspace")
     task_id: str = Field(..., description="Уникальный ID задачи (генерирует агент)")
-    chat_id: int = Field(..., description="ID чата для нотификации")
+    chat_id: str = Field(..., description="ID чата для нотификации")
     label: str = Field(default="", description="Человекочитаемое имя задачи")
     stdin: str = Field(default="")
 

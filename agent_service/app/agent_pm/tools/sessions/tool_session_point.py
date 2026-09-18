@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 def make_session_point_tool(agent):
 
     @tool
-    async def session_point(chat_id: int, point_type: str, session_id: int = 0) -> str:
+    async def session_point(chat_id: str, point_type: str, session_id: int = 0) -> str:
         """
         Фиксирует точку сессии — начало или конец диалога.
         Используй этот инструмент когда:

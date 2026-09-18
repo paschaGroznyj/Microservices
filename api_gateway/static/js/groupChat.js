@@ -165,17 +165,13 @@
       const edited = m.edited_at ? '<span class="gc-edited">(изм.)</span>' : '';
       const pin = m.is_pinned ? '<span class="gc-pin-flag" title="Закреплено">★</span>' : '';
       const author = mine ? '' : `<div class="gc-author">${this._esc(m.username || 'Аноним')}</div>`;
-      let actions = '';
-      const acts = [];
-      if (mine) acts.push(`<button class="gc-act" data-act="del" data-id="${m.id}">Удалить</button>`);
-      if (canAdmin) acts.push(`<button class="gc-act" data-act="pin" data-id="${m.id}" data-pin="${m.is_pinned ? 0 : 1}">${m.is_pinned ? 'Открепить' : 'Закрепить'}</button>`);
-      if (acts.length) actions = `<div class="gc-actions">${acts.join('')}</div>`;
-      return `<div class="gc-row ${mine ? 'gc-row--mine' : ''}" data-id="${m.id}">
+      const canDel = mine;
+      const canPin = canAdmin;
+      return `<div class="gc-row ${mine ? 'gc-row--mine' : ''}" data-id="${m.id}" data-mine="${mine ? 1 : 0}" data-pinned="${m.is_pinned ? 1 : 0}" data-can-del="${canDel ? 1 : 0}" data-can-pin="${canPin ? 1 : 0}">
         ${author}
         <div class="${cls}">
           <div class="gc-bubble-text">${this._esc(m.message_text)}</div>
           <div class="gc-meta">${pin}${edited}<span class="gc-time">${this._fmtTime(m.created_at)}</span></div>
-          ${actions}
         </div>
       </div>`;
     },
@@ -194,13 +190,58 @@
     },
 
     _bindMsgActions(box) {
-      box.querySelectorAll('.gc-act').forEach(btn => {
-        btn.onclick = () => {
-          const id = Number(btn.dataset.id);
-          if (btn.dataset.act === 'del') this._delete(id);
-          else if (btn.dataset.act === 'pin') this._pin(id, btn.dataset.pin === '1');
+      box.querySelectorAll('.gc-row').forEach(row => {
+        const msgEl = row.querySelector('.gc-msg');
+        if (!msgEl) return;
+        msgEl.oncontextmenu = (e) => {
+          e.preventDefault();
+          this._showCtxMenu(e, row);
         };
       });
+    },
+
+    _closeCtxMenu() {
+      const ex = document.getElementById('gc-ctx-menu');
+      if (ex) ex.remove();
+      document.removeEventListener('click', this._ctxCloseHandler, true);
+      document.removeEventListener('contextmenu', this._ctxCloseHandler, true);
+    },
+
+    _showCtxMenu(e, row) {
+      this._closeCtxMenu();
+      const id = Number(row.dataset.id);
+      const canDel = row.dataset.canDel === '1';
+      const canPin = row.dataset.canPin === '1';
+      const pinned = row.dataset.pinned === '1';
+      if (!canDel && !canPin) return;
+      const menu = document.createElement('div');
+      menu.className = 'gc-ctx-menu';
+      menu.id = 'gc-ctx-menu';
+      const items = [];
+      if (canPin) items.push(`<button class="gc-ctx-item" data-act="pin">${pinned ? 'Открепить' : 'Закрепить в шапке'}</button>`);
+      if (canDel) items.push(`<button class="gc-ctx-item gc-ctx-item--danger" data-act="del">Удалить</button>`);
+      menu.innerHTML = items.join('');
+      document.body.appendChild(menu);
+      const mw = menu.offsetWidth, mh = menu.offsetHeight;
+      let x = e.clientX, y = e.clientY;
+      if (x + mw > window.innerWidth - 8) x = window.innerWidth - mw - 8;
+      if (y + mh > window.innerHeight - 8) y = window.innerHeight - mh - 8;
+      menu.style.left = x + 'px';
+      menu.style.top = y + 'px';
+      menu.querySelectorAll('.gc-ctx-item').forEach(btn => {
+        btn.onclick = () => {
+          if (btn.dataset.act === 'del') this._delete(id);
+          else if (btn.dataset.act === 'pin') this._pin(id, !pinned);
+          this._closeCtxMenu();
+        };
+      });
+      this._ctxCloseHandler = (ev) => {
+        if (!menu.contains(ev.target)) this._closeCtxMenu();
+      };
+      setTimeout(() => {
+        document.addEventListener('click', this._ctxCloseHandler, true);
+        document.addEventListener('contextmenu', this._ctxCloseHandler, true);
+      }, 0);
     },
 
     _bindInput() {

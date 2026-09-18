@@ -35,7 +35,7 @@
 
 .presence-overlay {
   position: absolute; top: calc(100% + 8px); right: 0;
-  width: 260px; z-index: 60;
+  width: 260px; max-width: calc(100vw - 24px); z-index: 60;
   background: var(--surface, #fff);
   border: 1px solid var(--border-color, rgba(0,0,0,.1));
   border-radius: 12px;

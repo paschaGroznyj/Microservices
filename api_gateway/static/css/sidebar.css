@@ -871,16 +871,24 @@
   }
 
   /* На мобилке кнопка ⋯ видна всегда — значит дымка тоже должна быть
-     постоянной (не только на hover), чтобы заголовок не подлезал под кнопку. */
+     постоянной. NB: hover-подсветки строки на тач нет, поэтому дымку
+     красим в ФОН сайдбара (--sidebar-bg), а не в --sidebar-hover — иначе тёмная
+     плашка выделяется на фоне строки. Шире и плавнее, чтобы не было шва. */
   .chat-line-wrap::after {
     content: "";
     position: absolute;
     top: 0;
     right: 0;
     bottom: 0;
-    width: 34px;
+    width: 48px;
     pointer-events: none;
-    background: linear-gradient(to right, transparent, var(--sidebar-hover) 70%);
+    background: linear-gradient(to right, transparent, var(--sidebar-bg) 55%);
+  }
+
+  /* Под активным чатом фон строки = --sidebar-hover, значит и дымку там
+     красим под него, чтобы совпадала с подложкой активной строки. */
+  .chat-item.active .chat-line-wrap::after {
+    background: linear-gradient(to right, transparent, var(--sidebar-hover) 55%);
   }
 
 }

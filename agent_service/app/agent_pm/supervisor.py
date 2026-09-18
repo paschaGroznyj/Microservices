@@ -51,6 +51,9 @@ _MAX_TOOLS_CATALOG_CHARS = 2500
 _RECENT_CONTEXT_PAIRS = 3
 _MAX_CONTEXT_MSG_CHARS = 500
 _MAX_RECENT_CONTEXT_CHARS = 3000
+# Сколько последних вердиктов супервизора помнить (память внутри цикла)
+_SUPERVISOR_MEMORY_N = 5
+_MAX_MEMORY_CHARS = 1500
 
 
 def _extract_json(text: str) -> dict | None:
@@ -188,6 +191,32 @@ def _build_recent_context(messages_snapshot: list) -> str:
     return ctx[-_MAX_RECENT_CONTEXT_CHARS:] if ctx else "(нет предыдущего контекста)"
 
 
+def _build_supervisor_memory(loop_state: dict) -> str:
+    """Собирает последние _SUPERVISOR_MEMORY_N вердиктов самого супервизора.
+
+    Память живёт в loop_state['supervisor_history'] (в пределах одного
+    цикла agent_event_loop). Нужна, чтобы супервизор понимал, не
+    стоит ли агент на месте: если одна и та же проблема повторяется
+    из прогона в прогон — агент застрял/зациклился.
+    """
+    history = (loop_state or {}).get("supervisor_history") or []
+    if not history:
+        return "(это первый прогон, прошлых заключений нет)"
+    tail = history[-_SUPERVISOR_MEMORY_N:]
+    lines: list[str] = []
+    for rec in tail:
+        it = rec.get("iter", "?")
+        st = rec.get("status", "?")
+        reason = str(rec.get("reason", "") or "").strip()
+        directive = str(rec.get("directive", "") or "").strip()
+        line = f"[шаг {it} | {st}] {reason}"
+        if st == "correct" and directive:
+            line += f" → directive: {directive}"
+        lines.append(line)
+    mem = "\n".join(lines)
+    return mem[-_MAX_MEMORY_CHARS:] if mem else "(это первый прогон, прошлых заключений нет)"
+
+
 def _extract_user_goal(user_input) -> str:
     """Нормализует цель пользователя в строку (user_input может быть мультимодальным)."""
     if isinstance(user_input, str):
@@ -217,6 +246,7 @@ async def run_supervisor(agent, user_input, messages_snapshot: list, loop_state:
         digest = _build_digest(messages_snapshot, loop_state)
         tools_catalog = _build_tools_catalog(loop_state)
         recent_context = _build_recent_context(messages_snapshot)
+        supervisor_memory = _build_supervisor_memory(loop_state)
         iteration = loop_state.get("iteration", 0) if loop_state else 0
         hard_limit = loop_state.get("hard_limit", 100) if loop_state else 100
 
@@ -225,6 +255,7 @@ async def run_supervisor(agent, user_input, messages_snapshot: list, loop_state:
             iteration=iteration,
             hard_limit=hard_limit,
             recent_context=recent_context,
+            supervisor_memory=supervisor_memory,
             tools_catalog=tools_catalog,
             digest=digest,
         )
@@ -253,6 +284,15 @@ async def run_supervisor(agent, user_input, messages_snapshot: list, loop_state:
             f"{{status={status!r}, reason={str(verdict.get('reason',''))[:200]!r}, "
             f"directive={str(verdict.get('directive',''))[:300]!r}}}"
         )
+        # Фиксируем ВСЕ прогоны в память (и ok, и correct) — ДО любого return,
+        # чтобы на следующем прогоне видеть динамику (стоит ли агент на месте).
+        if loop_state is not None:
+            loop_state.setdefault("supervisor_history", []).append({
+                "iter": iteration,
+                "status": status,
+                "reason": str(verdict.get("reason", ""))[:200],
+                "directive": str(verdict.get("directive", ""))[:200],
+            })
         if status != "correct":
             return None
 

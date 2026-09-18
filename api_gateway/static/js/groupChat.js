@@ -269,7 +269,6 @@
     _bindInput() {
       const input = document.getElementById('gc-input');
       const sendBtn = document.getElementById('gc-send-btn');
-      const box = document.getElementById('gc-input-box');
       const syncBtn = () => {
         if (!sendBtn) return;
         const hasText = !!(input && input.innerText.trim().length);
@@ -296,11 +295,6 @@
       input?.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); }
       });
-
-      if (box && typeof MutationObserver !== 'undefined') {
-        const obs = new MutationObserver(() => syncBtn());
-        obs.observe(box, { childList: true, subtree: true, attributes: true });
-      }
 
       syncBtn();
     },

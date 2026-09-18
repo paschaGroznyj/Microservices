@@ -119,7 +119,8 @@ async def _call_sandbox(
     is_shell: bool = False, 
     timeout: int = 30, 
     stdin: str = "", 
-    workspace_id: str | None = None
+    workspace_id: str | None = None,
+    persist_script: bool = True
 ) -> dict:
     try:
         payload = {
@@ -128,7 +129,8 @@ async def _call_sandbox(
             "is_shell": is_shell,
             "timeout": timeout,
             "stdin": stdin,
-            "workspace_id": workspace_id
+            "workspace_id": workspace_id,
+            "persist_script": persist_script
         }
         
         async with httpx.AsyncClient(timeout=timeout + HTTP_TIMEOUT_BUFFER) as client:
@@ -177,9 +179,16 @@ async def _process_sandbox_result(
         "exit_code": result.get("exit_code"),
         "truncated": result.get("truncated", False),
         "duration_ms": result.get("duration_ms", duration_ms),
+        "run_id": result.get("run_id"),
         "saved_files": [{"filename": f["filename"], "path": f["path"], "size_bytes": f["size_bytes"]} for f in saved_files],
     }
-    
+
+    # Путь к скрипту, сохранённому ВНУТРИ workspace самим sandbox-сервисом
+    # (output/.scripts/<run_id>.py) — агент может прочитать его через
+    # read_workspace_file / list_workspace_files и переиспользовать.
+    if result.get("saved_script"):
+        response["saved_script_in_workspace"] = result["saved_script"]
+
     # Сохраняем скрипт, только если это был Python код
     if code_for_saving:
         saved_script_path = _save_script_if_ok(code_for_saving, run_id, result.get("ok", False), reusable)
@@ -287,7 +296,7 @@ def make_sandbox_execute_tool(agent):
 
     @tool
     async def execute_python_code(code: str, timeout: int = DEFAULT_TIMEOUT, reusable: bool = False,
-        workspace_id: str = None) -> dict:
+        workspace_id: str = None, persist_script: bool = True) -> dict:
         """
         Исполняет Python-код в изолированной песочнице (отдельный контейнер,
         доступ в интернет есть, доступа к файловой системе проекта нет).
@@ -304,6 +313,14 @@ def make_sandbox_execute_tool(agent):
                       в будущих задачах (используй для универсальных функций/шаблонов,
                       не для одноразовых скриптов). По умолчанию False.
             workspace_id: ID workspace (передавай только при финальной агрегации результатов параллельных задач)
+            persist_script: True (по умолчанию) — при заданном workspace_id
+                  sandbox-сервис сохранит ИСПОЛНЁННЫЙ скрипт ВНУТРЬ workspace
+                  в output/.scripts/<run_id>.py (+ алиас output/.scripts/last_script.py).
+                  Так его можно потом подсмотреть/переиспользовать в рамках сессии
+                  через read_workspace_file / list_workspace_files, не переписывая
+                  с нуля. Путь возвращается в поле saved_script_in_workspace, а сам
+                  run_id — в поле run_id ответа. Поставь False для разовых скриптов,
+                  которые не нужно хранить. Без workspace_id аргумент игнорируется.
 
         ── Файлы и границы файловой системы (ЧИТАЙ ВНИМАТЕЛЬНО) ─────────────────
         Код бежит в СВЕЖЕМ контейнере песочницы. Из кода видны только:
@@ -471,7 +488,8 @@ def make_sandbox_execute_tool(agent):
             code=code, 
             timeout=timeout, 
             workspace_id=workspace_id, 
-            is_shell=False
+            is_shell=False,
+            persist_script=persist_script
         )
         return await _process_sandbox_result(result, start, run_id, code_for_saving=code, reusable=reusable)
 

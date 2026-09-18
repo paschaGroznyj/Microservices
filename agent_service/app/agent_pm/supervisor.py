@@ -47,6 +47,13 @@ _MAX_MSG_CHARS = 700
 _MAX_DIGEST_CHARS = 6000
 _MAX_DIRECTIVE_CHARS = 600
 _MAX_TOOLS_CATALOG_CHARS = 2500
+# Сколько последних ПАР (human/ai) подмешивать как предыдущий контекст диалога
+_RECENT_CONTEXT_PAIRS = 3
+_MAX_CONTEXT_MSG_CHARS = 500
+_MAX_RECENT_CONTEXT_CHARS = 3000
+# Сколько последних вердиктов супервизора помнить (память внутри цикла)
+_SUPERVISOR_MEMORY_N = 5
+_MAX_MEMORY_CHARS = 1500
 
 
 def _extract_json(text: str) -> dict | None:
@@ -130,7 +137,84 @@ def _build_tools_catalog(loop_state: dict) -> str:
     catalog = "\n".join(lines)
     if not catalog:
         return "(нет данных о доступных инструментах)"
-    return catalog[:_MAX_TOOLS_CATALOG_CHARS]
+    return catalog
+
+
+def _msg_text(m) -> str:
+    """Извлекает текстовый контент из сообщения (терпим к мультимодальности)."""
+    content = getattr(m, "content", "")
+    if isinstance(content, list):
+        parts = []
+        for it in content:
+            if isinstance(it, dict) and it.get("type") == "text":
+                parts.append(it.get("text", ""))
+        content = " ".join(parts)
+    return (str(content) or "").strip()
+
+
+def _build_recent_context(messages_snapshot: list) -> str:
+    """Собирает последние _RECENT_CONTEXT_PAIRS пар human/ai из истории.
+
+    Нужно, чтобы супервизор понимал контекст при коротких уточняющих
+    ответах юзера (напр. «да»): берём ПРЕДЫДУЩИЕ человек/агент
+    реплики, а не только текущий ввод. Служебные tool-сообщения
+    игнорируем — нужен именно диалог, а не траектория (она в дайджесте).
+    """
+    if not messages_snapshot:
+        return "(нет предыдущего контекста)"
+    # берём только human/ai-реплики с непустым текстом
+    dialog = []
+    for m in messages_snapshot:
+        mtype = getattr(m, "type", m.__class__.__name__)
+        if isinstance(m, ToolMessage) or mtype == "tool":
+            continue
+        if mtype in ("human", "HumanMessage"):
+            role = "human"
+        elif mtype in ("ai", "AIMessage"):
+            role = "ai"
+        else:
+            continue
+        # у AIMessage с tool_calls текст часто пустой — пропускаем
+        text = _msg_text(m)
+        if not text:
+            continue
+        dialog.append((role, text))
+    if not dialog:
+        return "(нет предыдущего контекста)"
+    # ПОСЛЕДНИЕ N пар = последние 2*N реплик диалога
+    tail = dialog[-(_RECENT_CONTEXT_PAIRS * 2):]
+    lines = []
+    for role, text in tail:
+        tag = "ПОЛЬЗОВАТЕЛЬ" if role == "human" else "АГЕНТ"
+        lines.append(f"[{tag}]: {text[:_MAX_CONTEXT_MSG_CHARS]}")
+    ctx = "\n".join(lines)
+    return ctx[-_MAX_RECENT_CONTEXT_CHARS:] if ctx else "(нет предыдущего контекста)"
+
+
+def _build_supervisor_memory(loop_state: dict) -> str:
+    """Собирает последние _SUPERVISOR_MEMORY_N вердиктов самого супервизора.
+
+    Память живёт в loop_state['supervisor_history'] (в пределах одного
+    цикла agent_event_loop). Нужна, чтобы супервизор понимал, не
+    стоит ли агент на месте: если одна и та же проблема повторяется
+    из прогона в прогон — агент застрял/зациклился.
+    """
+    history = (loop_state or {}).get("supervisor_history") or []
+    if not history:
+        return "(это первый прогон, прошлых заключений нет)"
+    tail = history[-_SUPERVISOR_MEMORY_N:]
+    lines: list[str] = []
+    for rec in tail:
+        it = rec.get("iter", "?")
+        st = rec.get("status", "?")
+        reason = str(rec.get("reason", "") or "").strip()
+        directive = str(rec.get("directive", "") or "").strip()
+        line = f"[шаг {it} | {st}] {reason}"
+        if st == "correct" and directive:
+            line += f" → directive: {directive}"
+        lines.append(line)
+    mem = "\n".join(lines)
+    return mem[-_MAX_MEMORY_CHARS:] if mem else "(это первый прогон, прошлых заключений нет)"
 
 
 def _extract_user_goal(user_input) -> str:
@@ -161,6 +245,8 @@ async def run_supervisor(agent, user_input, messages_snapshot: list, loop_state:
 
         digest = _build_digest(messages_snapshot, loop_state)
         tools_catalog = _build_tools_catalog(loop_state)
+        recent_context = _build_recent_context(messages_snapshot)
+        supervisor_memory = _build_supervisor_memory(loop_state)
         iteration = loop_state.get("iteration", 0) if loop_state else 0
         hard_limit = loop_state.get("hard_limit", 100) if loop_state else 100
 
@@ -168,6 +254,8 @@ async def run_supervisor(agent, user_input, messages_snapshot: list, loop_state:
             user_input=goal[:_MAX_DIGEST_CHARS],
             iteration=iteration,
             hard_limit=hard_limit,
+            recent_context=recent_context,
+            supervisor_memory=supervisor_memory,
             tools_catalog=tools_catalog,
             digest=digest,
         )
@@ -196,6 +284,15 @@ async def run_supervisor(agent, user_input, messages_snapshot: list, loop_state:
             f"{{status={status!r}, reason={str(verdict.get('reason',''))[:200]!r}, "
             f"directive={str(verdict.get('directive',''))[:300]!r}}}"
         )
+        # Фиксируем ВСЕ прогоны в память (и ok, и correct) — ДО любого return,
+        # чтобы на следующем прогоне видеть динамику (стоит ли агент на месте).
+        if loop_state is not None:
+            loop_state.setdefault("supervisor_history", []).append({
+                "iter": iteration,
+                "status": status,
+                "reason": str(verdict.get("reason", ""))[:200],
+                "directive": str(verdict.get("directive", ""))[:200],
+            })
         if status != "correct":
             return None
 

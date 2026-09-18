@@ -1770,7 +1770,7 @@ class KnowledgeAgent:
             STEPS_LEFT_WARN = 3  # предупреждаем про request_more_steps когда осталось <= N шагов
             JUDGE_LIMIT = 5
             # ФОНОВЫЙ reasoning-супервизор цели: триггер каждые N шагов, неблокирующе.
-            SUPERVISOR_EVERY_N = 8   # как часто запускать фоновый надзор (0 = выкл)
+            SUPERVISOR_EVERY_N = 5   # как часто запускать фоновый надзор (0 = выкл)
             SUPERVISOR_MIN_ITER = 4  # не трогаем первые шаги (агент только разогнался)
             total_input_tokens  = 0
             total_output_tokens = 0

@@ -29,6 +29,7 @@
         this._bindPinnedBar();
         this.opened = true;
       }
+      this._loadPermissions();
       this._loadHistory();
       this._loadPinned();
       this._connectSse();
@@ -54,6 +55,19 @@
         if (this.pinnedCursor >= this.pinned.length) this.pinnedCursor = 0;
         this._renderPinned();
       } catch (e) { console.warn('[group] pinned error', e); }
+    },
+
+    async _loadPermissions() {
+      // Права админа нет в currentUser (/profile/me) — тянем из отдельного эндпоинта.
+      try {
+        const res = await fetch('/api/auth/permissions', { credentials: 'include' });
+        if (!res.ok) { this.isAdmin = false; return; }
+        const data = await res.json();
+        this.isAdmin = !!data.is_admin;
+      } catch (e) { this.isAdmin = false; }
+      // перерисовать меню/плашку с учётом прав, когда ответ пришёл
+      this._renderAll();
+      this._renderPinned();
     },
 
     _connectSse() {
@@ -236,7 +250,7 @@
     _msgHtml(m) {
       const mine = String(m.user_id) === String(this.userId);
       const cls = mine ? 'gc-msg gc-msg--mine' : 'gc-msg gc-msg--other';
-      const canAdmin = this.app?.currentUser?.is_admin;
+      const canAdmin = this.isAdmin;
       const edited = m.edited_at ? '<span class="gc-edited">изменено</span>' : '';
       const pin = m.is_pinned ? '<span class="gc-pin-flag" title="Закреплено">★</span>' : '';
       const author = mine ? '' : `<div class="gc-author">${this._esc(m.username || 'Аноним')}</div>`;
@@ -297,7 +311,7 @@
       if (!this.pinned.length) { bar.hidden = true; bar.innerHTML = ''; return; }
       if (this.pinnedCursor >= this.pinned.length) this.pinnedCursor = 0;
       const m = this.pinned[this.pinnedCursor];
-      const canAdmin = this.app?.currentUser?.is_admin;
+      const canAdmin = this.isAdmin;
       const idx = this.pinnedCursor + 1;
       const total = this.pinned.length;
       const counter = total > 1 ? `<span class="gc-pinned-counter">${idx}/${total}</span>` : '';

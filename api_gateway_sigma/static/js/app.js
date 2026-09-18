@@ -618,18 +618,18 @@ class ChatApp {
             .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
         if (!isBot) {
-            // Рендерим прикреплённые файлы над текстом сообщения
-            const filesHtml = this._renderMessageFiles(message.files);
             // Длинный текст (>1000 символов) сворачиваем в чип-файлик,
             // клик по которому открывает превью в правом сайдбаре.
             // Длинный текст (Claude-style): рендерим обычным текстом,
             // но помечаем как collapsible — CSS обрежет по высоте + mask,
             // а кнопка «Показать больше/Свернуть» развернёт на месте.
+            // NB: прикреплённые файлы (чипы) рендерятся НЕ внутри пузыря,
+            // а над ним — вставляются в wrapper ниже (см. блок else).
             const TEXT_COLLAPSE_LIMIT = 1000;
             const isLong = rawContent && rawContent.length > TEXT_COLLAPSE_LIMIT;
             const textCls = isLong ? 'message-text message-text--collapsible' : 'message-text';
             const toggleHtml = isLong ? this._renderCollapseToggle() : '';
-            messageEl.innerHTML = `${filesHtml}<div class="${textCls}">${content}</div>${toggleHtml}<div class="timestamp">${time}</div>`;
+            messageEl.innerHTML = `<div class="${textCls}">${content}</div>${toggleHtml}<div class="timestamp">${time}</div>`;
         } else {
             messageEl.dataset.id = message.id;
             messageEl.innerHTML = content;
@@ -675,6 +675,14 @@ class ChatApp {
             // id сообщения на wrapper — нужен для дедупа WS-эха (в т.ч. для чипов,
             // где textContent не содержит полного текста).
             if (message.id) wrapper.dataset.messageId = message.id;
+            // Прикреплённые файлы (чипы) — НАД пузырём сообщения, а не внутри него.
+            const filesHtml = this._renderMessageFiles(message.files);
+            if (filesHtml) {
+                const filesWrap = document.createElement('div');
+                filesWrap.innerHTML = filesHtml;
+                const filesNode = filesWrap.firstElementChild;
+                if (filesNode) wrapper.appendChild(filesNode);
+            }
             wrapper.appendChild(messageEl);
             wrapper.appendChild(actions);
             container.appendChild(wrapper);

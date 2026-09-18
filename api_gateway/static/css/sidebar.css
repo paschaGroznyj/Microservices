@@ -292,6 +292,15 @@
   opacity: 0;
 }
 
+/* Обёртка строки: занимает всю ширину chat-item; кнопка ⋯ ложится поверх
+   правого края (position:absolute). При наведении/активности, когда кнопка
+   видна, включается градиент-дымка справа — чтобы текст не подлезал под ⋯. */
+.chat-line-wrap {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+}
+
 /* единая строка в chat-item: либо renamed_title, либо preview сообщения */
 .chat-line {
   font-size: 0.8rem;
@@ -299,18 +308,36 @@
   overflow: hidden;
   text-overflow: ellipsis;
   line-height: 1.4;
-  /* Название занимает всю ширину chat-item; кнопка ⋯ ложится поверх
-     (position:absolute) и появляется только на hover/active. */
 }
 
+/* Автозаголовок и preview — обычный (не жирный) вес по умолчанию. */
 .chat-line--title {
   color: var(--text-primary);
-  font-weight: 500;
+  font-weight: 400;
+}
+
+/* Только ручное переименование выделяется жирным. */
+.chat-line--renamed {
+  font-weight: 600;
 }
 
 .chat-line--preview {
   color: var(--text-secondary);
   font-weight: 400;
+}
+
+/* Дымка у правого края под кнопкой ⋯ — появляется вместе с кнопкой
+   (hover/active), чтобы длинный заголовок красиво угасал перед кнопкой. */
+.chat-item:hover .chat-line-wrap::after,
+.chat-item.active .chat-line-wrap::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 34px;
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, var(--sidebar-hover) 70%);
 }
 
 
@@ -832,13 +859,28 @@
   /* ── Кнопка ⋯ на мобильных: всегда видима, крупнее зона тапа ── */
   .chat-item-menu-btn {
     display: flex !important;  /* всегда показываем — hover на тач нет */
-    width: 32px;
-    height: 32px;
+    width: 28px;
+    height: 28px;            /* не выше строки chat-item, иначе наложение на заголовок */
     right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
     border-radius: 7px;
     /* padding увеличивает зону тапа без изменения видимого размера */
-    padding: 5px;
+    padding: 4px;
     box-sizing: border-box;
+  }
+
+  /* На мобилке кнопка ⋯ видна всегда — значит дымка тоже должна быть
+     постоянной (не только на hover), чтобы заголовок не подлезал под кнопку. */
+  .chat-line-wrap::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 34px;
+    pointer-events: none;
+    background: linear-gradient(to right, transparent, var(--sidebar-hover) 70%);
   }
 
 }

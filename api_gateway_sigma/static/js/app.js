@@ -244,14 +244,14 @@ class ChatApp {
         // Если нет — показываем последнее сообщение как единственную строку.
         const getDisplayLine = (chat) => {
             const renamed = (chat.renamed_title || '').trim();
-            if (renamed) return { title: escapeHtml(renamed), preview: null };
+            if (renamed) return { title: escapeHtml(renamed), preview: null, kind: 'renamed' };
 
             // Автогенерированный заголовок (по первому обмену) — приоритетнее last_message.
             const auto = (chat.auto_title || '').trim();
-            if (auto) return { title: escapeHtml(auto), preview: null };
+            if (auto) return { title: escapeHtml(auto), preview: null, kind: 'auto' };
 
             const raw = (chat.last_message || '').trim();
-            if (!raw || raw === 'Чат создан') return { title: 'Новый чат', preview: null };
+            if (!raw || raw === 'Чат создан') return { title: 'Новый чат', preview: null, kind: 'auto' };
             const plainText = stripHtml(raw).trim();
             const truncated = plainText.length > 60 ? plainText.slice(0, 60) + '...' : plainText;
             return { title: null, preview: escapeHtml(truncated) };
@@ -267,16 +267,17 @@ class ChatApp {
                 return '<div class="chat-item-skeleton">Нет чатов</div>';
             }
             return items.map(chat => {
-                const { title, preview } = getDisplayLine(chat);
+                const { title, preview, kind } = getDisplayLine(chat);
+                const titleCls = kind === 'renamed' ? 'chat-line chat-line--title chat-line--renamed' : 'chat-line chat-line--title';
                 const lineHtml = title
-                    ? `<div class="chat-line chat-line--title">${title}</div>`
+                    ? `<div class="${titleCls}">${title}</div>`
                     : `<div class="chat-line chat-line--preview">${preview}</div>`;
                 return `
                 <div class="chat-item ${chat.id === this.currentChat ? 'active' : ''}"
                     data-chat-id="${escapeHtml(String(chat.id))}">
-                    ${lineHtml}
+                    <div class="chat-line-wrap">${lineHtml}</div>
                     <button class="chat-item-menu-btn" data-menu-chat-id="${escapeHtml(String(chat.id))}" title="Действия" type="button">
-                        <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14" style="transform:rotate(90deg)">
+                        <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14">
                             <circle cx="10" cy="4" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="10" cy="16" r="1.5"/>
                         </svg>
                     </button>

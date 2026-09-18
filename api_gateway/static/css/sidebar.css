@@ -327,17 +327,26 @@
 }
 
 /* Дымка у правого края под кнопкой ⋯ — появляется вместе с кнопкой
-   (hover/active), чтобы длинный заголовок красиво угасал перед кнопкой. */
-.chat-item:hover .chat-line-wrap::after,
-.chat-item.active .chat-line-wrap::after {
+   (hover/active). Цвет дымки = ФОН СТРОКИ под ней (hover или active),
+   иначе на активном чате появляется заметная плашка. */
+.chat-item .chat-line-wrap::after {
   content: "";
   position: absolute;
   top: 0;
   right: 0;
   bottom: 0;
-  width: 34px;
+  width: 44px;
   pointer-events: none;
-  background: linear-gradient(to right, transparent, var(--sidebar-hover) 70%);
+  opacity: 0;
+  background: linear-gradient(to right, transparent, var(--sidebar-hover) 90%);
+}
+.chat-item:hover .chat-line-wrap::after {
+  opacity: 1;
+  background: linear-gradient(to right, transparent, var(--sidebar-hover) 90%);
+}
+.chat-item.active .chat-line-wrap::after {
+  opacity: 1;
+  background: linear-gradient(to right, transparent, var(--sidebar-active) 90%);
 }
 
 
@@ -885,10 +894,10 @@
     background: linear-gradient(to right, transparent, var(--sidebar-bg) 55%);
   }
 
-  /* Под активным чатом фон строки = --sidebar-hover, значит и дымку там
+  /* Под активным чатом фон строки = --sidebar-active, значит и дымку там
      красим под него, чтобы совпадала с подложкой активной строки. */
   .chat-item.active .chat-line-wrap::after {
-    background: linear-gradient(to right, transparent, var(--sidebar-hover) 55%);
+    background: linear-gradient(to right, transparent, var(--sidebar-active) 55%);
   }
 
 }

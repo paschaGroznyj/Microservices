@@ -1854,6 +1854,8 @@ class KnowledgeAgent:
                 #     journal_text = await self.db.get_agent_journal(56) # Пока что мой id
 
             tools_by_name = {t.name: t for t in tools}
+            # Имена реально доступных агенту тулов — для каталога фонового супервизора
+            loop_state["tool_names"] = list(tools_by_name.keys())
             llm_with_tools = llm.bind_tools(tools)
             session_summary = await self.db.get_last_session_summary(chat_id)
 

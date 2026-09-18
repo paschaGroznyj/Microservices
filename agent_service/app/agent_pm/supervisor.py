@@ -36,6 +36,7 @@ from .prompts.supervisor_prompt import (
     SUPERVISOR_SYSTEM_PROMPT,
     SUPERVISOR_USER_TEMPLATE,
 )
+from .core.settings import TOOL_DESCRIPTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ _DIGEST_LAST_MSGS = 14
 _MAX_MSG_CHARS = 700
 _MAX_DIGEST_CHARS = 6000
 _MAX_DIRECTIVE_CHARS = 600
+_MAX_TOOLS_CATALOG_CHARS = 2500
 
 
 def _extract_json(text: str) -> dict | None:
@@ -109,6 +111,28 @@ def _build_digest(messages_snapshot: list, loop_state: dict) -> str:
     return digest[-_MAX_DIGEST_CHARS:] if digest else "(пока пусто)"
 
 
+def _build_tools_catalog(loop_state: dict) -> str:
+    """Собирает каталог ТОЛЬКО доступных агенту тулов с описаниями.
+
+    Имена берём из loop_state['tool_names'] (реальный отфильтрованный
+    набор агента), описания — из TOOL_DESCRIPTIONS. Выключенные
+    пользователем тулы в каталог НЕ попадают — контекст не засоряется.
+    """
+    names = (loop_state or {}).get("tool_names") or []
+    lines: list[str] = []
+    for name in names:
+        desc = TOOL_DESCRIPTIONS.get(name)
+        if desc:
+            lines.append(f"- {name}: {desc}")
+        else:
+            # тул без описания (напр. pm_research — намеренно не описан) — только имя
+            lines.append(f"- {name}")
+    catalog = "\n".join(lines)
+    if not catalog:
+        return "(нет данных о доступных инструментах)"
+    return catalog[:_MAX_TOOLS_CATALOG_CHARS]
+
+
 def _extract_user_goal(user_input) -> str:
     """Нормализует цель пользователя в строку (user_input может быть мультимодальным)."""
     if isinstance(user_input, str):
@@ -136,6 +160,7 @@ async def run_supervisor(agent, user_input, messages_snapshot: list, loop_state:
             return None
 
         digest = _build_digest(messages_snapshot, loop_state)
+        tools_catalog = _build_tools_catalog(loop_state)
         iteration = loop_state.get("iteration", 0) if loop_state else 0
         hard_limit = loop_state.get("hard_limit", 100) if loop_state else 100
 
@@ -143,6 +168,7 @@ async def run_supervisor(agent, user_input, messages_snapshot: list, loop_state:
             user_input=goal[:_MAX_DIGEST_CHARS],
             iteration=iteration,
             hard_limit=hard_limit,
+            tools_catalog=tools_catalog,
             digest=digest,
         )
         sup_messages = [
@@ -156,6 +182,8 @@ async def run_supervisor(agent, user_input, messages_snapshot: list, loop_state:
             raw = " ".join(
                 it.get("text", "") for it in raw if isinstance(it, dict) and it.get("type") == "text"
             )
+        # Явное логирование СЫРОГО ответа супервизора
+        logger.info(f"[supervisor] iter={iteration} raw_response={str(raw)[:1000]!r}")
 
         verdict = _extract_json(raw)
         if not verdict:
@@ -163,6 +191,11 @@ async def run_supervisor(agent, user_input, messages_snapshot: list, loop_state:
             return None
 
         status = str(verdict.get("status", "ok")).lower().strip()
+        logger.info(
+            f"[supervisor] iter={iteration} verdict="
+            f"{{status={status!r}, reason={str(verdict.get('reason',''))[:200]!r}, "
+            f"directive={str(verdict.get('directive',''))[:300]!r}}}"
+        )
         if status != "correct":
             return None
 

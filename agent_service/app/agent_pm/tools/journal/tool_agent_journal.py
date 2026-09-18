@@ -1,6 +1,6 @@
 from langchain.tools import tool
 
-def make_journal_tool(agent, chat_id: int, user_id: int):
+def make_journal_tool(agent, chat_id: str, user_id: int):
 
     @tool
     async def work_with_agent_journal(

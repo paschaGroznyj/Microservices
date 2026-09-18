@@ -69,12 +69,12 @@ class SigmaStatusStore:
         Нужно, чтобы взводить asyncio.Event из потока Kafka-consumer."""
         self._loop = loop
 
-    def _get_chat_event(self, chat_id: int) -> asyncio.Event:
+    def _get_chat_event(self, chat_id: str) -> asyncio.Event:
         with self._lock:
-            ev = self._chat_ready.get(int(chat_id))
+            ev = self._chat_ready.get(str(chat_id))
             if ev is None:
                 ev = asyncio.Event()
-                self._chat_ready[int(chat_id)] = ev
+                self._chat_ready[str(chat_id)] = ev
             return ev
 
     def _get_user_event(self, username: str) -> asyncio.Event:
@@ -98,7 +98,7 @@ class SigmaStatusStore:
             except RuntimeError:
                 pass
 
-    async def wait_chat_ready(self, chat_id: int, timeout: float) -> bool:
+    async def wait_chat_ready(self, chat_id: str, timeout: float) -> bool:
         """Спит до тех пор, пока mark_done не взведёт событие чата, либо
         до таймаута. Возвращает True, если событие пришло; False по таймауту.
         Использует SSE-эндпоинт вместо цикла опроса get_chat_state()."""
@@ -124,10 +124,10 @@ class SigmaStatusStore:
 
     # ── Состояние ответа бота ────────────────────────────────────────────
 
-    def mark_running(self, chat_id: int, request_id: str | None = None) -> None:
+    def mark_running(self, chat_id: str, request_id: str | None = None) -> None:
         """Пользователь отправил сообщение — ждём ответ бота."""
         with self._lock:
-            self._chats[int(chat_id)] = {
+            self._chats[str(chat_id)] = {
                 "status": "running",
                 "message": None,
                 "request_id": request_id,
@@ -135,11 +135,11 @@ class SigmaStatusStore:
             }
         logger.info(f"[sigma-store] chat {chat_id} -> running (req={request_id})")
 
-    def mark_done(self, chat_id: int, message: dict) -> None:
+    def mark_done(self, chat_id: str, message: dict) -> None:
         """Kafka-consumer получил финальный bot_message — ответ готов."""
         with self._lock:
-            prev = self._chats.get(int(chat_id)) or {}
-            self._chats[int(chat_id)] = {
+            prev = self._chats.get(str(chat_id)) or {}
+            self._chats[str(chat_id)] = {
                 "status": "done",
                 "message": message,
                 "request_id": prev.get("request_id"),
@@ -149,24 +149,24 @@ class SigmaStatusStore:
         self._signal(self._get_chat_event(chat_id))
         logger.info(f"[sigma-store] chat {chat_id} -> done")
 
-    def get_chat_request_id(self, chat_id: int) -> str | None:
+    def get_chat_request_id(self, chat_id: str) -> str | None:
         """request_id текущего running-хода чата — нужен SSE-стриму,
         чтобы подписаться на Redis-канал stream:{request_id} с чанками."""
         with self._lock:
-            st = self._chats.get(int(chat_id))
+            st = self._chats.get(str(chat_id))
             return (st or {}).get("request_id")
 
-    def get_chat_state(self, chat_id: int) -> dict:
+    def get_chat_state(self, chat_id: str) -> dict:
         """Вернуть текущее состояние для polling. Если done — отдаём один раз
         и сбрасываем в idle, чтобы повторный опрос не дублировал сообщение."""
         self._gc()
         with self._lock:
-            st = self._chats.get(int(chat_id))
+            st = self._chats.get(str(chat_id))
             if not st:
                 return {"status": "idle"}
             if st["status"] == "done":
                 # Отдаём финал и очищаем — фронт после done перечитает историю.
-                self._chats.pop(int(chat_id), None)
+                self._chats.pop(str(chat_id), None)
                 return {"status": "done", "message": st["message"]}
             return {"status": st["status"]}
 

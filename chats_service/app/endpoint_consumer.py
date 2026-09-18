@@ -129,7 +129,7 @@ class DBConsumer:
         except Exception as e:
             logger.error(f"Ошибка обработки сообщения: {e}")
 
-    async def send_to_main_service(self, chat_id: int, message: dict, gateway_url: str):
+    async def send_to_main_service(self, chat_id: str, message: dict, gateway_url: str):
         """Отправляем сообщение обратно в основной сервис для WebSocket"""
         try:
             start = time.perf_counter()

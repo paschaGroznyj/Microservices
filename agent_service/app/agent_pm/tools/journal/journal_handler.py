@@ -22,7 +22,7 @@ _ID_ACTIONS = {"archive", "unarchive"}
 async def handle_journal_operation(
         db,
         llm,
-        chat_id: int,
+        chat_id: str,
         action: str,
         entry_type: str,
         content: str,
@@ -92,7 +92,7 @@ async def handle_journal_operation(
         return {"ok": False, "error": f"Внутренняя ошибка: {type(e).__name__}: {e}"}
 
 
-async def _do_insert(db, chat_id: int, entry_type: str, content: str, user_id: int | None) -> dict:
+async def _do_insert(db, chat_id: str, entry_type: str, content: str, user_id: int | None) -> dict:
     # Проверяем — нет ли уже похожей записи под этим chat_id (защита от дублей)
     existing = await db.pool.fetchrow("""
         SELECT id FROM agent_journal
@@ -112,7 +112,7 @@ async def _do_insert(db, chat_id: int, entry_type: str, content: str, user_id: i
     return {"ok": True, "action": "insert", "id": row_id}
 
 
-async def _do_update(db, chat_id: int, entry_type: str, content: str, replace: str) -> dict:
+async def _do_update(db, chat_id: str, entry_type: str, content: str, replace: str) -> dict:
     # Ищем запись под этим chat_id, содержащую replace как подстроку
     row = await db.pool.fetchrow("""
         SELECT id, content FROM agent_journal
@@ -135,7 +135,7 @@ async def _do_update(db, chat_id: int, entry_type: str, content: str, replace: s
     return {"ok": True, "action": "update", "id": row["id"], "replaced": replace, "with": content}
 
 
-async def _do_delete(db, chat_id: int, entry_type: str, replace: str) -> dict:
+async def _do_delete(db, chat_id: str, entry_type: str, replace: str) -> dict:
     row = await db.pool.fetchrow("""
         SELECT id FROM agent_journal
         WHERE chat_id = $1 AND entry_type = $2 AND content LIKE '%' || $3 || '%'
@@ -151,7 +151,7 @@ async def _do_delete(db, chat_id: int, entry_type: str, replace: str) -> dict:
     return {"ok": True, "action": "delete", "id": row["id"]}
 
 
-async def _do_archive(db, chat_id: int, entry_id: int, archive_summary: str | None) -> dict:
+async def _do_archive(db, chat_id: str, entry_id: int, archive_summary: str | None) -> dict:
     """
     Помечает запись is_archived=TRUE и пишет краткое одно-предложение summary.
     Запись перестаёт тянуться в основной контекст get_agent_journal,
@@ -187,7 +187,7 @@ async def _do_archive(db, chat_id: int, entry_id: int, archive_summary: str | No
     return {"ok": True, "action": "archive", "id": entry_id, "summary": archive_summary.strip()}
 
 
-async def _do_unarchive(db, chat_id: int, entry_id: int) -> dict:
+async def _do_unarchive(db, chat_id: str, entry_id: int) -> dict:
     """Возвращает запись в активный контекст (is_archived=FALSE)."""
     row = await db.pool.fetchrow("""
         SELECT id, is_archived FROM agent_journal

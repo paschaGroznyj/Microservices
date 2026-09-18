@@ -2,7 +2,7 @@ import json
 COMPRESSION_THRESHOLD = 8
 KEEP_RECENT = 3
 
-async def maybe_compress_journal(db, llm, chat_id: int, entry_type: str) -> dict | None:
+async def maybe_compress_journal(db, llm, chat_id: str, entry_type: str) -> dict | None:
     """
     Проверяет, не превышен ли порог записей entry_type под этим chat_id.
     Если да — сжимает старые записи (кроме identity и summary) в одну

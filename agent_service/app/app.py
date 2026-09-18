@@ -219,7 +219,7 @@ def _resolve_in_whitelist(file_name: str) -> str | None:
 
 
 @web_router.get("/web/file")
-async def get_generated_file(path: str, chat_id: int | None = None):
+async def get_generated_file(path: str, chat_id: str | None = None):
     real_path = os.path.realpath(path)
 
     # Защита: файл обязан лежать внутри одного из разрешённых корней.

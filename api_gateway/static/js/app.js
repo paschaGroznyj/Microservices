@@ -284,7 +284,7 @@ class ChatApp {
 
             const item = e.target.closest('.chat-item');
             if (!item) return;
-            this.openChat(Number(item.dataset.chatId));
+            this.openChat(item.dataset.chatId);
         };
 
         document.getElementById('chat-list')?.addEventListener('click', handleChatListClick);
@@ -337,7 +337,7 @@ class ChatApp {
         document.querySelector('.chat-main-inner')?.classList.add('chat-active');
 
         document.querySelectorAll('.chat-item').forEach(item => {
-            item.classList.toggle('active', Number(item.dataset.chatId) === chatId);
+            item.classList.toggle('active', String(item.dataset.chatId) === String(chatId));
         });
 
         // Переключаемся на вкладку агента если были на arxiv
@@ -1155,8 +1155,8 @@ class ChatApp {
             if (existing.dataset.forChat === btn.dataset.menuChatId) return;
         }
 
-        const chatId = Number(btn.dataset.menuChatId);
-        const chat = this.chats.find(c => Number(c.id) === chatId) || {};
+        const chatId = btn.dataset.menuChatId;
+        const chat = this.chats.find(c => String(c.id) === String(chatId)) || {};
 
         const dropdown = document.createElement('div');
         dropdown.className = 'chat-item-dropdown';
@@ -1406,7 +1406,16 @@ class ChatApp {
     }
 
     generateChatId() {
-        return Math.floor(100000 + Math.random() * 900000);
+        // UUID v4 — глобально уникальный id чата, исключает коллизии.
+        if (window.crypto && crypto.randomUUID) {
+            return crypto.randomUUID();
+        }
+        // Фолбэк для старых браузеров (RFC4122 v4).
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+            const r = (Math.random() * 16) | 0;
+            const v = c === 'x' ? r : (r & 0x3) | 0x8;
+            return v.toString(16);
+        });
     }
 
     /* ══════════════════════════════════════════
@@ -1771,12 +1780,12 @@ class ChatApp {
 
             // Автогенерированный заголовок чата — обновляем строку чата в сайдбаре в реалтайме.
             if (msg.type === 'title_update') {
-                const cid = Number(msg.chat_id);
+                const cid = msg.chat_id != null ? String(msg.chat_id) : null;
                 const t = (msg.auto_title || '').trim();
                 if (cid && t) {
                     let touched = false;
                     this.chats = (this.chats || []).map(c => {
-                        if (Number(c.id) === cid) { touched = true; return { ...c, auto_title: t }; }
+                        if (String(c.id) === cid) { touched = true; return { ...c, auto_title: t }; }
                         return c;
                     });
                     if (touched) this.renderChats(this.chats);

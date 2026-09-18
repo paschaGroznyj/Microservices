@@ -91,6 +91,15 @@ COMMENT ON COLUMN agent_journal.updated_at IS
 ALTER TABLE agent_journal
     ADD COLUMN IF NOT EXISTS chat_id BIGINT;
 
+-- === Migration chat_id -> TEXT (UUID) ===
+DO $migr_aj$
+BEGIN
+    IF (SELECT data_type FROM information_schema.columns
+        WHERE table_name='agent_journal' AND column_name='chat_id') = 'bigint' THEN
+        ALTER TABLE agent_journal ALTER COLUMN chat_id TYPE TEXT USING chat_id::TEXT;
+    END IF;
+END $migr_aj$;
+
 CREATE INDEX IF NOT EXISTS idx_agent_journal_chat_id
     ON agent_journal (chat_id);
 

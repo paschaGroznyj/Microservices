@@ -113,7 +113,7 @@ templates = Jinja2Templates(directory=BASE_DIR / "templates")
 class ChatMessage(BaseModel):
     user_id: Optional[int] = None
     message: str
-    chat_id: int
+    chat_id: str
 
 
 class UserRegister(BaseModel):
@@ -126,7 +126,7 @@ class UserLogin(BaseModel):
     password: str
 
 class BotMessage(BaseModel):
-    chat_id: int
+    chat_id: str
     message: dict
 
 class BotStatus(BaseModel):
@@ -181,7 +181,7 @@ async def websocket_user(websocket: WebSocket, username: str):
 
 connections: dict[int, list[WebSocket]] = {}
 @app.websocket("/ws/chat/{chat_id}")
-async def websocket_chat(websocket: WebSocket, chat_id: int):
+async def websocket_chat(websocket: WebSocket, chat_id: str):
     await websocket.accept()
 
     if chat_id not in connections:
@@ -196,7 +196,7 @@ async def websocket_chat(websocket: WebSocket, chat_id: int):
         connections[chat_id].remove(websocket)
 
 # Функция для отправки события в WebSocket
-async def broadcast(chat_id: int, message: dict):
+async def broadcast(chat_id: str, message: dict):
     for ws in connections.get(chat_id, []):
         logging.info(f"Подключение {ws}, сообщение {message}")
         await ws.send_json(message)
@@ -1169,7 +1169,7 @@ async def upload_files(
         raise HTTPException(status_code=502, detail=f"Agent service unreachable: {str(e)}")
 
 @app.get("/api/chats/{chat_id}/image/{message_id}/{file_name}")
-async def get_chat_db_image(chat_id: int, message_id: str, file_name: str, request: Request, image_key: str | None = None):
+async def get_chat_db_image(chat_id: str, message_id: str, file_name: str, request: Request, image_key: str | None = None):
     """Отдаёт сгенерированную картинку из БД (generated_images) для превью в чате.
 
     В отличие от /files/... (который резолвит путь и стримит файл с диска —
@@ -1212,7 +1212,7 @@ async def get_chat_db_image(chat_id: int, message_id: str, file_name: str, reque
 
 
 @app.get("/api/chats/{chat_id}/files/{message_id}/{file_name}")
-async def download_chat_file(chat_id: int, message_id: str, file_name: str, request: Request):
+async def download_chat_file(chat_id: str, message_id: str, file_name: str, request: Request):
     user = await get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -1257,7 +1257,7 @@ async def download_chat_file(chat_id: int, message_id: str, file_name: str, requ
     )
 
 @app.post("/api/chats/{chat_id}/delete")
-async def delete_chat(chat_id: int, request: Request):
+async def delete_chat(chat_id: str, request: Request):
     user = await get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -1277,7 +1277,7 @@ async def delete_chat(chat_id: int, request: Request):
 
 
 @app.post("/api/chats/{chat_id}/rename")
-async def rename_chat(chat_id: int, request: Request):
+async def rename_chat(chat_id: str, request: Request):
     user = await get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -1302,7 +1302,7 @@ async def rename_chat(chat_id: int, request: Request):
 
 
 @app.post("/api/chats/{chat_id}/favorite")
-async def favorite_chat(chat_id: int, request: Request):
+async def favorite_chat(chat_id: str, request: Request):
     user = await get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -1386,7 +1386,7 @@ async def search_chats(request: Request, q: str = "", limit: int = 30):
 
 
 @app.get("/api/chats/{chat_id}/messages")
-async def get_messages(chat_id: int, request: Request):
+async def get_messages(chat_id: str, request: Request):
     """Получение сообщений чата (для SPA)"""
     user = await get_current_user(request)
     if not user:

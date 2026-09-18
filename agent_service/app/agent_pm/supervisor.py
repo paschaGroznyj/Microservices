@@ -47,6 +47,10 @@ _MAX_MSG_CHARS = 700
 _MAX_DIGEST_CHARS = 6000
 _MAX_DIRECTIVE_CHARS = 600
 _MAX_TOOLS_CATALOG_CHARS = 2500
+# Сколько последних ПАР (human/ai) подмешивать как предыдущий контекст диалога
+_RECENT_CONTEXT_PAIRS = 3
+_MAX_CONTEXT_MSG_CHARS = 500
+_MAX_RECENT_CONTEXT_CHARS = 3000
 
 
 def _extract_json(text: str) -> dict | None:
@@ -133,6 +137,57 @@ def _build_tools_catalog(loop_state: dict) -> str:
     return catalog[:_MAX_TOOLS_CATALOG_CHARS]
 
 
+def _msg_text(m) -> str:
+    """Извлекает текстовый контент из сообщения (терпим к мультимодальности)."""
+    content = getattr(m, "content", "")
+    if isinstance(content, list):
+        parts = []
+        for it in content:
+            if isinstance(it, dict) and it.get("type") == "text":
+                parts.append(it.get("text", ""))
+        content = " ".join(parts)
+    return (str(content) or "").strip()
+
+
+def _build_recent_context(messages_snapshot: list) -> str:
+    """Собирает последние _RECENT_CONTEXT_PAIRS пар human/ai из истории.
+
+    Нужно, чтобы супервизор понимал контекст при коротких уточняющих
+    ответах юзера (напр. «да»): берём ПРЕДЫДУЩИЕ человек/агент
+    реплики, а не только текущий ввод. Служебные tool-сообщения
+    игнорируем — нужен именно диалог, а не траектория (она в дайджесте).
+    """
+    if not messages_snapshot:
+        return "(нет предыдущего контекста)"
+    # берём только human/ai-реплики с непустым текстом
+    dialog = []
+    for m in messages_snapshot:
+        mtype = getattr(m, "type", m.__class__.__name__)
+        if isinstance(m, ToolMessage) or mtype == "tool":
+            continue
+        if mtype in ("human", "HumanMessage"):
+            role = "human"
+        elif mtype in ("ai", "AIMessage"):
+            role = "ai"
+        else:
+            continue
+        # у AIMessage с tool_calls текст часто пустой — пропускаем
+        text = _msg_text(m)
+        if not text:
+            continue
+        dialog.append((role, text))
+    if not dialog:
+        return "(нет предыдущего контекста)"
+    # ПОСЛЕДНИЕ N пар = последние 2*N реплик диалога
+    tail = dialog[-(_RECENT_CONTEXT_PAIRS * 2):]
+    lines = []
+    for role, text in tail:
+        tag = "ПОЛЬЗОВАТЕЛЬ" if role == "human" else "АГЕНТ"
+        lines.append(f"[{tag}]: {text[:_MAX_CONTEXT_MSG_CHARS]}")
+    ctx = "\n".join(lines)
+    return ctx[-_MAX_RECENT_CONTEXT_CHARS:] if ctx else "(нет предыдущего контекста)"
+
+
 def _extract_user_goal(user_input) -> str:
     """Нормализует цель пользователя в строку (user_input может быть мультимодальным)."""
     if isinstance(user_input, str):
@@ -161,6 +216,7 @@ async def run_supervisor(agent, user_input, messages_snapshot: list, loop_state:
 
         digest = _build_digest(messages_snapshot, loop_state)
         tools_catalog = _build_tools_catalog(loop_state)
+        recent_context = _build_recent_context(messages_snapshot)
         iteration = loop_state.get("iteration", 0) if loop_state else 0
         hard_limit = loop_state.get("hard_limit", 100) if loop_state else 100
 
@@ -168,6 +224,7 @@ async def run_supervisor(agent, user_input, messages_snapshot: list, loop_state:
             user_input=goal[:_MAX_DIGEST_CHARS],
             iteration=iteration,
             hard_limit=hard_limit,
+            recent_context=recent_context,
             tools_catalog=tools_catalog,
             digest=digest,
         )

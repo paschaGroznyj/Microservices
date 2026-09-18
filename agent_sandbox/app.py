@@ -126,6 +126,7 @@ class ExecuteRequest(BaseModel):
     timeout: int = Field(default=DEFAULT_TIMEOUT, ge=1, le=MAX_TIMEOUT)
     stdin: str = ""
     workspace_id: str | None = None
+    persist_script: bool = Field(True, description="Сохранять ли исполнённый Python-скрипт в workspace (output/.scripts/<run_id>.py) для переиспользования. Работает только при заданном workspace_id")
 
 
 class ExecuteResponse(BaseModel):
@@ -137,6 +138,8 @@ class ExecuteResponse(BaseModel):
     duration_ms: int = 0
     error: str | None = None
     files: list[OutputFile] = Field(default_factory=list)
+    run_id: str | None = None
+    saved_script: str | None = None
 
 
 class SubmitRequest(BaseModel):
@@ -267,7 +270,7 @@ def _get_workspace_path(workspace_id: str) -> str | None:
 
 
 def _run_code_sync(code: str, timeout: int, run_dir: str, stdin: str = "", task_id: str = None,
-    ws_path: str = None) -> dict:
+    ws_path: str = None, persist_script: bool = False, run_id: str = None) -> dict:
     """
     Синхронный запуск кода в subprocess.
     Используется и в /execute, и в /submit (через run_in_executor).
@@ -304,14 +307,22 @@ def _run_code_sync(code: str, timeout: int, run_dir: str, stdin: str = "", task_
     try:
         script_path.write_text(code, encoding="utf-8")
     except OSError as e:
-        return {
-            "ok": False,
-            "error": f"Не удалось подготовить исполнение: {e}",
-        }
-    try:
-        script_path.write_text(code, encoding="utf-8")
-    except OSError as e:
         return {"ok": False, "error": f"Не удалось подготовить исполнение: {e}"}
+
+    # Сохраняем копию скрипта ВНУТРИ workspace (переживёт удаление run_dir),
+    # чтобы агент мог его подсмотреть / переиспользовать в рамках сессии.
+    saved_script_rel = None
+    if ws_path and persist_script:
+        try:
+            scripts_dir = Path(ws_path) / OUTPUT_DIR_NAME / ".scripts"
+            scripts_dir.mkdir(parents=True, exist_ok=True)
+            fname = f"{run_id or exec_task_id}.py"
+            (scripts_dir / fname).write_text(code, encoding="utf-8")
+            # удобный алиас на последний скрипт
+            (scripts_dir / "last_script.py").write_text(code, encoding="utf-8")
+            saved_script_rel = f"{OUTPUT_DIR_NAME}/.scripts/{fname}"
+        except OSError as e:
+            log.warning("[persist_script] не удалось сохранить скрипт в workspace: %s", e)
 
     start = time.monotonic()
     try:
@@ -365,6 +376,8 @@ def _run_code_sync(code: str, timeout: int, run_dir: str, stdin: str = "", task_
             "duration_ms": duration_ms,
             "files": files,
             "error": missing_module_hint,
+            "run_id": run_id or exec_task_id,
+            "saved_script": saved_script_rel,
         }
 
     except subprocess.TimeoutExpired:
@@ -598,7 +611,8 @@ async def execute(req: ExecuteRequest):
         )
     else:
         result = await asyncio.to_thread(
-            _run_code_sync, req.code, req.timeout, run_dir, req.stdin, None, ws_path
+            _run_code_sync, req.code, req.timeout, run_dir, req.stdin, None, ws_path,
+            req.persist_script, run_id,
         )
 
     # Удаляем временный run_dir (изоляция — как раньше)
@@ -616,6 +630,8 @@ async def execute(req: ExecuteRequest):
         duration_ms=result.get("duration_ms", 0),
         files=result.get("files", []),
         error=result.get("error"),
+        run_id=result.get("run_id"),
+        saved_script=result.get("saved_script"),
     )
 
 
@@ -919,7 +935,8 @@ async def _run_task_background(req: SubmitRequest):
 
     # Запуск в executor (не блокирует event loop)
     result = await asyncio.to_thread(
-        _run_code_sync, req.code, req.timeout, run_dir, req.stdin, req.task_id
+        _run_code_sync, req.code, req.timeout, run_dir, req.stdin, req.task_id,
+        ws_path, True, req.task_id,
     )
 
     _tasks[req.task_id]["completed_at"] = time.time()

@@ -63,6 +63,22 @@ class GroupChatDB:
                     joined_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (room_id, user_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS group_message_files (
+                    id BIGSERIAL PRIMARY KEY,
+                    message_id BIGINT REFERENCES group_messages(id),
+                    room_id BIGINT NOT NULL REFERENCES group_rooms(id),
+                    client_msg_id TEXT,
+                    obs_key TEXT NOT NULL,
+                    file_name TEXT,
+                    mime_type TEXT,
+                    size_bytes BIGINT,
+                    is_image BOOLEAN NOT NULL DEFAULT FALSE,
+                    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS ix_group_files_msg ON group_message_files(message_id);
+                CREATE INDEX IF NOT EXISTS ix_group_files_client ON group_message_files(client_msg_id);
+                CREATE INDEX IF NOT EXISTS ix_group_files_room ON group_message_files(room_id);
             """)
             # Предсоздание общей комнаты (единственный room_uid='global')
             await conn.execute("""
@@ -135,6 +151,9 @@ class GroupChatDB:
             """, room["id"], limit, offset)
         # возвращаем в хронологическом порядке (старые сверху)
         msgs = [self._serialize(dict(r), room_uid) for r in reversed(rows)]
+        files_map = await self.get_files_for_messages([m["id"] for m in msgs])
+        for m in msgs:
+            m["files"] = files_map.get(m["id"], [])
         return {
             "messages": msgs,
             "total_count": int(total or 0),
@@ -202,6 +221,83 @@ class GroupChatDB:
             return None
         room_uid = await self._room_uid_by_id(row["room_id"])
         return self._serialize(dict(row), room_uid)
+
+    # ── Файлы (вложения) ───────────────────────────────────────
+
+    async def add_file(self, room_uid: str, client_msg_id: str, obs_key: str,
+                       file_name: str, mime_type: str, size_bytes: int,
+                       is_image: bool):
+        """Регистрирует загруженный файл. message_id пока NULL — доклеим
+        по client_msg_id, когда консюмер вставит сообщение."""
+        room = await self.get_room_by_uid(room_uid)
+        if not room:
+            return None
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                INSERT INTO group_message_files
+                    (message_id, room_id, client_msg_id, obs_key, file_name,
+                     mime_type, size_bytes, is_image)
+                VALUES (NULL, $1, $2, $3, $4, $5, $6, $7)
+                RETURNING id, obs_key, file_name, mime_type, size_bytes, is_image
+            """, room["id"], client_msg_id, obs_key, file_name,
+                 mime_type, size_bytes, is_image)
+        return dict(row) if row else None
+
+    async def bind_files_to_message(self, message_id: int, client_msg_id: str):
+        """Привязывает orphan-файлы (message_id IS NULL) к вставленному
+        сообщению по client_msg_id. Возвращает список файлов сообщения."""
+        if not client_msg_id:
+            return []
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE group_message_files
+                SET message_id = $1
+                WHERE client_msg_id = $2 AND message_id IS NULL
+            """, message_id, client_msg_id)
+            rows = await conn.fetch("""
+                SELECT id, obs_key, file_name, mime_type, size_bytes, is_image
+                FROM group_message_files
+                WHERE message_id = $1
+                ORDER BY id ASC
+            """, message_id)
+        return [self._serialize_file(dict(r)) for r in rows]
+
+    async def get_files_for_messages(self, message_ids: list) -> dict:
+        """Возвращает {message_id: [files...]} для набора сообщений."""
+        if not message_ids:
+            return {}
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT id, message_id, obs_key, file_name, mime_type,
+                       size_bytes, is_image
+                FROM group_message_files
+                WHERE message_id = ANY($1::bigint[])
+                ORDER BY id ASC
+            """, message_ids)
+        result: dict = {}
+        for r in rows:
+            d = dict(r)
+            result.setdefault(d["message_id"], []).append(self._serialize_file(d))
+        return result
+
+    async def get_file_by_id(self, file_id: int):
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT id, obs_key, file_name, mime_type, size_bytes, is_image
+                FROM group_message_files WHERE id = $1
+            """, file_id)
+        return dict(row) if row else None
+
+    @staticmethod
+    def _serialize_file(row: dict) -> dict:
+        return {
+            "id": row["id"],
+            "obs_key": row.get("obs_key"),
+            "file_name": row.get("file_name"),
+            "mime_type": row.get("mime_type"),
+            "size_bytes": row.get("size_bytes"),
+            "is_image": row.get("is_image", False),
+        }
 
     # ── helpers ────────────────────────────────────────────────
 

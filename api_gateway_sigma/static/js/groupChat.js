@@ -243,6 +243,7 @@
       const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
       box.innerHTML = this.messages.map(m => this._msgHtml(m)).join('');
       this._bindMsgActions(box);
+      this._bindCollages(box);
       this._initCollapsibles(box);
       if (nearBottom) box.scrollTop = box.scrollHeight;
     },
@@ -262,14 +263,139 @@
         <svg class="msg-collapse-toggle__chevron" viewBox="0 0 12 12" width="12" height="12" fill="none" aria-hidden="true">
           <path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
         </svg></button>`;
+      const media = this._mediaHtml(m);
+      const textBlock = (m.message_text && m.message_text.trim())
+        ? `<div class="gc-bubble-text message-text message-text--collapsible">${this._esc(m.message_text)}</div>${collapseBtn}`
+        : '';
+      const bubbleMod = media && !textBlock ? ' gc-msg--media-only' : '';
       return `<div class="gc-row ${mine ? 'gc-row--mine' : ''}" data-id="${m.id}" data-mine="${mine ? 1 : 0}" data-pinned="${m.is_pinned ? 1 : 0}" data-can-del="${canDel ? 1 : 0}" data-can-edit="${canEdit ? 1 : 0}" data-can-pin="${canPin ? 1 : 0}">
         ${author}
-        <div class="${cls}">
-          <div class="gc-bubble-text message-text message-text--collapsible">${this._esc(m.message_text)}</div>
-          ${collapseBtn}
+        <div class="${cls}${bubbleMod}">
+          ${media}
+          ${textBlock}
           <div class="gc-meta">${pin}${edited}<span class="gc-time">${this._fmtTime(m.created_at)}</span></div>
         </div>
       </div>`;
+    },
+
+    /* url файла: локальный object-url (оптимистичный) либо через gateway */
+    _fileUrl(f, download) {
+      if (f._localUrl) return f._localUrl;
+      const dl = download ? '?download=1' : '';
+      return `/api/group/file/${f.id}${dl}`;
+    },
+
+    _fmtSize(bytes) {
+      const b = Number(bytes) || 0;
+      if (b < 1024) return b + ' Б';
+      if (b < 1024 * 1024) return (b / 1024).toFixed(0) + ' КБ';
+      return (b / 1024 / 1024).toFixed(1) + ' МБ';
+    },
+
+    /* коллаж картинок (как в ТГ) + плитки не-картинок */
+    _mediaHtml(m) {
+      const files = Array.isArray(m.files) ? m.files : [];
+      if (!files.length) return '';
+      const images = files.filter(f => f.is_image);
+      const docs = files.filter(f => !f.is_image);
+      let html = '';
+      if (images.length) {
+        const n = images.length;
+        const shown = images.slice(0, 4);
+        const layout = n === 1 ? 'one' : n === 2 ? 'two' : n === 3 ? 'three' : 'four';
+        const tiles = shown.map((f, i) => {
+          const more = (n > 4 && i === 3) ? `<span class="gc-collage__more">+${n - 4}</span>` : '';
+          return `<button class="gc-collage__cell" type="button" data-lb="1" data-img-idx="${i}">
+            <img src="${this._fileUrl(f)}" alt="${this._esc(f.file_name || '')}" loading="lazy">${more}
+          </button>`;
+        }).join('');
+        const urls = images.map(f => this._fileUrl(f)).join('|');
+        const names = images.map(f => (f.file_name || 'image')).join('|');
+        html += `<div class="gc-collage gc-collage--${layout}" data-imgs="${this._esc(urls)}" data-names="${this._esc(names)}">${tiles}</div>`;
+      }
+      if (docs.length) {
+        html += '<div class="gc-files">' + docs.map(f => `
+          <a class="gc-file" href="${this._fileUrl(f, 1)}" target="_blank" rel="noopener" title="${this._esc(f.file_name || '')}">
+            <span class="gc-file__ico">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none"><path d="M14 3v5h5M6 3h9l5 5v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+            </span>
+            <span class="gc-file__meta">
+              <span class="gc-file__name">${this._esc(f.file_name || 'файл')}</span>
+              <span class="gc-file__size">${this._fmtSize(f.size_bytes)}</span>
+            </span>
+          </a>`).join('') + '</div>';
+      }
+      return html;
+    },
+
+    /* лайтбокс со стрелками (стиль image-lightbox основного чата) */
+    _openLightbox(urls, names, startIdx) {
+      document.getElementById('image-lightbox')?.remove();
+      let idx = startIdx || 0;
+      const overlay = document.createElement('div');
+      overlay.id = 'image-lightbox';
+      overlay.className = 'image-lightbox';
+      overlay.innerHTML = `
+        <div class="image-lightbox__box">
+          <img class="image-lightbox__img" src="" alt="">
+          <div class="image-lightbox__bar">
+            <span class="image-lightbox__name"></span>
+            <span class="gc-lb__counter"></span>
+            <a class="image-lightbox__dl" href="" download title="Скачать">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </a>
+            <button class="image-lightbox__close" type="button" title="Закрыть" aria-label="Закрыть">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </button>
+          </div>
+          <button class="gc-lb__nav gc-lb__nav--prev" type="button" aria-label="Назад" ${urls.length < 2 ? 'hidden' : ''}>
+            <svg viewBox="0 0 24 24" width="26" height="26" fill="none"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button class="gc-lb__nav gc-lb__nav--next" type="button" aria-label="Вперёд" ${urls.length < 2 ? 'hidden' : ''}>
+            <svg viewBox="0 0 24 24" width="26" height="26" fill="none"><path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>`;
+      document.body.appendChild(overlay);
+      const img = overlay.querySelector('.image-lightbox__img');
+      const nameEl = overlay.querySelector('.image-lightbox__name');
+      const cntEl = overlay.querySelector('.gc-lb__counter');
+      const dlEl = overlay.querySelector('.image-lightbox__dl');
+      const show = () => {
+        img.src = urls[idx];
+        nameEl.textContent = names[idx] || '';
+        cntEl.textContent = urls.length > 1 ? `${idx + 1}/${urls.length}` : '';
+        dlEl.href = urls[idx] + (urls[idx].indexOf('/api/group/file/') === 0 ? '?download=1' : '');
+        dlEl.setAttribute('download', names[idx] || 'image');
+      };
+      const nav = (d) => { idx = (idx + d + urls.length) % urls.length; show(); };
+      overlay.querySelector('.gc-lb__nav--prev').onclick = (e) => { e.stopPropagation(); nav(-1); };
+      overlay.querySelector('.gc-lb__nav--next').onclick = (e) => { e.stopPropagation(); nav(1); };
+      const close = () => { document.removeEventListener('keydown', onKey); overlay.remove(); };
+      overlay.querySelector('.image-lightbox__close').onclick = close;
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+      const onKey = (e) => {
+        if (e.key === 'Escape') close();
+        else if (e.key === 'ArrowLeft') nav(-1);
+        else if (e.key === 'ArrowRight') nav(1);
+      };
+      document.addEventListener('keydown', onKey);
+      show();
+      requestAnimationFrame(() => overlay.classList.add('image-lightbox--shown'));
+    },
+
+    /* клики по плиткам коллажа -> лайтбокс со стрелками */
+    _bindCollages(root) {
+      const scope = root || document;
+      scope.querySelectorAll('.gc-collage').forEach((col) => {
+        const urls = (col.getAttribute('data-imgs') || '').split('|').filter(Boolean);
+        const names = (col.getAttribute('data-names') || '').split('|');
+        col.querySelectorAll('[data-lb]').forEach((cell) => {
+          cell.onclick = () => {
+            const idx = parseInt(cell.getAttribute('data-img-idx') || '0', 10) || 0;
+            this._openLightbox(urls, names, idx);
+          };
+        });
+      });
     },
 
     _initCollapsibles(root) {

@@ -8,3 +8,5 @@ dotenv
 requests
 websockets
 wsproto
+aiobotocore
+Pillow

@@ -11,17 +11,37 @@
 Фичи (delete/edit/pin) идут синхронно в БД (они редкие и требуют ответа),
 но результат тоже транслируется в комнату через ту же Kafka-шину (event-типы).
 """
+import io
 import json
 import logging
 import time
 import uuid
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import (APIRouter, File, Form, Header, HTTPException, Request,
+                     UploadFile)
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+
+from app.core import obs_file_storage
 
 logger = logging.getLogger(__name__)
 
 GROUP_TOPIC = "group-chat-messages"
+
+
+def _content_disposition(filename: str, disposition: str = "attachment") -> str:
+    """RFC 6266 Content-Disposition: latin-1 fallback + filename* (UTF-8),
+    чтобы кириллица/юникод в имени не ломали заголовок (UnicodeEncodeError)."""
+    from urllib.parse import quote
+    fallback = (filename or "file").encode("ascii", "ignore").decode("ascii") or "file"
+    quoted = quote(filename or "file", safe="")
+    return f"{disposition}; filename=\"{fallback}\"; filename*=UTF-8''{quoted}"
+
+
+# Лимит на один файл: 20 МБ (согласовано)
+MAX_GROUP_FILE_SIZE = 20 * 1024 * 1024
+MAX_GROUP_FILES = 10
+_IMAGE_MIME_PREFIX = "image/"
 
 router = APIRouter(prefix="/group", tags=["group-chat"])
 
@@ -121,6 +141,73 @@ async def group_pinned(room_uid: str):
     except Exception as e:
         logger.error(f"[group-chat] pinned error: {e}")
         raise HTTPException(status_code=500, detail="не удалось загрузить закреплённые")
+
+
+# ── Файлы (вложения группового чата) ──────────────────────────
+
+@router.post("/{room_uid}/upload")
+async def group_upload(
+    room_uid: str,
+    client_msg_id: str = Form(...),
+    files: list[UploadFile] = File(...),
+):
+    """Заливает вложения группового сообщения в OBS и регистрирует их
+    в group_message_files с message_id=NULL. Привязка к сообщению
+    произойдёт в консюмере по client_msg_id. Возвращает метаданные
+    файлов (без байтов) — фронт сразу рисует коллаж-плейсхолдер."""
+    if group_db is None:
+        raise HTTPException(status_code=503, detail="db not ready")
+    if not files:
+        raise HTTPException(status_code=400, detail="нет файлов")
+    if len(files) > MAX_GROUP_FILES:
+        raise HTTPException(status_code=400,
+                            detail=f"максимум {MAX_GROUP_FILES} файлов за раз")
+
+    run_id = uuid.uuid4().hex[:12]
+    saved: list[dict] = []
+    for up in files:
+        body = await up.read()
+        if len(body) > MAX_GROUP_FILE_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"файл {up.filename} больше 20 МБ")
+        mime = up.content_type or "application/octet-stream"
+        is_image = mime.startswith(_IMAGE_MIME_PREFIX)
+        obs_key = obs_file_storage.build_group_obs_key(
+            room_uid, run_id, up.filename or "file")
+        stored = await obs_file_storage.upload_bytes(obs_key, body, mime)
+        if not stored:
+            raise HTTPException(status_code=502,
+                                detail=f"не удалось сохранить {up.filename}")
+        rec = await group_db.add_file(
+            room_uid=room_uid, client_msg_id=client_msg_id, obs_key=obs_key,
+            file_name=up.filename or "file", mime_type=mime,
+            size_bytes=len(body), is_image=is_image)
+        if rec:
+            saved.append(rec)
+    return {"ok": True, "files": saved}
+
+
+@router.get("/file/{file_id}")
+async def group_file(file_id: int, download: int = 0):
+    """Отдаёт файл вложения из OBS (StreamingResponse). Общий эндпоинт
+    для main и sigma — оба только скачивают."""
+    if group_db is None:
+        raise HTTPException(status_code=503, detail="db not ready")
+    rec = await group_db.get_file_by_id(file_id)
+    if not rec or not rec.get("obs_key"):
+        raise HTTPException(status_code=404, detail="файл не найден")
+    data = await obs_file_storage.download_bytes(rec["obs_key"])
+    if data is None:
+        raise HTTPException(status_code=404, detail="файл недоступен в хранилище")
+    mime = rec.get("mime_type") or "application/octet-stream"
+    disposition = "attachment" if download else "inline"
+    headers = {
+        "Content-Disposition": _content_disposition(
+            rec.get("file_name") or "file", disposition),
+        "Cache-Control": "private, max-age=86400",
+    }
+    return StreamingResponse(io.BytesIO(data), media_type=mime, headers=headers)
 
 
 # ── Фичи: delete / edit / pin ─────────────────────────────────

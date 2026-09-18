@@ -15,7 +15,8 @@
                         app.include_router(group_chat_gw.router)
 """
 import logging
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Form
+from fastapi.responses import StreamingResponse
 from fastapi.websockets import WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
@@ -118,6 +119,52 @@ async def api_group_pinned(room_uid: str, request: Request):
         raise HTTPException(status_code=401, detail="Not authenticated")
     resp = await _http.get(f"{_chats_url}/group/{room_uid}/pinned")
     return resp.json()
+
+
+@router.post("/api/group/{room_uid}/upload")
+async def api_group_upload(
+    room_uid: str,
+    request: Request,
+    client_msg_id: str = Form(...),
+    files: list[UploadFile] = File(...),
+):
+    """Проксирует multipart-вложения в chats_service (заливка в OBS там).
+    Только main — sigma без загрузки через интерфейс."""
+    user = await _get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    fwd = [("files", (f.filename, await f.read(),
+                      f.content_type or "application/octet-stream"))
+           for f in files]
+    resp = await _http.post(
+        f"{_chats_url}/group/{room_uid}/upload",
+        data={"client_msg_id": client_msg_id},
+        files=fwd,
+    )
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code,
+                            detail=resp.text)
+    return resp.json()
+
+
+@router.get("/api/group/file/{file_id}")
+async def api_group_file(file_id: int, request: Request, download: int = 0):
+    """Проксирует скачивание/отдачу файла из chats_service (OBS)."""
+    user = await _get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    resp = await _http.get(
+        f"{_chats_url}/group/file/{file_id}",
+        params={"download": download},
+    )
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail="файл не найден")
+    return StreamingResponse(
+        iter([resp.content]),
+        media_type=resp.headers.get("content-type", "application/octet-stream"),
+        headers={"Content-Disposition":
+                 resp.headers.get("content-disposition", "inline")},
+    )
 
 
 class GroupMsgActionBody(BaseModel):

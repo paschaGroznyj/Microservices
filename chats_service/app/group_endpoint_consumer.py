@@ -72,6 +72,14 @@ class GroupDBConsumer:
                 logger.info(f"[group-chat] INSERT room={room_uid} "
                             f"({time.perf_counter()-start:.4f}s)")
                 if saved:
+                    # доклеиваем ранее загруженные файлы (message_id был NULL)
+                    try:
+                        files = await self.group_db.bind_files_to_message(
+                            saved["id"], saved.get("client_msg_id"))
+                    except Exception as fe:
+                        logger.error(f"[group-chat] bind files error: {fe}")
+                        files = []
+                    saved["files"] = files
                     await self._broadcast(room_uid, {
                         "event": "new_message", "message": saved,
                     }, gateway_target)

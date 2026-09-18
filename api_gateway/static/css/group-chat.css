@@ -150,3 +150,148 @@
   color: var(--text-muted);
   pointer-events: none;
 }
+
+/* ============================================================
+   ЭТАП 5: edit-режим (в поле ввода), закреп-карусель, коллапс
+============================================================ */
+
+/* Плашка "Редактирование" внутри chat-input-box (над полем ввода) */
+.gc-edit-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 10px 8px;
+  margin: 0 0 6px;
+  border-bottom: 1px solid var(--border);
+}
+.gc-edit-banner__ic {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--accent);
+}
+.gc-edit-banner__body { flex: 1 1 auto; min-width: 0; }
+.gc-edit-banner__title {
+  font-size: .72rem;
+  font-weight: 600;
+  color: var(--accent);
+  line-height: 1.2;
+}
+.gc-edit-banner__text {
+  font-size: .8rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gc-edit-banner__close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+.gc-edit-banner__close:hover {
+  background: var(--sidebar-hover, rgba(0,0,0,.06));
+  color: var(--text-primary);
+}
+
+/* ---------- Закреп: стеклянная карусель во всю ширину под main-header ---------- */
+.gc-pinned-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--surface) 62%, transparent);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  transition: background var(--transition);
+}
+.gc-pinned-bar:hover { background: color-mix(in srgb, var(--surface) 80%, transparent); }
+.gc-pinned-ic { flex: 0 0 auto; color: var(--accent); display: inline-flex; }
+.gc-pinned-counter {
+  flex: 0 0 auto;
+  font-size: .7rem;
+  font-weight: 600;
+  color: var(--accent);
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.gc-pinned-body { flex: 1 1 auto; min-width: 0; }
+.gc-pinned-title {
+  font-size: .7rem;
+  font-weight: 600;
+  color: var(--accent);
+  line-height: 1.2;
+}
+.gc-pinned-text {
+  font-size: .8rem;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: .85;
+}
+.gc-pinned-unpin {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+.gc-pinned-unpin:hover {
+  background: var(--sidebar-hover, rgba(0,0,0,.06));
+  color: var(--text-primary);
+}
+
+/* Подсветка сообщения при переходе из закрепа */
+.gc-msg--flash {
+  animation: gcFlash 1.4s ease;
+}
+@keyframes gcFlash {
+  0%   { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 55%, transparent); }
+  100% { box-shadow: 0 0 0 3px transparent; }
+}
+
+/* Коллапс длинного текста в облачке общего чата (как user-message) */
+.gc-msg .message-text--collapsible {
+  max-height: 240px;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 3rem), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 3rem), transparent 100%);
+  transition: max-height .28s cubic-bezier(.215,.61,.355,1);
+}
+.gc-msg .message-text--collapsible.is-expanded {
+  max-height: none !important;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+.gc-msg .msg-collapse-toggle {
+  align-self: flex-start;
+  margin-top: 6px;
+}
+.gc-msg--mine .msg-collapse-toggle { align-self: flex-end; }
+
+/* ---------- edit-режим (подсветка поля во время правки) ---------- */
+.gc-input-wrap { flex-shrink: 0; }
+.gc-input-area.gc-editing .chat-input-box {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}

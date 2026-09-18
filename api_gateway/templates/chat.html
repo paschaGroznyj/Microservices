@@ -31,6 +31,7 @@
     <link rel="stylesheet" href="/static/css/skills.css">
     <link rel="stylesheet" href="/static/css/claude-ui.css">
     <link rel="stylesheet" href="/static/css/presence.css">
+    <link rel="stylesheet" href="/static/css/group-chat.css">
     <link rel="stylesheet" href="/static/css/palette.css">
 
     <script src="/static/js/palette.js"></script>
@@ -98,6 +99,14 @@
                             stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
                     </svg>
                     Граф
+                </div>
+
+                <div class="nav-item" data-tab="group">
+                    <svg viewBox="0 0 16 16" fill="none">
+                        <path d="M2 11.5c0-1.4 1.1-2.3 2.6-2.3s2.6.9 2.6 2.3M4.6 7.2a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2z" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M8.8 12.5c0-1.7 1.3-2.8 3.1-2.8s3.1 1.1 3.1 2.8M11.9 7.6a1.9 1.9 0 1 0 0-3.8 1.9 1.9 0 0 0 0 3.8z" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    Общий чат
                 </div>
 
 
@@ -341,6 +350,29 @@
                 <!-- GRAPH VIEW -->
                 <div class="view hidden" id="view-graph">
                     <div id="graph-section" style="height:100%;display:flex;flex-direction:column;"></div>
+                </div>
+
+                <!-- GROUP CHAT VIEW -->
+                <div class="view hidden" id="view-group">
+                    <div class="chat-main-inner gc-inner chat-active">
+                        <!-- Закреплённые сообщения (шапка) -->
+                        <div class="gc-pinned" id="gc-pinned" hidden></div>
+                        <div class="chat-messages gc-messages" id="gc-messages"></div>
+                        <div class="message-input-container gc-input-container">
+                            <div class="chat-input-wrapper gc-input-wrapper">
+                                <div class="chat-input gc-input" id="gc-input" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Написать в общий чат..."></div>
+                                <div class="chat-input-footer gc-input-footer">
+                                    <button class="attach-btn gc-attach-btn" id="gc-attach-btn" title="Прикрепить файл" type="button">
+                                        <svg viewBox="0 0 24 24" fill="none">
+                                            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+                                        </svg>
+                                    </button>
+                                    <span class="input-footer-note">Общий чат команды</span>
+                                    <button class="chat-send-btn gc-send-btn active" id="gc-send-btn" aria-label="Отправить"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
             </div>
@@ -719,6 +751,7 @@
 <script type="module" src="/static/js/searchBlock.js"></script>
 <script type="module" src="/static/js/chatSearchModal.js"></script>
 <script src="/static/js/presence.js"></script>
+<script src="/static/js/groupChat.js"></script>
 <script src="/static/js/paletteUI.js"></script>
 <script src="/static/js/whatsnew.js"></script>
 

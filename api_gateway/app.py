@@ -27,6 +27,7 @@ from config import (
     ADMIN_USERNAMES
 )
 import presence
+import group_chat_gw
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -46,12 +47,21 @@ async def lifespan(app: FastAPI):
         follow_redirects=True
     )
 
+    # Общий чат: прокидываем зависимости в роутер
+    group_chat_gw.bind(
+        http_client=app.state.http_client,
+        chats_url=SERVICES['chats']['url'],
+        get_current_user=get_current_user,
+        admin_usernames=ADMIN_USERNAMES,
+    )
+
     yield
 
     # Shutdown
     logger.info("Shutting down API Gateway...")
     await app.state.http_client.aclose()
 app = FastAPI(title="API Gateway", lifespan=lifespan)
+app.include_router(group_chat_gw.router)
 # app = FastAPI(title="API Gateway", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
 # Service Discovery

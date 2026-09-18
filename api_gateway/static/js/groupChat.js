@@ -25,6 +25,7 @@
         this._bindInput();
         this.opened = true;
       }
+      this._initFileAttach();
       this._loadHistory();
       this._loadPinned();
       this._connectWs();
@@ -244,19 +245,64 @@
       }, 0);
     },
 
+    _hasPendingFiles() {
+      try {
+        const arr = window.FileAttach?.getFiles?.() || [];
+        return Array.isArray(arr) && arr.length > 0;
+      } catch (e) { return false; }
+    },
+
+    _initFileAttach() {
+      // Инициализируем модуль вложений для поля общего чата (main).
+      // FileAttach ищет .chat-input-box как input-box и #gc-attach-btn как кнопку.
+      // Поле общего чата теперь на эталонной разметке chat-input-box (#gc-input-box),
+      // чипы вложений рендерятся в fa-preview-bar внутри него — идентично основному чату.
+      // Передаём КОНТЕЙНЕР (.gc-input-area), внутри которого init найдёт
+      // .chat-input-box через querySelector (сам себя элемент не находит).
+      const attachBtn = document.getElementById('gc-attach-btn');
+      const wrapper = document.querySelector('.gc-input-area');
+      if (attachBtn && wrapper) {
+        try { window.FileAttach?.init(attachBtn, wrapper); } catch (e) { /* noop */ }
+      }
+    },
+
     _bindInput() {
       const input = document.getElementById('gc-input');
       const sendBtn = document.getElementById('gc-send-btn');
-      const doSend = () => {
+      const box = document.getElementById('gc-input-box');
+      const syncBtn = () => {
+        if (!sendBtn) return;
+        const hasText = !!(input && input.innerText.trim().length);
+        const hasFiles = this._hasPendingFiles();
+        const canSend = hasText || hasFiles;
+        sendBtn.disabled = !canSend;
+        sendBtn.classList.toggle('active', canSend);
+      };
+      const doSend = async () => {
         if (!input) return;
-        const text = input.innerText;
+        const text = input.innerText.trim();
+        const hasFiles = this._hasPendingFiles();
+        if (!text && !hasFiles) return;
         input.innerHTML = '';
-        this._send(text);
+        syncBtn();
+        await this._send(text || '');
+        try { window.FileAttach?.clear?.(); } catch (e) {}
+        syncBtn();
       };
       sendBtn?.addEventListener('click', doSend);
+      input?.addEventListener('input', syncBtn);
+      input?.addEventListener('keyup', syncBtn);
+      input?.addEventListener('paste', () => setTimeout(syncBtn, 0));
       input?.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); }
       });
+
+      if (box && typeof MutationObserver !== 'undefined') {
+        const obs = new MutationObserver(() => syncBtn());
+        obs.observe(box, { childList: true, subtree: true, attributes: true });
+      }
+
+      syncBtn();
     },
   };
 

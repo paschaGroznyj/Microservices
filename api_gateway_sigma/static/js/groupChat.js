@@ -245,16 +245,28 @@
     _bindInput() {
       const input = document.getElementById('gc-input');
       const sendBtn = document.getElementById('gc-send-btn');
-      const doSend = () => {
+      const syncBtn = () => {
+        if (!sendBtn) return;
+        const hasText = !!(input && input.innerText.trim().length);
+        sendBtn.disabled = !hasText;
+        sendBtn.classList.toggle('active', hasText);
+      };
+      const doSend = async () => {
         if (!input) return;
-        const text = input.innerText;
+        const text = input.innerText.trim();
+        if (!text) return;
         input.innerHTML = '';
-        this._send(text);
+        syncBtn();
+        await this._send(text);
       };
       sendBtn?.addEventListener('click', doSend);
+      input?.addEventListener('input', syncBtn);
+      input?.addEventListener('keyup', syncBtn);
+      input?.addEventListener('paste', () => setTimeout(syncBtn, 0));
       input?.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); }
       });
+      syncBtn();
     },
   };
 

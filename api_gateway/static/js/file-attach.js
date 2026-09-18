@@ -266,7 +266,8 @@ const FileAttach = (() => {
 
         // Input-box: тот в котором живёт поле ввода
         _inputBox = root.querySelector('.chat-input-box')
-                 || root.querySelector('.start-input-box');
+                 || root.querySelector('.start-input-box')
+                 || root.querySelector('.gc-input-wrapper');
 
         if (!_attachBtn || !_inputBox) return;
 

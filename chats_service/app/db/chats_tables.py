@@ -53,7 +53,7 @@ class DataBaseChats:
             CREATE TABLE IF NOT EXISTS chats (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL,
-                chat_id INTEGER NOT NULL,
+                chat_id TEXT NOT NULL,
                 message_text TEXT,
                 is_from_bot BOOLEAN,
                 tool_name TEXT,
@@ -79,7 +79,7 @@ class DataBaseChats:
 
             -- Таблица типов чатов (один чат — один тип агента)
             CREATE TABLE IF NOT EXISTS chat_types_agent (
-                chat_id INTEGER NOT NULL,
+                chat_id TEXT NOT NULL,
                 user_id INTEGER NOT NULL,
                 type_agent TEXT NOT NULL DEFAULT 'pm',
                 PRIMARY KEY (chat_id, user_id)
@@ -87,7 +87,7 @@ class DataBaseChats:
 
             -- Метаданные для рендера левого сайдбара
             CREATE TABLE IF NOT EXISTS chat_sidebar_meta (
-                chat_id BIGINT NOT NULL,
+                chat_id TEXT NOT NULL,
                 user_id BIGINT NOT NULL,
                 is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
                 is_favorite BOOLEAN NOT NULL DEFAULT FALSE,
@@ -108,6 +108,33 @@ class DataBaseChats:
             ALTER TABLE chats ALTER COLUMN user_id TYPE BIGINT USING user_id::BIGINT;
             ALTER TABLE chats ALTER COLUMN chat_id TYPE BIGINT USING chat_id::BIGINT;
 
+            -- === Миграция chat_id -> TEXT (UUID v4) ===
+            -- Числовой 6-значный chat_id давал коллизии; переходим на строковый UUID.
+            -- Старые числовые id становятся строками "719729". Идемпотентно.
+            DO $migr$
+            BEGIN
+                IF (SELECT data_type FROM information_schema.columns
+                    WHERE table_name='chats' AND column_name='chat_id') <> 'text' THEN
+                    ALTER TABLE chats ALTER COLUMN chat_id TYPE TEXT USING chat_id::TEXT;
+                END IF;
+                IF (SELECT data_type FROM information_schema.columns
+                    WHERE table_name='chat_types_agent' AND column_name='chat_id') <> 'text' THEN
+                    ALTER TABLE chat_types_agent ALTER COLUMN chat_id TYPE TEXT USING chat_id::TEXT;
+                END IF;
+                IF (SELECT data_type FROM information_schema.columns
+                    WHERE table_name='chat_sidebar_meta' AND column_name='chat_id') <> 'text' THEN
+                    ALTER TABLE chat_sidebar_meta ALTER COLUMN chat_id TYPE TEXT USING chat_id::TEXT;
+                END IF;
+                IF (SELECT data_type FROM information_schema.columns
+                    WHERE table_name='chat_files' AND column_name='chat_id') = 'bigint' THEN
+                    ALTER TABLE chat_files ALTER COLUMN chat_id TYPE TEXT USING chat_id::TEXT;
+                END IF;
+                IF (SELECT data_type FROM information_schema.columns
+                    WHERE table_name='generated_images' AND column_name='chat_id') = 'bigint' THEN
+                    ALTER TABLE generated_images ALTER COLUMN chat_id TYPE TEXT USING chat_id::TEXT;
+                END IF;
+            END $migr$;
+
             ALTER TABLE chats ADD COLUMN IF NOT EXISTS selected_tools TEXT[];
             ALTER TABLE chats ADD COLUMN IF NOT EXISTS context_size TEXT;
 
@@ -124,7 +151,7 @@ class DataBaseChats:
             CREATE TABLE IF NOT EXISTS chat_files (
                 id SERIAL PRIMARY KEY,
                 message_id TEXT NOT NULL,
-                chat_id BIGINT NOT NULL,
+                chat_id TEXT NOT NULL,
                 user_id BIGINT NOT NULL,
                 file_name TEXT NOT NULL,
                 file_ext TEXT,
@@ -146,7 +173,7 @@ class DataBaseChats:
             CREATE TABLE IF NOT EXISTS generated_images (
                 id SERIAL PRIMARY KEY,
                 image_key UUID NOT NULL UNIQUE,
-                chat_id BIGINT,
+                chat_id TEXT,
                 user_id BIGINT,
                 message_id TEXT,
                 file_name TEXT NOT NULL,
@@ -176,7 +203,7 @@ class DataBaseChats:
         self,
         user_id: int,
         message: str,
-        chat_id: int,
+        chat_id: str,
         is_from_bot: bool,
         message_id: str | None = None,
         attached_files: list[dict] | None = None,
@@ -356,7 +383,7 @@ class DataBaseChats:
                 ON CONFLICT (chat_id, user_id) DO NOTHING
             """, username)
 
-    async def mark_chat_deleted(self, chat_id: int, user_id: int):
+    async def mark_chat_deleted(self, chat_id: str, user_id: int):
         async with self.pool.acquire() as conn:
             await conn.execute("""
                 INSERT INTO chat_sidebar_meta (chat_id, user_id, is_deleted, is_favorite, renamed_title)
@@ -365,7 +392,7 @@ class DataBaseChats:
                 DO UPDATE SET is_deleted = TRUE, updated_at = CURRENT_TIMESTAMP
             """, chat_id, user_id)
 
-    async def set_chat_auto_title(self, chat_id: int, user_id: int, auto_title: str):
+    async def set_chat_auto_title(self, chat_id: str, user_id: int, auto_title: str):
         """Записывает автогенерированный заголовок чата (только если ещё не задан).
 
         Не затирает ручной renamed_title и не перезаписывает уже существующий
@@ -385,7 +412,7 @@ class DataBaseChats:
             """, chat_id, user_id, auto_title)
             return row["auto_title"] if row else None
 
-    async def rename_chat(self, chat_id: int, user_id: int, new_title: str):
+    async def rename_chat(self, chat_id: str, user_id: int, new_title: str):
         async with self.pool.acquire() as conn:
             await conn.execute("""
                 INSERT INTO chat_sidebar_meta (chat_id, user_id, is_deleted, is_favorite, renamed_title)
@@ -394,7 +421,7 @@ class DataBaseChats:
                 DO UPDATE SET renamed_title = $3, updated_at = CURRENT_TIMESTAMP
             """, chat_id, user_id, new_title)
 
-    async def set_chat_favorite(self, chat_id: int, user_id: int, is_favorite: bool):
+    async def set_chat_favorite(self, chat_id: str, user_id: int, is_favorite: bool):
         async with self.pool.acquire() as conn:
             await conn.execute("""
                 INSERT INTO chat_sidebar_meta (chat_id, user_id, is_deleted, is_favorite, renamed_title)
@@ -448,7 +475,7 @@ class DataBaseChats:
             logging.error(f"Ошибка при получении списка чатов пользователя {username}: {e}")
             raise
 
-    async def get_chat_messages(self, chat_id: int, username: str, limit: int = 50, offset: int = 0):
+    async def get_chat_messages(self, chat_id: str, username: str, limit: int = 50, offset: int = 0):
         """
         Возвращает страницу сообщений в чате для пользователя (и сообщения бота),
         вместе со списком прикреплённых файлов на каждое сообщение.
@@ -586,7 +613,7 @@ class DataBaseChats:
             WHERE id = $1
         """, message_id)
 
-    async def set_chat_type(self, chat_id: int, user_id: int, type_agent: str):
+    async def set_chat_type(self, chat_id: str, user_id: int, type_agent: str):
         """Привязывает тип агента к чату."""
         async with self.pool.acquire() as conn:
             await conn.execute("""
@@ -595,7 +622,7 @@ class DataBaseChats:
                 ON CONFLICT (chat_id, user_id) DO UPDATE SET type_agent = $3
             """, chat_id, user_id, type_agent)
 
-    async def get_chat_type(self, chat_id: int, user_id: int) -> str | None:
+    async def get_chat_type(self, chat_id: str, user_id: int) -> str | None:
         """Возвращает тип агента для чата или None."""
         async with self.pool.acquire() as conn:
             return await conn.fetchval("""

@@ -132,7 +132,7 @@ templates = Jinja2Templates(directory=BASE_DIR / "templates")
 class ChatMessage(BaseModel):
     user_id: Optional[int] = None
     message: str
-    chat_id: int
+    chat_id: str
 
 
 class UserRegister(BaseModel):
@@ -145,7 +145,7 @@ class UserLogin(BaseModel):
     password: str
 
 class BotMessage(BaseModel):
-    chat_id: int
+    chat_id: str
     message: dict
 
 class BotStatus(BaseModel):
@@ -1120,7 +1120,7 @@ async def stop_message(request: Request):
 # ─────────────────────────────────────────────────────────────────────────
 
 @app.get("/api/chats/{chat_id}/status")
-async def poll_chat_status(chat_id: int, request: Request):
+async def poll_chat_status(chat_id: str, request: Request):
     """Опрос статуса ответа бота для чата (замена WS-push).
 
     Фронт вызывает этот эндпоинт по таймеру после отправки сообщения.
@@ -1206,7 +1206,7 @@ def _sse_pack(event: str, data: dict) -> str:
 
 
 @app.get("/api/chats/{chat_id}/stream")
-async def stream_chat_status(chat_id: int, request: Request):
+async def stream_chat_status(chat_id: str, request: Request):
     """SSE-замена polling'а GET /api/chats/{id}/status.
 
     Держит одно соединение и пушит событие ровно в момент готовности ответа
@@ -1380,7 +1380,7 @@ async def stream_user_events(request: Request):
 
 
 @app.get("/api/chats/{chat_id}/image/{message_id}/{file_name}")
-async def get_chat_db_image(chat_id: int, message_id: str, file_name: str, request: Request, image_key: str | None = None):
+async def get_chat_db_image(chat_id: str, message_id: str, file_name: str, request: Request, image_key: str | None = None):
     """Отдаёт сгенерированную картинку из БД (generated_images) для превью в чате.
 
     В отличие от /files/... (который резолвит путь и стримит файл с диска —
@@ -1423,7 +1423,7 @@ async def get_chat_db_image(chat_id: int, message_id: str, file_name: str, reque
 
 
 @app.get("/api/chats/{chat_id}/files/{message_id}/{file_name}")
-async def download_chat_file(chat_id: int, message_id: str, file_name: str, request: Request):
+async def download_chat_file(chat_id: str, message_id: str, file_name: str, request: Request):
     user = await get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -1468,7 +1468,7 @@ async def download_chat_file(chat_id: int, message_id: str, file_name: str, requ
     )
 
 @app.post("/api/chats/{chat_id}/delete")
-async def delete_chat(chat_id: int, request: Request):
+async def delete_chat(chat_id: str, request: Request):
     user = await get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -1488,7 +1488,7 @@ async def delete_chat(chat_id: int, request: Request):
 
 
 @app.post("/api/chats/{chat_id}/rename")
-async def rename_chat(chat_id: int, request: Request):
+async def rename_chat(chat_id: str, request: Request):
     user = await get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -1513,7 +1513,7 @@ async def rename_chat(chat_id: int, request: Request):
 
 
 @app.post("/api/chats/{chat_id}/favorite")
-async def favorite_chat(chat_id: int, request: Request):
+async def favorite_chat(chat_id: str, request: Request):
     user = await get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -1597,7 +1597,7 @@ async def search_chats(request: Request, q: str = "", limit: int = 30):
 
 
 @app.get("/api/chats/{chat_id}/messages")
-async def get_messages(chat_id: int, request: Request):
+async def get_messages(chat_id: str, request: Request):
     """Получение сообщений чата (для SPA)"""
     user = await get_current_user(request)
     if not user:

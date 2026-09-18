@@ -113,7 +113,7 @@ def _check_workspace_status(workspace_id: str) -> Optional[dict]:
 
 async def _send_chat_message(
     producer: AIOKafkaProducer,
-    chat_id: int,
+    chat_id: str,
     message: str,
     action: str = "task_notification",
 ):

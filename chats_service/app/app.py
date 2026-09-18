@@ -96,7 +96,7 @@ class ChatMessage(BaseModel):
     username: str
     tb_name: str
     message: str
-    chat_id: int
+    chat_id: str
     type_agent: str
     request_id: str
     selected_tools: list
@@ -155,7 +155,7 @@ async def send_message(chat: ChatMessage):
 
 
 @app.get("/chat/{chat_id}/messages")
-async def get_chat_messages(chat_id: int, limit: int = 50, offset: int = 0,  x_user_name: str = Header(..., alias="X-User-Name")):
+async def get_chat_messages(chat_id: str, limit: int = 50, offset: int = 0,  x_user_name: str = Header(..., alias="X-User-Name")):
     try:
         # Страховка от неадекватных значений с фронта
         limit = max(1, min(limit, 200))
@@ -208,18 +208,18 @@ async def search_messages(q: str = "", limit: int = 30, x_user_name: str = Heade
 
 
 class ChatSidebarAction(BaseModel):
-    chat_id: int
+    chat_id: str
     user_id: int
 
 
 class ChatRenameAction(BaseModel):
-    chat_id: int
+    chat_id: str
     user_id: int
     new_title: str
 
 
 class ChatFavoriteAction(BaseModel):
-    chat_id: int
+    chat_id: str
     user_id: int
     is_favorite: bool
 
@@ -316,7 +316,7 @@ async def find_chat_by_type(type_agent: str, x_user_id: str = Header(..., alias=
 
 
 @app.get("/internal/resolve_file")
-async def resolve_file(chat_id: int, message_id: str, file_name: str):
+async def resolve_file(chat_id: str, message_id: str, file_name: str):
     """Только для gateway. Отдаёт путь на диске agent_service для скачивания."""
     row = await db.pool.fetchrow("""
         SELECT file_path, source

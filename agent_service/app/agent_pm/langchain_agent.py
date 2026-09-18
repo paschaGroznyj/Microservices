@@ -889,7 +889,7 @@ class KnowledgeAgent:
     # Память per-user с загрузкой из БД через AgentDB
     # ------------------------------------------------------------------
 
-    async def _load_history_from_db(self, chat_id: int, limit: int) -> List[BaseMessage]:
+    async def _load_history_from_db(self, chat_id: str, limit: int) -> List[BaseMessage]:
         if not self.db:
             logger.warning("БД не подключена, история не загружена")
             return []
@@ -961,7 +961,7 @@ class KnowledgeAgent:
     # Память per-user
     # ------------------------------------------------------------------
 
-    async def _get_memory(self, chat_id: int, limit: int = 10) -> ConversationBufferWindowMemory:
+    async def _get_memory(self, chat_id: str, limit: int = 10) -> ConversationBufferWindowMemory:
         """Получить память для пользователя (с автозагрузкой из БД)"""
         key = f"{chat_id}"
         
@@ -985,7 +985,7 @@ class KnowledgeAgent:
             logger.info(f"✅ Память инициализирована для {key} ({len(messages)} сообщений)")
         return self._memories[key]
 
-    async def _build_history(self, chat_id: int, limit: int = 40) -> List[BaseMessage]:
+    async def _build_history(self, chat_id: str, limit: int = 40) -> List[BaseMessage]:
         """
         Всегда подгружает свежий срез из БД (не растущий in-memory буфер).
         limit — верхняя граница, реальную обрезку по токенам делает trim_messages выше по стеку.

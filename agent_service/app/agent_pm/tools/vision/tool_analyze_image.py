@@ -57,6 +57,65 @@ def _sniff_media_type(data: bytes, fallback: str = "image/jpeg") -> str:
     return fallback
 
 
+# Порог, после которого картинка программно сжимается перед отправкой в
+# vision-модель. Крупные картинки (скрины 4K, фото с телефона) раздувают
+# base64 data_uri и заставляют модель долго жевать запрос — вплоть до таймаута.
+_COMPRESS_THRESHOLD = 5 * 1024 * 1024  # 5 МБ
+# Целевые параметры даунскейла. 2048px по большей стороне сохраняет читаемость
+# текста на скринах UI, quality=85 даёт хороший баланс размер/качество.
+_COMPRESS_MAX_SIDE = 2048
+_COMPRESS_JPEG_QUALITY = 85
+
+
+def _maybe_compress(raw: bytes, mime: str) -> tuple[bytes, str]:
+    """Сжимает картинку, если её размер превышает _COMPRESS_THRESHOLD.
+
+    Возвращает (bytes, mime). Если сжатие не требуется, Pillow недоступен
+    или картинка не декодируется — возвращает исходные данные без изменений
+    (fail-open: лучше отправить как есть, чем упасть).
+
+    Логика: даунскейл до _COMPRESS_MAX_SIDE по большей стороне (thumbnail,
+    aspect ratio сохраняется), затем пересохранение в JPEG quality=85.
+    Прозрачность (PNG/GIF/WEBP с альфой) кладётся на белый фон, т.к. JPEG
+    альфу не поддерживает. GIF-анимация схлопывается до первого кадра —
+    для vision-анализа этого достаточно.
+    """
+    if len(raw) <= _COMPRESS_THRESHOLD:
+        return raw, mime
+    try:
+        import io
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(raw))
+        # Приводим к RGB на белом фоне (снимаем альфу/палитру).
+        if img.mode in ("RGBA", "LA", "P"):
+            img = img.convert("RGBA")
+            bg = Image.new("RGB", img.size, (255, 255, 255))
+            bg.paste(img, mask=img.split()[-1])
+            img = bg
+        else:
+            img = img.convert("RGB")
+
+        img.thumbnail((_COMPRESS_MAX_SIDE, _COMPRESS_MAX_SIDE), Image.LANCZOS)
+
+        out = io.BytesIO()
+        img.save(out, format="JPEG", quality=_COMPRESS_JPEG_QUALITY, optimize=True)
+        compressed = out.getvalue()
+        # Подстраховка: если после пересжатия почему-то стало не меньше —
+        # берём исходник (маловероятно, но не хотим ухудшать).
+        if len(compressed) >= len(raw):
+            log.info("analyze_image: compress skipped (no gain: %d -> %d bytes)",
+                     len(raw), len(compressed))
+            return raw, mime
+        log.info("analyze_image: compressed %d -> %d bytes (%s -> image/jpeg)",
+                 len(raw), len(compressed), mime)
+        return compressed, "image/jpeg"
+    except Exception as e:
+        log.warning("analyze_image: compress failed, sending original (%d bytes): %s",
+                    len(raw), e)
+        return raw, mime
+
+
 def _is_within_allowed_roots(real_path: str) -> bool:
     """True, если real_path лежит внутри одного из whitelist-корней."""
     for root in ALLOWED_IMAGE_ROOTS:
@@ -121,6 +180,7 @@ def _local_image_as_data_uri(path_or_name: str) -> tuple[str | None, str | None]
         # файл может быть PNG под именем *.jpg — тогда guess_type солгал бы и запрос упал бы 400.
         fallback = mimetypes.guess_type(real)[0] or "image/jpeg"
         mime = _sniff_media_type(raw, fallback=fallback)
+        raw, mime = _maybe_compress(raw, mime)
         b64 = base64.b64encode(raw).decode("ascii")
         return f"data:{mime};base64,{b64}", None
     except Exception as e:
@@ -149,6 +209,7 @@ async def _db_image_as_data_uri(agent, image_key: str) -> tuple[str | None, str 
         raw = bytes(row["image_data"])
         # media type — по реальной сигнатуре байтов; mime_type из БД — лишь fallback.
         mime = _sniff_media_type(raw, fallback=(row["mime_type"] or "image/jpeg"))
+        raw, mime = _maybe_compress(raw, mime)
         b64 = base64.b64encode(raw).decode("ascii")
         return f"data:{mime};base64,{b64}", None
     except Exception as e:
@@ -308,7 +369,21 @@ def make_analyze_image_tool(agent, images: list[dict] | None = None,
             return f"Картинка #{image_index} пустая (нет base64-данных)."
 
         mime = img.get("mime_type") or "image/png"
-        data_uri = b64 if b64.startswith("data:") else f"data:{mime};base64,{b64}"
+        # Сжимаем приложенную юзером картинку, если она крупная. b64 может
+        # прийти с префиксом data: — тогда отделяем полезную часть, декодируем,
+        # прогоняем через _maybe_compress и собираем data_uri заново.
+        try:
+            b64_payload = b64.split(",", 1)[1] if b64.startswith("data:") else b64
+            raw = base64.b64decode(b64_payload)
+            if len(raw) > _COMPRESS_THRESHOLD:
+                raw, mime = _maybe_compress(raw, mime)
+                b64 = base64.b64encode(raw).decode("ascii")
+                data_uri = f"data:{mime};base64,{b64}"
+            else:
+                data_uri = b64 if b64.startswith("data:") else f"data:{mime};base64,{b64}"
+        except Exception as e:
+            log.warning("analyze_image: user-image compress skipped: %s", e)
+            data_uri = b64 if b64.startswith("data:") else f"data:{mime};base64,{b64}"
         fname = img.get("filename", f"image_{image_index}")
         return await _run_vision(data_uri, f"user#{image_index}:{fname}")
 

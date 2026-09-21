@@ -314,24 +314,38 @@ class ChatApp {
             if (!this._chatStatuses) this._chatStatuses = {};
             // Главный статус PMыча
             const mainStatusEl = document.getElementById('agent-status-indicator');
+            // Признак что уходящий чат ещё в работе — чтобы при возврате
+            // мгновенно (без ожидания сети) поднять стоп-кнопку/плейсхолдер.
+            const runningMeta = {
+                running: this._runState === 'running',
+                activeRequestId: this._activeRequestId || null,
+            };
             if (mainStatusEl) {
                 this._chatStatuses[this.currentChat] = {
                     main: mainStatusEl.querySelector('.status-text')?.textContent || '',
-                    subagents: this.subagentStates ? { ...this.subagentStates } : {}
+                    subagents: this.subagentStates ? { ...this.subagentStates } : {},
+                    ...runningMeta
                 };
-            } else {
-                // Сохраняем только субагентов если они есть
-                if (this.subagentStates && Object.keys(this.subagentStates).length) {
-                    this._chatStatuses[this.currentChat] = {
-                        main: '',
-                        subagents: { ...this.subagentStates }
-                    };
-                }
+            } else if ((this.subagentStates && Object.keys(this.subagentStates).length) || runningMeta.running) {
+                // Сохраняем субагентов и/или факт активной работы
+                this._chatStatuses[this.currentChat] = {
+                    main: '',
+                    subagents: this.subagentStates ? { ...this.subagentStates } : {},
+                    ...runningMeta
+                };
             }
         }
 
         this.currentChat = chatId;
         this.subagentStates = {};
+
+        // Сбрасываем run-UI прошлого чата, чтобы стоп-кнопка/плейсхолдер не
+        // «протекли» в новый чат. Ниже _restoreRunningUI поднимет их заново,
+        // если новый чат действительно в работе (по Redis-флагу).
+        this._runState = 'idle';
+        this._activeRequestId = null;
+        this._botAnswered = false;
+        this._setSendButtonMode('send');
 
         const msgContainer = this.getMessagesContainer();
         if (msgContainer) {
@@ -369,6 +383,7 @@ class ChatApp {
             // Ответ уже есть — статус неуместен, удаляем сохранённое
             if (this._chatStatuses) delete this._chatStatuses[chatId];
             this._clearAllStatuses();
+            this._onRunFinished();
             return;
         }
 
@@ -380,6 +395,66 @@ class ChatApp {
                 this.subagentStates = savedState.subagents;
                 this._restoreSubagentStatuses(savedState.subagents);
             }
+        }
+
+        // Восстанавливаем UI «агент в работе» (стоп-кнопка, плейсхолдер).
+        // Источник истины — Redis-флаг на гейтвее: переживает и переключение
+        // чата, и F5. savedState даёт мгновенное восстановление без сети,
+        // run_status подтверждает/синхронизирует по серверу.
+        await this._restoreRunningUI(chatId, savedState);
+    }
+
+    /**
+     * Восстанавливает индикацию активной генерации по чату:
+     *  - стоп-кнопку (_setSendButtonMode('stop')) и _runState='running'
+     *  - _activeRequestId (чтобы Stop работал даже после F5)
+     *  - плейсхолдер-волну, если ответ ещё не начал приходить
+     * savedState (из _chatStatuses) — быстрый оптимистичный путь при
+     * переключении вкладок; run_status — авторитетная проверка по серверу.
+     */
+    async _restoreRunningUI(chatId, savedState = null) {
+        let running = false;
+        let requestId = savedState?.activeRequestId || null;
+
+        // Оптимистично поднимаем UI сразу, если локально знали что чат в работе
+        if (savedState?.running) {
+            running = true;
+        }
+
+        // Авторитетная проверка по серверу (переживает F5)
+        try {
+            const r = await fetch(`/api/chats/${chatId}/run_status`, {
+                credentials: 'include'
+            });
+            if (r.ok) {
+                const j = await r.json();
+                if (j?.running) {
+                    running = true;
+                    requestId = j.request_id || requestId;
+                } else {
+                    // Сервер говорит: работа завершена → снимаем UI
+                    running = false;
+                }
+            }
+        } catch (_) { /* сеть недоступна — доверяем savedState */ }
+
+        // Чат мог смениться, пока ждали ответ — не трогаем чужой UI
+        if (String(this.currentChat) !== String(chatId)) return;
+
+        if (!running) {
+            this._onRunFinished();
+            return;
+        }
+
+        this._runState = 'running';
+        this._activeRequestId = requestId;
+        this._setSendButtonMode('stop');
+
+        // Плейсхолдер-волна, только если ответ ещё не пошёл в ленту
+        const container = this.getMessagesContainer();
+        const alreadyStreaming = container?.querySelector('.live-block, .reasoning-live, #agent-response-placeholder');
+        if (container && !alreadyStreaming && !this._botAnswered) {
+            this._createBotPlaceholder(container);
         }
     }
 

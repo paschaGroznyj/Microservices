@@ -320,17 +320,19 @@ class ChatApp {
                 running: this._runState === 'running',
                 activeRequestId: this._activeRequestId || null,
             };
-            if (mainStatusEl) {
+            // ПУТЬ A: сохраняем ЖИВОЙ стриминг (reasoning + начатый ответ),
+            // чтобы при возврате в этот чат размышления не обрезались.
+            // Открепляем DOM-узел ответа бота и весь стрим-стейт, а RAF-цикл
+            // гасим (он тикает по _liveBlockEl, откреплённый узел рендерить не
+            // нужно — при возврате перезапустим). Новые чанки из WS продолжат
+            // дописываться в тот же узел после re-attach.
+            const streamSnapshot = this._snapshotStream();
+            if (mainStatusEl || (this.subagentStates && Object.keys(this.subagentStates).length)
+                || runningMeta.running || streamSnapshot) {
                 this._chatStatuses[this.currentChat] = {
-                    main: mainStatusEl.querySelector('.status-text')?.textContent || '',
+                    main: mainStatusEl?.querySelector('.status-text')?.textContent || '',
                     subagents: this.subagentStates ? { ...this.subagentStates } : {},
-                    ...runningMeta
-                };
-            } else if ((this.subagentStates && Object.keys(this.subagentStates).length) || runningMeta.running) {
-                // Сохраняем субагентов и/или факт активной работы
-                this._chatStatuses[this.currentChat] = {
-                    main: '',
-                    subagents: this.subagentStates ? { ...this.subagentStates } : {},
+                    stream: streamSnapshot,
                     ...runningMeta
                 };
             }
@@ -391,6 +393,12 @@ class ChatApp {
             if (savedState.subagents && Object.keys(savedState.subagents).length) {
                 this.subagentStates = savedState.subagents;
                 this._restoreSubagentStatuses(savedState.subagents);
+            }
+            // ПУТЬ A: возвращаем откреплённый ранее живой стриминг обратно в
+            // ленту (reasoning-свёртки + начатый ответ), продолжаем стрим.
+            if (savedState.stream) {
+                this._restoreStream(savedState.stream);
+                savedState.stream = null;  // узел снова в DOM, снапшот больше не нужен
             }
         }
 
@@ -453,6 +461,107 @@ class ChatApp {
         if (container && !alreadyStreaming && !this._botAnswered) {
             this._createBotPlaceholder(container);
         }
+    }
+
+    /* ══════════════════════════════════════════
+       ПУТЬ A: сохранение/восстановление живого стриминга
+       при переключении между чатами (только фронт).
+       Открепляем DOM-узел ответа бота (с reasoning-свёртками и начатым
+       живым блоком) + весь стрим-стейт, кладём в _chatStatuses. При
+       возврате re-attach и продолжаем стрим — размышления не обрезаются.
+    ══════════════════════════════════════════ */
+
+    /**
+     * Снимок текущего живого стриминга. Открепляет _pendingBotEl из DOM
+     * (detach — узел остаётся в памяти со всеми детьми) и гасит RAF-цикл.
+     * Возвращает объект-снапшот или null, если стриминга нет.
+     */
+    _snapshotStream() {
+        if (!this._pendingBotEl) return null;
+
+        // Гасим RAF-цикл: он тикает по _liveBlockEl, а мы сейчас обнулим ссылки.
+        // Новые чанки, пришедшие пока чат закрыт, продолжат копиться в
+        // _streamBuffer снапшота, отрисуются после re-attach.
+        if (this._streamRaf) {
+            cancelAnimationFrame(this._streamRaf);
+            this._streamRaf = null;
+        }
+
+        const el = this._pendingBotEl;
+        // Detach из DOM (сам innerHTML='' в openChat его бы уничтожил визуально,
+        // но узел мы уже держим по ссылке — remove() просто открепляет).
+        if (el.parentNode) el.parentNode.removeChild(el);
+
+        const snap = {
+            el,
+            liveBlockEl:      this._liveBlockEl || null,
+            reasoningWrapEl:  this._reasoningWrapEl || null,
+            streamBuffer:     this._streamBuffer || '',
+            streamShown:      this._streamShown || '',
+            streamFinalData:  this._streamFinalData || null,
+            streamDone:       !!this._streamDone,
+            streamIsFinal:    !!this._streamIsFinal,
+            streamingActive:  !!this._streamingActive,
+            pendingBotText:   this._pendingBotText || '',
+            botAnswered:      !!this._botAnswered,
+        };
+
+        // Чистим текущие ссылки, чтобы snapshot жил независимо и не был затронут
+        // сбросом run-UI нового чата.
+        this._pendingBotEl    = null;
+        this._liveBlockEl     = null;
+        this._reasoningWrapEl = null;
+        this._streamBuffer    = '';
+        this._streamShown     = '';
+        this._streamFinalData = null;
+        this._streamDone      = false;
+        this._streamIsFinal   = false;
+        this._streamingActive = false;
+        this._pendingBotText  = '';
+
+        return snap;
+    }
+
+    /**
+     * Возвращает откреплённый живой стриминг обратно в ленту текущего чата
+     * и восстанавливает стрим-стейт. Если сервер за время отсутствия успел
+     * дослать финал (done) — RAF-цикл сам финализирует после дренажа буфера.
+     */
+    _restoreStream(snap) {
+        if (!snap || !snap.el) return;
+        const container = this.getMessagesContainer();
+        if (!container) return;
+
+        // Убираем плейсхолдер-волну, если _restoreRunningUI успел её создать —
+        // у нас есть реальный узел ответа.
+        this._removeBotPlaceholder();
+
+        // Re-attach узла в конец ленты (после уже отрисованных loadMessages).
+        container.appendChild(snap.el);
+
+        // Восстанавливаем ссылки/буферы
+        this._pendingBotEl    = snap.el;
+        this._liveBlockEl     = snap.liveBlockEl;
+        this._reasoningWrapEl = snap.reasoningWrapEl;
+        this._streamBuffer    = snap.streamBuffer || '';
+        this._streamShown     = snap.streamShown || '';
+        this._streamFinalData = snap.streamFinalData || null;
+        this._streamDone      = !!snap.streamDone;
+        this._streamIsFinal   = !!snap.streamIsFinal;
+        this._streamingActive = !!snap.streamingActive;
+        this._pendingBotText  = snap.pendingBotText || '';
+        this._botAnswered     = !!snap.botAnswered;
+
+        // Перерисуем то, что уже накоплено, и (пере)запустим цикл, если
+        // остались данные для допечатки или сервер уже прислал финал.
+        if (this._liveBlockEl) {
+            this._renderStreamPartial();
+        }
+        if ((this._streamBuffer && this._streamBuffer.length) || this._streamDone) {
+            this._startStreamLoop();
+        }
+
+        container.scrollTop = container.scrollHeight;
     }
 
     async createNewChat() {

@@ -7,6 +7,8 @@ from app.db.chats_tables import DataBaseChats
 from fastapi import Depends, HTTPException, Request, status
 from jose import JWTError, jwt
 from app.core.config import SECRET_KEY, ALGORITHM, KAFKA_BROKER
+from app.db.group_chat_db import GroupChatDB
+from app import group_chat as group_chat_module
 import time
 
 WATCHDOG_INTERVAL = 10      # как часто проверяем
@@ -24,6 +26,10 @@ producer = KafkaProducer(
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 app = FastAPI(title="Chats Service")
+
+# Общий/групповой чат: отдельный слой БД + роутер (не раздуваем этот app.py)
+group_db = GroupChatDB(None)  # pool проставится на startup
+app.include_router(group_chat_module.router)
 
 # async def bot_response_watchdog():
 #     logging.info("🤖 Bot watchdog started")
@@ -113,6 +119,12 @@ async def startup():
     global service_message_alive
     service_message_alive = True
     await db.init_db_pool()
+
+    # Групповой чат: переиспользуем тот же пул asyncpg, инициализируем схему
+    # (таблицы group_rooms/group_messages/group_room_members + общая комната).
+    group_db.pool = db.pool
+    await group_db.init_schema()
+    group_chat_module.bind(group_db, producer)
 
     # # 🚀 старт watchdog-а
     # asyncio.create_task(bot_response_watchdog())

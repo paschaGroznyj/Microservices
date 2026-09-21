@@ -128,12 +128,18 @@ class ChatApp {
             if (tab === 'skills') titleEl.textContent = 'Магазин скиллов';
             else if (tab === 'agent') titleEl.textContent = 'Agent Process Mining';
             else if (tab === 'graph') titleEl.textContent = 'Граф';
+            else if (tab === 'group') titleEl.textContent = 'Общий чат';
             else titleEl.textContent = 'CatchPM';
         }
 
         // Таб-специфичная логика
         if (tab === 'agent') {
             this.renderMessageInput();
+            // renderMessageInput может выйти на гарде (инпут уже отрисован
+            // для текущего чата) и НЕ переинициализировать FileAttach.
+            // После общего чата синглтон FileAttach держит контекст группы,
+            // поэтому принудительно возвращаем его на инпут агента.
+            this._rebindFileAttachToAgent();
         }
         if (tab === 'graph') {
             console.log('INIT GRAPH')
@@ -141,6 +147,10 @@ class ChatApp {
         }
         if (tab === 'skills') {
             window.SkillsPanel?.open(this);
+        }
+        if (tab === 'group') {
+            chatMain?.classList.remove('start-screen-mode');
+            window.GroupChat?.open(this);
         }
     }
 
@@ -2479,6 +2489,19 @@ class ChatApp {
     /* ══════════════════════════════════════════
        RENDER INPUT
     ══════════════════════════════════════════ */
+    // Принудительно перепривязать FileAttach к инпуту агента.
+    // Нужно при возврате с общего чата: renderMessageInput мог выйти
+    // на гарде и не вызвать FileAttach.init(), из-за чего скрепка/drop/paste
+    // остаются в контексте общего чата (файл уходил не в тот раздел).
+    _rebindFileAttachToAgent() {
+        const container = this.getInputContainer();
+        if (!container) return;
+        const attachBtn = container.querySelector('#attach-btn')
+                       || container.querySelector('#start-attach-btn');
+        if (!attachBtn) return; // стартовый экран без инпута — нечего привязывать
+        try { window.FileAttach?.init(attachBtn, container); } catch (e) { /* noop */ }
+    }
+
     async renderMessageInput() {
         const container = this.getInputContainer();
         if (!container) return;

@@ -383,6 +383,12 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME}
       KAFKA_BROKER: ${KAFKA_BROKER}
+      OBS_BUCKET: ${OBS_BUCKET}
+      OBS_OPEN_BUCKET: ${OBS_OPEN_BUCKET}
+      OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
+      OBS_SECRET_KEY: ${OBS_SECRET_KEY}
+      OBS_REGION: ${OBS_REGION}
+      OBS_ENDPOINT: ${OBS_ENDPOINT}
     volumes:
       - ./chats_service:/app
     depends_on:
@@ -396,6 +402,30 @@ services:
     container_name: chats-consumer
     build: ./chats_service
     command: python -m app.endpoint_consumer
+    environment:
+      PORT_CHATS_SERVICE: ${PORT_CHATS_SERVICE}
+      PORT_GATEWAY_SIGMA_PORT: ${PORT_GATEWAY_SIGMA_PORT:-7010}
+      SECRET_KEY: ${SECRET_KEY}
+      ALGORITHM: ${ALGORITHM}
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      KAFKA_BROKER: ${KAFKA_BROKER}
+    volumes:
+      - ./chats_service:/app
+    depends_on:
+      - postgres
+      - broker
+    restart: unless-stopped
+    networks:
+      - catchPM
+
+  group-chat-consumer:
+    container_name: group-chat-consumer
+    build: ./chats_service
+    command: python -m app.group_endpoint_consumer
     environment:
       PORT_CHATS_SERVICE: ${PORT_CHATS_SERVICE}
       PORT_GATEWAY_SIGMA_PORT: ${PORT_GATEWAY_SIGMA_PORT:-7010}

@@ -52,6 +52,16 @@ class SigmaStatusStore:
         # из lifespan через bind_loop().
         self._loop: asyncio.AbstractEventLoop | None = None
 
+        # ── ОБЩИЙ ЧАТ (group-chat, SSE-broadcast) ────────────────────
+        # Монотонный счётчик событий комнаты + кольцевой буфер.
+        # Консьмер кладёт событие через push_group_event(); каждый SSE-
+        # стрим держит свой cursor и забирает события с него.
+        # room_uid -> list[(seq:int, event:dict)]
+        self._group_events: dict[str, list] = {}
+        self._group_seq: int = 0
+        # room_uid -> asyncio.Event (взводится при новом событии)
+        self._group_ready: dict[str, asyncio.Event] = {}
+
     # ── Привязка event loop и SSE-события ────────────────────────────────
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
@@ -189,6 +199,56 @@ class SigmaStatusStore:
             self._known_users.add(username)
             q = self._user_events.pop(username, [])
         return [item["event"] for item in q]
+
+    # ── ОБЩИЙ ЧАТ (group-chat) ────────────────────────────────
+    _MAX_GROUP_EVENTS = 300
+
+    def _get_group_event(self, room_uid: str) -> asyncio.Event:
+        with self._lock:
+            ev = self._group_ready.get(room_uid)
+            if ev is None:
+                ev = asyncio.Event()
+                self._group_ready[room_uid] = ev
+            return ev
+
+    def group_cursor(self, room_uid: str) -> int:
+        """Текущий seq комнаты — новый SSE-клиент начинает с него,
+        чтобы не получать старые события (история тянется через REST)."""
+        with self._lock:
+            return self._group_seq
+
+    def push_group_event(self, room_uid: str, event: dict) -> None:
+        """Консьмер кладёт событие общего чата (new/edit/delete/pin).
+        Взводит Event комнаты — все SSE-стримы этой комнаты проснутся."""
+        with self._lock:
+            self._group_seq += 1
+            seq = self._group_seq
+            q = self._group_events.setdefault(room_uid, [])
+            q.append((seq, event))
+            if len(q) > self._MAX_GROUP_EVENTS:
+                del q[: len(q) - self._MAX_GROUP_EVENTS]
+        self._signal(self._get_group_event(room_uid))
+
+    def pop_group_events(self, room_uid: str, after_seq: int):
+        """Вернуть события комнаты с seq > after_seq и новый курсор."""
+        with self._lock:
+            q = self._group_events.get(room_uid, [])
+            fresh = [(seq, ev) for (seq, ev) in q if seq > after_seq]
+        if not fresh:
+            return [], after_seq
+        new_cursor = fresh[-1][0]
+        return [ev for (_seq, ev) in fresh], new_cursor
+
+    async def wait_group_ready(self, room_uid: str, timeout: float) -> bool:
+        """Спит до появления нового события в комнате либо таймаута."""
+        ev = self._get_group_event(room_uid)
+        try:
+            await asyncio.wait_for(ev.wait(), timeout=timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
+        finally:
+            ev.clear()
 
     # ── Уборка ───────────────────────────────────────────────────────────
 

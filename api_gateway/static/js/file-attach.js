@@ -206,34 +206,88 @@ const FileAttach = (() => {
         });
     }
 
+    /* ─── именованные хендлеры (для снятия слушателей) ───────── */
+    // Храним ссылки на привязанные обработчики и контейнер/кнопку,
+    // чтобы при повторном init() (смена контекста: агент <-> общий чат)
+    // снять старые слушатели и не плодить утечку на прошлых боксах.
+    let _boundBox      = null;   // элемент, на который сейчас навешаны dnd/paste
+    let _boundBtn      = null;   // кнопка, на которую навешан click
+    let _hDragEnter    = null;
+    let _hDragOver     = null;
+    let _hDragLeave    = null;
+    let _hDropClear    = null;
+    let _hDrop         = null;
+    let _hPaste        = null;
+    let _hBtnClick     = null;
+
     /* ─── drag & drop на inputBox ────────────────────────────── */
     function _bindDragDrop(box) {
-        ['dragenter', 'dragover'].forEach(ev => {
-            box.addEventListener(ev, e => {
-                e.preventDefault();
-                box.classList.add('fa-dragover');
-            }, false);
-        });
-        ['dragleave', 'drop'].forEach(ev => {
-            box.addEventListener(ev, () => box.classList.remove('fa-dragover'), false);
-        });
-        box.addEventListener('drop', e => {
+        _hDragEnter = e => { e.preventDefault(); box.classList.add('fa-dragover'); };
+        _hDragOver  = e => { e.preventDefault(); box.classList.add('fa-dragover'); };
+        _hDragLeave = () => box.classList.remove('fa-dragover');
+        _hDropClear = () => box.classList.remove('fa-dragover');
+        _hDrop      = e => {
             e.preventDefault();
             const dt = e.dataTransfer;
             if (dt?.files?.length) _addFiles(Array.from(dt.files));
-        }, false);
+        };
+        box.addEventListener('dragenter', _hDragEnter, false);
+        box.addEventListener('dragover',  _hDragOver,  false);
+        box.addEventListener('dragleave', _hDragLeave, false);
+        box.addEventListener('drop',      _hDropClear, false);
+        box.addEventListener('drop',      _hDrop,      false);
     }
 
     /* ─── paste из буфера ────────────────────────────────────── */
     function _bindPaste(box) {
-        box.addEventListener('paste', e => {
+        _hPaste = e => {
             const items = e.clipboardData?.items;
             if (!items) return;
             const fileItems = Array.from(items).filter(i => i.kind === 'file');
             if (!fileItems.length) return;
-            const pastedFiles = fileItems.map(i => i.getAsFile()).filter(Boolean);
+            // Скриншоты из буфера почти всегда приходят с одинаковым именем
+            // (image.png) и близким размером -> дедуп по name+size отбрасывал
+            // повторы, и в стек попадал только последний. Переименовываем
+            // вставленные файлы, чтобы каждый Ctrl+V добавлял НОВУЮ картинку.
+            const pastedFiles = fileItems.map(i => {
+                const f = i.getAsFile();
+                if (!f) return null;
+                const ext = (f.type && f.type.split('/')[1]) || 'png';
+                const stamp = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+                const base = (f.name && f.name !== 'image.png') ? f.name.replace(/\.[^.]+$/, '') : 'pasted';
+                try {
+                    return new File([f], `${base}-${stamp}.${ext}`, { type: f.type });
+                } catch (err) {
+                    // старые браузеры без конструктора File — отдаём как есть
+                    return f;
+                }
+            }).filter(Boolean);
             if (pastedFiles.length) _addFiles(pastedFiles);
-        });
+        };
+        box.addEventListener('paste', _hPaste);
+    }
+
+    /* ─── снять ВСЕ ранее навешанные слушатели ───────────────── */
+    // Вызывается в начале init() перед перепривязкой к новому контексту.
+    // Лечит баг: файл, брошенный/вставленный в чат агента, оседал
+    // в контексте общего чата (или наоборот), т.к. синглтон FileAttach
+    // держал слушатели на прошлом _inputBox, а гард renderMessageInput
+    // не переинициализировал модуль при возврате.
+    function _unbindPrevious() {
+        if (_boundBox) {
+            if (_hDragEnter) _boundBox.removeEventListener('dragenter', _hDragEnter, false);
+            if (_hDragOver)  _boundBox.removeEventListener('dragover',  _hDragOver,  false);
+            if (_hDragLeave) _boundBox.removeEventListener('dragleave', _hDragLeave, false);
+            if (_hDropClear) _boundBox.removeEventListener('drop',      _hDropClear, false);
+            if (_hDrop)      _boundBox.removeEventListener('drop',      _hDrop,      false);
+            if (_hPaste)     _boundBox.removeEventListener('paste',     _hPaste);
+            _boundBox.classList.remove('fa-dragover');
+        }
+        if (_boundBtn && _hBtnClick) {
+            _boundBtn.removeEventListener('click', _hBtnClick);
+        }
+        _boundBox = _boundBtn = null;
+        _hDragEnter = _hDragOver = _hDragLeave = _hDropClear = _hDrop = _hPaste = _hBtnClick = null;
     }
 
     /* ─── вспомогательные ────────────────────────────────────── */
@@ -259,6 +313,11 @@ const FileAttach = (() => {
     function init(attachBtn, inputContainer) {
         const root = inputContainer || document;
 
+        // Снимаем слушатели с ПРЕДЫДУЩЕГО контекста, иначе синглтон
+        // накапливает dnd/paste на всех боксах, куда когда-либо инитили,
+        // и файл оседает не в том чате (агент <-> общий чат).
+        _unbindPrevious();
+
         // Кнопка: явная | #attach-btn | #start-attach-btn
         _attachBtn = attachBtn
             || root.querySelector('#attach-btn')
@@ -266,7 +325,8 @@ const FileAttach = (() => {
 
         // Input-box: тот в котором живёт поле ввода
         _inputBox = root.querySelector('.chat-input-box')
-                 || root.querySelector('.start-input-box');
+                 || root.querySelector('.start-input-box')
+                 || root.querySelector('.gc-input-wrapper');
 
         if (!_attachBtn || !_inputBox) return;
 
@@ -279,14 +339,17 @@ const FileAttach = (() => {
         // НЕ трогаем _files — файлы живут до отправки
         _previewBar = null;
 
-        // Кнопка открывает проводник
-        _attachBtn.addEventListener('click', () => {
-            _hiddenInput.click();
-        });
+        // Кнопка открывает проводник (именованный хендлер — снимается в _unbindPrevious)
+        _hBtnClick = () => { _hiddenInput.click(); };
+        _attachBtn.addEventListener('click', _hBtnClick);
 
         // Drag & drop + paste
         _bindDragDrop(_inputBox);
         _bindPaste(_inputBox);
+
+        // Запоминаем текущий контекст для последующего снятия
+        _boundBox = _inputBox;
+        _boundBtn = _attachBtn;
 
         // Если файлы уже есть — показать превью сразу
         if (_files.length > 0) {

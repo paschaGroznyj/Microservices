@@ -169,6 +169,7 @@ class ChatApp {
             if (tab === 'skills') titleEl.textContent = 'Магазин скиллов';
             else if (tab === 'agent') titleEl.textContent = 'Agent Process Mining';
             else if (tab === 'graph') titleEl.textContent = 'Граф';
+            else if (tab === 'group') titleEl.textContent = 'Общий чат';
             else titleEl.textContent = 'CatchPM';
         }
 
@@ -182,6 +183,11 @@ class ChatApp {
         }
         if (tab === 'skills') {
             window.SkillsPanel?.open(this);
+        }
+        if (tab === 'group') {
+            chatMain?.classList.remove('start-screen-mode');
+            inputContainer?.classList.remove('start-screen-host');
+            window.GroupChat?.open(this);
         }
     }
 

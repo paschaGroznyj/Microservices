@@ -245,7 +245,23 @@ const FileAttach = (() => {
             if (!items) return;
             const fileItems = Array.from(items).filter(i => i.kind === 'file');
             if (!fileItems.length) return;
-            const pastedFiles = fileItems.map(i => i.getAsFile()).filter(Boolean);
+            // Скриншоты из буфера почти всегда приходят с одинаковым именем
+            // (image.png) и близким размером -> дедуп по name+size отбрасывал
+            // повторы, и в стек попадал только последний. Переименовываем
+            // вставленные файлы, чтобы каждый Ctrl+V добавлял НОВУЮ картинку.
+            const pastedFiles = fileItems.map(i => {
+                const f = i.getAsFile();
+                if (!f) return null;
+                const ext = (f.type && f.type.split('/')[1]) || 'png';
+                const stamp = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+                const base = (f.name && f.name !== 'image.png') ? f.name.replace(/\.[^.]+$/, '') : 'pasted';
+                try {
+                    return new File([f], `${base}-${stamp}.${ext}`, { type: f.type });
+                } catch (err) {
+                    // старые браузеры без конструктора File — отдаём как есть
+                    return f;
+                }
+            }).filter(Boolean);
             if (pastedFiles.length) _addFiles(pastedFiles);
         };
         box.addEventListener('paste', _hPaste);

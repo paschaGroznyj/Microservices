@@ -60,6 +60,12 @@
   gap: 14px !important;
   padding: 82px 0 20px !important;
 }
+/* когда висит плашка закрепа (island) — резервируем место сверху,
+   чтобы верхнее сообщение не уезжало под неё (plashka top:64px + ~высота) */
+.gc-messages.gc-has-pinned {
+  padding-top: 150px !important;
+  scroll-padding-top: 150px;
+}
 
 /* Строка сообщения: ограничена по центру как user-message-wrapper */
 .gc-row {
@@ -460,6 +466,19 @@
 
 /* ---------- лайтбокс: счётчик + стрелки навигации ---------- */
 /* базовые .image-lightbox* берём из chat.css; здесь только доп. элементы */
+/* отступы под стрелки, чтобы они не липли к краю экрана */
+.gc-lightbox .image-lightbox__box {
+  max-width: calc(100vw - 160px);
+  max-height: 88vh;
+}
+.gc-lightbox .image-lightbox__img {
+  max-width: 100%;
+  max-height: 82vh;
+  transform-origin: center center;
+  transition: transform 0.08s ease-out;
+  cursor: zoom-in;
+  will-change: transform;
+}
 .gc-lb__counter {
   flex: 0 0 auto;
   font-size: 0.78em;

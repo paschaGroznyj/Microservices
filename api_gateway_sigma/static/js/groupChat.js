@@ -94,9 +94,7 @@
         this._upsertMessage(data.message);
         this._loadPinned();
       } else if (ev === 'delete_message') {
-        this.messages = this.messages.filter(m => m.id !== data.message_id);
-        this._renderAll();
-        this._loadPinned();
+        this._deleteMessage(data.message_id);
       } else if (ev === 'pin_message' && data.message) {
         this._upsertMessage(data.message);
         this._loadPinned();
@@ -112,6 +110,13 @@
       if (byClient >= 0) { this.messages[byClient] = msg; }
       else { this.messages.push(msg); }
       this._renderAll();
+    },
+
+    // Удаление сообщения (отыгрывается у всех на приём события delete_message).
+    _deleteMessage(messageId) {
+      this.messages = this.messages.filter(m => m.id !== messageId);
+      this._renderAll();
+      this._loadPinned();
     },
 
     async _send(text) {
@@ -255,7 +260,7 @@
       const edited = m.edited_at ? '<span class="gc-edited">изменено</span>' : '';
       const pin = m.is_pinned ? '<span class="gc-pin-flag" title="Закреплено">★</span>' : '';
       const author = mine ? '' : `<div class="gc-author">${this._esc(m.username || 'Аноним')}</div>`;
-      const canDel = mine;
+      const canDel = mine || canAdmin;
       const canEdit = mine && !m._optimistic;
       const canPin = canAdmin;
       const collapseBtn = `<button class="msg-collapse-toggle" type="button" aria-expanded="false" hidden>
@@ -334,7 +339,7 @@
       let idx = startIdx || 0;
       const overlay = document.createElement('div');
       overlay.id = 'image-lightbox';
-      overlay.className = 'image-lightbox';
+      overlay.className = 'image-lightbox gc-lightbox';
       overlay.innerHTML = `
         <div class="image-lightbox__box">
           <div class="image-lightbox__bar">
@@ -367,19 +372,69 @@
         dlEl.href = urls[idx] + (urls[idx].indexOf('/api/group/file/') === 0 ? '?download=1' : '');
         dlEl.setAttribute('download', names[idx] || 'image');
       };
-      const nav = (d) => { idx = (idx + d + urls.length) % urls.length; show(); };
-      overlay.querySelector('.gc-lb__nav--prev').onclick = (e) => { e.stopPropagation(); nav(-1); };
-      overlay.querySelector('.gc-lb__nav--next').onclick = (e) => { e.stopPropagation(); nav(1); };
-      const close = () => { document.removeEventListener('keydown', onKey); overlay.remove(); };
+      const prevBtn = overlay.querySelector('.gc-lb__nav--prev');
+      const nextBtn = overlay.querySelector('.gc-lb__nav--next');
+
+      // ── зум колесом + панорамирование + двойной клик ──
+      let scale = 1, panX = 0, panY = 0, dragging = false, lastX = 0, lastY = 0;
+      const MIN = 1, MAX = 4;
+      const applyTransform = () => {
+        img.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+        img.style.cursor = scale > 1 ? 'grab' : 'zoom-in';
+        const showNav = scale <= 1 && urls.length > 1;
+        if (prevBtn) prevBtn.style.display = showNav ? '' : 'none';
+        if (nextBtn) nextBtn.style.display = showNav ? '' : 'none';
+      };
+      const resetZoom = () => { scale = 1; panX = 0; panY = 0; applyTransform(); };
+
+      const nav = (d) => { idx = (idx + d + urls.length) % urls.length; resetZoom(); show(); };
+      prevBtn.onclick = (e) => { e.stopPropagation(); nav(-1); };
+      nextBtn.onclick = (e) => { e.stopPropagation(); nav(1); };
+
+      img.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const delta = -e.deltaY;
+        const step = delta > 0 ? 1.15 : 1 / 1.15;
+        scale = Math.min(MAX, Math.max(MIN, scale * step));
+        if (scale === 1) { panX = 0; panY = 0; }
+        applyTransform();
+      }, { passive: false });
+
+      img.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        if (scale > 1) resetZoom();
+        else { scale = 2; applyTransform(); }
+      });
+
+      img.addEventListener('mousedown', (e) => {
+        if (scale <= 1) return;
+        e.preventDefault(); dragging = true; lastX = e.clientX; lastY = e.clientY;
+        img.style.cursor = 'grabbing';
+      });
+      window.addEventListener('mousemove', (e) => {
+        if (!dragging) return;
+        panX += e.clientX - lastX; panY += e.clientY - lastY;
+        lastX = e.clientX; lastY = e.clientY;
+        applyTransform();
+      });
+      window.addEventListener('mouseup', () => {
+        if (dragging) { dragging = false; img.style.cursor = scale > 1 ? 'grab' : 'zoom-in'; }
+      });
+
+      const close = () => {
+        document.removeEventListener('keydown', onKey);
+        overlay.remove();
+      };
       overlay.querySelector('.image-lightbox__close').onclick = close;
       overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
       const onKey = (e) => {
         if (e.key === 'Escape') close();
-        else if (e.key === 'ArrowLeft') nav(-1);
-        else if (e.key === 'ArrowRight') nav(1);
+        else if (e.key === 'ArrowLeft' && scale <= 1) nav(-1);
+        else if (e.key === 'ArrowRight' && scale <= 1) nav(1);
       };
       document.addEventListener('keydown', onKey);
       show();
+      applyTransform();
       requestAnimationFrame(() => overlay.classList.add('image-lightbox--shown'));
     },
 
@@ -434,7 +489,12 @@
     _renderPinned() {
       const bar = document.getElementById('gc-pinned');
       if (!bar) return;
-      if (!this.pinned.length) { bar.hidden = true; bar.innerHTML = ''; return; }
+      const gcBox = document.getElementById('gc-messages');
+      if (!this.pinned.length) {
+        bar.hidden = true; bar.innerHTML = '';
+        if (gcBox) gcBox.classList.remove('gc-has-pinned');
+        return;
+      }
       if (this.pinnedCursor >= this.pinned.length) this.pinnedCursor = 0;
       const m = this.pinned[this.pinnedCursor];
       const canAdmin = this.isAdmin;
@@ -447,6 +507,7 @@
              <svg viewBox="0 0 24 24" fill="none" width="16" height="16"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
            </button>` : '';
       bar.hidden = false;
+      if (gcBox) gcBox.classList.add('gc-has-pinned');
       bar.innerHTML = `
         <div class="gc-pinned-bar" data-mid="${m.id}">
           <span class="gc-pinned-ic">
@@ -586,7 +647,15 @@
       sendBtn?.addEventListener('click', doSend);
       input?.addEventListener('input', syncBtn);
       input?.addEventListener('keyup', syncBtn);
-      input?.addEventListener('paste', () => setTimeout(syncBtn, 0));
+      // sigma не загружает файлы, но не пускаем HTML/картинки в contenteditable
+      input?.addEventListener('paste', (e) => {
+        const cd = e.clipboardData || window.clipboardData;
+        if (!cd) { setTimeout(syncBtn, 0); return; }
+        const text = cd.getData('text/plain') || cd.getData('text') || '';
+        e.preventDefault();
+        if (text) document.execCommand('insertText', false, text);
+        setTimeout(syncBtn, 0);
+      });
       input?.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); }
         else if (e.key === 'Escape' && this.editingId != null) { e.preventDefault(); this._cancelEdit(); }

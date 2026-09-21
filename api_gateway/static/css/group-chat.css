@@ -15,9 +15,10 @@
 /* Закреплённые в шапке */
 .gc-pinned {
   flex: 0 0 auto;
+  align-self: center;      /* центрирование в flex-колонке .gc-inner (margin:0 auto тут не работает) */
   max-width: 720px;
   width: 100%;
-  margin: 0 auto;
+  margin-top: 74px;        /* сдвиг из-под абсолютной main-header (как padding-top ленты) */
   padding: 8px 24px;
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--surface2) 55%, transparent);

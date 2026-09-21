@@ -383,6 +383,12 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME}
       KAFKA_BROKER: ${KAFKA_BROKER}
+      OBS_BUCKET: ${OBS_BUCKET}
+      OBS_OPEN_BUCKET: ${OBS_OPEN_BUCKET}
+      OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
+      OBS_SECRET_KEY: ${OBS_SECRET_KEY}
+      OBS_REGION: ${OBS_REGION}
+      OBS_ENDPOINT: ${OBS_ENDPOINT}
     volumes:
       - ./chats_service:/app
     depends_on:

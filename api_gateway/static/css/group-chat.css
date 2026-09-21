@@ -14,19 +14,32 @@
 
 /* Закреплённые в шапке */
 .gc-pinned {
-  flex: 0 0 auto;
-  align-self: center;      /* центрирование в flex-колонке .gc-inner (margin:0 auto тут не работает) */
-  max-width: 720px;
-  width: 100%;
-  margin-top: 74px;        /* сдвиг из-под абсолютной main-header (как padding-top ленты) */
-  padding: 8px 24px;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--surface2) 55%, transparent);
+  /* Dynamic Island: плавающая стеклянная капсула по центру под main-header;
+     лента видна в промежутке между шапкой и плашкой */
+  position: absolute;
+  top: 64px;               /* main-header 54px + 10px воздуха */
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9;
+  width: calc(100% - 32px);
+  max-width: 720px;        /* ширина как у chat-input-box */
+  padding: 8px 16px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  -webkit-backdrop-filter: blur(12px) saturate(120%);
+  backdrop-filter: blur(12px) saturate(120%);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
   display: flex;
   flex-direction: column;
   gap: 4px;
   max-height: 120px;
   overflow-y: auto;
+}
+[data-theme="dark"] .gc-pinned {
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: color-mix(in srgb, var(--surface) 62%, transparent);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.38);
 }
 .gc-pinned[hidden] { display: none; }
 .gc-pinned-item {

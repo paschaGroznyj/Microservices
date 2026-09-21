@@ -365,7 +365,6 @@
       overlay.className = 'image-lightbox';
       overlay.innerHTML = `
         <div class="image-lightbox__box">
-          <img class="image-lightbox__img" src="" alt="">
           <div class="image-lightbox__bar">
             <span class="image-lightbox__name"></span>
             <span class="gc-lb__counter"></span>
@@ -376,6 +375,7 @@
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
             </button>
           </div>
+          <img class="image-lightbox__img" src="" alt="">
           <button class="gc-lb__nav gc-lb__nav--prev" type="button" aria-label="Назад" ${urls.length < 2 ? 'hidden' : ''}>
             <svg viewBox="0 0 24 24" width="26" height="26" fill="none"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </button>

@@ -206,7 +206,10 @@ class GroupChatDB:
         if not row:
             return None
         room_uid = await self._room_uid_by_id(row["room_id"])
-        return self._serialize(dict(row), room_uid)
+        msg = self._serialize(dict(row), room_uid)
+        files_map = await self.get_files_for_messages([msg["id"]])
+        msg["files"] = files_map.get(msg["id"], [])
+        return msg
 
     async def set_pin(self, message_id: int, is_pinned: bool):
         """Закреп/откреп сообщения. Возвращает обновлённую строку."""
@@ -220,7 +223,10 @@ class GroupChatDB:
         if not row:
             return None
         room_uid = await self._room_uid_by_id(row["room_id"])
-        return self._serialize(dict(row), room_uid)
+        msg = self._serialize(dict(row), room_uid)
+        files_map = await self.get_files_for_messages([msg["id"]])
+        msg["files"] = files_map.get(msg["id"], [])
+        return msg
 
     # ── Файлы (вложения) ───────────────────────────────────────
 

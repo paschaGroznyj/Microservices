@@ -374,18 +374,15 @@ class ChatApp {
 
         this.connectWebSocket(chatId);
 
-        // Если в чате уже есть финальное сообщение от бота — статус не нужен,
-        // чистим сохранённое состояние и выходим
-        const hasBotMessage = this.getMessagesContainer()
-            ?.querySelector('.agent-message');
-
-        if (hasBotMessage) {
-            // Ответ уже есть — статус неуместен, удаляем сохранённое
-            if (this._chatStatuses) delete this._chatStatuses[chatId];
-            this._clearAllStatuses();
-            this._onRunFinished();
-            return;
-        }
+        // ВАЖНО: раньше здесь был ранний return по наличию любого
+        // .agent-message в ленте («ответ уже есть → агент свободен»).
+        // Это ломало восстановление в многоходовых чатах: старые ответы
+        // бота присутствуют всегда, поэтому ранний выход срабатывал даже
+        // когда агент реально в работе над НОВЫМ сообщением, и
+        // _restoreRunningUI (а с ним и запрос /run_status) не вызывался.
+        // Теперь источник истины — Redis-флаг: всегда доходим до
+        // _restoreRunningUI, он авторитетно спросит сервер и сам вызовет
+        // _onRunFinished(), если работа завершена.
 
         // Восстанавливаем сохранённый статус если есть (чат ещё в процессе)
         const savedState = this._chatStatuses?.[chatId];

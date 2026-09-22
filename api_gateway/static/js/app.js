@@ -179,13 +179,10 @@ class ChatApp {
         collapseBtn?.addEventListener('click', () => apply(true));
         expandBtn?.addEventListener('click', () => apply(false));
 
-        // Гамбургер в топбаре универсален: на десктопе он тоглит collapse,
-        // на мобилке (<=768) открытие оверлея рулит mobile.js — его не трогаем.
-        const topbarToggle = document.getElementById('mobile-menu-toggle');
-        topbarToggle?.addEventListener('click', () => {
-            if (window.innerWidth <= 768) return; // мобилка — отработает mobile.js
-            apply(!layout.classList.contains('sidebar-collapsed'));
-        });
+        // Гамбургер (#mobile-menu-toggle) обрабатывается ЕДИНЫМ слушателем в
+        // mobile.js (initMobileMenu): на десктопе он снимает collapse, на
+        // мобилке открывает оверлей. Здесь второй обработчик убран, иначе на
+        // клик срабатывали ОБА и гасили друг друга (сайдбар не разворачивался).
     }
 
     switchTab(tab) {

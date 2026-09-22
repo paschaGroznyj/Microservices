@@ -14,13 +14,27 @@ function initMobileMenu() {
         document.body.style.overflow = open ? 'hidden' : ''; // Блокируем скролл фона
     };
 
-    // Клик по гамбургеру
-   if (toggleBtn) {
+    // Клик по гамбургеру — ЕДИНЫЙ обработчик (B: убрано двойное управление).
+    // На мобилке (<=768) бургер открывает/закрывает сайдбар оверлеем.
+    // На десктопе (>768) бургер виден только когда сайдбар свёрнут (CSS
+    // .sidebar-collapsed) и играет роль кнопки "развернуть" — снимает collapse.
+    if (toggleBtn) {
         toggleBtn.addEventListener("click", (e) => {
-            // На десктопе (>768) гамбургер рулит collapse (app.js initSidebarCollapse),
-            // а не оверлеем — мобильную логику пропускаем.
-            if (window.innerWidth > 768) return;
             e.stopPropagation();
+            if (window.innerWidth > 768) {
+                // Десктоп: разворачиваем свёрнутый сайдбар.
+                const layout = document.querySelector('.chat-layout');
+                const expandBtn = document.getElementById('sidebar-expand-btn');
+                const collapseBtn = document.getElementById('sidebar-collapse-btn');
+                if (layout) {
+                    layout.classList.remove('sidebar-collapsed');
+                    if (expandBtn) expandBtn.hidden = true;
+                    if (collapseBtn) collapseBtn.setAttribute('aria-expanded', 'true');
+                    try { localStorage.setItem('catchpm:sidebar-collapsed', '0'); } catch (err) {}
+                }
+                return;
+            }
+            // Мобилка: оверлей.
             toggleSidebar(!sidebar.classList.contains('open'));
         });
     }

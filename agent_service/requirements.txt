@@ -25,5 +25,6 @@ websockets
 sqlparse
 python-docx
 python-multipart
+Pillow==10.3.0
 
 redis

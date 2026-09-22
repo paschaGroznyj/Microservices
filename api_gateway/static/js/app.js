@@ -398,6 +398,12 @@ class ChatApp {
        OPEN / CREATE CHAT
     ══════════════════════════════════════════ */
     async openChat(chatId) {
+        // Сохраняем черновик поля ввода уходящего чата (в т.ч. стартовый
+        // экран, если currentChat == null) перед сносом DOM.
+        if (String(this.currentChat) !== String(chatId)) {
+            this._saveInputDraft(this.currentChat);
+        }
+
         // Сохраняем статус уходящего чата перед сносом DOM
         if (this.currentChat && this.currentChat !== chatId) {
             if (!this._chatStatuses) this._chatStatuses = {};
@@ -474,6 +480,9 @@ class ChatApp {
             this.loadMessages(chatId),
             this.renderMessageInput()
         ]);
+
+        // Восстанавливаем черновик поля ввода этого чата (если был сохранён).
+        this._restoreInputDraft(chatId);
 
         this.connectWebSocket(chatId);
 
@@ -622,6 +631,10 @@ class ChatApp {
     }
 
     startNewChat() {
+        // Сохраняем черновик поля ввода уходящего чата, чтобы недописанный
+        // текст не потерялся при переходе на стартовый экран.
+        this._saveInputDraft(this.currentChat);
+
         // ВАРИАНТ 2: сокет активного чата закрываем ТОЛЬКО если он не стримит.
         // Если чат ещё генерит ответ — оставляем его сокет открытым, пусть
         // достримит в фоне (this._streams[chatId] живёт, узел откреплён при
@@ -631,14 +644,41 @@ class ChatApp {
             const st = this._getStream(cur);
             const sock = this._sockets[cur];
             const streaming = !!(st && (st.streamingActive || st.pendingBotEl));
+            // ВАРИАНТ 2: если чат ещё стримит — открепляем его узел ответа из
+            // ленты (сейчас она очистится), но сокет/стрим НЕ трогаем — пусть
+            // достримит в фоне. При возврате _reattachBackgroundStream вернёт.
+            if (st && st.pendingBotEl && st.pendingBotEl.parentNode) {
+                st.pendingBotEl.parentNode.removeChild(st.pendingBotEl);
+            }
             if (sock && !streaming) {
                 sock._intentionalClose = true;
                 sock.close();
                 delete this._sockets[cur];
             }
+            // Запоминаем, что этот чат ещё в работе — чтобы при возврате
+            // мгновенно поднять стоп-кнопку (как в openChat).
+            if (streaming || this._runState === 'running') {
+                if (!this._chatStatuses) this._chatStatuses = {};
+                const mainStatusEl = document.getElementById('agent-status-indicator');
+                this._chatStatuses[cur] = {
+                    main: mainStatusEl?.querySelector('.status-text')?.textContent || '',
+                    subagents: this.subagentStates ? { ...this.subagentStates } : {},
+                    stream: null,
+                    running: this._runState === 'running',
+                    activeRequestId: this._activeRequestId || null,
+                };
+            }
         }
 
         this.currentChat = null;
+
+        // Сбрасываем run-UI, чтобы стоп-кнопка/индикатор стримящего чата не
+        // «протекли» на стартовый экран. Остановить фоновый стрим можно
+        // только вернувшись в его чат.
+        this._runState = 'idle';
+        this._activeRequestId = null;
+        this._botAnswered = false;
+        this._setSendButtonMode('send');
 
         const msgContainer = this.getMessagesContainer();
         if (msgContainer) {
@@ -655,6 +695,8 @@ class ChatApp {
         }
 
         this.renderMessageInput();
+        // Восстанавливаем черновик стартового экрана (если был сохранён ранее).
+        this._restoreInputDraft(null);
     }
 
     /* ══════════════════════════════════════════
@@ -1617,6 +1659,8 @@ class ChatApp {
             // Убираем из локального списка и перерисовываем только сайдбар
             this.chats = this.chats.filter(c => c.id !== chatId);
             this.renderChats(this.chats);
+            // Чат удалён — выбрасываем его черновик ввода.
+            this._clearInputDraft(chatId);
             // Сбрасываем интерфейс ТОЛЬКО если удалили именно открытый чат
             if (this.currentChat === chatId) {
                 this.currentChat = null;
@@ -1699,6 +1743,9 @@ class ChatApp {
         } catch (_) {}
 
         this.clearInput(field);
+        // Черновик отправлен — чистим и стартовый ключ, и ключ этого чата.
+        this._clearInputDraft(null);
+        this._clearInputDraft(this.currentChat);
         sendBtn?.classList.remove('active');
         this._botAnswered = false;
         this._hardResetStreamState(this.currentChat);
@@ -3191,6 +3238,40 @@ class ChatApp {
         };
         walk(field);
         return out;
+    }
+
+    /* ── Черновики поля ввода per-chat ──────────────────────────────
+       При переключении между чатами (и на стартовый экран) недописанный
+       текст поля #message-input сохраняется и восстанавливается по ключу
+       чата. Ключ '__start__' — стартовый экран (currentChat == null).
+       Храним ПЛОСКИЙ текст (с раскрытыми чипами), как в разделах. */
+    _inputDraftKey(chatId) {
+        return (chatId == null || chatId === '') ? '__start__' : String(chatId);
+    }
+
+    _saveInputDraft(chatId) {
+        if (!this._inputDrafts) this._inputDrafts = {};
+        const text = this.getInputText();
+        const key = this._inputDraftKey(chatId);
+        if (text) this._inputDrafts[key] = text;
+        else delete this._inputDrafts[key];
+    }
+
+    _restoreInputDraft(chatId) {
+        if (!this._inputDrafts) return;
+        const key = this._inputDraftKey(chatId);
+        const text = this._inputDrafts[key];
+        if (!text) return;
+        const field = this.getInputContainer()?.querySelector('#message-input');
+        if (!field) return;
+        this.setInputText(field, text);
+        // Синхронизируем кнопку отправки/подсказки под восстановленный текст.
+        try { field.dispatchEvent(new Event('input')); } catch (_) {}
+    }
+
+    _clearInputDraft(chatId) {
+        if (!this._inputDrafts) return;
+        delete this._inputDrafts[this._inputDraftKey(chatId)];
     }
 
     setInputText(field, text) {

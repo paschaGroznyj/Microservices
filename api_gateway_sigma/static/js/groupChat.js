@@ -444,7 +444,9 @@
       requestAnimationFrame(() => overlay.classList.add('image-lightbox--shown'));
     },
 
-    /* клики по плиткам коллажа -> лайтбокс со стрелками */
+    /* клики по плиткам коллажа -> лайтбокс со стрелками
+       + анимация загрузки: ставим is-loaded на ячейку, когда img готов
+       (шиммер гаснет, картинка проявляется через opacity-transition) */
     _bindCollages(root) {
       const scope = root || document;
       scope.querySelectorAll('.gc-collage').forEach((col) => {
@@ -455,6 +457,13 @@
             const idx = parseInt(cell.getAttribute('data-img-idx') || '0', 10) || 0;
             this._openLightbox(urls, names, idx);
           };
+          const img = cell.querySelector('img');
+          if (img) {
+            const done = () => cell.classList.add('is-loaded');
+            if (img.complete && img.naturalWidth > 0) done();
+            else { img.addEventListener('load', done, { once: true });
+                   img.addEventListener('error', done, { once: true }); }
+          }
         });
       });
     },

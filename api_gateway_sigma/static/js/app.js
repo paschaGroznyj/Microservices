@@ -10,8 +10,102 @@ class ChatApp {
         this._runState = 'idle';      // idle | running | stopping
         this._activeRequestId = null;
         this._statusPollTimer = null;  // фолбэк-таймер, если SSE недоступен
-        this._statusSse = null;        // активный EventSource стрима статуса
         this.INPUT_MAX_CHARS = 10000;  // жёсткий предел длины поля ввода
+
+        /* ══════════════════════════════════════════
+           ВАРИАНТ 2: МУЛЬТИПЛЕКС СТРИМИНГА ПО ЧАТАМ (SSE)
+           Раньше весь стрим-стейт был глобальным (this._pendingBotEl,
+           this._streamBuffer, this._statusSse, this._streamRaf ...) — один
+           на инстанс. При переключении чата EventSource закрывался и стрим
+           обрывался.
+
+           Теперь на КАЖДЫЙ чат — свой объект стрима (this._streams[chatId])
+           и свой SSE-источник (this._sources[chatId]). Уходя из стримящего
+           чата, мы НЕ закрываем его EventSource: он продолжает копить чанки
+           в свой (открепленный от DOM) узел в фоне. При возврате — просто
+           re-attach готового узла.
+
+           Совместимость: старые методы стрима обращаются к глобальным
+           this._pendingBotEl / this._streamBuffer и т.д. Мы делаем эти поля
+           ПРОКСИ-геттерами на активный стрим (this._streams[currentChat]),
+           а фоновые источники пишут напрямую в свой стрим по chatId из
+           замыкания (см. _startStatusPolling).
+        ══════════════════════════════════════════ */
+        this._streams = {};    // chatId -> объект стрима (см. _getStream)
+        this._sources = {};    // chatId -> EventSource
+
+        const STREAM_FIELDS = [
+            'pendingBotEl', 'pendingBotText', 'liveBlockEl', 'reasoningWrapEl',
+            'streamBuffer', 'streamShown', 'streamDone', 'streamIsFinal',
+            'streamFinalData', 'streamingActive', 'streamRaf', 'lastStreamRender',
+            'botAnswered',
+        ];
+        for (const f of STREAM_FIELDS) {
+            const prop = '_' + f;
+            Object.defineProperty(this, prop, {
+                get() {
+                    const s = this._streams[this.currentChat];
+                    return s ? s[f] : undefined;
+                },
+                set(v) {
+                    const s = this._ensureStream(this.currentChat);
+                    if (s) s[f] = v;
+                },
+                configurable: false,
+                enumerable: false,
+            });
+        }
+    }
+
+    /* Фабрика чистого объекта стрима для одного чата. */
+    _newStreamState() {
+        return {
+            pendingBotEl: null,
+            pendingBotText: '',
+            liveBlockEl: null,
+            reasoningWrapEl: null,
+            streamBuffer: '',
+            streamShown: '',
+            streamDone: false,
+            streamIsFinal: false,
+            streamFinalData: null,
+            streamingActive: false,
+            streamRaf: null,
+            lastStreamRender: 0,
+            botAnswered: false,
+        };
+    }
+
+    _ensureStream(chatId) {
+        if (chatId == null) return null;
+        const key = String(chatId);
+        if (!this._streams[key]) this._streams[key] = this._newStreamState();
+        return this._streams[key];
+    }
+
+    _getStream(chatId) {
+        const key = String(chatId);
+        return this._streams[key] || null;
+    }
+
+    _resolveStream(chatId) {
+        if (chatId != null) return this._ensureStream(chatId);
+        return this._ensureStream(this.currentChat);
+    }
+
+    _isActiveChat(chatId) {
+        return String(chatId) === String(this.currentChat);
+    }
+
+    /* Прокси на активный SSE-источник — совместимость со старым this._statusSse. */
+    get _statusSse() {
+        return this._sources[this.currentChat] || null;
+    }
+    set _statusSse(v) {
+        if (this.currentChat == null) return;
+        const key = String(this.currentChat);
+        if (v == null) delete this._sources[key];
+        else this._sources[key] = v;
     }
 
     /* Обрезает содержимое поля ввода до INPUT_MAX_CHARS символов.
@@ -351,24 +445,47 @@ class ChatApp {
             if (!this._chatStatuses) this._chatStatuses = {};
             // Главный статус PMыча
             const mainStatusEl = document.getElementById('agent-status-indicator');
-            if (mainStatusEl) {
+            // Признак что уходящий чат ещё в работе — чтобы при возврате
+            // мгновенно (без ожидания сети) поднять стоп-кнопку/плейсхолдер.
+            const runningMeta = {
+                running: this._runState === 'running',
+                activeRequestId: this._activeRequestId || null,
+            };
+            // ВАРИАНТ 2 (мультиплекс SSE): EventSource уходящего чата НЕ
+            // закрываем, если он ещё стримит — пусть достримит в фоне. Стрим-
+            // стейт этого чата живёт изолированно в this._streams[oldChatId],
+            // а RAF-цикл продолжает тикать по его liveBlockEl. Узел ответа мы
+            // ОТКРЕПЛЯЕМ из ленты (её DOM сейчас очистится под новый чат), но
+            // ссылки в стриме сохраняем — фоновый RAF пишет туда. При возврате
+            // re-attach через _reattachBackgroundStream.
+            const oldKey = String(this.currentChat);
+            const oldStream = this._getStream(oldKey);
+            let streamDetached = false;
+            if (oldStream && oldStream.pendingBotEl) {
+                const el = oldStream.pendingBotEl;
+                if (el.parentNode) el.parentNode.removeChild(el);
+                streamDetached = true;
+            }
+            if (mainStatusEl || (this.subagentStates && Object.keys(this.subagentStates).length)
+                || runningMeta.running || streamDetached) {
                 this._chatStatuses[this.currentChat] = {
-                    main: mainStatusEl.querySelector('.status-text')?.textContent || '',
-                    subagents: this.subagentStates ? { ...this.subagentStates } : {}
+                    main: mainStatusEl?.querySelector('.status-text')?.textContent || '',
+                    subagents: this.subagentStates ? { ...this.subagentStates } : {},
+                    ...runningMeta
                 };
-            } else {
-                // Сохраняем только субагентов если они есть
-                if (this.subagentStates && Object.keys(this.subagentStates).length) {
-                    this._chatStatuses[this.currentChat] = {
-                        main: '',
-                        subagents: { ...this.subagentStates }
-                    };
-                }
             }
         }
 
         this.currentChat = chatId;
         this.subagentStates = {};
+
+        // Сбрасываем run-UI прошлого чата, чтобы стоп-кнопка/плейсхолдер не
+        // «протекли» в новый чат. Ниже _restoreRunningUI поднимет их заново,
+        // если новый чат действительно в работе (по Redis-флагу).
+        this._runState = 'idle';
+        this._activeRequestId = null;
+        this._botAnswered = false;
+        this._setSendButtonMode('send');
 
         const msgContainer = this.getMessagesContainer();
         if (msgContainer) {
@@ -395,17 +512,13 @@ class ChatApp {
             this.renderMessageInput()
         ]);
 
-        // Если в чате уже есть финальное сообщение от бота — статус не нужен,
-        // чистим сохранённое состояние и выходим
-        const hasBotMessage = this.getMessagesContainer()
-            ?.querySelector('.agent-message');
-
-        if (hasBotMessage) {
-            // Ответ уже есть — статус неуместен, удаляем сохранённое
-            if (this._chatStatuses) delete this._chatStatuses[chatId];
-            this._clearAllStatuses();
-            return;
-        }
+        // ВАЖНО: раньше здесь был ранний return по наличию любого
+        // .agent-message в ленте («ответ уже есть → агент свободен»). Это
+        // ломало восстановление в многоходовых чатах: старые ответы бота
+        // присутствуют всегда, поэтому ранний выход срабатывал даже когда
+        // агент реально в работе над НОВЫМ сообщением, и _restoreRunningUI
+        // (а с ним запрос /run_status) не вызывался. Теперь источник истины —
+        // Redis-флаг: всегда доходим до _restoreRunningUI.
 
         // Восстанавливаем сохранённый статус если есть (чат ещё в процессе)
         const savedState = this._chatStatuses?.[chatId];
@@ -416,6 +529,112 @@ class ChatApp {
                 this._restoreSubagentStatuses(savedState.subagents);
             }
         }
+
+        // ВАРИАНТ 2: если этот чат стримил в фоне (SSE был открыт, RAF тикал,
+        // узел откреплён) — возвращаем его узел ответа обратно в ленту. Стрим
+        // продолжается без разрывов: буфер копился всё время в this._streams.
+        this._reattachBackgroundStream(chatId);
+
+        // Восстанавливаем UI «агент в работе» (стоп-кнопка, плейсхолдер).
+        // Источник истины — Redis-флаг на гейтвее: переживает и переключение
+        // чата, и F5. savedState даёт мгновенное восстановление без сети,
+        // run_status подтверждает/синхронизирует по серверу.
+        await this._restoreRunningUI(chatId, savedState);
+    }
+
+    /**
+     * Восстанавливает индикацию активной генерации по чату:
+     *  - стоп-кнопку (_setSendButtonMode('stop')) и _runState='running'
+     *  - _activeRequestId (чтобы Stop работал даже после F5)
+     *  - плейсхолдер-волну, если ответ ещё не начал приходить
+     * savedState (из _chatStatuses) — быстрый оптимистичный путь при
+     * переключении вкладок; run_status — авторитетная проверка по серверу.
+     */
+    async _restoreRunningUI(chatId, savedState = null) {
+        let running = false;
+        let requestId = savedState?.activeRequestId || null;
+
+        // Оптимистично поднимаем UI сразу, если локально знали что чат в работе
+        if (savedState?.running) {
+            running = true;
+        }
+
+        // Авторитетная проверка по серверу (переживает F5)
+        try {
+            const r = await fetch(`/api/chats/${chatId}/run_status`, {
+                credentials: 'include'
+            });
+            if (r.ok) {
+                const j = await r.json();
+                if (j?.running) {
+                    running = true;
+                    requestId = j.request_id || requestId;
+                } else {
+                    running = false;
+                }
+            }
+        } catch (_) { /* сеть недоступна — доверяем savedState */ }
+
+        // Чат мог смениться, пока ждали ответ — не трогаем чужой UI
+        if (String(this.currentChat) !== String(chatId)) return;
+
+        if (!running) {
+            this._onRunFinished();
+            return;
+        }
+
+        this._runState = 'running';
+        this._activeRequestId = requestId;
+        this._setSendButtonMode('stop');
+
+        // Если по чату ещё нет живого SSE-источника (например после F5) —
+        // поднимаем стрим, чтобы поймать хвост генерации.
+        if (!this._sources[String(chatId)]) {
+            this._startStatusPolling(chatId);
+        }
+
+        // Плейсхолдер-волна, только если ответ ещё не пошёл в ленту
+        const container = this.getMessagesContainer();
+        const alreadyStreaming = container?.querySelector('.live-block, .reasoning-live, #agent-response-placeholder');
+        if (container && !alreadyStreaming && !this._botAnswered) {
+            this._createBotPlaceholder(container);
+        }
+    }
+
+    /* ══════════════════════════════════════════
+       ВАРИАНТ 2: мультиплекс стриминга по чатам (SSE).
+       Каждый чат стримит в СВОЙ this._streams[chatId] через СВОЙ EventSource
+       this._sources[chatId]. При уходе из стримящего чата источник НЕ
+       закрывается, RAF продолжает тикать в фоне (узел ответа откреплён от
+       ленты, но жив по ссылке в стриме). При возврате — re-attach узла:
+       размышления и уже напечатанный текст на месте, стрим без разрывов.
+    ══════════════════════════════════════════ */
+
+    /**
+     * Возвращает откреплённый фоновый стрим чата обратно в ленту.
+     * Вызывается из openChat после loadMessages. Если чат не стримил в
+     * фоне — тихо выходит.
+     */
+    _reattachBackgroundStream(chatId) {
+        const st = this._getStream(chatId);
+        if (!st || !st.pendingBotEl) return;
+        const container = this.getMessagesContainer();
+        if (!container) return;
+        if (st.pendingBotEl.parentNode === container) return;
+
+        // Убираем плейсхолдер-волну, если _restoreRunningUI успел её создать.
+        this._removeBotPlaceholder();
+
+        container.appendChild(st.pendingBotEl);
+        this._botAnswered = true;
+
+        // Показываем накопленное и (пере)запускаем RAF, если он был снят.
+        if (st.liveBlockEl) this._renderStreamPartial(chatId);
+        if ((st.streamBuffer && st.streamBuffer.length) || st.streamDone) {
+            this._startStreamLoop(chatId);
+        }
+
+        container.scrollTop = container.scrollHeight;
     }
 
     async createNewChat() {
@@ -1498,7 +1717,7 @@ class ChatApp {
         this.clearInput(field);
         sendBtn?.classList.remove('active');
         this._botAnswered = false;
-        this._hardResetStreamState();
+        this._hardResetStreamState(this.currentChat);
 
         this._runState = 'running';
         this._setSendButtonMode('stop');
@@ -1770,9 +1989,9 @@ class ChatApp {
     // Базовый темп: символов за кадр (~60fps → ~240 симв/сек).
     // При переполнении буфера порция плавно растёт, чтобы не отставать
     // от быстрой генерации, но не рвать плавность.
-    _streamTypewriterStep() {
+    _streamTypewriterStep(st) {
         const CHARS_PER_FRAME = 7;      // базовый темп (чуть быстрее, ~420 симв/сек)
-        const buffered = this._streamBuffer ? this._streamBuffer.length : 0;
+        const buffered = st.streamBuffer ? st.streamBuffer.length : 0;
 
         // Автоускорение: чем больше накопилось, тем крупнее порция.
         let step = CHARS_PER_FRAME;
@@ -1782,59 +2001,64 @@ class ChatApp {
         return step;
     }
 
-    _startStreamLoop() {
-        if (this._streamRaf) return;  // цикл уже крутится
+    _startStreamLoop(chatId) {
+        const st = this._resolveStream(chatId);
+        if (st.streamRaf) return;  // цикл уже крутится
 
         const RENDER_THROTTLE_MS = 70;  // не чаще — тяжёлый marked.parse
-        this._lastStreamRender = 0;
+        st.lastStreamRender = 0;
 
         const tick = (ts) => {
-            if (!this._liveBlockEl) {
-                this._streamRaf = null;
+            if (!st.liveBlockEl) {
+                st.streamRaf = null;
                 return;
             }
 
             // Вытаскиваем порцию символов из буфера
-            const step = this._streamTypewriterStep();
-            if (this._streamBuffer && this._streamBuffer.length) {
-                const take = this._streamBuffer.slice(0, step);
-                this._streamShown  += take;
-                this._streamBuffer  = this._streamBuffer.slice(step);
+            const step = this._streamTypewriterStep(st);
+            if (st.streamBuffer && st.streamBuffer.length) {
+                const take = st.streamBuffer.slice(0, step);
+                st.streamShown  += take;
+                st.streamBuffer  = st.streamBuffer.slice(step);
             }
 
             // Троттлим тяжёлый Markdown-ре-рендер
             if (!ts) ts = performance.now();
-            if (ts - this._lastStreamRender >= RENDER_THROTTLE_MS) {
-                this._renderStreamPartial();
-                this._lastStreamRender = ts;
+            if (ts - st.lastStreamRender >= RENDER_THROTTLE_MS) {
+                this._renderStreamPartial(chatId);
+                st.lastStreamRender = ts;
             }
 
             // Условие завершения: сервер сказал done И буфер пуст
-            const drained = !this._streamBuffer || this._streamBuffer.length === 0;
-            if (this._streamDone && drained) {
-                this._renderStreamPartial();   // финальный partial-рендер текста
-                this._finalizeStream();        // файлы, actions, подсветка
-                this._streamRaf = null;
+            const drained = !st.streamBuffer || st.streamBuffer.length === 0;
+            if (st.streamDone && drained) {
+                this._renderStreamPartial(chatId);   // финальный partial-рендер текста
+                this._finalizeStream(chatId);        // файлы, actions, подсветка
+                st.streamRaf = null;
                 return;
             }
 
-            this._streamRaf = requestAnimationFrame(tick);
+            st.streamRaf = requestAnimationFrame(tick);
         };
 
-        this._streamRaf = requestAnimationFrame(tick);
+        st.streamRaf = requestAnimationFrame(tick);
     }
 
-    _renderStreamPartial() {
+    _renderStreamPartial(chatId) {
+        const st = this._resolveStream(chatId);
         // Рендерим только в ЖИВОЙ блок (reasoning-блоки уже свёрнуты выше).
-        if (!this._liveBlockEl) return;
-        const container = this.getMessagesContainer();
+        if (!st.liveBlockEl) return;
+        // Для фонового чата контейнера в DOM нет — узел откреплён, но рендер
+        // всё равно идёт в его innerHTML (виден при возврате). Автоскролл —
+        // только для активного чата.
+        const container = this._isActiveChat(chatId) ? this.getMessagesContainer() : null;
 
-        let html = marked.parse(this._streamShown || '');
+        let html = marked.parse(st.streamShown || '');
         if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
             ADD_TAGS: ['table','thead','tbody','tr','th','td'],
             ADD_ATTR: ['colspan','rowspan','align']
         });
-        this._liveBlockEl.innerHTML = html;
+        st.liveBlockEl.innerHTML = html;
 
         if (container) {
             const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
@@ -1881,9 +2105,10 @@ class ChatApp {
     /* Гарантирует существование ЕДИНОГО свёртка «Размышления» для текущего
        ответа и возвращает его .reasoning-body — контейнер, куда дописываются
        все мысли между вызовами тулз. Не плодим блок на каждый шаг. */
-    _ensureReasoningWrap() {
-        if (this._reasoningWrapEl && this._pendingBotEl?.contains(this._reasoningWrapEl)) {
-            return this._reasoningWrapEl.querySelector('.reasoning-body');
+    _ensureReasoningWrap(chatId) {
+        const st = this._resolveStream(chatId);
+        if (st.reasoningWrapEl && st.pendingBotEl?.contains(st.reasoningWrapEl)) {
+            return st.reasoningWrapEl.querySelector('.reasoning-body');
         }
         const wrap = document.createElement('div');
         wrap.className = 'reasoning-block reasoning-collapsed';
@@ -1899,33 +2124,34 @@ class ChatApp {
             wrap.classList.toggle('reasoning-collapsed');
         });
         // Свёрток всегда выше живого блока
-        if (this._liveBlockEl) {
-            this._pendingBotEl.insertBefore(wrap, this._liveBlockEl);
+        if (st.liveBlockEl) {
+            st.pendingBotEl.insertBefore(wrap, st.liveBlockEl);
         } else {
-            this._pendingBotEl.appendChild(wrap);
+            st.pendingBotEl.appendChild(wrap);
         }
-        this._reasoningWrapEl = wrap;
+        st.reasoningWrapEl = wrap;
         return wrap.querySelector('.reasoning-body');
     }
 
     /* Текущий живой блок был размышлением перед тулзой. Дописываем его текст
        в ЕДИНЫЙ свёрток «Размышления» и убираем живой блок. Мысли из разных
        шагов копятся в одном свёртке как параграфы, а не отдельными блоками. */
-    _commitReasoningBlock() {
-        if (!this._liveBlockEl) return;
+    _commitReasoningBlock(chatId) {
+        const st = this._resolveStream(chatId);
+        if (!st.liveBlockEl) return;
 
         // Дренаж буфера: забираем всю накопленную мысль сразу
-        this._streamShown = (this._streamShown || '') + (this._streamBuffer || '');
-        this._streamBuffer = '';
-        if (this._streamRaf) { cancelAnimationFrame(this._streamRaf); this._streamRaf = null; }
+        st.streamShown = (st.streamShown || '') + (st.streamBuffer || '');
+        st.streamBuffer = '';
+        if (st.streamRaf) { cancelAnimationFrame(st.streamRaf); st.streamRaf = null; }
 
-        const text = this._streamShown;
-        const liveEl = this._liveBlockEl;
+        const text = st.streamShown;
+        const liveEl = st.liveBlockEl;
         // Отвязываем ссылки СРАЗУ, чтобы новые чанки не сыпались в лопающийся блок.
         // Сам DOM-узел (liveEl) убираем чуть позже — после анимации «лопания».
-        this._liveBlockEl = null;
-        this._streamShown = '';
-        this._streamDone  = false;
+        st.liveBlockEl = null;
+        st.streamShown = '';
+        st.streamDone  = false;
 
         // Пустую мысль не сохраняем — живой блок просто убираем без пузыря.
         if (!text.trim()) {
@@ -1939,7 +2165,7 @@ class ChatApp {
             ADD_ATTR: ['colspan','rowspan','align']
         });
 
-        const body = this._ensureReasoningWrap();
+        const body = this._ensureReasoningWrap(chatId);
         const step = document.createElement('div');
         // Стартуем step в «зажатом» состоянии — анимация pop-in надует его,
         // как только лопнет живой пузырь (см. класс .reasoning-step--popin).
@@ -1947,7 +2173,8 @@ class ChatApp {
         step.innerHTML = html;
         body.appendChild(step);
 
-        const container = this.getMessagesContainer();
+        // Для фонового чата контейнера нет — скролл/анимации только активному.
+        const container = this._isActiveChat(chatId) ? this.getMessagesContainer() : null;
         const nearBottom = () => {
             if (!container) return false;
             return (container.scrollHeight - container.scrollTop - container.clientHeight) < 120;
@@ -1981,16 +2208,17 @@ class ChatApp {
 
     /* Живой блок оказался финальным ответом — повышаем его стиль
        с приглушённого reasoning-live до обычного (основной шрифт). */
-    _promoteLiveToFinal() {
+    _promoteLiveToFinal(chatId) {
+        const st = this._resolveStream(chatId);
         // Помечаем флаг ДО работы с блоком: если живого блока ещё нет (финальные
         // чанки придут следом), новый блок создастся сразу как .live-block.
-        this._streamIsFinal = true;
-        if (this._liveBlockEl) {
-            this._liveBlockEl.className = 'live-block';
+        st.streamIsFinal = true;
+        if (st.liveBlockEl) {
+            st.liveBlockEl.className = 'live-block';
             // Форсим немедленный ре-рендер уже видимого текста, чтобы новый
             // (обычный) стиль применился сразу, а не «дожидался» финализации.
             // Иначе финал визуально досыпается в приглушённом reasoning-стиле.
-            this._renderStreamPartial();
+            this._renderStreamPartial(chatId);
         }
     }
 
@@ -2000,48 +2228,54 @@ class ChatApp {
        чтобы чанки нового ответа не дописывались в предыдущий пузырь бота.
        DOM прошлого ответа при этом не трогаем (он уже показан пользователю),
        только «дорисовываем» его в обычный стиль на случай залипшего reasoning. */
-    _hardResetStreamState() {
-        if (this._streamRaf) {
-            cancelAnimationFrame(this._streamRaf);
-            this._streamRaf = null;
+    _hardResetStreamState(chatId) {
+        // Сбрасываем ТОЛЬКО указанный/текущий чат. Фоновые стримящие чаты
+        // (свой this._streams[chatId] + открытый SSE) сброс не затрагивает.
+        const st = this._resolveStream(chatId);
+        if (st.streamRaf) {
+            cancelAnimationFrame(st.streamRaf);
+            st.streamRaf = null;
         }
         // Если прошлый живой блок так и остался в reasoning-стиле — нормализуем,
         // чтобы предыдущий ответ не выглядел как незавершённое размышление.
-        if (this._liveBlockEl && this._liveBlockEl.classList.contains('reasoning-live')) {
-            this._liveBlockEl.className = 'live-block';
+        if (st.liveBlockEl && st.liveBlockEl.classList.contains('reasoning-live')) {
+            st.liveBlockEl.className = 'live-block';
         }
-        this._pendingBotEl    = null;
-        this._liveBlockEl     = null;
-        this._reasoningWrapEl = null;
-        this._pendingBotText  = '';
-        this._streamBuffer    = '';
-        this._streamShown     = '';
-        this._streamDone      = false;
-        this._streamIsFinal   = false;
-        this._streamFinalData = null;
-        this._streamingActive = false;
+        st.pendingBotEl    = null;
+        st.liveBlockEl     = null;
+        st.reasoningWrapEl = null;
+        st.pendingBotText  = '';
+        st.streamBuffer    = '';
+        st.streamShown     = '';
+        st.streamDone      = false;
+        st.streamIsFinal   = false;
+        st.streamFinalData = null;
+        st.streamingActive = false;
     }
 
-    _finalizeStream() {
-        if (!this._pendingBotEl) return;
+    _finalizeStream(chatId) {
+        const st = this._resolveStream(chatId);
+        const isActive = this._isActiveChat(chatId);
+        if (!st.pendingBotEl) return;
 
         // Страховка: если генерация картинки завершилась (успех или ошибка),
         // а превью так и не пришло — снимаем висящий скелетон на финале.
-        this._removeImageGenSkeleton();
+        // Скелетон живёт в DOM активного чата — чистим только для активного.
+        if (isActive) this._removeImageGenSkeleton();
 
-        const data = this._streamFinalData || {};
-        const fullText = data.fullText ?? this._streamShown ?? '';
+        const data = st.streamFinalData || {};
+        const fullText = data.fullText ?? st.streamShown ?? '';
 
         // Финальный полный рендер финального ответа — в живой блок (если он есть).
         // reasoning-блоки остаются выше нетронутыми.
-        const targetBlock = this._liveBlockEl || (() => {
+        const targetBlock = st.liveBlockEl || (() => {
             const b = document.createElement('div');
             b.className = 'live-block';
-            this._pendingBotEl.appendChild(b);
+            st.pendingBotEl.appendChild(b);
             return b;
         })();
         // Гарантия: финальный ответ всегда в обычном стиле, даже если маркер
-        // final_commit не пришёл (например обрыв WS) — снимаем reasoning-стиль.
+        // final_commit не пришёл (например обрыв SSE) — снимаем reasoning-стиль.
         targetBlock.className = 'live-block';
 
         let html = marked.parse(fullText);
@@ -2053,40 +2287,49 @@ class ChatApp {
 
         // Файлы / actions вешаем на общую обёртку ответа
         if (data.files?.length) {
-            this._pendingBotEl.appendChild(
+            st.pendingBotEl.appendChild(
                 this._renderBotFiles(data.files, data.message_id)
             );
         }
         if (data.message_id) {
-            this._pendingBotEl.dataset.id = data.message_id;
+            st.pendingBotEl.dataset.id = data.message_id;
         }
-        this._applyCodeHeaders(this._pendingBotEl);
-        const actions = this.createMessageActions(this._pendingBotEl.dataset.id, fullText, true);
-        this._pendingBotEl.appendChild(actions);
-        this._pendingBotEl.style.transition = '';
-        this._pendingBotEl.style.opacity    = '';
+        this._applyCodeHeaders(st.pendingBotEl);
+        const actions = this.createMessageActions(st.pendingBotEl.dataset.id, fullText, true);
+        st.pendingBotEl.appendChild(actions);
+        st.pendingBotEl.style.transition = '';
+        st.pendingBotEl.style.opacity    = '';
 
-        // Сброс всего стрим-состояния
-        this._pendingBotEl    = null;
-        this._liveBlockEl     = null;
-        this._reasoningWrapEl = null;   // критично: иначе следующий ответ приклеится к старому свёртку
-        this._pendingBotText  = '';
-        this._streamBuffer    = '';
-        this._streamShown     = '';
-        this._streamDone      = false;
-        this._streamIsFinal   = false;
-        this._streamFinalData = null;
-        this._streamingActive = false;
-        if (this._streamRaf) { cancelAnimationFrame(this._streamRaf); this._streamRaf = null; }
+        // Сброс всего стрим-состояния этого чата
+        st.pendingBotEl    = null;
+        st.liveBlockEl     = null;
+        st.reasoningWrapEl = null;   // критично: иначе следующий ответ приклеится к старому свёртку
+        st.pendingBotText  = '';
+        st.streamBuffer    = '';
+        st.streamShown     = '';
+        st.streamDone      = false;
+        st.streamIsFinal   = false;
+        st.streamFinalData = null;
+        st.streamingActive = false;
+        if (st.streamRaf) { cancelAnimationFrame(st.streamRaf); st.streamRaf = null; }
 
-        // Финализация ответа: волна распрямляется в линию и гаснет,
-        // затем убираем placeholder; чистим статусы.
-        this._botAnswered = true;
-        this._flattenWaveIndicator();
-        setTimeout(() => this._removeBotPlaceholder(), 500);
-        this._clearAllStatuses();
-        if (this._chatStatuses) delete this._chatStatuses[this.currentChat];
-        this._onRunFinished();
+        // Фоновый SSE больше не нужен — стрим этого чата завершён, закрываем
+        // его источник (иначе повиснет открытым до следующего openChat).
+        if (!isActive) {
+            const src = this._sources[String(chatId)];
+            if (src) { try { src.close(); } catch (e) {} delete this._sources[String(chatId)]; }
+        }
+
+        // UI-эффекты (волна, placeholder, стоп-кнопка) — только для активного
+        // чата: у фонового placeholder/индикатора в DOM нет.
+        st.botAnswered = true;
+        if (this._chatStatuses) delete this._chatStatuses[String(chatId)];
+        if (isActive) {
+            this._flattenWaveIndicator();
+            setTimeout(() => this._removeBotPlaceholder(), 500);
+            this._clearAllStatuses();
+            this._onRunFinished();
+        }
     }
 
     _setSendButtonMode(mode = 'send') {
@@ -2175,21 +2418,29 @@ class ChatApp {
     }
 
     async _handleRunDone(chatId) {
-        // Гасим стрим-состояние (RAF + ссылки) без финализации DOM — лента
-        // всё равно будет перерисована из БД ниже.
-        this._hardResetStreamState();
-        // _finalizeStream мы обошли, значит placeholder с волной-индикатором и
-        // статусы тулов надо снять здесь вручную, иначе индикатор зависнет
-        // поверх уже перечитанной истории.
-        this._botAnswered = true;
-        this._flattenWaveIndicator();
-        this._removeBotPlaceholder();
-        this._clearAllStatuses();
-        if (this._chatStatuses) delete this._chatStatuses[chatId];
-        if (chatId === this.currentChat) {
+        const key = String(chatId);
+        const isActive = this._isActiveChat(key);
+        // Гасим стрим-состояние (RAF + ссылки) ТОЛЬКО этого чата без финализации
+        // DOM — лента активного чата всё равно перерисуется из БД ниже.
+        this._hardResetStreamState(key);
+        // Фоновый SSE-источник этого чата больше не нужен — закрываем.
+        const src = this._sources[key];
+        if (src) { try { src.close(); } catch (_) {} delete this._sources[key]; }
+        if (this._chatStatuses) delete this._chatStatuses[key];
+
+        if (isActive) {
+            // _finalizeStream мы обошли, значит placeholder с волной-индикатором и
+            // статусы тулов надо снять здесь вручную, иначе индикатор зависнет
+            // поверх уже перечитанной истории.
+            this._botAnswered = true;
+            this._flattenWaveIndicator();
+            this._removeBotPlaceholder();
+            this._clearAllStatuses();
             await this.loadMessages(chatId);
+            this._onRunFinished();
         }
-        this._onRunFinished();
+        // Для фонового чата UI не трогаем: при возврате openChat перечитает
+        // историю из БД, где уже лежит финальный ответ.
     }
 
     // Замена polling'а: держим один SSE (EventSource) и ждём push-события
@@ -2197,14 +2448,20 @@ class ChatApp {
     // polling GET /api/chats/{id}/status (эндпоинт оставлен как фолбэк).
     _startStatusPolling(chatId) {
         if (!chatId) return;
-        // подчистить прошлые подписки
+        const key = String(chatId);
+        // Стрим этого чата пишем строго в его собственный объект — иначе при
+        // уходе из чата прокси this._* переключатся на новый currentChat и
+        // фоновый SSE начнёт бить не по тому стриму.
+        const st = this._ensureStream(key);
+        // подчистить прошлые подписки ЭТОГО чата
         if (this._statusPollTimer) {
             clearInterval(this._statusPollTimer);
             this._statusPollTimer = null;
         }
-        if (this._statusSse) {
-            this._statusSse.close();
-            this._statusSse = null;
+        const prevSrc = this._sources[key];
+        if (prevSrc) {
+            try { prevSrc.close(); } catch (_) {}
+            delete this._sources[key];
         }
 
         if (typeof EventSource === 'undefined') {
@@ -2219,7 +2476,7 @@ class ChatApp {
             this._startStatusPollingFallback(chatId);
             return;
         }
-        this._statusSse = es;
+        this._sources[key] = es;
 
         // ── Живой токен-стрим (Redis pub/sub → SSE) ───────────────────────
         // Агент публикует фреймы в stream:{request_id}; sigma-гейтвей релеит
@@ -2241,58 +2498,62 @@ class ChatApp {
             const chunk = frame.chunk;
             if (chunk === undefined || chunk === null || chunk === '') return;
 
-            const container = this.getMessagesContainer();
-            if (!container) return;
+            const isActive = this._isActiveChat(key);
+            // Активный чат рисует в ленту; фоновый — в откреплённый узел
+            // (pendingBotEl не добавляется в DOM, живёт в st до возврата).
+            const container = isActive ? this.getMessagesContainer() : null;
 
-            if (!this._liveBlockEl) {
+            if (!st.liveBlockEl) {
                 // Обёртка ответа бота — создаём один раз на весь ответ.
-                if (!this._pendingBotEl) {
-                    this._pendingBotEl = document.createElement('div');
-                    this._pendingBotEl.className = 'agent-message';
-                    this._pendingBotEl.dataset.id = frame.id || '';
-                    this._pendingBotEl.style.opacity = '0';
-                    this._pendingBotEl.style.transition = 'opacity 0.25s ease';
-                    container.appendChild(this._pendingBotEl);
-                    requestAnimationFrame(() => requestAnimationFrame(() => {
-                        if (this._pendingBotEl) this._pendingBotEl.style.opacity = '1';
-                    }));
-                    this._botAnswered = true;
-                    // Placeholder НЕ убираем здесь: волна-индикатор крутится и
-                    // во время размышлений. Снос — в _finalizeStream.
-                    this._clearAllStatuses();
-                    this._streamingActive = true;
-                    this._streamIsFinal   = false;
+                if (!st.pendingBotEl) {
+                    st.pendingBotEl = document.createElement('div');
+                    st.pendingBotEl.className = 'agent-message';
+                    st.pendingBotEl.dataset.id = frame.id || '';
+                    if (isActive && container) {
+                        st.pendingBotEl.style.opacity = '0';
+                        st.pendingBotEl.style.transition = 'opacity 0.25s ease';
+                        container.appendChild(st.pendingBotEl);
+                        requestAnimationFrame(() => requestAnimationFrame(() => {
+                            if (st.pendingBotEl) st.pendingBotEl.style.opacity = '1';
+                        }));
+                        // Placeholder НЕ убираем здесь: волна-индикатор крутится и
+                        // во время размышлений. Снос — в _finalizeStream.
+                        this._clearAllStatuses();
+                    }
+                    st.botAnswered = true;
+                    st.streamingActive = true;
+                    st.streamIsFinal   = false;
                 }
                 // Живой блок печатается в reasoning-стиле, пока не пришёл
                 // final_commit. Если финал уже объявлен — сразу .live-block.
-                this._liveBlockEl = document.createElement('div');
-                this._liveBlockEl.className = this._streamIsFinal ? 'live-block' : 'reasoning-live';
-                this._pendingBotEl.appendChild(this._liveBlockEl);
-                this._streamBuffer = '';
-                this._streamShown  = '';
-                this._streamDone   = false;
-                this._startStreamLoop();
+                st.liveBlockEl = document.createElement('div');
+                st.liveBlockEl.className = st.streamIsFinal ? 'live-block' : 'reasoning-live';
+                st.pendingBotEl.appendChild(st.liveBlockEl);
+                st.streamBuffer = '';
+                st.streamShown  = '';
+                st.streamDone   = false;
+                this._startStreamLoop(key);
             }
 
-            this._streamBuffer += chunk;
+            st.streamBuffer += chunk;
         };
 
         es.addEventListener('live', onLive);
         es.addEventListener('reasoning_end', () => {
             // Текущий живой блок был размышлением перед вызовом тулзы —
             // сливаем его в общий свёрток «Размышления».
-            this._commitReasoningBlock();
+            this._commitReasoningBlock(key);
         });
         es.addEventListener('final_commit', () => {
             // Живой блок оказался финальным ответом — повышаем его стиль.
             // Реальная финализация (файлы, actions) придёт с 'done' из Kafka.
-            this._promoteLiveToFinal();
-            this._streamIsFinal = true;
+            this._promoteLiveToFinal(key);
+            st.streamIsFinal = true;
         });
 
         const onDone = async (ev) => {
             es.close();
-            if (this._statusSse === es) this._statusSse = null;
+            if (this._sources[key] === es) delete this._sources[key];
             // Автогенерированный заголовок чата приходит в message финала —
             // обновляем строку чата в сайдбаре в реалтайме (на первом обмене).
             this._applyAutoTitleFromDone(ev, chatId);
@@ -2304,9 +2565,9 @@ class ChatApp {
         es.addEventListener('timeout', () => {
             // Сервер закрыл стрим по потолку жизни. Если ран ещё идёт —
             // EventSource сам переподключится; страхуемся ручным reopen.
-            if (this._runState === 'running' && this._statusSse === es) {
+            if (st.streamingActive && this._sources[key] === es) {
                 es.close();
-                this._statusSse = null;
+                delete this._sources[key];
                 this._startStatusPolling(chatId);
             }
         });
@@ -2314,10 +2575,11 @@ class ChatApp {
 
         es.onerror = () => {
             // EventSource сам ретраит соединение. Но если браузер вообще не
-            // смог подключиться ( es.readyState === CLOSED) — уходим в фолбэк.
-            if (es.readyState === EventSource.CLOSED && this._runState === 'running') {
-                if (this._statusSse === es) this._statusSse = null;
-                this._startStatusPollingFallback(chatId);
+            // смог подключиться ( es.readyState === CLOSED) — уходим в фолбэк
+            // (только для активного чата, у фонового своего placeholder нет).
+            if (es.readyState === EventSource.CLOSED && st.streamingActive) {
+                if (this._sources[key] === es) delete this._sources[key];
+                if (this._isActiveChat(key)) this._startStatusPollingFallback(chatId);
             }
         };
     }

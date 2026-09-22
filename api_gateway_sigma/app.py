@@ -28,6 +28,7 @@ from config import (
 
 from sigma_status_store import status_store
 import presence
+import run_status
 
 import re
 
@@ -192,6 +193,8 @@ async def receive_bot_message(bot_msg: BotMessage):
     """Получаем финальное сообщение бота от chats-consumer и помечаем chat done для polling."""
     logging.info(f"[sigma] bot_message chat_id={bot_msg.chat_id}")
     status_store.mark_done(bot_msg.chat_id, bot_msg.message)
+    # Финал пришёл — снимаем Redis-флаг «агент в работе» (общий для гейтвеев).
+    await run_status.clear_running(bot_msg.chat_id)
     return {"ok": True}
 
 
@@ -1068,6 +1071,11 @@ async def send_message(request: Request):
     # ответ бота (status=running). Фронт сразу оптимистично отрисует своё
     # сообщение и начнёт поллить GET /api/chats/{id}/status.
     status_store.mark_running(data["chat_id"], request_id)
+    # Redis-флаг «агент в работе» (общий для обоих гейтвеев): переживает
+    # F5/переключение чата, фронт по нему восстанавливает стоп-кнопку и индикатор.
+    await run_status.mark_running(
+        data["chat_id"], request_id, data.get("type_agent")
+    )
     try:
         start = time.perf_counter()
         response = await app.state.http_client.post(
@@ -1097,6 +1105,11 @@ async def stop_message(request: Request):
     request_id = data.get("request_id")
     if not request_id:
         raise HTTPException(status_code=400, detail="request_id required")
+
+    # Стоп: снимаем Redis-флаг работы (chat_id знаем по pending_requests).
+    stop_chat_id = pending_requests.get(request_id) or data.get("chat_id")
+    if stop_chat_id is not None:
+        await run_status.clear_running(stop_chat_id)
 
     try:
         response = await app.state.http_client.post(
@@ -1153,6 +1166,24 @@ async def poll_user_events(request: Request):
 
     events = status_store.pop_user_events(user["username"])
     return JSONResponse(content={"events": events})
+
+
+@app.get("/api/chats/{chat_id}/run_status")
+async def chat_run_status(chat_id: str, request: Request):
+    """Идёт ли сейчас генерация по этому чату (для восстановления UI
+    после F5/переключения чата). Читает общий Redis-флаг (тот же ключ,
+    что и на main-гейтвее). Возвращает:
+      {"running": true, "request_id": "...", "model": "...", "started_at": ...}
+      {"running": false}
+    """
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    info = await run_status.get_running(chat_id)
+    if not info:
+        return JSONResponse(content={"running": False})
+    return JSONResponse(content={"running": True, **info})
 
 
 # ── SSE: push вместо polling ─────────────────────────────────────────────

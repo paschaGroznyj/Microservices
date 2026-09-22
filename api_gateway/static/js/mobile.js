@@ -19,26 +19,30 @@ function initMobileMenu() {
     // На десктопе (>768) бургер виден только когда сайдбар свёрнут (CSS
     // .sidebar-collapsed) и играет роль кнопки "развернуть" — снимает collapse.
     if (toggleBtn) {
+        // Единый критерий "мобилка" — тот же брейкпоинт, что в CSS (@media max-width:768px).
+        const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
+
         toggleBtn.addEventListener("click", (e) => {
             e.stopPropagation();
 
+            // МОБИЛКА: бургер всегда открывает/закрывает сайдбар оверлеем.
+            // Это приоритетная ветка — на узком экране desktop-collapse неактуален.
+            if (isMobile()) {
+                toggleSidebar(!sidebar.classList.contains('open'));
+                return;
+            }
+
+            // ДЕСКТОП (>768): бургер виден только когда сайдбар свёрнут (CSS
+            // .sidebar-collapsed) и играет роль кнопки "развернуть" — снимает collapse.
             const layout = document.querySelector('.chat-layout');
             const expandBtn = document.getElementById('sidebar-expand-btn');
             const collapseBtn = document.getElementById('sidebar-collapse-btn');
-            const isCollapsedDesktop = !!(layout && layout.classList.contains('sidebar-collapsed'));
-
-            // Десктоп в состоянии collapsed: бургер работает как "развернуть".
-            if (isCollapsedDesktop) {
+            if (layout && layout.classList.contains('sidebar-collapsed')) {
                 layout.classList.remove('sidebar-collapsed');
                 if (expandBtn) expandBtn.hidden = true;
                 if (collapseBtn) collapseBtn.setAttribute('aria-expanded', 'true');
                 try { localStorage.setItem('catchpm:sidebar-collapsed', '0'); } catch (err) {}
-                return;
             }
-
-            // Во всех остальных случаях (в т.ч. мобильные браузеры с нестандартным
-            // innerWidth/viewport) бургер открывает/закрывает мобильный оверлей.
-            toggleSidebar(!sidebar.classList.contains('open'));
         });
     }
 

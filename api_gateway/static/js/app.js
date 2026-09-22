@@ -179,13 +179,10 @@ class ChatApp {
         collapseBtn?.addEventListener('click', () => apply(true));
         expandBtn?.addEventListener('click', () => apply(false));
 
-        // Гамбургер в топбаре универсален: на десктопе он тоглит collapse,
-        // на мобилке (<=768) открытие оверлея рулит mobile.js — его не трогаем.
-        const topbarToggle = document.getElementById('mobile-menu-toggle');
-        topbarToggle?.addEventListener('click', () => {
-            if (window.innerWidth <= 768) return; // мобилка — отработает mobile.js
-            apply(!layout.classList.contains('sidebar-collapsed'));
-        });
+        // Гамбургер (#mobile-menu-toggle) обрабатывается ЕДИНЫМ слушателем в
+        // mobile.js (initMobileMenu): на десктопе он снимает collapse, на
+        // мобилке открывает оверлей. Здесь второй обработчик убран, иначе на
+        // клик срабатывали ОБА и гасили друг друга (сайдбар не разворачивался).
     }
 
     switchTab(tab) {
@@ -516,6 +513,78 @@ class ChatApp {
         // чата, и F5. savedState даёт мгновенное восстановление без сети,
         // run_status подтверждает/синхронизирует по серверу.
         await this._restoreRunningUI(chatId, savedState);
+
+        // Шахматы: восстанавливаем виджет-плашку после F5/переключения чата.
+        this._restoreChessMode(chatId);
+    }
+
+    /** Шахматы: спрашиваем gateway об активном режиме и поднимаем виджет. */
+    async _restoreChessMode(chatId) {
+        try {
+            const r = await fetch(`/api/chats/${chatId}/game_mode`, { credentials: 'include' });
+            if (!r.ok) { window.ChessWidget?.stop(); return; }
+            const j = await r.json();
+            if (chatId !== this.currentChat) return;   // чат успели переключить
+            if (j && j.active && j.mode === 'chess') {
+                window.ChessWidget?.start({
+                    mode: j.mode, engine: j.engine, player_color: j.player_color, fen: j.fen, restore: true
+                });
+            } else {
+                window.ChessWidget?.stop();
+            }
+        } catch (e) { /* молча — режим не критичен */ }
+    }
+
+    /**
+     * Шахматы: вырезает блок chess_move JSON из текста ответа агента.
+     * Ищет fenced ```json ... ``` или голый {"type":"chess_move"...} / chess_error.
+     * Возвращает {json, cleaned} либо null.
+     */
+    /**
+     * Шахматы: если текст user-message = "[CHESS_MOVE] {json}",
+     * возвращает человекочитаемую метку хода ("♙ e2 → e4"). Иначе null.
+     */
+    _chessMoveLabel(text) {
+        if (!text || typeof text !== 'string') return null;
+        const t = text.trimStart();
+        if (!t.startsWith('[CHESS_MOVE]')) return null;
+        try {
+            const jsonPart = t.slice('[CHESS_MOVE]'.length).trim();
+            const o = JSON.parse(jsonPart);
+            const uci = (o && o.player_move) ? String(o.player_move) : '';
+            if (uci.length >= 4) {
+                const from = uci.slice(0, 2), to = uci.slice(2, 4);
+                const promo = uci.length > 4 ? ' =' + uci.slice(4).toUpperCase() : '';
+                return '\u265F ' + from + ' \u2192 ' + to + promo;
+            }
+            return '\u265F ход';
+        } catch (_) { return '\u265F ход'; }
+    }
+
+    _extractChessMove(text) {
+        if (!text) return null;
+        const tryParse = (raw) => { try { const o = JSON.parse(raw); return (o && (o.type === 'chess_move' || o.type === 'chess_error')) ? o : null; } catch (_) { return null; } };
+        // 1) fenced-блок
+        const fence = /```(?:json)?\s*(\{[\s\S]*?\})\s*```/gi;
+        let m;
+        while ((m = fence.exec(text)) !== null) {
+            const o = tryParse(m[1]);
+            if (o) return { json: o, cleaned: (text.slice(0, m.index) + text.slice(m.index + m[0].length)).trim() };
+        }
+        // 2) голый JSON с балансом скобок
+        const key = text.search(/\{\s*"type"\s*:\s*"chess_(move|error)"/);
+        if (key !== -1) {
+            let depth = 0, end = -1;
+            for (let i = key; i < text.length; i++) {
+                if (text[i] === '{') depth++;
+                else if (text[i] === '}') { depth--; if (depth === 0) { end = i + 1; break; } }
+            }
+            if (end !== -1) {
+                const o = tryParse(text.slice(key, end));
+                if (o) return { json: o, cleaned: (text.slice(0, key) + text.slice(end)).trim() };
+            }
+        }
+        return null;
     }
 
     /**
@@ -863,6 +932,24 @@ class ChatApp {
             .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
         if (!isBot) {
+            // Шахматный ход: user-message с маркером [CHESS_MOVE] {json}
+            // показываем человекочитаемо (e2 → e4), а не сырым JSON.
+            const chessLabel = this._chessMoveLabel(rawContent);
+            if (chessLabel !== null) {
+                // Дедуп WS-эха: ход-чип оборачиваем в user-message-wrapper с
+                // data-message-id (как обычные user-message), иначе WS-эхо не
+                // найдёт совпадения и нарисует ход второй раз (дубль в ленте).
+                const chessWrap = document.createElement('div');
+                chessWrap.className = 'user-message-wrapper';
+                const mid = message.message_id || message.id;
+                if (mid) chessWrap.dataset.messageId = mid;
+                messageEl.classList.add('chess-move-msg');
+                messageEl.innerHTML = `<div class="message-text">${this.escapeHtml(chessLabel)}</div><div class="timestamp">${time}</div>`;
+                chessWrap.appendChild(messageEl);
+                container.appendChild(chessWrap);
+                if (scroll) container.scrollTop = container.scrollHeight;
+                return messageEl;
+            }
             // Длинный текст (>1000 символов) сворачиваем в чип-файлик,
             // клик по которому открывает превью в правом сайдбаре.
             // Длинный текст (Claude-style): рендерим обычным текстом,
@@ -1701,6 +1788,67 @@ class ChatApp {
     /* ══════════════════════════════════════════
        SEND
     ══════════════════════════════════════════ */
+    /**
+     * Программная отправка сообщения с готовым текстом (без поля ввода).
+     * Используется шахматным виджетом (chess.js): ход игрока улетает
+     * как обычный user-message с маркером [CHESS_MOVE]. Логика зеркалит
+     * sendMessage, но текст берётся из аргумента, а не из #message-input.
+     */
+    async sendMessageText(text) {
+        text = (text || "").trim();
+        if (!text) return;
+        if (this._runState !== "idle") return;
+        if (!this.currentChat) return;   // шахматы идут только в открытом чате
+
+        const container = this.getInputContainer();
+        const sendBtn = container?.querySelector("#send-btn");
+
+        const existing = this.chats.find(c => c.id === this.currentChat);
+        if (existing) {
+            existing.last_message = text;
+            existing.timestamp = new Date().toISOString();
+            this.renderChats(this.chats);
+        }
+
+        const msgId = `msg-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+        this.addMessage({ message: text, is_from_bot: false, id: msgId, created_at: new Date().toISOString(), files: [] });
+        this._scrollToUserMessageAndReserve();
+
+        this._botAnswered = false;
+        this._hardResetStreamState(this.currentChat);
+        this._runState = "running";
+        this._setSendButtonMode("stop");
+
+        try {
+            await this._waitForWS();
+            const resp = await fetch("/api/chats/send_message", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({
+                    chat_id:        this.currentChat,
+                    message:        text,
+                    message_id:     msgId,
+                    type_agent:     "pm",
+                    agent_model:    window.ModelPicker?.getModel() ?? "coder",
+                    selected_tools: window.ToolsPanel?.getSelectedCategories() ?? [],
+                    context_size:   window.ToolsPanel?.getContextSize()   ?? "medium",
+                    has_files:      false,
+                    files: []
+                })
+            });
+            try {
+                const j = await resp.clone().json();
+                this._activeRequestId = j?.request_id || null;
+            } catch (_) { this._activeRequestId = null; }
+        } catch (err) {
+            console.error("sendMessageText error:", err);
+            this._runState = "idle";
+            this._setSendButtonMode("send");
+            this._activeRequestId = null;
+        }
+    }
+
     async sendMessage() {
         const container = this.getInputContainer();
         const field   = container?.querySelector('#message-input');
@@ -2088,6 +2236,19 @@ class ChatApp {
                     });
                     if (touched) this.renderChats(this.chats);
                 }
+                return;
+            }
+
+            // Шахматы: старт/стоп игрового режима (broadcast с gateway по /chess, /stop).
+            if (msg.type === 'game_start') {
+                if (!isActive) return;
+                try { window.ChessWidget?.start({
+                    mode: msg.mode, engine: msg.engine, player_color: msg.player_color, fen: msg.fen
+                }); } catch (e) { console.error('[chess] start failed', e); }
+                return;
+            }
+            if (msg.type === 'game_stop') {
+                try { window.ChessWidget?.stop(); } catch (e) { console.error('[chess] stop failed', e); }
                 return;
             }
             // Дедупликация: пользовательское сообщение уже показано оптимистично
@@ -2580,7 +2741,18 @@ class ChatApp {
         if (isActive) this._removeImageGenSkeleton();
 
         const data = st.streamFinalData || {};
-        const fullText = data.fullText ?? st.streamShown ?? '';
+        let fullText = data.fullText ?? st.streamShown ?? '';
+        // Шахматы: если активен виджет, вырезаем сырой блок chess_move JSON из текста
+        // и применяем ход к доске. Игрок видит только комментарий агента.
+        try {
+            if (window.ChessWidget?.isActive?.()) {
+                const parsed = this._extractChessMove(fullText);
+                if (parsed) {
+                    fullText = parsed.cleaned;
+                    window.ChessWidget.applyServerMove(parsed.json);
+                }
+            }
+        } catch (e) { console.error('[chess] extract failed', e); }
 
         // Финальный полный рендер финального ответа — в живой блок (если он есть).
         // reasoning-блоки остаются выше нетронутыми.
@@ -3790,4 +3962,5 @@ class ChatApp {
 /* ── Точка входа ──────────────────────────── */
 const app = new ChatApp();
 app.init();
+window.App = app;   // для classic-скриптов (chess.js и др.)
 export default app;

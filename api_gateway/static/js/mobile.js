@@ -14,12 +14,12 @@ function initMobileMenu() {
         document.body.style.overflow = open ? 'hidden' : ''; // Блокируем скролл фона
     };
 
-    // Клик по гамбургеру
-   if (toggleBtn) {
+    // Клик по гамбургеру — ЕДИНЫЙ обработчик (B: убрано двойное управление).
+    // Логика 1:1 как в sigma (проверенно рабочая): просто инверсия open.
+    // Десктопный collapse/expand живёт отдельно в app.js на своих кнопках
+    // (#sidebar-collapse-btn / #sidebar-expand-btn) — бургеру туда лезть не надо.
+    if (toggleBtn) {
         toggleBtn.addEventListener("click", (e) => {
-            // На десктопе (>768) гамбургер рулит collapse (app.js initSidebarCollapse),
-            // а не оверлеем — мобильную логику пропускаем.
-            if (window.innerWidth > 768) return;
             e.stopPropagation();
             toggleSidebar(!sidebar.classList.contains('open'));
         });

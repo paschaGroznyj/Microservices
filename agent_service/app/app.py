@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 from agent_pm.langchain_agent import KnowledgeAgent, GATEWAY_URL
 from langchain.schema import HumanMessage, SystemMessage
 from agent_pm.summary_period import extract_json
+from agent_pm.prompts.game_prompts import build_game_context
 import asyncio
 from httpx import AsyncClient
 # from agent_pm.pm_parser.arxiv_parser import ARXIVParser
@@ -412,6 +413,14 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                 f"#{idx} [id={sk.get('id')}] {sk.get('theme')}\nИнструменты: {tools}\n{sk.get('body')}"
             )
         message += "\n\n[SELECTED_SKILLS_CONTEXT] Ниже скиллы, выбранные пользователем (до 5). Учитывай их как приоритетные инструкции, если они релевантны запросу:\n" + "\n\n".join(selected_chunks)
+
+    # Игровой режим (chess и др.): если сообщение — ход с маркером, подмешиваем игровую инструкцию.
+    try:
+        _game_ctx = build_game_context(text)
+        if _game_ctx:
+            message += "\n\n" + _game_ctx
+    except Exception as _e:
+        logging.warning(f"game_context inject failed: {_e}")
 
     images: list[dict] = []
     if has_files and message_id:

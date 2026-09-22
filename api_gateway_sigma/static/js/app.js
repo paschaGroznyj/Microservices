@@ -440,6 +440,11 @@ class ChatApp {
        OPEN / CREATE CHAT
     ══════════════════════════════════════════ */
     async openChat(chatId) {
+        // Сохраняем черновик поля ввода уходящего чата (в т.ч. со стартового
+        // экрана, где currentChat === null) до сноса DOM инпута.
+        if (String(this.currentChat) !== String(chatId)) {
+            this._saveInputDraft(this.currentChat);
+        }
         // Сохраняем статус уходящего чата перед сносом DOM
         if (this.currentChat && this.currentChat !== chatId) {
             if (!this._chatStatuses) this._chatStatuses = {};
@@ -511,6 +516,9 @@ class ChatApp {
             this.loadMessages(chatId),
             this.renderMessageInput()
         ]);
+
+        // Восстанавливаем сохранённый черновик поля ввода этого чата (если был).
+        this._restoreInputDraft(chatId);
 
         // ВАЖНО: раньше здесь был ранний return по наличию любого
         // .agent-message в ленте («ответ уже есть → агент свободен»). Это
@@ -655,7 +663,46 @@ class ChatApp {
     }
 
     startNewChat() {
+        // Перед уходом на стартовый экран снимаем черновик инпута текущего
+        // чата и сохраняем статус стримящего чата (как в openChat), иначе
+        // фоновый стрим/стоп-кнопка «протекут» на start page.
+        this._saveInputDraft(this.currentChat);
+        if (this.currentChat) {
+            if (!this._chatStatuses) this._chatStatuses = {};
+            const mainStatusEl = document.getElementById('agent-status-indicator');
+            const runningMeta = {
+                running: this._runState === 'running',
+                activeRequestId: this._activeRequestId || null,
+            };
+            // ВАРИАНТ 2 (мультиплекс SSE): EventSource стримящего чата НЕ
+            // закрываем — открепляем его узел из ленты, фоновый RAF достримит.
+            const oldKey = String(this.currentChat);
+            const oldStream = this._getStream(oldKey);
+            let streamDetached = false;
+            if (oldStream && oldStream.pendingBotEl) {
+                const el = oldStream.pendingBotEl;
+                if (el.parentNode) el.parentNode.removeChild(el);
+                streamDetached = true;
+            }
+            if (mainStatusEl || (this.subagentStates && Object.keys(this.subagentStates).length)
+                || runningMeta.running || streamDetached) {
+                this._chatStatuses[this.currentChat] = {
+                    main: mainStatusEl?.querySelector('.status-text')?.textContent || '',
+                    subagents: this.subagentStates ? { ...this.subagentStates } : {},
+                    ...runningMeta
+                };
+            }
+        }
+
         this.currentChat = null;
+        this.subagentStates = {};
+
+        // Сбрасываем run-UI: на стартовом экране стоп-кнопки быть не должно,
+        // даже если предыдущий (теперь фоновый) чат ещё стримит. Остановить
+        // его можно только вернувшись в него.
+        this._runState = 'idle';
+        this._activeRequestId = null;
+        this._botAnswered = false;
 
         const msgContainer = this.getMessagesContainer();
         if (msgContainer) {
@@ -672,6 +719,8 @@ class ChatApp {
         }
 
         this.renderMessageInput();
+        this._setSendButtonMode('send');
+        this._restoreInputDraft(null);
     }
 
     /* ══════════════════════════════════════════
@@ -1639,6 +1688,8 @@ class ChatApp {
             // Убираем из локального списка и перерисовываем только сайдбар
             this.chats = this.chats.filter(c => c.id !== chatId);
             this.renderChats(this.chats);
+            // Черновик удалённого чата больше не нужен
+            if (this._inputDrafts) delete this._inputDrafts[this._inputDraftKey(chatId)];
             // Сбрасываем интерфейс ТОЛЬКО если удалили именно открытый чат
             if (this.currentChat === chatId) {
                 this.currentChat = null;
@@ -1715,6 +1766,12 @@ class ChatApp {
         } catch (_) {}
 
         this.clearInput(field);
+        // Сообщение ушло — черновик этого чата (и стартового экрана) больше
+        // не нужен, иначе openChat из sendMessage мог сохранить его под id.
+        if (this._inputDrafts) {
+            delete this._inputDrafts[this._inputDraftKey(this.currentChat)];
+            delete this._inputDrafts['__start__'];
+        }
         sendBtn?.classList.remove('active');
         this._botAnswered = false;
         this._hardResetStreamState(this.currentChat);
@@ -3167,6 +3224,43 @@ class ChatApp {
         } else {
             field.innerHTML = '';
         }
+    }
+
+    /* ── Черновики поля ввода per-chat ──────────────────────────────
+       Как и в разделах, сохраняем недописанный текст при уходе из чата
+       (включая стартовый экран, ключ '__start__') и возвращаем при входе.
+       Храним ПЛОСКИЙ текст (с раскрытыми чипами) — при восстановлении
+       кладём его как обычный текст, чипы заново не собираем. */
+    _inputDraftKey(chatId) {
+        return (chatId === null || chatId === undefined || chatId === '')
+            ? '__start__'
+            : String(chatId);
+    }
+
+    _saveInputDraft(chatId) {
+        if (!this._inputDrafts) this._inputDrafts = {};
+        const container = this.getInputContainer();
+        const field = container?.querySelector('#message-input');
+        if (!field) return;
+        const text = this.getInputText();
+        const key = this._inputDraftKey(chatId);
+        if (text && text.length) {
+            this._inputDrafts[key] = text;
+        } else {
+            delete this._inputDrafts[key];
+        }
+    }
+
+    _restoreInputDraft(chatId) {
+        if (!this._inputDrafts) this._inputDrafts = {};
+        const container = this.getInputContainer();
+        const field = container?.querySelector('#message-input');
+        if (!field) return;
+        const key = this._inputDraftKey(chatId);
+        const draft = this._inputDrafts[key];
+        if (!draft) return;
+        // setInputText диспатчит input → пересчёт кнопки/лимита.
+        this.setInputText(field, draft);
     }
 
     /* Вставляет свёрнутый длинный текст как inline-чип в поле ввода.

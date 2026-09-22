@@ -357,17 +357,45 @@
   border: none;
   cursor: pointer;
   overflow: hidden;
-  background: color-mix(in srgb, var(--border) 40%, transparent);
+  /* без фона — во время загрузки видно только шиммер, картинка кропается cover */
+  background: transparent;
   min-height: 0;
   min-width: 0;
 }
+/* шиммер загрузки: бегущий блик поверх фона, гаснет когда img загрузился */
+.gc-collage__cell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 20%,
+    color-mix(in srgb, var(--text-muted) 22%, transparent) 50%,
+    transparent 80%
+  );
+  background-size: 220% 100%;
+  animation: gcShimmer 1.25s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+/* когда картинка догрузилась (JS ставит класс) — блик убираем */
+.gc-collage__cell.is-loaded::before { display: none; }
 .gc-collage__cell img {
+  position: relative;
+  z-index: 1;
   display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
+  opacity: 0;
+  transition: opacity 0.32s ease;
 }
+.gc-collage__cell.is-loaded img { opacity: 1; }
 .gc-collage__cell:hover img { filter: brightness(0.92); }
+@keyframes gcShimmer {
+  0%   { background-position: 140% 0; }
+  100% { background-position: -40% 0; }
+}
 
 .gc-collage__more {
   position: absolute;
@@ -381,17 +409,19 @@
   background: rgba(0, 0, 0, 0.45);
 }
 
-/* 1 картинка — во всю ширину пузыря, естественная высота */
+/* 1 картинка — фиксированная область, картинка кропается (cover),
+   без полей и без видимой рамки/фона по краям */
 .gc-collage--one {
   grid-template-columns: 1fr;
 }
 .gc-collage--one .gc-collage__cell {
-  max-height: 380px;
+  /* фиксированный размер области — подгрузка img не двигает скролл */
+  aspect-ratio: 4 / 3;
 }
 .gc-collage--one .gc-collage__cell img {
-  height: auto;
-  max-height: 380px;
-  object-fit: contain;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 /* 2 картинки — 50/50 */

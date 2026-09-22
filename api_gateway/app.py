@@ -1208,6 +1208,30 @@ async def chat_game_mode(chat_id: str, request: Request):
     return JSONResponse(content={"active": True, **info})
 
 
+@app.post("/api/chats/{chat_id}/game_engine")
+async def chat_game_engine(chat_id: str, request: Request):
+    """Смена движка (agent|best) в активном игровом режиме. Фронт дёргает
+    при клике на тумблер движка (разрешён только до первого хода).
+    Персистит выбор, чтобы после F5 сила соперника сохранилась.
+      {"ok": true, "engine": "best"}  |  {"ok": false} — режим не активен
+    """
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    engine = (body or {}).get("engine", "agent")
+
+    updated = await chat_commands.set_engine(chat_id, engine)
+    if not updated:
+        return JSONResponse(content={"ok": False})
+    return JSONResponse(content={"ok": True, "engine": updated.get("engine")})
+
+
 @app.post("/api/chats/upload_files")
 async def upload_files(
     request: Request,

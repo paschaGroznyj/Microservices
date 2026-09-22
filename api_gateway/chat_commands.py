@@ -121,6 +121,26 @@ async def set_mode(chat_id, mode: str, engine: str, player_color: str) -> dict:
     return payload
 
 
+async def set_engine(chat_id, engine: str) -> dict | None:
+    """Обновляет только движок в уже активном режиме (переключатель до
+    первого хода). Возвращает обновлённый payload или None, если режим
+    не активен. Не сбрасывает started_at/player_color."""
+    if _redis is None or chat_id is None:
+        return None
+    try:
+        raw = await _redis.get(_key(chat_id))
+        if not raw:
+            return None
+        payload = json.loads(raw)
+        payload["engine"] = "best" if engine == "best" else "agent"
+        # TTL сохраняем прежним диапазоном режима.
+        await _redis.set(_key(chat_id), json.dumps(payload), ex=MODE_TTL)
+        return payload
+    except Exception as e:
+        logger.debug("chat_commands.set_engine failed: %s", e)
+        return None
+
+
 async def clear_mode(chat_id) -> None:
     """Снимает флаг режима (/stop). Идемпотентно."""
     if _redis is None or chat_id is None:

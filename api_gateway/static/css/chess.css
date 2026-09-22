@@ -91,21 +91,46 @@
   align-items: center;
   gap: 10px;
 }
-/* Движок — индикатор (зафиксирован на партию). Стиль как у theme-toggle-капсулы. */
+/* Движок — сегментный тумблер в стиле theme-toggle-капсулы (agent | best).
+ * Кликабелен только до первого хода; после — .chess-engine-toggle--locked. */
 .chess-engine-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
+  gap: 2px;
+  padding: 3px;
   border-radius: 999px;
   border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  color: var(--accent);
-  font-size: .78rem;
-  font-weight: 600;
-  cursor: default;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  cursor: pointer;
+  transition: opacity var(--transition), background var(--transition);
 }
-.chess-engine-ic { display: inline-flex; }
+.chess-engine-toggle:hover:not(.chess-engine-toggle--locked) {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.chess-engine-toggle--locked {
+  cursor: default;
+  opacity: .85;
+}
+.chess-eng-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: .74rem;
+  font-weight: 600;
+  line-height: 1;
+  transition: background var(--transition), color var(--transition);
+}
+.chess-eng-opt svg { display: block; }
+.chess-eng-opt.is-active {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.chess-engine-toggle--locked .chess-eng-opt:not(.is-active) { opacity: .45; }
+.chess-eng-lbl { white-space: nowrap; }
 .chess-modal-status {
   flex: 1 1 auto;
   text-align: center;
@@ -182,8 +207,46 @@
 .cp-white svg { fill: #f8f8f8; stroke: #202020; stroke-width: 1.4; stroke-linejoin: round; }
 .cp-black svg { fill: #202020; stroke: #f0f0f0; stroke-width: 1.4; stroke-linejoin: round; }
 
+/* ── ФУТЕР МОДАЛКИ: пара кнопок (сдаться / свернуть) ─────────────────────── */
+.chess-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+}
+.chess-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: .85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition), color var(--transition);
+}
+.chess-btn:hover {
+  background: var(--sidebar-hover, color-mix(in srgb, var(--accent) 8%, transparent));
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+.chess-btn svg { display: block; }
+.chess-btn--danger {
+  color: #e0574a;
+  border-color: color-mix(in srgb, #e0574a 40%, var(--border));
+}
+.chess-btn--danger:hover {
+  background: color-mix(in srgb, #e0574a 12%, transparent);
+  border-color: #e0574a;
+}
+
 @media (max-width: 640px) {
   .chess-modal { width: 94vw; padding: 12px; }
+  .chess-eng-lbl { display: none; }
 }
 
 /* Ход игрока в ленте: компактный user-message-пузырь вместо сырого JSON */

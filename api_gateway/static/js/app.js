@@ -939,9 +939,17 @@ class ChatApp {
             // показываем человекочитаемо (e2 → e4), а не сырым JSON.
             const chessLabel = this._chessMoveLabel(rawContent);
             if (chessLabel !== null) {
+                // Дедуп WS-эха: ход-чип оборачиваем в user-message-wrapper с
+                // data-message-id (как обычные user-message), иначе WS-эхо не
+                // найдёт совпадения и нарисует ход второй раз (дубль в ленте).
+                const chessWrap = document.createElement('div');
+                chessWrap.className = 'user-message-wrapper';
+                const mid = message.message_id || message.id;
+                if (mid) chessWrap.dataset.messageId = mid;
                 messageEl.classList.add('chess-move-msg');
                 messageEl.innerHTML = `<div class="message-text">${this.escapeHtml(chessLabel)}</div><div class="timestamp">${time}</div>`;
-                container.appendChild(messageEl);
+                chessWrap.appendChild(messageEl);
+                container.appendChild(chessWrap);
                 if (scroll) container.scrollTop = container.scrollHeight;
                 return messageEl;
             }

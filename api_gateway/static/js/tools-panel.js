@@ -138,6 +138,27 @@ class ToolsPanel {
     return [...this._selected];
   }
 
+  /**
+   * Форсит наличие категории в выборе (для игровых режимов: chess требует
+   * "content", где живёт execute_python_code). Возвращает true, если
+   * категория была реально добавлена (её не было) — чтобы вызывающий мог
+   * потом откатить состояние. Обновляет UI-бейдж, если панель уже смонтирована.
+   */
+  ensureCategory(catId) {
+    if (!catId || this._selected.has(catId)) return false;
+    this._selected.add(catId);
+    try { this._updateTriggerBadge(); } catch (_) {}
+    return true;
+  }
+
+  /** Снимает категорию (откат ensureCategory). */
+  removeCategory(catId) {
+    if (!catId || !this._selected.has(catId)) return false;
+    this._selected.delete(catId);
+    try { this._updateTriggerBadge(); } catch (_) {}
+    return true;
+  }
+
   getContextSize() { return this._contextSize; }
 
   /**
@@ -544,6 +565,27 @@ class ModelPickerClass {
   /* ── Публичный API ──────────────────────────────────────────────────── */
 
   getModel() { return this._selected; }
+
+  /**
+   * Временно форсит модель БЕЗ записи в localStorage (для игровых режимов:
+   * chess требует тяжёлую модель, а не 'designer'). Возвращает предыдущий
+   * выбор пользователя, чтобы вызывающий мог его вернуть после игры.
+   */
+  forceModel(modelId) {
+    const prev = this._selected;
+    if (modelId && modelId !== prev) {
+      this._selected = modelId;
+      try { this._syncAllBtns(); } catch (_) {}
+    }
+    return prev;
+  }
+
+  /** Возврат ранее сохранённого выбора пользователя (откат forceModel). */
+  restoreModel(modelId) {
+    if (!modelId) return;
+    this._selected = modelId;
+    try { this._syncAllBtns(); } catch (_) {}
+  }
 
   /* Тянет доступность провайдеров с бэка (с TTL-кешем и дедупом запросов).
      Возвращает объект providers ({id: {up, name, reason?}}) или null. */

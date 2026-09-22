@@ -44,6 +44,12 @@
   };
   const ENGINE_LABEL = { agent: 'Агент', best: 'Stockfish' };
 
+  // Модель, форсируемая на время партии (agent-loop с execute_python_code).
+  // 'designer' (лёгкая) роняет цикл на инъекции chess-промпта — берём 'coder'.
+  const GAME_MODEL = 'coder';
+  // Категория тулов, где живёт execute_python_code (нужен, чтобы сходить движком).
+  const GAME_TOOL_CATEGORY = 'content';
+
   class ChessWidget {
     constructor() {
       this.active = false;
@@ -54,6 +60,7 @@
       this.board = null;            // 8x8 массив, [rank0=8..rank7=1][file]
       this.moveNo = 1;
       this.status = 'in_progress';
+      this.hasMoved = false;        // сделан ли первый ход (после — движок фиксируется)
       this.selected = null;         // выбранная клетка при клике
       this.pendingFrom = null;      // источник хода в процессе drag
       this.waitingServer = false;   // ждём ответ агента (блок доски)
@@ -63,16 +70,28 @@
     }
 
     // ── Публичный API (вызывается из app.js) ────────────────────────────────
-    start({ mode = 'chess', engine = 'agent', player_color = 'white', fen } = {}) {
+    start({ mode = 'chess', engine = 'agent', player_color = 'white', fen, restore = false } = {}) {
       this.active = true;
       this.mode = mode;
       this.engine = engine === 'best' ? 'best' : 'agent';
       this.playerColor = player_color === 'black' ? 'black' : 'white';
       this.fen = fen || START_FEN;
       this.status = 'in_progress';
-      this.moveNo = 1;
+      // Номер хода из FEN — при restore партия могла уже идти (6-е поле FEN).
+      const p = (this.fen || '').split(' ');
+      this.moveNo = (p.length >= 6 && parseInt(p[5], 10)) || 1;
       this.waitingServer = false;
+      // hasMoved: при рестарте после F5 определяем по FEN (не стартовая позиция
+      // или ход чёрных / номер хода > 1 => партия уже начата, движок зафиксирован).
+      this.hasMoved = restore ? (this.fen !== START_FEN) : false;
       this.board = this._parseFen(this.fen);
+
+      // ИГРОВОЙ РЕЖИМ ТРЕБУЕТ execute_python_code (категория "content") и
+      // тяжёлую модель — иначе agent-loop падает ("Ошибка внутри цикла агента"
+      // при selected_tools:[] и model=designer). Форсим на время партии,
+      // запоминая прежний выбор пользователя для отката в stop().
+      this._forceGameEnv();
+
       this._renderIsland();
     }
 
@@ -80,6 +99,41 @@
       this.active = false;
       this._removeModal();
       this._removeIsland();
+      // Возвращаем пользовательский выбор тулов/модели, который был до игры.
+      this._restoreUserEnv();
+    }
+
+    // Форсит набор тулов + модель под игру, сохраняя прежнее состояние.
+    _forceGameEnv() {
+      try {
+        const tp = window.ToolsPanel;
+        // Запоминаем, была ли категория content выбрана пользователем.
+        this._contentWasForced = tp && typeof tp.ensureCategory === 'function'
+          ? tp.ensureCategory(GAME_TOOL_CATEGORY)   // true, если добавили (потом снять)
+          : false;
+      } catch (_) { this._contentWasForced = false; }
+      try {
+        const mp = window.ModelPicker;
+        // GAME_MODEL — тяжёлая модель для игрового цикла (coder), сохраняем прежнюю.
+        this._prevModel = mp && typeof mp.forceModel === 'function'
+          ? mp.forceModel(GAME_MODEL)
+          : null;
+      } catch (_) { this._prevModel = null; }
+    }
+
+    _restoreUserEnv() {
+      try {
+        if (this._contentWasForced && window.ToolsPanel?.removeCategory) {
+          window.ToolsPanel.removeCategory(GAME_TOOL_CATEGORY);
+        }
+      } catch (_) {}
+      this._contentWasForced = false;
+      try {
+        if (this._prevModel && window.ModelPicker?.restoreModel) {
+          window.ModelPicker.restoreModel(this._prevModel);
+        }
+      } catch (_) {}
+      this._prevModel = null;
     }
 
     // Применить ход, вернувшийся от сервера (блок chess_move).
@@ -169,19 +223,23 @@
       const modal = document.createElement('div');
       modal.className = 'chess-modal';
 
-      // Шапка модалки: движок-индикатор + статус + кнопка закрыть
+      // Шапка модалки: движок-переключатель + статус + кнопка закрыть
       const header = document.createElement('div');
       header.className = 'chess-modal-header';
+      // Тумблер движка активен ТОЛЬКО до первого хода (для новой партии).
+      // После первого хода / в процессе — фиксируется (по договорённости с Павлом).
+      const toggleEnabled = this._canSwitchEngine();
       header.innerHTML =
-        '<div class="chess-engine-toggle" title="Движок зафиксирован на партию">' +
-        '  <span class="chess-engine-ic">' + ENGINE_ICON[this.engine] + '</span>' +
-        '  <span class="chess-engine-label">' + ENGINE_LABEL[this.engine] + '</span>' +
-        '</div>' +
+        this._engineToggleHtml(toggleEnabled) +
         '<div class="chess-modal-status" id="chess-status">' + (this._statusLabel() || 'В игре') + '</div>' +
         '<button class="chess-modal-close" type="button" aria-label="Закрыть">' +
         '  <svg viewBox="0 0 20 20" fill="none" width="18" height="18"><path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>' +
         '</button>';
       header.querySelector('.chess-modal-close').addEventListener('click', () => this._closeModal());
+      const toggleBtn = header.querySelector('.chess-engine-toggle');
+      if (toggleBtn && toggleEnabled) {
+        toggleBtn.addEventListener('click', () => this._toggleEngine());
+      }
 
       // Доска
       const boardWrap = document.createElement('div');
@@ -192,8 +250,23 @@
       boardWrap.appendChild(board);
       this._boardEl = board;
 
+      // Футер: пара кнопок (сдаться / закрыть окно)
+      const footer = document.createElement('div');
+      footer.className = 'chess-modal-footer';
+      footer.innerHTML =
+        '<button class="chess-btn chess-btn--danger" type="button" data-act="resign">' +
+        '  <svg viewBox="0 0 24 24" fill="none" width="16" height="16"><path d="M5 21V4M5 4h11l-2 4 2 4H5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+        '  <span>Сдаться</span>' +
+        '</button>' +
+        '<button class="chess-btn" type="button" data-act="close">' +
+        '  <span>Свернуть доску</span>' +
+        '</button>';
+      footer.querySelector('[data-act="resign"]').addEventListener('click', () => this._resign());
+      footer.querySelector('[data-act="close"]').addEventListener('click', () => this._closeModal());
+
       modal.appendChild(header);
       modal.appendChild(boardWrap);
+      modal.appendChild(footer);
       overlay.appendChild(modal);
       document.body.appendChild(overlay);
       this._modalEl = overlay;
@@ -292,6 +365,8 @@
 
     // Сформировать и отправить ход как обычное сообщение с маркером.
     _commitMove(from, to) {
+      // Защита от дубля: пока ждём ответ сервера — второй ход не шлём.
+      if (this.waitingServer || this.status !== 'in_progress') return;
       // Автопромоушен в ферзя (по договорённости — без модалки выбора фигуры).
       let uci = from + to;
       const [r, f] = this._sqToIdx(from);
@@ -304,7 +379,9 @@
       // Оптимистично двигаем фигуру локально (визуальный отклик), ждём подтверждения сервера.
       this.selected = null;
       this.waitingServer = true;
+      this.hasMoved = true;   // первый ход сделан -> движок фиксируется
       this._renderBoard();
+      this._refreshHeader();  // задизейблить тумблер движка
 
       const payload = { fen: this.fen, player_move: uci, engine: this.engine };
       const text = '[CHESS_MOVE] ' + JSON.stringify(payload);
@@ -316,6 +393,74 @@
         console.error('[chess] App.sendMessageText недоступен');
         this.waitingServer = false;
       }
+    }
+
+    // ── ДВИЖОК: переключатель (только до первого хода) ───────────────────────
+    // Тумблер в стиле theme-toggle: две SVG-иконки (agent/best), активная —
+    // текущий движок. Кликабелен ТОЛЬКО пока не сделан первый ход.
+    _canSwitchEngine() {
+      return !this.hasMoved && this.status === 'in_progress' && !this.waitingServer;
+    }
+
+    _engineToggleHtml(enabled) {
+      const cls = 'chess-engine-toggle' + (enabled ? '' : ' chess-engine-toggle--locked');
+      const title = enabled
+        ? 'Сила соперника (сменить можно до первого хода)'
+        : 'Движок зафиксирован на партию';
+      const aOn = this.engine === 'agent' ? ' is-active' : '';
+      const bOn = this.engine === 'best' ? ' is-active' : '';
+      return '<button class="' + cls + '" type="button" title="' + title + '"' +
+        (enabled ? '' : ' disabled') + ' aria-label="Переключить движок">' +
+        '<span class="chess-eng-opt' + aOn + '" data-eng="agent">' + ENGINE_ICON.agent +
+        '<span class="chess-eng-lbl">' + ENGINE_LABEL.agent + '</span></span>' +
+        '<span class="chess-eng-opt' + bOn + '" data-eng="best">' + ENGINE_ICON.best +
+        '<span class="chess-eng-lbl">' + ENGINE_LABEL.best + '</span></span>' +
+        '</button>';
+    }
+
+    _toggleEngine() {
+      if (!this._canSwitchEngine()) return;
+      this.engine = this.engine === 'agent' ? 'best' : 'agent';
+      // Персистим выбор на gateway, чтобы после F5 сила соперника сохранилась.
+      try {
+        fetch('/api/chats/' + encodeURIComponent(this._chatId()) + '/game_engine', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ engine: this.engine }),
+        }).catch(() => {});
+      } catch (_) {}
+      // Перерисовать шапку модалки + плашку.
+      this._refreshHeader();
+      this._renderIsland();
+    }
+
+    _refreshHeader() {
+      const header = this._modalEl && this._modalEl.querySelector('.chess-modal-header');
+      if (!header) return;
+      const old = header.querySelector('.chess-engine-toggle');
+      if (!old) return;
+      const enabled = this._canSwitchEngine();
+      const tmp = document.createElement('div');
+      tmp.innerHTML = this._engineToggleHtml(enabled);
+      const fresh = tmp.firstChild;
+      old.replaceWith(fresh);
+      if (enabled) fresh.addEventListener('click', () => this._toggleEngine());
+    }
+
+    _chatId() {
+      const app = window.App || window.app;
+      return (app && app.currentChat) || '';
+    }
+
+    // Сдаться: закрываем режим через /stop-эквивалент на gateway.
+    _resign() {
+      const app = window.App || window.app;
+      try {
+        if (app && typeof app.sendMessageText === 'function') {
+          app.sendMessageText('/stop');
+        }
+      } catch (_) {}
+      this.stop();
     }
 
     // ── FEN / индексы ────────────────────────────────────────────────────────

@@ -507,8 +507,25 @@
 .wn-btn-ghost:hover { color: var(--text-secondary, #5c5650); }
 
 /* ── Модалка обновления (What's New) — тот же каркас, компактнее ── */
-.wn-card-update { height: auto; max-height: calc(100vh - 40px); max-width: 480px; }
-.wn-card-update .wn-stage { display: block; }
+/* Фиксированная высота => окно не прыгает от обновления к обновлению,
+   а .wn-stage остаётся во flex-контексте, чтобы .wn-scroll реально скроллился. */
+.wn-card-update { height: 520px; max-height: calc(100vh - 40px); max-width: 480px; }
+.wn-card-update .wn-stage { display: flex; min-height: 0; }
+/* Для окна обновления показываем тонкую полосу прокрутки — видно, что контент листается. */
+.wn-card-update .wn-scroll {
+  scrollbar-width: thin;                               /* Firefox */
+  -ms-overflow-style: auto;
+  scrollbar-color: color-mix(in srgb, var(--border, #e0dbd4) 60%, transparent) transparent;
+}
+.wn-card-update .wn-scroll::-webkit-scrollbar { width: 6px; height: 6px; display: block; }
+.wn-card-update .wn-scroll::-webkit-scrollbar-track { background: transparent; }
+.wn-card-update .wn-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--border, #e0dbd4) 60%, transparent);
+  border-radius: 3px;
+}
+.wn-card-update .wn-scroll::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--border, #e0dbd4) 85%, transparent);
+}
 .wn-badge {
   display: inline-block;
   font-size: 0.72rem;
@@ -561,4 +578,10 @@
   .wn-hero-ph { display: none; }        /* плейсхолдеры на мобилке не мешаем */
   .wn-scroll { padding: 8px 18px 20px; }
   .wn-title { font-size: 1.2rem; }
+  /* Окно обновления на мобилке — на весь экран, без фиксированной 520px. */
+  .wn-card-update {
+    height: 100%;
+    max-height: 100%;
+    max-width: 100%;
+  }
 }

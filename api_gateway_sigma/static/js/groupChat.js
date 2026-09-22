@@ -245,12 +245,18 @@
     _renderAll() {
       const box = document.getElementById('gc-messages');
       if (!box) return;
+      // Полный ререндер через innerHTML сбрасывает scrollTop в 0 -> если
+      // пользователь пролистал вверх (читает старое) и прилетело событие
+      // (new_message/edit/pin/loadPinned), его кидало в начало ленты.
+      // Запоминаем позицию и держим её, если пользователь НЕ у низа.
+      const prevTop = box.scrollTop;
       const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
       box.innerHTML = this.messages.map(m => this._msgHtml(m)).join('');
       this._bindMsgActions(box);
       this._bindCollages(box);
       this._initCollapsibles(box);
       if (nearBottom) box.scrollTop = box.scrollHeight;
+      else box.scrollTop = prevTop;
     },
 
     _msgHtml(m) {

@@ -15,34 +15,13 @@ function initMobileMenu() {
     };
 
     // Клик по гамбургеру — ЕДИНЫЙ обработчик (B: убрано двойное управление).
-    // На мобилке (<=768) бургер открывает/закрывает сайдбар оверлеем.
-    // На десктопе (>768) бургер виден только когда сайдбар свёрнут (CSS
-    // .sidebar-collapsed) и играет роль кнопки "развернуть" — снимает collapse.
+    // Логика 1:1 как в sigma (проверенно рабочая): просто инверсия open.
+    // Десктопный collapse/expand живёт отдельно в app.js на своих кнопках
+    // (#sidebar-collapse-btn / #sidebar-expand-btn) — бургеру туда лезть не надо.
     if (toggleBtn) {
-        // Единый критерий "мобилка" — тот же брейкпоинт, что в CSS (@media max-width:768px).
-        const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
-
         toggleBtn.addEventListener("click", (e) => {
             e.stopPropagation();
-
-            // МОБИЛКА: бургер всегда открывает/закрывает сайдбар оверлеем.
-            // Это приоритетная ветка — на узком экране desktop-collapse неактуален.
-            if (isMobile()) {
-                toggleSidebar(!sidebar.classList.contains('open'));
-                return;
-            }
-
-            // ДЕСКТОП (>768): бургер виден только когда сайдбар свёрнут (CSS
-            // .sidebar-collapsed) и играет роль кнопки "развернуть" — снимает collapse.
-            const layout = document.querySelector('.chat-layout');
-            const expandBtn = document.getElementById('sidebar-expand-btn');
-            const collapseBtn = document.getElementById('sidebar-collapse-btn');
-            if (layout && layout.classList.contains('sidebar-collapsed')) {
-                layout.classList.remove('sidebar-collapsed');
-                if (expandBtn) expandBtn.hidden = true;
-                if (collapseBtn) collapseBtn.setAttribute('aria-expanded', 'true');
-                try { localStorage.setItem('catchpm:sidebar-collapsed', '0'); } catch (err) {}
-            }
+            toggleSidebar(!sidebar.classList.contains('open'));
         });
     }
 

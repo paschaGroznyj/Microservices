@@ -27,6 +27,7 @@ from config import (
     ADMIN_USERNAMES
 )
 import presence
+import run_status
 import group_chat_gw
 
 logging.basicConfig(level=logging.INFO)
@@ -245,6 +246,9 @@ async def receive_bot_message(bot_msg: BotMessage):
 
     # Отправляем сообщение через WebSocket всем клиентам в чате
     await broadcast(bot_msg.chat_id, bot_msg.message)
+
+    # Финал пришёл — снимаем Redis-флаг «агент в работе».
+    await run_status.clear_running(bot_msg.chat_id)
 
     # Автогенерированный заголовок чата: отдельное событие title_update,
     # чтобы фронт обновил строку чата в сайдбаре без перезапроса списка.
@@ -1086,6 +1090,11 @@ async def send_message(request: Request):
     }
     print("Перед отправкой сообщения", data)
     await broadcast(data["chat_id"], message) # Отравим сразу по вебсокету
+    # Флаг «агент в работе» в Redis: переживает F5/переключение чата,
+    # фронт по нему восстанавливает стоп-кнопку и индикатор работы.
+    await run_status.mark_running(
+        data["chat_id"], request_id, data.get("type_agent")
+    )
     try:
         start = time.perf_counter()
         response = await app.state.http_client.post(
@@ -1116,6 +1125,11 @@ async def stop_message(request: Request):
     if not request_id:
         raise HTTPException(status_code=400, detail="request_id required")
 
+    # Стоп: снимаем Redis-флаг работы (chat_id знаем по pending_requests).
+    stop_chat_id = pending_requests.get(request_id) or data.get("chat_id")
+    if stop_chat_id is not None:
+        await run_status.clear_running(stop_chat_id)
+
     try:
         response = await app.state.http_client.post(
             f"{SERVICES['agent_service']['url']}/internal/stop_message",
@@ -1129,6 +1143,23 @@ async def stop_message(request: Request):
         )
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Agent service unreachable: {str(e)}")
+
+@app.get("/api/chats/{chat_id}/run_status")
+async def chat_run_status(chat_id: str, request: Request):
+    """Идёт ли сейчас генерация по этому чату (для восстановления UI
+    после F5/переключения чата). Возвращает:
+      {"running": true, "request_id": "...", "model": "...", "started_at": ...}
+      {"running": false}
+    """
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    info = await run_status.get_running(chat_id)
+    if not info:
+        return JSONResponse(content={"running": False})
+    return JSONResponse(content={"running": True, **info})
+
 
 @app.post("/api/chats/upload_files")
 async def upload_files(

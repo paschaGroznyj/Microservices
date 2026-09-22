@@ -29,6 +29,7 @@ from config import (
 import presence
 import run_status
 import group_chat_gw
+import chat_commands
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1066,6 +1067,35 @@ async def send_message(request: Request):
     # Получаем данные из запроса
     data = await request.json()
     logging.info(data)
+
+    # --- СЛЭШ-КОМАНДЫ ИГРОВЫХ РЕЖИМОВ (/chess, /stop и т.д.) ---
+    # Перехватываем ДО отправки в chats_service/агента. Команда не есть
+    # сообщение для агента: гейтвей сам ставит/снимает режим в Redis
+    # и шлёт фронту сигнал рендерить/убрать игровой интерфейс.
+    _cmd = chat_commands.parse_command(data.get("message", ""))
+    if _cmd is not None:
+        _chat_id = data.get("chat_id")
+        if _cmd["kind"] == "stop":
+            await chat_commands.clear_mode(_chat_id)
+            await broadcast(_chat_id, {"type": "game_stop", "chat_id": _chat_id})
+            return JSONResponse(content={"command": "stop", "handled": True})
+        # kind == "start": включаем игровой режим
+        _player_color = chat_commands.pick_color(_cmd["spec"])
+        _payload = await chat_commands.set_mode(
+            _chat_id, _cmd["mode"], _cmd["engine"], _player_color
+        )
+        await broadcast(_chat_id, {
+            "type": "game_start",
+            "chat_id": _chat_id,
+            "mode": _cmd["mode"],
+            "engine": _cmd["engine"],
+            "player_color": _player_color,
+        })
+        return JSONResponse(content={
+            "command": _cmd["mode"], "handled": True, **_payload
+        })
+    # --- /СЛЭШ-КОМАНДЫ ---
+
     request_id = str(uuid.uuid4()) # Генерация id для передачи его агенту с последующей реализацией ОС о его действиях
     # Запоминаем связь ДО отправки агенту
     pending_requests[request_id] = data["chat_id"]
@@ -1159,6 +1189,23 @@ async def chat_run_status(chat_id: str, request: Request):
     if not info:
         return JSONResponse(content={"running": False})
     return JSONResponse(content={"running": True, **info})
+
+
+@app.get("/api/chats/{chat_id}/game_mode")
+async def chat_game_mode(chat_id: str, request: Request):
+    """Активен ли игровой режим по чату (для восстановления доски
+    после F5/переключения чата). Возвращает:
+      {"active": true, "mode": "chess", "engine": "...", "player_color": "...", ...}
+      {"active": false}
+    """
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    info = await chat_commands.get_mode(chat_id)
+    if not info:
+        return JSONResponse(content={"active": False})
+    return JSONResponse(content={"active": True, **info})
 
 
 @app.post("/api/chats/upload_files")

@@ -543,6 +543,27 @@ class ChatApp {
      * Ищет fenced ```json ... ``` или голый {"type":"chess_move"...} / chess_error.
      * Возвращает {json, cleaned} либо null.
      */
+    /**
+     * Шахматы: если текст user-message = "[CHESS_MOVE] {json}",
+     * возвращает человекочитаемую метку хода ("♙ e2 → e4"). Иначе null.
+     */
+    _chessMoveLabel(text) {
+        if (!text || typeof text !== 'string') return null;
+        const t = text.trimStart();
+        if (!t.startsWith('[CHESS_MOVE]')) return null;
+        try {
+            const jsonPart = t.slice('[CHESS_MOVE]'.length).trim();
+            const o = JSON.parse(jsonPart);
+            const uci = (o && o.player_move) ? String(o.player_move) : '';
+            if (uci.length >= 4) {
+                const from = uci.slice(0, 2), to = uci.slice(2, 4);
+                const promo = uci.length > 4 ? ' =' + uci.slice(4).toUpperCase() : '';
+                return '\u265F ' + from + ' \u2192 ' + to + promo;
+            }
+            return '\u265F ход';
+        } catch (_) { return '\u265F ход'; }
+    }
+
     _extractChessMove(text) {
         if (!text) return null;
         const tryParse = (raw) => { try { const o = JSON.parse(raw); return (o && (o.type === 'chess_move' || o.type === 'chess_error')) ? o : null; } catch (_) { return null; } };
@@ -914,6 +935,16 @@ class ChatApp {
             .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
         if (!isBot) {
+            // Шахматный ход: user-message с маркером [CHESS_MOVE] {json}
+            // показываем человекочитаемо (e2 → e4), а не сырым JSON.
+            const chessLabel = this._chessMoveLabel(rawContent);
+            if (chessLabel !== null) {
+                messageEl.classList.add('chess-move-msg');
+                messageEl.innerHTML = `<div class="message-text">${this.escapeHtml(chessLabel)}</div><div class="timestamp">${time}</div>`;
+                container.appendChild(messageEl);
+                if (scroll) container.scrollTop = container.scrollHeight;
+                return messageEl;
+            }
             // Длинный текст (>1000 символов) сворачиваем в чип-файлик,
             // клик по которому открывает превью в правом сайдбаре.
             // Длинный текст (Claude-style): рендерим обычным текстом,

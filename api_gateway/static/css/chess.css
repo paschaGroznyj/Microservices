@@ -185,3 +185,13 @@
 @media (max-width: 640px) {
   .chess-modal { width: 94vw; padding: 12px; }
 }
+
+/* Ход игрока в ленте: компактный user-message-пузырь вместо сырого JSON */
+.user-message.chess-move-msg .message-text {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .04em;
+  font-weight: 600;
+}
+.user-message.chess-move-msg .message-text::first-letter {
+  color: var(--accent);
+}

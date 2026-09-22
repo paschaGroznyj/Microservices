@@ -1,0 +1,187 @@
+/* ============================================================================
+ * chess.css — шахматный виджет в ленте чата
+ * ----------------------------------------------------------------------------
+ * ISLAND-плашка: стиль по образцу .gc-pinned (стеклянная капсула под хедером).
+ * КЛЕТКИ: завязаны на palette (var(--surface)/производная от --accent) и
+ *   НЕ переопределяются в [data-theme="dark"] — по требованию Павла цвет клеток
+ *   постоянен день/ночь. Меняется только вместе со сменой палитры (accent).
+ * Фигуры: SVG, currentColor -> .cp-white/.cp-black.
+ * ==========================================================================*/
+
+/* ── ISLAND-плашка (клик -> модалка) ─────────────────────────────────────── */
+.chess-island {
+  position: absolute;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9;
+  width: calc(100% - 32px);
+  max-width: 720px;
+  padding: 8px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  -webkit-backdrop-filter: blur(12px) saturate(120%);
+  backdrop-filter: blur(12px) saturate(120%);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  cursor: pointer;
+  transition: background var(--transition), box-shadow var(--transition);
+}
+.chess-island:hover {
+  background: color-mix(in srgb, var(--surface) 84%, transparent);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.16);
+}
+[data-theme="dark"] .chess-island {
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: color-mix(in srgb, var(--surface) 62%, transparent);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.38);
+}
+.chess-island-ic { flex: 0 0 auto; color: var(--accent); display: inline-flex; }
+.chess-island-body { flex: 1 1 auto; min-width: 0; }
+.chess-island-title {
+  font-size: .72rem;
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1.2;
+}
+.chess-island-text {
+  font-size: .8rem;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: .85;
+}
+.chess-island-open { flex: 0 0 auto; color: var(--text-muted); display: inline-flex; }
+
+/* ── МОДАЛКА с доской ─────────────────────────────────────────────────────── */
+.chess-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.45);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+  animation: chessFadeIn .16s ease;
+}
+@keyframes chessFadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+.chess-modal {
+  width: min(92vw, 560px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.32);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation: chessPop .18s cubic-bezier(.2, .8, .3, 1);
+}
+@keyframes chessPop { from { transform: scale(.96); opacity: .6; } to { transform: scale(1); opacity: 1; } }
+
+.chess-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+/* Движок — индикатор (зафиксирован на партию). Стиль как у theme-toggle-капсулы. */
+.chess-engine-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font-size: .78rem;
+  font-weight: 600;
+  cursor: default;
+}
+.chess-engine-ic { display: inline-flex; }
+.chess-modal-status {
+  flex: 1 1 auto;
+  text-align: center;
+  font-size: .82rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.chess-modal-status.chess-status--err { color: #e0574a; }
+.chess-modal-close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+.chess-modal-close:hover { background: var(--sidebar-hover, rgba(0,0,0,.06)); color: var(--text-primary); }
+
+/* ── ДОСКА ────────────────────────────────────────────────────────────────
+ * Клетки НА ПАЛИТРЕ. Светлая = поверхность-производная, тёмная = смесь accent.
+ * НЕ переопределяем в dark — постоянны день/ночь. */
+.chess-board-wrap {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 2px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.04);
+}
+.chess-board {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  grid-template-rows: repeat(8, 1fr);
+  width: 100%;
+  height: 100%;
+}
+.chess-sq {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+}
+.chess-sq--light { background: color-mix(in srgb, var(--accent) 8%, #f4ede0); }
+.chess-sq--dark  { background: color-mix(in srgb, var(--accent) 42%, #9a8468); }
+.chess-sq--sel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  pointer-events: none;
+}
+.chess-sq--over { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.chess-piece {
+  width: 88%;
+  height: 88%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+}
+.chess-piece[draggable="false"] { cursor: default; }
+.chess-piece:active { cursor: grabbing; }
+.chess-piece svg { width: 100%; height: 100%; display: block; }
+
+/* Белые/чёрные фигуры: заливка + контрастный контур для читаемости на любой палитре. */
+.cp-white svg { fill: #f8f8f8; stroke: #202020; stroke-width: 1.4; stroke-linejoin: round; }
+.cp-black svg { fill: #202020; stroke: #f0f0f0; stroke-width: 1.4; stroke-linejoin: round; }
+
+@media (max-width: 640px) {
+  .chess-modal { width: 94vw; padding: 12px; }
+}

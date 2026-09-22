@@ -21,20 +21,23 @@ function initMobileMenu() {
     if (toggleBtn) {
         toggleBtn.addEventListener("click", (e) => {
             e.stopPropagation();
-            if (window.innerWidth > 768) {
-                // Десктоп: разворачиваем свёрнутый сайдбар.
-                const layout = document.querySelector('.chat-layout');
-                const expandBtn = document.getElementById('sidebar-expand-btn');
-                const collapseBtn = document.getElementById('sidebar-collapse-btn');
-                if (layout) {
-                    layout.classList.remove('sidebar-collapsed');
-                    if (expandBtn) expandBtn.hidden = true;
-                    if (collapseBtn) collapseBtn.setAttribute('aria-expanded', 'true');
-                    try { localStorage.setItem('catchpm:sidebar-collapsed', '0'); } catch (err) {}
-                }
+
+            const layout = document.querySelector('.chat-layout');
+            const expandBtn = document.getElementById('sidebar-expand-btn');
+            const collapseBtn = document.getElementById('sidebar-collapse-btn');
+            const isCollapsedDesktop = !!(layout && layout.classList.contains('sidebar-collapsed'));
+
+            // Десктоп в состоянии collapsed: бургер работает как "развернуть".
+            if (isCollapsedDesktop) {
+                layout.classList.remove('sidebar-collapsed');
+                if (expandBtn) expandBtn.hidden = true;
+                if (collapseBtn) collapseBtn.setAttribute('aria-expanded', 'true');
+                try { localStorage.setItem('catchpm:sidebar-collapsed', '0'); } catch (err) {}
                 return;
             }
-            // Мобилка: оверлей.
+
+            // Во всех остальных случаях (в т.ч. мобильные браузеры с нестандартным
+            // innerWidth/viewport) бургер открывает/закрывает мобильный оверлей.
             toggleSidebar(!sidebar.classList.contains('open'));
         });
     }

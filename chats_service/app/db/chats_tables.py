@@ -197,6 +197,24 @@ class DataBaseChats:
             CREATE INDEX IF NOT EXISTS ix_generated_images_chat_id ON generated_images(chat_id);
             CREATE INDEX IF NOT EXISTS ix_generated_images_message_id ON generated_images(message_id);
             CREATE INDEX IF NOT EXISTS ix_generated_images_created_at ON generated_images(created_at DESC);
+
+            -- === ГРУППОВЫЕ ЧАТЫ: реестр участников обычного PM-чата ===
+            -- Чат становится групповым, как только в нём есть хотя бы один активный
+            -- участник (removed_at IS NULL). Привязка по chat_id-строке (UUID),
+            -- т.к. chats.id — это id сообщения, а не карточки чата.
+            CREATE TABLE IF NOT EXISTS chats_group (
+                id          BIGSERIAL PRIMARY KEY,
+                chat_id     TEXT   NOT NULL,
+                user_id     BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                is_admin    BOOLEAN NOT NULL DEFAULT FALSE,
+                added_by    BIGINT,
+                added_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                removed_at  TIMESTAMPTZ,
+                UNIQUE (chat_id, user_id)
+            );
+            CREATE INDEX IF NOT EXISTS ix_chats_group_chat ON chats_group(chat_id);
+            CREATE INDEX IF NOT EXISTS ix_chats_group_user ON chats_group(user_id);
+            CREATE INDEX IF NOT EXISTS ix_chats_group_active ON chats_group(chat_id) WHERE removed_at IS NULL;
         """)
     async def add_message(
         self,
@@ -438,10 +456,23 @@ class DataBaseChats:
                     WITH target_user AS (
                         SELECT id AS user_id FROM users WHERE username = $1
                     ),
-                    user_chats AS (
-                        SELECT DISTINCT c.chat_id, c.user_id
+                    -- chat_id, где юзер — автор сообщений (личные + его собственные)
+                    own_chats AS (
+                        SELECT DISTINCT c.chat_id
                         FROM chats c
                         JOIN target_user tu ON tu.user_id = c.user_id
+                    ),
+                    -- chat_id групповых чатов, куда юзер приглашён (активный участник)
+                    group_chats AS (
+                        SELECT DISTINCT g.chat_id
+                        FROM chats_group g
+                        JOIN target_user tu ON tu.user_id = g.user_id
+                        WHERE g.removed_at IS NULL
+                    ),
+                    all_chat_ids AS (
+                        SELECT chat_id FROM own_chats
+                        UNION
+                        SELECT chat_id FROM group_chats
                     )
                     SELECT DISTINCT ON (c.chat_id)
                         c.chat_id AS id,
@@ -450,10 +481,16 @@ class DataBaseChats:
                         COALESCE(m.is_deleted, FALSE) AS is_deleted,
                         COALESCE(m.is_favorite, FALSE) AS is_favorite,
                         m.renamed_title AS renamed_title,
-                        m.auto_title AS auto_title
+                        m.auto_title AS auto_title,
+                        EXISTS(
+                            SELECT 1 FROM chats_group g2
+                            WHERE g2.chat_id = c.chat_id AND g2.removed_at IS NULL
+                        ) AS is_group
                     FROM chats c
-                    JOIN user_chats uc ON c.chat_id = uc.chat_id AND c.user_id = uc.user_id
-                    LEFT JOIN chat_sidebar_meta m ON m.chat_id = uc.chat_id AND m.user_id = uc.user_id
+                    JOIN all_chat_ids uc ON c.chat_id = uc.chat_id
+                    LEFT JOIN chat_sidebar_meta m
+                        ON m.chat_id = c.chat_id
+                       AND m.user_id = (SELECT user_id FROM target_user)
                     WHERE COALESCE(m.is_deleted, FALSE) = FALSE
                     ORDER BY c.chat_id, c.created_at DESC
                 """, username)
@@ -466,7 +503,8 @@ class DataBaseChats:
                         "is_deleted": row["is_deleted"],
                         "is_favorite": row["is_favorite"],
                         "renamed_title": row["renamed_title"],
-                        "auto_title": row["auto_title"]
+                        "auto_title": row["auto_title"],
+                        "is_group": row["is_group"]
                     }
                     for row in rows
                 ]
@@ -671,4 +709,140 @@ class DataBaseChats:
             return await conn.fetchval("""
                 SELECT chat_id FROM chat_types_agent WHERE user_id = $1 AND type_agent = $2
                 ORDER BY chat_id DESC LIMIT 1
-            """, user_id, type_agent)   
+            """, user_id, type_agent)
+
+    async def get_user_id_by_username(self, username: str):
+        """id по username или None."""
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval("SELECT id FROM users WHERE username = $1", username)
+
+    # ===================== ГРУППОВЫЕ ЧАТЫ =====================
+
+    async def is_group_chat(self, chat_id: str) -> bool:
+        """Чат групповой, если есть хотя бы один активный участник."""
+        async with self.pool.acquire() as conn:
+            val = await conn.fetchval("""
+                SELECT EXISTS(
+                    SELECT 1 FROM chats_group
+                    WHERE chat_id = $1 AND removed_at IS NULL
+                )
+            """, str(chat_id))
+            return bool(val)
+
+    async def get_group_members(self, chat_id: str):
+        """Список активных участников группового чата с username и датами."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT g.user_id, u.username, g.is_admin, g.added_by, g.added_at
+                FROM chats_group g
+                LEFT JOIN users u ON u.id = g.user_id
+                WHERE g.chat_id = $1 AND g.removed_at IS NULL
+                ORDER BY g.is_admin DESC, g.added_at ASC
+            """, str(chat_id))
+            return [
+                {
+                    "user_id": r["user_id"],
+                    "username": r["username"],
+                    "is_admin": r["is_admin"],
+                    "added_by": r["added_by"],
+                    "added_at": r["added_at"].isoformat() if r["added_at"] else None,
+                }
+                for r in rows
+            ]
+
+    async def get_group_admin_id(self, chat_id: str):
+        """user_id админа группы (кто создал), или None."""
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval("""
+                SELECT user_id FROM chats_group
+                WHERE chat_id = $1 AND is_admin = TRUE AND removed_at IS NULL
+                LIMIT 1
+            """, str(chat_id))
+
+    async def add_group_member(self, chat_id: str, user_id: int, added_by: int, is_admin: bool = False):
+        """Добавляет участника. Если был удалён — реактивирует (removed_at=NULL)."""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO chats_group (chat_id, user_id, is_admin, added_by, added_at, removed_at)
+                VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, NULL)
+                ON CONFLICT (chat_id, user_id) DO UPDATE
+                    SET removed_at = NULL,
+                        added_by = EXCLUDED.added_by,
+                        added_at = CURRENT_TIMESTAMP,
+                        is_admin = chats_group.is_admin OR EXCLUDED.is_admin
+            """, str(chat_id), int(user_id), bool(is_admin), int(added_by))
+
+    async def ensure_group_admin(self, chat_id: str, admin_user_id: int):
+        """Гарантирует, что у чата есть админ. Вызывается при первом инвайте.
+        Создатель чата — тот, кто первым пригласил; его пишем с is_admin=TRUE."""
+        admin = await self.get_group_admin_id(chat_id)
+        if admin is None:
+            await self.add_group_member(chat_id, admin_user_id, admin_user_id, is_admin=True)
+            return admin_user_id
+        return admin
+
+    async def remove_group_member(self, chat_id: str, user_id: int):
+        """Софт-удаление участника (removed_at=now)."""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE chats_group SET removed_at = CURRENT_TIMESTAMP
+                WHERE chat_id = $1 AND user_id = $2 AND removed_at IS NULL
+            """, str(chat_id), int(user_id))
+
+    async def is_group_member(self, chat_id: str, user_id: int) -> bool:
+        """Проверяет, активный ли участник чата."""
+        async with self.pool.acquire() as conn:
+            val = await conn.fetchval("""
+                SELECT EXISTS(
+                    SELECT 1 FROM chats_group
+                    WHERE chat_id = $1 AND user_id = $2 AND removed_at IS NULL
+                )
+            """, str(chat_id), int(user_id))
+            return bool(val)
+
+    async def search_users(self, query: str, exclude_chat_id: str = None, limit: int = 20):
+        """Поиск юзеров по username. Пустой query — самые свежие зареги.
+        Если задан exclude_chat_id — в ответе помечает уже добавленных (already_member)."""
+        q = (query or "").strip()
+        async with self.pool.acquire() as conn:
+            if q:
+                rows = await conn.fetch("""
+                    SELECT id AS user_id, username, created_at
+                    FROM users
+                    WHERE username ILIKE $1
+                    ORDER BY username ASC
+                    LIMIT $2
+                """, f"%{q}%", int(limit))
+            else:
+                rows = await conn.fetch("""
+                    SELECT id AS user_id, username, created_at
+                    FROM users
+                    ORDER BY created_at DESC
+                    LIMIT $1
+                """, int(limit))
+
+            members = set()
+            if exclude_chat_id:
+                mrows = await conn.fetch("""
+                    SELECT user_id FROM chats_group
+                    WHERE chat_id = $1 AND removed_at IS NULL
+                """, str(exclude_chat_id))
+                members = {r["user_id"] for r in mrows}
+
+            return [
+                {
+                    "user_id": r["user_id"],
+                    "username": r["username"],
+                    "already_member": r["user_id"] in members,
+                }
+                for r in rows
+            ]
+
+    async def get_group_chat_ids_for_user(self, user_id: int):
+        """chat_id групповых чатов, где юзер — активный участник."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT chat_id FROM chats_group
+                WHERE user_id = $1 AND removed_at IS NULL
+            """, int(user_id))
+            return [r["chat_id"] for r in rows]   

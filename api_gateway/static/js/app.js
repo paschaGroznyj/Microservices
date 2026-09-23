@@ -772,7 +772,13 @@ class ChatApp {
             // Собираем события: добавление (added_at) и удаление (removed_at).
             const events = [];
             members.forEach(m => {
-                if (m.added_at) {
+                // Запись админа-создателя — это момент создания группы, а НЕ событие
+                // приглашения. Такие в ленту не выносим (иначе "X добавил X").
+                // Плашку "добавления" показываем только для реально приглашённых
+                // (не-админов) с корректным actor'ом.
+                const selfAdd = String(m.added_by) === String(m.user_id);
+                const isCreator = m.is_admin === true;
+                if (m.added_at && !selfAdd && !isCreator) {
                     events.push({ ts: m.added_at, type: 'add', target: m.username, actorId: m.added_by });
                 }
                 if (m.removed_at) {
@@ -3665,6 +3671,16 @@ class ChatApp {
                 if (!block) return;
                 const isCollapsed = block.classList.toggle('collapsed');
                 chatsBtn.setAttribute('aria-expanded', String(!isCollapsed));
+                return;
+            }
+
+            // Групповые — toggle (независимая секция)
+            const groupBtn = e.target.closest('#group-chats-toggle');
+            if (groupBtn) {
+                const block = document.getElementById('group-chats-block');
+                if (!block) return;
+                const isCollapsed = block.classList.toggle('collapsed');
+                groupBtn.setAttribute('aria-expanded', String(!isCollapsed));
                 return;
             }
 

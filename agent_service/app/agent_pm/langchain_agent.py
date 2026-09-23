@@ -1818,6 +1818,22 @@ class KnowledgeAgent:
             role_block = get_role(user_id)
             system_content = SYSTEM_PROMPT.format(datetime=current_datetime, role_block=role_block)
 
+            # Флаг личка/группа для промпта: групповой чат = есть активные участники в chats_group.
+            # Память/история общая (get_chat_history по chat_id), ролевые модели сохраняются.
+            try:
+                _is_group_chat = await self.db.is_group_chat(chat_id)
+            except Exception as _e:
+                logging.warning(f"is_group_chat failed for chat_id={chat_id}: {_e}")
+                _is_group_chat = False
+            if _is_group_chat:
+                system_content += (
+                    "\n\nТИП ЧАТА: ГРУППОВОЙ. В этом чате несколько участников с общей лентой и общей "
+                    "памятью. Сообщения разных людей помечены в шапке (ТабельНомер/Пользователь/user_id). "
+                    "Учитывай, что тебя читают несколько человек; адресуй ответ тому, кто задал текущий вопрос."
+                )
+            else:
+                system_content += "\n\nТИП ЧАТА: ЛИЧНЫЙ (один на один с пользователем)."
+
             # Собираем историю из памяти
             history = await self._build_history(chat_id, limit=30)
             journal_text = None

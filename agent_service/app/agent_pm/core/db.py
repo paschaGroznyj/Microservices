@@ -913,6 +913,22 @@ class AgentDB:
                 external_id,
             )
 
+    async def is_group_chat(self, chat_id: str) -> bool:
+        """True, если у чата есть хотя бы один активный участник в chats_group
+        (removed_at IS NULL). Используется для подстановки флага личка/группа
+        в системный промпт агента."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchval(
+                """
+                SELECT EXISTS(
+                    SELECT 1 FROM chats_group
+                    WHERE chat_id = $1 AND removed_at IS NULL
+                )
+            """,
+                str(chat_id),
+            )
+            return bool(row)
+
     async def get_chat_history(self, chat_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         """
         Получить последние N сообщений из чата для восстановления контекста.

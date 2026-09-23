@@ -5,7 +5,18 @@
 
 /* ── Модалка участников ─────────────────────────────────────── */
 .group-members-modal {
-    min-height: 340px;
+    min-height: 440px;
+    padding: 8px 20px 22px;
+}
+
+/* Секции разделяем воздухом и тонкой линией, чтобы участники не липли к списку добавления */
+.gm-section {
+    padding-top: 8px;
+}
+.gm-section + .gm-section {
+    margin-top: 12px;
+    border-top: 1px solid var(--border);
+    padding-top: 16px;
 }
 
 .gm-section-label {
@@ -14,23 +25,24 @@
     letter-spacing: .02em;
     color: var(--text-muted);
     text-transform: uppercase;
-    margin: 14px 4px 8px;
+    margin: 4px 4px 12px;
 }
 
 .gm-members {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    max-height: 220px;
+    gap: 6px;
+    max-height: 300px;
     overflow-y: auto;
+    padding-right: 2px;
 }
 
 .gm-member,
 .gm-result {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 8px 10px;
+    gap: 12px;
+    padding: 11px 12px;
     border-radius: 12px;
     transition: background .15s ease;
 }

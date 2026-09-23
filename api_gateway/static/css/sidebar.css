@@ -370,7 +370,12 @@
   flex-direction: column;
   flex: 0 0 auto;
   min-height: 0;
-  margin-bottom: 6px;
+}
+
+/* Заголовок "Групповые" — прижимаем вплотную, без лишнего верхнего отступа */
+#group-chats-toggle {
+  margin: 0;
+  padding-top: 0;
 }
 
 .group-chats-block.collapsed .section-chevron {

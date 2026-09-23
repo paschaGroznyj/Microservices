@@ -41,10 +41,14 @@ import uuid
 
 import httpx
 import redis.asyncio as aioredis
-from telegram import Update, Message, MessageEntity
+from telegram import (
+    Update, Message, MessageEntity,
+    InlineKeyboardButton, InlineKeyboardMarkup,
+)
 from telegram.constants import ParseMode
 from telegram.ext import (
-    Application, CommandHandler, ContextTypes, MessageHandler, filters,
+    Application, CommandHandler, CallbackQueryHandler, ContextTypes,
+    MessageHandler, filters,
 )
 
 import uvicorn
@@ -444,24 +448,196 @@ def extract_urls_from_message(msg: Message) -> list[str]:
     return urls
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# /start — интерактивное меню настроек чата (Коммит 2)
+# Доступно всем участникам, из группы И из лички. Настройки строго per-chat.
+# Обязательное условие: чат зарегистрирован (allow-list). Иначе — отбойник
+# со ссылкой на регистрацию через интерфейс CatchPM.
+# ══════════════════════════════════════════════════════════════════════════════
+
+CATCHPM_URL = os.environ.get("CATCHPM_URL", "https://catchpm.cds.uva-advanced.ru")
+
+# Доступные модели агента (без админских). Ключ = agent_model в БД.
+TG_MODELS = ["coder", "designer", "universal"]
+
+# Тул-категории, которые можно включать из телеги. Админская категория
+# намеренно ОТСУТСТВУЕТ — из телеги её включить нельзя.
+TG_TOOL_CATEGORIES = ["pm_research", "internet", "content", "sessions", "skills"]
+
+TG_TRIGGERS = ["mention", "orchestrator"]
+
+
+def _settings_summary(settings: dict) -> str:
+    model = settings.get("agent_model") or "coder"
+    mode = settings.get("trigger_mode") or "orchestrator"
+    tools = settings.get("selected_tools") or []
+    tools_str = ", ".join(tools) if tools else "\u043d\u0435\u0442 (\u0442\u043e\u043b\u044c\u043a\u043e \u0431\u0430\u0437\u043e\u0432\u044b\u0435)"
+    return (
+        "<b>\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u0430\u0433\u0435\u043d\u0442\u0430 \u0434\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u0447\u0430\u0442\u0430</b>\n\n"
+        f"\u041c\u043e\u0434\u0435\u043b\u044c: <code>{model}</code>\n"
+        f"\u0422\u0440\u0438\u0433\u0433\u0435\u0440: <code>{mode}</code>\n"
+        f"\u0418\u043d\u0441\u0442\u0440\u0443\u043c\u0435\u043d\u0442\u044b: <code>{tools_str}</code>"
+    )
+
+
+def _menu_root() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("\u041c\u043e\u0434\u0435\u043b\u044c", callback_data="tg:menu:model")],
+        [InlineKeyboardButton("\u0418\u043d\u0441\u0442\u0440\u0443\u043c\u0435\u043d\u0442\u044b", callback_data="tg:menu:tools")],
+        [InlineKeyboardButton("\u0422\u0440\u0438\u0433\u0433\u0435\u0440", callback_data="tg:menu:trigger")],
+        [InlineKeyboardButton("\u0417\u0430\u043a\u0440\u044b\u0442\u044c", callback_data="tg:close")],
+    ])
+
+
+def _menu_model(current) -> InlineKeyboardMarkup:
+    cur = current or "coder"
+    rows = []
+    for m in TG_MODELS:
+        mark = "\u2713 " if m == cur else ""
+        rows.append([InlineKeyboardButton(f"{mark}{m}", callback_data=f"tg:set:model:{m}")])
+    rows.append([InlineKeyboardButton("\u2039 \u041d\u0430\u0437\u0430\u0434", callback_data="tg:menu:root")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _menu_tools(selected) -> InlineKeyboardMarkup:
+    sel = set(selected or [])
+    rows = []
+    for c in TG_TOOL_CATEGORIES:
+        mark = "\u2611 " if c in sel else "\u2610 "
+        rows.append([InlineKeyboardButton(f"{mark}{c}", callback_data=f"tg:tool:{c}")])
+    rows.append([InlineKeyboardButton("\u2039 \u041d\u0430\u0437\u0430\u0434", callback_data="tg:menu:root")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _menu_trigger(current) -> InlineKeyboardMarkup:
+    cur = current or "orchestrator"
+    rows = []
+    for t in TG_TRIGGERS:
+        mark = "\u2713 " if t == cur else ""
+        rows.append([InlineKeyboardButton(f"{mark}{t}", callback_data=f"tg:set:trigger:{t}")])
+    rows.append([InlineKeyboardButton("\u2039 \u041d\u0430\u0437\u0430\u0434", callback_data="tg:menu:root")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def save_chat_settings(chat_id: int, patch: dict) -> bool:
+    """POST /tg/settings/{chat_id} - tochechnoe obnovlenie (belyj spisok polej)."""
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.post(
+                f"{CHATS_SERVICE_URL}/tg/settings/{chat_id}", json=patch,
+            )
+            resp.raise_for_status()
+        return True
+    except Exception as e:
+        log.error(f"save_chat_settings fail chat={chat_id}: {e}")
+        return False
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    /start внутри целевой группы — заглушка меню настроек (Коммит 2 добавит
-    инлайн-кнопки: модель / тулы / триггер). Настройки строго per-chat.
+    /start - menu nastroek, per-chat. Dostupno vsem (gruppa + lichka).
+    Snachala proverka registracii v BD (allow-list). Ne zaregistrirovan -
+    return s instrukciej zaregistrirovat chat cherez interfejs CatchPM.
     """
     chat_id = update.effective_chat.id
     if not await is_allowed(chat_id):
-        await update.message.reply_text("Этот чат не подключён к агенту. Обратитесь к администратору CatchPM.")
+        await update.message.reply_text(
+            "\u0423 \u0432\u0430\u0441 \u043d\u0435\u0442 \u0434\u043e\u0441\u0442\u0443\u043f\u0430 \u043a \u0430\u0433\u0435\u043d\u0442\u0443 \u0432 \u044d\u0442\u043e\u043c \u0447\u0430\u0442\u0435.\n\n"
+            f"\u0420\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0446\u0438\u044f \u0447\u0430\u0442\u043e\u0432 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0442\u043e\u043b\u044c\u043a\u043e \u0447\u0435\u0440\u0435\u0437 \u0438\u043d\u0442\u0435\u0440\u0444\u0435\u0439\u0441 CatchPM: {CATCHPM_URL}\n\n"
+            f"\u041f\u0435\u0440\u0435\u0434\u0430\u0439\u0442\u0435 \u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440\u0443 chat_id \u044d\u0442\u043e\u0433\u043e \u0447\u0430\u0442\u0430: {chat_id}",
+        )
         return
     settings = await get_chat_settings(chat_id)
-    model = settings.get("agent_model") or "coder (по умолчанию)"
-    mode = settings.get("trigger_mode") or "orchestrator"
     await update.message.reply_text(
-        "Агент CatchPM подключён к этому чату.\n\n"
-        f"Модель: {model}\n"
-        f"Триггер: {mode}\n\n"
-        "Меню настроек (модель, инструменты, триггер) появится здесь в следующем обновлении.",
+        _settings_summary(settings),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_menu_root(),
     )
+
+
+async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Obrabotka nazhatij inline-knopok menu /start. per-chat, dostupno vsem."""
+    query = update.callback_query
+    chat_id = query.message.chat.id if query.message else update.effective_chat.id
+    data = query.data or ""
+
+    if not await is_allowed(chat_id):
+        await query.answer("\u0427\u0430\u0442 \u043d\u0435 \u0437\u0430\u0440\u0435\u0433\u0438\u0441\u0442\u0440\u0438\u0440\u043e\u0432\u0430\u043d.", show_alert=True)
+        return
+
+    async def _refresh(kb_fn):
+        settings = await get_chat_settings(chat_id)
+        try:
+            await query.edit_message_text(
+                _settings_summary(settings),
+                parse_mode=ParseMode.HTML,
+                reply_markup=kb_fn(settings),
+            )
+        except Exception:
+            pass
+
+    if data == "tg:close":
+        await query.answer()
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        return
+
+    if data == "tg:menu:root":
+        await query.answer()
+        await _refresh(lambda s: _menu_root())
+        return
+    if data == "tg:menu:model":
+        await query.answer()
+        await _refresh(lambda s: _menu_model(s.get("agent_model")))
+        return
+    if data == "tg:menu:tools":
+        await query.answer()
+        await _refresh(lambda s: _menu_tools(s.get("selected_tools")))
+        return
+    if data == "tg:menu:trigger":
+        await query.answer()
+        await _refresh(lambda s: _menu_trigger(s.get("trigger_mode")))
+        return
+
+    if data.startswith("tg:set:model:"):
+        model = data.split(":", 3)[3]
+        if model not in TG_MODELS:
+            await query.answer("\u041d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u0430\u044f \u043c\u043e\u0434\u0435\u043b\u044c", show_alert=True)
+            return
+        ok = await save_chat_settings(chat_id, {"agent_model": model})
+        await query.answer("\u0421\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u043e" if ok else "\u041e\u0448\u0438\u0431\u043a\u0430")
+        await _refresh(lambda s: _menu_model(s.get("agent_model")))
+        return
+
+    if data.startswith("tg:set:trigger:"):
+        trig = data.split(":", 3)[3]
+        if trig not in TG_TRIGGERS:
+            await query.answer("\u041d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u044b\u0439 \u0442\u0440\u0438\u0433\u0433\u0435\u0440", show_alert=True)
+            return
+        ok = await save_chat_settings(chat_id, {"trigger_mode": trig})
+        await query.answer("\u0421\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u043e" if ok else "\u041e\u0448\u0438\u0431\u043a\u0430")
+        await _refresh(lambda s: _menu_trigger(s.get("trigger_mode")))
+        return
+
+    if data.startswith("tg:tool:"):
+        cat = data.split(":", 2)[2]
+        if cat not in TG_TOOL_CATEGORIES:
+            await query.answer("\u041d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430\u044f \u043a\u0430\u0442\u0435\u0433\u043e\u0440\u0438\u044f", show_alert=True)
+            return
+        settings = await get_chat_settings(chat_id)
+        sel = set(settings.get("selected_tools") or [])
+        if cat in sel:
+            sel.discard(cat)
+        else:
+            sel.add(cat)
+        ok = await save_chat_settings(chat_id, {"selected_tools": sorted(sel)})
+        await query.answer("\u0421\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u043e" if ok else "\u041e\u0448\u0438\u0431\u043a\u0430")
+        await _refresh(lambda s: _menu_tools(s.get("selected_tools")))
+        return
+
+    await query.answer()
 
 
 async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -602,6 +778,7 @@ async def run_both():
     global _bot_app
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).concurrent_updates(True).build()
     application.add_handler(CommandHandler("start", cmd_start))
+    application.add_handler(CallbackQueryHandler(on_callback, pattern=r"^tg:"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_message))
     application.add_handler(MessageHandler(filters.Document.ALL, on_document))
     application.add_error_handler(_on_error)

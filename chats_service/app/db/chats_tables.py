@@ -514,87 +514,223 @@ class DataBaseChats:
 
     async def get_chat_messages(self, chat_id: str, username: str, limit: int = 50, offset: int = 0):
         """
-        Возвращает страницу сообщений в чате для пользователя (и сообщения бота),
-        вместе со списком прикреплённых файлов на каждое сообщение.
+        Возвращает страницу элементов ленты чата: сообщения + (для групповых
+        чатов) системные события "добавлен/удалён участник" из chats_group.
 
-        Пагинация "с конца": offset=0 -> последние `limit` сообщений,
-        offset=limit -> предыдущая пачка (более старые) и т.д.
-        Внутри страницы сообщения всегда отсортированы по created_at ASC
-        (хронологический порядок для рендера).
+        Все элементы имеют поле "kind":
+            - "message"      — обычное сообщение (юзера или бота)
+            - "group_event"  — плашка о добавлении/удалении участника
+                               (поля actor, target, action=add|remove)
 
-        Возвращает dict:
-            {"messages": [...], "total_count": int, "has_more": bool}
+        Пагинация "с конца" по общему потоку (created_at DESC), затем разворот
+        страницы в ASC для рендера. События вписаны в поток хронологически,
+        поэтому не "выпадают" между страницами.
+
+        Для ГРУППОВОГО чата фильтр по автору снят: участник видит сообщения
+        ВСЕХ участников (и бота). Для личного — только свои + бот (-1).
         """
         try:
             async with self.pool.acquire() as conn:
-                total_count = await conn.fetchval("""
-                    SELECT COUNT(*)
-                    FROM chats c
-                    WHERE c.chat_id = $1
-                        AND (
-                            c.user_id = (SELECT id FROM users WHERE username = $2)
-                            OR c.user_id = -1
-                        )
-                """, chat_id, username)
+                # Групповой? (есть активные участники)
+                is_group = await conn.fetchval("""
+                    SELECT EXISTS(
+                        SELECT 1 FROM chats_group
+                        WHERE chat_id = $1 AND removed_at IS NULL
+                    )
+                """, chat_id)
 
-                rows = await conn.fetch("""
-                    SELECT * FROM (
-                        SELECT 
-                            c.id, 
-                            c.user_id,
-                            u.username as username,
-                            c.chat_id, 
-                            c.message_text, 
-                            c.is_from_bot, 
-                            c.message_id,
-                            c.created_at,
-                            COALESCE(
-                                (
-                                    SELECT json_agg(
+                # Условие видимости сообщений:
+                #  - групповой чат -> все сообщения этого chat_id
+                #  - личный        -> только свои (по username) + бот (-1)
+                if is_group:
+                    msg_visibility = "TRUE"
+                    q_args_common = [chat_id]
+                else:
+                    msg_visibility = (
+                        "(c.user_id = (SELECT id FROM users WHERE username = $2) "
+                        "OR c.user_id = -1)"
+                    )
+                    q_args_common = [chat_id, username]
+
+                # total_count: сообщения + group-события (только для групповых)
+                if is_group:
+                    total_count = await conn.fetchval(f"""
+                        SELECT
+                            (SELECT COUNT(*) FROM chats c
+                                WHERE c.chat_id = $1 AND {msg_visibility})
+                          + (SELECT COUNT(*) FROM (
+                                SELECT added_at AS ts FROM chats_group
+                                    WHERE chat_id = $1 AND added_at IS NOT NULL
+                                          AND NOT (is_admin = TRUE)
+                                          AND (added_by IS NULL OR added_by <> user_id)
+                                UNION ALL
+                                SELECT removed_at AS ts FROM chats_group
+                                    WHERE chat_id = $1 AND removed_at IS NOT NULL
+                            ) ev)
+                    """, *q_args_common)
+                else:
+                    total_count = await conn.fetchval(f"""
+                        SELECT COUNT(*) FROM chats c
+                        WHERE c.chat_id = $1 AND {msg_visibility}
+                    """, *q_args_common)
+
+                # Единый поток: сообщения + события (UNION ALL), пагинация по ts DESC.
+                # Плейсхолдеры limit/offset идут ПОСЛЕ common-аргументов.
+                lim_ph = f"${len(q_args_common) + 1}"
+                off_ph = f"${len(q_args_common) + 2}"
+
+                if is_group:
+                    union_sql = f"""
+                        SELECT * FROM (
+                            -- === СООБЩЕНИЯ ===
+                            SELECT
+                                'message'::text        AS kind,
+                                c.id                   AS id,
+                                c.user_id              AS user_id,
+                                u.username             AS username,
+                                c.chat_id              AS chat_id,
+                                c.message_text         AS message_text,
+                                c.is_from_bot          AS is_from_bot,
+                                c.message_id           AS message_id,
+                                c.created_at           AS ts,
+                                NULL::text             AS ev_action,
+                                NULL::text             AS ev_actor,
+                                NULL::text             AS ev_target,
+                                COALESCE(
+                                    (SELECT json_agg(
                                         json_build_object('name', f.file_name, 'ext', f.file_ext,
                                         'source', f.source, 'kind', f.file_kind, 'image_key', f.image_key)
-                                        ORDER BY f.id ASC
-                                    )
-                                    FROM chat_files f
-                                    WHERE f.message_id = c.message_id
-                                ),
-                                '[]'::json
-                            ) AS files
-                        FROM chats c
-                        LEFT JOIN users u ON c.user_id = u.id
-                        WHERE c.chat_id = $1 
-                            AND (
-                                c.user_id = (SELECT id FROM users WHERE username = $2)
-                                OR c.user_id = -1
-                            )
-                        ORDER BY c.created_at DESC, c.id DESC
-                        LIMIT $3 OFFSET $4
-                    ) sub
-                    ORDER BY sub.created_at ASC, sub.id ASC
-                """, chat_id, username, limit, offset)
+                                        ORDER BY f.id ASC)
+                                     FROM chat_files f WHERE f.message_id = c.message_id),
+                                    '[]'::json
+                                ) AS files
+                            FROM chats c
+                            LEFT JOIN users u ON c.user_id = u.id
+                            WHERE c.chat_id = $1 AND {msg_visibility}
 
-                messages = []
+                            UNION ALL
+
+                            -- === СОБЫТИЯ ДОБАВЛЕНИЯ ===
+                            SELECT
+                                'group_event'::text,
+                                g.id,
+                                g.user_id,
+                                tu.username,
+                                g.chat_id,
+                                NULL::text,
+                                FALSE,
+                                NULL::text,
+                                g.added_at,
+                                'add'::text,
+                                au.username,
+                                tu.username,
+                                '[]'::json
+                            FROM chats_group g
+                            LEFT JOIN users tu ON g.user_id = tu.id
+                            LEFT JOIN users au ON g.added_by = au.id
+                            WHERE g.chat_id = $1 AND g.added_at IS NOT NULL
+                                  AND NOT (g.is_admin = TRUE)
+                                  AND (g.added_by IS NULL OR g.added_by <> g.user_id)
+
+                            UNION ALL
+
+                            -- === СОБЫТИЯ УДАЛЕНИЯ ===
+                            SELECT
+                                'group_event'::text,
+                                g.id,
+                                g.user_id,
+                                tu.username,
+                                g.chat_id,
+                                NULL::text,
+                                FALSE,
+                                NULL::text,
+                                g.removed_at,
+                                'remove'::text,
+                                au.username,
+                                tu.username,
+                                '[]'::json
+                            FROM chats_group g
+                            LEFT JOIN users tu ON g.user_id = tu.id
+                            LEFT JOIN users au ON g.added_by = au.id
+                            WHERE g.chat_id = $1 AND g.removed_at IS NOT NULL
+                        ) feed
+                        ORDER BY feed.ts DESC, feed.id DESC
+                        LIMIT {lim_ph} OFFSET {off_ph}
+                    """
+                    rows = await conn.fetch(union_sql, *q_args_common, limit, offset)
+                else:
+                    rows = await conn.fetch(f"""
+                        SELECT * FROM (
+                            SELECT
+                                'message'::text        AS kind,
+                                c.id                   AS id,
+                                c.user_id              AS user_id,
+                                u.username             AS username,
+                                c.chat_id              AS chat_id,
+                                c.message_text         AS message_text,
+                                c.is_from_bot          AS is_from_bot,
+                                c.message_id           AS message_id,
+                                c.created_at           AS ts,
+                                NULL::text             AS ev_action,
+                                NULL::text             AS ev_actor,
+                                NULL::text             AS ev_target,
+                                COALESCE(
+                                    (SELECT json_agg(
+                                        json_build_object('name', f.file_name, 'ext', f.file_ext,
+                                        'source', f.source, 'kind', f.file_kind, 'image_key', f.image_key)
+                                        ORDER BY f.id ASC)
+                                     FROM chat_files f WHERE f.message_id = c.message_id),
+                                    '[]'::json
+                                ) AS files
+                            FROM chats c
+                            LEFT JOIN users u ON c.user_id = u.id
+                            WHERE c.chat_id = $1 AND {msg_visibility}
+                            ORDER BY c.created_at DESC, c.id DESC
+                            LIMIT {lim_ph} OFFSET {off_ph}
+                        ) feed
+                        ORDER BY feed.ts ASC, feed.id ASC
+                    """, *q_args_common, limit, offset)
+
+                # Для групповых после LIMIT/OFFSET по DESC разворачиваем в ASC вручную
+                rows = list(rows)
+                if is_group:
+                    rows.sort(key=lambda r: (r["ts"], r["id"]))
+
+                items = []
                 for row in rows:
+                    if row["kind"] == "group_event":
+                        items.append({
+                            "kind": "group_event",
+                            "id": row["id"],
+                            "chat_id": row["chat_id"],
+                            "action": row["ev_action"],
+                            "actor": row["ev_actor"] or "Кто-то",
+                            "target": row["ev_target"] or "",
+                            "created_at": row["ts"].isoformat() if row["ts"] else None,
+                        })
+                        continue
+
                     files = row["files"]
                     if isinstance(files, str):
                         files = json.loads(files)
-
-                    messages.append({
+                    items.append({
+                        "kind": "message",
                         "id": row["id"],
                         "user_id": row["user_id"],
                         "chat_id": row["chat_id"],
                         "message": row["message_text"],
                         "is_from_bot": row["is_from_bot"],
                         "message_id": row["message_id"],
-                        "created_at": row["created_at"].isoformat(),
+                        "created_at": row["ts"].isoformat() if row["ts"] else None,
                         "files": files or [],
                     })
 
-                has_more = (offset + len(messages)) < (total_count or 0)
+                has_more = (offset + len(items)) < (total_count or 0)
                 return {
-                    "messages": messages,
+                    "messages": items,
                     "total_count": total_count or 0,
                     "has_more": has_more,
+                    "is_group": bool(is_group),
                 }
         except Exception as e:
             logging.error(f"Ошибка при получении сообщений чата {chat_id}: {e}")

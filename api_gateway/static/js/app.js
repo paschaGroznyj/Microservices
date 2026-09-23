@@ -743,10 +743,8 @@ class ChatApp {
 
         this.renderMessages(data.messages);
         this._initHistoryScrollLoader();
-
-        // Групповой чат: подмешиваем в ленту стеклянные плашки-события
-        // «X добавил Y» / «X удалил Y» по данным chats_group (вариант Б).
-        this.renderGroupEvents(chatId);
+        // Плашки-события группы теперь приходят с бэка в общем потоке messages
+        // (kind==="group_event"), встроены хронологически через renderMessages/addMessage.
     }
 
     /**
@@ -931,6 +929,19 @@ class ChatApp {
     addMessage(message, scroll = true, animate = false) {
         const container = this.getMessagesContainer();
         if (!container) return;
+
+        // Системное событие группового чата (добавлен/удалён):
+        // рендерим стеклянную плашку прямо в поток ленты, по created_at.
+        if (message.kind === 'group_event') {
+            const node = this._buildGroupEventPlashka({
+                type: message.action === 'remove' ? 'remove' : 'add',
+                target: message.target,
+                ts: message.created_at,
+            }, message.actor);
+            container.appendChild(node);
+            if (scroll) container.scrollTop = container.scrollHeight;
+            return;
+        }
 
         const isBot      = message.is_from_bot;
         const rawContent = message.message || 'Тут было пусто';
@@ -2216,10 +2227,11 @@ class ChatApp {
                 if (window.GroupMembers && typeof window.GroupMembers.onMembersUpdated === 'function') {
                     window.GroupMembers.onMembersUpdated(msg.chat_id);
                 }
-                // Если это открытый сейчас чат — перерисовываем плашки-события
-                // в ленте (кто-то добавил/удалил участника) в реальном времени.
+                // Если это открытый сейчас чат — перезагружаем ленту целиком,
+                // чтобы новая плашка-событие встала на своё место по created_at
+                // (а не внизу). События теперь часть общего потока messages.
                 if (String(msg.chat_id) === String(this.currentChat)) {
-                    this.renderGroupEvents(this.currentChat);
+                    this.loadMessages(this.currentChat);
                 }
                 this.refreshChatsList?.();
                 return;

@@ -13,7 +13,10 @@
 .gm-section {
     padding-top: 8px;
 }
-.gm-section + .gm-section {
+/* Разделитель рисуем только между ДВУМЯ ВИДИМЫМИ секциями.
+   Скрытая (display:none) секция «Участники» остаётся в DOM, поэтому
+   селектор соседства учитываем через :not([style*="display: none"]). */
+.gm-section:not([style*="display: none"]) + .gm-section {
     margin-top: 12px;
     border-top: 1px solid var(--border);
     padding-top: 16px;
@@ -35,6 +38,16 @@
     max-height: 300px;
     overflow-y: auto;
     padding-right: 2px;
+}
+
+/* Список кандидатов на добавление тоже скроллим, чтобы длинный список
+   гостей не раздувал модалку и не съедал внешний скролл. */
+.gm-results {
+    max-height: 320px;
+    overflow-y: auto;
+    padding-right: 2px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
 }
 
 .gm-member,

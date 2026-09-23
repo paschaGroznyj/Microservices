@@ -84,11 +84,15 @@
 
     function renderMembers() {
         const list = state.members || [];
+        // Прячем ВСЮ секцию «Участники» (родительский .gm-section), а не только label,
+        // иначе у соседней секции «Добавить» остаётся висеть border-top (.gm-section + .gm-section).
+        const membersSection = membersLabel.closest(".gm-section");
         if (!list.length) {
-            membersLabel.style.display = "none";
+            if (membersSection) membersSection.style.display = "none";
             membersBox.innerHTML = "";
             return;
         }
+        if (membersSection) membersSection.style.display = "";
         membersLabel.style.display = "";
         membersBox.innerHTML = list.map((m) => {
             const initial = esc((m.username || "?").charAt(0).toUpperCase());

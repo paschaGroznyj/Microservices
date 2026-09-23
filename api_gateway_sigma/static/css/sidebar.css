@@ -216,12 +216,13 @@
   text-transform: uppercase;
   letter-spacing: .08em;
   color: var(--text-muted);
-  padding: 4px 6px 6px;
+  padding: 4px 6px 0;
   background: transparent;
   border: none;
   cursor: pointer;
   transition: color var(--transition);
   flex-shrink: 0;
+  margin: 0;
 }
 
 .section-label:hover {

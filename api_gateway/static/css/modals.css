@@ -427,7 +427,7 @@
   text-transform: uppercase;
   letter-spacing: .08em;
   color: var(--text-muted);
-  margin-bottom: 10px;
+  margin-bottom: 0;
 }
 
 .stats-grid {

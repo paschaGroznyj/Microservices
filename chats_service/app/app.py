@@ -138,6 +138,23 @@ async def shutdown():
 
 @app.post("/send_message")
 async def send_message(chat: ChatMessage):
+    # Гейт прав: удалённый из группового чата участник (или чужак в личном)
+    # не может писать. Для нового/пустого личного чата — разрешено.
+    if chat.user_id is not None:
+        try:
+            allowed = await db.can_post_to_chat(chat.chat_id, chat.user_id)
+        except Exception as e:
+            logging.error(f"can_post_to_chat error chat={chat.chat_id}: {e}")
+            allowed = True  # fail-open, чтобы не блокировать легитимных
+        if not allowed:
+            logging.warning(
+                f"[group] forbidden post chat={chat.chat_id} user={chat.user_id}"
+            )
+            raise HTTPException(
+                status_code=403,
+                detail="Вы не участник этого чата и не можете отправлять сообщения",
+            )
+
     message = {
         "user_id": chat.user_id,
         "tb_name": chat.tb_name,
@@ -187,7 +204,9 @@ async def get_chat_messages(chat_id: str, limit: int = 50, offset: int = 0,  x_u
             "limit": limit,
             "offset": offset,
             "messages": messages,
-            "username": x_user_name
+            "username": x_user_name,
+            "is_group": result.get("is_group", False),
+            "viewer_user_id": result.get("viewer_user_id"),
         }
     except Exception as e:
         logging.error(f"Ошибка в эндпоинте: {e}")

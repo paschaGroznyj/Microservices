@@ -456,11 +456,26 @@ class DataBaseChats:
                     WITH target_user AS (
                         SELECT id AS user_id FROM users WHERE username = $1
                     ),
-                    -- chat_id, где юзер — автор сообщений (личные + его собственные)
+                    -- chat_id, где юзер — автор сообщений (личные + его собственные).
+                    -- ВАЖНО: если чат групповой, а юзер там уже удалён
+                    -- (нет активной записи в chats_group) — чат НЕ показываем,
+                    -- даже если он раньше писал в него.
                     own_chats AS (
                         SELECT DISTINCT c.chat_id
                         FROM chats c
                         JOIN target_user tu ON tu.user_id = c.user_id
+                        WHERE NOT EXISTS (
+                            -- чат является групповым (есть активные участники)
+                            SELECT 1 FROM chats_group gx
+                            WHERE gx.chat_id = c.chat_id AND gx.removed_at IS NULL
+                        )
+                        OR EXISTS (
+                            -- ... либо юзер сам активный участник этого группового
+                            SELECT 1 FROM chats_group gy
+                            WHERE gy.chat_id = c.chat_id
+                              AND gy.user_id = tu.user_id
+                              AND gy.removed_at IS NULL
+                        )
                     ),
                     -- chat_id групповых чатов, куда юзер приглашён (активный участник)
                     group_chats AS (
@@ -717,6 +732,7 @@ class DataBaseChats:
                         "kind": "message",
                         "id": row["id"],
                         "user_id": row["user_id"],
+                        "username": row["username"],
                         "chat_id": row["chat_id"],
                         "message": row["message_text"],
                         "is_from_bot": row["is_from_bot"],
@@ -725,12 +741,18 @@ class DataBaseChats:
                         "files": files or [],
                     })
 
+                # Кто смотрит (для разграничения свой/чужой в групповом чате).
+                viewer_user_id = await conn.fetchval(
+                    "SELECT id FROM users WHERE username = $1", username
+                )
+
                 has_more = (offset + len(items)) < (total_count or 0)
                 return {
                     "messages": items,
                     "total_count": total_count or 0,
                     "has_more": has_more,
                     "is_group": bool(is_group),
+                    "viewer_user_id": viewer_user_id,
                 }
         except Exception as e:
             logging.error(f"Ошибка при получении сообщений чата {chat_id}: {e}")
@@ -935,6 +957,43 @@ class DataBaseChats:
                 )
             """, str(chat_id), int(user_id))
             return bool(val)
+
+    async def can_post_to_chat(self, chat_id: str, user_id: int) -> bool:
+        """
+        Может ли пользователь писать в чат.
+
+        Правила:
+          - Групповой чат (есть активные участники): писать может ТОЛЬКО
+            активный участник (removed_at IS NULL). Удалённый — нет.
+          - Личный чат: писать может владелец (автор существующих сообщений)
+            ИЛИ если в чате ещё нет ни одного сообщения (новый чат).
+        """
+        async with self.pool.acquire() as conn:
+            is_group = await conn.fetchval("""
+                SELECT EXISTS(
+                    SELECT 1 FROM chats_group
+                    WHERE chat_id = $1 AND removed_at IS NULL
+                )
+            """, str(chat_id))
+
+            if is_group:
+                return bool(await conn.fetchval("""
+                    SELECT EXISTS(
+                        SELECT 1 FROM chats_group
+                        WHERE chat_id = $1 AND user_id = $2 AND removed_at IS NULL
+                    )
+                """, str(chat_id), int(user_id)))
+
+            # Личный чат: есть ли вообще сообщения от кого-то, кроме бота?
+            owner_id = await conn.fetchval("""
+                SELECT user_id FROM chats
+                WHERE chat_id = $1 AND user_id <> -1
+                ORDER BY created_at ASC
+                LIMIT 1
+            """, str(chat_id))
+            if owner_id is None:
+                return True  # новый/пустой чат — можно писать
+            return int(owner_id) == int(user_id)
 
     async def search_users(self, query: str, exclude_chat_id: str = None, limit: int = 20):
         """Поиск юзеров по username. Пустой query — самые свежие зареги.

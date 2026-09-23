@@ -732,6 +732,10 @@ class ChatApp {
         const data = await res.json();
         if (chatId !== this.currentChat) return; // гонка
 
+        // Тип чата и id смотрящего — для разграничения авторов (свой/чужой) в групповом чате.
+        this._isGroupChat = !!data.is_group;
+        this._viewerUserId = data.viewer_user_id ?? null;
+
         // Состояние пагинации по конкретному чату
         this._pagination = {
             chatId,
@@ -944,12 +948,17 @@ class ChatApp {
         }
 
         const isBot      = message.is_from_bot;
+        // Групповой чат: чужое user-сообщение (не моё, не бот) — рендерим слева с ником.
+        const isOther = !isBot && this._isGroupChat
+            && message.user_id != null && this._viewerUserId != null
+            && Number(message.user_id) !== Number(this._viewerUserId);
+        const otherAuthor = isOther ? (message.username || 'Участник') : null;
         const rawContent = message.message || 'Тут было пусто';
         // Убираем статус-индикатор при ответе бота (через метод, чтобы захватить субагентов)
         if (isBot) this._clearAllStatuses();
 
         const messageEl = document.createElement('div');
-        messageEl.className = isBot ? 'agent-message' : 'user-message';
+        messageEl.className = isBot ? 'agent-message' : (isOther ? 'user-message user-message--other' : 'user-message');
 
         let content = rawContent;
         if (rawContent.trimStart().startsWith('<')) {
@@ -1028,7 +1037,14 @@ class ChatApp {
             // При animate — actions и code-header вешает _streamRenderMessage в финале
         } else {
             const wrapper = document.createElement('div');
-            wrapper.className = 'user-message-wrapper';
+            wrapper.className = isOther ? 'user-message-wrapper user-message-wrapper--other' : 'user-message-wrapper';
+            // Подпись ника над каждым чужим сообщением в групповом чате.
+            if (isOther) {
+                const authorEl = document.createElement('div');
+                authorEl.className = 'gc-author';
+                authorEl.textContent = otherAuthor;
+                wrapper.appendChild(authorEl);
+            }
             // id сообщения на wrapper — нужен для дедупа WS-эха (в т.ч. для чипов,
             // где textContent не содержит полного текста).
             if (message.id) wrapper.dataset.messageId = message.id;
@@ -1904,6 +1920,7 @@ class ChatApp {
                     files: window.FileAttach?.getFilesMeta() ?? []
                 })
             });
+            if (resp.status === 403) { this._handleForbiddenPost(); return; }
             try {
                 const j = await resp.clone().json();
                 this._activeRequestId = j?.request_id || null;
@@ -1926,6 +1943,34 @@ class ChatApp {
      * 2. Создаёт растущий placeholder под ответ бота
      * 3. Удаляет placeholder когда бот начинает отвечать
      */
+    /**
+     * Отправка вернула 403: пользователя удалили из группового чата.
+     * Откатываем UI: снимаем оптимистичное сообщение, возвращаем кнопку,
+     * уведомляем и перегружаем список чатов (чат исчезнет).
+     */
+    _handleForbiddenPost() {
+        this._runState = 'idle';
+        this._setSendButtonMode('send');
+        this._activeRequestId = null;
+        // Убираем последнее оптимистично отрисованное сообщение пользователя.
+        try {
+            const c = this.getMessagesContainer();
+            const wraps = c?.querySelectorAll('.user-message-wrapper');
+            if (wraps && wraps.length) wraps[wraps.length - 1].remove();
+        } catch (_) {}
+        try { this.showToast('Вы больше не участник этого чата'); } catch (_) {}
+        // Чат больше не наш, убираем его из списка и выходим на старт.
+        const goneId = this.currentChat;
+        this.chats = (this.chats || []).filter(c => c.id !== goneId);
+        this.currentChat = null;
+        this.renderChats(this.chats);
+        try { this.loadChats?.(); } catch (_) {}
+        try {
+            const c = this.getMessagesContainer();
+            if (c) c.innerHTML = '';
+        } catch (_) {}
+    }
+
     _scrollToUserMessageAndReserve() {
         const msgContainer = this.getMessagesContainer();
         if (!msgContainer) return;

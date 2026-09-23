@@ -1,0 +1,164 @@
+/* group-members.css — модалка участников группового чата (gm-*)
+   и стеклянные плашки-события «добавлен/удалён» в ленте (group-event).
+   Базовый каркас модалки берётся из search.css (.chat-search-overlay/.cse-*),
+   тут только специфика. */
+
+/* ── Модалка участников ─────────────────────────────────────── */
+.group-members-modal {
+    min-height: 340px;
+}
+
+.gm-section-label {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .02em;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    margin: 14px 4px 8px;
+}
+
+.gm-members {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 220px;
+    overflow-y: auto;
+}
+
+.gm-member,
+.gm-result {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 12px;
+    transition: background .15s ease;
+}
+
+.gm-member:hover,
+.gm-result:hover { background: var(--surface2); }
+
+.gm-avatar {
+    flex: 0 0 auto;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 600;
+    color: #fff;
+    background: linear-gradient(135deg, #6a8bff, #9b6aff);
+}
+
+.gm-info { flex: 1 1 auto; min-width: 0; }
+
+.gm-name {
+    font-size: 14px;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.gm-result .gm-name { flex: 1 1 auto; }
+
+.gm-when {
+    display: block;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 1px;
+}
+
+.gm-badge {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+    color: #9b6aff;
+    background: rgba(155, 106, 255, .12);
+    border-radius: 6px;
+    padding: 1px 6px;
+}
+
+.gm-already {
+    font-size: 11px;
+    color: var(--text-muted);
+    padding-right: 6px;
+}
+
+/* Кнопки + (добавить) и корзина (удалить) */
+.gm-add,
+.gm-trash {
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
+    border: none;
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    background: var(--surface2);
+    color: var(--text-secondary);
+    transition: background .15s ease, color .15s ease, transform .1s ease;
+}
+.gm-add svg,
+.gm-trash svg { width: 17px; height: 17px; }
+
+.gm-add:hover {
+    background: rgba(106, 139, 255, .16);
+    color: #6a8bff;
+}
+.gm-add:active { transform: scale(.9); }
+
+.gm-trash:hover {
+    background: rgba(255, 76, 76, .14);
+    color: #ff5c5c;
+}
+.gm-trash:active { transform: scale(.9); }
+
+/* ── Стеклянные плашки-события в ленте ───────────────────────── */
+.group-event {
+    display: flex;
+    justify-content: center;
+    margin: 10px auto;
+    width: 100%;
+}
+
+.group-event-glass {
+    max-width: 82%;
+    padding: 7px 16px;
+    border-radius: 999px;
+    font-size: 12.5px;
+    line-height: 1.4;
+    text-align: center;
+    color: var(--text-secondary);
+    /* Матовое стекло */
+    background: rgba(255, 255, 255, .08);
+    border: 1px solid rgba(255, 255, 255, .14);
+    -webkit-backdrop-filter: blur(14px) saturate(1.2);
+    backdrop-filter: blur(14px) saturate(1.2);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, .10);
+}
+
+:root[data-theme="light"] .group-event-glass {
+    background: rgba(20, 20, 30, .05);
+    border: 1px solid rgba(20, 20, 30, .10);
+    color: var(--text-secondary);
+}
+
+.group-event-glass .ge-actor { font-weight: 600; color: var(--text-primary); }
+.group-event-glass .ge-target { font-weight: 600; color: var(--text-primary); }
+.group-event-glass.is-remove .ge-verb { color: #ff7a7a; }
+.group-event-glass .ge-time {
+    display: inline-block;
+    margin-left: 6px;
+    font-size: 11px;
+    color: var(--text-muted);
+    opacity: .85;
+}

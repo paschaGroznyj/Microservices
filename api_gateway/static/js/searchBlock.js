@@ -321,6 +321,15 @@ function initUserSocket(username) {
             console.log('Данные по Вебсокету на фидбэк', data.feedback)
             onNewFeedback(data.feedback);
         }
+
+        // Меня пригласили в групповой чат — просим app обновить список чатов,
+        // чтобы чат появился в разделе «Групповые» без перезагрузки.
+        if (data.type === 'group_invited') {
+            console.log('[group-members] user-socket group_invited chat=', data.chat_id);
+            if (window.App && typeof window.App.refreshChatsList === 'function') {
+                window.App.refreshChatsList();
+            }
+        }
             // // Возвращаем UI в исходное состояние
             // document.getElementById("results-meta").textContent = "Ошибка загрузки";
         }

@@ -278,6 +278,12 @@ class ChatApp {
         }
     }
 
+    // Алиас для явной перезагрузки списка чатов (используется WS-хендлерами
+    // групповых чатов: group_invited / group_members_updated).
+    async refreshChatsList() {
+        return this.loadChats();
+    }
+
     renderChats(chats) {
         const list = document.getElementById('chat-list');
         const favList = document.getElementById('chat-favorites-list');
@@ -343,8 +349,11 @@ class ChatApp {
             }).join('');
         };
 
-        const favorites = sorted.filter(c => c.is_favorite);
-        const regular   = sorted.filter(c => !c.is_favorite);
+        // Групповые чаты (флаг is_group из chats_service) выносим в отдельный
+        // раздел «Групповые» под избранным. Они НЕ дублируются в избранном/обычных.
+        const groups    = sorted.filter(c => c.is_group);
+        const favorites = sorted.filter(c => !c.is_group && c.is_favorite);
+        const regular   = sorted.filter(c => !c.is_group && !c.is_favorite);
 
         // Секция избранного — показываем/скрываем целиком
         const favSection = document.getElementById('favorites-section');
@@ -355,6 +364,19 @@ class ChatApp {
             } else {
                 favList.innerHTML = '';
                 if (favSection) favSection.style.display = 'none';
+            }
+        }
+
+        // Секция групповых — показываем/скрываем целиком
+        const groupSection = document.getElementById('group-chats-block');
+        const groupList = document.getElementById('chat-group-list');
+        if (groupList) {
+            if (groups.length) {
+                groupList.innerHTML = buildList(groups);
+                if (groupSection) groupSection.style.display = 'flex';
+            } else {
+                groupList.innerHTML = '';
+                if (groupSection) groupSection.style.display = 'none';
             }
         }
 
@@ -383,6 +405,7 @@ class ChatApp {
 
         document.getElementById('chat-list')?.addEventListener('click', handleChatListClick);
         document.getElementById('chat-favorites-list')?.addEventListener('click', handleChatListClick);
+        document.getElementById('chat-group-list')?.addEventListener('click', handleChatListClick);
 
         document.addEventListener('click', (e) => {
             if (!e.target.closest('.chat-item-dropdown') && !e.target.closest('.chat-item-menu-btn')) {
@@ -720,6 +743,78 @@ class ChatApp {
 
         this.renderMessages(data.messages);
         this._initHistoryScrollLoader();
+
+        // Групповой чат: подмешиваем в ленту стеклянные плашки-события
+        // «X добавил Y» / «X удалил Y» по данным chats_group (вариант Б).
+        this.renderGroupEvents(chatId);
+    }
+
+    /**
+     * Рисует под лентой стеклянные плашки о добавлении/удалении участников.
+     * Источник — /api/chats/{id}/members (added_at / removed_at из chats_group).
+     * Ничего не хранится в таблице сообщений, агент этих событий не видит.
+     */
+    async renderGroupEvents(chatId) {
+        try {
+            const res = await fetch(`/api/chats/${chatId}/members`, { credentials: 'include' });
+            if (!res.ok) return;
+            const data = await res.json();
+            if (chatId !== this.currentChat) return; // чат переключили
+            const members = data.members || [];
+            if (!members.length) return; // не групповой — плашек нет
+
+            const container = this.getMessagesContainer();
+            if (!container) return;
+
+            // Убираем старые плашки, чтобы не задвоить при повторном рендере.
+            container.querySelectorAll('.group-event').forEach(n => n.remove());
+
+            // Собираем события: добавление (added_at) и удаление (removed_at).
+            const events = [];
+            members.forEach(m => {
+                if (m.added_at) {
+                    events.push({ ts: m.added_at, type: 'add', target: m.username, actorId: m.added_by });
+                }
+                if (m.removed_at) {
+                    events.push({ ts: m.removed_at, type: 'remove', target: m.username, actorId: m.added_by });
+                }
+            });
+            if (!events.length) return;
+
+            const nameById = {};
+            members.forEach(m => { nameById[String(m.user_id)] = m.username; });
+            events.sort((a, b) => new Date(a.ts) - new Date(b.ts));
+
+            events.forEach(ev => {
+                const actor = nameById[String(ev.actorId)] || 'Кто-то';
+                container.appendChild(this._buildGroupEventPlashka(ev, actor));
+            });
+            container.scrollTop = container.scrollHeight;
+        } catch (e) {
+            console.error('[group-members] renderGroupEvents error', e);
+        }
+    }
+
+    _buildGroupEventPlashka(ev, actor) {
+        const wrap = document.createElement('div');
+        wrap.className = 'group-event';
+        const glass = document.createElement('div');
+        glass.className = 'group-event-glass' + (ev.type === 'remove' ? ' is-remove' : '');
+        const verb = ev.type === 'remove' ? 'удалил(а)' : 'добавил(а)';
+        const prep = ev.type === 'remove' ? 'из чата' : 'в чат';
+        let when = '';
+        try {
+            when = new Date(ev.ts).toLocaleString([], {
+                day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+            });
+        } catch (_e) { when = ''; }
+        glass.innerHTML =
+            `<span class="ge-actor">${this.escapeHtml(actor)}</span> ` +
+            `<span class="ge-verb">${verb}</span> ` +
+            `<span class="ge-target">${this.escapeHtml(ev.target || '')}</span> ${prep}` +
+            (when ? `<span class="ge-time">${this.escapeHtml(when)}</span>` : '');
+        wrap.appendChild(glass);
+        return wrap;
     }
 
     renderMessages(messages) {
@@ -1456,9 +1551,17 @@ class ChatApp {
         const iconEdit = '<svg viewBox="0 0 24 24" fill="none"><path d="M4 20h4l10-10a2 2 0 0 0-4-4L4 16v4z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
         const iconStar = '<svg viewBox="0 0 24 24" fill="none"><path d="M12 3.8l2.56 5.2 5.74.84-4.15 4.05.98 5.72L12 16.9 6.87 19.6l.98-5.72L3.7 9.84l5.74-.84L12 3.8z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>';
         const iconTrash = '<svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16M9 7V5h6v2m-8 0l1 12h8l1-12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        const iconInvite = '<svg viewBox="0 0 24 24" fill="none"><circle cx="9" cy="8" r="3.2" stroke="currentColor" stroke-width="1.8"/><path d="M3.5 19c0-3 2.5-5 5.5-5s5.5 2 5.5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M18 8v6M15 11h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
 
         dropdown.appendChild(makeItem('chat-item-dropdown-action', 'Переименовать', iconEdit, () => this._renameChat(chatId, chat)));
         dropdown.appendChild(makeItem('chat-item-dropdown-action', chat.is_favorite ? 'Убрать из избранного' : 'В избранное', iconStar, () => this._favoriteChat(chatId, !chat.is_favorite)));
+        dropdown.appendChild(makeItem('chat-item-dropdown-action', 'Пригласить участников', iconInvite, () => {
+            if (window.GroupMembers && typeof window.GroupMembers.open === 'function') {
+                window.GroupMembers.open(chatId);
+            } else {
+                console.warn('[group-members] GroupMembers module not loaded');
+            }
+        }));
         dropdown.appendChild(makeItem('chat-item-dropdown-delete', 'Удалить', iconTrash, () => this._deleteChat(chatId)));
 
         // Позиционируем dropdown через fixed, чтобы он не выходил за viewport
@@ -2090,6 +2193,32 @@ class ChatApp {
                 }
                 return;
             }
+
+            // ── Групповые чаты ─────────────────────────────────────
+            // Меня добавили в групповой чат: перезагружаем список чатов,
+            // чтобы чат появился в разделе «Групповые» без F5.
+            if (msg.type === 'group_invited') {
+                console.log('[group-members] WS group_invited chat=', msg.chat_id);
+                this.refreshChatsList?.();
+                return;
+            }
+            // Состав участников чата изменился (добавили/удалили).
+            // Обновляем модалку (если открыта на этом чате) и список чатов
+            // (чат мог перестать быть групповым → уедет из раздела «Групповые»).
+            if (msg.type === 'group_members_updated') {
+                console.log('[group-members] WS group_members_updated chat=', msg.chat_id);
+                if (window.GroupMembers && typeof window.GroupMembers.onMembersUpdated === 'function') {
+                    window.GroupMembers.onMembersUpdated(msg.chat_id);
+                }
+                // Если это открытый сейчас чат — перерисовываем плашки-события
+                // в ленте (кто-то добавил/удалил участника) в реальном времени.
+                if (String(msg.chat_id) === String(this.currentChat)) {
+                    this.renderGroupEvents(this.currentChat);
+                }
+                this.refreshChatsList?.();
+                return;
+            }
+
             // Дедупликация: пользовательское сообщение уже показано оптимистично
             if (!msg.is_from_bot) {
                 // Основной ключ дедупа — message_id (совпадает с клиентским msgId,

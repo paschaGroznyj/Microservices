@@ -127,6 +127,17 @@ services:
         ORCH_THROTTLE_SEC:   "6"
         BUF_MAXLEN:          "40"
         BUF_TTL:             "3600"
+        # Ссылка для гейта регистрации в /start (незарегистрированный чат):
+        CATCHPM_URL:         https://catchpm.cds.uva-advanced.ru
+        # Проактивные триггеры (будильники завтрак/обед/ужин + poke):
+        TG_TZ:               Europe/Moscow
+        TG_POKE_PROBABILITY: "0.18"   # вероятность дёрнуть чат на тике poke
+        TG_POKE_HOUR_START:  "10"      # окно адресных poke [start, end) МСК
+        TG_POKE_HOUR_END:    "18"      # до 18 (слоты 9/13 внутри исключаются вероятностью)
+        TG_POKE_JITTER_MIN:  "15"      # ± минут джиттер запуска poke от ровного часа
+        TG_SAD_WAIT_LO:      "300"     # окно ожидания ответа (грусть), сек, low
+        TG_SAD_WAIT_HI:      "600"     # окно ожидания ответа (грусть), сек, high
+        TG_POKE_DAILY_TTL:   "86400"   # суточный throttle адресных poke на чат
       restart: unless-stopped
 
 

@@ -10,3 +10,4 @@ python-jose[cryptography]
 pydantic
 aiogram
 redis>=5.0
+APScheduler>=3.10

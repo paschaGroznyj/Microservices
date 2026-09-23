@@ -35,6 +35,7 @@ import base64
 import logging
 import os
 import pathlib
+import random
 import re
 import time
 import uuid
@@ -68,6 +69,22 @@ BUF_MAXLEN         = int(os.environ.get("BUF_MAXLEN", "40"))
 BUF_TTL            = int(os.environ.get("BUF_TTL", "3600"))
 ALLOWED_TTL        = int(os.environ.get("ALLOWED_TTL", "60"))
 
+# ── Проактивные триггеры (будильники + poke) ────────────────────────────────
+# 3 broadcast-слота (завтрак/обед/ужин) по МСК + адресные poke между ними.
+TG_TZ              = os.environ.get("TG_TZ", "Europe/Moscow")
+# Вероятность дёрнуть конкретный чат на ежечасном тике poke (0..1).
+TG_POKE_PROBABILITY = float(os.environ.get("TG_POKE_PROBABILITY", "0.18"))
+# Окно адресных poke: часы МСК [start, end) — до 18, слоты 9/13 исключаются.
+TG_POKE_HOUR_START = int(os.environ.get("TG_POKE_HOUR_START", "10"))
+TG_POKE_HOUR_END   = int(os.environ.get("TG_POKE_HOUR_END", "18"))  # exclusive
+# Джиттер запуска poke относительно ровного часа, ± минут.
+TG_POKE_JITTER_MIN = int(os.environ.get("TG_POKE_JITTER_MIN", "15"))
+# Окно ожидания ответа после адресной инициации (грусть), секунды: рандом [lo, hi].
+TG_SAD_WAIT_LO     = int(os.environ.get("TG_SAD_WAIT_LO", "300"))   # 5 мин
+TG_SAD_WAIT_HI     = int(os.environ.get("TG_SAD_WAIT_HI", "600"))   # 10 мин
+# Суточный throttle адресных poke на чат (сек).
+TG_POKE_DAILY_TTL  = int(os.environ.get("TG_POKE_DAILY_TTL", "86400"))
+
 MAX_FILE_SIZE = 20 * 1024 * 1024
 
 logging.basicConfig(
@@ -89,6 +106,10 @@ _thinking_messages: dict[int, int] = {}
 def _k_allowed() -> str:                return "tg:allowed_chats"
 def _k_buf(chat_id: int) -> str:        return f"tg:buf:{chat_id}"
 def _k_orch_ts(chat_id: int) -> str:    return f"tg:orch_ts:{chat_id}"
+# Суточный throttle адресных poke на чат.
+def _k_poke(chat_id: int) -> str:       return f"tg:poke:{chat_id}"
+# Ожидание ответа целевого юзера после адресной инициации (флаг «грусти»).
+def _k_await(chat_id: int, uid: int) -> str: return f"tg:await:{chat_id}:{uid}"
 
 
 async def get_redis() -> aioredis.Redis:
@@ -261,6 +282,197 @@ async def dispatch_to_agent(chat_id: int, user_id: int, username: str,
     except Exception as e:
         log.error(f"dispatch_to_agent fail chat={chat_id}: {e}")
         raise
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ПРОАКТИВНЫЕ ТРИГГЕРЫ: сбор участников + инициация + «грусть»
+# ══════════════════════════════════════════════════════════════════════════════
+async def upsert_member(chat_id: int, user_id: int, username: str | None,
+                        first_name: str | None):
+    """Пассивный сбор участников чата → chats_service (для рандомной инициации)."""
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(f"{CHATS_SERVICE_URL}/tg/members", json={
+                "chat_id": str(chat_id),
+                "user_id": user_id,
+                "username": username,
+                "first_name": first_name,
+            })
+    except Exception as e:
+        log.warning(f"upsert_member fail chat={chat_id}: {e}")
+
+
+async def get_random_member(chat_id: int) -> dict | None:
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{CHATS_SERVICE_URL}/tg/members/{chat_id}/random")
+            resp.raise_for_status()
+            return resp.json().get("member")
+    except Exception as e:
+        log.warning(f"get_random_member fail chat={chat_id}: {e}")
+        return None
+
+
+async def list_proactive_chats() -> list[str]:
+    """Чаты с включёнными будильниками (is_active + proactive_enabled)."""
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{CHATS_SERVICE_URL}/tg/proactive_chats")
+            resp.raise_for_status()
+            rows = resp.json().get("chats", [])
+            return [str(r["chat_id"]) for r in rows]
+    except Exception as e:
+        log.warning(f"list_proactive_chats fail: {e}")
+        return []
+
+
+async def dispatch_initiation(chat_id: int, slot: str, addressed: bool,
+                              target: dict | None, sad_followup: bool = False):
+    """
+    Шлёт агенту проактивный payload (initiated=True). Текст задачи агент
+    сгенерит сам из промпта инициации/грусти (см. tg_integration).
+    """
+    settings = await get_chat_settings(chat_id)
+    target_uid = (target or {}).get("user_id")
+    target_username = (target or {}).get("username") or (target or {}).get("first_name")
+    payload = {
+        "user_id": target_uid if target_uid else 0,
+        "username": target_username or "чат",
+        "chat_id": str(chat_id),
+        "message": "",
+        "type_agent": "pm",
+        "gateway_target": "telegram",
+        "request_id": str(uuid.uuid4()),
+        "message_id": str(uuid.uuid4()),
+        "selected_tools": settings.get("selected_tools") or [],
+        "agent_model": settings.get("agent_model"),
+        "context_size": "medium",
+        "has_files": False,
+        "is_from_bot": False,
+        "tb_name": None,
+        # проактив-поля
+        "initiated": True,
+        "slot": slot,
+        "addressed": addressed,
+        "target_username": target_username,
+        "sad_followup": sad_followup,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(f"{CHATS_SERVICE_URL}/send_message", json=payload)
+            resp.raise_for_status()
+        log.info(f"proactive dispatched chat={chat_id} slot={slot} "
+                 f"addressed={addressed} sad={sad_followup} target={target_username}")
+    except Exception as e:
+        log.error(f"dispatch_initiation fail chat={chat_id}: {e}")
+
+
+async def _sadness_watch(chat_id: int, target: dict):
+    """
+    После адресной инициации ждём рандом 5-10 мин. Если целевой юзер не ответил
+    (флаг tg:await:{chat}:{uid} ещё жив) → шлём ОДИН грустный follow-up.
+    Ответ юзера снимает флаг в on_text_message.
+    """
+    uid = target.get("user_id")
+    if not uid:
+        return
+    r = await get_redis()
+    wait = random.randint(TG_SAD_WAIT_LO, TG_SAD_WAIT_HI)
+    try:
+        # ставим флаг ожидания на время окна
+        await r.set(_k_await(chat_id, uid), "1", ex=wait + 30)
+    except Exception as e:
+        log.warning(f"sadness set-await fail chat={chat_id}: {e}")
+    await asyncio.sleep(wait)
+    try:
+        still_waiting = await r.get(_k_await(chat_id, uid))
+    except Exception:
+        still_waiting = None
+    if still_waiting:
+        # человек не ответил → грусть (один раз), снимаем флаг
+        try:
+            await r.delete(_k_await(chat_id, uid))
+        except Exception:
+            pass
+        await dispatch_initiation(chat_id, "poke", addressed=True,
+                                  target=target, sad_followup=True)
+
+
+async def run_broadcast_slot(slot: str):
+    """Завтрак/обед/ужин: broadcast во ВСЕ proactive-чаты, без адресата."""
+    chats = await list_proactive_chats()
+    log.info(f"[scheduler] broadcast slot={slot} chats={len(chats)}")
+    for cid in chats:
+        try:
+            await dispatch_initiation(int(cid), slot, addressed=False, target=None)
+        except Exception as e:
+            log.warning(f"broadcast fail chat={cid}: {e}")
+
+
+async def run_poke_tick():
+    """
+    Ежечасный (с джиттером) адресный poke между слотами.
+    Для каждого proactive-чата с вероятностью TG_POKE_PROBABILITY и не чаще
+    1 раза в сутки (Redis throttle) дёргаем рандомного участника + запускаем
+    «грусть»-вотчер.
+    """
+    chats = await list_proactive_chats()
+    r = await get_redis()
+    log.info(f"[scheduler] poke tick, candidate chats={len(chats)}")
+    for cid in chats:
+        try:
+            if random.random() > TG_POKE_PROBABILITY:
+                continue
+            # суточный throttle: NX ставит ключ только если его нет
+            fresh = await r.set(_k_poke(int(cid)), "1", nx=True, ex=TG_POKE_DAILY_TTL)
+            if not fresh:
+                continue
+            member = await get_random_member(int(cid))
+            if not member:
+                # некого дёргать — снимаем throttle-ключ, чтобы попробовать позже
+                await r.delete(_k_poke(int(cid)))
+                continue
+            await dispatch_initiation(int(cid), "poke", addressed=True, target=member)
+            asyncio.create_task(_sadness_watch(int(cid), member))
+        except Exception as e:
+            log.warning(f"poke fail chat={cid}: {e}")
+
+
+def _schedule_poke_with_jitter(scheduler):
+    """
+    Планирует ОДИН запуск run_poke_tick со случайным сдвигом ±TG_POKE_JITTER_MIN
+    минут от момента вызова (вызывается ежечасно в окне poke).
+    """
+    from datetime import datetime, timedelta
+    jitter = random.randint(-TG_POKE_JITTER_MIN, TG_POKE_JITTER_MIN)
+    run_at = datetime.now() + timedelta(minutes=max(0, jitter) + 0)
+    # отрицательный джиттер = запустить почти сразу (в прошлое нельзя)
+    if jitter < 0:
+        run_at = datetime.now() + timedelta(seconds=5)
+    scheduler.add_job(run_poke_tick, "date", run_date=run_at,
+                      id=f"poke-{uuid.uuid4().hex[:8]}", misfire_grace_time=120)
+    log.info(f"[scheduler] poke scheduled at {run_at} (jitter={jitter}m)")
+
+
+def build_scheduler():
+    """APScheduler: 3 cron-слота (МСК) + ежечасный джиттер-poke в окне."""
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.triggers.cron import CronTrigger
+
+    sched = AsyncIOScheduler(timezone=TG_TZ)
+    # Завтрак / обед / ужин — broadcast.
+    sched.add_job(run_broadcast_slot, CronTrigger(hour=9,  minute=0, timezone=TG_TZ),
+                  args=["morning"], id="slot-morning", misfire_grace_time=300)
+    sched.add_job(run_broadcast_slot, CronTrigger(hour=13, minute=0, timezone=TG_TZ),
+                  args=["lunch"], id="slot-lunch", misfire_grace_time=300)
+    sched.add_job(run_broadcast_slot, CronTrigger(hour=18, minute=0, timezone=TG_TZ),
+                  args=["dinner"], id="slot-dinner", misfire_grace_time=300)
+    # Ежечасный тик в окне [start, end): планирует poke со случайным джиттером.
+    hours = ",".join(str(h) for h in range(TG_POKE_HOUR_START, TG_POKE_HOUR_END))
+    sched.add_job(_schedule_poke_with_jitter,
+                  CronTrigger(hour=hours, minute=0, timezone=TG_TZ),
+                  args=[sched], id="poke-hourly", misfire_grace_time=120)
+    return sched
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -480,11 +692,19 @@ def _settings_summary(settings: dict) -> str:
     )
 
 
-def _menu_root() -> InlineKeyboardMarkup:
+def _menu_root(settings: dict | None = None) -> InlineKeyboardMarkup:
+    settings = settings or {}
+    proactive = settings.get("proactive_enabled")
+    if proactive is None:
+        proactive = True
+    # \u0411\u0443\u0434\u0438\u043b\u044c\u043d\u0438\u043a\u0438 (\u0437\u0430\u0432\u0442\u0440\u0430\u043a/\u043e\u0431\u0435\u0434/\u0443\u0436\u0438\u043d + poke)
+    poke_label = ("\U0001f514 \u0411\u0443\u0434\u0438\u043b\u044c\u043d\u0438\u043a\u0438: \u0432\u043a\u043b" if proactive
+                  else "\U0001f515 \u0411\u0443\u0434\u0438\u043b\u044c\u043d\u0438\u043a\u0438: \u0432\u044b\u043a\u043b")
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("\u041c\u043e\u0434\u0435\u043b\u044c", callback_data="tg:menu:model")],
         [InlineKeyboardButton("\u0418\u043d\u0441\u0442\u0440\u0443\u043c\u0435\u043d\u0442\u044b", callback_data="tg:menu:tools")],
         [InlineKeyboardButton("\u0422\u0440\u0438\u0433\u0433\u0435\u0440", callback_data="tg:menu:trigger")],
+        [InlineKeyboardButton(poke_label, callback_data="tg:toggle:proactive")],
         [InlineKeyboardButton("\u0417\u0430\u043a\u0440\u044b\u0442\u044c", callback_data="tg:close")],
     ])
 
@@ -551,7 +771,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         _settings_summary(settings),
         parse_mode=ParseMode.HTML,
-        reply_markup=_menu_root(),
+        reply_markup=_menu_root(settings),
     )
 
 
@@ -586,7 +806,20 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "tg:menu:root":
         await query.answer()
-        await _refresh(lambda s: _menu_root())
+        await _refresh(lambda s: _menu_root(s))
+        return
+
+    if data == "tg:toggle:proactive":
+        settings = await get_chat_settings(chat_id)
+        cur = settings.get("proactive_enabled")
+        if cur is None:
+            cur = True
+        ok = await save_chat_settings(chat_id, {"proactive_enabled": not cur})
+        await query.answer(
+            ("\u0411\u0443\u0434\u0438\u043b\u044c\u043d\u0438\u043a\u0438 " + ("\u0432\u044b\u043a\u043b" if cur else "\u0432\u043a\u043b"))
+            if ok else "\u041e\u0448\u0438\u0431\u043a\u0430"
+        )
+        await _refresh(lambda s: _menu_root(s))
         return
     if data == "tg:menu:model":
         await query.answer()
@@ -668,6 +901,16 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # обогащение ссылками/форвардом/реплаем
     text_for_agent = _enrich_text(msg, text_for_agent)
+
+    # пассивный сбор участников (для рандомной проактивной инициации)
+    await upsert_member(chat_id, user.id, user.username, user.first_name)
+
+    # человек ответил → снимаем флаг ожидания «грусти» (если ждали именно его)
+    try:
+        r = await get_redis()
+        await r.delete(_k_await(chat_id, user.id))
+    except Exception:
+        pass
 
     # всегда пишем реплику в буфер (для оркестратора и склейки контекста)
     if raw_text.strip():
@@ -787,13 +1030,19 @@ async def run_both():
     config = uvicorn.Config(api, host="0.0.0.0", port=TG_PUSH_PORT, log_level="info")
     server = uvicorn.Server(config)
 
+    # Проактивный планировщик (будильники + poke)
+    scheduler = build_scheduler()
+
     async with application:
         await application.start()
         await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
-        log.info(f"tg_bot запущен: polling + push API на :{TG_PUSH_PORT}")
+        scheduler.start()
+        log.info(f"tg_bot запущен: polling + push API на :{TG_PUSH_PORT} + scheduler "
+                 f"(slots 9/13/18 {TG_TZ}, poke {TG_POKE_HOUR_START}-{TG_POKE_HOUR_END} p={TG_POKE_PROBABILITY})")
         try:
             await server.serve()
         finally:
+            scheduler.shutdown(wait=False)
             await application.updater.stop()
             await application.stop()
 

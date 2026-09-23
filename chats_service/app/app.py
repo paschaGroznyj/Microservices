@@ -116,6 +116,12 @@ class ChatMessage(BaseModel):
     files: list = []
     agent_model: str | None = None
     gateway_target: str = "main"
+    # Проактивная инициация из telegram_service (будильники/poke/грусть).
+    initiated: bool = False
+    slot: str | None = None
+    addressed: bool = False
+    target_username: str | None = None
+    sad_followup: bool = False
     
 
 @app.on_event("startup")
@@ -162,6 +168,11 @@ async def send_message(chat: ChatMessage):
         "files": chat.files,
         "agent_model": chat.agent_model,
         "gateway_target": chat.gateway_target,
+        "initiated": chat.initiated,
+        "slot": chat.slot,
+        "addressed": chat.addressed,
+        "target_username": chat.target_username,
+        "sad_followup": chat.sad_followup,
     }
     logging.info(message)
     start = time.perf_counter()
@@ -189,6 +200,7 @@ class TgSettingsIn(BaseModel):
     selected_tools: list | None = None
     trigger_mode: str | None = None
     orchestrator_context_n: int | None = None
+    proactive_enabled: bool | None = None
 
 
 @app.post("/tg/chats")
@@ -224,6 +236,36 @@ async def tg_set_settings(chat_id: str, body: TgSettingsIn):
         **{k: v for k, v in body.dict().items() if v is not None},
     )
     return {"status": "ok", "settings": s}
+
+
+class TgMemberIn(BaseModel):
+    chat_id: str
+    user_id: int
+    username: str | None = None
+    first_name: str | None = None
+    is_bot: bool = False
+
+
+@app.post("/tg/members")
+async def tg_upsert_member(body: TgMemberIn):
+    """Пассивный сбор участников: бот шлёт каждого написавшего."""
+    await tg_db.upsert_member(
+        body.chat_id, body.user_id, body.username, body.first_name, body.is_bot
+    )
+    return {"status": "ok"}
+
+
+@app.get("/tg/members/{chat_id}/random")
+async def tg_random_member(chat_id: str):
+    """Рандомный участник — для проактивной инициации."""
+    m = await tg_db.get_random_member(chat_id)
+    return {"member": m}
+
+
+@app.get("/tg/proactive_chats")
+async def tg_proactive_chats():
+    """Активные чаты с включёнными будильниками — для планировщика бота."""
+    return {"chats": await tg_db.list_proactive_chats()}
 
 
 class TgLogIn(BaseModel):

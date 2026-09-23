@@ -388,10 +388,21 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     agent_model = payload.get("agent_model")
     gateway_target = payload.get("gateway_target", "main")
 
+    # Проактивная инициация (будильники завтрак/обед/ужин + poke). Бот шлёт
+    # спец-payload без "живого" текста от человека: initiated=True + слот/адресность.
+    tg_initiated = bool(payload.get("initiated", False))
+    tg_slot = payload.get("slot")                 # morning|lunch|dinner|poke
+    tg_addressed = bool(payload.get("addressed", False))
+    tg_target_username = payload.get("target_username")
+    tg_sad = bool(payload.get("sad_followup", False))
+
 
     if is_from_bot or user_id == -1:
         return
-    if not text or chat_id is None:
+    # Для проактивной инициации текст в payload может быть пустым — генерим сами.
+    if (not text) and (not tg_initiated):
+        pass
+    if (not text and not tg_initiated) or chat_id is None:
         logging.warning(f"Некорректное сообщение: {payload}")
         return
     print("ВНУТРИ АГЕНТА", payload)
@@ -404,9 +415,22 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     is_telegram = (gateway_target == "telegram")
     if is_telegram:
         # Источник Telegram: своя шапка (без CatchPM/табельного).
-        from agent_pm.telegram.tg_integration import build_tg_prefix, DEFAULT_TG_MODEL
+        from agent_pm.telegram.tg_integration import (
+            build_tg_prefix, DEFAULT_TG_MODEL,
+            build_initiation_prompt, build_sad_followup_prompt,
+        )
         _chat_type = "group" if str(chat_id).startswith("-") else "private"
-        message = build_tg_prefix(username, chat_id, _chat_type) + text
+        if tg_initiated:
+            # Проактив: текст задачи агент генерит из промпта инициации/грусти.
+            if tg_sad:
+                message = build_sad_followup_prompt(tg_target_username)
+            else:
+                message = build_initiation_prompt(
+                    tg_slot or "poke", tg_target_username,
+                    chat_type=_chat_type, addressed=tg_addressed,
+                )
+        else:
+            message = build_tg_prefix(username, chat_id, _chat_type) + text
         if not agent_model:
             agent_model = DEFAULT_TG_MODEL
     else:

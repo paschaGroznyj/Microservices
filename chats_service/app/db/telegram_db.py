@@ -67,9 +67,30 @@ class TelegramDB:
                     selected_tools JSONB,                -- NULL = все тулы по дефолту
                     trigger_mode   TEXT NOT NULL DEFAULT 'orchestrator', -- 'mention' | 'orchestrator' | 'every'
                     orchestrator_context_n INT NOT NULL DEFAULT 6,
+                    proactive_enabled BOOLEAN NOT NULL DEFAULT TRUE, -- будильники (завтрак/обед/ужин)
                     updated_at     TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
                 );
+
+                CREATE TABLE IF NOT EXISTS telegram_chat_members (
+                    chat_id     TEXT NOT NULL
+                                REFERENCES telegram_chats(chat_id) ON DELETE CASCADE,
+                    user_id     BIGINT NOT NULL,
+                    username    TEXT,
+                    first_name  TEXT,
+                    is_bot      BOOLEAN NOT NULL DEFAULT FALSE,
+                    last_seen   TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                    created_at  TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (chat_id, user_id)
+                );
+                CREATE INDEX IF NOT EXISTS ix_tg_members_chat
+                    ON telegram_chat_members(chat_id);
             """)
+
+            # мягкая миграция для уже существующих БД
+            await conn.execute(
+                "ALTER TABLE telegram_chat_settings "
+                "ADD COLUMN IF NOT EXISTS proactive_enabled BOOLEAN NOT NULL DEFAULT TRUE;"
+            )
 
     # ── allow-list ───────────────────────────────────────────────────────────
     async def upsert_chat(self, chat_id: str, added_by_user_id: int | None) -> dict:
@@ -139,7 +160,7 @@ class TelegramDB:
     async def update_settings(self, chat_id: str, **fields) -> dict | None:
         """Точечное обновление настроек. admin-тулы запрещены на уровне колл-сайта."""
         allowed = {"system_prompt", "agent_model", "selected_tools",
-                   "trigger_mode", "orchestrator_context_n"}
+                   "trigger_mode", "orchestrator_context_n", "proactive_enabled"}
         sets, args, i = [], [], 1
         for k, v in fields.items():
             if k not in allowed:
@@ -159,3 +180,41 @@ class TelegramDB:
                 *args,
             )
         return await self.get_settings(chat_id)
+
+    # ── members ───────────────────────────────────────────────────────────────────────────────
+    async def upsert_member(self, chat_id: str, user_id: int, username: str | None,
+                            first_name: str | None, is_bot: bool = False) -> None:
+        """Пассивный сбор: каждый написавший в чат попадает сюда."""
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO telegram_chat_members
+                    (chat_id, user_id, username, first_name, is_bot, last_seen)
+                VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+                ON CONFLICT (chat_id, user_id) DO UPDATE
+                    SET username   = EXCLUDED.username,
+                        first_name = EXCLUDED.first_name,
+                        is_bot     = EXCLUDED.is_bot,
+                        last_seen  = CURRENT_TIMESTAMP;
+            """, str(chat_id), int(user_id), username, first_name, is_bot)
+
+    async def get_random_member(self, chat_id: str, exclude_bots: bool = True) -> dict | None:
+        """Рандомный участник чата (для проактивной инициации)."""
+        q = ("SELECT user_id, username, first_name FROM telegram_chat_members "
+             "WHERE chat_id=$1")
+        if exclude_bots:
+            q += " AND is_bot=FALSE"
+        q += " ORDER BY random() LIMIT 1"
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(q, str(chat_id))
+        return dict(row) if row else None
+
+    async def list_proactive_chats(self) -> list[dict]:
+        """Активные чаты с включёнными будильниками."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT c.chat_id, c.chat_type
+                FROM telegram_chats c
+                JOIN telegram_chat_settings s ON s.chat_id = c.chat_id
+                WHERE c.is_active = TRUE AND s.proactive_enabled = TRUE
+            """)
+        return [dict(r) for r in rows]

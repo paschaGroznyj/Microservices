@@ -1628,6 +1628,160 @@ async def search_chats(request: Request, q: str = "", limit: int = 30):
         raise HTTPException(status_code=500, detail="Failed to search chats")
 
 
+# ========== ГРУППОВЫЕ УЧАСТНИКИ (SIGMA, порт из main) ==========
+# Реалтайм без WS: вместо broadcast() кладём событие в status_store по
+# каждому участнику — фронт заберёт через SSE /api/chats/user_events/stream.
+
+@app.get("/api/chats/{chat_id}/members")
+async def group_members_get(chat_id: str, request: Request):
+    """Список участников группового чата + admin_id + is_group."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        response = await app.state.http_client.get(
+            f"{SERVICES['chats']['url']}/group/{chat_id}/members",
+        )
+        if response.status_code != 200:
+            raise HTTPException(status_code=502, detail="Chats service error")
+        data = response.json()
+        data["current_user_id"] = user["user_id"]
+        data["is_current_admin"] = (data.get("admin_id") == user["user_id"])
+        return data
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"[group] members_get {chat_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch members")
+
+
+@app.get("/api/users/search")
+async def group_users_search(request: Request, q: str = "", chat_id: str = "", limit: int = 20):
+    """Живой поиск юзеров для приглашения. Пустой q — свежие зареги."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        response = await app.state.http_client.get(
+            f"{SERVICES['chats']['url']}/group/users/search",
+            params={"q": (q or "").strip(), "chat_id": chat_id or "",
+                    "limit": max(1, min(limit, 50))},
+        )
+        if response.status_code != 200:
+            raise HTTPException(status_code=502, detail="Chats service error")
+        return response.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"[group] users_search: {e}")
+        raise HTTPException(status_code=500, detail="Failed to search users")
+
+
+def _notify_group_members(members: list, event: dict) -> None:
+    """SIGMA-аналог broadcast(): пуш события каждому участнику в status_store."""
+    for m in members or []:
+        uname = m.get("username")
+        if uname:
+            try:
+                status_store.push_user_event(uname, event)
+            except Exception as e:
+                logging.warning(f"[group] push_user_event fail for {uname}: {e}")
+
+
+@app.post("/api/chats/{chat_id}/members/add")
+async def group_member_add(chat_id: str, request: Request):
+    """Добавить участника. Первый инвайт делает инициатора админом."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    target_user_id = body.get("target_user_id")
+    if not target_user_id:
+        raise HTTPException(status_code=400, detail="target_user_id required")
+    try:
+        response = await app.state.http_client.post(
+            f"{SERVICES['chats']['url']}/group/member/add",
+            json={"chat_id": chat_id, "user_id": user["user_id"],
+                  "target_user_id": target_user_id},
+        )
+        if response.status_code != 200:
+            return Response(content=response.content, status_code=response.status_code,
+                            media_type="application/json")
+        data = response.json()
+        logging.info(f"[group] add member chat={chat_id} target={target_user_id} by={user['user_id']}")
+        members = data.get("members", [])
+        # SIGMA: вместо broadcast — пуш в status_store каждому участнику
+        _notify_group_members(members, {"type": "group_members_updated",
+                                        "chat_id": chat_id, "members": members})
+        # Пинок приглашённому — обновить список чатов (появился групповой)
+        try:
+            for m in members:
+                if m.get("user_id") == target_user_id and m.get("username"):
+                    status_store.push_user_event(m["username"], {
+                        "type": "group_invited", "chat_id": chat_id})
+                    break
+        except Exception as e:
+            logging.warning(f"[group] notify invited fail: {e}")
+        return data
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"[group] member_add {chat_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to add member")
+
+
+@app.post("/api/chats/{chat_id}/members/remove")
+async def group_member_remove(chat_id: str, request: Request):
+    """Удалить участника. Только админ."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    target_user_id = body.get("target_user_id")
+    if not target_user_id:
+        raise HTTPException(status_code=400, detail="target_user_id required")
+    try:
+        # Запомним участников ДО удаления — чтобы уведомить также удалённого
+        prev = []
+        try:
+            pr = await app.state.http_client.get(f"{SERVICES['chats']['url']}/group/{chat_id}/members")
+            if pr.status_code == 200:
+                prev = pr.json().get("members", [])
+        except Exception:
+            pass
+        response = await app.state.http_client.post(
+            f"{SERVICES['chats']['url']}/group/member/remove",
+            json={"chat_id": chat_id, "user_id": user["user_id"],
+                  "target_user_id": target_user_id},
+        )
+        if response.status_code != 200:
+            return Response(content=response.content, status_code=response.status_code,
+                            media_type="application/json")
+        data = response.json()
+        logging.info(f"[group] remove member chat={chat_id} target={target_user_id} by={user['user_id']}")
+        members = data.get("members", [])
+        # Уведомляем оставшихся + удалённого (он был в prev, но нет в members)
+        notify_targets = {m.get("username"): m for m in members if m.get("username")}
+        for m in prev:
+            if m.get("user_id") == target_user_id and m.get("username"):
+                notify_targets[m["username"]] = m
+        _notify_group_members(list(notify_targets.values()),
+                              {"type": "group_members_updated", "chat_id": chat_id,
+                               "members": members})
+        return data
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"[group] member_remove {chat_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to remove member")
+
+
 @app.get("/api/chats/{chat_id}/messages")
 async def get_messages(chat_id: str, request: Request):
     """Получение сообщений чата (для SPA)"""

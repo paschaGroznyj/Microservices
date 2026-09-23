@@ -927,3 +927,41 @@
   border: 1px solid color-mix(in srgb, #67cc98 60%, var(--border));
 }
 .nav-item:not(.active) .nav-badge { opacity: .9; }
+
+/* ===== Групповые чаты (порт из main) ===== */
+/* Блок "Групповые" — независимая секция между избранным и "Ваши чаты".
+   Каркас как у .your-chats-block, но НЕ растягивается (flex:0), чтобы
+   групповые не отжимали список личных чатов. display управляется из JS
+   (inline flex/none), поэтому здесь фиксируем только направление и коллапс. */
+.group-chats-block {
+  flex-direction: column;
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+/* Заголовок "Групповые" — прижимаем вплотную, без лишнего верхнего отступа */
+#group-chats-toggle {
+  margin: 0;
+  padding-top: 0;
+}
+
+.group-chats-block.collapsed .section-chevron {
+  transform: rotate(-90deg);
+}
+
+.chat-list-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+  overflow: visible;
+  transition: max-height 0.2s ease, opacity 0.15s ease;
+  opacity: 1;
+  max-height: 2000px;
+}
+
+.group-chats-block.collapsed .chat-list-groups {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+}

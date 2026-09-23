@@ -125,9 +125,56 @@ class DBConsumer:
                         logger.error(f"Не удалось сохранить auto_title chat={chat_id}: {e}")
 
                 await self.send_to_main_service(chat_id, ws_payload, gateway_url)
+            else:
+                # === USER-СООБЩЕНИЕ В ГРУППОВОМ ЧАТЕ ===
+                # Кросс-гейтвейный фан-аут: сообщение одного участника должно
+                # прилететь всем остальным в реальном времени, независимо от того,
+                # на какой морде (main/sigma) каждый сидит. Раньше пуш был только
+                # для is_from_bot, поэтому чужие user-сообщения появлялись лишь
+                # после F5. Отправителя исключать не нужно — он получит своё
+                # сообщение и отфильтрует по message_id (у него оно уже отрисовано
+                # оптимистично, дедуп на фронте).
+                try:
+                    if user_id and user_id != -1 and await self.db.is_group_chat(chat_id):
+                        members = await self.db.get_group_members(chat_id)
+                        event_payload = {
+                            "type": "group_new_message",
+                            "chat_id": chat_id,
+                            "message": {
+                                "kind": "message",
+                                "user_id": user_id,
+                                "username": payload.get("username"),
+                                "message": message,
+                                "message_id": message_id,
+                                "is_from_bot": False,
+                                "files": _sanitize_files_for_ws(attached_files),
+                            },
+                        }
+                        await self.fanout_group_message(chat_id, members, event_payload)
+                except Exception as e:
+                    logger.error(f"Групповой фан-аут user-сообщения не удался chat={chat_id}: {e}")
 
         except Exception as e:
             logger.error(f"Ошибка обработки сообщения: {e}")
+
+    async def fanout_group_message(self, chat_id: str, members: list, event: dict):
+        """Рассылает событие группового чата на ОБА гейтвея.
+        Каждый гейтвей сам решает как доставить своим клиентам:
+        main → WS broadcast по chat_id, sigma → push_user_event по username."""
+        usernames = [m["username"] for m in members if m.get("username")]
+        for gw_name, gw_url in self.gateway_urls.items():
+            try:
+                requests.post(
+                    f"{gw_url}/internal/group_new_message",
+                    json={
+                        "chat_id": chat_id,
+                        "usernames": usernames,
+                        "event": event,
+                    },
+                    timeout=5,
+                )
+            except Exception as e:
+                logger.warning(f"[group] fanout {gw_name} fail chat={chat_id}: {e}")
 
     async def send_to_main_service(self, chat_id: str, message: dict, gateway_url: str):
         """Отправляем сообщение обратно в основной сервис для WebSocket"""

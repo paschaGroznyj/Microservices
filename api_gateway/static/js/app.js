@@ -278,6 +278,12 @@ class ChatApp {
         }
     }
 
+    // Алиас для явной перезагрузки списка чатов (используется WS-хендлерами
+    // групповых чатов: group_invited / group_members_updated).
+    async refreshChatsList() {
+        return this.loadChats();
+    }
+
     renderChats(chats) {
         const list = document.getElementById('chat-list');
         const favList = document.getElementById('chat-favorites-list');
@@ -343,8 +349,11 @@ class ChatApp {
             }).join('');
         };
 
-        const favorites = sorted.filter(c => c.is_favorite);
-        const regular   = sorted.filter(c => !c.is_favorite);
+        // Групповые чаты (флаг is_group из chats_service) выносим в отдельный
+        // раздел «Групповые» под избранным. Они НЕ дублируются в избранном/обычных.
+        const groups    = sorted.filter(c => c.is_group);
+        const favorites = sorted.filter(c => !c.is_group && c.is_favorite);
+        const regular   = sorted.filter(c => !c.is_group && !c.is_favorite);
 
         // Секция избранного — показываем/скрываем целиком
         const favSection = document.getElementById('favorites-section');
@@ -355,6 +364,19 @@ class ChatApp {
             } else {
                 favList.innerHTML = '';
                 if (favSection) favSection.style.display = 'none';
+            }
+        }
+
+        // Секция групповых — показываем/скрываем целиком
+        const groupSection = document.getElementById('group-chats-block');
+        const groupList = document.getElementById('chat-group-list');
+        if (groupList) {
+            if (groups.length) {
+                groupList.innerHTML = buildList(groups);
+                if (groupSection) groupSection.style.display = 'flex';
+            } else {
+                groupList.innerHTML = '';
+                if (groupSection) groupSection.style.display = 'none';
             }
         }
 
@@ -383,6 +405,7 @@ class ChatApp {
 
         document.getElementById('chat-list')?.addEventListener('click', handleChatListClick);
         document.getElementById('chat-favorites-list')?.addEventListener('click', handleChatListClick);
+        document.getElementById('chat-group-list')?.addEventListener('click', handleChatListClick);
 
         document.addEventListener('click', (e) => {
             if (!e.target.closest('.chat-item-dropdown') && !e.target.closest('.chat-item-menu-btn')) {
@@ -709,6 +732,10 @@ class ChatApp {
         const data = await res.json();
         if (chatId !== this.currentChat) return; // гонка
 
+        // Тип чата и id смотрящего — для разграничения авторов (свой/чужой) в групповом чате.
+        this._isGroupChat = !!data.is_group;
+        this._viewerUserId = data.viewer_user_id ?? null;
+
         // Состояние пагинации по конкретному чату
         this._pagination = {
             chatId,
@@ -720,6 +747,82 @@ class ChatApp {
 
         this.renderMessages(data.messages);
         this._initHistoryScrollLoader();
+        // Плашки-события группы теперь приходят с бэка в общем потоке messages
+        // (kind==="group_event"), встроены хронологически через renderMessages/addMessage.
+    }
+
+    /**
+     * Рисует под лентой стеклянные плашки о добавлении/удалении участников.
+     * Источник — /api/chats/{id}/members (added_at / removed_at из chats_group).
+     * Ничего не хранится в таблице сообщений, агент этих событий не видит.
+     */
+    async renderGroupEvents(chatId) {
+        try {
+            const res = await fetch(`/api/chats/${chatId}/members`, { credentials: 'include' });
+            if (!res.ok) return;
+            const data = await res.json();
+            if (chatId !== this.currentChat) return; // чат переключили
+            const members = data.members || [];
+            if (!members.length) return; // не групповой — плашек нет
+
+            const container = this.getMessagesContainer();
+            if (!container) return;
+
+            // Убираем старые плашки, чтобы не задвоить при повторном рендере.
+            container.querySelectorAll('.group-event').forEach(n => n.remove());
+
+            // Собираем события: добавление (added_at) и удаление (removed_at).
+            const events = [];
+            members.forEach(m => {
+                // Запись админа-создателя — это момент создания группы, а НЕ событие
+                // приглашения. Такие в ленту не выносим (иначе "X добавил X").
+                // Плашку "добавления" показываем только для реально приглашённых
+                // (не-админов) с корректным actor'ом.
+                const selfAdd = String(m.added_by) === String(m.user_id);
+                const isCreator = m.is_admin === true;
+                if (m.added_at && !selfAdd && !isCreator) {
+                    events.push({ ts: m.added_at, type: 'add', target: m.username, actorId: m.added_by });
+                }
+                if (m.removed_at) {
+                    events.push({ ts: m.removed_at, type: 'remove', target: m.username, actorId: m.added_by });
+                }
+            });
+            if (!events.length) return;
+
+            const nameById = {};
+            members.forEach(m => { nameById[String(m.user_id)] = m.username; });
+            events.sort((a, b) => new Date(a.ts) - new Date(b.ts));
+
+            events.forEach(ev => {
+                const actor = nameById[String(ev.actorId)] || 'Кто-то';
+                container.appendChild(this._buildGroupEventPlashka(ev, actor));
+            });
+            container.scrollTop = container.scrollHeight;
+        } catch (e) {
+            console.error('[group-members] renderGroupEvents error', e);
+        }
+    }
+
+    _buildGroupEventPlashka(ev, actor) {
+        const wrap = document.createElement('div');
+        wrap.className = 'group-event';
+        const glass = document.createElement('div');
+        glass.className = 'group-event-glass' + (ev.type === 'remove' ? ' is-remove' : '');
+        const verb = ev.type === 'remove' ? 'удалил(а)' : 'добавил(а)';
+        const prep = ev.type === 'remove' ? 'из чата' : 'в чат';
+        let when = '';
+        try {
+            when = new Date(ev.ts).toLocaleString([], {
+                day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+            });
+        } catch (_e) { when = ''; }
+        glass.innerHTML =
+            `<span class="ge-actor">${this.escapeHtml(actor)}</span> ` +
+            `<span class="ge-verb">${verb}</span> ` +
+            `<span class="ge-target">${this.escapeHtml(ev.target || '')}</span> ${prep}` +
+            (when ? `<span class="ge-time">${this.escapeHtml(when)}</span>` : '');
+        wrap.appendChild(glass);
+        return wrap;
     }
 
     renderMessages(messages) {
@@ -831,13 +934,31 @@ class ChatApp {
         const container = this.getMessagesContainer();
         if (!container) return;
 
+        // Системное событие группового чата (добавлен/удалён):
+        // рендерим стеклянную плашку прямо в поток ленты, по created_at.
+        if (message.kind === 'group_event') {
+            const node = this._buildGroupEventPlashka({
+                type: message.action === 'remove' ? 'remove' : 'add',
+                target: message.target,
+                ts: message.created_at,
+            }, message.actor);
+            container.appendChild(node);
+            if (scroll) container.scrollTop = container.scrollHeight;
+            return;
+        }
+
         const isBot      = message.is_from_bot;
+        // Групповой чат: чужое user-сообщение (не моё, не бот) — рендерим слева с ником.
+        const isOther = !isBot && this._isGroupChat
+            && message.user_id != null && this._viewerUserId != null
+            && Number(message.user_id) !== Number(this._viewerUserId);
+        const otherAuthor = isOther ? (message.username || 'Участник') : null;
         const rawContent = message.message || 'Тут было пусто';
         // Убираем статус-индикатор при ответе бота (через метод, чтобы захватить субагентов)
         if (isBot) this._clearAllStatuses();
 
         const messageEl = document.createElement('div');
-        messageEl.className = isBot ? 'agent-message' : 'user-message';
+        messageEl.className = isBot ? 'agent-message' : (isOther ? 'user-message user-message--other' : 'user-message');
 
         let content = rawContent;
         if (rawContent.trimStart().startsWith('<')) {
@@ -916,7 +1037,14 @@ class ChatApp {
             // При animate — actions и code-header вешает _streamRenderMessage в финале
         } else {
             const wrapper = document.createElement('div');
-            wrapper.className = 'user-message-wrapper';
+            wrapper.className = isOther ? 'user-message-wrapper user-message-wrapper--other' : 'user-message-wrapper';
+            // Подпись ника над каждым чужим сообщением в групповом чате.
+            if (isOther) {
+                const authorEl = document.createElement('div');
+                authorEl.className = 'gc-author';
+                authorEl.textContent = otherAuthor;
+                wrapper.appendChild(authorEl);
+            }
             // id сообщения на wrapper — нужен для дедупа WS-эха (в т.ч. для чипов,
             // где textContent не содержит полного текста).
             if (message.id) wrapper.dataset.messageId = message.id;
@@ -1456,9 +1584,17 @@ class ChatApp {
         const iconEdit = '<svg viewBox="0 0 24 24" fill="none"><path d="M4 20h4l10-10a2 2 0 0 0-4-4L4 16v4z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
         const iconStar = '<svg viewBox="0 0 24 24" fill="none"><path d="M12 3.8l2.56 5.2 5.74.84-4.15 4.05.98 5.72L12 16.9 6.87 19.6l.98-5.72L3.7 9.84l5.74-.84L12 3.8z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>';
         const iconTrash = '<svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16M9 7V5h6v2m-8 0l1 12h8l1-12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        const iconInvite = '<svg viewBox="0 0 24 24" fill="none"><circle cx="9" cy="8" r="3.2" stroke="currentColor" stroke-width="1.8"/><path d="M3.5 19c0-3 2.5-5 5.5-5s5.5 2 5.5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M18 8v6M15 11h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
 
         dropdown.appendChild(makeItem('chat-item-dropdown-action', 'Переименовать', iconEdit, () => this._renameChat(chatId, chat)));
         dropdown.appendChild(makeItem('chat-item-dropdown-action', chat.is_favorite ? 'Убрать из избранного' : 'В избранное', iconStar, () => this._favoriteChat(chatId, !chat.is_favorite)));
+        dropdown.appendChild(makeItem('chat-item-dropdown-action', 'Пригласить участников', iconInvite, () => {
+            if (window.GroupMembers && typeof window.GroupMembers.open === 'function') {
+                window.GroupMembers.open(chatId);
+            } else {
+                console.warn('[group-members] GroupMembers module not loaded');
+            }
+        }));
         dropdown.appendChild(makeItem('chat-item-dropdown-delete', 'Удалить', iconTrash, () => this._deleteChat(chatId)));
 
         // Позиционируем dropdown через fixed, чтобы он не выходил за viewport
@@ -1784,6 +1920,7 @@ class ChatApp {
                     files: window.FileAttach?.getFilesMeta() ?? []
                 })
             });
+            if (resp.status === 403) { this._handleForbiddenPost(); return; }
             try {
                 const j = await resp.clone().json();
                 this._activeRequestId = j?.request_id || null;
@@ -1806,6 +1943,34 @@ class ChatApp {
      * 2. Создаёт растущий placeholder под ответ бота
      * 3. Удаляет placeholder когда бот начинает отвечать
      */
+    /**
+     * Отправка вернула 403: пользователя удалили из группового чата.
+     * Откатываем UI: снимаем оптимистичное сообщение, возвращаем кнопку,
+     * уведомляем и перегружаем список чатов (чат исчезнет).
+     */
+    _handleForbiddenPost() {
+        this._runState = 'idle';
+        this._setSendButtonMode('send');
+        this._activeRequestId = null;
+        // Убираем последнее оптимистично отрисованное сообщение пользователя.
+        try {
+            const c = this.getMessagesContainer();
+            const wraps = c?.querySelectorAll('.user-message-wrapper');
+            if (wraps && wraps.length) wraps[wraps.length - 1].remove();
+        } catch (_) {}
+        try { this.showToast('Вы больше не участник этого чата'); } catch (_) {}
+        // Чат больше не наш, убираем его из списка и выходим на старт.
+        const goneId = this.currentChat;
+        this.chats = (this.chats || []).filter(c => c.id !== goneId);
+        this.currentChat = null;
+        this.renderChats(this.chats);
+        try { this.loadChats?.(); } catch (_) {}
+        try {
+            const c = this.getMessagesContainer();
+            if (c) c.innerHTML = '';
+        } catch (_) {}
+    }
+
     _scrollToUserMessageAndReserve() {
         const msgContainer = this.getMessagesContainer();
         if (!msgContainer) return;
@@ -2090,6 +2255,49 @@ class ChatApp {
                 }
                 return;
             }
+
+            // ── Групповые чаты ─────────────────────────────────────
+            // Меня добавили в групповой чат: перезагружаем список чатов,
+            // чтобы чат появился в разделе «Групповые» без F5.
+            if (msg.type === 'group_invited') {
+                console.log('[group-members] WS group_invited chat=', msg.chat_id);
+                this.refreshChatsList?.();
+                return;
+            }
+            // Новое user-сообщение от ДРУГОГО участника группового чата
+            // (кросс-гейтвейный фан-аут из chats_service). Если чат открыт —
+            // дорисовываем в ленту; свои (уже оптимистично) и повторы отсекаем по message_id.
+            if (msg.type === 'group_new_message') {
+                const m = msg.message || {};
+                if (String(msg.chat_id) === String(this.currentChat)) {
+                    if (m.message_id &&
+                        document.querySelector(`.user-message-wrapper[data-message-id="${m.message_id}"]`)) {
+                        // уже есть — пропускаем
+                    } else {
+                        this.addMessage(m, true, false);
+                    }
+                }
+                this.refreshChatsList?.();
+                return;
+            }
+            // Состав участников чата изменился (добавили/удалили).
+            // Обновляем модалку (если открыта на этом чате) и список чатов
+            // (чат мог перестать быть групповым → уедет из раздела «Групповые»).
+            if (msg.type === 'group_members_updated') {
+                console.log('[group-members] WS group_members_updated chat=', msg.chat_id);
+                if (window.GroupMembers && typeof window.GroupMembers.onMembersUpdated === 'function') {
+                    window.GroupMembers.onMembersUpdated(msg.chat_id);
+                }
+                // Если это открытый сейчас чат — перезагружаем ленту целиком,
+                // чтобы новая плашка-событие встала на своё место по created_at
+                // (а не внизу). События теперь часть общего потока messages.
+                if (String(msg.chat_id) === String(this.currentChat)) {
+                    this.loadMessages(this.currentChat);
+                }
+                this.refreshChatsList?.();
+                return;
+            }
+
             // Дедупликация: пользовательское сообщение уже показано оптимистично
             if (!msg.is_from_bot) {
                 // Основной ключ дедупа — message_id (совпадает с клиентским msgId,
@@ -3536,6 +3744,16 @@ class ChatApp {
                 if (!block) return;
                 const isCollapsed = block.classList.toggle('collapsed');
                 chatsBtn.setAttribute('aria-expanded', String(!isCollapsed));
+                return;
+            }
+
+            // Групповые — toggle (независимая секция)
+            const groupBtn = e.target.closest('#group-chats-toggle');
+            if (groupBtn) {
+                const block = document.getElementById('group-chats-block');
+                if (!block) return;
+                const isCollapsed = block.classList.toggle('collapsed');
+                groupBtn.setAttribute('aria-expanded', String(!isCollapsed));
                 return;
             }
 

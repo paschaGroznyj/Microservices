@@ -257,6 +257,18 @@
 
 .user-message .message-text { white-space: pre-wrap; width: 100%; }
 
+/* Групповой чат: чужое user-сообщение — слева с подписью ника (как Common chat) */
+.user-message-wrapper--other { align-items: flex-start; }
+.user-message-wrapper--other .gc-author { align-self: flex-start; }
+.user-message--other {
+  align-items: flex-start;
+  background: var(--surface2);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 14px 14px 14px 3px;
+}
+.user-message-wrapper--other .timestamp { align-self: flex-start; }
+
 .timestamp {
   font-size: .7rem;
   color: var(--text-muted);

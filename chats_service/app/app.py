@@ -138,6 +138,23 @@ async def shutdown():
 
 @app.post("/send_message")
 async def send_message(chat: ChatMessage):
+    # Гейт прав: удалённый из группового чата участник (или чужак в личном)
+    # не может писать. Для нового/пустого личного чата — разрешено.
+    if chat.user_id is not None:
+        try:
+            allowed = await db.can_post_to_chat(chat.chat_id, chat.user_id)
+        except Exception as e:
+            logging.error(f"can_post_to_chat error chat={chat.chat_id}: {e}")
+            allowed = True  # fail-open, чтобы не блокировать легитимных
+        if not allowed:
+            logging.warning(
+                f"[group] forbidden post chat={chat.chat_id} user={chat.user_id}"
+            )
+            raise HTTPException(
+                status_code=403,
+                detail="Вы не участник этого чата и не можете отправлять сообщения",
+            )
+
     message = {
         "user_id": chat.user_id,
         "tb_name": chat.tb_name,
@@ -187,7 +204,9 @@ async def get_chat_messages(chat_id: str, limit: int = 50, offset: int = 0,  x_u
             "limit": limit,
             "offset": offset,
             "messages": messages,
-            "username": x_user_name
+            "username": x_user_name,
+            "is_group": result.get("is_group", False),
+            "viewer_user_id": result.get("viewer_user_id"),
         }
     except Exception as e:
         logging.error(f"Ошибка в эндпоинте: {e}")
@@ -325,6 +344,88 @@ async def find_chat_by_type(type_agent: str, x_user_id: str = Header(..., alias=
     if chat_id:
         return {"chat_id": chat_id, "exists": True}
     return {"chat_id": None, "exists": False}
+
+
+# ===================== ГРУППОВЫЕ ЧАТЫ =====================
+
+class GroupMemberAction(BaseModel):
+    chat_id: str
+    user_id: int          # кто выполняет действие (должен быть админом)
+    target_user_id: int   # кого добавляем/удаляем
+
+
+@app.get("/group/{chat_id}/members")
+async def group_members(chat_id: str):
+    """Список активных участников группового чата + админ."""
+    try:
+        members = await db.get_group_members(chat_id)
+        admin_id = await db.get_group_admin_id(chat_id)
+        return {"members": members, "admin_id": admin_id, "is_group": len(members) > 0}
+    except Exception as e:
+        logging.error(f"Ошибка group_members {chat_id}: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось получить участников")
+
+
+@app.get("/group/users/search")
+async def group_users_search(q: str = "", chat_id: str = "", limit: int = 20):
+    """Поиск юзеров для приглашения. Пустой q — самые свежие зареги."""
+    try:
+        limit = max(1, min(limit, 50))
+        results = await db.search_users(q, exclude_chat_id=(chat_id or None), limit=limit)
+        return {"results": results, "query": (q or "").strip()}
+    except Exception as e:
+        logging.error(f"Ошибка group_users_search: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось выполнить поиск пользователей")
+
+
+@app.post("/group/member/add")
+async def group_member_add(action: GroupMemberAction):
+    """Добавляет участника. Первый инвайт делает инициатора админом чата."""
+    try:
+        # Кто-то уже админ? Если нет — инициатор становится админом.
+        admin_id = await db.ensure_group_admin(action.chat_id, action.user_id)
+        if admin_id != action.user_id:
+            raise HTTPException(status_code=403, detail="Только админ группы может добавлять участников")
+        await db.add_group_member(action.chat_id, action.target_user_id,
+                                  added_by=action.user_id, is_admin=False)
+        members = await db.get_group_members(action.chat_id)
+        logging.info(f"[group] add member chat={action.chat_id} target={action.target_user_id} by={action.user_id}")
+        return {"ok": True, "members": members, "admin_id": admin_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Ошибка group_member_add {action.chat_id}: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось добавить участника")
+
+
+@app.post("/group/member/remove")
+async def group_member_remove(action: GroupMemberAction):
+    """Удаляет участника. Только админ. Админа удалить нельзя."""
+    try:
+        admin_id = await db.get_group_admin_id(action.chat_id)
+        if admin_id != action.user_id:
+            raise HTTPException(status_code=403, detail="Только админ группы может удалять участников")
+        if action.target_user_id == admin_id:
+            raise HTTPException(status_code=400, detail="Нельзя удалить админа группы")
+        await db.remove_group_member(action.chat_id, action.target_user_id)
+        members = await db.get_group_members(action.chat_id)
+        logging.info(f"[group] remove member chat={action.chat_id} target={action.target_user_id} by={action.user_id}")
+        return {"ok": True, "members": members, "admin_id": admin_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Ошибка group_member_remove {action.chat_id}: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось удалить участника")
+
+
+@app.get("/group/{chat_id}/is_group")
+async def group_is_group(chat_id: str):
+    """Флаг: групповой ли чат (для агента/gateway)."""
+    try:
+        return {"is_group": await db.is_group_chat(chat_id)}
+    except Exception as e:
+        logging.error(f"Ошибка group_is_group {chat_id}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка проверки типа чата")
 
 
 @app.get("/internal/resolve_file")

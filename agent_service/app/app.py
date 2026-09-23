@@ -401,17 +401,28 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
         return
 
     # message = f"[CatchPM, ТабельНомер: 23423423, Пользователь: Иванов Иванон Иваныч, user_id=-1234]\n" + text
-    message = f"[CatchPM, ТабельНомер: {tb_name}, Пользователь: {username}, chat_id: {chat_id}, user_id: {user_id}]\n" + text
+    is_telegram = (gateway_target == "telegram")
+    if is_telegram:
+        # Источник Telegram: своя шапка (без CatchPM/табельного).
+        from agent_pm.telegram.tg_integration import build_tg_prefix, DEFAULT_TG_MODEL
+        _chat_type = "group" if str(chat_id).startswith("-") else "private"
+        message = build_tg_prefix(username, chat_id, _chat_type) + text
+        if not agent_model:
+            agent_model = DEFAULT_TG_MODEL
+    else:
+        message = f"[CatchPM, ТабельНомер: {tb_name}, Пользователь: {username}, chat_id: {chat_id}, user_id: {user_id}]\n" + text
 
-    selected_skills = await db.get_selected_skills_for_user(int(user_id))
-    if selected_skills:
-        selected_chunks = []
-        for idx, sk in enumerate(selected_skills, start=1):
-            tools = ", ".join(sk.get("tools") or []) or "не указаны"
-            selected_chunks.append(
-                f"#{idx} [id={sk.get('id')}] {sk.get('theme')}\nИнструменты: {tools}\n{sk.get('body')}"
-            )
-        message += "\n\n[SELECTED_SKILLS_CONTEXT] Ниже скиллы, выбранные пользователем (до 5). Учитывай их как приоритетные инструкции, если они релевантны запросу:\n" + "\n\n".join(selected_chunks)
+    # Скиллы юзера — только для CatchPM (в Telegram user_id это tg-id, не наш users).
+    if not is_telegram:
+        selected_skills = await db.get_selected_skills_for_user(int(user_id))
+        if selected_skills:
+            selected_chunks = []
+            for idx, sk in enumerate(selected_skills, start=1):
+                tools = ", ".join(sk.get("tools") or []) or "не указаны"
+                selected_chunks.append(
+                    f"#{idx} [id={sk.get('id')}] {sk.get('theme')}\nИнструменты: {tools}\n{sk.get('body')}"
+                )
+            message += "\n\n[SELECTED_SKILLS_CONTEXT] Ниже скиллы, выбранные пользователем (до 5). Учитывай их как приоритетные инструкции, если они релевантны запросу:\n" + "\n\n".join(selected_chunks)
 
     images: list[dict] = []
     if has_files and message_id:
@@ -429,7 +440,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                                             request_id=request_id, user_id=user_id, 
                                             chat_id=chat_id, database=db, selected_tools=selected_tools,
                                             context_size=context_size,
-                                            source="CatchPM",
+                                            source=("telegram" if is_telegram else "CatchPM"),
                                             agent_model=agent_model,
                                             images=images,
                                             gateway_target=gateway_target)
@@ -859,6 +870,33 @@ async def handle_tg_message(req: TgMessageRequest) -> TgMessageResponse:
     return TgMessageResponse(reply=enriched)
     # return TgMessageResponse(reply=reply)
     # return TgMessageResponse(reply="NOTHING")
+
+class TgShouldRespondRequest(BaseModel):
+    chat_id: int
+    buffer_lines: list[str] = []   # ["Ник: текст", ...] из Redis-буфера бота
+
+
+class TgShouldRespondResponse(BaseModel):
+    respond: bool
+
+
+@tg_router.post("/should_respond", response_model=TgShouldRespondResponse)
+async def tg_should_respond(req: TgShouldRespondRequest) -> TgShouldRespondResponse:
+    """
+    Оркестратор на llm_lite: по буферу последних сообщений группы
+    решает, обращаются ли к агенту. Буфер готовит бот (из Redis),
+    БД для контекста не трогаем. Fail-open в сторону молчания.
+    """
+    if _agent is None:
+        return TgShouldRespondResponse(respond=False)
+    try:
+        from agent_pm.telegram.tg_integration import should_respond
+        ok = await should_respond(_agent, req.buffer_lines)
+        return TgShouldRespondResponse(respond=bool(ok))
+    except Exception as e:
+        logging.error(f"tg_should_respond failed: {e}")
+        return TgShouldRespondResponse(respond=False)
+
 
 @service_router.post("/message", response_model=ServiceMessageResponse, status_code=202)
 async def handle_service_message(req: ServiceMessageRequest):

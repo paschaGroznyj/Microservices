@@ -1,0 +1,161 @@
+"""
+chats_service/app/db/telegram_db.py
+───────────────────────────────────
+Слой БД для телеграм-интеграции агента.
+
+Таблицы:
+  telegram_chats          — allow-list телеграм-чатов (встраиваются через CatchPM UI)
+  telegram_chat_settings  — per-chat настройки: модель, тулы, триггер, кастомный промпт
+
+chat_id телеграмы храним как TEXT (совпадает с chats.chat_id) — отрицательные
+числа для групп, положительные для лички.
+"""
+import asyncio
+import json
+import logging
+
+import asyncpg
+
+from app.core.config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME
+
+log = logging.getLogger("telegram_db")
+
+
+class TelegramDB:
+    def __init__(self, pool: asyncpg.Pool | None = None):
+        self.pool = pool
+
+    async def init_db_pool(self):
+        """Собственный пул (если модуль используется автономно)."""
+        if self.pool is not None:
+            await self._ensure_schema()
+            return
+        for attempt in range(1, 6):
+            try:
+                self.pool = await asyncpg.create_pool(
+                    user=DB_USER, password=DB_PASSWORD, host=DB_HOST,
+                    port=DB_PORT, database=DB_NAME, min_size=2, max_size=10,
+                    command_timeout=60, timeout=60,
+                )
+                await self._ensure_schema()
+                return
+            except Exception:
+                if attempt < 5:
+                    await asyncio.sleep(2.0 * attempt)
+                else:
+                    raise
+
+    async def _ensure_schema(self):
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS telegram_chats (
+                    chat_id        TEXT PRIMARY KEY,
+                    chat_type      TEXT NOT NULL DEFAULT 'group',  -- 'group' | 'private'
+                    is_active      BOOLEAN NOT NULL DEFAULT TRUE,
+                    added_by_user_id BIGINT,
+                    created_at     TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                    updated_at     TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS ix_telegram_chats_active
+                    ON telegram_chats(is_active);
+
+                CREATE TABLE IF NOT EXISTS telegram_chat_settings (
+                    chat_id        TEXT PRIMARY KEY
+                                   REFERENCES telegram_chats(chat_id) ON DELETE CASCADE,
+                    system_prompt  TEXT,                 -- кастомный промпт поверх дефолтного HTML
+                    agent_model    TEXT,                 -- NULL = дефолт
+                    selected_tools JSONB,                -- NULL = все тулы по дефолту
+                    trigger_mode   TEXT NOT NULL DEFAULT 'orchestrator', -- 'mention' | 'orchestrator' | 'every'
+                    orchestrator_context_n INT NOT NULL DEFAULT 6,
+                    updated_at     TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+
+    # ── allow-list ───────────────────────────────────────────────────────────
+    async def upsert_chat(self, chat_id: str, added_by_user_id: int | None) -> dict:
+        """Встраивает чат. Тип определяем по знаку: chat_id < 0 -> группа."""
+        chat_id = str(chat_id).strip()
+        try:
+            chat_type = "group" if int(chat_id) < 0 else "private"
+        except ValueError:
+            chat_type = "group"
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow("""
+                    INSERT INTO telegram_chats (chat_id, chat_type, is_active, added_by_user_id)
+                    VALUES ($1, $2, TRUE, $3)
+                    ON CONFLICT (chat_id) DO UPDATE
+                        SET is_active = TRUE,
+                            chat_type = EXCLUDED.chat_type,
+                            updated_at = CURRENT_TIMESTAMP
+                    RETURNING chat_id, chat_type, is_active, added_by_user_id;
+                """, chat_id, chat_type, added_by_user_id)
+                # дефолтная строка настроек (если нет)
+                await conn.execute("""
+                    INSERT INTO telegram_chat_settings (chat_id)
+                    VALUES ($1) ON CONFLICT (chat_id) DO NOTHING;
+                """, chat_id)
+        return dict(row)
+
+    async def deactivate_chat(self, chat_id: str) -> bool:
+        async with self.pool.acquire() as conn:
+            res = await conn.execute(
+                "UPDATE telegram_chats SET is_active=FALSE, updated_at=CURRENT_TIMESTAMP WHERE chat_id=$1",
+                str(chat_id),
+            )
+        return res.endswith("1")
+
+    async def list_active_chat_ids(self) -> list[str]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT chat_id FROM telegram_chats WHERE is_active=TRUE"
+            )
+        return [r["chat_id"] for r in rows]
+
+    async def is_allowed(self, chat_id: str) -> bool:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT 1 FROM telegram_chats WHERE chat_id=$1 AND is_active=TRUE",
+                str(chat_id),
+            )
+        return row is not None
+
+    # ── settings ─────────────────────────────────────────────────────────────
+    async def get_settings(self, chat_id: str) -> dict | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM telegram_chat_settings WHERE chat_id=$1", str(chat_id)
+            )
+        if not row:
+            return None
+        d = dict(row)
+        if isinstance(d.get("selected_tools"), str):
+            try:
+                d["selected_tools"] = json.loads(d["selected_tools"])
+            except Exception:
+                d["selected_tools"] = None
+        return d
+
+    async def update_settings(self, chat_id: str, **fields) -> dict | None:
+        """Точечное обновление настроек. admin-тулы запрещены на уровне колл-сайта."""
+        allowed = {"system_prompt", "agent_model", "selected_tools",
+                   "trigger_mode", "orchestrator_context_n"}
+        sets, args, i = [], [], 1
+        for k, v in fields.items():
+            if k not in allowed:
+                continue
+            if k == "selected_tools" and v is not None:
+                v = json.dumps(v)
+            sets.append(f"{k}=${i}")
+            args.append(v)
+            i += 1
+        if not sets:
+            return await self.get_settings(chat_id)
+        sets.append("updated_at=CURRENT_TIMESTAMP")
+        args.append(str(chat_id))
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                f"UPDATE telegram_chat_settings SET {', '.join(sets)} WHERE chat_id=${i}",
+                *args,
+            )
+        return await self.get_settings(chat_id)

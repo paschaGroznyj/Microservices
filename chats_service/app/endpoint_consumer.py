@@ -6,8 +6,13 @@ from kafka import KafkaConsumer
 from app.db.chats_tables import DataBaseChats
 from app.core.config import KAFKA_BROKER
 from typing import List
+import os
 import requests  # Для отправки сообщений обратно в основной сервис
 import time
+
+# Обратный путь для Telegram: ответ агента (gateway_target=="telegram") шлём
+# не на гейтвей, а прямо телеграм-боту (host-режим) через docker gateway IP.
+TG_BOT_PUSH_URL = os.getenv("TG_BOT_PUSH_URL", "http://172.18.0.1:8010/push_message")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -74,7 +79,8 @@ class DBConsumer:
             attached_files = payload.get("attached_files") or payload.get("files")
             tool_trace = payload.get("tool_trace")
             gateway_target = (payload.get("gateway_target") or "main").lower()
-            if gateway_target not in self.gateway_urls:
+            # telegram — валидный таргет (обратный путь не на гейтвей, а боту).
+            if gateway_target not in self.gateway_urls and gateway_target != "telegram":
                 gateway_target = "main"
             logging.info(payload)
             logging.info(f"gateway_target={gateway_target}")
@@ -104,6 +110,11 @@ class DBConsumer:
             elapsed = time.perf_counter() - start
             logging.info(f"Message Service. Время чтобы вытащить из кафки и положить в БД = {elapsed:.4f}s")
             # Если сообщение от бота, отправляем обратно в основной сервис для WebSocket
+            if is_from_bot and gateway_target == "telegram":
+                # Ответ агента для Telegram: пушим напрямую боту (host-режим).
+                await self.send_to_telegram(chat_id, message)
+                return
+
             if is_from_bot:
                 type_agent = payload.get("type_agent", "pm")
                 logging.info(type_agent)
@@ -128,6 +139,26 @@ class DBConsumer:
 
         except Exception as e:
             logger.error(f"Ошибка обработки сообщения: {e}")
+
+    async def send_to_telegram(self, chat_id: str, message: dict):
+        """Ответ агента → телеграм-бот (host-режим, эндпоинт /push_message).
+
+        Бот сам нарежет длинный текст и починит HTML-теги. Файлы агента
+        (attached_files) пробрасываем как есть — бот решит, слать ли документом.
+        """
+        try:
+            start = time.perf_counter()
+            payload = {
+                "chat_id": str(chat_id),
+                "text": message.get("message") or "",
+                "files": message.get("attached_files") or message.get("files") or None,
+            }
+            response = requests.post(TG_BOT_PUSH_URL, json=payload, timeout=30)
+            logger.info(f"Ответ агента отправлен в Telegram: {response.status_code}")
+            elapsed = time.perf_counter() - start
+            logging.info(f"Message Service. Время отправки ответа в Telegram = {elapsed:.4f}s")
+        except Exception as e:
+            logger.error(f"Ошибка отправки в Telegram: {e}")
 
     async def send_to_main_service(self, chat_id: str, message: dict, gateway_url: str):
         """Отправляем сообщение обратно в основной сервис для WebSocket"""

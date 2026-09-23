@@ -113,21 +113,21 @@ services:
       - catchPM
       - sandbox_net
 
-  # tg_bot:
-  #     build: ./telegram_service 
-  #     container_name: tg_bot
-  #     network_mode: "host"  # Используем сеть сервера напрямую
-  #     # networks: [catchPM]
-  #     # depends_on:
-  #     #   - agent_service
-  #     # ports:
-  #     #   - "8010:8010"
-  #     environment:
-  #       TELEGRAM_BOT_TOKEN:      ${TELEGRAM_BOT_TOKEN}
-  #       TELEGRAM_CHAT_IDS:        ${TELEGRAM_CHAT_IDS}
-  #       TELEGRAM_GROUPS_IDS:     ${TELEGRAM_GROUPS_IDS:-}
-  #       AGENT_SERVICE_URL:       http://127.0.0.1:9001  # Стучимся на 9001 порт хоста
-  #     restart: unless-stopped
+  tg_bot:
+      build: ./telegram_service
+      container_name: tg_bot
+      network_mode: "host"  # Используем сеть сервера напрямую (TG API + порты хоста)
+      environment:
+        TELEGRAM_BOT_TOKEN:  ${TELEGRAM_BOT_TOKEN}
+        # Стучимся в контейнеры через проброшенные порты хоста (host-режим):
+        CHATS_SERVICE_URL:   http://127.0.0.1:8001   # send_message (Kafka) + /tg/*
+        AGENT_SERVICE_URL:   http://127.0.0.1:9001   # оркестратор /api/tg/should_respond
+        REDIS_URL:           redis://127.0.0.1:6379/0
+        TG_PUSH_PORT:        "8010"
+        ORCH_THROTTLE_SEC:   "6"
+        BUF_MAXLEN:          "40"
+        BUF_TTL:             "3600"
+      restart: unless-stopped
 
 
   # token_service:

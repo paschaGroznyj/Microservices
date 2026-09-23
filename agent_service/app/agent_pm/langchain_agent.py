@@ -1016,6 +1016,7 @@ class KnowledgeAgent:
         allow_all: bool = False,
         images: list[dict] | None = None,
         agent_model: str | None = None,
+        is_telegram: bool = False,
     ):
         """Возвращает список LangChain @tool-функций, привязанных к контексту агента."""
 
@@ -1447,6 +1448,13 @@ class KnowledgeAgent:
 
         filtered = [t for t in all_tools if t.name in allowed_names]
 
+        # Telegram: жёстко режем админские тулы даже если категория выбрана
+        # в настройках чата (execute_sql_query / get_db_schema / shell).
+        # Настройки TG задаёт /start в самой группе — админку не отдаём наружу.
+        if is_telegram:
+            TG_FORBIDDEN = {"execute_sql_query", "get_db_schema", "execute_shell_commands"}
+            filtered = [t for t in filtered if t.name not in TG_FORBIDDEN]
+
         # Даже если пользователь не выбрал ни одной категории, универсальные
         # тулы должны остаться доступны — не подменяем их заглушкой.
         universal_present = [t for t in all_tools if t.name in UNIVERSAL_TOOLS]
@@ -1779,9 +1787,13 @@ class KnowledgeAgent:
             limit_mem = preset["limit_mem"]
             max_tokens = preset["max_tokens"]
 
-            allow_all_tools = (source == "telegram")
+            # Telegram: allow_all ВЫКЛЮЧЕН. Тулы берутся строго из настроек
+            # чата (selected_tools пришли из telegram_chat_settings), минус
+            # админские (режутся ещё в telegram_service/agent). Журнал в ТГ включаем.
+            is_telegram = (source == "telegram")
+            allow_all_tools = False
             selected_tools = selected_tools or []
-            use_journal = allow_all_tools or ("sessions" in selected_tools)
+            use_journal = is_telegram or ("sessions" in selected_tools)
 
             logging.info(f"🙂 {user_input[:200]}")
             tools = self._build_tools(
@@ -1792,6 +1804,7 @@ class KnowledgeAgent:
                 allow_all=allow_all_tools,
                 images=images,
                 agent_model=agent_model,
+                is_telegram=is_telegram,
             )
             loop_state = {
                 "iteration": 0,
@@ -1817,6 +1830,16 @@ class KnowledgeAgent:
             # РОЛЬ РЕШАЕТСЯ КОДОМ по verified user_id (не моделью, не по тексту/табельному/тегу).
             role_block = get_role(user_id)
             system_content = SYSTEM_PROMPT.format(datetime=current_datetime, role_block=role_block)
+            # Telegram: подмешиваем HTML-инструкцию форматирования + per-chat промпт из БД.
+            if is_telegram:
+                try:
+                    from agent_pm.telegram.tg_integration import (
+                        get_tg_chat_settings, build_tg_system_suffix,
+                    )
+                    _tg_settings = await get_tg_chat_settings(self.db, chat_id)
+                    system_content += "\n\n" + build_tg_system_suffix(_tg_settings.get("system_prompt"))
+                except Exception as _e:
+                    logging.warning(f"[tg] system suffix fail: {_e}")
 
             # Собираем историю из памяти
             history = await self._build_history(chat_id, limit=30)

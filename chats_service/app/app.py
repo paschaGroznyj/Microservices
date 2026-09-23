@@ -9,6 +9,7 @@ from jose import JWTError, jwt
 from app.core.config import SECRET_KEY, ALGORITHM, KAFKA_BROKER
 from app.db.group_chat_db import GroupChatDB
 from app import group_chat as group_chat_module
+from app.db.telegram_db import TelegramDB
 import time
 
 WATCHDOG_INTERVAL = 10      # как часто проверяем
@@ -30,6 +31,9 @@ app = FastAPI(title="Chats Service")
 # Общий/групповой чат: отдельный слой БД + роутер (не раздуваем этот app.py)
 group_db = GroupChatDB(None)  # pool проставится на startup
 app.include_router(group_chat_module.router)
+
+# Telegram-интеграция: отдельный слой БД (allow-list + per-chat настройки).
+tg_db = TelegramDB(None)  # pool проставится на startup
 
 # async def bot_response_watchdog():
 #     logging.info("🤖 Bot watchdog started")
@@ -100,17 +104,17 @@ async def get_current_user_from_cookie(token: str = Depends(get_token)):
 class ChatMessage(BaseModel):
     user_id: int | None
     username: str
-    tb_name: str
+    tb_name: str | None = None
     message: str
     chat_id: str
     type_agent: str
     request_id: str
-    selected_tools: list
-    context_size: str
+    selected_tools: list = []
+    context_size: str = "medium"
     message_id: str
-    has_files: bool
-    files: list
-    agent_model: str
+    has_files: bool = False
+    files: list = []
+    agent_model: str | None = None
     gateway_target: str = "main"
     
 
@@ -125,6 +129,10 @@ async def startup():
     group_db.pool = db.pool
     await group_db.init_schema()
     group_chat_module.bind(group_db, producer)
+
+    # Telegram: переиспользуем тот же пул, создаём таблицы telegram_*.
+    tg_db.pool = db.pool
+    await tg_db.init_db_pool()
 
     # # 🚀 старт watchdog-а
     # asyncio.create_task(bot_response_watchdog())
@@ -162,6 +170,83 @@ async def send_message(chat: ChatMessage):
     producer.flush()
     elapsed = time.perf_counter() - start
     logging.info(f"Message Service. Время на отправку в сокет и на перекладку в кафку = {elapsed:.4f}s")
+    return {"status": "ok"}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TELEGRAM-ИНТЕГРАЦИЯ: allow-list чатов + per-chat настройки.
+# Встраивание чата — только через CatchPM UI (залогиненный юзер).
+# telegram_service (host-режим) читает эти эндпоинты по 127.0.0.1:<port>.
+# ══════════════════════════════════════════════════════════════════════════════
+class TgChatIn(BaseModel):
+    chat_id: str
+    added_by_user_id: int | None = None
+
+
+class TgSettingsIn(BaseModel):
+    system_prompt: str | None = None
+    agent_model: str | None = None
+    selected_tools: list | None = None
+    trigger_mode: str | None = None
+    orchestrator_context_n: int | None = None
+
+
+@app.post("/tg/chats")
+async def tg_add_chat(body: TgChatIn):
+    """Встроить телеграм-чат в allow-list (из CatchPM UI). Тип по знаку chat_id."""
+    row = await tg_db.upsert_chat(body.chat_id, body.added_by_user_id)
+    return {"status": "ok", "chat": row}
+
+
+@app.delete("/tg/chats/{chat_id}")
+async def tg_remove_chat(chat_id: str):
+    ok = await tg_db.deactivate_chat(chat_id)
+    return {"status": "ok" if ok else "not_found"}
+
+
+@app.get("/tg/allowed")
+async def tg_allowed():
+    """Список активных chat_id — telegram_service кэширует в Redis."""
+    return {"chat_ids": await tg_db.list_active_chat_ids()}
+
+
+@app.get("/tg/settings/{chat_id}")
+async def tg_get_settings(chat_id: str):
+    s = await tg_db.get_settings(chat_id)
+    return {"settings": s}
+
+
+@app.post("/tg/settings/{chat_id}")
+async def tg_set_settings(chat_id: str, body: TgSettingsIn):
+    """Точечное обновление настроек (из /start бота). Админ-тулы режутся ботом/агентом."""
+    s = await tg_db.update_settings(
+        chat_id,
+        **{k: v for k, v in body.dict().items() if v is not None},
+    )
+    return {"status": "ok", "settings": s}
+
+
+class TgLogIn(BaseModel):
+    chat_id: str
+    user_id: int | None = None
+    username: str
+    message: str
+    is_from_bot: bool = False
+
+
+@app.post("/tg/log_message")
+async def tg_log_message(body: TgLogIn):
+    """
+    Пишет в chats ТОЛЬКО одобренные сообщения группы (те, на которые агент
+    реагирует). Молчаливый поток группы сюда не попадает — память не засоряется.
+    Идёт мимо Kafka (без повторного триггера агента).
+    """
+    await db.add_message(
+        user_id=body.user_id,
+        message=body.message,
+        chat_id=body.chat_id,
+        is_from_bot=body.is_from_bot,
+    )
     return {"status": "ok"}
 
 

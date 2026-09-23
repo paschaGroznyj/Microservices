@@ -9,3 +9,4 @@ jinja2
 python-jose[cryptography]
 pydantic
 aiogram
+redis>=5.0

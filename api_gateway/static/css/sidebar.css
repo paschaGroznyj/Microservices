@@ -212,7 +212,7 @@
   text-transform: uppercase;
   letter-spacing: .08em;
   color: var(--text-muted);
-  padding: 4px 6px 0;
+  padding: 4px 6px 6px;
   background: transparent;
   border: none;
   cursor: pointer;

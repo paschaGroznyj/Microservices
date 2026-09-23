@@ -268,6 +268,23 @@ async def receive_bot_message(bot_msg: BotMessage):
     logging.info(f"Message Service. Время на отправку в сокет и сообщение от бота = {elapsed:.4f}s")
 
 
+@app.post("/internal/group_new_message")
+async def receive_group_new_message(request: Request):
+    """Кросс-гейтвейный фан-аут user-сообщения группового чата (main).
+    chats_service дёргает ОБА гейтвея; main доставляет своим WS-клиентам,
+    подключённым к этому chat_id. Отправитель тоже получит своё сообщение,
+    но фронт дедуплицирует по message_id (оно уже отрисовано оптимистично)."""
+    try:
+        data = await request.json()
+        chat_id = data.get("chat_id")
+        event = data.get("event") or {}
+        if chat_id:
+            await broadcast(chat_id, event)
+    except Exception as e:
+        logging.warning(f"group_new_message broadcast не удался: {e}")
+    return {"ok": True}
+
+
 # Service Discovery функция
 async def discover_services():
     """Проверяет доступность сервисов"""

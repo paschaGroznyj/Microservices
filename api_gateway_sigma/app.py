@@ -980,6 +980,26 @@ async def translate(request: Request):
         raise HTTPException(status_code=502, detail=f"Agent service unreachable: {str(e)}")
 
 
+@app.post("/internal/group_new_message")
+async def receive_group_new_message(request: Request):
+    """Кросс-гейтвейный фан-аут user-сообщения группового чата (sigma).
+    chats_service присылает список usernames участников; кладём событие в
+    store каждому — их фронт заберёт через SSE /api/chats/user_events/stream
+    и, если чат открыт, дорисует сообщение (дедуп по message_id)."""
+    try:
+        data = await request.json()
+        event = data.get("event") or {}
+        usernames = data.get("usernames") or []
+        for uname in usernames:
+            try:
+                status_store.push_user_event(uname, event)
+            except Exception as e:
+                logging.warning(f"[group] push_user_event fail for {uname}: {e}")
+    except Exception as e:
+        logging.warning(f"group_new_message push не удался: {e}")
+    return {"ok": True}
+
+
 @app.post("/internal/sse-push")
 async def internal_sse_push(request: Request):
     """Агент сообщает что эмбеддинги/релевантные статьи готовы.

@@ -230,6 +230,22 @@ class ChatApp {
             this.loadChats();
             return;
         }
+        // Новое user-сообщение от ДРУГОГО участника группового чата
+        // (кросс-гейтвейный фан-аут из chats_service через SSE user_events).
+        // Если чат открыт — дорисовываем; свои/повторы отсекаем по message_id.
+        if (msg.type === 'group_new_message') {
+            const m = msg.message || {};
+            if (String(msg.chat_id) === String(this.currentChat)) {
+                if (m.message_id &&
+                    document.querySelector(`.user-message-wrapper[data-message-id="${m.message_id}"]`)) {
+                    // уже есть — пропускаем
+                } else {
+                    this.addMessage(m, true, false);
+                }
+            }
+            this.loadChats();
+            return;
+        }
     }
 
     /* ══════════════════════════════════════════

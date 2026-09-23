@@ -329,7 +329,7 @@ class DataBaseChats:
                         FROM chats c
                         JOIN user_chats uc ON uc.chat_id = c.chat_id
                         LEFT JOIN chat_sidebar_meta m
-                            ON m.chat_id = c.chat_id AND m.user_id = uc.chat_id  -- см. ниже
+                             ON m.chat_id = c.chat_id AND m.user_id = (SELECT user_id FROM target_user)
                         WHERE COALESCE(m.is_deleted, FALSE) = FALSE
                         AND c.message_text ILIKE $2 ESCAPE '\'
                         ORDER BY c.chat_id, c.created_at DESC

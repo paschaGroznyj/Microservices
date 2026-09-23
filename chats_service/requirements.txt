@@ -10,3 +10,4 @@ websockets
 wsproto
 aiobotocore
 Pillow
+python-multipart

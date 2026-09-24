@@ -281,12 +281,49 @@ async def orchestrator_should_respond(chat_id: int, lines: list[str]) -> bool:
 
 
 # ── Отправка одобренного сообщения в chats_service (Kafka) ──────────────────────
+async def _upload_file_to_agent(message_id: str, chat_id: int, user_id: int,
+                                file_b64: str, file_name: str):
+    """Доставка вложения агенту тем же каналом, что и web-gateway.
+
+    agent_service при has_files=True ждёт файлы по message_id через
+    wait_for_files(), которые приходят multipart-POST на /web/upload_files
+    (там же парсинг офисных файлов и подготовка картинок для vision).
+    Бот в host-режиме, порт 9001 проброшен → AGENT_SERVICE_URL доступен.
+    """
+    try:
+        raw = base64.b64decode(file_b64)
+        # content_type по расширению — влияет на ветку image/парсинг в agent_service
+        ext = pathlib.Path(file_name or "").suffix.lower()
+        ctype = {
+            ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+        }.get(ext, "application/octet-stream")
+        data = {
+            "chat_id": str(chat_id),
+            "message_id": message_id,
+            "user_id": str(user_id),
+        }
+        files = [("files", (file_name, raw, ctype))]
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{AGENT_SERVICE_URL}/web/upload_files", data=data, files=files
+            )
+            resp.raise_for_status()
+        log.info(f"file uploaded to agent chat={chat_id} msg={message_id} name={file_name}")
+    except Exception as e:
+        log.error(f"upload file to agent fail chat={chat_id} msg={message_id}: {e}")
+
+
 async def dispatch_to_agent(chat_id: int, user_id: int, username: str,
                             merged_text: str, file_b64: str | None = None,
                             file_name: str | None = None):
     """
     Формирует ChatMessage (gateway_target="telegram") и шлёт в chats_service.
     Агент ответит асинхронно → endpoint_consumer → /push_message боту.
+
+    Если приложен файл (file_b64) — ПОСЛЕ постановки сообщения в очередь
+    отправляем сам файл напрямую в agent_service /web/upload_files с тем же
+    message_id (агент ждёт его через wait_for_files). Иначе has_files=True
+    висит 20с в таймауте и агент отвечает без файла (галлюцинирует).
     """
     settings = await get_chat_settings(chat_id)
     request_id = str(uuid.uuid4())
@@ -317,6 +354,11 @@ async def dispatch_to_agent(chat_id: int, user_id: int, username: str,
     except Exception as e:
         log.error(f"dispatch_to_agent fail chat={chat_id}: {e}")
         raise
+
+    # Файл шлём после постановки в очередь: agent_service уже ждёт его
+    # по message_id (wait_for_files, окно 20с). Не роняем диалог при ошибке.
+    if has_files:
+        await _upload_file_to_agent(message_id, chat_id, user_id, file_b64, file_name or "file")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -558,6 +600,165 @@ def _fix_unclosed_tags(chunks: list[str]) -> list[str]:
     return fixed
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# MARKDOWN → TELEGRAM-HTML
+# Агент отдаёт финальный ответ в Markdown (единый формат для web и TG). Telegram
+# markdown сам не рендерит, а MarkdownV2 капризен к экранированию — поэтому
+# конвертим в безопасный HTML-сабсет Telegram (parse_mode="HTML"):
+#   <b> <i> <u> <s> <code> <pre> <a>. Таблицы TG не умеет → рендерим в <pre>.
+# ══════════════════════════════════════════════════════════════════════════════
+_HTML_ESCAPE = {"&": "&amp;", "<": "&lt;", ">": "&gt;"}
+
+
+def _esc(text: str) -> str:
+    """Экранирование под Telegram-HTML (амперсанд первым)."""
+    out = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return out
+
+
+def _inline_md_to_html(text: str) -> str:
+    """Инлайн-разметка внутри уже экранированной строки.
+
+    Обрабатываем: `code`, **bold**, __bold__, *italic*, _italic_, ~~strike~~,
+    [text](url). Код вырезаем плейсхолдерами, чтобы внутри не трогать разметку.
+    """
+    codes: list[str] = []
+
+    def _stash_code(m):
+        codes.append(m.group(1))
+        return f"\x00CODE{len(codes) - 1}\x00"
+
+    # 1) inline-code `...` — вырезаем первым, внутри ничего не форматируем
+    text = re.sub(r"`([^`]+)`", _stash_code, text)
+
+    # 2) ссылки [text](url)
+    def _link(m):
+        label = m.group(1)
+        url = m.group(2)
+        return f'<a href="{url}">{label}</a>'
+
+    text = re.sub(r"\[([^\]]+)\]\((https?://[^\s)]+)\)", _link, text)
+
+    # 3) bold **...** / __...__
+    text = re.sub(r"\*\*([^\*]+)\*\*", r"<b>\1</b>", text)
+    text = re.sub(r"__([^_]+)__", r"<b>\1</b>", text)
+    # 4) strike ~~...~~
+    text = re.sub(r"~~([^~]+)~~", r"<s>\1</s>", text)
+    # 5) italic *...* / _..._ (после bold, чтобы не съесть **)
+    text = re.sub(r"(?<!\*)\*(?!\*)([^\*\n]+?)\*(?!\*)", r"<i>\1</i>", text)
+    text = re.sub(r"(?<!_)_(?!_)([^_\n]+?)_(?!_)", r"<i>\1</i>", text)
+
+    # 6) возвращаем код обёрнутым в <code>
+    def _restore(m):
+        return "<code>" + codes[int(m.group(1))] + "</code>"
+
+    text = re.sub(r"\x00CODE(\d+)\x00", _restore, text)
+    return text
+
+
+def md_to_telegram_html(md: str) -> str:
+    """Конвертер Markdown → Telegram-HTML (построчный, устойчивый).
+
+    Поддержка: заголовки (## → жирная строка), нумерованные/маркированные
+    списки (→ • / номер), блоки кода ``` → <pre>, инлайн-разметка, таблицы
+    (| a | b |) → моноширинный <pre>. Всё, что не разметка, экранируется.
+    """
+    if not md:
+        return ""
+    lines = md.split("\n")
+    out: list[str] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i]
+
+        # ── блок кода ``` ──
+        if line.lstrip().startswith("```"):
+            fence_indent = line[: len(line) - len(line.lstrip())]
+            i += 1
+            code_lines: list[str] = []
+            while i < n and not lines[i].lstrip().startswith("```"):
+                code_lines.append(lines[i])
+                i += 1
+            i += 1  # закрывающий фенс
+            code_body = _esc("\n".join(code_lines))
+            out.append(f"<pre>{code_body}</pre>")
+            continue
+
+        # ── таблица markdown (2+ строки с | и разделителем ---) ──
+        if "|" in line and i + 1 < n and re.match(r"^\s*\|?[\s:-]+\|[\s:|-]*$", lines[i + 1]):
+            tbl: list[str] = [line]
+            i += 2  # шапка + разделитель
+            while i < n and "|" in lines[i]:
+                tbl.append(lines[i])
+                i += 1
+            rows = []
+            for ridx, raw in enumerate(tbl):
+                cells = [c.strip() for c in raw.strip().strip("|").split("|")]
+                rows.append(cells)
+            # выравниваем в моноширинный вид
+            widths: dict[int, int] = {}
+            for r in rows:
+                for ci, c in enumerate(r):
+                    widths[ci] = max(widths.get(ci, 0), len(c))
+            plain = []
+            for r in rows:
+                plain.append("  ".join(c.ljust(widths.get(ci, 0)) for ci, c in enumerate(r)))
+            out.append("<pre>" + _esc("\n".join(plain)) + "</pre>")
+            continue
+
+        stripped = line.strip()
+
+        # ── пустая строка ──
+        if not stripped:
+            out.append("")
+            i += 1
+            continue
+
+        # ── заголовки ## / ### → жирная строка ──
+        m = re.match(r"^(#{1,6})\s+(.*)$", stripped)
+        if m:
+            out.append("<b>" + _inline_md_to_html(_esc(m.group(2))) + "</b>")
+            i += 1
+            continue
+
+        # ── горизонтальный разделитель --- / *** ──
+        if re.match(r"^([-*_])\1{2,}$", stripped):
+            out.append("─" * 12)
+            i += 1
+            continue
+
+        # ── цитата > ──
+        if stripped.startswith(">"):
+            body = stripped[1:].strip()
+            out.append("<i>" + _inline_md_to_html(_esc(body)) + "</i>")
+            i += 1
+            continue
+
+        # ── маркированный список - / * / • ──
+        m = re.match(r"^[-*•]\s+(.*)$", stripped)
+        if m:
+            out.append("• " + _inline_md_to_html(_esc(m.group(1))))
+            i += 1
+            continue
+
+        # ── нумерованный список 1. ──
+        m = re.match(r"^(\d+)[.)]\s+(.*)$", stripped)
+        if m:
+            out.append(f"{m.group(1)}. " + _inline_md_to_html(_esc(m.group(2))))
+            i += 1
+            continue
+
+        # ── обычная строка ──
+        out.append(_inline_md_to_html(_esc(line)))
+        i += 1
+
+    # схлопываем 3+ пустых строк до одной
+    html = "\n".join(out)
+    html = re.sub(r"\n{3,}", "\n\n", html).strip()
+    return html
+
+
 class PushMessageRequest(BaseModel):
     chat_id: int
     text: str
@@ -667,7 +868,14 @@ async def push_message(req: PushMessageRequest):
     if not req.text:
         return PushMessageResponse(ok=False, error="Empty text")
 
-    chunks = split_message_safely(req.text)
+    # Агент отдаёт финальный ответ в Markdown → конвертим в Telegram-HTML.
+    # Только для parse_mode=HTML (дефолт); если провайдер прислал plain — не трогаем.
+    if (req.parse_mode or "").upper() == "HTML":
+        render_text = md_to_telegram_html(req.text)
+    else:
+        render_text = req.text
+
+    chunks = split_message_safely(render_text)
     sent_ids: list[int] = []
     try:
         if req.edit_thinking and chat_id_has_thinking(req.chat_id):

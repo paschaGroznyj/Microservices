@@ -101,6 +101,7 @@ services:
       AGENT_POOL_PASSWORD: ${AGENT_POOL_PASSWORD}
       SANDBOX_SERVICE_URL: ${SANDBOX_SERVICE_URL}
       TG_BOT_PUSH_URL: http://172.18.0.1:8010/push_message # docker network inspect pascha_microservices | grep Gateway
+      TG_INLINE_B64_MAX: "700000"  # > порог = file_url вместо base64 в Kafka
       # sudo ufw allow from 172.18.0.0/16 to any port 8010 proto tcp
 
     # extra_hosts:

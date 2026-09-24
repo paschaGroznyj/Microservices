@@ -511,13 +511,32 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                         _fpath = entry.get("path")
                         if _fpath and os.path.exists(_fpath):
                             _size = os.path.getsize(_fpath)
-                            if _size <= 20 * 1024 * 1024:
+                            # Мелкие файлы — inline base64 (быстро, без второго HTTP).
+                            # Крупные (> TG_INLINE_B64_MAX) НЕ кладём в Kafka как base64
+                            # (MessageSizeTooLargeError, лимит брокера ~1 МБ). Вместо байтов
+                            # кладём file_url — бот (host-режим, порт 9001) сам скачает файл
+                            # с /web/file, который отдаёт его с диска или из OBS.
+                            _inline_max = int(os.getenv("TG_INLINE_B64_MAX", str(700 * 1024)))
+                            if entry.get("kind") != "image" and _size <= 20 * 1024 * 1024:
+                                if _size <= _inline_max:
+                                    with open(_fpath, "rb") as _fh:
+                                        entry["file_b64"] = base64.b64encode(_fh.read()).decode("ascii")
+                                else:
+                                    entry["file_url"] = (
+                                        f"/web/file?path={quote(_fpath)}"
+                                        f"&chat_id={quote(str(chat_id))}"
+                                    )
+                                    logging.info(
+                                        f"[telegram] файл {_fpath} = {_size} байт > {_inline_max}, "
+                                        f"уходит через file_url (бот скачает с /web/file, Kafka лёгкая)"
+                                    )
+                            elif entry.get("kind") == "image" and _size <= 20 * 1024 * 1024:
                                 with open(_fpath, "rb") as _fh:
                                     entry["file_b64"] = base64.b64encode(_fh.read()).decode("ascii")
                             else:
                                 logging.warning(
                                     f"[telegram] файл {_fpath} = {_size} байт > 20MB, "
-                                    f"не влезает в лимит TG, пропускаю file_b64"
+                                    f"не влезает в лимит TG, пропускаю"
                                 )
                         else:
                             # Сгенерированные картинки (generate_image) лежат НЕ на диске,

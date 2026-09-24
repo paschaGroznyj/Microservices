@@ -1100,13 +1100,33 @@ async def push_message(req: PushMessageRequest):
 
 
 async def _send_agent_file(chat_id: int, f: dict):
-    """Файл из ответа агента. Поддерживаем path (локальный) и file_b64."""
+    """Файл из ответа агента. Поддерживаем file_b64, локальный path и file_url.
+
+    file_url — путь для скачивания с agent_service (/web/file?path=...&chat_id=...).
+    Крупные файлы (напр. pptx 6 МБ) не влезают в Kafka как base64
+    (MessageSizeTooLargeError), поэтому агент кладёт только file_url, а бот
+    (host-режим, порт 9001 проброшен) дочитывает бинарник HTTP-запросом.
+    Файл лежит на диске агента или восстанавливается им из OBS.
+    """
     from io import BytesIO
     raw = None
     if f.get("file_b64"):
         raw = base64.b64decode(f["file_b64"])
     elif f.get("path") and os.path.exists(f["path"]):
         raw = pathlib.Path(f["path"]).read_bytes()
+    elif f.get("file_url"):
+        url = f["file_url"]
+        if url.startswith("/"):
+            url = AGENT_SERVICE_URL.rstrip("/") + url
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as _c:
+                _r = await _c.get(url)
+                if _r.status_code == 200:
+                    raw = _r.content
+                else:
+                    logging.warning(f"[tg-file] pull {url} -> HTTP {_r.status_code}")
+        except Exception as _pull_err:
+            logging.error(f"[tg-file] не удалось скачать файл по file_url={url}: {_pull_err}")
     if not raw:
         return
     name = f.get("name") or "file"

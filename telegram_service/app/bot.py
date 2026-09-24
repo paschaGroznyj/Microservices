@@ -124,6 +124,28 @@ def _k_setname(chat_id: int, uid: int) -> str: return f"tg:setname:{chat_id}:{ui
 def _k_lastfwd(chat_id: int) -> str:    return f"tg:lastfwd:{chat_id}"
 # Последнее тег-сообщение без контента, которое ЖДЁТ форвард.
 def _k_lasttag(chat_id: int) -> str:    return f"tg:lasttag:{chat_id}"
+# Дедуп альбома-форварда: первое фото media-group уходит на анализ, остальные — молча.
+def _k_fwdgroup(chat_id: int, gid: str) -> str: return f"tg:fwdgroup:{chat_id}:{gid}"
+
+
+async def fwd_group_already_seen(chat_id: int, media_group_id) -> bool:
+    """True, если фото из этого media_group уже принято (значит текущее — дубль).
+
+    Пересланный АЛЬБОМ приходит в Telegram как несколько отдельных photo-сообщений
+    с общим media_group_id. Чтобы на анализ ушла максимум ОДНА картинка из пересыла,
+    первое фото группы ставит флаг в Redis (TTL 120с), остальные — игнорируем.
+    Одиночное фото (media_group_id пустой) — всегда пропускаем.
+    """
+    if not media_group_id:
+        return False
+    try:
+        r = await get_redis()
+        # SET NX: True при первой установке (не видели), None если ключ уже есть (видели)
+        ok = await r.set(_k_fwdgroup(chat_id, str(media_group_id)), "1", nx=True, ex=120)
+        return ok is None
+    except Exception as e:
+        log.warning(f"fwd_group_already_seen fail chat={chat_id}: {e}")
+        return False
 
 
 async def get_redis() -> aioredis.Redis:
@@ -239,11 +261,19 @@ async def stash_forward(chat_id: int, msg: Message):
         file_b64 = None
         file_name = None
         photo = msg.photo[-1] if msg.photo else None
-        if photo and not (photo.file_size and photo.file_size > MAX_FILE_SIZE):
+        # Форвард-альбом = несколько photo-сообщений с общим media_group_id.
+        # Берём картинку только из ПЕРВОГО сообщения группы, остальные — без фото
+        # (экономим токены vision: максимум одна картинка из пересыла).
+        dup_album = await fwd_group_already_seen(chat_id, msg.media_group_id)
+        if photo and not dup_album and not (photo.file_size and photo.file_size > MAX_FILE_SIZE):
             tg_file = await photo.get_file()
             raw = await tg_file.download_as_bytearray()
             file_b64 = base64.b64encode(raw).decode("utf-8")
             file_name = f"fwd_{photo.file_unique_id}.jpg"
+        # Дубль-кадр альбома без своего текста и без картинки — не перетираем stash.
+        if dup_album and not text and not file_b64:
+            log.info(f"[fwd] skip extra album photo chat={chat_id} gid={msg.media_group_id}")
+            return
         payload = {
             "author": author,
             "text": text,
@@ -313,6 +343,11 @@ async def handle_incoming_forward(chat_id: int, msg: Message) -> bool:
     file_b64 = None
     file_name = None
     photo = msg.photo[-1] if msg.photo else None
+    # Максимум одна картинка из пересыла: если это доп. кадр альбома —
+    # фото не тянем (первое фото группы уже ушло/уйдёт).
+    dup_album = await fwd_group_already_seen(chat_id, msg.media_group_id)
+    if photo and dup_album:
+        photo = None
     if photo and not (photo.file_size and photo.file_size > MAX_FILE_SIZE):
         try:
             tg_file = await photo.get_file()
@@ -330,6 +365,13 @@ async def handle_incoming_forward(chat_id: int, msg: Message) -> bool:
         merged = f"{tag_user}: {tag_text}\n[Переслано от {f_author}: картинка]".strip()
     log.info(f"[fwd] linked tag->forward (reverse order) chat={chat_id} "
              f"img={'yes' if file_b64 else 'no'}")
+    # Плашка «Думаю...» — как в прямой ветке on_text_message, чтобы ответ
+    # в обратном порядке тоже приходил с приставкой (edit_thinking снимет её).
+    try:
+        thinking = await msg.reply_text("Думаю...")
+        _thinking_messages[chat_id] = thinking.message_id
+    except Exception as e:
+        log.warning(f"handle_incoming_forward thinking fail: {e}")
     try:
         await dispatch_to_agent(chat_id, tag_uid, tag_user, merged,
                                 file_b64=file_b64, file_name=file_name)
@@ -1101,6 +1143,30 @@ def _is_reply_to_bot(msg: Message, bot_username: str) -> bool:
     return bool(r and r.from_user and r.from_user.username == bot_username)
 
 
+# Короткие «сигнальные» реплики: тег с таким текстом трактуется как
+# «сейчас пришлю форвард» и ждёт форвард (обратный порядок), а не отвечает
+# сразу. Длинные самодостаточные вопросы (> порога и без паттерна) —
+# обрабатываются немедленно, чтобы не тормозить обычные обращения.
+TG_SIGNAL_MAXLEN = int(os.environ.get("TG_SIGNAL_MAXLEN", "40"))
+_SIGNAL_PATTERNS = (
+    "вот", "теперь", "это", "гля", "глянь", "смотри", "мнение",
+    "что думаешь", "что скажешь", "как тебе", "оцени", "разбер", "инфо",
+    "а ты", "а вы", "прокоммент", "коммент",
+)
+
+
+def _is_signal_tag(stripped_tag: str) -> bool:
+    """True, если текст после снятия @-тега — короткая сигнальная фраза,
+    после которой ожидается форвард (обратный порядок связывания)."""
+    t = (stripped_tag or "").strip().lower()
+    if not t:
+        return True  # голый тег — всегда ждёт форвард
+    if len(t) <= TG_SIGNAL_MAXLEN:
+        return True  # короткая реплика вроде «вот инфо», «а теперь?»
+    # длинный текст — сигналим только при явном паттерне-обёртке
+    return any(p in t for p in _SIGNAL_PATTERNS)
+
+
 def _registration_gate_text(chat_id: int) -> str:
     """Единый текст отказа для незарегистрированного чата (/start + on_text_message)."""
     return (
@@ -1470,9 +1536,11 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # откладываем его на короткое окно: вдруг форвард
             # прилетит следующим сообщением (обратный порядок).
             stripped_tag = _strip_bot_tag(raw_text, bot_username)[0].strip()
-            # Ждём форвард ТОЛЬКО при голом @-упоминании (tagged без текста).
-            # Reply-to-bot без текста — это продолжение диалога, отвечаем сразу.
-            if tagged and not reply_to_bot and not stripped_tag:
+            # Ждём форвард при @-упоминании с ПУСТЫМ или коротким «сигнальным»
+            # текстом («вот инфо», «а теперь?», «что думаешь?»). Длинный
+            # самодостаточный вопрос обрабатываем сразу (не тормозим).
+            # Reply-to-bot без тега — продолжение диалога, отвечаем сразу.
+            if tagged and not reply_to_bot and _is_signal_tag(stripped_tag):
                 await stash_tag(chat_id, user.id, author, text_for_agent)
                 tag_waits_forward = True
         if stashed:
@@ -1646,6 +1714,11 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if photo.file_size and photo.file_size > MAX_FILE_SIZE:
         await msg.reply_text("Картинка слишком большая (лимит 20 MB).")
+        return
+    # Альбом (media_group): анализируем только первый кадр, остальные — молча.
+    # Максимум одна картинка из одного пересыла/альбома.
+    if await fwd_group_already_seen(chat_id, msg.media_group_id):
+        log.info(f"[fwd] skip extra album photo (on_photo) chat={chat_id} gid={msg.media_group_id}")
         return
 
     fname = f"photo_{photo.file_unique_id}.jpg"

@@ -739,6 +739,26 @@ async def _invoke_with_retry(llm, messages, iteration: int, max_retries: int = 3
     return None
 
 
+def _sanitize_messages(messages):
+    """Убирает human/tool сообщения с пустым content перед отправкой в LLM.
+
+    Провайдер (cloud.ru) отбивает весь запрос с 400 "messages.N: user messages
+    must have non-empty content", если у любого human/tool-сообщения content
+    пустой. AIMessage с tool_calls и пустым content — валиден (мы сами
+    гасим response.content при reasoning), его НЕ трогаем. SystemMessage тоже
+    оставляем всегда.
+    """
+    out = []
+    for m in messages:
+        mtype = getattr(m, "type", None)
+        if mtype in ("human", "tool"):
+            c = getattr(m, "content", None)
+            if c is None or (isinstance(c, str) and not c.strip()):
+                continue
+        out.append(m)
+    return out
+
+
 async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0):
     """Стриминговая версия _invoke_with_retry.
 
@@ -752,6 +772,7 @@ async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0):
 
     Стратегия отказоустойчивости: если astream упал — фолбэк на обычный ainvoke.
     """
+    messages = _sanitize_messages(messages)
     backoff = [2, 5, 10]
     last_error = None
     for attempt in range(3):
@@ -899,6 +920,14 @@ class KnowledgeAgent:
 
             messages = []
             for row in rows:
+                # САНИТАЙЗЕР: провайдер (cloud.ru) отбивает запрос с 400
+                # "messages.N: user messages must have non-empty content", если в любом
+                # сообщении content пустой. Такие строки попадают в БД от
+                # проактивных/телеграм-триггеров (initiated с message="").
+                # Дропаем пустые сообщения, чтобы не ломать весь цикл.
+                _txt = row.get("message_text")
+                if _txt is None or not str(_txt).strip():
+                    continue
                 kwargs = {"db_id": row["id"]}
                 if row["is_from_bot"]:
                     # РАЗДЕЛЕНИЕ СООБЩЕНИЙ И TOOL TRACE.

@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import os
 import pathlib
@@ -86,6 +87,8 @@ TG_SAD_WAIT_LO     = int(os.environ.get("TG_SAD_WAIT_LO", "300"))   # 5 мин
 TG_SAD_WAIT_HI     = int(os.environ.get("TG_SAD_WAIT_HI", "600"))   # 10 мин
 # Суточный throttle адресных poke на чат (сек).
 TG_POKE_DAILY_TTL  = int(os.environ.get("TG_POKE_DAILY_TTL", "86400"))
+# Окно связывания «форвард из другого чата» ↔ следующее тег-сообщение (сек).
+TG_FWD_TTL         = int(os.environ.get("TG_FWD_TTL", "90"))
 
 MAX_FILE_SIZE = 20 * 1024 * 1024
 
@@ -115,6 +118,8 @@ def _k_poke(chat_id: int) -> str:       return f"tg:poke:{chat_id}"
 def _k_await(chat_id: int, uid: int) -> str: return f"tg:await:{chat_id}:{uid}"
 def _k_gate(chat_id: int) -> str:       return f"tg:gate:{chat_id}"
 def _k_setname(chat_id: int, uid: int) -> str: return f"tg:setname:{chat_id}:{uid}"
+# Последний форвард из другого чата/канала (текст + опц. картинка), ждёт тег.
+def _k_lastfwd(chat_id: int) -> str:    return f"tg:lastfwd:{chat_id}"
 
 
 async def get_redis() -> aioredis.Redis:
@@ -201,6 +206,66 @@ async def buffer_lines(chat_id: int) -> list[str]:
     except Exception as e:
         log.warning(f"buffer_lines fail chat={chat_id}: {e}")
         return []
+
+
+# ── Буфер последнего форварда из другого чата/канала ────────────────────────────
+# Форвард обычно приходит ОТДЕЛЬНЫМ сообщением (без тега бота), а тег («гоша,
+# что скажешь?») — соседним. Reply на форвард в группе не работает (это форвард,
+# а не reply). Поэтому кладём контент форварда в Redis с коротким TTL и
+# подхватываем его при следующем тег-сообщении без собственного контента.
+def _fwd_origin_author(msg: Message) -> str:
+    origin = msg.forward_origin
+    try:
+        if origin.type == "user":
+            return origin.sender_user.full_name
+        if origin.type == "hidden_user":
+            return origin.sender_user_name
+        if origin.type in ("chat", "channel"):
+            return origin.chat.title
+    except Exception:
+        pass
+    return "источник"
+
+
+async def stash_forward(chat_id: int, msg: Message):
+    """Сохраняет контент форварда (текст + опц. картинка base64) в tg:lastfwd."""
+    try:
+        text = (msg.text or msg.caption or "").strip()
+        author = _fwd_origin_author(msg)
+        file_b64 = None
+        file_name = None
+        photo = msg.photo[-1] if msg.photo else None
+        if photo and not (photo.file_size and photo.file_size > MAX_FILE_SIZE):
+            tg_file = await photo.get_file()
+            raw = await tg_file.download_as_bytearray()
+            file_b64 = base64.b64encode(raw).decode("utf-8")
+            file_name = f"fwd_{photo.file_unique_id}.jpg"
+        payload = {
+            "author": author,
+            "text": text,
+            "file_b64": file_b64,
+            "file_name": file_name,
+        }
+        r = await get_redis()
+        await r.set(_k_lastfwd(chat_id), json.dumps(payload), ex=TG_FWD_TTL)
+        log.info(f"[fwd] stashed forward chat={chat_id} from={author} "
+                 f"text={len(text)}b img={'yes' if file_b64 else 'no'}")
+    except Exception as e:
+        log.warning(f"stash_forward fail chat={chat_id}: {e}")
+
+
+async def pop_forward(chat_id: int) -> dict | None:
+    """Забирает и удаляет сохранённый форвард (одноразовый подхват)."""
+    try:
+        r = await get_redis()
+        raw = await r.get(_k_lastfwd(chat_id))
+        if not raw:
+            return None
+        await r.delete(_k_lastfwd(chat_id))
+        return json.loads(raw)
+    except Exception as e:
+        log.warning(f"pop_forward fail chat={chat_id}: {e}")
+        return None
 
 
 async def buffer_push_agent(chat_id: int, agent_name: str | None, text: str):
@@ -1304,8 +1369,43 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # личка — всегда обращение к агенту
         approved = True
 
+    # ── форвард из другого чата/канала ──────────────────────────────────────
+    # Если это ПЕРЕСЛАННОЕ сообщение и оно НЕ является прямым обращением
+    # (нет тега/reply на бота) — просто откладываем его контент в stash и
+    # выходим. Подхватим при следующем тег-сообщении.
+    is_forward = bool(msg.forward_origin)
+    if is_forward and not approved:
+        await stash_forward(chat_id, msg)
+        # реплику в буфер всё равно кладём (для оркестратора)
+        if raw_text.strip():
+            await buffer_push(chat_id, author, raw_text.strip())
+        return
+
     # обогащение ссылками/форвардом/реплаем
     text_for_agent = _enrich_text(msg, text_for_agent)
+
+    # Тег-сообщение подхватывает отложенный форвард, если у него самого
+    # нет собственного смыслового контента (только обращение к боту).
+    fwd_file_b64 = None
+    fwd_file_name = None
+    if approved and not is_forward:
+        stashed = await pop_forward(chat_id)
+        if stashed:
+            f_author = stashed.get("author") or "источник"
+            f_text = (stashed.get("text") or "").strip()
+            if f_text:
+                text_for_agent = (
+                    f"{text_for_agent}\n[Переслано от {f_author}]: {f_text}"
+                ).strip()
+            else:
+                text_for_agent = (
+                    f"{text_for_agent}\n[Переслано от {f_author}: картинка]"
+                ).strip()
+            if stashed.get("file_b64"):
+                fwd_file_b64 = stashed["file_b64"]
+                fwd_file_name = stashed.get("file_name") or "forward.jpg"
+            log.info(f"[fwd] merged forward into tagged msg chat={chat_id} "
+                     f"img={'yes' if fwd_file_b64 else 'no'}")
 
     # пассивный сбор участников (для рандомной проактивной инициации)
     await upsert_member(chat_id, user.id, user.username, user.first_name)
@@ -1337,11 +1437,19 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         merged_text = f"{author}: {text_for_agent}"
 
+    # Если подхватили форвард — text_for_agent уже содержит блок [Переслано...],
+    # но buffer_flush мог его перекрыть склейкой буфера. Дописываем форвард-блок
+    # к merged_text, если его там ещё нет.
+    if (fwd_file_b64 or "[Переслано от" in text_for_agent) and \
+            "[Переслано от" not in merged_text:
+        merged_text = f"{merged_text}\n{text_for_agent}".strip()
+
     thinking = await msg.reply_text("Думаю...")
     _thinking_messages[chat_id] = thinking.message_id
 
     try:
-        await dispatch_to_agent(chat_id, user.id, author, merged_text)
+        await dispatch_to_agent(chat_id, user.id, author, merged_text,
+                                file_b64=fwd_file_b64, file_name=fwd_file_name)
     except Exception as e:
         await msg.reply_text(f"Не удалось связаться с агентом: {str(e)[:200]}")
 
@@ -1436,7 +1544,11 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         approved = tagged or _is_reply_to_bot(msg, bot_username)
         raw_text = stripped or raw_text
         if not approved:
-            return  # фото без тега в группе — игнор
+            # Пересланное фото из другого чата без тега — откладываем в stash,
+            # подхватим при следующем тег-сообщении. Прочее фото без тега — игнор.
+            if msg.forward_origin:
+                await stash_forward(chat_id, msg)
+            return
 
     photo = msg.photo[-1] if msg.photo else None  # самый большой размер
     if not photo:

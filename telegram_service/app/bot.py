@@ -969,9 +969,9 @@ def _is_reply_to_bot(msg: Message, bot_username: str) -> bool:
 def _registration_gate_text(chat_id: int) -> str:
     """Единый текст отказа для незарегистрированного чата (/start + on_text_message)."""
     return (
-        "\u0423 \u0432\u0430\u0441 \u043d\u0435\u0442 \u0434\u043e\u0441\u0442\u0443\u043f\u0430 \u043a \u0430\u0433\u0435\u043d\u0442\u0443 \u0432 \u044d\u0442\u043e\u043c \u0447\u0430\u0442\u0435.\n\n"
-        f"\u0420\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0446\u0438\u044f \u0447\u0430\u0442\u043e\u0432 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0442\u043e\u043b\u044c\u043a\u043e \u0447\u0435\u0440\u0435\u0437 \u0438\u043d\u0442\u0435\u0440\u0444\u0435\u0439\u0441 CatchPM: {CATCHPM_URL}\n\n"
-        f"\u041f\u0435\u0440\u0435\u0434\u0430\u0439\u0442\u0435 \u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440\u0443 chat_id \u044d\u0442\u043e\u0433\u043e \u0447\u0430\u0442\u0430: {chat_id}"
+        "У вас нет доступа к агенту в этом чате.\n\n"
+        f"Регистрация чатов доступна только через интерфейс CatchPM: {CATCHPM_URL}\n\n"
+        f"Передайте администратору chat_id этого чата: {chat_id}"
     )
 
 
@@ -1036,15 +1036,15 @@ def _settings_summary(settings: dict) -> str:
     model = settings.get("agent_model") or "coder"
     mode = settings.get("trigger_mode") or "orchestrator"
     tools = settings.get("selected_tools") or []
-    tools_str = ", ".join(tools) if tools else "\u043d\u0435\u0442 (\u0442\u043e\u043b\u044c\u043a\u043e \u0431\u0430\u0437\u043e\u0432\u044b\u0435)"
+    tools_str = ", ".join(tools) if tools else "нет (только базовые)"
     name = settings.get("agent_name")
-    name_str = name.strip() if (name and name.strip()) else "\u043f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e"
+    name_str = name.strip() if (name and name.strip()) else "по умолчанию"
     return (
-        "<b>\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u0430\u0433\u0435\u043d\u0442\u0430 \u0434\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u0447\u0430\u0442\u0430</b>\n\n"
-        f"\u0418\u043c\u044f: <code>{name_str}</code>\n"
-        f"\u041c\u043e\u0434\u0435\u043b\u044c: <code>{model}</code>\n"
-        f"\u0422\u0440\u0438\u0433\u0433\u0435\u0440: <code>{mode}</code>\n"
-        f"\u0418\u043d\u0441\u0442\u0440\u0443\u043c\u0435\u043d\u0442\u044b: <code>{tools_str}</code>"
+        "<b>Настройки агента для этого чата</b>\n\n"
+        f"Имя: <code>{name_str}</code>\n"
+        f"Модель: <code>{model}</code>\n"
+        f"Триггер: <code>{mode}</code>\n"
+        f"Инструменты: <code>{tools_str}</code>"
     )
 
 
@@ -1053,16 +1053,16 @@ def _menu_root(settings: dict | None = None) -> InlineKeyboardMarkup:
     proactive = settings.get("proactive_enabled")
     if proactive is None:
         proactive = True
-    # \u0411\u0443\u0434\u0438\u043b\u044c\u043d\u0438\u043a\u0438 (\u0437\u0430\u0432\u0442\u0440\u0430\u043a/\u043e\u0431\u0435\u0434/\u0443\u0436\u0438\u043d + poke)
-    poke_label = ("\U0001f514 \u0411\u0443\u0434\u0438\u043b\u044c\u043d\u0438\u043a\u0438: \u0432\u043a\u043b" if proactive
-                  else "\U0001f515 \u0411\u0443\u0434\u0438\u043b\u044c\u043d\u0438\u043a\u0438: \u0432\u044b\u043a\u043b")
+    # Будильники (завтрак/обед/ужин + poke)
+    poke_label = ("\U0001f514 Будильники: вкл" if proactive
+                  else "\U0001f515 Будильники: выкл")
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("\u0418\u043c\u044f \u0430\u0433\u0435\u043d\u0442\u0430", callback_data="tg:menu:name")],
-        [InlineKeyboardButton("\u041c\u043e\u0434\u0435\u043b\u044c", callback_data="tg:menu:model")],
-        [InlineKeyboardButton("\u0418\u043d\u0441\u0442\u0440\u0443\u043c\u0435\u043d\u0442\u044b", callback_data="tg:menu:tools")],
-        [InlineKeyboardButton("\u0422\u0440\u0438\u0433\u0433\u0435\u0440", callback_data="tg:menu:trigger")],
+        [InlineKeyboardButton("Имя агента", callback_data="tg:menu:name")],
+        [InlineKeyboardButton("Модель", callback_data="tg:menu:model")],
+        [InlineKeyboardButton("Инструменты", callback_data="tg:menu:tools")],
+        [InlineKeyboardButton("Триггер", callback_data="tg:menu:trigger")],
         [InlineKeyboardButton(poke_label, callback_data="tg:toggle:proactive")],
-        [InlineKeyboardButton("\u0417\u0430\u043a\u0440\u044b\u0442\u044c", callback_data="tg:close")],
+        [InlineKeyboardButton("Закрыть", callback_data="tg:close")],
     ])
 
 
@@ -1072,7 +1072,7 @@ def _menu_model(current) -> InlineKeyboardMarkup:
     for m in TG_MODELS:
         mark = "\u2713 " if m == cur else ""
         rows.append([InlineKeyboardButton(f"{mark}{m}", callback_data=f"tg:set:model:{m}")])
-    rows.append([InlineKeyboardButton("\u2039 \u041d\u0430\u0437\u0430\u0434", callback_data="tg:menu:root")])
+    rows.append([InlineKeyboardButton("‹ Назад", callback_data="tg:menu:root")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -1082,7 +1082,7 @@ def _menu_tools(selected) -> InlineKeyboardMarkup:
     for c in TG_TOOL_CATEGORIES:
         mark = "\u2611 " if c in sel else "\u2610 "
         rows.append([InlineKeyboardButton(f"{mark}{c}", callback_data=f"tg:tool:{c}")])
-    rows.append([InlineKeyboardButton("\u2039 \u041d\u0430\u0437\u0430\u0434", callback_data="tg:menu:root")])
+    rows.append([InlineKeyboardButton("‹ Назад", callback_data="tg:menu:root")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -1092,7 +1092,7 @@ def _menu_trigger(current) -> InlineKeyboardMarkup:
     for t in TG_TRIGGERS:
         mark = "\u2713 " if t == cur else ""
         rows.append([InlineKeyboardButton(f"{mark}{t}", callback_data=f"tg:set:trigger:{t}")])
-    rows.append([InlineKeyboardButton("\u2039 \u041d\u0430\u0437\u0430\u0434", callback_data="tg:menu:root")])
+    rows.append([InlineKeyboardButton("‹ Назад", callback_data="tg:menu:root")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -1135,7 +1135,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data or ""
 
     if not await is_allowed(chat_id):
-        await query.answer("\u0427\u0430\u0442 \u043d\u0435 \u0437\u0430\u0440\u0435\u0433\u0438\u0441\u0442\u0440\u0438\u0440\u043e\u0432\u0430\u043d.", show_alert=True)
+        await query.answer("Чат не зарегистрирован.", show_alert=True)
         return
 
     async def _refresh(kb_fn):
@@ -1169,8 +1169,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cur = True
         ok = await save_chat_settings(chat_id, {"proactive_enabled": not cur})
         await query.answer(
-            ("\u0411\u0443\u0434\u0438\u043b\u044c\u043d\u0438\u043a\u0438 " + ("\u0432\u044b\u043a\u043b" if cur else "\u0432\u043a\u043b"))
-            if ok else "\u041e\u0448\u0438\u0431\u043a\u0430"
+            ("Будильники " + ("выкл" if cur else "вкл"))
+            if ok else "Ошибка"
         )
         await _refresh(lambda s: _menu_root(s))
         return
@@ -1185,9 +1185,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         try:
             await query.edit_message_text(
-                "\u041e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435 \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0438\u043c \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435\u043c \u0438\u043c\u044f \u0430\u0433\u0435\u043d\u0442\u0430 \u0434\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u0447\u0430\u0442\u0430.\n"
-                "\u041d\u0430\u043f\u0440\u0438\u043c\u0435\u0440: <code>\u041c\u0430\u043a\u0441</code> \u0438\u043b\u0438 <code>\u0410\u0441\u0441\u0438\u0441\u0442\u0435\u043d\u0442</code>.\n"
-                "\u0427\u0442\u043e\u0431\u044b \u0441\u0431\u0440\u043e\u0441\u0438\u0442\u044c \u0438\u043c\u044f \u2014 \u043e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435 <code>-</code>.",
+                "Отправьте следующим сообщением имя агента для этого чата.\n"
+                "Например: <code>Макс</code> или <code>Ассистент</code>.\n"
+                "Чтобы сбросить имя — отправьте <code>-</code>.",
                 parse_mode=ParseMode.HTML,
             )
         except Exception:
@@ -1210,27 +1210,27 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("tg:set:model:"):
         model = data.split(":", 3)[3]
         if model not in TG_MODELS:
-            await query.answer("\u041d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u0430\u044f \u043c\u043e\u0434\u0435\u043b\u044c", show_alert=True)
+            await query.answer("Неизвестная модель", show_alert=True)
             return
         ok = await save_chat_settings(chat_id, {"agent_model": model})
-        await query.answer("\u0421\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u043e" if ok else "\u041e\u0448\u0438\u0431\u043a\u0430")
+        await query.answer("Сохранено" if ok else "Ошибка")
         await _refresh(lambda s: _menu_model(s.get("agent_model")))
         return
 
     if data.startswith("tg:set:trigger:"):
         trig = data.split(":", 3)[3]
         if trig not in TG_TRIGGERS:
-            await query.answer("\u041d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u044b\u0439 \u0442\u0440\u0438\u0433\u0433\u0435\u0440", show_alert=True)
+            await query.answer("Неизвестный триггер", show_alert=True)
             return
         ok = await save_chat_settings(chat_id, {"trigger_mode": trig})
-        await query.answer("\u0421\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u043e" if ok else "\u041e\u0448\u0438\u0431\u043a\u0430")
+        await query.answer("Сохранено" if ok else "Ошибка")
         await _refresh(lambda s: _menu_trigger(s.get("trigger_mode")))
         return
 
     if data.startswith("tg:tool:"):
         cat = data.split(":", 2)[2]
         if cat not in TG_TOOL_CATEGORIES:
-            await query.answer("\u041d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430\u044f \u043a\u0430\u0442\u0435\u0433\u043e\u0440\u0438\u044f", show_alert=True)
+            await query.answer("Недоступная категория", show_alert=True)
             return
         settings = await get_chat_settings(chat_id)
         sel = set(settings.get("selected_tools") or [])
@@ -1239,7 +1239,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             sel.add(cat)
         ok = await save_chat_settings(chat_id, {"selected_tools": sorted(sel)})
-        await query.answer("\u0421\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u043e" if ok else "\u041e\u0448\u0438\u0431\u043a\u0430")
+        await query.answer("Сохранено" if ok else "Ошибка")
         await _refresh(lambda s: _menu_tools(s.get("selected_tools")))
         return
 
@@ -1415,6 +1415,52 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text(f"Не удалось связаться с агентом: {str(e)[:200]}")
 
 
+async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Фото с подписью: Telegram шлёт его как photo-сообщение (не text/document),
+    текст лежит в caption. Гейт и триггер как в on_text/on_document,
+    картинка уходит в vision через _upload_file_to_agent (/web/upload_files).
+    """
+    chat_id = update.effective_chat.id
+    if not await is_allowed(chat_id):
+        return
+
+    msg = update.message
+    raw_text = msg.caption or ""
+    user = update.effective_user
+    author = user.full_name or user.username or "Аноним"
+    bot_username = context.bot.username
+
+    approved = True
+    if _is_group(chat_id):
+        stripped, tagged = _strip_bot_tag(raw_text, bot_username)
+        approved = tagged or _is_reply_to_bot(msg, bot_username)
+        raw_text = stripped or raw_text
+        if not approved:
+            return  # фото без тега в группе — игнор
+
+    photo = msg.photo[-1] if msg.photo else None  # самый большой размер
+    if not photo:
+        return
+    if photo.file_size and photo.file_size > MAX_FILE_SIZE:
+        await msg.reply_text("Картинка слишком большая (лимит 20 MB).")
+        return
+
+    fname = f"photo_{photo.file_unique_id}.jpg"
+    tg_file = await photo.get_file()
+    file_bytearray = await tg_file.download_as_bytearray()
+    file_b64 = base64.b64encode(file_bytearray).decode("utf-8")
+
+    thinking = await msg.reply_text("Смотрю картинку...")
+    _thinking_messages[chat_id] = thinking.message_id
+
+    merged_text = f"{author}: {raw_text}".strip() if raw_text else f"{author}: [картинка]"
+    try:
+        await dispatch_to_agent(chat_id, user.id, author, merged_text,
+                                file_b64=file_b64, file_name=fname)
+    except Exception as e:
+        await msg.reply_text(f"Не удалось связаться с агентом: {str(e)[:200]}")
+
+
 async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
     log.error("Unhandled error: %s", context.error, exc_info=context.error)
 
@@ -1429,6 +1475,7 @@ async def run_both():
     application.add_handler(CallbackQueryHandler(on_callback, pattern=r"^tg:"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_message))
     application.add_handler(MessageHandler(filters.Document.ALL, on_document))
+    application.add_handler(MessageHandler(filters.PHOTO, on_photo))
     application.add_error_handler(_on_error)
     _bot_app = application
 

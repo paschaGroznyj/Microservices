@@ -643,6 +643,7 @@ class DataBaseChats:
                     LEFT JOIN users u ON c.user_id = u.id
                     WHERE c.is_from_bot = FALSE
                       AND c.user_id <> -1
+                      AND c.gateway_target IS DISTINCT FROM 'telegram'
                       AND c.created_at >= date_trunc('day', now())
                     GROUP BY c.user_id, u.username
                     ORDER BY msg_count DESC
@@ -652,6 +653,7 @@ class DataBaseChats:
                     SELECT COUNT(*) FROM chats
                     WHERE is_from_bot = FALSE
                       AND user_id <> -1
+                      AND gateway_target IS DISTINCT FROM 'telegram'
                       AND created_at >= date_trunc('day', now())
                 """)
                 return {

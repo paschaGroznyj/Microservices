@@ -110,6 +110,7 @@ def _k_orch_ts(chat_id: int) -> str:    return f"tg:orch_ts:{chat_id}"
 def _k_poke(chat_id: int) -> str:       return f"tg:poke:{chat_id}"
 # Ожидание ответа целевого юзера после адресной инициации (флаг «грусти»).
 def _k_await(chat_id: int, uid: int) -> str: return f"tg:await:{chat_id}:{uid}"
+def _k_gate(chat_id: int) -> str:       return f"tg:gate:{chat_id}"
 
 
 async def get_redis() -> aioredis.Redis:
@@ -715,6 +716,33 @@ def _is_reply_to_bot(msg: Message, bot_username: str) -> bool:
     return bool(r and r.from_user and r.from_user.username == bot_username)
 
 
+def _registration_gate_text(chat_id: int) -> str:
+    """Единый текст отказа для незарегистрированного чата (/start + on_text_message)."""
+    return (
+        "\u0423 \u0432\u0430\u0441 \u043d\u0435\u0442 \u0434\u043e\u0441\u0442\u0443\u043f\u0430 \u043a \u0430\u0433\u0435\u043d\u0442\u0443 \u0432 \u044d\u0442\u043e\u043c \u0447\u0430\u0442\u0435.\n\n"
+        f"\u0420\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0446\u0438\u044f \u0447\u0430\u0442\u043e\u0432 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0442\u043e\u043b\u044c\u043a\u043e \u0447\u0435\u0440\u0435\u0437 \u0438\u043d\u0442\u0435\u0440\u0444\u0435\u0439\u0441 CatchPM: {CATCHPM_URL}\n\n"
+        f"\u041f\u0435\u0440\u0435\u0434\u0430\u0439\u0442\u0435 \u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440\u0443 chat_id \u044d\u0442\u043e\u0433\u043e \u0447\u0430\u0442\u0430: {chat_id}"
+    )
+
+
+def _is_direct_address(update: Update, bot_username: str) -> bool:
+    """
+    Прямое обращение к боту:
+      - в группе: @mention бота ИЛИ reply на сообщение бота;
+      - в личке: любое сообщение.
+    Фоновая болтовня в группе прямым обращением НЕ считается.
+    """
+    chat_id = update.effective_chat.id
+    if not _is_group(chat_id):
+        return True
+    msg = update.message
+    if not msg:
+        return False
+    raw = msg.text or msg.caption or ""
+    _, tagged = _strip_bot_tag(raw, bot_username)
+    return tagged or _is_reply_to_bot(msg, bot_username)
+
+
 def extract_urls_from_message(msg: Message) -> list[str]:
     urls = []
     has_text, has_caption = bool(msg.text), bool(msg.caption)
@@ -836,11 +864,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     chat_id = update.effective_chat.id
     if not await is_allowed(chat_id):
-        await update.message.reply_text(
-            "\u0423 \u0432\u0430\u0441 \u043d\u0435\u0442 \u0434\u043e\u0441\u0442\u0443\u043f\u0430 \u043a \u0430\u0433\u0435\u043d\u0442\u0443 \u0432 \u044d\u0442\u043e\u043c \u0447\u0430\u0442\u0435.\n\n"
-            f"\u0420\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0446\u0438\u044f \u0447\u0430\u0442\u043e\u0432 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0442\u043e\u043b\u044c\u043a\u043e \u0447\u0435\u0440\u0435\u0437 \u0438\u043d\u0442\u0435\u0440\u0444\u0435\u0439\u0441 CatchPM: {CATCHPM_URL}\n\n"
-            f"\u041f\u0435\u0440\u0435\u0434\u0430\u0439\u0442\u0435 \u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440\u0443 chat_id \u044d\u0442\u043e\u0433\u043e \u0447\u0430\u0442\u0430: {chat_id}",
-        )
+        await update.message.reply_text(_registration_gate_text(chat_id))
         return
     settings = await get_chat_settings(chat_id)
     await update.message.reply_text(
@@ -950,14 +974,25 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
+    bot_username = context.bot.username
     if not await is_allowed(chat_id):
+        # вариант A: отвечаем ТОЛЬКО на прямое обращение (mention/reply/личка),
+        # на фоновую болтовню в чужой группе — молчим. Отказ throttle-им.
+        if _is_direct_address(update, bot_username):
+            try:
+                r = await get_redis()
+                fresh = await r.set(_k_gate(chat_id), "1", nx=True,
+                                    ex=int(os.environ.get("TG_GATE_COOLDOWN", "300")))
+            except Exception:
+                fresh = True
+            if fresh:
+                await update.message.reply_text(_registration_gate_text(chat_id))
         return
 
     msg = update.message
     raw_text = msg.text or msg.caption or ""
     user = update.effective_user
     author = user.full_name or user.username or "Аноним"
-    bot_username = context.bot.username
 
     # разбор упоминания/реплая
     is_group = _is_group(chat_id)

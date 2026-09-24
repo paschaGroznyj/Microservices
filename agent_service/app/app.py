@@ -521,40 +521,18 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                                 )
                         else:
                             # Сгенерированные картинки (generate_image) лежат НЕ на диске,
-                            # а в БД generated_images (bytea), path=None. Для Telegram
-                            # достаём бинарник из БД по image_key и кодируем в base64.
+                            # а в БД generated_images (bytea), path=None.
+                            # ВАЖНО: base64 картинки (~1+ МБ) В payload ломает Kafka
+                            # (MessageSizeTooLargeError, дефолтный лимит 1 МБ). Поэтому
+                            # бинарник СЮДА НЕ кладём — оставляем только image_key.
+                            # chats-consumer перед отправкой в Telegram сам достанет
+                            # картинку из generated_images по image_key и b64-закодирует.
                             _img_key = entry.get("image_key")
                             if entry.get("kind") == "image" and _img_key:
-                                try:
-                                    async with db.pool.acquire() as _conn:
-                                        _img_row = await _conn.fetchrow(
-                                            "SELECT image_data FROM generated_images "
-                                            "WHERE image_key::text = $1 LIMIT 1",
-                                            str(_img_key).strip(),
-                                        )
-                                    if _img_row and _img_row["image_data"]:
-                                        _img_bytes = _img_row["image_data"]
-                                        _size = len(_img_bytes)
-                                        if _size <= 20 * 1024 * 1024:
-                                            entry["file_b64"] = base64.b64encode(_img_bytes).decode("ascii")
-                                            logging.info(
-                                                f"[telegram] картинка из БД image_key={_img_key} "
-                                                f"= {_size} байт → file_b64 подставлен"
-                                            )
-                                        else:
-                                            logging.warning(
-                                                f"[telegram] картинка image_key={_img_key} = {_size} байт "
-                                                f"> 20MB, не влезает в лимит TG, пропускаю file_b64"
-                                            )
-                                    else:
-                                        logging.warning(
-                                            f"[telegram] картинка image_key={_img_key} не найдена в БД generated_images"
-                                        )
-                                except Exception as _db_img_err:
-                                    logging.error(
-                                        f"[telegram] не удалось прочитать картинку из БД "
-                                        f"image_key={_img_key}: {_db_img_err}"
-                                    )
+                                logging.info(
+                                    f"[telegram] картинка image_key={_img_key} пойдёт через image_key "
+                                    f"(бинарник тянет chats-consumer, Kafka лёгкая)"
+                                )
                             else:
                                 logging.warning(f"[telegram] файл не найден на диске агента: {_fpath}")
                     except Exception as _b64_err:

@@ -7,6 +7,7 @@ from app.db.chats_tables import DataBaseChats
 from app.core.config import KAFKA_BROKER
 from typing import List
 import os
+import base64
 import requests  # Для отправки сообщений обратно в основной сервис
 import time
 
@@ -140,14 +141,62 @@ class DBConsumer:
         except Exception as e:
             logger.error(f"Ошибка обработки сообщения: {e}")
 
+    async def _hydrate_tg_files(self, files):
+        """Для Telegram дочитываем бинарник картинок из БД (Вариант B).
+
+        Агент СПЕЦИАЛЬНО НЕ кладёт base64 сгенерированных картинок в
+        Kafka-payload (бьёт лимит 1 МБ, MessageSizeTooLargeError) — он
+        передаёт только image_key. Здесь, непосредственно перед
+        отправкой боту, тянем бинарник из generated_images и b64-кодируем.
+        Kafka остаётся лёгкой, БД messages не раздувается.
+        """
+        if not files:
+            return files
+        MAX_TG = 20 * 1024 * 1024
+        for f in files:
+            try:
+                if f.get("file_b64"):
+                    continue  # уже есть бинарник (файлы с диска агента)
+                img_key = f.get("image_key")
+                if f.get("kind") != "image" or not img_key:
+                    continue
+                async with self.db.pool.acquire() as conn:
+                    row = await conn.fetchrow(
+                        "SELECT image_data FROM generated_images "
+                        "WHERE image_key::text = $1 LIMIT 1",
+                        str(img_key).strip(),
+                    )
+                if row and row["image_data"]:
+                    size = len(row["image_data"])
+                    if size <= MAX_TG:
+                        f["file_b64"] = base64.b64encode(row["image_data"]).decode("ascii")
+                        logging.info(
+                            f"[telegram] картинка из БД image_key={img_key} = {size} байт "
+                            f"→ file_b64 подставлен (consumer, Kafka лёгкая)"
+                        )
+                    else:
+                        logging.warning(
+                            f"[telegram] картинка image_key={img_key} = {size} байт > 20MB, пропускаю"
+                        )
+                else:
+                    logging.warning(
+                        f"[telegram] картинка image_key={img_key} не найдена в generated_images"
+                    )
+            except Exception as e:
+                logging.error(f"[telegram] не удалось дочитать картинку из БД: {e}")
+        return files
+
     async def send_to_telegram(self, chat_id: str, text: str, files=None):
         """Ответ агента → телеграм-бот (host-режим, эндпоинт /push_message).
 
-        Бот сам нарежет длинный текст и починит HTML-теги. Файлы агента
-        (attached_files) пробрасываем как есть — бот решит, слать ли документом.
+        Бот сам нарежет длинный текст и починит HTML-теги. Для картинок
+        (сгенерированных агентом) бинарник лежит в БД (Вариант B):
+        дочитываем file_b64 по image_key ЗДЕСЬ, чтобы не гнать base64
+        через Kafka (лимит 1 МБ).
         """
         try:
             start = time.perf_counter()
+            files = await self._hydrate_tg_files(files)
             payload = {
                 "chat_id": str(chat_id),
                 "text": text or "",

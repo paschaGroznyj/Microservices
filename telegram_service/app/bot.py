@@ -67,6 +67,8 @@ TG_PUSH_PORT       = int(os.environ.get("TG_PUSH_PORT", "8010"))
 ORCH_THROTTLE_SEC  = float(os.environ.get("ORCH_THROTTLE_SEC", "6"))
 BUF_MAXLEN         = int(os.environ.get("BUF_MAXLEN", "40"))
 BUF_TTL            = int(os.environ.get("BUF_TTL", "3600"))
+# Обрезка ответа агента перед записью в буфер оркестратора (чтобы не раздувать промпт).
+AGENT_BUF_CLIP     = int(os.environ.get("AGENT_BUF_CLIP", "400"))
 ALLOWED_TTL        = int(os.environ.get("ALLOWED_TTL", "60"))
 
 # ── Проактивные триггеры (будильники + poke) ────────────────────────────────
@@ -105,6 +107,7 @@ _thinking_messages: dict[int, int] = {}
 # ── Redis keys ──────────────────────────────────────────────────────────────────
 def _k_allowed() -> str:                return "tg:allowed_chats"
 def _k_buf(chat_id: int) -> str:        return f"tg:buf:{chat_id}"
+def _k_buf_mark(chat_id: int) -> str:   return f"tg:buf_mark:{chat_id}"
 def _k_orch_ts(chat_id: int) -> str:    return f"tg:orch_ts:{chat_id}"
 # Суточный throttle адресных poke на чат.
 def _k_poke(chat_id: int) -> str:       return f"tg:poke:{chat_id}"
@@ -200,20 +203,50 @@ async def buffer_lines(chat_id: int) -> list[str]:
         return []
 
 
+async def buffer_push_agent(chat_id: int, agent_name: str | None, text: str):
+    """Кладёт ОТВЕТ агента в тот же буфер, что и реплики людей.
+
+    Без этого оркестратор видит только реплики людей и теряет связь
+    «это продолжение диалога с ботом». Ответ обрезаем до AGENT_BUF_CLIP
+    символов, чтобы не раздувать промпт оркестратора.
+    """
+    author = (agent_name or "").strip() or "Ассистент"
+    body = (text or "").replace("\n", " ").strip()
+    if not body:
+        return
+    if len(body) > AGENT_BUF_CLIP:
+        body = body[:AGENT_BUF_CLIP].rstrip() + "…"
+    await buffer_push(chat_id, author, body)
+
+
 async def buffer_flush(chat_id: int) -> list[str]:
     """
-    Забирает накопленные реплики «с последнего ответа агента» и очищает буфер.
-    Возврат — список строк "Ник: текст". После флаша буфер пуст → маркер
-    сдвигается естественно (следующая порция копится заново).
+    Склейка для отправки агенту: берёт реплики ПОСЛЕ маркера
+    last_flushed (то, что ещё не отдавалось агенту).
+
+    В отличие от старой версии буфер НЕ удаляется — мы лишь сдвигаем
+    маркер на текущую длину. Так оркестратор (buffer_lines) всегда
+    видит скользящее окно последних реплик включая ответы агента,
+    а агенту уходит только новое — без дублей.
     """
     r = await get_redis()
     try:
-        # atomic: прочитать всё и удалить
         async with r.pipeline(transaction=True) as pipe:
             pipe.lrange(_k_buf(chat_id), 0, -1)
-            pipe.delete(_k_buf(chat_id))
+            pipe.get(_k_buf_mark(chat_id))
             res = await pipe.execute()
-        return res[0] or []
+        all_lines = res[0] or []
+        try:
+            mark = int(res[1]) if res[1] is not None else 0
+        except (TypeError, ValueError):
+            mark = 0
+        total = len(all_lines)
+        if mark > total:  # буфер усёкся (ltrim/TTL) — маркер устарел
+            mark = 0
+        fresh = all_lines[mark:]
+        # сдвигаем маркер на конец (всё отдано), TTL = как у буфера
+        await r.set(_k_buf_mark(chat_id), str(total), ex=BUF_TTL)
+        return fresh
     except Exception as e:
         log.warning(f"buffer_flush fail chat={chat_id}: {e}")
         return []
@@ -662,6 +695,14 @@ async def push_message(req: PushMessageRequest):
                 chat_id=req.chat_id, text=chunk, parse_mode=req.parse_mode,
             )
             sent_ids.append(msg.message_id)
+        # Ответ агента → в буфер оркестратора (только группы), чтобы он
+        # видел связь «бот участвует в диалоге». Не роняем ответ при ошибке.
+        try:
+            if _is_group(req.chat_id):
+                settings = await get_chat_settings(req.chat_id)
+                await buffer_push_agent(req.chat_id, settings.get("agent_name"), req.text)
+        except Exception as e:
+            log.warning(f"buffer_push_agent fail chat={req.chat_id}: {e}")
         return PushMessageResponse(ok=True, message_ids=sent_ids)
     except Exception as e:
         log.error(f"push_message fail chat={req.chat_id}: {e}", exc_info=True)

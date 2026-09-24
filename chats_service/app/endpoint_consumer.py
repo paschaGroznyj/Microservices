@@ -112,7 +112,7 @@ class DBConsumer:
             # Если сообщение от бота, отправляем обратно в основной сервис для WebSocket
             if is_from_bot and gateway_target == "telegram":
                 # Ответ агента для Telegram: пушим напрямую боту (host-режим).
-                await self.send_to_telegram(chat_id, message)
+                await self.send_to_telegram(chat_id, message, attached_files)
                 return
 
             if is_from_bot:
@@ -140,7 +140,7 @@ class DBConsumer:
         except Exception as e:
             logger.error(f"Ошибка обработки сообщения: {e}")
 
-    async def send_to_telegram(self, chat_id: str, message: dict):
+    async def send_to_telegram(self, chat_id: str, text: str, files=None):
         """Ответ агента → телеграм-бот (host-режим, эндпоинт /push_message).
 
         Бот сам нарежет длинный текст и починит HTML-теги. Файлы агента
@@ -150,8 +150,10 @@ class DBConsumer:
             start = time.perf_counter()
             payload = {
                 "chat_id": str(chat_id),
-                "text": message.get("message") or "",
-                "files": message.get("attached_files") or message.get("files") or None,
+                "text": text or "",
+                "files": files or None,
+                # бот отредактирует свой плейсхолдер «Думаю...» вместо нового сообщения
+                "edit_thinking": True,
             }
             response = requests.post(TG_BOT_PUSH_URL, json=payload, timeout=30)
             logger.info(f"Ответ агента отправлен в Telegram: {response.status_code}")

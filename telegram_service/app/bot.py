@@ -111,6 +111,7 @@ def _k_poke(chat_id: int) -> str:       return f"tg:poke:{chat_id}"
 # Ожидание ответа целевого юзера после адресной инициации (флаг «грусти»).
 def _k_await(chat_id: int, uid: int) -> str: return f"tg:await:{chat_id}:{uid}"
 def _k_gate(chat_id: int) -> str:       return f"tg:gate:{chat_id}"
+def _k_setname(chat_id: int, uid: int) -> str: return f"tg:setname:{chat_id}:{uid}"
 
 
 async def get_redis() -> aioredis.Redis:
@@ -787,8 +788,11 @@ def _settings_summary(settings: dict) -> str:
     mode = settings.get("trigger_mode") or "orchestrator"
     tools = settings.get("selected_tools") or []
     tools_str = ", ".join(tools) if tools else "\u043d\u0435\u0442 (\u0442\u043e\u043b\u044c\u043a\u043e \u0431\u0430\u0437\u043e\u0432\u044b\u0435)"
+    name = settings.get("agent_name")
+    name_str = name.strip() if (name and name.strip()) else "\u043f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e"
     return (
         "<b>\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u0430\u0433\u0435\u043d\u0442\u0430 \u0434\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u0447\u0430\u0442\u0430</b>\n\n"
+        f"\u0418\u043c\u044f: <code>{name_str}</code>\n"
         f"\u041c\u043e\u0434\u0435\u043b\u044c: <code>{model}</code>\n"
         f"\u0422\u0440\u0438\u0433\u0433\u0435\u0440: <code>{mode}</code>\n"
         f"\u0418\u043d\u0441\u0442\u0440\u0443\u043c\u0435\u043d\u0442\u044b: <code>{tools_str}</code>"
@@ -804,6 +808,7 @@ def _menu_root(settings: dict | None = None) -> InlineKeyboardMarkup:
     poke_label = ("\U0001f514 \u0411\u0443\u0434\u0438\u043b\u044c\u043d\u0438\u043a\u0438: \u0432\u043a\u043b" if proactive
                   else "\U0001f515 \u0411\u0443\u0434\u0438\u043b\u044c\u043d\u0438\u043a\u0438: \u0432\u044b\u043a\u043b")
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("\u0418\u043c\u044f \u0430\u0433\u0435\u043d\u0442\u0430", callback_data="tg:menu:name")],
         [InlineKeyboardButton("\u041c\u043e\u0434\u0435\u043b\u044c", callback_data="tg:menu:model")],
         [InlineKeyboardButton("\u0418\u043d\u0441\u0442\u0440\u0443\u043c\u0435\u043d\u0442\u044b", callback_data="tg:menu:tools")],
         [InlineKeyboardButton("\u0422\u0440\u0438\u0433\u0433\u0435\u0440", callback_data="tg:menu:trigger")],
@@ -920,6 +925,26 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await _refresh(lambda s: _menu_root(s))
         return
+    if data == "tg:menu:name":
+        # ставим флаг ожидания ввода имени от нажавшего юзера
+        uid = query.from_user.id if query.from_user else 0
+        try:
+            r = await get_redis()
+            await r.set(_k_setname(chat_id, uid), "1", ex=300)
+        except Exception:
+            pass
+        await query.answer()
+        try:
+            await query.edit_message_text(
+                "\u041e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435 \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0438\u043c \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435\u043c \u0438\u043c\u044f \u0430\u0433\u0435\u043d\u0442\u0430 \u0434\u043b\u044f \u044d\u0442\u043e\u0433\u043e \u0447\u0430\u0442\u0430.\n"
+                "\u041d\u0430\u043f\u0440\u0438\u043c\u0435\u0440: <code>\u041c\u0430\u043a\u0441</code> \u0438\u043b\u0438 <code>\u0410\u0441\u0441\u0438\u0441\u0442\u0435\u043d\u0442</code>.\n"
+                "\u0427\u0442\u043e\u0431\u044b \u0441\u0431\u0440\u043e\u0441\u0438\u0442\u044c \u0438\u043c\u044f \u2014 \u043e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435 <code>-</code>.",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            pass
+        return
+
     if data == "tg:menu:model":
         await query.answer()
         await _refresh(lambda s: _menu_model(s.get("agent_model")))
@@ -993,6 +1018,27 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw_text = msg.text or msg.caption or ""
     user = update.effective_user
     author = user.full_name or user.username or "Аноним"
+
+    # ── перехват ввода имени агента (после кнопки «Имя агента») ──
+    try:
+        r = await get_redis()
+        awaiting_name = await r.get(_k_setname(chat_id, user.id))
+    except Exception:
+        awaiting_name = None
+    if awaiting_name:
+        try:
+            await r.delete(_k_setname(chat_id, user.id))
+        except Exception:
+            pass
+        new_name = (raw_text or "").strip()
+        if new_name in ("-", "—", ""):
+            ok = await save_chat_settings(chat_id, {"agent_name": ""})
+            await msg.reply_text("Имя агента сброшено (дефолт)." if ok else "Ошибка сохранения.")
+        else:
+            new_name = new_name[:64]
+            ok = await save_chat_settings(chat_id, {"agent_name": new_name})
+            await msg.reply_text(("Имя агента: " + new_name) if ok else "Ошибка сохранения.")
+        return
 
     # разбор упоминания/реплая
     is_group = _is_group(chat_id)

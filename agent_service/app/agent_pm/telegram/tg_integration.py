@@ -67,6 +67,7 @@ async def get_tg_chat_settings(db, chat_id: str) -> dict:
     """
     defaults = {
         "system_prompt": None,
+        "agent_name": None,
         "agent_model": DEFAULT_TG_MODEL,
         "selected_tools": DEFAULT_TG_TOOLS,
         "trigger_mode": "orchestrator",
@@ -78,7 +79,7 @@ async def get_tg_chat_settings(db, chat_id: str) -> dict:
             return defaults
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT system_prompt, agent_model, selected_tools, "
+                "SELECT system_prompt, agent_name, agent_model, selected_tools, "
                 "trigger_mode, orchestrator_context_n "
                 "FROM telegram_chat_settings WHERE chat_id=$1",
                 str(chat_id),
@@ -99,6 +100,7 @@ async def get_tg_chat_settings(db, chat_id: str) -> dict:
         st = [t for t in st if t not in TG_FORBIDDEN_TOOLS]
         return {
             "system_prompt": d.get("system_prompt"),
+            "agent_name": d.get("agent_name"),
             "agent_model": d.get("agent_model") or DEFAULT_TG_MODEL,
             "selected_tools": st,
             "trigger_mode": d.get("trigger_mode") or "orchestrator",
@@ -130,9 +132,9 @@ def build_tg_prefix(username: str | None, chat_id: str, chat_type: str = "group"
 
 
 # ── 5. Оркестратор на llm_lite (решает: отвечать или молчать) ──────────────────
-ORCHESTRATOR_PROMPT = """Ты — фильтр-оркестратор группового Telegram-чата, где присутствует ИИ-ассистент.
+ORCHESTRATOR_PROMPT_BASE = """Ты — фильтр-оркестратор группового Telegram-чата, где присутствует ИИ-ассистент.
 Твоя задача: по последним сообщениям чата решить, ОБРАЩАЮТСЯ ли участники к ассистенту
-или просят его что-то сделать (вопрос к боту, просьба, задача, продолжение диалога с ботом).
+или просят его что-то сделать (вопрос к боту, просьба, задача, продолжение диалога с ботом).{name_line}
 
 Ответь СТРОГО одним словом:
   YES — если к ассистенту обращаются / просят помочь / задают вопрос, на который он должен ответить.
@@ -141,7 +143,21 @@ ORCHESTRATOR_PROMPT = """Ты — фильтр-оркестратор групп
 Не объясняй, не добавляй ничего кроме YES или NO."""
 
 
-async def should_respond(agent, buffer_lines: list[str]) -> bool:
+def build_orchestrator_prompt(agent_name: str | None = None) -> str:
+    """Собирает промпт оркестратора. Если у агента задано имя —
+    подсказываем оркестратору, что обращение по имени = обращение к ассистенту.
+    Пустое имя — дефолтный промпт без спец-имени."""
+    name_line = ""
+    if agent_name and agent_name.strip():
+        nm = agent_name.strip()
+        name_line = (
+            f"\n\nВ этом чате ассистента зовут «{nm}». Если участники обращаются к «{nm}» по имени "
+            f"(в любом падеже, регистре или сокращении) — это обращение к ассистенту, отвечай YES."
+        )
+    return ORCHESTRATOR_PROMPT_BASE.format(name_line=name_line)
+
+
+async def should_respond(agent, buffer_lines: list[str], agent_name: str | None = None) -> bool:
     """
     Оркестратор: дёргает llm_lite агента (_lite_ainvoke), скармливает буфер
     последних сообщений группы. Возвращает True, если агент должен ответить.
@@ -156,7 +172,7 @@ async def should_respond(agent, buffer_lines: list[str]) -> bool:
     try:
         from langchain_core.messages import SystemMessage, HumanMessage
         messages = [
-            SystemMessage(content=ORCHESTRATOR_PROMPT),
+            SystemMessage(content=build_orchestrator_prompt(agent_name)),
             HumanMessage(content="Последние сообщения чата:\n" + context_text +
                          "\n\nОбращаются ли к ассистенту? Ответь YES или NO."),
         ]

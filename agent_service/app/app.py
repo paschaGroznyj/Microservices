@@ -938,8 +938,15 @@ async def tg_should_respond(req: TgShouldRespondRequest) -> TgShouldRespondRespo
     if _agent is None:
         return TgShouldRespondResponse(respond=False)
     try:
-        from agent_pm.telegram.tg_integration import should_respond
-        ok = await should_respond(_agent, req.buffer_lines)
+        from agent_pm.telegram.tg_integration import should_respond, get_tg_chat_settings
+        # подтянем имя агента из настроек чата (fail-open: None → дефолтный промпт)
+        agent_name = None
+        try:
+            cfg = await get_tg_chat_settings(getattr(_agent, "db", None), str(req.chat_id))
+            agent_name = cfg.get("agent_name")
+        except Exception:
+            pass
+        ok = await should_respond(_agent, req.buffer_lines, agent_name)
         return TgShouldRespondResponse(respond=bool(ok))
     except Exception as e:
         logging.error(f"tg_should_respond failed: {e}")

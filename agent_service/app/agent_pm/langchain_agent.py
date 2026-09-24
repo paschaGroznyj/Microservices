@@ -1837,6 +1837,12 @@ class KnowledgeAgent:
                         get_tg_chat_settings, build_tg_system_suffix,
                     )
                     _tg_settings = await get_tg_chat_settings(self.db, chat_id)
+                    _tg_name = _tg_settings.get("agent_name")
+                    if _tg_name and _tg_name.strip():
+                        system_content += (
+                            "\n\nВ этом чате тебя зовут «" + _tg_name.strip() + "». "
+                            "Участники обращаются к тебе по этому имени — воспринимай его как своё и при необходимости так и представляйся."
+                        )
                     system_content += "\n\n" + build_tg_system_suffix(_tg_settings.get("system_prompt"))
                 except Exception as _e:
                     logging.warning(f"[tg] system suffix fail: {_e}")

@@ -196,6 +196,7 @@ class TgChatIn(BaseModel):
 
 class TgSettingsIn(BaseModel):
     system_prompt: str | None = None
+    agent_name: str | None = None
     agent_model: str | None = None
     selected_tools: list | None = None
     trigger_mode: str | None = None

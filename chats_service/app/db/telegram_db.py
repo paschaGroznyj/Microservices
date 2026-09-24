@@ -63,6 +63,7 @@ class TelegramDB:
                     chat_id        TEXT PRIMARY KEY
                                    REFERENCES telegram_chats(chat_id) ON DELETE CASCADE,
                     system_prompt  TEXT,                 -- кастомный промпт поверх дефолтного HTML
+                    agent_name     TEXT,                 -- имя агента в чате (NULL = дефолтный ассистент)
                     agent_model    TEXT,                 -- NULL = дефолт
                     selected_tools JSONB,                -- NULL = все тулы по дефолту
                     trigger_mode   TEXT NOT NULL DEFAULT 'orchestrator', -- 'mention' | 'orchestrator' | 'every'
@@ -90,6 +91,10 @@ class TelegramDB:
             await conn.execute(
                 "ALTER TABLE telegram_chat_settings "
                 "ADD COLUMN IF NOT EXISTS proactive_enabled BOOLEAN NOT NULL DEFAULT TRUE;"
+            )
+            await conn.execute(
+                "ALTER TABLE telegram_chat_settings "
+                "ADD COLUMN IF NOT EXISTS agent_name TEXT;"
             )
 
     # ── allow-list ───────────────────────────────────────────────────────────
@@ -159,7 +164,7 @@ class TelegramDB:
 
     async def update_settings(self, chat_id: str, **fields) -> dict | None:
         """Точечное обновление настроек. admin-тулы запрещены на уровне колл-сайта."""
-        allowed = {"system_prompt", "agent_model", "selected_tools",
+        allowed = {"system_prompt", "agent_name", "agent_model", "selected_tools",
                    "trigger_mode", "orchestrator_context_n", "proactive_enabled"}
         sets, args, i = [], [], 1
         for k, v in fields.items():

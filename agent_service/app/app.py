@@ -482,12 +482,12 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             attached_files = []
             for f in files_to_send:
                 if f.get("kind") == "image":
-                    attached_files.append({
+                    entry = {
                         "name": f.get("name") or "image.jpg",
                         "path": f.get("path"),
                         "kind": "image",
                         "image_key": f.get("image_key"),
-                    })
+                    }
                 else:
                     # Не-image файл: заливаем в OBS (obs://{OBS_BUCKET}/catchpm/{chat_id}/...).
                     # Ключ детерминирован от (chat_id + local_path), поэтому
@@ -496,11 +496,35 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                         await obs_file_storage.upload_user_file(f["path"], chat_id)
                     except Exception as _obs_err:
                         logging.error(f"OBS upload failed for {f.get('path')}: {_obs_err}")
-                    attached_files.append({
+                    entry = {
                         "name": os.path.basename(f["path"]),
                         "path": f["path"],
                         "kind": f.get("kind"),
-                    })
+                    }
+
+                # Для Telegram host-бот изолирован от ФС агента (разные контейнеры),
+                # поэтому os.path.exists(path) на его стороне вернёт False и файл
+                # молча не отправится. Дочитываем байты ЗДЕСЬ и кладём base64 в
+                # payload — бот возьмёт file_b64 без обращения к диску. Лимит TG 20MB.
+                if is_telegram:
+                    try:
+                        _fpath = entry.get("path")
+                        if _fpath and os.path.exists(_fpath):
+                            _size = os.path.getsize(_fpath)
+                            if _size <= 20 * 1024 * 1024:
+                                with open(_fpath, "rb") as _fh:
+                                    entry["file_b64"] = base64.b64encode(_fh.read()).decode("ascii")
+                            else:
+                                logging.warning(
+                                    f"[telegram] файл {_fpath} = {_size} байт > 20MB, "
+                                    f"не влезает в лимит TG, пропускаю file_b64"
+                                )
+                        else:
+                            logging.warning(f"[telegram] файл не найден на диске агента: {_fpath}")
+                    except Exception as _b64_err:
+                        logging.error(f"[telegram] не удалось прочитать файл в base64: {_b64_err}")
+
+                attached_files.append(entry)
 
         message_id = f"msg-{int(time.time() * 1000)}-{str(uuid.uuid4())[:8]}"
 

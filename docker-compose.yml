@@ -138,6 +138,7 @@ services:
         TG_SAD_WAIT_LO:      "300"     # окно ожидания ответа (грусть), сек, low
         TG_SAD_WAIT_HI:      "600"     # окно ожидания ответа (грусть), сек, high
         TG_POKE_DAILY_TTL:   "86400"   # суточный throttle адресных poke на чат
+        TG_DEBUG_TOKEN:      ${TG_DEBUG_TOKEN:-}  # если пусто — /tg/debug/trigger ОТКЛЮЧЁН (404)
       restart: unless-stopped
 
 

@@ -541,6 +541,81 @@ def chat_id_has_thinking(chat_id: int) -> bool:
     return chat_id in _thinking_messages
 
 
+# ── DEBUG: ручной запуск проактивных триггеров (для теста без ожидания cron) ──
+# Защищён токеном TG_DEBUG_TOKEN (если задан). Если токен не задан в env —
+# эндпоинт ОТКЛЮЧЁН (возвращает 404), чтобы не палить в проде.
+TG_DEBUG_TOKEN = os.environ.get("TG_DEBUG_TOKEN", "")
+
+
+class DebugTriggerResponse(BaseModel):
+    ok: bool
+    action: str
+    detail: str | None = None
+
+
+@api.post("/tg/debug/trigger", response_model=DebugTriggerResponse)
+async def debug_trigger(
+    slot: str = "poke",
+    chat_id: int | None = None,
+    token: str = "",
+):
+    """
+    Ручной запуск проактивного триггера (для теста, минуя APScheduler).
+
+    Параметры (query):
+      slot    — 'morning' | 'lunch' | 'dinner' → broadcast во все proactive-чаты
+                (или в один chat_id, если задан);
+                'poke' → адресный poke рандомному участнику chat_id.
+      chat_id — конкретный чат. Для broadcast опционален (без него — все
+                proactive-чаты); для 'poke' ОБЯЗАТЕЛЕН.
+      token   — TG_DEBUG_TOKEN (должен совпасть с env).
+
+    Пример:
+      POST /tg/debug/trigger?slot=poke&chat_id=-100123&token=SECRET
+      POST /tg/debug/trigger?slot=lunch&token=SECRET
+    """
+    if not TG_DEBUG_TOKEN:
+        raise HTTPException(status_code=404, detail="Not found")
+    if token != TG_DEBUG_TOKEN:
+        raise HTTPException(status_code=403, detail="Bad debug token")
+
+    slot = (slot or "poke").lower()
+
+    if slot == "poke":
+        if not chat_id:
+            raise HTTPException(status_code=400, detail="chat_id required for poke")
+        if not await is_allowed(chat_id):
+            raise HTTPException(status_code=400, detail="chat not registered")
+        member = await get_random_member(chat_id)
+        if not member:
+            return DebugTriggerResponse(ok=False, action="poke",
+                                        detail="no members collected yet")
+        await dispatch_initiation(chat_id, "poke", addressed=True, target=member)
+        asyncio.create_task(_sadness_watch(chat_id, member))
+        who = member.get("username") or member.get("first_name") or member.get("user_id")
+        return DebugTriggerResponse(ok=True, action="poke",
+                                    detail=f"poked {who} in chat {chat_id}")
+
+    if slot in ("morning", "lunch", "dinner"):
+        if chat_id:
+            if not await is_allowed(chat_id):
+                raise HTTPException(status_code=400, detail="chat not registered")
+            await dispatch_initiation(chat_id, slot, addressed=False, target=None)
+            return DebugTriggerResponse(ok=True, action=f"broadcast:{slot}",
+                                        detail=f"broadcast to chat {chat_id}")
+        chats = await list_proactive_chats()
+        for cid in chats:
+            try:
+                await dispatch_initiation(int(cid), slot, addressed=False, target=None)
+            except Exception as e:
+                log.warning(f"debug broadcast fail chat={cid}: {e}")
+        return DebugTriggerResponse(ok=True, action=f"broadcast:{slot}",
+                                    detail=f"broadcast to {len(chats)} proactive chats")
+
+    raise HTTPException(status_code=400,
+                        detail="slot must be one of: morning|lunch|dinner|poke")
+
+
 @api.post("/push_message", response_model=PushMessageResponse)
 async def push_message(req: PushMessageRequest):
     if _bot_app is None:

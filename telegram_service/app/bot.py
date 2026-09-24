@@ -89,6 +89,8 @@ TG_SAD_WAIT_HI     = int(os.environ.get("TG_SAD_WAIT_HI", "600"))   # 10 мин
 TG_POKE_DAILY_TTL  = int(os.environ.get("TG_POKE_DAILY_TTL", "86400"))
 # Окно связывания «форвард из другого чата» ↔ следующее тег-сообщение (сек).
 TG_FWD_TTL         = int(os.environ.get("TG_FWD_TTL", "90"))
+# Окно, в течение которого тег-сообщение БЕЗ своего контента ЖДЁТ форвард (сек).
+TG_TAG_TTL         = int(os.environ.get("TG_TAG_TTL", "20"))
 
 MAX_FILE_SIZE = 20 * 1024 * 1024
 
@@ -120,6 +122,8 @@ def _k_gate(chat_id: int) -> str:       return f"tg:gate:{chat_id}"
 def _k_setname(chat_id: int, uid: int) -> str: return f"tg:setname:{chat_id}:{uid}"
 # Последний форвард из другого чата/канала (текст + опц. картинка), ждёт тег.
 def _k_lastfwd(chat_id: int) -> str:    return f"tg:lastfwd:{chat_id}"
+# Последнее тег-сообщение без контента, которое ЖДЁТ форвард.
+def _k_lasttag(chat_id: int) -> str:    return f"tg:lasttag:{chat_id}"
 
 
 async def get_redis() -> aioredis.Redis:
@@ -266,6 +270,72 @@ async def pop_forward(chat_id: int) -> dict | None:
     except Exception as e:
         log.warning(f"pop_forward fail chat={chat_id}: {e}")
         return None
+
+
+async def stash_tag(chat_id: int, user_id: int, username: str, tag_text: str):
+    """Сохраняет тег-сообщение без контента, чтобы догнать форвард (обратный порядок)."""
+    try:
+        payload = {"user_id": user_id, "username": username, "text": (tag_text or "").strip()}
+        r = await get_redis()
+        await r.set(_k_lasttag(chat_id), json.dumps(payload), ex=TG_TAG_TTL)
+        log.info(f"[fwd] stashed tag chat={chat_id} uid={user_id} wait_fwd={TG_TAG_TTL}s")
+    except Exception as e:
+        log.warning(f"stash_tag fail chat={chat_id}: {e}")
+
+async def pop_tag(chat_id: int) -> dict | None:
+    """Забирает и удаляет отложенный тег (одноразовый подхват)."""
+    try:
+        r = await get_redis()
+        raw = await r.get(_k_lasttag(chat_id))
+        if not raw:
+            return None
+        await r.delete(_k_lasttag(chat_id))
+        return json.loads(raw)
+    except Exception as e:
+        log.warning(f"pop_tag fail chat={chat_id}: {e}")
+        return None
+
+
+async def handle_incoming_forward(chat_id: int, msg: Message) -> bool:
+    """Обрабатывает форвард без тега.
+
+    Если перед этим был голый тег (tg:lasttag ещё жив) — связываем
+    обратный порядок (тег → форвард): шлём агенту сразу,
+    возвращаем True (связали). Иначе стешим форвард и возвращаем False.
+    """
+    waiting = await pop_tag(chat_id)
+    if not waiting:
+        await stash_forward(chat_id, msg)
+        return False
+    # есть ждущий тег → собираем контент форварда и шлём агенту
+    f_author = _fwd_origin_author(msg)
+    f_text = (msg.text or msg.caption or "").strip()
+    file_b64 = None
+    file_name = None
+    photo = msg.photo[-1] if msg.photo else None
+    if photo and not (photo.file_size and photo.file_size > MAX_FILE_SIZE):
+        try:
+            tg_file = await photo.get_file()
+            raw = await tg_file.download_as_bytearray()
+            file_b64 = base64.b64encode(raw).decode("utf-8")
+            file_name = f"fwd_{photo.file_unique_id}.jpg"
+        except Exception as e:
+            log.warning(f"handle_incoming_forward photo dl fail: {e}")
+    tag_text = (waiting.get("text") or "").strip()
+    tag_user = waiting.get("username") or "Аноним"
+    tag_uid = int(waiting.get("user_id") or 0)
+    if f_text:
+        merged = f"{tag_user}: {tag_text}\n[Переслано от {f_author}]: {f_text}".strip()
+    else:
+        merged = f"{tag_user}: {tag_text}\n[Переслано от {f_author}: картинка]".strip()
+    log.info(f"[fwd] linked tag->forward (reverse order) chat={chat_id} "
+             f"img={'yes' if file_b64 else 'no'}")
+    try:
+        await dispatch_to_agent(chat_id, tag_uid, tag_user, merged,
+                                file_b64=file_b64, file_name=file_name)
+    except Exception as e:
+        log.warning(f"handle_incoming_forward dispatch fail: {e}")
+    return True
 
 
 async def buffer_push_agent(chat_id: int, agent_name: str | None, text: str):
@@ -1358,6 +1428,8 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_group = _is_group(chat_id)
     approved = False
     text_for_agent = raw_text
+    tagged = False
+    reply_to_bot = False
 
     if is_group:
         stripped, tagged = _strip_bot_tag(raw_text, bot_username)
@@ -1375,10 +1447,11 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # выходим. Подхватим при следующем тег-сообщении.
     is_forward = bool(msg.forward_origin)
     if is_forward and not approved:
-        await stash_forward(chat_id, msg)
-        # реплику в буфер всё равно кладём (для оркестратора)
+        # Если перед этим был голый тег, ждущий форвард (обратный
+        # порядок) — свяжем и шлём агенту. Иначе отложим в stash.
         if raw_text.strip():
             await buffer_push(chat_id, author, raw_text.strip())
+        await handle_incoming_forward(chat_id, msg)
         return
 
     # обогащение ссылками/форвардом/реплаем
@@ -1388,8 +1461,20 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # нет собственного смыслового контента (только обращение к боту).
     fwd_file_b64 = None
     fwd_file_name = None
+    tag_waits_forward = False
     if approved and not is_forward:
         stashed = await pop_forward(chat_id)
+        if not stashed:
+            # Форварда ещё нет. Если тег НЕ несёт собственного
+            # смыслового контента (голый @-тег/обращение по имени) —
+            # откладываем его на короткое окно: вдруг форвард
+            # прилетит следующим сообщением (обратный порядок).
+            stripped_tag = _strip_bot_tag(raw_text, bot_username)[0].strip()
+            # Ждём форвард ТОЛЬКО при голом @-упоминании (tagged без текста).
+            # Reply-to-bot без текста — это продолжение диалога, отвечаем сразу.
+            if tagged and not reply_to_bot and not stripped_tag:
+                await stash_tag(chat_id, user.id, author, text_for_agent)
+                tag_waits_forward = True
         if stashed:
             f_author = stashed.get("author") or "источник"
             f_text = (stashed.get("text") or "").strip()
@@ -1420,6 +1505,12 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # всегда пишем реплику в буфер (для оркестратора и склейки контекста)
     if raw_text.strip():
         await buffer_push(chat_id, author, raw_text.strip())
+
+    # Голый тег без контента — ЖДЁТ форвард (отложен в stash_tag).
+    # Не отвечаем сейчас: либо следом прилетит форвард и свяжется,
+    # либо тег сгорит по TG_TAG_TTL (тогда ответа на голый тег не будет).
+    if tag_waits_forward:
+        return
 
     # если не одобрено тегом — спросить оркестратор (в группе), с throttle
     if not approved and is_group:
@@ -1547,7 +1638,7 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Пересланное фото из другого чата без тега — откладываем в stash,
             # подхватим при следующем тег-сообщении. Прочее фото без тега — игнор.
             if msg.forward_origin:
-                await stash_forward(chat_id, msg)
+                await handle_incoming_forward(chat_id, msg)
             return
 
     photo = msg.photo[-1] if msg.photo else None  # самый большой размер

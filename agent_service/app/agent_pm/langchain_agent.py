@@ -759,7 +759,7 @@ def _sanitize_messages(messages):
     return out
 
 
-async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0):
+async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, error_info: dict | None = None):
     """Стриминговая версия _invoke_with_retry.
 
     Собирает ответ через llm.astream(), аккумулируя AIMessageChunk сложением (+=).
@@ -823,6 +823,8 @@ async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0):
         return await llm.ainvoke(messages)
     except Exception as e:
         logging.error(f"[iteration={iteration}] ainvoke-фолбэк тоже упал: {e}")
+        if error_info is not None:
+            error_info["reason"] = f"{type(e).__name__}: {e}"
         return None
 
 CODE_TOOLS = {"execute_python_code", "write_sandbox_file", "edit_sandbox_file"}
@@ -1645,6 +1647,53 @@ class KnowledgeAgent:
         if self._http_client and not self._http_client.is_closed:
             await self._http_client.aclose()
 
+    async def _probe_providers_status(self) -> str:
+        """Дёргает /internal/providers_status и возвращает человекочитаемую
+        строку с доступностью моделей (coder/designer/universal).
+
+        Использует готовый health-check эндпоинт того же процесса
+        (кеш TTL 30с на его стороне). При любой ошибке — мягкий фолбэк."""
+        _labels = {
+            "coder": "Кодер",
+            "designer": "Дизайнер",
+            "universal": "Универсал",
+        }
+        try:
+            client = await self._get_http_client()
+            port = os.getenv("PORT_PM_AGENT") or "9001"
+            resp = await client.get(
+                f"http://127.0.0.1:{port}/internal/providers_status",
+                timeout=12.0,
+            )
+            resp.raise_for_status()
+            providers = (resp.json() or {}).get("providers", {}) or {}
+        except Exception as e:
+            logger.warning(f"[providers_status] проба не удалась: {e}")
+            return "Не удалось опросить статус моделей (health-check недоступен)."
+
+        if not providers:
+            return "Статус моделей получить не удалось."
+
+        up_list, down_list = [], []
+        for mid, label in _labels.items():
+            info = providers.get(mid) or {}
+            if info.get("up"):
+                up_list.append(label)
+            else:
+                down_list.append(label)
+
+        lines = ["Доступность моделей сейчас:"]
+        for mid, label in _labels.items():
+            info = providers.get(mid) or {}
+            mark = "✅" if info.get("up") else "❌"
+            lines.append(f"{mark} {label}")
+
+        if not up_list:
+            lines.append("\nСейчас недоступна ни одна модель — ждите восстановления провайдера.")
+        else:
+            lines.append(f"\nМожно переключиться на: {', '.join(up_list)}.")
+        return "\n".join(lines)
+
     def _ctx_get(self, key: str, default=None):
         """Читает request-local значение из ContextVar."""
         ctx = self._request_ctx.get()
@@ -2052,16 +2101,33 @@ class KnowledgeAgent:
                             text, request_id, msg_id=str(request_id), kind="live"
                         )
 
+                    _llm_error = {}
                     try:
                         response = await _astream_collect(
-                            current_llm, messages, on_chunk=_on_chunk, iteration=iteration
+                            current_llm, messages, on_chunk=_on_chunk, iteration=iteration,
+                            error_info=_llm_error
                         )
-                    except Exception:
+                    except Exception as _exc:
+                        _llm_error["reason"] = f"{type(_exc).__name__}: {_exc}"
                         response = None
 
                     if response is None:
-                        logging.error(f"[iteration={iteration}] Все попытки llm провалены, прерываю цикл")
-                        final_response = "Ошибка внутри цикла агента. Но агент запомнил шаги, попробуйте вернуться к запросу"
+                        _err_reason = _llm_error.get("reason", "unknown")
+                        logging.error(f"[iteration={iteration}] Все попытки llm провалены, прерываю цикл: {_err_reason}")
+                        _is_provider_down = any(kw in str(_err_reason).lower() for kw in (
+                            "all providers failed", "503", "service unavailable",
+                            "connection", "timeout", "unreachable"
+                        ))
+                        if _is_provider_down:
+                            _status_line = await self._probe_providers_status()
+                            final_response = (
+                                "⚠️ Провайдер моделей (cloud.ru) сейчас недоступен или отвечает ошибками "
+                                "(503/Service Unavailable). Это не проблема агента — проблема на стороне провайдера.\n\n"
+                                f"{_status_line}\n\n"
+                                "Попробуйте повторить запрос через несколько минут."
+                            )
+                        else:
+                            final_response = "Ошибка внутри цикла агента. Но агент запомнил шаги, попробуйте вернуться к запросу"
                         break
 
                     _has_tool_calls = bool(getattr(response, "tool_calls", None))

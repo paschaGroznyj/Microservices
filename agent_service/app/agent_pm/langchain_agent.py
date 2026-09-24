@@ -588,6 +588,13 @@ MAX_STDOUT_CHARS = 2000  # Настройте максимальную длин�
 # ~8000 символов ≈ 2.5-3k токенов — достаточно чтобы модель "увидела" суть.
 MAX_TOOL_MSG_CHARS = int(os.getenv("MAX_TOOL_MSG_CHARS", "8000"))
 
+# Лимит на длину tool_trace ОДНОГО сообщения при загрузке истории из БД.
+# Исторически в chats.tool_trace накопились гигантские записи (git/grep-выводы
+# execute_shell_commands по 40k+ симв). Такой trace, будучи прочитанным в
+# составе последних N сообщений, раздувает память процесса и подмешивается в
+# chunk при сжатии. Режем каждый trace на входе из БД до этого лимита.
+MAX_TRACE_FROM_DB_CHARS = int(os.getenv("MAX_TRACE_FROM_DB_CHARS", "2500"))
+
 def _truncate_text(text: str, max_chars: int = MAX_STDOUT_CHARS) -> str:
     """Обрезает текст, если он превышает лимит, добавляя плашку с указанием перерасхода."""
     if not isinstance(text, str) or len(text) <= max_chars:
@@ -723,10 +730,35 @@ def _summarize_tool_call(tc: dict, result: Any) -> str | None:
             )
     if name == "request_more_steps":
         return f"{name} ШАГ-БУСТ → {str(result)}"
+    if name == "execute_shell_commands":
+        # КРИТИЧНО для памяти/контекста: команды (git heredoc, grep, py_compile)
+        # и их stdout/stderr бывают по 40k+ символов. Без жёсткого лимита такой
+        # trace осаждается в chats.tool_trace и раздувает контекст следующего
+        # запроса (последние N сообщений). Режем и команду, и результат.
+        _cmds = args.get("commands", args)
+        _cmd_s = str(_cmds)
+        if len(_cmd_s) > 400:
+            _cmd_s = _cmd_s[:400] + f"…[+{len(_cmd_s) - 400} симв]"
+        if isinstance(result, dict):
+            _ok = result.get("ok")
+            _out = str(result.get("stdout", ""))
+            _err = str(result.get("stderr", ""))
+            _rc = result.get("exit_code")
+            _res_s = f"ok={_ok} rc={_rc} stdout={_out[:800]}"
+            if _err.strip():
+                _res_s += f" stderr={_err[:300]}"
+        else:
+            _res_s = str(result)[:800]
+        return f"execute_shell_commands({_cmd_s}) → {_res_s}"
     # if name == "research_prompt":
     #     query = args.get("query", args.get("topic", ""))
     #     return f"research_prompt('{query}') → найдены источники"
-    return f"{name}({args} -> {result[:1000]})"
+    # Финальный фолбэк: НИКОГДА не осаждаем нелимитированные args/result —
+    # раньше тут args уходил целиком (без среза), что и раздувало tool_trace.
+    _args_s = str(args)
+    if len(_args_s) > 500:
+        _args_s = _args_s[:500] + f"…[+{len(_args_s) - 500} симв]"
+    return f"{name}({_args_s} -> {str(result)[:1000]})"
 
 
 async def _invoke_with_retry(llm, messages, iteration: int, max_retries: int = 3):
@@ -950,7 +982,17 @@ class KnowledgeAgent:
                     # сжатии (_summarize_cut_messages), чтобы факты из трейса
                     # (пути, workspace_id, ссылки) не терялись, а уходили в rolling summary.
                     if row.get("tool_trace"):
-                        kwargs["tool_trace"] = row["tool_trace"]
+                        # ДОПОЛНИТЕЛЬНЫЙ ПРЕДОХРАНИТЕЛЬ на входе из БД.
+                        # Хотя trace не идёт в content (не считается в токенах),
+                        # исторически в chats.tool_trace осели гигантские записи
+                        # (execute_shell_commands с git/grep-выводами по 40k+ симв).
+                        # При загрузке последних N сообщений такой trace держится в
+                        # памяти процесса и подмешивается в chunk при сжатии. Режем
+                        # каждый tool_trace на входе до безопасного лимита, чтобы
+                        # старые раздутые записи из БД не били по контексту.
+                        kwargs["tool_trace"] = _truncate_text(
+                            str(row["tool_trace"]), max_chars=MAX_TRACE_FROM_DB_CHARS
+                        )
                     messages.append(AIMessage(content=row["message_text"], additional_kwargs=kwargs))
                 else:
                     messages.append(HumanMessage(content=row["message_text"], additional_kwargs=kwargs))
@@ -2391,7 +2433,7 @@ class KnowledgeAgent:
                 "action": used_tools[0] if len(used_tools)> 0 else '',
                 "success": True,
                 "files_to_send": files_to_send,
-                "tool_trace": '; '.join(tool_trace) if tool_trace else None,
+                "tool_trace": _truncate_text('; '.join(tool_trace), max_chars=MAX_TRACE_FROM_DB_CHARS) if tool_trace else None,
                 "agent_model": agent_model,
                 "tokens_usage": tokens_usage,
                 "auto_title": auto_title

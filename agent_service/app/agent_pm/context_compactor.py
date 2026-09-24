@@ -48,8 +48,21 @@ logger = logging.getLogger(__name__)
 
 # --- дефолты (перекрываются аргументами вызова) ----------------------------
 TOKEN_SOFT_LIMIT = 90_000   # порог по iter_in (факт от модели), НЕ аппроксимация
-KEEP_LAST_PAIRS  = 5        # сколько последних пар AIMessage+ToolMessage оставить дословно
+KEEP_LAST_PAIRS  = 3        # сколько последних пар AIMessage+ToolMessage оставить дословно
 COMPACT_MARKER   = "\U0001F5DC СЖАТЫЙ КОНТЕКСТ ИТЕРАЦИЙ"  # 🗜, метка для дедупликации
+
+# Вариант C, часть B: даже СВЕЖАЯ пара (внутри keep_last) разрешается к сжатию,
+# если её суммарный tool-результат тяжелее этого порога. Иначе один жадный вызов
+# (analyze_image / shell с гигантским stdout / дамп из execute_python_code),
+# попав в keep_last, навсегда держит iter_in выше лимита — компактор режет старьё
+# по 2 сообщения, а слон остаётся, и на след. итерации снова перебор.
+HEAVY_PAIR_CHARS = 6_000    # длина content ToolMessage(ов) пары, при которой она "тяжёлая"
+
+# Вариант C, часть п.1 (пост-проход): даже если тяжёлая пара не подлежит удалению
+# (последняя пара / осталась в keep_last и LLM-сжатие её не тронуло), её ToolMessage
+# всё равно физически усекается до этого лимита. Это гарантирует, что один жадный
+# вызов не держит iter_in выше лимита бесконечно (баг из логов: 145k не падал).
+MAX_TOOL_MSG_CHARS = 8_000  # верхний предел content ToolMessage при пост-усечении в стеке
 
 
 COMPACTION_PROMPT = """Ты сжимаешь СТАРУЮ часть рабочего лога агента, которая больше не помещается в контекст.
@@ -140,21 +153,55 @@ def _find_tool_result(messages, tool_call_id):
     return ""
 
 
+def _pair_tool_chars(messages, ai_idx):
+    """Суммарная длина content всех ToolMessage, принадлежащих паре ai_idx."""
+    total = 0
+    j = ai_idx + 1
+    while j < len(messages) and getattr(messages[j], "type", "") == "tool":
+        total += len(str(getattr(messages[j], "content", "")))
+        j += 1
+    return total
+
+
 def _select_drop_pairs(messages, keep_last):
     """Возвращает set индексов сообщений, которые надо вырезать.
 
     Полностью повторяет инвариант self._trim_tool_pairs: вырезаем старые
     пары AIMessage(tool_calls)+следующие подряд ToolMessage, кроме последних
     keep_last пар. SystemMessage/HumanMessage не трогаем.
+
+    Вариант C, часть B: пара из последних keep_last ВСЁ РАВНО попадает под
+    срез, если её tool-результат "тяжёлый" (>= HEAVY_PAIR_CHARS). Это ловит
+    случай, когда один жадный вызов раздул контекст и, будучи свежим,
+    защищён keep_last — тогда обычный срез старья по 1-2 пары не спасает.
+    Единственное исключение — САМАЯ последняя пара (её результат агенту
+    нужен прямо сейчас для следующего шага), её не режем никогда.
     """
     ai_tool_indices = [
         i for i, m in enumerate(messages)
         if getattr(m, "tool_calls", None)
     ]
-    if len(ai_tool_indices) <= keep_last:
+    if not ai_tool_indices:
         return set(), []
 
-    to_drop_starts = ai_tool_indices[:-keep_last]
+    # Старьё за пределами keep_last — режем всегда.
+    protected = set(ai_tool_indices[-keep_last:]) if keep_last > 0 else set()
+    # Самую последнюю пару не трогаем ни при каких условиях.
+    last_pair = ai_tool_indices[-1] if ai_tool_indices else None
+
+    to_drop_starts = []
+    for ai_idx in ai_tool_indices:
+        if ai_idx == last_pair:
+            continue
+        if ai_idx in protected:
+            # свежая пара: режем только если она "тяжёлая"
+            if _pair_tool_chars(messages, ai_idx) < HEAVY_PAIR_CHARS:
+                continue
+        to_drop_starts.append(ai_idx)
+
+    if not to_drop_starts:
+        return set(), []
+
     drop_set = set()
     ordered = []
     for ai_idx in to_drop_starts:
@@ -166,6 +213,51 @@ def _select_drop_pairs(messages, keep_last):
             ordered.append(j)
             j += 1
     return drop_set, ordered
+
+
+def _truncate_heavy_tool_messages(messages, *, max_chars=MAX_TOOL_MSG_CHARS, keep_last_pair=True):
+    """П.1 варианта C: физически усекает content тяжёлых ToolMessage прямо в стеке.
+
+    Срабатывает НЕЗАВИСИМО от удаления старых пар: даже если резать нечего
+    или LLM-сжатие упало, тяжёлые тела в keep_last всё равно урежутся. Это гарантирует,
+    что один жадный вызов (shell/analyze_image/код) не держит iter_in выше лимита
+    бесконечно (баг из логов: 145k не падал после сжатия).
+
+    tool_call_id / структура сообщения НЕ трогаются — меняется только content.
+    Последняя пара (её результат нужен агенту прямо сейчас) по умолчанию защищена.
+
+    Возвращает (messages, n_truncated, saved_chars).
+    """
+    ai_tool_indices = [i for i, m in enumerate(messages) if getattr(m, "tool_calls", None)]
+    protected_tool_ids = set()
+    if keep_last_pair and ai_tool_indices:
+        last_ai = ai_tool_indices[-1]
+        j = last_ai + 1
+        while j < len(messages) and getattr(messages[j], "type", "") == "tool":
+            protected_tool_ids.add(id(messages[j]))
+            j += 1
+    n_trunc = 0
+    saved = 0
+    for m in messages:
+        if getattr(m, "type", "") != "tool":
+            continue
+        if id(m) in protected_tool_ids:
+            continue
+        content = getattr(m, "content", None)
+        if not isinstance(content, str) or len(content) <= max_chars:
+            continue
+        orig = len(content)
+        head = max_chars // 2
+        tail = max_chars - head
+        cut = orig - max_chars
+        m.content = (
+            content[:head]
+            + f"\n\n... [tool-результат усечён компактором, пропущено {cut} симв] ...\n\n"
+            + content[-tail:]
+        )
+        n_trunc += 1
+        saved += cut
+    return messages, n_trunc, saved
 
 
 async def compact_messages(
@@ -194,6 +286,15 @@ async def compact_messages(
     """
     drop_set, ordered = _select_drop_pairs(messages, keep_last)
     if not drop_set:
+        # Удалять старьё нечего, но тяжёлые тела в свежих парах могут
+        # держать iter_in выше лимита. Физически усекаем их (П.1).
+        messages, n_tr, saved = _truncate_heavy_tool_messages(messages)
+        if n_tr:
+            logger.info(
+                f"[compactor] старьё резать нечего, но усекли {n_tr} тяжёлых tool-результатов "
+                f"(~{saved} симв освобождено)"
+            )
+            return messages, {"compacted": True, "dropped": 0, "pairs": 0, "truncated": n_tr}
         return messages, {"compacted": False, "dropped": 0, "pairs": 0}
 
     # Текст для сжатия — по порядку следования вырезаемых сообщений.
@@ -232,12 +333,18 @@ async def compact_messages(
     if not inserted:  # подстраховка (не должно случиться)
         new_messages.insert(0, compact_msg)
 
+    # П.1 варианта C: после удаления старья добиваем тяжёлые tool-тела,
+    # оставшиеся в свежих парах (кроме самой последней).
+    new_messages, n_tr, saved_tr = _truncate_heavy_tool_messages(new_messages)
+
     dropped = len(drop_set)
     pairs = len(ordered) and sum(
         1 for i in ordered if getattr(messages[i], "tool_calls", None)
     )
     logger.info(
         f"[compactor] стек сжат: было {len(messages)} → стало {len(new_messages)} "
-        f"(вырезано {dropped} сообщений, ~{pairs} пар), конспект {len(summary_text)} симв."
+        f"(вырезано {dropped} сообщений, ~{pairs} пар, "
+        f"усечено тяжёлых tool-тел {n_tr} на ~{saved_tr} симв), "
+        f"конспект {len(summary_text)} симв."
     )
-    return new_messages, {"compacted": True, "dropped": dropped, "pairs": pairs}
+    return new_messages, {"compacted": True, "dropped": dropped, "pairs": pairs, "truncated": n_tr}

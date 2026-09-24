@@ -581,6 +581,13 @@ class AutoProcessor:
 # ================================================================
 MAX_STDOUT_CHARS = 2000  # Настройте максимальную длину (например, 2000 символов)
 
+# Предохранитель против жадных тулов (Вариант C, часть A): максимальный размер
+# тела ЛЮБОГО ToolMessage перед добавлением в стек агента. Один вызов, вернувший
+# десятки тысяч символов (shell/analyze_image/search_internet), иначе раздувает
+# input_tokens так, что реактивный компактор не успевает (свежая пара в keep_last).
+# ~8000 символов ≈ 2.5-3k токенов — достаточно чтобы модель "увидела" суть.
+MAX_TOOL_MSG_CHARS = int(os.getenv("MAX_TOOL_MSG_CHARS", "8000"))
+
 def _truncate_text(text: str, max_chars: int = MAX_STDOUT_CHARS) -> str:
     """Обрезает текст, если он превышает лимит, добавляя плашку с указанием перерасхода."""
     if not isinstance(text, str) or len(text) <= max_chars:
@@ -2263,6 +2270,15 @@ class KnowledgeAgent:
                             content = f"Ошибка инструмента: {tr}"
                         else:
                             content = content_for_message
+
+                        # ── ПРЕДОХРАНИТЕЛЬ (Вариант C, часть A): универсальная обрезка ──
+                        # execute_python_code уже режет stdout/stderr выше, но ЛЮБОЙ
+                        # другой тул (execute_shell_commands, analyze_image,
+                        # search_internet, git-выводы) кладёт content целиком.
+                        # Один жадный вызов раздувает стек до потолка и in-loop
+                        # компактор не спасает, т.к. свежая пара защищена keep_last.
+                        # Поэтому усекаем тело ЛЮБОГО tool-результата на входе в стек.
+                        content = _truncate_text(content, max_chars=MAX_TOOL_MSG_CHARS)
 
                         messages.append(ToolMessage(content=content, tool_call_id=tc["id"]))
 

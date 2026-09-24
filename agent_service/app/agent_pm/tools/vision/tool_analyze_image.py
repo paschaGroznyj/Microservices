@@ -248,6 +248,20 @@ def make_analyze_image_tool(agent, images: list[dict] | None = None,
     log.info("analyze_image: agent_model=%s → vision-модель '%s'",
              agent_model, vision_key)
 
+    # Цепочка vision-кандидатов: начинаем с выбранной модели, затем
+    # остальные — чтобы пережить случай, когда конкретный бэкенд cloud.ru
+    # временно/постоянно не принимает image_url (ModelArts.81001).
+    _vision_order = [vision_key, "universal", "designer", "coder"]
+    _seen: set = set()
+    vision_candidates: list = []
+    for _k in _vision_order:
+        if _k in _seen:
+            continue
+        _seen.add(_k)
+        _m = agent.AGENT_MODELS.get(_k)
+        if _m is not None:
+            vision_candidates.append((_k, _m))
+
     # Краткая опись картинок для подсказки модели в docstring не вставить (он статичен),
     # поэтому кладём в имена — модель видит их из текста сообщения ([IMAGE #N: ...]).
     n_images = len(images)
@@ -316,18 +330,34 @@ def make_analyze_image_tool(agent, images: list[dict] | None = None,
 
         async def _run_vision(data_uri: str, label: str) -> str:
             """Один прогон vision-модели по data_uri, возврат текста/ошибки."""
-            try:
-                msg = HumanMessage(content=[
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": data_uri}},
-                ])
-                resp = await vision_llm.ainvoke([msg])
-                content = resp.content if hasattr(resp, "content") else str(resp)
-                log.info("analyze_image: обработана картинка %s", label)
-                return content
-            except Exception as e:
-                log.error("analyze_image failed (%s): %s", label, e, exc_info=True)
-                return f"Ошибка анализа изображения ({label}): {e}"
+            msg = HumanMessage(content=[
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": data_uri}},
+            ])
+            last_err = None
+            for _k, _model in vision_candidates:
+                try:
+                    resp = await _model.ainvoke([msg])
+                    content = resp.content if hasattr(resp, "content") else str(resp)
+                    log.info("analyze_image: обработана картинка %s (vision-модель '%s')", label, _k)
+                    return content
+                except Exception as e:
+                    last_err = e
+                    _es = str(e).lower()
+                    _vision_unsupported = (
+                        "image_url" in _es
+                        or "unsupported content type" in _es
+                        or "only supported type" in _es
+                        or "modelarts.81001" in _es
+                    )
+                    if _vision_unsupported:
+                        log.warning("analyze_image: модель '%s' не поддержала vision (%s), пробую следующую", _k, label)
+                        continue
+                    # Не-vision ошибка (сеть/503/таймаут) — тоже пробуем следующую модель.
+                    log.warning("analyze_image: модель '%s' упала (%s): %s, пробую следующую", _k, label, e)
+                    continue
+            log.error("analyze_image failed (%s): все vision-модели отказали: %s", label, last_err, exc_info=True)
+            return f"Ошибка анализа изображения ({label}): ни одна vision-модель провайдера не приняла картинку. Последняя ошибка: {last_err}"
 
         # ── Источник 1: image_key из хранилища generated_images ──────────
         if keys:

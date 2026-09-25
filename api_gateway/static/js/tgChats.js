@@ -39,6 +39,7 @@
 
   const DEFAULTS = {
     system_prompt: '',
+    agent_name: '',
     agent_model: 'designer',
     selected_tools: ['internet', 'content'],
     trigger_mode: 'orchestrator',
@@ -88,6 +89,7 @@
     _form = {
       chat_id: chat.chat_id,
       system_prompt: s.system_prompt || '',
+      agent_name: s.agent_name || '',
       agent_model: s.agent_model || DEFAULTS.agent_model,
       selected_tools: s.selected_tools || DEFAULTS.selected_tools,
       trigger_mode: s.trigger_mode || DEFAULTS.trigger_mode,
@@ -138,6 +140,7 @@
             '<div class="tgc-row-main">' +
               '<span class="tgc-cid">' + c.chat_id + '</span>' +
               '<span class="tgc-badge tgc-badge--' + (c.chat_type || 'private') + '">' + (c.chat_type === 'group' ? 'группа' : 'личка') + '</span>' +
+              (s.agent_name ? '<span class="tgc-aname">' + s.agent_name + '</span>' : '') +
               (mdl ? '<span class="tgc-model" style="color:' + mdl.accent + '">' + mdl.svg + ' ' + mdl.label + '</span>' : '') +
             '</div>' +
             '<div class="tgc-row-actions">' +
@@ -176,6 +179,10 @@
           '<span class="tgc-field-label">Chat ID</span>' +
           '<input class="tgc-input" id="tgc-chatid" type="text" placeholder="-1004313379449 или 123456789" value="' + _form.chat_id + '"' + (_editing ? ' disabled' : '') + '/>' +
           '<span class="tgc-field-hint">Минус \u2192 группа, без минуса \u2192 личка</span>' +
+        '</div>' +
+        '<div class="tgc-field">' +
+          '<span class="tgc-field-label">Имя агента</span>' +
+          '<input class="tgc-input" id="tgc-agentname" type="text" placeholder="Напр. CatchPM (пусто = дефолтный ассистент)" value=' + "'" + _form.agent_name + "'" + '/>' +
         '</div>' +
         ddToggle('Модель', modelDisplay(), modelContent, 'tgc-dd-model') +
         ddToggle('Инструменты', toolsDisplay(), toolsContent, 'tgc-dd-tools') +
@@ -265,6 +272,8 @@
     if (proEl) proEl.addEventListener('change', function (e) { _form.proactive_enabled = e.target.checked; });
     var prEl = _mount.querySelector('#tgc-prompt');
     if (prEl) prEl.addEventListener('input', function (e) { _form.system_prompt = e.target.value; });
+    var anEl = _mount.querySelector('#tgc-agentname');
+    if (anEl) anEl.addEventListener('input', function (e) { _form.agent_name = e.target.value; });
 
     var saveBtn = _mount.querySelector('#tgc-save');
     if (saveBtn) saveBtn.addEventListener('click', onSave);
@@ -283,6 +292,7 @@
   async function onSave() {
     var payload = {
       system_prompt: _form.system_prompt,
+      agent_name: _form.agent_name,
       agent_model: _form.agent_model,
       selected_tools: _form.selected_tools,
       trigger_mode: _form.trigger_mode,

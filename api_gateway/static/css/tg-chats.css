@@ -79,3 +79,32 @@
 .tgc-panel.open .tgc-panel-chevron{transform:rotate(180deg)}
 .tgc-panel-pop{overflow:hidden;max-height:0;opacity:0;transform:translateY(-6px);transition:max-height .3s ease,opacity .2s ease,transform .2s ease,margin-top .2s ease;margin-top:0}
 .tgc-panel.open .tgc-panel-pop{max-height:2000px;opacity:1;transform:translateY(0);margin-top:10px;overflow:visible}
+
+/* --- Light theme readability overrides (dark theme untouched) --- */
+[data-theme="light"] .tgc-cid{color:#1f2023}
+[data-theme="light"] .tgc-form-title{color:#1f2023}
+[data-theme="light"] .tgc-field-label{color:#3c4043;font-weight:600}
+[data-theme="light"] .tgc-field-hint{color:#5f6368;opacity:1}
+[data-theme="light"] .tgc-input,
+[data-theme="light"] .tgc-textarea{color:#1f2023;background:#fff;border-color:rgba(0,0,0,.14)}
+[data-theme="light"] .tgc-input::placeholder,
+[data-theme="light"] .tgc-textarea::placeholder{color:#9aa0a6}
+[data-theme="light"] .tgc-dd-toggle{color:#1f2023}
+[data-theme="light"] .tgc-dd-value{color:#3c4043}
+[data-theme="light"] .tgc-opt{color:#3c4043}
+[data-theme="light"] .tgc-opt--on{color:#1f2023}
+[data-theme="light"] .tgc-topt{color:#3c4043}
+[data-theme="light"] .tgc-topt--on{color:#1f2023}
+[data-theme="light"] .tgc-model{color:#5f6368}
+[data-theme="light"] .tgc-aname{color:#3c4043}
+[data-theme="light"] .tgc-check{color:#1f2023}
+[data-theme="light"] .tgc-btn{color:#5f6368}
+[data-theme="light"] .tgc-btn:hover{color:#1f2023}
+[data-theme="light"] .tgc-cancel{color:#5f6368}
+[data-theme="light"] .tgc-cancel:hover{color:#1f2023}
+[data-theme="light"] .tgc-panel-toggle{color:#1f2023}
+[data-theme="light"] .tgc-panel-count{color:#3c4043}
+[data-theme="light"] .tgc-empty{color:#5f6368}
+
+/* agent name pill */
+.tgc-aname{font-size:11px;color:var(--text-muted,#9aa0a6);font-style:italic}

@@ -194,6 +194,7 @@ class TgChatIn(BaseModel):
     added_by_user_id: int | None = None
     # Опционально: настройки, применяемые сразу при встраивании (из CatchPM UI).
     system_prompt: str | None = None
+    agent_name: str | None = None
     agent_model: str | None = None
     selected_tools: list | None = None
     trigger_mode: str | None = None
@@ -226,6 +227,7 @@ async def tg_add_chat(body: TgChatIn):
     settings_fields = {
         k: v for k, v in {
             "system_prompt": body.system_prompt,
+            "agent_name": body.agent_name,
             "agent_model": body.agent_model,
             "selected_tools": body.selected_tools,
             "trigger_mode": body.trigger_mode,

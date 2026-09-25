@@ -644,6 +644,7 @@ async def get_permissions(request: Request):
 class TgChatUpsert(BaseModel):
     chat_id: str
     system_prompt: Optional[str] = None
+    agent_name: Optional[str] = None
     agent_model: Optional[str] = None
     selected_tools: Optional[list] = None
     trigger_mode: Optional[str] = None
@@ -653,6 +654,7 @@ class TgChatUpsert(BaseModel):
 
 class TgSettingsUpdate(BaseModel):
     system_prompt: Optional[str] = None
+    agent_name: Optional[str] = None
     agent_model: Optional[str] = None
     selected_tools: Optional[list] = None
     trigger_mode: Optional[str] = None

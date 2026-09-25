@@ -151,7 +151,7 @@ class TelegramDB:
                            s.orchestrator_context_n, s.proactive_enabled
                     FROM telegram_chats c
                     LEFT JOIN telegram_chat_settings s ON s.chat_id = c.chat_id
-                    WHERE c.is_active = TRUE AND c.added_by_user_id = 
+                    WHERE c.is_active = TRUE AND c.added_by_user_id = $1
                     ORDER BY c.created_at DESC
                 """, user_id)
             else:

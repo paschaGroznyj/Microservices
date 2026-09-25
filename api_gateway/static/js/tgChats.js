@@ -200,6 +200,7 @@
       '</div>';
 
     bindEvents();
+    updatePanelCount();
   }
 
   function bindEvents() {
@@ -306,14 +307,32 @@
     }
   }
 
+  function updatePanelCount() {
+    var cnt = document.getElementById('tgc-panel-count');
+    if (cnt) cnt.textContent = _chats.length ? String(_chats.length) : '';
+  }
+
+  function wirePanel() {
+    var panel = document.getElementById('tgc-panel');
+    var toggle = document.getElementById('tgc-panel-toggle');
+    if (!panel || !toggle || toggle.dataset.wired) return;
+    toggle.dataset.wired = '1';
+    toggle.addEventListener('click', function () {
+      var open = panel.classList.toggle('open');
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+  }
+
   async function init() {
     _mount = document.getElementById('tg-chats-mount');
     var section = document.getElementById('tg-chats-section');
     if (!_mount || !section) return;
     section.style.display = '';
+    wirePanel();
     resetForm();
     await loadChats();
     render();
+    updatePanelCount();
   }
 
   window.TgChats = { init: init, reload: async function () { await loadChats(); render(); } };

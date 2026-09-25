@@ -26,7 +26,7 @@ from .core.config import (
     PORT_PARSERS_SERVICE, get_role
 )
 from .core.settings import TOOLS_SETTINGS, UNIVERSAL_TOOLS
-from .prompts.summary_prompt import SUMMARIZE_CUT_PROMPT
+from .prompts.summary_prompt import SUMMARIZE_CUT_PROMPT, TOOL_TRACE_SUMMARY_PROMPT
 from .prompts.system_prompt import SYSTEM_PROMPT, SCIENTIFIC_RESEARCH_MODULE
 from .title_generator import generate_chat_title, is_first_turn
 
@@ -595,6 +595,15 @@ MAX_TOOL_MSG_CHARS = int(os.getenv("MAX_TOOL_MSG_CHARS", "8000"))
 # chunk при сжатии. Режем каждый trace на входе из БД до этого лимита.
 MAX_TRACE_FROM_DB_CHARS = int(os.getenv("MAX_TRACE_FROM_DB_CHARS", "2500"))
 
+# Порог (в символах) для LLM-сжатия tool_trace НА ВЫХОДЕ из запроса.
+# Если сырой trace текущего хода длиннее — гоним его через основную модель
+# (TOOL_TRACE_SUMMARY_PROMPT) и в БД кладём компактную md-таблицу-сводку,
+# а не сырой лог. Короткие trace сохраняем как есть (не тратим LLM-вызов).
+TRACE_SUMMARY_THRESHOLD = int(os.getenv("TRACE_SUMMARY_THRESHOLD", "6000"))
+# Жёсткий аварийный предел на входе из БД (на случай исторических записей,
+# сохранённых до включения LLM-сжатия). Только страховка от аномалий.
+MAX_TRACE_HARD_CHARS = int(os.getenv("MAX_TRACE_HARD_CHARS", "12000"))
+
 def _truncate_text(text: str, max_chars: int = MAX_STDOUT_CHARS) -> str:
     """Обрезает текст, если он превышает лимит, добавляя плашку с указанием перерасхода."""
     if not isinstance(text, str) or len(text) <= max_chars:
@@ -982,16 +991,13 @@ class KnowledgeAgent:
                     # сжатии (_summarize_cut_messages), чтобы факты из трейса
                     # (пути, workspace_id, ссылки) не терялись, а уходили в rolling summary.
                     if row.get("tool_trace"):
-                        # ДОПОЛНИТЕЛЬНЫЙ ПРЕДОХРАНИТЕЛЬ на входе из БД.
-                        # Хотя trace не идёт в content (не считается в токенах),
-                        # исторически в chats.tool_trace осели гигантские записи
-                        # (execute_shell_commands с git/grep-выводами по 40k+ симв).
-                        # При загрузке последних N сообщений такой trace держится в
-                        # памяти процесса и подмешивается в chunk при сжатии. Режем
-                        # каждый tool_trace на входе до безопасного лимита, чтобы
-                        # старые раздутые записи из БД не били по контексту.
+                        # trace сжимается ТЕПЕРЬ НА ВЫХОДЕ из запроса (LLM-сводка,
+                        # см. _summarize_tool_trace). Здесь на входе — только мягкая
+                        # аварийная страховка от исторических записей, сохранённых
+                        # до включения LLM-сжатия (огромные сырые логи). Нормальные
+                        # (уже сжатые) trace проходят без изменений.
                         kwargs["tool_trace"] = _truncate_text(
-                            str(row["tool_trace"]), max_chars=MAX_TRACE_FROM_DB_CHARS
+                            str(row["tool_trace"]), max_chars=MAX_TRACE_HARD_CHARS
                         )
                     messages.append(AIMessage(content=row["message_text"], additional_kwargs=kwargs))
                 else:
@@ -1599,6 +1605,30 @@ class KnowledgeAgent:
             )
             return await self._lite_ainvoke(messages)
         return await model.ainvoke(messages)
+
+    async def _summarize_tool_trace(self, raw_trace: str) -> str:
+        """LLM-сжатие сырого tool_trace ОДНОГО запроса в компактную md-таблицу.
+
+        Вызывается на выходе из run_agent, если сырой trace длиннее
+        TRACE_SUMMARY_THRESHOLD. Использует основную модель агента
+        (_main_ainvoke) и TOOL_TRACE_SUMMARY_PROMPT. Fail-open: при любой
+        ошибке / пустом ответе деградируем на _truncate_text, чтобы падение
+        LLM никогда не роняло сохранение сообщения.
+        """
+        try:
+            prompt = TOOL_TRACE_SUMMARY_PROMPT.format(raw_trace=raw_trace)
+            resp = await self._main_ainvoke([HumanMessage(content=prompt)])
+            summary = (getattr(resp, "content", "") or "").strip()
+            if summary:
+                logging.info(
+                    f"[trace-summary] сырой trace {len(raw_trace)} симв → "
+                    f"сводка {len(summary)} симв"
+                )
+                return summary
+            logging.warning("[trace-summary] пустой ответ модели, деградирую на обрезку")
+        except Exception as e:
+            logging.error(f"[trace-summary] ошибка LLM-сжатия trace: {e}, деградирую на обрезку")
+        return _truncate_text(raw_trace, max_chars=MAX_TRACE_FROM_DB_CHARS)
 
     async def _summarize_cut_messages(
         self,
@@ -2426,6 +2456,19 @@ class KnowledgeAgent:
                         logging.info(f"[title] chat={chat_id} сгенерирован заголовок: {auto_title!r}")
             except Exception as e:
                 logging.error(f"[title] ошибка автозаголовка chat={chat_id}: {e}")
+
+            # Сжатие tool_trace ЗДЕСЬ И СЕЙЧАС (на выходе из запроса).
+            # Сырой trace текущего хода: если длиннее порога — гоним через
+            # основную модель в компактную md-таблицу (артефакты сохраняются),
+            # иначе кладём как есть. В БД больше НЕ ложатся сырые простыни.
+            trace_out = None
+            if tool_trace:
+                raw_trace = '; '.join(tool_trace)
+                if len(raw_trace) > TRACE_SUMMARY_THRESHOLD:
+                    trace_out = await self._summarize_tool_trace(raw_trace)
+                else:
+                    trace_out = raw_trace
+
             return {
                 "input": user_input,
                 "message": final_response,
@@ -2433,7 +2476,7 @@ class KnowledgeAgent:
                 "action": used_tools[0] if len(used_tools)> 0 else '',
                 "success": True,
                 "files_to_send": files_to_send,
-                "tool_trace": _truncate_text('; '.join(tool_trace), max_chars=MAX_TRACE_FROM_DB_CHARS) if tool_trace else None,
+                "tool_trace": trace_out,
                 "agent_model": agent_model,
                 "tokens_usage": tokens_usage,
                 "auto_title": auto_title

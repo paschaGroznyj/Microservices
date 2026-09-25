@@ -395,6 +395,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     tg_addressed = bool(payload.get("addressed", False))
     tg_target_username = payload.get("target_username")
     tg_sad = bool(payload.get("sad_followup", False))
+    tg_custom_prompt = payload.get("custom_prompt")
 
 
     if is_from_bot or user_id == -1:
@@ -418,12 +419,18 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
         from agent_pm.telegram.tg_integration import (
             build_tg_prefix, DEFAULT_TG_MODEL,
             build_initiation_prompt, build_sad_followup_prompt,
+            build_custom_trigger_prompt,
         )
         _chat_type = "group" if str(chat_id).startswith("-") else "private"
         if tg_initiated:
             # Проактив: текст задачи агент генерит из промпта инициации/грусти.
             if tg_sad:
                 message = build_sad_followup_prompt(tg_target_username)
+            elif tg_custom_prompt and tg_custom_prompt.strip():
+                message = build_custom_trigger_prompt(
+                    tg_custom_prompt, tg_target_username,
+                    chat_type=_chat_type, addressed=tg_addressed,
+                )
             else:
                 message = build_initiation_prompt(
                     tg_slot or "poke", tg_target_username,

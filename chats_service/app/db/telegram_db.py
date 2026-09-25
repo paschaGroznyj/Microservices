@@ -85,6 +85,31 @@ class TelegramDB:
                 );
                 CREATE INDEX IF NOT EXISTS ix_tg_members_chat
                     ON telegram_chat_members(chat_id);
+
+                -- Индивидуальные проактивные триггеры per-chat:
+                --   kind='recurring' -> регулярный (time_msk + days_of_week)
+                --   kind='once'      -> разовый по дате (time_msk + trigger_date)
+                CREATE TABLE IF NOT EXISTS telegram_triggers (
+                    id             SERIAL PRIMARY KEY,
+                    chat_id        TEXT NOT NULL
+                                   REFERENCES telegram_chats(chat_id) ON DELETE CASCADE,
+                    added_by_user_id BIGINT,
+                    kind           TEXT NOT NULL DEFAULT 'recurring', -- 'recurring' | 'once'
+                    title          TEXT,                 -- ярлык для UI
+                    time_msk       TEXT NOT NULL,        -- 'HH:MM' по МСК
+                    days_of_week   INT[],                -- recurring: [1..7] пн..вс; NULL/[] = все дни
+                    trigger_date   DATE,                 -- once: конкретная дата
+                    prompt         TEXT,                 -- индивидуальный промпт триггера (NULL = дефолт)
+                    addressed      BOOLEAN NOT NULL DEFAULT FALSE, -- TRUE=адресный рандомному, FALSE=broadcast
+                    is_active      BOOLEAN NOT NULL DEFAULT TRUE,
+                    last_fired_at  TIMESTAMPTZ,          -- защита от повторного выстрела
+                    created_at     TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                    updated_at     TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS ix_tg_triggers_chat
+                    ON telegram_triggers(chat_id);
+                CREATE INDEX IF NOT EXISTS ix_tg_triggers_scan
+                    ON telegram_triggers(is_active, time_msk);
             """)
 
             # мягкая миграция для уже существующих БД
@@ -274,3 +299,106 @@ class TelegramDB:
                 WHERE c.is_active = TRUE AND s.proactive_enabled = TRUE
             """)
         return [dict(r) for r in rows]
+
+
+    # ─── Индивидуальные триггеры (telegram_triggers) ───
+
+    async def list_triggers(self, chat_id: str) -> list[dict]:
+        """Все триггеры чата (активные и нет) — для UI."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT id, chat_id, added_by_user_id, kind, title,
+                       time_msk, days_of_week, trigger_date, prompt,
+                       addressed, is_active, last_fired_at, created_at, updated_at
+                FROM telegram_triggers
+                WHERE chat_id = $1
+                ORDER BY kind, time_msk
+            """, chat_id)
+        return [dict(r) for r in rows]
+
+    async def create_trigger(self, chat_id: str, added_by_user_id: int | None,
+                             kind: str, time_msk: str,
+                             title: str | None = None,
+                             days_of_week: list | None = None,
+                             trigger_date=None, prompt: str | None = None,
+                             addressed: bool = False) -> dict:
+        """Создать триггер. days_of_week — список 1..7 или None."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                INSERT INTO telegram_triggers
+                    (chat_id, added_by_user_id, kind, title, time_msk,
+                     days_of_week, trigger_date, prompt, addressed)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                RETURNING id, chat_id, added_by_user_id, kind, title,
+                          time_msk, days_of_week, trigger_date, prompt,
+                          addressed, is_active, last_fired_at, created_at, updated_at
+            """, chat_id, added_by_user_id, kind, title, time_msk,
+                 days_of_week, trigger_date, prompt, addressed)
+        return dict(row)
+
+    async def update_trigger(self, trigger_id: int, **fields) -> dict | None:
+        """Точечное обновление триггера."""
+        allowed = {"kind", "title", "time_msk", "days_of_week",
+                   "trigger_date", "prompt", "addressed", "is_active"}
+        sets, vals = [], []
+        for k, v in fields.items():
+            if k in allowed:
+                vals.append(v)
+                sets.append(f"{k} = ${len(vals)}")
+        if not sets:
+            return None
+        vals.append(trigger_id)
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(f"""
+                UPDATE telegram_triggers
+                SET {', '.join(sets)}, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ${len(vals)}
+                RETURNING id, chat_id, added_by_user_id, kind, title,
+                          time_msk, days_of_week, trigger_date, prompt,
+                          addressed, is_active, last_fired_at, created_at, updated_at
+            """, *vals)
+        return dict(row) if row else None
+
+    async def delete_trigger(self, trigger_id: int) -> bool:
+        async with self.pool.acquire() as conn:
+            res = await conn.execute(
+                "DELETE FROM telegram_triggers WHERE id = $1", trigger_id)
+        return res.endswith("1")
+
+    async def scan_due_triggers(self, hhmm: str, dow: int, today) -> list[dict]:
+        """Тик-сканер: вернуть триггеры, чьё время настало СЕЙЧАС.
+        hhmm='HH:MM' МСК, dow=1..7 (пн..вс), today=date.
+        recurring: совпало время и (days пуст или dow в days).
+        once: совпало время, trigger_date=today, ещё не стрелял (last_fired_at NULL или не сегодня).
+        Только для чатов с proactive_enabled=TRUE.
+        """
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT t.id, t.chat_id, t.kind, t.title, t.time_msk,
+                       t.days_of_week, t.trigger_date, t.prompt, t.addressed,
+                       c.chat_type
+                FROM telegram_triggers t
+                JOIN telegram_chats c ON c.chat_id = t.chat_id
+                JOIN telegram_chat_settings s ON s.chat_id = t.chat_id
+                WHERE t.is_active = TRUE
+                  AND c.is_active = TRUE
+                  AND s.proactive_enabled = TRUE
+                  AND t.time_msk = $1
+                  AND (
+                       (t.kind = 'recurring'
+                          AND (t.days_of_week IS NULL
+                               OR array_length(t.days_of_week, 1) IS NULL
+                               OR $2 = ANY(t.days_of_week)))
+                    OR (t.kind = 'once'
+                          AND t.trigger_date = $3
+                          AND (t.last_fired_at IS NULL
+                               OR t.last_fired_at::date <> $3))
+                  )
+            """, hhmm, dow, today)
+        return [dict(r) for r in rows]
+
+    async def mark_trigger_fired(self, trigger_id: int) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE telegram_triggers SET last_fired_at = CURRENT_TIMESTAMP WHERE id = $1",
+                trigger_id)

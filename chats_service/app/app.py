@@ -301,6 +301,87 @@ async def tg_proactive_chats():
     return {"chats": await tg_db.list_proactive_chats()}
 
 
+class TgTriggerIn(BaseModel):
+    kind: str = "recurring"            # 'recurring' | 'once'
+    title: str | None = None
+    time_msk: str                       # 'HH:MM'
+    days_of_week: list | None = None    # [1..7] пн..вс; None/[] = все дни
+    trigger_date: str | None = None     # 'YYYY-MM-DD' для once
+    prompt: str | None = None
+    addressed: bool = False
+    added_by_user_id: int | None = None
+
+
+class TgTriggerPatch(BaseModel):
+    kind: str | None = None
+    title: str | None = None
+    time_msk: str | None = None
+    days_of_week: list | None = None
+    trigger_date: str | None = None
+    prompt: str | None = None
+    addressed: bool | None = None
+    is_active: bool | None = None
+
+
+@app.get("/tg/triggers/{chat_id}")
+async def tg_list_triggers(chat_id: str):
+    """Список индивидуальных триггеров чата."""
+    return {"triggers": await tg_db.list_triggers(chat_id)}
+
+
+@app.post("/tg/triggers/{chat_id}")
+async def tg_create_trigger(chat_id: str, body: TgTriggerIn):
+    from datetime import date as _date
+    td = None
+    if body.trigger_date:
+        try:
+            td = _date.fromisoformat(body.trigger_date)
+        except ValueError:
+            return {"status": "error", "detail": "bad trigger_date"}
+    row = await tg_db.create_trigger(
+        chat_id, body.added_by_user_id, body.kind, body.time_msk,
+        title=body.title, days_of_week=body.days_of_week,
+        trigger_date=td, prompt=body.prompt, addressed=body.addressed,
+    )
+    return {"status": "ok", "trigger": row}
+
+
+@app.patch("/tg/triggers/{chat_id}/{trigger_id}")
+async def tg_update_trigger(chat_id: str, trigger_id: int, body: TgTriggerPatch):
+    from datetime import date as _date
+    fields = {k: v for k, v in body.dict().items() if v is not None}
+    if "trigger_date" in fields:
+        try:
+            fields["trigger_date"] = _date.fromisoformat(fields["trigger_date"])
+        except ValueError:
+            return {"status": "error", "detail": "bad trigger_date"}
+    row = await tg_db.update_trigger(trigger_id, **fields)
+    return {"status": "ok" if row else "not_found", "trigger": row}
+
+
+@app.delete("/tg/triggers/{chat_id}/{trigger_id}")
+async def tg_delete_trigger(chat_id: str, trigger_id: int):
+    ok = await tg_db.delete_trigger(trigger_id)
+    return {"status": "ok" if ok else "not_found"}
+
+
+@app.get("/tg/triggers_due")
+async def tg_triggers_due(hhmm: str, dow: int, day: str):
+    """Тик-сканер бота: триггеры, чьё время настало СЕЙЧАС (МСК)."""
+    from datetime import date as _date
+    try:
+        today = _date.fromisoformat(day)
+    except ValueError:
+        return {"triggers": []}
+    return {"triggers": await tg_db.scan_due_triggers(hhmm, dow, today)}
+
+
+@app.post("/tg/triggers/{chat_id}/{trigger_id}/fired")
+async def tg_trigger_fired(chat_id: str, trigger_id: int):
+    await tg_db.mark_trigger_fired(trigger_id)
+    return {"status": "ok"}
+
+
 class TgLogIn(BaseModel):
     chat_id: str
     user_id: int | None = None

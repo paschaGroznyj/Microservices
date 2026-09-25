@@ -129,6 +129,8 @@ def _k_fwdgroup(chat_id: int, gid: str) -> str: return f"tg:fwdgroup:{chat_id}:{
 # Единый дедуп ПОСТА: один пост (текст+тег + 1..N фото, альбом или форвард) =
 # один вызов агента. Ключ по media_group_id (альбом) либо message_id (одиночное).
 def _k_post(chat_id: int, pid: str) -> str: return f"tg:post:{chat_id}:{pid}"
+# дедуп срабатывания триггера в конкретную минуту (tid + YYYYMMDDHHMM)
+def _k_trig(tid: int, stamp: str) -> str: return f"tg:trig:{tid}:{stamp}"
 
 
 async def fwd_group_already_seen(chat_id: int, media_group_id) -> bool:
@@ -631,7 +633,8 @@ async def list_proactive_chats() -> list[str]:
 
 
 async def dispatch_initiation(chat_id: int, slot: str, addressed: bool,
-                              target: dict | None, sad_followup: bool = False):
+                              target: dict | None, sad_followup: bool = False,
+                              custom_prompt: str | None = None):
     """
     Шлёт агенту проактивный payload (initiated=True). Текст задачи агент
     сгенерит сам из промпта инициации/грусти (см. tg_integration).
@@ -660,6 +663,8 @@ async def dispatch_initiation(chat_id: int, slot: str, addressed: bool,
         "addressed": addressed,
         "target_username": target_username,
         "sad_followup": sad_followup,
+        # индивидуальный промпт триггера (None -> агент берёт дефолт по slot)
+        "custom_prompt": custom_prompt,
     }
     try:
         async with httpx.AsyncClient(timeout=15) as client:
@@ -742,6 +747,77 @@ async def run_poke_tick():
             log.warning(f"poke fail chat={cid}: {e}")
 
 
+async def fetch_due_triggers(hhmm: str, dow: int, day: str) -> list[dict]:
+    """Спросить chats_service: какие триггеры должны сработать сейчас."""
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(
+                f"{CHATS_SERVICE_URL}/tg/triggers_due",
+                params={"hhmm": hhmm, "dow": dow, "day": day},
+            )
+            resp.raise_for_status()
+            return resp.json().get("triggers", [])
+    except Exception as e:
+        log.warning(f"fetch_due_triggers fail: {e}")
+        return []
+
+
+async def mark_trigger_fired_remote(chat_id: str, trigger_id: int) -> None:
+    """Пометить триггер как сработавший (важно для once)."""
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(
+                f"{CHATS_SERVICE_URL}/tg/triggers/{chat_id}/{trigger_id}/fired")
+    except Exception as e:
+        log.warning(f"mark_trigger_fired fail tid={trigger_id}: {e}")
+
+
+async def run_trigger_scan():
+    """Тик-сканер (раз в минуту): индивидуальные триггеры чатов.
+    Сравнивает текущее время МСК с базой через chats_service.
+    Идемпотентность: Redis-флаг tg:trig:{id}:{YYYYMMDDHHMM} NX EX 120.
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    now = datetime.now(ZoneInfo(TG_TZ))
+    hhmm = now.strftime("%H:%M")
+    dow = now.isoweekday()            # 1..7 пн..вс
+    day = now.strftime("%Y-%m-%d")
+    stamp = now.strftime("%Y%m%d%H%M")
+
+    triggers = await fetch_due_triggers(hhmm, dow, day)
+    if not triggers:
+        return
+    r = await get_redis()
+    log.info(f"[scheduler] trigger-scan {hhmm} dow={dow} due={len(triggers)}")
+    for t in triggers:
+        tid = t["id"]
+        cid = t["chat_id"]
+        try:
+            # дедуп: только первый тик в эту минуту стреляет
+            fresh = await r.set(_k_trig(tid, stamp), "1", nx=True, ex=120)
+            if not fresh:
+                continue
+            addressed = bool(t.get("addressed"))
+            target = None
+            if addressed:
+                target = await get_random_member(int(cid))
+                if not target:
+                    addressed = False   # некого адресовать — шлём broadcast
+            slot = t.get("kind") or "custom"
+            await dispatch_initiation(
+                int(cid), slot=slot, addressed=addressed, target=target,
+                custom_prompt=t.get("prompt"),
+            )
+            # once — помечаем сработавшим, чтобы не повторился
+            if t.get("kind") == "once":
+                await mark_trigger_fired_remote(cid, tid)
+            if addressed and target:
+                asyncio.create_task(_sadness_watch(int(cid), target))
+        except Exception as e:
+            log.warning(f"trigger-scan fire fail tid={tid} chat={cid}: {e}")
+
+
 def _schedule_poke_with_jitter(scheduler):
     """
     Планирует ОДИН запуск run_poke_tick со случайным сдвигом ±TG_POKE_JITTER_MIN
@@ -776,6 +852,12 @@ def build_scheduler():
     sched.add_job(_schedule_poke_with_jitter,
                   CronTrigger(hour=hours, minute=0, timezone=TG_TZ),
                   args=[sched], id="poke-hourly", misfire_grace_time=120)
+    # Тик-сканер индивидуальных триггеров: раз в минуту сверяется с БД.
+    from apscheduler.triggers.interval import IntervalTrigger
+    sched.add_job(run_trigger_scan,
+                  IntervalTrigger(minutes=1, timezone=TG_TZ),
+                  id="trigger-scan", misfire_grace_time=45, max_instances=1,
+                  coalesce=True)
     return sched
 
 

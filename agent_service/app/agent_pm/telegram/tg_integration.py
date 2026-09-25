@@ -237,6 +237,30 @@ def build_initiation_prompt(slot: str, username: str | None, chat_type: str = "g
     )
 
 
+def build_custom_trigger_prompt(custom_prompt: str, username: str | None = None,
+                                chat_type: str = "group", addressed: bool = False) -> str:
+    """Проактив по ИНДИВИДУАЛЬНОМУ триггеру пользователя.
+    custom_prompt задаёт ЧТО делать (текст из настроек триггера). Мы лишь
+    оборачиваем его в проактивный контекст + журнал-хинт.
+    addressed=True -> адресно @username (ждём ответ, работает грусть).
+    """
+    who = username or "участник"
+    head = "[ПРОАКТИВНАЯ ИНИЦИАЦИЯ ПО ТРИГГЕРУ]"
+    if addressed:
+        addr = f"Обратись лично к @{who}. "
+    else:
+        addr = "Пишешь в общий чат без конкретного адресата. "
+    return (
+        f"{head}\n"
+        f"Сработал твой запланированный триггер. Задача от пользователя:\n"
+        f"{custom_prompt.strip()}\n\n"
+        f"{addr}Действуй по задаче выше: можешь использовать свои инструменты "
+        f"(поиск/парсинг/генерация), чтобы собрать нужную инфу к этому моменту. "
+        f"Пиши живо и по делу."
+        f"\n{JOURNAL_HINT}"
+    )
+
+
 def build_sad_followup_prompt(username: str | None) -> str:
     """Агент «грустит»: человек не ответил на инициацию за окно (5-10 мин). Один раз."""
     who = username or "друг"

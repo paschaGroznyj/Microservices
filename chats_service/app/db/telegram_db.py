@@ -138,6 +138,43 @@ class TelegramDB:
             )
         return [r["chat_id"] for r in rows]
 
+    async def list_chats_with_settings(self) -> list[dict]:
+        """Активные встроенные чаты вместе с их настройками — для CatchPM UI."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT c.chat_id, c.chat_type, c.is_active, c.added_by_user_id,
+                       c.created_at, c.updated_at,
+                       s.system_prompt, s.agent_name, s.agent_model,
+                       s.selected_tools, s.trigger_mode,
+                       s.orchestrator_context_n, s.proactive_enabled
+                FROM telegram_chats c
+                LEFT JOIN telegram_chat_settings s ON s.chat_id = c.chat_id
+                WHERE c.is_active = TRUE
+                ORDER BY c.created_at DESC
+            """)
+        out = []
+        for row in rows:
+            d = dict(row)
+            if isinstance(d.get("selected_tools"), str):
+                try:
+                    d["selected_tools"] = json.loads(d["selected_tools"])
+                except Exception:
+                    d["selected_tools"] = None
+            # Собираем настройки во вложенный объект settings (так их ждёт CatchPM UI),
+            # оставляя chat_id/chat_type/is_active в корне.
+            settings = {
+                "system_prompt": d.pop("system_prompt", None),
+                "agent_name": d.pop("agent_name", None),
+                "agent_model": d.pop("agent_model", None),
+                "selected_tools": d.pop("selected_tools", None),
+                "trigger_mode": d.pop("trigger_mode", None),
+                "orchestrator_context_n": d.pop("orchestrator_context_n", None),
+                "proactive_enabled": d.pop("proactive_enabled", None),
+            }
+            d["settings"] = settings
+            out.append(d)
+        return out
+
     async def is_allowed(self, chat_id: str) -> bool:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(

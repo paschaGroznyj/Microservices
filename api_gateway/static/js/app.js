@@ -3633,7 +3633,12 @@ class ChatApp {
         const close   = document.getElementById('profile-close-btn');
         if (!btn || !overlay) return;
 
-        btn.onclick = () => overlay.classList.add('active');
+        btn.onclick = () => {
+            overlay.classList.add('active');
+            // Раздел Telegram-чатов (только админ): подтягиваем свежий список
+            // при каждом открытии профиля — иконки тулов к этому моменту готовы.
+            try { window.TgChats?.init?.(); } catch (_) {}
+        };
         close?.addEventListener('click', () => overlay.classList.remove('active'));
         overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.classList.remove('active'); });
         document.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.classList.remove('active'); });

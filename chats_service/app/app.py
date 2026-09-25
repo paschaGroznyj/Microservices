@@ -192,6 +192,13 @@ async def send_message(chat: ChatMessage):
 class TgChatIn(BaseModel):
     chat_id: str
     added_by_user_id: int | None = None
+    # Опционально: настройки, применяемые сразу при встраивании (из CatchPM UI).
+    system_prompt: str | None = None
+    agent_model: str | None = None
+    selected_tools: list | None = None
+    trigger_mode: str | None = None
+    orchestrator_context_n: int | None = None
+    proactive_enabled: bool | None = None
 
 
 class TgSettingsIn(BaseModel):
@@ -204,11 +211,33 @@ class TgSettingsIn(BaseModel):
     proactive_enabled: bool | None = None
 
 
+@app.get("/tg/chats")
+async def tg_list_chats():
+    """Список встроенных активных чатов вместе с настройками — для CatchPM UI."""
+    return {"chats": await tg_db.list_chats_with_settings()}
+
+
 @app.post("/tg/chats")
 async def tg_add_chat(body: TgChatIn):
     """Встроить телеграм-чат в allow-list (из CatchPM UI). Тип по знаку chat_id."""
     row = await tg_db.upsert_chat(body.chat_id, body.added_by_user_id)
-    return {"status": "ok", "chat": row}
+    # Если вместе с чатом переданы настройки — применяем их сразу.
+    settings_fields = {
+        k: v for k, v in {
+            "system_prompt": body.system_prompt,
+            "agent_model": body.agent_model,
+            "selected_tools": body.selected_tools,
+            "trigger_mode": body.trigger_mode,
+            "orchestrator_context_n": body.orchestrator_context_n,
+            "proactive_enabled": body.proactive_enabled,
+        }.items() if v is not None
+    }
+    settings = None
+    if settings_fields:
+        settings = await tg_db.update_settings(body.chat_id, **settings_fields)
+    else:
+        settings = await tg_db.get_settings(body.chat_id)
+    return {"status": "ok", "chat": row, "settings": settings}
 
 
 @app.delete("/tg/chats/{chat_id}")

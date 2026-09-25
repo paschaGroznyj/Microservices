@@ -138,20 +138,34 @@ class TelegramDB:
             )
         return [r["chat_id"] for r in rows]
 
-    async def list_chats_with_settings(self) -> list[dict]:
-        """Активные встроенные чаты вместе с их настройками — для CatchPM UI."""
+    async def list_chats_with_settings(self, user_id: int | None = None) -> list[dict]:
+        """Активные встроенные чаты вместе с их настройками — для CatchPM UI.
+        Если user_id задан — только чаты этого пользователя."""
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch("""
-                SELECT c.chat_id, c.chat_type, c.is_active, c.added_by_user_id,
-                       c.created_at, c.updated_at,
-                       s.system_prompt, s.agent_name, s.agent_model,
-                       s.selected_tools, s.trigger_mode,
-                       s.orchestrator_context_n, s.proactive_enabled
-                FROM telegram_chats c
-                LEFT JOIN telegram_chat_settings s ON s.chat_id = c.chat_id
-                WHERE c.is_active = TRUE
-                ORDER BY c.created_at DESC
-            """)
+            if user_id is not None:
+                rows = await conn.fetch("""
+                    SELECT c.chat_id, c.chat_type, c.is_active, c.added_by_user_id,
+                           c.created_at, c.updated_at,
+                           s.system_prompt, s.agent_name, s.agent_model,
+                           s.selected_tools, s.trigger_mode,
+                           s.orchestrator_context_n, s.proactive_enabled
+                    FROM telegram_chats c
+                    LEFT JOIN telegram_chat_settings s ON s.chat_id = c.chat_id
+                    WHERE c.is_active = TRUE AND c.added_by_user_id = 
+                    ORDER BY c.created_at DESC
+                """, user_id)
+            else:
+                rows = await conn.fetch("""
+                    SELECT c.chat_id, c.chat_type, c.is_active, c.added_by_user_id,
+                           c.created_at, c.updated_at,
+                           s.system_prompt, s.agent_name, s.agent_model,
+                           s.selected_tools, s.trigger_mode,
+                           s.orchestrator_context_n, s.proactive_enabled
+                    FROM telegram_chats c
+                    LEFT JOIN telegram_chat_settings s ON s.chat_id = c.chat_id
+                    WHERE c.is_active = TRUE
+                    ORDER BY c.created_at DESC
+                """)
         out = []
         for row in rows:
             d = dict(row)

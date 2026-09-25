@@ -1,11 +1,9 @@
-// tgChats.js
-// Раздел «Telegram-чаты» в профиле (#tg-chats-mount). ТОЛЬКО для админов.
-// Встраивание/редактирование per-chat настроек TG-ботов без прямых SQL.
-// Переиспользует список моделей и категорий тулов из tools-panel.js
-// (MP_MODELS / TOOL_CATEGORIES / ICONS) — те же id и иконки.
+// tgChats.js — раздел «Telegram-чаты» в профиле (#tg-chats-mount).
+// Любой юзер видит и редактирует свои добавленные чаты.
+// Переиспользает ICONS из tools-panel.js (window.__TP_ICONS).
 //
-// API (через api_gateway, гейт админа на бэке):
-//   GET    /api/tg/chats               → { chats: [{chat_id, chat_type, is_active, settings:{...}}] }
+// API (через api_gateway):
+//   GET    /api/tg/chats               → { chats: [...] }
 //   POST   /api/tg/chats               → встроить чат + настройки
 //   DELETE /api/tg/chats/{chat_id}     → деактивировать
 //   GET    /api/tg/settings/{chat_id}  → { settings }
@@ -14,17 +12,19 @@
 (function () {
   'use strict';
 
-  // ── Метаданные (дубль минимального набора, чтобы не зависеть от порядка загрузки модулей) ──
   const TG_MODELS = [
-    { id: 'coder',     label: 'Кодер',     accent: '#6366f1' },
-    { id: 'designer',  label: 'Дизайнер',  accent: '#ec4899' },
-    { id: 'universal', label: 'Универсал', accent: '#10b981' },
+    { id: 'coder',     label: 'Кодер',     accent: '#6366f1',
+      svg: '<svg viewBox="0 0 24 24" fill="none" width="16" height="16" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 8 3 12 7 16"/><polyline points="17 8 21 12 17 16"/><line x1="14" y1="4" x2="10" y2="20"/></svg>' },
+    { id: 'designer',  label: 'Дизайнер',  accent: '#ec4899',
+      svg: '<svg viewBox="0 0 24 24" fill="none" width="16" height="16" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 0 1 0 20c-1.657 0-3-1.343-3-3 0-.828.336-1.578.879-2.121A3 3 0 0 0 8 14.5c0-1.657 1.343-3 3-3"/><circle cx="8" cy="9" r="1.2" fill="currentColor" stroke="none"/><circle cx="12" cy="6" r="1.2" fill="currentColor" stroke="none"/><circle cx="16" cy="9" r="1.2" fill="currentColor" stroke="none"/></svg>' },
+    { id: 'universal', label: 'Универсал', accent: '#10b981',
+      svg: '<svg viewBox="0 0 24 24" fill="none" width="16" height="16" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="9" cy="6" r="2" fill="var(--surface,#fff)" stroke="currentColor"/><circle cx="15" cy="12" r="2" fill="var(--surface,#fff)" stroke="currentColor"/><circle cx="9" cy="18" r="2" fill="var(--surface,#fff)" stroke="currentColor"/></svg>' },
   ];
 
   const TG_TOOLS = [
-    { id: 'internet', label: 'Интернет',              icon: 'internet' },
-    { id: 'content',  label: 'Контент и файлы',       icon: 'content'  },
-    { id: 'sessions', label: 'Бортовой журнал агента', icon: 'sessions' },
+    { id: 'internet', label: 'Интернет' },
+    { id: 'content',  label: 'Контент и файлы' },
+    { id: 'sessions', label: 'Бортовой журнал' },
   ];
 
   const TG_TRIGGERS = [
@@ -32,11 +32,9 @@
     { id: 'orchestrator', label: 'Оркестратор'  },
   ];
 
-  // SVG иконки тулов — берём из глобального ICONS, если модуль tools-panel уже загружен,
-  // иначе минимальный фолбэк.
   function toolIcon(iconId) {
     if (window.__TP_ICONS && window.__TP_ICONS[iconId]) return window.__TP_ICONS[iconId];
-    return `<svg viewBox="0 0 24 24" width="17" height="17" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/></svg>`;
+    return '<svg viewBox="0 0 24 24" width="16" height="16" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/></svg>';
   }
 
   const DEFAULTS = {
@@ -49,9 +47,9 @@
   };
 
   let _mount = null;
-  let _chats = [];          // список встроенных чатов
-  let _editing = null;      // chat_id редактируемого или null (режим создания)
-  let _form = { ...DEFAULTS, chat_id: '' };
+  let _chats = [];
+  let _editing = null;
+  let _form = Object.assign({}, DEFAULTS, { chat_id: '' });
 
   async function api(method, path, body) {
     const opts = { method, credentials: 'include', headers: {} };
@@ -63,19 +61,10 @@
     let data = null;
     try { data = await res.json(); } catch (_) {}
     if (!res.ok) {
-      const msg = (data && (data.detail || data.error)) || `HTTP ${res.status}`;
+      const msg = (data && (data.detail || data.error)) || ('HTTP ' + res.status);
       throw new Error(msg);
     }
     return data;
-  }
-
-  async function isAdmin() {
-    try {
-      const res = await fetch('/api/auth/permissions', { credentials: 'include' });
-      if (!res.ok) return false;
-      const { is_admin } = await res.json();
-      return !!is_admin;
-    } catch (_) { return false; }
   }
 
   async function loadChats() {
@@ -88,14 +77,9 @@
     }
   }
 
-  function chatTypeBadge(t) {
-    if (t === 'group') return '<span class="tgc-badge tgc-badge--group">группа</span>';
-    return '<span class="tgc-badge tgc-badge--private">личка</span>';
-  }
-
   function resetForm() {
     _editing = null;
-    _form = { ...DEFAULTS, chat_id: '' };
+    _form = Object.assign({}, DEFAULTS, { chat_id: '' });
   }
 
   function fillFormFrom(chat) {
@@ -105,152 +89,198 @@
       chat_id: chat.chat_id,
       system_prompt: s.system_prompt || '',
       agent_model: s.agent_model || DEFAULTS.agent_model,
-      selected_tools: Array.isArray(s.selected_tools) ? s.selected_tools.slice() : DEFAULTS.selected_tools.slice(),
+      selected_tools: s.selected_tools || DEFAULTS.selected_tools,
       trigger_mode: s.trigger_mode || DEFAULTS.trigger_mode,
-      orchestrator_context_n: s.orchestrator_context_n ?? DEFAULTS.orchestrator_context_n,
-      proactive_enabled: !!s.proactive_enabled,
+      orchestrator_context_n: s.orchestrator_context_n != null ? s.orchestrator_context_n : DEFAULTS.orchestrator_context_n,
+      proactive_enabled: s.proactive_enabled != null ? s.proactive_enabled : DEFAULTS.proactive_enabled,
     };
+  }
+
+  function modelDisplay() {
+    var m = TG_MODELS.find(function (x) { return x.id === _form.agent_model; });
+    return m ? '<span class="tgc-dd-ic" style="color:' + m.accent + '">' + m.svg + '</span>' + m.label : '\u2014';
+  }
+
+  function toolsDisplay() {
+    if (!_form.selected_tools.length) return 'Не выбраны';
+    return _form.selected_tools.map(function (id) {
+      var t = TG_TOOLS.find(function (x) { return x.id === id; });
+      return t ? t.label : id;
+    }).join(', ');
+  }
+
+  function triggerDisplay() {
+    var t = TG_TRIGGERS.find(function (x) { return x.id === _form.trigger_mode; });
+    return t ? t.label : '\u2014';
+  }
+
+  function ddToggle(labelText, valueHtml, contentHtml, sectionId) {
+    return '<div class="tgc-dd" id="' + sectionId + '">' +
+      '<button class="tgc-dd-toggle" type="button">' +
+        '<span class="tgc-dd-label">' + labelText + '</span>' +
+        '<span class="tgc-dd-value">' + valueHtml + '</span>' +
+        '<svg class="tgc-dd-chevron" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+      '</button>' +
+      '<div class="tgc-dd-pop">' + contentHtml + '</div>' +
+    '</div>';
   }
 
   function render() {
     if (!_mount) return;
 
-    const listHtml = _chats.length
-      ? _chats.map(c => `
-        <div class="tgc-row ${_editing === c.chat_id ? 'tgc-row--active' : ''}" data-cid="${c.chat_id}">
-          <div class="tgc-row-main">
-            <span class="tgc-cid">${c.chat_id}</span>
-            ${chatTypeBadge(c.chat_type)}
-            <span class="tgc-model">${(c.settings && c.settings.agent_model) || '—'}</span>
-          </div>
-          <div class="tgc-row-actions">
-            <button class="tgc-btn tgc-edit"  data-cid="${c.chat_id}" title="Редактировать">✎</button>
-            <button class="tgc-btn tgc-del"   data-cid="${c.chat_id}" title="Удалить из allow-list">✕</button>
-          </div>
-        </div>`).join('')
-      : '<div class="tgc-empty">Пока нет встроенных чатов</div>';
+    var listHtml = _chats.length === 0
+      ? '<div class="tgc-empty">Нет встроенных чатов</div>'
+      : _chats.map(function (c) {
+          var s = c.settings || {};
+          var mdl = TG_MODELS.find(function (m) { return m.id === s.agent_model; });
+          var isEditing = _editing === c.chat_id;
+          return '<div class="tgc-row' + (isEditing ? ' tgc-row--active' : '') + '">' +
+            '<div class="tgc-row-main">' +
+              '<span class="tgc-cid">' + c.chat_id + '</span>' +
+              '<span class="tgc-badge tgc-badge--' + (c.chat_type || 'private') + '">' + (c.chat_type === 'group' ? 'группа' : 'личка') + '</span>' +
+              (mdl ? '<span class="tgc-model" style="color:' + mdl.accent + '">' + mdl.svg + ' ' + mdl.label + '</span>' : '') +
+            '</div>' +
+            '<div class="tgc-row-actions">' +
+              '<button class="tgc-btn" data-edit="' + c.chat_id + '" title="Редактировать"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M11 2l3 3-9 9H2v-3l9-9z" stroke-linecap="round" stroke-linejoin="round"/></svg></button>' +
+              '<button class="tgc-btn tgc-del" data-del="' + c.chat_id + '" title="Удалить"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 4h10M6 4V2h4v2M5 4l1 10h4l1-10" stroke-linecap="round" stroke-linejoin="round"/></svg></button>' +
+            '</div>' +
+          '</div>';
+        }).join('');
 
-    const modelsHtml = TG_MODELS.map(m => `
-      <button type="button" class="tgc-chip ${_form.agent_model === m.id ? 'tgc-chip--on' : ''}"
-              data-model="${m.id}" style="--acc:${m.accent}">${m.label}</button>`).join('');
-
-    const toolsHtml = TG_TOOLS.map(t => {
-      const on = _form.selected_tools.includes(t.id);
-      return `<button type="button" class="tgc-tool ${on ? 'tgc-tool--on' : ''}" data-tool="${t.id}">
-                <span class="tgc-tool-ic">${toolIcon(t.icon)}</span>${t.label}
-              </button>`;
+    var modelContent = TG_MODELS.map(function (m) {
+      return '<button class="tgc-opt' + (m.id === _form.agent_model ? ' tgc-opt--on' : '') + '" data-model="' + m.id + '" type="button" style="--tgc-accent:' + m.accent + '">' +
+        '<span class="tgc-opt-ic">' + m.svg + '</span>' +
+        '<span class="tgc-opt-label">' + m.label + '</span>' +
+      '</button>';
     }).join('');
 
-    const trigHtml = TG_TRIGGERS.map(tr => `
-      <button type="button" class="tgc-chip ${_form.trigger_mode === tr.id ? 'tgc-chip--on' : ''}"
-              data-trigger="${tr.id}">${tr.label}</button>`).join('');
+    var toolsContent = TG_TOOLS.map(function (t) {
+      var on = _form.selected_tools.indexOf(t.id) >= 0;
+      return '<button class="tgc-topt' + (on ? ' tgc-topt--on' : '') + '" data-tool="' + t.id + '" type="button">' +
+        '<span class="tgc-topt-ic">' + toolIcon(t.id) + '</span>' +
+        '<span>' + t.label + '</span>' +
+      '</button>';
+    }).join('');
 
-    _mount.innerHTML = `
-      <div class="tgc-wrap">
-        <div class="tgc-list">${listHtml}</div>
+    var triggerContent = TG_TRIGGERS.map(function (t) {
+      return '<button class="tgc-opt' + (t.id === _form.trigger_mode ? ' tgc-opt--on' : '') + '" data-trigger="' + t.id + '" type="button">' +
+        '<span class="tgc-opt-label">' + t.label + '</span>' +
+      '</button>';
+    }).join('');
 
-        <div class="tgc-form">
-          <div class="tgc-form-title">${_editing ? 'Редактирование чата' : 'Встроить новый чат'}</div>
-
-          <label class="tgc-label">Chat ID</label>
-          <input class="tgc-input" id="tgc-chatid" type="text" placeholder="-1004313379449 или 123456789"
-                 value="${_form.chat_id}" ${_editing ? 'disabled' : ''}>
-          <div class="tgc-hint">Минус в начале → группа, без минуса → личка. Тип определится автоматически.</div>
-
-          <label class="tgc-label">Базовая модель</label>
-          <div class="tgc-chips" id="tgc-models">${modelsHtml}</div>
-
-          <label class="tgc-label">Инструменты</label>
-          <div class="tgc-tools" id="tgc-tools">${toolsHtml}</div>
-
-          <label class="tgc-label">Режим триггера</label>
-          <div class="tgc-chips" id="tgc-triggers">${trigHtml}</div>
-
-          <label class="tgc-label">Глубина контекста оркестратора</label>
-          <input class="tgc-input tgc-input--sm" id="tgc-ctxn" type="number" min="1" max="40"
-                 value="${_form.orchestrator_context_n}">
-
-          <label class="tgc-check">
-            <input type="checkbox" id="tgc-proactive" ${_form.proactive_enabled ? 'checked' : ''}>
-            Проактивные триггеры (рассылки, поки)
-          </label>
-
-          <label class="tgc-label">Базовый промпт</label>
-          <textarea class="tgc-textarea" id="tgc-prompt" rows="4"
-                    placeholder="Системный промпт для агента в этом чате...">${_form.system_prompt}</textarea>
-
-          <div class="tgc-actions">
-            <button class="tgc-save" id="tgc-save">${_editing ? 'Сохранить' : 'Встроить чат'}</button>
-            ${_editing ? '<button class="tgc-cancel" id="tgc-cancel">Отмена</button>' : ''}
-          </div>
-          <div class="tgc-msg" id="tgc-msg"></div>
-        </div>
-      </div>`;
+    _mount.innerHTML =
+      '<div class="tgc-list">' + listHtml + '</div>' +
+      '<div class="tgc-form">' +
+        '<div class="tgc-form-title">' + (_editing ? 'Редактирование чата' : 'Встроить новый чат') + '</div>' +
+        '<div class="tgc-field">' +
+          '<span class="tgc-field-label">Chat ID</span>' +
+          '<input class="tgc-input" id="tgc-chatid" type="text" placeholder="-1004313379449 или 123456789" value="' + _form.chat_id + '"' + (_editing ? ' disabled' : '') + '/>' +
+          '<span class="tgc-field-hint">Минус \u2192 группа, без минуса \u2192 личка</span>' +
+        '</div>' +
+        ddToggle('Модель', modelDisplay(), modelContent, 'tgc-dd-model') +
+        ddToggle('Инструменты', toolsDisplay(), toolsContent, 'tgc-dd-tools') +
+        ddToggle('Триггер', triggerDisplay(), triggerContent, 'tgc-dd-trigger') +
+        '<div class="tgc-field">' +
+          '<span class="tgc-field-label">Глубина контекста</span>' +
+          '<input class="tgc-input tgc-input--sm" id="tgc-ctxn" type="number" min="1" max="20" value="' + _form.orchestrator_context_n + '"/>' +
+        '</div>' +
+        '<label class="tgc-check">' +
+          '<input type="checkbox" id="tgc-proactive"' + (_form.proactive_enabled ? ' checked' : '') + '/>' +
+          '<span>Проактивные триггеры</span>' +
+        '</label>' +
+        '<div class="tgc-field">' +
+          '<span class="tgc-field-label">Базовый промпт</span>' +
+          '<textarea class="tgc-textarea" id="tgc-prompt" placeholder="Системный промпт для агента в этом чате...">' + _form.system_prompt + '</textarea>' +
+        '</div>' +
+        '<div class="tgc-actions">' +
+          '<button class="tgc-save" id="tgc-save" type="button">' + (_editing ? 'Сохранить' : 'Встроить чат') + '</button>' +
+          (_editing ? '<button class="tgc-cancel" id="tgc-cancel" type="button">Отмена</button>' : '') +
+        '</div>' +
+        '<div class="tgc-msg" id="tgc-msg"></div>' +
+      '</div>';
 
     bindEvents();
   }
 
   function bindEvents() {
-    // список: edit / delete
-    _mount.querySelectorAll('.tgc-edit').forEach(b => b.addEventListener('click', e => {
-      const cid = e.currentTarget.dataset.cid;
-      const chat = _chats.find(c => String(c.chat_id) === String(cid));
-      if (chat) { fillFormFrom(chat); render(); }
-    }));
-    _mount.querySelectorAll('.tgc-del').forEach(b => b.addEventListener('click', async e => {
-      const cid = e.currentTarget.dataset.cid;
-      if (!confirm(`Удалить чат ${cid} из allow-list бота?`)) return;
-      try {
-        await api('DELETE', `/api/tg/chats/${encodeURIComponent(cid)}`);
-        if (String(_editing) === String(cid)) resetForm();
-        await loadChats();
+    _mount.querySelectorAll('.tgc-dd-toggle').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var dd = btn.closest('.tgc-dd');
+        dd.classList.toggle('tgc-dd--open');
+        _mount.querySelectorAll('.tgc-dd').forEach(function (other) {
+          if (other !== dd) other.classList.remove('tgc-dd--open');
+        });
+      });
+    });
+
+    _mount.querySelectorAll('[data-model]').forEach(function (b) {
+      b.addEventListener('click', function (e) {
+        _form.agent_model = e.currentTarget.dataset.model;
         render();
-      } catch (err) { showMsg('Ошибка удаления: ' + err.message, true); }
-    }));
+      });
+    });
 
-    // model chips
-    _mount.querySelectorAll('[data-model]').forEach(b => b.addEventListener('click', e => {
-      _form.agent_model = e.currentTarget.dataset.model; render();
-    }));
-    // tool toggles
-    _mount.querySelectorAll('[data-tool]').forEach(b => b.addEventListener('click', e => {
-      const id = e.currentTarget.dataset.tool;
-      const i = _form.selected_tools.indexOf(id);
-      if (i >= 0) _form.selected_tools.splice(i, 1); else _form.selected_tools.push(id);
-      render();
-    }));
-    // trigger chips
-    _mount.querySelectorAll('[data-trigger]').forEach(b => b.addEventListener('click', e => {
-      _form.trigger_mode = e.currentTarget.dataset.trigger; render();
-    }));
+    _mount.querySelectorAll('[data-tool]').forEach(function (b) {
+      b.addEventListener('click', function (e) {
+        var id = e.currentTarget.dataset.tool;
+        var i = _form.selected_tools.indexOf(id);
+        if (i >= 0) _form.selected_tools.splice(i, 1); else _form.selected_tools.push(id);
+        render();
+      });
+    });
 
-    // inputs (сохраняем в _form без ререндера, чтобы не терять фокус)
-    const cidEl = _mount.querySelector('#tgc-chatid');
-    if (cidEl) cidEl.addEventListener('input', e => { _form.chat_id = e.target.value.trim(); });
-    const ctxEl = _mount.querySelector('#tgc-ctxn');
-    if (ctxEl) ctxEl.addEventListener('input', e => { _form.orchestrator_context_n = parseInt(e.target.value, 10) || 1; });
-    const proEl = _mount.querySelector('#tgc-proactive');
-    if (proEl) proEl.addEventListener('change', e => { _form.proactive_enabled = e.target.checked; });
-    const prEl = _mount.querySelector('#tgc-prompt');
-    if (prEl) prEl.addEventListener('input', e => { _form.system_prompt = e.target.value; });
+    _mount.querySelectorAll('[data-trigger]').forEach(function (b) {
+      b.addEventListener('click', function (e) {
+        _form.trigger_mode = e.currentTarget.dataset.trigger;
+        render();
+      });
+    });
 
-    // save
-    const saveBtn = _mount.querySelector('#tgc-save');
+    _mount.querySelectorAll('[data-edit]').forEach(function (b) {
+      b.addEventListener('click', function (e) {
+        var cid = e.currentTarget.dataset.edit;
+        var chat = _chats.find(function (c) { return c.chat_id === cid; });
+        if (chat) { fillFormFrom(chat); render(); }
+      });
+    });
+
+    _mount.querySelectorAll('[data-del]').forEach(function (b) {
+      b.addEventListener('click', async function (e) {
+        var cid = e.currentTarget.dataset.del;
+        if (!confirm('Удалить чат ' + cid + '?')) return;
+        try {
+          await api('DELETE', '/api/tg/chats/' + encodeURIComponent(cid));
+          if (_editing === cid) resetForm();
+          await loadChats(); render();
+        } catch (err) { showMsg('Ошибка: ' + err.message, true); }
+      });
+    });
+
+    var cidEl = _mount.querySelector('#tgc-chatid');
+    if (cidEl) cidEl.addEventListener('input', function (e) { _form.chat_id = e.target.value.trim(); });
+    var ctxEl = _mount.querySelector('#tgc-ctxn');
+    if (ctxEl) ctxEl.addEventListener('input', function (e) { _form.orchestrator_context_n = parseInt(e.target.value, 10) || 1; });
+    var proEl = _mount.querySelector('#tgc-proactive');
+    if (proEl) proEl.addEventListener('change', function (e) { _form.proactive_enabled = e.target.checked; });
+    var prEl = _mount.querySelector('#tgc-prompt');
+    if (prEl) prEl.addEventListener('input', function (e) { _form.system_prompt = e.target.value; });
+
+    var saveBtn = _mount.querySelector('#tgc-save');
     if (saveBtn) saveBtn.addEventListener('click', onSave);
-    const cancelBtn = _mount.querySelector('#tgc-cancel');
-    if (cancelBtn) cancelBtn.addEventListener('click', () => { resetForm(); render(); });
+    var cancelBtn = _mount.querySelector('#tgc-cancel');
+    if (cancelBtn) cancelBtn.addEventListener('click', function () { resetForm(); render(); });
   }
 
   function showMsg(text, isErr) {
-    const el = _mount.querySelector('#tgc-msg');
+    var el = _mount.querySelector('#tgc-msg');
     if (!el) return;
     el.textContent = text;
     el.className = 'tgc-msg ' + (isErr ? 'tgc-msg--err' : 'tgc-msg--ok');
-    if (!isErr) setTimeout(() => { if (el) el.textContent = ''; }, 2500);
+    if (!isErr) setTimeout(function () { if (el) el.textContent = ''; }, 2500);
   }
 
   async function onSave() {
-    const payload = {
+    var payload = {
       system_prompt: _form.system_prompt,
       agent_model: _form.agent_model,
       selected_tools: _form.selected_tools,
@@ -260,12 +290,12 @@
     };
     try {
       if (_editing) {
-        await api('POST', `/api/tg/settings/${encodeURIComponent(_editing)}`, payload);
+        await api('POST', '/api/tg/settings/' + encodeURIComponent(_editing), payload);
         showMsg('Настройки сохранены');
       } else {
-        const cid = (_form.chat_id || '').trim();
+        var cid = (_form.chat_id || '').trim();
         if (!cid) { showMsg('Укажи Chat ID', true); return; }
-        await api('POST', '/api/tg/chats', { chat_id: cid, ...payload });
+        await api('POST', '/api/tg/chats', Object.assign({ chat_id: cid }, payload));
         showMsg('Чат встроен');
         resetForm();
       }
@@ -278,20 +308,15 @@
 
   async function init() {
     _mount = document.getElementById('tg-chats-mount');
-    const section = document.getElementById('tg-chats-section');
+    var section = document.getElementById('tg-chats-section');
     if (!_mount || !section) return;
-
-    const admin = await isAdmin();
-    if (!admin) { section.style.display = 'none'; return; }
     section.style.display = '';
-
     resetForm();
     await loadChats();
     render();
   }
 
-  // Публичный хук: перезагрузить при открытии профиля (на случай изменений).
-  window.TgChats = { init, reload: async () => { await loadChats(); render(); } };
+  window.TgChats = { init: init, reload: async function () { await loadChats(); render(); } };
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);

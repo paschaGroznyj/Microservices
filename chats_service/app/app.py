@@ -212,9 +212,10 @@ class TgSettingsIn(BaseModel):
 
 
 @app.get("/tg/chats")
-async def tg_list_chats():
-    """Список встроенных активных чатов вместе с настройками — для CatchPM UI."""
-    return {"chats": await tg_db.list_chats_with_settings()}
+async def tg_list_chats(added_by_user_id: int | None = None):
+    """Список встроенных активных чатов вместе с настройками — для CatchPM UI.
+    Если added_by_user_id задан — только чаты этого пользователя."""
+    return {"chats": await tg_db.list_chats_with_settings(user_id=added_by_user_id)}
 
 
 @app.post("/tg/chats")

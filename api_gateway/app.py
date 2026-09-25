@@ -638,7 +638,7 @@ async def get_permissions(request: Request):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Telegram-чаты: встраивание из CatchPM UI (раздел в профиле, ТОЛЬКО админам).
+# Telegram-чаты: встраивание из CatchPM UI (раздел в профиле, любой юзер видит свои чаты).
 # Прокси в chats_service /tg/*. added_by_user_id проставляется из текущей сессии.
 # ─────────────────────────────────────────────────────────────────────────────
 class TgChatUpsert(BaseModel):
@@ -660,22 +660,22 @@ class TgSettingsUpdate(BaseModel):
     proactive_enabled: Optional[bool] = None
 
 
-async def _require_admin(request: Request):
-    """Гейт: только аутентифицированный админ. Иначе 401/403."""
+async def _require_auth(request: Request):
+    """Гейт: любой аутентифицированный юзер. Иначе 401."""
     user = await get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    if user["username"] not in ADMIN_USERNAMES:
-        raise HTTPException(status_code=403, detail="Admin only")
     return user
 
 
 @app.get("/api/tg/chats")
 async def api_tg_list_chats(request: Request):
-    await _require_admin(request)
+    user = await _require_auth(request)
     chats_url = SERVICES['chats']['url']
     try:
-        resp = await app.state.http_client.get(f"{chats_url}/tg/chats", timeout=10.0)
+        resp = await app.state.http_client.get(
+            f"{chats_url}/tg/chats", params={"added_by_user_id": user["user_id"]}, timeout=10.0
+        )
         return JSONResponse(content=resp.json(), status_code=resp.status_code)
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Chats service dead: {str(e)}")
@@ -683,7 +683,7 @@ async def api_tg_list_chats(request: Request):
 
 @app.post("/api/tg/chats")
 async def api_tg_add_chat(request: Request, body: TgChatUpsert):
-    user = await _require_admin(request)
+    user = await _require_auth(request)
     chats_url = SERVICES['chats']['url']
     payload = body.dict()
     payload["added_by_user_id"] = user["user_id"]
@@ -698,7 +698,7 @@ async def api_tg_add_chat(request: Request, body: TgChatUpsert):
 
 @app.delete("/api/tg/chats/{chat_id}")
 async def api_tg_remove_chat(request: Request, chat_id: str):
-    await _require_admin(request)
+    await _require_auth(request)
     chats_url = SERVICES['chats']['url']
     try:
         resp = await app.state.http_client.delete(
@@ -711,7 +711,7 @@ async def api_tg_remove_chat(request: Request, chat_id: str):
 
 @app.get("/api/tg/settings/{chat_id}")
 async def api_tg_get_settings(request: Request, chat_id: str):
-    await _require_admin(request)
+    await _require_auth(request)
     chats_url = SERVICES['chats']['url']
     try:
         resp = await app.state.http_client.get(
@@ -724,7 +724,7 @@ async def api_tg_get_settings(request: Request, chat_id: str):
 
 @app.post("/api/tg/settings/{chat_id}")
 async def api_tg_set_settings(request: Request, chat_id: str, body: TgSettingsUpdate):
-    await _require_admin(request)
+    await _require_auth(request)
     chats_url = SERVICES['chats']['url']
     try:
         resp = await app.state.http_client.post(

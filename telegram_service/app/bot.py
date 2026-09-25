@@ -91,6 +91,12 @@ TG_POKE_DAILY_TTL  = int(os.environ.get("TG_POKE_DAILY_TTL", "86400"))
 TG_FWD_TTL         = int(os.environ.get("TG_FWD_TTL", "90"))
 # Окно, в течение которого тег-сообщение БЕЗ своего контента ЖДЁТ форвард (сек).
 TG_TAG_TTL         = int(os.environ.get("TG_TAG_TTL", "20"))
+# Сколько ждать форвард, прежде чем ОТВЕТИТЬ на сам тег-вопрос (fallback).
+# Вариант 2: тег кладётся в stash, планируется отложенный ответ через
+# TG_TAG_WAIT сек. Если за это время форвард связался (pop_tag его выдернул) —
+# отложенный ответ тихо выходит. Иначе отвечаем на исходный текст тега.
+# Должно быть < TG_TAG_TTL, чтобы тег ещё был жив в Redis к моменту fallback.
+TG_TAG_WAIT        = int(os.environ.get("TG_TAG_WAIT", "10"))
 
 MAX_FILE_SIZE = 20 * 1024 * 1024
 
@@ -354,6 +360,45 @@ async def pop_tag(chat_id: int) -> dict | None:
     except Exception as e:
         log.warning(f"pop_tag fail chat={chat_id}: {e}")
         return None
+
+
+async def _deferred_tag_answer(chat_id: int, user_id: int, username: str,
+                              tag_text: str):
+    """ВАРИАНТ 2 (fallback по таймауту): тег-вопрос БЕЗ форварда.
+
+    Спим TG_TAG_WAIT сек. Если за это время форвард прилетел — он вызвал
+    handle_incoming_forward -> pop_tag, который ВЫДЕРНУЛ тег из Redis и уже
+    ответил (связка тег↔форвард). Тогда наш pop_tag вернёт None -> тихо
+    выходим (без дубля). Если форварда не было — тег ещё жив, pop_tag его
+    заберёт, и мы отвечаем на ИСХОДНЫЙ тег-вопрос (тег больше не теряется).
+    """
+    try:
+        await asyncio.sleep(TG_TAG_WAIT)
+    except asyncio.CancelledError:
+        return
+    # Атомарно забираем тег: кто первым сделал pop_tag (мы или форвард-ветка) —
+    # тот и обрабатывает. None => форвард уже связал и ответил.
+    waiting = await pop_tag(chat_id)
+    if not waiting:
+        log.info(f"[fwd] deferred tag already linked by forward chat={chat_id}")
+        return
+    text = (waiting.get("text") or tag_text or "").strip()
+    if not text:
+        # голый @-тег без текста и без форварда — отвечать не на что
+        log.info(f"[fwd] deferred bare tag expired w/o forward chat={chat_id}")
+        return
+    log.info(f"[fwd] deferred fallback: answer tag itself chat={chat_id} "
+             f"after {TG_TAG_WAIT}s (no forward)")
+    merged = f"{username}: {text}"
+    try:
+        thinking = await _bot_app.bot.send_message(chat_id, "Думаю...")
+        _thinking_messages[chat_id] = thinking.message_id
+    except Exception as e:
+        log.warning(f"deferred tag thinking fail chat={chat_id}: {e}")
+    try:
+        await dispatch_to_agent(chat_id, user_id, username, merged)
+    except Exception as e:
+        log.warning(f"deferred tag dispatch fail chat={chat_id}: {e}")
 
 
 async def handle_incoming_forward(chat_id: int, msg: Message) -> bool:
@@ -1737,6 +1782,14 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if tagged and not reply_to_bot and _is_signal_tag(stripped_tag):
                 await stash_tag(chat_id, user.id, author, text_for_agent)
                 tag_waits_forward = True
+                # ВАРИАНТ 2: планируем отложенный ответ на сам тег-вопрос.
+                # Если форвард прилетит за TG_TAG_WAIT сек — он выдернет тег
+                # (pop_tag) и ответит связкой, а наш таймер получит None и
+                # тихо выйдет. Иначе через TG_TAG_WAIT отвечаем на исходный
+                # тег — тег больше не теряется.
+                asyncio.create_task(_deferred_tag_answer(
+                    chat_id, user.id, author,
+                    _strip_bot_tag(raw_text, bot_username)[0].strip()))
         if stashed:
             f_author = stashed.get("author") or "источник"
             f_text = (stashed.get("text") or "").strip()
@@ -1768,9 +1821,10 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if raw_text.strip():
         await buffer_push(chat_id, author, raw_text.strip())
 
-    # Голый тег без контента — ЖДЁТ форвард (отложен в stash_tag).
-    # Не отвечаем сейчас: либо следом прилетит форвард и свяжется,
-    # либо тег сгорит по TG_TAG_TTL (тогда ответа на голый тег не будет).
+    # Голый/сигнальный тег без форварда — отложенный ответ (ВАРИАНТ 2).
+    # Мы уже запланировали _deferred_tag_answer: если форвард прилетит за
+    # TG_TAG_WAIT сек — он свяжет тег и ответит связкой; иначе таймер
+    # ответит на сам тег-вопрос. В любом случае тег НЕ теряется.
     if tag_waits_forward:
         return
 

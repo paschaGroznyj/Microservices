@@ -126,6 +126,9 @@ def _k_lastfwd(chat_id: int) -> str:    return f"tg:lastfwd:{chat_id}"
 def _k_lasttag(chat_id: int) -> str:    return f"tg:lasttag:{chat_id}"
 # Дедуп альбома-форварда: первое фото media-group уходит на анализ, остальные — молча.
 def _k_fwdgroup(chat_id: int, gid: str) -> str: return f"tg:fwdgroup:{chat_id}:{gid}"
+# Единый дедуп ПОСТА: один пост (текст+тег + 1..N фото, альбом или форвард) =
+# один вызов агента. Ключ по media_group_id (альбом) либо message_id (одиночное).
+def _k_post(chat_id: int, pid: str) -> str: return f"tg:post:{chat_id}:{pid}"
 
 
 async def fwd_group_already_seen(chat_id: int, media_group_id) -> bool:
@@ -145,6 +148,31 @@ async def fwd_group_already_seen(chat_id: int, media_group_id) -> bool:
         return ok is None
     except Exception as e:
         log.warning(f"fwd_group_already_seen fail chat={chat_id}: {e}")
+        return False
+
+
+async def post_already_dispatched(chat_id: int, msg: Message) -> bool:
+    """Единый guard: True, если по ЭТОМУ ПОСТУ уже был вызов агента.
+
+    Один пост в Telegram может прийти несколькими апдейтами (альбом = N photo-
+    сообщений с общим media_group_id; текст-тег + фото; форвард + связанный тег).
+    Все эти пути вызывают dispatch_to_agent независимо → дубли ответов.
+    Этот guard координирует их по общему ключу поста и пропускает ТОЛЬКО первый.
+
+    Ключ поста:
+      - media_group_id  — для альбома (несколько фото/док одного поста);
+      - message_id      — для одиночного сообщения.
+    SET NX EX: первый вызывающий получает True на set (→ пропускаем dispatch),
+    остальные видят существующий ключ (→ дубль, глушим).
+    """
+    try:
+        gid = getattr(msg, "media_group_id", None)
+        pid = str(gid) if gid else f"m{msg.message_id}"
+        r = await get_redis()
+        ok = await r.set(_k_post(chat_id, pid), "1", nx=True, ex=120)
+        return ok is None
+    except Exception as e:
+        log.warning(f"post_already_dispatched fail chat={chat_id}: {e}")
         return False
 
 
@@ -332,7 +360,29 @@ async def handle_incoming_forward(chat_id: int, msg: Message) -> bool:
     Если перед этим был голый тег (tg:lasttag ещё жив) — связываем
     обратный порядок (тег → форвард): шлём агенту сразу,
     возвращаем True (связали). Иначе стешим форвард и возвращаем False.
+
+    ВАРИАНТ Б (склейка тег↔форвард-альбом): форвард-альбом приходит N кадрами
+    (общий media_group_id), и КАЖДЫЙ кадр без тега попадает сюда. Чтобы тег
+    подхватился ровно ОДИН раз и dispatch был один — на входе ставим единый
+    guard поста. Первый кадр проходит (ставит ключ, связывает тег, шлёт агенту),
+    остальные кадры видят ключ и молча выходят (тег не выдёргивают повторно).
     """
+    # ВАРИАНТ Б: единый per-post guard в САМОМ НАЧАЛЕ (до pop_tag/stash_forward).
+    # Форвард-альбом приходит N кадрами с общим media_group_id, и каждый кадр
+    # без тега залетает сюда. Первый кадр ставит ключ поста и идёт дальше
+    # (свяжет тег, dispatch). Остальные кадры того же альбома видят ключ и молча
+    # выходят — НЕ трогают pop_tag (тег не выдёргивают повторно) и НЕ засоряют
+    # stash_forward. Для одиночного форварда (media_group_id пустой) ключ по
+    # message_id — тоже безопасно, второй апдейт по тому же message_id не придёт.
+    if await post_already_dispatched(chat_id, msg):
+        log.info(f"[post] skip duplicate forward frame (handle_incoming_forward) "
+                 f"chat={chat_id} mid={msg.message_id} gid={msg.media_group_id}")
+        return True
+    # Порядок важен: тег может ещё не прийти (прямой порядок: форвард раньше тега).
+    # Тогда стешим форвард и выходим. NB: guard уже поставлен выше — если следом
+    # прилетит тег в on_text по ЭТОМУ ЖЕ посту, он тоже увидит guard; но тег
+    # приходит ОТДЕЛЬНЫМ апдейтом (свой message_id / без media_group_id форварда),
+    # поэтому его ключ поста другой — коллизии нет.
     waiting = await pop_tag(chat_id)
     if not waiting:
         await stash_forward(chat_id, msg)
@@ -1623,6 +1673,14 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "[Переслано от" not in merged_text:
         merged_text = f"{merged_text}\n{text_for_agent}".strip()
 
+    # Единый guard поста ДО плашки «Думаю...»: если по этому посту (например
+    # альбом с caption-тегом, кадры которого параллельно идут в on_photo)
+    # агент уже вызван из другой точки входа — молча выходим, не оставляя
+    # висящую плашку и не дублируя ответ.
+    if await post_already_dispatched(chat_id, msg):
+        log.info(f"[post] skip duplicate dispatch (on_text) chat={chat_id} mid={msg.message_id} gid={msg.media_group_id}")
+        return
+
     thinking = await msg.reply_text("Думаю...")
     _thinking_messages[chat_id] = thinking.message_id
 
@@ -1723,9 +1781,19 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         approved = tagged or _is_reply_to_bot(msg, bot_username)
         raw_text = stripped or raw_text
         if not approved:
-            # Пересланное фото из другого чата без тега — откладываем в stash,
-            # подхватим при следующем тег-сообщении. Прочее фото без тега — игнор.
-            if msg.forward_origin:
+            # Вариант Б (склейка тег↔форвард-альбом раздельными апдейтами):
+            # если ранее пришёл голый тег и ждёт форвард (tg:lasttag жив), то
+            # это фото-сообщение — тот самый форвард (пересланный альбом ИЛИ
+            # обычное фото, отправленное следом за тегом). Подхватываем через
+            # handle_incoming_forward, который свяжет тег и вызовет агента ОДИН
+            # раз (per-post guard внутри отсекает лишние кадры альбома).
+            has_waiting_tag = False
+            try:
+                r = await get_redis()
+                has_waiting_tag = bool(await r.get(_k_lasttag(chat_id)))
+            except Exception:
+                has_waiting_tag = False
+            if msg.forward_origin or has_waiting_tag:
                 await handle_incoming_forward(chat_id, msg)
             return
 
@@ -1739,6 +1807,14 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Максимум одна картинка из одного пересыла/альбома.
     if await fwd_group_already_seen(chat_id, msg.media_group_id):
         log.info(f"[fwd] skip extra album photo (on_photo) chat={chat_id} gid={msg.media_group_id}")
+        return
+
+    # Единый guard поста (вариант Б): фото-пост с caption-тегом мог параллельно
+    # прийти в on_text (отдельный текст-апдейт с тем же смыслом) или это кадр
+    # альбома, чей брат уже связался в handle_incoming_forward. Первый, кто
+    # дошёл сюда, ставит ключ и дальше dispatch'ит; дубли молча выходят.
+    if await post_already_dispatched(chat_id, msg):
+        log.info(f"[post] skip duplicate dispatch (on_photo) chat={chat_id} mid={msg.message_id} gid={msg.media_group_id}")
         return
 
     fname = f"photo_{photo.file_unique_id}.jpg"

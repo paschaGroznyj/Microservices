@@ -122,6 +122,7 @@ class ChatMessage(BaseModel):
     addressed: bool = False
     target_username: str | None = None
     sad_followup: bool = False
+    custom_prompt: str | None = None
     
 
 @app.on_event("startup")
@@ -173,6 +174,7 @@ async def send_message(chat: ChatMessage):
         "addressed": chat.addressed,
         "target_username": chat.target_username,
         "sad_followup": chat.sad_followup,
+        "custom_prompt": chat.custom_prompt,
     }
     logging.info(message)
     start = time.perf_counter()
@@ -380,6 +382,13 @@ async def tg_triggers_due(hhmm: str, dow: int, day: str):
 async def tg_trigger_fired(chat_id: str, trigger_id: int):
     await tg_db.mark_trigger_fired(trigger_id)
     return {"status": "ok"}
+
+
+@app.get("/tg/trigger/{trigger_id}")
+async def tg_get_trigger(trigger_id: int):
+    """Один триггер по id (для debug-прогона из бота)."""
+    row = await tg_db.get_trigger(trigger_id)
+    return {"trigger": row}
 
 
 class TgLogIn(BaseModel):

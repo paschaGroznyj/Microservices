@@ -1102,12 +1102,17 @@ class DebugTriggerResponse(BaseModel):
 async def debug_trigger(
     slot: str = "poke",
     chat_id: int | None = None,
+    trigger_id: int | None = None,
     token: str = "",
 ):
     """
     Ручной запуск проактивного триггера (для теста, минуя APScheduler).
 
     Параметры (query):
+      trigger_id — id индивидуального триггера из telegram_triggers.
+                   Если задан — читаем триггер из БД и шлём немедленно
+                   с его prompt/addressed (минуя проверку времени/дня).
+                   Имеет ПРИОРИТЕТ над slot.
       slot    — 'morning' | 'lunch' | 'dinner' → broadcast во все proactive-чаты
                 (или в один chat_id, если задан);
                 'poke' → адресный poke рандомному участнику chat_id.
@@ -1116,6 +1121,7 @@ async def debug_trigger(
       token   — TG_DEBUG_TOKEN (должен совпасть с env).
 
     Пример:
+      POST /tg/debug/trigger?trigger_id=3&token=SECRET
       POST /tg/debug/trigger?slot=poke&chat_id=-100123&token=SECRET
       POST /tg/debug/trigger?slot=lunch&token=SECRET
     """
@@ -1123,6 +1129,42 @@ async def debug_trigger(
         raise HTTPException(status_code=404, detail="Not found")
     if token != TG_DEBUG_TOKEN:
         raise HTTPException(status_code=403, detail="Bad debug token")
+
+    # ── Приоритет: прогон конкретного индивидуального триггера по id ──
+    if trigger_id is not None:
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                resp = await client.get(
+                    f"{CHATS_SERVICE_URL}/tg/trigger/{trigger_id}")
+                resp.raise_for_status()
+                trig = resp.json().get("trigger")
+        except Exception as e:
+            return DebugTriggerResponse(ok=False, action="trigger",
+                                        detail=f"fetch fail: {e}")
+        if not trig:
+            raise HTTPException(status_code=404,
+                                detail=f"trigger {trigger_id} not found")
+        cid = trig["chat_id"]
+        if not await is_allowed(int(cid)):
+            raise HTTPException(status_code=400, detail="chat not registered")
+        addressed = bool(trig.get("addressed"))
+        target = None
+        if addressed:
+            target = await get_random_member(int(cid))
+            if not target:
+                addressed = False
+        kind = trig.get("kind") or "custom"
+        await dispatch_initiation(
+            int(cid), slot=kind, addressed=addressed, target=target,
+            custom_prompt=trig.get("prompt"),
+        )
+        if addressed and target:
+            asyncio.create_task(_sadness_watch(int(cid), target))
+        return DebugTriggerResponse(
+            ok=True, action=f"trigger:{trigger_id}",
+            detail=(f"fired trigger {trigger_id} in chat {cid} "
+                    f"(kind={kind}, addressed={addressed}, "
+                    f"prompt={(trig.get('prompt') or '')[:60]!r})"))
 
     slot = (slot or "poke").lower()
 

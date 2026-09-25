@@ -402,3 +402,15 @@ class TelegramDB:
             await conn.execute(
                 "UPDATE telegram_triggers SET last_fired_at = CURRENT_TIMESTAMP WHERE id = $1",
                 trigger_id)
+
+    async def get_trigger(self, trigger_id: int) -> dict | None:
+        """Один триггер по id (для debug-прогона)."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT id, chat_id, added_by_user_id, kind, title,
+                       time_msk, days_of_week, trigger_date, prompt,
+                       addressed, is_active, last_fired_at, created_at, updated_at
+                FROM telegram_triggers
+                WHERE id = $1
+            """, trigger_id)
+        return dict(row) if row else None

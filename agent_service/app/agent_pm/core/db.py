@@ -1796,12 +1796,47 @@ class AgentDB:
             SET summary_text = $2, covered_up_to_id = $3, updated_at = NOW()
         """, chat_id, summary_text, covered_up_to_id)
 
-                
+    # ─── Telegram-триггеры (агент ставит сам через тулу) ───
+    async def create_tg_trigger(self, chat_id: str, added_by_user_id,
+                                kind: str, time_msk: str,
+                                title=None, days_of_week=None,
+                                trigger_date=None, prompt=None,
+                                addressed: bool = False) -> dict:
+        """Создать запись в telegram_triggers (та же БД, что у chats_service).
+        days_of_week — список 1..7 (пн..вс) или None. trigger_date — date для once.
+        Сканер chats_service подхватит запись автоматически (proactive_enabled должен быть TRUE)."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                INSERT INTO telegram_triggers
+                    (chat_id, added_by_user_id, kind, title, time_msk,
+                     days_of_week, trigger_date, prompt, addressed)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                RETURNING id, chat_id, kind, title, time_msk,
+                          days_of_week, trigger_date, prompt, addressed,
+                          is_active, created_at
+            """, chat_id, added_by_user_id, kind, title, time_msk,
+                 days_of_week, trigger_date, prompt, addressed)
+        return dict(row)
 
+    async def list_tg_triggers(self, chat_id: str) -> list[dict]:
+        """Активные триггеры чата — чтобы агент мог посмотреть что уже стоит."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT id, kind, title, time_msk, days_of_week,
+                       trigger_date, prompt, addressed, is_active, last_fired_at
+                FROM telegram_triggers
+                WHERE chat_id = $1 AND is_active = TRUE
+                ORDER BY kind, time_msk
+            """, chat_id)
+        return [dict(r) for r in rows]
 
- 
-
- 
-
-
+    async def deactivate_tg_trigger(self, trigger_id: int, chat_id: str) -> bool:
+        """Мягкое удаление триггера (is_active=FALSE), только в своём чате."""
+        async with self.pool.acquire() as conn:
+            res = await conn.execute("""
+                UPDATE telegram_triggers SET is_active = FALSE,
+                       updated_at = CURRENT_TIMESTAMP
+                WHERE id = $1 AND chat_id = $2
+            """, trigger_id, chat_id)
+        return res.endswith("1")
 

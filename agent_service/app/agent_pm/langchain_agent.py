@@ -1421,6 +1421,11 @@ class KnowledgeAgent:
         # 5. Точка эндпоинта для создания сессии start/end
         from .tools.sessions.tool_session_point import make_session_point_tool
         session_point = make_session_point_tool(agent)
+        # 5.1 Планировщик собственных Telegram-триггеров (агент сам ставит
+        # отложенные само-запуски: recurring/once по МСК). Слушатель
+        # chats_service раз в минуту сканирует telegram_triggers и будит агента.
+        from .tools.telegram.tool_manage_trigger import make_manage_trigger_tool
+        manage_trigger = make_manage_trigger_tool(agent, chat_id, user_id)
         # 6. Тулзы для работы с кодовой базой проекта и песочницы. tree/grep/cat
         from .tools.filesystem.tool_read_codebase import make_filesystem_tools
         fs_tools = make_filesystem_tools(agent)
@@ -1502,6 +1507,7 @@ class KnowledgeAgent:
             search_internet,
             download_text_pdf,
             session_point,
+            manage_trigger,
             send_file_tool,
             send_message_tool,
             work_with_email,

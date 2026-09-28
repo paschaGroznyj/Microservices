@@ -40,6 +40,8 @@ import random
 import re
 import time
 import uuid
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import httpx
 import redis.asyncio as aioredis
@@ -137,6 +139,7 @@ def _k_fwdgroup(chat_id: int, gid: str) -> str: return f"tg:fwdgroup:{chat_id}:{
 def _k_post(chat_id: int, pid: str) -> str: return f"tg:post:{chat_id}:{pid}"
 # дедуп срабатывания триггера в конкретную минуту (tid + YYYYMMDDHHMM)
 def _k_trig(tid: int, stamp: str) -> str: return f"tg:trig:{tid}:{stamp}"
+def _k_alarmedit(chat_id: int, uid: int) -> str: return f"tg:alarmedit:{chat_id}:{uid}"
 
 
 async def fwd_group_already_seen(chat_id: int, media_group_id) -> bool:
@@ -792,16 +795,16 @@ async def run_poke_tick():
             log.warning(f"poke fail chat={cid}: {e}")
 
 
-async def fetch_due_triggers(hhmm: str, dow: int, day: str) -> list[dict]:
+async def fetch_due_triggers(now_utc: datetime) -> list[dict]:
     """Спросить chats_service: какие триггеры должны сработать сейчас."""
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.get(
                 f"{CHATS_SERVICE_URL}/tg/triggers_due",
-                params={"hhmm": hhmm, "dow": dow, "day": day},
+                params={"utc_ts": now_utc.astimezone(timezone.utc).isoformat()},
             )
             resp.raise_for_status()
-            return resp.json().get("triggers", [])
+            return resp.json().get("triggers", []) or []
     except Exception as e:
         log.warning(f"fetch_due_triggers fail: {e}")
         return []
@@ -819,27 +822,21 @@ async def mark_trigger_fired_remote(chat_id: str, trigger_id: int) -> None:
 
 async def run_trigger_scan():
     """Тик-сканер (раз в минуту): индивидуальные триггеры чатов.
-    Сравнивает текущее время МСК с базой через chats_service.
+    Сравнивает текущее UTC-время с локальной timezone каждого чата в БД.
     Идемпотентность: Redis-флаг tg:trig:{id}:{YYYYMMDDHHMM} NX EX 120.
     """
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-    now = datetime.now(ZoneInfo(TG_TZ))
-    hhmm = now.strftime("%H:%M")
-    dow = now.isoweekday()            # 1..7 пн..вс
-    day = now.strftime("%Y-%m-%d")
-    stamp = now.strftime("%Y%m%d%H%M")
+    now_utc = datetime.now(timezone.utc)
+    stamp = now_utc.strftime("%Y%m%d%H%M")
 
-    triggers = await fetch_due_triggers(hhmm, dow, day)
+    triggers = await fetch_due_triggers(now_utc)
     if not triggers:
         return
     r = await get_redis()
-    log.info(f"[scheduler] trigger-scan {hhmm} dow={dow} due={len(triggers)}")
+    log.info(f"[scheduler] trigger-scan utc={now_utc.isoformat()} due={len(triggers)}")
     for t in triggers:
         tid = t["id"]
         cid = t["chat_id"]
         try:
-            # дедуп: только первый тик в эту минуту стреляет
             fresh = await r.set(_k_trig(tid, stamp), "1", nx=True, ex=120)
             if not fresh:
                 continue
@@ -848,13 +845,12 @@ async def run_trigger_scan():
             if addressed:
                 target = await get_random_member(int(cid))
                 if not target:
-                    addressed = False   # некого адресовать — шлём broadcast
-            slot = t.get("kind") or "custom"
+                    addressed = False
+            slot = t.get("preset_key") or t.get("kind") or "custom"
             await dispatch_initiation(
                 int(cid), slot=slot, addressed=addressed, target=target,
                 custom_prompt=t.get("prompt"),
             )
-            # once — помечаем сработавшим, чтобы не повторился
             if t.get("kind") == "once":
                 await mark_trigger_fired_remote(cid, tid)
             if addressed and target:
@@ -1501,6 +1497,7 @@ def _menu_root(settings: dict | None = None) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("Модель", callback_data="tg:menu:model")],
         [InlineKeyboardButton("Инструменты", callback_data="tg:menu:tools")],
         [InlineKeyboardButton("Триггер", callback_data="tg:menu:trigger")],
+        [InlineKeyboardButton("Будильники", callback_data="tg:menu:alarms")],
         [InlineKeyboardButton(poke_label, callback_data="tg:toggle:proactive")],
         [InlineKeyboardButton("Закрыть", callback_data="tg:close")],
     ])
@@ -1534,6 +1531,113 @@ def _menu_trigger(current) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton(f"{mark}{t}", callback_data=f"tg:set:trigger:{t}")])
     rows.append([InlineKeyboardButton("‹ Назад", callback_data="tg:menu:root")])
     return InlineKeyboardMarkup(rows)
+
+
+ALARM_PRESETS = [
+    ("breakfast", "Завтрак", "09:00"),
+    ("lunch", "Обед", "13:00"),
+    ("dinner", "Ужин", "18:00"),
+]
+ALARM_TITLES = {k: t for k, t, _ in ALARM_PRESETS}
+
+async def fetch_chat_triggers(chat_id: int) -> list[dict]:
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{CHATS_SERVICE_URL}/tg/triggers/{chat_id}")
+            resp.raise_for_status()
+            return resp.json().get("triggers", []) or []
+    except Exception as e:
+        log.error(f"fetch_chat_triggers fail chat={chat_id}: {e}")
+        return []
+
+
+def _find_alarm_trigger(triggers: list[dict], preset_key: str) -> dict | None:
+    for t in triggers or []:
+        if t.get("preset_key") == preset_key:
+            return t
+    return None
+
+
+async def ensure_alarm_trigger(chat_id: int, uid: int, preset_key: str) -> dict | None:
+    triggers = await fetch_chat_triggers(chat_id)
+    hit = _find_alarm_trigger(triggers, preset_key)
+    if hit:
+        return hit
+    title = ALARM_TITLES.get(preset_key, preset_key)
+    default_time = next((tm for k, _, tm in ALARM_PRESETS if k == preset_key), "09:00")
+    body = {
+        "kind": "recurring",
+        "title": title,
+        "time_msk": default_time,
+        "days_of_week": [],
+        "prompt": None,
+        "preset_key": preset_key,
+        "addressed": False,
+        "added_by_user_id": uid,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.post(f"{CHATS_SERVICE_URL}/tg/triggers/{chat_id}", json=body)
+            resp.raise_for_status()
+            return resp.json().get("trigger")
+    except Exception as e:
+        log.error(f"ensure_alarm_trigger fail chat={chat_id} preset={preset_key}: {e}")
+        return None
+
+
+async def patch_trigger(chat_id: int, trigger_id: int, patch: dict) -> dict | None:
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.patch(f"{CHATS_SERVICE_URL}/tg/triggers/{chat_id}/{trigger_id}", json=patch)
+            resp.raise_for_status()
+            return resp.json().get("trigger")
+    except Exception as e:
+        log.error(f"patch_trigger fail chat={chat_id} trigger={trigger_id}: {e}")
+        return None
+
+
+def _menu_alarms(settings: dict | None, triggers: list[dict]) -> InlineKeyboardMarkup:
+    settings = settings or {}
+    enabled = settings.get("proactive_enabled")
+    if enabled is None:
+        enabled = True
+    rows = []
+    rows.append([InlineKeyboardButton(("🔔 Будильники: вкл" if enabled else "🔕 Будильники: выкл"), callback_data="tg:toggle:proactive")])
+    rows.append([InlineKeyboardButton(f"TZ: {(settings.get('timezone_name') or TG_TZ)}", callback_data="tg:alarm:tz")])
+    for preset_key, title, default_time in ALARM_PRESETS:
+        trig = _find_alarm_trigger(triggers, preset_key)
+        active = bool(trig and trig.get("is_active", True))
+        hhmm = (trig or {}).get("time_msk") or default_time
+        label = f"{'✅' if active else '⏸'} {title}: {hhmm}"
+        rows.append([InlineKeyboardButton(label, callback_data=f"tg:alarm:open:{preset_key}")])
+    rows.append([InlineKeyboardButton("‹ Назад", callback_data="tg:menu:root")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _menu_alarm_detail(preset_key: str, trig: dict | None) -> InlineKeyboardMarkup:
+    title = ALARM_TITLES.get(preset_key, preset_key)
+    active = bool((trig or {}).get("is_active", True))
+    rows = [
+        [InlineKeyboardButton(f"Время: {((trig or {}).get('time_msk') or '09:00')}", callback_data=f"tg:alarm:edit_time:{preset_key}")],
+        [InlineKeyboardButton("Промпт", callback_data=f"tg:alarm:edit_prompt:{preset_key}")],
+        [InlineKeyboardButton(("Выключить" if active else "Включить"), callback_data=f"tg:alarm:toggle:{preset_key}")],
+        [InlineKeyboardButton("Сбросить промпт", callback_data=f"tg:alarm:clear_prompt:{preset_key}")],
+        [InlineKeyboardButton(f"‹ К будильникам ({title})", callback_data="tg:menu:alarms")],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+async def _refresh_alarms(query, chat_id: int):
+    settings = await get_chat_settings(chat_id)
+    triggers = await fetch_chat_triggers(chat_id)
+    try:
+        await query.edit_message_text(
+            _settings_summary(settings),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_menu_alarms(settings, triggers),
+        )
+    except Exception:
+        pass
 
 
 async def save_chat_settings(chat_id: int, patch: dict) -> bool:
@@ -1614,6 +1718,117 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await _refresh(lambda s: _menu_root(s))
         return
+    if data == "tg:menu:alarms":
+        await query.answer()
+        await _refresh_alarms(query, chat_id)
+        return
+
+    if data == "tg:alarm:tz":
+        uid = query.from_user.id if query.from_user else 0
+        try:
+            r = await get_redis()
+            await r.set(_k_alarmedit(chat_id, uid), "tz", ex=300)
+        except Exception:
+            pass
+        await query.answer()
+        try:
+            await query.edit_message_text(
+                "Отправь timezone чата в формате IANA, например: <code>Europe/Moscow</code> или <code>Europe/Samara</code>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("‹ К будильникам", callback_data="tg:menu:alarms")]]),
+            )
+        except Exception:
+            pass
+        return
+
+    if data.startswith("tg:alarm:open:"):
+        preset_key = data.rsplit(":", 1)[-1]
+        uid = query.from_user.id if query.from_user else 0
+        trig = await ensure_alarm_trigger(chat_id, uid, preset_key)
+        await query.answer()
+        try:
+            await query.edit_message_text(
+                _settings_summary(await get_chat_settings(chat_id)),
+                parse_mode=ParseMode.HTML,
+                reply_markup=_menu_alarm_detail(preset_key, trig),
+            )
+        except Exception:
+            pass
+        return
+
+    if data.startswith("tg:alarm:edit_time:"):
+        preset_key = data.rsplit(":", 1)[-1]
+        uid = query.from_user.id if query.from_user else 0
+        try:
+            r = await get_redis()
+            await r.set(_k_alarmedit(chat_id, uid), f"time:{preset_key}", ex=300)
+        except Exception:
+            pass
+        await query.answer()
+        try:
+            await query.edit_message_text(
+                f"Отправь новое время для {ALARM_TITLES.get(preset_key, preset_key)} в формате <code>HH:MM</code> по локальной timezone чата.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("‹ Назад", callback_data=f"tg:alarm:open:{preset_key}")]]),
+            )
+        except Exception:
+            pass
+        return
+
+    if data.startswith("tg:alarm:edit_prompt:"):
+        preset_key = data.rsplit(":", 1)[-1]
+        uid = query.from_user.id if query.from_user else 0
+        try:
+            r = await get_redis()
+            await r.set(_k_alarmedit(chat_id, uid), f"prompt:{preset_key}", ex=300)
+        except Exception:
+            pass
+        await query.answer()
+        try:
+            await query.edit_message_text(
+                f"Отправь новый промпт для {ALARM_TITLES.get(preset_key, preset_key)}. Он будет выполнен как custom_prompt триггера.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("‹ Назад", callback_data=f"tg:alarm:open:{preset_key}")]]),
+            )
+        except Exception:
+            pass
+        return
+
+    if data.startswith("tg:alarm:toggle:"):
+        preset_key = data.rsplit(":", 1)[-1]
+        uid = query.from_user.id if query.from_user else 0
+        trig = await ensure_alarm_trigger(chat_id, uid, preset_key)
+        cur = bool((trig or {}).get("is_active", True))
+        ok = trig and await patch_trigger(chat_id, int(trig["id"]), {"is_active": (not cur)})
+        await query.answer("Сохранено" if ok else "Ошибка")
+        trig = await ensure_alarm_trigger(chat_id, uid, preset_key)
+        try:
+            await query.edit_message_text(
+                _settings_summary(await get_chat_settings(chat_id)),
+                parse_mode=ParseMode.HTML,
+                reply_markup=_menu_alarm_detail(preset_key, trig),
+            )
+        except Exception:
+            pass
+        return
+
+    if data.startswith("tg:alarm:clear_prompt:"):
+        preset_key = data.rsplit(":", 1)[-1]
+        uid = query.from_user.id if query.from_user else 0
+        trig = await ensure_alarm_trigger(chat_id, uid, preset_key)
+        ok = trig and await patch_trigger(chat_id, int(trig["id"]), {"prompt": ""})
+        await query.answer("Промпт очищен" if ok else "Ошибка")
+        trig = await ensure_alarm_trigger(chat_id, uid, preset_key)
+        try:
+            await query.edit_message_text(
+                _settings_summary(await get_chat_settings(chat_id)),
+                parse_mode=ParseMode.HTML,
+                reply_markup=_menu_alarm_detail(preset_key, trig),
+            )
+        except Exception:
+            pass
+        return
+
     if data == "tg:menu:name":
         # ставим флаг ожидания ввода имени от нажавшего юзера
         uid = query.from_user.id if query.from_user else 0

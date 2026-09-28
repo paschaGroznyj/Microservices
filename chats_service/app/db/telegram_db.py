@@ -13,6 +13,8 @@ chat_id телеграмы храним как TEXT (совпадает с chats
 import asyncio
 import json
 import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import asyncpg
 
@@ -69,6 +71,7 @@ class TelegramDB:
                     trigger_mode   TEXT NOT NULL DEFAULT 'orchestrator', -- 'mention' | 'orchestrator' | 'every'
                     orchestrator_context_n INT NOT NULL DEFAULT 6,
                     proactive_enabled BOOLEAN NOT NULL DEFAULT TRUE, -- будильники (завтрак/обед/ужин)
+                    timezone_name  TEXT NOT NULL DEFAULT 'Europe/Moscow', -- локальная TZ чата
                     updated_at     TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
                 );
 
@@ -100,6 +103,7 @@ class TelegramDB:
                     days_of_week   INT[],                -- recurring: [1..7] пн..вс; NULL/[] = все дни
                     trigger_date   DATE,                 -- once: конкретная дата
                     prompt         TEXT,                 -- индивидуальный промпт триггера (NULL = дефолт)
+                    preset_key     TEXT,                 -- системный будильник: breakfast|lunch|dinner
                     addressed      BOOLEAN NOT NULL DEFAULT FALSE, -- TRUE=адресный рандомному, FALSE=broadcast
                     is_active      BOOLEAN NOT NULL DEFAULT TRUE,
                     last_fired_at  TIMESTAMPTZ,          -- защита от повторного выстрела
@@ -111,6 +115,19 @@ class TelegramDB:
                 CREATE INDEX IF NOT EXISTS ix_tg_triggers_scan
                     ON telegram_triggers(is_active, time_msk);
             """)
+
+            await conn.execute(
+                "ALTER TABLE telegram_chat_settings "
+                "ADD COLUMN IF NOT EXISTS timezone_name TEXT NOT NULL DEFAULT 'Europe/Moscow';"
+            )
+            await conn.execute(
+                "ALTER TABLE telegram_triggers "
+                "ADD COLUMN IF NOT EXISTS preset_key TEXT;"
+            )
+            await conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_tg_triggers_chat_preset "
+                "ON telegram_triggers(chat_id, preset_key) WHERE preset_key IS NOT NULL;"
+            )
 
             # мягкая миграция для уже существующих БД
             await conn.execute(
@@ -146,6 +163,7 @@ class TelegramDB:
                     INSERT INTO telegram_chat_settings (chat_id)
                     VALUES ($1) ON CONFLICT (chat_id) DO NOTHING;
                 """, chat_id)
+        await self.ensure_default_alarm_triggers(chat_id, added_by_user_id)
         return dict(row)
 
     async def deactivate_chat(self, chat_id: str) -> bool:
@@ -173,7 +191,7 @@ class TelegramDB:
                            c.created_at, c.updated_at,
                            s.system_prompt, s.agent_name, s.agent_model,
                            s.selected_tools, s.trigger_mode,
-                           s.orchestrator_context_n, s.proactive_enabled
+                           s.orchestrator_context_n, s.proactive_enabled, s.timezone_name
                     FROM telegram_chats c
                     LEFT JOIN telegram_chat_settings s ON s.chat_id = c.chat_id
                     WHERE c.is_active = TRUE AND c.added_by_user_id = $1
@@ -185,7 +203,7 @@ class TelegramDB:
                            c.created_at, c.updated_at,
                            s.system_prompt, s.agent_name, s.agent_model,
                            s.selected_tools, s.trigger_mode,
-                           s.orchestrator_context_n, s.proactive_enabled
+                           s.orchestrator_context_n, s.proactive_enabled, s.timezone_name
                     FROM telegram_chats c
                     LEFT JOIN telegram_chat_settings s ON s.chat_id = c.chat_id
                     WHERE c.is_active = TRUE
@@ -209,6 +227,7 @@ class TelegramDB:
                 "trigger_mode": d.pop("trigger_mode", None),
                 "orchestrator_context_n": d.pop("orchestrator_context_n", None),
                 "proactive_enabled": d.pop("proactive_enabled", None),
+                "timezone_name": d.pop("timezone_name", None),
             }
             d["settings"] = settings
             out.append(d)
@@ -241,7 +260,7 @@ class TelegramDB:
     async def update_settings(self, chat_id: str, **fields) -> dict | None:
         """Точечное обновление настроек. admin-тулы запрещены на уровне колл-сайта."""
         allowed = {"system_prompt", "agent_name", "agent_model", "selected_tools",
-                   "trigger_mode", "orchestrator_context_n", "proactive_enabled"}
+                   "trigger_mode", "orchestrator_context_n", "proactive_enabled", "timezone_name"}
         sets, args, i = [], [], 1
         for k, v in fields.items():
             if k not in allowed:
@@ -308,7 +327,7 @@ class TelegramDB:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("""
                 SELECT id, chat_id, added_by_user_id, kind, title,
-                       time_msk, days_of_week, trigger_date, prompt,
+                       time_msk, days_of_week, trigger_date, prompt, preset_key,
                        addressed, is_active, last_fired_at, created_at, updated_at
                 FROM telegram_triggers
                 WHERE chat_id = $1
@@ -321,6 +340,7 @@ class TelegramDB:
                              title: str | None = None,
                              days_of_week: list | None = None,
                              trigger_date=None, prompt: str | None = None,
+                             preset_key: str | None = None,
                              addressed: bool = False) -> dict:
         """Создать триггер. days_of_week — список 1..7 или None."""
         async with self.pool.acquire() as conn:
@@ -330,7 +350,7 @@ class TelegramDB:
                      days_of_week, trigger_date, prompt, addressed)
                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
                 RETURNING id, chat_id, added_by_user_id, kind, title,
-                          time_msk, days_of_week, trigger_date, prompt,
+                          time_msk, days_of_week, trigger_date, prompt, preset_key,
                           addressed, is_active, last_fired_at, created_at, updated_at
             """, chat_id, added_by_user_id, kind, title, time_msk,
                  days_of_week, trigger_date, prompt, addressed)
@@ -354,7 +374,7 @@ class TelegramDB:
                 SET {', '.join(sets)}, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ${len(vals)}
                 RETURNING id, chat_id, added_by_user_id, kind, title,
-                          time_msk, days_of_week, trigger_date, prompt,
+                          time_msk, days_of_week, trigger_date, prompt, preset_key,
                           addressed, is_active, last_fired_at, created_at, updated_at
             """, *vals)
         return dict(row) if row else None
@@ -365,37 +385,52 @@ class TelegramDB:
                 "DELETE FROM telegram_triggers WHERE id = $1", trigger_id)
         return res.endswith("1")
 
-    async def scan_due_triggers(self, hhmm: str, dow: int, today) -> list[dict]:
-        """Тик-сканер: вернуть триггеры, чьё время настало СЕЙЧАС.
-        hhmm='HH:MM' МСК, dow=1..7 (пн..вс), today=date.
-        recurring: совпало время и (days пуст или dow в days).
-        once: совпало время, trigger_date=today, ещё не стрелял (last_fired_at NULL или не сегодня).
-        Только для чатов с proactive_enabled=TRUE.
+    async def scan_due_triggers(self, now_utc: datetime) -> list[dict]:
+        """Тик-сканер: вернуть триггеры, чьё локальное время настало СЕЙЧАС.
+        now_utc — текущий UTC timestamp; локальное время считается через timezone_name чата.
         """
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("""
                 SELECT t.id, t.chat_id, t.kind, t.title, t.time_msk,
-                       t.days_of_week, t.trigger_date, t.prompt, t.addressed,
-                       c.chat_type
+                       t.days_of_week, t.trigger_date, t.prompt, t.preset_key,
+                       t.addressed, c.chat_type, s.timezone_name, t.last_fired_at
                 FROM telegram_triggers t
                 JOIN telegram_chats c ON c.chat_id = t.chat_id
                 JOIN telegram_chat_settings s ON s.chat_id = t.chat_id
                 WHERE t.is_active = TRUE
                   AND c.is_active = TRUE
                   AND s.proactive_enabled = TRUE
-                  AND t.time_msk = $1
-                  AND (
-                       (t.kind = 'recurring'
-                          AND (t.days_of_week IS NULL
-                               OR array_length(t.days_of_week, 1) IS NULL
-                               OR $2 = ANY(t.days_of_week)))
-                    OR (t.kind = 'once'
-                          AND t.trigger_date = $3
-                          AND (t.last_fired_at IS NULL
-                               OR t.last_fired_at::date <> $3))
-                  )
-            """, hhmm, dow, today)
-        return [dict(r) for r in rows]
+            """)
+        due = []
+        for row in rows:
+            d = dict(row)
+            tz_name = d.get("timezone_name") or "Europe/Moscow"
+            try:
+                local_now = now_utc.astimezone(ZoneInfo(tz_name))
+            except Exception:
+                local_now = now_utc.astimezone(ZoneInfo("Europe/Moscow"))
+                d["timezone_name"] = "Europe/Moscow"
+            if d.get("time_msk") != local_now.strftime("%H:%M"):
+                continue
+            if d.get("kind") == "recurring":
+                days = d.get("days_of_week") or []
+                if days and local_now.isoweekday() not in days:
+                    continue
+            elif d.get("kind") == "once":
+                if d.get("trigger_date") != local_now.date():
+                    continue
+                lf = d.get("last_fired_at")
+                if lf is not None:
+                    try:
+                        if lf.astimezone(local_now.tzinfo).date() == local_now.date():
+                            continue
+                    except Exception:
+                        if lf.date() == local_now.date():
+                            continue
+            else:
+                continue
+            due.append(d)
+        return due
 
     async def mark_trigger_fired(self, trigger_id: int) -> None:
         async with self.pool.acquire() as conn:
@@ -408,9 +443,66 @@ class TelegramDB:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow("""
                 SELECT id, chat_id, added_by_user_id, kind, title,
-                       time_msk, days_of_week, trigger_date, prompt,
+                       time_msk, days_of_week, trigger_date, prompt, preset_key,
                        addressed, is_active, last_fired_at, created_at, updated_at
                 FROM telegram_triggers
                 WHERE id = $1
             """, trigger_id)
         return dict(row) if row else None
+
+    async def ensure_default_alarm_triggers(self, chat_id: str, added_by_user_id: int | None = None) -> None:
+        defaults = [
+            ("breakfast", "Завтрак", "09:00"),
+            ("lunch", "Обед", "13:00"),
+            ("dinner", "Ужин", "18:00"),
+        ]
+        async with self.pool.acquire() as conn:
+            for preset_key, title, time_msk in defaults:
+                await conn.execute("""
+                    INSERT INTO telegram_triggers
+                        (chat_id, added_by_user_id, kind, title, time_msk,
+                         days_of_week, trigger_date, prompt, preset_key, addressed, is_active)
+                    VALUES ($1,$2,'recurring',$3,$4,NULL,NULL,NULL,$5,FALSE,TRUE)
+                    ON CONFLICT (chat_id, preset_key) DO NOTHING
+                """, str(chat_id), added_by_user_id, title, time_msk, preset_key)
+
+    async def get_alarm_trigger(self, chat_id: str, preset_key: str) -> dict | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT id, chat_id, added_by_user_id, kind, title,
+                       time_msk, days_of_week, trigger_date, prompt, preset_key,
+                       addressed, is_active, last_fired_at, created_at, updated_at
+                FROM telegram_triggers
+                WHERE chat_id = $1 AND preset_key = $2
+            """, str(chat_id), preset_key)
+        return dict(row) if row else None
+
+    async def upsert_alarm_trigger(self, chat_id: str, added_by_user_id: int | None,
+                                   preset_key: str, title: str, time_msk: str | None = None,
+                                   prompt: str | None = None,
+                                   is_active: bool | None = None) -> dict:
+        base = await self.get_alarm_trigger(chat_id, preset_key)
+        if base is None:
+            await self.create_trigger(
+                chat_id=chat_id,
+                added_by_user_id=added_by_user_id,
+                kind='recurring',
+                time_msk=time_msk or '09:00',
+                title=title,
+                days_of_week=None,
+                trigger_date=None,
+                prompt=prompt,
+                preset_key=preset_key,
+                addressed=False,
+            )
+            base = await self.get_alarm_trigger(chat_id, preset_key)
+        fields = {'kind': 'recurring', 'title': title, 'preset_key': preset_key}
+        if time_msk is not None:
+            fields['time_msk'] = time_msk
+        if prompt is not None:
+            fields['prompt'] = prompt
+        if is_active is not None:
+            fields['is_active'] = is_active
+        row = await self.update_trigger(int(base['id']), **fields)
+        return row or base
+

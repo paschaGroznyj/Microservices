@@ -202,6 +202,7 @@ class TgChatIn(BaseModel):
     trigger_mode: str | None = None
     orchestrator_context_n: int | None = None
     proactive_enabled: bool | None = None
+    timezone_name: str | None = None
 
 
 class TgSettingsIn(BaseModel):
@@ -212,6 +213,7 @@ class TgSettingsIn(BaseModel):
     trigger_mode: str | None = None
     orchestrator_context_n: int | None = None
     proactive_enabled: bool | None = None
+    timezone_name: str | None = None
 
 
 @app.get("/tg/chats")
@@ -310,6 +312,7 @@ class TgTriggerIn(BaseModel):
     days_of_week: list | None = None    # [1..7] пн..вс; None/[] = все дни
     trigger_date: str | None = None     # 'YYYY-MM-DD' для once
     prompt: str | None = None
+    preset_key: str | None = None
     addressed: bool = False
     added_by_user_id: int | None = None
 
@@ -321,6 +324,7 @@ class TgTriggerPatch(BaseModel):
     days_of_week: list | None = None
     trigger_date: str | None = None
     prompt: str | None = None
+    preset_key: str | None = None
     addressed: bool | None = None
     is_active: bool | None = None
 
@@ -343,7 +347,7 @@ async def tg_create_trigger(chat_id: str, body: TgTriggerIn):
     row = await tg_db.create_trigger(
         chat_id, body.added_by_user_id, body.kind, body.time_msk,
         title=body.title, days_of_week=body.days_of_week,
-        trigger_date=td, prompt=body.prompt, addressed=body.addressed,
+        trigger_date=td, prompt=body.prompt, preset_key=body.preset_key, addressed=body.addressed,
     )
     return {"status": "ok", "trigger": row}
 
@@ -368,14 +372,16 @@ async def tg_delete_trigger(chat_id: str, trigger_id: int):
 
 
 @app.get("/tg/triggers_due")
-async def tg_triggers_due(hhmm: str, dow: int, day: str):
-    """Тик-сканер бота: триггеры, чьё время настало СЕЙЧАС (МСК)."""
-    from datetime import date as _date
-    try:
-        today = _date.fromisoformat(day)
-    except ValueError:
-        return {"triggers": []}
-    return {"triggers": await tg_db.scan_due_triggers(hhmm, dow, today)}
+async def tg_triggers_due(utc_ts: str | None = None):
+    """Тик-сканер бота: триггеры, чьё локальное время настало СЕЙЧАС."""
+    from datetime import datetime, timezone
+    now_utc = datetime.now(timezone.utc)
+    if utc_ts:
+        try:
+            now_utc = datetime.fromisoformat(utc_ts.replace('Z', '+00:00')).astimezone(timezone.utc)
+        except ValueError:
+            pass
+    return {"triggers": await tg_db.scan_due_triggers(now_utc)}
 
 
 @app.post("/tg/triggers/{chat_id}/{trigger_id}/fired")

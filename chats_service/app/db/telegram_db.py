@@ -128,6 +128,16 @@ class TelegramDB:
                 "CREATE UNIQUE INDEX IF NOT EXISTS ux_tg_triggers_chat_preset "
                 "ON telegram_triggers(chat_id, preset_key) WHERE preset_key IS NOT NULL;"
             )
+            # анти-дубль для НЕ-preset триггеров (custom recurring/once):
+            # один и тот же чат не может иметь две одинаковые записи по
+            # (kind, time_msk, title, trigger_date). preset-будильники сюда
+            # не попадают — у них свой индекс выше.
+            await conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_tg_triggers_custom_natkey "
+                "ON telegram_triggers(chat_id, kind, time_msk, "
+                "COALESCE(title,''), COALESCE(trigger_date,'0001-01-01'::date)) "
+                "WHERE preset_key IS NULL;"
+            )
 
             # мягкая миграция для уже существующих БД
             await conn.execute(
@@ -342,24 +352,44 @@ class TelegramDB:
                              trigger_date=None, prompt: str | None = None,
                              preset_key: str | None = None,
                              addressed: bool = False) -> dict:
-        """Создать триггер. days_of_week — список 1..7 или None."""
+        """Создать триггер. days_of_week — список 1..7 или None.
+
+        Идемпотентно: при повторе с тем же ключом (preset_key ЛИБО
+        natural-key chat_id+kind+time_msk+title+trigger_date для custom)
+        не плодит дубль, а обновляет существующую строку (ON CONFLICT).
+        """
+        # выбираем целевой конфликт-таргет под соответствующий частичный индекс
+        if preset_key is not None:
+            conflict = "(chat_id, preset_key) WHERE preset_key IS NOT NULL"
+        else:
+            conflict = ("(chat_id, kind, time_msk, COALESCE(title,''), "
+                        "COALESCE(trigger_date,'0001-01-01'::date)) "
+                        "WHERE preset_key IS NULL")
         async with self.pool.acquire() as conn:
-            row = await conn.fetchrow("""
+            row = await conn.fetchrow(f"""
                 INSERT INTO telegram_triggers
                     (chat_id, added_by_user_id, kind, title, time_msk,
-                     days_of_week, trigger_date, prompt, addressed)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                     days_of_week, trigger_date, prompt, preset_key, addressed)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                ON CONFLICT {conflict} DO UPDATE SET
+                    added_by_user_id = EXCLUDED.added_by_user_id,
+                    days_of_week     = EXCLUDED.days_of_week,
+                    trigger_date     = EXCLUDED.trigger_date,
+                    prompt           = EXCLUDED.prompt,
+                    addressed        = EXCLUDED.addressed,
+                    is_active        = TRUE,
+                    updated_at       = CURRENT_TIMESTAMP
                 RETURNING id, chat_id, added_by_user_id, kind, title,
                           time_msk, days_of_week, trigger_date, prompt, preset_key,
                           addressed, is_active, last_fired_at, created_at, updated_at
             """, chat_id, added_by_user_id, kind, title, time_msk,
-                 days_of_week, trigger_date, prompt, addressed)
+                 days_of_week, trigger_date, prompt, preset_key, addressed)
         return dict(row)
 
     async def update_trigger(self, trigger_id: int, **fields) -> dict | None:
         """Точечное обновление триггера."""
         allowed = {"kind", "title", "time_msk", "days_of_week",
-                   "trigger_date", "prompt", "addressed", "is_active"}
+                   "trigger_date", "prompt", "preset_key", "addressed", "is_active"}
         sets, vals = [], []
         for k, v in fields.items():
             if k in allowed:

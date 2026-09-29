@@ -422,14 +422,20 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             build_custom_trigger_prompt,
         )
         _chat_type = "group" if str(chat_id).startswith("-") else "private"
+        # slot от бота: для preset-будильников это breakfast|lunch|dinner,
+        # для broadcast-совместимости также morning|lunch|dinner, для тычка poke.
+        _preset_slots = {"breakfast", "lunch", "dinner", "morning"}
         if tg_initiated:
             # Проактив: текст задачи агент генерит из промпта инициации/грусти.
             if tg_sad:
                 message = build_sad_followup_prompt(tg_target_username)
-            elif tg_custom_prompt and tg_custom_prompt.strip():
+            elif (tg_custom_prompt and tg_custom_prompt.strip()) or (tg_slot in _preset_slots):
+                # Триггер по расписанию: либо custom_prompt, либо preset-будильник
+                # (breakfast/lunch/dinner) с пустым промптом -> дефолтная задача по preset.
                 message = build_custom_trigger_prompt(
-                    tg_custom_prompt, tg_target_username,
+                    tg_custom_prompt or "", tg_target_username,
                     chat_type=_chat_type, addressed=tg_addressed,
+                    preset_key=tg_slot,
                 )
             else:
                 message = build_initiation_prompt(

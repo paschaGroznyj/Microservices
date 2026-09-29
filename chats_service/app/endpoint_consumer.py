@@ -113,7 +113,7 @@ class DBConsumer:
             # Если сообщение от бота, отправляем обратно в основной сервис для WebSocket
             if is_from_bot and gateway_target == "telegram":
                 # Ответ агента для Telegram: пушим напрямую боту (host-режим).
-                await self.send_to_telegram(chat_id, message, attached_files)
+                await self.send_to_telegram(chat_id, message, attached_files, message_id=message_id)
                 return
 
             if is_from_bot:
@@ -186,7 +186,7 @@ class DBConsumer:
                 logging.error(f"[telegram] не удалось дочитать картинку из БД: {e}")
         return files
 
-    async def send_to_telegram(self, chat_id: str, text: str, files=None):
+    async def send_to_telegram(self, chat_id: str, text: str, files=None, message_id=None):
         """Ответ агента → телеграм-бот (host-режим, эндпоинт /push_message).
 
         Бот сам нарежет длинный текст и починит HTML-теги. Для картинок
@@ -203,6 +203,8 @@ class DBConsumer:
                 "files": files or None,
                 # бот отредактирует свой плейсхолдер «Думаю...» вместо нового сообщения
                 "edit_thinking": True,
+                # agent message_id — для связки TG-реакций с записью в БД
+                "agent_message_id": message_id,
             }
             response = requests.post(TG_BOT_PUSH_URL, json=payload, timeout=30)
             logger.info(f"Ответ агента отправлен в Telegram: {response.status_code}")

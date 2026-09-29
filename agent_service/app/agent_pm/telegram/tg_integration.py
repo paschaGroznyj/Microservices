@@ -301,3 +301,115 @@ def build_sad_followup_prompt(username: str | None) -> str:
         f"Напиши ОДНО короткое добродушно-грустное сообщение (с лёгким юмором, без обид), "
         f"мол, жаль что проигнорили. Не навязывайся, одной репликой."
     )
+
+
+# ── 7. Реакции на сообщения бота (lite-анализ + feedback большому агенту) ──────
+# REACTIONS_BLOCK_V1
+# Лайт-модель оценивает реакцию (emoji + текст ответа агента) → sentiment.
+# Собранные реакции копятся в Redis и подмешиваются большому агенту в next-запросе.
+
+REACTION_SENTIMENT_PROMPT = (
+    "Ты — лаконичный анализатор реакций. На сообщение ассистента в чате поставили emoji-реакцию.\n"
+    "Определи тональность реакции по emoji и тексту сообщения.\n"
+    "Ответь СТРОГО одной строкой JSON без markdown:\n"
+    '{"sentiment": "pos|neg|neutral", "note": "коротко почему (до 10 слов)"}\n'
+    "pos = понравилось/одобрение/смешно. "
+    "neg = не понравилось/критика/негатив. "
+    "neutral = нейтрально/непонятно."
+)
+
+
+async def analyze_reaction(agent, emoji: str, action: str, agent_text: str) -> dict:
+    """Лайт-анализ реакции. Возвращает {sentiment, note}.
+
+    action: 'add' (поставил) | 'remove' (снял).
+    Fail-open: при ошибке → neutral.
+    """
+    snippet = (agent_text or "").replace("\n", " ").strip()
+    if len(snippet) > 500:
+        snippet = snippet[:500] + "…"
+    act_ru = "поставил" if action == "add" else "снял"
+    try:
+        from langchain_core.messages import SystemMessage, HumanMessage
+        messages = [
+            SystemMessage(content=REACTION_SENTIMENT_PROMPT),
+            HumanMessage(content=(
+                f"Сообщение ассистента: {snippet!r}\n"
+                f"Реакция: {emoji} ({act_ru}).\n"
+                f"Верни JSON."
+            )),
+        ]
+        resp = await agent._lite_ainvoke(messages)
+        raw = (getattr(resp, "content", None) or str(resp) or "").strip()
+        if raw.startswith("```"):
+            raw = raw.strip("`")
+            if raw.lower().startswith("json"):
+                raw = raw[4:]
+        import re as _re
+        m = _re.search(r"\{.*\}", raw, _re.S)
+        data = json.loads(m.group(0) if m else raw)
+        sent = str(data.get("sentiment", "neutral")).lower()
+        if sent not in ("pos", "neg", "neutral"):
+            sent = "neutral"
+        return {"sentiment": sent, "note": str(data.get("note", ""))[:120]}
+    except Exception as e:
+        log.warning(f"[tg] analyze_reaction fail: {e}")
+        return {"sentiment": "neutral", "note": ""}
+
+
+def build_reactions_feedback(reactions: list[dict]) -> str:
+    """Собирает блок обратной связи для большого агента в next-запросе.
+
+    reactions — список dict {username, emoji, action, sentiment, note, agent_snippet}.
+    """
+    if not reactions:
+        return ""
+    pos = [r for r in reactions if r.get("sentiment") == "pos"]
+    neg = [r for r in reactions if r.get("sentiment") == "neg"]
+    lines = ["[ОБРАТНАЯ СВЯЗЬ ПО РЕАКЦИЯМ] Еуу, броу — люди отреагировали на твои прошлые сообщения:"]
+    for r in reactions[:20]:
+        who = r.get("username") or "кто-то"
+        emoji = r.get("emoji") or ""
+        act = "поставил" if r.get("action") == "add" else "снял"
+        snip = (r.get("agent_snippet") or "").strip()
+        if len(snip) > 80:
+            snip = snip[:80] + "…"
+        tag = {"pos": "➕", "neg": "➖", "neutral": "○"}.get(r.get("sentiment"), "○")
+        extra = f" ({r.get('note')})" if r.get("note") else ""
+        lines.append(f"  {tag} {who} {act} {emoji} на «{snip}»{extra}")
+    lines.append(f"Итого: 👍 {len(pos)} позитивных, 👎 {len(neg)} негативных.")
+    lines.append(
+        "Учти это в тоне следующего ответа (что зашло — развивай, что нет — корректируй). "
+        "НЕ отчитывайся о реакциях явно, просто учитывай настроение."
+    )
+    return "\n".join(lines)
+
+
+def build_reaction_proactive_prompt(kind: str, reactions: list[dict]) -> str:
+    """Проактивный триггер по реакциям.
+
+    kind='pos' — накопилось 3+ позитивных на одно сообщение → развить тему.
+    kind='neg' — одна негативная → шутливо уточнить, что не так (с юмором).
+    """
+    r0 = reactions[0] if reactions else {}
+    snip = (r0.get("agent_snippet") or "").strip()
+    if len(snip) > 160:
+        snip = snip[:160] + "…"
+    emojis = " ".join(x.get("emoji", "") for x in reactions if x.get("emoji"))
+    if kind == "neg":
+        who = r0.get("username") or "кто-то"
+        return (
+            f"[РЕАКЦИЯ-ТРИГГЕР: НЕГАТИВ] На твоё сообщение «{snip}» "
+            f"{who} поставил {emojis or 'негативную реакцию'}. "
+            f"Напиши ОДНО короткое живое сообщение в стиле «эй, а чего так?» — "
+            f"с лёгким юмором и самоиронией, без обид и агрессии. "
+            f"Можешь шутливо уточнить, что не так. Коротко."
+            f"\n{JOURNAL_HINT}"
+        )
+    return (
+        f"[РЕАКЦИЯ-ТРИГГЕР: ПОЗИТИВ] Твоё сообщение «{snip}» зашло — "
+        f"набрало {len(reactions)} позитивных реакций ({emojis}). "
+        f"Народу тема понравилась — развей её: принеси продолжение, "
+        f"доп-факт, углубление или свежий поворот по этой теме. Одним сообщением, живо."
+        f"\n{JOURNAL_HINT}"
+    )

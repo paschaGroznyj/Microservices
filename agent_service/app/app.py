@@ -10,6 +10,7 @@ import json
 import logging
 import base64
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
@@ -427,7 +428,10 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
         _preset_slots = {"breakfast", "lunch", "dinner", "morning"}
         if tg_initiated:
             # Проактив: текст задачи агент генерит из промпта инициации/грусти.
-            if tg_sad:
+            if tg_slot == "reaction" and tg_custom_prompt:
+                # Триггер по реакциям: промпт уже готов (build_reaction_proactive_prompt) — идёт как есть.
+                message = tg_custom_prompt
+            elif tg_sad:
                 message = build_sad_followup_prompt(tg_target_username)
             elif (tg_custom_prompt and tg_custom_prompt.strip()) or (tg_slot in _preset_slots):
                 # Триггер по расписанию: либо custom_prompt, либо preset-будильник
@@ -997,6 +1001,101 @@ async def tg_should_respond(req: TgShouldRespondRequest) -> TgShouldRespondRespo
     except Exception as e:
         logging.error(f"tg_should_respond failed: {e}")
         return TgShouldRespondResponse(respond=False)
+
+
+class TgReactionRequest(BaseModel):
+    chat_id: int
+    agent_message_id: str | None = None   # agent uuid сообщения бота (для БД-аналитики)
+    emoji: str = ""
+    action: str = "add"                     # add | remove
+    user_id: int | None = None
+    username: str | None = None
+    agent_text: str = ""                    # текст сообщения бота, на которое реакция
+
+
+class TgReactionResponse(BaseModel):
+    sentiment: str = "neutral"
+    note: str = ""
+
+
+@tg_router.post("/analyze_reaction", response_model=TgReactionResponse)
+async def tg_analyze_reaction(req: TgReactionRequest) -> TgReactionResponse:
+    """Лайт-анализ реакции на сообщение бота + запись в БД (аналитика).
+
+    Бот дёргает этот эндпоинт когда прилетает message_reaction. Возвращает
+    sentiment (pos|neg|neutral) + note, чтобы бот решил про проактив.
+    Сам анализ — на llm_lite. Fail-open → neutral.
+    """
+    if _agent is None:
+        return TgReactionResponse()
+    try:
+        from agent_pm.telegram.tg_integration import analyze_reaction
+        text = req.agent_text or ""
+        # если текст не пришёл — подтянем из БД по agent_message_id
+        if not text and req.agent_message_id and getattr(_agent, "db", None):
+            try:
+                text = await _agent.db.get_bot_message_text(req.agent_message_id) or ""
+            except Exception:
+                pass
+        res = await analyze_reaction(_agent, req.emoji, req.action, text)
+        # запись реакции в БД (аналитика) — fail-open
+        if req.agent_message_id and getattr(_agent, "db", None):
+            try:
+                await _agent.db.append_reaction(req.agent_message_id, {
+                    "user_id": req.user_id,
+                    "username": req.username,
+                    "emoji": req.emoji,
+                    "action": req.action,
+                    "sentiment": res.get("sentiment", "neutral"),
+                    "note": res.get("note", ""),
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                })
+            except Exception as e:
+                logging.warning(f"append_reaction fail: {e}")
+        return TgReactionResponse(sentiment=res.get("sentiment", "neutral"), note=res.get("note", ""))
+    except Exception as e:
+        logging.error(f"tg_analyze_reaction failed: {e}")
+        return TgReactionResponse()
+
+
+class TgReactionsFeedbackRequest(BaseModel):
+    reactions: list = []
+
+
+class TgReactionsFeedbackResponse(BaseModel):
+    feedback: str = ""
+
+
+@tg_router.post("/build_reactions_feedback", response_model=TgReactionsFeedbackResponse)
+async def tg_build_reactions_feedback(req: TgReactionsFeedbackRequest) -> TgReactionsFeedbackResponse:
+    """Собирает feedback-блок по реакциям для большого агента."""
+    try:
+        from agent_pm.telegram.tg_integration import build_reactions_feedback
+        return TgReactionsFeedbackResponse(feedback=build_reactions_feedback(req.reactions or []))
+    except Exception as e:
+        logging.error(f"build_reactions_feedback failed: {e}")
+        return TgReactionsFeedbackResponse()
+
+
+class TgReactionPromptRequest(BaseModel):
+    kind: str = "pos"
+    reactions: list = []
+    count: int = 0
+
+
+class TgReactionPromptResponse(BaseModel):
+    prompt: str = ""
+
+
+@tg_router.post("/build_reaction_prompt", response_model=TgReactionPromptResponse)
+async def tg_build_reaction_prompt(req: TgReactionPromptRequest) -> TgReactionPromptResponse:
+    """Проактив-промпт по реакциям (pos: развить тему / neg: шутливо уточнить, что не так)."""
+    try:
+        from agent_pm.telegram.tg_integration import build_reaction_proactive_prompt
+        return TgReactionPromptResponse(prompt=build_reaction_proactive_prompt(req.kind, req.reactions or []))
+    except Exception as e:
+        logging.error(f"build_reaction_prompt failed: {e}")
+        return TgReactionPromptResponse()
 
 
 @service_router.post("/message", response_model=ServiceMessageResponse, status_code=202)

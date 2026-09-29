@@ -52,7 +52,7 @@ from telegram import (
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, ContextTypes,
-    MessageHandler, filters,
+    MessageHandler, MessageReactionHandler, filters,
 )
 
 import uvicorn
@@ -140,6 +140,14 @@ def _k_post(chat_id: int, pid: str) -> str: return f"tg:post:{chat_id}:{pid}"
 # дедуп срабатывания триггера в конкретную минуту (tid + YYYYMMDDHHMM)
 def _k_trig(tid: int, stamp: str) -> str: return f"tg:trig:{tid}:{stamp}"
 def _k_alarmedit(chat_id: int, uid: int) -> str: return f"tg:alarmedit:{chat_id}:{uid}"
+# Связка tg_message_id бота -> agent_message_id + текст (для реакций). TTL сутки.
+def _k_msgmap(chat_id: int, tg_mid: int) -> str: return f"tg:msgmap:{chat_id}:{tg_mid}"
+# Буфер реакций для большого агента (очищается только после next-сообщения, без TTL).
+def _k_reactbuf(chat_id: int) -> str: return f"tg:reactions:{chat_id}"
+# Throttle на neg-проактив (1 в 5 мин на чат).
+def _k_react_neg(chat_id: int) -> str: return f"tg:react:neg:{chat_id}"
+# Счётчик pos-реакций на конкретное сообщение (порог 3+ -> триггер 1 раз).
+def _k_react_pos(chat_id: int, tg_mid: int) -> str: return f"tg:react:pos:{chat_id}:{tg_mid}"
 
 
 async def fwd_group_already_seen(chat_id: int, media_group_id) -> bool:
@@ -680,6 +688,193 @@ async def list_proactive_chats() -> list[str]:
         return []
 
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# РЕАКЦИИ НА СООБЩЕНИЯ БОТА: lite-анализ + буфер фидбека + проактив
+# ══════════════════════════════════════════════════════════════════════════════
+POS_THRESHOLD = int(os.environ.get("TG_REACT_POS_THRESHOLD", "3"))   # 3+ pos -> проактив
+NEG_THROTTLE_SEC = int(os.environ.get("TG_REACT_NEG_THROTTLE", "300"))  # 1 neg-ответ / 5 мин
+
+
+def _reaction_emojis(reaction_list) -> list:
+    """Из списка ReactionType вытаскивает emoji-строки."""
+    out = []
+    for rt in (reaction_list or []):
+        emoji = getattr(rt, "emoji", None)
+        if emoji:
+            out.append(emoji)
+        else:
+            ce = getattr(rt, "custom_emoji_id", None)
+            if ce:
+                out.append("[custom]")
+    return out
+
+
+async def reactions_feedback_flush(chat_id: int) -> str:
+    """Читает буфер реакций и СРАЗУ очищает его (после next-сообщения).
+    Возвращает готовый feedback-блок для большого агента (или "")."""
+    try:
+        r = await get_redis()
+        key = _k_reactbuf(chat_id)
+        raw = await r.lrange(key, 0, -1)
+        if not raw:
+            return ""
+        await r.delete(key)
+        items = []
+        for x in raw:
+            try:
+                items.append(json.loads(x))
+            except Exception:
+                pass
+        if not items:
+            return ""
+        # свежие сверху (LPUSH) -> развернём в хронологию
+        items.reverse()
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{AGENT_SERVICE_URL}/api/tg/build_reactions_feedback",
+                json={"reactions": items},
+            )
+            resp.raise_for_status()
+            return resp.json().get("feedback", "") or ""
+    except Exception as e:
+        log.warning(f"reactions_feedback_flush fail chat={chat_id}: {e}")
+        return ""
+
+
+async def on_message_reaction(update, context: ContextTypes.DEFAULT_TYPE):
+    """Ловим реакцию на сообщение бота -> lite-анализ -> буфер + проактив.
+
+    Только реакции на сообщения БОТА (по msgmap: tg_message_id -> agent uuid).
+    add: сравниваем old->new, берём НОВЫЕ emoji. remove игнорируем для проактива,
+    но пишем в БД как action=remove.
+    """
+    log.info(f"[reaction] RAW update received: has_mr={update.message_reaction is not None}")
+    mr = update.message_reaction
+    if mr is None:
+        return
+    chat_id = mr.chat.id
+    tg_mid = mr.message_id
+    ruser = mr.user
+    if ruser is None:
+        return  # анонимная реакция (message_reaction_count) — пропускаем
+
+    # это сообщение бота? ищем связку в Redis
+    try:
+        r = await get_redis()
+        raw = await r.get(_k_msgmap(chat_id, tg_mid))
+    except Exception:
+        raw = None
+    if not raw:
+        log.info(f"[reaction] msgmap MISS chat={mr.chat.id} tg_mid={mr.message_id} (not bot msg or expired)")
+        return  # реакция не на сообщение бота (или связка протухла)
+    try:
+        mm = json.loads(raw)
+    except Exception:
+        return
+    agent_mid = mm.get("aid")
+    agent_text = mm.get("text") or ""
+
+    old_e = set(_reaction_emojis(mr.old_reaction))
+    new_e = set(_reaction_emojis(mr.new_reaction))
+    added = list(new_e - old_e)
+    removed = list(old_e - new_e)
+
+    username = ruser.username or ruser.full_name or "кто-то"
+    uid = ruser.id
+
+    # обрабатываем и добавленные, и снятые (снятые — только аналитика в БД)
+    events = [(e, "add") for e in added] + [(e, "remove") for e in removed]
+    if not events:
+        log.info(f"[reaction] no add/remove events chat={mr.chat.id}")
+        return
+
+    for emoji, action in events:
+        # lite-анализ + запись в БД (аналитика) — через agent_service
+        sentiment, note = "neutral", ""
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.post(
+                    f"{AGENT_SERVICE_URL}/api/tg/analyze_reaction",
+                    json={
+                        "chat_id": chat_id,
+                        "agent_message_id": agent_mid,
+                        "emoji": emoji,
+                        "action": action,
+                        "user_id": uid,
+                        "username": username,
+                        "agent_text": agent_text,
+                    },
+                )
+                resp.raise_for_status()
+                jd = resp.json()
+                sentiment = jd.get("sentiment", "neutral")
+                note = jd.get("note", "")
+        except Exception as e:
+            log.warning(f"analyze_reaction call fail chat={chat_id}: {e}")
+
+        # снятие реакции — только в аналитику, дальше не тянем
+        if action != "add":
+            continue
+
+        # кладём в буфер фидбека для большого агента (без TTL)
+        rec = {
+            "username": username, "emoji": emoji, "action": action,
+            "sentiment": sentiment, "note": note,
+            "agent_snippet": agent_text[:120],
+        }
+        try:
+            r = await get_redis()
+            await r.lpush(_k_reactbuf(chat_id), json.dumps(rec))
+            await r.ltrim(_k_reactbuf(chat_id), 0, 49)
+        except Exception as e:
+            log.warning(f"reactbuf push fail chat={chat_id}: {e}")
+
+        # ── ПРОАКТИВ ──
+        try:
+            if sentiment == "neg":
+                # одна негативная -> сразу шутливый отклик, throttle 5 мин на чат
+                r = await get_redis()
+                ok = await r.set(_k_react_neg(chat_id), "1", nx=True, ex=NEG_THROTTLE_SEC)
+                if ok:
+                    prompt = await _build_react_prompt("neg", [rec])
+                    if prompt:
+                        await dispatch_initiation(chat_id, slot="reaction",
+                                                  addressed=False, target=None,
+                                                  custom_prompt=prompt)
+                        log.info(f"[react] NEG proactive fired chat={chat_id} emoji={emoji}")
+            elif sentiment == "pos":
+                # копим pos по КОНКРЕТНОМУ сообщению; порог -> триггер 1 раз
+                r = await get_redis()
+                cnt = await r.incr(_k_react_pos(chat_id, tg_mid))
+                await r.expire(_k_react_pos(chat_id, tg_mid), 3600)
+                if cnt == POS_THRESHOLD:
+                    # собираем все pos по этому сообщению из буфера
+                    prompt = await _build_react_prompt("pos", [rec], count=cnt)
+                    if prompt:
+                        await dispatch_initiation(chat_id, slot="reaction",
+                                                  addressed=False, target=None,
+                                                  custom_prompt=prompt)
+                        log.info(f"[react] POS proactive fired chat={chat_id} mid={tg_mid} cnt={cnt}")
+        except Exception as e:
+            log.warning(f"reaction proactive fail chat={chat_id}: {e}")
+
+
+async def _build_react_prompt(kind: str, reactions: list, count: int = 0) -> str:
+    """Запрашивает у agent_service готовый проактив-промпт по реакциям."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{AGENT_SERVICE_URL}/api/tg/build_reaction_prompt",
+                json={"kind": kind, "reactions": reactions, "count": count},
+            )
+            resp.raise_for_status()
+            return resp.json().get("prompt", "") or ""
+    except Exception as e:
+        log.warning(f"build_react_prompt fail: {e}")
+        return ""
+
+
 async def dispatch_initiation(chat_id: int, slot: str, addressed: bool,
                               target: dict | None, sad_followup: bool = False,
                               custom_prompt: str | None = None):
@@ -876,18 +1071,15 @@ def _schedule_poke_with_jitter(scheduler):
 
 
 def build_scheduler():
-    """APScheduler: 3 cron-слота (МСК) + ежечасный джиттер-poke в окне."""
+    """APScheduler: ежечасный джиттер-poke + минутный тик-сканер триггеров из БД (meal вкл)."""
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from apscheduler.triggers.cron import CronTrigger
 
     sched = AsyncIOScheduler(timezone=TG_TZ)
-    # Завтрак / обед / ужин — broadcast.
-    sched.add_job(run_broadcast_slot, CronTrigger(hour=9,  minute=0, timezone=TG_TZ),
-                  args=["morning"], id="slot-morning", misfire_grace_time=300)
-    sched.add_job(run_broadcast_slot, CronTrigger(hour=13, minute=0, timezone=TG_TZ),
-                  args=["lunch"], id="slot-lunch", misfire_grace_time=300)
-    sched.add_job(run_broadcast_slot, CronTrigger(hour=18, minute=0, timezone=TG_TZ),
-                  args=["dinner"], id="slot-dinner", misfire_grace_time=300)
+    # meal-триггеры (завтрак/обед/ужин) БОЛЬШЕ НЕ на хардкод-cron.
+    # Единственный источник — таблица telegram_triggers (preset_key breakfast/lunch/dinner),
+    # которую читает run_trigger_scan. Время/промпт/вкл-выкл настраиваются через /start.
+    # run_broadcast_slot остаётся только для ручного дебага (/tg/debug/trigger).
     # Ежечасный тик в окне [start, end): планирует poke со случайным джиттером.
     hours = ",".join(str(h) for h in range(TG_POKE_HOUR_START, TG_POKE_HOUR_END))
     sched.add_job(_schedule_poke_with_jitter,
@@ -1115,6 +1307,7 @@ class PushMessageRequest(BaseModel):
     parse_mode: str = "HTML"
     edit_thinking: bool = False
     files: list | None = None
+    agent_message_id: str | None = None   # agent uuid для связки TG-реакций
 
 
 class PushMessageResponse(BaseModel):
@@ -1295,6 +1488,21 @@ async def push_message(req: PushMessageRequest):
                 chat_id=req.chat_id, text=chunk, parse_mode=req.parse_mode,
             )
             sent_ids.append(msg.message_id)
+        # Связка tg_message_id -> agent_message_id + текст (для реакций).
+        # Кладём только если есть agent_message_id — чтобы при реакции найти запись в БД.
+        try:
+            log.info(f"[msgmap] push chat={req.chat_id} aid={req.agent_message_id!r} sent_ids={sent_ids}")
+            if req.agent_message_id and sent_ids:
+                r = await get_redis()
+                snippet = (req.text or "")[:400]
+                payload = json.dumps({"aid": req.agent_message_id, "text": snippet})
+                for _mid in sent_ids:
+                    await r.set(_k_msgmap(req.chat_id, _mid), payload, ex=86400)
+                    log.info(f"[msgmap] SET key={_k_msgmap(req.chat_id, _mid)}")
+            elif not req.agent_message_id:
+                log.warning(f"[msgmap] NO agent_message_id -> reactions won't map, chat={req.chat_id} sent_ids={sent_ids}")
+        except Exception as e:
+            log.warning(f"msgmap save fail chat={req.chat_id}: {e}")
         # Ответ агента → в буфер оркестратора (только группы), чтобы он
         # видел связь «бот участвует в диалоге». Не роняем ответ при ошибке.
         try:
@@ -2144,6 +2352,15 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "[Переслано от" not in merged_text:
         merged_text = f"{merged_text}\n{text_for_agent}".strip()
 
+    # Подмешиваем обратную связь по реакциям (копились с прошлого ответа бота).
+    # Буфер очищается ТОЛЬКО здесь (после next-сообщения), без TTL.
+    try:
+        react_fb = await reactions_feedback_flush(chat_id)
+        if react_fb:
+            merged_text = f"{react_fb}\n\n{merged_text}".strip()
+    except Exception as e:
+        log.warning(f"reactions feedback merge fail chat={chat_id}: {e}")
+
     # Единый guard поста ДО плашки «Думаю...»: если по этому посту (например
     # альбом с caption-тегом, кадры которого параллельно идут в on_photo)
     # агент уже вызван из другой точки входа — молча выходим, не оставляя
@@ -2319,6 +2536,7 @@ async def run_both():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_message))
     application.add_handler(MessageHandler(filters.Document.ALL, on_document))
     application.add_handler(MessageHandler(filters.PHOTO, on_photo))
+    application.add_handler(MessageReactionHandler(on_message_reaction))
     application.add_error_handler(_on_error)
     _bot_app = application
 

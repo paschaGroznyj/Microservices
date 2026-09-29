@@ -377,7 +377,6 @@ class TelegramDB:
                     trigger_date     = EXCLUDED.trigger_date,
                     prompt           = EXCLUDED.prompt,
                     addressed        = EXCLUDED.addressed,
-                    is_active        = TRUE,
                     updated_at       = CURRENT_TIMESTAMP
                 RETURNING id, chat_id, added_by_user_id, kind, title,
                           time_msk, days_of_week, trigger_date, prompt, preset_key,

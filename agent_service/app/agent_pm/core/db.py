@@ -975,6 +975,41 @@ class AgentDB:
         except asyncpg.UniqueViolationError:
             logging.error(f"Сообщение не может быть добавлено")
 
+    async def get_bot_message_text(self, message_id: str):
+        """Текст ответа бота по message_id (только is_from_bot)."""
+        try:
+            async with self.pool.acquire() as conn:
+                return await conn.fetchval(
+                    """
+                    SELECT message_text FROM chats
+                    WHERE message_id = $1 AND is_from_bot = TRUE
+                    ORDER BY created_at DESC LIMIT 1
+                    """,
+                    message_id,
+                )
+        except Exception as e:
+            logging.warning(f"get_bot_message_text fail: {e}")
+            return None
+
+    async def append_reaction(self, message_id: str, reaction: dict):
+        """Добавить реакцию в JSONB-массив reactions сообщения бота."""
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE chats
+                    SET reactions = COALESCE(reactions, '[]'::jsonb) || $2::jsonb
+                    WHERE id = (
+                        SELECT id FROM chats
+                        WHERE message_id = $1 AND is_from_bot = TRUE
+                        ORDER BY created_at DESC LIMIT 1
+                    )
+                    """,
+                    message_id, json.dumps([reaction]),
+                )
+        except Exception as e:
+            logging.warning(f"append_reaction fail: {e}")
+
 # ============================== ОБЩЕНИЕ МЕЖДУ СЕРВИСАМИ ==============================
 
     async def add_service_message(service_name, service_port, message):

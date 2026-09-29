@@ -1924,14 +1924,22 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     author = user.full_name or user.username or "Аноним"
 
     # ── перехват ввода имени агента (после кнопки «Имя агента») ──
+    # Атомарный GETDEL — защита от дубля update (см. комментарий у alarmedit).
     try:
         r = await get_redis()
-        awaiting_name = await r.get(_k_setname(chat_id, user.id))
+        try:
+            awaiting_name = await r.execute_command("GETDEL", _k_setname(chat_id, user.id))
+        except Exception:
+            awaiting_name = await r.get(_k_setname(chat_id, user.id))
+            if awaiting_name:
+                await r.delete(_k_setname(chat_id, user.id))
     except Exception:
         awaiting_name = None
     if awaiting_name:
+        if isinstance(awaiting_name, bytes):
+            awaiting_name = awaiting_name.decode()
         try:
-            await r.delete(_k_setname(chat_id, user.id))
+            await post_already_dispatched(chat_id, msg)
         except Exception:
             pass
         new_name = (raw_text or "").strip()
@@ -1942,6 +1950,76 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             new_name = new_name[:64]
             ok = await save_chat_settings(chat_id, {"agent_name": new_name})
             await msg.reply_text(("Имя агента: " + new_name) if ok else "Ошибка сохранения.")
+        return
+
+    # ── перехват ввода настроек будильника (после кнопок Время/Промпт/TZ) ──
+    # ВАЖНО: берём СВЕЖИЙ redis-инстанс (r из блока awaiting_name мог быть
+    # невалиден/закрыт после сетевых await'ов), иначе get упадёт в except,
+    # alarm_flag=None и ввод «08:00» уедет в агента вместо будильника.
+    #
+    # АТОМАРНО: читаем И удаляем флаг одной командой GETDEL. Это защищает от
+    # дубля update от Telegram (два параллельных on_text_message на одно
+    # сообщение): непустое значение получит РОВНО ОДИН заход — он и обработает
+    # будильник + сделает return. Второй заход получит None и НЕ уйдёт в
+    # агента, потому что мы дополнительно помечаем этот message_id как
+    # «съеденный будильником» через post_already_dispatched.
+    try:
+        r = await get_redis()
+        alarm_key = _k_alarmedit(chat_id, user.id)
+        try:
+            alarm_flag = await r.execute_command("GETDEL", alarm_key)
+        except Exception:
+            # старый redis без GETDEL — фолбэк на get+delete
+            alarm_flag = await r.get(alarm_key)
+            if alarm_flag:
+                await r.delete(alarm_key)
+    except Exception as e:
+        log.warning(f"[alarmedit] get fail chat={chat_id} uid={user.id}: {e}")
+        alarm_flag = None
+    log.info(f"[alarmedit GETDEL] key={_k_alarmedit(chat_id, user.id)} val={alarm_flag!r}")
+    if alarm_flag:
+        if isinstance(alarm_flag, bytes):
+            alarm_flag = alarm_flag.decode()
+        log.info(f"[alarmedit HIT] chat={chat_id} uid={user.id} flag={alarm_flag!r} raw={raw_text!r}")
+        # Помечаем пост как обработанный будильником, чтобы дублирующий update
+        # по тому же message_id (если он проскочит) не ушёл в dispatch.
+        try:
+            await post_already_dispatched(chat_id, msg)
+        except Exception:
+            pass
+        value = (raw_text or "").strip()
+        # TZ
+        if alarm_flag == "tz":
+            try:
+                ZoneInfo(value)
+                tz_ok = True
+            except Exception:
+                tz_ok = False
+            if not tz_ok:
+                await msg.reply_text("Неизвестный часовой пояс. Пример: Europe/Moscow или Europe/Samara.")
+            else:
+                ok = await save_chat_settings(chat_id, {"timezone_name": value})
+                await msg.reply_text(("Timezone: " + value) if ok else "Ошибка сохранения.")
+            return
+        # time:<preset> / prompt:<preset>
+        kind_flag, _, preset_key = alarm_flag.partition(":")
+        if kind_flag == "time":
+            if not re.match(r"^([01]?[0-9]|2[0-3]):[0-5][0-9]$", value):
+                await msg.reply_text("Формат времени HH:MM (например 08:00).")
+                return
+            hh, mm = value.split(":")
+            norm = f"{int(hh):02d}:{mm}"
+            trig = await ensure_alarm_trigger(chat_id, user.id, preset_key)
+            ok = trig and await patch_trigger(chat_id, int(trig["id"]), {"time_msk": norm})
+            await msg.reply_text((ALARM_TITLES.get(preset_key, preset_key) + ": " + norm) if ok else "Ошибка сохранения.")
+            return
+        if kind_flag == "prompt":
+            new_prompt = value[:2000]
+            trig = await ensure_alarm_trigger(chat_id, user.id, preset_key)
+            ok = trig and await patch_trigger(chat_id, int(trig["id"]), {"prompt": new_prompt})
+            await msg.reply_text(("Промпт для " + ALARM_TITLES.get(preset_key, preset_key) + " сохранён.") if ok else "Ошибка сохранения.")
+            return
+        # неизвестный флаг — молча выходим, не шлём в агента
         return
 
     # разбор упоминания/реплая

@@ -1196,24 +1196,50 @@ def _inline_md_to_html(text: str) -> str:
     # 1) inline-code `...` — вырезаем первым, внутри ничего не форматируем
     text = re.sub(r"`([^`]+)`", _stash_code, text)
 
-    # 2) ссылки [text](url)
+    # 2) ссылки [text](url) — стэшим готовый <a>, чтобы italic/bold не лезли в label/url.
+    # Разрешаем схемы http(s) И tg:// (пинги по user_id: [Имя](tg://user?id=123)).
+    links: list[str] = []
+
     def _link(m):
         label = m.group(1)
         url = m.group(2)
-        return f'<a href="{url}">{label}</a>'
+        # url уже прошёл _esc на уровне строки (& -> &amp;), что валидно для href.
+        # label может содержать _ / * — он уже экранирован, больше не трогаем.
+        links.append(f'<a href="{url}">{label}</a>')
+        return f"\x00LINK{len(links) - 1}\x00"
 
-    text = re.sub(r"\[([^\]]+)\]\((https?://[^\s)]+)\)", _link, text)
+    text = re.sub(r"\[([^\]]+)\]\(((?:https?|tg)://[^\s)]+)\)", _link, text)
 
     # 3) bold **...** / __...__
     text = re.sub(r"\*\*([^\*]+)\*\*", r"<b>\1</b>", text)
     text = re.sub(r"__([^_]+)__", r"<b>\1</b>", text)
     # 4) strike ~~...~~
     text = re.sub(r"~~([^~]+)~~", r"<s>\1</s>", text)
+    # 5a) голые @username_with_underscores — стэшим, чтобы italic не съел _ в нике.
+    mentions: list[str] = []
+
+    def _stash_mention(m):
+        mentions.append(m.group(0))
+        return f"\x00MENT{len(mentions) - 1}\x00"
+
+    text = re.sub(r"@[A-Za-z0-9_]{3,}", _stash_mention, text)
+
     # 5) italic *...* / _..._ (после bold, чтобы не съесть **)
     text = re.sub(r"(?<!\*)\*(?!\*)([^\*\n]+?)\*(?!\*)", r"<i>\1</i>", text)
     text = re.sub(r"(?<!_)_(?!_)([^_\n]+?)_(?!_)", r"<i>\1</i>", text)
 
-    # 6) возвращаем код обёрнутым в <code>
+    # 5b) возвращаем меншены
+    def _restore_mention(m):
+        return mentions[int(m.group(1))]
+
+    text = re.sub(r"\x00MENT(\d+)\x00", _restore_mention, text)
+
+    # 6) возвращаем ссылки и код обратно (после всей inline-разметки)
+    def _restore_link(m):
+        return links[int(m.group(1))]
+
+    text = re.sub(r"\x00LINK(\d+)\x00", _restore_link, text)
+
     def _restore(m):
         return "<code>" + codes[int(m.group(1))] + "</code>"
 

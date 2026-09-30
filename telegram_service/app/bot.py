@@ -1050,7 +1050,11 @@ async def run_trigger_scan():
         tid = t["id"]
         cid = t["chat_id"]
         try:
-            fresh = await r.set(_k_trig(tid, stamp), "1", nx=True, ex=120)
+            # дедуп по ЗАПЛАНИРОВАННОЙ минуте (fire_stamp из chats_service),
+            # а не по текущему тику: окно матча 120с покрывает 2 тика,
+            # стабильный ключ не даёт стрельнуть дважды. Fallback на stamp.
+            fire_stamp = t.get("fire_stamp") or stamp
+            fresh = await r.set(_k_trig(tid, fire_stamp), "1", nx=True, ex=180)
             if not fresh:
                 continue
             addressed = bool(t.get("addressed"))
@@ -1064,8 +1068,9 @@ async def run_trigger_scan():
                 int(cid), slot=slot, addressed=addressed, target=target,
                 custom_prompt=t.get("prompt"),
             )
-            if t.get("kind") == "once":
-                await mark_trigger_fired_remote(cid, tid)
+            # гасим last_fired_at для ЛЮБОГО kind: это второй слой дедупа
+            # в окне (scan_due_triggers скипнет, если last_fired_at >= scheduled)
+            await mark_trigger_fired_remote(cid, tid)
             if addressed and target:
                 asyncio.create_task(_sadness_watch(int(cid), target))
         except Exception as e:

@@ -415,9 +415,22 @@ class TelegramDB:
         return res.endswith("1")
 
     async def scan_due_triggers(self, now_utc: datetime) -> list[dict]:
-        """Тик-сканер: вернуть триггеры, чьё локальное время настало СЕЙЧАС.
-        now_utc — текущий UTC timestamp; локальное время считается через timezone_name чата.
+        """Тик-сканер: вернуть триггеры, чья запланированная минута настала.
+
+        ВАЖНО: time_msk трактуется СТРОГО как время по Москве (Europe/Moscow),
+        независимо от timezone_name чата. tz чата в матче НЕ участвует.
+
+        Матч не по точному равенству HH:MM, а по ОКНУ: триггер считается
+        сработавшим, если 0 <= (now_msk - scheduled_msk) < GRACE_SEC.
+        Это переживает дрейф/пропуск ровной минуты тик-сканером.
+        Идемпотентность обеспечивается: last_fired_at (гашение в окне) +
+        Redis-флагом по ЗАПЛАНИРОВАННОЙ минуте на стороне бота.
+        Каждому due-триггеру добавляется fire_stamp (YYYYMMDDHHMM запланированной
+        минуты по МСК) — стабильный ключ дедупа независимо от текущего тика.
         """
+        GRACE_SEC = 120
+        MSK = ZoneInfo("Europe/Moscow")
+        now_msk = now_utc.astimezone(MSK)
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("""
                 SELECT t.id, t.chat_id, t.kind, t.title, t.time_msk,
@@ -433,31 +446,44 @@ class TelegramDB:
         due = []
         for row in rows:
             d = dict(row)
-            tz_name = d.get("timezone_name") or "Europe/Moscow"
-            try:
-                local_now = now_utc.astimezone(ZoneInfo(tz_name))
-            except Exception:
-                local_now = now_utc.astimezone(ZoneInfo("Europe/Moscow"))
-                d["timezone_name"] = "Europe/Moscow"
-            if d.get("time_msk") != local_now.strftime("%H:%M"):
+            hhmm = d.get("time_msk")
+            if not hhmm:
                 continue
+            try:
+                hh, mm = [int(x) for x in str(hhmm).split(":")]
+            except Exception:
+                continue
+
+            # запланированная минута сегодня по МСК
+            scheduled = now_msk.replace(hour=hh, minute=mm, second=0, microsecond=0)
+            delta = (now_msk - scheduled).total_seconds()
+            if delta < 0 or delta >= GRACE_SEC:
+                continue
+
             if d.get("kind") == "recurring":
                 days = d.get("days_of_week") or []
-                if days and local_now.isoweekday() not in days:
+                if days and now_msk.isoweekday() not in days:
                     continue
             elif d.get("kind") == "once":
-                if d.get("trigger_date") != local_now.date():
+                td = d.get("trigger_date")
+                if td != now_msk.date():
                     continue
-                lf = d.get("last_fired_at")
-                if lf is not None:
-                    try:
-                        if lf.astimezone(local_now.tzinfo).date() == local_now.date():
-                            continue
-                    except Exception:
-                        if lf.date() == local_now.date():
-                            continue
             else:
                 continue
+
+            # гашение в окне: если уже стрелял в эту же запланированную минуту — скип
+            lf = d.get("last_fired_at")
+            if lf is not None:
+                try:
+                    lf_msk = lf.astimezone(MSK)
+                    if lf_msk >= scheduled:
+                        continue
+                except Exception:
+                    pass
+
+            # стабильный дедуп-ключ по запланированной минуте (для Redis-флага бота)
+            d["fire_stamp"] = scheduled.strftime("%Y%m%d%H%M")
+            d.pop("timezone_name", None)
             due.append(d)
         return due
 

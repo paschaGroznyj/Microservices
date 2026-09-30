@@ -1473,7 +1473,7 @@ class KnowledgeAgent:
         # base64 картинок захватывается в замыкание тула из images —
         # модель передаёт только промпт, base64 не идёт в контекст.
         from .tools.vision.tool_analyze_image import make_analyze_image_tool
-        analyze_image = make_analyze_image_tool(agent, images, agent_model=agent_model)
+        analyze_image = make_analyze_image_tool(agent, images, agent_model=agent_model, chat_id=chat_id)
 
         # Тул генерации изображений (gemini-3.1-flash-image-preview).
         # Пресет качества из карточки #127. Сгенерированные файлы копятся
@@ -1993,6 +1993,15 @@ class KnowledgeAgent:
             # РОЛЬ РЕШАЕТСЯ КОДОМ по verified user_id (не моделью, не по тексту/табельному/тегу).
             role_block = get_role(user_id)
             system_content = SYSTEM_PROMPT.format(datetime=current_datetime, role_block=role_block)
+            # Медиа-хранилище чата (Redis, пер-chat_id): картинки/файлы из недавних
+            # сообщений — чтобы агент видел их даже когда в текущем сообщении вложений нет.
+            try:
+                from agent_pm.media import media_store as _media_store
+                _media_block = await _media_store.build_media_prompt_block(chat_id)
+                if _media_block:
+                    system_content += _media_block
+            except Exception as _e:
+                logging.warning(f"[media_store] prompt block fail: {_e}")
             # Telegram: подмешиваем HTML-инструкцию форматирования + per-chat промпт из БД.
             if is_telegram:
                 try:

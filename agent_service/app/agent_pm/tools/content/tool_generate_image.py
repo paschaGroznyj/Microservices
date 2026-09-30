@@ -377,6 +377,7 @@ def make_generate_image_tool(agent, images: list[dict] | None = None):
         source_images: list[str] | None = None,
         source_image_keys: list[str] | None = None,
         source_user_image_indexes: list[int] | None = None,
+        source_media_ids: list[str] | None = None,
         extra_quality_prompt: str | None = None,
     ) -> str:
         """
@@ -400,6 +401,12 @@ def make_generate_image_tool(agent, images: list[dict] | None = None):
           source_user_image_indexes — опционально: индексы картинок, которые
                           пользователь приложил к сообщению (0 — первая),
                           если хочешь редактировать их.
+          source_media_ids — опционально: список media_id из МЕДИА-ХРАНИЛИЩА
+                          чата (Redis, картинки прошлых сообщений, живут ~24ч).
+                          Их реестр показан тебе в блоке «МЕДИА-ХРАНИЛИЩЕ ЧАТА».
+                          Используй, чтобы сделать image-to-image на основе
+                          картинки, присланной ранее, когда во вложениях
+                          текущего сообщения её уже нет.
           extra_quality_prompt — опционально: доп. арт-дирекшен в system
                           (напр. "Rembrandt light, 85mm portrait lens, f/1.8").
 
@@ -435,6 +442,7 @@ def make_generate_image_tool(agent, images: list[dict] | None = None):
         source_images = _coerce_str_list(source_images)
         source_image_keys = _coerce_str_list(source_image_keys)
         source_user_image_indexes = _coerce_int_list(source_user_image_indexes)
+        source_media_ids = _coerce_str_list(source_media_ids)
 
         log.info(
             "generate_image: source_images=%s, source_image_keys=%s, source_user_image_indexes=%s, "
@@ -492,6 +500,29 @@ def make_generate_image_tool(agent, images: list[dict] | None = None):
                         "(доступно %d). Картинка из интерфейса не подхватилась.",
                         idx, len(images),
                     )
+        # Источник: media_id из пер-чат media_store (Redis, картинки прошлых сообщений).
+        if source_media_ids:
+            chat_id = agent._ctx_get("chat_id", getattr(agent, "current_chat_id", None))
+            if chat_id is None:
+                log.warning("generate_image: chat_id неизвестен, source_media_ids пропущены")
+            else:
+                try:
+                    from agent_pm.media import media_store as _ms
+                except Exception:
+                    _ms = None
+                if _ms is not None:
+                    for _mid in source_media_ids:
+                        try:
+                            raw, meta = await _ms.get_media(chat_id, _mid)
+                            if not raw:
+                                log.warning("generate_image: media_id=%s не найден в хранилище", _mid)
+                                continue
+                            mime = (meta or {}).get("mime") or "image/png"
+                            b64 = base64.b64encode(raw).decode("ascii")
+                            source_data_uris.append(f"data:{mime};base64,{b64}")
+                            log.info("generate_image: взят media_id=%s из media_store", _mid)
+                        except Exception as e:
+                            log.warning("generate_image: media_id=%s ошибка чтения: %s", _mid, e)
 
         # ── system-промпт: базовое качество + опц. арт-дирекшен + aspect ─
         system_parts = [DEFAULT_QUALITY_SYSTEM]

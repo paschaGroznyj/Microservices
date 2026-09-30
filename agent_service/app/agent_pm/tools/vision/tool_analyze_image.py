@@ -218,7 +218,8 @@ async def _db_image_as_data_uri(agent, image_key: str) -> tuple[str | None, str 
 
 
 def make_analyze_image_tool(agent, images: list[dict] | None = None,
-                            agent_model: str | None = None):
+                            agent_model: str | None = None,
+                            chat_id=None):
     """
     Фабрика тула анализа изображений.
 
@@ -272,6 +273,7 @@ def make_analyze_image_tool(agent, images: list[dict] | None = None,
         image_index: int = 0,
         local_path: str | None = None,
         source_image_keys: list[str] | None = None,
+        source_media_ids: list[str] | None = None,
     ) -> str:
         """
         Анализирует изображение (JPEG/PNG/WEBP/GIF) и отвечает на вопрос о нём:
@@ -303,6 +305,16 @@ def make_analyze_image_tool(agent, images: list[dict] | None = None,
              сообщению. В тексте сообщения они помечены маркерами [IMAGE #0: file].
              base64 таких картинок уже на сервере — передавать его НЕ нужно.
              Номер из маркера (0 — первая, по умолчанию 0).
+
+          4. source_media_ids — список media_id из МЕДИА-ХРАНИЛИЩА этого чата
+             (Redis, TTL 24ч). Туда попадают ВСЕ картинки/файлы, присланные в
+             этом чате в прошлых сообщениях. Их реестр показывается тебе в блоке
+             «МЕДИА-ХРАНИЛИЩЕ ЧАТА» в начале запроса: там для каждого media_id
+             указано имя и (если уже смотрел) краткое описание. Используй ЭТОТ
+             источник, когда в текущем сообщении картинки нет, а надо вернуться к
+             ранее присланной («та картинка выше», «фото велосипеда из прошлого
+             сообщения»). Передай нужные media_id — будут проанализированы по
+             очереди, а их описания дозапишутся в реестр.
 
         Параметр prompt — что именно сделать с изображением — обязателен всегда.
 
@@ -358,6 +370,50 @@ def make_analyze_image_tool(agent, images: list[dict] | None = None,
                     continue
             log.error("analyze_image failed (%s): все vision-модели отказали: %s", label, last_err, exc_info=True)
             return f"Ошибка анализа изображения ({label}): ни одна vision-модель провайдера не приняла картинку. Последняя ошибка: {last_err}"
+
+        # ── Источник 0: media_id из пер-чат media_store (Redis) ───────
+        # Картинки, присланные в прошлых сообщениях этого чата. После анализа
+        # дописываем описание в реестр — чтобы в следующий раз агент видел, что на картинке.
+        _mids: list[str] = []
+        if source_media_ids is not None:
+            if isinstance(source_media_ids, list):
+                _mids = [str(m).strip() for m in source_media_ids if str(m).strip()]
+            else:
+                _sm = str(source_media_ids).strip()
+                if _sm:
+                    try:
+                        import json as _json
+                        _parsed = _json.loads(_sm)
+                        _mids = ([str(m).strip() for m in _parsed if str(m).strip()]
+                                 if isinstance(_parsed, list) else [str(_parsed).strip()])
+                    except Exception:
+                        _mids = [x.strip() for x in _sm.replace(",", " ").split() if x.strip()]
+        if _mids:
+            try:
+                from agent_pm.media import media_store as _ms
+            except Exception:
+                _ms = None
+            if _ms is None or chat_id is None:
+                return ("Медиа-хранилище недоступно в этом контексте.")
+            results: list[str] = []
+            for _mid in _mids:
+                raw, meta = await _ms.get_media(chat_id, _mid)
+                if not raw:
+                    results.append(f"[media_id={_mid}] не найдено в хранилище (истёк TTL 24ч или неверный id).")
+                    continue
+                _mime = (meta or {}).get("mime") or "image/png"
+                if len(raw) > _COMPRESS_THRESHOLD:
+                    raw, _mime = _maybe_compress(raw, _mime)
+                _b64 = base64.b64encode(raw).decode("ascii")
+                _data_uri = f"data:{_mime};base64,{_b64}"
+                out = await _run_vision(_data_uri, f"media_id={_mid}")
+                results.append(f"[media_id={_mid}]\n{out}")
+                # Дописываем описание в реестр (коротко).
+                try:
+                    await _ms.attach_description(chat_id, _mid, out)
+                except Exception:
+                    pass
+            return "\n\n".join(results)
 
         # ── Источник 1: image_key из хранилища generated_images ──────────
         if keys:
@@ -415,6 +471,16 @@ def make_analyze_image_tool(agent, images: list[dict] | None = None,
             log.warning("analyze_image: user-image compress skipped: %s", e)
             data_uri = b64 if b64.startswith("data:") else f"data:{mime};base64,{b64}"
         fname = img.get("filename", f"image_{image_index}")
-        return await _run_vision(data_uri, f"user#{image_index}:{fname}")
+        _out = await _run_vision(data_uri, f"user#{image_index}:{fname}")
+        # Если эта картинка уже лежит в media_store (media_id проставлен при upload) —
+        # дописываем описание в реестр, чтобы в следующих сообщениях агент знал, что на ней.
+        _uid = img.get("media_id")
+        if _uid and chat_id is not None:
+            try:
+                from agent_pm.media import media_store as _ms
+                await _ms.attach_description(chat_id, _uid, _out)
+            except Exception:
+                pass
+        return _out
 
     return analyze_image

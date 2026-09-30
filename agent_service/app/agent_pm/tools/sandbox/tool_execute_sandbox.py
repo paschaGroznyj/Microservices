@@ -1015,6 +1015,7 @@ def make_sandbox_execute_tool(agent):
         workspace_id: str,
         local_path: str | None = None,
         image_keys: list[str] | None = None,
+        media_ids: list[str] | None = None,
         dest: str = "",
     ) -> dict:
         """
@@ -1048,6 +1049,13 @@ def make_sandbox_execute_tool(agent):
             workspace_id: ID целевого workspace (из create_workspace)
             local_path:   опционально — локальный файл/папка (см. выше)
             image_keys:   опционально — список image_key из generated_images
+            media_ids:    опционально — список media_id из МЕДИА-ХРАНИЛИЩА чата
+                          (Redis, файлы/картинки из недавних сообщений, живут
+                          ~24ч; реестр показан в блоке «МЕДИА-ХРАНИЛИЩЕ ЧАТА»).
+                          Мост Redis→фабрика: тул достаёт бинарник из хранилища
+                          и заливает его файлом в workspace. Так на фабрику
+                          попадают и НЕ-картиночные файлы (docx/pdf/csv…),
+                          присланные пользователем ранее, а не только картинки.
             dest:         подпапка назначения внутри workspace, напр. "assets/img".
                           Пустая строка — корень workspace. Применяется к обоим
                           источникам.
@@ -1076,10 +1084,28 @@ def make_sandbox_execute_tool(agent):
                     except Exception:
                         keys = [p.strip() for p in s.strip("[]").split(",") if p.strip()]
 
-        if not local_path and not keys:
+        # Нормализация media_ids (LLM может прислать строкой/JSON/CSV)
+        mids: list[str] = []
+        if media_ids is not None:
+            if isinstance(media_ids, list):
+                mids = [str(k).strip() for k in media_ids if str(k).strip()]
+            else:
+                s = str(media_ids).strip()
+                if s:
+                    try:
+                        import json as _json
+                        parsed = _json.loads(s)
+                        if isinstance(parsed, list):
+                            mids = [str(k).strip() for k in parsed if str(k).strip()]
+                        else:
+                            mids = [str(parsed).strip()]
+                    except Exception:
+                        mids = [p.strip() for p in s.strip("[]").split(",") if p.strip()]
+
+        if not local_path and not keys and not mids:
             return str({
                 "ok": False,
-                "error": "Не указан ни local_path, ни image_keys — нечего заливать.",
+                "error": "Не указан ни local_path, ни image_keys, ни media_ids — нечего заливать.",
             })
 
         # Собираем список payload'ов: (upload_name, bytes, unpack, source_label,
@@ -1128,11 +1154,41 @@ def make_sandbox_execute_tool(agent):
                 continue
             payloads.append((upload_name, content, "false", f"image_key={k}", k))
 
+        # 2b) Файлы/картинки из пер-чат media_store (Redis) по media_id
+        media_errors: list[str] = []
+        if mids:
+            chat_id = agent._ctx_get("chat_id", getattr(agent, "current_chat_id", None))
+            if chat_id is None:
+                media_errors.append("chat_id неизвестен — media_ids пропущены")
+            else:
+                try:
+                    from agent_pm.media import media_store as _ms
+                except Exception:
+                    _ms = None
+                if _ms is None:
+                    media_errors.append("media_store недоступен")
+                else:
+                    for _mid in mids:
+                        try:
+                            raw, meta = await _ms.get_media(chat_id, _mid)
+                        except Exception as e:
+                            media_errors.append(f"media_id={_mid}: {type(e).__name__}: {e}")
+                            continue
+                        if not raw:
+                            media_errors.append(f"media_id={_mid}: не найдено (истёк TTL 24ч или неверный id)")
+                            continue
+                        if len(raw) > MAX_LOCAL_UPLOAD_SIZE:
+                            media_errors.append(f"media_id={_mid}: превышает лимит {MAX_LOCAL_UPLOAD_SIZE} б")
+                            continue
+                        _name = (meta or {}).get("name") or f"{_mid}.bin"
+                        payloads.append((_name, raw, "false", f"media_id={_mid}", None))
+
         if not payloads:
             return str({
                 "ok": False,
                 "error": "Ни один источник не удалось подготовить.",
                 "image_errors": img_errors,
+                "media_errors": media_errors,
             })
 
         # 3) Заливаем каждый payload на фабрику (unpack различается для zip/файла,
@@ -1189,6 +1245,8 @@ def make_sandbox_execute_tool(agent):
         }
         if img_errors:
             out["image_errors"] = img_errors
+        if media_errors:
+            out["media_errors"] = media_errors
         return str(out)
     
     return [

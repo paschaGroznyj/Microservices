@@ -34,6 +34,7 @@ from agent_pm.scheduler_digest import start_digest_scheduler, start_interval_dig
 import websockets
 from agent_pm.core.botocore_client import database
 from agent_pm.core import obs_file_storage
+from agent_pm.media import media_store
 from urllib.parse import quote
 logging.basicConfig(level=logging.INFO)
 
@@ -115,6 +116,7 @@ async def upload_web_files(
 ):
     parts = []
     images: list[dict] = []          # картинки JPEG/PNG для vision-тула
+    image_media_ids: list[str] = []  # media_id положенных в Redis media_store (пер-чат)
     IMAGE_MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
 
     # Серверный предохранитель: не более 10 файлов на сообщение (дубль
@@ -141,17 +143,41 @@ async def upload_web_files(
                 "mime_type": IMAGE_MIME[ext],
                 "b64": b64,
             })
+            # Кладём входящую картинку в пер-чат media-хранилище СРАЗУ (до анализа),
+            # чтобы картинка пережила текущий запрос и была доступна в следующих.
+            media_id = None
+            try:
+                media_id = await media_store.put_media(
+                    chat_id, raw, f.filename, IMAGE_MIME[ext], kind="image"
+                )
+            except Exception as _e:
+                logging.warning(f"[media_store] put_media пропущен: {_e}")
+            if media_id:
+                image_media_ids.append(media_id)
+                images[idx]["media_id"] = media_id  # чтобы analyze_image мог дописать desc
+            mid_hint = (f", media_id={media_id}" if media_id else "")
             # В текст сообщения — только лёгкий маркер с индексом.
             parts.append(
                 f"\n\n🖼️[IMAGE #{idx}: {f.filename}] "
                 f"(изображение загружено, для анализа вызови тул analyze_image "
-                f"с image_index={idx})"
+                f"с image_index={idx}{mid_hint})"
             )
             continue
 
+        # Не-image файл: тоже кладём бинарник в media_store (kind=file) — чтобы
+        # его можно было залить в workspace через upload_to_workspace(media_ids=[...]).
+        _fmid = None
+        try:
+            _fmid = await media_store.put_media(
+                chat_id, raw, f.filename,
+                "application/octet-stream", kind="file"
+            )
+        except Exception as _e:
+            logging.warning(f"[media_store] put_media(file) пропущен: {_e}")
+        _fmid_hint = (f" [media_id={_fmid}]" if _fmid else "")
         try:
             extracted_text = await asyncio.to_thread(parse_file, f.filename, raw)
-            parts.append(f"\n\n📎[FILE] [Прикрепленный файл: {f.filename}]\nСодержимое файла:\n```\n{extracted_text}\n```")
+            parts.append(f"\n\n📎[FILE] [Прикрепленный файл: {f.filename}]{_fmid_hint}\nСодержимое файла:\n```\n{extracted_text}\n```")
         except Exception as e:
             logging.error("Ошибка парсинга файла %s: %s", f.filename, e)
             parts.append(f"\n\n[Не удалось прочитать прикрепленный файл {f.filename}: {e}]")

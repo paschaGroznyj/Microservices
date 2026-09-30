@@ -85,6 +85,7 @@ const FileAttach = (() => {
 
     /* ─── toast-уведомление ──────────────────────────────────── */
     const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 МБ
+    const MAX_FILES = 10; // максимум файлов на одно сообщение
 
     function _showToast(message) {
         let container = document.getElementById('toast-container');
@@ -111,6 +112,16 @@ const FileAttach = (() => {
 
     /* ─── добавить файлы ─────────────────────────────────────── */
     function _addFiles(newFiles) {
+        // Лимит на общее число файлов в одном сообщении (с учётом уже прикреплённых).
+        let _slots = MAX_FILES - _files.length;
+        if (_slots <= 0) {
+            _showToast(`Можно прикрепить не более ${MAX_FILES} файлов.`);
+            return;
+        }
+        if (newFiles.length > _slots) {
+            _showToast(`Можно прикрепить не более ${MAX_FILES} файлов — лишние пропущены.`);
+            newFiles = newFiles.slice(0, _slots);
+        }
         newFiles.forEach(f => {
             // Проверка размера — не более 20 МБ
             if (f.size > MAX_FILE_SIZE) {

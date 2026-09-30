@@ -101,6 +101,11 @@ TG_TAG_TTL         = int(os.environ.get("TG_TAG_TTL", "20"))
 TG_TAG_WAIT        = int(os.environ.get("TG_TAG_WAIT", "10"))
 
 MAX_FILE_SIZE = 20 * 1024 * 1024
+# Максимум картинок на один пост-альбом (агент тоже режет до 10).
+TG_ALBUM_MAX   = int(os.environ.get("TG_ALBUM_MAX", "10"))
+# Окно дебаунса сборки альбома: TG шлёт кадры N отдельными
+# апдейтами с общим media_group_id; ждём тишины перед dispatch.
+TG_ALBUM_DEBOUNCE = float(os.environ.get("TG_ALBUM_DEBOUNCE", "1.3"))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -115,6 +120,10 @@ _redis: aioredis.Redis | None = None
 
 # message_id последнего "Думаю..." по chat_id (для edit_thinking)
 _thinking_messages: dict[int, int] = {}
+
+# Буфер альбомов: media_group_id -> {items, chat_id, user_id, author,
+# text, thinking_mid, task}. Кадры копятся, дебаунс-таск флашит одним dispatch.
+_album_buffers: dict[str, dict] = {}
 
 
 # ── Redis keys ──────────────────────────────────────────────────────────────────
@@ -566,41 +575,44 @@ async def orchestrator_should_respond(chat_id: int, lines: list[str]) -> bool:
 
 
 # ── Отправка одобренного сообщения в chats_service (Kafka) ──────────────────────
-async def _upload_file_to_agent(message_id: str, chat_id: int, user_id: int,
-                                file_b64: str, file_name: str):
-    """Доставка вложения агенту тем же каналом, что и web-gateway.
+async def _upload_files_to_agent(message_id, chat_id, user_id, items):
+    """Доставка 1..N вложений агенту одним multipart-POST (как web-gateway).
 
-    agent_service при has_files=True ждёт файлы по message_id через
-    wait_for_files(), которые приходят multipart-POST на /web/upload_files
-    (там же парсинг офисных файлов и подготовка картинок для vision).
-    Бот в host-режиме, порт 9001 проброшен → AGENT_SERVICE_URL доступен.
+    items: list[dict] с ключами file_b64, file_name. Агент ждёт файлы по
+    message_id через wait_for_files(); /web/upload_files принимает список
+    и сам режет до 10 шт. Каждый файл -> отдельный [IMAGE #idx] маркер.
     """
+    if not items:
+        return
     try:
-        raw = base64.b64decode(file_b64)
-        # content_type по расширению — влияет на ветку image/парсинг в agent_service
-        ext = pathlib.Path(file_name or "").suffix.lower()
-        ctype = {
-            ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
-        }.get(ext, "application/octet-stream")
+        files = []
+        for it in items:
+            raw = base64.b64decode(it["file_b64"])
+            fname = it.get("file_name") or "file"
+            ext = pathlib.Path(fname).suffix.lower()
+            ctype = {
+                ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+            }.get(ext, "application/octet-stream")
+            files.append(("files", (fname, raw, ctype)))
         data = {
             "chat_id": str(chat_id),
             "message_id": message_id,
             "user_id": str(user_id),
         }
-        files = [("files", (file_name, raw, ctype))]
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
                 f"{AGENT_SERVICE_URL}/web/upload_files", data=data, files=files
             )
             resp.raise_for_status()
-        log.info(f"file uploaded to agent chat={chat_id} msg={message_id} name={file_name}")
+        log.info(f"files uploaded to agent chat={chat_id} msg={message_id} count={len(files)}")
     except Exception as e:
-        log.error(f"upload file to agent fail chat={chat_id} msg={message_id}: {e}")
+        log.error(f"upload files to agent fail chat={chat_id} msg={message_id}: {e}")
 
 
 async def dispatch_to_agent(chat_id: int, user_id: int, username: str,
                             merged_text: str, file_b64: str | None = None,
-                            file_name: str | None = None):
+                            file_name: str | None = None,
+                            files: list | None = None):
     """
     Формирует ChatMessage (gateway_target="telegram") и шлёт в chats_service.
     Агент ответит асинхронно → endpoint_consumer → /push_message боту.
@@ -613,7 +625,13 @@ async def dispatch_to_agent(chat_id: int, user_id: int, username: str,
     settings = await get_chat_settings(chat_id)
     request_id = str(uuid.uuid4())
     message_id = str(uuid.uuid4())
-    has_files = bool(file_b64)
+    # Единый список вложений: новый путь (files=[{file_b64,file_name}]) или
+    # старый одиночный (file_b64+file_name) — обратная совместимость.
+    items = list(files) if files else ([] )
+    if not items and file_b64:
+        items = [{"file_b64": file_b64, "file_name": file_name or "file"}]
+    items = items[:10]  # жёсткий лимит 10 картинок на сообщение
+    has_files = bool(items)
 
     payload = {
         "user_id": user_id,
@@ -643,7 +661,7 @@ async def dispatch_to_agent(chat_id: int, user_id: int, username: str,
     # Файл шлём после постановки в очередь: agent_service уже ждёт его
     # по message_id (wait_for_files, окно 20с). Не роняем диалог при ошибке.
     if has_files:
-        await _upload_file_to_agent(message_id, chat_id, user_id, file_b64, file_name or "file")
+        await _upload_files_to_agent(message_id, chat_id, user_id, items)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2448,10 +2466,36 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text(f"Не удалось связаться с агентом: {str(e)[:200]}")
 
 
+async def _flush_album(gid: str):
+    """Флаш буфера альбома после дебаунс-окна: один dispatch со всеми кадрами."""
+    try:
+        await asyncio.sleep(TG_ALBUM_DEBOUNCE)
+    except asyncio.CancelledError:
+        return
+    buf = _album_buffers.pop(gid, None)
+    if not buf or not buf.get("items"):
+        return
+    items = buf["items"][:TG_ALBUM_MAX]
+    chat_id = buf["chat_id"]
+    user_id = buf["user_id"]
+    author = buf["author"]
+    raw_text = buf.get("text") or ""
+    n = len(items)
+    if raw_text:
+        merged_text = f"{author}: {raw_text}".strip()
+    else:
+        merged_text = f"{author}: [альбом из {n} картинок]"
+    log.info(f"[album] flush chat={chat_id} gid={gid} frames={n}")
+    try:
+        await dispatch_to_agent(chat_id, user_id, author, merged_text, files=items)
+    except Exception as e:
+        log.error(f"[album] dispatch fail chat={chat_id} gid={gid}: {e}")
+
+
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Фото с подписью: Telegram шлёт его как photo-сообщение (не text/document),
     текст лежит в caption. Гейт и триггер как в on_text/on_document,
-    картинка уходит в vision через _upload_file_to_agent (/web/upload_files).
+    картинка уходит в vision через _upload_files_to_agent (/web/upload_files).
     """
     chat_id = update.effective_chat.id
     if not await is_allowed(chat_id):
@@ -2491,32 +2535,51 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if photo.file_size and photo.file_size > MAX_FILE_SIZE:
         await msg.reply_text("Картинка слишком большая (лимит 20 MB).")
         return
-    # Альбом (media_group): анализируем только первый кадр, остальные — молча.
-    # Максимум одна картинка из одного пересыла/альбома.
-    if await fwd_group_already_seen(chat_id, msg.media_group_id):
-        log.info(f"[fwd] skip extra album photo (on_photo) chat={chat_id} gid={msg.media_group_id}")
-        return
-
-    # Единый guard поста (вариант Б): фото-пост с caption-тегом мог параллельно
-    # прийти в on_text (отдельный текст-апдейт с тем же смыслом) или это кадр
-    # альбома, чей брат уже связался в handle_incoming_forward. Первый, кто
-    # дошёл сюда, ставит ключ и дальше dispatch'ит; дубли молча выходят.
-    if await post_already_dispatched(chat_id, msg):
-        log.info(f"[post] skip duplicate dispatch (on_photo) chat={chat_id} mid={msg.message_id} gid={msg.media_group_id}")
-        return
 
     fname = f"photo_{photo.file_unique_id}.jpg"
     tg_file = await photo.get_file()
     file_bytearray = await tg_file.download_as_bytearray()
     file_b64 = base64.b64encode(file_bytearray).decode("utf-8")
+    item = {"file_b64": file_b64, "file_name": fname}
+
+    gid = msg.media_group_id
+    if gid:
+        # АЛЬБОМ: TG шлёт кадры N отдельными photo-апдейтами с общим
+        # media_group_id. Копим все кадры в буфер и одним dispatch'ем отправляем
+        # после дебаунс-окна (тишины). caption есть только у одного кадра.
+        key = str(gid)
+        buf = _album_buffers.get(key)
+        if buf is None:
+            thinking = await msg.reply_text("Смотрю картинки...")
+            _thinking_messages[chat_id] = thinking.message_id
+            buf = {
+                "items": [], "chat_id": chat_id, "user_id": user.id,
+                "author": author, "text": raw_text, "task": None,
+            }
+            _album_buffers[key] = buf
+        if len(buf["items"]) < TG_ALBUM_MAX:
+            buf["items"].append(item)
+        if raw_text and not buf.get("text"):
+            buf["text"] = raw_text
+        # перезапускаем дебаунс-таймер на каждый новый кадр
+        old_task = buf.get("task")
+        if old_task and not old_task.done():
+            old_task.cancel()
+        buf["task"] = asyncio.create_task(_flush_album(key))
+        return
+
+    # ОДИНОЧНОЕ фото: единый guard поста (вариант Б) — мог параллельно
+    # прийти в on_text; первый дошедший ставит ключ, дубли молча выходят.
+    if await post_already_dispatched(chat_id, msg):
+        log.info(f"[post] skip duplicate dispatch (on_photo) chat={chat_id} mid={msg.message_id}")
+        return
 
     thinking = await msg.reply_text("Смотрю картинку...")
     _thinking_messages[chat_id] = thinking.message_id
 
     merged_text = f"{author}: {raw_text}".strip() if raw_text else f"{author}: [картинка]"
     try:
-        await dispatch_to_agent(chat_id, user.id, author, merged_text,
-                                file_b64=file_b64, file_name=fname)
+        await dispatch_to_agent(chat_id, user.id, author, merged_text, files=[item])
     except Exception as e:
         await msg.reply_text(f"Не удалось связаться с агентом: {str(e)[:200]}")
 

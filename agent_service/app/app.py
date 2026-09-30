@@ -117,6 +117,16 @@ async def upload_web_files(
     images: list[dict] = []          # картинки JPEG/PNG для vision-тула
     IMAGE_MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
 
+    # Серверный предохранитель: не более 10 файлов на сообщение (дубль
+    # фронтового лимита MAX_FILES — чтобы нельзя было обойти мимо UI).
+    MAX_FILES = 10
+    if len(files) > MAX_FILES:
+        logging.warning(
+            "upload_files: получено %d файлов, обрезаю до %d (message_id=%s)",
+            len(files), MAX_FILES, message_id,
+        )
+        files = files[:MAX_FILES]
+
     for f in files:
         raw = await f.read()
         ext = os.path.splitext(f.filename or "")[1].lower()

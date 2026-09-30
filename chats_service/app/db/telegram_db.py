@@ -492,7 +492,7 @@ class TelegramDB:
                         (chat_id, added_by_user_id, kind, title, time_msk,
                          days_of_week, trigger_date, prompt, preset_key, addressed, is_active)
                     VALUES ($1,$2,'recurring',$3,$4,NULL,NULL,NULL,$5,FALSE,TRUE)
-                    ON CONFLICT (chat_id, preset_key) DO NOTHING
+                    ON CONFLICT (chat_id, preset_key) WHERE preset_key IS NOT NULL DO NOTHING
                 """, str(chat_id), added_by_user_id, title, time_msk, preset_key)
 
     async def get_alarm_trigger(self, chat_id: str, preset_key: str) -> dict | None:

@@ -27,9 +27,10 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
         "presentation_design_skill",
         "html_design_skill",
         "generate_image",
+        "find_generated_image",
     ],
     "sessions": [
-        "session_point",
+        # "session_point",
         "work_with_agent_journal",
     ],
     "skills": [
@@ -45,7 +46,7 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
         "grep_search",
         "find_files",
         # "push_message_to_telegram",
-        "work_with_email",
+        # "work_with_email",
         "connect_mcp_git",
         "execute_shell_commands",
     ],
@@ -77,6 +78,10 @@ UNIVERSAL_TOOLS: set[str] = {
     "check_task_status",
     # --- Универсальная отправка email (текст + вложения до 20МБ) ---
     "send_email",
+    # --- Планировщик собственных Telegram-триггеров (агент ставит сам) ---
+    # recurring/once по МСК; слушатель chats_service будит агента в нужное время.
+    # Работает только в TG-чатах с proactive_enabled, но тула безопасна всегда.
+    "manage_trigger",
 }
 
 # Короткие описания инструментов (1 строка на тул) для ФОНОВОГО СУПЕРВИЗОРА.
@@ -127,6 +132,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "submit_task": "Ставит долгую задачу на асинхронное исполнение в песочнице (не блокирует).",
     "check_task_status": "Проверяет статус асинхронных задач в песочнице.",
     "send_email": "Отправляет письмо (текст + вложения до 20МБ) от имени агента.",
+    "manage_trigger": "Ставит/снимает собственные Telegram-триггеры (recurring/once) по МСК — агент сам планирует отложенные само-запуски.",
     # --- рантайм-тулзы (аппендятся внутри цикла) ---
     "request_more_steps": "Запрашивает дополнительные шаги в текущем цикле, когда задача почти готова.",
     "call_subagent": "Делегирует подзадачу специализированному субагенту (изолированный LLM-цикл).",

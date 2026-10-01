@@ -65,25 +65,25 @@ def make_send_email_tool(agent=None):
         attachment_paths: Optional[List[str]] = None,
     ) -> str:
         """
-        Отправить письмо по email от имени агента.
+        Send an email on behalf of the agent.
 
-        Универсальный инструмент отправки почты: сам пишешь текст письма,
-        указываешь получателей и (опционально) прикладываешь файлы.
+        Universal email sending tool: you write the email text yourself,
+        specify the recipients, and (optionally) attach files.
 
-        Аргументы:
-            to: список email-адресов получателей (можно один).
-            subject: тема письма.
-            body: текст письма (plain text, пишешь сам).
-            attachment_paths: список путей к файлам-вложениям. Файлы должны
-                лежать строго внутри /app/generated_files (результаты
-                execute_python_code / скачанные из workspace) или /sandbox
-                (черновики). Прикрепляются как есть. Ограничение: каждый файл
-                не больше 20 МБ И суммарный размер всех вложений не больше
-                20 МБ. Если None — письмо без вложений.
+        Arguments:
+            to: list of email addresses of the recipients (one is enough).
+            subject: subject of the email.
+            body: email text (plain text, you write it yourself).
+            attachment_paths: a list of paths to the attachment files. The files should
+                lie strictly inside /app/generated_files (results
+                execute_python_code / downloaded from workspace) or /sandbox
+                (drafts). They are attached as is. Limitation: each file
+                no more than 20 MB And the total size of all attachments is no more
+                20 MB. If None— it is an email without attachments.
 
-        Возвращает строку-отчёт: кому ушло письмо и какие файлы приложены,
-        либо понятную причину ошибки (пустой список, превышение лимита,
-        файл вне разрешённых папок, ошибка SMTP).
+        Returns a report string: to whom the email was sent and which files are attached,
+        or a clear reason for an error (empty list, exceeding the limit,
+        file outside allowed folders, SMTP error).
         """
         # ── Валидация получателей ──────────────────────────────────────────
         if isinstance(to, str):

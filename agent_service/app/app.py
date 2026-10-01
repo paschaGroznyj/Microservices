@@ -10,6 +10,7 @@ import json
 import logging
 import base64
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
@@ -33,6 +34,7 @@ from agent_pm.scheduler_digest import start_digest_scheduler, start_interval_dig
 import websockets
 from agent_pm.core.botocore_client import database
 from agent_pm.core import obs_file_storage
+from agent_pm.media import media_store
 from urllib.parse import quote
 logging.basicConfig(level=logging.INFO)
 
@@ -114,7 +116,18 @@ async def upload_web_files(
 ):
     parts = []
     images: list[dict] = []          # картинки JPEG/PNG для vision-тула
+    image_media_ids: list[str] = []  # media_id положенных в Redis media_store (пер-чат)
     IMAGE_MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
+
+    # Серверный предохранитель: не более 10 файлов на сообщение (дубль
+    # фронтового лимита MAX_FILES — чтобы нельзя было обойти мимо UI).
+    MAX_FILES = 10
+    if len(files) > MAX_FILES:
+        logging.warning(
+            "upload_files: получено %d файлов, обрезаю до %d (message_id=%s)",
+            len(files), MAX_FILES, message_id,
+        )
+        files = files[:MAX_FILES]
 
     for f in files:
         raw = await f.read()
@@ -130,17 +143,41 @@ async def upload_web_files(
                 "mime_type": IMAGE_MIME[ext],
                 "b64": b64,
             })
+            # Кладём входящую картинку в пер-чат media-хранилище СРАЗУ (до анализа),
+            # чтобы картинка пережила текущий запрос и была доступна в следующих.
+            media_id = None
+            try:
+                media_id = await media_store.put_media(
+                    chat_id, raw, f.filename, IMAGE_MIME[ext], kind="image"
+                )
+            except Exception as _e:
+                logging.warning(f"[media_store] put_media пропущен: {_e}")
+            if media_id:
+                image_media_ids.append(media_id)
+                images[idx]["media_id"] = media_id  # чтобы analyze_image мог дописать desc
+            mid_hint = (f", media_id={media_id}" if media_id else "")
             # В текст сообщения — только лёгкий маркер с индексом.
             parts.append(
                 f"\n\n🖼️[IMAGE #{idx}: {f.filename}] "
                 f"(изображение загружено, для анализа вызови тул analyze_image "
-                f"с image_index={idx})"
+                f"с image_index={idx}{mid_hint})"
             )
             continue
 
+        # Не-image файл: тоже кладём бинарник в media_store (kind=file) — чтобы
+        # его можно было залить в workspace через upload_to_workspace(media_ids=[...]).
+        _fmid = None
+        try:
+            _fmid = await media_store.put_media(
+                chat_id, raw, f.filename,
+                "application/octet-stream", kind="file"
+            )
+        except Exception as _e:
+            logging.warning(f"[media_store] put_media(file) пропущен: {_e}")
+        _fmid_hint = (f" [media_id={_fmid}]" if _fmid else "")
         try:
             extracted_text = await asyncio.to_thread(parse_file, f.filename, raw)
-            parts.append(f"\n\n📎[FILE] [Прикрепленный файл: {f.filename}]\nСодержимое файла:\n```\n{extracted_text}\n```")
+            parts.append(f"\n\n📎[FILE] [Прикрепленный файл: {f.filename}]{_fmid_hint}\nСодержимое файла:\n```\n{extracted_text}\n```")
         except Exception as e:
             logging.error("Ошибка парсинга файла %s: %s", f.filename, e)
             parts.append(f"\n\n[Не удалось прочитать прикрепленный файл {f.filename}: {e}]")
@@ -388,10 +425,22 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     agent_model = payload.get("agent_model")
     gateway_target = payload.get("gateway_target", "main")
 
+    # Проактивная инициация (будильники завтрак/обед/ужин + poke). Бот шлёт
+    # спец-payload без "живого" текста от человека: initiated=True + слот/адресность.
+    tg_initiated = bool(payload.get("initiated", False))
+    tg_slot = payload.get("slot")                 # morning|lunch|dinner|poke
+    tg_addressed = bool(payload.get("addressed", False))
+    tg_target_username = payload.get("target_username")
+    tg_sad = bool(payload.get("sad_followup", False))
+    tg_custom_prompt = payload.get("custom_prompt")
+
 
     if is_from_bot or user_id == -1:
         return
-    if not text or chat_id is None:
+    # Для проактивной инициации текст в payload может быть пустым — генерим сами.
+    if (not text) and (not tg_initiated):
+        pass
+    if (not text and not tg_initiated) or chat_id is None:
         logging.warning(f"Некорректное сообщение: {payload}")
         return
     print("ВНУТРИ АГЕНТА", payload)
@@ -401,17 +450,56 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
         return
 
     # message = f"[CatchPM, ТабельНомер: 23423423, Пользователь: Иванов Иванон Иваныч, user_id=-1234]\n" + text
-    message = f"[CatchPM, ТабельНомер: {tb_name}, Пользователь: {username}, chat_id: {chat_id}, user_id: {user_id}]\n" + text
+    is_telegram = (gateway_target == "telegram")
+    if is_telegram:
+        # Источник Telegram: своя шапка (без CatchPM/табельного).
+        from agent_pm.telegram.tg_integration import (
+            build_tg_prefix, DEFAULT_TG_MODEL,
+            build_initiation_prompt, build_sad_followup_prompt,
+            build_custom_trigger_prompt,
+        )
+        _chat_type = "group" if str(chat_id).startswith("-") else "private"
+        # slot от бота: для preset-будильников это breakfast|lunch|dinner,
+        # для broadcast-совместимости также morning|lunch|dinner, для тычка poke.
+        _preset_slots = {"breakfast", "lunch", "dinner", "morning"}
+        if tg_initiated:
+            # Проактив: текст задачи агент генерит из промпта инициации/грусти.
+            if tg_slot == "reaction" and tg_custom_prompt:
+                # Триггер по реакциям: промпт уже готов (build_reaction_proactive_prompt) — идёт как есть.
+                message = tg_custom_prompt
+            elif tg_sad:
+                message = build_sad_followup_prompt(tg_target_username)
+            elif (tg_custom_prompt and tg_custom_prompt.strip()) or (tg_slot in _preset_slots):
+                # Триггер по расписанию: либо custom_prompt, либо preset-будильник
+                # (breakfast/lunch/dinner) с пустым промптом -> дефолтная задача по preset.
+                message = build_custom_trigger_prompt(
+                    tg_custom_prompt or "", tg_target_username,
+                    chat_type=_chat_type, addressed=tg_addressed,
+                    preset_key=tg_slot,
+                )
+            else:
+                message = build_initiation_prompt(
+                    tg_slot or "poke", tg_target_username,
+                    chat_type=_chat_type, addressed=tg_addressed,
+                )
+        else:
+            message = build_tg_prefix(username, chat_id, _chat_type) + text
+        if not agent_model:
+            agent_model = DEFAULT_TG_MODEL
+    else:
+        message = f"[CatchPM, ТабельНомер: {tb_name}, Пользователь: {username}, chat_id: {chat_id}, user_id: {user_id}]\n" + text
 
-    selected_skills = await db.get_selected_skills_for_user(int(user_id))
-    if selected_skills:
-        selected_chunks = []
-        for idx, sk in enumerate(selected_skills, start=1):
-            tools = ", ".join(sk.get("tools") or []) or "не указаны"
-            selected_chunks.append(
-                f"#{idx} [id={sk.get('id')}] {sk.get('theme')}\nИнструменты: {tools}\n{sk.get('body')}"
-            )
-        message += "\n\n[SELECTED_SKILLS_CONTEXT] Ниже скиллы, выбранные пользователем (до 5). Учитывай их как приоритетные инструкции, если они релевантны запросу:\n" + "\n\n".join(selected_chunks)
+    # Скиллы юзера — только для CatchPM (в Telegram user_id это tg-id, не наш users).
+    if not is_telegram:
+        selected_skills = await db.get_selected_skills_for_user(int(user_id))
+        if selected_skills:
+            selected_chunks = []
+            for idx, sk in enumerate(selected_skills, start=1):
+                tools = ", ".join(sk.get("tools") or []) or "не указаны"
+                selected_chunks.append(
+                    f"#{idx} [id={sk.get('id')}] {sk.get('theme')}\nИнструменты: {tools}\n{sk.get('body')}"
+                )
+            message += "\n\n[SELECTED_SKILLS_CONTEXT] Ниже скиллы, выбранные пользователем (до 5). Учитывай их как приоритетные инструкции, если они релевантны запросу:\n" + "\n\n".join(selected_chunks)
 
     images: list[dict] = []
     if has_files and message_id:
@@ -429,7 +517,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                                             request_id=request_id, user_id=user_id, 
                                             chat_id=chat_id, database=db, selected_tools=selected_tools,
                                             context_size=context_size,
-                                            source="CatchPM",
+                                            source=("telegram" if is_telegram else "CatchPM"),
                                             agent_model=agent_model,
                                             images=images,
                                             gateway_target=gateway_target)
@@ -447,12 +535,12 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             attached_files = []
             for f in files_to_send:
                 if f.get("kind") == "image":
-                    attached_files.append({
+                    entry = {
                         "name": f.get("name") or "image.jpg",
                         "path": f.get("path"),
                         "kind": "image",
                         "image_key": f.get("image_key"),
-                    })
+                    }
                 else:
                     # Не-image файл: заливаем в OBS (obs://{OBS_BUCKET}/catchpm/{chat_id}/...).
                     # Ключ детерминирован от (chat_id + local_path), поэтому
@@ -461,11 +549,68 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                         await obs_file_storage.upload_user_file(f["path"], chat_id)
                     except Exception as _obs_err:
                         logging.error(f"OBS upload failed for {f.get('path')}: {_obs_err}")
-                    attached_files.append({
+                    entry = {
                         "name": os.path.basename(f["path"]),
                         "path": f["path"],
                         "kind": f.get("kind"),
-                    })
+                    }
+
+                # Для Telegram host-бот изолирован от ФС агента (разные контейнеры),
+                # поэтому os.path.exists(path) на его стороне вернёт False и файл
+                # молча не отправится. Дочитываем байты ЗДЕСЬ и кладём base64 в
+                # payload — бот возьмёт file_b64 без обращения к диску. Лимит TG 20MB.
+                if is_telegram:
+                    try:
+                        _fpath = entry.get("path")
+                        if _fpath and os.path.exists(_fpath):
+                            _size = os.path.getsize(_fpath)
+                            # Мелкие файлы — inline base64 (быстро, без второго HTTP).
+                            # Крупные (> TG_INLINE_B64_MAX) НЕ кладём в Kafka как base64
+                            # (MessageSizeTooLargeError, лимит брокера ~1 МБ). Вместо байтов
+                            # кладём file_url — бот (host-режим, порт 9001) сам скачает файл
+                            # с /web/file, который отдаёт его с диска или из OBS.
+                            _inline_max = int(os.getenv("TG_INLINE_B64_MAX", str(700 * 1024)))
+                            if entry.get("kind") != "image" and _size <= 20 * 1024 * 1024:
+                                if _size <= _inline_max:
+                                    with open(_fpath, "rb") as _fh:
+                                        entry["file_b64"] = base64.b64encode(_fh.read()).decode("ascii")
+                                else:
+                                    entry["file_url"] = (
+                                        f"/web/file?path={quote(_fpath)}"
+                                        f"&chat_id={quote(str(chat_id))}"
+                                    )
+                                    logging.info(
+                                        f"[telegram] файл {_fpath} = {_size} байт > {_inline_max}, "
+                                        f"уходит через file_url (бот скачает с /web/file, Kafka лёгкая)"
+                                    )
+                            elif entry.get("kind") == "image" and _size <= 20 * 1024 * 1024:
+                                with open(_fpath, "rb") as _fh:
+                                    entry["file_b64"] = base64.b64encode(_fh.read()).decode("ascii")
+                            else:
+                                logging.warning(
+                                    f"[telegram] файл {_fpath} = {_size} байт > 20MB, "
+                                    f"не влезает в лимит TG, пропускаю"
+                                )
+                        else:
+                            # Сгенерированные картинки (generate_image) лежат НЕ на диске,
+                            # а в БД generated_images (bytea), path=None.
+                            # ВАЖНО: base64 картинки (~1+ МБ) В payload ломает Kafka
+                            # (MessageSizeTooLargeError, дефолтный лимит 1 МБ). Поэтому
+                            # бинарник СЮДА НЕ кладём — оставляем только image_key.
+                            # chats-consumer перед отправкой в Telegram сам достанет
+                            # картинку из generated_images по image_key и b64-закодирует.
+                            _img_key = entry.get("image_key")
+                            if entry.get("kind") == "image" and _img_key:
+                                logging.info(
+                                    f"[telegram] картинка image_key={_img_key} пойдёт через image_key "
+                                    f"(бинарник тянет chats-consumer, Kafka лёгкая)"
+                                )
+                            else:
+                                logging.warning(f"[telegram] файл не найден на диске агента: {_fpath}")
+                    except Exception as _b64_err:
+                        logging.error(f"[telegram] не удалось прочитать файл в base64: {_b64_err}")
+
+                attached_files.append(entry)
 
         message_id = f"msg-{int(time.time() * 1000)}-{str(uuid.uuid4())[:8]}"
 
@@ -859,6 +1004,135 @@ async def handle_tg_message(req: TgMessageRequest) -> TgMessageResponse:
     return TgMessageResponse(reply=enriched)
     # return TgMessageResponse(reply=reply)
     # return TgMessageResponse(reply="NOTHING")
+
+class TgShouldRespondRequest(BaseModel):
+    chat_id: int
+    buffer_lines: list[str] = []   # ["Ник: текст", ...] из Redis-буфера бота
+
+
+class TgShouldRespondResponse(BaseModel):
+    respond: bool
+
+
+@tg_router.post("/should_respond", response_model=TgShouldRespondResponse)
+async def tg_should_respond(req: TgShouldRespondRequest) -> TgShouldRespondResponse:
+    """
+    Оркестратор на llm_lite: по буферу последних сообщений группы
+    решает, обращаются ли к агенту. Буфер готовит бот (из Redis),
+    БД для контекста не трогаем. Fail-open в сторону молчания.
+    """
+    if _agent is None:
+        return TgShouldRespondResponse(respond=False)
+    try:
+        from agent_pm.telegram.tg_integration import should_respond, get_tg_chat_settings
+        # подтянем имя агента из настроек чата (fail-open: None → дефолтный промпт)
+        agent_name = None
+        try:
+            cfg = await get_tg_chat_settings(getattr(_agent, "db", None), str(req.chat_id))
+            agent_name = cfg.get("agent_name")
+        except Exception:
+            pass
+        ok = await should_respond(_agent, req.buffer_lines, agent_name)
+        return TgShouldRespondResponse(respond=bool(ok))
+    except Exception as e:
+        logging.error(f"tg_should_respond failed: {e}")
+        return TgShouldRespondResponse(respond=False)
+
+
+class TgReactionRequest(BaseModel):
+    chat_id: int
+    agent_message_id: str | None = None   # agent uuid сообщения бота (для БД-аналитики)
+    emoji: str = ""
+    action: str = "add"                     # add | remove
+    user_id: int | None = None
+    username: str | None = None
+    agent_text: str = ""                    # текст сообщения бота, на которое реакция
+
+
+class TgReactionResponse(BaseModel):
+    sentiment: str = "neutral"
+    note: str = ""
+
+
+@tg_router.post("/analyze_reaction", response_model=TgReactionResponse)
+async def tg_analyze_reaction(req: TgReactionRequest) -> TgReactionResponse:
+    """Лайт-анализ реакции на сообщение бота + запись в БД (аналитика).
+
+    Бот дёргает этот эндпоинт когда прилетает message_reaction. Возвращает
+    sentiment (pos|neg|neutral) + note, чтобы бот решил про проактив.
+    Сам анализ — на llm_lite. Fail-open → neutral.
+    """
+    if _agent is None:
+        return TgReactionResponse()
+    try:
+        from agent_pm.telegram.tg_integration import analyze_reaction
+        text = req.agent_text or ""
+        # если текст не пришёл — подтянем из БД по agent_message_id
+        if not text and req.agent_message_id and getattr(_agent, "db", None):
+            try:
+                text = await _agent.db.get_bot_message_text(req.agent_message_id) or ""
+            except Exception:
+                pass
+        res = await analyze_reaction(_agent, req.emoji, req.action, text)
+        # запись реакции в БД (аналитика) — fail-open
+        if req.agent_message_id and getattr(_agent, "db", None):
+            try:
+                await _agent.db.append_reaction(req.agent_message_id, {
+                    "user_id": req.user_id,
+                    "username": req.username,
+                    "emoji": req.emoji,
+                    "action": req.action,
+                    "sentiment": res.get("sentiment", "neutral"),
+                    "note": res.get("note", ""),
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                })
+            except Exception as e:
+                logging.warning(f"append_reaction fail: {e}")
+        return TgReactionResponse(sentiment=res.get("sentiment", "neutral"), note=res.get("note", ""))
+    except Exception as e:
+        logging.error(f"tg_analyze_reaction failed: {e}")
+        return TgReactionResponse()
+
+
+class TgReactionsFeedbackRequest(BaseModel):
+    reactions: list = []
+
+
+class TgReactionsFeedbackResponse(BaseModel):
+    feedback: str = ""
+
+
+@tg_router.post("/build_reactions_feedback", response_model=TgReactionsFeedbackResponse)
+async def tg_build_reactions_feedback(req: TgReactionsFeedbackRequest) -> TgReactionsFeedbackResponse:
+    """Собирает feedback-блок по реакциям для большого агента."""
+    try:
+        from agent_pm.telegram.tg_integration import build_reactions_feedback
+        return TgReactionsFeedbackResponse(feedback=build_reactions_feedback(req.reactions or []))
+    except Exception as e:
+        logging.error(f"build_reactions_feedback failed: {e}")
+        return TgReactionsFeedbackResponse()
+
+
+class TgReactionPromptRequest(BaseModel):
+    kind: str = "pos"
+    reactions: list = []
+    count: int = 0
+
+
+class TgReactionPromptResponse(BaseModel):
+    prompt: str = ""
+
+
+@tg_router.post("/build_reaction_prompt", response_model=TgReactionPromptResponse)
+async def tg_build_reaction_prompt(req: TgReactionPromptRequest) -> TgReactionPromptResponse:
+    """Проактив-промпт по реакциям (pos: развить тему / neg: шутливо уточнить, что не так)."""
+    try:
+        from agent_pm.telegram.tg_integration import build_reaction_proactive_prompt
+        return TgReactionPromptResponse(prompt=build_reaction_proactive_prompt(req.kind, req.reactions or []))
+    except Exception as e:
+        logging.error(f"build_reaction_prompt failed: {e}")
+        return TgReactionPromptResponse()
+
 
 @service_router.post("/message", response_model=ServiceMessageResponse, status_code=202)
 async def handle_service_message(req: ServiceMessageRequest):

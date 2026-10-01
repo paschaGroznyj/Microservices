@@ -6,8 +6,14 @@ from kafka import KafkaConsumer
 from app.db.chats_tables import DataBaseChats
 from app.core.config import KAFKA_BROKER
 from typing import List
+import os
+import base64
 import requests  # Для отправки сообщений обратно в основной сервис
 import time
+
+# Обратный путь для Telegram: ответ агента (gateway_target=="telegram") шлём
+# не на гейтвей, а прямо телеграм-боту (host-режим) через docker gateway IP.
+TG_BOT_PUSH_URL = os.getenv("TG_BOT_PUSH_URL", "http://172.18.0.1:8010/push_message")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -74,7 +80,8 @@ class DBConsumer:
             attached_files = payload.get("attached_files") or payload.get("files")
             tool_trace = payload.get("tool_trace")
             gateway_target = (payload.get("gateway_target") or "main").lower()
-            if gateway_target not in self.gateway_urls:
+            # telegram — валидный таргет (обратный путь не на гейтвей, а боту).
+            if gateway_target not in self.gateway_urls and gateway_target != "telegram":
                 gateway_target = "main"
             logging.info(payload)
             logging.info(f"gateway_target={gateway_target}")
@@ -104,6 +111,11 @@ class DBConsumer:
             elapsed = time.perf_counter() - start
             logging.info(f"Message Service. Время чтобы вытащить из кафки и положить в БД = {elapsed:.4f}s")
             # Если сообщение от бота, отправляем обратно в основной сервис для WebSocket
+            if is_from_bot and gateway_target == "telegram":
+                # Ответ агента для Telegram: пушим напрямую боту (host-режим).
+                await self.send_to_telegram(chat_id, message, attached_files, message_id=message_id)
+                return
+
             if is_from_bot:
                 type_agent = payload.get("type_agent", "pm")
                 logging.info(type_agent)
@@ -128,6 +140,78 @@ class DBConsumer:
 
         except Exception as e:
             logger.error(f"Ошибка обработки сообщения: {e}")
+
+    async def _hydrate_tg_files(self, files):
+        """Для Telegram дочитываем бинарник картинок из БД (Вариант B).
+
+        Агент СПЕЦИАЛЬНО НЕ кладёт base64 сгенерированных картинок в
+        Kafka-payload (бьёт лимит 1 МБ, MessageSizeTooLargeError) — он
+        передаёт только image_key. Здесь, непосредственно перед
+        отправкой боту, тянем бинарник из generated_images и b64-кодируем.
+        Kafka остаётся лёгкой, БД messages не раздувается.
+        """
+        if not files:
+            return files
+        MAX_TG = 20 * 1024 * 1024
+        for f in files:
+            try:
+                if f.get("file_b64"):
+                    continue  # уже есть бинарник (файлы с диска агента)
+                img_key = f.get("image_key")
+                if f.get("kind") != "image" or not img_key:
+                    continue
+                async with self.db.pool.acquire() as conn:
+                    row = await conn.fetchrow(
+                        "SELECT image_data FROM generated_images "
+                        "WHERE image_key::text = $1 LIMIT 1",
+                        str(img_key).strip(),
+                    )
+                if row and row["image_data"]:
+                    size = len(row["image_data"])
+                    if size <= MAX_TG:
+                        f["file_b64"] = base64.b64encode(row["image_data"]).decode("ascii")
+                        logging.info(
+                            f"[telegram] картинка из БД image_key={img_key} = {size} байт "
+                            f"→ file_b64 подставлен (consumer, Kafka лёгкая)"
+                        )
+                    else:
+                        logging.warning(
+                            f"[telegram] картинка image_key={img_key} = {size} байт > 20MB, пропускаю"
+                        )
+                else:
+                    logging.warning(
+                        f"[telegram] картинка image_key={img_key} не найдена в generated_images"
+                    )
+            except Exception as e:
+                logging.error(f"[telegram] не удалось дочитать картинку из БД: {e}")
+        return files
+
+    async def send_to_telegram(self, chat_id: str, text: str, files=None, message_id=None):
+        """Ответ агента → телеграм-бот (host-режим, эндпоинт /push_message).
+
+        Бот сам нарежет длинный текст и починит HTML-теги. Для картинок
+        (сгенерированных агентом) бинарник лежит в БД (Вариант B):
+        дочитываем file_b64 по image_key ЗДЕСЬ, чтобы не гнать base64
+        через Kafka (лимит 1 МБ).
+        """
+        try:
+            start = time.perf_counter()
+            files = await self._hydrate_tg_files(files)
+            payload = {
+                "chat_id": str(chat_id),
+                "text": text or "",
+                "files": files or None,
+                # бот отредактирует свой плейсхолдер «Думаю...» вместо нового сообщения
+                "edit_thinking": True,
+                # agent message_id — для связки TG-реакций с записью в БД
+                "agent_message_id": message_id,
+            }
+            response = requests.post(TG_BOT_PUSH_URL, json=payload, timeout=30)
+            logger.info(f"Ответ агента отправлен в Telegram: {response.status_code}")
+            elapsed = time.perf_counter() - start
+            logging.info(f"Message Service. Время отправки ответа в Telegram = {elapsed:.4f}s")
+        except Exception as e:
+            logger.error(f"Ошибка отправки в Telegram: {e}")
 
     async def send_to_main_service(self, chat_id: str, message: dict, gateway_url: str):
         """Отправляем сообщение обратно в основной сервис для WebSocket"""

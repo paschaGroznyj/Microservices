@@ -19,23 +19,23 @@ def make_workspace_codeedit_tools(agent):
         limit: int = 0,
     ) -> str:
         """
-        Читает текстовый файл (код/конфиг) ВНУТРИ workspace на фабрике.
+        Reads a text file (code/config) INSIDE the workspace on the factory.
 
-        В отличие от read_file (который читает локальную ФС агента /app и /sandbox),
-        этот тул тянет файл из persistent workspace фабрики по HTTP.
+        Unlike read_file (which reads the local agent file system /app and /sandbox),
+        this tool pulls the file from the persistent workspace of the factory via HTTP.
 
-        Аргументы:
-            workspace_id: ID workspace (из create_workspace)
-            path:         относительный путь внутри workspace, напр.
-                          "src/app.py" или "static/js/fluid.js"
-            offset:       с какой строки читать (0 = с начала)
-            limit:        сколько строк прочитать (0 = до конца).
-                          Для больших файлов читай окном: offset=0 limit=200,
-                          посмотри total_lines, потом offset=200 limit=200 и т.д.
+        Arguments:
+            workspace_id: workspace ID (from create_workspace)
+            path:         relative path inside the workspace, e.g.
+                          "src/app.py" or "static/js/fluid.js"
+            offset:       from which line to read (0 = from the beginning)
+            limit:        how many lines to read (0 = to the end).
+                          For large files, read in chunks: offset=0 limit=200,
+                          check total_lines, then offset=200 limit=200, etc.
 
-        Возвращает текст файла с метаданными (total_lines, shown_lines).
-        Используй перед edit_workspace_file, чтобы скопировать точный
-        фрагмент для old_str.
+        Returns the file text with metadata (total_lines, shown_lines).
+        Use before edit_workspace_file to copy the exact
+        fragment for old_str.
         """
         params = {"path": path, "offset": offset, "limit": limit}
         try:
@@ -72,24 +72,24 @@ def make_workspace_codeedit_tools(agent):
         new_str: str,
     ) -> str:
         """
-        Точечно редактирует файл ВНУТРИ workspace на фабрике (find & replace).
-        Сама замена выполняется НА СТОРОНЕ ФАБРИКИ атомарно — агент шлёт
-        только {path, old_str, new_str}, файл целиком туда-сюда не гоняется.
+        Edits the file INSIDE the workspace in the factory (find & replace).
+        The replacement itself is performed atomically ON THE FACTORY SIDE — the agent sends
+        only {path, old_str, new_str}, the entire file is not chased back and forth.
 
-        В отличие от edit_sandbox_file (локальный /sandbox), правит файл
-        в persistent workspace, где живёт код для execute_python_code /
+        Unlike edit_sandbox_file (local /sandbox), it edits the file
+        in the persistent workspace where the code for execute_python_code lives /
         execute_shell_commands.
 
-        Аргументы:
-            workspace_id: ID workspace
-            path:         относительный путь к файлу внутри workspace
-            old_str:      точный фрагмент для замены. Должен встречаться
-                          РОВНО один раз — иначе фабрика вернёт ошибку 409
-                          (0 вхождений или >1). При >1 добавь больше контекста.
-            new_str:      текст замены. Пустая строка удаляет old_str.
+        Arguments:
+            workspace_id: workspace ID
+            path:         relative path to the file within the workspace
+            old_str:      exact fragment to replace. Must occur
+                          EXACTLY once — otherwise, the factory will return error 409
+                          (0 occurrences or >1). If >1, add more context.
+            new_str:      replacement text. An empty line deletes old_str.
 
-        Порядок работы: сначала read_workspace_file, скопируй точный кусок
-        (с отступами и пробелами) в old_str, затем edit_workspace_file.
+        How to work: read_workspace_file first, copy the exact piece.
+        (with indents and spaces) in old_str, then edit_workspace_file.
         """
         payload = {"path": path, "old_str": old_str, "new_str": new_str}
         try:

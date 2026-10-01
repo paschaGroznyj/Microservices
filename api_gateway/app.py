@@ -638,6 +638,185 @@ async def get_permissions(request: Request):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Telegram-чаты: встраивание из CatchPM UI (раздел в профиле, любой юзер видит свои чаты).
+# Прокси в chats_service /tg/*. added_by_user_id проставляется из текущей сессии.
+# ─────────────────────────────────────────────────────────────────────────────
+class TgChatUpsert(BaseModel):
+    chat_id: str
+    system_prompt: Optional[str] = None
+    agent_name: Optional[str] = None
+    agent_model: Optional[str] = None
+    selected_tools: Optional[list] = None
+    trigger_mode: Optional[str] = None
+    orchestrator_context_n: Optional[int] = None
+    proactive_enabled: Optional[bool] = None
+
+
+class TgSettingsUpdate(BaseModel):
+    system_prompt: Optional[str] = None
+    agent_name: Optional[str] = None
+    agent_model: Optional[str] = None
+    selected_tools: Optional[list] = None
+    trigger_mode: Optional[str] = None
+    orchestrator_context_n: Optional[int] = None
+    proactive_enabled: Optional[bool] = None
+
+
+class TgTriggerUpsert(BaseModel):
+    kind: str = "recurring"            # 'recurring' | 'once'
+    title: Optional[str] = None
+    time_msk: str = "09:00"            # 'HH:MM'
+    days_of_week: Optional[list] = None  # [1..7] пн..вс; None/[] = все дни
+    trigger_date: Optional[str] = None   # 'YYYY-MM-DD' для kind=once
+    prompt: Optional[str] = None
+    addressed: Optional[bool] = False
+    is_active: Optional[bool] = True
+
+
+class TgTriggerPatchIn(BaseModel):
+    kind: Optional[str] = None
+    title: Optional[str] = None
+    time_msk: Optional[str] = None
+    days_of_week: Optional[list] = None
+    trigger_date: Optional[str] = None
+    prompt: Optional[str] = None
+    addressed: Optional[bool] = None
+    is_active: Optional[bool] = None
+
+
+async def _require_auth(request: Request):
+    """Гейт: любой аутентифицированный юзер. Иначе 401."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
+
+
+@app.get("/api/tg/chats")
+async def api_tg_list_chats(request: Request):
+    user = await _require_auth(request)
+    chats_url = SERVICES['chats']['url']
+    try:
+        resp = await app.state.http_client.get(
+            f"{chats_url}/tg/chats", params={"added_by_user_id": user["user_id"]}, timeout=10.0
+        )
+        return JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Chats service dead: {str(e)}")
+
+
+@app.post("/api/tg/chats")
+async def api_tg_add_chat(request: Request, body: TgChatUpsert):
+    user = await _require_auth(request)
+    chats_url = SERVICES['chats']['url']
+    payload = body.dict()
+    payload["added_by_user_id"] = user["user_id"]
+    try:
+        resp = await app.state.http_client.post(
+            f"{chats_url}/tg/chats", json=payload, timeout=10.0
+        )
+        return JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Chats service dead: {str(e)}")
+
+
+@app.delete("/api/tg/chats/{chat_id}")
+async def api_tg_remove_chat(request: Request, chat_id: str):
+    await _require_auth(request)
+    chats_url = SERVICES['chats']['url']
+    try:
+        resp = await app.state.http_client.delete(
+            f"{chats_url}/tg/chats/{quote(chat_id, safe='')}", timeout=10.0
+        )
+        return JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Chats service dead: {str(e)}")
+
+
+# --- Telegram triggers (per-chat, edited by owner) ---
+@app.get("/api/tg/triggers/{chat_id}")
+async def api_tg_list_triggers(request: Request, chat_id: str):
+    await _require_auth(request)
+    chats_url = SERVICES['chats']['url']
+    try:
+        resp = await app.state.http_client.get(
+            f"{chats_url}/tg/triggers/{quote(chat_id, safe='')}", timeout=10.0
+        )
+        return JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Chats service dead: {str(e)}")
+
+
+@app.post("/api/tg/triggers/{chat_id}")
+async def api_tg_create_trigger(request: Request, chat_id: str, body: TgTriggerUpsert):
+    user = await _require_auth(request)
+    chats_url = SERVICES['chats']['url']
+    payload = body.dict()
+    payload["added_by_user_id"] = user["user_id"]
+    try:
+        resp = await app.state.http_client.post(
+            f"{chats_url}/tg/triggers/{quote(chat_id, safe='')}", json=payload, timeout=10.0
+        )
+        return JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Chats service dead: {str(e)}")
+
+
+@app.patch("/api/tg/triggers/{chat_id}/{trigger_id}")
+async def api_tg_update_trigger(request: Request, chat_id: str, trigger_id: int, body: TgTriggerPatchIn):
+    await _require_auth(request)
+    chats_url = SERVICES['chats']['url']
+    payload = {k: v for k, v in body.dict().items() if v is not None}
+    try:
+        resp = await app.state.http_client.patch(
+            f"{chats_url}/tg/triggers/{quote(chat_id, safe='')}/{trigger_id}", json=payload, timeout=10.0
+        )
+        return JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Chats service dead: {str(e)}")
+
+
+@app.delete("/api/tg/triggers/{chat_id}/{trigger_id}")
+async def api_tg_delete_trigger(request: Request, chat_id: str, trigger_id: int):
+    await _require_auth(request)
+    chats_url = SERVICES['chats']['url']
+    try:
+        resp = await app.state.http_client.delete(
+            f"{chats_url}/tg/triggers/{quote(chat_id, safe='')}/{trigger_id}", timeout=10.0
+        )
+        return JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Chats service dead: {str(e)}")
+
+
+@app.get("/api/tg/settings/{chat_id}")
+async def api_tg_get_settings(request: Request, chat_id: str):
+    await _require_auth(request)
+    chats_url = SERVICES['chats']['url']
+    try:
+        resp = await app.state.http_client.get(
+            f"{chats_url}/tg/settings/{quote(chat_id, safe='')}", timeout=10.0
+        )
+        return JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Chats service dead: {str(e)}")
+
+
+@app.post("/api/tg/settings/{chat_id}")
+async def api_tg_set_settings(request: Request, chat_id: str, body: TgSettingsUpdate):
+    await _require_auth(request)
+    chats_url = SERVICES['chats']['url']
+    try:
+        resp = await app.state.http_client.post(
+            f"{chats_url}/tg/settings/{quote(chat_id, safe='')}",
+            json=body.dict(), timeout=10.0
+        )
+        return JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Chats service dead: {str(e)}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # What's New (обновления приложения) + Onboarding (демо-модалка).
 # Аутентификация — на стороне gateway (get_current_user по куке), в auth_service
 # проксируем уже готовый user_id в теле (как /profile/me).

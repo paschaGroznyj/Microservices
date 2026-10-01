@@ -34,35 +34,32 @@ def make_parse_page_tool(agent):
         headers: Optional[dict] = None,
     ) -> str:
         """
-        Открывает несколько веб-страниц и извлекает из них текстовое содержимое:
-        заголовки (h1-h6), параграфы, списки, таблицы и ссылки.
-        HTML-разметка удаляется, результат возвращается как чистый текст.
+        Opens several web pages and extracts text content from them:
+        headings (h1-h6), paragraphs, lists, tables, and links.
+        HTML markup is removed, and the result is returned as plain text.
  
-        Используй этот инструмент когда нужно:
-          - прочитать содержимое конкретной страницы сайта
-          - получить список ссылок со страницы
-          - вытащить текст из новостной статьи, расписания, профиля сотрудника и т.п.
+        Use this tool when you need to:
+          - read the content of a specific website page
+          - get a list of links from a page
+          - extract text from a news article, schedule, employee profile, etc.
  
-        Параметры:
-          urls     — список полных URL страниц (https://...)
-          headers — HTTP-заголовки запроса (необязательно). Примеры:
+        Parameters:
+          urls — a list of full page URLs (https://...)
+          headers — HTTP request headers (optional). Examples:
                     {"User-Agent": "Mozilla/5.0 ...", "Accept-Language": "ru-RU,ru;q=0.9"}
-                    Если не указаны — сервис подставит дефолтный User-Agent.
+                    If not specified, the service will use the default User-Agent.
  
-        Возвращает текст страницы объёмом до ~12 000 символов.
-        Если страница не загрузилась — вернёт сообщение об ошибке.
- 
-        Пример вызова:
+        Returns the page text, up to approximately 12,000 characters.
+        If the page doesn’t load, it will return an error message.
+
+        Example call:
             parse_web_page(
                 urls=["https://example1/", "https://example2/"],
                 headers={"User-Agent": "Mozilla/5.0", "Accept-Language": "ru-RU"}
             )
         
-        ВЫЗЫВАЙ СРАЗУ ПОСЛЕ search_internet, чтобы прочитать реальный
-        текст 2-4 найденных страниц. Сниппеты поисковика недостаточны
-        для точных цифр, дат и цитат — их бери только отсюда.
-
-        Если не получается пробить защиту сайта, пробуй подменять заголовки, УСПЕХОВ!
+        CALL IMMEDIATELY AFTER search_internet to read the real
+        text of 2–4 found pages. Search engine snippets are insufficient  for exact numbers, dates, and quotes — take them only from there.
         """
         parsers_url = agent.services["parsers"]["url"]
  

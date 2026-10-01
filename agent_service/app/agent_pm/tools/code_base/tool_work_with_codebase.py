@@ -7,21 +7,21 @@ def make_work_codebase_tool(agent):
     @tool
     async def save_to_code_library(json_description: str) -> str:
         """
-        Документирует переиспользуемый скрипт в таблицу code_library.
+        Documents a reusable script in the code_library table.
 
-        Агент вызывает ТОЛЬКО после успешного выполнения скрипта с reusable=True.
-        Перед вставкой тулза динамически проверяет схему таблицы (без get_db_schema).
+        The agent calls ONLY after the successful execution of a script with reusable=True.
+        Before insertion, the tool dynamically checks the table schema (without get_db_schema).
 
-        Параметр json_description — JSON-строка со следующими полями:
-        title       (str, обязателен) — краткое название скрипта
-        description (str, обязателен) — что делает, входные параметры, выходной результат
-        code_type   (str, обязателен) — parser|scraper|excel|pptx|digest|generator|util|migration|core
-        tags        (list[str])       — теги для поиска
-        author      (str)             — agent|human|human:паша (по умолчанию "agent")
-        path        (str, обязателен) — полный путь /sandbox/reusable/{uuid}.py
-        run_id      (str, опционально) — UUID из execute_python_code
+        The json_description parameter is a JSON string with the following fields:
+        title       (str, required) — a brief description of the script
+        description (str, required) — what it does, input parameters, output result
+        code_type   (str, required) — parser|scraper|excel|pptx|digest|generator|util|migration|core
+        tags        (list[str])       — search tags
+        author      (str)             — agent|human|human:pasha (default: "agent")
+        path        (str, required) — full path /sandbox/reusable/{uuid}.py
+        run_id      (str, optional) — UUID from execute_python_code
 
-        Возвращает: сообщение с id созданной записи.
+        Returns: a message with the ID of the created record.
         """
         try:
             data = json.loads(json_description)
@@ -66,31 +66,31 @@ def make_work_codebase_tool(agent):
         limit: int = 5,
     ) -> str:
         """
-        Поиск по библиотеке скриптов (BM25 через websearch_to_tsquery).
+        Search in the script library (BM25 via websearch_to_tsquery).
 
-        Агент ОБЯЗАН вызывать этот инструмент ПЕРВЫМ при любом запросе на написание кода —
-        чтобы проверить, есть ли уже готовый скрипт.
+        The agent MUST call this tool FIRST when any code writing request is made —
+        to check whether a ready‑made script already exists.
 
-        Параметры:
-        query     — поисковый запрос на естественном языке (например "парсер вакансий excel")
-        code_type — фильтр по типу: parser|scraper|excel|pptx|digest|generator|util|migration|core
-        tags      — фильтр по тегам, например ["hh", "excel"]
-        author    — фильтр по автору: agent|human|human:паша
-        limit     — количество результатов (по умолчанию 5)
-        path - поиск скрипта по пути к файлу (указывать, если он задан в описании тула)
+        Parameters:
+        query     — a search query in natural language (for example, “excel job parser”)
+        code_type — filter by type: parser|scraper|excel|pptx|digest|generator|util|migration|core
+        tags      — filter by tags, for example ["hh", "excel"]
+        author    — filter by author: agent|human|human:pasha
+        limit — the number of results (default is 5)
+        path — search for a script by file path (specify if it is defined in the tool description)
 
-        Возвращает: список найденных скриптов с полями id, title, description,
+        Returns: a list of found scripts with the following fields: id, title, description,
         code_type, tags, author, path, use_count, score.
-        Если ничего не найдено — сообщает об этом явно.
+        If nothing is found, it explicitly reports this.
 
-        Решение агента после получения результатов:
-        - Нашёл подходящий → вызвать edit_and_run(library_id, need_context=...)
-        - Не нашёл → генерировать новый скрипт через execute_python_code(reusable=True)
+        The agent’s decision after receiving the results:
+        - Found a suitable one → call edit_and_run(library_id, need_context=...)
+        - Didn’t find any → generate a new script via execute_python_code(reusable=True)
 
-        📚 code_library — обязательная тройка:
+        📚 code_library — a mandatory trio:
         search_code_library → execute_python_code(reusable=True) → save_to_code_library
 
-        🔍 BM25 в search_code_library — запросы максимум 2–3 слова, длинные дают 0 результатов
+        🔍 BM25 in search_code_library — queries should be a maximum of 2–3 words; longer ones yield 0 results.
         """
 
         try:

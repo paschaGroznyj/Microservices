@@ -147,6 +147,9 @@ class DataBaseChats:
             ALTER TABLE chats ADD COLUMN IF NOT EXISTS message_id TEXT;
             CREATE INDEX IF NOT EXISTS ix_chats_message_id ON chats(message_id);
 
+            -- Реакции TG на сообщения бота (аналитика + фидбек агенту)
+            ALTER TABLE chats ADD COLUMN IF NOT EXISTS reactions JSONB DEFAULT '[]'::jsonb;
+
             CREATE TABLE IF NOT EXISTS chat_files (
                 id SERIAL PRIMARY KEY,
                 message_id TEXT NOT NULL,
@@ -249,6 +252,45 @@ class DataBaseChats:
                         ])
         except asyncpg.UniqueViolationError:
             logging.error("Сообщение не может быть добавлено (дубликат message_id)")
+
+    async def append_reaction(self, message_id: str, reaction: dict) -> dict | None:
+        """Добавить реакцию к сообщению бота (JSONB-массив reactions).
+        Возвращает {message_text, is_from_bot, reactions} по последней строке этого message_id
+        или None, если сообщение не найдено."""
+        import json as _json
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                UPDATE chats
+                SET reactions = COALESCE(reactions, '[]'::jsonb) || $2::jsonb
+                WHERE id = (
+                    SELECT id FROM chats
+                    WHERE message_id = $1 AND is_from_bot = TRUE
+                    ORDER BY created_at DESC LIMIT 1
+                )
+                RETURNING message_text, is_from_bot, reactions;
+                """,
+                message_id, _json.dumps([reaction]),
+            )
+            if not row:
+                return None
+            return {
+                "message_text": row["message_text"],
+                "is_from_bot": row["is_from_bot"],
+                "reactions": row["reactions"],
+            }
+
+    async def get_bot_message_text(self, message_id: str) -> str | None:
+        """Текст ответа бота по message_id (только is_from_bot)."""
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(
+                """
+                SELECT message_text FROM chats
+                WHERE message_id = $1 AND is_from_bot = TRUE
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                message_id,
+            )
 
     async def get_all_user_messages(self, username: str, limit: int = 50, offset: int = 0):
         """
@@ -643,6 +685,7 @@ class DataBaseChats:
                     LEFT JOIN users u ON c.user_id = u.id
                     WHERE c.is_from_bot = FALSE
                       AND c.user_id <> -1
+                      AND c.gateway_target IS DISTINCT FROM 'telegram'
                       AND c.created_at >= date_trunc('day', now())
                     GROUP BY c.user_id, u.username
                     ORDER BY msg_count DESC
@@ -652,6 +695,7 @@ class DataBaseChats:
                     SELECT COUNT(*) FROM chats
                     WHERE is_from_bot = FALSE
                       AND user_id <> -1
+                      AND gateway_target IS DISTINCT FROM 'telegram'
                       AND created_at >= date_trunc('day', now())
                 """)
                 return {

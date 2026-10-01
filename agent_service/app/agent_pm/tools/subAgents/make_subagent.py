@@ -158,35 +158,34 @@ def make_subagent_tool(agent_instance):
         extra_context: str = "",
     ) -> str:
         """
-        Делегировать задачу специализированному субагенту.
+        Delegate the task to a specialized subagent.
 
-        Субагент — изолированный LLM-цикл с ограниченным набором тулзов.
-        Не имеет доступа к истории чата, памяти и бортовому журналу.
-        Результат (строка) возвращается PMычу — тот отвечает пользователю.
+        The subagent is an isolated LLM cycle with a limited set of tools.
+        It has no access to chat history, memory, or the flight log.
+        The result (a string) is returned to PMych — he responds to the user.
 
-        Аргументы:
-            agent_name    — роль субагента. Стандартные:
-                            "data_analyst", "scraper", "researcher",
-                            "content_maker", "kb_manager", "code_writer".
-                            Произвольное имя допустимо — тогда system_prompt обязателен.
-            task          — подробное описание задачи. Чем детальнее — тем лучше.
-            allowed_tools — список имён тулзов, которые субагент может вызывать.
-                            Невалидные имена фильтруются тихо.
-                            Пример: ["execute_python_code", "search_code_library"]
-            system_prompt — системный промт субагента. Если пустой — берётся дефолтный
-                            по agent_name из DEFAULT_SYSTEM_PROMPTS.
-            max_iter      — максимум итераций агентного цикла (1–12, дефолт 6).
-            extra_context — дополнительный контекст: результаты других субагентов,
-                            промежуточные данные, уточнения.
+        Arguments:
+            agent_name    — the role of the subagent. Standard:
+                            "data_analyst", "scraper", "researcher", "content_maker", "kb_manager", "code_writer".
+                            An arbitrary name is acceptable — in this case, system_prompt is required.
+            task          — a detailed description of the task. The more detailed, the better.
+            allowed_tools — a list of tool names that the subagent can call.
+                            Invalid names are silently filtered out.
+                            Example: ["execute_python_code", "search_code_library"]
+            system_prompt — the subagent’s system prompt. If empty, the default prompt is taken
+                            based on agent_name from DEFAULT_SYSTEM_PROMPTS.
+            max_iter      — the maximum number of iterations in the agent cycle (1–12, default is 6).
+            extra_context — additional context: results from other subagents,
+                            intermediate data, clarifications.
 
-        Возвращает:
-            Финальный ответ субагента в виде строки.
-            При ошибке — строку с описанием ошибки.
+        Returns:
+            The final response of the subagent as a string.
+            In case of an error — a string with a description of the error.
 
-        Параллельный запуск:
-            Вызови call_subagent несколько раз в одном батче — LangChain запустит их
-            через asyncio.gather параллельно, результаты придут независимо.
-            Статусы каждого субагента маркируются [agent_name]-префиксом на фронте.
+        Parallel execution:
+            Call `call_subagent` multiple times in a single batch — LangChain will run them
+            via `asyncio.gather` in parallel; the results will arrive independently.
+            The statuses of each subagent are marked with a [agent_name]-prefix at the front.
         """
         # ── Получаем request_id из агента (нужен для _send_status) ──────────
         # agent.current_request_id должен быть выставлен в process_query

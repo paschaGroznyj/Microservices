@@ -218,7 +218,8 @@ async def _db_image_as_data_uri(agent, image_key: str) -> tuple[str | None, str 
 
 
 def make_analyze_image_tool(agent, images: list[dict] | None = None,
-                            agent_model: str | None = None):
+                            agent_model: str | None = None,
+                            chat_id=None):
     """
     Фабрика тула анализа изображений.
 
@@ -248,6 +249,20 @@ def make_analyze_image_tool(agent, images: list[dict] | None = None,
     log.info("analyze_image: agent_model=%s → vision-модель '%s'",
              agent_model, vision_key)
 
+    # Цепочка vision-кандидатов: начинаем с выбранной модели, затем
+    # остальные — чтобы пережить случай, когда конкретный бэкенд cloud.ru
+    # временно/постоянно не принимает image_url (ModelArts.81001).
+    _vision_order = [vision_key, "universal", "designer", "coder"]
+    _seen: set = set()
+    vision_candidates: list = []
+    for _k in _vision_order:
+        if _k in _seen:
+            continue
+        _seen.add(_k)
+        _m = agent.AGENT_MODELS.get(_k)
+        if _m is not None:
+            vision_candidates.append((_k, _m))
+
     # Краткая опись картинок для подсказки модели в docstring не вставить (он статичен),
     # поэтому кладём в имена — модель видит их из текста сообщения ([IMAGE #N: ...]).
     n_images = len(images)
@@ -258,43 +273,53 @@ def make_analyze_image_tool(agent, images: list[dict] | None = None,
         image_index: int = 0,
         local_path: str | None = None,
         source_image_keys: list[str] | None = None,
+        source_media_ids: list[str] | None = None,
     ) -> str:
         """
-        Анализирует изображение (JPEG/PNG/WEBP/GIF) и отвечает на вопрос о нём:
-        описать, распознать текст/диаграмму, извлечь данные из графика/таблицы,
-        оценить содержимое схемы и т.п.
+        Analyzes an image (JPEG/PNG/WEBP/GIF) and answers a question about it:
+        describe, recognize text/diagram, extract data from a graph/table,
+        assess the contents of a diagram, etc.
 
-        Источник картинки выбирается по ОДНОМУ из параметров (в порядке приоритета):
+        The image source is selected based on ONE of the parameters (in priority order):
 
-          1. source_image_keys — список image_key (UUID) ранее СГЕНЕРИРОВАННЫХ
-             картинок из хранилища generated_images. Удобно, чтобы посмотреть на
-             картинку, которую ты сам нарисовал через generate_image (её image_key
-             был в отчёте / find_generated_image). Можно передать несколько —
-             будут проанализированы по очереди в одном ответе.
+          1. source_image_keys — a list of image_key (UUID) of previously GENERATED
+             images from the generated_images storage. It's convenient to look at
+             a picture that you drew yourself using generate_image (its image_key
+             was in the report / find_generated_image). You can send several —
+             they will be analyzed one at a time in a single response.
 
-          2. local_path — путь ИЛИ имя файла картинки на диске сервера. Читается
-             СТРОГО из разрешённых папок: /sandbox и /app/generated_files
-             (можно указать полный путь внутри них или просто имя файла — тогда
-             ищется по имени рекурсивно). Пригодится для картинок, которые сделал
-             другой тул (скриншот, отрисованный график, сохранённый ассет).
-             ВАЖНО: файлы, собранные в workspace фабрики (output/... внутри
-             execute_python_code), напрямую НЕ видны этому тулу — он читает только
-             /app/generated_files и /sandbox. Сначала скачай картинку через
-             download_workspace_file (он положит её в /app/generated_files и вернёт
-             path), и только потом передавай этот path в local_path. Формат
-             (JPEG/PNG/...) определяется по сигнатуре байтов автоматически,
-             пересохранять png-как-jpg вручную НЕ нужно.
+          2. local_path is the path OR name of the image file on the server disk. It reads
+             STRICTLY from the allowed folders: /sandbox and /app/generated_files
+             (you can specify the full path inside them or just the file name — then
+             searched by name recursively). It will be useful for the pictures that I made.
+             another tool (screenshot, rendered graph, saved asset).
+             IMPORTANT: files collected in the factory workspace (output/... inside
+             execute_python_code), are NOT directly visible to this tool — it only reads
+             /app/generated_files and /sandbox. First, download the image using
+             download_workspace_file (it will place it in /app/generated_files and return
+             path), and only then pass this path to local_path. The format
+             (JPEG/PNG/...) is automatically determined by the byte signature.
+             You do NOT need to manually resave png-as-jpg.
 
-          3. image_index — картинка, которую ПОЛЬЗОВАТЕЛЬ приложил к текущему
-             сообщению. В тексте сообщения они помечены маркерами [IMAGE #0: file].
-             base64 таких картинок уже на сервере — передавать его НЕ нужно.
-             Номер из маркера (0 — первая, по умолчанию 0).
+          3. image_index — the image that the USER has attached to the current one.
+             the message. In the text of the message, they are marked with [IMAGE #0: file] markers.
+             The base64 of such images is already on the server, so you DON'T need to transfer it.
+             The number from the marker (0 is the first one, 0 by default).
 
-        Параметр prompt — что именно сделать с изображением — обязателен всегда.
+          4. source_media_ids — list of media_ids from the MEDIA STORAGE of this chat
+             (Redis, TTL 24h). ALL images/files sent to
+             in this chat in previous messages. Their registry is shown to you in the block
+             "CHAT MEDIA STORAGE" at the beginning of the request: there's a media_id for each one
+             the name is indicated and (if you have already watched it) a short description. Use THIS ONE
+             source, when there is no picture in the current message, but you need to go back to
+             previously sent ("that picture above", "bike photo from the past
+             messages"). Pass the necessary media_ids and they will be analyzed by
+             queues, and their descriptions will be added to the registry.
 
-        Если нужно проанализировать несколько картинок из разных источников —
-        вызывай тул отдельно для каждой (кроме source_image_keys, где список
-        обрабатывается за один вызов).
+        The prompt parameter — what exactly to do with the image — is always required.
+
+        If you need to analyze several images from different sources —
+        Call the tool separately for each (except for source_image_keys, where the list  is processed in a single call).
         """
         # ── Нормализация source_image_keys (LLM может прислать строкой) ──
         keys: list[str] = []
@@ -316,18 +341,78 @@ def make_analyze_image_tool(agent, images: list[dict] | None = None,
 
         async def _run_vision(data_uri: str, label: str) -> str:
             """Один прогон vision-модели по data_uri, возврат текста/ошибки."""
+            msg = HumanMessage(content=[
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": data_uri}},
+            ])
+            last_err = None
+            for _k, _model in vision_candidates:
+                try:
+                    resp = await _model.ainvoke([msg])
+                    content = resp.content if hasattr(resp, "content") else str(resp)
+                    log.info("analyze_image: обработана картинка %s (vision-модель '%s')", label, _k)
+                    return content
+                except Exception as e:
+                    last_err = e
+                    _es = str(e).lower()
+                    _vision_unsupported = (
+                        "image_url" in _es
+                        or "unsupported content type" in _es
+                        or "only supported type" in _es
+                        or "modelarts.81001" in _es
+                    )
+                    if _vision_unsupported:
+                        log.warning("analyze_image: модель '%s' не поддержала vision (%s), пробую следующую", _k, label)
+                        continue
+                    # Не-vision ошибка (сеть/503/таймаут) — тоже пробуем следующую модель.
+                    log.warning("analyze_image: модель '%s' упала (%s): %s, пробую следующую", _k, label, e)
+                    continue
+            log.error("analyze_image failed (%s): все vision-модели отказали: %s", label, last_err, exc_info=True)
+            return f"Ошибка анализа изображения ({label}): ни одна vision-модель провайдера не приняла картинку. Последняя ошибка: {last_err}"
+
+        # ── Источник 0: media_id из пер-чат media_store (Redis) ───────
+        # Картинки, присланные в прошлых сообщениях этого чата. После анализа
+        # дописываем описание в реестр — чтобы в следующий раз агент видел, что на картинке.
+        _mids: list[str] = []
+        if source_media_ids is not None:
+            if isinstance(source_media_ids, list):
+                _mids = [str(m).strip() for m in source_media_ids if str(m).strip()]
+            else:
+                _sm = str(source_media_ids).strip()
+                if _sm:
+                    try:
+                        import json as _json
+                        _parsed = _json.loads(_sm)
+                        _mids = ([str(m).strip() for m in _parsed if str(m).strip()]
+                                 if isinstance(_parsed, list) else [str(_parsed).strip()])
+                    except Exception:
+                        _mids = [x.strip() for x in _sm.replace(",", " ").split() if x.strip()]
+        if _mids:
             try:
-                msg = HumanMessage(content=[
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": data_uri}},
-                ])
-                resp = await vision_llm.ainvoke([msg])
-                content = resp.content if hasattr(resp, "content") else str(resp)
-                log.info("analyze_image: обработана картинка %s", label)
-                return content
-            except Exception as e:
-                log.error("analyze_image failed (%s): %s", label, e, exc_info=True)
-                return f"Ошибка анализа изображения ({label}): {e}"
+                from agent_pm.media import media_store as _ms
+            except Exception:
+                _ms = None
+            if _ms is None or chat_id is None:
+                return ("Медиа-хранилище недоступно в этом контексте.")
+            results: list[str] = []
+            for _mid in _mids:
+                raw, meta = await _ms.get_media(chat_id, _mid)
+                if not raw:
+                    results.append(f"[media_id={_mid}] не найдено в хранилище (истёк TTL 24ч или неверный id).")
+                    continue
+                _mime = (meta or {}).get("mime") or "image/png"
+                if len(raw) > _COMPRESS_THRESHOLD:
+                    raw, _mime = _maybe_compress(raw, _mime)
+                _b64 = base64.b64encode(raw).decode("ascii")
+                _data_uri = f"data:{_mime};base64,{_b64}"
+                out = await _run_vision(_data_uri, f"media_id={_mid}")
+                results.append(f"[media_id={_mid}]\n{out}")
+                # Дописываем описание в реестр (коротко).
+                try:
+                    await _ms.attach_description(chat_id, _mid, out)
+                except Exception:
+                    pass
+            return "\n\n".join(results)
 
         # ── Источник 1: image_key из хранилища generated_images ──────────
         if keys:
@@ -385,6 +470,16 @@ def make_analyze_image_tool(agent, images: list[dict] | None = None,
             log.warning("analyze_image: user-image compress skipped: %s", e)
             data_uri = b64 if b64.startswith("data:") else f"data:{mime};base64,{b64}"
         fname = img.get("filename", f"image_{image_index}")
-        return await _run_vision(data_uri, f"user#{image_index}:{fname}")
+        _out = await _run_vision(data_uri, f"user#{image_index}:{fname}")
+        # Если эта картинка уже лежит в media_store (media_id проставлен при upload) —
+        # дописываем описание в реестр, чтобы в следующих сообщениях агент знал, что на ней.
+        _uid = img.get("media_id")
+        if _uid and chat_id is not None:
+            try:
+                from agent_pm.media import media_store as _ms
+                await _ms.attach_description(chat_id, _uid, _out)
+            except Exception:
+                pass
+        return _out
 
     return analyze_image

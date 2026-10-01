@@ -12,61 +12,61 @@ def make_journal_tool(agent, chat_id: str, user_id: int):
         archive_summary: str = "",
     ) -> str:
         """
-        Работа с бортовым журналом (agent_journal) — ПАМЯТЬ ВНУТРИ ЭТОГО ЧАТА.
-        Используй, когда пользователь явно просит "запомни это", "зафиксируй",
-        "не забывай про X" — или когда сам считаешь важным сохранить факт
-        для будущих сообщений в этом же диалоге.
+        Working with the logbook (agent_journal) IS THE MEMORY INSIDE THIS CHAT.
+        Use it when the user explicitly asks for "remember this", "fix it",
+        "don't forget about X" — or when you yourself consider it important to preserve the fact
+        for future messages in the same dialog.
 
-        Журнал привязан к конкретному чату — записи из других чатов не видны
-        и не затрагиваются.
+        The log is linked to a specific chat — recordings from other chats are not visible.
+        and they are not affected.
 
-        АРХИВ: записи можно свернуть в архив. Архивная запись НЕ тянется в
-        основной контекст (экономит токены), но остаётся видимой в компактном
-        реестре "── В АРХИВЕ ──" как "ID: N — краткое описание". По этому id
-        её можно вернуть обратно (unarchive).
+        ARCHIVE: Recordings can be collapsed into an archive. The archive record does NOT extend to
+        the main context (saves tokens), but remains visible in a compact
+        in the registry "── IN THE ARCHIVE ──" as "ID: N — short description". By this id
+        it can be returned back (unarchive).
 
-        Аргументы:
-            action: "insert"    — новая запись
-                    "update"    — заменить часть текста в существующей записи
-                    "archive"   — свернуть запись в архив по её id
-                                  (нужны entry_id + archive_summary)
-                    "unarchive" — вернуть архивную запись в активный контекст
-                                  (нужен entry_id)
-            entry_id: id записи журнала — ТОЛЬКО для archive/unarchive.
-                      Берётся из блока "── В АРХИВЕ ──" (разархивация) или из
-                      "ID: N" активной записи (архивация).
-            archive_summary: одно короткое предложение о содержимом записи —
-                      ОБЯЗАТЕЛЬНО для archive. Именно оно показывается в реестре
-                      архива вместо полного текста.
-            entry_type: тип записи (для insert/update) — один из:
-                identity        — как вести себя в этом чате, стиль, роль
-                user_preference — предпочтения собеседника в этом чате
-                anomaly         — замеченная странность/повторяющаяся проблема
-                evolution       — что нового понял по ходу этого диалога
-                summary         — сжатая сводка (обычно не создаётся тобой напрямую)
-            content: текст записи (для insert/update — что писать),
-                     ОБЯЗАТЕЛЕН, не может быть пустым
-            replace: ТОЛЬКО для update/delete — подстрока, по которой ищем
-                     существующую запись (то, что нужно найти и заменить/удалить).
-                     Для insert не используется.
+        Arguments:
+            action: "insert" is a new entry.
+                    "update" — replace part of the text in an existing entry
+                    "archive"   — move an entry to the archive by its id
+                                  (entry_id + archive_summary required)
+                    "unarchive" — return an archived entry to the active context
+                                  (entry_id required)
+            entry_id: the id of the journal entry — ONLY for archive/unarchive.
+                      It is taken from the ARCHIVE section (unarchiving) or from
+                      "ID: N" of the active record (archiving).
+            archive_summary: One short sentence about the contents of the record is
+                      MANDATORY for archive. It is shown in the registry.
+                      archive instead of the full text.
+            entry_type: The record type (for insert/update) is one of:
+                identity        — how to behave in this chat, style, role
+                user_preference — the other person’s preferences in this chat
+                anomaly         — a noticed oddity/recurring problem
+                evolution       — what you’ve learned in the course of this dialogue
+                summary         — a concise summary (usually not created by you directly)
+            content: the text of the entry (for insert/update — what to write),
+                     MANDATORY, cannot be empty
+            replace: update/delete ONLY — the substring we are looking for
+                     an existing record (something that needs to be found and replaced/deleted).
+                     It is not used for insert.
 
-        Примеры:
-            Запомнить новый факт:
-                action="insert", entry_type="user_preference", content="Предпочитает короткие ответы без эмодзи"
+        Examples:
+            Memorize a new fact:
+                action="insert", entry_type="user_preference", content="Prefers short answers without emojis"
 
-            Уточнить существующую запись:
+            Refine an existing record:
                 action="update", entry_type="user_preference",
-                replace="короткие ответы", content="развёрнутые ответы с примерами"
+                replace="short answers", content="detailed answers with examples"
 
-            Свернуть запись в архив (по id из реестра):
+            Archive the entry (using the id from the registry):
                 action="archive", entry_id=157,
-                archive_summary="Ход по PoC graph-world: нарезка героя-кота и анимация ходьбы."
+                archive_summary="Walkthrough of the PoC graph-world: slicing the cat hero and walking animation."
 
-            Вернуть запись из архива в контекст:
+            Return the entry from the archive to the context:
                 action="unarchive", entry_id=157
 
-        НЕ пиши SQL — только эти параметры. Все операции выполняются
-        строго в рамках текущего чата, никакие другие записи не затрагиваются.
+        DON'T write SQL — just these parameters. All operations are performed
+        strictly within the scope of the current chat, no other entries are affected.
         """
         from .journal_handler import handle_journal_operation
         result = await handle_journal_operation(

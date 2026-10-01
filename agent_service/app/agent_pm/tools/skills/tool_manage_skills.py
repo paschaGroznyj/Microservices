@@ -16,35 +16,32 @@ def make_manage_skills_tool(agent, user_id: int):
         new_str: str = "",
     ) -> str:
         """
-        Управление библиотекой скиллов.
+        Skill library management.
         action:
-        - create: создать скилл (нужны theme, body, опционально tools[])
-        - list: показать список скиллов (sort_by=new|popular, query, tool_filter)
-        - like: лайк/анлайк скилла (нужен skill_id)
-        - export_prompt: отдать готовый промпт скилла для копирования в чат
+        - create: create a skill (requires theme, body, and optionally tools[])
+        - list: show a list of skills (sort_by=new|popular, query, tool_filter)
+        - like: like/unlike a skill (requires skill_id)
+        - export_prompt: return the finished skill prompt for copying to a chat
         - edit: точечная правка тела скилла через find & replace
-          (нужны skill_id, old_str, new_str). old_str должен встречаться
-          в body РОВНО один раз и точно совпадать по символам
-          (включая пробелы/переносы). Править может только автор скилла.
-          Пустой new_str удаляет найденный фрагмент.
+          (skill_id, old_str, new_str are required). old_str must appear
+          in body EXACTLY once and must match exactly in terms of characters
+          (including spaces/newlines). Only the skill author can make changes.
+          An empty new_str deletes the found fragment.
 
-        ФОРМАТ ТЕЛА СКИЛЛА (body) ПРИ create:
-        body ОБЯЗАТЕЛЬНО пиши в Markdown. Фронт рендерит его как md при раскрытии карточки.
-        Рекомендуемая структура:
-          ## Цель — 1-2 предложения, зачем скилл.
-          ## Шаги — нумерованный список действий.
-          ## Инструменты — какие тулы и зачем.
-          ## Пример — блок кода/запроса в ``` при необходимости.
-        Используй заголовки (##/###), списки (- / 1.), инлайн-код (`code`)
-        и блоки кода (```lang ... ```). Не пиши HTML в body.
+        SKILL BODY FORMAT (body) WHEN CREATING:
+        body MUST be written in Markdown. The frontend renders it as md when the card is expanded.
+        Recommended structure:
+          ## Goal — 1-2 sentences explaining why the skill is needed.
+          ## Steps — a numbered list of actions.
+          ## Tools — which tools are used and why.
+          ## Example — a code/query block in ``` if necessary.
+        Use headings (##/###), lists (- / 1.), inline code (`code`), and code blocks (```lang ... ```). Do not write HTML in the body.
 
 
-        Если в теле запроса уже есть:
-            Тема скилла: ...
-            Рекомендуемые инструменты: ...
+        If the request body already contains:             Skill topic: ...            Recommended tools: ...
 
-            Тело скилла: ...
-        Значит тебе уже передали готовый скилл, этот скилл добавлять не нужно, необходимо запросить у пользователя дополнительные вводные для чего использовать этот скилл, если ничего не передано
+            Skill body: ...
+        This means you’ve already been given a ready‑made skill; you don’t need to add this skill. You should ask the user for additional information on what to use this skill for if nothing has been provided.
         """
         act = (action or "").strip().lower()
 

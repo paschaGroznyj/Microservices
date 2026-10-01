@@ -101,6 +101,7 @@ services:
       AGENT_POOL_PASSWORD: ${AGENT_POOL_PASSWORD}
       SANDBOX_SERVICE_URL: ${SANDBOX_SERVICE_URL}
       TG_BOT_PUSH_URL: http://172.18.0.1:8010/push_message # docker network inspect pascha_microservices | grep Gateway
+      TG_INLINE_B64_MAX: "700000"  # > порог = file_url вместо base64 в Kafka
       # sudo ufw allow from 172.18.0.0/16 to any port 8010 proto tcp
 
     # extra_hosts:
@@ -113,21 +114,33 @@ services:
       - catchPM
       - sandbox_net
 
-  # tg_bot:
-  #     build: ./telegram_service 
-  #     container_name: tg_bot
-  #     network_mode: "host"  # Используем сеть сервера напрямую
-  #     # networks: [catchPM]
-  #     # depends_on:
-  #     #   - agent_service
-  #     # ports:
-  #     #   - "8010:8010"
-  #     environment:
-  #       TELEGRAM_BOT_TOKEN:      ${TELEGRAM_BOT_TOKEN}
-  #       TELEGRAM_CHAT_IDS:        ${TELEGRAM_CHAT_IDS}
-  #       TELEGRAM_GROUPS_IDS:     ${TELEGRAM_GROUPS_IDS:-}
-  #       AGENT_SERVICE_URL:       http://127.0.0.1:9001  # Стучимся на 9001 порт хоста
-  #     restart: unless-stopped
+  tg_bot:
+      build: ./telegram_service
+      container_name: tg_bot
+      network_mode: "host"  # Используем сеть сервера напрямую (TG API + порты хоста)
+      environment:
+        TELEGRAM_BOT_TOKEN:  ${TELEGRAM_BOT_TOKEN}
+        # Стучимся в контейнеры через проброшенные порты хоста (host-режим):
+        CHATS_SERVICE_URL:   http://127.0.0.1:8001   # send_message (Kafka) + /tg/*
+        AGENT_SERVICE_URL:   http://127.0.0.1:9001   # оркестратор /api/tg/should_respond
+        REDIS_URL:           redis://127.0.0.1:6379/0
+        TG_PUSH_PORT:        "8010"
+        ORCH_THROTTLE_SEC:   "6"
+        BUF_MAXLEN:          "40"
+        BUF_TTL:             "3600"
+        # Ссылка для гейта регистрации в /start (незарегистрированный чат):
+        CATCHPM_URL:         https://catchpm.cds.uva-advanced.ru
+        # Проактивные триггеры (будильники завтрак/обед/ужин + poke):
+        TG_TZ:               Europe/Moscow
+        TG_POKE_PROBABILITY: "0.18"   # вероятность дёрнуть чат на тике poke
+        TG_POKE_HOUR_START:  "10"      # окно адресных poke [start, end) МСК
+        TG_POKE_HOUR_END:    "18"      # до 18 (слоты 9/13 внутри исключаются вероятностью)
+        TG_POKE_JITTER_MIN:  "15"      # ± минут джиттер запуска poke от ровного часа
+        TG_SAD_WAIT_LO:      "300"     # окно ожидания ответа (грусть), сек, low
+        TG_SAD_WAIT_HI:      "600"     # окно ожидания ответа (грусть), сек, high
+        TG_POKE_DAILY_TTL:   "86400"   # суточный throttle адресных poke на чат
+        TG_DEBUG_TOKEN:      ${TG_DEBUG_TOKEN:-}  # если пусто — /tg/debug/trigger ОТКЛЮЧЁН (404)
+      restart: unless-stopped
 
 
   # token_service:

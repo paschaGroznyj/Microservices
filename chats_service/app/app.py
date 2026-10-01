@@ -9,6 +9,7 @@ from jose import JWTError, jwt
 from app.core.config import SECRET_KEY, ALGORITHM, KAFKA_BROKER
 from app.db.group_chat_db import GroupChatDB
 from app import group_chat as group_chat_module
+from app.db.telegram_db import TelegramDB
 import time
 
 WATCHDOG_INTERVAL = 10      # как часто проверяем
@@ -30,6 +31,9 @@ app = FastAPI(title="Chats Service")
 # Общий/групповой чат: отдельный слой БД + роутер (не раздуваем этот app.py)
 group_db = GroupChatDB(None)  # pool проставится на startup
 app.include_router(group_chat_module.router)
+
+# Telegram-интеграция: отдельный слой БД (allow-list + per-chat настройки).
+tg_db = TelegramDB(None)  # pool проставится на startup
 
 # async def bot_response_watchdog():
 #     logging.info("🤖 Bot watchdog started")
@@ -100,18 +104,25 @@ async def get_current_user_from_cookie(token: str = Depends(get_token)):
 class ChatMessage(BaseModel):
     user_id: int | None
     username: str
-    tb_name: str
+    tb_name: str | None = None
     message: str
     chat_id: str
     type_agent: str
     request_id: str
-    selected_tools: list
-    context_size: str
+    selected_tools: list = []
+    context_size: str = "medium"
     message_id: str
-    has_files: bool
-    files: list
-    agent_model: str
+    has_files: bool = False
+    files: list = []
+    agent_model: str | None = None
     gateway_target: str = "main"
+    # Проактивная инициация из telegram_service (будильники/poke/грусть).
+    initiated: bool = False
+    slot: str | None = None
+    addressed: bool = False
+    target_username: str | None = None
+    sad_followup: bool = False
+    custom_prompt: str | None = None
     
 
 @app.on_event("startup")
@@ -125,6 +136,10 @@ async def startup():
     group_db.pool = db.pool
     await group_db.init_schema()
     group_chat_module.bind(group_db, producer)
+
+    # Telegram: переиспользуем тот же пул, создаём таблицы telegram_*.
+    tg_db.pool = db.pool
+    await tg_db.init_db_pool()
 
     # # 🚀 старт watchdog-а
     # asyncio.create_task(bot_response_watchdog())
@@ -154,6 +169,12 @@ async def send_message(chat: ChatMessage):
         "files": chat.files,
         "agent_model": chat.agent_model,
         "gateway_target": chat.gateway_target,
+        "initiated": chat.initiated,
+        "slot": chat.slot,
+        "addressed": chat.addressed,
+        "target_username": chat.target_username,
+        "sad_followup": chat.sad_followup,
+        "custom_prompt": chat.custom_prompt,
     }
     logging.info(message)
     start = time.perf_counter()
@@ -162,6 +183,241 @@ async def send_message(chat: ChatMessage):
     producer.flush()
     elapsed = time.perf_counter() - start
     logging.info(f"Message Service. Время на отправку в сокет и на перекладку в кафку = {elapsed:.4f}s")
+    return {"status": "ok"}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TELEGRAM-ИНТЕГРАЦИЯ: allow-list чатов + per-chat настройки.
+# Встраивание чата — только через CatchPM UI (залогиненный юзер).
+# telegram_service (host-режим) читает эти эндпоинты по 127.0.0.1:<port>.
+# ══════════════════════════════════════════════════════════════════════════════
+class TgChatIn(BaseModel):
+    chat_id: str
+    added_by_user_id: int | None = None
+    # Опционально: настройки, применяемые сразу при встраивании (из CatchPM UI).
+    system_prompt: str | None = None
+    agent_name: str | None = None
+    agent_model: str | None = None
+    selected_tools: list | None = None
+    trigger_mode: str | None = None
+    orchestrator_context_n: int | None = None
+    proactive_enabled: bool | None = None
+    timezone_name: str | None = None
+
+
+class TgSettingsIn(BaseModel):
+    system_prompt: str | None = None
+    agent_name: str | None = None
+    agent_model: str | None = None
+    selected_tools: list | None = None
+    trigger_mode: str | None = None
+    orchestrator_context_n: int | None = None
+    proactive_enabled: bool | None = None
+    timezone_name: str | None = None
+
+
+@app.get("/tg/chats")
+async def tg_list_chats(added_by_user_id: int | None = None):
+    """Список встроенных активных чатов вместе с настройками — для CatchPM UI.
+    Если added_by_user_id задан — только чаты этого пользователя."""
+    return {"chats": await tg_db.list_chats_with_settings(user_id=added_by_user_id)}
+
+
+@app.post("/tg/chats")
+async def tg_add_chat(body: TgChatIn):
+    """Встроить телеграм-чат в allow-list (из CatchPM UI). Тип по знаку chat_id."""
+    row = await tg_db.upsert_chat(body.chat_id, body.added_by_user_id)
+    # Если вместе с чатом переданы настройки — применяем их сразу.
+    settings_fields = {
+        k: v for k, v in {
+            "system_prompt": body.system_prompt,
+            "agent_name": body.agent_name,
+            "agent_model": body.agent_model,
+            "selected_tools": body.selected_tools,
+            "trigger_mode": body.trigger_mode,
+            "orchestrator_context_n": body.orchestrator_context_n,
+            "proactive_enabled": body.proactive_enabled,
+        }.items() if v is not None
+    }
+    settings = None
+    if settings_fields:
+        settings = await tg_db.update_settings(body.chat_id, **settings_fields)
+    else:
+        settings = await tg_db.get_settings(body.chat_id)
+    return {"status": "ok", "chat": row, "settings": settings}
+
+
+@app.delete("/tg/chats/{chat_id}")
+async def tg_remove_chat(chat_id: str):
+    ok = await tg_db.deactivate_chat(chat_id)
+    return {"status": "ok" if ok else "not_found"}
+
+
+@app.get("/tg/allowed")
+async def tg_allowed():
+    """Список активных chat_id — telegram_service кэширует в Redis."""
+    return {"chat_ids": await tg_db.list_active_chat_ids()}
+
+
+@app.get("/tg/settings/{chat_id}")
+async def tg_get_settings(chat_id: str):
+    s = await tg_db.get_settings(chat_id)
+    return {"settings": s}
+
+
+@app.post("/tg/settings/{chat_id}")
+async def tg_set_settings(chat_id: str, body: TgSettingsIn):
+    """Точечное обновление настроек (из /start бота). Админ-тулы режутся ботом/агентом."""
+    s = await tg_db.update_settings(
+        chat_id,
+        **{k: v for k, v in body.dict().items() if v is not None},
+    )
+    return {"status": "ok", "settings": s}
+
+
+class TgMemberIn(BaseModel):
+    chat_id: str
+    user_id: int
+    username: str | None = None
+    first_name: str | None = None
+    is_bot: bool = False
+
+
+@app.post("/tg/members")
+async def tg_upsert_member(body: TgMemberIn):
+    """Пассивный сбор участников: бот шлёт каждого написавшего."""
+    await tg_db.upsert_member(
+        body.chat_id, body.user_id, body.username, body.first_name, body.is_bot
+    )
+    return {"status": "ok"}
+
+
+@app.get("/tg/members/{chat_id}/random")
+async def tg_random_member(chat_id: str):
+    """Рандомный участник — для проактивной инициации."""
+    m = await tg_db.get_random_member(chat_id)
+    return {"member": m}
+
+
+@app.get("/tg/proactive_chats")
+async def tg_proactive_chats():
+    """Активные чаты с включёнными будильниками — для планировщика бота."""
+    return {"chats": await tg_db.list_proactive_chats()}
+
+
+class TgTriggerIn(BaseModel):
+    kind: str = "recurring"            # 'recurring' | 'once'
+    title: str | None = None
+    time_msk: str                       # 'HH:MM'
+    days_of_week: list | None = None    # [1..7] пн..вс; None/[] = все дни
+    trigger_date: str | None = None     # 'YYYY-MM-DD' для once
+    prompt: str | None = None
+    preset_key: str | None = None
+    addressed: bool = False
+    added_by_user_id: int | None = None
+
+
+class TgTriggerPatch(BaseModel):
+    kind: str | None = None
+    title: str | None = None
+    time_msk: str | None = None
+    days_of_week: list | None = None
+    trigger_date: str | None = None
+    prompt: str | None = None
+    preset_key: str | None = None
+    addressed: bool | None = None
+    is_active: bool | None = None
+
+
+@app.get("/tg/triggers/{chat_id}")
+async def tg_list_triggers(chat_id: str):
+    """Список индивидуальных триггеров чата."""
+    return {"triggers": await tg_db.list_triggers(chat_id)}
+
+
+@app.post("/tg/triggers/{chat_id}")
+async def tg_create_trigger(chat_id: str, body: TgTriggerIn):
+    from datetime import date as _date
+    td = None
+    if body.trigger_date:
+        try:
+            td = _date.fromisoformat(body.trigger_date)
+        except ValueError:
+            return {"status": "error", "detail": "bad trigger_date"}
+    row = await tg_db.create_trigger(
+        chat_id, body.added_by_user_id, body.kind, body.time_msk,
+        title=body.title, days_of_week=body.days_of_week,
+        trigger_date=td, prompt=body.prompt, preset_key=body.preset_key, addressed=body.addressed,
+    )
+    return {"status": "ok", "trigger": row}
+
+
+@app.patch("/tg/triggers/{chat_id}/{trigger_id}")
+async def tg_update_trigger(chat_id: str, trigger_id: int, body: TgTriggerPatch):
+    from datetime import date as _date
+    fields = {k: v for k, v in body.dict().items() if v is not None}
+    if "trigger_date" in fields:
+        try:
+            fields["trigger_date"] = _date.fromisoformat(fields["trigger_date"])
+        except ValueError:
+            return {"status": "error", "detail": "bad trigger_date"}
+    row = await tg_db.update_trigger(trigger_id, **fields)
+    return {"status": "ok" if row else "not_found", "trigger": row}
+
+
+@app.delete("/tg/triggers/{chat_id}/{trigger_id}")
+async def tg_delete_trigger(chat_id: str, trigger_id: int):
+    ok = await tg_db.delete_trigger(trigger_id)
+    return {"status": "ok" if ok else "not_found"}
+
+
+@app.get("/tg/triggers_due")
+async def tg_triggers_due(utc_ts: str | None = None):
+    """Тик-сканер бота: триггеры, чьё локальное время настало СЕЙЧАС."""
+    from datetime import datetime, timezone
+    now_utc = datetime.now(timezone.utc)
+    if utc_ts:
+        try:
+            now_utc = datetime.fromisoformat(utc_ts.replace('Z', '+00:00')).astimezone(timezone.utc)
+        except ValueError:
+            pass
+    return {"triggers": await tg_db.scan_due_triggers(now_utc)}
+
+
+@app.post("/tg/triggers/{chat_id}/{trigger_id}/fired")
+async def tg_trigger_fired(chat_id: str, trigger_id: int):
+    await tg_db.mark_trigger_fired(trigger_id)
+    return {"status": "ok"}
+
+
+@app.get("/tg/trigger/{trigger_id}")
+async def tg_get_trigger(trigger_id: int):
+    """Один триггер по id (для debug-прогона из бота)."""
+    row = await tg_db.get_trigger(trigger_id)
+    return {"trigger": row}
+
+
+class TgLogIn(BaseModel):
+    chat_id: str
+    user_id: int | None = None
+    username: str
+    message: str
+    is_from_bot: bool = False
+
+
+@app.post("/tg/log_message")
+async def tg_log_message(body: TgLogIn):
+    """
+    Пишет в chats ТОЛЬКО одобренные сообщения группы (те, на которые агент
+    реагирует). Молчаливый поток группы сюда не попадает — память не засоряется.
+    Идёт мимо Kafka (без повторного триггера агента).
+    """
+    await db.add_message(
+        user_id=body.user_id,
+        message=body.message,
+        chat_id=body.chat_id,
+        is_from_bot=body.is_from_bot,
+    )
     return {"status": "ok"}
 
 

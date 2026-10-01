@@ -27,24 +27,24 @@ def make_web_search():
             time_range: Optional[str] = None,
     ) -> str:
         """
-        Выполняет поиск информации в интернете через контейнер SearXNG (JSON API).
-        Используй инструмент для поиска свежих новостей, документации, статей или фактов.
+        Searches for information on the Internet through the SearXNG container (JSON API).
+        Use the tool to find the latest news, documentation, articles, or facts.
 
-        ВЫЗЫВАЙ ПЕРВЫМ ДЕЙСТВИЕМ на любой вопрос про актуальные данные:
-        курсы валют, цены, котировки, новости, спорт, погоду, статусы
-        событий, факты о людях/компаниях, «сегодня/сейчас/последние».
-        Не отвечай на такие вопросы по памяти — твои знания устарели.
+        USE the FIRST ACTION to answer any question about current data.:
+        exchange rates, prices, quotes, news, sports, weather, statuses
+        events, facts about people/companies, "today/now/latest".
+        Don't answer such questions from memory — your knowledge is outdated.
 
-        После получения выдачи ОТКРЫВАЙ найденные ссылки через
-        parse_web_page (2-4 штуки) и бери цифры/цитаты из текста страниц,
-        а не из сниппетов.
+        After receiving the output, OPEN the found links via
+        parse_web_page (2-4 pieces) and take numbers/quotes from the page text,
+        not from the snippets.
 
-        :param query: Поисковый запрос (до 512 символов).
-        :param categories: Категории поиска, например ["general"] или ["it"]. Нельзя использовать вместе с engines.
-        :param engines: Список конкретных движков, например ["google", "yandex", "duckduckgo"].
-        :param max_results: Количество результатов от 1 до 20 (по умолчанию 10).
-        :param language: Код языка выдачи, например "ru", "en" (опционально).
-        :param time_range: Ограничение по времени: "day", "week", "month", "year" (опционально).
+        :param query: Search query (up to 512 characters).
+        :param categories: Search categories, for example ["general"] or ["it"]. Cannot be used together with engines.
+        :param engines: A list of specific engines, for example ["google", "yandex", "duckduckgo"].
+        :param max_results: The number of results, from 1 to 20 (default is 10).
+        :param language: The language code for the output, for example "ru", "en" (optional).
+        :param time_range: Time range restriction: "day", "week", "month", "year" (optional).
         """
         q = (query or "").strip()
         if not q:

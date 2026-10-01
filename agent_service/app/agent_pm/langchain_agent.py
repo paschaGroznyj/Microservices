@@ -18,7 +18,8 @@ from langchain_core.messages.utils import count_tokens_approximately
 
 from .core.agent_provider import (get_llm_lite_model, get_llm_model,
 get_llm_model_gpt, get_llm_model_claude, get_llm_model_gemini,
-get_llm_lite_model_gpt_mini, get_llm_lite_model_gemini_flash)
+get_llm_lite_model_gpt_mini, get_llm_lite_model_gemini_flash,
+get_llm_model_glm)
 from .core.botocore_client import OBSWorker
 from .core.config import (
     ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH,
@@ -26,7 +27,7 @@ from .core.config import (
     PORT_PARSERS_SERVICE, get_role
 )
 from .core.settings import TOOLS_SETTINGS, UNIVERSAL_TOOLS
-from .prompts.summary_prompt import SUMMARIZE_CUT_PROMPT
+from .prompts.summary_prompt import SUMMARIZE_CUT_PROMPT, TOOL_TRACE_SUMMARY_PROMPT
 from .prompts.system_prompt import SYSTEM_PROMPT, SCIENTIFIC_RESEARCH_MODULE
 from .title_generator import generate_chat_title, is_first_turn
 
@@ -581,6 +582,29 @@ class AutoProcessor:
 # ================================================================
 MAX_STDOUT_CHARS = 2000  # Настройте максимальную длину (например, 2000 символов)
 
+# Предохранитель против жадных тулов (Вариант C, часть A): максимальный размер
+# тела ЛЮБОГО ToolMessage перед добавлением в стек агента. Один вызов, вернувший
+# десятки тысяч символов (shell/analyze_image/search_internet), иначе раздувает
+# input_tokens так, что реактивный компактор не успевает (свежая пара в keep_last).
+# ~8000 символов ≈ 2.5-3k токенов — достаточно чтобы модель "увидела" суть.
+MAX_TOOL_MSG_CHARS = int(os.getenv("MAX_TOOL_MSG_CHARS", "8000"))
+
+# Лимит на длину tool_trace ОДНОГО сообщения при загрузке истории из БД.
+# Исторически в chats.tool_trace накопились гигантские записи (git/grep-выводы
+# execute_shell_commands по 40k+ симв). Такой trace, будучи прочитанным в
+# составе последних N сообщений, раздувает память процесса и подмешивается в
+# chunk при сжатии. Режем каждый trace на входе из БД до этого лимита.
+MAX_TRACE_FROM_DB_CHARS = int(os.getenv("MAX_TRACE_FROM_DB_CHARS", "2500"))
+
+# Порог (в символах) для LLM-сжатия tool_trace НА ВЫХОДЕ из запроса.
+# Если сырой trace текущего хода длиннее — гоним его через основную модель
+# (TOOL_TRACE_SUMMARY_PROMPT) и в БД кладём компактную md-таблицу-сводку,
+# а не сырой лог. Короткие trace сохраняем как есть (не тратим LLM-вызов).
+TRACE_SUMMARY_THRESHOLD = int(os.getenv("TRACE_SUMMARY_THRESHOLD", "6000"))
+# Жёсткий аварийный предел на входе из БД (на случай исторических записей,
+# сохранённых до включения LLM-сжатия). Только страховка от аномалий.
+MAX_TRACE_HARD_CHARS = int(os.getenv("MAX_TRACE_HARD_CHARS", "12000"))
+
 def _truncate_text(text: str, max_chars: int = MAX_STDOUT_CHARS) -> str:
     """Обрезает текст, если он превышает лимит, добавляя плашку с указанием перерасхода."""
     if not isinstance(text, str) or len(text) <= max_chars:
@@ -622,7 +646,7 @@ STATEFUL_TOOLS = {
     "execute_python_code",
     "send_file_to_user",
     "work_with_agent_journal",
-    "request_more_steps",
+    # "request_more_steps",
     "submit_task", "check_task_status",
     "create_workspace", "list_workspace_files", "download_workspace_file",
     "delete_workspace", "cleanup_workspaces",
@@ -714,12 +738,37 @@ def _summarize_tool_call(tc: dict, result: Any) -> str | None:
                 f"код:\n{code[:800]}\n"
                 f"ошибка: {error}"
             )
-    if name == "request_more_steps":
-        return f"{name} ШАГ-БУСТ → {str(result)}"
+    # if name == "request_more_steps":
+    #     return f"{name} ШАГ-БУСТ → {str(result)}"
+    if name == "execute_shell_commands":
+        # КРИТИЧНО для памяти/контекста: команды (git heredoc, grep, py_compile)
+        # и их stdout/stderr бывают по 40k+ символов. Без жёсткого лимита такой
+        # trace осаждается в chats.tool_trace и раздувает контекст следующего
+        # запроса (последние N сообщений). Режем и команду, и результат.
+        _cmds = args.get("commands", args)
+        _cmd_s = str(_cmds)
+        if len(_cmd_s) > 400:
+            _cmd_s = _cmd_s[:400] + f"…[+{len(_cmd_s) - 400} симв]"
+        if isinstance(result, dict):
+            _ok = result.get("ok")
+            _out = str(result.get("stdout", ""))
+            _err = str(result.get("stderr", ""))
+            _rc = result.get("exit_code")
+            _res_s = f"ok={_ok} rc={_rc} stdout={_out[:800]}"
+            if _err.strip():
+                _res_s += f" stderr={_err[:300]}"
+        else:
+            _res_s = str(result)[:800]
+        return f"execute_shell_commands({_cmd_s}) → {_res_s}"
     # if name == "research_prompt":
     #     query = args.get("query", args.get("topic", ""))
     #     return f"research_prompt('{query}') → найдены источники"
-    return f"{name}({args} -> {result[:1000]})"
+    # Финальный фолбэк: НИКОГДА не осаждаем нелимитированные args/result —
+    # раньше тут args уходил целиком (без среза), что и раздувало tool_trace.
+    _args_s = str(args)
+    if len(_args_s) > 500:
+        _args_s = _args_s[:500] + f"…[+{len(_args_s) - 500} симв]"
+    return f"{name}({_args_s} -> {str(result)[:1000]})"
 
 
 async def _invoke_with_retry(llm, messages, iteration: int, max_retries: int = 3):
@@ -739,7 +788,27 @@ async def _invoke_with_retry(llm, messages, iteration: int, max_retries: int = 3
     return None
 
 
-async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0):
+def _sanitize_messages(messages):
+    """Убирает human/tool сообщения с пустым content перед отправкой в LLM.
+
+    Провайдер (cloud.ru) отбивает весь запрос с 400 "messages.N: user messages
+    must have non-empty content", если у любого human/tool-сообщения content
+    пустой. AIMessage с tool_calls и пустым content — валиден (мы сами
+    гасим response.content при reasoning), его НЕ трогаем. SystemMessage тоже
+    оставляем всегда.
+    """
+    out = []
+    for m in messages:
+        mtype = getattr(m, "type", None)
+        if mtype in ("human", "tool"):
+            c = getattr(m, "content", None)
+            if c is None or (isinstance(c, str) and not c.strip()):
+                continue
+        out.append(m)
+    return out
+
+
+async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, error_info: dict | None = None):
     """Стриминговая версия _invoke_with_retry.
 
     Собирает ответ через llm.astream(), аккумулируя AIMessageChunk сложением (+=).
@@ -752,6 +821,7 @@ async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0):
 
     Стратегия отказоустойчивости: если astream упал — фолбэк на обычный ainvoke.
     """
+    messages = _sanitize_messages(messages)
     backoff = [2, 5, 10]
     last_error = None
     for attempt in range(3):
@@ -802,6 +872,8 @@ async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0):
         return await llm.ainvoke(messages)
     except Exception as e:
         logging.error(f"[iteration={iteration}] ainvoke-фолбэк тоже упал: {e}")
+        if error_info is not None:
+            error_info["reason"] = f"{type(e).__name__}: {e}"
         return None
 
 CODE_TOOLS = {"execute_python_code", "write_sandbox_file", "edit_sandbox_file"}
@@ -848,7 +920,7 @@ class KnowledgeAgent:
         )
         self.AGENT_MODELS = {'coder': get_llm_model_gpt(),
                             'designer': get_llm_model_claude(),
-                            'universal': get_llm_model_gemini()
+                            'universal': get_llm_model_glm()
                             }
         self.llm_lite = get_llm_lite_model()
         # Цепочка фолбэков для лайт-модели (суммаризация и прочие служебные
@@ -857,6 +929,7 @@ class KnowledgeAgent:
         self.llm_lite_fallbacks = [
             get_llm_lite_model_gpt_mini(),
             get_llm_lite_model_gemini_flash(),
+            get_llm_model_glm()
         ]
         self.obs_loader = OBSWorker()
         self.email_handler = DigestEmailHandler()
@@ -899,6 +972,14 @@ class KnowledgeAgent:
 
             messages = []
             for row in rows:
+                # САНИТАЙЗЕР: провайдер (cloud.ru) отбивает запрос с 400
+                # "messages.N: user messages must have non-empty content", если в любом
+                # сообщении content пустой. Такие строки попадают в БД от
+                # проактивных/телеграм-триггеров (initiated с message="").
+                # Дропаем пустые сообщения, чтобы не ломать весь цикл.
+                _txt = row.get("message_text")
+                if _txt is None or not str(_txt).strip():
+                    continue
                 kwargs = {"db_id": row["id"]}
                 if row["is_from_bot"]:
                     # РАЗДЕЛЕНИЕ СООБЩЕНИЙ И TOOL TRACE.
@@ -912,7 +993,14 @@ class KnowledgeAgent:
                     # сжатии (_summarize_cut_messages), чтобы факты из трейса
                     # (пути, workspace_id, ссылки) не терялись, а уходили в rolling summary.
                     if row.get("tool_trace"):
-                        kwargs["tool_trace"] = row["tool_trace"]
+                        # trace сжимается ТЕПЕРЬ НА ВЫХОДЕ из запроса (LLM-сводка,
+                        # см. _summarize_tool_trace). Здесь на входе — только мягкая
+                        # аварийная страховка от исторических записей, сохранённых
+                        # до включения LLM-сжатия (огромные сырые логи). Нормальные
+                        # (уже сжатые) trace проходят без изменений.
+                        kwargs["tool_trace"] = _truncate_text(
+                            str(row["tool_trace"]), max_chars=MAX_TRACE_HARD_CHARS
+                        )
                     messages.append(AIMessage(content=row["message_text"], additional_kwargs=kwargs))
                 else:
                     messages.append(HumanMessage(content=row["message_text"], additional_kwargs=kwargs))
@@ -1016,6 +1104,7 @@ class KnowledgeAgent:
         allow_all: bool = False,
         images: list[dict] | None = None,
         agent_model: str | None = None,
+        is_telegram: bool = False,
     ):
         """Возвращает список LangChain @tool-функций, привязанных к контексту агента."""
 
@@ -1227,54 +1316,51 @@ class KnowledgeAgent:
         @tool
         async def execute_sql_query(sql: str) -> str:
             """
-            Выполнить SQL-запрос к базе данных (SELECT, INSERT, UPDATE).
+            Execute an SQL query to the database (SELECT, INSERT, UPDATE).
             
-            КАРТА ДОСТУПА И ПРАВ (ROLE: knowledge_manager):
+            ACCESS AND RIGHTS MAP (ROLE: knowledge_manager):
 
-            ЗАКОН ПРИ РАБОТЕ С БД:
-            Если SQL-запрос вернул "результатов нет" при поиске конкретных статей/фактов, 
-            которые ты собирался процитировать — ОБЯЗАН сообщить пользователю: 
-            "Не нашёл точных совпадений в базе для темы X, могу поискать шире / 
-            дать общий обзор без привязки к конкретным ID". 
-            ЗАПРЕЩЕНО подменять неудачный результат правдоподобно звучащими названиями, 
-            особенно с формулировками вида 'я проверил/уточнил через SQL', 
-            если фактический результат запроса был пуст или нерелевантен.
+            LAW WHEN WORKING WITH THE DB:
+            If the SQL query returned “no results” when searching for specific articles/facts that you were going to cite, you are OBLIGED to inform the user: “I didn’t find any exact matches in the database for topic X, I can search more broadly / 
+            give a general overview without reference to specific IDs." 
+            It is FORBIDDEN to substitute plausible-sounding names for an unsuccessful result,
+            especially with formulations like 'I checked/clarified via SQL'
+            if the actual query result was empty or irrelevant.
 
-            Утверждение о сохранении данных в БД без фактического вызова execute_sql_query 
-            в этом же ходу — это создание ложной информации и категорически запрещено.
+            A statement about saving data to the database without actually calling execute_sql_query 
+            In the same move, it is the creation of false information and is strictly prohibited.
             
-            СТРОГИЕ ОГРАНИЧЕНИЯ:
-            - Прямые операции DELETE СТРОГО ЗАПРЕЩЕНЫ на уровне прав роли.
-            - Для предложения удаления записи из 'knowledge' делай INSERT в 'knowledge_review' 
-            с указанием 'knowledge_id' и 'reason'.
-            - Перед формированием запросов обязательно вызови 'get_db_schema' для проверки структуры.
+            STRICT RESTRICTIONS:
+            - DIRECT DELETE operations are STRICTLY PROHIBITED at the role permission level.
+            - To propose deleting a record from 'knowledge', perform an INSERT into 'knowledge_review' 
+            specifying 'knowledge_id' and 'reason'.
+            - Before generating queries, be sure to call 'get_db_schema' to check the structure.
 
-            СТРАТЕГИЯ РАБОТЫ С ТАБЛИЦЕЙ knowledge:
-            - НОВАЯ ЗАПИСЬ (INSERT): создавай всегда когда источник новый (новая статья, новый URL, новый автор).
-            Одна статья = одна запись. Не объединяй разные источники в одну строку.
+            THE STRATEGY OF WORKING WITH THE knowledge TABLE is:
+            - NEW ENTRY (INSERT): create whenever the source is new (new article, new URL, new author).
+            One article = one entry. Don't combine different sources into one line.
 
-            - ОБНОВЛЕНИЕ (UPDATE): только если запись с этим источником уже существует
-            и нужно дополнить или исправить текст. Проверяй через SELECT перед UPDATE.
+            - UPDATE: only if an entry with this source already exists
+            and you need to add or correct the text. Check through SELECT before UPDATING.
 
-            - ВСЕГДА ПРОВЕРЯЙ разницу времени между временем создания записи и её обновлением. НИКОГДА не говори
-            пользователю, что запись обновлена. Если разницы нет, то сделай самостоятельное обновление. 
+            - ALWAYS CHECK the time difference between the time the entry was created and the time it was updated. NEVER tell the user that the entry has been updated. If there is no difference, perform the update yourself.
 
-            - ОБЪЕДИНЕНИЕ: НЕ объединяй записи из разных источников даже если темы похожи.
-            Смежность тем — не повод для слияния. Семантический поиск сам найдёт связанные записи.
+            - MERGING: DO NOT merge entries from different sources, even if the topics are similar.
+            Similarity of topics is not a reason to merge. Semantic search will find related entries on its own.
 
-            - В metadata_knowledge всегда указывай source (URL или идентификатор статьи),
-            чтобы можно было отследить происхождение знания. Без явной ссылки, можешь оставить пустым.
+            - In metadata_knowledge, always specify the source (URL or article identifier).
+            so that the origin of knowledge can be traced. Without an explicit link, you can leave it blank.
 
-            - ТОЧЕЧНОЕ ОБНОВЛЕНИЕ ТЕКСТА (UPDATE + REPLACE):
-            Если нужно заменить только конкретную фразу/слово, а не переписывать весь текст:
-            1. Сначала сделай SELECT text_knowledge WHERE id = N, чтобы усмотреть точную формулировку.
-            2. Выполни подстановку через REPLACE:
+            - POINT TEXT UPDATE (UPDATE + REPLACE):
+            If you need to replace only a specific phrase/word, rather than rewrite the entire text:
+            1. First, do SELECT text_knowledge WHERE id = N to see the exact wording.
+            2. Perform substitution via REPLACE:
                 UPDATE knowledge 
-                SET text_knowledge = REPLACE(text_knowledge, 'строго точный старый текст', 'новый текст'),
+                SET text_knowledge = REPLACE(text_knowledge, 'strictly accurate old text', 'new text'),
                     updated_at = NOW()
                 WHERE id = N;
 
-            :param sql: Валидный PostgreSQL запрос.
+            :param sql: Valid PostgreSQL query.
             """
             result = await tool_execute_sql_query(agent.db, sql)
             
@@ -1303,20 +1389,20 @@ class KnowledgeAgent:
         @tool
         async def no_tools_selected() -> str:
             """
-            Вызывай ТОЛЬКО если тебе нужно выполнить действие, требующее инструмента,
-            а ни один инструмент недоступен. Сообщи пользователю, что нужно выбрать
-            хотя бы одну категорию инструментов в панели настроек (кнопка со значком
-            гаечного ключа рядом с полем ввода), и объясни, какая категория подошла бы
-            для его запроса. НЕ выдумывай данные и НЕ пытайся ответить по памяти —
-            задача без инструментов не может быть выполнена корректно.
+            Call it ONLY if you need to perform an action that requires a tool.,
+            and not a single tool is available. Tell the user what to choose.
+            at least one category of tools in the settings panel (the button with the icon
+            a wrench next to the input field), and explain which category would be suitable.
+            for his request. DO NOT invent data and DO NOT try to answer from memory —
+            the task cannot be performed correctly without tools.
             """
             return (
-                "⚠️ Инструменты не выбраны. Чтобы выполнить этот запрос, нужно "
-                "включить хотя бы одну категорию инструментов на главной странице: "
-                "нажмите на кнопку настройки инструментов (значок гаечного ключа "
-                "рядом с полем ввода) и выберите подходящую категорию, затем "
-                "повторите запрос. Без включённых инструментов я не могу собрать "
-                "данные и не буду отвечать по памяти, чтобы не ввести вас в заблуждение."
+                "⚠️ Tools are not selected. To complete this request, you need to "
+                "enable at least one category of tools on the main page: "
+                "click on the Tools settings button (wrench icon "
+                "next to the input field) and select the appropriate category, then "
+                "repeat the request. Without the included tools, I cannot collect "
+                "data and will not answer from memory, so as not to mislead you."
             )
 
         # 1. Генерация новых ревью
@@ -1334,6 +1420,11 @@ class KnowledgeAgent:
         # 5. Точка эндпоинта для создания сессии start/end
         from .tools.sessions.tool_session_point import make_session_point_tool
         session_point = make_session_point_tool(agent)
+        # 5.1 Планировщик собственных Telegram-триггеров (агент сам ставит
+        # отложенные само-запуски: recurring/once по МСК). Слушатель
+        # chats_service раз в минуту сканирует telegram_triggers и будит агента.
+        from .tools.telegram.tool_manage_trigger import make_manage_trigger_tool
+        manage_trigger = make_manage_trigger_tool(agent, chat_id, user_id)
         # 6. Тулзы для работы с кодовой базой проекта и песочницы. tree/grep/cat
         from .tools.filesystem.tool_read_codebase import make_filesystem_tools
         fs_tools = make_filesystem_tools(agent)
@@ -1381,7 +1472,7 @@ class KnowledgeAgent:
         # base64 картинок захватывается в замыкание тула из images —
         # модель передаёт только промпт, base64 не идёт в контекст.
         from .tools.vision.tool_analyze_image import make_analyze_image_tool
-        analyze_image = make_analyze_image_tool(agent, images, agent_model=agent_model)
+        analyze_image = make_analyze_image_tool(agent, images, agent_model=agent_model, chat_id=chat_id)
 
         # Тул генерации изображений (gemini-3.1-flash-image-preview).
         # Пресет качества из карточки #127. Сгенерированные файлы копятся
@@ -1415,6 +1506,7 @@ class KnowledgeAgent:
             search_internet,
             download_text_pdf,
             session_point,
+            manage_trigger,
             send_file_tool,
             send_message_tool,
             work_with_email,
@@ -1446,6 +1538,13 @@ class KnowledgeAgent:
         allowed_names.update(UNIVERSAL_TOOLS)
 
         filtered = [t for t in all_tools if t.name in allowed_names]
+
+        # Telegram: жёстко режем админские тулы даже если категория выбрана
+        # в настройках чата (execute_sql_query / get_db_schema / shell).
+        # Настройки TG задаёт /start в самой группе — админку не отдаём наружу.
+        if is_telegram:
+            TG_FORBIDDEN = {"execute_sql_query", "get_db_schema", "execute_shell_commands"}
+            filtered = [t for t in filtered if t.name not in TG_FORBIDDEN]
 
         # Даже если пользователь не выбрал ни одной категории, универсальные
         # тулы должны остаться доступны — не подменяем их заглушкой.
@@ -1511,6 +1610,30 @@ class KnowledgeAgent:
             )
             return await self._lite_ainvoke(messages)
         return await model.ainvoke(messages)
+
+    async def _summarize_tool_trace(self, raw_trace: str) -> str:
+        """LLM-сжатие сырого tool_trace ОДНОГО запроса в компактную md-таблицу.
+
+        Вызывается на выходе из run_agent, если сырой trace длиннее
+        TRACE_SUMMARY_THRESHOLD. Использует основную модель агента
+        (_main_ainvoke) и TOOL_TRACE_SUMMARY_PROMPT. Fail-open: при любой
+        ошибке / пустом ответе деградируем на _truncate_text, чтобы падение
+        LLM никогда не роняло сохранение сообщения.
+        """
+        try:
+            prompt = TOOL_TRACE_SUMMARY_PROMPT.format(raw_trace=raw_trace)
+            resp = await self._main_ainvoke([HumanMessage(content=prompt)])
+            summary = (getattr(resp, "content", "") or "").strip()
+            if summary:
+                logging.info(
+                    f"[trace-summary] сырой trace {len(raw_trace)} симв → "
+                    f"сводка {len(summary)} симв"
+                )
+                return summary
+            logging.warning("[trace-summary] пустой ответ модели, деградирую на обрезку")
+        except Exception as e:
+            logging.error(f"[trace-summary] ошибка LLM-сжатия trace: {e}, деградирую на обрезку")
+        return _truncate_text(raw_trace, max_chars=MAX_TRACE_FROM_DB_CHARS)
 
     async def _summarize_cut_messages(
         self,
@@ -1607,6 +1730,53 @@ class KnowledgeAgent:
     async def close(self):
         if self._http_client and not self._http_client.is_closed:
             await self._http_client.aclose()
+
+    async def _probe_providers_status(self) -> str:
+        """Дёргает /internal/providers_status и возвращает человекочитаемую
+        строку с доступностью моделей (coder/designer/universal).
+
+        Использует готовый health-check эндпоинт того же процесса
+        (кеш TTL 30с на его стороне). При любой ошибке — мягкий фолбэк."""
+        _labels = {
+            "coder": "Кодер",
+            "designer": "Дизайнер",
+            "universal": "Универсал",
+        }
+        try:
+            client = await self._get_http_client()
+            port = os.getenv("PORT_PM_AGENT") or "9001"
+            resp = await client.get(
+                f"http://127.0.0.1:{port}/internal/providers_status",
+                timeout=12.0,
+            )
+            resp.raise_for_status()
+            providers = (resp.json() or {}).get("providers", {}) or {}
+        except Exception as e:
+            logger.warning(f"[providers_status] проба не удалась: {e}")
+            return "Не удалось опросить статус моделей (health-check недоступен)."
+
+        if not providers:
+            return "Статус моделей получить не удалось."
+
+        up_list, down_list = [], []
+        for mid, label in _labels.items():
+            info = providers.get(mid) or {}
+            if info.get("up"):
+                up_list.append(label)
+            else:
+                down_list.append(label)
+
+        lines = ["Доступность моделей сейчас:"]
+        for mid, label in _labels.items():
+            info = providers.get(mid) or {}
+            mark = "✅" if info.get("up") else "❌"
+            lines.append(f"{mark} {label}")
+
+        if not up_list:
+            lines.append("\nСейчас недоступна ни одна модель — ждите восстановления провайдера.")
+        else:
+            lines.append(f"\nМожно переключиться на: {', '.join(up_list)}.")
+        return "\n".join(lines)
 
     def _ctx_get(self, key: str, default=None):
         """Читает request-local значение из ContextVar."""
@@ -1779,9 +1949,13 @@ class KnowledgeAgent:
             limit_mem = preset["limit_mem"]
             max_tokens = preset["max_tokens"]
 
-            allow_all_tools = (source == "telegram")
+            # Telegram: allow_all ВЫКЛЮЧЕН. Тулы берутся строго из настроек
+            # чата (selected_tools пришли из telegram_chat_settings), минус
+            # админские (режутся ещё в telegram_service/agent). Журнал в ТГ включаем.
+            is_telegram = (source == "telegram")
+            allow_all_tools = False
             selected_tools = selected_tools or []
-            use_journal = allow_all_tools or ("sessions" in selected_tools)
+            use_journal = is_telegram or ("sessions" in selected_tools)
 
             logging.info(f"🙂 {user_input[:200]}")
             tools = self._build_tools(
@@ -1792,6 +1966,7 @@ class KnowledgeAgent:
                 allow_all=allow_all_tools,
                 images=images,
                 agent_model=agent_model,
+                is_telegram=is_telegram,
             )
             loop_state = {
                 "iteration": 0,
@@ -1817,6 +1992,31 @@ class KnowledgeAgent:
             # РОЛЬ РЕШАЕТСЯ КОДОМ по verified user_id (не моделью, не по тексту/табельному/тегу).
             role_block = get_role(user_id)
             system_content = SYSTEM_PROMPT.format(datetime=current_datetime, role_block=role_block)
+            # Медиа-хранилище чата (Redis, пер-chat_id): картинки/файлы из недавних
+            # сообщений — чтобы агент видел их даже когда в текущем сообщении вложений нет.
+            try:
+                from agent_pm.media import media_store as _media_store
+                _media_block = await _media_store.build_media_prompt_block(chat_id)
+                if _media_block:
+                    system_content += _media_block
+            except Exception as _e:
+                logging.warning(f"[media_store] prompt block fail: {_e}")
+            # Telegram: подмешиваем HTML-инструкцию форматирования + per-chat промпт из БД.
+            if is_telegram:
+                try:
+                    from agent_pm.telegram.tg_integration import (
+                        get_tg_chat_settings, build_tg_system_suffix,
+                    )
+                    _tg_settings = await get_tg_chat_settings(self.db, chat_id)
+                    _tg_name = _tg_settings.get("agent_name")
+                    if _tg_name and _tg_name.strip():
+                        system_content += (
+                            "\n\nВ этом чате тебя зовут «" + _tg_name.strip() + "». "
+                            "Участники обращаются к тебе по этому имени — воспринимай его как своё и при необходимости так и представляйся."
+                        )
+                    system_content += "\n\n" + _tg_settings.get("system_prompt")
+                except Exception as _e:
+                    logging.warning(f"[tg] system suffix fail: {_e}")
 
             # Собираем историю из памяти
             history = await self._build_history(chat_id, limit=30)
@@ -1908,6 +2108,18 @@ class KnowledgeAgent:
                 *trimmed_history,
                 HumanMessage(content=user_input),
             ]
+            RATIO = {"designer": 1.3, "coder": 4.0}   # символов на токен
+
+            import json
+            def _tok(s): return len(s) // RATIO.get(agent_model, 2)   # для русского ~2 симв/токен, а не 4
+
+            # for m in messages:
+            #     c = m.content if isinstance(m.content, str) else json.dumps(m.content, ensure_ascii=False)
+            #     logger.info(f"[budget] {m.__class__.__name__:15} chars={len(c):6} ~tok={_tok(c):6} | {c[:60]!r}")
+
+            schemas = json.dumps([t.args_schema.schema() if t.args_schema else {} for t in tools], ensure_ascii=False)
+            descr   = sum(len(t.description or "") for t in tools)
+            logger.info(f"[budget] tools={len(tools)} schema_chars={len(schemas)} descr_chars={descr} ~tok={_tok(schemas)+_tok('x'*descr)}")
 
             async def agent_event_loop(messages: list):
                 nonlocal total_input_tokens, total_output_tokens # Не видит из-за +=
@@ -1955,21 +2167,21 @@ class KnowledgeAgent:
                     current_llm = llm if (is_last_step and not can_still_extend) else llm_with_tools
 
                     # ТОЧКА 3: адресный триггер на КАЖДОМ шаге окна, а не однократно.
-                    steps_left = loop_state["hard_limit"] - iteration - 1
+                    # steps_left = loop_state["hard_limit"] - iteration - 1
                     # SOFT_LIMIT-предупреждение привязано к КОНЦУ окна, а не к фикс. номеру:
                     # при hard_limit=100 нельзя спамить 90 SystemMessage. Шлём подсказку
                     # про request_more_steps только когда до потолка осталось <= STEPS_LEFT_WARN.
-                    if steps_left <= loop_state["steps_left_warn"] and can_still_extend:
-                        messages.append(SystemMessage(content=(
-                            f"[Контроль лимита] Осталось шагов: {steps_left}. "
-                            f"Если НЕ успеваешь завершить задачу за оставшиеся шаги — "
-                            f"вызови request_more_steps ПРЯМО СЕЙЧАС (расширение одноразовое). "
-                            f"Если успеваешь — продолжай и дай финальный ответ."
-                        )))
-                    elif steps_left <= loop_state["steps_left_warn"]:
-                        messages.append(SystemMessage(
-                            content=f"[Прогресс: шаг {iteration} из {loop_state['hard_limit']}]"
-                        ))
+                    # if steps_left <= loop_state["steps_left_warn"] and can_still_extend:
+                    #     messages.append(SystemMessage(content=(
+                    #         f"[Контроль лимита] Осталось шагов: {steps_left}. "
+                    #         f"Если НЕ успеваешь завершить задачу за оставшиеся шаги — "
+                    #         f"вызови request_more_steps ПРЯМО СЕЙЧАС (расширение одноразовое). "
+                    #         f"Если успеваешь — продолжай и дай финальный ответ."
+                    #     )))
+                    # elif steps_left <= loop_state["steps_left_warn"]:
+                    #     messages.append(SystemMessage(
+                    #         content=f"[Прогресс: шаг {iteration} из {loop_state['hard_limit']}]"
+                    #     ))
 
 
                     # ── Живой стриминг текста модели ──────────────────────────
@@ -1994,16 +2206,33 @@ class KnowledgeAgent:
                             text, request_id, msg_id=str(request_id), kind="live"
                         )
 
+                    _llm_error = {}
                     try:
                         response = await _astream_collect(
-                            current_llm, messages, on_chunk=_on_chunk, iteration=iteration
+                            current_llm, messages, on_chunk=_on_chunk, iteration=iteration,
+                            error_info=_llm_error
                         )
-                    except Exception:
+                    except Exception as _exc:
+                        _llm_error["reason"] = f"{type(_exc).__name__}: {_exc}"
                         response = None
 
                     if response is None:
-                        logging.error(f"[iteration={iteration}] Все попытки llm провалены, прерываю цикл")
-                        final_response = "Ошибка внутри цикла агента. Но агент запомнил шаги, попробуйте вернуться к запросу"
+                        _err_reason = _llm_error.get("reason", "unknown")
+                        logging.error(f"[iteration={iteration}] Все попытки llm провалены, прерываю цикл: {_err_reason}")
+                        _is_provider_down = any(kw in str(_err_reason).lower() for kw in (
+                            "all providers failed", "503", "service unavailable",
+                            "connection", "timeout", "unreachable"
+                        ))
+                        if _is_provider_down:
+                            _status_line = await self._probe_providers_status()
+                            final_response = (
+                                "⚠️ Провайдер моделей (cloud.ru) сейчас недоступен или отвечает ошибками "
+                                "(503/Service Unavailable). Это не проблема агента — проблема на стороне провайдера.\n\n"
+                                f"{_status_line}\n\n"
+                                "Попробуйте повторить запрос через несколько минут."
+                            )
+                        else:
+                            final_response = "Ошибка внутри цикла агента. Но агент запомнил шаги, попробуйте вернуться к запросу"
                         break
 
                     _has_tool_calls = bool(getattr(response, "tool_calls", None))
@@ -2018,7 +2247,7 @@ class KnowledgeAgent:
                                 "", request_id, msg_id=str(request_id), kind="reasoning_end"
                             )
                         # В стек reasoning не тащим (как и раньше) — гасим content
-                        response.content = ""
+                        # response.content = ""
                     elif _has_tool_calls and not _had_text:
                         # Шаг без текста (сразу tool_calls). Если что-то всё же
                         # успело улететь как live (пустой мусор) — закрываем блок.
@@ -2090,6 +2319,20 @@ class KnowledgeAgent:
                         ],
                         return_exceptions=True,
                     )
+
+                    if iter_in and iter_in >= TOKEN_SOFT_LIMIT:
+                        logger.info(
+                            f"[compactor] iter_in={iter_in} >= {TOKEN_SOFT_LIMIT}, "
+                            f"запускаю сжатие стека (итерация {iteration})"
+                        )
+                        try:
+                            messages, _meta = await compact_messages(
+                                self,
+                                messages,
+                                summarize_tool_call=_summarize_tool_call,
+                            )
+                        except Exception as _e:
+                            logger.error(f"[compactor] сбой сжатия, продолжаю без него: {_e}")
                     # logging.info(f"Результаты тулзов: {tool_results}")
 
                     for tc, tr in zip(tool_calls, tool_results):
@@ -2139,6 +2382,15 @@ class KnowledgeAgent:
                             content = f"Ошибка инструмента: {tr}"
                         else:
                             content = content_for_message
+
+                        # ── ПРЕДОХРАНИТЕЛЬ (Вариант C, часть A): универсальная обрезка ──
+                        # execute_python_code уже режет stdout/stderr выше, но ЛЮБОЙ
+                        # другой тул (execute_shell_commands, analyze_image,
+                        # search_internet, git-выводы) кладёт content целиком.
+                        # Один жадный вызов раздувает стек до потолка и in-loop
+                        # компактор не спасает, т.к. свежая пара защищена keep_last.
+                        # Поэтому усекаем тело ЛЮБОГО tool-результата на входе в стек.
+                        content = _truncate_text(content, max_chars=MAX_TOOL_MSG_CHARS)
 
                         messages.append(ToolMessage(content=content, tool_call_id=tc["id"]))
 
@@ -2244,6 +2496,19 @@ class KnowledgeAgent:
                         logging.info(f"[title] chat={chat_id} сгенерирован заголовок: {auto_title!r}")
             except Exception as e:
                 logging.error(f"[title] ошибка автозаголовка chat={chat_id}: {e}")
+
+            # Сжатие tool_trace ЗДЕСЬ И СЕЙЧАС (на выходе из запроса).
+            # Сырой trace текущего хода: если длиннее порога — гоним через
+            # основную модель в компактную md-таблицу (артефакты сохраняются),
+            # иначе кладём как есть. В БД больше НЕ ложатся сырые простыни.
+            trace_out = None
+            if tool_trace:
+                raw_trace = '; '.join(tool_trace)
+                if len(raw_trace) > TRACE_SUMMARY_THRESHOLD:
+                    trace_out = await self._summarize_tool_trace(raw_trace)
+                else:
+                    trace_out = raw_trace
+
             return {
                 "input": user_input,
                 "message": final_response,
@@ -2251,7 +2516,7 @@ class KnowledgeAgent:
                 "action": used_tools[0] if len(used_tools)> 0 else '',
                 "success": True,
                 "files_to_send": files_to_send,
-                "tool_trace": '; '.join(tool_trace) if tool_trace else None,
+                "tool_trace": trace_out,
                 "agent_model": agent_model,
                 "tokens_usage": tokens_usage,
                 "auto_title": auto_title

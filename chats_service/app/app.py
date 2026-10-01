@@ -309,11 +309,18 @@ class TgStartLogIn(BaseModel):
 
 @app.post("/tg/log_start")
 async def tg_log_start(body: TgStartLogIn):
-    """Журнал нажатий /start (append-only): username, user_id, дата/время."""
+    """Лог /start: первое нажатие = INSERT, повторы = start_count+1, updated_at."""
     await tg_db.log_start(
         body.chat_id, body.user_id, body.username, body.first_name, body.is_allowed
     )
     return {"status": "ok"}
+
+
+@app.get("/tg/start_log")
+async def tg_start_log(limit: int = 50):
+    """Последние входы /start для админ-кнопки в боте."""
+    rows = await tg_db.get_start_log(limit=max(1, min(int(limit), 200)))
+    return {"status": "ok", "items": rows}
 
 
 @app.get("/tg/proactive_chats")

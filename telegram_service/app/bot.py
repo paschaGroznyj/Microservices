@@ -682,6 +682,19 @@ async def upsert_member(chat_id: int, user_id: int, username: str | None,
         log.warning(f"upsert_member fail chat={chat_id}: {e}")
 
 
+async def fetch_start_log(limit: int = 20) -> list[dict]:
+    """Тянет последние входы /start для админ-кнопки."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{CHATS_SERVICE_URL}/tg/start_log", params={"limit": limit})
+            if resp.status_code == 200:
+                return (resp.json() or {}).get("items") or []
+    except Exception as e:
+        logger.warning(f"[startlog] fetch failed: {e}")
+    return []
+
+
 async def log_start_event(chat_id: int, user, is_allowed_flag: bool) -> None:
     """Лог нажатия /start → chats_service (append-only журнал входов)."""
     try:
@@ -1796,7 +1809,7 @@ def _settings_summary(settings: dict) -> str:
     )
 
 
-def _menu_root(settings: dict | None = None) -> InlineKeyboardMarkup:
+def _menu_root(settings: dict | None = None, is_admin: bool = False) -> InlineKeyboardMarkup:
     settings = settings or {}
     proactive = settings.get("proactive_enabled")
     if proactive is None:
@@ -1804,15 +1817,18 @@ def _menu_root(settings: dict | None = None) -> InlineKeyboardMarkup:
     # Будильники (завтрак/обед/ужин + poke)
     poke_label = ("\U0001f514 Будильники: вкл" if proactive
                   else "\U0001f515 Будильники: выкл")
-    return InlineKeyboardMarkup([
+    rows = [
         [InlineKeyboardButton("Имя агента", callback_data="tg:menu:name")],
         [InlineKeyboardButton("Модель", callback_data="tg:menu:model")],
         [InlineKeyboardButton("Инструменты", callback_data="tg:menu:tools")],
         [InlineKeyboardButton("Триггер", callback_data="tg:menu:trigger")],
         [InlineKeyboardButton("Будильники", callback_data="tg:menu:alarms")],
         [InlineKeyboardButton(poke_label, callback_data="tg:toggle:proactive")],
-        [InlineKeyboardButton("Закрыть", callback_data="tg:close")],
-    ])
+    ]
+    if is_admin:
+        rows.append([InlineKeyboardButton("🔒 Кто жал /start", callback_data="tg:admin:startlog")])
+    rows.append([InlineKeyboardButton("Закрыть", callback_data="tg:close")])
+    return InlineKeyboardMarkup(rows)
 
 
 def _menu_model(current) -> InlineKeyboardMarkup:
@@ -1985,10 +2001,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(_registration_gate_text(chat_id))
         return
     settings = await get_chat_settings(chat_id)
+    _adm = _is_tg_admin(update.effective_user.id if update.effective_user else 0)
     await update.message.reply_text(
         _settings_summary(settings),
         parse_mode=ParseMode.HTML,
-        reply_markup=_menu_root(settings),
+        reply_markup=_menu_root(settings, is_admin=_adm),
     )
 
 
@@ -1997,6 +2014,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     chat_id = query.message.chat.id if query.message else update.effective_chat.id
     data = query.data or ""
+    _cb_admin = _is_tg_admin(query.from_user.id if query.from_user else 0)
 
     if not await is_allowed(chat_id):
         await query.answer("Чат не зарегистрирован.", show_alert=True)
@@ -2023,7 +2041,36 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "tg:menu:root":
         await query.answer()
-        await _refresh(lambda s: _menu_root(s))
+        await _refresh(lambda s: _menu_root(s, is_admin=_cb_admin))
+        return
+
+    if data == "tg:admin:startlog":
+        if not _cb_admin:
+            await query.answer("Только для админа", show_alert=True)
+            return
+        await query.answer()
+        items = await fetch_start_log(20)
+        if not items:
+            body = "Лог /start пуст."
+        else:
+            lines = ["<b>🔒 Кто жал /start (последние 20)</b>", ""]
+            for it in items:
+                uname = it.get("username") or it.get("first_name") or "?"
+                uid = it.get("user_id")
+                cnt = it.get("start_count") or 1
+                allowed = it.get("is_allowed")
+                mark = "✅" if allowed else "🚫"
+                ts = str(it.get("updated_at") or it.get("created_at") or "")[:16]
+                lines.append(f"{mark} <code>{uid}</code> @{uname} · x{cnt} · {ts}")
+            body = "\n".join(lines)
+        try:
+            await query.edit_message_text(
+                body, parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("‹ Назад", callback_data="tg:menu:root")]]),
+            )
+        except Exception:
+            pass
         return
 
     if data == "tg:toggle:proactive":
@@ -2036,7 +2083,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ("Будильники " + ("выкл" if cur else "вкл"))
             if ok else "Ошибка"
         )
-        await _refresh(lambda s: _menu_root(s))
+        await _refresh(lambda s: _menu_root(s, is_admin=_cb_admin))
         return
     if data == "tg:menu:alarms":
         await query.answer()

@@ -4,17 +4,21 @@ tools/content/tool_generate_audio.py
 Admin-only text-to-speech (TTS) via RouterAPI (routerai.ru).
 
 RouterAPI is a SEPARATE paid provider (different base_url + auth token). Speech
-synthesis uses the OpenAI-compatible endpoint POST /v1/audio/speech and returns
-raw audio bytes. We talk raw httpx (not the openai SDK) to avoid an extra
-dependency and stay consistent with the image/video tools.
+synthesis uses the OpenAI-compatible endpoint POST /v1/audio/speech. The TTS
+model (google/gemini-3.8-flash-tts) only returns RAW PCM (24 kHz, 16-bit, mono).
+Raw PCM is not directly playable and Telegram sendVoice requires OGG/Opus, so
+this tool ALWAYS requests pcm from the API and then transcodes it in-memory to
+OGG (Opus) via ffmpeg (stdin -> stdout, no temp files). The resulting .ogg is a
+native Telegram voice message (shows an audio waveform).
 
-The produced audio file is written to /app/generated_files so the transport can
-hand it to the user (send_file_to_user).
+The produced .ogg is written to /app/generated_files so the transport can hand
+it to the user (send_file_to_user).
 """
 
 import os
 import uuid
 import logging
+import subprocess
 
 import httpx
 from langchain.tools import tool
@@ -35,13 +39,44 @@ AVAILABLE_VOICES = [
 ]
 DEFAULT_VOICE = "Zephyr"
 
-# Output format -> file extension. 'mp3' is the friendliest default for playback;
-# 'pcm' is raw and needs a header to play, so we steer to mp3 by default.
-ALLOWED_FORMATS = {"mp3", "wav", "opus", "aac", "flac", "pcm"}
-FORMAT_EXT = {
-    "mp3": "mp3", "wav": "wav", "opus": "opus",
-    "aac": "aac", "flac": "flac", "pcm": "pcm",
-}
+# Gemini TTS raw PCM parameters (fixed by the model).
+PCM_SAMPLE_RATE = 24000
+PCM_CHANNELS = 1
+
+
+def _pcm_to_ogg_opus(pcm_data: bytes) -> bytes:
+    """Transcode raw PCM (24kHz, 16-bit signed LE, mono) to OGG/Opus in memory.
+
+    Uses ffmpeg via subprocess (stdin -> stdout), no temp files on disk.
+    Raises RuntimeError if ffmpeg is missing or fails.
+    """
+    command = [
+        "ffmpeg",
+        "-f", "s16le",
+        "-ar", str(PCM_SAMPLE_RATE),
+        "-ac", str(PCM_CHANNELS),
+        "-i", "pipe:0",
+        "-c:a", "libopus",
+        "-b:a", "32k",
+        "-f", "ogg",
+        "pipe:1",
+    ]
+    try:
+        proc = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        raise RuntimeError(
+            "ffmpeg not found in the container. Add 'apt-get install -y ffmpeg' "
+            "to agent_service Dockerfile and rebuild."
+        )
+    stdout, stderr = proc.communicate(input=pcm_data)
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg error: {stderr.decode('utf-8', 'ignore')[:300]}")
+    return stdout
 
 
 def make_generate_audio_tool(agent):
@@ -51,12 +86,14 @@ def make_generate_audio_tool(agent):
     async def generate_audio(
         text: str,
         voice: str = DEFAULT_VOICE,
-        response_format: str = "mp3",
     ) -> str:
         """Synthesize speech from text via RouterAPI TTS (admin-only, paid).
 
-        Converts the given text into spoken audio and saves the file for delivery
-        to the user.
+        Converts the given text into a spoken voice message and saves it as an
+        OGG/Opus file ready to be sent as a native Telegram voice message
+        (send_file_to_user). Gemini TTS outputs raw PCM; the tool automatically
+        transcodes it to OGG (Opus) via ffmpeg, so the output always plays back
+        and shows an audio waveform in Telegram.
 
         Args:
             text: The text to speak (required).
@@ -66,9 +103,8 @@ def make_generate_audio_tool(agent):
                 Rasalgethi, Laomedeia, Achernar, Alnilam, Schedar, Gacrux,
                 Pulcherrima, Achird, Zubenelgenubi, Vindemiatrix, Sadachbia,
                 Sadaltager, Sulafat.
-            response_format: Audio format: mp3 (default), wav, opus, aac, flac, pcm.
 
-        Returns a human-readable status with the local audio path on success, or
+        Returns a human-readable status with the local .ogg path on success, or
         a clear error message on failure.
         """
         cfg = get_router_api_config()
@@ -82,13 +118,13 @@ def make_generate_audio_tool(agent):
             return "generate_audio error: text is empty."
 
         v = voice if voice in AVAILABLE_VOICES else DEFAULT_VOICE
-        fmt = response_format if response_format in ALLOWED_FORMATS else "mp3"
 
+        # Gemini TTS only returns raw PCM -> always request pcm, transcode later.
         payload = {
             "model": model,
             "voice": v,
             "input": text.strip(),
-            "response_format": fmt,
+            "response_format": "pcm",
         }
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -103,21 +139,27 @@ def make_generate_audio_tool(agent):
                 if r.status_code >= 400:
                     return (f"generate_audio error: HTTP {r.status_code}: "
                             f"{r.text[:300]}")
-                audio_bytes = r.content
-                if not audio_bytes:
+                pcm_bytes = r.content
+                if not pcm_bytes:
                     return "generate_audio error: empty audio response."
         except httpx.HTTPError as e:
             return f"generate_audio error: network failure: {e}"
         except Exception as e:
-            log.exception("generate_audio unexpected error")
+            log.exception("generate_audio request error")
             return f"generate_audio error: {e}"
 
+        try:
+            ogg_bytes = _pcm_to_ogg_opus(pcm_bytes)
+        except RuntimeError as e:
+            return f"generate_audio error: transcode failed: {e}"
+        if not ogg_bytes:
+            return "generate_audio error: transcode produced empty output."
+
         os.makedirs(GENERATED_ROOT, exist_ok=True)
-        ext = FORMAT_EXT.get(fmt, "mp3")
-        fname = f"speech_{uuid.uuid4().hex[:12]}.{ext}"
+        fname = f"voice_{uuid.uuid4().hex[:12]}.ogg"
         fpath = os.path.join(GENERATED_ROOT, fname)
         with open(fpath, "wb") as f:
-            f.write(audio_bytes)
+            f.write(ogg_bytes)
 
         try:
             pend = getattr(agent, "_pending_generated_files", None)
@@ -126,8 +168,8 @@ def make_generate_audio_tool(agent):
         except Exception:
             pass
 
-        size_kb = len(audio_bytes) // 1024
-        return (f"Audio generated (voice={v}, {fmt}). Saved to {fpath} "
+        size_kb = len(ogg_bytes) // 1024
+        return (f"Voice message generated (voice={v}, OGG/Opus). Saved to {fpath} "
                 f"({size_kb} KB). Send it with send_file_to_user.")
 
     return generate_audio

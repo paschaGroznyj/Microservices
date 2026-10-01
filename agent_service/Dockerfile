@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y \
     grep \
     findutils \
     coreutils \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # ca-certificates только для локальной отладки

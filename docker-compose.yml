@@ -95,6 +95,11 @@ services:
 
       CLOUD_LLM_ACCESS_KEY: ${CLOUD_LLM_ACCESS_KEY}
 
+      # RouterAPI (routerai.ru) — paid media provider for admin-only
+      # generate_video / generate_audio tools.
+      ROUTER_API_KEY: ${ROUTER_API_KEY}
+      ROUTER_API_BASE_URL: ${ROUTER_API_BASE_URL}
+
       SEARXNG_BASE_URL: ${SEARXNG_BASE_URL}
 
       ADMINS_INFO: ${ADMINS_INFO}

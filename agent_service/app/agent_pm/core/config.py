@@ -59,6 +59,11 @@ DIGEST_UPLOAD_TO_OBS = os.getenv('DIGEST_UPLOAD_TO_OBS', 'true')
 FERNET_KEY = os.getenv("FERNET_KEY")
 CLOUD_LLM_ACCESS_KEY = os.getenv("CLOUD_LLM_ACCESS_KEY")
 
+# RouterAPI (routerai.ru) — separate paid provider for media generation
+# (video/audio). Admin-only tools; these are the admin's personal funds.
+ROUTER_API_KEY = os.getenv("ROUTER_API_KEY", "")
+ROUTER_API_BASE_URL = os.getenv("ROUTER_API_BASE_URL", "https://routerai.ru/api/v1")
+
 SEARXNG_BASE_URL = os.getenv("SEARXNG_BASE_URL")
 
 import json as _json

@@ -24,9 +24,9 @@ from .core.botocore_client import OBSWorker
 from .core.config import (
     ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH,
     METADATA_FILE, PORT_GATEWAY_PORT, PORT_GATEWAY_SIGMA_PORT, ADMINS_INFO,
-    PORT_PARSERS_SERVICE, get_role
+    PORT_PARSERS_SERVICE, get_role, ADMINS_BY_USER_ID
 )
-from .core.settings import TOOLS_SETTINGS, UNIVERSAL_TOOLS
+from .core.settings import TOOLS_SETTINGS, UNIVERSAL_TOOLS, ADMIN_ONLY_CATEGORIES
 from .prompts.summary_prompt import SUMMARIZE_CUT_PROMPT, TOOL_TRACE_SUMMARY_PROMPT
 from .prompts.system_prompt import SYSTEM_PROMPT, SCIENTIFIC_RESEARCH_MODULE
 from .title_generator import generate_chat_title, is_first_turn
@@ -1487,11 +1487,21 @@ class KnowledgeAgent:
         # что он рисовал, и может вернуться к картинке (image-to-image).
         find_generated_image = make_find_generated_image_tool(agent)
 
+        # Admin-only paid media generation via RouterAPI (routerai.ru):
+        # text-to-video (async task + polling) and text-to-speech. Gated by
+        # the admin-only "media_gen" category in TOOLS_SETTINGS.
+        from .tools.content.tool_generate_video import make_generate_video_tool
+        from .tools.content.tool_generate_audio import make_generate_audio_tool
+        generate_video = make_generate_video_tool(agent)
+        generate_audio = make_generate_audio_tool(agent)
+
         base_tools = [
             search_db,
             analyze_image,
             generate_image,
             find_generated_image,
+            generate_video,
+            generate_audio,
             summarize_by_filter,
             rebuild_categories,
             send_digest_email,
@@ -1529,8 +1539,18 @@ class KnowledgeAgent:
         if allow_all:
             return all_tools
 
+        # Admin-only categories (e.g. media_gen — paid RouterAPI video/audio)
+        # are available ONLY to admins, even if a non-admin selected them in the
+        # tools panel. Admin identity is resolved by user_id via ADMINS_BY_USER_ID.
+        try:
+            _is_admin = int(user_id) in ADMINS_BY_USER_ID
+        except (TypeError, ValueError):
+            _is_admin = False
+
         allowed_names: set[str] = set()
         for category in selected_tools:
+            if category in ADMIN_ONLY_CATEGORIES and not _is_admin:
+                continue
             allowed_names.update(TOOLS_SETTINGS.get(category, []))
 
         # Универсальные тулы добавляются всегда, вне зависимости от выбранных

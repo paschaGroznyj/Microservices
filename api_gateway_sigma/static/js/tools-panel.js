@@ -46,6 +46,14 @@ const ICONS = {
           stroke-linecap="round" stroke-linejoin="round"/>
   </svg>`,
 
+  media_gen: `<svg viewBox="0 0 24 24" fill="none" width="17" height="17">
+    <rect x="2" y="4" width="20" height="16" rx="2"
+          stroke="currentColor" stroke-width="2"/>
+    <path d="M10 9l5 3-5 3V9z"
+          stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`,
+
   admin: `<svg viewBox="0 0 24 24" fill="none" width="17" height="17">
     <rect x="3" y="11" width="18" height="11" rx="2" ry="2"
           stroke="currentColor" stroke-width="2"/>
@@ -80,6 +88,12 @@ const TOOL_CATEGORIES = [
     label:       "Бортовой журнал агента",
     description: "Бортовой журнал агента: долгосрочная память и точки сессий",
     adminOnly:   false
+  },
+  {
+    id:          "media_gen",
+    label:       "Видео и аудио",
+    description: "Генерация видео и синтез речи (RouterAPI, платно)",
+    adminOnly:   true
   },
   {
     id:          "admin",

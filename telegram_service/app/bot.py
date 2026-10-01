@@ -1602,13 +1602,14 @@ async def _send_agent_file(chat_id: int, f: dict):
     if not raw:
         return
     name = f.get("name") or "file"
-    bio = BytesIO(raw); bio.name = name
-    ext = pathlib.Path(name).suffix.lower()
-    if ext in (".png", ".jpg", ".jpeg", ".webp"):
-        await _bot_app.bot.send_photo(chat_id=chat_id, photo=bio, caption=f.get("caption", ""))
-    else:
-        await _bot_app.bot.send_document(chat_id=chat_id, document=bio, filename=name,
-                                         caption=f.get("caption", ""))
+    # Делегируем выбор метода отправки (voice/audio/video/photo/document)
+    # в отдельный модуль media_voice. kind — явная подсказка от агента
+    # (kind="voice" для generate_audio OGG/Opus), иначе решает расширение.
+    from media_voice import send_agent_media
+    await send_agent_media(
+        _bot_app.bot, chat_id, raw, name,
+        kind=f.get("kind"), caption=f.get("caption", ""),
+    )
 
 
 @api.get("/health")

@@ -135,13 +135,30 @@ def make_send_file_tool(agent):
                 "error": f"Файл слишком большой для отправки ({size} байт, лимит {MAX_SEND_FILE_SIZE}).",
             }
 
+        # Media-class hint by extension so the transport (e.g. Telegram) can pick
+        # the right send_* method: voice bubble for .ogg (generate_audio),
+        # video for .mp4 (generate_video), image preview for pictures.
+        _ext = os.path.splitext(target)[1].lower()
+        if _ext in (".ogg", ".oga", ".opus"):
+            _kind = "voice"
+        elif _ext in (".mp4", ".mov", ".webm", ".mkv"):
+            _kind = "video"
+        elif _ext in (".mp3", ".m4a", ".aac", ".flac", ".wav"):
+            _kind = "audio"
+        elif _ext in (".png", ".jpg", ".jpeg", ".webp"):
+            _kind = "image"
+        else:
+            _kind = "file"
+
         return {
             "ok": True,
             "saved_files": [
                 {
                     "filename": os.path.basename(target),
+                    "name": os.path.basename(target),
                     "path": target,
                     "size_bytes": size,
+                    "kind": _kind,
                 }
             ],
         }

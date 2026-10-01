@@ -11,6 +11,10 @@ this tool ALWAYS requests pcm from the API and then transcodes it in-memory to
 OGG (Opus) via ffmpeg (stdin -> stdout, no temp files). The resulting .ogg is a
 native Telegram voice message (shows an audio waveform).
 
+Supports a free-form `style` (speech_metadata.style) controlling tone/pace/emotion
+for the whole utterance, plus inline tags inside `text` like <laugh>, <sigh>,
+<short pause> for non-verbal sounds and pauses.
+
 The produced .ogg is written to /app/generated_files so the transport can hand
 it to the user (send_file_to_user).
 """
@@ -86,6 +90,7 @@ def make_generate_audio_tool(agent):
     async def generate_audio(
         text: str,
         voice: str = DEFAULT_VOICE,
+        style: str = "",
     ) -> str:
         """Synthesize speech from text via RouterAPI TTS (admin-only, paid).
 
@@ -103,6 +108,18 @@ def make_generate_audio_tool(agent):
                 Rasalgethi, Laomedeia, Achernar, Alnilam, Schedar, Gacrux,
                 Pulcherrima, Achird, Zubenelgenubi, Vindemiatrix, Sadachbia,
                 Sadaltager, Sulafat.
+            style: Optional free-form description of the delivery manner for the
+                WHOLE text: emotion, pace, tone, accent. Any language. Examples:
+                "calm and relaxed, like an audiobook narrator", "whispered",
+                "cheerful and friendly", "sad and slow", "bored and monotone",
+                "excited", "out of breath", "like a news anchor". Leave empty for
+                the model default. Maps to speech_metadata.style.
+
+        INLINE TAGS (optional): you may embed non-verbal sounds and pauses
+        directly inside `text` at the exact position they should occur, using
+        angle brackets: <laugh>, <chuckle>, <sigh>, <gasp>, <breath>, <pant>,
+        <cough>, <throat-clearing>, <short pause>, <long pause>. Example:
+        "Well... <sigh> I guess you were right. <laugh> That is hilarious!"
 
         Returns a human-readable status with the local .ogg path on success, or
         a clear error message on failure.
@@ -126,6 +143,14 @@ def make_generate_audio_tool(agent):
             "input": text.strip(),
             "response_format": "pcm",
         }
+        if (style or "").strip():
+            payload["provider"] = {
+                "options": {
+                    "google-ai-studio": {
+                        "speech_metadata": {"style": style.strip()},
+                    },
+                },
+            }
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -169,7 +194,8 @@ def make_generate_audio_tool(agent):
             pass
 
         size_kb = len(ogg_bytes) // 1024
-        return (f"Voice message generated (voice={v}, OGG/Opus). Saved to {fpath} "
-                f"({size_kb} KB). Send it with send_file_to_user.")
+        style_note = f", style='{style.strip()}'" if (style or "").strip() else ""
+        return (f"Voice message generated (voice={v}{style_note}, OGG/Opus). "
+                f"Saved to {fpath} ({size_kb} KB). Send it with send_file_to_user.")
 
     return generate_audio

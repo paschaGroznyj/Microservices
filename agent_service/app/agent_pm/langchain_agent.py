@@ -1492,7 +1492,7 @@ class KnowledgeAgent:
         # the admin-only "media_gen" category in TOOLS_SETTINGS.
         from .tools.content.tool_generate_video import make_generate_video_tool
         from .tools.content.tool_generate_audio import make_generate_audio_tool
-        generate_video = make_generate_video_tool(agent)
+        generate_video = make_generate_video_tool(agent, images)
         generate_audio = make_generate_audio_tool(agent)
 
         base_tools = [

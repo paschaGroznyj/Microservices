@@ -8,6 +8,12 @@ generation is ASYNCHRONOUS: POST /v1/videos creates a task and returns an id +
 polling_url; we then poll GET /v1/videos/{id} until the task is ready and fetch
 the resulting mp4 via GET /v1/videos/{id}/content.
 
+Image-to-video sources (first frame + references) mirror generate_image: an
+image may come from a local path, a generated_images image_key, an index into
+the user-attached images of the current request, or a media_id from the per-chat
+media_store cache. Any of those is resolved to a base64 data URI before being
+put into the RouterAPI payload (which accepts URL or data URI alike).
+
 The produced mp4 is written to /app/generated_files so the transport can hand it
 to the user (send_file_to_user). Everything talks raw httpx (OpenAI-compatible),
 not the langchain wrapper.
@@ -23,6 +29,12 @@ import httpx
 from langchain.tools import tool
 
 from ...core.agent_provider import get_router_api_config
+from ._image_sources import (
+    resolve_path_to_data_uri,
+    resolve_image_key_to_data_uri,
+    resolve_user_image_to_data_uri,
+    resolve_media_id_to_data_uri,
+)
 
 log = logging.getLogger(__name__)
 
@@ -60,8 +72,47 @@ def _coerce_url_list(val):
         return [p.strip() for p in s.strip("[]").split(",") if p.strip()]
 
 
-def make_generate_video_tool(agent):
-    """Factory: builds the admin-only generate_video langchain tool."""
+def _coerce_int_list(val):
+    """Normalize int-list arg (indexes). Accepts list / JSON / CSV / single."""
+    if val is None:
+        return []
+    if isinstance(val, int):
+        return [val]
+    if isinstance(val, list):
+        out = []
+        for x in val:
+            try:
+                out.append(int(x))
+            except (TypeError, ValueError):
+                continue
+        return out
+    s = str(val).strip()
+    if not s:
+        return []
+    try:
+        import json as _json
+        parsed = _json.loads(s)
+        return _coerce_int_list(parsed)
+    except Exception:
+        out = []
+        for p in s.strip("[]").split(","):
+            p = p.strip()
+            if not p:
+                continue
+            try:
+                out.append(int(p))
+            except ValueError:
+                continue
+        return out
+
+
+def make_generate_video_tool(agent, images: list[dict] | None = None):
+    """Factory: builds the admin-only generate_video langchain tool.
+
+    images: the user-attached images of the current request (same list passed to
+    analyze_image / generate_image): [{filename, mime_type, b64}]. Used so the
+    video tool can reference an image the user just uploaded by its index.
+    """
 
     @tool
     async def generate_video(
@@ -70,7 +121,14 @@ def make_generate_video_tool(agent):
         duration: int = 5,
         resolution: str = "480p",
         first_frame_image_url: str | None = None,
+        first_frame_path: str | None = None,
+        first_frame_image_key: str | None = None,
+        first_frame_user_image_index: int | None = None,
+        first_frame_media_id: str | None = None,
         reference_image_urls: list[str] | None = None,
+        reference_image_keys: list[str] | None = None,
+        reference_user_image_indexes: list[int] | None = None,
+        reference_media_ids: list[str] | None = None,
         generate_audio: bool = False,
         seed: int | None = None,
     ) -> str:
@@ -85,10 +143,26 @@ def make_generate_video_tool(agent):
             duration: Clip length in seconds, 5..10 (values above 10 are clamped
                 to 10). Default 5.
             resolution: 480p or 768p. Default 480p (cheaper).
-            first_frame_image_url: Optional image URL (or data URI) used as the
-                first frame for image-to-video.
-            reference_image_urls: Optional list of image URLs (or data URIs) used
-                as style/character/object references.
+
+            First frame (image-to-video). Provide AT MOST ONE of these; they are
+            tried in this priority order:
+              first_frame_image_url: a public image URL or a data URI.
+              first_frame_path: a local path OR file name inside the allowed
+                roots (/sandbox, /app/generated_files).
+              first_frame_image_key: an image_key of a previously GENERATED
+                image (generated_images table).
+              first_frame_user_image_index: index of an image the USER attached
+                in the current request (0 = first).
+              first_frame_media_id: a media_id from the per-chat MEDIA STORAGE
+                (cache of recent images in this chat).
+
+            References (character / style / object). Each list is resolved and
+            all resolved images are sent together:
+              reference_image_urls: list of image URLs or data URIs.
+              reference_image_keys: list of generated_images image_keys.
+              reference_user_image_indexes: indexes of user-attached images.
+              reference_media_ids: list of media_ids from MEDIA STORAGE.
+
             generate_audio: Whether to also generate an audio track. Default False.
             seed: Optional integer for deterministic generation.
 
@@ -105,7 +179,9 @@ def make_generate_video_tool(agent):
         if not (prompt or "").strip():
             return "generate_video error: prompt is empty."
 
-        # ── validate / clamp params ──────────────────────────────────────
+        chat_id = agent._ctx_get("chat_id", getattr(agent, "current_chat_id", None))
+
+        # -- validate / clamp params --------------------------------------
         ar = aspect_ratio if aspect_ratio in ALLOWED_ASPECT else "16:9"
         res = resolution if resolution in ALLOWED_RESOLUTION else "480p"
         try:
@@ -118,6 +194,42 @@ def make_generate_video_tool(agent):
             dur = 5
         if dur not in ALLOWED_DURATION:
             dur = 5
+
+        # -- resolve first frame (at most one, priority order) ------------
+        first_frame_uri = None
+        if first_frame_image_url and str(first_frame_image_url).strip():
+            first_frame_uri = str(first_frame_image_url).strip()
+        elif first_frame_path and str(first_frame_path).strip():
+            first_frame_uri = resolve_path_to_data_uri(str(first_frame_path).strip())
+        elif first_frame_image_key and str(first_frame_image_key).strip():
+            first_frame_uri = await resolve_image_key_to_data_uri(
+                agent, str(first_frame_image_key).strip())
+        elif first_frame_user_image_index is not None:
+            try:
+                first_frame_uri = resolve_user_image_to_data_uri(
+                    images, int(first_frame_user_image_index))
+            except (TypeError, ValueError):
+                first_frame_uri = None
+        elif first_frame_media_id and str(first_frame_media_id).strip():
+            first_frame_uri = await resolve_media_id_to_data_uri(
+                agent, chat_id, str(first_frame_media_id).strip())
+
+        # -- resolve references (all sources concatenated) ----------------
+        reference_uris: list[str] = []
+        for u in _coerce_url_list(reference_image_urls):
+            reference_uris.append(u)
+        for k in _coerce_url_list(reference_image_keys):
+            uri = await resolve_image_key_to_data_uri(agent, k)
+            if uri:
+                reference_uris.append(uri)
+        for idx in _coerce_int_list(reference_user_image_indexes):
+            uri = resolve_user_image_to_data_uri(images, idx)
+            if uri:
+                reference_uris.append(uri)
+        for mid in _coerce_url_list(reference_media_ids):
+            uri = await resolve_media_id_to_data_uri(agent, chat_id, mid)
+            if uri:
+                reference_uris.append(uri)
 
         data = {
             "model": model,
@@ -132,16 +244,15 @@ def make_generate_video_tool(agent):
                 data["seed"] = int(seed)
             except (TypeError, ValueError):
                 pass
-        if first_frame_image_url and str(first_frame_image_url).strip():
+        if first_frame_uri:
             data["frame_images"] = [{
                 "type": "image_url",
-                "image_url": {"url": str(first_frame_image_url).strip()},
+                "image_url": {"url": first_frame_uri},
                 "frame_type": "first_frame",
             }]
-        refs = _coerce_url_list(reference_image_urls)
-        if refs:
+        if reference_uris:
             data["input_references"] = [
-                {"type": "image_url", "image_url": {"url": u}} for u in refs
+                {"type": "image_url", "image_url": {"url": u}} for u in reference_uris
             ]
 
         headers = {
@@ -190,9 +301,9 @@ def make_generate_video_tool(agent):
                 fpath = os.path.join(GENERATED_ROOT, fname)
 
                 # Prefer a direct url if the API returned one; else /content.
+                out = last.get("output")
                 direct_url = (last.get("url") or last.get("video_url")
-                              or (last.get("output") or {}).get("url")
-                              if isinstance(last.get("output"), dict) else last.get("url"))
+                              or (out.get("url") if isinstance(out, dict) else None))
                 content_resp = None
                 if direct_url:
                     content_resp = await client.get(direct_url, timeout=httpx.Timeout(120.0))

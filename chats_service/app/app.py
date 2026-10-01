@@ -299,6 +299,23 @@ async def tg_random_member(chat_id: str):
     return {"member": m}
 
 
+class TgStartLogIn(BaseModel):
+    chat_id: str | None = None
+    user_id: int | None = None
+    username: str | None = None
+    first_name: str | None = None
+    is_allowed: bool | None = None
+
+
+@app.post("/tg/log_start")
+async def tg_log_start(body: TgStartLogIn):
+    """Журнал нажатий /start (append-only): username, user_id, дата/время."""
+    await tg_db.log_start(
+        body.chat_id, body.user_id, body.username, body.first_name, body.is_allowed
+    )
+    return {"status": "ok"}
+
+
 @app.get("/tg/proactive_chats")
 async def tg_proactive_chats():
     """Активные чаты с включёнными будильниками — для планировщика бота."""

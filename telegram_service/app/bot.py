@@ -682,6 +682,21 @@ async def upsert_member(chat_id: int, user_id: int, username: str | None,
         log.warning(f"upsert_member fail chat={chat_id}: {e}")
 
 
+async def log_start_event(chat_id: int, user, is_allowed_flag: bool) -> None:
+    """Лог нажатия /start → chats_service (append-only журнал входов)."""
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(f"{CHATS_SERVICE_URL}/tg/log_start", json={
+                "chat_id": str(chat_id),
+                "user_id": (user.id if user else None),
+                "username": (user.username if user else None),
+                "first_name": (user.first_name if user else None),
+                "is_allowed": is_allowed_flag,
+            })
+    except Exception as e:
+        log.warning(f"log_start fail chat={chat_id}: {e}")
+
+
 async def get_random_member(chat_id: int) -> dict | None:
     try:
         async with httpx.AsyncClient(timeout=5) as client:
@@ -1964,7 +1979,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return s instrukciej zaregistrirovat chat cherez interfejs CatchPM.
     """
     chat_id = update.effective_chat.id
-    if not await is_allowed(chat_id):
+    _allowed = await is_allowed(chat_id)
+    await log_start_event(chat_id, update.effective_user, _allowed)
+    if not _allowed:
         await update.message.reply_text(_registration_gate_text(chat_id))
         return
     settings = await get_chat_settings(chat_id)

@@ -89,6 +89,21 @@ class TelegramDB:
                 CREATE INDEX IF NOT EXISTS ix_tg_members_chat
                     ON telegram_chat_members(chat_id);
 
+                -- Журнал нажатий /start (append-only, вся история входов).
+                CREATE TABLE IF NOT EXISTS telegram_start_log (
+                    id          BIGSERIAL PRIMARY KEY,
+                    chat_id     TEXT,
+                    user_id     BIGINT,
+                    username    TEXT,
+                    first_name  TEXT,
+                    is_allowed  BOOLEAN,
+                    started_at  TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS ix_tg_start_log_user
+                    ON telegram_start_log(user_id);
+                CREATE INDEX IF NOT EXISTS ix_tg_start_log_time
+                    ON telegram_start_log(started_at);
+
                 -- Индивидуальные проактивные триггеры per-chat:
                 --   kind='recurring' -> регулярный (time_msk + days_of_week)
                 --   kind='once'      -> разовый по дате (time_msk + trigger_date)
@@ -306,6 +321,20 @@ class TelegramDB:
                         is_bot     = EXCLUDED.is_bot,
                         last_seen  = CURRENT_TIMESTAMP;
             """, str(chat_id), int(user_id), username, first_name, is_bot)
+
+    async def log_start(self, chat_id: str | None, user_id: int | None,
+                        username: str | None, first_name: str | None,
+                        is_allowed: bool | None = None) -> None:
+        """Append-only журнал нажатий /start."""
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO telegram_start_log "
+                "(chat_id, user_id, username, first_name, is_allowed) "
+                "VALUES ($1, $2, $3, $4, $5)",
+                (str(chat_id) if chat_id is not None else None),
+                (int(user_id) if user_id is not None else None),
+                username, first_name, is_allowed,
+            )
 
     async def get_random_member(self, chat_id: str, exclude_bots: bool = True) -> dict | None:
         """Рандомный участник чата (для проактивной инициации)."""

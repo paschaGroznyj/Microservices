@@ -51,7 +51,6 @@ MAX_FILES_PER_CALL = 5
 
 
 def _ensure_save_dir() -> None:
-    print(SAVE_DIR)
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
 
 def _save_script_if_ok(code: str, run_id: str, ok: bool, reusable: bool = False) -> str | None:
@@ -298,90 +297,86 @@ def make_sandbox_execute_tool(agent):
     async def execute_python_code(code: str, timeout: int = DEFAULT_TIMEOUT, reusable: bool = False,
         workspace_id: str = None, persist_script: bool = True) -> dict:
         """
-        Исполняет Python-код в изолированной песочнице (отдельный контейнер,
-        доступ в интернет есть, доступа к файловой системе проекта нет).
-        Используй для вычислений, обработки данных, генерации графиков/файлов/
-        презентаций, парсинга веб-страниц, проверки кода перед показом пользователю.
+        Executes Python code in an isolated sandbox (a separate container,         there is internet access, but no access to the project’s file system).
+        Use it for calculations, data processing, generating graphs/files/presentations, parsing web pages, and checking code before showing it to the user.
 
-        Название: ЖДУН ФАБРИКА, с фиксированным таймаутом, нужно ждать выполнение задачи
+        Arguments:
+            code: Python code to execute. Write print() statements during execution —
+                  all output will be returned to stdout. Traceback on error — to stderr.
+            timeout: execution timeout in seconds, maximum 30 (default 10).
+            reusable: True — saves code to /sandbox/reusable/ for reuse
+                      in future tasks (use for generic functions/templates,
+                      not for one‑off scripts). Default is False.
+            workspace_id: workspace ID (transmit only during the final aggregation of the results of parallel tasks)
+persist_script: True (by default) — with the specified workspace_id
+                  The sandbox service will save the EXECUTED script INSIDE the workspace.
+                  in output/.scripts/<run_id>.py (+ alias output/.scripts/last_script.py ).
+So you can then spy on it/reuse it within the session.
+                  via read_workspace_file / list_workspace_files, without rewriting
+                  from scratch. The path is returned in the saved_script_in_workspace field, and the
+                  run_id — in the run_id field of the response. Set False for one-time scripts,
+                  which do not need to be stored. Without the workspace_id, the argument is ignored.
 
-        Аргументы:
-            code: Python-код для исполнения. Пиши print() по ходу выполнения —
-                  весь вывод вернётся в stdout. Traceback при ошибке — в stderr.
-            timeout: таймаут исполнения в секундах, максимум 30 (по умолчанию 10).
-            reusable: True — сохраняет код в /sandbox/reusable/ для переиспользования
-                      в будущих задачах (используй для универсальных функций/шаблонов,
-                      не для одноразовых скриптов). По умолчанию False.
-            workspace_id: ID workspace (передавай только при финальной агрегации результатов параллельных задач)
-            persist_script: True (по умолчанию) — при заданном workspace_id
-                  sandbox-сервис сохранит ИСПОЛНЁННЫЙ скрипт ВНУТРЬ workspace
-                  в output/.scripts/<run_id>.py (+ алиас output/.scripts/last_script.py).
-                  Так его можно потом подсмотреть/переиспользовать в рамках сессии
-                  через read_workspace_file / list_workspace_files, не переписывая
-                  с нуля. Путь возвращается в поле saved_script_in_workspace, а сам
-                  run_id — в поле run_id ответа. Поставь False для разовых скриптов,
-                  которые не нужно хранить. Без workspace_id аргумент игнорируется.
+        ── Files and file system boundaries (READ CAREFULLY) ─────────────────
+        The code runs in a FRESH sandbox container. Only the following are visible from the code:
+          • the relative output/ folder — save the results here:
+            open("output/name.ext", "wb"). The folder is created automatically.
+          • the current working directory of the launch (for intermediate files).
 
-        ── Файлы и границы файловой системы (ЧИТАЙ ВНИМАТЕЛЬНО) ─────────────────
-        Код бежит в СВЕЖЕМ контейнере песочницы. Из кода видны только:
-          • относительная папка output/ — сюда сохраняй результаты:
-            open("output/имя.ext", "wb"). Папка создаётся автоматически.
-          • текущая рабочая директория запуска (для промежуточных файлов).
+        Paths from saved_files (in the form /app/generated_files/<uuid>/file) are file system paths.
+        The agent_service service, NOT the sandbox. DO NOT use open() with this path
+        inside the code — the file is not there, you will get a FileNotFoundError. These paths
+        are needed ONLY for the agent_service tools: send_file_to_user, analyze_image,
+        send_email. /app/generated_files and /sandbox are NOT visible from the sandbox code.
 
-        Пути из saved_files (вида /app/generated_files/<uuid>/файл) — это ФС
-        сервиса agent_service, НЕ песочницы. НЕ делай open() по такому пути
-        внутри кода — файла там нет, получишь FileNotFoundError. Эти пути
-        нужны ТОЛЬКО для тулов agent_service: send_file_to_user, analyze_image,
-        send_email. /app/generated_files и /sandbox из кода песочницы НЕ видны.
+        PERSISTENCE between calls:
+          • WITHOUT workspace_id: output/ and the entire container is EPHEMERAL — erased
+            after EACH call. A file created in a single execute_python_code,
+            it is no longer AVAILABLE in the next call. Do the whole chain
+            (data → build → conversion → QA-render) in ONE call.
+          • With workspace_id: files in output/ survive calls (live for 10 hours).
+            To transfer a file between calls, work with a single workspace_id
+            or upload it via upload_to_workspace and read it from there.
 
-        ПЕРСИСТЕНТНОСТЬ между вызовами:
-          • БЕЗ workspace_id: output/ и весь контейнер ЭФЕМЕРНЫ — стираются
-            после КАЖДОГО вызова. Файл, созданный в одном execute_python_code,
-            в следующем вызове уже НЕДОСТУПЕН. Делай всю цепочку
-            (данные → сборка → конвертация → QA-рендер) в ОДНОМ вызове.
-          • С workspace_id: файлы в output/ переживают вызовы (живут 10ч).
-            Чтобы передать файл между вызовами — работай с одним workspace_id
-            или клади его через upload_to_workspace и читай оттуда.
+        For analyze_image to see the image created in the sandbox: first,
+        download_workspace_file (it places the file in /app/generated_files and returns
+        the path), then call analyze_image using that path. It doesn’t see the local output/.
 
-        Чтобы analyze_image увидел картинку, созданную в песочнице: сперва
-        download_workspace_file (он кладёт файл в /app/generated_files и вернёт
-        path), затем analyze_image по этому path. Локальный output/ он не видит.
+        Do not print binary data using print().
 
-        Не печатай бинарные данные через print().
+        ── Successful scripts are saved automatically ───────────────────
+        When ok=True, the code is saved in /sandbox/executed_scripts/{run_id}.py —
+        it is available via read_file for reuse. Failed attempts are not saved.
 
-        ── Успешные скрипты сохраняются автоматически ───────────────────
-        При ok=True код сохраняется в /sandbox/executed_scripts/{run_id}.py —
-        доступен через read_file для переиспользования. Неудачные попытки не сохраняются.
+        ── Ready‑made libraries in dev_utils (use them, don’t write from scratch) ─
 
-        ── Готовые библиотеки в dev_utils (используй их, не пиши заново) ─
-
-        1. Рендер HTML → JPEG (один слайд/скриншот):
+        1. HTML → JPEG rendering (one slide/screenshot):
             import sys; sys.path.insert(0, "/app")
             from dev_utils.render import render_html_to_image
             await render_html_to_image(
                 html_path, output_path,
-                full_page=False,   # True — вся высота страницы, для длинных документов;
-                                    # False — только viewport, для слайдов фикс. размера
+                full_page=False,   # True — the entire page height, for long documents;
+                                    # False — only the viewport, for slides of a fixed size
                 viewport={"width": 1920, "height": 1080},
                 jpeg_quality=90,
             )
-            Паттерн загрузки: wait_until="domcontentloaded" (НЕ networkidle — зависает
-            на рекламных пикселях/аналитике), затем await page.evaluate("document.fonts.ready").
+            Loading pattern: wait_until="domcontentloaded" (NOT networkidle — freezes
+            on advertising pixels/analytics), then await page.evaluate("document.fonts.ready").
         
-        ВАЖНО: код исполняется как обычный .py скрипт, top-level await НЕ работает.
-        Все await-вызовы (render_slides_to_pdf, render_html_to_image, parse_web_page)
-        оборачивай в async def main(): ... ; asyncio.run(main())
+        IMPORTANT: the code is executed as normal.py script, top-level await is NOT working.
+        All await calls (render_slides_to_pdf, render_html_to_image, parse_web_page)
+        wrap in async def main(): ...; asyncio.run(main())
 
-        2. Презентация из нескольких HTML-слайдов → готовый PDF (используй ЭТО,
-        а не собирай Pillow multi-page вручную):
+        2. A presentation consisting of several HTML slides → ready‑made PDF (use THIS,
+        rather than manually assembling Pillow multi‑page):
 
             async def main():
                 import sys; sys.path.insert(0, "/app")
                 from dev_utils.slides_to_pdf import render_slides_to_pdf
 
-                # Пиши HTML-файлы ОТНОСИТЕЛЬНЫМИ путями в текущую рабочую директорию —
-                # НЕ в /sandbox (недоступен из песочницы) и не в /tmp вручную (не нужно,
-                # рабочая директория уже существует и уникальна на этот запуск)
+                # Write HTML files with RELATIVE paths to the current working directory —
+                # NOT in /sandbox (not accessible from the sandbox) and not in /tmp manually (not necessary,
+                # the working directory already exists and is unique to this run)
                 with open("slide1.html", "w") as f:
                     f.write(html_content_1)
                 with open("slide2.html", "w") as f:
@@ -396,21 +391,21 @@ def make_sandbox_execute_tool(agent):
             asyncio.run(main())
 
             # result = {"ok": bool, "output_path": str, "slides_count": int, "error": str|None}
-            # В saved_files попадёт ТОЛЬКО итоговый PDF — промежуточные JPEG-слайды
-            # удаляются автоматически, не нужно чистить их вручную.
-            Каждый слайд — ОТДЕЛЬНЫЙ HTML-файл (не пытайся сделать один HTML с
-            page-break-after — рендер снимает только один viewport, не постранично).
+            # ONLY the final PDF will be saved in saved_files — the intermediate JPEG slides
+            # are deleted automatically; there’s no need to clean them up manually.
+            Each slide is a SEPARATE HTML file (don't try to make one HTML with
+            page-break-after — rendering removes only one viewport, not page-by-page).
 
-            ВАЖНО: код исполняется как .py скрипт, top-level await не работает —
-            всегда оборачивай асинхронные вызовы в async def main(): ...; asyncio.run(main()).
+            IMPORTANT: the code is executed as .py script, top-level await is not working —
+            always wrap asynchronous calls in async def main(): ...; asyncio.run(main()).
 
-        ── Шрифты ─────────────────────────────────────────────────────────
-        /app/fonts/InterVariable.ttf — вариативный, НЕ для reportlab/Pillow
-        /app/fonts/extras/ttf/Inter-{Regular,Bold,Italic}.ttf — для reportlab/Pillow ✅
+        ── Fonts ─────────────────────────────────────────────────────────
+        /app/fonts/InterVariable.ttf — variable, NOT for reportlab/Pillow
+        /app/fonts/extras/ttf/Inter-{Regular,Bold,Italic}.ttf — for reportlab/Pillow ✅
         /app/fonts/static/ — PlayfairDisplay ✅
-        DejaVu (matplotlib mpl-data/fonts/ttf/) — фолбэк без явного указания
+        DejaVu (matplotlib mpl-data/fonts/ttf/) — fallback without explicit specification
 
-        ── Библиотеки ─────────────────────────────────────────────────────
+        ── Libraries ─────────────────────────────────────────────────────
         pandas==2.2.2
         numpy==1.26.4
         matplotlib==3.9.0
@@ -433,50 +428,33 @@ def make_sandbox_execute_tool(agent):
         aiokafka
         beautifulsoup4
         apscheduler
+        python-multipart
+        gdown
 
-        Возвращает: stdout, stderr, exit_code, saved_files (пути созданных файлов).
+        Returns: stdout, stderr, exit_code, saved_files (paths to the created files).
 
-        4. Playwright MCP через CDP (для JS-SPA без WAF):
-        Прямой запуск `npx @playwright/mcp --browser chromium` НЕ работает —
-        MCP ищет chrome-for-testing, а не системный /usr/bin/chromium.
-        Рабочая схема — поднять системный chromium как CDP-сервер и
-        подключить MCP к нему:
+        4. Playwright MCP via CDP (for JS-SPA without WAF):
+        Direct launch `npx @playwright/mcp --browser chromium` does NOT work —
+        MCP is looking for chrome-for-testing, not the system /usr/bin/chromium.
+        The working scheme is to run the system chromium as a CDP server and
+        connect MCP to it:
 
             chromium --headless=new --no-sandbox --remote-debugging-port=9222 &
-            # подождать ~4с, затем:
+            # wait ~4s, then:
             npx @playwright/mcp --cdp-endpoint http://localhost:9222
-            # транспорт — stdin/stdout JSON-RPC, НЕ HTTP-SSE
+            # transport — stdin/stdout JSON-RPC, NOT HTTP-SSE
 
-        Таймауты: старт chromium ~4с, инициализация MCP ~3с,
-        ожидание навигации 8-12с.
+        Timeouts: chromium start ~4s, MCP initialization ~3s,
+        navigation wait 8-12s.
 
-        @playwright/mcp уже установлен глобально (read-only FS, повторный
-        npm install -g упадёт с EROFS — это нормально, пакет уже на месте).
+        @playwright/mcp is already installed globally (read-only FS; a subsequent
+        npm install -g will fail with EROFS — this is normal, the package is already in place).
 
-        Доступные команды: browser_navigate, browser_snapshot,
+        Available commands: browser_navigate, browser_snapshot,
         browser_evaluate, browser_click, browser_fill.
 
-        Для парсинга Telegram-ресурсов:
-            - t.me/s/ отдаёт ~20 последних постов. Чтобы получить больше, нужно пагинировать через ?before=POST_ID
-
-        Готовый блок правил для системного промпта агента (системных инструкций `agent_service`). Его можно скопировать и вставить в секцию инструкций по обработке данных и работе с файлами:
-
-        ### 📋 Правила работы агента: Формирование выгрузок и обработка артефактов
-        #### 1. Маршрутизация файлов и работа с окружением
-
-        * **Запрет прямых путей:**
-        * Строго запрещено передавать в функцию отправки файлов (`send_file_to_user`) пути из рабочих директорий изолированного окружения (`/tmp/exec/workspaces/...`).
-
-        * **Корректный каталог артефактов:**
-        * Файл должен формироваться или копироваться в разрешённую целевую директорию (например, `output/...`, сохраняемую в `/app/generated_files`).
-        * Отправлять клиенту только пути, вернувшиеся и подтверждённые в поле `saved_files` результата выполнения инструмента.
-
-        #### 2. Обработка ошибок инфраструктуры
-
-        * Если выполнение кода вернуло `'ok': False`, ошибку окружения (например, `[Errno 2]`) или пустой `saved_files`:
-        * **Категорически запрещено** отвечать пользователю в духе *"Файл отправлен"* или *"Я сформировал файл"*.
-        * Агент обязан честно сообщить об инфраструктурной ошибке подготовки/выполнения среды и предложить повторную сборку.
-
+        For parsing Telegram resources:
+            - t.me/s/ returns ~20 latest posts. To get
         """
         timeout = MAX_TIMEOUT
         run_id = uuid.uuid4().hex
@@ -496,28 +474,28 @@ def make_sandbox_execute_tool(agent):
     @tool
     async def execute_shell_commands(commands: list[str], timeout: int = DEFAULT_TIMEOUT, workspace_id: str = None) -> dict:
         """
-        Выполняет системные команды в изолированной песочнице без использования оболочки (shell).
-        Подходит для запуска сторонних бинарников (например, docker, curl, git).
+        Executes system commands in an isolated sandbox without using a shell (shell).
+        Suitable for running third‑party binaries (e.g., docker, curl, git).
 
-        ОБРАТИ ВНИМАНИЕ: Команды нужно передавать строго списком аргументов!
-        Например: ["docker", "run", "--rm", "alpine", "echo", "hello"]
+        PLEASE NOTE: commands must be passed strictly as a list of arguments!
+        For example: ["docker", "run", "--rm", "alpine", "echo", "hello"]
 
-        Доступные возможности:
-        - git clone / git pull / git push (интернет есть, токены через env)
-        - docker build / docker run / docker compose up (DinD, демон доступен)
-        - curl, wget — сетевые запросы
-        - apt-get install — установка пакетов в рамках сессии
+        Available features:
+        - git clone / git pull / git push (internet access, tokens via env)
+        - docker build / docker run / docker compose up (DinD, the daemon is available)
+        - curl, wget — network requests
+        - apt-get install — package installation within the session
 
-        Если планируешь работать с файлами в рамках сессии, нужно создавать workspace
-        через create_workspace (файлы внутри области будут жить 10 часов)
+        If you plan to work with files within the session, you need to create a workspace
+        via create_workspace (files inside the area will be stored for 10 hours)
 
-        Если ты иницилизируешь репозиторий .git внутри /tmp/exec/workspaces/<workspace_name>, он не будет удален по таймеру
+        If you initialize the repository.git inside /tmp/exec/workspaces/<work_name>, it will not be deleted by timer
 
-        Docker-специфика:
-        - Демон доступен через unix:///var/run/docker.sock
-        - Для сборки образа: ["docker", "build", "-t", "my-image", "/path/to/context"]
-        - Для compose: ["docker", "compose", "-f", "/path/compose.yml", "up", "-d"]
-        - Kafka bootstrap внутри DinD: 172.28.0.10:9092
+        Docker specifics:
+        - The daemon is accessible via unix:///var/run/docker.sock
+        - To build an image: ["docker", "build", "-t", "my-image", "/path/to/context"]
+        - For compose: ["docker", "compose", "-f", "/path/compose.yml", "up", "-d"]
+        - Running Kafka inside DinD: 172.28.0.10:9092
         """
         run_id = uuid.uuid4().hex
         _ensure_save_dir()
@@ -539,35 +517,35 @@ def make_sandbox_execute_tool(agent):
         timeout: int = DEFAULT_TIMEOUT,
     ) -> dict:
         """
-        Извлекает переиспользуемый скрипт из библиотеки code_library по library_id
-        и выполняет одно из двух действий — агент выбирает сам через need_context:
+        Extracts a reusable script from the code_library by library_id
+        and performs one of two actions — the agent chooses which one via need_context:
 
-        need_context=False — скрипт запускается как есть, без правок:
-          • Тулза читает path из БД
-          • Передаёт файл напрямую в sandbox на исполнение
-          • Возвращает результат идентично execute_python_code
-          • Автоматически инкрементирует use_count и обновляет last_used_at
+        need_context=False — the script runs as is, without any modifications:
+          • The tool reads the path from the database
+          • Passes the file directly to the sandbox for execution
+          • Returns the result identically to execute_python_code
+          • Automatically increments use_count and updates last_used_at
 
-        need_context=True — агенту нужно посмотреть код перед запуском:
-          • Тулза читает path из БД и возвращает текст файла агенту
-          • Агент делает точечные правки через edit_sandbox_file
-          • Агент сам вызывает execute_python_code с исправленным кодом
-          • use_count НЕ обновляется здесь — агент обновит после успешного запуска
+        need_context=True — the agent needs to review the code before running:
+          • The tool reads the path from the database and returns the file text to the agent
+          • The agent makes точечные edits via edit_sandbox_file
+          • The agent itself calls execute_python_code with the corrected code
+          • use_count is NOT updated here — the agent will update it after a successful run
 
-        Решение агента (need_context):
-          False — запрос совпадает 1-в-1 с описанием в БД, параметры не менялись
-          True  — нужны правки: другой URL, параметры, формат вывода
+        Agent decision (need_context):
+          False — the request matches 1-to-1 with the description in the database, the parameters have not changed.
+          True — edits are needed: different URL, parameters, output format.
 
-        Параметры:
-          library_id   — id записи в таблице code_library
-          need_context — bool, агент указывает сам
-          timeout      — таймаут исполнения в секундах (только для need_context=False)
+        Parameters:
+          library_id   — the ID of the record in the code_library table.
+          need_context — bool, the agent specifies this itself.
+          timeout      — execution timeout in seconds (only for need_context=False).
 
-        Возвращает при need_context=False:
+        Returns when need_context=False:
           ok, stdout, stderr, exit_code, saved_files, duration_ms
 
-        Возвращает при need_context=True:
-          source_code (str), path (str), title (str), description (str)
+        Returns when need_context=True:
+        source_code (str), path (str), title (str), description (str)
         """
         
         # ── 1. Тянем запись из БД ─────────────────────────────
@@ -701,32 +679,30 @@ def make_sandbox_execute_tool(agent):
     @tool
     async def create_workspace() -> dict:
         """
-        Создаёт новый persistent workspace в sandbox-сервисе.
-        Возвращает workspace_id, который нужно передавать в execute_python_code
-        для сохранения файлов между вызовами.
+        Creates a new persistent workspace in the sandbox service.
+        Returns the workspace_id, which must be passed to execute_python_code
+        to save files between calls.
 
-        Используй для многошаговых задач:
-        - Сбор данных (шаг 1) → парсинг (шаг 2) → генерация файла (шаг 3)
-        - Когда каждый шаг — отдельный вызов execute_python_code,
-          но файлы из шага 1 нужны в шаге 3
+        Use for multi‑step tasks:
+        - Data collection (step 1) → parsing (step 2) → file generation (step 3)
+        - When each step is a separate call to execute_python_code,
+          but files from step 1 are needed in step 3
 
-        ВАЖНО (работа с файлами/презами/медиа): если пользователь просит
-        собрать/прислать файл, презентацию, документ, видео или любой
-        артефакт, который надо ему отдать — СНАЧАЛА создай workspace через
-        этот тул, собери артефакт в нём (upload_to_workspace /
-        edit_workspace_file / execute_python_code с этим workspace_id), положи
-        результат в output/ и отправь через send_file_to_user по пути
-        /tmp/exec/workspaces/{workspace_id}/output/<filename>. Без workspace отдать
-        тяжёлые/составные файлы надёжно не получится.
+        IMPORTANT (working with files/presentations/media): if the user requests
+        assemble/send a file, presentation, document, video, or any other
+        the artifact that needs to be given to him — FIRST create a workspace through
+        this tool, collect the artifact in it (upload_to_workspace /
+        edit_workspace_file / execute_python_code with this workspace_id), put
+        the result is in output/ and send via send_file_to_user along the way
+        /tmp/exec/workspaces/{workspace_id}/output/<filename>. Give it away without a workspace
+        heavy/composite files will not work reliably.
 
-        ВСЕГДА создавай workspace и передавай его id в связке тяжелых операций генерации execute_python_code
+        ALWAYS create a workspace and pass its id in a bunch of heavy operations to generate execute_python_code.
 
-        Workspace автоматически удаляется через 10 часов неактивности, поэтому
-        в рамках диалога удалять область не обязательно.
+        The workspace is automatically deleted after 10 hours of inactivity, so
+        It is not necessary to delete an area within the dialog.
 
-        Возвращает: workspace_id, created_at, path
-
-        НАЗВАНИЕ: НЕЖДУН ФАБРИКА, пустил-вернулся, АВТОНОМНАЯ ФАБРИКА
+        Returns: workspace_id, created_at, path
         """
         result = await _call_sandbox_endpoint("POST", "/workspace/create")
 
@@ -757,14 +733,14 @@ def make_sandbox_execute_tool(agent):
     @tool
     async def list_workspace_files(workspace_id: str) -> dict:
         """
-        Возвращает список всех файлов в workspace (включая подпапки).
-        Используй чтобы проверить, какие файлы доступны из предыдущих шагов,
-        перед запуском следующего execute_python_code.
+        Returns a list of all files in the workspace (including subfolders).
+        Use this to check which files are available from previous steps,
+        before running the next execute_python_code.
 
-        Аргументы:
-            workspace_id: ID workspace, полученный из create_workspace
+        Arguments:
+            workspace_id: workspace ID obtained from create_workspace
 
-        Возвращает: список файлов с путями и размерами, общий размер.
+        Returns: a list of files with paths and sizes, total size.
         """
         result = await _call_sandbox_endpoint(
             "GET", f"/workspace/{workspace_id}/files"
@@ -801,18 +777,18 @@ def make_sandbox_execute_tool(agent):
         filepath: str,
     ) -> dict:
         """
-        Скачивает конкретный файл из workspace и сохраняет его в
-        /app/generated_files для отправки пользователю.
+        Downloads a specific file from workspace and saves it to
+        /app/generated_files to send to the user.
 
-        Используй когда финальный файл создан в workspace и его нужно
-        отдать пользователю через send_file_to_user.
+        Use it when the final file is created in workspace and it needs to be
+        give it to the user via send_file_to_user.
 
-        Аргументы:
+        Arguments:
             workspace_id: ID workspace
-            filepath: относительный путь к файлу внутри workspace
-                      (например "output/result.xlsx" или "output/data.json")
+            filepath: the relative path to the file inside the workspace
+                      (for example, "output/result.xlsx" or "output/data.json")
 
-        Возвращает: путь к сохранённому файлу в /app/generated_files
+        Returns: the path to the saved file in /app/generated_files
         """
         try:
             async with httpx.AsyncClient(timeout=60) as client:
@@ -863,14 +839,14 @@ def make_sandbox_execute_tool(agent):
     @tool
     async def delete_workspace(workspace_id: str) -> dict:
         """
-        Удаляет workspace и все файлы в нём.
-        Вызывай после завершения многошаговой задачи для освобождения ресурсов.
-        Если не вызвать — workspace удалится автоматически через 1 час неактивности.
+        Deletes the workspace and all files in it.
+        Call this after completing a multi‑step task to release resources.
+        If you don’t call it, the workspace will be deleted automatically after 1 hour of inactivity.
 
-        Аргументы:
-            workspace_id: ID workspace для удаления
+        Arguments:
+            workspace_id: ID of the workspace to delete
 
-        Возвращает: status, workspace_id
+        Returns: status, workspace_id
         """
         result = await _call_sandbox_endpoint(
             "DELETE", f"/workspace/{workspace_id}"
@@ -897,10 +873,10 @@ def make_sandbox_execute_tool(agent):
     @tool
     async def cleanup_workspaces() -> dict:
         """
-        Принудительно очищает все просроченные workspace (с истёкшим TTL).
-        Вызывай если получил ошибку "достигнут лимит workspace".
+        Forcibly clears all expired workspaces (with an expired TTL).
+        Call this if you receive the error “workspace limit reached”.
 
-        Возвращает: количество удалённых, количество оставшихся.
+        Returns: the number of deleted workspaces, the number of remaining ones.
         """
         result = await _call_sandbox_endpoint("POST", "/workspace/cleanup")
 
@@ -956,18 +932,15 @@ def make_sandbox_execute_tool(agent):
     @tool
     async def html_design_skill():
         """
-        Вызвать перед генерацией HTML-страниц в современном стиле, дизайном, анимациями и переходами.
-        
-        ВСЕГДА использовать execute_python_code для поиска текста скиллов, если пользователь запроси красивую презентацию
-
-        СКИЛЛЫ ЛЕЖАТ НЕ ЛОКАЛЬНО, необходимо писать скрипт с помощью execute_python_code, чтобы достать их из удаленной песочницы.
-                
-        ## 1. Как это устроено в удаленной песочнице
+        Call before generating HTML pages in a modern style, with design, animation, and transitions.
+        ALWAYS use execute_python_code to search for text skills if the user requests a beautiful presentation
+        SKILLS ARE NOT LOCAL; you need to write a script using execute_python_code to retrieve them from the remote sandbox.
+        ## 1. How it works in the remote sandbox
 
         ```
         /app/
-        ├── skills-lock.json          # реестр: версия, список скилов, хэши
-        ├── .agents/skills/           # рабочая директория скилов
+        ├── skills-lock.json          # registry: version, list of skills, hashes
+        ├── .agents/skills/           # working directory for skills
         │   ├── animate/SKILL.md
         │   ├── animation-vocabulary/SKILL.md
         │   ├── apple-design/SKILL.md
@@ -977,14 +950,14 @@ def make_sandbox_execute_tool(agent):
         │   ├── pick-ui-library/SKILL.md
         │   ├── prototype/SKILL.md
         │   └── review-animations/SKILL.md
-        └── agent/skills/             # зеркало (те же файлы)
+        └── agent/skills/             # mirror (the same files)
         ```
 
         ### skills-lock.json
 
         ---
 
-        ## 2. Как получить содержимое скилов (для докстрингов)
+        ## 2. How to get the content of skills (for documentation)
 
         ```python
         import os
@@ -999,7 +972,7 @@ def make_sandbox_execute_tool(agent):
                 skill_path = os.path.join(base, skill_name, "SKILL.md")
                 key = skill_name
                 if key in seen:
-                    continue
+                    resume
                 seen.add(key)
                 if os.path.isfile(skill_path):
                     with open(skill_path) as f:
@@ -1019,51 +992,51 @@ def make_sandbox_execute_tool(agent):
         dest: str = "",
     ) -> dict:
         """
-        Когда надо ОТДАТЬ пользователю презу/док/видео/архив: сначала
-        create_workspace, сюда залей исходники/ассеты, собери артефакт,
-        положи его в output/ и отправь через send_file_to_user.
+        When you need to GIVE the user the presentation/document/video/archive: at first
+        create_workspace, upload the source code/assets here, assemble the artifact,
+        put it in output/ and send it via send_file_to_user.
 
-        Заливает артефакты в удалённый workspace фабрики, где они станут
-        доступны для execute_python_code / execute_shell_commands с тем же
-        workspace_id (обратная операция к download_workspace_file).
+        Uploads artifacts to the remote workspace of the factory, where they will become
+        available for execute_python_code / execute_shell_commands with the same
+        workspace_id (the reverse operation of download_workspace_file).
 
-        Два источника, можно комбинировать (хотя бы один обязателен):
+        Two sources, can be combined (at least one is required):
 
-            local_path — путь к ЛОКАЛЬНОМУ файлу или папке в файловой системе
-                         агента. Разрешены корни: /sandbox, /app/generated_files.
-                         файл → заливается как есть; папка → пакуется в zip и
-                         распаковывается на фабрике (структура сохраняется).
+            local_path is the path to a LOCAL file or folder in the file system.
+                         the agent. The following roots are allowed: /sandbox, /app/generated_files.
+                         the file → is filled in as it is; the folder → is packed in zip and
+                         unpacked at the factory (the structure is preserved).
 
-            image_keys — список image_key (UUID) СГЕНЕРИРОВАННЫХ тобой картинок
-                         из хранилища generated_images. Именно так сгенерированные
-                         через generate_image изображения попадают на УДАЛЁННУЮ
-                         ФАБРИКУ: бинарник картинки лежит в БД (BYTEA), физического
-                         файла у агента нет, поэтому обычным local_path его не
-                         передать. Тул сам достаёт байты из БД и заливает их файлом
-                         в workspace. Используй это, когда нужно вставить
-                         сгенерированную картинку в презентацию/документ, который
-                         собирается python-скриптом на фабрике. image_key берётся
-                         из отчёта generate_image или из find_generated_image.
+            image_keys — a list of image_key (UUID) images generated by you
+                         from the generated_images repository. That's how the generated
+                         through generate_image, images are sent to the REMOTE
+                         FACTORY: the binary of the image is in the database (BYTEA), physical
+                         the agent doesn't have the file, so the usual local_path doesn't contain it.
+                         transfer. Tool gets the bytes from the database itself and fills them with a file.
+                         in the workspace. Use this when you need to insert
+                         the generated image in a presentation/document that
+                         it is built using a python script in the factory. image_key is taken
+                         from the generate_image report or from find_generated_image.
 
-        Аргументы:
-            workspace_id: ID целевого workspace (из create_workspace)
-            local_path:   опционально — локальный файл/папка (см. выше)
-            image_keys:   опционально — список image_key из generated_images
-            media_ids:    опционально — список media_id из МЕДИА-ХРАНИЛИЩА чата
-                          (Redis, файлы/картинки из недавних сообщений, живут
-                          ~24ч; реестр показан в блоке «МЕДИА-ХРАНИЛИЩЕ ЧАТА»).
-                          Мост Redis→фабрика: тул достаёт бинарник из хранилища
-                          и заливает его файлом в workspace. Так на фабрику
-                          попадают и НЕ-картиночные файлы (docx/pdf/csv…),
-                          присланные пользователем ранее, а не только картинки.
-            dest:         подпапка назначения внутри workspace, напр. "assets/img".
-                          Пустая строка — корень workspace. Применяется к обоим
-                          источникам.
+        Arguments:
+            workspace_id: ID of the target workspace (from create_workspace)
+            local_path: optional — local file/folder (see above)
+            image_keys: optional — a list of image_keys from generated_images
+            media_ids: optional — a list of media_ids from the chat's MEDIA STORAGE
+                          (Redis, files/images from recent posts, live
+                          ~24h; the registry is shown in the "CHAT MEDIA STORAGE" block).
+                          Redis Bridge→factory: tool takes binary out of storage
+                          and fills it with a file in the workspace. So to the factory
+                          There are also NON-picture files (docx/pdf/csv...)
+                          sent by the user earlier, and not just pictures.
+            dest: The destination subfolder inside the workspace, e.g. "assets/img".
+                          The empty string is the root of the workspace. Applies to both
+                          sources.
 
-        Возвращает: {ok, workspace_id, dest, uploaded:[...],
-                     images: {image_key: "dest/имя_файла"}, result}
-        Карта images говорит, под каким путём в workspace лежит каждая картинка —
-        именно эти пути подставляй в python-код сборки презентации.
+        Returns: {ok, workspace_id, dest, uploaded:[...],
+                     images: {image_key: "dest/file_name"}, result}
+        The images map indicates which path in the workspace each image is located at —
+        use these paths in the Python code for building the presentation.
         """
         local_path = (local_path or "").strip() or None
         # Нормализация image_keys (LLM может прислать строкой/JSON/CSV)

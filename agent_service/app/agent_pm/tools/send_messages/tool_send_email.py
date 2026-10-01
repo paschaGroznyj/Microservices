@@ -225,32 +225,32 @@ def make_send_digest_email_tool(agent):
         comment: str = "",
     ) -> str:
         """
-        Основное назначение: Сформировать дайджест и отправить на email.
+        The main purpose: to generate a digest and send it via email.
 
-        Параметры:
-          emails      — список адресов получателей, например ["user@mail.ru"]
-          review_ids  — список ID из таблицы reviews (bigint).
-                        Получи их заранее через execute_sql_query:
+        Parameters:
+          emails      — a list of recipient addresses, for example ["user@mail.ru"]
+          review_ids  — a list of IDs from the reviews table (bigint).
+                        Get them in advance using execute_sql_query:
                         SELECT id FROM reviews r
                         JOIN papers_metadata pm ON r.external_id = pm.external_id
-                        WHERE <твой фильтр>;
-          comment     — необязательный комментарий в начале письма
+                        WHERE <your filter>
+          comment     — an optional comment at the beginning of the message
 
-        Что делает:
-          1. Тянет записи из reviews + papers_metadata по переданным ID
-          2. Формирует Markdown-дайджест
-          3. Загружает в OBS и получает ссылку
-          4. Отправляет письмо со ссылкой + MD-файлом во вложении
+        What it does:
+          1. Pulls records from reviews + papers_metadata based on the passed IDs
+          2. Generates a Markdown digest
+          3. Uploads to OBS and gets a link
+          4. Sends an email with a link + MD file attached
 
-        Пример вызова:
+        Example of a call:
             send_digest_email(
                 emails=["maria@example.com"],
                 review_ids=[101, 105, 108],
-                comment="Мария, подборка статей по Process Mining за июль."
-            )
+                comment="Maria, a selection of articles on Process Mining for July."
+)
 
-        Вторичное назначение: Инструмент способен отправлять письма по почте, текст comment встраивается в письмо
-        Для этого -> review_ids нужно оставить None
+        Secondary purpose: the tool is capable of sending emails; the comment text is embedded in the email.
+        To do this -> review_ids should be left as None.
         """
         result = await sender.execute(
             emails=emails,

@@ -67,28 +67,28 @@ def make_send_file_tool(agent):
     @tool
     async def send_file_to_user(path: str) -> dict:
         """
-        Отправляет пользователю уже существующий файл из песочницы или
-        папки сгенерированных файлов. Используй, когда пользователь просит
-        прислать/показать/скинуть файл, который был создан ранее
-        (например через execute_python_code в этой же или предыдущей сессии).
+        It sends the user an existing file from the sandbox or
+        a folder of generated files. Use it when the user asks
+        send/show/upload a file that was created earlier
+        (for example, via execute_python_code in the same or previous session).
 
-        Не создаёт новый файл — только помечает существующий на отправку.
+        It does not create a new file, but only marks the existing one for sending.
 
-        РАБОТА С ФАЙЛАМИ/ПРЕЗАМИ/МЕДИА: если нужно отдать пользователю
-        собранный на фабрике артефакт (преза, видео, архив, док):
-        создай workspace (create_workspace), собери там файл, положи в output/
-        и вызови этот тул с путём
-        /tmp/exec/workspaces/{workspace_id}/output/<filename> — файл будет авто-
-        подкачан с фабрики и отправлен.
-        Если файла не существует, сообщи об этом пользователю вместо повтора попыток.
+        WORKING WITH FILES/PRESENTATIONS/MEDIA: if you need to give it to the user
+        An artifact assembled at the factory (presentation, video, archive, doc):
+        create a workspace (create_workspace), assemble the file there, place it in output/,
+        and call this tool with the path
+        /tmp/exec/workspaces/{workspace_id}/output/<filename> — the file will be auto-
+        downloaded from the factory and sent..
+        If the file does not exist, inform the user instead of retrying..
 
-        Аргументы:
-            path: полный путь к файлу, например "/app/generated_files/{run_id}/chart.png"
-                  или "/sandbox/draft.py". Обычно берётся из поля "path" в ответе
-                  execute_python_code (saved_files) или write_sandbox_file.
-            Возможна автоматическая подкачка файлов из Фабрики, для этого нужно задать путь к файлу
-            в таком виде: /tmp/exec/workspaces/{workspace_id}/output/<filename>
-            Файл автоматически будет сохранен в /app/generated_files/{workspace_id}.
+        Arguments:
+            path: the full path to the file, for example "/app/generated_files/{run_id}/chart.png"
+        or "/sandbox/draft.py ". It is usually taken from the "path" field in the response.
+                  execute_python_code (saved_files) or write_sandbox_file.
+            It is possible to automatically swap files from the Factory, for this you need to specify the path to the file.
+            in this format: /tmp/exec/workspaces/{workspace_id}/output/<filename>
+            The file will be automatically saved in /app/generated_files/{workspace_id}.
         """
         target = _valid_send_path(path)
 

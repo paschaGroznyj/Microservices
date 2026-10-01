@@ -50,42 +50,42 @@ def make_manage_trigger_tool(agent, chat_id: str, user_id):
         addressed: bool = False,
     ) -> str:
         """
-        Планировщик собственных отложенных запусков (Telegram-триггеры).
-        Позволяет тебе САМОМУ запланировать будущее действие в этом чате: слушатель
-        каждую минуту сверяет время по МСК и в нужный момент разбудит тебя
-        с текстом из поля prompt — ты выполнишь его как задачу и напишешь в чат.
+        Scheduler for your own delayed launches (Telegram triggers).
+        Allows you to SCHEDULE a future action in this chat yourself: the listener
+        checks the time in Moscow every minute and, at the right moment, will wake you up
+        with the text from the prompt field — you will complete it as a task and write in the chat.
 
-        Когда использовать:
-          - пользователь просит "напомни в 18:00", "каждое утро присылай дайджест",
-            "завтра в 9 сгенерируй картинку" и т.п.;
-          - когда нужно отложить действие на конкретное время.
-        Ставь триггер ТОЛЬКО по явному запросу пользователя.
+        When to use:
+          - the user asks for “remind me at 18:00”, “send a digest every morning”,
+            “Generate an image tomorrow at 9,” etc.;
+          - when you need to postpone an action until a specific time.
+        Set the trigger ONLY upon the user’s explicit request.
 
-        Параметры:
-          action     — "create" | "list" | "cancel"
-          kind       — "once" (разовый, нужен trigger_date) |
-                       "recurring" (регулярный, можно days_of_week)
-          time_msk   — время запуска по Москве в формате "HH:MM" (обязательно для create)
-          prompt     — что ты должен будешь сделать когда триггер сработает
-                       (обязательно для create) — именно этот текст придёт тебе обратно
-          title      — короткая метка для списка (опционально)
-          trigger_date — дата для kind=once в формате "YYYY-MM-DD" (МСК).
-                         Если не задана — берётся сегодняшняя дата МСК.
-          days_of_week — для kind=recurring: список дней 1..7 (1=пн..7=вс).
-                         Пустой список / None = каждый день.
-          trigger_id — id триггера для action="cancel"
-          addressed  — False (по умолчанию): пишешь в чат без конкретного адресата.
+        Parameters:
+          action     — "create", "list", "cancel"
+          kind       — "once" (one‑time, trigger_date is required) |
+                       "recurring" (regular, you can use days_of_week)
+          time_msk   — launch time in Moscow in the format "HH:MM" (required for create)
+          prompt     — what you will need to do when the trigger is activated
+                       (required for create) — this is the text that will be returned to you
+          title      — a short label for the list (optional)
+          trigger_date — the date for kind=once in the format "YYYY-MM-DD" (MSK).
+                         If not specified, today’s MSK date is used.
+          days_of_week — for kind=recurring: a list of days 1..7 (1=mon..7=sun).
+                         An empty list / None = every day.
+          trigger_id — trigger ID for action="cancel"
+          addressed — False (default): you write in the chat without a specific addressee.
 
-        Примеры:
+        Examples:
           create once:      action=create, kind=once, time_msk="18:30",
-                            trigger_date="2026-09-27", prompt="Напомнить про созвон"
+                            trigger_date="2026-09-27", prompt="Remind about the call"
           create recurring: action=create, kind=recurring, time_msk="09:00",
-                            days_of_week=[1,2,3,4,5], prompt="Утренний дайджест PM"
+                            days_of_week=[1,2,3,4,5], prompt="Morning PM digest"
           list:             action=list
           cancel:           action=cancel, trigger_id=42
 
-        ВАЖНО: триггеры работают только в Telegram-чатах с включённой проактивностью.
-        Время всегда трактуется как МСК. Минутная гранулярность.
+        IMPORTANT: triggers only work in Telegram chats with proactive mode enabled.
+        Time is always interpreted as MSK. Minute granularity.
         """
         try:
             act = (action or "").strip().lower()

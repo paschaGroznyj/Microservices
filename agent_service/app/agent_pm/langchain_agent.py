@@ -18,7 +18,8 @@ from langchain_core.messages.utils import count_tokens_approximately
 
 from .core.agent_provider import (get_llm_lite_model, get_llm_model,
 get_llm_model_gpt, get_llm_model_claude, get_llm_model_gemini,
-get_llm_lite_model_gpt_mini, get_llm_lite_model_gemini_flash)
+get_llm_lite_model_gpt_mini, get_llm_lite_model_gemini_flash,
+get_llm_model_glm)
 from .core.botocore_client import OBSWorker
 from .core.config import (
     ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH,
@@ -645,7 +646,7 @@ STATEFUL_TOOLS = {
     "execute_python_code",
     "send_file_to_user",
     "work_with_agent_journal",
-    "request_more_steps",
+    # "request_more_steps",
     "submit_task", "check_task_status",
     "create_workspace", "list_workspace_files", "download_workspace_file",
     "delete_workspace", "cleanup_workspaces",
@@ -737,8 +738,8 @@ def _summarize_tool_call(tc: dict, result: Any) -> str | None:
                 f"код:\n{code[:800]}\n"
                 f"ошибка: {error}"
             )
-    if name == "request_more_steps":
-        return f"{name} ШАГ-БУСТ → {str(result)}"
+    # if name == "request_more_steps":
+    #     return f"{name} ШАГ-БУСТ → {str(result)}"
     if name == "execute_shell_commands":
         # КРИТИЧНО для памяти/контекста: команды (git heredoc, grep, py_compile)
         # и их stdout/stderr бывают по 40k+ символов. Без жёсткого лимита такой
@@ -919,7 +920,7 @@ class KnowledgeAgent:
         )
         self.AGENT_MODELS = {'coder': get_llm_model_gpt(),
                             'designer': get_llm_model_claude(),
-                            'universal': get_llm_model_gemini()
+                            'universal': get_llm_model_glm()
                             }
         self.llm_lite = get_llm_lite_model()
         # Цепочка фолбэков для лайт-модели (суммаризация и прочие служебные
@@ -928,6 +929,7 @@ class KnowledgeAgent:
         self.llm_lite_fallbacks = [
             get_llm_lite_model_gpt_mini(),
             get_llm_lite_model_gemini_flash(),
+            get_llm_model_glm()
         ]
         self.obs_loader = OBSWorker()
         self.email_handler = DigestEmailHandler()
@@ -1314,54 +1316,51 @@ class KnowledgeAgent:
         @tool
         async def execute_sql_query(sql: str) -> str:
             """
-            Выполнить SQL-запрос к базе данных (SELECT, INSERT, UPDATE).
+            Execute an SQL query to the database (SELECT, INSERT, UPDATE).
             
-            КАРТА ДОСТУПА И ПРАВ (ROLE: knowledge_manager):
+            ACCESS AND RIGHTS MAP (ROLE: knowledge_manager):
 
-            ЗАКОН ПРИ РАБОТЕ С БД:
-            Если SQL-запрос вернул "результатов нет" при поиске конкретных статей/фактов, 
-            которые ты собирался процитировать — ОБЯЗАН сообщить пользователю: 
-            "Не нашёл точных совпадений в базе для темы X, могу поискать шире / 
-            дать общий обзор без привязки к конкретным ID". 
-            ЗАПРЕЩЕНО подменять неудачный результат правдоподобно звучащими названиями, 
-            особенно с формулировками вида 'я проверил/уточнил через SQL', 
-            если фактический результат запроса был пуст или нерелевантен.
+            LAW WHEN WORKING WITH THE DB:
+            If the SQL query returned “no results” when searching for specific articles/facts that you were going to cite, you are OBLIGED to inform the user: “I didn’t find any exact matches in the database for topic X, I can search more broadly / 
+            give a general overview without reference to specific IDs." 
+            It is FORBIDDEN to substitute plausible-sounding names for an unsuccessful result,
+            especially with formulations like 'I checked/clarified via SQL'
+            if the actual query result was empty or irrelevant.
 
-            Утверждение о сохранении данных в БД без фактического вызова execute_sql_query 
-            в этом же ходу — это создание ложной информации и категорически запрещено.
+            A statement about saving data to the database without actually calling execute_sql_query 
+            In the same move, it is the creation of false information and is strictly prohibited.
             
-            СТРОГИЕ ОГРАНИЧЕНИЯ:
-            - Прямые операции DELETE СТРОГО ЗАПРЕЩЕНЫ на уровне прав роли.
-            - Для предложения удаления записи из 'knowledge' делай INSERT в 'knowledge_review' 
-            с указанием 'knowledge_id' и 'reason'.
-            - Перед формированием запросов обязательно вызови 'get_db_schema' для проверки структуры.
+            STRICT RESTRICTIONS:
+            - DIRECT DELETE operations are STRICTLY PROHIBITED at the role permission level.
+            - To propose deleting a record from 'knowledge', perform an INSERT into 'knowledge_review' 
+            specifying 'knowledge_id' and 'reason'.
+            - Before generating queries, be sure to call 'get_db_schema' to check the structure.
 
-            СТРАТЕГИЯ РАБОТЫ С ТАБЛИЦЕЙ knowledge:
-            - НОВАЯ ЗАПИСЬ (INSERT): создавай всегда когда источник новый (новая статья, новый URL, новый автор).
-            Одна статья = одна запись. Не объединяй разные источники в одну строку.
+            THE STRATEGY OF WORKING WITH THE knowledge TABLE is:
+            - NEW ENTRY (INSERT): create whenever the source is new (new article, new URL, new author).
+            One article = one entry. Don't combine different sources into one line.
 
-            - ОБНОВЛЕНИЕ (UPDATE): только если запись с этим источником уже существует
-            и нужно дополнить или исправить текст. Проверяй через SELECT перед UPDATE.
+            - UPDATE: only if an entry with this source already exists
+            and you need to add or correct the text. Check through SELECT before UPDATING.
 
-            - ВСЕГДА ПРОВЕРЯЙ разницу времени между временем создания записи и её обновлением. НИКОГДА не говори
-            пользователю, что запись обновлена. Если разницы нет, то сделай самостоятельное обновление. 
+            - ALWAYS CHECK the time difference between the time the entry was created and the time it was updated. NEVER tell the user that the entry has been updated. If there is no difference, perform the update yourself.
 
-            - ОБЪЕДИНЕНИЕ: НЕ объединяй записи из разных источников даже если темы похожи.
-            Смежность тем — не повод для слияния. Семантический поиск сам найдёт связанные записи.
+            - MERGING: DO NOT merge entries from different sources, even if the topics are similar.
+            Similarity of topics is not a reason to merge. Semantic search will find related entries on its own.
 
-            - В metadata_knowledge всегда указывай source (URL или идентификатор статьи),
-            чтобы можно было отследить происхождение знания. Без явной ссылки, можешь оставить пустым.
+            - In metadata_knowledge, always specify the source (URL or article identifier).
+            so that the origin of knowledge can be traced. Without an explicit link, you can leave it blank.
 
-            - ТОЧЕЧНОЕ ОБНОВЛЕНИЕ ТЕКСТА (UPDATE + REPLACE):
-            Если нужно заменить только конкретную фразу/слово, а не переписывать весь текст:
-            1. Сначала сделай SELECT text_knowledge WHERE id = N, чтобы усмотреть точную формулировку.
-            2. Выполни подстановку через REPLACE:
+            - POINT TEXT UPDATE (UPDATE + REPLACE):
+            If you need to replace only a specific phrase/word, rather than rewrite the entire text:
+            1. First, do SELECT text_knowledge WHERE id = N to see the exact wording.
+            2. Perform substitution via REPLACE:
                 UPDATE knowledge 
-                SET text_knowledge = REPLACE(text_knowledge, 'строго точный старый текст', 'новый текст'),
+                SET text_knowledge = REPLACE(text_knowledge, 'strictly accurate old text', 'new text'),
                     updated_at = NOW()
                 WHERE id = N;
 
-            :param sql: Валидный PostgreSQL запрос.
+            :param sql: Valid PostgreSQL query.
             """
             result = await tool_execute_sql_query(agent.db, sql)
             
@@ -1390,20 +1389,20 @@ class KnowledgeAgent:
         @tool
         async def no_tools_selected() -> str:
             """
-            Вызывай ТОЛЬКО если тебе нужно выполнить действие, требующее инструмента,
-            а ни один инструмент недоступен. Сообщи пользователю, что нужно выбрать
-            хотя бы одну категорию инструментов в панели настроек (кнопка со значком
-            гаечного ключа рядом с полем ввода), и объясни, какая категория подошла бы
-            для его запроса. НЕ выдумывай данные и НЕ пытайся ответить по памяти —
-            задача без инструментов не может быть выполнена корректно.
+            Call it ONLY if you need to perform an action that requires a tool.,
+            and not a single tool is available. Tell the user what to choose.
+            at least one category of tools in the settings panel (the button with the icon
+            a wrench next to the input field), and explain which category would be suitable.
+            for his request. DO NOT invent data and DO NOT try to answer from memory —
+            the task cannot be performed correctly without tools.
             """
             return (
-                "⚠️ Инструменты не выбраны. Чтобы выполнить этот запрос, нужно "
-                "включить хотя бы одну категорию инструментов на главной странице: "
-                "нажмите на кнопку настройки инструментов (значок гаечного ключа "
-                "рядом с полем ввода) и выберите подходящую категорию, затем "
-                "повторите запрос. Без включённых инструментов я не могу собрать "
-                "данные и не буду отвечать по памяти, чтобы не ввести вас в заблуждение."
+                "⚠️ Tools are not selected. To complete this request, you need to "
+                "enable at least one category of tools on the main page: "
+                "click on the Tools settings button (wrench icon "
+                "next to the input field) and select the appropriate category, then "
+                "repeat the request. Without the included tools, I cannot collect "
+                "data and will not answer from memory, so as not to mislead you."
             )
 
         # 1. Генерация новых ревью
@@ -2015,7 +2014,7 @@ class KnowledgeAgent:
                             "\n\nВ этом чате тебя зовут «" + _tg_name.strip() + "». "
                             "Участники обращаются к тебе по этому имени — воспринимай его как своё и при необходимости так и представляйся."
                         )
-                    system_content += "\n\n" + build_tg_system_suffix(_tg_settings.get("system_prompt"))
+                    system_content += "\n\n" + _tg_settings.get("system_prompt")
                 except Exception as _e:
                     logging.warning(f"[tg] system suffix fail: {_e}")
 
@@ -2109,6 +2108,18 @@ class KnowledgeAgent:
                 *trimmed_history,
                 HumanMessage(content=user_input),
             ]
+            RATIO = {"designer": 1.3, "coder": 4.0}   # символов на токен
+
+            import json
+            def _tok(s): return len(s) // RATIO.get(agent_model, 2)   # для русского ~2 симв/токен, а не 4
+
+            # for m in messages:
+            #     c = m.content if isinstance(m.content, str) else json.dumps(m.content, ensure_ascii=False)
+            #     logger.info(f"[budget] {m.__class__.__name__:15} chars={len(c):6} ~tok={_tok(c):6} | {c[:60]!r}")
+
+            schemas = json.dumps([t.args_schema.schema() if t.args_schema else {} for t in tools], ensure_ascii=False)
+            descr   = sum(len(t.description or "") for t in tools)
+            logger.info(f"[budget] tools={len(tools)} schema_chars={len(schemas)} descr_chars={descr} ~tok={_tok(schemas)+_tok('x'*descr)}")
 
             async def agent_event_loop(messages: list):
                 nonlocal total_input_tokens, total_output_tokens # Не видит из-за +=
@@ -2156,21 +2167,21 @@ class KnowledgeAgent:
                     current_llm = llm if (is_last_step and not can_still_extend) else llm_with_tools
 
                     # ТОЧКА 3: адресный триггер на КАЖДОМ шаге окна, а не однократно.
-                    steps_left = loop_state["hard_limit"] - iteration - 1
+                    # steps_left = loop_state["hard_limit"] - iteration - 1
                     # SOFT_LIMIT-предупреждение привязано к КОНЦУ окна, а не к фикс. номеру:
                     # при hard_limit=100 нельзя спамить 90 SystemMessage. Шлём подсказку
                     # про request_more_steps только когда до потолка осталось <= STEPS_LEFT_WARN.
-                    if steps_left <= loop_state["steps_left_warn"] and can_still_extend:
-                        messages.append(SystemMessage(content=(
-                            f"[Контроль лимита] Осталось шагов: {steps_left}. "
-                            f"Если НЕ успеваешь завершить задачу за оставшиеся шаги — "
-                            f"вызови request_more_steps ПРЯМО СЕЙЧАС (расширение одноразовое). "
-                            f"Если успеваешь — продолжай и дай финальный ответ."
-                        )))
-                    elif steps_left <= loop_state["steps_left_warn"]:
-                        messages.append(SystemMessage(
-                            content=f"[Прогресс: шаг {iteration} из {loop_state['hard_limit']}]"
-                        ))
+                    # if steps_left <= loop_state["steps_left_warn"] and can_still_extend:
+                    #     messages.append(SystemMessage(content=(
+                    #         f"[Контроль лимита] Осталось шагов: {steps_left}. "
+                    #         f"Если НЕ успеваешь завершить задачу за оставшиеся шаги — "
+                    #         f"вызови request_more_steps ПРЯМО СЕЙЧАС (расширение одноразовое). "
+                    #         f"Если успеваешь — продолжай и дай финальный ответ."
+                    #     )))
+                    # elif steps_left <= loop_state["steps_left_warn"]:
+                    #     messages.append(SystemMessage(
+                    #         content=f"[Прогресс: шаг {iteration} из {loop_state['hard_limit']}]"
+                    #     ))
 
 
                     # ── Живой стриминг текста модели ──────────────────────────
@@ -2236,7 +2247,7 @@ class KnowledgeAgent:
                                 "", request_id, msg_id=str(request_id), kind="reasoning_end"
                             )
                         # В стек reasoning не тащим (как и раньше) — гасим content
-                        response.content = ""
+                        # response.content = ""
                     elif _has_tool_calls and not _had_text:
                         # Шаг без текста (сразу tool_calls). Если что-то всё же
                         # успело улететь как live (пустой мусор) — закрываем блок.
@@ -2308,6 +2319,20 @@ class KnowledgeAgent:
                         ],
                         return_exceptions=True,
                     )
+
+                    if iter_in and iter_in >= TOKEN_SOFT_LIMIT:
+                        logger.info(
+                            f"[compactor] iter_in={iter_in} >= {TOKEN_SOFT_LIMIT}, "
+                            f"запускаю сжатие стека (итерация {iteration})"
+                        )
+                        try:
+                            messages, _meta = await compact_messages(
+                                self,
+                                messages,
+                                summarize_tool_call=_summarize_tool_call,
+                            )
+                        except Exception as _e:
+                            logger.error(f"[compactor] сбой сжатия, продолжаю без него: {_e}")
                     # logging.info(f"Результаты тулзов: {tool_results}")
 
                     for tc, tr in zip(tool_calls, tool_results):

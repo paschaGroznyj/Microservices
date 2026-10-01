@@ -27,9 +27,10 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
         "presentation_design_skill",
         "html_design_skill",
         "generate_image",
+        "find_generated_image",
     ],
     "sessions": [
-        "session_point",
+        # "session_point",
         "work_with_agent_journal",
     ],
     "skills": [
@@ -45,7 +46,7 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
         "grep_search",
         "find_files",
         # "push_message_to_telegram",
-        "work_with_email",
+        # "work_with_email",
         "connect_mcp_git",
         "execute_shell_commands",
     ],

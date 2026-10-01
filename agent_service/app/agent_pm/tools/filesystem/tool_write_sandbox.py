@@ -52,18 +52,18 @@ def make_sandbox_write_tool(agent):
     @tool
     async def write_sandbox_file(path: str, content: str, mode: str = "write") -> str:
         """
-        Записывает файл СТРОГО внутри /sandbox. Доступа к /app на запись нет —
-        это черновик-зона для написания и показа кода, не для изменения реального сервиса.
+        Writes the file STRICTLY inside /sandbox. There is no recording access to /app —
+        This is a draft area for writing and displaying code, not for changing the actual service.
 
-        Аргументы:
-            path: относительный путь внутри /sandbox, например "draft_tool.py"
-            content: содержимое файла
-            mode: "write" (перезаписать) или "append" (дописать в конец)
+        Arguments:
+            path: a relative path inside /sandbox, for example "draft_tool.py "
+            content: file content
+            mode: "write" (overwrite) or "append" (add to the end)
 
-        Лимит: 200KB на файл, 50 файлов одновременно.
+        Limit: 200KB per file, 50 files at a time.
 
-        Используй, чтобы подготовить черновик кода или файла для показа пользователю —
-        он сам решит, переносить ли это в реальный проект.
+        Use to prepare a draft of the code or file to show to the user —
+        they will decide whether to move it to the real project.
         """
         target = _valid_sandbox_path(path)
         if target is None:

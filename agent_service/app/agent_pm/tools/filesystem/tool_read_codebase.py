@@ -201,19 +201,19 @@ def make_filesystem_tools(agent):
     @tool
     async def list_tree(path: str = ROOT, depth: int = MAX_DEPTH_DEFAULT) -> str:
         """
-        Показывает дерево директорий и файлов проекта (аналог `tree`).
-        Служебные и мусорные папки (__pycache__, digests, faiss_index, knowledge_base, venv)
-        автоматически исключены из вывода.
+        Displays the tree of directories and project files (similar to `tree`).
+        Service and junk folders (__pycache__, digests, faiss_index, knowledge_base, venv)
+        are automatically excluded from the output.
 
-        Аргументы:
-            path: путь внутри /app (по умолчанию корень проекта)
-            depth: глубина вложенности, 1-7 (по умолчанию 5)
+        Arguments:
+            path: path inside /app (by default, the project root)
+            depth: nesting depth, 1–7 (default is 5)
 
-        Используй для первого знакомства со структурой проекта или конкретной папки.
+        Use for the first acquaintance with the project structure or a specific folder.
 
-        Для чтения файлов из песочницы (/sandbox) указывай ПОЛНЫЙ абсолютный путь,
-        например "/sandbox/draft.py". Короткие относительные пути (без "/")
-        резолвятся относительно /app, а не /sandbox.
+        To read files from the sandbox (/sandbox), specify the FULL absolute path,
+        for example, "/sandbox/draft.py". Short relative paths (without "/")
+        are resolved relative to /app, not /sandbox.
         """
         target = _safe_join(path)
         if target is None:
@@ -224,22 +224,20 @@ def make_filesystem_tools(agent):
     @tool
     async def read_file(path: str, offset: int = 0, limit: int = 0) -> str:
         """
-        Читает содержимое файла (аналог `cat` / `sed -n`).
+        Reads the contents of the file (analogous to `cat` / `sed -n`).
 
-        Аргументы:
-            path: путь к файлу внутри /app, относительный или абсолютный
-            offset: с какой строки читать (0 = с начала). Используй вместе с limit
-                    для скользящего окна по большому файлу.
-            limit: сколько строк прочитать. 0 = до конца файла (или до лимита по умолчанию).
+        Arguments:
+            path: the path to the file inside /app, relative or absolute
+            offset: which line to read from (0 = from the beginning). Use it together with the limit
+                    for a sliding window over a large file.
+            limit: how many lines to read. 0 = to the end of the file (or to the default limit).
 
-        Поведение:
-            - Если offset и limit не заданы, а файл < 50KB — вернёт файл целиком.
-            - Если offset и limit не заданы, а файл > 50KB — вернёт первые 150
-            и последние 80 строк, остальное будет truncated.
-            - Если задан offset/limit — вернёт ровно запрошенный диапазон строк,
-            независимо от размера файла. Так можно прочитать большой файл по частям:
-            сначала offset=0 limit=200, увидеть total_lines в ответе, затем
-            offset=200 limit=200 и так далее.
+        Behavior:
+            - If offset and limit are not specified, and the file is < 50KB, it will return the entire file.
+            - If offset and limit are not specified, and the file is > 50KB, it will return the first 150 and the last 80 lines, the rest will be truncated.
+            - If offset/limit is specified, it will return exactly the requested range of lines,
+            regardless of the file size. This way, you can read a large file in parts:
+            First, offset=0, limit=200, see total_lines in the response, then  offset=200, limit=200, and so on.
         """
         target = _safe_join(path)
         if target is None:
@@ -250,17 +248,17 @@ def make_filesystem_tools(agent):
     @tool
     async def grep_search(pattern: str, path: str = ROOT, exts: list[str] | None = None) -> str:
         """
-        Ищет текст внутри файлов проекта (аналог `grep -rn`).
-        Возвращает путь, номер строки и саму строку для каждого совпадения.
-        Максимум 200 совпадений за раз — уточняй pattern или path, если упёрлось в лимит.
+        Searches for text inside project files (analogous to `grep -rn`).
+        Returns the path, line number, and the line itself for each match.
+        Maximum of 200 matches per call — specify pattern or path if you’ve hit the limit.
 
-        Аргументы:
-            pattern: строка или regex для поиска (grep -E синтаксис, если нужен regex — передавай -E явно в pattern не нужно, используется базовый grep)
-            path: где искать, по умолчанию весь /app
-            exts: список расширений для фильтра, например [".py", ".md"]. Если не задано — ищет во всех файлах.
+        Arguments:
+            pattern: a string or regex for searching (grep -E syntax; if you need a regex, you don’t need to explicitly pass -E in the pattern — the basic grep is used)
+            path: where to search; by default, it searches the entire /app
+            exts: a list of extensions to filter by, for example [".py", ".md"]. If not specified, it searches all files.
 
-        Используй для поиска функций, классов, переменных, упоминаний конкретных сущностей в коде.
-        Пример: pattern="def analyze_article" чтобы найти определение функции.
+        Use it to search for functions, classes, variables, and mentions of specific entities in the code.
+        Example: pattern="def analyze_article" to find the function definition.
         """
         target = _safe_join(path)
         if target is None:
@@ -271,14 +269,14 @@ def make_filesystem_tools(agent):
     @tool
     async def find_files(name_pattern: str, path: str = ROOT, depth: int = MAX_DEPTH_DEFAULT) -> str:
         """
-        Ищет файлы по маске имени (аналог `find -iname`).
+        Searches for files using a file name mask (analogous to `find -iname`).
 
-        Аргументы:
-            name_pattern: маска имени файла, например "*.py" или "*config*"
-            path: где искать, по умолчанию весь /app
-            depth: глубина поиска, 1-7
+        Arguments:
+            name_pattern: file name mask, for example, "*.py" or "*config*"
+            path: where to search, by default the entire /app
+            depth: search depth, 1-7
 
-        Используй, когда знаешь примерное имя файла, но не знаешь, где он лежит.
+        Use when you know the approximate file name but not its location.
         """
         target = _safe_join(path)
         if target is None:

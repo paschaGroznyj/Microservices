@@ -381,37 +381,36 @@ def make_generate_image_tool(agent, images: list[dict] | None = None):
         extra_quality_prompt: str | None = None,
     ) -> str:
         """
-        Генерирует изображение(я) по текстовому промпту через gemini-flash-image.
-        Результат — качественные картинки (JPEG), сохранённые на сервер и
-        автоматически отданные пользователю в интерфейс CatchPM.
+        Generates image(s) based on a text prompt via gemini-flash-image.
+        The result is high-quality pictures (JPEG) saved to the server and
+        automatically sent to the user via the CatchPM interface.
 
-        Параметры:
-          prompt        — описание сцены (что нарисовать). Обязателен.
-          temperature   — 0.2–1.0, по умолчанию 0.4 (ниже = строже следует промпту).
-          aspect_ratio  — "16:9" | "9:16" | "1:1" | "4:3" | "3:4" (по умолчанию 16:9).
-          n             — сколько картинок сгенерировать (1–10, по умолчанию 1).
-          source_images — список путей ИЛИ имён файлов картинок для
-                          image-to-image, читаемых с диска СТРОГО из
-                          разрешённых папок: /sandbox и /app/generated_files.
-                          Можно указать полный путь внутри них или просто имя
-                          файла (ищется по имени рекурсивно). Пути вне этих
-                          папок игнорируются (защита от обхода директорий).
-          source_image_keys — опционально: список image_key из generated_images
-                          для image-to-image без диска (предпочтительный путь).
-          source_user_image_indexes — опционально: индексы картинок, которые
-                          пользователь приложил к сообщению (0 — первая),
-                          если хочешь редактировать их.
-          source_media_ids — опционально: список media_id из МЕДИА-ХРАНИЛИЩА
-                          чата (Redis, картинки прошлых сообщений, живут ~24ч).
-                          Их реестр показан тебе в блоке «МЕДИА-ХРАНИЛИЩЕ ЧАТА».
-                          Используй, чтобы сделать image-to-image на основе
-                          картинки, присланной ранее, когда во вложениях
-                          текущего сообщения её уже нет.
-          extra_quality_prompt — опционально: доп. арт-дирекшен в system
-                          (напр. "Rembrandt light, 85mm portrait lens, f/1.8").
+        Parameters:
+          prompt        — scene description (what to draw). Required.
+          temperature   — 0.2–1.0, default is 0.4 (lower = stricter adherence to the prompt).
+          aspect_ratio — "16:9" | "9:16" | "1:1" | "4:3" | "3:4" ( the default is 16:9).
+          n — how many images to generate (1-10, 1 by default).
+          source_images — a list of paths OR image file names for
+                          image-to-image, read from disk STRICTLY from
+                          Allowed folders: /sandbox and /app/generated_files.
+                          You can specify the full path within them or just the file name
+                          (searched recursively by name). Paths outside these
+                          folders are ignored (directory traversal protection).
+          source_image_keys — optional: a list of image_key from generated_images
+                          for image-to-image without a disk (preferred path).
+          source_user_image_indexes — optional: indexes of images that
+                          the user attached to the message (0 is the first one),
+                          if you want to edit them.
+          source_media_ids — optional: list of media_ids from MEDIA STORAGE
+                          chat (Redis, pictures of past messages, live ~24h).
+                          Their registry is shown to you in the "CHAT MEDIA STORAGE" section.
+                          Use it to make image-to-image based on
+                          images sent earlier when in attachments
+                          the current message is no longer there.
+          extra_quality_prompt — optional: additional art direction in the system
+                          (e.g. "Rembrandt light, 85mm portrait lens, f/1.8").
 
-        Возвращает текстовый отчёт с путями сохранённых картинок. Сами файлы
-        уходят пользователю в чат автоматически (превью в интерфейсе).
+        Returns a text report with the paths of saved images. The files themselves  are sent to the user in the chat automatically (preview in the interface).
         """
         if not prompt or not prompt.strip():
             return "Пустой промпт — нечего генерировать. Опиши, что нарисовать."

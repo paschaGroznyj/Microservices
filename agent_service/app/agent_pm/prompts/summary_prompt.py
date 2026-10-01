@@ -1,61 +1,49 @@
-SUMMARIZE_CUT_PROMPT = """Ты — модуль долговременной памяти агента. Ты сжимаешь часть истории диалога,
-которая больше не помещается в контекст. Твоя сводка — ЕДИНСТВЕННОЕ, что агент будет
-помнить об этих сообщениях дальше. Если ты потеряешь артефакт (путь, ссылку, id
-воркспейса, имя ветки) — агент потеряет его НАВСЕГДА и начнёт переспрашивать или выдумывать.
+SUMMARIZE_CUT_PROMPT = """You are the agent’s long‑term memory module. You compress the part of the dialogue history that no longer fits into the context. Your summary is the ONLY thing the agent will remember about these messages in the future. If you lose an artifact (path, link, workspace ID, branch name), the agent will lose it FOREVER and will start asking for clarification or making things up.
 
-ГЛАВНОЕ ПРАВИЛО: перечисляй ФАКТАМИ, не пересказывай художественно. Лучше сухой список
-точных значений, чем гладкий текст без конкретики.
+MAIN RULE: list facts, don’t retell in a creative way. A dry list of exact values is better than a smooth text without specifics.
 
-Сводку выдавай СТРОГО в следующей структуре (пропускай раздел, только если по нему
-реально нечего сказать):
+Provide the summary STRICTLY in the following structure (skip a section only if there’s really nothing to say about it):
 
-АРТЕФАКТЫ (файлы/пути): каждый созданный или упомянутый путь дословно
-  — /sandbox/..., /app/generated_files/..., output/..., имена файлов, форматы.
-ВОРКСПЕЙСЫ: id воркспейсов фабрики (например 206b160c2bee) и что в них лежит/делалось.
-GIT: репозитории, имена веток, хеши коммитов, номера PR, статус (запушено/смерджено/ждёт теста).
-ССЫЛКИ: все URL дословно.
-КЛЮЧЕВЫЕ ЭТАПЫ: что уже сделано и подтверждено (по шагам, кратко, но конкретно).
-ИНСТРУМЕНТЫ И РЕЗУЛЬТАТЫ: какие тулзы вызывались и с каким итогом (например:
-  execute_python_code создал chart.png; execute_shell_commands: py_compile OK).
-ДОГОВОРЁННОСТИ / НЕЗАВЕРШЁННОЕ: что агент обещал, что ждёт пользователя, что осталось доделать.
-ЧИСЛА/ПАРАМЕТРЫ: конкретные значения, настройки, лимиты, версии, теги.
+ARTIFACTS (files/paths): each created or mentioned path verbatim — /sandbox/..., /app/generated_files/..., output/..., file names, formats.
+WORKSPACES: factory workspace IDs (e.g., 206b160c2bee) and what’s in them/what was done.
+GIT: repositories, branch names, commit hashes, PR numbers, status (committed/merged/pending test).
+LINKS: all URLs verbatim.
+KEY STAGES: what has already been done and confirmed (step by step, briefly but specifically).
+TOOLS AND RESULTS: which tools were invoked and what the outcome was (for example:
+  execute_python_code created chart.png; execute_shell_commands: py_compile OK)..
+AGREEMENTS / UNFINISHED: what the agent promised, what the user is waiting for, what remains to be done.
+NUMBERS/PARAMETERS: specific values, settings, limits, versions, tags.
 
-НЕ включай: приветствия, общие фразы, размышления вслух, извинения, воду.
-НЕ выдумывай значения, которых нет во фрагменте. Если чего-то не было — не пиши раздел.
+DO NOT include: greetings, general phrases, musings out loud, apologies, filler text.
+DO NOT invent values that are not present in the fragment. If something wasn’t there, don’t write a section.
 
 {previous_block}
 
-Новый фрагмент диалога для сжатия (реплики + при наличии их tool_trace):
+New dialogue fragment for compression (replies +, if available, tool_trace):
 {chunk_text}
 
-Верни ОБНОВЛЁННУЮ сводку, которая ПОЛНОСТЬЮ ЗАМЕНИТ предыдущую: перенеси из предыдущего
-саммари всё, что ещё актуально (особенно артефакты, воркспейсы, git, ссылки), и добавь новое.
-Объём — по необходимости, но без воды; артефакты/ссылки/id воркспейсов и коммитов
-сохраняй ВСЕГДА и ПОЛНОСТЬЮ, даже если это удлиняет сводку.
+Return an UPDATED summary that will COMPLETELY replace the previous one: transfer everything from the previous summary that is still relevant (especially artifacts, workspaces, git, links), and add new content..
+The volume should be as needed, but without unnecessary fluff; artifacts/links/ids of workspaces and commits should be retained ALWAYS and COMPLETELY, even if it makes the summary longer.
 """
 
 
-TOOL_TRACE_SUMMARY_PROMPT = """Ты — модуль памяти агента. Тебе дан СЫРОЙ tool_trace за ОДИН запрос —
-лог вызовов инструментов с аргументами и результатами. Он слишком длинный.
-Твоя задача — сжать его в компактную сводку, которая станет ЕДИНСТВЕННЫМ,
-что агент будет помнить о своей работе в этом ходе.
+TOOL_TRACE_SUMMARY_PROMPT = """You are the agent’s memory module. You are given a RAW tool_trace for ONE request — a log of tool calls with arguments and results. It is too long.
+Your task is to compress it into a compact summary that will be the ONLY thing the agent will remember about its work in this session.
 
-КРИТИЧНО: если ты потеряешь артефакт (путь файла, хеш коммита, имя ветки,
-id воркспейса, URL, image_key, текст ошибки) — агент потеряет его НАВСЕГДА.
-Сохраняй такие значения ДОСЛОВНО.
+CRITICAL: if you lose an artifact (file path, commit hash, branch name, workspace ID, URL, image_key, error text) — the agent will lose it FOREVER.. Save such values VERBATIM.
 
-Формат ответа — СВОДНАЯ md-ТАБЛИЦА (без вступлений и послесловий):
+The response format is a COMBINED md-TABLE (without introductions or afterwords):
 
-| инструмент | вызовов | что сделано / артефакты / результат |
+| tool | calls | what was done / artifacts / result |
 |---|---|---|
-| execute_shell_commands | 3 | git push feature/x -> коммит abc1234; py_compile OK |
+| execute_shell_commands | 3 | git push feature/x -> commit abc1234; py_compile OK |
 
-Правила:
-- Одна строка на КАЖДЫЙ уникальный инструмент (агрегируй повторные вызовы в счётчик).
-- В 3-й колонке — сухо и фактами: ключевые результаты, пути, коммиты, id, ошибки.
-- НЕ выдумывай того, чего нет в trace. НЕ пиши воду.
-- Если была ошибка — укажи её кратко в той же строке.
+Rules:
+- One line per UNIQUE tool (aggregate repeated calls into a counter).
+- In the 3rd column — concise and factual: key results, paths, commits, IDs, errors.
+- DO NOT invent anything that is not in the trace. DO NOT write fluff.
+- If there was an error, indicate it briefly on the same line.
 
-Сырой tool_trace:
+Raw tool_trace:
 {raw_trace}
 """

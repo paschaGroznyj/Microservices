@@ -276,51 +276,50 @@ def make_analyze_image_tool(agent, images: list[dict] | None = None,
         source_media_ids: list[str] | None = None,
     ) -> str:
         """
-        Анализирует изображение (JPEG/PNG/WEBP/GIF) и отвечает на вопрос о нём:
-        описать, распознать текст/диаграмму, извлечь данные из графика/таблицы,
-        оценить содержимое схемы и т.п.
+        Analyzes an image (JPEG/PNG/WEBP/GIF) and answers a question about it:
+        describe, recognize text/diagram, extract data from a graph/table,
+        assess the contents of a diagram, etc.
 
-        Источник картинки выбирается по ОДНОМУ из параметров (в порядке приоритета):
+        The image source is selected based on ONE of the parameters (in priority order):
 
-          1. source_image_keys — список image_key (UUID) ранее СГЕНЕРИРОВАННЫХ
-             картинок из хранилища generated_images. Удобно, чтобы посмотреть на
-             картинку, которую ты сам нарисовал через generate_image (её image_key
-             был в отчёте / find_generated_image). Можно передать несколько —
-             будут проанализированы по очереди в одном ответе.
+          1. source_image_keys — a list of image_key (UUID) of previously GENERATED
+             images from the generated_images storage. It's convenient to look at
+             a picture that you drew yourself using generate_image (its image_key
+             was in the report / find_generated_image). You can send several —
+             they will be analyzed one at a time in a single response.
 
-          2. local_path — путь ИЛИ имя файла картинки на диске сервера. Читается
-             СТРОГО из разрешённых папок: /sandbox и /app/generated_files
-             (можно указать полный путь внутри них или просто имя файла — тогда
-             ищется по имени рекурсивно). Пригодится для картинок, которые сделал
-             другой тул (скриншот, отрисованный график, сохранённый ассет).
-             ВАЖНО: файлы, собранные в workspace фабрики (output/... внутри
-             execute_python_code), напрямую НЕ видны этому тулу — он читает только
-             /app/generated_files и /sandbox. Сначала скачай картинку через
-             download_workspace_file (он положит её в /app/generated_files и вернёт
-             path), и только потом передавай этот path в local_path. Формат
-             (JPEG/PNG/...) определяется по сигнатуре байтов автоматически,
-             пересохранять png-как-jpg вручную НЕ нужно.
+          2. local_path is the path OR name of the image file on the server disk. It reads
+             STRICTLY from the allowed folders: /sandbox and /app/generated_files
+             (you can specify the full path inside them or just the file name — then
+             searched by name recursively). It will be useful for the pictures that I made.
+             another tool (screenshot, rendered graph, saved asset).
+             IMPORTANT: files collected in the factory workspace (output/... inside
+             execute_python_code), are NOT directly visible to this tool — it only reads
+             /app/generated_files and /sandbox. First, download the image using
+             download_workspace_file (it will place it in /app/generated_files and return
+             path), and only then pass this path to local_path. The format
+             (JPEG/PNG/...) is automatically determined by the byte signature.
+             You do NOT need to manually resave png-as-jpg.
 
-          3. image_index — картинка, которую ПОЛЬЗОВАТЕЛЬ приложил к текущему
-             сообщению. В тексте сообщения они помечены маркерами [IMAGE #0: file].
-             base64 таких картинок уже на сервере — передавать его НЕ нужно.
-             Номер из маркера (0 — первая, по умолчанию 0).
+          3. image_index — the image that the USER has attached to the current one.
+             the message. In the text of the message, they are marked with [IMAGE #0: file] markers.
+             The base64 of such images is already on the server, so you DON'T need to transfer it.
+             The number from the marker (0 is the first one, 0 by default).
 
-          4. source_media_ids — список media_id из МЕДИА-ХРАНИЛИЩА этого чата
-             (Redis, TTL 24ч). Туда попадают ВСЕ картинки/файлы, присланные в
-             этом чате в прошлых сообщениях. Их реестр показывается тебе в блоке
-             «МЕДИА-ХРАНИЛИЩЕ ЧАТА» в начале запроса: там для каждого media_id
-             указано имя и (если уже смотрел) краткое описание. Используй ЭТОТ
-             источник, когда в текущем сообщении картинки нет, а надо вернуться к
-             ранее присланной («та картинка выше», «фото велосипеда из прошлого
-             сообщения»). Передай нужные media_id — будут проанализированы по
-             очереди, а их описания дозапишутся в реестр.
+          4. source_media_ids — list of media_ids from the MEDIA STORAGE of this chat
+             (Redis, TTL 24h). ALL images/files sent to
+             in this chat in previous messages. Their registry is shown to you in the block
+             "CHAT MEDIA STORAGE" at the beginning of the request: there's a media_id for each one
+             the name is indicated and (if you have already watched it) a short description. Use THIS ONE
+             source, when there is no picture in the current message, but you need to go back to
+             previously sent ("that picture above", "bike photo from the past
+             messages"). Pass the necessary media_ids and they will be analyzed by
+             queues, and their descriptions will be added to the registry.
 
-        Параметр prompt — что именно сделать с изображением — обязателен всегда.
+        The prompt parameter — what exactly to do with the image — is always required.
 
-        Если нужно проанализировать несколько картинок из разных источников —
-        вызывай тул отдельно для каждой (кроме source_image_keys, где список
-        обрабатывается за один вызов).
+        If you need to analyze several images from different sources —
+        Call the tool separately for each (except for source_image_keys, where the list  is processed in a single call).
         """
         # ── Нормализация source_image_keys (LLM может прислать строкой) ──
         keys: list[str] = []

@@ -49,37 +49,37 @@ def make_submit_tools(agent):
         timeout: int = DEFAULT_TIMEOUT,
     ) -> dict:
         """
-        Ставит задачу на асинхронное исполнение в sandbox.
-        НЕ БЛОКИРУЕТ — сразу возвращает task_id.
+        Sets the task for asynchronous execution in the sandbox.
+        IF it DOESN'T BLOCK it, it returns the task_id immediately.
 
-        После завершения sandbox автоматически отправит уведомление в чат
-        через Kafka. Не нужно polling — ты получишь сообщение когда задача
-        будет готова.
+        After completion, the sandbox will automatically send a notification to the chat.
+        via Kafka. No need for polling — you will receive a message when the task is completed.
+        She'll be ready.
 
-        Используй для долгих задач (парсинг, сбор данных, обработка больших
-        файлов), которые занимают больше 30 секунд. Пока задача выполняется
-        — ты можешь общаться с пользователем.
+        Use it for long-term tasks (parsing, data collection, large data processing
+        files) that take more than 30 seconds. While the task is running
+        — You can communicate with the user.
 
-        Файлы сохраняются в persistent workspace (output/) и доступны
-        для последующих вызовов execute_python_code с тем же workspace_id.
+        Files are saved in the persistent workspace (output/) and are available
+        for subsequent calls to execute_python_code with the same workspace_id.
 
-        Аргументы:
-            code: Python-код для исполнения. Пиши print() — вывод вернётся
-                  в уведомлении (первые 500 символов).
-            workspace_id: ID workspace (создай через create_workspace)
-            chat_id: ID чата для отправки уведомления о завершении
-            label: Человекочитаемое имя задачи (например "АКРА", "НКР")
-            timeout: таймаут в секундах, макс 1800 (по умолчанию 1800)
+        Arguments:
+            code: Python code to execute. Write print() — the output will be returned
+                  in the notification (first 500 characters).
+            workspace_id: workspace ID (create via create_workspace)
+            chat_id: chat ID for sending a completion notification
+            label: human‑readable task name (e.g., "AKRA", "NKR")
+            timeout: timeout in seconds, max 1800 (default 1800)
 
-        Возвращает: task_id, status, workspace_id
+        Returns: task_id, status, workspace_id
 
-        Пример сценария:
+        Example scenario:
             1. create_workspace() → workspace_id="abc123"
-            2. submit_task(code_acra, "abc123", chat_id, "АКРА") → task_id=1
+            2. submit_task(code_acra, "abc123", chat_id, "AKRA") → task_id=1
             3. submit_task(code_nkr, "abc123", chat_id, "НКР") → task_id=2
-            4. submit_task(code_expert, "abc123", chat_id, "Эксперт РА") → task_id=3
-            5. [ждёшь уведомлений, общаешься с пользователем]
-            6. [прилетает: "Все 3 задачи завершены"]
+            4. submit_task(code_expert, "abc123", chat_id, "RA Expert") → task_id=3
+            5. [You wait for notifications, communicate with the user]
+            6. [You receive: "All 3 tasks are completed"]
             7. execute_python_code(workspace_id="abc123", code="# merge → xlsx")
             8. download_workspace_file("abc123", "output/result.xlsx")
             9. delete_workspace("abc123")
@@ -146,35 +146,35 @@ def make_submit_tools(agent):
         task_id: str = "",
     ) -> dict:
         """
-        Проверяет статус задач в sandbox.
+        Checks the status of tasks in the sandbox.
 
-        Можно проверить:
-          • Конкретную задачу — передай task_id
-          • Все задачи в workspace — передай workspace_id
+        You can check:
+          • A specific task — pass the task_id
+          • All tasks in the workspace — pass the workspace_id
 
-        Статусы: pending → running → completed | failed
+        Statuses: pending → running → completed | failed
 
-        Аргументы:
-            workspace_id: ID workspace (проверить все задачи в нём)
-            task_id: ID конкретной задачи (если нужно посмотреть детали)
+        Arguments:
+            workspace_id: workspace ID (to check all tasks in it)
+            task_id: ID of a specific task (if you need to view details)
 
-        Возвращает:
-            Для workspace: список задач с статусами, флаг all_done
-            Для task_id: полный результат (stdout, stderr, files, duration)
+        Returns:
+            For workspace: a list of tasks with statuses, the all_done flag
+            For task_id: the full result (stdout, stderr, files, duration)
 
-        ЗАПРЕЩЕНО:
-            Проверять статус задачи в event_loop цикле > 5 раз подряд
-            (Задача может быть длительная по выполнению).
+        FORBIDDEN:
+            Checking the task status in the event_loop loop > 5 times in a row
+            (The task may take a long time to complete).
 
-        ВАЖНО (возврат в чат):
-            Если задача ещё pending/running — НЕ крути проверки в цикле.
-            sandbox сам пришлёт уведомление в чат через Kafka по завершении.
-            После 1-2 проверок со статусом pending/running — ВЕРНИСЬ В ЧАТ:
-            сообщи пользователю, что задача выполняется, и продолжай
-            общение — к результату вернёшься, когда прилетит уведомление.
+        IMPORTANT (return to chat):
+            If the task is still pending/running — DO NOT run checks in a loop.
+            sandbox itself will send a notification to the chat via Kafka upon completion.
+            After 1-2 checks with the pending/running status, RETURN to the CHAT.:
+            inform the user that the task is being completed, and continue.
+            communication — you will return to the result when the notification arrives.
 
-        Используй когда пользователь спрашивает «ну что там с задачами?»
-        или перед финальной сборкой результата.
+        Use it when the user asks "what's up with the tasks?"
+        or before the final build of the result.
         """
         try:
             if task_id:

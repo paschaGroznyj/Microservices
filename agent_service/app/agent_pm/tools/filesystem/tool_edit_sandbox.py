@@ -58,19 +58,19 @@ def make_sandbox_edit_tool(agent):
     @tool
     async def edit_sandbox_file(path: str, old_str: str, new_str: str) -> str:
         """
-        Редактирует файл в /sandbox через точечную замену текста (find & replace).
-        Файл должен уже существовать — создай его сначала через write_sandbox_file.
+        Edits a file in /sandbox via spot text replacement (find & replace).
+        The file must already exist. Create it first via write_sandbox_file.
 
-        Аргументы:
-            path: относительный путь внутри /sandbox
-            old_str: точный фрагмент текста для замены (должен встречаться РОВНО один раз в файле —
-                     если встречается несколько раз, добавь больше окружающего контекста
-                     в old_str, чтобы он стал уникальным)
-            new_str: текст, на который заменить. Пустая строка удаляет old_str.
+        Arguments:
+            path: relative path inside /sandbox
+            old_str: the exact text fragment to replace (must occur EXACTLY once in the file —
+                     if it occurs several times, add more surrounding context.
+                     in old_str, so that it becomes unique)
+            new_str: the text to replace it with. An empty line deletes old_str.
 
-        Используй для точечных правок вместо перезаписи всего файла — так безопаснее
-        и экономичнее по токенам. Сначала прочитай файл через read_file, скопируй
-        точный фрагмент для old_str.
+        Use it for spot edits instead of overwriting the entire file — it's safer this way.
+        and more economical in terms of tokens. First, read the file through read_file, copy
+        the exact fragment for old_str.
         """
         target = _valid_sandbox_path(path)
         if target is None:

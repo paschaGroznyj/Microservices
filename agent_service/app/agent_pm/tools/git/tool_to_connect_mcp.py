@@ -8,10 +8,10 @@ async def connect_mcp_git():
     """
     tools/git_mcp_tool.py
     =====================
-    Тул для агента: работа с Git-репозиториями.
-    Поддерживает два режима: GitVerse (MCP) и GitHub (subprocess + PAT).
+    Tool for the agent: working with Git repositories..
+    Supports two modes: GitVerse (MCP) and GitHub (subprocess + PAT)..
     
-    Дерни этот инструмент чтобы получить полную инструкцию работы с удаленными репозиториями.
+    Run this tool to get a complete guide on working with remote repositories.
     """
     try:
         with open(SKILLS_PATH / "work_git.md", mode='r', encoding='utf-8') as f:

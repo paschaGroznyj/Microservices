@@ -145,6 +145,9 @@ services:
         TG_SAD_WAIT_HI:      "600"     # окно ожидания ответа (грусть), сек, high
         TG_POKE_DAILY_TTL:   "86400"   # суточный throttle адресных poke на чат
         TG_DEBUG_TOKEN:      ${TG_DEBUG_TOKEN:-}  # если пусто — /tg/debug/trigger ОТКЛЮЧЁН (404)
+        # Тот же источник, что и у agent_service: tg_id админов берётся из ADMINS_INFO
+        # (поле tg_id). Нужен, чтобы в /start-меню показывать админские категории тулов.
+        ADMINS_INFO:         ${ADMINS_INFO}
       restart: unless-stopped
 
 

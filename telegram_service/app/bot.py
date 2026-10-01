@@ -1721,7 +1721,46 @@ TG_MODELS = ["coder", "designer", "universal"]
 
 # Тул-категории, которые можно включать из телеги. Админская категория
 # намеренно ОТСУТСТВУЕТ — из телеги её включить нельзя.
+# Админская категория тулов (платный RouterAPI: видео/аудио). Видна только админу.
+TG_ADMIN_TOOL_CATEGORIES = ["media_gen"]
 TG_TOOL_CATEGORIES = ["pm_research", "internet", "content", "sessions", "skills"]
+
+
+def _parse_tg_admin_ids():
+    """tg_id админов из того же ADMINS_INFO (поле tg_id). Без дублирования записей."""
+    raw = os.environ.get("ADMINS_INFO")
+    ids = set()
+    if not raw:
+        return ids
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return ids
+    if isinstance(data, dict):
+        data = [data]
+    if not isinstance(data, list):
+        return ids
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        tg = item.get("tg_id")
+        if tg is None:
+            continue
+        try:
+            ids.add(int(tg))
+        except (ValueError, TypeError):
+            continue
+    return ids
+
+
+TG_ADMIN_IDS = _parse_tg_admin_ids()
+
+
+def _is_tg_admin(uid) -> bool:
+    try:
+        return int(uid) in TG_ADMIN_IDS
+    except (ValueError, TypeError):
+        return False
 
 TG_TRIGGERS = ["mention", "orchestrator"]
 
@@ -1771,12 +1810,18 @@ def _menu_model(current) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def _menu_tools(selected) -> InlineKeyboardMarkup:
+def _menu_tools(selected, is_admin: bool = False) -> InlineKeyboardMarkup:
     sel = set(selected or [])
     rows = []
-    for c in TG_TOOL_CATEGORIES:
+    cats = list(TG_TOOL_CATEGORIES)
+    if is_admin:
+        cats = cats + list(TG_ADMIN_TOOL_CATEGORIES)
+    for c in cats:
         mark = "\u2611 " if c in sel else "\u2610 "
-        rows.append([InlineKeyboardButton(f"{mark}{c}", callback_data=f"tg:tool:{c}")])
+        label = f"{mark}{c}"
+        if c in TG_ADMIN_TOOL_CATEGORIES:
+            label = f"{mark}\U0001f512 {c}"  # замок: админ-категория
+        rows.append([InlineKeyboardButton(label, callback_data=f"tg:tool:{c}")])
     rows.append([InlineKeyboardButton("‹ Назад", callback_data="tg:menu:root")])
     return InlineKeyboardMarkup(rows)
 
@@ -2113,7 +2158,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if data == "tg:menu:tools":
         await query.answer()
-        await _refresh(lambda s: _menu_tools(s.get("selected_tools")))
+        _uid_t = query.from_user.id if query.from_user else 0
+        _adm_t = _is_tg_admin(_uid_t)
+        await _refresh(lambda s: _menu_tools(s.get("selected_tools"), is_admin=_adm_t))
         return
     if data == "tg:menu:trigger":
         await query.answer()
@@ -2142,8 +2189,14 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("tg:tool:"):
         cat = data.split(":", 2)[2]
-        if cat not in TG_TOOL_CATEGORIES:
-            await query.answer("Недоступная категория", show_alert=True)
+        _uid_t = query.from_user.id if query.from_user else 0
+        _adm_t = _is_tg_admin(_uid_t)
+        _allowed_cats = set(TG_TOOL_CATEGORIES)
+        if _adm_t:
+            _allowed_cats |= set(TG_ADMIN_TOOL_CATEGORIES)
+        if cat not in _allowed_cats:
+            # админская категория для не-админа либо вообще неизвестная
+            await query.answer("Эта категория доступна только админу", show_alert=True)
             return
         settings = await get_chat_settings(chat_id)
         sel = set(settings.get("selected_tools") or [])
@@ -2153,7 +2206,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sel.add(cat)
         ok = await save_chat_settings(chat_id, {"selected_tools": sorted(sel)})
         await query.answer("Сохранено" if ok else "Ошибка")
-        await _refresh(lambda s: _menu_tools(s.get("selected_tools")))
+        await _refresh(lambda s: _menu_tools(s.get("selected_tools"), is_admin=_adm_t))
         return
 
     await query.answer()

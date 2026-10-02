@@ -116,6 +116,7 @@ class ChatMessage(BaseModel):
     files: list = []
     agent_model: str | None = None
     gateway_target: str = "main"
+    input_format: str = "text"  # text | voice
     # Проактивная инициация из telegram_service (будильники/poke/грусть).
     initiated: bool = False
     slot: str | None = None
@@ -169,6 +170,7 @@ async def send_message(chat: ChatMessage):
         "files": chat.files,
         "agent_model": chat.agent_model,
         "gateway_target": chat.gateway_target,
+        "input_format": chat.input_format,
         "initiated": chat.initiated,
         "slot": chat.slot,
         "addressed": chat.addressed,

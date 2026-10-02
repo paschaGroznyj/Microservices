@@ -612,7 +612,8 @@ async def _upload_files_to_agent(message_id, chat_id, user_id, items):
 async def dispatch_to_agent(chat_id: int, user_id: int, username: str,
                             merged_text: str, file_b64: str | None = None,
                             file_name: str | None = None,
-                            files: list | None = None):
+                            files: list | None = None,
+                            input_format: str = "text"):
     """
     Формирует ChatMessage (gateway_target="telegram") и шлёт в chats_service.
     Агент ответит асинхронно → endpoint_consumer → /push_message боту.
@@ -640,6 +641,7 @@ async def dispatch_to_agent(chat_id: int, user_id: int, username: str,
         "message": merged_text,
         "type_agent": "pm",
         "gateway_target": "telegram",
+        "input_format": input_format,
         "request_id": request_id,
         "message_id": message_id,
         "selected_tools": settings.get("selected_tools") or [],
@@ -2552,6 +2554,8 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     merged_lines = await buffer_flush(chat_id)
     if merged_lines:
         merged_text = "\n".join(merged_lines)
+    elif not is_group:
+        merged_text = text_for_agent
     else:
         merged_text = f"{author}: {text_for_agent}"
 
@@ -2690,9 +2694,9 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
-    merged_text = f"{author}: [VOICE] {text}".strip()
+    merged_text = (f"{author}: {text}".strip() if _is_group(chat_id) else text.strip())
     try:
-        await dispatch_to_agent(chat_id, user.id, author, merged_text)
+        await dispatch_to_agent(chat_id, user.id, author, merged_text, input_format="voice")
     except Exception as e:
         await msg.reply_text(f"Не удалось связаться с агентом: {str(e)[:200]}")
 

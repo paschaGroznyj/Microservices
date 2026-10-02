@@ -80,6 +80,7 @@ class DBConsumer:
             attached_files = payload.get("attached_files") or payload.get("files")
             tool_trace = payload.get("tool_trace")
             gateway_target = (payload.get("gateway_target") or "main").lower()
+            input_format = payload.get("input_format") or "text"
             # telegram — валидный таргет (обратный путь не на гейтвей, а боту).
             if gateway_target not in self.gateway_urls and gateway_target != "telegram":
                 gateway_target = "main"
@@ -105,7 +106,8 @@ class DBConsumer:
                 tool_trace=tool_trace,
                 model_type=model_type,
                 tokens_usage=tokens_usage,
-                gateway_target=gateway_target
+                gateway_target=gateway_target,
+                input_format=input_format,
             )
             logger.info(f"Сообщение сохранено в БД: chat={chat_id}, user={user_id}")
             elapsed = time.perf_counter() - start

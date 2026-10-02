@@ -44,9 +44,37 @@ GENERATED_ROOT = "/app/generated_files"
 # cap at 10s to keep cost under control (admin's personal funds).
 MAX_DURATION_SEC = 10
 
-ALLOWED_ASPECT = {"21:9", "16:9", "4:3", "1:1", "3:4", "9:16"}
-ALLOWED_RESOLUTION = {"480p", "768p"}
-ALLOWED_DURATION = {5, 6, 7, 8, 9, 10}  # 11..15 intentionally excluded (cap 10s)
+# ── Provider matrix ────────────────────────────────────────────────────────
+# RouterAPI exposes several video backends behind the same /v1/videos async
+# endpoint, but each backend accepts a different set of aspect/resolution/
+# duration values. We pick the backend via the `provider` arg and validate the
+# params against that backend's allowed set. Default stays heygen (cheapest).
+#
+# Each entry: model id + allowed aspect ratios / resolutions / durations +
+# the fallback value used when the caller passes something unsupported.
+PROVIDERS = {
+    "heygen": {
+        "model": "heygen/heygen-video-1",
+        "aspect": {"21:9", "16:9", "4:3", "1:1", "3:4", "9:16"},
+        "resolution": {"480p", "768p"},
+        "duration": {5, 6, 7, 8, 9, 10},  # 11..15 excluded (cost cap 10s)
+        "default_aspect": "16:9",
+        "default_resolution": "480p",
+        "default_duration": 5,
+        "audio": False,  # heygen has no audio track knob here
+    },
+    "google": {
+        "model": "google/veo-3.1-fast",
+        "aspect": {"16:9", "9:16"},
+        "resolution": {"720p", "1080p", "4K"},
+        "duration": {4, 6, 8},
+        "default_aspect": "16:9",
+        "default_resolution": "720p",
+        "default_duration": 8,
+        "audio": True,  # veo generates an audio track by default
+    },
+}
+DEFAULT_PROVIDER = "heygen"
 
 # Polling parameters for the async video task.
 POLL_INTERVAL_SEC = 6
@@ -117,9 +145,10 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
     @tool
     async def generate_video(
         prompt: str,
-        aspect_ratio: str = "16:9",
-        duration: int = 5,
-        resolution: str = "480p",
+        provider: str = "heygen",
+        aspect_ratio: str | None = None,
+        duration: int | None = None,
+        resolution: str | None = None,
         first_frame_image_url: str | None = None,
         first_frame_path: str | None = None,
         first_frame_image_key: str | None = None,
@@ -129,7 +158,7 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
         reference_image_keys: list[str] | None = None,
         reference_user_image_indexes: list[int] | None = None,
         reference_media_ids: list[str] | None = None,
-        generate_audio: bool = False,
+        generate_audio: bool | None = None,
         seed: int | None = None,
     ) -> str:
         """Generate a short video from a text prompt via RouterAPI (admin-only, paid).
@@ -139,10 +168,23 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
 
         Args:
             prompt: Text description of the scene to animate (required).
-            aspect_ratio: One of 21:9, 16:9, 4:3, 1:1, 3:4, 9:16. Default 16:9.
-            duration: Clip length in seconds, 5..10 (values above 10 are clamped
-                to 10). Default 5.
-            resolution: 480p or 768p. Default 480p (cheaper).
+            provider: Which video backend to use. One of:
+                "heygen" (default, cheapest) -> heygen/heygen-video-1;
+                    aspect 21:9|16:9|4:3|1:1|3:4|9:16, resolution 480p|768p,
+                    duration 5..10, no audio track.
+                "google" -> google/veo-3.1-fast; aspect 16:9|9:16, resolution
+                    720p|1080p|4K, duration 4|6|8, generates an audio track by
+                    default. Use google for cinematic prompts with sound.
+            aspect_ratio: Aspect ratio. Allowed values depend on `provider`
+                (see above). Unsupported values snap to the provider default.
+                If omitted, the provider default is used.
+            duration: Clip length in seconds. Allowed values depend on `provider`
+                (heygen 5..10, google 4|6|8). Values above 10 are capped; an
+                unsupported value snaps to the nearest allowed one. If omitted,
+                the provider default is used.
+            resolution: Output resolution. Allowed values depend on `provider`
+                (heygen 480p|768p, google 720p|1080p|4K). If omitted, the
+                provider default is used.
 
             First frame (image-to-video). Provide AT MOST ONE of these; they are
             tried in this priority order:
@@ -163,7 +205,9 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
               reference_user_image_indexes: indexes of user-attached images.
               reference_media_ids: list of media_ids from MEDIA STORAGE.
 
-            generate_audio: Whether to also generate an audio track. Default False.
+            generate_audio: Whether to also generate an audio track. Only honored
+                by providers that support it (google/veo). If omitted, the
+                provider default is used (veo: on). Ignored for heygen.
             seed: Optional integer for deterministic generation.
 
         Returns a human-readable status with the local mp4 path on success, or a
@@ -172,7 +216,12 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
         cfg = get_router_api_config()
         api_key = cfg.get("api_key") or ""
         base_url = (cfg.get("base_url") or "").rstrip("/")
-        model = cfg.get("video_model")
+        prov_key = (provider or DEFAULT_PROVIDER).strip().lower()
+        if prov_key not in PROVIDERS:
+            return (f"generate_video error: unknown provider {provider!r}. "
+                    f"Choose one of: {', '.join(PROVIDERS)}.")
+        prov = PROVIDERS[prov_key]
+        model = prov["model"]
         if not api_key:
             return ("generate_video error: RouterAPI key is not configured "
                     "(ROUTER_API_KEY). Ask the admin to set it in env.")
@@ -181,19 +230,21 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
 
         chat_id = agent._ctx_get("chat_id", getattr(agent, "current_chat_id", None))
 
-        # -- validate / clamp params --------------------------------------
-        ar = aspect_ratio if aspect_ratio in ALLOWED_ASPECT else "16:9"
-        res = resolution if resolution in ALLOWED_RESOLUTION else "480p"
-        try:
-            dur = int(duration)
-        except (TypeError, ValueError):
-            dur = 5
-        if dur > MAX_DURATION_SEC:
-            dur = MAX_DURATION_SEC
-        if dur < 5:
-            dur = 5
-        if dur not in ALLOWED_DURATION:
-            dur = 5
+        # -- validate / clamp params (per selected provider) --------------
+        ar = aspect_ratio if aspect_ratio in prov["aspect"] else prov["default_aspect"]
+        res = resolution if resolution in prov["resolution"] else prov["default_resolution"]
+        if duration is None:
+            dur = prov["default_duration"]
+        else:
+            try:
+                dur = int(duration)
+            except (TypeError, ValueError):
+                dur = prov["default_duration"]
+            if dur > MAX_DURATION_SEC:
+                dur = MAX_DURATION_SEC
+            if dur not in prov["duration"]:
+                # snap to the closest allowed duration for this provider
+                dur = min(prov["duration"], key=lambda d: (abs(d - dur), d))
 
         # -- resolve first frame (at most one, priority order) ------------
         first_frame_uri = None
@@ -237,8 +288,12 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
             "aspect_ratio": ar,
             "duration": dur,
             "resolution": res,
-            "generate_audio": bool(generate_audio),
         }
+        # Audio track: only meaningful for providers that expose the knob
+        # (veo). Fall back to the provider default when the caller is silent.
+        if prov["audio"]:
+            want_audio = prov["audio"] if generate_audio is None else bool(generate_audio)
+            data["generate_audio"] = want_audio
         if seed is not None:
             try:
                 data["seed"] = int(seed)
@@ -333,7 +388,7 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
             pass
 
         size_kb = os.path.getsize(fpath) // 1024
-        return (f"Video generated ({dur}s, {ar}, {res}). Saved to {fpath} "
-                f"({size_kb} KB). Send it with send_file_to_user.")
+        return (f"Video generated via {prov_key} ({model}): {dur}s, {ar}, {res}. "
+                f"Saved to {fpath} ({size_kb} KB). Send it with send_file_to_user.")
 
     return generate_video

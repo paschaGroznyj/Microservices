@@ -25,7 +25,7 @@ from .core.config import (
     ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH,
     METADATA_FILE, PORT_GATEWAY_PORT, PORT_GATEWAY_SIGMA_PORT, ADMINS_INFO,
     PORT_PARSERS_SERVICE, get_role, ADMINS_BY_USER_ID,
-    ADMINS_BY_TG_ID, get_role_tg
+    ADMINS_BY_TG_ID, get_role_tg, TG_BOT_PUSH_URL
 )
 from .core.settings import TOOLS_SETTINGS, UNIVERSAL_TOOLS, ADMIN_ONLY_CATEGORIES
 from .prompts.summary_prompt import SUMMARIZE_CUT_PROMPT, TOOL_TRACE_SUMMARY_PROMPT
@@ -1872,6 +1872,33 @@ class KnowledgeAgent:
             "kind": kind,
         }
 
+        # TELEGRAM: живого ws/sse нет — только Bot API (edit_message_text).
+        # По буквам стримить нельзя (rate limit ~1 правка/сек). Поэтому копим
+        # живые чанки в буфер и редактируем плашку "Думаю..." ЦЕЛЫМ блоком
+        # на маркере reasoning_end. На final_commit буфер сбрасываем — финал
+        # придёт отдельно по Kafka → push_message → edit_thinking.
+        if target == "telegram":
+            buf = getattr(self, "_tg_reasoning_buf", None)
+            if buf is None:
+                buf = []
+                self._tg_reasoning_buf = buf
+            if kind == "live":
+                if chunk:
+                    buf.append(chunk)
+                return
+            if kind == "reasoning_end":
+                block = "".join(buf).strip()
+                self._tg_reasoning_buf = []
+                if block:
+                    tg_chat_id = self._ctx_get("chat_id", None)
+                    await self._tg_edit_reasoning(tg_chat_id, block)
+                return
+            if kind == "final_commit":
+                # финал уедет по Kafka целиком — просто чистим буфер
+                self._tg_reasoning_buf = []
+                return
+            return
+
         # SIGMA: у гейтвея нет WebSocket — льём чанки через Redis pub/sub,
         # sigma-гейтвей подписан на stream:{request_id} и релеит в SSE.
         if target == "sigma":
@@ -1888,6 +1915,37 @@ class KnowledgeAgent:
             )
         except Exception as e:
             logger.debug(f"Не удалось отправить чанк стриминга: {e}")
+
+    async def _tg_edit_reasoning(self, chat_id, text: str) -> None:
+        """Трансляция reasoning-блока в Telegram: редактирует плашку "Думаю..."
+        целым блоком (последний блок размышлений, обрезка до 500 символов).
+        Дебаунс ~1с на chat_id, чтобы не упираться в rate limit edit_message_text.
+        Любые ошибки гасим — трансляция не должна ронять основной ответ."""
+        if not chat_id or not text or not TG_BOT_PUSH_URL:
+            return
+        try:
+            snippet = text.strip()
+            if len(snippet) > 500:
+                snippet = snippet[:500].rstrip() + "..."
+            # Дебаунс на chat_id
+            now = asyncio.get_event_loop().time()
+            dbg = getattr(self, "_tg_reasoning_last", None)
+            if dbg is None:
+                dbg = {}
+                self._tg_reasoning_last = dbg
+            last = dbg.get(chat_id, 0.0)
+            if now - last < 1.0:
+                return
+            dbg[chat_id] = now
+            url = TG_BOT_PUSH_URL.replace("/push_message", "/tg/reasoning")
+            client = await self._get_http_client()
+            await client.post(
+                url,
+                json={"chat_id": chat_id, "text": snippet},
+                timeout=3,
+            )
+        except Exception as e:
+            logger.debug(f"[tg-reasoning] не удалось отправить блок: {e}")
 
 
     # ------------------------------------------------------------------
@@ -1936,6 +1994,8 @@ class KnowledgeAgent:
         self.current_chat_id = chat_id
         self.current_user_id = user_id
         self.current_message_id = None  # message_id генерится позже, в app.py; необязателен
+        # Буфер живого reasoning для Telegram (собираем чанки, флашим блоком)
+        self._tg_reasoning_buf = []
         cleaned_user_input = user_input
         try:
             # ── Настройки контекста ────────────────────────────────────────

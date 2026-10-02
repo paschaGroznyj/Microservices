@@ -1514,6 +1514,49 @@ async def debug_trigger(
                         detail="slot must be one of: morning|lunch|dinner|poke")
 
 
+class ReasoningRequest(BaseModel):
+    chat_id: int
+    text: str
+
+
+@api.post("/tg/reasoning")
+async def tg_reasoning(req: ReasoningRequest):
+    """Трансляция reasoning-блока агента в плашку "Думаю...".
+
+    Агент копит живой reasoning целым блоком и шлёт сюда на каждом
+    завершённом шаге (reasoning_end). Мы редактируем существующее
+    сообщение "Думаю..." (_thinking_messages[chat_id]), показывая последний
+    блок курсивом. Это НЕ финал — финал придёт отдельно через push_message
+    с edit_thinking (он же снимет плашку). msgmap НЕ трогаем.
+
+    Fail-safe: любые ошибки гасим — трансляция не критична.
+    """
+    if _bot_app is None:
+        return {"ok": False, "error": "bot not ready"}
+    text = (req.text or "").strip()
+    if not text:
+        return {"ok": False, "error": "empty"}
+    thinking_id = _thinking_messages.get(req.chat_id)
+    if not thinking_id:
+        # плашки нет (уже снята финалом / не создана) — нечего редактировать
+        return {"ok": False, "error": "no thinking message"}
+    # Экранируем HTML и оформляем курсивом с индикатором.
+    safe = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    rendered = f"💭 <i>{safe}</i>"
+    if len(rendered) > 4000:
+        rendered = rendered[:3990] + "...</i>"
+    try:
+        await _bot_app.bot.edit_message_text(
+            chat_id=req.chat_id, message_id=thinking_id,
+            text=rendered, parse_mode="HTML",
+        )
+        return {"ok": True}
+    except Exception as e:
+        # "message is not modified" / rate limit / etc. — не критично
+        log.debug(f"[tg-reasoning] edit fail chat={req.chat_id}: {e}")
+        return {"ok": False, "error": str(e)}
+
+
 @api.post("/push_message", response_model=PushMessageResponse)
 async def push_message(req: PushMessageRequest):
     if _bot_app is None:

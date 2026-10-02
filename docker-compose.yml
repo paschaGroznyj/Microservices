@@ -99,6 +99,8 @@ services:
       # generate_video / generate_audio tools.
       ROUTER_API_KEY: ${ROUTER_API_KEY}
       ROUTER_API_BASE_URL: ${ROUTER_API_BASE_URL}
+      # ASR (голосовые TG): cloud_ru (whisper) | routerapi (mai-transcribe-2)
+      TG_ASR_PROVIDER: ${TG_ASR_PROVIDER:-cloud_ru}
 
       SEARXNG_BASE_URL: ${SEARXNG_BASE_URL}
 
@@ -128,6 +130,7 @@ services:
         # Стучимся в контейнеры через проброшенные порты хоста (host-режим):
         CHATS_SERVICE_URL:   http://127.0.0.1:8001   # send_message (Kafka) + /tg/*
         AGENT_SERVICE_URL:   http://127.0.0.1:9001   # оркестратор /api/tg/should_respond
+        TG_ASR_PROVIDER:     ${TG_ASR_PROVIDER:-cloud_ru}   # провайдер распознавания голосовых
         REDIS_URL:           redis://127.0.0.1:6379/0
         TG_PUSH_PORT:        "8010"
         ORCH_THROTTLE_SEC:   "6"

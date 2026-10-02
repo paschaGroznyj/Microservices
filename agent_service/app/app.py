@@ -1134,6 +1134,44 @@ async def tg_build_reaction_prompt(req: TgReactionPromptRequest) -> TgReactionPr
         return TgReactionPromptResponse()
 
 
+class TgTranscribeRequest(BaseModel):
+    audio_b64: str
+    fmt: str = "ogg"
+    language: str = "ru"
+    provider: str | None = None  # None -> env TG_ASR_PROVIDER -> cloud_ru
+
+
+class TgTranscribeResponse(BaseModel):
+    ok: bool = False
+    text: str = ""
+    error: str = ""
+
+
+@tg_router.post("/transcribe", response_model=TgTranscribeResponse)
+async def tg_transcribe(req: TgTranscribeRequest) -> TgTranscribeResponse:
+    """Распознавание голосового сообщения Telegram (ogg/opus) -> текст.
+
+    Провайдер: req.provider | env TG_ASR_PROVIDER | "cloud_ru" (whisper).
+    """
+    import base64 as _b64
+    from agent_pm.transcribe import transcribe_audio
+    try:
+        audio = _b64.b64decode(req.audio_b64)
+    except Exception as e:
+        return TgTranscribeResponse(error=f"bad base64: {e}")
+    if not audio:
+        return TgTranscribeResponse(error="empty audio")
+    provider = (req.provider or os.getenv("TG_ASR_PROVIDER", "cloud_ru"))
+    try:
+        text = await transcribe_audio(audio, provider=provider, language=req.language or "ru", fmt=req.fmt or "ogg")
+        if not text:
+            return TgTranscribeResponse(ok=True, text="")
+        return TgTranscribeResponse(ok=True, text=text)
+    except Exception as e:
+        logging.error(f"tg_transcribe failed (provider={provider}): {e}")
+        return TgTranscribeResponse(error=str(e)[:300])
+
+
 @service_router.post("/message", response_model=ServiceMessageResponse, status_code=202)
 async def handle_service_message(req: ServiceMessageRequest):
     """

@@ -2616,6 +2616,87 @@ def _enrich_text(msg: Message, base_text: str) -> str:
         return base_text
 
 
+TG_ASR_PROVIDER = os.environ.get("TG_ASR_PROVIDER", "cloud_ru")
+
+
+async def transcribe_voice_remote(audio_b64: str, fmt: str = "ogg") -> str:
+    """Зов agent_service /api/tg/transcribe. Возвращает текст или пустую строку."""
+    try:
+        async with httpx.AsyncClient(timeout=130) as client:
+            r = await client.post(
+                f"{AGENT_SERVICE_URL}/api/tg/transcribe",
+                json={"audio_b64": audio_b64, "fmt": fmt, "language": "ru", "provider": TG_ASR_PROVIDER},
+            )
+            r.raise_for_status()
+            data = r.json()
+            if not data.get("ok"):
+                log.warning(f"[voice] transcribe not ok: {data.get('error')}")
+                return ""
+            return (data.get("text") or "").strip()
+    except Exception as e:
+        log.error(f"[voice] transcribe call fail: {e}")
+        return ""
+
+
+async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Голосовое (voice/audio) -> ASR в agent_service -> текст -> dispatch_to_agent.
+
+    В группах у голосового нет caption/тега, поэтому реагируем только на reply на бота.
+    В личке реагируем всегда.
+    """
+    chat_id = update.effective_chat.id
+    if not await is_allowed(chat_id):
+        return
+    msg = update.message
+    user = update.effective_user
+    author = user.full_name or user.username or "Аноним"
+    bot_username = context.bot.username
+
+    if _is_group(chat_id) and not _is_reply_to_bot(msg, bot_username):
+        return  # голосовое в группе без reply на бота — игнор
+
+    voice = msg.voice or msg.audio
+    if not voice:
+        return
+    if voice.file_size and voice.file_size > MAX_FILE_SIZE:
+        await msg.reply_text("Голосовое слишком большое (лимит 20 MB).")
+        return
+
+    thinking = await msg.reply_text("\U0001f3a4 Распознаю голосовое...")
+    _thinking_messages[chat_id] = thinking.message_id
+
+    try:
+        tg_file = await voice.get_file()
+        audio_ba = await tg_file.download_as_bytearray()
+    except Exception as e:
+        log.error(f"[voice] download fail chat={chat_id}: {e}")
+        try:
+            await thinking.edit_text("Не удалось скачать голосовое.")
+        except Exception:
+            pass
+        return
+
+    audio_b64 = base64.b64encode(audio_ba).decode("utf-8")
+    text = await transcribe_voice_remote(audio_b64, fmt="ogg")
+    if not text:
+        try:
+            await thinking.edit_text("Не расслышал голосовое, попробуй ещё раз или текстом.")
+        except Exception:
+            pass
+        return
+
+    try:
+        await thinking.edit_text(f"\U0001f3a4 «{text[:300]}»")
+    except Exception:
+        pass
+
+    merged_text = f"{author}: [VOICE] {text}".strip()
+    try:
+        await dispatch_to_agent(chat_id, user.id, author, merged_text)
+    except Exception as e:
+        await msg.reply_text(f"Не удалось связаться с агентом: {str(e)[:200]}")
+
+
 async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if not await is_allowed(chat_id):
@@ -2791,6 +2872,7 @@ async def run_both():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_message))
     application.add_handler(MessageHandler(filters.Document.ALL, on_document))
     application.add_handler(MessageHandler(filters.PHOTO, on_photo))
+    application.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, on_voice))
     application.add_handler(MessageReactionHandler(on_message_reaction))
     application.add_error_handler(_on_error)
     _bot_app = application

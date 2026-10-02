@@ -28,10 +28,13 @@ _PROVIDERS = {
     "cloud_ru": {
         "base_url": CLOUD_RU_BASE_URL,
         "model": "openai/whisper-large-v3",
+        "response_format": "text",
     },
     "routerapi": {
         "base_url": (ROUTER_API_BASE_URL or "https://routerai.ru/api/v1"),
         "model": "microsoft/mai-transcribe-2",
+        # mai-transcribe-2 НЕ принимает response_format=text, только json/verbose_json
+        "response_format": "json",
     },
 }
 
@@ -60,13 +63,13 @@ async def _ffmpeg_ogg_to_mp3(audio_bytes: bytes) -> bytes:
 
 
 async def _post_transcription(
-    *, base_url: str, api_key: str, model: str,
+    *, base_url: str, api_key: str, model: str, response_format: str,
     audio_bytes: bytes, filename: str, mime: str, language: str,
 ) -> httpx.Response:
     files = {"file": (filename, audio_bytes, mime)}
     data = {
         "model": model,
-        "response_format": "text",
+        "response_format": response_format,
         "language": language,
     }
     headers = {"Authorization": f"Bearer {api_key}"}
@@ -97,6 +100,7 @@ async def transcribe_audio(
         raise RuntimeError(f"ASR provider {provider!r}: API key is not configured")
 
     base_url, model = cfg["base_url"], cfg["model"]
+    response_format = cfg.get("response_format", "text")
 
     # Попытка 1: ogg как есть (Telegram opus-in-ogg).
     mime = "audio/ogg" if fmt in ("ogg", "oga", "opus") else f"audio/{fmt}"
@@ -104,6 +108,7 @@ async def transcribe_audio(
     try:
         r = await _post_transcription(
             base_url=base_url, api_key=api_key, model=model,
+            response_format=response_format,
             audio_bytes=audio_bytes, filename=fname, mime=mime, language=language,
         )
         if r.status_code < 400:
@@ -117,6 +122,7 @@ async def transcribe_audio(
     mp3 = await _ffmpeg_ogg_to_mp3(audio_bytes)
     r = await _post_transcription(
         base_url=base_url, api_key=api_key, model=model,
+        response_format=response_format,
         audio_bytes=mp3, filename="audio.mp3", mime="audio/mpeg", language=language,
     )
     if r.status_code >= 400:

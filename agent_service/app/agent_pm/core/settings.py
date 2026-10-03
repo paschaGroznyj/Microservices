@@ -36,6 +36,11 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
     "skills": [
         "manage_skills",
     ],
+    # Admin-only paid media generation via RouterAPI (routerai.ru).
+    "media_gen": [
+        "generate_video",
+        "generate_audio",
+    ],
     "admin": [
         "get_db_schema",
         "execute_sql_query",
@@ -52,7 +57,7 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
     ],
 }
 
-ADMIN_ONLY_CATEGORIES = {"admin"}
+ADMIN_ONLY_CATEGORIES = {"admin", "media_gen"}
 
 # Универсальные тулы — доступны всегда, независимо от выбранных категорий
 # (не фильтруются по selected_tools). Пополняем сюда тулы, которые должны
@@ -101,6 +106,9 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "presentation_design_skill": "Генерирует дизайн/структуру презентации.",
     "html_design_skill": "Генерирует HTML-вёрстку/дизайн страницы.",
     "generate_image": "Генерирует изображение по текстовому описанию.",
+    # --- media_gen (admin-only, RouterAPI) ---
+    "generate_video": "Генерирует короткое видео по промпту (RouterAPI, админ, платно).",
+    "generate_audio": "Синтезирует речь из текста (TTS, RouterAPI, админ, платно).",
     # --- sessions ---
     "session_point": "Фиксирует точку сессии (начало/конец диалога) и делает саммари.",
     "work_with_agent_journal": "Ведёт бортовой журнал памяти внутри чата (запомнить/обновить/архив факты).",

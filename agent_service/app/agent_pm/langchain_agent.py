@@ -24,9 +24,10 @@ from .core.botocore_client import OBSWorker
 from .core.config import (
     ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH,
     METADATA_FILE, PORT_GATEWAY_PORT, PORT_GATEWAY_SIGMA_PORT, ADMINS_INFO,
-    PORT_PARSERS_SERVICE, get_role
+    PORT_PARSERS_SERVICE, get_role, ADMINS_BY_USER_ID,
+    ADMINS_BY_TG_ID, get_role_tg, TG_BOT_PUSH_URL
 )
-from .core.settings import TOOLS_SETTINGS, UNIVERSAL_TOOLS
+from .core.settings import TOOLS_SETTINGS, UNIVERSAL_TOOLS, ADMIN_ONLY_CATEGORIES
 from .prompts.summary_prompt import SUMMARIZE_CUT_PROMPT, TOOL_TRACE_SUMMARY_PROMPT
 from .prompts.system_prompt import SYSTEM_PROMPT, SCIENTIFIC_RESEARCH_MODULE
 from .title_generator import generate_chat_title, is_first_turn
@@ -911,6 +912,9 @@ class KnowledgeAgent:
         self.articles_path = base_dir / Path(STORAGE_PATH) / ARTICLES_FOLDER
         self.name_meta_dir = base_dir / Path(STORAGE_PATH)
         self.digest_path = base_dir / "digests"
+        # Фоновая rolling-саммаризация: lock+task per chat_id (одна реплика)
+        self._summary_locks = {}
+        self._summary_tasks = {}
 
         self.monitor = StorageMonitor(STORAGE_PATH, METADATA_FILE)
         self.vector_db = VectorDBManager(str(self.digest_path), VECTOR_DB_PATH)
@@ -1487,11 +1491,21 @@ class KnowledgeAgent:
         # что он рисовал, и может вернуться к картинке (image-to-image).
         find_generated_image = make_find_generated_image_tool(agent)
 
+        # Admin-only paid media generation via RouterAPI (routerai.ru):
+        # text-to-video (async task + polling) and text-to-speech. Gated by
+        # the admin-only "media_gen" category in TOOLS_SETTINGS.
+        from .tools.content.tool_generate_video import make_generate_video_tool
+        from .tools.content.tool_generate_audio import make_generate_audio_tool
+        generate_video = make_generate_video_tool(agent, images)
+        generate_audio = make_generate_audio_tool(agent)
+
         base_tools = [
             search_db,
             analyze_image,
             generate_image,
             find_generated_image,
+            generate_video,
+            generate_audio,
             summarize_by_filter,
             rebuild_categories,
             send_digest_email,
@@ -1529,8 +1543,21 @@ class KnowledgeAgent:
         if allow_all:
             return all_tools
 
+        # Admin-only categories (e.g. media_gen — paid RouterAPI video/audio)
+        # are available ONLY to admins, even if a non-admin selected them in the
+        # tools panel. Admin identity is resolved by user_id via ADMINS_BY_USER_ID.
+        # В Telegram user_id == tg_id (не наш catchPM user_id), поэтому админка
+        # резолвится через ADMINS_BY_TG_ID (tg_id в метаданных админа), а не по user_id.
+        try:
+            _admin_index = ADMINS_BY_TG_ID if is_telegram else ADMINS_BY_USER_ID
+            _is_admin = int(user_id) in _admin_index
+        except (TypeError, ValueError):
+            _is_admin = False
+
         allowed_names: set[str] = set()
         for category in selected_tools:
+            if category in ADMIN_ONLY_CATEGORIES and not _is_admin:
+                continue
             allowed_names.update(TOOLS_SETTINGS.get(category, []))
 
         # Универсальные тулы добавляются всегда, вне зависимости от выбранных
@@ -1634,6 +1661,46 @@ class KnowledgeAgent:
         except Exception as e:
             logging.error(f"[trace-summary] ошибка LLM-сжатия trace: {e}, деградирую на обрезку")
         return _truncate_text(raw_trace, max_chars=MAX_TRACE_FROM_DB_CHARS)
+
+    def _spawn_summary_refresh(self, chat_id, new_cut_messages, prev_summary, max_covered_id, total_cut):
+        """Фоновая rolling-саммаризация (defer на N+1).
+
+        Агент текущего запроса её НЕ ждёт: стартует на prev_summary, а новый
+        summary ляжет в БД к следующему ходу. Одна реплика → asyncio.Lock per chat."""
+        prev = self._summary_tasks.get(chat_id)
+        if prev is not None and not prev.done():
+            logger.info(f"[ROLLING SUMMARY|bg] chat={chat_id}: задача уже в работе, скип спавна")
+            return
+        task = asyncio.create_task(
+            self._summary_refresh_job(chat_id, new_cut_messages, prev_summary, max_covered_id, total_cut)
+        )
+        self._summary_tasks[chat_id] = task
+        # чтобы GC не убил таск и не терялись исключения
+        task.add_done_callback(lambda t: self._summary_tasks.pop(chat_id, None))
+
+    async def _summary_refresh_job(self, chat_id, new_cut_messages, prev_summary, max_covered_id, total_cut):
+        lock = self._summary_locks.setdefault(chat_id, asyncio.Lock())
+        if lock.locked():
+            logger.info(f"[ROLLING SUMMARY|bg] chat={chat_id}: lock занят, другой ход уже сжимает, скип")
+            return
+        async with lock:
+            try:
+                # перечитываем покрытие: вдруг предыдущая фоновая задача уже сдвинула указатель
+                cur = await self.db.get_rolling_summary(chat_id)
+                cur_covered = cur["covered_up_to_id"] if cur else 0
+                fresh = [m for m in new_cut_messages if m.additional_kwargs.get("db_id", 0) > cur_covered]
+                if not fresh:
+                    logger.info(f"[ROLLING SUMMARY|bg] chat={chat_id}: всё уже покрыто другим ходом, скип")
+                    return
+                base_summary = cur["summary_text"] if cur else prev_summary
+                text = await self._summarize_cut_messages(fresh, base_summary)
+                await self.db.upsert_rolling_summary(chat_id, text, covered_up_to_id=max_covered_id)
+                logger.info(
+                    f"[ROLLING SUMMARY|bg] chat={chat_id}: сжато {len(fresh)} "
+                    f"(из {total_cut} отсечённых), длина саммари={len(text)}, covered_up_to={max_covered_id}"
+                )
+            except Exception as e:
+                logger.error(f"[ROLLING SUMMARY|bg] chat={chat_id} FAILED: {e}")
 
     async def _summarize_cut_messages(
         self,
@@ -1848,6 +1915,33 @@ class KnowledgeAgent:
             "kind": kind,
         }
 
+        # TELEGRAM: живого ws/sse нет — только Bot API (edit_message_text).
+        # По буквам стримить нельзя (rate limit ~1 правка/сек). Поэтому копим
+        # живые чанки в буфер и редактируем плашку "Думаю..." ЦЕЛЫМ блоком
+        # на маркере reasoning_end. На final_commit буфер сбрасываем — финал
+        # придёт отдельно по Kafka → push_message → edit_thinking.
+        if target == "telegram":
+            buf = getattr(self, "_tg_reasoning_buf", None)
+            if buf is None:
+                buf = []
+                self._tg_reasoning_buf = buf
+            if kind == "live":
+                if chunk:
+                    buf.append(chunk)
+                return
+            if kind == "reasoning_end":
+                block = "".join(buf).strip()
+                self._tg_reasoning_buf = []
+                if block:
+                    tg_chat_id = self._ctx_get("chat_id", None)
+                    await self._tg_edit_reasoning(tg_chat_id, block)
+                return
+            if kind == "final_commit":
+                # финал уедет по Kafka целиком — просто чистим буфер
+                self._tg_reasoning_buf = []
+                return
+            return
+
         # SIGMA: у гейтвея нет WebSocket — льём чанки через Redis pub/sub,
         # sigma-гейтвей подписан на stream:{request_id} и релеит в SSE.
         if target == "sigma":
@@ -1864,6 +1958,37 @@ class KnowledgeAgent:
             )
         except Exception as e:
             logger.debug(f"Не удалось отправить чанк стриминга: {e}")
+
+    async def _tg_edit_reasoning(self, chat_id, text: str) -> None:
+        """Трансляция reasoning-блока в Telegram: редактирует плашку "Думаю..."
+        целым блоком (последний блок размышлений, обрезка до 500 символов).
+        Дебаунс ~1с на chat_id, чтобы не упираться в rate limit edit_message_text.
+        Любые ошибки гасим — трансляция не должна ронять основной ответ."""
+        if not chat_id or not text or not TG_BOT_PUSH_URL:
+            return
+        try:
+            snippet = text.strip()
+            if len(snippet) > 500:
+                snippet = snippet[:500].rstrip() + "..."
+            # Дебаунс на chat_id
+            now = asyncio.get_event_loop().time()
+            dbg = getattr(self, "_tg_reasoning_last", None)
+            if dbg is None:
+                dbg = {}
+                self._tg_reasoning_last = dbg
+            last = dbg.get(chat_id, 0.0)
+            if now - last < 1.0:
+                return
+            dbg[chat_id] = now
+            url = TG_BOT_PUSH_URL.replace("/push_message", "/tg/reasoning")
+            client = await self._get_http_client()
+            await client.post(
+                url,
+                json={"chat_id": chat_id, "text": snippet},
+                timeout=3,
+            )
+        except Exception as e:
+            logger.debug(f"[tg-reasoning] не удалось отправить блок: {e}")
 
 
     # ------------------------------------------------------------------
@@ -1912,6 +2037,8 @@ class KnowledgeAgent:
         self.current_chat_id = chat_id
         self.current_user_id = user_id
         self.current_message_id = None  # message_id генерится позже, в app.py; необязателен
+        # Буфер живого reasoning для Telegram (собираем чанки, флашим блоком)
+        self._tg_reasoning_buf = []
         cleaned_user_input = user_input
         try:
             # ── Настройки контекста ────────────────────────────────────────
@@ -1990,7 +2117,7 @@ class KnowledgeAgent:
             current_datetime = datetime.now().strftime("%d.%m.%Y %H:%M, %A")
 
             # РОЛЬ РЕШАЕТСЯ КОДОМ по verified user_id (не моделью, не по тексту/табельному/тегу).
-            role_block = get_role(user_id)
+            role_block = get_role_tg(user_id) if is_telegram else get_role(user_id)
             system_content = SYSTEM_PROMPT.format(datetime=current_datetime, role_block=role_block)
             # Медиа-хранилище чата (Redis, пер-chat_id): картинки/файлы из недавних
             # сообщений — чтобы агент видел их даже когда в текущем сообщении вложений нет.
@@ -2064,13 +2191,14 @@ class KnowledgeAgent:
                 ]
 
                 if new_cut_messages:
-                    rolling_summary_text = await self._summarize_cut_messages(new_cut_messages, previous_summary_text)
+                    # DEFER: не ждём LLM-сжатие в текущем запросе — агент стартует
+                    # сразу на previous_summary_text, а новый summary считается фоном
+                    # и подхватится следующим запросом (N+1).
+                    rolling_summary_text = previous_summary_text
                     max_covered_id = max(m.additional_kwargs.get("db_id", 0) for m in cut_messages_all)
-                    await self.db.upsert_rolling_summary(chat_id, rolling_summary_text, covered_up_to_id=max_covered_id)
-                    logger.info(
-                        f"[ROLLING SUMMARY] Новых сообщений в сжатии: {len(new_cut_messages)} "
-                        f"(из {len(cut_messages_all)} отсечённых, {len(cut_messages_all) - len(new_cut_messages)} уже были покрыты), "
-                        f"длина саммари={len(rolling_summary_text)}"
+                    self._spawn_summary_refresh(
+                        chat_id, new_cut_messages, previous_summary_text, max_covered_id,
+                        len(cut_messages_all),
                     )
                 else:
                     # всё что отсекли — уже было в прошлом summary, реально нового сжимать не нужно

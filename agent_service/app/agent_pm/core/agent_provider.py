@@ -1,7 +1,7 @@
 from functools import lru_cache
 from langchain_gigachat.embeddings import GigaChatEmbeddings
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from .config import CLOUD_LLM_ACCESS_KEY
+from .config import CLOUD_LLM_ACCESS_KEY, ROUTER_API_KEY, ROUTER_API_BASE_URL
 
 
 @lru_cache
@@ -149,3 +149,23 @@ def get_image_gen_config() -> dict:
 # auth_url меняется на http://host.docker.internal:9004/api/v2/oauth при работе с докером
 # auth_url меняется на http://localhost:9004/api/v2/oauth при работе без докера
 # Условие по созданию проброса на порт 9004, должно быть выполнено
+
+
+# ══ RouterAPI (routerai.ru) — media generation (video/audio) ══
+
+# Separate PAID provider, different base_url and auth token. Used ONLY by the
+# admin-only media tools (generate_video / generate_audio). We talk to it with
+# raw httpx POST (OpenAI-compatible), NOT through the langchain wrapper, because
+# video generation is async (task + polling) and audio returns raw binary.
+ROUTER_VIDEO_MODEL = "heygen/heygen-video-1"
+ROUTER_AUDIO_MODEL = "google/gemini-3.8-flash-tts"
+
+
+def get_router_api_config() -> dict:
+    """Config for the RouterAPI media provider (base_url + key + models)."""
+    return {
+        "base_url": ROUTER_API_BASE_URL,
+        "api_key": ROUTER_API_KEY,
+        "video_model": ROUTER_VIDEO_MODEL,
+        "audio_model": ROUTER_AUDIO_MODEL,
+    }

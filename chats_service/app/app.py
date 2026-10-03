@@ -116,6 +116,7 @@ class ChatMessage(BaseModel):
     files: list = []
     agent_model: str | None = None
     gateway_target: str = "main"
+    input_format: str = "text"  # text | voice
     # Проактивная инициация из telegram_service (будильники/poke/грусть).
     initiated: bool = False
     slot: str | None = None
@@ -169,6 +170,7 @@ async def send_message(chat: ChatMessage):
         "files": chat.files,
         "agent_model": chat.agent_model,
         "gateway_target": chat.gateway_target,
+        "input_format": chat.input_format,
         "initiated": chat.initiated,
         "slot": chat.slot,
         "addressed": chat.addressed,
@@ -297,6 +299,30 @@ async def tg_random_member(chat_id: str):
     """Рандомный участник — для проактивной инициации."""
     m = await tg_db.get_random_member(chat_id)
     return {"member": m}
+
+
+class TgStartLogIn(BaseModel):
+    chat_id: str | None = None
+    user_id: int | None = None
+    username: str | None = None
+    first_name: str | None = None
+    is_allowed: bool | None = None
+
+
+@app.post("/tg/log_start")
+async def tg_log_start(body: TgStartLogIn):
+    """Лог /start: первое нажатие = INSERT, повторы = start_count+1, updated_at."""
+    await tg_db.log_start(
+        body.chat_id, body.user_id, body.username, body.first_name, body.is_allowed
+    )
+    return {"status": "ok"}
+
+
+@app.get("/tg/start_log")
+async def tg_start_log(limit: int = 50):
+    """Последние входы /start для админ-кнопки в боте."""
+    rows = await tg_db.get_start_log(limit=max(1, min(int(limit), 200)))
+    return {"status": "ok", "items": rows}
 
 
 @app.get("/tg/proactive_chats")

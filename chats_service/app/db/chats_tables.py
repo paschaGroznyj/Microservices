@@ -149,6 +149,7 @@ class DataBaseChats:
 
             -- Реакции TG на сообщения бота (аналитика + фидбек агенту)
             ALTER TABLE chats ADD COLUMN IF NOT EXISTS reactions JSONB DEFAULT '[]'::jsonb;
+            ALTER TABLE chats ADD COLUMN IF NOT EXISTS input_format TEXT DEFAULT 'text';
 
             CREATE TABLE IF NOT EXISTS chat_files (
                 id SERIAL PRIMARY KEY,
@@ -216,6 +217,7 @@ class DataBaseChats:
         model_type: str | None = None,
         tokens_usage: dict | None = None,
         gateway_target: str | None = None,
+        input_format: str | None = None,
     ):
         if user_id is None or chat_id is None:
             logging.warning("Пропущено сообщение: отсутствует user_id или chat_id")
@@ -230,12 +232,12 @@ class DataBaseChats:
                     await conn.execute("""
                         INSERT INTO chats (
                             user_id, chat_id, message_text, is_from_bot,
-                            tool_name, selected_tools, context_size, message_id, created_at, tool_trace, model_type, tokens_usage, gateway_target
+                            tool_name, selected_tools, context_size, message_id, created_at, tool_trace, model_type, tokens_usage, gateway_target, input_format
                         )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13);
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14);
                     """,
                     user_id, chat_id, message, is_from_bot,
-                    action, selected_tools, context_size, message_id, now_utc, tool_trace, model_type, tokens_usage_json, gateway_target)
+                    action, selected_tools, context_size, message_id, now_utc, tool_trace, model_type, tokens_usage_json, gateway_target, (input_format or 'text'))
 
                     if attached_files:
                         source = "agent" if is_from_bot else "user"

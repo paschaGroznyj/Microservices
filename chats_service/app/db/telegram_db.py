@@ -89,6 +89,25 @@ class TelegramDB:
                 CREATE INDEX IF NOT EXISTS ix_tg_members_chat
                     ON telegram_chat_members(chat_id);
 
+                -- Лог первого /start: одна строка на (user_id, chat_id).
+                -- Первое нажатие = INSERT (created_at), повторы = бамп start_count + updated_at.
+                CREATE TABLE IF NOT EXISTS telegram_start_log (
+                    id          BIGSERIAL PRIMARY KEY,
+                    user_id     BIGINT NOT NULL,
+                    chat_id     TEXT   NOT NULL,
+                    username    TEXT,
+                    first_name  TEXT,
+                    is_allowed  BOOLEAN,
+                    start_count INTEGER     DEFAULT 1,
+                    created_at  TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                    updated_at  TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (user_id, chat_id)
+                );
+                CREATE INDEX IF NOT EXISTS ix_tg_start_log_user
+                    ON telegram_start_log(user_id);
+                CREATE INDEX IF NOT EXISTS ix_tg_start_log_time
+                    ON telegram_start_log(created_at);
+
                 -- Индивидуальные проактивные триггеры per-chat:
                 --   kind='recurring' -> регулярный (time_msk + days_of_week)
                 --   kind='once'      -> разовый по дате (time_msk + trigger_date)
@@ -306,6 +325,41 @@ class TelegramDB:
                         is_bot     = EXCLUDED.is_bot,
                         last_seen  = CURRENT_TIMESTAMP;
             """, str(chat_id), int(user_id), username, first_name, is_bot)
+
+    async def log_start(self, chat_id: str | None, user_id: int | None,
+                        username: str | None, first_name: str | None,
+                        is_allowed: bool | None = None) -> None:
+        """Лог /start: первое нажатие создаёт запись, повторы бампят start_count + updated_at.
+
+        Уникальность по (user_id, chat_id). username/first_name освежаются.
+        """
+        if user_id is None or chat_id is None:
+            return
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO telegram_start_log "
+                "(user_id, chat_id, username, first_name, is_allowed) "
+                "VALUES ($1, $2, $3, $4, $5) "
+                "ON CONFLICT (user_id, chat_id) DO UPDATE SET "
+                "    username    = EXCLUDED.username, "
+                "    first_name  = EXCLUDED.first_name, "
+                "    is_allowed  = EXCLUDED.is_allowed, "
+                "    start_count = telegram_start_log.start_count + 1, "
+                "    updated_at  = CURRENT_TIMESTAMP",
+                int(user_id), str(chat_id), username, first_name, is_allowed,
+            )
+
+    async def get_start_log(self, limit: int = 50) -> list[dict]:
+        """Последние входы по /start (для админ-кнопки в боте)."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT user_id, chat_id, username, first_name, is_allowed, "
+                "       start_count, created_at, updated_at "
+                "FROM telegram_start_log "
+                "ORDER BY updated_at DESC LIMIT $1",
+                int(limit),
+            )
+            return [dict(r) for r in rows]
 
     async def get_random_member(self, chat_id: str, exclude_bots: bool = True) -> dict | None:
         """Рандомный участник чата (для проактивной инициации)."""

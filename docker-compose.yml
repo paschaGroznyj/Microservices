@@ -95,6 +95,13 @@ services:
 
       CLOUD_LLM_ACCESS_KEY: ${CLOUD_LLM_ACCESS_KEY}
 
+      # RouterAPI (routerai.ru) — paid media provider for admin-only
+      # generate_video / generate_audio tools.
+      ROUTER_API_KEY: ${ROUTER_API_KEY}
+      ROUTER_API_BASE_URL: ${ROUTER_API_BASE_URL}
+      # ASR (голосовые TG): cloud_ru (whisper) | routerapi (mai-transcribe-2)
+      TG_ASR_PROVIDER: ${TG_ASR_PROVIDER:-cloud_ru}
+
       SEARXNG_BASE_URL: ${SEARXNG_BASE_URL}
 
       ADMINS_INFO: ${ADMINS_INFO}
@@ -123,6 +130,7 @@ services:
         # Стучимся в контейнеры через проброшенные порты хоста (host-режим):
         CHATS_SERVICE_URL:   http://127.0.0.1:8001   # send_message (Kafka) + /tg/*
         AGENT_SERVICE_URL:   http://127.0.0.1:9001   # оркестратор /api/tg/should_respond
+        TG_ASR_PROVIDER:     ${TG_ASR_PROVIDER:-cloud_ru}   # провайдер распознавания голосовых
         REDIS_URL:           redis://127.0.0.1:6379/0
         TG_PUSH_PORT:        "8010"
         ORCH_THROTTLE_SEC:   "6"
@@ -140,6 +148,9 @@ services:
         TG_SAD_WAIT_HI:      "600"     # окно ожидания ответа (грусть), сек, high
         TG_POKE_DAILY_TTL:   "86400"   # суточный throttle адресных poke на чат
         TG_DEBUG_TOKEN:      ${TG_DEBUG_TOKEN:-}  # если пусто — /tg/debug/trigger ОТКЛЮЧЁН (404)
+        # Тот же источник, что и у agent_service: tg_id админов берётся из ADMINS_INFO
+        # (поле tg_id). Нужен, чтобы в /start-меню показывать админские категории тулов.
+        ADMINS_INFO:         ${ADMINS_INFO}
       restart: unless-stopped
 
 

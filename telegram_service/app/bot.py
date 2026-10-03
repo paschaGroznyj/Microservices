@@ -54,6 +54,8 @@ from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, ContextTypes,
     MessageHandler, MessageReactionHandler, filters,
 )
+from telegram.error import TimedOut, NetworkError
+from telegram.request import HTTPXRequest
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -101,6 +103,23 @@ TG_TAG_TTL         = int(os.environ.get("TG_TAG_TTL", "20"))
 TG_TAG_WAIT        = int(os.environ.get("TG_TAG_WAIT", "10"))
 
 MAX_FILE_SIZE = 20 * 1024 * 1024
+
+# ── Скачивание файла с ретраями ───────────────────────────────────────
+async def safe_download(media, retries: int = 3):
+    """get_file()+download_as_bytearray() с ретраями на сетевые таймауты Telegram.
+    Возвращает bytearray или кидает последнее исключение."""
+    last_exc = None
+    for attempt in range(retries):
+        try:
+            tg_file = await media.get_file()
+            return await tg_file.download_as_bytearray()
+        except (TimedOut, NetworkError) as e:
+            last_exc = e
+            wait = 2 ** attempt  # 1, 2, 4
+            log.warning(f"[download] attempt {attempt+1}/{retries} failed ({type(e).__name__}): {e}; retry in {wait}s")
+            await asyncio.sleep(wait)
+    raise last_exc
+
 # Максимум картинок на один пост-альбом (агент тоже режет до 10).
 TG_ALBUM_MAX   = int(os.environ.get("TG_ALBUM_MAX", "10"))
 # Окно дебаунса сборки альбома: TG шлёт кадры N отдельными
@@ -267,7 +286,7 @@ async def get_chat_settings(chat_id: int) -> dict:
 
 
 # ── Redis-буфер реплик группы (для оркестратора и склейки) ──────────────────────
-async def buffer_push(chat_id: int, author: str, text: str):
+async def buffer_push(chat_id: int, author: str, text: str, ):
     """Добавляет реплику в буфер (rpush + ltrim + TTL)."""
     r = await get_redis()
     line = f"{author}: {text}".replace("\n", " ").strip()
@@ -284,6 +303,8 @@ async def buffer_push(chat_id: int, author: str, text: str):
 async def buffer_lines(chat_id: int) -> list[str]:
     r = await get_redis()
     try:
+        text = await r.lrange(_k_buf(chat_id), 0, -1)
+        logging.info(f"FROM REDIS {len(text)}")
         return await r.lrange(_k_buf(chat_id), 0, -1)
     except Exception as e:
         log.warning(f"buffer_lines fail chat={chat_id}: {e}")
@@ -322,10 +343,12 @@ async def stash_forward(chat_id: int, msg: Message):
         # (экономим токены vision: максимум одна картинка из пересыла).
         dup_album = await fwd_group_already_seen(chat_id, msg.media_group_id)
         if photo and not dup_album and not (photo.file_size and photo.file_size > MAX_FILE_SIZE):
-            tg_file = await photo.get_file()
-            raw = await tg_file.download_as_bytearray()
-            file_b64 = base64.b64encode(raw).decode("utf-8")
-            file_name = f"fwd_{photo.file_unique_id}.jpg"
+            try:
+                raw = await safe_download(photo)
+                file_b64 = base64.b64encode(raw).decode("utf-8")
+                file_name = f"fwd_{photo.file_unique_id}.jpg"
+            except Exception as e:
+                log.warning(f"fwd album photo dl fail: {e}")
         # Дубль-кадр альбома без своего текста и без картинки — не перетираем stash.
         if dup_album and not text and not file_b64:
             log.info(f"[fwd] skip extra album photo chat={chat_id} gid={msg.media_group_id}")
@@ -467,8 +490,7 @@ async def handle_incoming_forward(chat_id: int, msg: Message) -> bool:
         photo = None
     if photo and not (photo.file_size and photo.file_size > MAX_FILE_SIZE):
         try:
-            tg_file = await photo.get_file()
-            raw = await tg_file.download_as_bytearray()
+            raw = await safe_download(photo)
             file_b64 = base64.b64encode(raw).decode("utf-8")
             file_name = f"fwd_{photo.file_unique_id}.jpg"
         except Exception as e:
@@ -612,7 +634,8 @@ async def _upload_files_to_agent(message_id, chat_id, user_id, items):
 async def dispatch_to_agent(chat_id: int, user_id: int, username: str,
                             merged_text: str, file_b64: str | None = None,
                             file_name: str | None = None,
-                            files: list | None = None):
+                            files: list | None = None,
+                            input_format: str = "text"):
     """
     Формирует ChatMessage (gateway_target="telegram") и шлёт в chats_service.
     Агент ответит асинхронно → endpoint_consumer → /push_message боту.
@@ -640,6 +663,7 @@ async def dispatch_to_agent(chat_id: int, user_id: int, username: str,
         "message": merged_text,
         "type_agent": "pm",
         "gateway_target": "telegram",
+        "input_format": input_format,
         "request_id": request_id,
         "message_id": message_id,
         "selected_tools": settings.get("selected_tools") or [],
@@ -680,6 +704,34 @@ async def upsert_member(chat_id: int, user_id: int, username: str | None,
             })
     except Exception as e:
         log.warning(f"upsert_member fail chat={chat_id}: {e}")
+
+
+async def fetch_start_log(limit: int = 20) -> list[dict]:
+    """Тянет последние входы /start для админ-кнопки."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{CHATS_SERVICE_URL}/tg/start_log", params={"limit": limit})
+            if resp.status_code == 200:
+                return (resp.json() or {}).get("items") or []
+    except Exception as e:
+        logger.warning(f"[startlog] fetch failed: {e}")
+    return []
+
+
+async def log_start_event(chat_id: int, user, is_allowed_flag: bool) -> None:
+    """Лог нажатия /start → chats_service (append-only журнал входов)."""
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(f"{CHATS_SERVICE_URL}/tg/log_start", json={
+                "chat_id": str(chat_id),
+                "user_id": (user.id if user else None),
+                "username": (user.username if user else None),
+                "first_name": (user.first_name if user else None),
+                "is_allowed": is_allowed_flag,
+            })
+    except Exception as e:
+        log.warning(f"log_start fail chat={chat_id}: {e}")
 
 
 async def get_random_member(chat_id: int) -> dict | None:
@@ -1486,6 +1538,49 @@ async def debug_trigger(
                         detail="slot must be one of: morning|lunch|dinner|poke")
 
 
+class ReasoningRequest(BaseModel):
+    chat_id: int
+    text: str
+
+
+@api.post("/tg/reasoning")
+async def tg_reasoning(req: ReasoningRequest):
+    """Трансляция reasoning-блока агента в плашку "Думаю...".
+
+    Агент копит живой reasoning целым блоком и шлёт сюда на каждом
+    завершённом шаге (reasoning_end). Мы редактируем существующее
+    сообщение "Думаю..." (_thinking_messages[chat_id]), показывая последний
+    блок курсивом. Это НЕ финал — финал придёт отдельно через push_message
+    с edit_thinking (он же снимет плашку). msgmap НЕ трогаем.
+
+    Fail-safe: любые ошибки гасим — трансляция не критична.
+    """
+    if _bot_app is None:
+        return {"ok": False, "error": "bot not ready"}
+    text = (req.text or "").strip()
+    if not text:
+        return {"ok": False, "error": "empty"}
+    thinking_id = _thinking_messages.get(req.chat_id)
+    if not thinking_id:
+        # плашки нет (уже снята финалом / не создана) — нечего редактировать
+        return {"ok": False, "error": "no thinking message"}
+    # Экранируем HTML и оформляем курсивом с индикатором.
+    safe = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    rendered = f"💭 <i>{safe}</i>"
+    if len(rendered) > 4000:
+        rendered = rendered[:3990] + "...</i>"
+    try:
+        await _bot_app.bot.edit_message_text(
+            chat_id=req.chat_id, message_id=thinking_id,
+            text=rendered, parse_mode="HTML",
+        )
+        return {"ok": True}
+    except Exception as e:
+        # "message is not modified" / rate limit / etc. — не критично
+        log.debug(f"[tg-reasoning] edit fail chat={req.chat_id}: {e}")
+        return {"ok": False, "error": str(e)}
+
+
 @api.post("/push_message", response_model=PushMessageResponse)
 async def push_message(req: PushMessageRequest):
     if _bot_app is None:
@@ -1602,13 +1697,14 @@ async def _send_agent_file(chat_id: int, f: dict):
     if not raw:
         return
     name = f.get("name") or "file"
-    bio = BytesIO(raw); bio.name = name
-    ext = pathlib.Path(name).suffix.lower()
-    if ext in (".png", ".jpg", ".jpeg", ".webp"):
-        await _bot_app.bot.send_photo(chat_id=chat_id, photo=bio, caption=f.get("caption", ""))
-    else:
-        await _bot_app.bot.send_document(chat_id=chat_id, document=bio, filename=name,
-                                         caption=f.get("caption", ""))
+    # Делегируем выбор метода отправки (voice/audio/video/photo/document)
+    # в отдельный модуль media_voice. kind — явная подсказка от агента
+    # (kind="voice" для generate_audio OGG/Opus), иначе решает расширение.
+    from media_voice import send_agent_media
+    await send_agent_media(
+        _bot_app.bot, chat_id, raw, name,
+        kind=f.get("kind"), caption=f.get("caption", ""),
+    )
 
 
 @api.get("/health")
@@ -1663,7 +1759,7 @@ def _registration_gate_text(chat_id: int) -> str:
     """Единый текст отказа для незарегистрированного чата (/start + on_text_message)."""
     return (
         "У вас нет доступа к агенту в этом чате.\n\n"
-        f"Регистрация чатов доступна только через интерфейс CatchPM: {CATCHPM_URL}\n\n"
+        f"Регистрация чатов доступна только через интерфейс CatchPM: внедрение в процессе\n\n"
         f"Передайте администратору chat_id этого чата: {chat_id}"
     )
 
@@ -1720,7 +1816,46 @@ TG_MODELS = ["coder", "designer", "universal"]
 
 # Тул-категории, которые можно включать из телеги. Админская категория
 # намеренно ОТСУТСТВУЕТ — из телеги её включить нельзя.
+# Админская категория тулов (платный RouterAPI: видео/аудио). Видна только админу.
+TG_ADMIN_TOOL_CATEGORIES = ["media_gen", "admin"]
 TG_TOOL_CATEGORIES = ["pm_research", "internet", "content", "sessions", "skills"]
+
+
+def _parse_tg_admin_ids():
+    """tg_id админов из того же ADMINS_INFO (поле tg_id). Без дублирования записей."""
+    raw = os.environ.get("ADMINS_INFO")
+    ids = set()
+    if not raw:
+        return ids
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return ids
+    if isinstance(data, dict):
+        data = [data]
+    if not isinstance(data, list):
+        return ids
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        tg = item.get("tg_id")
+        if tg is None:
+            continue
+        try:
+            ids.add(int(tg))
+        except (ValueError, TypeError):
+            continue
+    return ids
+
+
+TG_ADMIN_IDS = _parse_tg_admin_ids()
+
+
+def _is_tg_admin(uid) -> bool:
+    try:
+        return int(uid) in TG_ADMIN_IDS
+    except (ValueError, TypeError):
+        return False
 
 TG_TRIGGERS = ["mention", "orchestrator"]
 
@@ -1741,7 +1876,7 @@ def _settings_summary(settings: dict) -> str:
     )
 
 
-def _menu_root(settings: dict | None = None) -> InlineKeyboardMarkup:
+def _menu_root(settings: dict | None = None, is_admin: bool = False) -> InlineKeyboardMarkup:
     settings = settings or {}
     proactive = settings.get("proactive_enabled")
     if proactive is None:
@@ -1749,15 +1884,18 @@ def _menu_root(settings: dict | None = None) -> InlineKeyboardMarkup:
     # Будильники (завтрак/обед/ужин + poke)
     poke_label = ("\U0001f514 Будильники: вкл" if proactive
                   else "\U0001f515 Будильники: выкл")
-    return InlineKeyboardMarkup([
+    rows = [
         [InlineKeyboardButton("Имя агента", callback_data="tg:menu:name")],
         [InlineKeyboardButton("Модель", callback_data="tg:menu:model")],
         [InlineKeyboardButton("Инструменты", callback_data="tg:menu:tools")],
         [InlineKeyboardButton("Триггер", callback_data="tg:menu:trigger")],
         [InlineKeyboardButton("Будильники", callback_data="tg:menu:alarms")],
         [InlineKeyboardButton(poke_label, callback_data="tg:toggle:proactive")],
-        [InlineKeyboardButton("Закрыть", callback_data="tg:close")],
-    ])
+    ]
+    if is_admin:
+        rows.append([InlineKeyboardButton("🔒 Кто жал /start", callback_data="tg:admin:startlog")])
+    rows.append([InlineKeyboardButton("Закрыть", callback_data="tg:close")])
+    return InlineKeyboardMarkup(rows)
 
 
 def _menu_model(current) -> InlineKeyboardMarkup:
@@ -1770,12 +1908,18 @@ def _menu_model(current) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def _menu_tools(selected) -> InlineKeyboardMarkup:
+def _menu_tools(selected, is_admin: bool = False) -> InlineKeyboardMarkup:
     sel = set(selected or [])
     rows = []
-    for c in TG_TOOL_CATEGORIES:
+    cats = list(TG_TOOL_CATEGORIES)
+    if is_admin:
+        cats = cats + list(TG_ADMIN_TOOL_CATEGORIES)
+    for c in cats:
         mark = "\u2611 " if c in sel else "\u2610 "
-        rows.append([InlineKeyboardButton(f"{mark}{c}", callback_data=f"tg:tool:{c}")])
+        label = f"{mark}{c}"
+        if c in TG_ADMIN_TOOL_CATEGORIES:
+            label = f"{mark}\U0001f512 {c}"  # замок: админ-категория
+        rows.append([InlineKeyboardButton(label, callback_data=f"tg:tool:{c}")])
     rows.append([InlineKeyboardButton("‹ Назад", callback_data="tg:menu:root")])
     return InlineKeyboardMarkup(rows)
 
@@ -1918,22 +2062,26 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return s instrukciej zaregistrirovat chat cherez interfejs CatchPM.
     """
     chat_id = update.effective_chat.id
-    if not await is_allowed(chat_id):
+    _allowed = await is_allowed(chat_id)
+    await log_start_event(chat_id, update.effective_user, _allowed)
+    if not _allowed:
         await update.message.reply_text(_registration_gate_text(chat_id))
         return
     settings = await get_chat_settings(chat_id)
+    _adm = _is_tg_admin(update.effective_user.id if update.effective_user else 0)
     await update.message.reply_text(
         _settings_summary(settings),
         parse_mode=ParseMode.HTML,
-        reply_markup=_menu_root(settings),
+        reply_markup=_menu_root(settings, is_admin=_adm),
     )
 
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Obrabotka nazhatij inline-knopok menu /start. per-chat, dostupno vsem."""
     query = update.callback_query
-    chat_id = query.message.chat.id if query.message else update.effective_chat.id
+    chat_id = str(query.message.chat.id if query.message else update.effective_chat.id)
     data = query.data or ""
+    _cb_admin = _is_tg_admin(query.from_user.id if query.from_user else 0)
 
     if not await is_allowed(chat_id):
         await query.answer("Чат не зарегистрирован.", show_alert=True)
@@ -1960,7 +2108,36 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "tg:menu:root":
         await query.answer()
-        await _refresh(lambda s: _menu_root(s))
+        await _refresh(lambda s: _menu_root(s, is_admin=_cb_admin))
+        return
+
+    if data == "tg:admin:startlog":
+        if not _cb_admin:
+            await query.answer("Только для админа", show_alert=True)
+            return
+        await query.answer()
+        items = await fetch_start_log(20)
+        if not items:
+            body = "Лог /start пуст."
+        else:
+            lines = ["<b>🔒 Кто жал /start (последние 20)</b>", ""]
+            for it in items:
+                uname = it.get("username") or it.get("first_name") or "?"
+                uid = it.get("user_id")
+                cnt = it.get("start_count") or 1
+                allowed = it.get("is_allowed")
+                mark = "✅" if allowed else "🚫"
+                ts = str(it.get("updated_at") or it.get("created_at") or "")[:16]
+                lines.append(f"{mark} <code>{uid}</code> @{uname} · x{cnt} · {ts}")
+            body = "\n".join(lines)
+        try:
+            await query.edit_message_text(
+                body, parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("‹ Назад", callback_data="tg:menu:root")]]),
+            )
+        except Exception:
+            pass
         return
 
     if data == "tg:toggle:proactive":
@@ -1973,7 +2150,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ("Будильники " + ("выкл" if cur else "вкл"))
             if ok else "Ошибка"
         )
-        await _refresh(lambda s: _menu_root(s))
+        await _refresh(lambda s: _menu_root(s, is_admin=_cb_admin))
         return
     if data == "tg:menu:alarms":
         await query.answer()
@@ -2016,11 +2193,11 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("tg:alarm:edit_time:"):
         preset_key = data.rsplit(":", 1)[-1]
         uid = query.from_user.id if query.from_user else 0
-        try:
-            r = await get_redis()
-            await r.set(_k_alarmedit(chat_id, uid), f"time:{preset_key}", ex=300)
-        except Exception:
-            pass
+        key = _k_alarmedit(chat_id, uid)
+        r = await get_redis()
+        await r.set(key, f"time:{preset_key}", ex=300)
+        val = await r.get(key)
+        log.info(f"[alarmedit SET] key={key} val={val!r}")   # пруф что записалось
         await query.answer()
         try:
             await query.edit_message_text(
@@ -2112,7 +2289,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if data == "tg:menu:tools":
         await query.answer()
-        await _refresh(lambda s: _menu_tools(s.get("selected_tools")))
+        _uid_t = query.from_user.id if query.from_user else 0
+        _adm_t = _is_tg_admin(_uid_t)
+        await _refresh(lambda s: _menu_tools(s.get("selected_tools"), is_admin=_adm_t))
         return
     if data == "tg:menu:trigger":
         await query.answer()
@@ -2141,8 +2320,14 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("tg:tool:"):
         cat = data.split(":", 2)[2]
-        if cat not in TG_TOOL_CATEGORIES:
-            await query.answer("Недоступная категория", show_alert=True)
+        _uid_t = query.from_user.id if query.from_user else 0
+        _adm_t = _is_tg_admin(_uid_t)
+        _allowed_cats = set(TG_TOOL_CATEGORIES)
+        if _adm_t:
+            _allowed_cats |= set(TG_ADMIN_TOOL_CATEGORIES)
+        if cat not in _allowed_cats:
+            # админская категория для не-админа либо вообще неизвестная
+            await query.answer("Эта категория доступна только админу", show_alert=True)
             return
         settings = await get_chat_settings(chat_id)
         sel = set(settings.get("selected_tools") or [])
@@ -2152,7 +2337,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sel.add(cat)
         ok = await save_chat_settings(chat_id, {"selected_tools": sorted(sel)})
         await query.answer("Сохранено" if ok else "Ошибка")
-        await _refresh(lambda s: _menu_tools(s.get("selected_tools")))
+        await _refresh(lambda s: _menu_tools(s.get("selected_tools"), is_admin=_adm_t))
         return
 
     await query.answer()
@@ -2366,9 +2551,14 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await r.delete(_k_await(chat_id, user.id))
     except Exception:
         pass
+    
+
+    key = _k_alarmedit(chat_id, user.id)
+    alarm_flag = await r.get(key)
+    log.info(f"[alarmedit GET] key={key} val={alarm_flag!r}")
 
     # всегда пишем реплику в буфер (для оркестратора и склейки контекста)
-    if raw_text.strip():
+    if raw_text.strip() and is_group:
         await buffer_push(chat_id, author, raw_text.strip())
 
     # Голый/сигнальный тег без форварда — отложенный ответ (ВАРИАНТ 2).
@@ -2391,8 +2581,11 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     merged_lines = await buffer_flush(chat_id)
     if merged_lines:
         merged_text = "\n".join(merged_lines)
+    elif not is_group:
+        merged_text = text_for_agent
     else:
         merged_text = f"{author}: {text_for_agent}"
+
 
     # Если подхватили форвард — text_for_agent уже содержит блок [Переслано...],
     # но buffer_flush мог его перекрыть склейкой буфера. Дописываем форвард-блок
@@ -2400,7 +2593,7 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if (fwd_file_b64 or "[Переслано от" in text_for_agent) and \
             "[Переслано от" not in merged_text:
         merged_text = f"{merged_text}\n{text_for_agent}".strip()
-
+        
     # Подмешиваем обратную связь по реакциям (копились с прошлого ответа бота).
     # Буфер очищается ТОЛЬКО здесь (после next-сообщения), без TTL.
     try:
@@ -2455,6 +2648,92 @@ def _enrich_text(msg: Message, base_text: str) -> str:
         return base_text
 
 
+TG_ASR_PROVIDER = os.environ.get("TG_ASR_PROVIDER", "cloud_ru")
+
+
+async def transcribe_voice_remote(audio_b64: str, _adm: bool, fmt: str = "ogg") -> str:
+    """Зов agent_service /api/tg/transcribe. Возвращает текст или пустую строку."""
+    if _adm:
+        # provider = "routerapi"
+        provider = TG_ASR_PROVIDER
+    else:
+        provider = TG_ASR_PROVIDER
+    try:
+        async with httpx.AsyncClient(timeout=130) as client:
+            r = await client.post(
+                f"{AGENT_SERVICE_URL}/api/tg/transcribe",
+                json={"audio_b64": audio_b64, "fmt": fmt, "language": "ru", "provider": provider},
+            )
+            r.raise_for_status()
+            data = r.json()
+            if not data.get("ok"):
+                log.warning(f"[voice] transcribe not ok: {data.get('error')}")
+                return ""
+            return (data.get("text") or "").strip()
+    except Exception as e:
+        log.error(f"[voice] transcribe call fail: {e}")
+        return ""
+
+
+async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Голосовое (voice/audio) -> ASR в agent_service -> текст -> dispatch_to_agent.
+
+    В группах у голосового нет caption/тега, поэтому реагируем только на reply на бота.
+    В личке реагируем всегда.
+    """
+    chat_id = update.effective_chat.id
+    if not await is_allowed(chat_id):
+        return
+    msg = update.message
+    user = update.effective_user
+    _adm = _is_tg_admin(update.effective_user.id if update.effective_user else 0)
+    author = user.full_name or user.username or "Аноним"
+    bot_username = context.bot.username
+
+    if _is_group(chat_id) and not _is_reply_to_bot(msg, bot_username):
+        return  # голосовое в группе без reply на бота — игнор
+
+    voice = msg.voice or msg.audio
+    if not voice:
+        return
+    if voice.file_size and voice.file_size > MAX_FILE_SIZE:
+        await msg.reply_text("Голосовое слишком большое (лимит 20 MB).")
+        return
+
+    thinking = await msg.reply_text("\U0001f3a4 Распознаю голосовое...")
+    _thinking_messages[chat_id] = thinking.message_id
+
+    try:
+        audio_ba = await safe_download(voice)
+    except Exception as e:
+        log.error(f"[voice] download fail chat={chat_id}: {e}")
+        try:
+            await thinking.edit_text("Не удалось скачать голосовое.")
+        except Exception:
+            pass
+        return
+
+    audio_b64 = base64.b64encode(audio_ba).decode("utf-8")
+    text = await transcribe_voice_remote(audio_b64, _adm, fmt="ogg")
+    if not text:
+        try:
+            await thinking.edit_text("Не расслышал голосовое, попробуй ещё раз или текстом.")
+        except Exception:
+            pass
+        return
+
+    try:
+        await thinking.edit_text(f"\U0001f3a4 «{text[:300]}»")
+    except Exception:
+        pass
+
+    merged_text = (f"{author}: {text}".strip() if _is_group(chat_id) else text.strip())
+    try:
+        await dispatch_to_agent(chat_id, user.id, author, merged_text, input_format="voice")
+    except Exception as e:
+        await msg.reply_text(f"Не удалось связаться с агентом: {str(e)[:200]}")
+
+
 async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if not await is_allowed(chat_id):
@@ -2482,8 +2761,12 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     fname = pathlib.Path(doc.file_name or f"file_{doc.file_id[:8]}").name
-    tg_file = await doc.get_file()
-    file_bytearray = await tg_file.download_as_bytearray()
+    try:
+        file_bytearray = await safe_download(doc)
+    except Exception as e:
+        log.error(f"[document] download fail chat={chat_id}: {e}")
+        await msg.reply_text("⚠️ Не удалось загрузить файл, попробуй ещё раз.")
+        return
     file_b64 = base64.b64encode(file_bytearray).decode("utf-8")
 
     thinking = await msg.reply_text("Обрабатываю файл...")
@@ -2568,8 +2851,12 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     fname = f"photo_{photo.file_unique_id}.jpg"
-    tg_file = await photo.get_file()
-    file_bytearray = await tg_file.download_as_bytearray()
+    try:
+        file_bytearray = await safe_download(photo)
+    except Exception as e:
+        log.error(f"[photo] download fail chat={chat_id}: {e}")
+        await msg.reply_text("⚠️ Не удалось загрузить картинку, попробуй ещё раз.")
+        return
     file_b64 = base64.b64encode(file_bytearray).decode("utf-8")
     item = {"file_b64": file_b64, "file_name": fname}
 
@@ -2624,12 +2911,27 @@ async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
 # ══════════════════════════════════════════════════════════════════════════════
 async def run_both():
     global _bot_app
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).concurrent_updates(True).build()
+    # Поднятые таймауты: дефолт PTB ~5с короток для крупных файлов / медленного TLS к Telegram.
+    _req = HTTPXRequest(
+        connect_timeout=20.0,
+        read_timeout=60.0,
+        write_timeout=60.0,
+        pool_timeout=20.0,
+    )
+    application = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .concurrent_updates(True)
+        .request(_req)
+        .get_updates_request(HTTPXRequest(connect_timeout=20.0, read_timeout=60.0))
+        .build()
+    )
     application.add_handler(CommandHandler("start", cmd_start))
     application.add_handler(CallbackQueryHandler(on_callback, pattern=r"^tg:"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_message))
     application.add_handler(MessageHandler(filters.Document.ALL, on_document))
     application.add_handler(MessageHandler(filters.PHOTO, on_photo))
+    application.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, on_voice))
     application.add_handler(MessageReactionHandler(on_message_reaction))
     application.add_error_handler(_on_error)
     _bot_app = application
@@ -2641,6 +2943,11 @@ async def run_both():
     scheduler = build_scheduler()
 
     async with application:
+        from telegram import BotCommand
+        await application.bot.set_my_commands([
+            BotCommand("start", "Запустить бота")
+        ])
+
         await application.start()
         await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
         scheduler.start()

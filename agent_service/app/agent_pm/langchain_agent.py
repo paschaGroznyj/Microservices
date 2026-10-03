@@ -912,6 +912,9 @@ class KnowledgeAgent:
         self.articles_path = base_dir / Path(STORAGE_PATH) / ARTICLES_FOLDER
         self.name_meta_dir = base_dir / Path(STORAGE_PATH)
         self.digest_path = base_dir / "digests"
+        # Фоновая rolling-саммаризация: lock+task per chat_id (одна реплика)
+        self._summary_locks = {}
+        self._summary_tasks = {}
 
         self.monitor = StorageMonitor(STORAGE_PATH, METADATA_FILE)
         self.vector_db = VectorDBManager(str(self.digest_path), VECTOR_DB_PATH)
@@ -1659,6 +1662,46 @@ class KnowledgeAgent:
             logging.error(f"[trace-summary] ошибка LLM-сжатия trace: {e}, деградирую на обрезку")
         return _truncate_text(raw_trace, max_chars=MAX_TRACE_FROM_DB_CHARS)
 
+    def _spawn_summary_refresh(self, chat_id, new_cut_messages, prev_summary, max_covered_id, total_cut):
+        """Фоновая rolling-саммаризация (defer на N+1).
+
+        Агент текущего запроса её НЕ ждёт: стартует на prev_summary, а новый
+        summary ляжет в БД к следующему ходу. Одна реплика → asyncio.Lock per chat."""
+        prev = self._summary_tasks.get(chat_id)
+        if prev is not None and not prev.done():
+            logger.info(f"[ROLLING SUMMARY|bg] chat={chat_id}: задача уже в работе, скип спавна")
+            return
+        task = asyncio.create_task(
+            self._summary_refresh_job(chat_id, new_cut_messages, prev_summary, max_covered_id, total_cut)
+        )
+        self._summary_tasks[chat_id] = task
+        # чтобы GC не убил таск и не терялись исключения
+        task.add_done_callback(lambda t: self._summary_tasks.pop(chat_id, None))
+
+    async def _summary_refresh_job(self, chat_id, new_cut_messages, prev_summary, max_covered_id, total_cut):
+        lock = self._summary_locks.setdefault(chat_id, asyncio.Lock())
+        if lock.locked():
+            logger.info(f"[ROLLING SUMMARY|bg] chat={chat_id}: lock занят, другой ход уже сжимает, скип")
+            return
+        async with lock:
+            try:
+                # перечитываем покрытие: вдруг предыдущая фоновая задача уже сдвинула указатель
+                cur = await self.db.get_rolling_summary(chat_id)
+                cur_covered = cur["covered_up_to_id"] if cur else 0
+                fresh = [m for m in new_cut_messages if m.additional_kwargs.get("db_id", 0) > cur_covered]
+                if not fresh:
+                    logger.info(f"[ROLLING SUMMARY|bg] chat={chat_id}: всё уже покрыто другим ходом, скип")
+                    return
+                base_summary = cur["summary_text"] if cur else prev_summary
+                text = await self._summarize_cut_messages(fresh, base_summary)
+                await self.db.upsert_rolling_summary(chat_id, text, covered_up_to_id=max_covered_id)
+                logger.info(
+                    f"[ROLLING SUMMARY|bg] chat={chat_id}: сжато {len(fresh)} "
+                    f"(из {total_cut} отсечённых), длина саммари={len(text)}, covered_up_to={max_covered_id}"
+                )
+            except Exception as e:
+                logger.error(f"[ROLLING SUMMARY|bg] chat={chat_id} FAILED: {e}")
+
     async def _summarize_cut_messages(
         self,
         cut_messages: list[BaseMessage],
@@ -2148,13 +2191,14 @@ class KnowledgeAgent:
                 ]
 
                 if new_cut_messages:
-                    rolling_summary_text = await self._summarize_cut_messages(new_cut_messages, previous_summary_text)
+                    # DEFER: не ждём LLM-сжатие в текущем запросе — агент стартует
+                    # сразу на previous_summary_text, а новый summary считается фоном
+                    # и подхватится следующим запросом (N+1).
+                    rolling_summary_text = previous_summary_text
                     max_covered_id = max(m.additional_kwargs.get("db_id", 0) for m in cut_messages_all)
-                    await self.db.upsert_rolling_summary(chat_id, rolling_summary_text, covered_up_to_id=max_covered_id)
-                    logger.info(
-                        f"[ROLLING SUMMARY] Новых сообщений в сжатии: {len(new_cut_messages)} "
-                        f"(из {len(cut_messages_all)} отсечённых, {len(cut_messages_all) - len(new_cut_messages)} уже были покрыты), "
-                        f"длина саммари={len(rolling_summary_text)}"
+                    self._spawn_summary_refresh(
+                        chat_id, new_cut_messages, previous_summary_text, max_covered_id,
+                        len(cut_messages_all),
                     )
                 else:
                     # всё что отсекли — уже было в прошлом summary, реально нового сжимать не нужно

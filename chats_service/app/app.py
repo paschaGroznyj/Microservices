@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from fastapi import FastAPI, Header
 from kafka import KafkaProducer
 from pydantic import BaseModel
@@ -18,6 +19,15 @@ MESSAGE_TIMEOUT = 20        # сколько секунд ждём ответ о
 
 db = DataBaseChats()  # ← один раз для всего приложения
 service_message_alive = False
+
+# Redis — обратный путь для мобильного клиента (gateway_target="mobile").
+# Телефон за NAT: сервер не может сам к нему достучаться (в отличие от TG-бота),
+# поэтому ответ агента кладётся в Redis-список mobile:reply:{chat_id},
+# а мобилка забирает его long-poll'ом через GET /mobile/poll.
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+redis_client = None  # redis.asyncio.Redis — проставится на startup
+MOBILE_REPLY_KEY = "mobile:reply:{chat_id}"
+MOBILE_REPLY_TTL = 300  # сек — ответ живёт 5 мин, если мобилка не забрала
 producer = KafkaProducer(
     bootstrap_servers=[KAFKA_BROKER],
     api_version=(4,1,0),
@@ -141,6 +151,17 @@ async def startup():
     # Telegram: переиспользуем тот же пул, создаём таблицы telegram_*.
     tg_db.pool = db.pool
     await tg_db.init_db_pool()
+
+    # Redis-клиент для обратного пути мобильного клиента (long-poll).
+    global redis_client
+    try:
+        import redis.asyncio as aioredis
+        redis_client = aioredis.from_url(REDIS_URL, decode_responses=True)
+        await redis_client.ping()
+        logging.info(f"[mobile] Redis подключён: {REDIS_URL}")
+    except Exception as e:
+        redis_client = None
+        logging.error(f"[mobile] Redis недоступен ({REDIS_URL}): {e} — /mobile/poll вернёт 503")
 
     # # 🚀 старт watchdog-а
     # asyncio.create_task(bot_response_watchdog())
@@ -637,6 +658,46 @@ async def overlay_stats(gw: str = "main", top_n: int = 3):
     except Exception as e:
         logging.error(f"Ошибка в overlay_stats: {e}")
         raise HTTPException(status_code=500, detail="overlay stats failed")
+
+
+@app.get("/mobile/poll")
+async def mobile_poll(chat_id: str, timeout: int = 25):
+    """Long-poll обратного пути для мобильного клиента (AI_tracker).
+
+    Телефон за NAT — сервер не может инициировать соединение к нему, поэтому
+    мобилка сама периодически дёргает этот эндпоинт. Ответ агента кладёт сюда
+    chats-consumer (endpoint_consumer.py) при gateway_target="mobile" в
+    Redis-список mobile:reply:{chat_id}.
+
+    Параметры:
+      chat_id — тот же детерминированный UUIDv5(ANDROID_ID), что мобилка шлёт в
+                /mobile/send_message.
+      timeout — сколько секунд держать соединение в ожидании ответа (BLPOP),
+                по умолчанию 25с (клиент ретраит сразу после).
+
+    Возвращает:
+      {"status":"ok","reply":{...}}   — пришёл ответ агента (text + опц. голос);
+      {"status":"empty"}              — за timeout ничего не пришло, ретрайни;
+      503                             — Redis недоступен.
+    """
+    if redis_client is None:
+        raise HTTPException(status_code=503, detail="mobile reply channel offline (no redis)")
+    # BLPOP держит соединение до timeout или до появления элемента.
+    key = MOBILE_REPLY_KEY.format(chat_id=str(chat_id))
+    timeout = max(1, min(int(timeout), 55))  # защита: не дольше nginx-таймаута
+    try:
+        item = await redis_client.blpop(key, timeout=timeout)
+    except Exception as e:
+        logging.error(f"[mobile] poll BLPOP error chat={chat_id}: {e}")
+        raise HTTPException(status_code=503, detail="mobile reply channel error")
+    if not item:
+        return {"status": "empty"}
+    # item = (key, value); value — JSON, который положил consumer
+    try:
+        reply = json.loads(item[1])
+    except Exception:
+        reply = {"text": item[1]}
+    return {"status": "ok", "reply": reply}
 
 
 @app.get("/health")

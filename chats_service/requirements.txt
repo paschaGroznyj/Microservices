@@ -8,6 +8,7 @@ dotenv
 requests
 websockets
 wsproto
+redis
 aiobotocore
 Pillow
 python-multipart

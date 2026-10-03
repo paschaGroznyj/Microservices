@@ -413,11 +413,13 @@ services:
       OBS_SECRET_KEY: ${OBS_SECRET_KEY}
       OBS_REGION: ${OBS_REGION}
       OBS_ENDPOINT: ${OBS_ENDPOINT}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     volumes:
       - ./chats_service:/app
     depends_on:
       - postgres
       - broker
+      - redis
     restart: unless-stopped
     networks:
       - catchPM
@@ -437,11 +439,13 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME}
       KAFKA_BROKER: ${KAFKA_BROKER}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     volumes:
       - ./chats_service:/app
     depends_on:
       - postgres
       - broker
+      - redis
     restart: unless-stopped
     networks:
       - catchPM

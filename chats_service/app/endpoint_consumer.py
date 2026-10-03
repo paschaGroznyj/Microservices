@@ -15,6 +15,14 @@ import time
 # не на гейтвей, а прямо телеграм-боту (host-режим) через docker gateway IP.
 TG_BOT_PUSH_URL = os.getenv("TG_BOT_PUSH_URL", "http://172.18.0.1:8010/push_message")
 
+# Redis — обратный путь мобильного клиента (gateway_target="mobile").
+# Телефон за NAT не принимает входящие, поэтому ответ агента кладём в
+# Redis-список mobile:reply:{chat_id}, а мобилка забирает его через
+# GET /mobile/poll (long-poll, BLPOP) на chats_service.
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+MOBILE_REPLY_KEY = "mobile:reply:{chat_id}"
+MOBILE_REPLY_TTL = 300  # сек
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -38,6 +46,7 @@ class DBConsumer:
     def __init__(self):
         self.db = DataBaseChats()
         self.consumer = None
+        self.redis = None  # redis.asyncio.Redis — обратный путь мобилки
         self.agents = {
             "pm": {
                 "name": "Agent PM",
@@ -50,6 +59,15 @@ class DBConsumer:
 
     async def init(self):
         await self.db.init_db_pool()
+
+        try:
+            import redis.asyncio as aioredis
+            self.redis = aioredis.from_url(REDIS_URL, decode_responses=True)
+            await self.redis.ping()
+            logging.info(f"[mobile] consumer Redis подключён: {REDIS_URL}")
+        except Exception as e:
+            self.redis = None
+            logging.error(f"[mobile] consumer Redis недоступен ({REDIS_URL}): {e}")
 
         self.consumer = KafkaConsumer(
             'chat-messages',
@@ -116,6 +134,13 @@ class DBConsumer:
             if is_from_bot and gateway_target == "telegram":
                 # Ответ агента для Telegram: пушим напрямую боту (host-режим).
                 await self.send_to_telegram(chat_id, message, attached_files, message_id=message_id)
+                return
+
+            if is_from_bot and gateway_target == "mobile":
+                # Ответ агента для мобильного клиента: телефон за NAT, поэтому
+                # не пушим ему, а кладём в Redis-список — мобилка заберёт
+                # long-poll'ом через GET /mobile/poll.
+                await self.push_to_mobile(chat_id, message, attached_files, message_id=message_id)
                 return
 
             if is_from_bot:
@@ -187,6 +212,42 @@ class DBConsumer:
             except Exception as e:
                 logging.error(f"[telegram] не удалось дочитать картинку из БД: {e}")
         return files
+
+    async def push_to_mobile(self, chat_id: str, text: str, files=None, message_id=None):
+        """Ответ агента → Redis-список для мобильного клиента (AI_tracker).
+
+        Телефон за NAT: сервер не инициирует соединение к нему, поэтому ответ
+        кладётся в mobile:reply:{chat_id}, а мобилка забирает его long-poll'ом
+        через GET /mobile/poll (BLPOP).
+
+        Голосовой ответ (generate_audio → .ogg) и картинки приезжают так же,
+        как для Telegram: бинарник в generated_images по image_key, здесь
+        догидрируем file_b64 (переиспользуем _hydrate_tg_files), чтобы мобилка
+        получила самодостаточный JSON и проиграла голос «на ухо» без доп.
+        запросов.
+        """
+        if self.redis is None:
+            logging.error(f"[mobile] Redis offline — ответ chat={chat_id} потерян")
+            return
+        try:
+            start = time.perf_counter()
+            files = await self._hydrate_tg_files(files)
+            reply = {
+                "text": text or "",
+                "files": files or None,
+                "message_id": message_id,
+                "ts": int(time.time()),
+            }
+            key = MOBILE_REPLY_KEY.format(chat_id=str(chat_id))
+            await self.redis.rpush(key, json.dumps(reply))
+            await self.redis.expire(key, MOBILE_REPLY_TTL)
+            elapsed = time.perf_counter() - start
+            logging.info(
+                f"[mobile] ответ агента положен в Redis key={key} "
+                f"(files={len(files) if files else 0}) за {elapsed:.4f}s"
+            )
+        except Exception as e:
+            logger.error(f"[mobile] ошибка push в Redis chat={chat_id}: {e}")
 
     async def send_to_telegram(self, chat_id: str, text: str, files=None, message_id=None):
         """Ответ агента → телеграм-бот (host-режим, эндпоинт /push_message).

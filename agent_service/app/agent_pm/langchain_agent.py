@@ -1921,24 +1921,26 @@ class KnowledgeAgent:
         # на маркере reasoning_end. На final_commit буфер сбрасываем — финал
         # придёт отдельно по Kafka → push_message → edit_thinking.
         if target == "telegram":
-            buf = getattr(self, "_tg_reasoning_buf", None)
-            if buf is None:
-                buf = []
-                self._tg_reasoning_buf = buf
+            # Буфер reasoning — СТРОГО request-local (ContextVar), а не self.*,
+            # иначе параллельные чаты пишут в один список и reasoning смешивается.
+            ctx = self._request_ctx.get()
+            if not isinstance(ctx, dict):
+                return
+            buf = ctx.setdefault("tg_reasoning_buf", [])
             if kind == "live":
                 if chunk:
                     buf.append(chunk)
                 return
             if kind == "reasoning_end":
                 block = "".join(buf).strip()
-                self._tg_reasoning_buf = []
+                buf.clear()
                 if block:
-                    tg_chat_id = self._ctx_get("chat_id", None)
+                    tg_chat_id = ctx.get("chat_id")
                     await self._tg_edit_reasoning(tg_chat_id, block)
                 return
             if kind == "final_commit":
                 # финал уедет по Kafka целиком — просто чистим буфер
-                self._tg_reasoning_buf = []
+                buf.clear()
                 return
             return
 
@@ -2025,6 +2027,8 @@ class KnowledgeAgent:
             "message_id": None,
             "agent_model": agent_model,
             "pending_generated_images": [],
+            # request-local буфер живого reasoning для Telegram (изоляция параллельных чатов)
+            "tg_reasoning_buf": [],
             # Защита от бесконечного polling check_task_status: >3 подряд блокируем
             "check_status_streak": 0,
             "last_tool_name": "",
@@ -2037,8 +2041,7 @@ class KnowledgeAgent:
         self.current_chat_id = chat_id
         self.current_user_id = user_id
         self.current_message_id = None  # message_id генерится позже, в app.py; необязателен
-        # Буфер живого reasoning для Telegram (собираем чанки, флашим блоком)
-        self._tg_reasoning_buf = []
+        # Буфер живого reasoning для Telegram теперь в request-local ctx ("tg_reasoning_buf")
         cleaned_user_input = user_input
         try:
             # ── Настройки контекста ────────────────────────────────────────

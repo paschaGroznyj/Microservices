@@ -286,7 +286,7 @@ async def get_chat_settings(chat_id: int) -> dict:
 
 
 # ── Redis-буфер реплик группы (для оркестратора и склейки) ──────────────────────
-async def buffer_push(chat_id: int, author: str, text: str):
+async def buffer_push(chat_id: int, author: str, text: str, ):
     """Добавляет реплику в буфер (rpush + ltrim + TTL)."""
     r = await get_redis()
     line = f"{author}: {text}".replace("\n", " ").strip()
@@ -303,6 +303,8 @@ async def buffer_push(chat_id: int, author: str, text: str):
 async def buffer_lines(chat_id: int) -> list[str]:
     r = await get_redis()
     try:
+        text = await r.lrange(_k_buf(chat_id), 0, -1)
+        logging.info(f"FROM REDIS {len(text)}")
         return await r.lrange(_k_buf(chat_id), 0, -1)
     except Exception as e:
         log.warning(f"buffer_lines fail chat={chat_id}: {e}")
@@ -1757,7 +1759,7 @@ def _registration_gate_text(chat_id: int) -> str:
     """Единый текст отказа для незарегистрированного чата (/start + on_text_message)."""
     return (
         "У вас нет доступа к агенту в этом чате.\n\n"
-        f"Регистрация чатов доступна только через интерфейс CatchPM: {CATCHPM_URL}\n\n"
+        f"Регистрация чатов доступна только через интерфейс CatchPM: внедрение в процессе\n\n"
         f"Передайте администратору chat_id этого чата: {chat_id}"
     )
 
@@ -1815,7 +1817,7 @@ TG_MODELS = ["coder", "designer", "universal"]
 # Тул-категории, которые можно включать из телеги. Админская категория
 # намеренно ОТСУТСТВУЕТ — из телеги её включить нельзя.
 # Админская категория тулов (платный RouterAPI: видео/аудио). Видна только админу.
-TG_ADMIN_TOOL_CATEGORIES = ["media_gen"]
+TG_ADMIN_TOOL_CATEGORIES = ["media_gen", "admin"]
 TG_TOOL_CATEGORIES = ["pm_research", "internet", "content", "sessions", "skills"]
 
 
@@ -2077,7 +2079,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Obrabotka nazhatij inline-knopok menu /start. per-chat, dostupno vsem."""
     query = update.callback_query
-    chat_id = query.message.chat.id if query.message else update.effective_chat.id
+    chat_id = str(query.message.chat.id if query.message else update.effective_chat.id)
     data = query.data or ""
     _cb_admin = _is_tg_admin(query.from_user.id if query.from_user else 0)
 
@@ -2191,11 +2193,11 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("tg:alarm:edit_time:"):
         preset_key = data.rsplit(":", 1)[-1]
         uid = query.from_user.id if query.from_user else 0
-        try:
-            r = await get_redis()
-            await r.set(_k_alarmedit(chat_id, uid), f"time:{preset_key}", ex=300)
-        except Exception:
-            pass
+        key = _k_alarmedit(chat_id, uid)
+        r = await get_redis()
+        await r.set(key, f"time:{preset_key}", ex=300)
+        val = await r.get(key)
+        log.info(f"[alarmedit SET] key={key} val={val!r}")   # пруф что записалось
         await query.answer()
         try:
             await query.edit_message_text(
@@ -2549,9 +2551,14 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await r.delete(_k_await(chat_id, user.id))
     except Exception:
         pass
+    
+
+    key = _k_alarmedit(chat_id, user.id)
+    alarm_flag = await r.get(key)
+    log.info(f"[alarmedit GET] key={key} val={alarm_flag!r}")
 
     # всегда пишем реплику в буфер (для оркестратора и склейки контекста)
-    if raw_text.strip():
+    if raw_text.strip() and is_group:
         await buffer_push(chat_id, author, raw_text.strip())
 
     # Голый/сигнальный тег без форварда — отложенный ответ (ВАРИАНТ 2).
@@ -2579,13 +2586,14 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         merged_text = f"{author}: {text_for_agent}"
 
+
     # Если подхватили форвард — text_for_agent уже содержит блок [Переслано...],
     # но buffer_flush мог его перекрыть склейкой буфера. Дописываем форвард-блок
     # к merged_text, если его там ещё нет.
     if (fwd_file_b64 or "[Переслано от" in text_for_agent) and \
             "[Переслано от" not in merged_text:
         merged_text = f"{merged_text}\n{text_for_agent}".strip()
-
+        
     # Подмешиваем обратную связь по реакциям (копились с прошлого ответа бота).
     # Буфер очищается ТОЛЬКО здесь (после next-сообщения), без TTL.
     try:
@@ -2643,13 +2651,18 @@ def _enrich_text(msg: Message, base_text: str) -> str:
 TG_ASR_PROVIDER = os.environ.get("TG_ASR_PROVIDER", "cloud_ru")
 
 
-async def transcribe_voice_remote(audio_b64: str, fmt: str = "ogg") -> str:
+async def transcribe_voice_remote(audio_b64: str, _adm: bool, fmt: str = "ogg") -> str:
     """Зов agent_service /api/tg/transcribe. Возвращает текст или пустую строку."""
+    if _adm:
+        # provider = "routerapi"
+        provider = TG_ASR_PROVIDER
+    else:
+        provider = TG_ASR_PROVIDER
     try:
         async with httpx.AsyncClient(timeout=130) as client:
             r = await client.post(
                 f"{AGENT_SERVICE_URL}/api/tg/transcribe",
-                json={"audio_b64": audio_b64, "fmt": fmt, "language": "ru", "provider": TG_ASR_PROVIDER},
+                json={"audio_b64": audio_b64, "fmt": fmt, "language": "ru", "provider": provider},
             )
             r.raise_for_status()
             data = r.json()
@@ -2673,6 +2686,7 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     msg = update.message
     user = update.effective_user
+    _adm = _is_tg_admin(update.effective_user.id if update.effective_user else 0)
     author = user.full_name or user.username or "Аноним"
     bot_username = context.bot.username
 
@@ -2700,7 +2714,7 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     audio_b64 = base64.b64encode(audio_ba).decode("utf-8")
-    text = await transcribe_voice_remote(audio_b64, fmt="ogg")
+    text = await transcribe_voice_remote(audio_b64, _adm, fmt="ogg")
     if not text:
         try:
             await thinking.edit_text("Не расслышал голосовое, попробуй ещё раз или текстом.")
@@ -2929,6 +2943,11 @@ async def run_both():
     scheduler = build_scheduler()
 
     async with application:
+        from telegram import BotCommand
+        await application.bot.set_my_commands([
+            BotCommand("start", "Запустить бота")
+        ])
+
         await application.start()
         await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
         scheduler.start()

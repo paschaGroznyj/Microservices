@@ -54,6 +54,8 @@ from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, ContextTypes,
     MessageHandler, MessageReactionHandler, filters,
 )
+from telegram.error import TimedOut, NetworkError
+from telegram.request import HTTPXRequest
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -101,6 +103,23 @@ TG_TAG_TTL         = int(os.environ.get("TG_TAG_TTL", "20"))
 TG_TAG_WAIT        = int(os.environ.get("TG_TAG_WAIT", "10"))
 
 MAX_FILE_SIZE = 20 * 1024 * 1024
+
+# ── Скачивание файла с ретраями ───────────────────────────────────────
+async def safe_download(media, retries: int = 3):
+    """get_file()+download_as_bytearray() с ретраями на сетевые таймауты Telegram.
+    Возвращает bytearray или кидает последнее исключение."""
+    last_exc = None
+    for attempt in range(retries):
+        try:
+            tg_file = await media.get_file()
+            return await tg_file.download_as_bytearray()
+        except (TimedOut, NetworkError) as e:
+            last_exc = e
+            wait = 2 ** attempt  # 1, 2, 4
+            log.warning(f"[download] attempt {attempt+1}/{retries} failed ({type(e).__name__}): {e}; retry in {wait}s")
+            await asyncio.sleep(wait)
+    raise last_exc
+
 # Максимум картинок на один пост-альбом (агент тоже режет до 10).
 TG_ALBUM_MAX   = int(os.environ.get("TG_ALBUM_MAX", "10"))
 # Окно дебаунса сборки альбома: TG шлёт кадры N отдельными
@@ -322,10 +341,12 @@ async def stash_forward(chat_id: int, msg: Message):
         # (экономим токены vision: максимум одна картинка из пересыла).
         dup_album = await fwd_group_already_seen(chat_id, msg.media_group_id)
         if photo and not dup_album and not (photo.file_size and photo.file_size > MAX_FILE_SIZE):
-            tg_file = await photo.get_file()
-            raw = await tg_file.download_as_bytearray()
-            file_b64 = base64.b64encode(raw).decode("utf-8")
-            file_name = f"fwd_{photo.file_unique_id}.jpg"
+            try:
+                raw = await safe_download(photo)
+                file_b64 = base64.b64encode(raw).decode("utf-8")
+                file_name = f"fwd_{photo.file_unique_id}.jpg"
+            except Exception as e:
+                log.warning(f"fwd album photo dl fail: {e}")
         # Дубль-кадр альбома без своего текста и без картинки — не перетираем stash.
         if dup_album and not text and not file_b64:
             log.info(f"[fwd] skip extra album photo chat={chat_id} gid={msg.media_group_id}")
@@ -467,8 +488,7 @@ async def handle_incoming_forward(chat_id: int, msg: Message) -> bool:
         photo = None
     if photo and not (photo.file_size and photo.file_size > MAX_FILE_SIZE):
         try:
-            tg_file = await photo.get_file()
-            raw = await tg_file.download_as_bytearray()
+            raw = await safe_download(photo)
             file_b64 = base64.b64encode(raw).decode("utf-8")
             file_name = f"fwd_{photo.file_unique_id}.jpg"
         except Exception as e:
@@ -2670,8 +2690,7 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _thinking_messages[chat_id] = thinking.message_id
 
     try:
-        tg_file = await voice.get_file()
-        audio_ba = await tg_file.download_as_bytearray()
+        audio_ba = await safe_download(voice)
     except Exception as e:
         log.error(f"[voice] download fail chat={chat_id}: {e}")
         try:
@@ -2728,8 +2747,12 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     fname = pathlib.Path(doc.file_name or f"file_{doc.file_id[:8]}").name
-    tg_file = await doc.get_file()
-    file_bytearray = await tg_file.download_as_bytearray()
+    try:
+        file_bytearray = await safe_download(doc)
+    except Exception as e:
+        log.error(f"[document] download fail chat={chat_id}: {e}")
+        await msg.reply_text("⚠️ Не удалось загрузить файл, попробуй ещё раз.")
+        return
     file_b64 = base64.b64encode(file_bytearray).decode("utf-8")
 
     thinking = await msg.reply_text("Обрабатываю файл...")
@@ -2814,8 +2837,12 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     fname = f"photo_{photo.file_unique_id}.jpg"
-    tg_file = await photo.get_file()
-    file_bytearray = await tg_file.download_as_bytearray()
+    try:
+        file_bytearray = await safe_download(photo)
+    except Exception as e:
+        log.error(f"[photo] download fail chat={chat_id}: {e}")
+        await msg.reply_text("⚠️ Не удалось загрузить картинку, попробуй ещё раз.")
+        return
     file_b64 = base64.b64encode(file_bytearray).decode("utf-8")
     item = {"file_b64": file_b64, "file_name": fname}
 
@@ -2870,7 +2897,21 @@ async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
 # ══════════════════════════════════════════════════════════════════════════════
 async def run_both():
     global _bot_app
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).concurrent_updates(True).build()
+    # Поднятые таймауты: дефолт PTB ~5с короток для крупных файлов / медленного TLS к Telegram.
+    _req = HTTPXRequest(
+        connect_timeout=20.0,
+        read_timeout=60.0,
+        write_timeout=60.0,
+        pool_timeout=20.0,
+    )
+    application = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .concurrent_updates(True)
+        .request(_req)
+        .get_updates_request(HTTPXRequest(connect_timeout=20.0, read_timeout=60.0))
+        .build()
+    )
     application.add_handler(CommandHandler("start", cmd_start))
     application.add_handler(CallbackQueryHandler(on_callback, pattern=r"^tg:"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_message))

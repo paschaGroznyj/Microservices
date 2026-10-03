@@ -62,7 +62,15 @@ class DBConsumer:
 
         try:
             import redis.asyncio as aioredis
-            self.redis = aioredis.from_url(REDIS_URL, decode_responses=True)
+            self.redis = aioredis.from_url(
+                REDIS_URL,
+                decode_responses=True,
+                socket_timeout=10,
+                socket_connect_timeout=5,
+                socket_keepalive=True,
+                health_check_interval=30,
+                retry_on_timeout=True,
+            )
             await self.redis.ping()
             logging.info(f"[mobile] consumer Redis подключён: {REDIS_URL}")
         except Exception as e:

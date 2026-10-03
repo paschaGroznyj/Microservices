@@ -156,7 +156,18 @@ async def startup():
     global redis_client
     try:
         import redis.asyncio as aioredis
-        redis_client = aioredis.from_url(REDIS_URL, decode_responses=True)
+        # ВАЖНО: socket_timeout должен быть БОЛЬШЕ, чем BLPOP-timeout (<=55с),
+        # иначе сокет рвёт блокирующее чтение раньше, чем BLPOP вернётся,
+        # и ловим "Timeout reading from redis". Ставим 60 с запасом + keepalive.
+        redis_client = aioredis.from_url(
+            REDIS_URL,
+            decode_responses=True,
+            socket_timeout=60,
+            socket_connect_timeout=5,
+            socket_keepalive=True,
+            health_check_interval=30,
+            retry_on_timeout=True,
+        )
         await redis_client.ping()
         logging.info(f"[mobile] Redis подключён: {REDIS_URL}")
     except Exception as e:
@@ -684,10 +695,14 @@ async def mobile_poll(chat_id: str, timeout: int = 25):
         raise HTTPException(status_code=503, detail="mobile reply channel offline (no redis)")
     # BLPOP держит соединение до timeout или до появления элемента.
     key = MOBILE_REPLY_KEY.format(chat_id=str(chat_id))
-    timeout = max(1, min(int(timeout), 55))  # защита: не дольше nginx-таймаута
+    # BLPOP-timeout держим строго меньше socket_timeout(=60) клиента,
+    # иначе сокет рвёт чтение раньше. И не дольше nginx proxy_read_timeout.
+    timeout = max(1, min(int(timeout), 50))
     try:
         item = await redis_client.blpop(key, timeout=timeout)
     except Exception as e:
+        # Пустой BLPOP по таймауту НЕ должен прилетать сюда (redis сам вернёт None),
+        # но на всякий случай различаем реальную поломку Redis и штатное отсутствие ответа.
         logging.error(f"[mobile] poll BLPOP error chat={chat_id}: {e}")
         raise HTTPException(status_code=503, detail="mobile reply channel error")
     if not item:

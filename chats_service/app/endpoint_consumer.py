@@ -13,7 +13,7 @@ import time
 
 # Обратный путь для Telegram: ответ агента (gateway_target=="telegram") шлём
 # не на гейтвей, а прямо телеграм-боту (host-режим) через docker gateway IP.
-TG_BOT_PUSH_URL = os.getenv("TG_BOT_PUSH_URL", "http://172.18.0.1:8010/push_message")
+TG_BOT_PUSH_URL = os.getenv("TG_BOT_PUSH_URL", "http://172.28.0.1:8010/push_message")
 
 # Redis — обратный путь мобильного клиента (gateway_target="mobile").
 # Телефон за NAT не принимает входящие, поэтому ответ агента кладём в
@@ -83,7 +83,8 @@ class DBConsumer:
             group_id='db-consumer-group',
             value_deserializer=lambda m: json.loads(m.decode('utf-8')),
             auto_offset_reset='latest',
-            enable_auto_commit=True
+            enable_auto_commit=True,
+            max_partition_fetch_bytes=10485760
         )
 
     async def process_message(self, payload):
@@ -97,21 +98,10 @@ class DBConsumer:
             selected_tools = payload.get("selected_tools")
             context_size = payload.get("context_size")
             message_id = payload.get("message_id")
-            # Ботовое сообщение приходит с ключом attached_files (из agent_service),
-            # а сообщение пользователя — с ключом files (метаданные из getFilesMeta()
-            # на фронте, продюсер send_message кладёт их как chat.files). Раньше
-            # user-файлы терялись: консюмер читал только attached_files → в chat_files
-            # для юзера ничего не писалось, и чипы пропадали после F5. Берём files
-            # как фолбэк, чтобы вложения пользователя тоже сохранялись.
             attached_files = payload.get("attached_files") or payload.get("files")
             tool_trace = payload.get("tool_trace")
             gateway_target = (payload.get("gateway_target") or "main").lower()
             input_format = payload.get("input_format") or "text"
-            # telegram — валидный таргет (обратный путь не на гейтвей, а боту).
-            if gateway_target not in self.gateway_urls and gateway_target != "telegram":
-                gateway_target = "main"
-            logging.info(payload)
-            logging.info(f"gateway_target={gateway_target}")
             
             model_type = None
             tokens_usage = None
@@ -137,13 +127,12 @@ class DBConsumer:
             )
             logger.info(f"Сообщение сохранено в БД: chat={chat_id}, user={user_id}")
             elapsed = time.perf_counter() - start
-            logging.info(f"Message Service. Время чтобы вытащить из кафки и положить в БД = {elapsed:.4f}s")
+            # logging.info(f"Message Service. Время чтобы вытащить из кафки и положить в БД = {elapsed:.4f}s")
             # Если сообщение от бота, отправляем обратно в основной сервис для WebSocket
             if is_from_bot and gateway_target == "telegram":
                 # Ответ агента для Telegram: пушим напрямую боту (host-режим).
                 await self.send_to_telegram(chat_id, message, attached_files, message_id=message_id)
                 return
-
             if is_from_bot and gateway_target == "mobile":
                 # Ответ агента для мобильного клиента: телефон за NAT, поэтому
                 # не пушим ему, а кладём в Redis-список — мобилка заберёт
@@ -153,7 +142,6 @@ class DBConsumer:
 
             if is_from_bot:
                 type_agent = payload.get("type_agent", "pm")
-                logging.info(type_agent)
                 gateway_url = self.gateway_urls[gateway_target]
                 ws_payload = dict(payload)
                 ws_payload["files"] = _sanitize_files_for_ws(attached_files) # Адаптивно, чтобы и для файлов пользователя

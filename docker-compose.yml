@@ -414,6 +414,8 @@ services:
       OBS_REGION: ${OBS_REGION}
       OBS_ENDPOINT: ${OBS_ENDPOINT}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      AGENT_SERVICE_URL: ${AGENT_SERVICE_URL:-http://agent_service:9001}
+      TG_ASR_PROVIDER: ${TG_ASR_PROVIDER:-cloud_ru}
     volumes:
       - ./chats_service:/app
     depends_on:

@@ -28,6 +28,14 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 redis_client = None  # redis.asyncio.Redis — проставится на startup
 MOBILE_REPLY_KEY = "mobile:reply:{chat_id}"
 MOBILE_REPLY_TTL = 300  # сек — ответ живёт 5 мин, если мобилка не забрала
+
+# ── Голос мобильного клиента: ASR на сервере (как в telegram_service) ──────────
+# Мобилка НЕ расшифровывает звук сама — она шлёт голос (ogg/opus) в /send_message
+# с input_format="voice" и байтами в files[].file_b64. chats_service дёргает
+# уже готовый эндпоинт агента /api/tg/transcribe, подменяет message текстом и
+# только ПОТОМ кладёт лёгкое текстовое сообщение в Kafka (голос в Kafka не летит).
+AGENT_SERVICE_URL = os.getenv("AGENT_SERVICE_URL", "http://agent_service:9001")
+MOBILE_ASR_PROVIDER = os.getenv("TG_ASR_PROVIDER", "cloud_ru")
 producer = KafkaProducer(
     bootstrap_servers=[KAFKA_BROKER],
     api_version=(4,1,0),
@@ -184,8 +192,84 @@ async def shutdown():
     service_message_alive = False
     await db.pool.close()
 
+def _extract_voice_file(files: list):
+    """Находит голосовой файл в files[] мобильного сообщения.
+
+    Возвращает (voice_dict, index) или (None, -1). Голос опознаём по
+    kind=="voice" либо по аудио-расширению (ogg/opus/oga/mp3/m4a/wav/aac).
+    """
+    AUDIO_EXT = ("ogg", "opus", "oga", "mp3", "m4a", "wav", "aac", "flac")
+    for i, f in enumerate(files or []):
+        if not isinstance(f, dict):
+            continue
+        kind = (f.get("kind") or "").lower()
+        name = (f.get("name") or "")
+        ext = (f.get("ext") or (name.rsplit(".", 1)[-1] if "." in name else "")).lower()
+        if kind == "voice" or ext in AUDIO_EXT:
+            return f, i
+    return None, -1
+
+
+async def transcribe_mobile_voice(chat: "ChatMessage") -> str:
+    """Расшифровка голоса мобильного клиента через agent_service /api/tg/transcribe.
+
+    Зеркало telegram_service.transcribe_voice_remote, но на стороне chats_service:
+    телефон прислал голос в files[].file_b64, мы отдаём его агенту и получаем текст.
+    Возвращает распознанный текст (может быть "") либо кидает исключение при сбое HTTP.
+    """
+    import base64 as _b64
+    import requests as _rq
+
+    voice, _idx = _extract_voice_file(chat.files)
+    if not voice:
+        return ""
+    audio_b64 = voice.get("file_b64")
+    if not audio_b64:
+        logging.warning("[mobile-voice] голосовой файл без file_b64 — нечего расшифровывать")
+        return ""
+    name = (voice.get("name") or "")
+    fmt = (voice.get("ext") or (name.rsplit(".", 1)[-1] if "." in name else "ogg")).lower() or "ogg"
+
+    def _call() -> str:
+        r = _rq.post(
+            f"{AGENT_SERVICE_URL}/api/tg/transcribe",
+            json={"audio_b64": audio_b64, "fmt": fmt, "language": "ru",
+                  "provider": MOBILE_ASR_PROVIDER},
+            timeout=130,
+        )
+        r.raise_for_status()
+        data = r.json()
+        if not data.get("ok"):
+            logging.warning(f"[mobile-voice] transcribe not ok: {data.get('error')}")
+            return ""
+        return (data.get("text") or "").strip()
+
+    import asyncio as _aio
+    return await _aio.to_thread(_call)
+
+
 @app.post("/send_message")
 async def send_message(chat: ChatMessage):
+    # ── Мобильный голос: расшифровываем на сервере ДО Kafka ────────────────────
+    # Телефон прислал голос (input_format="voice" + files[].file_b64). Отдаём его
+    # агенту на ASR, подменяем message текстом и выкидываем голос из files, чтобы
+    # в Kafka поехало лёгкое текстовое сообщение (как делает telegram_service).
+    if chat.gateway_target == "mobile" and chat.input_format == "voice":
+        try:
+            text = await transcribe_mobile_voice(chat)
+        except Exception as e:
+            logging.error(f"[mobile-voice] ошибка расшифровки: {e}")
+            raise HTTPException(status_code=502, detail="voice transcription failed")
+        if not text:
+            raise HTTPException(status_code=422, detail="voice not recognized")
+        logging.info(f"[mobile-voice] распознано: {text[:80]!r} (chat={chat.chat_id})")
+        chat.message = text
+        # Голос в Kafka не нужен — агент работает уже с текстом.
+        _voice, vidx = _extract_voice_file(chat.files)
+        if vidx >= 0:
+            chat.files.pop(vidx)
+        chat.has_files = bool(chat.files)
+
     message = {
         "user_id": chat.user_id,
         "tb_name": chat.tb_name,

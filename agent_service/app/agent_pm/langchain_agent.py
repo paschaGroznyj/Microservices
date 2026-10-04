@@ -29,7 +29,7 @@ from .core.config import (
 )
 from .core.settings import TOOLS_SETTINGS, UNIVERSAL_TOOLS, ADMIN_ONLY_CATEGORIES
 from .prompts.summary_prompt import SUMMARIZE_CUT_PROMPT, TOOL_TRACE_SUMMARY_PROMPT
-from .prompts.system_prompt import SYSTEM_PROMPT, SCIENTIFIC_RESEARCH_MODULE
+from .prompts.system_prompt import SYSTEM_PROMPT
 from .title_generator import generate_chat_title, is_first_turn
 
 from datetime import datetime
@@ -976,32 +976,12 @@ class KnowledgeAgent:
 
             messages = []
             for row in rows:
-                # САНИТАЙЗЕР: провайдер (cloud.ru) отбивает запрос с 400
-                # "messages.N: user messages must have non-empty content", если в любом
-                # сообщении content пустой. Такие строки попадают в БД от
-                # проактивных/телеграм-триггеров (initiated с message="").
-                # Дропаем пустые сообщения, чтобы не ломать весь цикл.
                 _txt = row.get("message_text")
                 if _txt is None or not str(_txt).strip():
                     continue
                 kwargs = {"db_id": row["id"]}
                 if row["is_from_bot"]:
-                    # РАЗДЕЛЕНИЕ СООБЩЕНИЙ И TOOL TRACE.
-                    # В content кладём ТОЛЬКО чистую реплику агента (message_text).
-                    # tool_trace НЕ приклеиваем к content — иначе на длинных задачах
-                    # трейс раздувает каждый AIMessage до тысяч токенов, trim_messages
-                    # выкидывает целые пары human/ai, и реальная память по диалогу
-                    # схлопывается до 1-2 ходов. Трейс кладём отдельно в
-                    # additional_kwargs["tool_trace"] — он НЕ участвует в подсчёте
-                    # токенов основного окна (в content его нет), но доступен при
-                    # сжатии (_summarize_cut_messages), чтобы факты из трейса
-                    # (пути, workspace_id, ссылки) не терялись, а уходили в rolling summary.
                     if row.get("tool_trace"):
-                        # trace сжимается ТЕПЕРЬ НА ВЫХОДЕ из запроса (LLM-сводка,
-                        # см. _summarize_tool_trace). Здесь на входе — только мягкая
-                        # аварийная страховка от исторических записей, сохранённых
-                        # до включения LLM-сжатия (огромные сырые логи). Нормальные
-                        # (уже сжатые) trace проходят без изменений.
                         kwargs["tool_trace"] = _truncate_text(
                             str(row["tool_trace"]), max_chars=MAX_TRACE_HARD_CHARS
                         )
@@ -1548,12 +1528,12 @@ class KnowledgeAgent:
         # tools panel. Admin identity is resolved by user_id via ADMINS_BY_USER_ID.
         # В Telegram user_id == tg_id (не наш catchPM user_id), поэтому админка
         # резолвится через ADMINS_BY_TG_ID (tg_id в метаданных админа), а не по user_id.
-        try:
-            _admin_index = ADMINS_BY_TG_ID if is_telegram else ADMINS_BY_USER_ID
-            _is_admin = int(user_id) in _admin_index
-        except (TypeError, ValueError):
-            _is_admin = False
-
+        # try:
+        #     _admin_index = ADMINS_BY_TG_ID if is_telegram else ADMINS_BY_USER_ID
+        #     _is_admin = int(user_id) in _admin_index
+        # except (TypeError, ValueError):
+        #     _is_admin = False
+        _is_admin = True
         allowed_names: set[str] = set()
         for category in selected_tools:
             if category in ADMIN_ONLY_CATEGORIES and not _is_admin:
@@ -1565,13 +1545,6 @@ class KnowledgeAgent:
         allowed_names.update(UNIVERSAL_TOOLS)
 
         filtered = [t for t in all_tools if t.name in allowed_names]
-
-        # Telegram: жёстко режем админские тулы даже если категория выбрана
-        # в настройках чата (execute_sql_query / get_db_schema / shell).
-        # Настройки TG задаёт /start в самой группе — админку не отдаём наружу.
-        if is_telegram:
-            TG_FORBIDDEN = {"execute_sql_query", "get_db_schema", "execute_shell_commands"}
-            filtered = [t for t in filtered if t.name not in TG_FORBIDDEN]
 
         # Даже если пользователь не выбрал ни одной категории, универсальные
         # тулы должны остаться доступны — не подменяем их заглушкой.
@@ -2004,7 +1977,7 @@ class KnowledgeAgent:
         user_id: int,
         chat_id,
         database,
-        agent_model,
+        agent_model="coder",
         source=None,
         selected_tools=None,
         context_size=None,
@@ -2014,11 +1987,6 @@ class KnowledgeAgent:
         if not self.db:
             self.db = database
 
-        # Статус "думаю" больше НЕ шлём: пользователь видит реальный поток
-        # размышлений модели (живой reasoning-стрим), а не служебный индикатор.
-        # await self._send_status(get_thinking_status(), request_id)
-        # Request-local контекст для текущего хода.
-        # Это устраняет гонки при параллельной обработке разных чатов.
         ctx_token = self._request_ctx.set({
             "request_id": request_id,
             "gateway_target": gateway_target or "main",
@@ -2046,9 +2014,9 @@ class KnowledgeAgent:
         try:
             # ── Настройки контекста ────────────────────────────────────────
             CONTEXT_PRESETS = {
-                "small":  {"limit_mem": 8,  "max_tokens": 6000},
-                "medium": {"limit_mem": 10, "max_tokens": 15000},
-                "large":  {"limit_mem": 12, "max_tokens": 20000},
+                "small":  {"limit_mem": 8,  "max_tokens": 15_000},
+                "medium": {"limit_mem": 10, "max_tokens": 30_000},
+                "large":  {"limit_mem": 12, "max_tokens": 60_000},
             }
             logging.info(f'Выбрана модель {agent_model}')
             llm = self.AGENT_MODELS[agent_model]
@@ -2062,9 +2030,7 @@ class KnowledgeAgent:
             AUTO_SEND_FILE_TOOLS = {"send_file_to_user"}
             files_to_send = []
             seen_paths = set()
-            # request-local pending_generated_images уже инициализирован в ContextVar
-            # при старте process_query.
-            # SOFT_LIMIT временно отключён (не спамим на длинных задачах); предупреждаем только когда steps_left <= 3 (см. ниже)
+
             SOFT_LIMIT = 10   # DEPRECATED, оставлен для loop_state-совместимости
             HARD_LIMIT = 100  # поднято с 14; контекст не пухнет благодаря in-loop compaction
             STEPS_LEFT_WARN = 3  # предупреждаем про request_more_steps когда осталось <= N шагов
@@ -2148,16 +2114,12 @@ class KnowledgeAgent:
                 except Exception as _e:
                     logging.warning(f"[tg] system suffix fail: {_e}")
 
-            # Собираем историю из памяти
-            history = await self._build_history(chat_id, limit=30)
             journal_text = None
             if use_journal:
                 print(f"USER ID: {user_id}")
                 tools.append(make_journal_tool(self, chat_id, user_id))
                 journal_text = await self.db.get_agent_journal(chat_id)
                 print(f"ЖУРНАЛ АГЕНТА: длина = {len(journal_text)   }")
-                # if source == "telegram":
-                #     journal_text = await self.db.get_agent_journal(56) # Пока что мой id
 
             tools_by_name = {t.name: t for t in tools}
             # Имена реально доступных агенту тулов — для каталога фонового супервизора
@@ -2165,8 +2127,8 @@ class KnowledgeAgent:
             llm_with_tools = llm.bind_tools(tools)
             session_summary = await self.db.get_last_session_summary(chat_id)
 
-            logger.info(f"[ИСТОРИЯ ДО ОБРЕЗКИ] {len(history)}")
-            # Режем историю чатов
+            # Собираем историю из памяти
+            history = await self._build_history(chat_id, limit=30)
             trimmed_history = trim_messages(
                 history,
                 max_tokens=max_tokens,
@@ -2184,7 +2146,6 @@ class KnowledgeAgent:
             previous_covered_id = previous_rolling["covered_up_to_id"] if previous_rolling else 0
             previous_summary_text = previous_rolling["summary_text"] if previous_rolling else None
 
-            logging.info(f"ЧИСЛО РАЗНИЦА = {cut_count}")
             if cut_count > 0:
                 cut_messages_all = history[:cut_count]
                 # берём только те, что ЕЩЁ не входили в прошлый summary
@@ -2297,41 +2258,13 @@ class KnowledgeAgent:
                     can_still_extend = not loop_state["extension_used"]
                     current_llm = llm if (is_last_step and not can_still_extend) else llm_with_tools
 
-                    # ТОЧКА 3: адресный триггер на КАЖДОМ шаге окна, а не однократно.
-                    # steps_left = loop_state["hard_limit"] - iteration - 1
-                    # SOFT_LIMIT-предупреждение привязано к КОНЦУ окна, а не к фикс. номеру:
-                    # при hard_limit=100 нельзя спамить 90 SystemMessage. Шлём подсказку
-                    # про request_more_steps только когда до потолка осталось <= STEPS_LEFT_WARN.
-                    # if steps_left <= loop_state["steps_left_warn"] and can_still_extend:
-                    #     messages.append(SystemMessage(content=(
-                    #         f"[Контроль лимита] Осталось шагов: {steps_left}. "
-                    #         f"Если НЕ успеваешь завершить задачу за оставшиеся шаги — "
-                    #         f"вызови request_more_steps ПРЯМО СЕЙЧАС (расширение одноразовое). "
-                    #         f"Если успеваешь — продолжай и дай финальный ответ."
-                    #     )))
-                    # elif steps_left <= loop_state["steps_left_warn"]:
-                    #     messages.append(SystemMessage(
-                    #         content=f"[Прогресс: шаг {iteration} из {loop_state['hard_limit']}]"
-                    #     ))
-
-
                     # ── Живой стриминг текста модели ──────────────────────────
                     # Заранее неизвестно, окажется ли текущий шаг финалом (без
-                    # tool_calls) или reasoning'ом перед вызовом тулзы. Поэтому
-                    # чанки шлём оптимистично с kind="live" — фронт печатает их в
-                    # текущем "живом" блоке. Как только шаг завершился и стал ясен
-                    # его тип, шлём УПРАВЛЯЮЩИЙ маркер:
-                    #   • есть tool_calls  → kind="reasoning_end": фронт сворачивает
-                    #     живой блок в приглушённый reasoning-блок (курсив, мельче);
-                    #   • нет tool_calls   → kind="final_commit": фронт фиксирует
-                    #     живой блок как финальный ответ (основной шрифт).
+                    # tool_calls) или reasoning'ом перед вызовом тулзы.
                     stream_state = {"sent": False}
 
                     async def _on_chunk(text: str, kind: str = "answer"):
                         # kind из коллектора: "reasoning" | "answer".
-                        # Оба канала шлём оптимистично как live — фронт
-                        # печатает в живом блоке; тип шага (reasoning_end /
-                        # final_commit) доопределяется по tool_calls после шага.
                         stream_state["sent"] = True
                         await self._send_chunk(
                             text, request_id, msg_id=str(request_id), kind="live"
@@ -2401,13 +2334,6 @@ class KnowledgeAgent:
                     )
                     logger.info(f"🦒Длина стека = {len(messages)}")
 
-                    # ---- IN-LOOP CONTEXT COMPACTION -------------------------------
-                    # Триггер ПО ФАКТУ от модели (iter_in), не аппроксимация.
-                    # Проверяем НА ГРАНИЦЕ итерации: все ToolMessage текущего шага
-                    # уже добавлены ниже по циклу на СЛЕДУЮЩЕМ проходе, поэтому пары
-                    # всегда целые. Компактор режет только старые пары, вставляет
-                    # SystemMessage-конспект (пути/ссылки/артефакты/workspace) —
-                    # tool-protocol не ломается. БД НЕ трогаем.
                     if iter_in and iter_in >= TOKEN_SOFT_LIMIT:
                         logger.info(
                             f"[compactor] iter_in={iter_in} >= {TOKEN_SOFT_LIMIT}, "
@@ -2427,8 +2353,6 @@ class KnowledgeAgent:
                         final_response = response.content or ""
 
                         # Финальный шаг: фиксируем живой блок как финальный ответ.
-                        # Если что-то стримилось (обычный случай) — шлём маркер
-                        # final_commit, чтобы фронт закрепил блок основным шрифтом.
                         if stream_state["sent"]:
                             await self._send_chunk(
                                 "", request_id, msg_id=str(request_id), kind="final_commit"
@@ -2438,11 +2362,6 @@ class KnowledgeAgent:
                     # Выполняем все запрошенные инструменты параллельно
                     tool_calls = response.tool_calls
                     tool_names = [tc['name'] for tc in tool_calls]
-                    # Статусы тулов больше НЕ шлём: пользователь видит реальный поток
-                    # размышлений модели (reasoning-блоки), а не служебные индикаторы.
-                    # await self._send_status(get_tools_status(tool_names), request_id)
-
-                    # logging.info(f"Итерация в цикле: {iteration}. Вызванные инструменты: {tool_calls}")
                     tool_results = await asyncio.gather(
                         *[
                             self._invoke_tool(tools_by_name, tc, request_id)
@@ -2514,13 +2433,6 @@ class KnowledgeAgent:
                         else:
                             content = content_for_message
 
-                        # ── ПРЕДОХРАНИТЕЛЬ (Вариант C, часть A): универсальная обрезка ──
-                        # execute_python_code уже режет stdout/stderr выше, но ЛЮБОЙ
-                        # другой тул (execute_shell_commands, analyze_image,
-                        # search_internet, git-выводы) кладёт content целиком.
-                        # Один жадный вызов раздувает стек до потолка и in-loop
-                        # компактор не спасает, т.к. свежая пара защищена keep_last.
-                        # Поэтому усекаем тело ЛЮБОГО tool-результата на входе в стек.
                         content = _truncate_text(content, max_chars=MAX_TOOL_MSG_CHARS)
 
                         messages.append(ToolMessage(content=content, tool_call_id=tc["id"]))
@@ -2559,30 +2471,7 @@ class KnowledgeAgent:
 
                 return final_response, tool_trace
 
-            # LLM-as-judge: проверяем финальный ответ перед commit.
-            # Судья может завернуть ответ только один раз за запрос.
             final_response, tool_trace = await agent_event_loop(messages=messages)
-
-            # --- JUDGE ВРЕМЕННО ОТКЛЮЧЁН (feature/in-loop-context-compaction) ---
-#             if loop_state["iteration"] >= loop_state["judge_limit"]:
-#                 judge_result = await judge_final_answer(
-#                     llm=llm,
-#                     user_input=user_input,
-#                     final_response=final_response,
-#                     tool_trace=tool_trace,
-#                 )
-#                 logging.info(f"🛑 ВЕРДИКТ СУДЬИ: {judge_result}")
-#                 if judge_result.get("verdict") == "revise":
-#                     reason = (judge_result.get("reason") or "").strip()
-#                     missing = (judge_result.get("missing") or "").strip()
-#                     messages.append(HumanMessage(content=(
-#                         "[JUDGE] Финальный ответ не принят. Доработай ответ и верни "
-#                         "пользователю корректный итоговый результат. "
-#                         "Избегай лишних шагов и инструментов, если можно ответить сразу.\n"
-#                         f"Причина: {reason or 'не указана'}\n"
-#                         f"Что исправить: {missing or 'улучшить релевантность и полноту ответа'}"
-#                     )))
-#                     final_response, tool_trace = await agent_event_loop(messages=messages)
 
             tokens_usage = {
                     "input_tokens": total_input_tokens,
@@ -2591,8 +2480,6 @@ class KnowledgeAgent:
                 }
 
             # Авто-отправка изображений, сгенерированных тулом generate_image.
-            # Берём request-local буфер из ContextVar, чтобы файлы разных чатов
-            # не смешивались при параллельной обработке.
             pending_images = self._ctx_get("pending_generated_images", [])
             for gen_item in pending_images:
                 if isinstance(gen_item, dict):

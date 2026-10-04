@@ -25,8 +25,8 @@ from httpx import AsyncClient
 # from agent_pm.pm_parser.arxiv_parser import ARXIVParser
 from agent_pm.core.config import (KAFKA_BROKER, PORT_PM_AGENT, 
 PORT_PARSERS_SERVICE, PORT_GATEWAY_PORT,
-TG_BOT_PUSH_URL)
-
+TG_BOT_PUSH_URL, TRANSCRIBE_PROVIDER)
+from agent_pm.tools.content.tool_generate_audio import audio_generator
 from agent_pm.search_bot.searcher import searcher_main
 from agent_pm.core.db import AgentDB
 from agent_pm.core.file_parsers import parse_file
@@ -100,6 +100,7 @@ async def get_producer() -> AIOKafkaProducer:
             bootstrap_servers=[KAFKA_BROKER],
             key_serializer=lambda k: str(k).encode("utf-8"),
             value_serializer=lambda m: json.dumps(m).encode("utf-8"),
+            max_request_size=10485760,
         )
         await producer.start()
     return producer
@@ -451,6 +452,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
 
     # message = f"[CatchPM, ТабельНомер: 23423423, Пользователь: Иванов Иванон Иваныч, user_id=-1234]\n" + text
     is_telegram = (gateway_target == "telegram")
+    is_mobile = (gateway_target == "mobile") # Если это мобильный клиент
     if is_telegram:
         # Источник Telegram: своя шапка (без CatchPM/табельного).
         from agent_pm.telegram.tg_integration import (
@@ -484,11 +486,13 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                 )
         else:
             message = build_tg_prefix(username, chat_id, _chat_type) + text
-        if not agent_model:
-            agent_model = DEFAULT_TG_MODEL
     else:
         message = f"[CatchPM, ТабельНомер: {tb_name}, Пользователь: {username}, chat_id: {chat_id}, user_id: {user_id}]\n" + text
 
+    if is_mobile:
+        from agent_pm.mobile.mobile_settings import (DEFAULT_INSTRUCTION, VOICE_STYLE, LIMIT_VOICE_TEXT,
+            text_compressor)
+        message = DEFAULT_INSTRUCTION + text
     # Скиллы юзера — только для CatchPM (в Telegram user_id это tg-id, не наш users).
     if not is_telegram:
         selected_skills = await db.get_selected_skills_for_user(int(user_id))
@@ -529,6 +533,21 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
         # formatted_time = now.strftime("%H:%M:%S")
         # response_text = f"Идет внедрение новой фичи! Cпасибо за понимание. Текущее время: **{formatted_time}**, {message}"
         files_to_send = response.get("files_to_send")  # [{"path": "...", ...}, ...]
+
+        
+        if is_mobile: # Должны сгенерировать ответ агента голосом по дефолту
+            voice_text = None
+            if len(response_text) > LIMIT_VOICE_TEXT:
+                voice_text = text_compressor(text)
+            else: voice_text = response_text
+
+            voice_metadata = await audio_generator(text=voice_text, voice="Charon", style=VOICE_STYLE)
+            # path = "/app/generated_files/voice_3a2d9c7194d0.ogg"
+            # voice_metadata = {"result": None, "voice": "sace", "style_note": "a", "fpath": path, "size_kb": 123}
+            if not voice_metadata["result"]:
+                files_to_send = [{"kind": "voice", "path": voice_metadata["fpath"]}]
+            else:
+                pass # Нужно вернуть сигнал об какой либо ошибке. Потом собрать дефолтные ГС на мобильном клиенте
 
         attached_files = None
         if files_to_send:
@@ -743,6 +762,7 @@ async def kafka_consumer():
         heartbeat_interval_ms=5000,  # Шлем пульс каждые 10 сек
         max_poll_interval_ms=300000,  # Даем 5 минут на обработку одного сообщения
         max_poll_records=1,
+        max_partition_fetch_bytes=10485760
     )
 
     await consumer.start()
@@ -1161,7 +1181,8 @@ async def tg_transcribe(req: TgTranscribeRequest) -> TgTranscribeResponse:
         return TgTranscribeResponse(error=f"bad base64: {e}")
     if not audio:
         return TgTranscribeResponse(error="empty audio")
-    provider = (req.provider or os.getenv("TG_ASR_PROVIDER", "cloud_ru"))
+    provider = (req.provider or TRANSCRIBE_PROVIDER)
+    logging.info(f"[TRANSCRIBE] {provider}")
     try:
         text = await transcribe_audio(audio, provider=provider, language=req.language or "ru", fmt=req.fmt or "ogg")
         if not text:

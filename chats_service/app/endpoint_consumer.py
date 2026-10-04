@@ -23,6 +23,12 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 MOBILE_REPLY_KEY = "mobile:reply:{chat_id}"
 MOBILE_REPLY_TTL = 300  # сек
 
+# agent_service отдаёт бинарники не-image файлов (голос, docx, pptx) по HTTP
+# эндпоинту /web/file (с диска или восстанавливает из OBS). Контейнеры
+# изолированы, поэтому читать файл с диска агента нельзя — только докачка
+# по этому URL. Внутри compose-сети catchPM адрес — http://agent_service:9001.
+AGENT_SERVICE_URL = os.getenv("AGENT_SERVICE_URL", "http://agent_service:9001")
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -164,7 +170,7 @@ class DBConsumer:
         except Exception as e:
             logger.error(f"Ошибка обработки сообщения: {e}")
 
-    async def _hydrate_tg_files(self, files):
+    async def _hydrate_tg_files(self, files, chat_id=None):
         """Для Telegram дочитываем бинарник картинок из БД (Вариант B).
 
         Агент СПЕЦИАЛЬНО НЕ кладёт base64 сгенерированных картинок в
@@ -182,6 +188,52 @@ class DBConsumer:
                     continue  # уже есть бинарник (файлы с диска агента)
                 img_key = f.get("image_key")
                 if f.get("kind") != "image" or not img_key:
+                    # Не картинка из generated_images — это дисковый файл агента
+                    # (голос generate_audio → .ogg, документы и т.п.). Контейнеры
+                    # ИЗОЛИРОВАНЫ: у консьюмера НЕТ файловой системы агента, читать
+                    # f["path"] с диска бессмысленно (os.path.isfile всегда False).
+                    # Единственный способ достать байты — HTTP-эндпоинт агента
+                    # /web/file?path=...&chat_id=... (отдаёт с диска агента или
+                    # восстанавливает из OBS). Это тот же механизм, что у телеги
+                    # (_send_agent_file по file_url). Мобилке за NAT нужны байты
+                    # прямо в JSON, поэтому докачиваем здесь и кладём base64.
+                    file_url = f.get("file_url")
+                    fpath = f.get("path")
+                    pull_url = None
+                    if file_url:
+                        pull_url = file_url
+                    elif fpath:
+                        from urllib.parse import quote
+                        pull_url = f"/web/file?path={quote(fpath)}"
+                        if chat_id:
+                            pull_url += f"&chat_id={quote(str(chat_id))}"
+                    if pull_url:
+                        if pull_url.startswith("/"):
+                            pull_url = AGENT_SERVICE_URL.rstrip("/") + pull_url
+                        try:
+                            resp = await asyncio.to_thread(
+                                requests.get, pull_url, timeout=120
+                            )
+                            if resp.status_code == 200:
+                                raw = resp.content
+                                if len(raw) <= MAX_TG:
+                                    f["file_b64"] = base64.b64encode(raw).decode("ascii")
+                                    f.pop("path", None)
+                                    f.pop("file_url", None)
+                                    logging.info(
+                                        f"[mobile] файл {f.get('name')} = {len(raw)} байт "
+                                        f"докачан с /web/file → file_b64 (kind={f.get('kind')})"
+                                    )
+                                else:
+                                    logging.warning(
+                                        f"[mobile] файл {f.get('name')} = {len(raw)} байт > 20MB, пропускаю"
+                                    )
+                            else:
+                                logging.warning(
+                                    f"[mobile] /web/file -> HTTP {resp.status_code} для {pull_url}"
+                                )
+                        except Exception as e:
+                            logging.error(f"[mobile] не удалось докачать файл по {pull_url}: {e}")
                     continue
                 async with self.db.pool.acquire() as conn:
                     row = await conn.fetchrow(
@@ -227,10 +279,26 @@ class DBConsumer:
             return
         try:
             start = time.perf_counter()
-            files = await self._hydrate_tg_files(files)
+            files = await self._hydrate_tg_files(files, chat_id=chat_id)
+            # Для мобилки чистим серверный path (телефон его не прочитает) и
+            # оставляем самодостаточные поля: name, kind, ext, file_b64.
+            mobile_files = None
+            if files:
+                mobile_files = []
+                for f in files:
+                    nm = f.get("name") or ""
+                    ext = f.get("ext")
+                    if not ext and "." in nm:
+                        ext = nm.rsplit(".", 1)[-1].lower()
+                    mobile_files.append({
+                        "name": nm,
+                        "kind": f.get("kind"),
+                        "ext": ext,
+                        "file_b64": f.get("file_b64"),
+                    })
             reply = {
                 "text": text or "",
-                "files": files or None,
+                "files": mobile_files,
                 "message_id": message_id,
                 "ts": int(time.time()),
             }

@@ -43,13 +43,6 @@ def _content_disposition(filename: str, disposition: str = "attachment") -> str:
     """
     Собрать корректный заголовок Content-Disposition для имён с не-ASCII
     символами (кириллица и т.п.) по RFC 6266.
-
-    Проблема: Starlette/uvicorn кодируют HTTP-заголовки в latin-1
-    (raw_headers = ...v.encode("latin-1")). Имя вроде "LFR_Метрики_2026.pptx"
-    в latin-1 не влезает -> UnicodeEncodeError -> 500 на /web/file.
-
-    Решение: ASCII-фолбэк в filename="..." (для старых клиентов) + filename*
-    с percent-encoding в UTF-8 (современные браузеры берут именно его).
     """
     fallback = filename.encode("ascii", "replace").decode("ascii")
     quoted = quote(filename, safe="")

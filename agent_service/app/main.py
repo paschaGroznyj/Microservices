@@ -119,6 +119,16 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     has_files = payload.get("has_files", False)
     agent_model = payload.get("agent_model")
     gateway_target = payload.get("gateway_target", "main")
+    # Mobile-оркестратор: роутер в chats_service проставляет уровень обработки.
+    #   agent_tier = "lite"  -> дешёвая модель (Haiku) отвечает сама (дефолт);
+    #   agent_tier = "agent" -> полный агент с тулами (юзер явно позвал).
+    # agent_farewell=True -> это ПОСЛЕДНИЙ ход agent-режима (счётчик дошёл до 0):
+    #   сервер подмешивает в конец speech прощание. Сам агент про счётчик не знает.
+    agent_tier = payload.get("agent_tier", "lite")
+    agent_farewell = bool(payload.get("agent_farewell", False))
+    # Персона голосового героя (Пейто/Атлантик). Прилетает из приложения;
+    # по ней жёстко мапятся голос+стиль TTS и блок личности в промпте.
+    mobile_persona = payload.get("persona")
 
     # Проактивная инициация (будильники завтрак/обед/ужин + poke). Бот шлёт
     # спец-payload без "живого" текста от человека: initiated=True + слот/адресность.
@@ -184,9 +194,13 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
         message = f"[CatchPM, ТабельНомер: {tb_name}, Пользователь: {username}, chat_id: {chat_id}, user_id: {user_id}]\n" + text
 
     if is_mobile:
-        from agent.mobile.mobile_settings import (DEFAULT_INSTRUCTION, VOICE_STYLE, LIMIT_VOICE_TEXT,
+        from agent.mobile.mobile_settings import (build_agent_instruction, LIMIT_VOICE_TEXT,
             text_compressor)
-        message = DEFAULT_INSTRUCTION + text
+        from agent.mobile.personas import get_persona_prompt
+        # Персона приклеивается и к agent-инструкции, и к lite (внутри run_lite),
+        # чтобы герой был один на обоих мозгах. В agent-режиме здесь собираем
+        # полную инструкцию с характером; lite соберёт свою в run_lite.
+        message = build_agent_instruction(get_persona_prompt(mobile_persona)) + text
     # Скиллы юзера — только для CatchPM (в Telegram user_id это tg-id, не наш users).
     if not is_telegram:
         selected_skills = await db.get_selected_skills_for_user(int(user_id))
@@ -211,27 +225,87 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
 
     try:
         logging.info(f"ПОЛЬЗОВАТЕЛЬ ВЫБРАЛ: {selected_tools}, с контекстом {context_size}")
-        response = await agent.process_query(user_input=message, 
-                                            request_id=request_id, user_id=user_id, 
+        # ── MOBILE LITE-ВЕТКА ───────────────────────────────────────────────
+        # Дешёвая модель (Haiku) отвечает сама, БЕЗ тулов и event-loop'а.
+        # process_query НЕ вызывается. Если Haiku в JSON вернёт call_agent=true,
+        # ниже (после парсинга) переключаем Redis-режим на agent (режим X:
+        # Haiku всё равно отвечает этим же ответом «подключаю агента»).
+        is_lite = is_mobile and agent_tier == "lite"
+        if is_lite:
+            from agent.mobile.lite_runner import run_lite
+            from agent.mobile.action_parser import parse_mobile_response
+            response = {}
+            lite_raw = await run_lite(text, persona=mobile_persona)
+            lite_parsed = parse_mobile_response(lite_raw)
+
+            # ВАРИАНТ Y (бесшовная эскалация): если Haiku в JSON пометила, что
+            # вопрос вне её компетенций (needs_agent) ИЛИ юзер явно позвал
+            # агента (call_agent) — НЕ выходим, а в ЭТОМ ЖЕ проходе дёргаем
+            # полного агента. Реплику-мостик Haiku ("дай-ка подумать…")
+            # склеиваем в начало ответа агента -> один голос, без стыка и без
+            # упоминания слова «агент». Заодно включаем agent-режим в Redis
+            # (следующие ходы поедут на агента без эскалации).
+            if lite_parsed.get("needs_agent") or lite_parsed.get("call_agent"):
+                try:
+                    from agent.mobile.mode_store import enable_agent_mode
+                    await enable_agent_mode(chat_id)
+                    logging.info(f"[mobile] chat_id={chat_id}: эскалация -> agent-режим (5 ходов)")
+                except Exception as _mode_err:
+                    logging.error(f"[mobile] не удалось включить agent-режим: {_mode_err}")
+
+                bridge = (lite_parsed.get("speech") or "").strip()
+                response = await agent.process_query(user_input=message,
+                                                request_id=request_id, user_id=user_id,
+                                                chat_id=chat_id, database=db, selected_tools=selected_tools,
+                                                context_size=context_size,
+                                                source="CatchPM",
+                                                agent_model=agent_model,
+                                                images=images,
+                                                gateway_target=gateway_target)
+                response_text = response["message"]
+                # мостик-реплику Haiku пометим, чтобы ниже приклеить её к speech агента
+                _mobile_bridge = bridge
+                is_lite = False  # дальше обрабатываем как полноценный ответ агента
+            else:
+                response_text = lite_raw
+                _mobile_bridge = None
+        else:
+            _mobile_bridge = None
+            response = await agent.process_query(user_input=message,
+                                            request_id=request_id, user_id=user_id,
                                             chat_id=chat_id, database=db, selected_tools=selected_tools,
                                             context_size=context_size,
                                             source=("telegram" if is_telegram else "CatchPM"),
                                             agent_model=agent_model,
                                             images=images,
                                             gateway_target=gateway_target)
-
-        response_text = response["message"]
-        # Mobile: ответ агента приходит СТРОГИМ JSON {"v","speech","actions"}.
-        # Парсер fallback-safe: при кривом JSON весь текст уходит в speech,
-        # actions=[]. Вариант A: в историю чата кладём чистый speech, а
-        # actions едут отдельным полем на телефон (Redis long-poll).
+            response_text = response["message"]
+        # Mobile: ответ приходит СТРОГИМ JSON {"v","speech","actions","style",...}.
+        # Парсер fallback-safe: при кривом JSON весь текст уходит в speech.
+        # Вариант A: в историю чата кладём чистый speech, actions/style едут
+        # отдельными полями на телефон (Redis long-poll).
         mobile_speech = None
         mobile_actions = []
+        mobile_style = None
         if is_mobile:
             from agent.mobile.action_parser import parse_mobile_response
             parsed = parse_mobile_response(response_text)
             mobile_speech = parsed["speech"]
             mobile_actions = parsed["actions"]
+            mobile_style = parsed.get("style")
+
+            # Бесшовная эскалация: приклеиваем мостик Haiku в начало speech агента.
+            if _mobile_bridge and mobile_speech:
+                mobile_speech = f"{_mobile_bridge} <short pause> {mobile_speech}"
+            elif _mobile_bridge and not mobile_speech:
+                mobile_speech = _mobile_bridge
+
+            # AGENT: последний ход режима (счётчик дошёл до 0) -> прощаемся голосом.
+            # Подмешивает СЕРВЕР; агент про счётчик не осведомлён.
+            if (agent_tier != "lite") and agent_farewell:
+                from agent.mobile.mobile_settings import AGENT_FAREWELL_SUFFIX
+                mobile_speech = (mobile_speech or "") + AGENT_FAREWELL_SUFFIX
+
             # дальше по пайплайну (TTS + история чата) используем чистый текст
             response_text = mobile_speech
         # from datetime import datetime
@@ -242,19 +316,27 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
         files_to_send = response.get("files_to_send")  # [{"path": "...", ...}, ...]
 
         
-        if is_mobile: # Должны сгенерировать ответ агента голосом по дефолту
-            voice_text = None
-            if len(response_text) > LIMIT_VOICE_TEXT:
-                voice_text = text_compressor(response_text)
-            else: voice_text = response_text
+        if is_mobile: # Генерируем голос по speech. Пустой speech -> команда без озвучки.
+            from agent.mobile.personas import get_voice_and_style
+            voice_id, persona_style = get_voice_and_style(mobile_persona)
+            # Модель может уточнить эмоцию в поле style -> домешиваем к базовому
+            # стилю персоны; если не прислала — остаётся базовый стиль героя.
+            eff_style = f"{persona_style}, {mobile_style}" if mobile_style else persona_style
 
-            voice_metadata = await audio_generator(text=voice_text, voice="Charon", style=VOICE_STYLE)
-            # path = "/app/generated_files/voice_3a2d9c7194d0.ogg"
-            # voice_metadata = {"result": None, "voice": "sace", "style_note": "a", "fpath": path, "size_kb": 123}
-            if not voice_metadata["result"]:
-                files_to_send = [{"kind": "voice", "path": voice_metadata["fpath"]}]
+            speech_clean = (response_text or "").strip()
+            if not speech_clean:
+                # Пустой speech = команда (фонарик/громкость/трек): TTS НЕ генерим,
+                # на телефон уедут только actions. Мобилка выполнит молча / свой ack.
+                logging.info(f"[mobile] speech пуст -> пропускаю TTS, только actions ({len(mobile_actions)})")
             else:
-                pass # Нужно вернуть сигнал об какой либо ошибке. Потом собрать дефолтные ГС на мобильном клиенте
+                voice_text = speech_clean
+                if len(speech_clean) > LIMIT_VOICE_TEXT:
+                    voice_text = text_compressor(speech_clean)
+                voice_metadata = await audio_generator(text=voice_text, voice=voice_id, style=eff_style)
+                if not voice_metadata["result"]:
+                    files_to_send = [{"kind": "voice", "path": voice_metadata["fpath"]}]
+                else:
+                    pass # Нужно вернуть сигнал об ошибке. Дефолтные ГС на мобильном клиенте
 
         attached_files = None
         if files_to_send:

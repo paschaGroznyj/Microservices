@@ -98,31 +98,69 @@ def _validate_actions(raw_actions) -> list[dict]:
     return clean
 
 
-def parse_mobile_response(raw: str) -> dict:
-    """Главная функция. Всегда возвращает {"speech": str, "actions": list}.
+def _fallback(raw: str) -> dict:
+    """Единый безопасный fallback: весь текст в speech, без эскалации/действий."""
+    return {
+        "speech": raw.strip(),
+        "actions": [],
+        "call_agent": False,
+        "needs_agent": False,
+        "style": "",
+    }
 
-    FALLBACK-SAFE: любая ошибка → весь текст уходит в speech, actions=[].
+
+def parse_mobile_response(raw: str) -> dict:
+    """Главная функция. Всегда возвращает dict с ключами:
+        speech (str), actions (list), call_agent (bool), needs_agent (bool), style (str).
+
+    FALLBACK-SAFE: любая ошибка → весь текст уходит в speech, actions=[],
+    без эскалации (никогда не эскалируем вслепую на кривом JSON).
+
+    Управляющие поля имеют смысл только в LITE-режиме (оркестратор Haiku):
+      * call_agent  — пользователь ЯВНО позвал агента словами;
+      * needs_agent — Haiku САМА решила, что запрос вне её компетенций.
+    Любой из двух true → сервер эскалирует на полного агента (вариант Y,
+    в том же проходе). В agent-режиме этих полей в ответе нет — остаются False.
+
+    style — опциональная подсказка эмоции для TTS (домешивается к базовому
+    стилю персоны). Нет/не строка → "".
+
+    ВАЖНО: speech="" (пустая строка) — ВАЛИДНО и НЕ является ошибкой. Это
+    команда устройством без озвучки (пропускаем TTS). Fallback срабатывает
+    только когда JSON вообще не распознан, а не когда speech пустой.
     """
     if not isinstance(raw, str):
         raw = str(raw or "")
 
     blob = _extract_json_blob(raw)
     if not blob:
-        return {"speech": raw.strip(), "actions": []}
+        return _fallback(raw)
 
     try:
         data = json.loads(blob)
     except Exception as e:
         logger.warning("[mobile] JSON не распарсился (%s) — fallback на plain text", e)
-        return {"speech": raw.strip(), "actions": []}
+        return _fallback(raw)
 
     if not isinstance(data, dict):
-        return {"speech": raw.strip(), "actions": []}
+        return _fallback(raw)
 
+    # speech: строка допустима пустая (команда без озвучки). Если поля нет вовсе
+    # или оно не строка — это кривой ответ, уходим в fallback (голос не теряем).
     speech = data.get("speech")
-    if not isinstance(speech, str) or not speech.strip():
-        # нет валидного speech — не рискуем, озвучиваем исходный текст целиком
-        return {"speech": raw.strip(), "actions": []}
+    if not isinstance(speech, str):
+        return _fallback(raw)
 
     actions = _validate_actions(data.get("actions"))
-    return {"speech": speech.strip(), "actions": actions}
+    call_agent = bool(data.get("call_agent", False))
+    needs_agent = bool(data.get("needs_agent", False))
+    style = data.get("style")
+    style = style.strip() if isinstance(style, str) else ""
+
+    return {
+        "speech": speech.strip(),
+        "actions": actions,
+        "call_agent": call_agent,
+        "needs_agent": needs_agent,
+        "style": style,
+    }

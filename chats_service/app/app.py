@@ -29,6 +29,46 @@ redis_client = None  # redis.asyncio.Redis — проставится на start
 MOBILE_REPLY_KEY = "mobile:reply:{chat_id}"
 MOBILE_REPLY_TTL = 300  # сек — ответ живёт 5 мин, если мобилка не забрала
 
+# ── MOBILE-ОРКЕСТРАТОР: режим lite <-> agent ───────────────────────────────────
+# Контракт ключа идентичен agent_service/app/agent/mobile/mode_store.py:
+#   ключ   = mobile:mode:{chat_id}
+#   value  = JSON {"mode":"agent","turns_left":N}
+#   нет ключа = lite (дефолт); TTL 24ч.
+# Включает режим agent_service (при call_agent=true от lite-модели), а СПИСЫВАЕТ
+# ходы — этот роутер. На последнем ходу режим сбрасывается в lite + farewell.
+MOBILE_MODE_KEY = "mobile:mode:{chat_id}"
+MOBILE_MODE_TTL = 24 * 3600
+
+
+async def _route_mobile_tier(chat_id: str) -> dict:
+    """Списать один ход agent-режима. Возвращает {"tier":"agent"|"lite","farewell":bool}.
+
+    fail-open: Redis недоступен/любая ошибка -> lite (мобилку обслужит дешёвая модель).
+    """
+    if redis_client is None:
+        return {"tier": "lite", "farewell": False}
+    try:
+        key = MOBILE_MODE_KEY.format(chat_id=chat_id)
+        raw = await redis_client.get(key)
+        if not raw:
+            return {"tier": "lite", "farewell": False}
+        data = json.loads(raw)
+        if data.get("mode") != "agent":
+            return {"tier": "lite", "farewell": False}
+        left = int(data.get("turns_left", 0))
+        if left <= 0:
+            await redis_client.delete(key)
+            return {"tier": "lite", "farewell": False}
+        left -= 1
+        if left <= 0:
+            await redis_client.delete(key)
+            return {"tier": "agent", "farewell": True}
+        await redis_client.set(key, json.dumps({"mode": "agent", "turns_left": left}), ex=MOBILE_MODE_TTL)
+        return {"tier": "agent", "farewell": False}
+    except Exception as e:
+        logging.warning(f"[mobile-router] fail-open lite: {e}")
+        return {"tier": "lite", "farewell": False}
+
 # ── Голос мобильного клиента: ASR на сервере (как в telegram_service) ──────────
 # Мобилка НЕ расшифровывает звук сама — она шлёт голос (ogg/opus) в /send_message
 # с input_format="voice" и байтами в files[].file_b64. chats_service дёргает
@@ -135,6 +175,10 @@ class ChatMessage(BaseModel):
     agent_model: str | None = None
     gateway_target: str = "main"
     input_format: str = "text"  # text | voice
+    # Голосовая персона мобильного героя (Пейто/Атлантик). Прилетает из приложения
+    # (его определяет wake-word: какое имя распознано). По ней agent_service
+    # жёстко мапит голос+стиль TTS и блок личности в промпте. None -> дефолт.
+    persona: str | None = None
     # Проактивная инициация из telegram_service (будильники/poke/грусть).
     initiated: bool = False
     slot: str | None = None
@@ -270,6 +314,19 @@ async def send_message(chat: ChatMessage):
             chat.files.pop(vidx)
         chat.has_files = bool(chat.files)
 
+    # ── MOBILE-ОРКЕСТРАТОР: роутер lite/agent ──────────────────────────────────
+    # По умолчанию мобилка обрабатывается дешёвой моделью (lite). Если юзер ранее
+    # явно позвал агента — в Redis mobile:mode:{chat_id} стоит agent + счётчик
+    # ходов. Здесь списываем один ход; на последнем ставим farewell (сервер
+    # agent_service подмешает прощание в голос и режим сбросится в lite).
+    agent_tier = "agent"   # не-mobile всегда идёт обычным путём
+    agent_farewell = False
+    if chat.gateway_target == "mobile":
+        tier_info = await _route_mobile_tier(chat.chat_id)
+        agent_tier = tier_info["tier"]
+        agent_farewell = tier_info["farewell"]
+        logging.info(f"[mobile-router] chat={chat.chat_id} tier={agent_tier} farewell={agent_farewell}")
+
     message = {
         "user_id": chat.user_id,
         "tb_name": chat.tb_name,
@@ -293,6 +350,9 @@ async def send_message(chat: ChatMessage):
         "target_username": chat.target_username,
         "sad_followup": chat.sad_followup,
         "custom_prompt": chat.custom_prompt,
+        "agent_tier": agent_tier,
+        "agent_farewell": agent_farewell,
+        "persona": chat.persona,
     }
     logging.info(message)
     start = time.perf_counter()

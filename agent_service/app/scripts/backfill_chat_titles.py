@@ -36,13 +36,13 @@ import sys
 import asyncpg
 
 # Импорты работают при запуске как модуль из /app: python -m app.scripts.backfill_chat_titles
-from app.agent_pm.core.config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME
-from app.agent_pm.core.agent_provider import (
+from app.agent.core.config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME
+from app.agent.core.agent_provider import (
     get_llm_lite_model,
     get_llm_lite_model_gpt_mini,
     get_llm_lite_model_gemini_flash,
 )
-from app.agent_pm.title_generator import generate_chat_title
+from app.agent.title_generator import generate_chat_title
 
 logging.basicConfig(
     level=logging.INFO,

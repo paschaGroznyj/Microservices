@@ -143,7 +143,8 @@ class DBConsumer:
                 # Ответ агента для мобильного клиента: телефон за NAT, поэтому
                 # не пушим ему, а кладём в Redis-список — мобилка заберёт
                 # long-poll'ом через GET /mobile/poll.
-                await self.push_to_mobile(chat_id, message, attached_files, message_id=message_id)
+                mobile_actions = payload.get("mobile_actions") or []
+                await self.push_to_mobile(chat_id, message, attached_files, message_id=message_id, actions=mobile_actions)
                 return
 
             if is_from_bot:
@@ -261,7 +262,7 @@ class DBConsumer:
                 logging.error(f"[telegram] не удалось дочитать картинку из БД: {e}")
         return files
 
-    async def push_to_mobile(self, chat_id: str, text: str, files=None, message_id=None):
+    async def push_to_mobile(self, chat_id: str, text: str, files=None, message_id=None, actions=None):
         """Ответ агента → Redis-список для мобильного клиента (AI_tracker).
 
         Телефон за NAT: сервер не инициирует соединение к нему, поэтому ответ
@@ -299,6 +300,7 @@ class DBConsumer:
             reply = {
                 "text": text or "",
                 "files": mobile_files,
+                "actions": actions or [],
                 "message_id": message_id,
                 "ts": int(time.time()),
             }

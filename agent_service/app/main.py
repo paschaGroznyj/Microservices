@@ -221,6 +221,19 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                                             gateway_target=gateway_target)
 
         response_text = response["message"]
+        # Mobile: ответ агента приходит СТРОГИМ JSON {"v","speech","actions"}.
+        # Парсер fallback-safe: при кривом JSON весь текст уходит в speech,
+        # actions=[]. Вариант A: в историю чата кладём чистый speech, а
+        # actions едут отдельным полем на телефон (Redis long-poll).
+        mobile_speech = None
+        mobile_actions = []
+        if is_mobile:
+            from agent.mobile.action_parser import parse_mobile_response
+            parsed = parse_mobile_response(response_text)
+            mobile_speech = parsed["speech"]
+            mobile_actions = parsed["actions"]
+            # дальше по пайплайну (TTS + история чата) используем чистый текст
+            response_text = mobile_speech
         # from datetime import datetime
         # now = datetime.now()
         # response = {'action': "test"}
@@ -232,7 +245,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
         if is_mobile: # Должны сгенерировать ответ агента голосом по дефолту
             voice_text = None
             if len(response_text) > LIMIT_VOICE_TEXT:
-                voice_text = text_compressor(text)
+                voice_text = text_compressor(response_text)
             else: voice_text = response_text
 
             voice_metadata = await audio_generator(text=voice_text, voice="Charon", style=VOICE_STYLE)
@@ -371,6 +384,10 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             "tokens_usage": response.get("tokens_usage"),
             "gateway_target": gateway_target,
             "auto_title": response.get("auto_title"),
+            # Mobile device actions (белый список): едут на телефон через
+            # endpoint_consumer.push_to_mobile -> Redis -> long-poll мобилки.
+            # Для не-mobile всегда [] — поле нейтральное.
+            "mobile_actions": mobile_actions,
         }
 
         await prod.send_and_wait("chat-messages", value=bot_message)

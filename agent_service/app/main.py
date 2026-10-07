@@ -28,7 +28,7 @@ from agent.tools.content.tool_generate_audio import audio_generator
 from agent.core.db import AgentDB
 from agent.core.file_parsers import parse_file
 from agent.core import obs_file_storage
-from api.web_ui import web_router, pending_files
+from api.web_ui import web_router, pending_files, set_db as _set_web_ui_db, set_active_tasks as _set_web_ui_tasks
 
 logging.basicConfig(level=logging.INFO)
 
@@ -614,6 +614,9 @@ async def lifespan(app: FastAPI):
     await db.init_db_pool()
     await db.init_agent_admin_pool() 
     await db.init_agent_base_pool()
+    # web_ui использует ТОТ ЖЕ прогретый db (иначе его локальный pool=None -> 503)
+    _set_web_ui_db(db)
+    _set_web_ui_tasks(active_tasks)   # web_ui.stop_message видит тот же словарь задач
 
     from agent.consumers.task_events_consumer import start_task_events_consumer
 

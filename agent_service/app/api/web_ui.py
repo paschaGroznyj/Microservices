@@ -15,7 +15,26 @@ APIRouter, Form, File, UploadFile)
 
 logging.basicConfig(level=logging.INFO)
 
+# db-инстанс проставляется из main.py (lifespan) через set_db() —
+# это ТОТ ЖЕ объект, чей пул прогрет в init_db_pool(). Отдельный AgentDB()
+# здесь держал бы self.pool=None -> /web/db_image отдавал 503.
 db = AgentDB()
+
+def set_db(shared_db):
+    """Подменяет модульный db прогретым инстансом из main.lifespan."""
+    global db
+    db = shared_db
+
+# active_tasks — ТОТ ЖЕ словарь, что в main.py (связывается через set_active_tasks()
+# из lifespan). main пишет [request_id]=task / .pop, web_ui читает для /stop_message.
+# Общая ссылка на один объект; main словарь целиком не переприсваивает, только мутирует.
+active_tasks: dict = {}
+
+def set_active_tasks(shared_tasks):
+    """Связывает модульный active_tasks с общим словарём из main.lifespan."""
+    global active_tasks
+    active_tasks = shared_tasks
+
 web_router = APIRouter()
 
 ALLOWED_FILES_ROOTS = [

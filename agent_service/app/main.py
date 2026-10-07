@@ -253,7 +253,25 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                 except Exception as _mode_err:
                     logging.error(f"[mobile] не удалось включить agent-режим: {_mode_err}")
 
+                # БЕСШОВНЫЙ МОСТИК: реплику Haiku ("дай-ка подумать…") озвучиваем
+                # голосом ТЕКУЩЕЙ персоны и СРАЗУ кладём напрямую в Redis
+                # mobile:reply (мимо Kafka и БД — это промежуточная реплика).
+                # Юзер слышит голос героя мгновенно, пока агент работает;
+                # финальный ответ приедет вторым сообщением штатным путём.
                 bridge = (lite_parsed.get("speech") or "").strip()
+                if bridge:
+                    try:
+                        from agent.mobile.personas import get_voice_and_style
+                        from agent.mobile.mode_store import push_bridge_reply
+                        b_voice, b_style = get_voice_and_style(mobile_persona)
+                        bridge_meta = await audio_generator(text=bridge, voice=b_voice, style=b_style)
+                        if not bridge_meta["result"]:
+                            await push_bridge_reply(chat_id, bridge_meta["fpath"])
+                        else:
+                            logging.warning("[mobile] не удалось озвучить мостик, эскалирую без раннего голоса")
+                    except Exception as _bridge_err:
+                        logging.error(f"[mobile] ошибка озвучки/отправки мостика: {_bridge_err}")
+
                 response = await agent.process_query(user_input=message,
                                                 request_id=request_id, user_id=user_id,
                                                 chat_id=chat_id, database=db, selected_tools=selected_tools,
@@ -263,14 +281,10 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                                                 images=images,
                                                 gateway_target=gateway_target)
                 response_text = response["message"]
-                # мостик-реплику Haiku пометим, чтобы ниже приклеить её к speech агента
-                _mobile_bridge = bridge
                 is_lite = False  # дальше обрабатываем как полноценный ответ агента
             else:
                 response_text = lite_raw
-                _mobile_bridge = None
         else:
-            _mobile_bridge = None
             response = await agent.process_query(user_input=message,
                                             request_id=request_id, user_id=user_id,
                                             chat_id=chat_id, database=db, selected_tools=selected_tools,
@@ -294,11 +308,9 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             mobile_actions = parsed["actions"]
             mobile_style = parsed.get("style")
 
-            # Бесшовная эскалация: приклеиваем мостик Haiku в начало speech агента.
-            if _mobile_bridge and mobile_speech:
-                mobile_speech = f"{_mobile_bridge} <short pause> {mobile_speech}"
-            elif _mobile_bridge and not mobile_speech:
-                mobile_speech = _mobile_bridge
+            # Мостик-реплика Haiku при эскалации уже ушла ОТДЕЛЬНЫМ голосовым
+            # сообщением в Redis (push_bridge_reply) ПЕРЕД вызовом агента —
+            # здесь к ответу агента её НЕ клеим (иначе прозвучит дважды).
 
             # AGENT: последний ход режима (счётчик дошёл до 0) -> прощаемся голосом.
             # Подмешивает СЕРВЕР; агент про счётчик не осведомлён.

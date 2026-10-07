@@ -22,6 +22,17 @@ MODE_KEY = "mobile:mode:{chat_id}"
 MODE_TTL = 24 * 3600          # сутки
 AGENT_TURNS = 5               # ходов агента до авто-выхода
 
+# Обратный путь мобилки (как в chats_service/endpoint_consumer.py). Контракт
+# ОДИН: мобилка забирает mobile:reply:{chat_id} через GET /mobile/poll (BLPOP).
+# При бесшовной эскалации реплику-мостик Haiku ("дай-ка подумать…") шлём
+# НАПРЯМУЮ из agent_service в этот же список ПЕРЕД тем как дёрнуть тяжёлого
+# агента — чтобы юзер услышал голос героя сразу, а не вместе с финальным
+# ответом через 3-5 секунд. Мостик в БД НЕ сохраняется (это промежуточная
+# реплика), поэтому идёт мимо Kafka/истории — только голос в Redis.
+MOBILE_REPLY_KEY = "mobile:reply:{chat_id}"
+MOBILE_REPLY_TTL = 300        # сек (совпадает с endpoint_consumer)
+_BRIDGE_MAX_BYTES = 20 * 1024 * 1024  # 20MB — как лимит картинок в Telegram-пути
+
 _redis = None
 
 
@@ -88,3 +99,52 @@ async def consume_agent_turn(chat_id: str) -> dict:
     except Exception as e:
         logger.warning("[mobile-mode] consume_agent_turn fail-open lite: %s", e)
         return {"tier": "lite", "farewell": False}
+
+
+async def push_bridge_reply(chat_id: str, voice_path: str) -> bool:
+    """Положить ОЗВУЧЕННЫЙ мостик-реплику Haiku напрямую в mobile:reply:{chat_id}.
+
+    Вызывается ТОЛЬКО при бесшовной эскалации (Haiku -> агент) ПЕРЕД запуском
+    тяжёлого агента. Юзер слышит голос героя сразу ("дай-ка подумать…"), пока
+    агент работает; финальный ответ приедет вторым сообщением штатным путём
+    (Kafka -> endpoint_consumer -> этот же список).
+
+    Контракт reply ИДЕНТИЧЕН endpoint_consumer.push_to_mobile:
+      {"text","files":[{"name","kind","ext","file_b64"}],"actions","message_id","ts"}
+    Мостик: text="" (в БД/историю НЕ кладём), один voice-файл, actions=[].
+
+    Возвращает True если реплика легла в Redis, иначе False (fail-open —
+    эскалация продолжится, просто без раннего голоса).
+    """
+    import time
+    import base64
+    try:
+        with open(voice_path, "rb") as fh:
+            raw = fh.read()
+        if len(raw) > _BRIDGE_MAX_BYTES:
+            logger.warning("[mobile-bridge] voice %s = %d байт > лимита, пропускаю",
+                           voice_path, len(raw))
+            return False
+        ext = voice_path.rsplit(".", 1)[-1].lower() if "." in voice_path else "ogg"
+        name = voice_path.rsplit("/", 1)[-1] if "/" in voice_path else voice_path
+        reply = {
+            "text": "",  # промежуточная реплика — в историю/БД не идёт
+            "files": [{
+                "name": name,
+                "kind": "voice",
+                "ext": ext,
+                "file_b64": base64.b64encode(raw).decode("ascii"),
+            }],
+            "actions": [],
+            "message_id": None,
+            "ts": int(time.time()),
+        }
+        r = _get_redis()
+        key = MOBILE_REPLY_KEY.format(chat_id=str(chat_id))
+        await r.rpush(key, json.dumps(reply))
+        await r.expire(key, MOBILE_REPLY_TTL)
+        logger.info("[mobile-bridge] мостик-голос положен в Redis key=%s (%d байт)", key, len(raw))
+        return True
+    except Exception as e:
+        logger.error("[mobile-bridge] не удалось положить мостик в Redis chat=%s: %s", chat_id, e)
+        return False

@@ -172,6 +172,11 @@ def get_image_gen_config() -> dict:
 # video generation is async (task + polling) and audio returns raw binary.
 ROUTER_VIDEO_MODEL = "heygen/heygen-video-1"
 ROUTER_AUDIO_MODEL = "google/gemini-3.8-flash-lite-tts"
+# Instrumental/background music generation (text -> mp3). Streaming
+# chat.completions with audio={"format":"mp3"}; chunks arrive base64-encoded.
+ROUTER_MUSIC_MODEL = "google/lyria-3-pro-preview"
+# Talking-avatar video (image + voice/audio -> lipsynced mp4). Async /videos.
+ROUTER_AVATAR_MODEL = "heygen/avatar-iv"
 
 
 def get_router_api_config() -> dict:
@@ -181,4 +186,6 @@ def get_router_api_config() -> dict:
         "api_key": ROUTER_API_KEY,
         "video_model": ROUTER_VIDEO_MODEL,
         "audio_model": ROUTER_AUDIO_MODEL,
+        "music_model": ROUTER_MUSIC_MODEL,
+        "avatar_model": ROUTER_AVATAR_MODEL,
     }

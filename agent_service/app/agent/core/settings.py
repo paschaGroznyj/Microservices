@@ -22,6 +22,7 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
     "media_gen": [
         "generate_video",
         "generate_audio",
+        "generate_music",
     ],
     "admin": [
         "get_db_schema",
@@ -92,6 +93,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     # --- media_gen (admin-only, RouterAPI) ---
     "generate_video": "Генерирует короткое видео по промпту (RouterAPI, админ, платно).",
     "generate_audio": "Синтезирует речь из текста (TTS, RouterAPI, админ, платно).",
+    "generate_music": "Генерирует инструментальную/фоновую музыку (mp3) по описанию (Lyria, RouterAPI, админ, платно).",
     # --- sessions ---
     "session_point": "Фиксирует точку сессии (начало/конец диалога) и делает саммари.",
     "work_with_agent_journal": "Ведёт бортовой журнал памяти внутри чата (запомнить/обновить/архив факты).",

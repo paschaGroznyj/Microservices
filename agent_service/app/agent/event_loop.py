@@ -810,8 +810,10 @@ class HarnessAgent:
         # the admin-only "media_gen" category in TOOLS_SETTINGS.
         from .tools.content.tool_generate_video import make_generate_video_tool
         from .tools.content.tool_generate_audio import make_generate_audio_tool
+        from .tools.content.tool_generate_audio import make_generate_music_tool
         generate_video = make_generate_video_tool(agent, images)
         generate_audio = make_generate_audio_tool(agent)
+        generate_music = make_generate_music_tool(agent)
 
         base_tools = [
             analyze_image,
@@ -819,6 +821,7 @@ class HarnessAgent:
             find_generated_image,
             generate_video,
             generate_audio,
+            generate_music,
             get_db_schema,
             execute_sql_query,
             parse_web_page,

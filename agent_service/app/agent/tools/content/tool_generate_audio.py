@@ -21,6 +21,8 @@ it to the user (send_file_to_user).
 
 import os
 import uuid
+import json
+import base64
 import logging
 import subprocess
 
@@ -209,3 +211,129 @@ def make_generate_audio_tool(agent):
             return voice_meta["result"]
 
     return generate_audio
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# MUSIC GENERATION (text -> instrumental mp3) via RouterAPI google/lyria-3-pro
+# ══════════════════════════════════════════════════════════════════════════
+# Unlike TTS, music uses the STREAMING chat.completions endpoint with
+# audio={"format":"mp3"}. The server emits SSE chunks; each chunk carries a
+# base64-encoded mp3 fragment at delta.audio.data. We concatenate all base64
+# strings, decode once and write a ready-to-play .mp3 (no ffmpeg transcode).
+
+async def music_generator(prompt: str):
+    """Call RouterAPI Lyria, stream mp3 chunks, return (mp3_bytes | error_str)."""
+    cfg = get_router_api_config()
+    api_key = cfg.get("api_key") or ""
+    base_url = (cfg.get("base_url") or "").rstrip("/")
+    model = cfg.get("music_model")
+    if not api_key:
+        return ("generate_music error: RouterAPI key is not configured "
+                "(ROUTER_API_KEY). Ask the admin to set it in env.")
+    if not model:
+        return "generate_music error: music_model is not configured."
+    if not (prompt or "").strip():
+        return "generate_music error: prompt is empty."
+
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt.strip()}],
+        "audio": {"format": "mp3"},
+        "stream": True,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    b64_parts: list[str] = []
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(300.0)) as client:
+            async with client.stream(
+                "POST", f"{base_url}/chat/completions",
+                headers=headers, json=payload,
+            ) as resp:
+                if resp.status_code >= 400:
+                    body = (await resp.aread()).decode("utf-8", "ignore")
+                    return (f"generate_music error: HTTP {resp.status_code}: "
+                            f"{body[:300]}")
+                async for line in resp.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line[len("data:"):].strip()
+                    if not data or data == "[DONE]":
+                        continue
+                    try:
+                        obj = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    choices = obj.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta") or {}
+                    audio = delta.get("audio")
+                    if isinstance(audio, dict) and audio.get("data"):
+                        b64_parts.append(audio["data"])
+    except httpx.HTTPError as e:
+        return f"generate_music error: network failure: {e}"
+    except Exception as e:
+        log.exception("generate_music request error")
+        return f"generate_music error: {e}"
+
+    if not b64_parts:
+        return "generate_music error: empty audio response (no chunks)."
+    try:
+        mp3_bytes = base64.b64decode("".join(b64_parts))
+    except Exception as e:
+        return f"generate_music error: base64 decode failed: {e}"
+    if not mp3_bytes:
+        return "generate_music error: decoded audio is empty."
+    return mp3_bytes
+
+
+def make_generate_music_tool(agent):
+    """Factory: builds the admin-only generate_music langchain tool."""
+
+    @tool
+    async def generate_music(prompt: str) -> str:
+        """Generate instrumental/background MUSIC from a text prompt via RouterAPI (admin-only, paid).
+
+        Uses google/lyria-3-pro-preview. Produces an mp3 track from a free-form
+        description of the desired music and saves it for delivery to the user
+        (send_file_to_user). This is for MUSIC/soundscapes, NOT speech — for
+        spoken voice use generate_audio instead.
+
+        Args:
+            prompt: Free-form description of the music to compose. Describe genre,
+                mood, instruments, tempo, energy. Any language. Examples:
+                "спокойная музыка в стиле ambient", "энергичный synthwave с
+                драйвовым басом", "lo-fi hip-hop beat for studying, mellow piano",
+                "epic orchestral trailer music, building to a climax".
+
+        Returns a human-readable status with the local .mp3 path on success, or
+        a clear error message on failure.
+        """
+        result = await music_generator(prompt)
+        if isinstance(result, str):
+            # error path (generator returns an error string)
+            return result
+
+        mp3_bytes = result
+        os.makedirs(GENERATED_ROOT, exist_ok=True)
+        fname = f"music_{uuid.uuid4().hex[:12]}.mp3"
+        fpath = os.path.join(GENERATED_ROOT, fname)
+        with open(fpath, "wb") as f:
+            f.write(mp3_bytes)
+
+        try:
+            pend = getattr(agent, "_pending_generated_files", None)
+            if isinstance(pend, list):
+                pend.append(fpath)
+        except Exception:
+            pass
+
+        size_kb = len(mp3_bytes) // 1024
+        return (f"Music generated (mp3). Saved to {fpath} ({size_kb} KB). "
+                f"Send it with send_file_to_user.")
+
+    return generate_music

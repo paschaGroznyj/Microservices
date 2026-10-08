@@ -73,8 +73,25 @@ PROVIDERS = {
         "default_duration": 8,
         "audio": True,  # veo generates an audio track by default
     },
+    # Talking-head avatar: animates ONE face image to speak. Either synthesizes
+    # speech from `prompt` using a catalog voice_id, OR lip-syncs to a provided
+    # audio track (audio_url / local audio path). Duration is driven by the
+    # speech length, not a `duration` knob — so we don't send duration here.
+    "avatar": {
+        "model": "heygen/avatar-iv",
+        "aspect": {"16:9", "9:16", "1:1", "4:3", "3:4"},
+        "resolution": {"720p", "1080p"},
+        "duration": set(),  # not applicable — length follows the speech
+        "default_aspect": "16:9",
+        "default_resolution": "720p",
+        "default_duration": None,
+        "audio": False,
+    },
 }
 DEFAULT_PROVIDER = "heygen"
+# Multilingual HeyGen catalog voice used when the caller doesn't pick one
+# (works for Russian). Override per call via avatar_voice_id.
+DEFAULT_AVATAR_VOICE_ID = "80441555167a467e967ab9487d844a30"
 
 # Polling parameters for the async video task.
 POLL_INTERVAL_SEC = 6
@@ -134,6 +151,49 @@ def _coerce_int_list(val):
         return out
 
 
+# Local audio file (produced by generate_audio / generate_music) -> data URI.
+# Whitelisted roots only; used to feed an avatar lip-sync track without a public
+# URL. Mirrors the image path resolver but for audio mime types.
+_AUDIO_ROOTS = ("/app/generated_files", "/sandbox")
+_AUDIO_MIME = {
+    ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg",
+    ".oga": "audio/ogg", ".opus": "audio/ogg", ".m4a": "audio/mp4",
+    ".aac": "audio/aac", ".flac": "audio/flac",
+}
+
+
+def _resolve_audio_to_data_uri(path_or_name: str) -> str | None:
+    """Local audio path / file name (whitelisted roots) -> data URI, or None."""
+    import base64 as _b64
+    p = (path_or_name or "").strip()
+    if not p:
+        return None
+    candidate = None
+    if os.path.isabs(p):
+        if any(os.path.abspath(p).startswith(r) for r in _AUDIO_ROOTS) and os.path.isfile(p):
+            candidate = p
+    else:
+        for root in _AUDIO_ROOTS:
+            for dirpath, _dirs, files in os.walk(root):
+                if os.path.basename(p) in files:
+                    candidate = os.path.join(dirpath, os.path.basename(p))
+                    break
+            if candidate:
+                break
+    if not candidate or not os.path.isfile(candidate):
+        return None
+    ext = os.path.splitext(candidate)[1].lower()
+    mime = _AUDIO_MIME.get(ext, "audio/mpeg")
+    try:
+        with open(candidate, "rb") as f:
+            raw = f.read()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    return f"data:{mime};base64,{_b64.b64encode(raw).decode('ascii')}"
+
+
 def make_generate_video_tool(agent, images: list[dict] | None = None):
     """Factory: builds the admin-only generate_video langchain tool.
 
@@ -160,6 +220,9 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
         reference_media_ids: list[str] | None = None,
         generate_audio: bool | None = None,
         seed: int | None = None,
+        avatar_voice_id: str | None = None,
+        avatar_audio_url: str | None = None,
+        avatar_audio_path: str | None = None,
     ) -> str:
         """Generate a short video from a text prompt via RouterAPI (admin-only, paid).
 
@@ -175,6 +238,15 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
                 "google" -> google/veo-3.1-fast; aspect 16:9|9:16, resolution
                     720p|1080p|4K, duration 4|6|8, generates an audio track by
                     default. Use google for cinematic prompts with sound.
+                "avatar" -> heygen/avatar-iv; a TALKING-HEAD avatar that animates
+                    ONE face photo to speak. aspect 16:9|9:16|1:1|4:3|3:4,
+                    resolution 720p|1080p. Length follows the speech (no duration
+                    knob). REQUIRES a face image as the first frame (use any
+                    first_frame_* source — a clear JPEG with one visible face).
+                    Speech comes from EITHER avatar_voice_id (TTS reads `prompt`)
+                    OR an audio track (avatar_audio_url / avatar_audio_path) that
+                    the avatar lip-syncs to. For lip-sync, `prompt` becomes a
+                    stage direction (e.g. "friendly, smiling, gestures").
             aspect_ratio: Aspect ratio. Allowed values depend on `provider`
                 (see above). Unsupported values snap to the provider default.
                 If omitted, the provider default is used.
@@ -210,6 +282,17 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
                 provider default is used (veo: on). Ignored for heygen.
             seed: Optional integer for deterministic generation.
 
+            Avatar-only (provider="avatar"):
+              avatar_voice_id: catalog voice id for TTS. The avatar reads
+                `prompt` aloud in this voice. For Russian use a multilingual
+                voice. Mutually exclusive with the audio lip-sync args.
+              avatar_audio_url: public URL of an audio track to lip-sync to.
+              avatar_audio_path: local path/name of an audio file (e.g. one
+                produced by generate_audio or generate_music, in
+                /app/generated_files or /sandbox) to lip-sync to. Resolved to a
+                data URI automatically. Use this to chain voice/music -> avatar.
+              Provide EITHER avatar_voice_id OR one of the audio args.
+
         Returns a human-readable status with the local mp4 path on success, or a
         clear error message on failure.
         """
@@ -233,18 +316,20 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
         # -- validate / clamp params (per selected provider) --------------
         ar = aspect_ratio if aspect_ratio in prov["aspect"] else prov["default_aspect"]
         res = resolution if resolution in prov["resolution"] else prov["default_resolution"]
-        if duration is None:
-            dur = prov["default_duration"]
-        else:
-            try:
-                dur = int(duration)
-            except (TypeError, ValueError):
+        dur = None
+        if prov["duration"]:  # avatar has no duration knob -> leave dur=None
+            if duration is None:
                 dur = prov["default_duration"]
-            if dur > MAX_DURATION_SEC:
-                dur = MAX_DURATION_SEC
-            if dur not in prov["duration"]:
-                # snap to the closest allowed duration for this provider
-                dur = min(prov["duration"], key=lambda d: (abs(d - dur), d))
+            else:
+                try:
+                    dur = int(duration)
+                except (TypeError, ValueError):
+                    dur = prov["default_duration"]
+                if dur > MAX_DURATION_SEC:
+                    dur = MAX_DURATION_SEC
+                if dur not in prov["duration"]:
+                    # snap to the closest allowed duration for this provider
+                    dur = min(prov["duration"], key=lambda d: (abs(d - dur), d))
 
         # -- resolve first frame (at most one, priority order) ------------
         first_frame_uri = None
@@ -286,29 +371,58 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
             "model": model,
             "prompt": prompt.strip(),
             "aspect_ratio": ar,
-            "duration": dur,
             "resolution": res,
         }
-        # Audio track: only meaningful for providers that expose the knob
-        # (veo). Fall back to the provider default when the caller is silent.
-        if prov["audio"]:
-            want_audio = prov["audio"] if generate_audio is None else bool(generate_audio)
-            data["generate_audio"] = want_audio
-        if seed is not None:
-            try:
-                data["seed"] = int(seed)
-            except (TypeError, ValueError):
-                pass
-        if first_frame_uri:
-            data["frame_images"] = [{
-                "type": "image_url",
-                "image_url": {"url": first_frame_uri},
-                "frame_type": "first_frame",
-            }]
-        if reference_uris:
-            data["input_references"] = [
-                {"type": "image_url", "image_url": {"url": u}} for u in reference_uris
-            ]
+        if dur is not None:
+            data["duration"] = dur
+
+        if prov_key == "avatar":
+            # Talking-head: the face image MUST go into input_references (not
+            # frame_images). Prefer an explicit first_frame_* source; fall back
+            # to the first reference image if that's where the caller put it.
+            face_uri = first_frame_uri or (reference_uris[0] if reference_uris else None)
+            if not face_uri:
+                return ("generate_video error: avatar needs a face image. Pass a "
+                        "clear JPEG with one visible face via any first_frame_* "
+                        "source (path / image_key / user_image_index / media_id).")
+            refs = [{"type": "image_url", "image_url": {"url": face_uri}}]
+
+            # Speech source: EITHER a lip-sync audio track OR a catalog voice_id.
+            audio_uri = None
+            if avatar_audio_url and str(avatar_audio_url).strip():
+                audio_uri = str(avatar_audio_url).strip()
+            elif avatar_audio_path and str(avatar_audio_path).strip():
+                audio_uri = _resolve_audio_to_data_uri(str(avatar_audio_path).strip())
+            if audio_uri:
+                refs.append({"type": "audio_url", "audio_url": {"url": audio_uri}})
+            data["input_references"] = refs
+
+            if not audio_uri:
+                # No audio -> TTS reads `prompt` with a catalog voice. Default to
+                # a multilingual voice (Kore) when the caller didn't pick one.
+                vid = (avatar_voice_id or "").strip() or DEFAULT_AVATAR_VOICE_ID
+                data["provider"] = {"options": {"heygen": {"voice_id": vid}}}
+        else:
+            # Audio track: only meaningful for providers that expose the knob
+            # (veo). Fall back to the provider default when the caller is silent.
+            if prov["audio"]:
+                want_audio = prov["audio"] if generate_audio is None else bool(generate_audio)
+                data["generate_audio"] = want_audio
+            if seed is not None:
+                try:
+                    data["seed"] = int(seed)
+                except (TypeError, ValueError):
+                    pass
+            if first_frame_uri:
+                data["frame_images"] = [{
+                    "type": "image_url",
+                    "image_url": {"url": first_frame_uri},
+                    "frame_type": "first_frame",
+                }]
+            if reference_uris:
+                data["input_references"] = [
+                    {"type": "image_url", "image_url": {"url": u}} for u in reference_uris
+                ]
 
         headers = {
             "Authorization": f"Bearer {api_key}",

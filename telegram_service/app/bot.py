@@ -176,6 +176,128 @@ def _k_reactbuf(chat_id: int) -> str: return f"tg:reactions:{chat_id}"
 def _k_react_neg(chat_id: int) -> str: return f"tg:react:neg:{chat_id}"
 # Счётчик pos-реакций на конкретное сообщение (порог 3+ -> триггер 1 раз).
 def _k_react_pos(chat_id: int, tg_mid: int) -> str: return f"tg:react:pos:{chat_id}:{tg_mid}"
+# Текущая активная СЕССИЯ диалога для этого telegram-чата. tg chat_id (число) —
+# это физический адрес доставки, а session_id (chat_id в chats_service) — ключ
+# памяти/истории агента. Один telegram-чат может переключать N сессий.
+def _k_session(tg_chat_id: int) -> str: return f"tg:session:{tg_chat_id}"
+# Реестр сессий telegram-чата (новые — в конец). Ведём сами, не полагаясь на
+# users-джойн в chats_service: telegram-юзера может не быть в таблице users,
+# тогда /user/chats вернёт пусто. Храним id сессий + последнюю реплику для
+# подписи кнопки. Хэш: field=session_id -> JSON{title, ts}.
+def _k_sessions_reg(tg_chat_id: int) -> str: return f"tg:sessions:{tg_chat_id}"
+
+
+def _tg_username(user_id: int, username: str | None) -> str:
+    """Стабильный ключ пользователя для chats_service (/user/chats матчит по
+    users.username). Если у telegram-юзера нет @username — суррогат tg_<id>,
+    чтобы список сессий всегда находился по одному и тому же ключу."""
+    u = (username or "").strip()
+    return u if u else f"tg_{user_id}"
+
+
+async def get_current_session(tg_chat_id: int) -> str | None:
+    """Текущий session_id (chat_id chats_service) для telegram-чата, либо None."""
+    try:
+        r = await get_redis()
+        return await r.get(_k_session(tg_chat_id))
+    except Exception as e:
+        log.warning(f"get_current_session fail chat={tg_chat_id}: {e}")
+        return None
+
+
+async def set_current_session(tg_chat_id: int, session_id) -> None:
+    try:
+        r = await get_redis()
+        await r.set(_k_session(tg_chat_id), str(session_id))
+    except Exception as e:
+        log.warning(f"set_current_session fail chat={tg_chat_id}: {e}")
+
+
+async def create_session(user_id: int) -> str | None:
+    """Создаёт новую сессию в chats_service (/chat/new -> числовой chat_id)."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                f"{CHATS_SERVICE_URL}/chat/new",
+                json={"user_id": user_id, "type_agent": "pm"},
+            )
+            resp.raise_for_status()
+            return str(resp.json().get("chat_id"))
+    except Exception as e:
+        log.error(f"create_session fail user={user_id}: {e}")
+        return None
+
+
+async def register_session(tg_chat_id: int, session_id, title: str = "") -> None:
+    """Добавляет/обновляет сессию в Redis-реестре telegram-чата."""
+    try:
+        r = await get_redis()
+        payload = json.dumps({"title": title or "", "ts": int(time.time())})
+        await r.hset(_k_sessions_reg(tg_chat_id), str(session_id), payload)
+    except Exception as e:
+        log.warning(f"register_session fail chat={tg_chat_id}: {e}")
+
+
+async def touch_session_title(tg_chat_id: int, session_id, last_text: str) -> None:
+    """Обновляет подпись активной сессии последним сообщением пользователя
+    (если ручного/авто-заголовка ещё нет — показываем начало реплики)."""
+    try:
+        r = await get_redis()
+        key = _k_sessions_reg(tg_chat_id)
+        raw = await r.hget(key, str(session_id))
+        meta = json.loads(raw) if raw else {}
+        if not meta.get("title"):
+            t = " ".join((last_text or "").split())
+            meta["title"] = (t[:60]) if t else ""
+        meta["ts"] = int(time.time())
+        await r.hset(key, str(session_id), json.dumps(meta))
+    except Exception as e:
+        log.warning(f"touch_session_title fail chat={tg_chat_id}: {e}")
+
+
+async def ensure_session(tg_chat_id: int, user_id: int) -> str:
+    """Возвращает активную сессию telegram-чата; если её нет — создаёт первую
+    и запоминает в Redis. Фолбэк на tg_chat_id, если chats_service недоступен
+    (диалог не падает — работает как раньше, одна сессия на чат)."""
+    sid = await get_current_session(tg_chat_id)
+    if sid:
+        return sid
+    sid = await create_session(user_id)
+    if not sid:
+        return str(tg_chat_id)
+    await set_current_session(tg_chat_id, sid)
+    await register_session(tg_chat_id, sid)
+    log.info(f"session created chat={tg_chat_id} user={user_id} -> {sid}")
+    return sid
+
+
+async def list_sessions(tg_chat_id: int) -> list[dict]:
+    """Сессии telegram-чата из Redis-реестра, новые сверху.
+    Каждый элемент: {id, title, ts}."""
+    try:
+        r = await get_redis()
+        raw = await r.hgetall(_k_sessions_reg(tg_chat_id))
+        out = []
+        for sid, meta_raw in (raw or {}).items():
+            try:
+                meta = json.loads(meta_raw)
+            except Exception:
+                meta = {}
+            out.append({"id": sid, "title": meta.get("title") or "",
+                        "ts": int(meta.get("ts") or 0)})
+        out.sort(key=lambda x: x["ts"], reverse=True)
+        return out
+    except Exception as e:
+        log.error(f"list_sessions fail chat={tg_chat_id}: {e}")
+        return []
+
+
+def _session_title(item: dict) -> str:
+    """Короткая подпись сессии для кнопки."""
+    t = " ".join(str(item.get("title") or "").split())
+    if len(t) > 38:
+        t = t[:37] + "…"
+    return t or f"Сессия {item.get('id')}"
 
 
 async def fwd_group_already_seen(chat_id: int, media_group_id) -> bool:
@@ -648,6 +770,13 @@ async def dispatch_to_agent(chat_id: int, user_id: int, username: str,
     settings = await get_chat_settings(chat_id)
     request_id = str(uuid.uuid4())
     message_id = str(uuid.uuid4())
+    # chat_id-аргумент = telegram chat id (физический адрес доставки ответа).
+    # Ключ СЕССИИ (память/история агента) резолвим отдельно: активная сессия
+    # этого telegram-чата из Redis, либо автосоздание первой через /chat/new.
+    session_id = await ensure_session(chat_id, user_id)
+    # Обновляем подпись сессии последним сообщением юзера (для списка сессий).
+    if merged_text and merged_text.strip():
+        await touch_session_title(chat_id, session_id, merged_text)
     # Единый список вложений: новый путь (files=[{file_b64,file_name}]) или
     # старый одиночный (file_b64+file_name) — обратная совместимость.
     items = list(files) if files else ([] )
@@ -658,8 +787,9 @@ async def dispatch_to_agent(chat_id: int, user_id: int, username: str,
 
     payload = {
         "user_id": user_id,
-        "username": username,
-        "chat_id": str(chat_id),
+        "username": _tg_username(user_id, username),
+        "chat_id": str(session_id),
+        "tg_chat_id": str(chat_id),
         "message": merged_text,
         "type_agent": "pm",
         "gateway_target": "telegram",
@@ -1876,6 +2006,31 @@ def _settings_summary(settings: dict) -> str:
     )
 
 
+SESS_PAGE = 5  # сессий на страницу
+
+
+def _menu_sessions(items: list[dict], page: int, active_id: str | None) -> InlineKeyboardMarkup:
+    """Меню списка сессий: до SESS_PAGE кнопок + пагинация + новая сессия."""
+    total = len(items)
+    start = page * SESS_PAGE
+    chunk = items[start:start + SESS_PAGE]
+    rows = [[InlineKeyboardButton("\u2795 Новая сессия", callback_data="tg:sess:new")]]
+    for it in chunk:
+        mark = "\u2713 " if str(it.get("id")) == str(active_id) else ""
+        rows.append([InlineKeyboardButton(
+            f"{mark}{_session_title(it)}",
+            callback_data=f"tg:sess:open:{it.get('id')}")])
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("\u2b05\ufe0f", callback_data=f"tg:sess:list:{page-1}"))
+    if start + SESS_PAGE < total:
+        nav.append(InlineKeyboardButton("\u27a1\ufe0f", callback_data=f"tg:sess:list:{page+1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton("\u2039 Назад", callback_data="tg:menu:root")])
+    return InlineKeyboardMarkup(rows)
+
+
 def _menu_root(settings: dict | None = None, is_admin: bool = False) -> InlineKeyboardMarkup:
     settings = settings or {}
     proactive = settings.get("proactive_enabled")
@@ -1890,6 +2045,7 @@ def _menu_root(settings: dict | None = None, is_admin: bool = False) -> InlineKe
         [InlineKeyboardButton("Инструменты", callback_data="tg:menu:tools")],
         [InlineKeyboardButton("Триггер", callback_data="tg:menu:trigger")],
         [InlineKeyboardButton("Будильники", callback_data="tg:menu:alarms")],
+        [InlineKeyboardButton("\U0001f4ac Сессии", callback_data="tg:sess:list:0")],
         [InlineKeyboardButton(poke_label, callback_data="tg:toggle:proactive")],
     ]
     if is_admin:
@@ -2109,6 +2265,70 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "tg:menu:root":
         await query.answer()
         await _refresh(lambda s: _menu_root(s, is_admin=_cb_admin))
+        return
+
+    # ── Сессии (n-диалогов на один telegram-чат) ──────────────────────────
+    if data.startswith("tg:sess:"):
+        tg_id = int(chat_id)
+        uid = query.from_user.id if query.from_user else tg_id
+        action = data[len("tg:sess:"):]
+
+        if action.startswith("list:"):
+            try:
+                page = int(action.split(":", 1)[1])
+            except Exception:
+                page = 0
+            await query.answer()
+            items = await list_sessions(tg_id)
+            active = await get_current_session(tg_id)
+            try:
+                await query.edit_message_text(
+                    f"<b>\U0001f4ac Сессии</b> · всего: {len(items)}\n"
+                    "Текущая отмечена \u2713. Переключи или создай новую.",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=_menu_sessions(items, page, active),
+                )
+            except Exception:
+                pass
+            return
+
+        if action == "new":
+            sid = await create_session(uid)
+            if not sid:
+                await query.answer("chats_service недоступен", show_alert=True)
+                return
+            await set_current_session(tg_id, sid)
+            await register_session(tg_id, sid)
+            await query.answer("Новая сессия создана")
+            items = await list_sessions(tg_id)
+            try:
+                await query.edit_message_text(
+                    f"<b>\U0001f4ac Сессии</b> · всего: {len(items)}\n"
+                    "Создана и выбрана новая сессия \u2713",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=_menu_sessions(items, 0, sid),
+                )
+            except Exception:
+                pass
+            return
+
+        if action.startswith("open:"):
+            sid = action.split(":", 1)[1]
+            await set_current_session(tg_id, sid)
+            await query.answer("Сессия выбрана")
+            items = await list_sessions(tg_id)
+            try:
+                await query.edit_message_text(
+                    f"<b>\U0001f4ac Сессии</b> · всего: {len(items)}\n"
+                    "Переключил активную сессию \u2713",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=_menu_sessions(items, 0, sid),
+                )
+            except Exception:
+                pass
+            return
+
+        await query.answer()
         return
 
     if data == "tg:admin:startlog":
@@ -2768,20 +2988,46 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("⚠️ Не удалось загрузить файл, попробуй ещё раз.")
         return
     file_b64 = base64.b64encode(file_bytearray).decode("utf-8")
+    item = {"file_b64": file_b64, "file_name": fname}
+
+    gid = msg.media_group_id
+    if gid:
+        # АЛЬБОМ документов: Telegram шлёт каждый файл отдельным update с общим
+        # media_group_id. Копим файлы в тот же буфер, что и фото, и шлём одним
+        # dispatch'ем после debounce-окна. caption обычно есть только у одного
+        # элемента, поэтому сохраняем первый непустой текст.
+        key = str(gid)
+        buf = _album_buffers.get(key)
+        if buf is None:
+            thinking = await msg.reply_text("Обрабатываю файлы...")
+            _thinking_messages[chat_id] = thinking.message_id
+            buf = {
+                "items": [], "chat_id": chat_id, "user_id": user.id,
+                "author": author, "text": raw_text, "task": None,
+            }
+            _album_buffers[key] = buf
+        if len(buf["items"]) < TG_ALBUM_MAX:
+            buf["items"].append(item)
+        if raw_text and not buf.get("text"):
+            buf["text"] = raw_text
+        old_task = buf.get("task")
+        if old_task and not old_task.done():
+            old_task.cancel()
+        buf["task"] = asyncio.create_task(_flush_album(key))
+        return
 
     thinking = await msg.reply_text("Обрабатываю файл...")
     _thinking_messages[chat_id] = thinking.message_id
 
     merged_text = f"{author}: {raw_text}".strip() if raw_text else f"{author}: [файл {fname}]"
     try:
-        await dispatch_to_agent(chat_id, user.id, author, merged_text,
-                                file_b64=file_b64, file_name=fname)
+        await dispatch_to_agent(chat_id, user.id, author, merged_text, files=[item])
     except Exception as e:
         await msg.reply_text(f"Не удалось связаться с агентом: {str(e)[:200]}")
 
 
 async def _flush_album(gid: str):
-    """Флаш буфера альбома после дебаунс-окна: один dispatch со всеми кадрами."""
+    """Флаш буфера media_group после дебаунс-окна: один dispatch со всеми вложениями."""
     try:
         await asyncio.sleep(TG_ALBUM_DEBOUNCE)
     except asyncio.CancelledError:
@@ -2795,11 +3041,14 @@ async def _flush_album(gid: str):
     author = buf["author"]
     raw_text = buf.get("text") or ""
     n = len(items)
+    all_images = all((item.get("file_name") or "").lower().endswith((".jpg", ".jpeg", ".png", ".webp")) for item in items)
     if raw_text:
         merged_text = f"{author}: {raw_text}".strip()
-    else:
+    elif all_images:
         merged_text = f"{author}: [альбом из {n} картинок]"
-    log.info(f"[album] flush chat={chat_id} gid={gid} frames={n}")
+    else:
+        merged_text = f"{author}: [альбом из {n} файлов]"
+    log.info(f"[album] flush chat={chat_id} gid={gid} items={n} images={all_images}")
     try:
         await dispatch_to_agent(chat_id, user_id, author, merged_text, files=items)
     except Exception as e:

@@ -137,7 +137,11 @@ class DBConsumer:
             # Если сообщение от бота, отправляем обратно в основной сервис для WebSocket
             if is_from_bot and gateway_target == "telegram":
                 # Ответ агента для Telegram: пушим напрямую боту (host-режим).
-                await self.send_to_telegram(chat_id, message, attached_files, message_id=message_id)
+                # chat_id в payload = session_id (ключ памяти). Физический адрес
+                # доставки — tg_chat_id (если прокинут из бота); фолбэк на chat_id
+                # для обратной совместимости со старым контрактом.
+                deliver_chat_id = payload.get("tg_chat_id") or chat_id
+                await self.send_to_telegram(deliver_chat_id, message, attached_files, message_id=message_id)
                 return
             if is_from_bot and gateway_target == "mobile":
                 # Ответ агента для мобильного клиента: телефон за NAT, поэтому

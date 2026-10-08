@@ -124,7 +124,7 @@ async def safe_download(media, retries: int = 3):
 TG_ALBUM_MAX   = int(os.environ.get("TG_ALBUM_MAX", "10"))
 # Окно дебаунса сборки альбома: TG шлёт кадры N отдельными
 # апдейтами с общим media_group_id; ждём тишины перед dispatch.
-TG_ALBUM_DEBOUNCE = float(os.environ.get("TG_ALBUM_DEBOUNCE", "1.3"))
+TG_ALBUM_DEBOUNCE = float(os.environ.get("TG_ALBUM_DEBOUNCE", "5"))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -143,6 +143,15 @@ _thinking_messages: dict[int, int] = {}
 # Буфер альбомов: media_group_id -> {items, chat_id, user_id, author,
 # text, thinking_mid, task}. Кадры копятся, дебаунс-таск флашит одним dispatch.
 _album_buffers: dict[str, dict] = {}
+
+
+def _loop_now() -> float:
+    """Монотонное время текущего event loop (для debounce-окна альбома)."""
+    try:
+        return asyncio.get_event_loop().time()
+    except Exception:
+        import time as _t
+        return _t.monotonic()
 
 
 # ── Redis keys ──────────────────────────────────────────────────────────────────
@@ -828,8 +837,12 @@ async def dispatch_to_agent(chat_id: int, user_id: int, username: str,
 
     # Файл шлём после постановки в очередь: agent_service уже ждёт его
     # по message_id (wait_for_files, окно 20с). Не роняем диалог при ошибке.
+    # ВАЖНО: грузим под session_id (а НЕ под числовым tg chat_id) — media_store
+    # ключуется по chat_id, с которым зовётся агент (payload.chat_id=session_id).
+    # Иначе файл ложится в media:chat:{tg_chat_id}:*, а агент ищет под session_id
+    # и видит пусто (разъехалось после ввода мульти-сессий).
     if has_files:
-        await _upload_files_to_agent(message_id, chat_id, user_id, items)
+        await _upload_files_to_agent(message_id, session_id, user_id, items)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2301,7 +2314,14 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             items_redis, items_db, active = await asyncio.gather(
                 redis_task, db_task, active_task
             )
-            items = (items_redis or []) + (items_db or [])
+            merged: dict[str, dict] = {}
+            for item in (items_redis or []):
+                merged[str(item["id"])] = item
+            for item in (items_db or []):
+                merged[str(item["id"])] = item
+
+            # Новые сверху
+            items = sorted(merged.values(), key=lambda x: x.get("ts", 0), reverse=True)
 
             try:
                 await query.edit_message_text(
@@ -2330,7 +2350,14 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             items_redis, items_db, active = await asyncio.gather(
                 redis_task, db_task, active_task
             )
-            items = (items_redis or []) + (items_db or [])
+            merged: dict[str, dict] = {}
+            for item in (items_redis or []):
+                merged[str(item["id"])] = item
+            for item in (items_db or []):
+                merged[str(item["id"])] = item
+
+            # Новые сверху
+            items = sorted(merged.values(), key=lambda x: x.get("ts", 0), reverse=True)
             try:
                 await query.edit_message_text(
                     f"<b>\U0001f4ac Сессии</b> · всего: {len(items)}\n"
@@ -2353,7 +2380,14 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             items_redis, items_db, active = await asyncio.gather(
                 redis_task, db_task, active_task
             )
-            items = (items_redis or []) + (items_db or [])
+            merged: dict[str, dict] = {}
+            for item in (items_redis or []):
+                merged[str(item["id"])] = item
+            for item in (items_db or []):
+                merged[str(item["id"])] = item
+
+            # Новые сверху
+            items = sorted(merged.values(), key=lambda x: x.get("ts", 0), reverse=True)
             try:
                 await query.edit_message_text(
                     f"<b>\U0001f4ac Сессии</b> · всего: {len(items)}\n"
@@ -3031,23 +3065,32 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # по chat_id в том же debounce-окне.
     gid = msg.media_group_id
     key = str(gid) if gid else f"doc:{chat_id}"
-
-    # Буфер заводим/обновляем СРАЗУ, ещё до скачивания файла, и перезапускаем
-    # debounce-таймер — иначе медленный safe_download одного файла закрывал бы
-    # окно раньше, чем успеют прийти остальные апдейты альбома (гонка, из-за
-    # которой альбом уходил по одному файлу).
     buf = _album_buffers.get(key)
-    if buf is None:
-        thinking = await msg.reply_text("Обрабатываю файлы...")
-        _thinking_messages[chat_id] = thinking.message_id
+    is_new_buf = buf is None
+    if is_new_buf:
         buf = {
             "items": [], "chat_id": chat_id, "user_id": user.id,
             "author": author, "text": raw_text, "task": None,
-            "downloads": [],
+            "downloads": [], "thinking_sent": False, "last_add": 0.0,
         }
-        _album_buffers[key] = buf
+        _album_buffers[key] = buf  # синхронно, до await — закрывает гонку
+    # Отметку времени последнего кадра обновляем на КАЖДЫЙ апдейт: debounce в
+    # _flush_album отсчитывается именно от неё, а не слепым sleep от старта
+    # задачи. Иначе медленные/крупные файлы, разнесённые по времени больше
+    # окна, флашатся по одному (items=1 на каждый).
+    buf["last_add"] = _loop_now()
     if raw_text and not buf.get("text"):
         buf["text"] = raw_text
+
+    # Плашку "Обрабатываю файлы..." шлём ОДИН раз на буфер (после синхронной
+    # регистрации, так что гонки за ней уже нет).
+    if is_new_buf and not buf.get("thinking_sent"):
+        buf["thinking_sent"] = True
+        try:
+            thinking = await msg.reply_text("Обрабатываю файлы...")
+            _thinking_messages[chat_id] = thinking.message_id
+        except Exception as e:
+            log.error(f"[document] thinking reply fail chat={chat_id}: {e}")
 
     # Скачивание запускаем отдельной задачей и кладём её в буфер: _flush_album
     # перед отправкой дождётся завершения ВСЕХ загрузок буфера. Так окно
@@ -3066,16 +3109,31 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     buf["downloads"].append(asyncio.create_task(_download_into_buf(doc, fname, buf)))
 
+    # Задачу-флашер НЕ пересоздаём на каждый кадр: она сама досыпает по
+    # обновлённому last_add. Создаём только если её ещё нет или уже завершилась.
     old_task = buf.get("task")
-    if old_task and not old_task.done():
-        old_task.cancel()
-    buf["task"] = asyncio.create_task(_flush_album(key))
+    if not old_task or old_task.done():
+        buf["task"] = asyncio.create_task(_flush_album(key))
 
 
 async def _flush_album(gid: str):
-    """Флаш буфера media_group после дебаунс-окна: один dispatch со всеми вложениями."""
+    """Флаш буфера media_group после дебаунс-окна: один dispatch со всеми вложениями.
+
+    Debounce отсчитывается от времени ПОСЛЕДНЕГО добавленного кадра (buf["last_add"]),
+    а не слепым sleep от старта задачи. Пока кадры продолжают прилетать (last_add
+    двигается вперёд), задача досыпает. Это чинит потерю файлов, когда кадры
+    альбома/пачки документов разнесены по времени больше окна (медленная сеть,
+    крупные файлы) — раньше каждый такой кадр флашился отдельно (items=1).
+    """
     try:
-        await asyncio.sleep(TG_ALBUM_DEBOUNCE)
+        while True:
+            buf = _album_buffers.get(gid)
+            if not buf:
+                return
+            wait = buf.get("last_add", 0.0) + TG_ALBUM_DEBOUNCE - _loop_now()
+            if wait <= 0:
+                break
+            await asyncio.sleep(wait)
     except asyncio.CancelledError:
         return
     buf = _album_buffers.get(gid)
@@ -3083,16 +3141,21 @@ async def _flush_album(gid: str):
         return
     # Дожидаемся завершения всех запущенных загрузок файлов буфера, чтобы в один
     # dispatch попали ВСЕ вложения, а не только те, что успели скачаться к концу
-    # debounce-окна. Если во время ожидания придёт новый апдейт альбома — он
-    # отменит нашу задачу (buf["task"]) и перезапустит таймер.
+    # debounce-окна.
     downloads = list(buf.get("downloads") or [])
     if downloads:
         try:
             await asyncio.gather(*downloads, return_exceptions=True)
         except asyncio.CancelledError:
             return
-    # После ожидания проверяем, что буфер всё ещё наш (не перезапущен новым
-    # апдейтом) — снимаем его из общего словаря только сейчас.
+    # Пока ждали загрузки — мог прийти новый кадр и сдвинуть last_add. Если окно
+    # ещё не истекло, досыпаем (не теряем свежие кадры).
+    buf = _album_buffers.get(gid)
+    if not buf:
+        return
+    if _loop_now() - buf.get("last_add", 0.0) < TG_ALBUM_DEBOUNCE:
+        return await _flush_album(gid)
+    # После ожидания снимаем буфер из общего словаря только сейчас.
     buf = _album_buffers.pop(gid, None)
     if not buf or not buf.get("items"):
         return
@@ -3173,17 +3236,24 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # раньше остальных апдейтов и альбом уезжал по одной картинке.
         key = str(gid)
         buf = _album_buffers.get(key)
-        if buf is None:
-            thinking = await msg.reply_text("Смотрю картинки...")
-            _thinking_messages[chat_id] = thinking.message_id
+        is_new_buf = buf is None
+        if is_new_buf:
             buf = {
                 "items": [], "chat_id": chat_id, "user_id": user.id,
                 "author": author, "text": raw_text, "task": None,
-                "downloads": [],
+                "downloads": [], "thinking_sent": False, "last_add": 0.0,
             }
-            _album_buffers[key] = buf
+            _album_buffers[key] = buf  # синхронно, до await — закрывает гонку
+        buf["last_add"] = _loop_now()
         if raw_text and not buf.get("text"):
             buf["text"] = raw_text
+        if is_new_buf and not buf.get("thinking_sent"):
+            buf["thinking_sent"] = True
+            try:
+                thinking = await msg.reply_text("Смотрю картинки...")
+                _thinking_messages[chat_id] = thinking.message_id
+            except Exception as e:
+                log.error(f"[photo] thinking reply fail chat={chat_id}: {e}")
 
         async def _download_photo_into_buf(_media, _fname, _buf):
             try:
@@ -3199,11 +3269,13 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         buf["downloads"].append(asyncio.create_task(_download_photo_into_buf(photo, fname, buf)))
 
-        # перезапускаем дебаунс-таймер на каждый новый кадр
-        old_task = buf.get("task")
-        if old_task and not old_task.done():
-            old_task.cancel()
-        buf["task"] = asyncio.create_task(_flush_album(key))
+        # Флашер НЕ пересоздаём на каждый кадр: он сам досыпает по last_add
+        # (цикл внутри _flush_album), а last_add мы уже сдвинули выше. Создаём
+        # единственную задачу только если живой ещё нет — иначе cancel/recreate
+        # на быстрых кадрах могли оставить альбом без флашера или разорвать его.
+        task = buf.get("task")
+        if task is None or task.done():
+            buf["task"] = asyncio.create_task(_flush_album(key))
         return
 
     try:

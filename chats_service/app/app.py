@@ -1,7 +1,8 @@
 import json
 import logging
 import os
-from fastapi import FastAPI, Header
+import uuid
+from fastapi import FastAPI, Header, Query
 from kafka import KafkaProducer
 from pydantic import BaseModel
 from app.db.chats_tables import DataBaseChats
@@ -80,7 +81,9 @@ producer = KafkaProducer(
     bootstrap_servers=[KAFKA_BROKER],
     api_version=(4,1,0),
     key_serializer=lambda k: str(k).encode('utf-8'),
-    value_serializer=lambda m: json.dumps(m).encode('utf-8'))
+    value_serializer=lambda m: json.dumps(m).encode('utf-8'),
+    max_request_size=10485760)
+   
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -359,13 +362,12 @@ async def send_message(chat: ChatMessage):
         "agent_farewell": agent_farewell,
         "persona": chat.persona,
     }
-    logging.info(message)
     start = time.perf_counter()
     # отправка в Kafka
     producer.send("chat-messages", key=chat.user_id, value=message)
     producer.flush()
     elapsed = time.perf_counter() - start
-    logging.info(f"Message Service. Время на отправку в сокет и на перекладку в кафку = {elapsed:.4f}s")
+    # logging.info(f"Message Service. Время на отправку в сокет и на перекладку в кафку = {elapsed:.4f}s")
     return {"status": "ok"}
 
 
@@ -627,6 +629,15 @@ async def tg_log_message(body: TgLogIn):
     )
     return {"status": "ok"}
 
+@app.get("/tg/user/chats")
+async def get_user_chats(user_id: int = Query(..., alias="user_id"), chat_id: str = Query(..., alias="chat_id")):
+    try:
+        logging.info(f"[meta] {user_id} {chat_id}")
+        chats = await db.get_user_chats_summary_by_user_id(user_id, chat_id)
+        return {"chats": chats}
+    except Exception as e:
+        logging.error(f"Ошибка в эндпоинте get_user_chats: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось загрузить список чатов")
 
 
 @app.get("/chat/{chat_id}/messages")
@@ -751,33 +762,7 @@ async def favorite_chat(action: ChatFavoriteAction):
 
 @app.post("/chat/new")
 async def create_chat(request: Request):
-    data = await request.json()
-    user_id = data.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id required")
-
-    type_agent = data.get("type_agent", "pm")
-
-    # Для ouroboros — один чат на пользователя
-    if type_agent == "ouroboros":
-        existing = await db.find_chat_by_type(user_id, "ouroboros")
-        if existing:
-            return {"chat_id": existing}
-
-    chat_id = await db.create_new_chat()
-
-    # Сохраняем тип чата
-    await db.set_chat_type(chat_id, user_id, type_agent)
-
-    # (опционально) создаём первое сообщение
-    await db.add_message(
-        user_id=user_id,
-        message="Чат создан",
-        chat_id=chat_id,
-        is_from_bot=True
-    )
-
-    return {"chat_id": chat_id}
+    return {"chat_id": str(uuid.uuid4())}
 
 
 @app.get("/chat/by-type/{type_agent}")

@@ -15,19 +15,13 @@ import time
 # не на гейтвей, а прямо телеграм-боту (host-режим) через docker gateway IP.
 TG_BOT_PUSH_URL = os.getenv("TG_BOT_PUSH_URL", "http://172.28.0.1:8010/push_message")
 
-# Redis — обратный путь мобильного клиента (gateway_target="mobile").
-# Телефон за NAT не принимает входящие, поэтому ответ агента кладём в
-# Redis-список mobile:reply:{chat_id}, а мобилка забирает его через
-# GET /mobile/poll (long-poll, BLPOP) на chats_service.
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 MOBILE_REPLY_KEY = "mobile:reply:{chat_id}"
 MOBILE_REPLY_TTL = 300  # сек
 
-# agent_service отдаёт бинарники не-image файлов (голос, docx, pptx) по HTTP
-# эндпоинту /web/file (с диска или восстанавливает из OBS). Контейнеры
-# изолированы, поэтому читать файл с диска агента нельзя — только докачка
-# по этому URL. Внутри compose-сети catchPM адрес — http://agent_service:9001.
+
 AGENT_SERVICE_URL = os.getenv("AGENT_SERVICE_URL", "http://agent_service:9001")
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

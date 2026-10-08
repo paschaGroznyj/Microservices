@@ -291,6 +291,20 @@ async def list_sessions(tg_chat_id: int) -> list[dict]:
         log.error(f"list_sessions fail chat={tg_chat_id}: {e}")
         return []
 
+async def list_sessions_database(user_id: int, chat_id: str) -> list[dict]:
+    """Чаты по user_id"""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{CHATS_SERVICE_URL}/tg/user/chats",
+                params={"user_id": user_id, "chat_id": chat_id},
+            )
+            resp.raise_for_status()
+            return resp.json().get("chats")
+    except Exception as e:
+        log.error(f"create_session fail user={user_id}: {e}")
+        return None
+
 
 def _session_title(item: dict) -> str:
     """Короткая подпись сессии для кнопки."""
@@ -2237,7 +2251,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     chat_id = str(query.message.chat.id if query.message else update.effective_chat.id)
     data = query.data or ""
-    _cb_admin = _is_tg_admin(query.from_user.id if query.from_user else 0)
+    user_id = query.from_user.id if query.from_user else 0
+    _cb_admin = _is_tg_admin(user_id)
 
     if not await is_allowed(chat_id):
         await query.answer("Чат не зарегистрирован.", show_alert=True)
@@ -2274,22 +2289,30 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         action = data[len("tg:sess:"):]
 
         if action.startswith("list:"):
-            try:
-                page = int(action.split(":", 1)[1])
-            except Exception:
-                page = 0
+            page_str = action.removeprefix("list:")
+            page = int(page_str) if page_str.isdigit() else 0
+
             await query.answer()
-            items = await list_sessions(tg_id)
-            active = await get_current_session(tg_id)
+
+            redis_task = list_sessions(tg_id)
+            db_task = list_sessions_database(user_id, chat_id)
+            active_task = get_current_session(tg_id)
+
+            items_redis, items_db, active = await asyncio.gather(
+                redis_task, db_task, active_task
+            )
+            items = (items_redis or []) + (items_db or [])
+
             try:
                 await query.edit_message_text(
-                    f"<b>\U0001f4ac Сессии</b> · всего: {len(items)}\n"
-                    "Текущая отмечена \u2713. Переключи или создай новую.",
+                    f"<b>💬 Сессии</b> · всего: {len(items)}\n"
+                    "Текущая отмечена ✓. Переключи или создай новую.",
                     parse_mode=ParseMode.HTML,
                     reply_markup=_menu_sessions(items, page, active),
                 )
-            except Exception:
+            except TelegramBadRequest:
                 pass
+
             return
 
         if action == "new":
@@ -2300,7 +2323,14 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await set_current_session(tg_id, sid)
             await register_session(tg_id, sid)
             await query.answer("Новая сессия создана")
-            items = await list_sessions(tg_id)
+            redis_task = list_sessions(tg_id)
+            db_task = list_sessions_database(user_id, chat_id)
+            active_task = get_current_session(tg_id)
+
+            items_redis, items_db, active = await asyncio.gather(
+                redis_task, db_task, active_task
+            )
+            items = (items_redis or []) + (items_db or [])
             try:
                 await query.edit_message_text(
                     f"<b>\U0001f4ac Сессии</b> · всего: {len(items)}\n"
@@ -2316,7 +2346,14 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sid = action.split(":", 1)[1]
             await set_current_session(tg_id, sid)
             await query.answer("Сессия выбрана")
-            items = await list_sessions(tg_id)
+            redis_task = list_sessions(tg_id)
+            db_task = list_sessions_database(user_id, chat_id)
+            active_task = get_current_session(tg_id)
+
+            items_redis, items_db, active = await asyncio.gather(
+                redis_task, db_task, active_task
+            )
+            items = (items_redis or []) + (items_db or [])
             try:
                 await query.edit_message_text(
                     f"<b>\U0001f4ac Сессии</b> · всего: {len(items)}\n"

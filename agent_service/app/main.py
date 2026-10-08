@@ -24,11 +24,14 @@ from langchain.schema import HumanMessage, SystemMessage
 from agent.core.config import (KAFKA_BROKER, PORT_PM_AGENT, 
 PORT_PARSERS_SERVICE, PORT_GATEWAY_PORT,
 TG_BOT_PUSH_URL, TRANSCRIBE_PROVIDER)
+from agent.mobile.lite_runner import run_lite
+from agent.mobile.action_parser import parse_mobile_response
 from agent.tools.content.tool_generate_audio import audio_generator
 from agent.core.db import AgentDB
 from agent.core.file_parsers import parse_file
 from agent.core import obs_file_storage
 from api.web_ui import web_router, pending_files, set_db as _set_web_ui_db, set_active_tasks as _set_web_ui_tasks
+
 
 logging.basicConfig(level=logging.INFO)
 
@@ -236,8 +239,6 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
         # Haiku всё равно отвечает этим же ответом «подключаю агента»).
         is_lite = is_mobile and agent_tier == "lite"
         if is_lite:
-            from agent.mobile.lite_runner import run_lite
-            from agent.mobile.action_parser import parse_mobile_response
             response = {}
             lite_raw = await run_lite(text, persona=mobile_persona)
             lite_parsed = parse_mobile_response(lite_raw)
@@ -250,12 +251,13 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             # упоминания слова «агент». Заодно включаем agent-режим в Redis
             # (следующие ходы поедут на агента без эскалации).
             if lite_parsed.get("needs_agent") or lite_parsed.get("call_agent"):
-                try:
-                    from agent.mobile.mode_store import enable_agent_mode
-                    await enable_agent_mode(chat_id)
-                    logging.info(f"[mobile] chat_id={chat_id}: эскалация -> agent-режим (5 ходов)")
-                except Exception as _mode_err:
-                    logging.error(f"[mobile] не удалось включить agent-режим: {_mode_err}")
+                if lite_parsed.get("call_agent"):
+                    try:
+                        from agent.mobile.mode_store import enable_agent_mode
+                        await enable_agent_mode(chat_id)
+                        logging.info(f"[mobile] chat_id={chat_id}: эскалация -> agent-режим (5 ходов)")
+                    except Exception as _mode_err:
+                        logging.error(f"[mobile] не удалось включить agent-режим: {_mode_err}")
 
                 # БЕСШОВНЫЙ МОСТИК: реплику Haiku ("дай-ка подумать…") озвучиваем
                 # голосом ТЕКУЩЕЙ персоны и СРАЗУ кладём напрямую в Redis
@@ -306,7 +308,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
         mobile_actions = []
         mobile_style = None
         if is_mobile:
-            from agent.mobile.action_parser import parse_mobile_response
+            
             parsed = parse_mobile_response(response_text)
             mobile_speech = parsed["speech"]
             mobile_actions = parsed["actions"]

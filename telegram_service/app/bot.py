@@ -2825,9 +2825,14 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if tag_waits_forward:
         return
 
-    # если не одобрено тегом — спросить оркестратор (в группе), с throttle
+    # если не одобрено тегом — спросить оркестратор (в группе), с throttle.
+    # ВАЖНО: оркестратор (lite_llm) дёргаем ТОЛЬКО если trigger_mode="orchestrator".
+    # В режиме "mention" бот отвечает ИСКЛЮЧИТЕЛЬНО на прямое обращение
+    # (@mention / reply на бота); фоновую болтовню не трогаем и lite_llm не зовём.
     if not approved and is_group:
-        if await orchestrator_allowed(chat_id):
+        _settings = await get_chat_settings(chat_id)
+        trigger_mode = (_settings or {}).get("trigger_mode") or "orchestrator"
+        if trigger_mode == "orchestrator" and await orchestrator_allowed(chat_id):
             lines = await buffer_lines(chat_id)
             approved = await orchestrator_should_respond(chat_id, lines)
 
@@ -3018,49 +3023,53 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     fname = pathlib.Path(doc.file_name or f"file_{doc.file_id[:8]}").name
-    try:
-        file_bytearray = await safe_download(doc)
-    except Exception as e:
-        log.error(f"[document] download fail chat={chat_id}: {e}")
-        await msg.reply_text("⚠️ Не удалось загрузить файл, попробуй ещё раз.")
-        return
-    file_b64 = base64.b64encode(file_bytearray).decode("utf-8")
-    item = {"file_b64": file_b64, "file_name": fname}
 
+    # Ключ буфера: альбомный media_group_id, либо (fallback) сам chat_id —
+    # Telegram Desktop часто шлёт несколько документов в одном сообщении БЕЗ
+    # media_group_id (каждый файл = отдельный update, gid=None). Чтобы такие
+    # файлы тоже склеились в ОДИН запрос, при отсутствии gid копим их в буфер
+    # по chat_id в том же debounce-окне.
     gid = msg.media_group_id
-    if gid:
-        # АЛЬБОМ документов: Telegram шлёт каждый файл отдельным update с общим
-        # media_group_id. Копим файлы в тот же буфер, что и фото, и шлём одним
-        # dispatch'ем после debounce-окна. caption обычно есть только у одного
-        # элемента, поэтому сохраняем первый непустой текст.
-        key = str(gid)
-        buf = _album_buffers.get(key)
-        if buf is None:
-            thinking = await msg.reply_text("Обрабатываю файлы...")
-            _thinking_messages[chat_id] = thinking.message_id
-            buf = {
-                "items": [], "chat_id": chat_id, "user_id": user.id,
-                "author": author, "text": raw_text, "task": None,
-            }
-            _album_buffers[key] = buf
-        if len(buf["items"]) < TG_ALBUM_MAX:
-            buf["items"].append(item)
-        if raw_text and not buf.get("text"):
-            buf["text"] = raw_text
-        old_task = buf.get("task")
-        if old_task and not old_task.done():
-            old_task.cancel()
-        buf["task"] = asyncio.create_task(_flush_album(key))
-        return
+    key = str(gid) if gid else f"doc:{chat_id}"
 
-    thinking = await msg.reply_text("Обрабатываю файл...")
-    _thinking_messages[chat_id] = thinking.message_id
+    # Буфер заводим/обновляем СРАЗУ, ещё до скачивания файла, и перезапускаем
+    # debounce-таймер — иначе медленный safe_download одного файла закрывал бы
+    # окно раньше, чем успеют прийти остальные апдейты альбома (гонка, из-за
+    # которой альбом уходил по одному файлу).
+    buf = _album_buffers.get(key)
+    if buf is None:
+        thinking = await msg.reply_text("Обрабатываю файлы...")
+        _thinking_messages[chat_id] = thinking.message_id
+        buf = {
+            "items": [], "chat_id": chat_id, "user_id": user.id,
+            "author": author, "text": raw_text, "task": None,
+            "downloads": [],
+        }
+        _album_buffers[key] = buf
+    if raw_text and not buf.get("text"):
+        buf["text"] = raw_text
 
-    merged_text = f"{author}: {raw_text}".strip() if raw_text else f"{author}: [файл {fname}]"
-    try:
-        await dispatch_to_agent(chat_id, user.id, author, merged_text, files=[item])
-    except Exception as e:
-        await msg.reply_text(f"Не удалось связаться с агентом: {str(e)[:200]}")
+    # Скачивание запускаем отдельной задачей и кладём её в буфер: _flush_album
+    # перед отправкой дождётся завершения ВСЕХ загрузок буфера. Так окно
+    # debounce отсчитывается от прихода апдейтов (быстро), а не от скачивания.
+    async def _download_into_buf(_doc, _fname, _buf):
+        try:
+            data = await safe_download(_doc)
+        except Exception as e:
+            log.error(f"[document] download fail chat={chat_id} name={_fname}: {e}")
+            return
+        if len(_buf["items"]) < TG_ALBUM_MAX:
+            _buf["items"].append({
+                "file_b64": base64.b64encode(data).decode("utf-8"),
+                "file_name": _fname,
+            })
+
+    buf["downloads"].append(asyncio.create_task(_download_into_buf(doc, fname, buf)))
+
+    old_task = buf.get("task")
+    if old_task and not old_task.done():
+        old_task.cancel()
+    buf["task"] = asyncio.create_task(_flush_album(key))
 
 
 async def _flush_album(gid: str):
@@ -3069,6 +3078,21 @@ async def _flush_album(gid: str):
         await asyncio.sleep(TG_ALBUM_DEBOUNCE)
     except asyncio.CancelledError:
         return
+    buf = _album_buffers.get(gid)
+    if not buf:
+        return
+    # Дожидаемся завершения всех запущенных загрузок файлов буфера, чтобы в один
+    # dispatch попали ВСЕ вложения, а не только те, что успели скачаться к концу
+    # debounce-окна. Если во время ожидания придёт новый апдейт альбома — он
+    # отменит нашу задачу (buf["task"]) и перезапустит таймер.
+    downloads = list(buf.get("downloads") or [])
+    if downloads:
+        try:
+            await asyncio.gather(*downloads, return_exceptions=True)
+        except asyncio.CancelledError:
+            return
+    # После ожидания проверяем, что буфер всё ещё наш (не перезапущен новым
+    # апдейтом) — снимаем его из общего словаря только сейчас.
     buf = _album_buffers.pop(gid, None)
     if not buf or not buf.get("items"):
         return
@@ -3083,6 +3107,8 @@ async def _flush_album(gid: str):
         merged_text = f"{author}: {raw_text}".strip()
     elif all_images:
         merged_text = f"{author}: [альбом из {n} картинок]"
+    elif n == 1:
+        merged_text = f"{author}: [файл {items[0].get('file_name') or 'file'}]"
     else:
         merged_text = f"{author}: [альбом из {n} файлов]"
     log.info(f"[album] flush chat={chat_id} gid={gid} items={n} images={all_images}")
@@ -3137,20 +3163,14 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     fname = f"photo_{photo.file_unique_id}.jpg"
-    try:
-        file_bytearray = await safe_download(photo)
-    except Exception as e:
-        log.error(f"[photo] download fail chat={chat_id}: {e}")
-        await msg.reply_text("⚠️ Не удалось загрузить картинку, попробуй ещё раз.")
-        return
-    file_b64 = base64.b64encode(file_bytearray).decode("utf-8")
-    item = {"file_b64": file_b64, "file_name": fname}
 
     gid = msg.media_group_id
     if gid:
         # АЛЬБОМ: TG шлёт кадры N отдельными photo-апдейтами с общим
-        # media_group_id. Копим все кадры в буфер и одним dispatch'ем отправляем
-        # после дебаунс-окна (тишины). caption есть только у одного кадра.
+        # media_group_id. Буфер и debounce-таймер заводим СРАЗУ (до скачивания),
+        # а сами кадры качаем отдельными задачами — _flush_album дождётся их
+        # перед отправкой. Иначе медленная загрузка кадра могла закрыть окно
+        # раньше остальных апдейтов и альбом уезжал по одной картинке.
         key = str(gid)
         buf = _album_buffers.get(key)
         if buf is None:
@@ -3159,18 +3179,41 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             buf = {
                 "items": [], "chat_id": chat_id, "user_id": user.id,
                 "author": author, "text": raw_text, "task": None,
+                "downloads": [],
             }
             _album_buffers[key] = buf
-        if len(buf["items"]) < TG_ALBUM_MAX:
-            buf["items"].append(item)
         if raw_text and not buf.get("text"):
             buf["text"] = raw_text
+
+        async def _download_photo_into_buf(_media, _fname, _buf):
+            try:
+                data = await safe_download(_media)
+            except Exception as e:
+                log.error(f"[photo] download fail chat={chat_id} name={_fname}: {e}")
+                return
+            if len(_buf["items"]) < TG_ALBUM_MAX:
+                _buf["items"].append({
+                    "file_b64": base64.b64encode(data).decode("utf-8"),
+                    "file_name": _fname,
+                })
+
+        buf["downloads"].append(asyncio.create_task(_download_photo_into_buf(photo, fname, buf)))
+
         # перезапускаем дебаунс-таймер на каждый новый кадр
         old_task = buf.get("task")
         if old_task and not old_task.done():
             old_task.cancel()
         buf["task"] = asyncio.create_task(_flush_album(key))
         return
+
+    try:
+        file_bytearray = await safe_download(photo)
+    except Exception as e:
+        log.error(f"[photo] download fail chat={chat_id}: {e}")
+        await msg.reply_text("⚠️ Не удалось загрузить картинку, попробуй ещё раз.")
+        return
+    file_b64 = base64.b64encode(file_bytearray).decode("utf-8")
+    item = {"file_b64": file_b64, "file_name": fname}
 
     # ОДИНОЧНОЕ фото: единый guard поста (вариант Б) — мог параллельно
     # прийти в on_text; первый дошедший ставит ключ, дубли молча выходят.

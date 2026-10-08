@@ -285,7 +285,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                                                 source="CatchPM",
                                                 agent_model=agent_model,
                                                 images=images,
-                                                gateway_target=gateway_target)
+                                                gateway_target=gateway_target,
+                                                tg_chat_id=tg_chat_id)
                 response_text = response["message"]
                 is_lite = False  # дальше обрабатываем как полноценный ответ агента
             else:
@@ -298,7 +299,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                                             source=("telegram" if is_telegram else "CatchPM"),
                                             agent_model=agent_model,
                                             images=images,
-                                            gateway_target=gateway_target)
+                                            gateway_target=gateway_target,
+                                            tg_chat_id=tg_chat_id)
             response_text = response["message"]
         # Mobile: ответ приходит СТРОГИМ JSON {"v","speech","actions","style",...}.
         # Парсер fallback-safe: при кривом JSON весь текст уходит в speech.

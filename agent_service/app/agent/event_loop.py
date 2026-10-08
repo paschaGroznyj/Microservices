@@ -1214,8 +1214,11 @@ class HarnessAgent:
                 block = "".join(buf).strip()
                 buf.clear()
                 if block:
-                    tg_chat_id = ctx.get("chat_id")
-                    await self._tg_edit_reasoning(tg_chat_id, block)
+                    # Адрес плашки "Думаю..." — ФИЗИЧЕСКИЙ числовой tg chat id,
+                    # а НЕ session_id (после мульти-сессий chat_id = UUID сессии).
+                    # Фолбэк на chat_id для обратной совместимости (старые клиенты).
+                    rid = ctx.get("tg_chat_id") or ctx.get("chat_id")
+                    await self._tg_edit_reasoning(rid, block)
                 return
             if kind == "final_commit":
                 # финал уедет по Kafka целиком — просто чистим буфер
@@ -1246,6 +1249,13 @@ class HarnessAgent:
         Дебаунс ~1с на chat_id, чтобы не упираться в rate limit edit_message_text.
         Любые ошибки гасим — трансляция не должна ронять основной ответ."""
         if not chat_id or not text or not TG_BOT_PUSH_URL:
+            return
+        # Endpoint /tg/reasoning ждёт chat_id:int (это числовой tg chat id).
+        # Если прилетел session UUID (строка не из цифр) — трансляция невозможна,
+        # тихо выходим (не роняем ответ).
+        try:
+            chat_id = int(chat_id)
+        except (TypeError, ValueError):
             return
         try:
             snippet = text.strip()
@@ -1289,6 +1299,7 @@ class HarnessAgent:
         context_size=None,
         images=None,
         gateway_target: str = "main",
+        tg_chat_id=None,
     ) -> Dict[str, Any]:
         if not self.db:
             self.db = database
@@ -1297,6 +1308,7 @@ class HarnessAgent:
             "request_id": request_id,
             "gateway_target": gateway_target or "main",
             "chat_id": chat_id,
+            "tg_chat_id": tg_chat_id,
             "user_id": user_id,
             "message_id": None,
             "agent_model": agent_model,

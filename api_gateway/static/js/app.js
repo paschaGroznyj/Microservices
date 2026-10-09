@@ -2673,14 +2673,12 @@ class ChatApp {
         if (this._runState !== 'running') return;
         this._runState = 'stopping';
         try {
-            if (this._activeRequestId) {
-                await fetch('/api/chats/stop_message', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    credentials: 'include',
-                    body: JSON.stringify({ request_id: this._activeRequestId, chat_id: this.currentChat })
-                });
-            }
+            await fetch('/api/chats/stop_message', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ request_id: this._activeRequestId || '__loop__', chat_id: this.currentChat })
+            });
         } catch (e) {
             console.warn('stopCurrentRun error:', e);
         }

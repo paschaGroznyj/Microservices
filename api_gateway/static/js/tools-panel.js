@@ -341,11 +341,13 @@ class ToolsPanel {
       const loopBox = loopRow.querySelector(".tp-checkbox");
       loopRow.addEventListener("click", e => {
         e.preventDefault();
+        e.stopPropagation();
         const nowChecked = !this._loopEnabled;
         this._loopEnabled = nowChecked;
         loopCb.checked = nowChecked;
         loopBox.classList.toggle("checked", nowChecked);
         loopBox.innerHTML = nowChecked ? this._checkSVG() : "";
+        this._updateTriggerBadge(triggerBtn);
       });
       toolsSection.appendChild(loopRow);
     }

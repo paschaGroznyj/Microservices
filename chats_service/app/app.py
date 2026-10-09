@@ -1,6 +1,8 @@
 import json
 import logging
-from fastapi import FastAPI, Header
+import os
+import uuid
+from fastapi import FastAPI, Header, Query
 from kafka import KafkaProducer
 from pydantic import BaseModel
 from app.db.chats_tables import DataBaseChats
@@ -18,11 +20,70 @@ MESSAGE_TIMEOUT = 20        # сколько секунд ждём ответ о
 
 db = DataBaseChats()  # ← один раз для всего приложения
 service_message_alive = False
+
+# Redis — обратный путь для мобильного клиента (gateway_target="mobile").
+# Телефон за NAT: сервер не может сам к нему достучаться (в отличие от TG-бота),
+# поэтому ответ агента кладётся в Redis-список mobile:reply:{chat_id},
+# а мобилка забирает его long-poll'ом через GET /mobile/poll.
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+redis_client = None  # redis.asyncio.Redis — проставится на startup
+MOBILE_REPLY_KEY = "mobile:reply:{chat_id}"
+MOBILE_REPLY_TTL = 300  # сек — ответ живёт 5 мин, если мобилка не забрала
+
+# ── MOBILE-ОРКЕСТРАТОР: режим lite <-> agent ───────────────────────────────────
+# Контракт ключа идентичен agent_service/app/agent/mobile/mode_store.py:
+#   ключ   = mobile:mode:{chat_id}
+#   value  = JSON {"mode":"agent","turns_left":N}
+#   нет ключа = lite (дефолт); TTL 24ч.
+# Включает режим agent_service (при call_agent=true от lite-модели), а СПИСЫВАЕТ
+# ходы — этот роутер. На последнем ходу режим сбрасывается в lite + farewell.
+MOBILE_MODE_KEY = "mobile:mode:{chat_id}"
+MOBILE_MODE_TTL = 24 * 3600
+
+
+async def _route_mobile_tier(chat_id: str) -> dict:
+    """Списать один ход agent-режима. Возвращает {"tier":"agent"|"lite","farewell":bool}.
+
+    fail-open: Redis недоступен/любая ошибка -> lite (мобилку обслужит дешёвая модель).
+    """
+    if redis_client is None:
+        return {"tier": "lite", "farewell": False}
+    try:
+        key = MOBILE_MODE_KEY.format(chat_id=chat_id)
+        raw = await redis_client.get(key)
+        if not raw:
+            return {"tier": "lite", "farewell": False}
+        data = json.loads(raw)
+        if data.get("mode") != "agent":
+            return {"tier": "lite", "farewell": False}
+        left = int(data.get("turns_left", 0))
+        if left <= 0:
+            await redis_client.delete(key)
+            return {"tier": "lite", "farewell": False}
+        left -= 1
+        if left <= 0:
+            await redis_client.delete(key)
+            return {"tier": "agent", "farewell": True}
+        await redis_client.set(key, json.dumps({"mode": "agent", "turns_left": left}), ex=MOBILE_MODE_TTL)
+        return {"tier": "agent", "farewell": False}
+    except Exception as e:
+        logging.warning(f"[mobile-router] fail-open lite: {e}")
+        return {"tier": "lite", "farewell": False}
+
+# ── Голос мобильного клиента: ASR на сервере (как в telegram_service) ──────────
+# Мобилка НЕ расшифровывает звук сама — она шлёт голос (ogg/opus) в /send_message
+# с input_format="voice" и байтами в files[].file_b64. chats_service дёргает
+# уже готовый эндпоинт агента /api/tg/transcribe, подменяет message текстом и
+# только ПОТОМ кладёт лёгкое текстовое сообщение в Kafka (голос в Kafka не летит).
+AGENT_SERVICE_URL = os.getenv("AGENT_SERVICE_URL", "http://agent_service:9001")
+MOBILE_ASR_PROVIDER = os.getenv("TG_ASR_PROVIDER", "cloud_ru")
 producer = KafkaProducer(
     bootstrap_servers=[KAFKA_BROKER],
     api_version=(4,1,0),
     key_serializer=lambda k: str(k).encode('utf-8'),
-    value_serializer=lambda m: json.dumps(m).encode('utf-8'))
+    value_serializer=lambda m: json.dumps(m).encode('utf-8'),
+    max_request_size=10485760)
+   
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -116,7 +177,15 @@ class ChatMessage(BaseModel):
     files: list = []
     agent_model: str | None = None
     gateway_target: str = "main"
+    # Физический telegram chat id — адрес доставки ответа. Для telegram chat_id
+    # (выше) теперь = session_id (ключ памяти агента), а push ответа идёт на
+    # tg_chat_id. None -> обратная совместимость (push на chat_id, как раньше).
+    tg_chat_id: str | None = None
     input_format: str = "text"  # text | voice
+    # Голосовая персона мобильного героя (Пейто/Атлантик). Прилетает из приложения
+    # (его определяет wake-word: какое имя распознано). По ней agent_service
+    # жёстко мапит голос+стиль TTS и блок личности в промпте. None -> дефолт.
+    persona: str | None = None
     # Проактивная инициация из telegram_service (будильники/poke/грусть).
     initiated: bool = False
     slot: str | None = None
@@ -142,6 +211,28 @@ async def startup():
     tg_db.pool = db.pool
     await tg_db.init_db_pool()
 
+    # Redis-клиент для обратного пути мобильного клиента (long-poll).
+    global redis_client
+    try:
+        import redis.asyncio as aioredis
+        # ВАЖНО: socket_timeout должен быть БОЛЬШЕ, чем BLPOP-timeout (<=55с),
+        # иначе сокет рвёт блокирующее чтение раньше, чем BLPOP вернётся,
+        # и ловим "Timeout reading from redis". Ставим 60 с запасом + keepalive.
+        redis_client = aioredis.from_url(
+            REDIS_URL,
+            decode_responses=True,
+            socket_timeout=60,
+            socket_connect_timeout=5,
+            socket_keepalive=True,
+            health_check_interval=30,
+            retry_on_timeout=True,
+        )
+        await redis_client.ping()
+        logging.info(f"[mobile] Redis подключён: {REDIS_URL}")
+    except Exception as e:
+        redis_client = None
+        logging.error(f"[mobile] Redis недоступен ({REDIS_URL}): {e} — /mobile/poll вернёт 503")
+
     # # 🚀 старт watchdog-а
     # asyncio.create_task(bot_response_watchdog())
 
@@ -152,8 +243,97 @@ async def shutdown():
     service_message_alive = False
     await db.pool.close()
 
+def _extract_voice_file(files: list):
+    """Находит голосовой файл в files[] мобильного сообщения.
+
+    Возвращает (voice_dict, index) или (None, -1). Голос опознаём по
+    kind=="voice" либо по аудио-расширению (ogg/opus/oga/mp3/m4a/wav/aac).
+    """
+    AUDIO_EXT = ("ogg", "opus", "oga", "mp3", "m4a", "wav", "aac", "flac")
+    for i, f in enumerate(files or []):
+        if not isinstance(f, dict):
+            continue
+        kind = (f.get("kind") or "").lower()
+        name = (f.get("name") or "")
+        ext = (f.get("ext") or (name.rsplit(".", 1)[-1] if "." in name else "")).lower()
+        if kind == "voice" or ext in AUDIO_EXT:
+            return f, i
+    return None, -1
+
+
+async def transcribe_mobile_voice(chat: "ChatMessage") -> str:
+    """Расшифровка голоса мобильного клиента через agent_service /api/tg/transcribe.
+
+    Зеркало telegram_service.transcribe_voice_remote, но на стороне chats_service:
+    телефон прислал голос в files[].file_b64, мы отдаём его агенту и получаем текст.
+    Возвращает распознанный текст (может быть "") либо кидает исключение при сбое HTTP.
+    """
+    import base64 as _b64
+    import requests as _rq
+
+    voice, _idx = _extract_voice_file(chat.files)
+    if not voice:
+        return ""
+    audio_b64 = voice.get("file_b64")
+    if not audio_b64:
+        logging.warning("[mobile-voice] голосовой файл без file_b64 — нечего расшифровывать")
+        return ""
+    name = (voice.get("name") or "")
+    fmt = (voice.get("ext") or (name.rsplit(".", 1)[-1] if "." in name else "ogg")).lower() or "ogg"
+
+    def _call() -> str:
+        r = _rq.post(
+            f"{AGENT_SERVICE_URL}/api/tg/transcribe",
+            json={"audio_b64": audio_b64, "fmt": fmt, "language": "ru",
+                  "provider": MOBILE_ASR_PROVIDER},
+            timeout=130,
+        )
+        r.raise_for_status()
+        data = r.json()
+        if not data.get("ok"):
+            logging.warning(f"[mobile-voice] transcribe not ok: {data.get('error')}")
+            return ""
+        return (data.get("text") or "").strip()
+
+    import asyncio as _aio
+    return await _aio.to_thread(_call)
+
+
 @app.post("/send_message")
 async def send_message(chat: ChatMessage):
+    # ── Мобильный голос: расшифровываем на сервере ДО Kafka ────────────────────
+    # Телефон прислал голос (input_format="voice" + files[].file_b64). Отдаём его
+    # агенту на ASR, подменяем message текстом и выкидываем голос из files, чтобы
+    # в Kafka поехало лёгкое текстовое сообщение (как делает telegram_service).
+    if chat.gateway_target == "mobile" and chat.input_format == "voice":
+        try:
+            text = await transcribe_mobile_voice(chat)
+        except Exception as e:
+            logging.error(f"[mobile-voice] ошибка расшифровки: {e}")
+            raise HTTPException(status_code=502, detail="voice transcription failed")
+        if not text:
+            raise HTTPException(status_code=422, detail="voice not recognized")
+        logging.info(f"[mobile-voice] распознано: {text[:80]!r} (chat={chat.chat_id})")
+        chat.message = text
+        # Голос в Kafka не нужен — агент работает уже с текстом.
+        _voice, vidx = _extract_voice_file(chat.files)
+        if vidx >= 0:
+            chat.files.pop(vidx)
+        chat.has_files = bool(chat.files)
+
+    # ── MOBILE-ОРКЕСТРАТОР: роутер lite/agent ──────────────────────────────────
+    # По умолчанию мобилка обрабатывается дешёвой моделью (lite). Если юзер ранее
+    # явно позвал агента — в Redis mobile:mode:{chat_id} стоит agent + счётчик
+    # ходов. Здесь списываем один ход; на последнем ставим farewell (сервер
+    # agent_service подмешает прощание в голос и режим сбросится в lite).
+    agent_tier = "agent"   # не-mobile всегда идёт обычным путём
+    agent_farewell = False
+    if chat.gateway_target == "mobile":
+        tier_info = await _route_mobile_tier(chat.chat_id)
+        agent_tier = tier_info["tier"]
+        agent_farewell = tier_info["farewell"]
+        logging.info(f"[mobile-router] chat={chat.chat_id} tier={agent_tier} farewell={agent_farewell}")
+
     message = {
         "user_id": chat.user_id,
         "tb_name": chat.tb_name,
@@ -170,6 +350,7 @@ async def send_message(chat: ChatMessage):
         "files": chat.files,
         "agent_model": chat.agent_model,
         "gateway_target": chat.gateway_target,
+        "tg_chat_id": chat.tg_chat_id,
         "input_format": chat.input_format,
         "initiated": chat.initiated,
         "slot": chat.slot,
@@ -177,14 +358,16 @@ async def send_message(chat: ChatMessage):
         "target_username": chat.target_username,
         "sad_followup": chat.sad_followup,
         "custom_prompt": chat.custom_prompt,
+        "agent_tier": agent_tier,
+        "agent_farewell": agent_farewell,
+        "persona": chat.persona,
     }
-    logging.info(message)
     start = time.perf_counter()
     # отправка в Kafka
     producer.send("chat-messages", key=chat.user_id, value=message)
     producer.flush()
     elapsed = time.perf_counter() - start
-    logging.info(f"Message Service. Время на отправку в сокет и на перекладку в кафку = {elapsed:.4f}s")
+    # logging.info(f"Message Service. Время на отправку в сокет и на перекладку в кафку = {elapsed:.4f}s")
     return {"status": "ok"}
 
 
@@ -446,6 +629,15 @@ async def tg_log_message(body: TgLogIn):
     )
     return {"status": "ok"}
 
+@app.get("/tg/user/chats")
+async def get_user_chats(user_id: int = Query(..., alias="user_id"), chat_id: str = Query(..., alias="chat_id")):
+    try:
+        logging.info(f"[meta] {user_id} {chat_id}")
+        chats = await db.get_user_chats_summary_by_user_id(user_id, chat_id)
+        return {"chats": chats}
+    except Exception as e:
+        logging.error(f"Ошибка в эндпоинте get_user_chats: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось загрузить список чатов")
 
 
 @app.get("/chat/{chat_id}/messages")
@@ -570,33 +762,7 @@ async def favorite_chat(action: ChatFavoriteAction):
 
 @app.post("/chat/new")
 async def create_chat(request: Request):
-    data = await request.json()
-    user_id = data.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id required")
-
-    type_agent = data.get("type_agent", "pm")
-
-    # Для ouroboros — один чат на пользователя
-    if type_agent == "ouroboros":
-        existing = await db.find_chat_by_type(user_id, "ouroboros")
-        if existing:
-            return {"chat_id": existing}
-
-    chat_id = await db.create_new_chat()
-
-    # Сохраняем тип чата
-    await db.set_chat_type(chat_id, user_id, type_agent)
-
-    # (опционально) создаём первое сообщение
-    await db.add_message(
-        user_id=user_id,
-        message="Чат создан",
-        chat_id=chat_id,
-        is_from_bot=True
-    )
-
-    return {"chat_id": chat_id}
+    return {"chat_id": str(uuid.uuid4())}
 
 
 @app.get("/chat/by-type/{type_agent}")
@@ -637,6 +803,50 @@ async def overlay_stats(gw: str = "main", top_n: int = 3):
     except Exception as e:
         logging.error(f"Ошибка в overlay_stats: {e}")
         raise HTTPException(status_code=500, detail="overlay stats failed")
+
+
+@app.get("/mobile/poll")
+async def mobile_poll(chat_id: str, timeout: int = 25):
+    """Long-poll обратного пути для мобильного клиента (AI_tracker).
+
+    Телефон за NAT — сервер не может инициировать соединение к нему, поэтому
+    мобилка сама периодически дёргает этот эндпоинт. Ответ агента кладёт сюда
+    chats-consumer (endpoint_consumer.py) при gateway_target="mobile" в
+    Redis-список mobile:reply:{chat_id}.
+
+    Параметры:
+      chat_id — тот же детерминированный UUIDv5(ANDROID_ID), что мобилка шлёт в
+                /mobile/send_message.
+      timeout — сколько секунд держать соединение в ожидании ответа (BLPOP),
+                по умолчанию 25с (клиент ретраит сразу после).
+
+    Возвращает:
+      {"status":"ok","reply":{...}}   — пришёл ответ агента (text + опц. голос);
+      {"status":"empty"}              — за timeout ничего не пришло, ретрайни;
+      503                             — Redis недоступен.
+    """
+    if redis_client is None:
+        raise HTTPException(status_code=503, detail="mobile reply channel offline (no redis)")
+    # BLPOP держит соединение до timeout или до появления элемента.
+    key = MOBILE_REPLY_KEY.format(chat_id=str(chat_id))
+    # BLPOP-timeout держим строго меньше socket_timeout(=60) клиента,
+    # иначе сокет рвёт чтение раньше. И не дольше nginx proxy_read_timeout.
+    timeout = max(1, min(int(timeout), 50))
+    try:
+        item = await redis_client.blpop(key, timeout=timeout)
+    except Exception as e:
+        # Пустой BLPOP по таймауту НЕ должен прилетать сюда (redis сам вернёт None),
+        # но на всякий случай различаем реальную поломку Redis и штатное отсутствие ответа.
+        logging.error(f"[mobile] poll BLPOP error chat={chat_id}: {e}")
+        raise HTTPException(status_code=503, detail="mobile reply channel error")
+    if not item:
+        return {"status": "empty"}
+    # item = (key, value); value — JSON, который положил consumer
+    try:
+        reply = json.loads(item[1])
+    except Exception:
+        reply = {"text": item[1]}
+    return {"status": "ok", "reply": reply}
 
 
 @app.get("/health")

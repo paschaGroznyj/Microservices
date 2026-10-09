@@ -1,4 +1,4 @@
-appuser@...:/app$ python # Внутри agent_pm, exit() на выход
+appuser@...:/app$ python # Внутри agent, exit() на выход
 
 import sys
 sys.path.insert(0, "/app")
@@ -12,7 +12,7 @@ print(_tree_view(ROOT, 3)["tree"])
 ├── __init__.py
 ├── app
 │   ├── __init__.py
-│   ├── agent_pm
+│   ├── agent
 │   │   ├── __init__.py
 │   │   ├── analyze_article.py
 │   │   ├── core
@@ -79,7 +79,7 @@ print(_tree_view(ROOT, 3)["tree"])
 
 
 # 2. Чтение файла
-res = _read_file("/app/app/agent_pm/langchain_agent.py")
+res = _read_file("/app/app/agent/langchain_agent.py")
 print(res["size"], res["truncated"])
 print(res["content"][:500])
 
@@ -107,7 +107,7 @@ from .core.botocore_client import O
 # 3. Чтение большого файла — проверь truncation
 # найди что-то реально большое, например faiss index не тронешь (бинарник),
 # возьми любой md подлиннее или искусственно протестируй лимит:
-res = _read_file("/app/app/agent_pm/tokens.json")  # или другой файл побольше 50KB
+res = _read_file("/app/app/agent/tokens.json")  # или другой файл побольше 50KB
 print(res["truncated"]) # truncated = True, если превышен лимит по памяти
 
 
@@ -151,12 +151,12 @@ for f in res["files"][:10]:
 {'path': '/app/app/__init__.py', 'size': 0}
 {'path': '/app/app/app.py', 'size': 37954}
 {'path': '/app/app/searcher.py', 'size': 12110}
-{'path': '/app/app/agent_pm/vector_db.py', 'size': 4123}
-{'path': '/app/app/agent_pm/analyze_article.py', 'size': 6646}
-{'path': '/app/app/agent_pm/scheduler_digest.py', 'size': 10228}
-{'path': '/app/app/agent_pm/update_metadata.py', 'size': 13416}
-{'path': '/app/app/agent_pm/favorites_digest.py', 'size': 11635}
-{'path': '/app/app/agent_pm/summary_period.py', 'size': 26112}
+{'path': '/app/app/agent/vector_db.py', 'size': 4123}
+{'path': '/app/app/agent/analyze_article.py', 'size': 6646}
+{'path': '/app/app/agent/scheduler_digest.py', 'size': 10228}
+{'path': '/app/app/agent/update_metadata.py', 'size': 13416}
+{'path': '/app/app/agent/favorites_digest.py', 'size': 11635}
+{'path': '/app/app/agent/summary_period.py', 'size': 26112}
 
 
 ## НАПИСАНИЕ КОДА И СОХРАНЕНИЕ В Sandbox

@@ -124,7 +124,7 @@ async def safe_download(media, retries: int = 3):
 TG_ALBUM_MAX   = int(os.environ.get("TG_ALBUM_MAX", "10"))
 # Окно дебаунса сборки альбома: TG шлёт кадры N отдельными
 # апдейтами с общим media_group_id; ждём тишины перед dispatch.
-TG_ALBUM_DEBOUNCE = float(os.environ.get("TG_ALBUM_DEBOUNCE", "1.3"))
+TG_ALBUM_DEBOUNCE = float(os.environ.get("TG_ALBUM_DEBOUNCE", "5"))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -143,6 +143,15 @@ _thinking_messages: dict[int, int] = {}
 # Буфер альбомов: media_group_id -> {items, chat_id, user_id, author,
 # text, thinking_mid, task}. Кадры копятся, дебаунс-таск флашит одним dispatch.
 _album_buffers: dict[str, dict] = {}
+
+
+def _loop_now() -> float:
+    """Монотонное время текущего event loop (для debounce-окна альбома)."""
+    try:
+        return asyncio.get_event_loop().time()
+    except Exception:
+        import time as _t
+        return _t.monotonic()
 
 
 # ── Redis keys ──────────────────────────────────────────────────────────────────
@@ -176,6 +185,142 @@ def _k_reactbuf(chat_id: int) -> str: return f"tg:reactions:{chat_id}"
 def _k_react_neg(chat_id: int) -> str: return f"tg:react:neg:{chat_id}"
 # Счётчик pos-реакций на конкретное сообщение (порог 3+ -> триггер 1 раз).
 def _k_react_pos(chat_id: int, tg_mid: int) -> str: return f"tg:react:pos:{chat_id}:{tg_mid}"
+# Текущая активная СЕССИЯ диалога для этого telegram-чата. tg chat_id (число) —
+# это физический адрес доставки, а session_id (chat_id в chats_service) — ключ
+# памяти/истории агента. Один telegram-чат может переключать N сессий.
+def _k_session(tg_chat_id: int) -> str: return f"tg:session:{tg_chat_id}"
+# Реестр сессий telegram-чата (новые — в конец). Ведём сами, не полагаясь на
+# users-джойн в chats_service: telegram-юзера может не быть в таблице users,
+# тогда /user/chats вернёт пусто. Храним id сессий + последнюю реплику для
+# подписи кнопки. Хэш: field=session_id -> JSON{title, ts}.
+def _k_sessions_reg(tg_chat_id: int) -> str: return f"tg:sessions:{tg_chat_id}"
+
+
+def _tg_username(user_id: int, username: str | None) -> str:
+    """Стабильный ключ пользователя для chats_service (/user/chats матчит по
+    users.username). Если у telegram-юзера нет @username — суррогат tg_<id>,
+    чтобы список сессий всегда находился по одному и тому же ключу."""
+    u = (username or "").strip()
+    return u if u else f"tg_{user_id}"
+
+
+async def get_current_session(tg_chat_id: int) -> str | None:
+    """Текущий session_id (chat_id chats_service) для telegram-чата, либо None."""
+    try:
+        r = await get_redis()
+        return await r.get(_k_session(tg_chat_id))
+    except Exception as e:
+        log.warning(f"get_current_session fail chat={tg_chat_id}: {e}")
+        return None
+
+
+async def set_current_session(tg_chat_id: int, session_id) -> None:
+    try:
+        r = await get_redis()
+        await r.set(_k_session(tg_chat_id), str(session_id))
+    except Exception as e:
+        log.warning(f"set_current_session fail chat={tg_chat_id}: {e}")
+
+
+async def create_session(user_id: int) -> str | None:
+    """Создаёт новую сессию в chats_service (/chat/new -> числовой chat_id)."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                f"{CHATS_SERVICE_URL}/chat/new",
+                json={"user_id": user_id, "type_agent": "pm"},
+            )
+            resp.raise_for_status()
+            return str(resp.json().get("chat_id"))
+    except Exception as e:
+        log.error(f"create_session fail user={user_id}: {e}")
+        return None
+
+
+async def register_session(tg_chat_id: int, session_id, title: str = "") -> None:
+    """Добавляет/обновляет сессию в Redis-реестре telegram-чата."""
+    try:
+        r = await get_redis()
+        payload = json.dumps({"title": title or "", "ts": int(time.time())})
+        await r.hset(_k_sessions_reg(tg_chat_id), str(session_id), payload)
+    except Exception as e:
+        log.warning(f"register_session fail chat={tg_chat_id}: {e}")
+
+
+async def touch_session_title(tg_chat_id: int, session_id, last_text: str) -> None:
+    """Обновляет подпись активной сессии последним сообщением пользователя
+    (если ручного/авто-заголовка ещё нет — показываем начало реплики)."""
+    try:
+        r = await get_redis()
+        key = _k_sessions_reg(tg_chat_id)
+        raw = await r.hget(key, str(session_id))
+        meta = json.loads(raw) if raw else {}
+        if not meta.get("title"):
+            t = " ".join((last_text or "").split())
+            meta["title"] = (t[:60]) if t else ""
+        meta["ts"] = int(time.time())
+        await r.hset(key, str(session_id), json.dumps(meta))
+    except Exception as e:
+        log.warning(f"touch_session_title fail chat={tg_chat_id}: {e}")
+
+
+async def ensure_session(tg_chat_id: int, user_id: int) -> str:
+    """Возвращает активную сессию telegram-чата; если её нет — создаёт первую
+    и запоминает в Redis. Фолбэк на tg_chat_id, если chats_service недоступен
+    (диалог не падает — работает как раньше, одна сессия на чат)."""
+    sid = await get_current_session(tg_chat_id)
+    if sid:
+        return sid
+    sid = await create_session(user_id)
+    if not sid:
+        return str(tg_chat_id)
+    await set_current_session(tg_chat_id, sid)
+    await register_session(tg_chat_id, sid)
+    log.info(f"session created chat={tg_chat_id} user={user_id} -> {sid}")
+    return sid
+
+
+async def list_sessions(tg_chat_id: int) -> list[dict]:
+    """Сессии telegram-чата из Redis-реестра, новые сверху.
+    Каждый элемент: {id, title, ts}."""
+    try:
+        r = await get_redis()
+        raw = await r.hgetall(_k_sessions_reg(tg_chat_id))
+        out = []
+        for sid, meta_raw in (raw or {}).items():
+            try:
+                meta = json.loads(meta_raw)
+            except Exception:
+                meta = {}
+            out.append({"id": sid, "title": meta.get("title") or "",
+                        "ts": int(meta.get("ts") or 0)})
+        out.sort(key=lambda x: x["ts"], reverse=True)
+        return out
+    except Exception as e:
+        log.error(f"list_sessions fail chat={tg_chat_id}: {e}")
+        return []
+
+async def list_sessions_database(user_id: int, chat_id: str) -> list[dict]:
+    """Чаты по user_id"""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{CHATS_SERVICE_URL}/tg/user/chats",
+                params={"user_id": user_id, "chat_id": chat_id},
+            )
+            resp.raise_for_status()
+            return resp.json().get("chats")
+    except Exception as e:
+        log.error(f"create_session fail user={user_id}: {e}")
+        return None
+
+
+def _session_title(item: dict) -> str:
+    """Короткая подпись сессии для кнопки."""
+    t = " ".join(str(item.get("title") or "").split())
+    if len(t) > 38:
+        t = t[:37] + "…"
+    return t or f"Сессия {item.get('id')}"
 
 
 async def fwd_group_already_seen(chat_id: int, media_group_id) -> bool:
@@ -648,6 +793,13 @@ async def dispatch_to_agent(chat_id: int, user_id: int, username: str,
     settings = await get_chat_settings(chat_id)
     request_id = str(uuid.uuid4())
     message_id = str(uuid.uuid4())
+    # chat_id-аргумент = telegram chat id (физический адрес доставки ответа).
+    # Ключ СЕССИИ (память/история агента) резолвим отдельно: активная сессия
+    # этого telegram-чата из Redis, либо автосоздание первой через /chat/new.
+    session_id = await ensure_session(chat_id, user_id)
+    # Обновляем подпись сессии последним сообщением юзера (для списка сессий).
+    if merged_text and merged_text.strip():
+        await touch_session_title(chat_id, session_id, merged_text)
     # Единый список вложений: новый путь (files=[{file_b64,file_name}]) или
     # старый одиночный (file_b64+file_name) — обратная совместимость.
     items = list(files) if files else ([] )
@@ -658,8 +810,9 @@ async def dispatch_to_agent(chat_id: int, user_id: int, username: str,
 
     payload = {
         "user_id": user_id,
-        "username": username,
-        "chat_id": str(chat_id),
+        "username": _tg_username(user_id, username),
+        "chat_id": str(session_id),
+        "tg_chat_id": str(chat_id),
         "message": merged_text,
         "type_agent": "pm",
         "gateway_target": "telegram",
@@ -684,8 +837,12 @@ async def dispatch_to_agent(chat_id: int, user_id: int, username: str,
 
     # Файл шлём после постановки в очередь: agent_service уже ждёт его
     # по message_id (wait_for_files, окно 20с). Не роняем диалог при ошибке.
+    # ВАЖНО: грузим под session_id (а НЕ под числовым tg chat_id) — media_store
+    # ключуется по chat_id, с которым зовётся агент (payload.chat_id=session_id).
+    # Иначе файл ложится в media:chat:{tg_chat_id}:*, а агент ищет под session_id
+    # и видит пусто (разъехалось после ввода мульти-сессий).
     if has_files:
-        await _upload_files_to_agent(message_id, chat_id, user_id, items)
+        await _upload_files_to_agent(message_id, session_id, user_id, items)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1876,6 +2033,31 @@ def _settings_summary(settings: dict) -> str:
     )
 
 
+SESS_PAGE = 5  # сессий на страницу
+
+
+def _menu_sessions(items: list[dict], page: int, active_id: str | None) -> InlineKeyboardMarkup:
+    """Меню списка сессий: до SESS_PAGE кнопок + пагинация + новая сессия."""
+    total = len(items)
+    start = page * SESS_PAGE
+    chunk = items[start:start + SESS_PAGE]
+    rows = [[InlineKeyboardButton("\u2795 Новая сессия", callback_data="tg:sess:new")]]
+    for it in chunk:
+        mark = "\u2713 " if str(it.get("id")) == str(active_id) else ""
+        rows.append([InlineKeyboardButton(
+            f"{mark}{_session_title(it)}",
+            callback_data=f"tg:sess:open:{it.get('id')}")])
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("\u2b05\ufe0f", callback_data=f"tg:sess:list:{page-1}"))
+    if start + SESS_PAGE < total:
+        nav.append(InlineKeyboardButton("\u27a1\ufe0f", callback_data=f"tg:sess:list:{page+1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton("\u2039 Назад", callback_data="tg:menu:root")])
+    return InlineKeyboardMarkup(rows)
+
+
 def _menu_root(settings: dict | None = None, is_admin: bool = False) -> InlineKeyboardMarkup:
     settings = settings or {}
     proactive = settings.get("proactive_enabled")
@@ -1890,6 +2072,7 @@ def _menu_root(settings: dict | None = None, is_admin: bool = False) -> InlineKe
         [InlineKeyboardButton("Инструменты", callback_data="tg:menu:tools")],
         [InlineKeyboardButton("Триггер", callback_data="tg:menu:trigger")],
         [InlineKeyboardButton("Будильники", callback_data="tg:menu:alarms")],
+        [InlineKeyboardButton("\U0001f4ac Сессии", callback_data="tg:sess:list:0")],
         [InlineKeyboardButton(poke_label, callback_data="tg:toggle:proactive")],
     ]
     if is_admin:
@@ -2081,7 +2264,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     chat_id = str(query.message.chat.id if query.message else update.effective_chat.id)
     data = query.data or ""
-    _cb_admin = _is_tg_admin(query.from_user.id if query.from_user else 0)
+    user_id = query.from_user.id if query.from_user else 0
+    _cb_admin = _is_tg_admin(user_id)
 
     if not await is_allowed(chat_id):
         await query.answer("Чат не зарегистрирован.", show_alert=True)
@@ -2109,6 +2293,113 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "tg:menu:root":
         await query.answer()
         await _refresh(lambda s: _menu_root(s, is_admin=_cb_admin))
+        return
+
+    # ── Сессии (n-диалогов на один telegram-чат) ──────────────────────────
+    if data.startswith("tg:sess:"):
+        tg_id = int(chat_id)
+        uid = query.from_user.id if query.from_user else tg_id
+        action = data[len("tg:sess:"):]
+
+        if action.startswith("list:"):
+            page_str = action.removeprefix("list:")
+            page = int(page_str) if page_str.isdigit() else 0
+
+            await query.answer()
+
+            redis_task = list_sessions(tg_id)
+            db_task = list_sessions_database(user_id, chat_id)
+            active_task = get_current_session(tg_id)
+
+            items_redis, items_db, active = await asyncio.gather(
+                redis_task, db_task, active_task
+            )
+            merged: dict[str, dict] = {}
+            for item in (items_redis or []):
+                merged[str(item["id"])] = item
+            for item in (items_db or []):
+                merged[str(item["id"])] = item
+
+            # Новые сверху
+            items = sorted(merged.values(), key=lambda x: x.get("ts", 0), reverse=True)
+
+            try:
+                await query.edit_message_text(
+                    f"<b>💬 Сессии</b> · всего: {len(items)}\n"
+                    "Текущая отмечена ✓. Переключи или создай новую.",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=_menu_sessions(items, page, active),
+                )
+            except TelegramBadRequest:
+                pass
+
+            return
+
+        if action == "new":
+            sid = await create_session(uid)
+            if not sid:
+                await query.answer("chats_service недоступен", show_alert=True)
+                return
+            await set_current_session(tg_id, sid)
+            await register_session(tg_id, sid)
+            await query.answer("Новая сессия создана")
+            redis_task = list_sessions(tg_id)
+            db_task = list_sessions_database(user_id, chat_id)
+            active_task = get_current_session(tg_id)
+
+            items_redis, items_db, active = await asyncio.gather(
+                redis_task, db_task, active_task
+            )
+            merged: dict[str, dict] = {}
+            for item in (items_redis or []):
+                merged[str(item["id"])] = item
+            for item in (items_db or []):
+                merged[str(item["id"])] = item
+
+            # Новые сверху
+            items = sorted(merged.values(), key=lambda x: x.get("ts", 0), reverse=True)
+            try:
+                await query.edit_message_text(
+                    f"<b>\U0001f4ac Сессии</b> · всего: {len(items)}\n"
+                    "Создана и выбрана новая сессия \u2713",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=_menu_sessions(items, 0, sid),
+                )
+            except Exception:
+                pass
+            return
+
+        if action.startswith("open:"):
+            sid = action.split(":", 1)[1]
+            await set_current_session(tg_id, sid)
+            await query.answer("Сессия выбрана")
+            redis_task = list_sessions(tg_id)
+            db_task = list_sessions_database(user_id, chat_id)
+            active_task = get_current_session(tg_id)
+
+            items_redis, items_db, active = await asyncio.gather(
+                redis_task, db_task, active_task
+            )
+            merged: dict[str, dict] = {}
+            for item in (items_redis or []):
+                merged[str(item["id"])] = item
+            for item in (items_db or []):
+                merged[str(item["id"])] = item
+
+            # Новые сверху
+            items = sorted(merged.values(), key=lambda x: x.get("ts", 0), reverse=True)
+            try:
+                await query.edit_message_text(
+                    f"<b>\U0001f4ac Сессии</b> · всего: {len(items)}\n"
+                    "Переключил активную сессию \u2713",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=_menu_sessions(items, 0, sid),
+                )
+            except Exception:
+                pass
+            return
+
+        await query.answer()
         return
 
     if data == "tg:admin:startlog":
@@ -2568,9 +2859,14 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if tag_waits_forward:
         return
 
-    # если не одобрено тегом — спросить оркестратор (в группе), с throttle
+    # если не одобрено тегом — спросить оркестратор (в группе), с throttle.
+    # ВАЖНО: оркестратор (lite_llm) дёргаем ТОЛЬКО если trigger_mode="orchestrator".
+    # В режиме "mention" бот отвечает ИСКЛЮЧИТЕЛЬНО на прямое обращение
+    # (@mention / reply на бота); фоновую болтовню не трогаем и lite_llm не зовём.
     if not approved and is_group:
-        if await orchestrator_allowed(chat_id):
+        _settings = await get_chat_settings(chat_id)
+        trigger_mode = (_settings or {}).get("trigger_mode") or "orchestrator"
+        if trigger_mode == "orchestrator" and await orchestrator_allowed(chat_id):
             lines = await buffer_lines(chat_id)
             approved = await orchestrator_should_respond(chat_id, lines)
 
@@ -2761,31 +3057,105 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     fname = pathlib.Path(doc.file_name or f"file_{doc.file_id[:8]}").name
-    try:
-        file_bytearray = await safe_download(doc)
-    except Exception as e:
-        log.error(f"[document] download fail chat={chat_id}: {e}")
-        await msg.reply_text("⚠️ Не удалось загрузить файл, попробуй ещё раз.")
-        return
-    file_b64 = base64.b64encode(file_bytearray).decode("utf-8")
 
-    thinking = await msg.reply_text("Обрабатываю файл...")
-    _thinking_messages[chat_id] = thinking.message_id
+    # Ключ буфера: альбомный media_group_id, либо (fallback) сам chat_id —
+    # Telegram Desktop часто шлёт несколько документов в одном сообщении БЕЗ
+    # media_group_id (каждый файл = отдельный update, gid=None). Чтобы такие
+    # файлы тоже склеились в ОДИН запрос, при отсутствии gid копим их в буфер
+    # по chat_id в том же debounce-окне.
+    gid = msg.media_group_id
+    key = str(gid) if gid else f"doc:{chat_id}"
+    buf = _album_buffers.get(key)
+    is_new_buf = buf is None
+    if is_new_buf:
+        buf = {
+            "items": [], "chat_id": chat_id, "user_id": user.id,
+            "author": author, "text": raw_text, "task": None,
+            "downloads": [], "thinking_sent": False, "last_add": 0.0,
+        }
+        _album_buffers[key] = buf  # синхронно, до await — закрывает гонку
+    # Отметку времени последнего кадра обновляем на КАЖДЫЙ апдейт: debounce в
+    # _flush_album отсчитывается именно от неё, а не слепым sleep от старта
+    # задачи. Иначе медленные/крупные файлы, разнесённые по времени больше
+    # окна, флашатся по одному (items=1 на каждый).
+    buf["last_add"] = _loop_now()
+    if raw_text and not buf.get("text"):
+        buf["text"] = raw_text
 
-    merged_text = f"{author}: {raw_text}".strip() if raw_text else f"{author}: [файл {fname}]"
-    try:
-        await dispatch_to_agent(chat_id, user.id, author, merged_text,
-                                file_b64=file_b64, file_name=fname)
-    except Exception as e:
-        await msg.reply_text(f"Не удалось связаться с агентом: {str(e)[:200]}")
+    # Плашку "Обрабатываю файлы..." шлём ОДИН раз на буфер (после синхронной
+    # регистрации, так что гонки за ней уже нет).
+    if is_new_buf and not buf.get("thinking_sent"):
+        buf["thinking_sent"] = True
+        try:
+            thinking = await msg.reply_text("Обрабатываю файлы...")
+            _thinking_messages[chat_id] = thinking.message_id
+        except Exception as e:
+            log.error(f"[document] thinking reply fail chat={chat_id}: {e}")
+
+    # Скачивание запускаем отдельной задачей и кладём её в буфер: _flush_album
+    # перед отправкой дождётся завершения ВСЕХ загрузок буфера. Так окно
+    # debounce отсчитывается от прихода апдейтов (быстро), а не от скачивания.
+    async def _download_into_buf(_doc, _fname, _buf):
+        try:
+            data = await safe_download(_doc)
+        except Exception as e:
+            log.error(f"[document] download fail chat={chat_id} name={_fname}: {e}")
+            return
+        if len(_buf["items"]) < TG_ALBUM_MAX:
+            _buf["items"].append({
+                "file_b64": base64.b64encode(data).decode("utf-8"),
+                "file_name": _fname,
+            })
+
+    buf["downloads"].append(asyncio.create_task(_download_into_buf(doc, fname, buf)))
+
+    # Задачу-флашер НЕ пересоздаём на каждый кадр: она сама досыпает по
+    # обновлённому last_add. Создаём только если её ещё нет или уже завершилась.
+    old_task = buf.get("task")
+    if not old_task or old_task.done():
+        buf["task"] = asyncio.create_task(_flush_album(key))
 
 
 async def _flush_album(gid: str):
-    """Флаш буфера альбома после дебаунс-окна: один dispatch со всеми кадрами."""
+    """Флаш буфера media_group после дебаунс-окна: один dispatch со всеми вложениями.
+
+    Debounce отсчитывается от времени ПОСЛЕДНЕГО добавленного кадра (buf["last_add"]),
+    а не слепым sleep от старта задачи. Пока кадры продолжают прилетать (last_add
+    двигается вперёд), задача досыпает. Это чинит потерю файлов, когда кадры
+    альбома/пачки документов разнесены по времени больше окна (медленная сеть,
+    крупные файлы) — раньше каждый такой кадр флашился отдельно (items=1).
+    """
     try:
-        await asyncio.sleep(TG_ALBUM_DEBOUNCE)
+        while True:
+            buf = _album_buffers.get(gid)
+            if not buf:
+                return
+            wait = buf.get("last_add", 0.0) + TG_ALBUM_DEBOUNCE - _loop_now()
+            if wait <= 0:
+                break
+            await asyncio.sleep(wait)
     except asyncio.CancelledError:
         return
+    buf = _album_buffers.get(gid)
+    if not buf:
+        return
+    # Дожидаемся завершения всех запущенных загрузок файлов буфера, чтобы в один
+    # dispatch попали ВСЕ вложения, а не только те, что успели скачаться к концу
+    # debounce-окна.
+    downloads = list(buf.get("downloads") or [])
+    if downloads:
+        try:
+            await asyncio.gather(*downloads, return_exceptions=True)
+        except asyncio.CancelledError:
+            return
+    # Пока ждали загрузки — мог прийти новый кадр и сдвинуть last_add. Если окно
+    # ещё не истекло, досыпаем (не теряем свежие кадры).
+    buf = _album_buffers.get(gid)
+    if not buf:
+        return
+    if _loop_now() - buf.get("last_add", 0.0) < TG_ALBUM_DEBOUNCE:
+        return await _flush_album(gid)
+    # После ожидания снимаем буфер из общего словаря только сейчас.
     buf = _album_buffers.pop(gid, None)
     if not buf or not buf.get("items"):
         return
@@ -2795,11 +3165,16 @@ async def _flush_album(gid: str):
     author = buf["author"]
     raw_text = buf.get("text") or ""
     n = len(items)
+    all_images = all((item.get("file_name") or "").lower().endswith((".jpg", ".jpeg", ".png", ".webp")) for item in items)
     if raw_text:
         merged_text = f"{author}: {raw_text}".strip()
-    else:
+    elif all_images:
         merged_text = f"{author}: [альбом из {n} картинок]"
-    log.info(f"[album] flush chat={chat_id} gid={gid} frames={n}")
+    elif n == 1:
+        merged_text = f"{author}: [файл {items[0].get('file_name') or 'file'}]"
+    else:
+        merged_text = f"{author}: [альбом из {n} файлов]"
+    log.info(f"[album] flush chat={chat_id} gid={gid} items={n} images={all_images}")
     try:
         await dispatch_to_agent(chat_id, user_id, author, merged_text, files=items)
     except Exception as e:
@@ -2851,6 +3226,58 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     fname = f"photo_{photo.file_unique_id}.jpg"
+
+    gid = msg.media_group_id
+    if gid:
+        # АЛЬБОМ: TG шлёт кадры N отдельными photo-апдейтами с общим
+        # media_group_id. Буфер и debounce-таймер заводим СРАЗУ (до скачивания),
+        # а сами кадры качаем отдельными задачами — _flush_album дождётся их
+        # перед отправкой. Иначе медленная загрузка кадра могла закрыть окно
+        # раньше остальных апдейтов и альбом уезжал по одной картинке.
+        key = str(gid)
+        buf = _album_buffers.get(key)
+        is_new_buf = buf is None
+        if is_new_buf:
+            buf = {
+                "items": [], "chat_id": chat_id, "user_id": user.id,
+                "author": author, "text": raw_text, "task": None,
+                "downloads": [], "thinking_sent": False, "last_add": 0.0,
+            }
+            _album_buffers[key] = buf  # синхронно, до await — закрывает гонку
+        buf["last_add"] = _loop_now()
+        if raw_text and not buf.get("text"):
+            buf["text"] = raw_text
+        if is_new_buf and not buf.get("thinking_sent"):
+            buf["thinking_sent"] = True
+            try:
+                thinking = await msg.reply_text("Смотрю картинки...")
+                _thinking_messages[chat_id] = thinking.message_id
+            except Exception as e:
+                log.error(f"[photo] thinking reply fail chat={chat_id}: {e}")
+
+        async def _download_photo_into_buf(_media, _fname, _buf):
+            try:
+                data = await safe_download(_media)
+            except Exception as e:
+                log.error(f"[photo] download fail chat={chat_id} name={_fname}: {e}")
+                return
+            if len(_buf["items"]) < TG_ALBUM_MAX:
+                _buf["items"].append({
+                    "file_b64": base64.b64encode(data).decode("utf-8"),
+                    "file_name": _fname,
+                })
+
+        buf["downloads"].append(asyncio.create_task(_download_photo_into_buf(photo, fname, buf)))
+
+        # Флашер НЕ пересоздаём на каждый кадр: он сам досыпает по last_add
+        # (цикл внутри _flush_album), а last_add мы уже сдвинули выше. Создаём
+        # единственную задачу только если живой ещё нет — иначе cancel/recreate
+        # на быстрых кадрах могли оставить альбом без флашера или разорвать его.
+        task = buf.get("task")
+        if task is None or task.done():
+            buf["task"] = asyncio.create_task(_flush_album(key))
+        return
+
     try:
         file_bytearray = await safe_download(photo)
     except Exception as e:
@@ -2859,32 +3286,6 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     file_b64 = base64.b64encode(file_bytearray).decode("utf-8")
     item = {"file_b64": file_b64, "file_name": fname}
-
-    gid = msg.media_group_id
-    if gid:
-        # АЛЬБОМ: TG шлёт кадры N отдельными photo-апдейтами с общим
-        # media_group_id. Копим все кадры в буфер и одним dispatch'ем отправляем
-        # после дебаунс-окна (тишины). caption есть только у одного кадра.
-        key = str(gid)
-        buf = _album_buffers.get(key)
-        if buf is None:
-            thinking = await msg.reply_text("Смотрю картинки...")
-            _thinking_messages[chat_id] = thinking.message_id
-            buf = {
-                "items": [], "chat_id": chat_id, "user_id": user.id,
-                "author": author, "text": raw_text, "task": None,
-            }
-            _album_buffers[key] = buf
-        if len(buf["items"]) < TG_ALBUM_MAX:
-            buf["items"].append(item)
-        if raw_text and not buf.get("text"):
-            buf["text"] = raw_text
-        # перезапускаем дебаунс-таймер на каждый новый кадр
-        old_task = buf.get("task")
-        if old_task and not old_task.done():
-            old_task.cancel()
-        buf["task"] = asyncio.create_task(_flush_album(key))
-        return
 
     # ОДИНОЧНОЕ фото: единый guard поста (вариант Б) — мог параллельно
     # прийти в on_text; первый дошедший ставит ключ, дубли молча выходят.

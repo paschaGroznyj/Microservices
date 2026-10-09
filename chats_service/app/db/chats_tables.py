@@ -518,6 +518,74 @@ class DataBaseChats:
             logging.error(f"Ошибка при получении списка чатов пользователя {username}: {e}")
             raise
 
+    async def get_user_chats_summary_by_user_id(
+        self, user_id: int, chat_id: str
+    ) -> list[dict]:
+        """Возвращает список сессий пользователя для лички или конкретной группы Telegram."""
+        try:
+            target_chat_id = str(chat_id)
+
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, last_message, timestamp, renamed_title, auto_title
+                    FROM (
+                        SELECT DISTINCT ON (c.chat_id)
+                            c.chat_id      AS id,
+                            c.message_text AS last_message,
+                            c.created_at   AS timestamp,
+                            m.renamed_title AS renamed_title,
+                            m.auto_title    AS auto_title
+                        FROM chats c
+                        LEFT JOIN chat_sidebar_meta m
+                            ON m.chat_id = c.chat_id
+                        AND m.user_id = $1
+                        WHERE COALESCE(m.is_deleted, FALSE) = FALSE
+                        AND (
+                            -- Группа: последнее сообщение этого чата от любого участника
+                            ($2::text LIKE '-%' AND c.chat_id = $2::text)
+                            OR
+                            -- Личка: все личные чаты пользователя (только его сообщения)
+                            ($2::text NOT LIKE '-%'
+                                AND c.user_id = $1
+                                AND c.chat_id ~ '^[0-9]+$')
+                        )
+                        ORDER BY c.chat_id, c.created_at DESC, c.id DESC
+                    ) latest_messages
+                    ORDER BY timestamp DESC
+                    """,
+                    user_id,
+                    target_chat_id,
+                )
+
+                out = []
+                for row in rows:
+                    title = (
+                        row["renamed_title"]
+                        or row["auto_title"]
+                        or row["last_message"]
+                        or "Новый чат"
+                    )
+
+                    if len(title) > 40:
+                        title = title[:37] + "..."
+
+                    ts = int(row["timestamp"].timestamp()) if row["timestamp"] else 0
+
+                    out.append({
+                        "id": str(row["id"]),
+                        "title": title,
+                        "ts": ts,
+                    })
+
+                return out
+
+        except Exception as e:
+            logging.error(
+                f"get_user_chats_summary_by_user_id fail user={user_id}, chat={chat_id}: {e}"
+            )
+            return []
+
     async def get_chat_messages(self, chat_id: str, username: str, limit: int = 50, offset: int = 0):
         """
         Возвращает страницу сообщений в чате для пользователя (и сообщения бота),
@@ -635,7 +703,7 @@ class DataBaseChats:
     async def create_new_chat(self) -> int:
         async with self.pool.acquire() as conn:
             chat_id = await conn.fetchval("""
-                SELECT COALESCE(MAX(chat_id), 0) + 1 FROM chats
+                SELECT COALESCE(MAX(id), 0) + 1 FROM chats
             """)
             return chat_id
 

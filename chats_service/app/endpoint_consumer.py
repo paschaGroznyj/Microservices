@@ -13,7 +13,15 @@ import time
 
 # Обратный путь для Telegram: ответ агента (gateway_target=="telegram") шлём
 # не на гейтвей, а прямо телеграм-боту (host-режим) через docker gateway IP.
-TG_BOT_PUSH_URL = os.getenv("TG_BOT_PUSH_URL", "http://172.18.0.1:8010/push_message")
+TG_BOT_PUSH_URL = os.getenv("TG_BOT_PUSH_URL", "http://172.28.0.1:8010/push_message")
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+MOBILE_REPLY_KEY = "mobile:reply:{chat_id}"
+MOBILE_REPLY_TTL = 300  # сек
+
+
+AGENT_SERVICE_URL = os.getenv("AGENT_SERVICE_URL", "http://agent_service:9001")
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -38,6 +46,7 @@ class DBConsumer:
     def __init__(self):
         self.db = DataBaseChats()
         self.consumer = None
+        self.redis = None  # redis.asyncio.Redis — обратный путь мобилки
         self.agents = {
             "pm": {
                 "name": "Agent PM",
@@ -51,13 +60,31 @@ class DBConsumer:
     async def init(self):
         await self.db.init_db_pool()
 
+        try:
+            import redis.asyncio as aioredis
+            self.redis = aioredis.from_url(
+                REDIS_URL,
+                decode_responses=True,
+                socket_timeout=10,
+                socket_connect_timeout=5,
+                socket_keepalive=True,
+                health_check_interval=30,
+                retry_on_timeout=True,
+            )
+            await self.redis.ping()
+            logging.info(f"[mobile] consumer Redis подключён: {REDIS_URL}")
+        except Exception as e:
+            self.redis = None
+            logging.error(f"[mobile] consumer Redis недоступен ({REDIS_URL}): {e}")
+
         self.consumer = KafkaConsumer(
             'chat-messages',
             bootstrap_servers=[KAFKA_BROKER],
             group_id='db-consumer-group',
             value_deserializer=lambda m: json.loads(m.decode('utf-8')),
             auto_offset_reset='latest',
-            enable_auto_commit=True
+            enable_auto_commit=True,
+            max_partition_fetch_bytes=10485760
         )
 
     async def process_message(self, payload):
@@ -71,21 +98,10 @@ class DBConsumer:
             selected_tools = payload.get("selected_tools")
             context_size = payload.get("context_size")
             message_id = payload.get("message_id")
-            # Ботовое сообщение приходит с ключом attached_files (из agent_service),
-            # а сообщение пользователя — с ключом files (метаданные из getFilesMeta()
-            # на фронте, продюсер send_message кладёт их как chat.files). Раньше
-            # user-файлы терялись: консюмер читал только attached_files → в chat_files
-            # для юзера ничего не писалось, и чипы пропадали после F5. Берём files
-            # как фолбэк, чтобы вложения пользователя тоже сохранялись.
             attached_files = payload.get("attached_files") or payload.get("files")
             tool_trace = payload.get("tool_trace")
             gateway_target = (payload.get("gateway_target") or "main").lower()
             input_format = payload.get("input_format") or "text"
-            # telegram — валидный таргет (обратный путь не на гейтвей, а боту).
-            if gateway_target not in self.gateway_urls and gateway_target != "telegram":
-                gateway_target = "main"
-            logging.info(payload)
-            logging.info(f"gateway_target={gateway_target}")
             
             model_type = None
             tokens_usage = None
@@ -111,16 +127,26 @@ class DBConsumer:
             )
             logger.info(f"Сообщение сохранено в БД: chat={chat_id}, user={user_id}")
             elapsed = time.perf_counter() - start
-            logging.info(f"Message Service. Время чтобы вытащить из кафки и положить в БД = {elapsed:.4f}s")
+            # logging.info(f"Message Service. Время чтобы вытащить из кафки и положить в БД = {elapsed:.4f}s")
             # Если сообщение от бота, отправляем обратно в основной сервис для WebSocket
             if is_from_bot and gateway_target == "telegram":
                 # Ответ агента для Telegram: пушим напрямую боту (host-режим).
-                await self.send_to_telegram(chat_id, message, attached_files, message_id=message_id)
+                # chat_id в payload = session_id (ключ памяти). Физический адрес
+                # доставки — tg_chat_id (если прокинут из бота); фолбэк на chat_id
+                # для обратной совместимости со старым контрактом.
+                deliver_chat_id = payload.get("tg_chat_id") or chat_id
+                await self.send_to_telegram(deliver_chat_id, message, attached_files, message_id=message_id)
+                return
+            if is_from_bot and gateway_target == "mobile":
+                # Ответ агента для мобильного клиента: телефон за NAT, поэтому
+                # не пушим ему, а кладём в Redis-список — мобилка заберёт
+                # long-poll'ом через GET /mobile/poll.
+                mobile_actions = payload.get("mobile_actions") or []
+                await self.push_to_mobile(chat_id, message, attached_files, message_id=message_id, actions=mobile_actions)
                 return
 
             if is_from_bot:
                 type_agent = payload.get("type_agent", "pm")
-                logging.info(type_agent)
                 gateway_url = self.gateway_urls[gateway_target]
                 ws_payload = dict(payload)
                 ws_payload["files"] = _sanitize_files_for_ws(attached_files) # Адаптивно, чтобы и для файлов пользователя
@@ -143,7 +169,7 @@ class DBConsumer:
         except Exception as e:
             logger.error(f"Ошибка обработки сообщения: {e}")
 
-    async def _hydrate_tg_files(self, files):
+    async def _hydrate_tg_files(self, files, chat_id=None):
         """Для Telegram дочитываем бинарник картинок из БД (Вариант B).
 
         Агент СПЕЦИАЛЬНО НЕ кладёт base64 сгенерированных картинок в
@@ -161,6 +187,52 @@ class DBConsumer:
                     continue  # уже есть бинарник (файлы с диска агента)
                 img_key = f.get("image_key")
                 if f.get("kind") != "image" or not img_key:
+                    # Не картинка из generated_images — это дисковый файл агента
+                    # (голос generate_audio → .ogg, документы и т.п.). Контейнеры
+                    # ИЗОЛИРОВАНЫ: у консьюмера НЕТ файловой системы агента, читать
+                    # f["path"] с диска бессмысленно (os.path.isfile всегда False).
+                    # Единственный способ достать байты — HTTP-эндпоинт агента
+                    # /web/file?path=...&chat_id=... (отдаёт с диска агента или
+                    # восстанавливает из OBS). Это тот же механизм, что у телеги
+                    # (_send_agent_file по file_url). Мобилке за NAT нужны байты
+                    # прямо в JSON, поэтому докачиваем здесь и кладём base64.
+                    file_url = f.get("file_url")
+                    fpath = f.get("path")
+                    pull_url = None
+                    if file_url:
+                        pull_url = file_url
+                    elif fpath:
+                        from urllib.parse import quote
+                        pull_url = f"/web/file?path={quote(fpath)}"
+                        if chat_id:
+                            pull_url += f"&chat_id={quote(str(chat_id))}"
+                    if pull_url:
+                        if pull_url.startswith("/"):
+                            pull_url = AGENT_SERVICE_URL.rstrip("/") + pull_url
+                        try:
+                            resp = await asyncio.to_thread(
+                                requests.get, pull_url, timeout=120
+                            )
+                            if resp.status_code == 200:
+                                raw = resp.content
+                                if len(raw) <= MAX_TG:
+                                    f["file_b64"] = base64.b64encode(raw).decode("ascii")
+                                    f.pop("path", None)
+                                    f.pop("file_url", None)
+                                    logging.info(
+                                        f"[mobile] файл {f.get('name')} = {len(raw)} байт "
+                                        f"докачан с /web/file → file_b64 (kind={f.get('kind')})"
+                                    )
+                                else:
+                                    logging.warning(
+                                        f"[mobile] файл {f.get('name')} = {len(raw)} байт > 20MB, пропускаю"
+                                    )
+                            else:
+                                logging.warning(
+                                    f"[mobile] /web/file -> HTTP {resp.status_code} для {pull_url}"
+                                )
+                        except Exception as e:
+                            logging.error(f"[mobile] не удалось докачать файл по {pull_url}: {e}")
                     continue
                 async with self.db.pool.acquire() as conn:
                     row = await conn.fetchrow(
@@ -187,6 +259,59 @@ class DBConsumer:
             except Exception as e:
                 logging.error(f"[telegram] не удалось дочитать картинку из БД: {e}")
         return files
+
+    async def push_to_mobile(self, chat_id: str, text: str, files=None, message_id=None, actions=None):
+        """Ответ агента → Redis-список для мобильного клиента (AI_tracker).
+
+        Телефон за NAT: сервер не инициирует соединение к нему, поэтому ответ
+        кладётся в mobile:reply:{chat_id}, а мобилка забирает его long-poll'ом
+        через GET /mobile/poll (BLPOP).
+
+        Голосовой ответ (generate_audio → .ogg) и картинки приезжают так же,
+        как для Telegram: бинарник в generated_images по image_key, здесь
+        догидрируем file_b64 (переиспользуем _hydrate_tg_files), чтобы мобилка
+        получила самодостаточный JSON и проиграла голос «на ухо» без доп.
+        запросов.
+        """
+        if self.redis is None:
+            logging.error(f"[mobile] Redis offline — ответ chat={chat_id} потерян")
+            return
+        try:
+            start = time.perf_counter()
+            files = await self._hydrate_tg_files(files, chat_id=chat_id)
+            # Для мобилки чистим серверный path (телефон его не прочитает) и
+            # оставляем самодостаточные поля: name, kind, ext, file_b64.
+            mobile_files = None
+            if files:
+                mobile_files = []
+                for f in files:
+                    nm = f.get("name") or ""
+                    ext = f.get("ext")
+                    if not ext and "." in nm:
+                        ext = nm.rsplit(".", 1)[-1].lower()
+                    mobile_files.append({
+                        "name": nm,
+                        "kind": f.get("kind"),
+                        "ext": ext,
+                        "file_b64": f.get("file_b64"),
+                    })
+            reply = {
+                "text": text or "",
+                "files": mobile_files,
+                "actions": actions or [],
+                "message_id": message_id,
+                "ts": int(time.time()),
+            }
+            key = MOBILE_REPLY_KEY.format(chat_id=str(chat_id))
+            await self.redis.rpush(key, json.dumps(reply))
+            await self.redis.expire(key, MOBILE_REPLY_TTL)
+            elapsed = time.perf_counter() - start
+            logging.info(
+                f"[mobile] ответ агента положен в Redis key={key} "
+                f"(files={len(files) if files else 0}) за {elapsed:.4f}s"
+            )
+        except Exception as e:
+            logger.error(f"[mobile] ошибка push в Redis chat={chat_id}: {e}")
 
     async def send_to_telegram(self, chat_id: str, text: str, files=None, message_id=None):
         """Ответ агента → телеграм-бот (host-режим, эндпоинт /push_message).

@@ -25,6 +25,9 @@ services:
       KAFKA_HEAP_OPTS: "-Xmx512m -Xms128m"
       KAFKA_LOG_RETENTION_HOURS: 6
       KAFKA_LOG_RETENTION_BYTES: 1073741824
+
+      KAFKA_MESSAGE_MAX_BYTES: 10485760
+      KAFKA_REPLICA_FETCH_MAX_BYTES: 10485760
     volumes:
       - kafka-data:/var/lib/kafka/data
 
@@ -94,6 +97,7 @@ services:
       FERNET_KEY: ${FERNET_KEY}
 
       CLOUD_LLM_ACCESS_KEY: ${CLOUD_LLM_ACCESS_KEY}
+
 
       # RouterAPI (routerai.ru) — paid media provider for admin-only
       # generate_video / generate_audio tools.
@@ -413,11 +417,15 @@ services:
       OBS_SECRET_KEY: ${OBS_SECRET_KEY}
       OBS_REGION: ${OBS_REGION}
       OBS_ENDPOINT: ${OBS_ENDPOINT}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      AGENT_SERVICE_URL: ${AGENT_SERVICE_URL:-http://agent_service:9001}
+      TG_ASR_PROVIDER: ${TG_ASR_PROVIDER:-cloud_ru}
     volumes:
       - ./chats_service:/app
     depends_on:
       - postgres
       - broker
+      - redis
     restart: unless-stopped
     networks:
       - catchPM
@@ -437,12 +445,17 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME}
       KAFKA_BROKER: ${KAFKA_BROKER}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      TG_BOT_PUSH_URL: "http://host.docker.internal:8010/push_message"
     volumes:
       - ./chats_service:/app
     depends_on:
       - postgres
       - broker
+      - redis
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - catchPM
 

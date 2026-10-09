@@ -36,4 +36,4 @@ ENV PYTHONPATH=/app
 
 EXPOSE 9001
 
-CMD ["python", "app/app.py"]
+CMD ["python", "app/main.py"]

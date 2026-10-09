@@ -1326,7 +1326,13 @@ async def stop_message(request: Request):
     try:
         response = await app.state.http_client.post(
             f"{SERVICES['agent_service']['url']}/internal/stop_message",
-            json={"request_id": request_id, "user_id": user["user_id"]},
+            json={
+                "request_id": request_id,
+                "user_id": user["user_id"],
+                # chat_id нужен, чтобы погасить самоцикл (deactivate_loop_task).
+                # Петля живёт на уровне чата, а не request_id (каждый тик — свой id).
+                "chat_id": data.get("chat_id"),
+            },
             timeout=10.0
         )
         return Response(

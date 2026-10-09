@@ -2671,7 +2671,7 @@ class ChatApp {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     credentials: 'include',
-                    body: JSON.stringify({ request_id: this._activeRequestId })
+                    body: JSON.stringify({ request_id: this._activeRequestId, chat_id: this.currentChat })
                 });
             }
         } catch (e) {

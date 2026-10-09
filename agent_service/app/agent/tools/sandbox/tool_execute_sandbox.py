@@ -18,6 +18,7 @@ import os
 import time
 import uuid
 import io
+import re
 import zipfile
 
 import httpx
@@ -53,24 +54,48 @@ MAX_FILES_PER_CALL = 5
 def _ensure_save_dir() -> None:
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
 
-def _save_script_if_ok(code: str, run_id: str, ok: bool, reusable: bool = False) -> str | None:
-    """Сохраняет исходный код в /sandbox, если исполнение прошло успешно."""
-    if not ok:
-        return None
+def _save_script(code: str, run_id: str, ok: bool, reusable: bool = False) -> str | None:
+    """Сохраняет исходный код в /sandbox ВСЕГДА — и при успехе, и при ошибке.
+
+    При ошибке кладёт в executed_scripts/failed/ — чтобы агент мог перечитать и точечно починить через edit_sandbox_file,
+    а не переписывать весь скрипт заново."""
     try:
         from agent.tools.filesystem.tool_write_sandbox import SANDBOX_ROOT
         if reusable:
             script_dir = Path(SANDBOX_ROOT) / "reusable"
-        else:
+        elif ok:
             script_dir = Path(SANDBOX_ROOT) / "executed_scripts"
+        else:
+            script_dir = Path(SANDBOX_ROOT) / "executed_scripts" / "failed"
 
         script_dir.mkdir(parents=True, exist_ok=True)
         script_path = script_dir / f"{run_id}.py"
         script_path.write_text(code, encoding="utf-8")
         return str(script_path)
     except OSError as e:
-        log.warning(f"Не удалось сохранить рабочий скрипт {run_id}: {e}")
+        log.warning(f"Не удалось сохранить скрипт {run_id}: {e}")
         return None
+
+
+def _extract_error_context(stderr: str, code: str, window: int = 6) -> tuple[int | None, str | None]:
+    """Из traceback вытаскивает номер строки с ошибкой и вырезает окно строк вокруг неё."""
+    if not stderr or not code:
+        return None, None
+    matches = re.findall(r'line (\d+)', stderr)
+    if not matches:
+        return None, None
+    err_line = int(matches[-1])  # последняя — обычно самая точная (наш script.py)
+    lines = code.split("\n")
+    if err_line < 1 or err_line > len(lines):
+        return err_line, None
+    start = max(0, err_line - window)
+    end = min(len(lines), err_line + window)
+    out = []
+    for i in range(start, end):
+        ln = i + 1
+        marker = ">>> " if ln == err_line else "    "
+        out.append(f"{marker}{ln:4d} | {lines[i]}")
+    return err_line, "\n".join(out)
 
 def _save_output_files(files: list[dict], run_id: str) -> tuple[list[dict], list[str]]:
     """Декодирует base64 из ответа sandbox-сервиса и пишет на диск. Модели возвращаем только метаданные."""
@@ -188,11 +213,27 @@ async def _process_sandbox_result(
     if result.get("saved_script"):
         response["saved_script_in_workspace"] = result["saved_script"]
 
-    # Сохраняем скрипт, только если это был Python код
+    # Сохраняем скрипт ВСЕГДА (и при ok, и при ошибке)
     if code_for_saving:
-        saved_script_path = _save_script_if_ok(code_for_saving, run_id, result.get("ok", False), reusable)
+        saved_script_path = _save_script(code_for_saving, run_id, result.get("ok", False), reusable)
         logging.info(f"Сохраненный скрипт: {saved_script_path}")
         response["saved_script_path"] = saved_script_path
+
+    if not result.get("ok") and code_for_saving:
+        err_line, err_ctx = _extract_error_context(response.get("stderr", ""), code_for_saving)
+        response["code_bytes"] = len(code_for_saving.encode("utf-8"))
+        if err_line is not None:
+            response["error_line"] = err_line
+        if err_ctx:
+            response["error_context"] = err_ctx
+        loc = response.get("saved_script_path") or response.get("saved_script_in_workspace")
+        if loc:
+            response["hint"] = (
+                f"Скрипт целиком дошёл до sandbox ({response['code_bytes']} байт) и сохранён в {loc}. "
+                "Ошибка синтаксическая, НЕ транспортная — код НЕ обрезался. "
+                "Перечитай скрипт вокруг error_line и исправь ТОЧЕЧНО через edit_sandbox_file. "
+                "НЕ переписывай весь скрипт заново."
+            )
 
     if result.get("error"):
         response["error"] = result["error"]

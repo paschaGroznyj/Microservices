@@ -2189,6 +2189,7 @@ class ChatApp {
                         fullText,
                         files: msg.files,
                         message_id: msg.message_id,
+                        loop: msg.loop === true,
                     };
                     st.streamDone = true;
                     this._startStreamLoop(key);
@@ -2200,7 +2201,7 @@ class ChatApp {
                     this._clearAllStatuses();
                     st.streamingActive = false;
                     if (this._chatStatuses) delete this._chatStatuses[key];
-                    this._onRunFinished();
+                    this._onRunFinished(msg.loop === true);
                 } else {
                     // Фоновый чат без живого стрима, но пришёл финал — сохраняем
                     // как готовый узел, чтобы отрисовать при возврате.
@@ -2213,7 +2214,7 @@ class ChatApp {
                     el.appendChild(st.liveBlockEl);
                     st.streamShown = fullText;
                     st.streamBuffer = '';
-                    st.streamFinalData = { fullText, files: msg.files, message_id: msg.message_id };
+                    st.streamFinalData = { fullText, files: msg.files, message_id: msg.message_id, loop: msg.loop === true };
                     st.streamDone = true;
                     this._finalizeStream(key);
                 }
@@ -2639,7 +2640,7 @@ class ChatApp {
             this._flattenWaveIndicator();
             setTimeout(() => this._removeBotPlaceholder(), 500);
             this._clearAllStatuses();
-            this._onRunFinished();
+            this._onRunFinished(data.loop === true);
         }
         if (this._chatStatuses) delete this._chatStatuses[key];
     }
@@ -2679,7 +2680,18 @@ class ChatApp {
         }
     }
 
-    _onRunFinished() {
+    _onRunFinished(keepRunning = false) {
+        // Вариант A (самоцикл): если финальный ответ помечен loop:true и
+        // пользователь НЕ нажимал стоп — петля жива, следующий тик придёт
+        // через консьюмер. Кнопку-стоп НЕ гасим, держим running.
+        // Как только придёт финал без loop (обычный ход) или после стопа
+        // (_runState==='stopping') — гасим как обычно.
+        if (keepRunning && this._runState === 'running') {
+            // держим стоп-кнопку, request_id текущего тика больше не актуален
+            // (следующий тик придёт со своим), но стоп гасим по chat_id — ок.
+            this._setSendButtonMode('stop');
+            return;
+        }
         this._runState = 'idle';
         this._activeRequestId = null;
         this._setSendButtonMode('send');

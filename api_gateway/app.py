@@ -1249,6 +1249,20 @@ async def send_message(request: Request):
     # Запоминаем связь ДО отправки агенту
     pending_requests[request_id] = data["chat_id"]
 
+    # Самоцикл (loop) — только для админов. Если не-админ подделал POST
+    # с loop=true — молча срезаем все loop-поля (обычная отправка не ломается).
+    if data.get("loop"):
+        if user["username"] not in ADMIN_USERNAMES:
+            logger.warning(
+                f"[self-loop] не-админ {user.get('username')} пытался включить loop — срезано"
+            )
+            data.pop("loop", None)
+            data.pop("loop_instruction", None)
+            data.pop("loop_tick", None)
+        else:
+            # старт петли с фронта — это всегда начальный вход, не служебный тик
+            data["loop_tick"] = False
+
     data["user_id"] = user["user_id"]
     data["tb_name"] = request.headers.get("X-Authentik-Username") # Передача табельника в chats_service -> promt Ouroboros
     data["username"] = request.headers.get("X-Authentik-Name").encode('latin-1').decode('utf-8') # Передача имени в chats_service -> promt Ouroboros

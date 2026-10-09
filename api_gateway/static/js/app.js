@@ -1780,6 +1780,8 @@ class ChatApp {
                     agent_model:    window.ModelPicker?.getModel() ?? 'coder',
                     selected_tools: window.ToolsPanel?.getSelectedCategories() ?? [],
                     context_size:   window.ToolsPanel?.getContextSize()   ?? 'medium',
+                    loop:            window.ToolsPanel?.getLoopEnabled() ?? false,
+                    loop_instruction: window.ToolsPanel?.getLoopEnabled() ? text : '',
                     has_files:      _hasFiles,
                     files: window.FileAttach?.getFilesMeta() ?? []
                 })

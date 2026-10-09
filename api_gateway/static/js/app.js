@@ -542,12 +542,18 @@ class ChatApp {
             });
             if (r.ok) {
                 const j = await r.json();
-                if (j?.running) {
+                // loop_active — стабильный флаг самоцикла (живёт между тиками,
+                // не гаснет в зазоре "ответ ушёл / следующий тик ещё не поднят").
+                // Если петля активна — держим UI в running независимо от того,
+                // крутится ли прямо сейчас конкретный тик.
+                if (j?.running || j?.loop_active) {
                     running = true;
                     requestId = j.request_id || requestId;
+                    this._loopActive = !!j.loop_active;
                 } else {
                     // Сервер говорит: работа завершена → снимаем UI
                     running = false;
+                    this._loopActive = false;
                 }
             }
         } catch (_) { /* сеть недоступна — доверяем savedState */ }

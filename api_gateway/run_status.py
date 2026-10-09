@@ -39,6 +39,49 @@ def _key(chat_id) -> str:
     return f"agent:running:{chat_id}"
 
 
+def _loop_key(chat_id) -> str:
+    return f"agent:loop:{chat_id}"
+
+
+# TTL loop-флага: предохранитель на случай, если стоп потеряется и петля
+# как-то повиснет. Сутки — петля живёт долго, но не вечно.
+LOOP_TTL = int(os.getenv("AGENT_LOOP_TTL", "86400"))
+
+
+async def mark_loop(chat_id) -> None:
+    """Пометить, что по chat_id запущен САМОЦИКЛ. В отличие от agent:running
+    (эфемерный флаг одного хода, гаснет между тиками), этот флаг стабилен и
+    живёт всё время работы петли — по нему фронт после F5 понимает, что
+    работа продолжается, хотя текущего тика прямо сейчас может и не быть."""
+    if _redis is None or chat_id is None:
+        return
+    try:
+        await _redis.set(_loop_key(chat_id), "1", ex=LOOP_TTL)
+    except Exception as e:
+        logger.debug("run_status.mark_loop failed: %s", e)
+
+
+async def clear_loop(chat_id) -> None:
+    """Снять флаг самоцикла: стоп-кнопка / deactivate. Идемпотентно."""
+    if _redis is None or chat_id is None:
+        return
+    try:
+        await _redis.delete(_loop_key(chat_id))
+    except Exception as e:
+        logger.debug("run_status.clear_loop failed: %s", e)
+
+
+async def is_loop_active(chat_id) -> bool:
+    """Активен ли самоцикл по chat_id (стабильно между тиками)."""
+    if _redis is None or chat_id is None:
+        return False
+    try:
+        return bool(await _redis.exists(_loop_key(chat_id)))
+    except Exception as e:
+        logger.debug("run_status.is_loop_active failed: %s", e)
+        return False
+
+
 async def mark_running(chat_id, request_id: str, model: str | None = None) -> None:
     """Пометить, что по chat_id стартовала генерация. Вызывается в send_message."""
     if _redis is None or chat_id is None:

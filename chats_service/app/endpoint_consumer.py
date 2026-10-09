@@ -30,6 +30,22 @@ LOOP_SERVICE_USER_ID = -100
 LOOP_SERVICE_USERNAME = "agent-self-loop"
 
 
+def _clear_loop_flag(chat_id):
+    """Снять стабильный Redis-флаг самоцикла agent:loop:{chat_id}.
+
+    Нужен для случаев, когда петля гаснет НЕ по стоп-кнопке (её снимает
+    gateway), а по решению consumer: бюджет исчерпан или установка больше
+    не активна. Без этого флаг провисит до TTL и фронт после F5 покажет
+    ложное «идёт работа». Синхронный redis, best-effort — не роняем петлю.
+    """
+    try:
+        import redis as _redis_sync
+        r = _redis_sync.from_url(REDIS_URL, decode_responses=True)
+        r.delete(f"agent:loop:{chat_id}")
+    except Exception as e:
+        logger.debug(f"[self-loop] clear_loop_flag failed chat={chat_id}: {e}")
+
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -201,12 +217,14 @@ class DBConsumer:
         budget_ok = True  # TODO(budget): подключить проверку расхода
         if not budget_ok:
             await self.db.deactivate_loop_task(chat_id)
+            _clear_loop_flag(chat_id)
             logger.info(f"[self-loop] бюджет исчерпан, петля остановлена chat={chat_id}")
             return
 
         # 2) Активна ли установка (килл-свитч/стоп снимают is_active).
         task = await self.db.get_active_loop_task(chat_id)
         if not task:
+            _clear_loop_flag(chat_id)
             logger.info(f"[self-loop] активной установки нет, петля не продолжается chat={chat_id}")
             return
 

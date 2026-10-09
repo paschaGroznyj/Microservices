@@ -1288,6 +1288,10 @@ async def send_message(request: Request):
     await run_status.mark_running(
         data["chat_id"], request_id, data.get("type_agent")
     )
+    # Старт самоцикла (реальный, не служебный тик): ставим стабильный loop-флаг,
+    # чтобы фронт после F5/переключения чата знал, что работа идёт в цикле.
+    if data.get("loop") and not data.get("loop_tick"):
+        await run_status.mark_loop(data["chat_id"])
     try:
         start = time.perf_counter()
         response = await app.state.http_client.post(
@@ -1322,6 +1326,8 @@ async def stop_message(request: Request):
     stop_chat_id = pending_requests.get(request_id) or data.get("chat_id")
     if stop_chat_id is not None:
         await run_status.clear_running(stop_chat_id)
+        # Гасим и флаг самоцикла — петля останавливается по стоп-кнопке.
+        await run_status.clear_loop(stop_chat_id)
 
     try:
         response = await app.state.http_client.post(
@@ -1355,9 +1361,11 @@ async def chat_run_status(chat_id: str, request: Request):
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     info = await run_status.get_running(chat_id)
+    loop_active = await run_status.is_loop_active(chat_id)
     if not info:
-        return JSONResponse(content={"running": False})
-    return JSONResponse(content={"running": True, **info})
+        # Текущего тика нет, но петля может быть жива (зазор между тиками).
+        return JSONResponse(content={"running": loop_active, "loop_active": loop_active})
+    return JSONResponse(content={"running": True, "loop_active": loop_active, **info})
 
 
 @app.post("/api/chats/upload_files")

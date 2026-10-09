@@ -193,6 +193,13 @@ class ChatMessage(BaseModel):
     target_username: str | None = None
     sad_followup: bool = False
     custom_prompt: str | None = None
+    # САМОЦИКЛ АГЕНТА: loop=True — включить петлю для чата. loop_instruction —
+    # начальная установка от пользователя (что делать на каждом тике). Сохраняется
+    # в agent_loop_tasks ОДИН раз при старте; consumer её НЕ переписывает.
+    loop: bool = False
+    loop_instruction: str | None = None
+    # loop_tick=True — служебный тик петли от consumer (user_id=-100), проходит гейт агента.
+    loop_tick: bool = False
     
 
 @app.on_event("startup")
@@ -334,6 +341,16 @@ async def send_message(chat: ChatMessage):
         agent_farewell = tier_info["farewell"]
         logging.info(f"[mobile-router] chat={chat.chat_id} tier={agent_tier} farewell={agent_farewell}")
 
+    # ═══ САМОЦИКЛ: старт петли от пользователя ════════════════════════════
+    # Фронт прислал loop=True + loop_instruction — заводим/обновляем установку в БД.
+    # Только на РЕАЛЬНОМ старте (loop_tick=False); служебный тик установку НЕ трогает.
+    if chat.loop and not chat.loop_tick and (chat.loop_instruction or "").strip():
+        try:
+            await db.upsert_loop_task(chat.chat_id, chat.user_id, chat.loop_instruction)
+            logging.info(f"[self-loop] установка заведена chat={chat.chat_id} user={chat.user_id}")
+        except Exception as e:
+            logging.error(f"[self-loop] не удалось завести установку chat={chat.chat_id}: {e}")
+
     message = {
         "user_id": chat.user_id,
         "tb_name": chat.tb_name,
@@ -361,6 +378,9 @@ async def send_message(chat: ChatMessage):
         "agent_tier": agent_tier,
         "agent_farewell": agent_farewell,
         "persona": chat.persona,
+        "loop": chat.loop,
+        "loop_instruction": chat.loop_instruction,
+        "loop_tick": chat.loop_tick,
     }
     start = time.perf_counter()
     # отправка в Kafka

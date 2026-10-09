@@ -201,7 +201,63 @@ class DataBaseChats:
             CREATE INDEX IF NOT EXISTS ix_generated_images_chat_id ON generated_images(chat_id);
             CREATE INDEX IF NOT EXISTS ix_generated_images_message_id ON generated_images(message_id);
             CREATE INDEX IF NOT EXISTS ix_generated_images_created_at ON generated_images(created_at DESC);
+
+            -- Самоцикл агента (утилизация ресурсов): установка от пользователя,
+            -- которая подмешивается в промпт на каждом тике петли.
+            -- is_active=false -> consumer не делает реентри (килл-свитч / выход по бюджету).
+            CREATE TABLE IF NOT EXISTS agent_loop_tasks (
+                id SERIAL PRIMARY KEY,
+                chat_id TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                instruction TEXT NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS ix_agent_loop_tasks_chat ON agent_loop_tasks(chat_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_agent_loop_tasks_chat_active
+                ON agent_loop_tasks(chat_id) WHERE is_active;
         """)
+
+    # ═══ САМОЦИКЛ АГЕНТА (agent_loop_tasks) ═══════════════════════════════
+    async def upsert_loop_task(self, chat_id: str, user_id: int, instruction: str) -> dict | None:
+        """Завести/обновить активную установку петли для чата.
+
+        На чат держим РОВНО ОДНУ активную установку (гарантия — частичный
+        unique-индекс ux_agent_loop_tasks_chat_active). Старую гасим, новую вставляем.
+        Это и есть начальная установка от пользователя; consumer её НЕ меняет.
+        """
+        if not chat_id or user_id is None or not (instruction or "").strip():
+            return None
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "UPDATE agent_loop_tasks SET is_active=FALSE, updated_at=now() "
+                    "WHERE chat_id=$1 AND is_active;", chat_id)
+                row = await conn.fetchrow(
+                    "INSERT INTO agent_loop_tasks (chat_id, user_id, instruction) "
+                    "VALUES ($1,$2,$3) RETURNING id, chat_id, user_id, instruction, is_active;",
+                    chat_id, user_id, instruction.strip())
+        return dict(row) if row else None
+
+    async def get_active_loop_task(self, chat_id: str) -> dict | None:
+        """Активная установка петли для чата (или None). Читает consumer перед реентри."""
+        if not chat_id:
+            return None
+        row = await self.pool.fetchrow(
+            "SELECT id, chat_id, user_id, instruction, is_active "
+            "FROM agent_loop_tasks WHERE chat_id=$1 AND is_active LIMIT 1;", chat_id)
+        return dict(row) if row else None
+
+    async def deactivate_loop_task(self, chat_id: str) -> bool:
+        """Остановить петлю для чата (килл-свитч/стоп-кнопка/выход по бюджету)."""
+        if not chat_id:
+            return False
+        res = await self.pool.execute(
+            "UPDATE agent_loop_tasks SET is_active=FALSE, updated_at=now() "
+            "WHERE chat_id=$1 AND is_active;", chat_id)
+        return res.endswith("1") or res.split()[-1] not in ("0", "")
+
     async def add_message(
         self,
         user_id: int,

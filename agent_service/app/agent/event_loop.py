@@ -501,6 +501,7 @@ class HarnessAgent:
             get_llm_model_glm()
         ]
         self.obs_loader = OBSWorker()
+        self.services = {"parsers": {"url": f"http://parsers_service:{PORT_PARSERS_SERVICE}",}}
         # Память: последние 10 сообщений (5 пар human/ai)
         self._memories: Dict[str, ConversationBufferWindowMemory] = {}
         self._memory_loaded: Dict[str, bool] = {}

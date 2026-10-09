@@ -3226,7 +3226,6 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     fname = f"photo_{photo.file_unique_id}.jpg"
-
     gid = msg.media_group_id
     if gid:
         # АЛЬБОМ: TG шлёт кадры N отдельными photo-апдейтами с общим

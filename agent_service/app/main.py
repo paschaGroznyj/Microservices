@@ -1149,5 +1149,6 @@ async def internal_providers_status():
 
 
 if __name__ == "__main__":
-    uvicorn.run("app.main:app", host="0.0.0.0", port=int(PORT_PM_AGENT), log_level="info", reload=True)
+    # Важно ставить reload=False, т.к. при записи файлов в разрешенные папки, контейнер начинает перезапускаться
+    uvicorn.run("app.main:app", host="0.0.0.0", port=int(PORT_PM_AGENT), log_level="info", reload=False)
 

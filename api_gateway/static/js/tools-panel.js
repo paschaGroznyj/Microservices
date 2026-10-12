@@ -115,6 +115,7 @@ class ToolsPanel {
   constructor() {
     this._isAdmin     = false;
     this._contextSize = "medium";
+    this._loopEnabled = false;   // самоцикл агента (только админ)
     this._open        = false;
     this._panelEl     = null;
 
@@ -153,6 +154,9 @@ class ToolsPanel {
   }
 
   getContextSize() { return this._contextSize; }
+
+  /** Самоцикл включён? Только админ может включить. */
+  getLoopEnabled() { return this._isAdmin && this._loopEnabled; }
 
   /**
    * Вставляет кнопку 🔧 в chat-input-footer и start-input-footer.
@@ -314,6 +318,39 @@ class ToolsPanel {
 
       toolsSection.appendChild(row);
     });
+
+    // ── Самоцикл агента (только админ) ─────────────
+    if (this._isAdmin) {
+      const loopRow = document.createElement("label");
+      loopRow.className = "tp-row tp-row--admin";
+      loopRow.innerHTML = `
+        <span class="tp-row-icon"><svg viewBox="0 0 24 24" fill="none" width="17" height="17">
+          <path d="M21 12a9 9 0 1 1-2.64-6.36" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <path d="M21 3v5h-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg></span>
+        <span class="tp-row-info">
+          <span class="tp-row-label">Самоцикл</span>
+          <span class="tp-row-desc">Агент работает по установке из сообщения в цикле</span>
+        </span>
+        <span class="tp-checkbox ${this._loopEnabled ? "checked" : ""}">
+          ${this._loopEnabled ? this._checkSVG() : ""}
+        </span>
+        <input type="checkbox" class="tp-hidden-cb" ${this._loopEnabled ? "checked" : ""} data-cat="__loop__">`;
+
+      const loopCb  = loopRow.querySelector(".tp-hidden-cb");
+      const loopBox = loopRow.querySelector(".tp-checkbox");
+      loopRow.addEventListener("click", e => {
+        e.preventDefault();
+        e.stopPropagation();
+        const nowChecked = !this._loopEnabled;
+        this._loopEnabled = nowChecked;
+        loopCb.checked = nowChecked;
+        loopBox.classList.toggle("checked", nowChecked);
+        loopBox.innerHTML = nowChecked ? this._checkSVG() : "";
+        this._updateTriggerBadge(triggerBtn);
+      });
+      toolsSection.appendChild(loopRow);
+    }
 
     // Весь контент — в скролл-контейнер, чтобы при нехватке высоты
     // появлялась прокрутка, а не панель уходила за экран.

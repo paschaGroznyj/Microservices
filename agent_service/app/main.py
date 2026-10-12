@@ -146,8 +146,16 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     tg_sad = bool(payload.get("sad_followup", False))
     tg_custom_prompt = payload.get("custom_prompt")
 
+    # САМОЦИКЛ АГЕНТА: тик петли приходит от consumer с user_id=-100, loop_tick=True.
+    # loop_instruction — установка (consumer подтянул её из БД и положил в message).
+    loop_flag = bool(payload.get("loop", False))
+    loop_tick = bool(payload.get("loop_tick", False))
+    loop_instruction = payload.get("loop_instruction")
 
-    if is_from_bot or user_id == -1:
+
+    # Служебный тик петли (loop_tick, user_id=-100) ДОЛЖЕН пройти гейт: это
+    # новый вход от сервиса, не ответ бота. Остальные bot/‑сообщения и user_id=-1 — отсекаем.
+    if (is_from_bot or user_id == -1) and not loop_tick:
         return
     # Для проактивной инициации текст в payload может быть пустым — генерим сами.
     if (not text) and (not tg_initiated):
@@ -197,6 +205,16 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                 )
         else:
             message = build_tg_prefix(username, chat_id, _chat_type) + text
+    elif loop_tick:
+        # Самоцикл: служебный тик. Текст уже содержит установку (из consumer).
+        # Даём спец-шапку вместо табельного (tb_name/username у сервиса пустые).
+        _loop_instr = (loop_instruction or text or "").strip()
+        message = (
+            f"[AGENT SELF-LOOP — служебный тик самоцикла, chat_id: {chat_id}]\n"
+            "Это автоматическое продолжение работы без нового сообщения от пользователя. "
+            "Действуй самостоятельно согласно установке ниже, продолжая начатое.\n\n"
+            f"[УСТАНОВКА]\n{_loop_instr}"
+        )
     else:
         message = f"[CatchPM, ТабельНомер: {tb_name}, Пользователь: {username}, chat_id: {chat_id}, user_id: {user_id}]\n" + text
 
@@ -479,7 +497,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             "message_id": message_id,
             "is_from_bot": True,
             "type_agent": "pm",
-            "action": response['action'],
+            "action": response.get('action'),
             "attached_files": attached_files,
             "tool_trace": response.get("tool_trace"), # str,
             "agent_model": response.get("agent_model"),
@@ -491,6 +509,10 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             # endpoint_consumer.push_to_mobile -> Redis -> long-poll мобилки.
             # Для не-mobile всегда [] — поле нейтральное.
             "mobile_actions": mobile_actions,
+            # САМОЦИКЛ: пробрасываем флаг и установку, чтобы consumer после
+            # логирования сделал реентри (новый тик) — только для web (gateway main).
+            "loop": loop_flag,
+            "loop_instruction": loop_instruction,
         }
 
         await prod.send_and_wait("chat-messages", value=bot_message)
@@ -1127,5 +1149,6 @@ async def internal_providers_status():
 
 
 if __name__ == "__main__":
-    uvicorn.run("app.main:app", host="0.0.0.0", port=int(PORT_PM_AGENT), log_level="info", reload=True)
+    # Важно ставить reload=False, т.к. при записи файлов в разрешенные папки, контейнер начинает перезапускаться
+    uvicorn.run("app.main:app", host="0.0.0.0", port=int(PORT_PM_AGENT), log_level="info", reload=False)
 

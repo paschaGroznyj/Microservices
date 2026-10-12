@@ -317,8 +317,15 @@ async def get_db_image(
 
 @web_router.post("/internal/stop_message")
 async def internal_stop_message(payload: StopMessagePayload):
+    # САМОЦИКЛ: стоп-кнопка гасит не только текущий тик (task.cancel), но и саму
+    # петлю (is_active=false) — иначе consumer тут же запустит следующий тик.
+    if payload.chat_id:
+        try:
+            await db.deactivate_loop_task(payload.chat_id)
+        except Exception as e:
+            logging.error(f"[self-loop] не удалось погасить петлю chat={payload.chat_id}: {e}")
     task = active_tasks.get(payload.request_id)
     if not task:
-        return {"ok": False, "status": "not_found"}
+        return {"ok": False, "status": "not_found", "loop_stopped": bool(payload.chat_id)}
     task.cancel()
-    return {"ok": True, "status": "cancelling", "request_id": payload.request_id}
+    return {"ok": True, "status": "cancelling", "request_id": payload.request_id, "loop_stopped": bool(payload.chat_id)}

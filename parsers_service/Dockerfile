@@ -4,6 +4,7 @@ WORKDIR /app
 
 # 1. Системные зависимости (для Chromium и утилит)
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
     chromium \
     chromium-driver \
     && rm -rf /var/lib/apt/lists/*
@@ -20,11 +21,8 @@ USER appuser
 RUN playwright install chromium
 USER root
 
-RUN pip uninstall -y frontend && pip install pymupdf
 # 5. Копируем код и настраиваем права
 COPY . .
-RUN mkdir -p /app/knowledge_base/articles /app/logs /app/pw_profile_scholar \
-    && chown -R appuser:appuser /app
 
 # 6. Переключаемся на appuser
 USER appuser
@@ -35,4 +33,4 @@ ENV PYTHONPATH=/app
 
 EXPOSE 8003
 
-CMD ["python", "app/app.py"]
+CMD ["python", "app/main.py"]

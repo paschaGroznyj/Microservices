@@ -249,6 +249,25 @@ class AgentDB:
 
     #     return head_str + "\n\n".join(formatted_entries)
 
+    async def deactivate_loop_task(self, chat_id: str) -> bool:
+        """САМОЦИКЛ: погасить активную установку петли (стоп-кнопка).
+
+        Таблица agent_loop_tasks живёт в ОБЩЕЙ БД (создаёт chats_service). Агент
+        ходит в тот же Postgres своим пулом. После деактивации consumer
+        при следующем реентри увидит отсутствие активной задачи и не продолжит.
+        """
+        if not chat_id or not self.pool:
+            return False
+        try:
+            res = await self.pool.execute(
+                "UPDATE agent_loop_tasks SET is_active=FALSE, updated_at=now() "
+                "WHERE chat_id=$1 AND is_active;", str(chat_id))
+            return "UPDATE" in res
+        except Exception as e:
+            import logging as _lg
+            _lg.error(f"[self-loop] deactivate_loop_task chat={chat_id}: {e}")
+            return False
+
     async def get_agent_journal(self, chat_id: str | None = None) -> str:
         async with self.pool.acquire() as conn:
             # В основной контекст тянем ТОЛЬКО активные (не архивные) записи.

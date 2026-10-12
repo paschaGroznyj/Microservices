@@ -317,6 +317,7 @@ def make_analyze_image_tool(agent, images: list[dict] | None = None,
              queues, and their descriptions will be added to the registry.
 
         The prompt parameter — what exactly to do with the image — is always required.
+        If the PDF doesn't execute, render the first page to PNG using pdf2image/pdftoppm and pass the PNG.
 
         If you need to analyze several images from different sources —
         Call the tool separately for each (except for source_image_keys, where the list  is processed in a single call).

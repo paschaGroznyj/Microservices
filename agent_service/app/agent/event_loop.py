@@ -456,8 +456,13 @@ def _fmt_args(name: str, args: dict) -> str:
     parts = []
     for k, v in args.items():
         s = str(v)
-        # Если тулза кодовая и аргумент похож на код — обрезаем жёстче
+        # Если тулза кодовая и аргумент похож на код — показываем РАЗМЕР + короткий preview,
+        # а НЕ усечённый хвост "…[+N]" (он провоцировал ложный вывод «код обрезался при передаче»).
         is_code = name in CODE_TOOLS or k in ("code", "content", "new_str", "old_str")
+        if is_code and len(s) > MAX_CODE_LEN:
+            preview = s[:160].replace("\n", "\\n").rstrip()
+            parts.append(f"{k}=<{len(s)} bytes, preview={preview!r}>")
+            continue
         limit = MAX_CODE_LEN if is_code else MAX_ARG_LEN
         if len(s) > limit:
             s = s[:limit].rstrip() + f"…[+{len(s)-limit}]"
@@ -496,6 +501,7 @@ class HarnessAgent:
             get_llm_model_glm()
         ]
         self.obs_loader = OBSWorker()
+        self.services = {"parsers": {"url": f"http://parsers_service:{PORT_PARSERS_SERVICE}",}}
         # Память: последние 10 сообщений (5 пар human/ai)
         self._memories: Dict[str, ConversationBufferWindowMemory] = {}
         self._memory_loaded: Dict[str, bool] = {}

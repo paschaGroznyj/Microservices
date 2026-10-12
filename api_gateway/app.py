@@ -1249,6 +1249,20 @@ async def send_message(request: Request):
     # Запоминаем связь ДО отправки агенту
     pending_requests[request_id] = data["chat_id"]
 
+    # Самоцикл (loop) — только для админов. Если не-админ подделал POST
+    # с loop=true — молча срезаем все loop-поля (обычная отправка не ломается).
+    if data.get("loop"):
+        if user["username"] not in ADMIN_USERNAMES:
+            logger.warning(
+                f"[self-loop] не-админ {user.get('username')} пытался включить loop — срезано"
+            )
+            data.pop("loop", None)
+            data.pop("loop_instruction", None)
+            data.pop("loop_tick", None)
+        else:
+            # старт петли с фронта — это всегда начальный вход, не служебный тик
+            data["loop_tick"] = False
+
     data["user_id"] = user["user_id"]
     data["tb_name"] = request.headers.get("X-Authentik-Username") # Передача табельника в chats_service -> promt Ouroboros
     data["username"] = request.headers.get("X-Authentik-Name").encode('latin-1').decode('utf-8') # Передача имени в chats_service -> promt Ouroboros
@@ -1274,6 +1288,10 @@ async def send_message(request: Request):
     await run_status.mark_running(
         data["chat_id"], request_id, data.get("type_agent")
     )
+    # Старт самоцикла (реальный, не служебный тик): ставим стабильный loop-флаг,
+    # чтобы фронт после F5/переключения чата знал, что работа идёт в цикле.
+    if data.get("loop") and not data.get("loop_tick"):
+        await run_status.mark_loop(data["chat_id"])
     try:
         start = time.perf_counter()
         response = await app.state.http_client.post(
@@ -1308,11 +1326,19 @@ async def stop_message(request: Request):
     stop_chat_id = pending_requests.get(request_id) or data.get("chat_id")
     if stop_chat_id is not None:
         await run_status.clear_running(stop_chat_id)
+        # Гасим и флаг самоцикла — петля останавливается по стоп-кнопке.
+        await run_status.clear_loop(stop_chat_id)
 
     try:
         response = await app.state.http_client.post(
             f"{SERVICES['agent_service']['url']}/internal/stop_message",
-            json={"request_id": request_id, "user_id": user["user_id"]},
+            json={
+                "request_id": request_id,
+                "user_id": user["user_id"],
+                # chat_id нужен, чтобы погасить самоцикл (deactivate_loop_task).
+                # Петля живёт на уровне чата, а не request_id (каждый тик — свой id).
+                "chat_id": data.get("chat_id"),
+            },
             timeout=10.0
         )
         return Response(
@@ -1335,9 +1361,11 @@ async def chat_run_status(chat_id: str, request: Request):
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     info = await run_status.get_running(chat_id)
+    loop_active = await run_status.is_loop_active(chat_id)
     if not info:
-        return JSONResponse(content={"running": False})
-    return JSONResponse(content={"running": True, **info})
+        # Текущего тика нет, но петля может быть жива (зазор между тиками).
+        return JSONResponse(content={"running": loop_active, "loop_active": loop_active})
+    return JSONResponse(content={"running": True, "loop_active": loop_active, **info})
 
 
 @app.post("/api/chats/upload_files")

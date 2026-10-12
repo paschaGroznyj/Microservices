@@ -8,6 +8,7 @@ from app.core.config import KAFKA_BROKER
 from typing import List
 import os
 import base64
+import uuid
 import requests  # Для отправки сообщений обратно в основной сервис
 import time
 
@@ -21,6 +22,29 @@ MOBILE_REPLY_TTL = 300  # сек
 
 
 AGENT_SERVICE_URL = os.getenv("AGENT_SERVICE_URL", "http://agent_service:9001")
+
+# САМОЦИКЛ АГЕНТА: consumer делает реентри — POST обратно в /send_message того же
+# chats_service (внутри docker-сети). Новый тик летит от user_id=-100 (служебный).
+CHATS_SELF_URL = os.getenv("CHATS_SERVICE_SELF_URL", "http://chats_service:8001")
+LOOP_SERVICE_USER_ID = -100
+LOOP_SERVICE_USERNAME = "agent-self-loop"
+
+
+def _clear_loop_flag(chat_id):
+    """Снять стабильный Redis-флаг самоцикла agent:loop:{chat_id}.
+
+    Нужен для случаев, когда петля гаснет НЕ по стоп-кнопке (её снимает
+    gateway), а по решению consumer: бюджет исчерпан или установка больше
+    не активна. Без этого флаг провисит до TTL и фронт после F5 покажет
+    ложное «идёт работа». Синхронный redis, best-effort — не роняем петлю.
+    """
+    try:
+        import redis as _redis_sync
+        r = _redis_sync.from_url(REDIS_URL, decode_responses=True)
+        r.delete(f"agent:loop:{chat_id}")
+    except Exception as e:
+        logger.debug(f"[self-loop] clear_loop_flag failed chat={chat_id}: {e}")
+
 
 
 logging.basicConfig(level=logging.INFO)
@@ -166,8 +190,76 @@ class DBConsumer:
 
                 await self.send_to_main_service(chat_id, ws_payload, gateway_url)
 
+                # САМОЦИКЛ: после логирования ответа агента — пробуем реентри (новый тик).
+                # Только для web (gateway main): telegram/mobile выше сделали return.
+                if payload.get("loop"):
+                    await self._maybe_reenter_loop(payload)
+
         except Exception as e:
             logger.error(f"Ошибка обработки сообщения: {e}")
+
+    async def _maybe_reenter_loop(self, payload):
+        """САМОЦИКЛ: решает, продолжать ли петлю, и дёргает новый тик.
+
+        Цепочка: ответ агента (is_from_bot) уже залогирован. Здесь:
+          1) проверка бюджета (ЗАГЛУШКА — логика позже);
+          2) проверка is_active в agent_loop_tasks (килл-свитч/стоп-кнопка);
+          3) POST /send_message с установкой от user_id=-100, loop_tick=True.
+        Сообщение агента НЕ переносим — в message кладём ИМЕННО установку из БД.
+        """
+        chat_id = payload.get("chat_id")
+        gateway_target = (payload.get("gateway_target") or "main").lower()
+        if gateway_target != "main":
+            return  # петля только для web-чата
+
+        # 1) БЮДЖЕТ — ЗАГЛУШКА. Сюда позже войдёт Activity API / подсчёт токенов.
+        # Как только расход >= порога -> budget_ok=False -> гасим установку, выход.
+        budget_ok = True  # TODO(budget): подключить проверку расхода
+        if not budget_ok:
+            await self.db.deactivate_loop_task(chat_id)
+            _clear_loop_flag(chat_id)
+            logger.info(f"[self-loop] бюджет исчерпан, петля остановлена chat={chat_id}")
+            return
+
+        # 2) Активна ли установка (килл-свитч/стоп снимают is_active).
+        task = await self.db.get_active_loop_task(chat_id)
+        if not task:
+            _clear_loop_flag(chat_id)
+            logger.info(f"[self-loop] активной установки нет, петля не продолжается chat={chat_id}")
+            return
+
+        # 3) РЕЕНТРИ: POST /send_message с установкой. Настройки чата статичны — берём из payload.
+        ms = int(time.time() * 1000)
+        tick_payload = {
+            "user_id": LOOP_SERVICE_USER_ID,
+            "username": LOOP_SERVICE_USERNAME,
+            "tb_name": None,
+            "message": task["instruction"],
+            "chat_id": chat_id,
+            "type_agent": payload.get("type_agent", "pm"),
+            "request_id": f"loop-{ms}-{uuid.uuid4().hex[:8]}",
+            "message_id": f"msg-{ms}-{uuid.uuid4().hex[:8]}",
+            "selected_tools": payload.get("selected_tools") or [],
+            "context_size": payload.get("context_size") or "medium",
+            "agent_model": payload.get("agent_model"),
+            "gateway_target": "main",
+            "has_files": False,
+            "files": [],
+            # флаги петли: loop остаётся True (цикл продолжается), loop_tick=True (служебный),
+            # loop_instruction дублируем для шапки агента. loop_instruction=УСТАНОВКУ НЕ ПЕРЕПИСЫВАЕМ.
+            "loop": True,
+            "loop_tick": True,
+            "loop_instruction": task["instruction"],
+        }
+        url = f"{CHATS_SELF_URL}/send_message"
+        try:
+            # requests синхронный — уводим в пул, чтобы не блокировать event-loop консьюмера.
+            def _post():
+                return requests.post(url, json=tick_payload, timeout=10)
+            resp = await asyncio.to_thread(_post)
+            logger.info(f"[self-loop] реентри chat={chat_id} -> {url} HTTP {resp.status_code}")
+        except Exception as e:
+            logger.error(f"[self-loop] реентри не удался chat={chat_id}: {e}")
 
     async def _hydrate_tg_files(self, files, chat_id=None):
         """Для Telegram дочитываем бинарник картинок из БД (Вариант B).

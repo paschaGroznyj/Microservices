@@ -542,12 +542,18 @@ class ChatApp {
             });
             if (r.ok) {
                 const j = await r.json();
-                if (j?.running) {
+                // loop_active — стабильный флаг самоцикла (живёт между тиками,
+                // не гаснет в зазоре "ответ ушёл / следующий тик ещё не поднят").
+                // Если петля активна — держим UI в running независимо от того,
+                // крутится ли прямо сейчас конкретный тик.
+                if (j?.running || j?.loop_active) {
                     running = true;
                     requestId = j.request_id || requestId;
+                    this._loopActive = !!j.loop_active;
                 } else {
                     // Сервер говорит: работа завершена → снимаем UI
                     running = false;
+                    this._loopActive = false;
                 }
             }
         } catch (_) { /* сеть недоступна — доверяем savedState */ }
@@ -1780,6 +1786,8 @@ class ChatApp {
                     agent_model:    window.ModelPicker?.getModel() ?? 'coder',
                     selected_tools: window.ToolsPanel?.getSelectedCategories() ?? [],
                     context_size:   window.ToolsPanel?.getContextSize()   ?? 'medium',
+                    loop:            window.ToolsPanel?.getLoopEnabled() ?? false,
+                    loop_instruction: window.ToolsPanel?.getLoopEnabled() ? text : '',
                     has_files:      _hasFiles,
                     files: window.FileAttach?.getFilesMeta() ?? []
                 })
@@ -2187,6 +2195,7 @@ class ChatApp {
                         fullText,
                         files: msg.files,
                         message_id: msg.message_id,
+                        loop: msg.loop === true,
                     };
                     st.streamDone = true;
                     this._startStreamLoop(key);
@@ -2198,7 +2207,7 @@ class ChatApp {
                     this._clearAllStatuses();
                     st.streamingActive = false;
                     if (this._chatStatuses) delete this._chatStatuses[key];
-                    this._onRunFinished();
+                    this._onRunFinished(msg.loop === true);
                 } else {
                     // Фоновый чат без живого стрима, но пришёл финал — сохраняем
                     // как готовый узел, чтобы отрисовать при возврате.
@@ -2211,7 +2220,7 @@ class ChatApp {
                     el.appendChild(st.liveBlockEl);
                     st.streamShown = fullText;
                     st.streamBuffer = '';
-                    st.streamFinalData = { fullText, files: msg.files, message_id: msg.message_id };
+                    st.streamFinalData = { fullText, files: msg.files, message_id: msg.message_id, loop: msg.loop === true };
                     st.streamDone = true;
                     this._finalizeStream(key);
                 }
@@ -2637,7 +2646,7 @@ class ChatApp {
             this._flattenWaveIndicator();
             setTimeout(() => this._removeBotPlaceholder(), 500);
             this._clearAllStatuses();
-            this._onRunFinished();
+            this._onRunFinished(data.loop === true);
         }
         if (this._chatStatuses) delete this._chatStatuses[key];
     }
@@ -2664,20 +2673,29 @@ class ChatApp {
         if (this._runState !== 'running') return;
         this._runState = 'stopping';
         try {
-            if (this._activeRequestId) {
-                await fetch('/api/chats/stop_message', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    credentials: 'include',
-                    body: JSON.stringify({ request_id: this._activeRequestId })
-                });
-            }
+            await fetch('/api/chats/stop_message', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ request_id: this._activeRequestId || '__loop__', chat_id: this.currentChat })
+            });
         } catch (e) {
             console.warn('stopCurrentRun error:', e);
         }
     }
 
-    _onRunFinished() {
+    _onRunFinished(keepRunning = false) {
+        // Вариант A (самоцикл): если финальный ответ помечен loop:true и
+        // пользователь НЕ нажимал стоп — петля жива, следующий тик придёт
+        // через консьюмер. Кнопку-стоп НЕ гасим, держим running.
+        // Как только придёт финал без loop (обычный ход) или после стопа
+        // (_runState==='stopping') — гасим как обычно.
+        if (keepRunning && this._runState === 'running') {
+            // держим стоп-кнопку, request_id текущего тика больше не актуален
+            // (следующий тик придёт со своим), но стоп гасим по chat_id — ок.
+            this._setSendButtonMode('stop');
+            return;
+        }
         this._runState = 'idle';
         this._activeRequestId = null;
         this._setSendButtonMode('send');

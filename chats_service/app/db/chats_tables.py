@@ -1,6 +1,6 @@
 import asyncio
 import asyncpg
-from app.core.config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME
+from app.core.config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME, LOOP_SERVICE_USER_ID
 import logging
 from datetime import datetime, timezone
 import json
@@ -284,21 +284,38 @@ class DataBaseChats:
         мы сами суммируем токены из chats и переводим в деньги. chat_id=None —
         по всему отделу (все чаты), иначе только по одному чату.
         """
-        where = "AND chat_id = $1" if chat_id else ""
-        args = [chat_id] if chat_id else []
-        rows = await self.pool.fetch(
-            f"""
-            SELECT COALESCE(c.model_type, 'universal') AS abs_model,
-                   SUM(COALESCE((c.tokens_usage->>'input_tokens')::bigint, 0))  AS in_tok,
-                   SUM(COALESCE((c.tokens_usage->>'output_tokens')::bigint, 0)) AS out_tok
-            FROM chats c
-            WHERE c.is_from_bot = TRUE
-              AND c.tokens_usage IS NOT NULL
-              AND c.created_at >= date_trunc('day', (now() AT TIME ZONE 'Europe/Moscow'))
-                                 AT TIME ZONE 'Europe/Moscow'
-              {where}
-            GROUP BY 1;
-            """, *args)
+        if chat_id:
+            rows = await self.pool.fetch(
+                """
+                SELECT COALESCE(c.model_type, 'universal') AS abs_model,
+                    SUM(COALESCE((c.tokens_usage->>'input_tokens')::bigint, 0))  AS in_tok,
+                    SUM(COALESCE((c.tokens_usage->>'output_tokens')::bigint, 0)) AS out_tok
+                FROM chats c
+                WHERE c.chat_id = $1
+                AND c.user_id = $2
+                AND c.is_from_bot = TRUE
+                AND c.tokens_usage IS NOT NULL
+                AND c.created_at >= COALESCE(
+                        (SELECT t.created_at FROM agent_loop_tasks t
+                        WHERE t.chat_id = $1 AND t.is_active = TRUE
+                        ORDER BY t.created_at DESC LIMIT 1),
+                        date_trunc('day', (now() AT TIME ZONE 'Europe/Moscow'))
+                            AT TIME ZONE 'Europe/Moscow')
+                GROUP BY 1;
+                """, chat_id, LOOP_SERVICE_USER_ID)
+        else:
+            rows = await self.pool.fetch(
+                """
+                SELECT COALESCE(c.model_type, 'universal') AS abs_model,
+                    SUM(COALESCE((c.tokens_usage->>'input_tokens')::bigint, 0))  AS in_tok,
+                    SUM(COALESCE((c.tokens_usage->>'output_tokens')::bigint, 0)) AS out_tok
+                FROM chats c
+                WHERE c.is_from_bot = TRUE
+                AND c.tokens_usage IS NOT NULL
+                AND c.created_at >= date_trunc('day', (now() AT TIME ZONE 'Europe/Moscow'))
+                                    AT TIME ZONE 'Europe/Moscow'
+                GROUP BY 1;
+                """)
 
         tariffs = await self.get_tariffs()
         total = 0.0
@@ -306,8 +323,8 @@ class DataBaseChats:
             t = tariffs.get(r["abs_model"]) or tariffs.get("universal") or {}
             in_rate = float(t.get("input_per_1m", 0) or 0)
             out_rate = float(t.get("output_per_1m", 0) or 0)
-            total += (r["in_tok"] or 0) / 1_000_000 * in_rate
-            total += (r["out_tok"] or 0) / 1_000_000 * out_rate
+            total += float((r["in_tok"] or 0) / 1_000_000) * in_rate
+            total += float((r["out_tok"] or 0) / 1_000_000) * out_rate
         return round(total, 2)
 
     async def get_tariffs(self) -> dict:

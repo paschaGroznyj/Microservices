@@ -1529,9 +1529,9 @@ class HarnessAgent:
             import json
             def _tok(s): return len(s) // RATIO.get(agent_model, 2)   # для русского ~2 симв/токен, а не 4
 
-            # for m in messages:
-            #     c = m.content if isinstance(m.content, str) else json.dumps(m.content, ensure_ascii=False)
-            #     logger.info(f"[budget] {m.__class__.__name__:15} chars={len(c):6} ~tok={_tok(c):6} | {c[:60]!r}")
+            for m in messages:
+                c = m.content if isinstance(m.content, str) else json.dumps(m.content, ensure_ascii=False)
+                logger.info(f"[budget] {m.__class__.__name__:15} chars={len(c):6} ~tok={_tok(c):6} | {c[:60]!r}")
 
             schemas = json.dumps([t.args_schema.schema() if t.args_schema else {} for t in tools], ensure_ascii=False)
             descr   = sum(len(t.description or "") for t in tools)

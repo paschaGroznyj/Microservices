@@ -97,48 +97,6 @@ app.include_router(group_chat_module.router)
 # Telegram-интеграция: отдельный слой БД (allow-list + per-chat настройки).
 tg_db = TelegramDB(None)  # pool проставится на startup
 
-# async def bot_response_watchdog():
-#     logging.info("🤖 Bot watchdog started")
-#
-#     while True:
-#         try:
-#             # 1. Получаем зависшие сообщения
-#             stuck_messages = await db.get_stuck_messages(
-#                 older_than_seconds=MESSAGE_TIMEOUT
-#             )
-#
-#             for msg in stuck_messages:
-#                 logging.warning(
-#                     f"LLM timeout for message id={msg['id']} chat={msg['chat_id']}"
-#                 )
-#
-#                 # 2. Помечаем сообщение как FAILED
-#                 await db.mark_message_failed(msg["id"])
-#
-#                 # 3. Формируем system/bot сообщение
-#                 bot_message = {
-#                     "chat_id": msg["chat_id"],
-#                     "message": "🤖 Ассистент временно недоступен. Попробуйте позже.",
-#                     "is_from_bot": True,
-#                 }
-#
-#                 # 4. Сохраняем в БД
-#                 await db.add_message(
-#                     username=msg["username"],
-#                     message=bot_message["message"],
-#                     chat_id=msg["chat_id"],
-#                     is_from_bot=True
-#                 )
-#
-#                 # 5. Отправляем в WebSocket
-#                 await broadcast(msg["chat_id"], bot_message)
-#
-#         except Exception as e:
-#             logging.error(f"Watchdog error: {e}")
-#
-#         await asyncio.sleep(WATCHDOG_INTERVAL)
-
-
 
 def get_auth_data():
     return {"secret_key": SECRET_KEY, "algorithm": ALGORITHM}
@@ -947,7 +905,8 @@ async def budget_check(chat_id: str):
     from app.core.config import LOOP_HARD_LIMIT_RUB
 
     activity = await budget_activity(aggregation="day")
-    estimate = await db.estimate_spend_today(chat_id=None)
+    estimate_dept = await db.estimate_spend_today(chat_id=None)
+    estimate_loop = await db.estimate_spend_today(chat_id=chat_id)
 
     threshold = activity.get("threshold")
     actual = activity.get("current")
@@ -956,9 +915,9 @@ async def budget_check(chat_id: str):
     if threshold is not None:
         if actual is not None and float(actual) >= float(threshold):
             checks["A_activity"] = False
-        if estimate >= float(threshold):
+        if estimate_dept >= float(threshold):
             checks["B_estimate"] = False
-    if estimate >= LOOP_HARD_LIMIT_RUB:
+    if estimate_loop >= LOOP_HARD_LIMIT_RUB:
         checks["C_loop_limit"] = False
 
     allowed = all(checks.values())
@@ -968,7 +927,8 @@ async def budget_check(chat_id: str):
         "reason": reason,
         "actual": actual,
         "threshold": threshold,
-        "estimate_today": estimate,
+        "estimate_dept": estimate_dept,
+        "estimate_loop": estimate_loop,
         "loop_hard_limit": LOOP_HARD_LIMIT_RUB,
         "checks": checks,
     }

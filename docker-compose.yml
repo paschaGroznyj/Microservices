@@ -454,6 +454,8 @@ services:
       TG_BOT_PUSH_URL: "http://host.docker.internal:8010/push_message"
       # САМОЦИКЛ: реентри-POST в /send_message того же chats_service (docker-сеть)
       CHATS_SERVICE_SELF_URL: ${CHATS_SERVICE_SELF_URL:-http://chats_service:8001}
+      ACTIVITY_TOKEN: ${ACTIVITY_TOKEN}
+      ACTIVITY_URL: ${ACTIVITY_URL}
     volumes:
       - ./chats_service:/app
     depends_on:

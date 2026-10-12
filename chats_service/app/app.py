@@ -903,7 +903,7 @@ async def budget_check(chat_id: str):
     fail-open по A/B: если данных нет — условие не блокирует. C считаем всегда.
     """
     from app.core.config import LOOP_HARD_LIMIT_RUB
-
+    logging.info(f"[hard_limit_ru] {LOOP_HARD_LIMIT_RUB}")
     activity = await budget_activity(aggregation="day")
     estimate_dept = await db.estimate_spend_today(chat_id=None)
     estimate_loop = await db.estimate_spend_today(chat_id=chat_id)

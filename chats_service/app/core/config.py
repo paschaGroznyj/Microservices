@@ -30,7 +30,7 @@ ACTIVITY_URL = os.getenv("ACTIVITY_URL", "https://grafana.uva-advanced.ru/cloudr
 ACTIVITY_TOKEN = os.getenv("ACTIVITY_TOKEN")
 ACTIVITY_DEPARTMENT = os.getenv("ACTIVITY_DEPARTMENT", "cds")
 
-LOOP_HARD_LIMIT_RUB = float(os.getenv("LOOP_HARD_LIMIT_RUB", "500"))
+LOOP_HARD_LIMIT_RUB = float(os.getenv("LOOP_HARD_LIMIT_RUB", "200.0"))
 BUDGET_CACHE_TTL = int(os.getenv("BUDGET_CACHE_TTL", "900"))
 
 LOOP_SERVICE_USER_ID = -100

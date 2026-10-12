@@ -292,7 +292,6 @@ class DataBaseChats:
                     SUM(COALESCE((c.tokens_usage->>'output_tokens')::bigint, 0)) AS out_tok
                 FROM chats c
                 WHERE c.chat_id = $1
-                AND c.user_id = $2
                 AND c.is_from_bot = TRUE
                 AND c.tokens_usage IS NOT NULL
                 AND c.created_at >= COALESCE(
@@ -302,7 +301,8 @@ class DataBaseChats:
                         date_trunc('day', (now() AT TIME ZONE 'Europe/Moscow'))
                             AT TIME ZONE 'Europe/Moscow')
                 GROUP BY 1;
-                """, chat_id, LOOP_SERVICE_USER_ID)
+                """, chat_id)
+
         else:
             rows = await self.pool.fetch(
                 """

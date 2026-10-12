@@ -212,9 +212,26 @@ class DBConsumer:
         if gateway_target != "main":
             return  # петля только для web-чата
 
-        # 1) БЮДЖЕТ — ЗАГЛУШКА. Сюда позже войдёт Activity API / подсчёт токенов.
-        # Как только расход >= порога -> budget_ok=False -> гасим установку, выход.
-        budget_ok = True  # TODO(budget): подключить проверку расхода
+        # 1) БЮДЖЕТ: три условия агрегирует chats_service (там пул + ключи Activity).
+        # fail-open: если эндпоинт недоступен — петлю НЕ рубим, пропускаем тик.
+        budget_ok = True
+        try:
+            loop = asyncio.get_event_loop()
+            resp = await loop.run_in_executor(
+                None,
+                lambda: requests.get(f"{CHATS_SELF_URL}/budget/check/{chat_id}", timeout=10),
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                budget_ok = bool(data.get("allowed", True))
+                if not budget_ok:
+                    logger.info(
+                        f"[self-loop] бюджет: reason={data.get('reason')} "
+                        f"estimate={data.get('estimate_today')} "
+                        f"actual={data.get('actual')} threshold={data.get('threshold')} chat={chat_id}"
+                    )
+        except Exception as e:
+            logger.warning(f"[self-loop] проверка бюджета недоступна ({e}), пропускаем тик chat={chat_id}")
         if not budget_ok:
             await self.db.deactivate_loop_task(chat_id)
             _clear_loop_flag(chat_id)

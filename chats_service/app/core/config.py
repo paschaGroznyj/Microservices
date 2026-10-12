@@ -25,3 +25,10 @@ PORT_CRB_SERVICE = os.getenv("PORT_CRB_SERVICE")
 PORT_GATEWAY_PORT = os.getenv("PORT_GATEWAY_PORT")
 
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
+
+ACTIVITY_URL = os.getenv("ACTIVITY_URL", "https://grafana.uva-advanced.ru/cloudru-activity")
+ACTIVITY_TOKEN = os.getenv("ACTIVITY_TOKEN")
+ACTIVITY_DEPARTMENT = os.getenv("ACTIVITY_DEPARTMENT", "cds")
+
+LOOP_HARD_LIMIT_RUB = float(os.getenv("LOOP_HARD_LIMIT_RUB", "500"))
+BUDGET_CACHE_TTL = int(os.getenv("BUDGET_CACHE_TTL", "900"))

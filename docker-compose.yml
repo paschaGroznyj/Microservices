@@ -422,6 +422,9 @@ services:
       TG_ASR_PROVIDER: ${TG_ASR_PROVIDER:-cloud_ru}
       ACTIVITY_TOKEN: ${ACTIVITY_TOKEN}
       ACTIVITY_URL: ${ACTIVITY_URL}
+      ACTIVITY_DEPARTMENT: ${ACTIVITY_DEPARTMENT:-cds}
+      LOOP_HARD_LIMIT_RUB: ${LOOP_HARD_LIMIT_RUB:-500}
+      BUDGET_CACHE_TTL: ${BUDGET_CACHE_TTL:-900}
     volumes:
       - ./chats_service:/app
     depends_on:

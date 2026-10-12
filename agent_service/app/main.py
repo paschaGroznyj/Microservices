@@ -497,7 +497,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             "message_id": message_id,
             "is_from_bot": True,
             "type_agent": "pm",
-            "action": response['action'],
+            "action": response.get('action'),
             "attached_files": attached_files,
             "tool_trace": response.get("tool_trace"), # str,
             "agent_model": response.get("agent_model"),

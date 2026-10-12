@@ -150,5 +150,4 @@ async def browser_parser(
         result = result[:max_chars] + f"\n\n... (обрезано, всего {len(result)} символов)"
 
     log.info("Страница %s: извлечено %d символов", url, len(result))
-    log.info(result)
     return result

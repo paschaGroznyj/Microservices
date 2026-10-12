@@ -4,6 +4,7 @@ WORKDIR /app
 
 # 1. Системные зависимости (для Chromium и утилит)
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
     chromium \
     chromium-driver \
     && rm -rf /var/lib/apt/lists/*

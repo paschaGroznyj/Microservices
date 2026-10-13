@@ -214,6 +214,7 @@ class ToolsPanel {
 
   _openPanel(triggerBtn) {
     this._close();
+    window.ModelPicker?._close?.();
 
     const panel = document.createElement("div");
     panel.className = "tools-panel";
@@ -537,6 +538,29 @@ const MP_MODELS = [
     hint:   'Универсальная и более быстрая модель. Подходит для большинства задач.',
     accent: '#10b981',
   },
+  {
+    id:     'gemini',
+    label:  'Gemini',
+    // Gemini: четырёхконечная звезда с вогнутыми гранями
+    svg: `<svg viewBox="0 0 24 24" fill="none" width="20" height="20"
+               stroke="currentColor" stroke-width="1.75"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2.5C12 7.8 16.2 12 21.5 12
+                     C16.2 12 12 16.2 12 21.5
+                     C12 16.2 7.8 12 2.5 12
+                     C7.8 12 12 7.8 12 2.5Z"/>
+          </svg>`,
+    svgSm: `<svg viewBox="0 0 24 24" fill="none" width="15" height="15"
+               stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2.5C12 7.8 16.2 12 21.5 12
+                       C16.2 12 12 16.2 12 21.5
+                       C12 16.2 7.8 12 2.5 12
+                       C7.8 12 12 7.8 12 2.5Z"/>
+            </svg>`,
+    hint:   'Модель от Google. Хорошо справляется с длинными документами и разными типами данных.',
+    accent: '#4285f4',
+  },
 ];
 
 const MP_STORAGE_KEY = 'mp_selected_model';
@@ -687,7 +711,8 @@ class ModelPickerClass {
 
   _open(triggerBtn) {
     // Закрываем чужие оверлеи
-    document.querySelectorAll('.tools-panel').forEach(p => p.classList.add('tp-hiding'));
+    window.ToolsPanel?._close?.();
+    document.querySelectorAll('.mp-panel').forEach(p => p.classList.add('mp-hiding'));
     document.querySelectorAll('.chat-item-dropdown').forEach(d => d.remove());
 
     const panel = document.createElement('div');

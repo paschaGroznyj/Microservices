@@ -489,7 +489,8 @@ class HarnessAgent:
         self._summary_tasks = {}
         self.AGENT_MODELS = {'coder': get_llm_model_gpt(),
                             'designer': get_llm_model_claude(),
-                            'universal': get_llm_model_glm()
+                            'universal': get_llm_model_glm(),
+                            'gemini': get_llm_model_gemini()
                             }
         self.llm_lite = get_llm_lite_model()
         # Цепочка фолбэков для лайт-модели (суммаризация и прочие служебные
@@ -1098,6 +1099,7 @@ class HarnessAgent:
             "coder": "Кодер",
             "designer": "Дизайнер",
             "universal": "Универсал",
+            "gemini": "Gemini"
         }
         try:
             client = await self._get_http_client()

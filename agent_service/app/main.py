@@ -985,7 +985,7 @@ async def health():
 
 # ── Доступность LLM-провайдеров ────────────────────────────────────
 from agent.core.agent_provider import (
-    get_llm_model_gpt, get_llm_model_claude, get_llm_model_gemini,
+    get_llm_model_gpt, get_llm_model_claude, get_llm_model_gemini, get_llm_model_glm
 )
 
 _PROVIDERS_TTL = 30.0  # сек — как часто реально перепроверяем провайдеров
@@ -994,9 +994,10 @@ _providers_lock = asyncio.Lock()
 
 # id модели в UI -> человекочитаемое имя + фабрика llm
 _PROVIDER_MODELS = {
-    "coder":     ("openai/gpt-5.3-codex",           get_llm_model_gpt),
+    "coder":     ("openai/gpt-5.4",           get_llm_model_gpt),
     "designer":  ("anthropic/claude-opus-4.8",      get_llm_model_claude),
-    "universal": ("google/gemini-3.1-pro-preview",  get_llm_model_gemini),
+    "universal": ("zai-org/GLM-5.2",  get_llm_model_glm),
+    "gemini": ("google/gemini-3.1-pro-preview",  get_llm_model_gemini),
 }
 
 
@@ -1008,9 +1009,8 @@ async def _ping_provider(model_id: str, model_name: str, factory) -> dict:
         await asyncio.wait_for(
             llm.ainvoke(
                 [HumanMessage(content="ping")],
-                max_tokens=1,
             ),
-            timeout=8.0,
+            timeout=20.0,
         )
         return {"id": model_id, "name": model_name, "up": True}
     except asyncio.TimeoutError:

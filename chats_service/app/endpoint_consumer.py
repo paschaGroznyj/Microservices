@@ -28,6 +28,7 @@ AGENT_SERVICE_URL = os.getenv("AGENT_SERVICE_URL", "http://agent_service:9001")
 CHATS_SELF_URL = os.getenv("CHATS_SERVICE_SELF_URL", "http://chats_service:8001")
 LOOP_SERVICE_USER_ID = -100
 LOOP_SERVICE_USERNAME = "agent-self-loop"
+LOOP_STOP_MARKER = "[ОСТАНОВИТЬ ЦИКЛ]"
 
 
 def _clear_loop_flag(chat_id):
@@ -213,6 +214,17 @@ class DBConsumer:
         if gateway_target != "main":
             return  # петля только для web-чата
 
+        # 0) САМО-СТОП АГЕНТА: если агент в своём ответе явно попросил остановить
+        # цикл маркером [ОСТАНОВИТЬ ЦИКЛ] — гасим петлю по его решению, чистим
+        # флаги и дёргаем финальный тик с просьбой финализировать проделанную работу.
+        agent_text = payload.get("message") or ""
+        if LOOP_STOP_MARKER in agent_text.upper():
+            await self.db.deactivate_loop_task(chat_id)
+            _clear_loop_flag(chat_id)
+            logger.info(f"[self-loop] агент запросил остановку цикла маркером, петля остановлена chat={chat_id}")
+            await self._emit_loop_stop_message(payload, budget_data=None, agent_requested=True)
+            return
+
         # 1) БЮДЖЕТ: три условия агрегирует chats_service (там пул + ключи Activity).
         # fail-open: если эндпоинт недоступен — петлю НЕ рубим, пропускаем тик.
         budget_ok = True
@@ -285,39 +297,49 @@ class DBConsumer:
         except Exception as e:
             logger.error(f"[self-loop] реентри не удался chat={chat_id}: {e}")
 
-    async def _emit_loop_stop_message(self, payload, budget_data):
+    async def _emit_loop_stop_message(self, payload, budget_data, agent_requested=False):
         """Отправить ОДИН финальный тик (loop=False) с причиной остановки.
 
         Петля уже погашена (deactivate + чистка флагов). Здесь мы подмешиваем
-        в промпт причину (какое именно условие упёрлось) и просим агента
-        написать короткое прощальное сообщение. loop=False — этот тик НЕ
+        в промпт причину (бюджет упёрся ИЛИ агент сам решил остановиться) и
+        просим агента написать финальное сообщение. loop=False — этот тик НЕ
         породит новый реентри (см. _maybe_reenter_loop: вход только если payload.loop).
         """
         chat_id = payload.get("chat_id")
-        checks = (budget_data or {}).get("checks") or {}
-        reason = (budget_data or {}).get("reason") or "budget"
 
-        if checks.get("C_loop_limit") is False:
-            cause = (
-                f"Средства в рамках текущей петли исчерпаны: оценка "
-                f"{(budget_data or {}).get('estimate_loop')} ₽ превысила лимит петли "
-                f"{(budget_data or {}).get('loop_hard_limit')} ₽."
-            )
-        elif checks.get("A_activity") is False or checks.get("B_estimate") is False:
-            cause = (
-                f"Суточный бюджет отдела исчерпан: расход "
-                f"{(budget_data or {}).get('estimate_dept')} ₽ (факт Activity {(budget_data or {}).get('actual')} ₽) "
-                f"достиг порога {(budget_data or {}).get('threshold')} ₽."
+        if agent_requested:
+            instruction = (
+                "САМОЦИКЛ ОСТАНОВЛЕН ПО ТВОЕМУ РЕШЕНИЮ. "
+                "Ты сам решил завершить цикл (запросил остановку маркером [ОСТАНОВИТЬ ЦИКЛ]). "
+                "Финализируй работу: напиши пользователю ОДНО сообщение — коротко расскажи "
+                "о проделанной за цикл работе и о том, что цикл завершён по твоему решению. "
+                "Не вызывай инструменты, не продолжай работу — только подведи итог."
             )
         else:
-            cause = f"Бюджет исчерпан (reason={reason})."
+            checks = (budget_data or {}).get("checks") or {}
+            reason = (budget_data or {}).get("reason") or "budget"
 
-        instruction = (
-            "САМОЦИКЛ ОСТАНОВЛЕН ПО БЮДЖЕТУ. "
-            f"Причина: {cause} "
-            "Напиши пользователю ОДНО короткое сообщение: почему самоцикл был остановлен. "
-            "Не вызывай инструменты, не продолжай работу — только сообщи об остановке."
-        )
+            if checks.get("C_loop_limit") is False:
+                cause = (
+                    f"Средства в рамках текущей петли исчерпаны: оценка "
+                    f"{(budget_data or {}).get('estimate_loop')} ₽ превысила лимит петли "
+                    f"{(budget_data or {}).get('loop_hard_limit')} ₽."
+                )
+            elif checks.get("A_activity") is False or checks.get("B_estimate") is False:
+                cause = (
+                    f"Суточный бюджет отдела исчерпан: расход "
+                    f"{(budget_data or {}).get('estimate_dept')} ₽ (факт Activity {(budget_data or {}).get('actual')} ₽) "
+                    f"достиг порога {(budget_data or {}).get('threshold')} ₽."
+                )
+            else:
+                cause = f"Бюджет исчерпан (reason={reason})."
+
+            instruction = (
+                "САМОЦИКЛ ОСТАНОВЛЕН ПО БЮДЖЕТУ. "
+                f"Причина: {cause} "
+                "Напиши пользователю ОДНО короткое сообщение: почему самоцикл был остановлен. "
+                "Не вызывай инструменты, не продолжай работу — только сообщи об остановке."
+            )
 
         ms = int(time.time() * 1000)
         tick_payload = {

@@ -1227,13 +1227,12 @@ class ChatApp {
             const hiddenChips = hidden.map(makeChip).join('');
             const uid = `fa-collapse-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
             collapseHtml = `
-<div class="fa-chips-hidden" id="${uid}" style="display:none;">${hiddenChips}</div>
+<div class="fa-chips-hidden" id="${uid}">${hiddenChips}</div>
 <button class="fa-chips-toggle" type="button"
         onclick="(function(btn){
             var box = document.getElementById('${uid}');
-            var open = box.style.display !== 'none';
-            box.style.display = open ? 'none' : 'flex';
-            btn.textContent = open ? '+${hidden.length} файл${hidden.length === 1 ? '' : hidden.length < 5 ? 'а' : 'ов'}' : 'Скрыть';
+            var open = box.classList.toggle('fa-chips-hidden--open');
+            btn.textContent = open ? 'Скрыть' : '+${hidden.length} файл${hidden.length === 1 ? '' : hidden.length < 5 ? 'а' : 'ов'}';
         })(this)">+${hidden.length} файл${hidden.length === 1 ? '' : hidden.length < 5 ? 'а' : 'ов'}</button>`;
         }
 

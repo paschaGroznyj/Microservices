@@ -236,12 +236,22 @@
   margin-bottom: 6px;
 }
 
+/* Фиксированная ширина чипа в истории — ровная сетка во всех строках,
+   чтобы последняя неполная строка не растягивала чипы (flex-grow:0). */
+.fa-message-files .fa-chip {
+  flex: 0 0 150px;
+  width: 150px;
+  max-width: 150px;
+}
+
 /* Чипы вложений над пузырём сообщения пользователя — выравниваем
    по правому краю (как сам пузырь), т.к. wrapper центрирует column. */
 .user-message-wrapper > .fa-message-files {
-  justify-content: flex-end;
+  justify-content: flex-start;
+  width: fit-content;
   max-width: 75%;
   margin-bottom: 8px;
+  margin-left: auto;
   align-self: flex-end;
 }
 
@@ -258,12 +268,16 @@
   padding: 4px 8px 4px 6px; /* убираем правый паддинг под крестик */
 }
 
-/* Скрытый блок дополнительных файлов */
+/* Скрытый блок дополнительных файлов.
+   display:contents — когда раскрыт, вложенные чипы встают в общий
+   flex-wrap родителя единой сеткой (без паразитного width:100%,
+   который ломал выравнивание и растягивал чипы на всю строку). */
 .fa-chips-hidden {
   display: none;
-  flex-wrap: wrap;
-  gap: 6px;
-  width: 100%;
+}
+
+.fa-chips-hidden.fa-chips-hidden--open {
+  display: contents;
 }
 
 /* Кнопка «+N файлов / Скрыть» */
@@ -440,5 +454,18 @@
   .fa-chip__remove svg {
     width: 7px;
     height: 7px;
+  }
+
+  /* История сообщений на мобиле: фикс 150px не влезает в узкий пузырь
+     и чипы падают в столбик. Делаем гибкую 2-колоночную сетку. */
+  .fa-message-files .fa-chip {
+    flex: 1 1 calc(50% - 3px);
+    width: auto;
+    max-width: none;
+    min-width: 0;
+  }
+
+  .user-message-wrapper > .fa-message-files {
+    max-width: 100%;
   }
 }

@@ -2144,9 +2144,7 @@ class ChatApp {
              + `<circle class="graph-dot graph-dot-a" cx="8" cy="12" r="2.2"/>`
              + `<circle class="graph-dot graph-dot-b" cx="26" cy="4" r="2.2"/>`
              + `<circle class="graph-dot graph-dot-c" cx="44" cy="12" r="2.2"/>`
-             + `<circle class="graph-signal" r="2.6">`
-             + `<animateMotion dur="1.6s" repeatCount="indefinite" keyPoints="0;1;0" keyTimes="0;0.5;1" calcMode="linear" path="M8 12 L26 4 L44 12"/>`
-             + `</circle>`
+             + `<circle class="graph-signal" cx="8" cy="12" r="2.6"/>`
              + `</g>`
              + `</svg></div>`;
     }

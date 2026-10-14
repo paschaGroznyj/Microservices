@@ -1359,7 +1359,8 @@ pre {
 .wave-indicator .graph-signal {
   fill: var(--accent);
   filter: drop-shadow(0 0 3px var(--accent));
-  animation: graph-signal-glow 1.6s ease-in-out infinite;
+  transform-box: view-box;
+  animation: graph-signal-run 1.6s linear infinite;
 }
 @keyframes graph-dot-flicker {
   0%, 100% { opacity: 0.35; transform: scale(0.85); }
@@ -1369,9 +1370,15 @@ pre {
   0%, 100% { opacity: 0.4; }
   50%      { opacity: 0.9; }
 }
-@keyframes graph-signal-glow {
-  0%, 100% { opacity: 0.6; }
-  50%      { opacity: 1; }
+/* Бегущий сигнал на чистом CSS (без SMIL animateMotion — его режет
+   корпоративный CSP). Трек повторяет path="M8 12 L26 4 L44 12":
+   узел A(8,12) → B(26,4) → C(44,12) и обратно, точка отсчёта cx=8 cy=12. */
+@keyframes graph-signal-run {
+  0%   { transform: translate(0px,   0px); opacity: 0.6; }
+  25%  { transform: translate(18px, -8px); opacity: 1;   }
+  50%  { transform: translate(36px,  0px); opacity: 0.6; }
+  75%  { transform: translate(18px, -8px); opacity: 1;   }
+  100% { transform: translate(0px,   0px); opacity: 0.6; }
 }
 .wave-indicator.wave-flatten {
   opacity: 0;
@@ -1382,13 +1389,19 @@ pre {
   animation: none;
 }
 
+/* В корпоративной сети prefers-reduced-motion включён системными политиками.
+   Индикатор ожидания декоративный и обязан жить (иначе юзер не видит, что
+   агент работает) — поэтому НЕ глушим его, а лишь замедляем мерцание. */
 @media (prefers-reduced-motion: reduce) {
-  .wave-indicator .graph-dot,
-  .wave-indicator .graph-link,
-  .wave-indicator .graph-signal {
-    animation: none;
+  .wave-indicator .graph-dot {
+    animation: graph-dot-flicker 3.2s ease-in-out infinite;
   }
-  .wave-indicator .graph-signal { display: none; }
+  .wave-indicator .graph-link {
+    animation: graph-link-pulse 3.2s ease-in-out infinite;
+  }
+  .wave-indicator .graph-signal {
+    animation: graph-signal-run 3.2s linear infinite;
+  }
 }
 
 /* ══════════════════════════════════════════════

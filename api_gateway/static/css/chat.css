@@ -1162,7 +1162,8 @@
     border-radius: 20px;
   }
 
-  .start-title { font-size: 1.5rem; }
+  .start-title { font-size: 1.5rem; line-height: 1.18; }
+  .start-greeting { font-size: .85rem; }
 
   .start-input-box {
     border-radius: 14px;
@@ -1201,6 +1202,8 @@
 }
 
 @media (max-width: 480px) {
+  .start-title { font-size: 1.32rem; }
+  .start-greeting { font-size: .8rem; }
   .start-footer-note {
     font-size: .62rem;
     opacity: .8;

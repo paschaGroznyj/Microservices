@@ -3221,7 +3221,7 @@ class ChatApp {
         const g = cv.getContext('2d');
         const root = document.documentElement;
         let W = 0, H = 0, dpr = 1, nodes = [];
-        const m = { x: 0, y: 0, sx: 0, sy: 0, active: false };
+        const m = { x: 0, y: 0, sx: 0, sy: 0, active: false, seeded: false };
 
         // Цвет узлов жёстко завязан на --accent (меняется с палитрой).
         // 3 тона: базовый + светлее/темнее для разнообразия.
@@ -3258,23 +3258,42 @@ class ChatApp {
             }));
         }
 
-        const onMove = (e) => { m.x = e.clientX; m.y = e.clientY; m.active = true; };
+        // тилт панели — только мышь (desktop); реакция узлов графа — всегда (вкл. touch)
+        const seed = () => { if (!m.seeded) { m.sx = m.x; m.sy = m.y; m.seeded = true; } };
+        const onMove = (e) => { m.x = e.clientX; m.y = e.clientY; m.active = true; seed(); };
         const onLeave = () => {
             m.active = false;
             body.style.setProperty('--rx', '0deg');
             body.style.setProperty('--ry', '0deg');
         };
+        const touchPoint = (e) => {
+            const t = e.touches && e.touches[0];
+            if (!t) return;
+            m.x = t.clientX; m.y = t.clientY; m.active = true; seed();
+        };
+        const onTouchEnd = () => { m.active = false; };
         const onResize = () => resize();
 
         if (interactive) {
             document.addEventListener('pointermove', onMove, { passive: true });
             document.addEventListener('pointerleave', onLeave);
         }
+        // тач-взаимодействие с точками на любом устройстве (тап/свайп по экрану)
+        if (!reduce) {
+            screen.addEventListener('touchstart', touchPoint, { passive: true });
+            screen.addEventListener('touchmove', touchPoint, { passive: true });
+            screen.addEventListener('touchend', onTouchEnd, { passive: true });
+            screen.addEventListener('touchcancel', onTouchEnd, { passive: true });
+        }
         window.addEventListener('resize', onResize);
 
         this._startGraphCleanup = () => {
             document.removeEventListener('pointermove', onMove);
             document.removeEventListener('pointerleave', onLeave);
+            screen.removeEventListener('touchstart', touchPoint);
+            screen.removeEventListener('touchmove', touchPoint);
+            screen.removeEventListener('touchend', onTouchEnd);
+            screen.removeEventListener('touchcancel', onTouchEnd);
             window.removeEventListener('resize', onResize);
         };
 
@@ -3285,7 +3304,7 @@ class ChatApp {
             const L = CONFIG.linkDist, RR = CONFIG.cursorRadius, GR = CONFIG.glowRadius;
             const rect = screen.getBoundingClientRect();
             const cx = m.sx - rect.left, cy = m.sy - rect.top;
-            const live = m.active && interactive;
+            const live = m.active;  // реакция узлов на курсор/тап — на любом устройстве
 
             for (const n of nodes) {
                 if (!reduce) {
@@ -3325,8 +3344,10 @@ class ChatApp {
 
         let frames = 0;
         const frame = () => {
-            m.sx += (m.x - m.sx) * CONFIG.cursorLerp;
-            m.sy += (m.y - m.sy) * CONFIG.cursorLerp;
+            if (m.seeded) {
+                m.sx += (m.x - m.sx) * CONFIG.cursorLerp;
+                m.sy += (m.y - m.sy) * CONFIG.cursorLerp;
+            }
 
             if (interactive && m.active) {
                 const nx = (m.sx / window.innerWidth - .5) * 2;

@@ -2876,7 +2876,9 @@ class ChatApp {
             container.innerHTML = `
 <div class="chat-start-screen">
 
-    <div class="start-scrim"></div>
+    <div class="start-bg" aria-hidden="true">
+        <canvas id="start-graph"></canvas>
+    </div>
 
     <div class="start-body">
         <div class="start-header">
@@ -2897,6 +2899,14 @@ class ChatApp {
                 ></div>
                 <div class="start-input-footer">
                     <!-- tools-trigger вставляется сюда через ToolsPanel.inject() -->
+                    <button class="attach-btn" id="start-attach-btn" title="Прикрепить файл" type="button">
+                        <svg viewBox="0 0 24 24" fill="none">
+                            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19
+                                     a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
+                                  stroke="currentColor" stroke-width="2"
+                                  stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
                     <button class="start-send-btn" id="send-btn" disabled aria-label="Отправить">
                         <svg viewBox="0 0 24 24" fill="none">
                             <path d="M5 12h14M13 6l6 6-6 6"
@@ -2961,7 +2971,7 @@ class ChatApp {
 
         if (!this.currentChat) {
             this._animateStartHeader(container);
-            this._revealStartBackground(container);
+            this._initStartGraph(container);
         }
 
         setTimeout(() => container.classList.remove('rending'), 0);
@@ -3092,29 +3102,187 @@ class ChatApp {
     }
 
     /* ══════════════════════════════════════════
-       Плавное появление фонового изображения старта.
-       Ставит .bg-ready на .chat-start-screen ТОЛЬКО после того,
-       как активная для текущей темы картинка (day/night) реально
-       загружена — чтобы не было резкого "прыжка" необлитого фона.
+       СТАРТОВЫЙ ЭКРАН: живой фон «за стеклом».
+       Граф (canvas) на весь экран БЕЗ цветных пятен — цвет узлов жёстко
+       завязан на --accent (3 тона от базового), меняется с палитрой.
+       Параллакс: граф > наклон панели. reduced-motion / touch —
+       деградируют мягко. Один rAF, курсор сглажен lerp-ом.
     ══════════════════════════════════════════ */
-    _revealStartBackground(container) {
+    _initStartGraph(container) {
+        // Снять предыдущий цикл, если был (возврат на стартовый экран)
+        if (this._startGraphRAF) { cancelAnimationFrame(this._startGraphRAF); this._startGraphRAF = null; }
+        if (this._startGraphCleanup) { this._startGraphCleanup(); this._startGraphCleanup = null; }
+
         const screen = container.querySelector('.chat-start-screen');
-        if (!screen) return;
+        const cv = container.querySelector('#start-graph');
+        const body = container.querySelector('.start-body');
+        if (!screen || !cv || !body) return;
 
-        const theme = document.documentElement.getAttribute('data-theme') || 'light';
-        const src = theme === 'dark' ? '/static/img/night.jpg' : '/static/img/day.jpg';
+        requestAnimationFrame(() => screen.classList.add('bg-ready'));
 
-        const reveal = () => requestAnimationFrame(() => {
-            requestAnimationFrame(() => screen.classList.add('bg-ready'));
-        });
+        const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const interactive = window.matchMedia('(hover: hover) and (pointer: fine)').matches && !reduce;
 
-        const img = new Image();
-        img.onload = reveal;
-        img.onerror = reveal;   // даже если картинка не загрузилась — не блокируем UI
-        img.src = src;
+        const CONFIG = {
+            nodes: 64, linkDist: 132, cursorRadius: 150, cursorForce: 0.9,
+            glowRadius: 180, cursorMode: 'repel', cursorLerp: 0.12,
+            graphParallax: 14, tilt: 2.5,
+        };
 
-        // Если картинка уже в кеше — onload может не сработать, подстрахуемся
-        if (img.complete) reveal();
+        const g = cv.getContext('2d');
+        const root = document.documentElement;
+        let W = 0, H = 0, dpr = 1, nodes = [];
+        const m = { x: 0, y: 0, sx: 0, sy: 0, active: false, seeded: false };
+
+        // Цвет узлов жёстко завязан на --accent (меняется с палитрой).
+        // 3 тона: базовый + светлее/темнее для разнообразия.
+        const parseAccent = () => {
+            const cs = getComputedStyle(root);
+            let v = cs.getPropertyValue('--accent').trim() || '#6366f1';
+            let r, gg, b;
+            if (v.startsWith('#')) {
+                if (v.length === 4) v = '#' + v[1]+v[1]+v[2]+v[2]+v[3]+v[3];
+                r = parseInt(v.slice(1,3),16); gg = parseInt(v.slice(3,5),16); b = parseInt(v.slice(5,7),16);
+            } else {
+                const mm = v.match(/\d+/g) || [99,102,241];
+                r = +mm[0]; gg = +mm[1]; b = +mm[2];
+            }
+            const clamp = (x) => Math.max(0, Math.min(255, Math.round(x)));
+            const shade = (k) => `${clamp(r*k)},${clamp(gg*k)},${clamp(b*k)}`;
+            return [`${r},${gg},${b}`, shade(1.18), shade(0.82)];
+        };
+        let COLS = parseAccent();
+
+        function resize() {
+            const r = screen.getBoundingClientRect();
+            dpr = Math.min(window.devicePixelRatio || 1, 2);
+            W = Math.max(1, r.width); H = Math.max(1, r.height);
+            cv.width = W * dpr; cv.height = H * dpr;
+            cv.style.width = W + 'px'; cv.style.height = H + 'px';
+            g.setTransform(dpr, 0, 0, dpr, 0, 0);
+            const n = Math.round(CONFIG.nodes * Math.min(1, (W * H) / (1440 * 900)) + 16);
+            nodes = Array.from({ length: n }, (_, i) => ({
+                x: Math.random() * W, y: Math.random() * H,
+                vx: (Math.random() - .5) * .22, vy: (Math.random() - .5) * .22,
+                r: 1.5 + Math.random() * 2.3,
+                c: COLS[i % 3],
+            }));
+        }
+
+        // тилт панели — только мышь (desktop); реакция узлов графа — всегда (вкл. touch)
+        const seed = () => { if (!m.seeded) { m.sx = m.x; m.sy = m.y; m.seeded = true; } };
+        const onMove = (e) => { m.x = e.clientX; m.y = e.clientY; m.active = true; seed(); };
+        const onLeave = () => {
+            m.active = false;
+            body.style.setProperty('--rx', '0deg');
+            body.style.setProperty('--ry', '0deg');
+        };
+        const touchPoint = (e) => {
+            const t = e.touches && e.touches[0];
+            if (!t) return;
+            m.x = t.clientX; m.y = t.clientY; m.active = true; seed();
+        };
+        const onTouchEnd = () => { m.active = false; };
+        const onResize = () => resize();
+
+        if (interactive) {
+            document.addEventListener('pointermove', onMove, { passive: true });
+            document.addEventListener('pointerleave', onLeave);
+        }
+        // тач-взаимодействие с точками на любом устройстве (тап/свайп по экрану)
+        if (!reduce) {
+            screen.addEventListener('touchstart', touchPoint, { passive: true });
+            screen.addEventListener('touchmove', touchPoint, { passive: true });
+            screen.addEventListener('touchend', onTouchEnd, { passive: true });
+            screen.addEventListener('touchcancel', onTouchEnd, { passive: true });
+        }
+        window.addEventListener('resize', onResize);
+
+        this._startGraphCleanup = () => {
+            document.removeEventListener('pointermove', onMove);
+            document.removeEventListener('pointerleave', onLeave);
+            screen.removeEventListener('touchstart', touchPoint);
+            screen.removeEventListener('touchmove', touchPoint);
+            screen.removeEventListener('touchend', onTouchEnd);
+            screen.removeEventListener('touchcancel', onTouchEnd);
+            window.removeEventListener('resize', onResize);
+        };
+
+        resize();
+
+        const drawGraph = () => {
+            g.clearRect(0, 0, W, H);
+            const L = CONFIG.linkDist, RR = CONFIG.cursorRadius, GR = CONFIG.glowRadius;
+            const rect = screen.getBoundingClientRect();
+            const cx = m.sx - rect.left, cy = m.sy - rect.top;
+            const live = m.active;  // реакция узлов на курсор/тап — на любом устройстве
+
+            for (const n of nodes) {
+                if (!reduce) {
+                    n.x += n.vx; n.y += n.vy;
+                    if (n.x < -20) n.x = W + 20; if (n.x > W + 20) n.x = -20;
+                    if (n.y < -20) n.y = H + 20; if (n.y > H + 20) n.y = -20;
+                    if (live) {
+                        const dx = n.x - cx, dy = n.y - cy, dist = Math.hypot(dx, dy);
+                        if (dist < RR && dist > 0.1) {
+                            const f = (1 - dist / RR) * CONFIG.cursorForce;
+                            n.x += (dx / dist) * f; n.y += (dy / dist) * f;
+                        }
+                    }
+                }
+            }
+
+            for (let i = 0; i < nodes.length; i++) {
+                const a = nodes[i];
+                for (let j = i + 1; j < nodes.length; j++) {
+                    const b = nodes[j];
+                    const d = Math.hypot(a.x - b.x, a.y - b.y);
+                    if (d < L) {
+                        const near = live ? Math.max(0, 1 - Math.hypot((a.x + b.x) / 2 - cx, (a.y + b.y) / 2 - cy) / GR) : 0;
+                        const alpha = (1 - d / L) * (.26 + near * .5);
+                        g.strokeStyle = `rgba(${a.c}, ${alpha})`;
+                        g.lineWidth = 1 + near * .8;
+                        g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke();
+                    }
+                }
+            }
+            for (const n of nodes) {
+                const near = live ? Math.max(0, 1 - Math.hypot(n.x - cx, n.y - cy) / GR) : 0;
+                g.fillStyle = `rgba(${n.c}, ${.55 + near * .45})`;
+                g.beginPath(); g.arc(n.x, n.y, n.r + near * 1.5, 0, Math.PI * 2); g.fill();
+            }
+        };
+
+        let frames = 0;
+        const frame = () => {
+            if (m.seeded) {
+                m.sx += (m.x - m.sx) * CONFIG.cursorLerp;
+                m.sy += (m.y - m.sy) * CONFIG.cursorLerp;
+            }
+
+            if (interactive && m.active) {
+                const nx = (m.sx / window.innerWidth - .5) * 2;
+                const ny = (m.sy / window.innerHeight - .5) * 2;
+                const gp = CONFIG.graphParallax;
+                cv.style.transform = `translate3d(${(-nx * gp).toFixed(1)}px, ${(-ny * gp).toFixed(1)}px, 0)`;
+
+                const rect = body.getBoundingClientRect();
+                const bx = (m.sx - (rect.left + rect.width / 2)) / (rect.width / 2);
+                const by = (m.sy - (rect.top + rect.height / 2)) / (rect.height / 2);
+                body.style.setProperty('--ry', (Math.max(-1, Math.min(1, bx)) * CONFIG.tilt).toFixed(2) + 'deg');
+                body.style.setProperty('--rx', (-Math.max(-1, Math.min(1, by)) * CONFIG.tilt).toFixed(2) + 'deg');
+                body.style.setProperty('--mx', ((m.sx - rect.left) / rect.width * 100).toFixed(1) + '%');
+                body.style.setProperty('--my', ((m.sy - rect.top) / rect.height * 100).toFixed(1) + '%');
+            }
+
+            if ((frames++ & 63) === 0) {
+                COLS = parseAccent();
+                for (let i = 0; i < nodes.length; i++) nodes[i].c = COLS[i % 3];
+            }
+            drawGraph();
+            this._startGraphRAF = requestAnimationFrame(frame);
+        };
+        this._startGraphRAF = requestAnimationFrame(frame);
     }
 
     _animateStartHeader(container) {

@@ -28,7 +28,10 @@ AGENT_SERVICE_URL = os.getenv("AGENT_SERVICE_URL", "http://agent_service:9001")
 CHATS_SELF_URL = os.getenv("CHATS_SERVICE_SELF_URL", "http://chats_service:8001")
 LOOP_SERVICE_USER_ID = -100
 LOOP_SERVICE_USERNAME = "agent-self-loop"
-LOOP_STOP_MARKER = "[ОСТАНОВИТЬ ЦИКЛ]"
+LOOP_STOP_MARKER = "[STOP LOOP]"
+
+STOP_LOOP_INSTRUCTION = f"\nTo stop and exit the self-loop, you need to write {LOOP_STOP_MARKER} at the beginning of your message."
+
 
 
 def _clear_loop_flag(chat_id):
@@ -270,7 +273,7 @@ class DBConsumer:
             "user_id": LOOP_SERVICE_USER_ID,
             "username": LOOP_SERVICE_USERNAME,
             "tb_name": None,
-            "message": task["instruction"],
+            "message": task["instruction"] + STOP_LOOP_INSTRUCTION,
             "chat_id": chat_id,
             "type_agent": payload.get("type_agent", "pm"),
             "request_id": f"loop-{ms}-{uuid.uuid4().hex[:8]}",

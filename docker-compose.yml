@@ -233,8 +233,6 @@ services:
       - "8080:8080"
     volumes:
       - ./searxng:/etc/searxng
-    environment:
-      - SEARXNG_REDIS_URL=redis://redis:6379/0
     depends_on:
       redis:
         condition: service_healthy

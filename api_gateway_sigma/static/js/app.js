@@ -3121,7 +3121,10 @@ class ChatApp {
         requestAnimationFrame(() => screen.classList.add('bg-ready'));
 
         const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        const interactive = window.matchMedia('(hover: hover) and (pointer: fine)').matches && !reduce;
+        const pointerFine = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+        // interactive — для parallax/tilt панели (их глушим при reduce как «резкое движение UI»).
+        // Сам граф (дрейф + реакция точек) от reduce НЕ зависит — см. ниже.
+        const interactive = pointerFine && !reduce;
 
         const CONFIG = {
             nodes: 64, linkDist: 132, cursorRadius: 150, cursorForce: 0.9,
@@ -3185,12 +3188,12 @@ class ChatApp {
         const onTouchEnd = () => { m.active = false; };
         const onResize = () => resize();
 
-        if (interactive) {
+        if (pointerFine) {
             document.addEventListener('pointermove', onMove, { passive: true });
             document.addEventListener('pointerleave', onLeave);
         }
         // тач-взаимодействие с точками на любом устройстве (тап/свайп по экрану)
-        if (!reduce) {
+        {
             screen.addEventListener('touchstart', touchPoint, { passive: true });
             screen.addEventListener('touchmove', touchPoint, { passive: true });
             screen.addEventListener('touchend', onTouchEnd, { passive: true });
@@ -3217,17 +3220,19 @@ class ChatApp {
             const cx = m.sx - rect.left, cy = m.sy - rect.top;
             const live = m.active;  // реакция узлов на курсор/тап — на любом устройстве
 
+            // Дрейф + реакция узлов работают всегда (в т.ч. при prefers-reduced-motion:
+            // в корпоративной сети этот флаг включён политиками на весь парк машин).
+            // reduce лишь замедляет фоновый дрейф, не глушит его целиком.
+            const vk = reduce ? 0.35 : 1;
             for (const n of nodes) {
-                if (!reduce) {
-                    n.x += n.vx; n.y += n.vy;
-                    if (n.x < -20) n.x = W + 20; if (n.x > W + 20) n.x = -20;
-                    if (n.y < -20) n.y = H + 20; if (n.y > H + 20) n.y = -20;
-                    if (live) {
-                        const dx = n.x - cx, dy = n.y - cy, dist = Math.hypot(dx, dy);
-                        if (dist < RR && dist > 0.1) {
-                            const f = (1 - dist / RR) * CONFIG.cursorForce;
-                            n.x += (dx / dist) * f; n.y += (dy / dist) * f;
-                        }
+                n.x += n.vx * vk; n.y += n.vy * vk;
+                if (n.x < -20) n.x = W + 20; if (n.x > W + 20) n.x = -20;
+                if (n.y < -20) n.y = H + 20; if (n.y > H + 20) n.y = -20;
+                if (live) {
+                    const dx = n.x - cx, dy = n.y - cy, dist = Math.hypot(dx, dy);
+                    if (dist < RR && dist > 0.1) {
+                        const f = (1 - dist / RR) * CONFIG.cursorForce;
+                        n.x += (dx / dist) * f; n.y += (dy / dist) * f;
                     }
                 }
             }

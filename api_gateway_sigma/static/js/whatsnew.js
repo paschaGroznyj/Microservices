@@ -660,51 +660,95 @@
     });
   }
 
-  // ── Модалка одного обновления ──────────────────────────────────────────────
-  function showUpdate(update) {
-    return new Promise((resolve) => {
-      const dateStr = update.created_at
-        ? new Date(update.created_at).toLocaleDateString("ru-RU",
-            { day: "numeric", month: "long", year: "numeric" })
-        : "";
+    // ── Модалка обновлений с навигацией по истории ──────────────────────────────
+    function showUpdates(updates, onSeen) {
+      return new Promise((resolve) => {
+        // Сортируем от старых к новым (устойчиво к порядку с бэка).
+        const list = updates.slice().sort((a, b) => {
+          const ta = a.created_at ? Date.parse(a.created_at) : 0;
+          const tb = b.created_at ? Date.parse(b.created_at) : 0;
+          if (ta !== tb) return ta - tb;
+          return (a.id || 0) - (b.id || 0);
+        });
+        const total = list.length;
+        let idx = total - 1;              // стартуем на самом свежем
+        const seen = new Set();           // чтобы не слать seen повторно
 
-      const closeBtn = h("button", { class: "wn-close", type: "button", "aria-label": "Закрыть" }, []);
-      closeBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" ' +
-        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+        const closeBtn = h("button", { class: "wn-close", type: "button", "aria-label": "Закрыть" }, []);
+        closeBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" ' +
+          'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
-      const okBtn = h("button", { class: "wn-btn wn-btn-primary", type: "button" }, ["Понятно"]);
+        const badge   = h("span", { class: "wn-badge" }, []);
+        const dateEl  = h("span", { class: "wn-update-date" }, []);
+        const topInfo = h("div", { class: "wn-update-head" }, [badge, dateEl]);
 
-      const rawBody = update.body || "";
-      const htmlBody = wnRenderMarkdown(rawBody);
-      const safeBody = (window.DOMPurify ? window.DOMPurify.sanitize(htmlBody) : htmlBody);
+        const titleEl = h("h3", { class: "wn-title", style: "text-align:left;" }, []);
+        const bodyEl  = h("div", { class: "wn-update-body" }, []);
+        const scroll  = h("div", { class: "wn-scroll" }, [titleEl, bodyEl]);
 
-      const card = h("div", { class: "wn-card wn-card-update" }, [
-        h("div", { class: "wn-topbar" }, [
-          h("div", { class: "wn-progress", style: "flex:1;align-items:center;gap:8px;" }, [
-            h("span", { class: "wn-badge" }, [update.version ? (/^v/i.test(update.version) ? update.version : "v" + update.version) : "Обновление"]),
-            dateStr ? h("span", { class: "wn-update-date" }, [dateStr]) : null,
+        // Кнопка "Предыдущие" (листать назад), "Дальше" (к более свежим), "Понятно".
+        const prevBtn = h("button", { class: "wn-btn wn-btn-secondary", type: "button" }, ["👈Предыдущие"]);
+        const fwdBtn  = h("button", { class: "wn-btn wn-btn-ghost", type: "button" }, ["Дальше👉"]);
+        const okBtn   = h("button", { class: "wn-btn wn-btn-primary", type: "button" }, ["Понятно"]);
+
+        function markSeen(i) {
+          const u = list[i];
+          if (!u || seen.has(u.id)) return;
+          seen.add(u.id);
+          try { onSeen && onSeen(u); } catch (e) { /* не критично */ }
+        }
+
+        function render() {
+          const u = list[idx];
+          const dateStr = u.created_at
+            ? new Date(u.created_at).toLocaleDateString("ru-RU",
+                { day: "numeric", month: "long", year: "numeric" })
+            : "";
+
+          badge.textContent = u.version
+            ? (/^v/i.test(u.version) ? u.version : "v" + u.version)
+            : "Обновление";
+          dateEl.textContent = dateStr;
+          dateEl.style.display = dateStr ? "" : "none";
+
+          titleEl.textContent = u.title || "Что нового";
+          const htmlBody = wnRenderMarkdown(u.body || "");
+          bodyEl.innerHTML = (window.DOMPurify ? window.DOMPurify.sanitize(htmlBody) : htmlBody);
+
+          // Навигация: idx==0 — самое старое, idx==total-1 — самое свежее.
+          prevBtn.style.display = idx > 0 ? "" : "none";
+          fwdBtn.style.display  = idx < total - 1 ? "" : "none";
+
+          // Счётчик позиции, если обновлений больше одного.
+          if (total > 1) {
+            prevBtn.textContent = "👈Предыдущие (" + idx + ")";
+          }
+
+          markSeen(idx);
+          scroll.scrollTop = 0;
+          syncThemeIcons(scroll);
+        }
+
+        function done() { closeOverlay().then(resolve); }
+
+        prevBtn.addEventListener("click", () => { if (idx > 0) { idx--; render(); } });
+        fwdBtn.addEventListener("click",  () => { if (idx < total - 1) { idx++; render(); } });
+        okBtn.addEventListener("click", done);
+        closeBtn.addEventListener("click", done);
+
+        const card = h("div", { class: "wn-card wn-card-update" }, [
+          h("div", { class: "wn-topbar" }, [topInfo, closeBtn]),
+          h("div", { class: "wn-stage" }, [scroll]),
+          h("div", { class: "wn-footer" }, [
+            h("div", { class: "wn-footer-left" }, [prevBtn, fwdBtn]),
+            okBtn,
           ]),
-          closeBtn,
-        ]),
-        h("div", { class: "wn-stage" }, [
-          h("div", { class: "wn-scroll" }, [
-            h("h3", { class: "wn-title", style: "text-align:left;" }, [update.title || "Что нового"]),
-            h("div", { class: "wn-update-body", html: safeBody }, []),
-          ]),
-        ]),
-        h("div", { class: "wn-footer" }, [
-          h("span", {}, []),
-          okBtn,
-        ]),
-      ]);
+        ]);
 
-      function done() { closeOverlay().then(resolve); }
-      closeBtn.addEventListener("click", done);
-      okBtn.addEventListener("click", done);
-
-      openOverlay(card);
-    });
-  }
+        render();
+        openOverlay(card);
+      });
+    }
 
   // ── Оркестрация ────────────────────────────────────────────────────────────
   async function run() {
@@ -719,9 +763,10 @@
     }
 
     const updates = Array.isArray(data.updates) ? data.updates : [];
-    for (const upd of updates) {
-      await showUpdate(upd);
-      try { await apiPost(API.updateSeen, { update_id: upd.id }); } catch (e) { /* не критично */ }
+    if (updates.length) {
+      await showUpdates(updates, (upd) => {
+        apiPost(API.updateSeen, { update_id: upd.id }).catch(() => {});
+      });
     }
   }
 

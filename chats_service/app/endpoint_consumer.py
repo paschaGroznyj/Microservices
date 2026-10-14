@@ -28,6 +28,10 @@ AGENT_SERVICE_URL = os.getenv("AGENT_SERVICE_URL", "http://agent_service:9001")
 CHATS_SELF_URL = os.getenv("CHATS_SERVICE_SELF_URL", "http://chats_service:8001")
 LOOP_SERVICE_USER_ID = -100
 LOOP_SERVICE_USERNAME = "agent-self-loop"
+LOOP_STOP_MARKER = "[STOP LOOP]"
+
+STOP_LOOP_INSTRUCTION = f"\nTo stop and exit the self-loop, you need to write {LOOP_STOP_MARKER} at the beginning of your message."
+
 
 
 def _clear_loop_flag(chat_id):
@@ -42,6 +46,7 @@ def _clear_loop_flag(chat_id):
         import redis as _redis_sync
         r = _redis_sync.from_url(REDIS_URL, decode_responses=True)
         r.delete(f"agent:loop:{chat_id}")
+        r.delete(f"agent:running:{chat_id}")
     except Exception as e:
         logger.debug(f"[self-loop] clear_loop_flag failed chat={chat_id}: {e}")
 
@@ -212,13 +217,47 @@ class DBConsumer:
         if gateway_target != "main":
             return  # петля только для web-чата
 
-        # 1) БЮДЖЕТ — ЗАГЛУШКА. Сюда позже войдёт Activity API / подсчёт токенов.
-        # Как только расход >= порога -> budget_ok=False -> гасим установку, выход.
-        budget_ok = True  # TODO(budget): подключить проверку расхода
+        # 0) САМО-СТОП АГЕНТА: если агент в своём ответе явно попросил остановить
+        # цикл маркером [ОСТАНОВИТЬ ЦИКЛ] — гасим петлю по его решению, чистим
+        # флаги и дёргаем финальный тик с просьбой финализировать проделанную работу.
+        agent_text = payload.get("message") or ""
+        if LOOP_STOP_MARKER in agent_text.upper():
+            await self.db.deactivate_loop_task(chat_id)
+            _clear_loop_flag(chat_id)
+            logger.info(f"[self-loop] агент запросил остановку цикла маркером, петля остановлена chat={chat_id}")
+            await self._emit_loop_stop_message(payload, budget_data=None, agent_requested=True)
+            return
+
+        # 1) БЮДЖЕТ: три условия агрегирует chats_service (там пул + ключи Activity).
+        # fail-open: если эндпоинт недоступен — петлю НЕ рубим, пропускаем тик.
+        budget_ok = True
+        budget_data = {}
+        try:
+            loop = asyncio.get_event_loop()
+            resp = await loop.run_in_executor(
+                None,
+                lambda: requests.get(f"{CHATS_SELF_URL}/budget/check/{chat_id}", timeout=10),
+            )
+            if resp.status_code == 200:
+                budget_data = resp.json()
+                budget_ok = bool(budget_data.get("allowed", True))
+                if not budget_ok:
+                    logger.info(
+                        f"[self-loop] бюджет: reason={budget_data.get('reason')} "
+                        f"estimate_loop={budget_data.get('estimate_loop')} "
+                        f"estimate_dept={budget_data.get('estimate_dept')} "
+                        f"actual={budget_data.get('actual')} threshold={budget_data.get('threshold')} chat={chat_id}"
+                    )
+        except Exception as e:
+            logger.warning(f"[self-loop] проверка бюджета недоступна ({e}), пропускаем тик chat={chat_id}")
         if not budget_ok:
+            # Петля гаснет по бюджету: деактивируем установку + чистим Redis-флаги,
+            # после чего дёргаем ОДИН финальный тик (loop=False), чтобы агент
+            # сам написал прощальное сообщение с причиной остановки.
             await self.db.deactivate_loop_task(chat_id)
             _clear_loop_flag(chat_id)
             logger.info(f"[self-loop] бюджет исчерпан, петля остановлена chat={chat_id}")
+            await self._emit_loop_stop_message(payload, budget_data)
             return
 
         # 2) Активна ли установка (килл-свитч/стоп снимают is_active).
@@ -234,7 +273,7 @@ class DBConsumer:
             "user_id": LOOP_SERVICE_USER_ID,
             "username": LOOP_SERVICE_USERNAME,
             "tb_name": None,
-            "message": task["instruction"],
+            "message": task["instruction"] + STOP_LOOP_INSTRUCTION,
             "chat_id": chat_id,
             "type_agent": payload.get("type_agent", "pm"),
             "request_id": f"loop-{ms}-{uuid.uuid4().hex[:8]}",
@@ -260,6 +299,79 @@ class DBConsumer:
             logger.info(f"[self-loop] реентри chat={chat_id} -> {url} HTTP {resp.status_code}")
         except Exception as e:
             logger.error(f"[self-loop] реентри не удался chat={chat_id}: {e}")
+
+    async def _emit_loop_stop_message(self, payload, budget_data, agent_requested=False):
+        """Отправить ОДИН финальный тик (loop=False) с причиной остановки.
+
+        Петля уже погашена (deactivate + чистка флагов). Здесь мы подмешиваем
+        в промпт причину (бюджет упёрся ИЛИ агент сам решил остановиться) и
+        просим агента написать финальное сообщение. loop=False — этот тик НЕ
+        породит новый реентри (см. _maybe_reenter_loop: вход только если payload.loop).
+        """
+        chat_id = payload.get("chat_id")
+
+        if agent_requested:
+            instruction = (
+                "САМОЦИКЛ ОСТАНОВЛЕН ПО ТВОЕМУ РЕШЕНИЮ. "
+                "Ты сам решил завершить цикл (запросил остановку маркером [ОСТАНОВИТЬ ЦИКЛ]). "
+                "Финализируй работу: напиши пользователю ОДНО сообщение — коротко расскажи "
+                "о проделанной за цикл работе и о том, что цикл завершён по твоему решению. "
+                "Не вызывай инструменты, не продолжай работу — только подведи итог."
+            )
+        else:
+            checks = (budget_data or {}).get("checks") or {}
+            reason = (budget_data or {}).get("reason") or "budget"
+
+            if checks.get("C_loop_limit") is False:
+                cause = (
+                    f"Средства в рамках текущей петли исчерпаны: оценка "
+                    f"{(budget_data or {}).get('estimate_loop')} ₽ превысила лимит петли "
+                    f"{(budget_data or {}).get('loop_hard_limit')} ₽."
+                )
+            elif checks.get("A_activity") is False or checks.get("B_estimate") is False:
+                cause = (
+                    f"Суточный бюджет отдела исчерпан: расход "
+                    f"{(budget_data or {}).get('estimate_dept')} ₽ (факт Activity {(budget_data or {}).get('actual')} ₽) "
+                    f"достиг порога {(budget_data or {}).get('threshold')} ₽."
+                )
+            else:
+                cause = f"Бюджет исчерпан (reason={reason})."
+
+            instruction = (
+                "САМОЦИКЛ ОСТАНОВЛЕН ПО БЮДЖЕТУ. "
+                f"Причина: {cause} "
+                "Напиши пользователю ОДНО короткое сообщение: почему самоцикл был остановлен. "
+                "Не вызывай инструменты, не продолжай работу — только сообщи об остановке."
+            )
+
+        ms = int(time.time() * 1000)
+        tick_payload = {
+            "user_id": LOOP_SERVICE_USER_ID,
+            "username": LOOP_SERVICE_USERNAME,
+            "tb_name": None,
+            "message": instruction,
+            "chat_id": chat_id,
+            "type_agent": payload.get("type_agent", "pm"),
+            "request_id": f"loopstop-{ms}-{uuid.uuid4().hex[:8]}",
+            "message_id": f"msg-{ms}-{uuid.uuid4().hex[:8]}",
+            "selected_tools": payload.get("selected_tools") or [],
+            "context_size": payload.get("context_size") or "medium",
+            "agent_model": payload.get("agent_model"),
+            "gateway_target": "main",
+            "has_files": False,
+            "files": [],
+            "loop": False,
+            "loop_tick": True,
+            "loop_instruction": instruction,
+        }
+        url = f"{CHATS_SELF_URL}/send_message"
+        try:
+            def _post():
+                return requests.post(url, json=tick_payload, timeout=10)
+            resp = await asyncio.to_thread(_post)
+            logger.info(f"[self-loop] финальный тик (причина остановки) chat={chat_id} -> HTTP {resp.status_code}")
+        except Exception as e:
+            logger.error(f"[self-loop] финальный тик не удался chat={chat_id}: {e}")
 
     async def _hydrate_tg_files(self, files, chat_id=None):
         """Для Telegram дочитываем бинарник картинок из БД (Вариант B).

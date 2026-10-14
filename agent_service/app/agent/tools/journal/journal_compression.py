@@ -1,4 +1,8 @@
 import json
+import logging
+
+log = logging.getLogger(__name__)
+
 COMPRESSION_THRESHOLD = 8
 KEEP_RECENT = 3
 

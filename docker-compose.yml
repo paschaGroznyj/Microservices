@@ -233,8 +233,6 @@ services:
       - "8080:8080"
     volumes:
       - ./searxng:/etc/searxng
-    environment:
-      - SEARXNG_REDIS_URL=redis://redis:6379/0
     depends_on:
       redis:
         condition: service_healthy
@@ -420,6 +418,11 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       AGENT_SERVICE_URL: ${AGENT_SERVICE_URL:-http://agent_service:9001}
       TG_ASR_PROVIDER: ${TG_ASR_PROVIDER:-cloud_ru}
+      ACTIVITY_TOKEN: ${ACTIVITY_TOKEN}
+      ACTIVITY_URL: ${ACTIVITY_URL}
+      ACTIVITY_DEPARTMENT: ${ACTIVITY_DEPARTMENT:-cds}
+      LOOP_HARD_LIMIT_RUB: ${LOOP_HARD_LIMIT_RUB:-200}
+      BUDGET_CACHE_TTL: ${BUDGET_CACHE_TTL:-900}
     volumes:
       - ./chats_service:/app
     depends_on:
@@ -449,6 +452,8 @@ services:
       TG_BOT_PUSH_URL: "http://host.docker.internal:8010/push_message"
       # САМОЦИКЛ: реентри-POST в /send_message того же chats_service (docker-сеть)
       CHATS_SERVICE_SELF_URL: ${CHATS_SERVICE_SELF_URL:-http://chats_service:8001}
+      ACTIVITY_TOKEN: ${ACTIVITY_TOKEN}
+      ACTIVITY_URL: ${ACTIVITY_URL}
     volumes:
       - ./chats_service:/app
     depends_on:

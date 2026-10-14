@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import uuid
+import requests
 from fastapi import FastAPI, Header, Query
 from kafka import KafkaProducer
 from pydantic import BaseModel
@@ -95,48 +96,6 @@ app.include_router(group_chat_module.router)
 
 # Telegram-интеграция: отдельный слой БД (allow-list + per-chat настройки).
 tg_db = TelegramDB(None)  # pool проставится на startup
-
-# async def bot_response_watchdog():
-#     logging.info("🤖 Bot watchdog started")
-#
-#     while True:
-#         try:
-#             # 1. Получаем зависшие сообщения
-#             stuck_messages = await db.get_stuck_messages(
-#                 older_than_seconds=MESSAGE_TIMEOUT
-#             )
-#
-#             for msg in stuck_messages:
-#                 logging.warning(
-#                     f"LLM timeout for message id={msg['id']} chat={msg['chat_id']}"
-#                 )
-#
-#                 # 2. Помечаем сообщение как FAILED
-#                 await db.mark_message_failed(msg["id"])
-#
-#                 # 3. Формируем system/bot сообщение
-#                 bot_message = {
-#                     "chat_id": msg["chat_id"],
-#                     "message": "🤖 Ассистент временно недоступен. Попробуйте позже.",
-#                     "is_from_bot": True,
-#                 }
-#
-#                 # 4. Сохраняем в БД
-#                 await db.add_message(
-#                     username=msg["username"],
-#                     message=bot_message["message"],
-#                     chat_id=msg["chat_id"],
-#                     is_from_bot=True
-#                 )
-#
-#                 # 5. Отправляем в WebSocket
-#                 await broadcast(msg["chat_id"], bot_message)
-#
-#         except Exception as e:
-#             logging.error(f"Watchdog error: {e}")
-#
-#         await asyncio.sleep(WATCHDOG_INTERVAL)
-
 
 
 def get_auth_data():
@@ -867,6 +826,112 @@ async def mobile_poll(chat_id: str, timeout: int = 25):
     except Exception:
         reply = {"text": item[1]}
     return {"status": "ok", "reply": reply}
+
+
+@app.get("/budget/activity")
+async def budget_activity(aggregation: str = "day"):
+    """Фактический расход отдела из Cloud.ru Activity API. Кэш в Redis на BUDGET_CACHE_TTL.
+
+    Activity обновляется ~раз в час, поэтому дёргать внешний API на каждом тике
+    петли смысла нет. fail-open: при любой ошибке allowed=True, чтобы сбой панели
+    не ронял работу агента.
+    """
+    from app.core.config import (
+        ACTIVITY_URL, ACTIVITY_TOKEN, ACTIVITY_DEPARTMENT, BUDGET_CACHE_TTL,
+    )
+    import datetime as _dt
+
+    cache_key = f"budget:activity:{ACTIVITY_DEPARTMENT}:{aggregation}"
+    if redis_client is not None:
+        try:
+            cached = await redis_client.get(cache_key)
+            if cached:
+                return {**json.loads(cached), "cached": True}
+        except Exception:
+            pass
+
+    if not ACTIVITY_TOKEN:
+        return {"ok": False, "reason": "no_token", "current": None, "threshold": None}
+
+    now_msk = _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=3)))
+    if aggregation == "day":
+        period = now_msk.strftime("%Y-%m-%d")
+    elif aggregation == "month":
+        period = now_msk.strftime("%Y-%m")
+    else:
+        period = now_msk.strftime("%Y")
+
+    try:
+        resp = requests.get(
+            ACTIVITY_URL,
+            params={"aggregation": aggregation, "period": period,
+                    "department": ACTIVITY_DEPARTMENT},
+            headers={"Authorization": f"Bearer {ACTIVITY_TOKEN}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        total = data.get("total") or {}
+        pace = data.get("pace") or {}
+        result = {
+            "ok": True,
+            "current": total.get("current"),
+            "threshold": total.get("threshold"),
+            "pace_current": pace.get("current"),
+            "pace_threshold": pace.get("threshold"),
+            "as_of": data.get("as_of"),
+        }
+        if redis_client is not None:
+            try:
+                await redis_client.set(cache_key, json.dumps(result), ex=BUDGET_CACHE_TTL)
+            except Exception:
+                pass
+        return result
+    except Exception as e:
+        logging.warning(f"[budget] Activity API недоступен: {e}")
+        return {"ok": False, "reason": "activity_error", "current": None, "threshold": None}
+
+
+@app.get("/budget/check/{chat_id}")
+async def budget_check(chat_id: str):
+    """Агрегатор трёх условий бюджета для петли. Возвращает {allowed, reason, ...}.
+
+    Петля продолжается только если прошли ВСЕ три:
+      A) фактический расход отдела (Activity) < порога панели;
+      B) наша оценка по токенам за сегодня (отдел) < того же порога;
+      C) наша оценка < собственного жёсткого лимита петли (LOOP_HARD_LIMIT_RUB).
+    fail-open по A/B: если данных нет — условие не блокирует. C считаем всегда.
+    """
+    from app.core.config import LOOP_HARD_LIMIT_RUB
+    logging.info(f"[hard_limit_ru] {LOOP_HARD_LIMIT_RUB}")
+    activity = await budget_activity(aggregation="day")
+    estimate_dept = await db.estimate_spend_today(chat_id=None)
+    estimate_loop = await db.estimate_spend_today(chat_id=chat_id)
+
+    threshold = activity.get("threshold")
+    actual = activity.get("current")
+
+    checks = {"A_activity": True, "B_estimate": True, "C_loop_limit": True}
+    if threshold is not None:
+        if actual is not None and float(actual) >= float(threshold):
+            checks["A_activity"] = False
+        if estimate_dept >= float(threshold):
+            checks["B_estimate"] = False
+    if estimate_loop >= LOOP_HARD_LIMIT_RUB:
+        checks["C_loop_limit"] = False
+
+    allowed = all(checks.values())
+    reason = "ok" if allowed else ",".join(k for k, v in checks.items() if not v)
+    return {
+        "allowed": allowed,
+        "reason": reason,
+        "actual": actual,
+        "threshold": threshold,
+        "estimate_dept": estimate_dept,
+        "estimate_loop": estimate_loop,
+        "loop_hard_limit": LOOP_HARD_LIMIT_RUB,
+        "checks": checks,
+    }
 
 
 @app.get("/health")

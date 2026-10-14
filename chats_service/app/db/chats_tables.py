@@ -1,6 +1,6 @@
 import asyncio
 import asyncpg
-from app.core.config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME
+from app.core.config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME, LOOP_SERVICE_USER_ID
 import logging
 from datetime import datetime, timezone
 import json
@@ -217,6 +217,24 @@ class DataBaseChats:
             CREATE INDEX IF NOT EXISTS ix_agent_loop_tasks_chat ON agent_loop_tasks(chat_id);
             CREATE UNIQUE INDEX IF NOT EXISTS ux_agent_loop_tasks_chat_active
                 ON agent_loop_tasks(chat_id) WHERE is_active;
+
+            CREATE TABLE IF NOT EXISTS model_tariffs (
+                model_name          TEXT PRIMARY KEY,
+                abstract_model_name TEXT,
+                input_per_1m        NUMERIC(14,4) NOT NULL DEFAULT 0,
+                output_per_1m       NUMERIC(14,4) NOT NULL DEFAULT 0,
+                currency            TEXT NOT NULL DEFAULT 'RUB',
+                updated_at          TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS ix_model_tariffs_abstract
+                ON model_tariffs(abstract_model_name);
+
+            INSERT INTO model_tariffs (model_name, abstract_model_name, input_per_1m, output_per_1m)
+            VALUES
+                ('openai/gpt-5.4',             'coder',     0, 0),
+                ('anthropic/claude-opus-4.8',  'designer',  0, 0),
+                ('zai-org/GLM-5.2',            'universal', 0, 0)
+            ON CONFLICT (model_name) DO NOTHING;
         """)
 
     # ═══ САМОЦИКЛ АГЕНТА (agent_loop_tasks) ═══════════════════════════════
@@ -257,6 +275,71 @@ class DataBaseChats:
             "UPDATE agent_loop_tasks SET is_active=FALSE, updated_at=now() "
             "WHERE chat_id=$1 AND is_active;", chat_id)
         return res.endswith("1") or res.split()[-1] not in ("0", "")
+
+    # ═══ ТАРИФИКАЦИЯ (model_tariffs) ══════════════════════════════════════
+    async def estimate_spend_today(self, chat_id: str | None = None) -> float:
+        """Своя оценка расхода в рублях за сегодня (МСК) по tokens_usage × тарифам.
+
+        Второе условие бюджета петли: между часовыми обновлениями Activity API
+        мы сами суммируем токены из chats и переводим в деньги. chat_id=None —
+        по всему отделу (все чаты), иначе только по одному чату.
+        """
+        if chat_id:
+            rows = await self.pool.fetch(
+                """
+                SELECT COALESCE(c.model_type, 'universal') AS abs_model,
+                    SUM(COALESCE((c.tokens_usage->>'input_tokens')::bigint, 0))  AS in_tok,
+                    SUM(COALESCE((c.tokens_usage->>'output_tokens')::bigint, 0)) AS out_tok
+                FROM chats c
+                WHERE c.chat_id = $1
+                AND c.is_from_bot = TRUE
+                AND c.tokens_usage IS NOT NULL
+                AND c.created_at >= COALESCE(
+                        (SELECT t.created_at FROM agent_loop_tasks t
+                        WHERE t.chat_id = $1 AND t.is_active = TRUE
+                        ORDER BY t.created_at DESC LIMIT 1),
+                        date_trunc('day', (now() AT TIME ZONE 'Europe/Moscow'))
+                            AT TIME ZONE 'Europe/Moscow')
+                GROUP BY 1;
+                """, chat_id)
+
+        else:
+            rows = await self.pool.fetch(
+                """
+                SELECT COALESCE(c.model_type, 'universal') AS abs_model,
+                    SUM(COALESCE((c.tokens_usage->>'input_tokens')::bigint, 0))  AS in_tok,
+                    SUM(COALESCE((c.tokens_usage->>'output_tokens')::bigint, 0)) AS out_tok
+                FROM chats c
+                WHERE c.is_from_bot = TRUE
+                AND c.tokens_usage IS NOT NULL
+                AND c.created_at >= date_trunc('day', (now() AT TIME ZONE 'Europe/Moscow'))
+                                    AT TIME ZONE 'Europe/Moscow'
+                GROUP BY 1;
+                """)
+
+        tariffs = await self.get_tariffs()
+        total = 0.0
+        for r in rows:
+            t = tariffs.get(r["abs_model"]) or tariffs.get("universal") or {}
+            in_rate = float(t.get("input_per_1m", 0) or 0)
+            out_rate = float(t.get("output_per_1m", 0) or 0)
+            total += float((r["in_tok"] or 0) / 1_000_000) * in_rate
+            total += float((r["out_tok"] or 0) / 1_000_000) * out_rate
+        return round(total, 2)
+
+    async def get_tariffs(self) -> dict:
+        """Карта abstract_model_name -> {input_per_1m, output_per_1m, model_name}."""
+        rows = await self.pool.fetch(
+            "SELECT model_name, abstract_model_name, input_per_1m, output_per_1m FROM model_tariffs;")
+        out = {}
+        for r in rows:
+            key = r["abstract_model_name"] or r["model_name"]
+            out[key] = {
+                "model_name": r["model_name"],
+                "input_per_1m": float(r["input_per_1m"] or 0),
+                "output_per_1m": float(r["output_per_1m"] or 0),
+            }
+        return out
 
     async def add_message(
         self,

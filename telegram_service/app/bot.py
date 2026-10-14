@@ -1969,7 +1969,7 @@ def extract_urls_from_message(msg: Message) -> list[str]:
 CATCHPM_URL = os.environ.get("CATCHPM_URL", "https://catchpm.cds.uva-advanced.ru")
 
 # Доступные модели агента (без админских). Ключ = agent_model в БД.
-TG_MODELS = ["coder", "designer", "universal"]
+TG_MODELS = ["coder", "designer", "universal", "gemini"]
 
 # Тул-категории, которые можно включать из телеги. Админская категория
 # намеренно ОТСУТСТВУЕТ — из телеги её включить нельзя.

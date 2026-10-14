@@ -2907,12 +2907,6 @@ class ChatApp {
     </div>
 
     <div class="start-body">
-        <div class="start-body-blobs" aria-hidden="true">
-            <span class="start-blob sb1" data-depth="52"></span>
-            <span class="start-blob sb2" data-depth="40"></span>
-            <span class="start-blob sb3" data-depth="60"></span>
-            <span class="start-blob sb4" data-depth="30"></span>
-        </div>
         <div class="start-header">
             <p class="start-greeting">Привет, <span class="username">${this.escapeHtml(username)}</span> 👋</p>
             <h1 class="start-title">Чем могу помочь?</h1>
@@ -3198,10 +3192,9 @@ class ChatApp {
 
     /* ══════════════════════════════════════════
        СТАРТОВЫЙ ЭКРАН: живой фон «за стеклом».
-       Граф (canvas) на весь экран БЕЗ цветных пятен — три цвета берутся
-       из CSS-констант --graph-c1/2/3 (A1: те же акценты у footer-note).
-       Blob'ы живут ВНУТРИ .start-body (клиппятся её рамкой через overflow).
-       Параллакс: пятна > граф > наклон панели. reduced-motion / touch —
+       Граф (canvas) на весь экран БЕЗ цветных пятен — цвет узлов жёстко
+       завязан на --accent (3 тона от базового), меняется с палитрой.
+       Параллакс: граф > наклон панели. reduced-motion / touch —
        деградируют мягко. Один rAF, курсор сглажен lerp-ом.
     ══════════════════════════════════════════ */
     _initStartGraph(container) {
@@ -3212,7 +3205,6 @@ class ChatApp {
         const screen = container.querySelector('.chat-start-screen');
         const cv = container.querySelector('#start-graph');
         const body = container.querySelector('.start-body');
-        const blobs = container.querySelector('.start-body-blobs');
         if (!screen || !cv || !body) return;
 
         requestAnimationFrame(() => screen.classList.add('bg-ready'));
@@ -3223,7 +3215,7 @@ class ChatApp {
         const CONFIG = {
             nodes: 64, linkDist: 132, cursorRadius: 150, cursorForce: 0.9,
             glowRadius: 180, cursorMode: 'repel', cursorLerp: 0.12,
-            blobParallax: 1.0, graphParallax: 14, tilt: 2.5,
+            graphParallax: 14, tilt: 2.5,
         };
 
         const g = cv.getContext('2d');
@@ -3231,15 +3223,24 @@ class ChatApp {
         let W = 0, H = 0, dpr = 1, nodes = [];
         const m = { x: 0, y: 0, sx: 0, sy: 0, active: false };
 
-        const read3 = () => {
-            const cs = getComputedStyle(screen);
-            return [
-                cs.getPropertyValue('--graph-c1').trim() || '91,33,182',
-                cs.getPropertyValue('--graph-c2').trim() || '59,130,246',
-                cs.getPropertyValue('--graph-c3').trim() || '52,211,153',
-            ];
+        // Цвет узлов жёстко завязан на --accent (меняется с палитрой).
+        // 3 тона: базовый + светлее/темнее для разнообразия.
+        const parseAccent = () => {
+            const cs = getComputedStyle(root);
+            let v = cs.getPropertyValue('--accent').trim() || '#6366f1';
+            let r, gg, b;
+            if (v.startsWith('#')) {
+                if (v.length === 4) v = '#' + v[1]+v[1]+v[2]+v[2]+v[3]+v[3];
+                r = parseInt(v.slice(1,3),16); gg = parseInt(v.slice(3,5),16); b = parseInt(v.slice(5,7),16);
+            } else {
+                const mm = v.match(/\d+/g) || [99,102,241];
+                r = +mm[0]; gg = +mm[1]; b = +mm[2];
+            }
+            const clamp = (x) => Math.max(0, Math.min(255, Math.round(x)));
+            const shade = (k) => `${clamp(r*k)},${clamp(gg*k)},${clamp(b*k)}`;
+            return [`${r},${gg},${b}`, shade(1.18), shade(0.82)];
         };
-        let COLS = read3();
+        let COLS = parseAccent();
 
         function resize() {
             const r = screen.getBoundingClientRect();
@@ -3330,12 +3331,6 @@ class ChatApp {
             if (interactive && m.active) {
                 const nx = (m.sx / window.innerWidth - .5) * 2;
                 const ny = (m.sy / window.innerHeight - .5) * 2;
-                if (blobs) {
-                    for (const l of blobs.children) {
-                        const depth = (+l.dataset.depth || 20) * CONFIG.blobParallax;
-                        l.style.transform = `translate3d(${(-nx * depth).toFixed(1)}px, ${(-ny * depth).toFixed(1)}px, 0)`;
-                    }
-                }
                 const gp = CONFIG.graphParallax;
                 cv.style.transform = `translate3d(${(-nx * gp).toFixed(1)}px, ${(-ny * gp).toFixed(1)}px, 0)`;
 
@@ -3348,7 +3343,10 @@ class ChatApp {
                 body.style.setProperty('--my', ((m.sy - rect.top) / rect.height * 100).toFixed(1) + '%');
             }
 
-            if ((frames++ & 63) === 0) COLS = read3();
+            if ((frames++ & 63) === 0) {
+                COLS = parseAccent();
+                for (let i = 0; i < nodes.length; i++) nodes[i].c = COLS[i % 3];
+            }
             drawGraph();
             this._startGraphRAF = requestAnimationFrame(frame);
         };

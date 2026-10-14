@@ -882,6 +882,9 @@
 .chat-start-screen {
   position: absolute;
   inset: 0;
+  height: 100%;
+  max-height: 100%;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -889,85 +892,59 @@
   padding: 24px 16px 32px;
   overflow-y: hidden;
   overflow-x: hidden;
+  perspective: 1200px;
+  background: linear-gradient(160deg, var(--start-bg-a), var(--start-bg-b));
+  transition: background .4s ease;
+
+  /* Фон-градиент под стекло + ТРИ цвета графа (A1).
+     Эти же три константы подсвечивают .start-footer-note. */
+  --start-bg-a: #eef0f8;
+  --start-bg-b: #dfe3f3;
+  --graph-c1: 91, 33, 182;    /* фиолет  */
+  --graph-c2: 59, 130, 246;   /* синий   */
+  --graph-c3: 52, 211, 153;   /* зелёный */
+  --blob-1: #8b5cf6;
+  --blob-2: #3b82f6;
+  --blob-3: #34d399;
+  --blob-4: #f0abfc;
+  --blob-opacity: .42;
+  --glare: rgba(255, 255, 255, .55);
 }
 
-/* Два фоновых слоя (день/ночь) на всю область, статичные — без вращения.
-   ::before = день, ::after = ночь. Смена темы = плавный кросс-фейд opacity.
-   Плавное ПОЯВЛЕНИЕ при подгрузке интерфейса: слой .bg-ready включает
-   opacity через transition (класс ставит JS после первого кадра/загрузки img). */
-.chat-start-screen::before,
-.chat-start-screen::after {
-  content: "";
+[data-theme="dark"] .chat-start-screen {
+  --start-bg-a: #0d0b1a;
+  --start-bg-b: #16122b;
+  --graph-c1: 196, 181, 253;
+  --graph-c2: 125, 170, 255;
+  --graph-c3: 110, 231, 183;
+  --blob-opacity: .38;
+  --glare: rgba(255, 255, 255, .14);
+}
+
+/* ── Живой фон: граф на весь экран (БЕЗ пятен). Появляется по .bg-ready ── */
+.start-bg {
   position: absolute;
   inset: 0;
+  z-index: 0;
   pointer-events: none;
-  background-size: cover;
-  background-repeat: no-repeat;
-  background-position: center;
-  filter: saturate(106%);
-  z-index: 0;
+  overflow: hidden;
   opacity: 0;
-  transform: scale(1.06);
-  transition:
-    opacity 1.1s cubic-bezier(.22, .61, .36, 1),
-    transform 1.6s cubic-bezier(.22, .61, .36, 1);
-  will-change: opacity, transform;
+  transition: opacity 1s ease;
 }
+.chat-start-screen.bg-ready .start-bg { opacity: 1; }
 
-/* День */
-.chat-start-screen::before {
-  background-image: url('/static/img/day.jpg');
-}
-
-/* Ночь */
-.chat-start-screen::after {
-  background-image: url('/static/img/night.jpg');
-  z-index: 0;
-}
-
-/* Затемняющий/осветляющий градиент поверх фото — отдельный слой .start-scrim */
-.start-scrim {
+.start-bg #start-graph {
   position: absolute;
   inset: 0;
-  z-index: 1;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 1.1s ease;
-  background:
-    radial-gradient(circle at 50% 42%, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0.06) 42%, rgba(10,16,28,0.14) 100%),
-    linear-gradient(to bottom, rgba(8,12,22,0.07), rgba(8,12,22,0.22));
-}
-
-[data-theme="dark"] .start-scrim {
-  background:
-    radial-gradient(circle at 50% 42%, rgba(255,255,255,0.08) 0%, rgba(16,20,32,0.18) 48%, rgba(7,10,19,0.42) 100%),
-    linear-gradient(to bottom, rgba(6,8,14,0.30), rgba(6,8,14,0.52));
-}
-
-/* ── ПОЯВЛЕНИЕ ФОНА: класс .bg-ready ставит JS после готовности картинок ── */
-/* День активен в светлой теме, ночь — в тёмной. Появление плавное. */
-.chat-start-screen.bg-ready::before,
-.chat-start-screen.bg-ready::after {
-  transform: scale(1);
-}
-
-[data-theme="light"] .chat-start-screen.bg-ready::before { opacity: 1; }
-[data-theme="light"] .chat-start-screen.bg-ready::after  { opacity: 0; }
-[data-theme="dark"]  .chat-start-screen.bg-ready::before { opacity: 0; }
-[data-theme="dark"]  .chat-start-screen.bg-ready::after  { opacity: 1; }
-
-.chat-start-screen.bg-ready .start-scrim { opacity: 1; }
-
-/* PERF: will-change нужен ТОЛЬКО на время fade-in фона. После того как JS
-   поставил .bg-ready и анимация отыграла — снимаем will-change,
-   чтобы не держать два постоянных GPU-слоя с full-bleed фото. */
-.chat-start-screen.bg-ready::before,
-.chat-start-screen.bg-ready::after {
-  will-change: auto;
+  display: block;
+  width: 100%;
+  height: 100%;
+  will-change: transform;
 }
 
 /* Центральный блок (заголовок + инпут) — единый стеклянный контейнер */
 .start-body {
+  --mx: 50%; --my: 50%; --rx: 0deg; --ry: 0deg;
   position: relative;
   z-index: 2;
   width: 100%;
@@ -978,21 +955,87 @@
   /* Стеклянная панель вокруг всей центральной группы */
   padding: 32px 34px 34px;
   border-radius: 24px;
-  background: rgba(255, 255, 255, 0.30);
-  border: 1px solid rgba(255, 255, 255, 0.38);
+  background: rgba(255, 255, 255, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.6);
   box-shadow:
-    0 18px 48px rgba(15, 23, 42, 0.14),
-    inset 0 1px 0 rgba(255, 255, 255, 0.40);
-  backdrop-filter: blur(6px) saturate(115%);
-  -webkit-backdrop-filter: blur(6px) saturate(115%);
+    0 24px 70px rgba(60, 40, 120, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  backdrop-filter: blur(26px) saturate(1.5);
+  -webkit-backdrop-filter: blur(26px) saturate(1.5);
+  overflow: hidden;
+  transform: rotateX(var(--rx)) rotateY(var(--ry));
+  transition: transform .25s ease-out;
+  transform-style: preserve-3d;
+}
+
+/* Блик за курсором */
+.start-body::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  background: radial-gradient(420px circle at var(--mx) var(--my), var(--glare), transparent 60%);
+  mix-blend-mode: soft-light;
+}
+/* Светящаяся кромка у курсора */
+.start-body::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 1;
+  padding: 1px;
+  background: radial-gradient(260px circle at var(--mx) var(--my), rgba(255,255,255,.95), transparent 65%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+}
+
+/* Содержимое панели — над бликами */
+.start-body > .start-header,
+.start-body > .start-input-area { position: relative; z-index: 2; }
+
+/* Цветные пятна ВНУТРИ панели — клиппятся её рамкой (overflow:hidden) */
+.start-body-blobs {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  overflow: hidden;
+}
+.start-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(60px);
+  opacity: var(--blob-opacity);
+  will-change: transform;
+  animation: startBlobDrift 26s ease-in-out infinite alternate;
+}
+.start-blob.sb1 { width: 60%; height: 120%; left: -18%; top: -40%;   background: var(--blob-1); }
+.start-blob.sb2 { width: 55%; height: 110%; right: -16%; top: -24%;  background: var(--blob-2); animation-duration: 32s; animation-delay: -6s; }
+.start-blob.sb3 { width: 50%; height: 100%; left: 20%;  bottom: -46%; background: var(--blob-3); animation-duration: 29s; animation-delay: -12s; }
+.start-blob.sb4 { width: 40%; height: 90%;  right: 14%; bottom: -30%; background: var(--blob-4); animation-duration: 24s; animation-delay: -3s; }
+.start-blob[data-depth] { /* data-depth читается из JS для параллакса */ }
+@keyframes startBlobDrift {
+  from { translate: 0 0; }
+  to   { translate: 4% -5%; }
 }
 
 [data-theme="dark"] .start-body {
-  background: rgba(15, 23, 37, 0.34);
-  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.16);
   box-shadow:
-    0 18px 48px rgba(0, 0, 0, 0.34),
+    0 24px 70px rgba(0, 0, 0, 0.5),
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .start-body { transition: none; }
+  .start-blob { animation: none; }
 }
 
 /* Приветствие */
@@ -1158,21 +1201,47 @@
   position: absolute;
   z-index: 2;
   bottom: 14px;
-  padding: 6px 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 32px);
+  white-space: nowrap;
+  padding: 7px 16px;
   border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
-  background: color-mix(in srgb, var(--surface) 90%, transparent);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
+  /* Стекло из шаблона + акцентная кромка/свечение из цветов графа (A1) */
+  border: 1px solid rgba(var(--graph-c2), .45);
+  background: rgba(255, 255, 255, .22);
+  backdrop-filter: blur(16px) saturate(1.4);
+  -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  box-shadow:
+    0 6px 22px rgba(var(--graph-c1), .20),
+    inset 0 1px 0 rgba(255, 255, 255, .45);
   font-size: .72rem;
   font-weight: 500;
-  color: color-mix(in srgb, var(--text-muted) 84%, #ffffff 16%);
+  letter-spacing: .1px;
+  color: color-mix(in srgb, var(--text-primary) 72%, transparent);
   text-align: center;
+  transition: border-color .4s ease, box-shadow .4s ease;
+}
+/* Тонкая градиентная подложка-акцент тремя цветами графа */
+.start-footer-note::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: .14;
+  background: linear-gradient(90deg,
+    rgba(var(--graph-c1), 1),
+    rgba(var(--graph-c2), 1),
+    rgba(var(--graph-c3), 1));
 }
 
 [data-theme="dark"] .start-footer-note {
-  border-color: color-mix(in srgb, var(--border) 66%, transparent);
-  background: color-mix(in srgb, #0f1725 82%, transparent);
+  border-color: rgba(var(--graph-c2), .4);
+  background: rgba(255, 255, 255, .06);
+  box-shadow:
+    0 6px 22px rgba(0, 0, 0, .4),
+    inset 0 1px 0 rgba(255, 255, 255, .08);
   color: #e6ebf5;
 }
 

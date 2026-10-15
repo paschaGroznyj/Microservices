@@ -13,6 +13,7 @@ from app.core.config import SECRET_KEY, ALGORITHM, KAFKA_BROKER
 from app.db.group_chat_db import GroupChatDB
 from app import group_chat as group_chat_module
 from app.db.telegram_db import TelegramDB
+from app.db.max_db import MaxDB
 import time
 
 WATCHDOG_INTERVAL = 10      # как часто проверяем
@@ -96,6 +97,7 @@ app.include_router(group_chat_module.router)
 
 # Telegram-интеграция: отдельный слой БД (allow-list + per-chat настройки).
 tg_db = TelegramDB(None)  # pool проставится на startup
+max_db = MaxDB(None)  # pool проставится на startup (MAX-интеграция)
 
 
 def get_auth_data():
@@ -176,6 +178,10 @@ async def startup():
     # Telegram: переиспользуем тот же пул, создаём таблицы telegram_*.
     tg_db.pool = db.pool
     await tg_db.init_db_pool()
+
+    # MAX: тот же пул, таблицы max_*.
+    max_db.pool = db.pool
+    await max_db.init_db_pool()
 
     # Redis-клиент для обратного пути мобильного клиента (long-poll).
     global redis_client
@@ -617,6 +623,83 @@ async def get_user_chats(user_id: int = Query(..., alias="user_id"), chat_id: st
     except Exception as e:
         logging.error(f"Ошибка в эндпоинте get_user_chats: {e}")
         raise HTTPException(status_code=500, detail="Не удалось загрузить список чатов")
+
+
+# ══════════════════════════════════════════════════════════════
+# MAX-интеграция (аналог /tg/*). Ядро: allow-list + per-chat настройки.
+# ══════════════════════════════════════════════════════════════
+class MaxChatIn(BaseModel):
+    chat_id: str
+    added_by_user_id: int | None = None
+    system_prompt: str | None = None
+    agent_name: str | None = None
+    agent_model: str | None = None
+    selected_tools: list | None = None
+    trigger_mode: str | None = None
+    orchestrator_context_n: int | None = None
+    proactive_enabled: bool | None = None
+
+
+class MaxSettingsIn(BaseModel):
+    system_prompt: str | None = None
+    agent_name: str | None = None
+    agent_model: str | None = None
+    selected_tools: list | None = None
+    trigger_mode: str | None = None
+    orchestrator_context_n: int | None = None
+    proactive_enabled: bool | None = None
+
+
+@app.get("/max/chats")
+async def max_list_chats(added_by_user_id: int | None = None):
+    return {"chats": await max_db.list_chats_with_settings(user_id=added_by_user_id)}
+
+
+@app.post("/max/chats")
+async def max_add_chat(body: MaxChatIn):
+    row = await max_db.upsert_chat(body.chat_id, body.added_by_user_id)
+    settings_fields = {
+        k: v for k, v in {
+            "system_prompt": body.system_prompt,
+            "agent_name": body.agent_name,
+            "agent_model": body.agent_model,
+            "selected_tools": body.selected_tools,
+            "trigger_mode": body.trigger_mode,
+            "orchestrator_context_n": body.orchestrator_context_n,
+            "proactive_enabled": body.proactive_enabled,
+        }.items() if v is not None
+    }
+    if settings_fields:
+        settings = await max_db.update_settings(body.chat_id, **settings_fields)
+    else:
+        settings = await max_db.get_settings(body.chat_id)
+    return {"status": "ok", "chat": row, "settings": settings}
+
+
+@app.delete("/max/chats/{chat_id}")
+async def max_remove_chat(chat_id: str):
+    ok = await max_db.deactivate_chat(chat_id)
+    return {"status": "ok" if ok else "not_found"}
+
+
+@app.get("/max/allowed_chats")
+async def max_allowed():
+    """Активные chat_id — max_service кэширует в Redis (ключ max:allowed_chats)."""
+    return {"chats": await max_db.list_active_chat_ids()}
+
+
+@app.get("/max/settings/{chat_id}")
+async def max_get_settings(chat_id: str):
+    return await max_db.get_settings(chat_id) or {}
+
+
+@app.post("/max/settings/{chat_id}")
+async def max_set_settings(chat_id: str, body: MaxSettingsIn):
+    s = await max_db.update_settings(
+        chat_id, **{k: v for k, v in body.dict().items() if v is not None}
+    )
+    return {"status": "ok", "settings": s}
+
 
 
 @app.get("/chat/{chat_id}/messages")

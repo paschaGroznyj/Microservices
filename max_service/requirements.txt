@@ -1,0 +1,6 @@
+httpx
+requests>=2.28
+fastapi
+uvicorn[standard]
+pydantic
+redis>=5.0

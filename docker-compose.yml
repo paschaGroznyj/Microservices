@@ -112,6 +112,7 @@ services:
       AGENT_POOL_PASSWORD: ${AGENT_POOL_PASSWORD}
       SANDBOX_SERVICE_URL: ${SANDBOX_SERVICE_URL}
       TG_BOT_PUSH_URL: http://172.18.0.1:8010/push_message # docker network inspect pascha_microservices | grep Gateway
+      MAX_BOT_PUSH_URL: http://172.18.0.1:8011/push_message
       TG_INLINE_B64_MAX: "700000"  # > порог = file_url вместо base64 в Kafka
       # sudo ufw allow from 172.18.0.0/16 to any port 8010 proto tcp
 
@@ -155,6 +156,22 @@ services:
         # Тот же источник, что и у agent_service: tg_id админов берётся из ADMINS_INFO
         # (поле tg_id). Нужен, чтобы в /start-меню показывать админские категории тулов.
         ADMINS_INFO:         ${ADMINS_INFO}
+      restart: unless-stopped
+
+
+  max_bot:
+      build: ./max_service
+      container_name: max_bot
+      network_mode: "host"  # host-режим: MAX API (platform-api2.max.ru) + порты хоста
+      environment:
+        MAX_TOKEN_API:       ${MAX_TOKEN_API}
+        CHATS_SERVICE_URL:   http://127.0.0.1:8001   # send_message (Kafka) + /max/*
+        AGENT_SERVICE_URL:   http://127.0.0.1:9001
+        REDIS_URL:           redis://127.0.0.1:6379/0
+        MAX_PUSH_PORT:       "8011"
+        MAX_POLL_TIMEOUT:    "30"
+        MAX_ALLOWED_TTL:     "60"
+        CATCHPM_URL:         https://catchpm.cds.uva-advanced.ru
       restart: unless-stopped
 
 
@@ -450,6 +467,7 @@ services:
       KAFKA_BROKER: ${KAFKA_BROKER}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       TG_BOT_PUSH_URL: "http://host.docker.internal:8010/push_message"
+      MAX_BOT_PUSH_URL: "http://host.docker.internal:8011/push_message"
       # САМОЦИКЛ: реентри-POST в /send_message того же chats_service (docker-сеть)
       CHATS_SERVICE_SELF_URL: ${CHATS_SERVICE_SELF_URL:-http://chats_service:8001}
       ACTIVITY_TOKEN: ${ACTIVITY_TOKEN}

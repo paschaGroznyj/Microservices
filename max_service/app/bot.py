@@ -467,12 +467,109 @@ def split_message(text: str, limit: int = MAX_MSG_LIMIT) -> list[str]:
     return parts or [text[:limit]]
 
 
+import base64
+import pathlib
+
+# Классификация файла агента → upload-type MAX Bot API v2 (image|video|audio|file).
+# kind-подсказка от агента приоритетнее расширения (как в telegram media_voice).
+_VOICE_EXTS = {".ogg", ".oga", ".opus"}
+_AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".flac", ".wav"}
+_VIDEO_EXTS = {".mp4", ".mov", ".webm", ".mkv"}
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+_KIND_TO_MAX = {
+    "voice": "audio", "audio": "audio",
+    "video": "video",
+    "image": "image", "photo": "image",
+}
+
+
+def _max_upload_type(name: str | None, kind: str | None) -> str:
+    k = (kind or "").strip().lower()
+    if k in _KIND_TO_MAX:
+        return _KIND_TO_MAX[k]
+    ext = pathlib.Path(name or "").suffix.lower()
+    if ext in _VOICE_EXTS or ext in _AUDIO_EXTS:
+        return "audio"
+    if ext in _VIDEO_EXTS:
+        return "video"
+    if ext in _IMAGE_EXTS:
+        return "image"
+    return "file"
+
+
+async def _resolve_file_bytes(f: dict) -> bytes | None:
+    """Байты файла агента: file_b64 → локальный path → file_url (с agent_service)."""
+    if f.get("file_b64"):
+        try:
+            return base64.b64decode(f["file_b64"])
+        except Exception as e:
+            log.warning(f"[max-file] b64 decode fail: {e}")
+    fpath = f.get("path")
+    if fpath and os.path.exists(fpath):
+        try:
+            return pathlib.Path(fpath).read_bytes()
+        except Exception as e:
+            log.warning(f"[max-file] read path fail {fpath}: {e}")
+    url = f.get("file_url")
+    if url:
+        if url.startswith("/"):
+            url = AGENT_SERVICE_URL.rstrip("/") + url
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as c:
+                r = await c.get(url)
+                if r.status_code == 200:
+                    return r.content
+                log.warning(f"[max-file] pull {url} -> HTTP {r.status_code}")
+        except Exception as e:
+            log.error(f"[max-file] pull fail {url}: {e}")
+    return None
+
+
+async def _send_agent_file(chat_id: int, f: dict) -> None:
+    """Файл из ответа агента → MAX: 2-шаговая загрузка + attach в сообщение."""
+    raw = await _resolve_file_bytes(f)
+    if not raw:
+        log.warning(f"[max-file] нет байтов для {f.get('name')}")
+        return
+    name = f.get("name") or "file"
+    up_type = _max_upload_type(name, f.get("kind"))
+    info = await client.upload_file(up_type, name, raw)
+    token = info.get("token") or (info.get("photos") and None)
+    if not token:
+        # для image MAX иногда отдаёт {"photos": {...}} вместо token — берём payload целиком
+        if up_type == "image" and isinstance(info.get("photos"), dict):
+            attachment = {"type": "image", "payload": info}
+        else:
+            log.warning(f"[max-file] upload без token: {info}")
+            return
+    else:
+        attachment = {"type": up_type, "payload": {"token": token}}
+    await client.send_message(
+        text=f.get("caption") or "",
+        chat_id=chat_id,
+        attachments=[attachment],
+        fmt=None,
+    )
+    log.info(f"[max-file] отправлен {name} как {up_type}")
+
+
 @api.post("/push_message", response_model=PushMessageResponse)
 async def push_message(req: PushMessageRequest):
     if client is None:
         raise HTTPException(status_code=503, detail="MAX bot не инициализирован")
+
+    # файлы агента (если пришли) — грузим и шлём отдельными сообщениями-вложениями
+    if req.files:
+        for f in req.files:
+            try:
+                await _send_agent_file(int(req.chat_id), f)
+            except MaxApiError as e:
+                log.warning(f"[max-file] API error {e.status}: {e.data}")
+            except Exception as e:
+                log.warning(f"[max-file] push file fail: {e}")
+
     if not req.text:
-        return PushMessageResponse(ok=False, error="Empty text")
+        return PushMessageResponse(ok=True)
     fmt = (req.parse_mode or "markdown").lower()
     if fmt not in ("markdown", "html"):
         fmt = None

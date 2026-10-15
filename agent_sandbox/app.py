@@ -356,6 +356,8 @@ def _run_code_sync(code: str, timeout: int, run_dir: str, stdin: str = "", task_
                 "GITVERSE_TOKEN": os.getenv("GITVERSE_TOKEN", ""),
                 "GITHUB_TOKEN": os.getenv("GITHUB_TOKEN", ""),
                 "DOCKER_HOST": os.getenv("DOCKER_HOST", "tcp://sandbox_dind:2375"),
+                "GATEWAY_IP": os.getenv("GATEWAY_IP", ""),
+                "CAPTION_API_PORT": os.getenv("CAPTION_API_PORT", ""),
             },
         )
         duration_ms = int((time.monotonic() - start) * 1000)
@@ -460,7 +462,9 @@ def _run_commands_sync(commands: list[str], timeout: int, run_dir: str, stdin: s
                 "GITVERSE_TOKEN": os.getenv("GITVERSE_TOKEN", ""),
                 "GITHUB_TOKEN": os.getenv("GITHUB_TOKEN", ""),
                 "DOCKER_HOST": os.getenv("DOCKER_HOST", "tcp://sandbox_dind:2375"),
-                "KAFKA_BROKER_DIND": os.getenv("KAFKA_BROKER_DIND", "")
+                "KAFKA_BROKER_DIND": os.getenv("KAFKA_BROKER_DIND", ""),
+                "GATEWAY_IP": os.getenv("GATEWAY_IP", ""),
+                "CAPTION_API_PORT": os.getenv("CAPTION_API_PORT", ""),
             },
         )
         duration_ms = int((time.monotonic() - start) * 1000)

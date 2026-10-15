@@ -526,11 +526,14 @@ services:
       - KAFKA_BROKER=${KAFKA_BROKER}
       - DOCKER_HOST=tcp://sandbox_dind:2375
       - KAFKA_BROKER_DIND=172.28.0.10:9092    # для контейнеров, которые agent_sandbox поднимает внутри dind
+      - GATEWAY_IP=${GATEWAY_IP}
+      - CAPTION_API_PORT=${CAPTION_API_PORT}     
     volumes:
       - ./agent_sandbox/fonts:/app/fonts:ro
       - ./agent_sandbox/dev_utils:/app/dev_utils:ro
       - ./agent_sandbox/result_parsing:/app/result_parsing:ro
       - ./agent_sandbox/workspaces:/tmp/exec/workspaces:rw
+      - /usr/local/bin/youtube-captions:/usr/local/bin/youtube-captions:ro
     restart: unless-stopped
 
   sandbox_dind:

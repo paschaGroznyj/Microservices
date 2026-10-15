@@ -21,6 +21,7 @@ ENV:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import uuid
@@ -34,7 +35,7 @@ from pydantic import BaseModel
 from app.api.max_client import MaxClient, MaxApiError
 from app.menu import (
     settings_summary, menu_root, menu_model, menu_tools, menu_trigger,
-    MAX_MODELS, MAX_TRIGGERS, MAX_TOOL_CATEGORIES,
+    MAX_MODELS, MAX_TRIGGERS, MAX_TOOL_CATEGORIES, MAX_ADMIN_TOOL_CATEGORIES,
 )
 
 logging.basicConfig(level=logging.INFO,
@@ -52,6 +53,43 @@ ALLOWED_TTL      = int(os.getenv("MAX_ALLOWED_TTL", "60"))
 
 # Типы апдейтов, которые слушаем на этапе ядра.
 UPDATE_TYPES = ["message_created", "bot_added", "bot_started", "message_callback"]
+
+
+def _parse_max_admin_ids() -> set:
+    """user_id админов в MAX из ADMINS_INFO (поле max_id). Аналог _parse_tg_admin_ids."""
+    raw = os.environ.get("ADMINS_INFO")
+    ids = set()
+    if not raw:
+        return ids
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return ids
+    if isinstance(data, dict):
+        data = [data]
+    if not isinstance(data, list):
+        return ids
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        mx = item.get("max_id")
+        if mx is None:
+            continue
+        try:
+            ids.add(int(mx))
+        except (ValueError, TypeError):
+            continue
+    return ids
+
+
+MAX_ADMIN_IDS = _parse_max_admin_ids()
+
+
+def _is_max_admin(uid) -> bool:
+    try:
+        return int(uid) in MAX_ADMIN_IDS
+    except (ValueError, TypeError):
+        return False
 
 client: MaxClient | None = None
 _redis: aioredis.Redis | None = None
@@ -164,6 +202,14 @@ async def dispatch_to_agent(chat_id: int, user_id: int, username: str, text: str
 # ══════════════════════════════════════════════════════════════
 # Обработка апдейтов MAX
 # ══════════════════════════════════════════════════════════════
+def _sender_name(sender: dict) -> str:
+    """У MAX нет username — собираем из first_name+last_name, fallback name."""
+    first = (sender.get("first_name") or "").strip()
+    last = (sender.get("last_name") or "").strip()
+    full = (first + " " + last).strip()
+    return full or (sender.get("name") or "").strip()
+
+
 def _extract_message(update: dict) -> dict | None:
     """Из message_created вытаскиваем chat_id/user_id/username/text.
 
@@ -180,27 +226,27 @@ def _extract_message(update: dict) -> dict | None:
     return {
         "chat_id": int(chat_id),
         "user_id": int(sender.get("user_id") or 0),
-        "username": sender.get("username") or sender.get("name") or "",
+        "username": _sender_name(sender),
         "text": text,
         "message_id": body.get("mid") or msg.get("message_id"),
     }
 
 
-async def _send_menu(chat_id: int, settings: dict) -> None:
+async def _send_menu(chat_id: int, settings: dict, is_admin: bool = False) -> None:
     await client.send_message(
         text=settings_summary(settings), chat_id=chat_id, fmt="markdown",
-        attachments=menu_root(),
+        attachments=menu_root(is_admin=is_admin),
     )
 
 
-async def cmd_start(chat_id: int) -> None:
+async def cmd_start(chat_id: int, user_id: int | None = None) -> None:
     """Открыть меню настроек. Гейт регистрации — как в telegram_service."""
     if not await is_allowed(chat_id):
         await client.send_message(text=_registration_gate_text(chat_id),
                                   chat_id=chat_id, fmt=None)
         return
     settings = await get_chat_settings(chat_id)
-    await _send_menu(chat_id, settings)
+    await _send_menu(chat_id, settings, is_admin=_is_max_admin(user_id))
 
 
 async def handle_callback(update: dict) -> None:
@@ -208,6 +254,9 @@ async def handle_callback(update: dict) -> None:
     cb = update.get("callback") or {}
     callback_id = cb.get("callback_id")
     data = cb.get("payload") or ""
+    cb_user = cb.get("user") or {}
+    user_id = cb_user.get("user_id")
+    is_admin = _is_max_admin(user_id)
     msg = update.get("message") or {}
     recipient = msg.get("recipient") or {}
     body = msg.get("body") or {}
@@ -252,7 +301,7 @@ async def handle_callback(update: dict) -> None:
 
     if data == "max:menu:root":
         await ack()
-        await rerender(menu_root())
+        await rerender(menu_root(is_admin=is_admin))
         return
     if data == "max:menu:model":
         await ack()
@@ -262,7 +311,7 @@ async def handle_callback(update: dict) -> None:
     if data == "max:menu:tools":
         await ack()
         s = await get_chat_settings(chat_id)
-        await rerender(menu_tools(s.get("selected_tools")), s)
+        await rerender(menu_tools(s.get("selected_tools"), is_admin=is_admin), s)
         return
     if data == "max:menu:trigger":
         await ack()
@@ -294,8 +343,12 @@ async def handle_callback(update: dict) -> None:
 
     if data.startswith("max:tool:"):
         cat = data.split(":", 2)[2]
-        if cat not in MAX_TOOL_CATEGORIES:
-            await ack("Неизвестная категория")
+        allowed_cats = set(MAX_TOOL_CATEGORIES)
+        if is_admin:
+            allowed_cats |= set(MAX_ADMIN_TOOL_CATEGORIES)
+        if cat not in allowed_cats:
+            await ack("Недоступно" if cat in MAX_ADMIN_TOOL_CATEGORIES
+                      else "Неизвестная категория")
             return
         s = await get_chat_settings(chat_id)
         sel = set(s.get("selected_tools") or [])
@@ -303,7 +356,7 @@ async def handle_callback(update: dict) -> None:
         ok = await save_chat_settings(chat_id, {"selected_tools": sorted(sel)})
         await ack("Сохранено" if ok else "Ошибка")
         s = await get_chat_settings(chat_id)
-        await rerender(menu_tools(s.get("selected_tools")), s)
+        await rerender(menu_tools(s.get("selected_tools"), is_admin=is_admin), s)
         return
 
     await ack()
@@ -317,22 +370,27 @@ async def handle_update(update: dict) -> None:
     if utype in ("bot_started", "bot_added"):
         chat = (update.get("chat_id") or
                 (update.get("message", {}).get("recipient", {}) or {}).get("chat_id"))
+        starter = (update.get("user") or {}).get("user_id") or update.get("user_id")
         if chat is not None and client is not None:
             if await is_allowed(int(chat)):
-                await cmd_start(int(chat))
+                await cmd_start(int(chat), starter)
             else:
                 await client.send_message(
                     text=("Доступ к боту ограничен. Регистрация чата — через "
                           f"{CATCHPM_URL}\nchat_id: {chat}"),
                     chat_id=int(chat), fmt=None)
         return
+    if utype in ("bot_admin_permissions_changed", "user_added", "user_removed",
+                 "chat_title_changed", "bot_removed", "message_edited",
+                 "message_removed", "dialog_removed"):
+        return  # явно игнорируем на этом этапе
     if utype != "message_created":
         return
     info = _extract_message(update)
     if not info:
         return
     if info["text"].strip().split()[0].lower() in ("/start", "start"):
-        await cmd_start(info["chat_id"])
+        await cmd_start(info["chat_id"], info.get("user_id"))
         return
     if not await is_allowed(info["chat_id"]):
         if client is not None:

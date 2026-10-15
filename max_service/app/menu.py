@@ -14,6 +14,8 @@ from __future__ import annotations
 MAX_MODELS = ["coder", "designer", "universal", "gemini"]
 MAX_TRIGGERS = ["mention", "orchestrator"]
 MAX_TOOL_CATEGORIES = ["pm_research", "internet", "content", "sessions", "skills"]
+# Платные/админские категории — видны только админу (аналог TG_ADMIN_TOOL_CATEGORIES).
+MAX_ADMIN_TOOL_CATEGORIES = ["media_gen", "admin"]
 
 
 def _btn(text: str, payload: str) -> dict:
@@ -41,13 +43,14 @@ def settings_summary(settings: dict) -> str:
     )
 
 
-def menu_root() -> list[dict]:
-    return keyboard([
+def menu_root(is_admin: bool = False) -> list[dict]:
+    rows = [
         [_btn("Модель", "max:menu:model")],
         [_btn("Инструменты", "max:menu:tools")],
         [_btn("Триггер", "max:menu:trigger")],
-        [_btn("Закрыть", "max:close")],
-    ])
+    ]
+    rows.append([_btn("Закрыть", "max:close")])
+    return keyboard(rows)
 
 
 def menu_model(current) -> list[dict]:
@@ -58,10 +61,16 @@ def menu_model(current) -> list[dict]:
     return keyboard(rows)
 
 
-def menu_tools(selected) -> list[dict]:
+def menu_tools(selected, is_admin: bool = False) -> list[dict]:
     sel = set(selected or [])
-    rows = [[_btn(f"{'☑ ' if c in sel else '☐ '}{c}", f"max:tool:{c}")]
-            for c in MAX_TOOL_CATEGORIES]
+    cats = list(MAX_TOOL_CATEGORIES)
+    if is_admin:
+        cats = cats + list(MAX_ADMIN_TOOL_CATEGORIES)
+    rows = []
+    for c in cats:
+        box = "☑ " if c in sel else "☐ "
+        label = f"{box}🔒 {c}" if c in MAX_ADMIN_TOOL_CATEGORIES else f"{box}{c}"
+        rows.append([_btn(label, f"max:tool:{c}")])
     rows.append([_btn("‹ Назад", "max:menu:root")])
     return keyboard(rows)
 

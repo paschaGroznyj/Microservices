@@ -8,7 +8,8 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 # проходит через MITM-прокси со своим Root CA — положи его в max_service/certs/*.crt,
 # он добавится в системный стор при сборке (путь также доступен через env MAX_CA_BUNDLE).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y ca-certificates \
+    && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 ENV UV_SYSTEM_PYTHON=1 \

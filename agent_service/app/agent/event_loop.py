@@ -1301,7 +1301,7 @@ class HarnessAgent:
         user_id: int,
         chat_id,
         database,
-        agent_model="coder",
+        agent_model: str,
         source=None,
         selected_tools=None,
         context_size=None,

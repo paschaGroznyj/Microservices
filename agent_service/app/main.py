@@ -120,7 +120,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     context_size = payload.get("context_size")
     message_id = payload.get("message_id")
     has_files = payload.get("has_files", False)
-    agent_model = payload.get("agent_model")
+    agent_model = payload.get("agent_model", "coder")
     gateway_target = payload.get("gateway_target", "main")
     # Физический telegram chat id — адрес доставки ответа. chat_id (выше) для
     # telegram теперь = session_id (ключ памяти), а push ответа идёт на tg_chat_id.

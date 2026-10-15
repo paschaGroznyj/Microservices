@@ -46,7 +46,7 @@ CHATS_SERVICE_URL = os.getenv("CHATS_SERVICE_URL", "http://127.0.0.1:8001")
 AGENT_SERVICE_URL = os.getenv("AGENT_SERVICE_URL", "http://127.0.0.1:9001")
 REDIS_URL        = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
 MAX_PUSH_PORT    = int(os.getenv("MAX_PUSH_PORT", "8011"))
-CATCHPM_URL      = os.getenv("CATCHPM_URL", "https://catchpm.cds.uva-advanced.ru")
+CATCHPM_URL      = os.getenv("CATCHPM_URL", "https://catchpm.uva-advanced.ru")
 POLL_TIMEOUT     = int(os.getenv("MAX_POLL_TIMEOUT", "30"))
 ALLOWED_TTL      = int(os.getenv("MAX_ALLOWED_TTL", "60"))
 
@@ -136,6 +136,7 @@ def _registration_gate_text(chat_id: int) -> str:
 # ══════════════════════════════════════════════════════════════
 async def dispatch_to_agent(chat_id: int, user_id: int, username: str, text: str):
     settings = await get_chat_settings(chat_id)
+    logging.info(f"[settings] {settings}")
     payload = {
         "user_id": user_id,
         "username": username or f"max_{user_id}",

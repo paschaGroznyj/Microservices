@@ -26,7 +26,8 @@ from .core.config import (
     ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH,
     METADATA_FILE, PORT_GATEWAY_PORT, PORT_GATEWAY_SIGMA_PORT, ADMINS_INFO,
     PORT_PARSERS_SERVICE, get_role, ADMINS_BY_USER_ID,
-    ADMINS_BY_TG_ID, get_role_tg, TG_BOT_PUSH_URL
+    ADMINS_BY_TG_ID, get_role_tg, TG_BOT_PUSH_URL,
+    ADMINS_BY_MAX_ID, get_role_max,
 )
 from .core.settings import TOOLS_SETTINGS, UNIVERSAL_TOOLS, ADMIN_ONLY_CATEGORIES
 from .prompts.summary_prompt import SUMMARIZE_CUT_PROMPT, TOOL_TRACE_SUMMARY_PROMPT
@@ -644,6 +645,7 @@ class HarnessAgent:
         images: list[dict] | None = None,
         agent_model: str | None = None,
         is_telegram: bool = False,
+        is_max: bool = False,
     ):
         """Возвращает список LangChain @tool-функций, привязанных к контексту агента."""
 
@@ -859,7 +861,12 @@ class HarnessAgent:
 
         # Admin-only categories
         try:
-            _admin_index = ADMINS_BY_TG_ID if is_telegram else ADMINS_BY_USER_ID
+            if is_telegram:
+                _admin_index = ADMINS_BY_TG_ID
+            elif is_max:
+                _admin_index = ADMINS_BY_MAX_ID
+            else:
+                _admin_index = ADMINS_BY_USER_ID
             _is_admin = int(user_id) in _admin_index
         except (TypeError, ValueError):
             _is_admin = False
@@ -1375,9 +1382,10 @@ class HarnessAgent:
             # чата (selected_tools пришли из telegram_chat_settings), минус
             # админские (режутся ещё в telegram_service/agent). Журнал в ТГ включаем.
             is_telegram = (source == "telegram")
+            is_max = (source == "max")
             allow_all_tools = False
             selected_tools = selected_tools or []
-            use_journal = is_telegram or ("sessions" in selected_tools)
+            use_journal = is_telegram or is_max or ("sessions" in selected_tools)
 
             logging.info(f"🙂 {user_input[:200]}")
             tools = self._build_tools(
@@ -1389,6 +1397,7 @@ class HarnessAgent:
                 images=images,
                 agent_model=agent_model,
                 is_telegram=is_telegram,
+                is_max=is_max,
             )
             loop_state = {
                 "iteration": 0,
@@ -1412,7 +1421,12 @@ class HarnessAgent:
             current_datetime = datetime.now().strftime("%d.%m.%Y %H:%M, %A")
 
             # РОЛЬ РЕШАЕТСЯ КОДОМ по verified user_id (не моделью, не по тексту/табельному/тегу).
-            role_block = get_role_tg(user_id) if is_telegram else get_role(user_id)
+            if is_telegram:
+                role_block = get_role_tg(user_id)
+            elif is_max:
+                role_block = get_role_max(user_id)
+            else:
+                role_block = get_role(user_id)
             system_content = SYSTEM_PROMPT.format(datetime=current_datetime, role_block=role_block)
             # Медиа-хранилище чата (Redis, пер-chat_id): картинки/файлы из недавних
             # сообщений — чтобы агент видел их даже когда в текущем сообщении вложений нет.

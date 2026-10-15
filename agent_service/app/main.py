@@ -171,6 +171,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
 
     # message = f"[CatchPM, ТабельНомер: 23423423, Пользователь: Иванов Иванон Иваныч, user_id=-1234]\n" + text
     is_telegram = (gateway_target == "telegram")
+    is_max = (gateway_target == "max")
     is_mobile = (gateway_target == "mobile") # Если это мобильный клиент
     if is_telegram:
         # Источник Telegram: своя шапка (без CatchPM/табельного).
@@ -205,6 +206,11 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                 )
         else:
             message = build_tg_prefix(username, chat_id, _chat_type) + text
+    elif is_max:
+        # Источник MAX: простая шапка (без CatchPM/табельного, по аналогии с TG).
+        from agent.max.max_integration import build_max_prefix
+        _chat_type_max = "group" if str(chat_id).startswith("-") else "private"
+        message = build_max_prefix(username, chat_id, _chat_type_max) + text
     elif loop_tick:
         # Самоцикл: служебный тик. Текст уже содержит установку (из consumer).
         # Даём спец-шапку вместо табельного (tb_name/username у сервиса пустые).
@@ -226,8 +232,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
         # чтобы герой был один на обоих мозгах. В agent-режиме здесь собираем
         # полную инструкцию с характером; lite соберёт свою в run_lite.
         message = build_agent_instruction(get_persona_prompt(mobile_persona)) + text
-    # Скиллы юзера — только для CatchPM (в Telegram user_id это tg-id, не наш users).
-    if not is_telegram:
+    # Скиллы юзера — только для CatchPM (в Telegram/MAX user_id — id мессенджера, не наш users).
+    if not is_telegram and not is_max:
         selected_skills = await db.get_selected_skills_for_user(int(user_id))
         if selected_skills:
             selected_chunks = []
@@ -314,7 +320,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                                             request_id=request_id, user_id=user_id,
                                             chat_id=chat_id, database=db, selected_tools=selected_tools,
                                             context_size=context_size,
-                                            source=("telegram" if is_telegram else "CatchPM"),
+                                            source=("telegram" if is_telegram else ("max" if is_max else "CatchPM")),
                                             agent_model=agent_model,
                                             images=images,
                                             gateway_target=gateway_target,

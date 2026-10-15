@@ -743,6 +743,11 @@ So you can then spy on it/reuse it within the session.
         The workspace is automatically deleted after 10 hours of inactivity, so
         It is not necessary to delete an area within the dialog.
 
+        To preserve the workspace permanently, you need to create a file at the workspace root—specifically
+        at `/tmp/exec/workspaces/<wid>/.ws_hold`—alongside your folders (not inside `output/` or `repo/`, but at the root itself).
+
+        Save the workspace only if the user plans to continue working with it.
+
         Returns: workspace_id, created_at, path
         """
         result = await _call_sandbox_endpoint("POST", "/workspace/create")

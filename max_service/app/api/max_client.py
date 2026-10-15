@@ -20,9 +20,30 @@ Auth: заголовок Authorization: <token> — сырой токен бот
 from __future__ import annotations
 
 import logging
+import os
+import ssl
 from typing import Any
 
 import httpx
+
+
+def _build_ssl_context() -> ssl.SSLContext | str | bool:
+    """
+    В корпоративной сети TLS к platform-api2.max.ru перехватывается MITM-прокси,
+    который подписывает свой внутренний Root CA. Он отсутствует в certifi/системе,
+    отсюда CERTIFICATE_VERIFY_FAILED. Разрешаем подсунуть корпоративный CA через env:
+      MAX_CA_BUNDLE   — путь к .pem/.crt (один файл или бандл)
+      MAX_TLS_INSECURE=1 — крайний случай: отключить верификацию (НЕ для прода)
+    По умолчанию — обычная верификация (certifi).
+    """
+    if os.getenv("MAX_TLS_INSECURE", "").lower() in ("1", "true", "yes"):
+        log_init = logging.getLogger("max_client")
+        log_init.warning("MAX_TLS_INSECURE=1 — верификация TLS ОТКЛЮЧЕНА (небезопасно)")
+        return False
+    ca = os.getenv("MAX_CA_BUNDLE") or os.getenv("SSL_CERT_FILE") or os.getenv("REQUESTS_CA_BUNDLE")
+    if ca and os.path.exists(ca):
+        return ca
+    return True
 
 log = logging.getLogger("max_client")
 
@@ -43,6 +64,7 @@ class MaxClient:
         self._token = token
         self._base = base_url.rstrip("/")
         self._timeout = timeout
+        self._verify = _build_ssl_context()
         self._client: httpx.AsyncClient | None = None
 
     async def _http(self) -> httpx.AsyncClient:
@@ -51,6 +73,7 @@ class MaxClient:
                 base_url=self._base,
                 headers={"Authorization": self._token},
                 timeout=self._timeout,
+                verify=self._verify,
             )
         return self._client
 
@@ -149,7 +172,7 @@ class MaxClient:
         url = info.get("url")
         if not url:
             raise MaxApiError(500, {"message": "no upload url", "data": info})
-        async with httpx.AsyncClient(timeout=120.0) as up:
+        async with httpx.AsyncClient(timeout=120.0, verify=self._verify) as up:
             files = {"data": (filename, content, content_type or "application/octet-stream")}
             r = await up.post(url, files=files)
             if r.status_code not in (200, 201):

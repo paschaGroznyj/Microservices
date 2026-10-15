@@ -165,6 +165,8 @@ services:
       network_mode: "host"  # host-режим: MAX API (platform-api2.max.ru) + порты хоста
       environment:
         MAX_TOKEN_API:       ${MAX_TOKEN_API}
+        MAX_CA_BUNDLE:       ${MAX_CA_BUNDLE:-}       # путь к корп. CA внутри контейнера (если TLS за MITM-прокси)
+        MAX_TLS_INSECURE:    ${MAX_TLS_INSECURE:-}    # 1 — отключить верификацию TLS (крайний случай, НЕ для прода)
         CHATS_SERVICE_URL:   http://127.0.0.1:8001   # send_message (Kafka) + /max/*
         AGENT_SERVICE_URL:   http://127.0.0.1:9001
         REDIS_URL:           redis://127.0.0.1:6379/0

@@ -117,7 +117,7 @@ class MaxClient:
                           attachments: list[dict] | None = None,
                           fmt: str | None = "markdown") -> dict:
         body: dict[str, Any] = {"text": text}
-        if attachments:
+        if attachments is not None:
             body["attachments"] = attachments
         if fmt:
             body["format"] = fmt

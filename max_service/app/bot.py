@@ -32,6 +32,10 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from app.api.max_client import MaxClient, MaxApiError
+from app.menu import (
+    settings_summary, menu_root, menu_model, menu_tools, menu_trigger,
+    MAX_MODELS, MAX_TRIGGERS, MAX_TOOL_CATEGORIES,
+)
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -108,6 +112,25 @@ async def get_chat_settings(chat_id: int) -> dict:
     return {}
 
 
+async def save_chat_settings(chat_id: int, patch: dict) -> bool:
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.post(f"{CHATS_SERVICE_URL}/max/settings/{chat_id}", json=patch)
+            r.raise_for_status()
+        return True
+    except Exception as e:
+        log.error(f"save_chat_settings fail chat={chat_id}: {e}")
+        return False
+
+
+def _registration_gate_text(chat_id: int) -> str:
+    return (
+        "У вас нет доступа к агенту в этом чате.\n\n"
+        f"Регистрация чатов — через интерфейс CatchPM: {CATCHPM_URL}\n\n"
+        f"Передайте администратору chat_id этого чата: {chat_id}"
+    )
+
+
 # ══════════════════════════════════════════════════════════════
 # Проброс в агента
 # ══════════════════════════════════════════════════════════════
@@ -158,16 +181,145 @@ def _extract_message(update: dict) -> dict | None:
         "user_id": int(sender.get("user_id") or 0),
         "username": sender.get("username") or sender.get("name") or "",
         "text": text,
+        "message_id": body.get("mid") or msg.get("message_id"),
     }
+
+
+async def _send_menu(chat_id: int, settings: dict) -> None:
+    await client.send_message(
+        text=settings_summary(settings), chat_id=chat_id, fmt="markdown",
+        attachments=menu_root(),
+    )
+
+
+async def cmd_start(chat_id: int) -> None:
+    """Открыть меню настроек. Гейт регистрации — как в telegram_service."""
+    if not await is_allowed(chat_id):
+        await client.send_message(text=_registration_gate_text(chat_id),
+                                  chat_id=chat_id, fmt=None)
+        return
+    settings = await get_chat_settings(chat_id)
+    await _send_menu(chat_id, settings)
+
+
+async def handle_callback(update: dict) -> None:
+    """Нажатие inline-кнопки меню (message_callback). per-chat, доступно всем."""
+    cb = update.get("callback") or {}
+    callback_id = cb.get("callback_id")
+    data = cb.get("payload") or ""
+    msg = update.get("message") or {}
+    recipient = msg.get("recipient") or {}
+    body = msg.get("body") or {}
+    chat_id = recipient.get("chat_id")
+    message_id = body.get("mid")
+    if chat_id is None or client is None:
+        return
+    chat_id = int(chat_id)
+
+    async def ack(text: str | None = None):
+        if callback_id:
+            try:
+                await client.answer_callback(callback_id, notification=text)
+            except Exception as e:
+                log.warning(f"answer_callback fail: {e}")
+
+    async def rerender(attachments: list[dict], settings: dict | None = None):
+        s = settings if settings is not None else await get_chat_settings(chat_id)
+        if message_id:
+            try:
+                await client.edit_message(message_id, settings_summary(s),
+                                          attachments=attachments, fmt="markdown")
+                return
+            except Exception as e:
+                log.warning(f"edit_message fail: {e}")
+        await client.send_message(text=settings_summary(s), chat_id=chat_id,
+                                  fmt="markdown", attachments=attachments)
+
+    if not await is_allowed(chat_id):
+        await ack("Чат не зарегистрирован.")
+        return
+
+    if data == "max:close":
+        await ack()
+        if message_id:
+            try:
+                await client.edit_message(message_id, settings_summary(
+                    await get_chat_settings(chat_id)), attachments=[], fmt="markdown")
+            except Exception:
+                pass
+        return
+
+    if data == "max:menu:root":
+        await ack()
+        await rerender(menu_root())
+        return
+    if data == "max:menu:model":
+        await ack()
+        s = await get_chat_settings(chat_id)
+        await rerender(menu_model(s.get("agent_model")), s)
+        return
+    if data == "max:menu:tools":
+        await ack()
+        s = await get_chat_settings(chat_id)
+        await rerender(menu_tools(s.get("selected_tools")), s)
+        return
+    if data == "max:menu:trigger":
+        await ack()
+        s = await get_chat_settings(chat_id)
+        await rerender(menu_trigger(s.get("trigger_mode")), s)
+        return
+
+    if data.startswith("max:set:model:"):
+        model = data.split(":", 3)[3]
+        if model not in MAX_MODELS:
+            await ack("Неизвестная модель")
+            return
+        ok = await save_chat_settings(chat_id, {"agent_model": model})
+        await ack("Сохранено" if ok else "Ошибка")
+        s = await get_chat_settings(chat_id)
+        await rerender(menu_model(s.get("agent_model")), s)
+        return
+
+    if data.startswith("max:set:trigger:"):
+        trig = data.split(":", 3)[3]
+        if trig not in MAX_TRIGGERS:
+            await ack("Неизвестный триггер")
+            return
+        ok = await save_chat_settings(chat_id, {"trigger_mode": trig})
+        await ack("Сохранено" if ok else "Ошибка")
+        s = await get_chat_settings(chat_id)
+        await rerender(menu_trigger(s.get("trigger_mode")), s)
+        return
+
+    if data.startswith("max:tool:"):
+        cat = data.split(":", 2)[2]
+        if cat not in MAX_TOOL_CATEGORIES:
+            await ack("Неизвестная категория")
+            return
+        s = await get_chat_settings(chat_id)
+        sel = set(s.get("selected_tools") or [])
+        sel.discard(cat) if cat in sel else sel.add(cat)
+        ok = await save_chat_settings(chat_id, {"selected_tools": sorted(sel)})
+        await ack("Сохранено" if ok else "Ошибка")
+        s = await get_chat_settings(chat_id)
+        await rerender(menu_tools(s.get("selected_tools")), s)
+        return
+
+    await ack()
 
 
 async def handle_update(update: dict) -> None:
     utype = update.get("update_type") or update.get("type")
+    if utype == "message_callback":
+        await handle_callback(update)
+        return
     if utype in ("bot_started", "bot_added"):
         chat = (update.get("chat_id") or
                 (update.get("message", {}).get("recipient", {}) or {}).get("chat_id"))
         if chat is not None and client is not None:
-            if not await is_allowed(int(chat)):
+            if await is_allowed(int(chat)):
+                await cmd_start(int(chat))
+            else:
                 await client.send_message(
                     text=("Доступ к боту ограничен. Регистрация чата — через "
                           f"{CATCHPM_URL}\nchat_id: {chat}"),
@@ -177,6 +329,9 @@ async def handle_update(update: dict) -> None:
         return
     info = _extract_message(update)
     if not info:
+        return
+    if info["text"].strip().split()[0].lower() in ("/start", "start"):
+        await cmd_start(info["chat_id"])
         return
     if not await is_allowed(info["chat_id"]):
         if client is not None:
@@ -293,6 +448,12 @@ async def _startup():
         log.info(f"MAX bot: {me.get('name')} (user_id={me.get('user_id')})")
     except Exception as e:
         log.error(f"get_me не удался (продолжаю): {e}")
+    try:
+        await client.set_commands([
+            {"name": "start", "description": "Настройки агента для этого чата"},
+        ])
+    except Exception as e:
+        log.warning(f"set_commands не удался (продолжаю): {e}")
     _poll_task = asyncio.create_task(poll_loop())
 
 

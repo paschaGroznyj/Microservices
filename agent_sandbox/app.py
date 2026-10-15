@@ -18,6 +18,8 @@ agent_sandbox/app.py  —  v3: Async Submit + Kafka + Persistent Workspace
   GET  /workspace/{wid}/files — список файлов
   GET  /workspace/{wid}/file/{path} — скачать файл
   DELETE /workspace/{wid} — удалить workspace
+  POST /workspace/{wid}/keep — закрепить workspace бессрочно (keep-маркер, иммунитет к TTL)
+  DELETE /workspace/{wid}/keep — снять keep-маркер
   POST /workspace/cleanup — принудительная очистка просроченных
   GET  /health            — healthcheck
 """
@@ -64,6 +66,11 @@ MAX_FILES_RETURNED = 50
 WORKSPACE_TTL_SECONDS = 36000  # 10 часов
 WORKSPACE_MAX_COUNT = 500
 WORKSPACE_CLEANUP_INTERVAL = 3600
+
+# Секретный маркер-закрепление: если в корне workspace лежит файл с этим именем,
+# workspace НЕ удаляется НИКОГДА, пока файл физически лежит (полный иммунитет к TTL).
+# Имя намеренно неочевидное и переопределяемо через env.
+WORKSPACE_KEEP_MARKER = os.environ.get("WORKSPACE_KEEP_MARKER", ".ws_hold")
 
 KAFKA_BROKER = os.getenv("KAFKA_BROKER")
 KAFKA_TASK_EVENTS_TOPIC = "task-events"
@@ -535,6 +542,11 @@ def _has_git(ws_path: str) -> bool:
             return True
     return False
 
+def _has_keep_hold(ws_path: str) -> bool:
+    """Секретный маркер-файл держит workspace живым бессрочно, пока файл физически лежит.
+    Наличие маркера = полный иммунитет к TTL-удалению (без проверки возраста)."""
+    return os.path.exists(os.path.join(ws_path, WORKSPACE_KEEP_MARKER))
+
 def _cleanup_expired_workspaces():
     """Удаляет workspace с истёкшим TTL."""
     if not os.path.isdir(WORKSPACES_DIR):
@@ -550,6 +562,10 @@ def _cleanup_expired_workspaces():
 
         if _has_git(ws_path):
             log.debug("[workspace] Пропущен %s (содержит .git)", entry)
+            continue
+
+        if _has_keep_hold(ws_path):
+            log.debug("[workspace] Пропущен %s (keep-маркер %s)", entry, WORKSPACE_KEEP_MARKER)
             continue
 
         last_active_file = os.path.join(ws_path, ".last_active")
@@ -1124,6 +1140,35 @@ async def delete_workspace_endpoint(workspace_id: str):
         del _tasks[tid]
 
     return {"status": "deleted", "workspace_id": workspace_id}
+
+
+@app.post("/workspace/{workspace_id}/keep")
+async def keep_workspace_endpoint(workspace_id: str):
+    """Ставит секретный keep-маркер: workspace не будет удалён, пока маркер лежит."""
+    ws_path = _get_workspace_path(workspace_id)
+    if ws_path is None:
+        raise HTTPException(status_code=404, detail="Workspace не найден")
+    marker = os.path.join(ws_path, WORKSPACE_KEEP_MARKER)
+    with open(marker, "w") as f:
+        f.write(str(time.time()))
+    return {
+        "status": "kept",
+        "workspace_id": workspace_id,
+        "permanent": True,
+        "marker": WORKSPACE_KEEP_MARKER,
+    }
+
+@app.delete("/workspace/{workspace_id}/keep")
+async def unkeep_workspace_endpoint(workspace_id: str):
+    """Снимает keep-маркер: workspace возвращается под обычный TTL."""
+    ws_path = _get_workspace_path(workspace_id)
+    if ws_path is None:
+        raise HTTPException(status_code=404, detail="Workspace не найден")
+    marker = os.path.join(ws_path, WORKSPACE_KEEP_MARKER)
+    existed = os.path.exists(marker)
+    if existed:
+        os.remove(marker)
+    return {"status": "released" if existed else "no_marker", "workspace_id": workspace_id}
 
 
 @app.post("/workspace/cleanup")

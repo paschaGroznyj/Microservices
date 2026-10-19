@@ -57,6 +57,31 @@ ALLOWED_TTL      = int(os.getenv("MAX_ALLOWED_TTL", "60"))
 # Типы апдейтов, которые слушаем на этапе ядра.
 UPDATE_TYPES = ["message_created", "bot_added", "bot_started", "message_callback"]
 
+# mid последней плашки "Думаю..." по chat_id — чтобы ответ агента отредактировал её.
+_thinking_messages: dict[int, str] = {}
+
+
+def _extract_mid(resp: dict) -> str | None:
+    """mid из ответа POST /messages: {"message":{"body":{"mid":...}}}."""
+    try:
+        return (resp or {}).get("message", {}).get("body", {}).get("mid")
+    except Exception:
+        return None
+
+
+async def _send_thinking(chat_id: int) -> None:
+    """Плашка «Думаю...» сразу после входящего сообщения. mid запоминаем,
+    первый текстовый чанк ответа агента снимет её через edit_message."""
+    if client is None:
+        return
+    try:
+        resp = await client.send_message(text="Думаю...", chat_id=chat_id, fmt=None)
+        mid = _extract_mid(resp)
+        if mid:
+            _thinking_messages[chat_id] = mid
+    except Exception as e:
+        log.warning(f"thinking send fail chat={chat_id}: {e}")
+
 
 def _parse_max_admin_ids() -> set:
     """user_id админов в MAX из ADMINS_INFO (поле max_id). Аналог _parse_tg_admin_ids."""
@@ -420,6 +445,10 @@ async def handle_update(update: dict) -> None:
                       f"chat_id: {info['chat_id']}"),
                 chat_id=info["chat_id"], fmt=None)
         return
+    # Плашка "Думаю..." сразу на входящее — ответ агента отредактирует её.
+    # Для альбома (дебаунс) шлём одну плашку на первое вложение серии.
+    if info["chat_id"] not in _thinking_messages:
+        await _send_thinking(info["chat_id"])
     # С вложениями — скачиваем и прогоняем через альбом-буфер (дебаунс),
     # чтобы склеить N отдельных апдейтов по одному файлу в один вызов агента.
     if info.get("has_attachments"):
@@ -436,6 +465,14 @@ async def handle_update(update: dict) -> None:
                                             info["username"], info["text"])
                 except Exception as e:
                     log.error(f"dispatch fail chat={info['chat_id']}: {e}")
+            else:
+                # ни файлов, ни текста — снимаем висящую плашку "Думаю..."
+                _tm = _thinking_messages.pop(info["chat_id"], None)
+                if _tm and client is not None:
+                    try:
+                        await client.delete_message(_tm)
+                    except Exception:
+                        pass
             return
 
         async def _flush(chat_id, text, user_id, username, _mid, flushed_items):
@@ -616,14 +653,36 @@ async def push_message(req: PushMessageRequest):
             except Exception as e:
                 log.warning(f"[max-file] push file fail: {e}")
 
+    cid = int(req.chat_id)
+    thinking_mid = _thinking_messages.pop(cid, None)
+
     if not req.text:
+        # Ответ без текста (напр. только файлы): снимаем висящую плашку.
+        if thinking_mid:
+            try:
+                if req.files:
+                    await client.delete_message(thinking_mid)
+                else:
+                    await client.edit_message(thinking_mid, "✅", fmt=None)
+            except Exception as e:
+                log.warning(f"thinking cleanup fail chat={cid}: {e}")
         return PushMessageResponse(ok=True)
     fmt = (req.parse_mode or "markdown").lower()
     if fmt not in ("markdown", "html"):
         fmt = None
     try:
+        first = True
         for chunk in split_message(req.text):
-            await client.send_message(text=chunk, chat_id=int(req.chat_id), fmt=fmt)
+            if first and thinking_mid:
+                # Первый чанк заменяет плашку "Думаю..." через edit.
+                try:
+                    await client.edit_message(thinking_mid, chunk, fmt=fmt)
+                except Exception as e:
+                    log.warning(f"edit thinking fail chat={cid}: {e}; фоллбэк send")
+                    await client.send_message(text=chunk, chat_id=cid, fmt=fmt)
+            else:
+                await client.send_message(text=chunk, chat_id=cid, fmt=fmt)
+            first = False
         return PushMessageResponse(ok=True)
     except MaxApiError as e:
         log.error(f"push_message API error {e.status}: {e.data}")

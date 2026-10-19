@@ -409,7 +409,8 @@ async def handle_update(update: dict) -> None:
     info = _extract_message(update)
     if not info:
         return
-    if info["text"].strip().split()[0].lower() in ("/start", "start"):
+    _words = (info.get("text") or "").strip().split()
+    if _words and _words[0].lower() in ("/start", "start"):
         await cmd_start(info["chat_id"], info.get("user_id"))
         return
     if not await is_allowed(info["chat_id"]):

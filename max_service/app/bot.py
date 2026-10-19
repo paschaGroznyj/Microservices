@@ -33,6 +33,9 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from app.api.max_client import MaxClient, MaxApiError
+from app.media import (
+    collect_message_items, upload_items_to_agent, AlbumBuffer,
+)
 from app.menu import (
     settings_summary, menu_root, menu_model, menu_tools, menu_trigger,
     MAX_MODELS, MAX_TRIGGERS, MAX_TOOL_CATEGORIES, MAX_ADMIN_TOOL_CATEGORIES,
@@ -92,6 +95,7 @@ def _is_max_admin(uid) -> bool:
         return False
 
 client: MaxClient | None = None
+_album = AlbumBuffer()
 _redis: aioredis.Redis | None = None
 _poll_task: asyncio.Task | None = None
 
@@ -172,31 +176,45 @@ def _registration_gate_text(chat_id: int) -> str:
 # ══════════════════════════════════════════════════════════════
 # Проброс в агента
 # ══════════════════════════════════════════════════════════════
-async def dispatch_to_agent(chat_id: int, user_id: int, username: str, text: str):
+async def dispatch_to_agent(chat_id: int, user_id: int, username: str, text: str,
+                            items: list | None = None):
+    """ChatMessage(gateway_target="max") в chats_service. Если есть вложения
+    (items=[{file_b64,file_name,kind}]) — ПОСЛЕ постановки в очередь грузим
+    файлы в agent_service /web/upload_files под тем же message_id (агент ждёт
+    их через wait_for_files). Аналог telegram_service."""
     settings = await get_chat_settings(chat_id)
     logging.info(f"[settings] {settings}")
+    items = (items or [])[:10]
+    has_files = bool(items)
+    message_id = str(uuid.uuid4())
     payload = {
         "user_id": user_id,
         "username": username or f"max_{user_id}",
         "chat_id": str(chat_id),
         "max_chat_id": str(chat_id),
-        "message": text,
+        "message": text or "",
         "type_agent": "pm",
         "gateway_target": "max",
         "input_format": "text",
         "request_id": str(uuid.uuid4()),
-        "message_id": str(uuid.uuid4()),
+        "message_id": message_id,
         "selected_tools": settings.get("selected_tools") or [],
         "agent_model": settings.get("agent_model"),
         "context_size": "medium",
-        "has_files": False,
+        "has_files": has_files,
         "is_from_bot": False,
         "tb_name": None,
     }
     async with httpx.AsyncClient(timeout=15) as c:
         resp = await c.post(f"{CHATS_SERVICE_URL}/send_message", json=payload)
         resp.raise_for_status()
-    log.info(f"dispatched to agent chat={chat_id} req={payload['request_id']}")
+    log.info(f"dispatched to agent chat={chat_id} req={payload['request_id']} "
+             f"files={len(items)}")
+    # Файлы шлём после постановки: agent уже ждёт их по message_id.
+    # Ключ media_store — chat_id, с которым зовём агента (payload.chat_id).
+    if has_files:
+        await upload_items_to_agent(AGENT_SERVICE_URL, message_id, chat_id,
+                                    user_id, items)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -220,8 +238,9 @@ def _extract_message(update: dict) -> dict | None:
     sender = msg.get("sender") or {}
     body = msg.get("body") or {}
     chat_id = recipient.get("chat_id")
-    text = body.get("text")
-    if chat_id is None or not text:
+    text = body.get("text") or ""
+    has_att = bool(body.get("attachments"))
+    if chat_id is None or (not text and not has_att):
         return None
     return {
         "chat_id": int(chat_id),
@@ -229,6 +248,7 @@ def _extract_message(update: dict) -> dict | None:
         "username": _sender_name(sender),
         "text": text,
         "message_id": body.get("mid") or msg.get("message_id"),
+        "has_attachments": has_att,
     }
 
 
@@ -398,6 +418,33 @@ async def handle_update(update: dict) -> None:
                 text=(f"Доступ к боту ограничен. Регистрация — через {CATCHPM_URL}\n"
                       f"chat_id: {info['chat_id']}"),
                 chat_id=info["chat_id"], fmt=None)
+        return
+    # С вложениями — скачиваем и прогоняем через альбом-буфер (дебаунс),
+    # чтобы склеить N отдельных апдейтов по одному файлу в один вызов агента.
+    if info.get("has_attachments"):
+        try:
+            items = await collect_message_items(update)
+        except Exception as e:
+            log.error(f"[media] collect fail chat={info['chat_id']}: {e}")
+            items = []
+        if not items:
+            # вложения не скачались — шлём хотя бы текст, если он есть
+            if info["text"].strip():
+                try:
+                    await dispatch_to_agent(info["chat_id"], info["user_id"],
+                                            info["username"], info["text"])
+                except Exception as e:
+                    log.error(f"dispatch fail chat={info['chat_id']}: {e}")
+            return
+
+        async def _flush(chat_id, text, user_id, username, _mid, flushed_items):
+            try:
+                await dispatch_to_agent(chat_id, user_id, username, text,
+                                        items=flushed_items)
+            except Exception as e:
+                log.error(f"dispatch(files) fail chat={chat_id}: {e}")
+
+        await _album.add(info["chat_id"], info, items, _flush)
         return
     try:
         await dispatch_to_agent(info["chat_id"], info["user_id"],

@@ -580,8 +580,15 @@ services:
     mem_limit: 4g
     cpus: "2.0"
 
-
-  
+  augent_redirect:
+    build: ./augent_redirect
+    container_name: augent_redirect
+    networks:
+      - catchPM
+    ports:
+      - "18040:80"   # redirect-заглушка со старого домена CatchPM на augent.cds.uva-advanced.ru (проброс в nginx вручную)
+    restart: unless-stopped
+    mem_limit: 128m
 
 volumes:
   kafka-data:

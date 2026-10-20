@@ -376,6 +376,54 @@ def _sanitize_messages(messages):
         out.append(m)
     return out
 
+def _merge_tool_chunks(chunk, calls: dict, idx_map: dict, state: dict) -> None:
+    """Копит tool_call_chunks по id (а не по index). Имя пишется один раз."""
+    for tcc in getattr(chunk, "tool_call_chunks", None) or []:
+        cid, idx = tcc.get("id"), tcc.get("index")
+        if cid:                                   # пришёл id: новый или уже известный вызов
+            if cid not in calls:
+                calls[cid] = {"id": cid, "name": "", "args": ""}
+            key = cid
+            if idx is not None:
+                idx_map[idx] = key                # последний id на этом index выигрывает
+            state["cur"] = key
+        else:                                     # продолжение: ищем по index, иначе текущий
+            key = idx_map.get(idx, state.get("cur"))
+            if key is None:                       # id вообще не было — заводим синтетический
+                key = f"call_{len(calls)}"
+                calls[key] = {"id": key, "name": "", "args": ""}
+                state["cur"] = key
+                if idx is not None:
+                    idx_map[idx] = key
+        e = calls[key]
+        if tcc.get("name") and not e["name"]:     # имя — ОДИН раз, не конкатенируем
+            e["name"] = tcc["name"]
+        e["args"] += tcc.get("args") or ""
+
+
+def _build_final(aggregate, calls: dict) -> AIMessage:
+    tool_calls, invalid = [], []
+    for e in calls.values():
+        raw = e["args"].strip() or "{}"
+        try:
+            args = json.loads(raw)
+            tool_calls.append({"name": e["name"], "args": args, "id": e["id"], "type": "tool_call"})
+        except json.JSONDecodeError:
+            logging.warning(f"[stream] битый JSON args у {e['name']}: {raw[:200]!r}")
+            invalid.append({"name": e["name"], "args": raw, "id": e["id"],
+                            "error": "invalid json", "type": "invalid_tool_call"})
+    ak = dict(aggregate.additional_kwargs or {})
+    ak.pop("tool_calls", None)                    # сырой дубль провайдера не нужен
+    return AIMessage(
+        content=aggregate.content,
+        additional_kwargs=ak,
+        response_metadata=aggregate.response_metadata,
+        tool_calls=tool_calls,
+        invalid_tool_calls=invalid,
+        usage_metadata=aggregate.usage_metadata,
+        id=aggregate.id,
+    )
+
 
 async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, error_info: dict | None = None):
     """Стриминговая версия _invoke_with_retry.
@@ -424,8 +472,8 @@ async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, err
                 elif raw and on_chunk is not None:
                     await on_chunk(raw, kind="answer")
             if aggregate is not None:
+                # return _build_final(aggregate, calls)
                 return aggregate
-            # пустой стрим — уходим в фолбэк ainvoke
             return await llm.ainvoke(messages)
         except Exception as e:
             last_error = e
@@ -1874,7 +1922,7 @@ class HarnessAgent:
         """Вызвать один инструмент по его имени и аргументам."""
         name = tool_call["name"]
         args = tool_call.get("args", {})
-
+        logging.info(f"[tool call] {name}")
         # Анти-спам для check_task_status: разрешаем максимум 3 вызова подряд.
         # На 4-й и далее не дёргаем sandbox, а возвращаем инъекцию в контекст модели,
         # чтобы она завершала шаг ответом в чат и ждала асинхронного уведомления.

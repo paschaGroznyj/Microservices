@@ -237,7 +237,7 @@
         src: srcLight,
         "data-icon-light": srcLight,
         "data-icon-dark": srcDark || srcLight,
-        alt: "CatchPM герой",
+        alt: "AuGent герой",
       }, []);
       box.appendChild(img);
       // Боковые коты (peek) — таскаются по вертикали (до крестика).
@@ -321,7 +321,7 @@
         src: asset.light,
         "data-icon-light": asset.light,
         "data-icon-dark": asset.dark || asset.light,
-        alt: "CatchPM герои",
+        alt: "AuGent герои",
       }, []));
     } else {
       box.appendChild(h("div", { class: "wn-hero-ph wn-hero-ph--center" }, [
@@ -354,12 +354,12 @@
           src: "/static/img/icon_black.png",
           "data-icon-light": "/static/img/icon_black.png",
           "data-icon-dark": "/static/img/icon_white.png",
-          alt: "CatchPM icon",
+          alt: "AuGent icon",
         }, []),
         h("h3", { class: "wn-title",
           html: 'Привет, <span class="username">' + esc(username) + "</span> 👋" }, []),
         h("p", { class: "wn-text center" }, [
-          "Это CatchPM — рабочее пространство с ИИ-агентом. Ставьте задачи в " +
+          "Это AuGent — рабочее пространство с ИИ-агентом. Ставьте задачи в " +
           "диалоговом окне: агент ищет, анализирует, пишет код и собирает результат.",
         ]),
         h("ul", { class: "wn-list" }, [
@@ -407,7 +407,7 @@
           "различия только в оболочке и способе входа.",
         ]),
         h("span", { class: "wn-note",
-          html: "<b>Базовый CatchPM</b> — <code>catchpm.uva-advanced.ru</code><br>" +
+          html: "<b>Базовый AuGent</b> — <code>catchpm.uva-advanced.ru</code><br>" +
                 "Подтягивает настоящее имя из платформы УВА (authentik), можно " +
                 "прикладывать файлы и изображения, поле ввода без жёсткого лимита." }, []),
         h("span", { class: "wn-note",
@@ -516,12 +516,12 @@
           src: "/static/img/icon_black.png",
           "data-icon-light": "/static/img/icon_black.png",
           "data-icon-dark": "/static/img/icon_white.png",
-          alt: "CatchPM icon",
+          alt: "AuGent icon",
         }, []),
         h("h3", { class: "wn-title" }, ["Погнали!"]),
         h("p", { class: "wn-text center" }, [
           "Всё готово. Открывайте новый чат, ставьте задачу — и поехали. " +
-          "Добро пожаловать в CatchPM 🚀",
+          "Добро пожаловать в AuGent 🚀",
         ]),
         heroCenter("duo"),
       ]),

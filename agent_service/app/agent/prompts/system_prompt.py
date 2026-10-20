@@ -79,7 +79,7 @@ SYSTEM_PROMPT = (
       - Links: <URL>
       Do NOT add this header for standard conversational answers without created artifacts.
    """
-   + TASK_COMPLETION_GUIDANCE + PARALLEL_TOOL_CALL_GUIDANCE +
+   + TASK_COMPLETION_GUIDANCE +
    """
    FORMATTING (MARKDOWN):
    - Format all answers in Markdown. The frontend renders it as markdown.

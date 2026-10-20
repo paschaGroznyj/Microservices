@@ -264,7 +264,7 @@ class ChatApp {
             else if (tab === 'agent') titleEl.textContent = 'Agent Process Mining';
             else if (tab === 'graph') titleEl.textContent = 'Граф';
             else if (tab === 'group') titleEl.textContent = 'Общий чат';
-            else titleEl.textContent = 'CatchPM';
+            else titleEl.textContent = 'AuGent';
         }
 
         // Таб-специфичная логика

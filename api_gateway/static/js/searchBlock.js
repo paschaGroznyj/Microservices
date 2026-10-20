@@ -433,7 +433,7 @@ function switchTab(tab) {
       "graph":  "Граф знаний",
       "skills": "Магазин скиллов",
     };
-    titleEl.textContent = titles[tab] || "CatchPM";
+    titleEl.textContent = titles[tab] || "AuGent";
   }
 }
 

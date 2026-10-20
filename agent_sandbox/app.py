@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import resource
+import shlex
 import shutil
 import subprocess
 import time
@@ -128,7 +129,7 @@ class OutputFile(BaseModel):
 
 class ExecuteRequest(BaseModel):
     code: str | None = Field(None, description="Python код для исполнения")
-    commands: list[str] | None = Field(None, description="Список команд для выполнения (например, ['docker', 'ps'])")
+    commands: str | list[str] | None = Field(None, description="Команды для выполнения. Строкой (например, 'git commit -m \"fix\"') — разбирается через shlex, уважая кавычки. Список аргументов тоже поддерживается для обратной совместимости.")
     is_shell: bool = Field(False, description="Флаг, указывающий, что нужно выполнить системные команды вместо Python-кода")
     timeout: int = Field(default=DEFAULT_TIMEOUT, ge=1, le=MAX_TIMEOUT)
     stdin: str = ""
@@ -407,11 +408,21 @@ def _run_code_sync(code: str, timeout: int, run_dir: str, stdin: str = "", task_
         return {"ok": False, "error": f"Внутренняя ошибка сервиса: {type(e).__name__}: {e}"}
 
 
-def _run_commands_sync(commands: list[str], timeout: int, run_dir: str, stdin: str = "", task_id: str = None, ws_path: str = None) -> dict:
+def _run_commands_sync(commands: str | list[str], timeout: int, run_dir: str, stdin: str = "", task_id: str = None, ws_path: str = None) -> dict:
     """
     Синхронный запуск системных команд в subprocess без записи Python-скрипта.
-    Ожидает commands в виде списка: ["docker", "run", "--rm", "alpine", "echo", "hello"]
+    Принимает commands строкой ('git commit -m "fix"') — разбирает через shlex,
+    либо готовым списком ['git', 'commit', ...] для обратной совместимости.
+    Запуск всегда shell=False (без инъекций ; | && $()).
     """
+    if isinstance(commands, str):
+        try:
+            commands = shlex.split(commands)
+        except ValueError as e:
+            return {"ok": False, "error": f"Не удалось разобрать строку команды (проверь кавычки): {e}"}
+    if not commands:
+        return {"ok": False, "error": "Пустой список команд после разбора."}
+
     base_run_dir = Path(ws_path) if ws_path else Path(run_dir)
 
     # 1. Если передана конкретная асинхронная таска — изолируем в .tasks/<task_id>
@@ -610,7 +621,7 @@ async def _workspace_cleanup_loop():
 @app.post("/execute", response_model=ExecuteResponse)
 async def execute(req: ExecuteRequest):
     if req.is_shell and not req.commands:
-        raise HTTPException(status_code=400, detail="Для is_shell=True необходимо передать список 'commands'")
+        raise HTTPException(status_code=400, detail="Для is_shell=True необходимо передать 'commands' (строкой или списком)")
     if not req.is_shell and not req.code:
         raise HTTPException(status_code=400, detail="Для выполнения Python необходимо передать 'code'")
 

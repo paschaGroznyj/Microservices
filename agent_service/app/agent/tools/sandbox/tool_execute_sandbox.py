@@ -139,7 +139,7 @@ def _save_output_files(files: list[dict], run_id: str) -> tuple[list[dict], list
 
 async def _call_sandbox(
     code: str | None = None, 
-    commands: list[str] | None = None, 
+    commands: str | list[str] | None = None, 
     is_shell: bool = False, 
     timeout: int = 30, 
     stdin: str = "", 
@@ -513,13 +513,17 @@ So you can then spy on it/reuse it within the session.
         return await _process_sandbox_result(result, start, run_id, code_for_saving=code, reusable=reusable)
 
     @tool
-    async def execute_shell_commands(commands: list[str], timeout: int = DEFAULT_TIMEOUT, workspace_id: str = None) -> dict:
+    async def execute_shell_commands(commands: str, timeout: int = DEFAULT_TIMEOUT, workspace_id: str = None) -> dict:
         """
-        Executes system commands in an isolated sandbox without using a shell (shell).
-        Suitable for running third‑party binaries (e.g., docker, curl, git).
+        Executes a system command in an isolated sandbox without a real shell.
+        Suitable for running third‑party binaries (git, docker, curl, npx, etc.).
 
-        PLEASE NOTE: commands must be passed strictly as a list of arguments!
-        For example: ["docker", "run", "--rm", "alpine", "echo", "hello"]
+        PASS THE COMMAND AS ONE STRING — not a list:
+            "git commit -m \"fix: обновил конфиг\""
+            "docker run --rm alpine echo hello"
+        The string is split with shlex (quotes are respected, so args with spaces
+        work via quotes). Execution is shell=False: pipes/redirects/chaining
+        (| && ; > $()) are NOT interpreted — run such steps as separate calls.
 
         Available features:
         - git clone / git pull / git push (internet access, tokens via env)
@@ -527,16 +531,15 @@ So you can then spy on it/reuse it within the session.
         - curl, wget — network requests
         - apt-get install — package installation within the session
 
-        If you plan to work with files within the session, you need to create a workspace
-        via create_workspace (files inside the area will be stored for 10 hours)
-
-        If you initialize the repository.git inside /tmp/exec/workspaces/<work_name>, it will not be deleted by timer
+        If you plan to work with files within the session, create a workspace
+        via create_workspace (files inside the area live for 10 hours).
+        If you init a git repo inside /tmp/exec/workspaces/<id>, it won't be swept by the timer.
 
         Docker specifics:
         - The daemon is accessible via unix:///var/run/docker.sock
-        - To build an image: ["docker", "build", "-t", "my-image", "/path/to/context"]
-        - For compose: ["docker", "compose", "-f", "/path/compose.yml", "up", "-d"]
-        - Running Kafka inside DinD: 172.28.0.10:9092
+        - Build image: "docker build -t my-image /path/to/context"
+        - Compose: "docker compose -f /path/compose.yml up -d"
+        - Kafka inside DinD: 172.28.0.10:9092
         """
         run_id = uuid.uuid4().hex
         _ensure_save_dir()

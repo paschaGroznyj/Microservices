@@ -633,7 +633,14 @@ class DataBaseChats:
                         COALESCE(m.is_deleted, FALSE) AS is_deleted,
                         COALESCE(m.is_favorite, FALSE) AS is_favorite,
                         m.renamed_title AS renamed_title,
-                        m.auto_title AS auto_title
+                        (
+                            SELECT am.auto_title
+                            FROM chat_sidebar_meta am
+                            WHERE am.chat_id = c.chat_id
+                              AND am.auto_title IS NOT NULL
+                            ORDER BY am.updated_at DESC
+                            LIMIT 1
+                        ) AS auto_title
                     FROM chats c
                     JOIN user_chats uc ON c.chat_id = uc.chat_id AND c.user_id = uc.user_id
                     LEFT JOIN chat_sidebar_meta m ON m.chat_id = uc.chat_id AND m.user_id = uc.user_id
@@ -674,7 +681,14 @@ class DataBaseChats:
                             c.message_text AS last_message,
                             c.created_at   AS timestamp,
                             m.renamed_title AS renamed_title,
-                            m.auto_title    AS auto_title
+                            (
+                                SELECT am.auto_title
+                                FROM chat_sidebar_meta am
+                                WHERE am.chat_id = c.chat_id
+                                  AND am.auto_title IS NOT NULL
+                                ORDER BY am.updated_at DESC
+                                LIMIT 1
+                            ) AS auto_title
                         FROM chats c
                         LEFT JOIN chat_sidebar_meta m
                             ON m.chat_id = c.chat_id

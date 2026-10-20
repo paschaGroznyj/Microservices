@@ -24,6 +24,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import uuid
 
 import httpx
@@ -38,6 +39,7 @@ from app.media import (
 )
 from app.menu import (
     settings_summary, menu_root, menu_model, menu_tools, menu_trigger,
+    menu_sessions,
     MAX_MODELS, MAX_TRIGGERS, MAX_TOOL_CATEGORIES, MAX_ADMIN_TOOL_CATEGORIES,
 )
 
@@ -201,6 +203,129 @@ def _registration_gate_text(chat_id: int) -> str:
 # ══════════════════════════════════════════════════════════════
 # Проброс в агента
 # ══════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════
+# Сессии + имя агента (per-chat, Redis-реестр по аналогии с telegram_service)
+# ════════════════════════════════════════════════════════════
+# Физический max chat_id — адрес доставки; session_id (chat_id в chats_service)
+# — ключ памяти/истории агента. Один чат → N сессий.
+def _k_session(max_chat_id: int) -> str: return f"max:session:{max_chat_id}"
+def _k_sessions_reg(max_chat_id: int) -> str: return f"max:sessions:{max_chat_id}"
+def _k_setname(max_chat_id: int, uid) -> str: return f"max:setname:{max_chat_id}:{uid}"
+
+
+async def get_current_session(max_chat_id: int):
+    try:
+        r = await get_redis()
+        return await r.get(_k_session(max_chat_id))
+    except Exception as e:
+        log.warning(f"get_current_session fail chat={max_chat_id}: {e}")
+        return None
+
+
+async def set_current_session(max_chat_id: int, session_id) -> None:
+    try:
+        r = await get_redis()
+        await r.set(_k_session(max_chat_id), str(session_id))
+    except Exception as e:
+        log.warning(f"set_current_session fail chat={max_chat_id}: {e}")
+
+
+async def create_session(user_id) -> str | None:
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            resp = await c.post(f"{CHATS_SERVICE_URL}/chat/new", json={"user_id": user_id})
+            resp.raise_for_status()
+            return str(resp.json().get("chat_id"))
+    except Exception as e:
+        log.error(f"create_session fail user={user_id}: {e}")
+        return None
+
+
+async def register_session(max_chat_id: int, session_id, title: str = "") -> None:
+    try:
+        r = await get_redis()
+        payload = json.dumps({"title": title or "", "ts": int(time.time())})
+        await r.hset(_k_sessions_reg(max_chat_id), str(session_id), payload)
+    except Exception as e:
+        log.warning(f"register_session fail chat={max_chat_id}: {e}")
+
+
+async def touch_session_title(max_chat_id: int, session_id, last_text: str) -> None:
+    try:
+        r = await get_redis()
+        key = _k_sessions_reg(max_chat_id)
+        raw = await r.hget(key, str(session_id))
+        meta = json.loads(raw) if raw else {}
+        if not meta.get("title"):
+            t = " ".join((last_text or "").split())
+            meta["title"] = t[:60] if t else ""
+        meta["ts"] = int(time.time())
+        await r.hset(key, str(session_id), json.dumps(meta))
+    except Exception as e:
+        log.warning(f"touch_session_title fail chat={max_chat_id}: {e}")
+
+
+async def ensure_session(max_chat_id: int, user_id) -> str:
+    sid = await get_current_session(max_chat_id)
+    if sid:
+        return sid
+    sid = await create_session(user_id)
+    if not sid:
+        return str(max_chat_id)
+    await set_current_session(max_chat_id, sid)
+    await register_session(max_chat_id, sid)
+    log.info(f"session created chat={max_chat_id} user={user_id} -> {sid}")
+    return sid
+
+
+async def list_sessions(max_chat_id: int) -> list:
+    try:
+        r = await get_redis()
+        raw = await r.hgetall(_k_sessions_reg(max_chat_id))
+        out = []
+        for sid, meta_raw in (raw or {}).items():
+            try:
+                meta = json.loads(meta_raw)
+            except Exception:
+                meta = {}
+            out.append({"id": sid, "title": meta.get("title") or "",
+                        "ts": int(meta.get("ts") or 0)})
+        out.sort(key=lambda x: x["ts"], reverse=True)
+        return out
+    except Exception as e:
+        log.error(f"list_sessions fail chat={max_chat_id}: {e}")
+        return []
+
+
+async def _consume_setname(max_chat_id: int, user_id, text: str) -> bool:
+    """Если для чата/юзера висит флаг ожидания имени — сохраняем имя
+    и гасим флаг. Возвращает True, если сообщение было поглощено."""
+    try:
+        r = await get_redis()
+        key = _k_setname(max_chat_id, user_id)
+        if not await r.get(key):
+            return False
+        await r.delete(key)
+    except Exception as e:
+        log.warning(f"consume_setname fail chat={max_chat_id}: {e}")
+        return False
+    raw = (text or "").strip()
+    new_name = "" if raw == "-" else raw[:40]
+    ok = await save_chat_settings(max_chat_id, {"agent_name": new_name})
+    if client is not None:
+        if not ok:
+            msg = "Не удалось сохранить имя, попробуйте позже."
+        elif new_name:
+            msg = f"Имя агента: {new_name}"
+        else:
+            msg = "Имя сброшено к дефолту."
+        try:
+            await client.send_message(text=msg, chat_id=max_chat_id, fmt=None)
+        except Exception:
+            pass
+    return True
+
+
 async def dispatch_to_agent(chat_id: int, user_id: int, username: str, text: str,
                             items: list | None = None):
     """ChatMessage(gateway_target="max") в chats_service. Если есть вложения
@@ -212,10 +337,13 @@ async def dispatch_to_agent(chat_id: int, user_id: int, username: str, text: str
     items = (items or [])[:10]
     has_files = bool(items)
     message_id = str(uuid.uuid4())
+    # chat_id здесь — ФИЗИЧЕСКИЙ max chat_id. Ключ памяти агента — активная сессия.
+    session_id = await ensure_session(chat_id, user_id)
+    await touch_session_title(chat_id, session_id, text)
     payload = {
         "user_id": user_id,
         "username": username or f"max_{user_id}",
-        "chat_id": str(chat_id),
+        "chat_id": str(session_id),
         "max_chat_id": str(chat_id),
         "message": text or "",
         "type_agent": "pm",
@@ -238,7 +366,7 @@ async def dispatch_to_agent(chat_id: int, user_id: int, username: str, text: str
     # Файлы шлём после постановки: agent уже ждёт их по message_id.
     # Ключ media_store — chat_id, с которым зовём агента (payload.chat_id).
     if has_files:
-        await upload_items_to_agent(AGENT_SERVICE_URL, message_id, chat_id,
+        await upload_items_to_agent(AGENT_SERVICE_URL, message_id, session_id,
                                     user_id, items)
 
 
@@ -404,6 +532,55 @@ async def handle_callback(update: dict) -> None:
         await rerender(menu_tools(s.get("selected_tools"), is_admin=is_admin), s)
         return
 
+    # ── Имя агента: ставим флаг ожидания, следующее сообщение юзера = имя
+    if data == "max:menu:name":
+        await ack()
+        try:
+            r = await get_redis()
+            await r.set(_k_setname(chat_id, user_id), "1", ex=300)
+        except Exception as e:
+            log.warning(f"setname flag fail: {e}")
+        if client is not None:
+            await client.send_message(
+                text=("Отправьте новое имя агента одним сообщением.\n"
+                      "Для сброса к имени по умолчанию отправьте `-`."),
+                chat_id=chat_id, fmt="markdown")
+        return
+
+    # ── Сессии
+    if data.startswith("max:sess:list:"):
+        await ack()
+        try:
+            page = int(data.split(":", 3)[3])
+        except (ValueError, IndexError):
+            page = 0
+        active = await get_current_session(chat_id)
+        items = await list_sessions(chat_id)
+        await rerender(menu_sessions(items, page, active))
+        return
+
+    if data == "max:sess:new":
+        await ack("Новая сессия")
+        sid = await create_session(user_id)
+        if sid:
+            await set_current_session(chat_id, sid)
+            await register_session(chat_id, sid)
+            log.info(f"session switch(new) chat={chat_id} -> {sid}")
+        active = await get_current_session(chat_id)
+        items = await list_sessions(chat_id)
+        await rerender(menu_sessions(items, 0, active))
+        return
+
+    if data.startswith("max:sess:open:"):
+        sid = data.split(":", 3)[3]
+        await set_current_session(chat_id, sid)
+        log.info(f"session switch(open) chat={chat_id} -> {sid}")
+        await ack("Переключено")
+        active = await get_current_session(chat_id)
+        items = await list_sessions(chat_id)
+        await rerender(menu_sessions(items, 0, active))
+        return
+
     await ack()
 
 
@@ -437,6 +614,9 @@ async def handle_update(update: dict) -> None:
     _words = (info.get("text") or "").strip().split()
     if _words and _words[0].lower() in ("/start", "start"):
         await cmd_start(info["chat_id"], info.get("user_id"))
+        return
+    # Ввод имени агента: если висит флаг ожидания — следующее сообщение = имя.
+    if await _consume_setname(info["chat_id"], info.get("user_id"), info.get("text") or ""):
         return
     if not await is_allowed(info["chat_id"]):
         if client is not None:

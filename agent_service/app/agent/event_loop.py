@@ -1510,6 +1510,24 @@ class HarnessAgent:
                 except Exception as _e:
                     logging.warning(f"[tg] system suffix fail: {_e}")
 
+            # MAX: per-chat имя агента + кастомный промпт. Настройки привязаны
+            # к ФИЗИЧЕСКОМУ max_chat_id (= tg_chat_id), а не к chat_id/session_id.
+            if is_max:
+                try:
+                    from agent.max.max_integration import get_max_chat_settings
+                    _max_settings = await get_max_chat_settings(self.db, tg_chat_id or chat_id)
+                    _max_name = _max_settings.get("agent_name")
+                    if _max_name and _max_name.strip():
+                        system_content += (
+                            "\n\nВ этом чате тебя зовут «" + _max_name.strip() + "». "
+                            "Участники обращаются к тебе по этому имени — воспринимай его как своё и при необходимости так и представляйся."
+                        )
+                    _max_sp = _max_settings.get("system_prompt")
+                    if _max_sp and _max_sp.strip():
+                        system_content += "\n\n" + _max_sp
+                except Exception as _e:
+                    logging.warning(f"[max] system suffix fail: {_e}")
+
             journal_text = None
             if use_journal:
                 print(f"USER ID: {user_id}")

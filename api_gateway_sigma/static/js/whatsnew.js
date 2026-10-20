@@ -361,9 +361,9 @@
       node: h("div", {}, [
         h("img", {
           class: "wn-app-icon js-theme-icon",
-          src: IS_SIGMA ? "/static/img/icon_sigma_black.png" : "/static/img/icon_black.png",
-          "data-icon-light": IS_SIGMA ? "/static/img/icon_sigma_black.png" : "/static/img/icon_black.png",
-          "data-icon-dark": IS_SIGMA ? "/static/img/icon_sigma_white.png" : "/static/img/icon_white.png",
+          src: IS_SIGMA ? "/static/img/sage_sigma_black.png" : "/static/img/sage_black.png",
+          "data-icon-light": IS_SIGMA ? "/static/img/sage_sigma_black.png" : "/static/img/sage_black.png",
+          "data-icon-dark": IS_SIGMA ? "/static/img/sage_sigma_white.png" : "/static/img/sage_white.png",
           alt: IS_SIGMA ? "AuGent Sigma icon" : "AuGent icon",
         }, []),
         h("h3", { class: "wn-title",
@@ -522,9 +522,9 @@
       node: h("div", {}, [
         h("img", {
           class: "wn-app-icon js-theme-icon",
-          src: IS_SIGMA ? "/static/img/icon_sigma_black.png" : "/static/img/icon_black.png",
-          "data-icon-light": IS_SIGMA ? "/static/img/icon_sigma_black.png" : "/static/img/icon_black.png",
-          "data-icon-dark": IS_SIGMA ? "/static/img/icon_sigma_white.png" : "/static/img/icon_white.png",
+          src: IS_SIGMA ? "/static/img/sage_sigma_black.png" : "/static/img/sage_black.png",
+          "data-icon-light": IS_SIGMA ? "/static/img/sage_sigma_black.png" : "/static/img/sage_black.png",
+          "data-icon-dark": IS_SIGMA ? "/static/img/sage_sigma_white.png" : "/static/img/sage_white.png",
           alt: IS_SIGMA ? "AuGent Sigma icon" : "AuGent icon",
         }, []),
         h("h3", { class: "wn-title" }, ["Погнали!"]),

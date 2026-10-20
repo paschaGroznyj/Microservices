@@ -351,9 +351,9 @@
       node: h("div", {}, [
         h("img", {
           class: "wn-app-icon js-theme-icon",
-          src: "/static/img/icon_black.png",
-          "data-icon-light": "/static/img/icon_black.png",
-          "data-icon-dark": "/static/img/icon_white.png",
+          src: "/static/img/sage_black.png",
+          "data-icon-light": "/static/img/sage_black.png",
+          "data-icon-dark": "/static/img/sage_white.png",
           alt: "AuGent icon",
         }, []),
         h("h3", { class: "wn-title",
@@ -513,9 +513,9 @@
       node: h("div", {}, [
         h("img", {
           class: "wn-app-icon js-theme-icon",
-          src: "/static/img/icon_black.png",
-          "data-icon-light": "/static/img/icon_black.png",
-          "data-icon-dark": "/static/img/icon_white.png",
+          src: "/static/img/sage_black.png",
+          "data-icon-light": "/static/img/sage_black.png",
+          "data-icon-dark": "/static/img/sage_white.png",
           alt: "AuGent icon",
         }, []),
         h("h3", { class: "wn-title" }, ["Погнали!"]),

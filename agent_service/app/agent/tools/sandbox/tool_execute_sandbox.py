@@ -515,15 +515,20 @@ So you can then spy on it/reuse it within the session.
     @tool
     async def execute_shell_commands(commands: str, timeout: int = DEFAULT_TIMEOUT, workspace_id: str = None) -> dict:
         """
-        Executes a system command in an isolated sandbox without a real shell.
+        Executes a system command in an isolated sandbox via bash.
         Suitable for running third‑party binaries (git, docker, curl, npx, etc.).
 
-        PASS THE COMMAND AS ONE STRING — not a list:
-            "git commit -m \"fix: обновил конфиг\""
+        PASS THE COMMAND AS ONE STRING — not a list. The string runs through
+        `bash -lc`, so FULL shell syntax works: pipes |, chaining && || ;,
+        redirects > >>, command substitution $(), globs *.
+            "git add -A && git commit -m \"fix: обновил конфиг\""
+            "ls -la | grep .py | wc -l"
+            "cat file.txt | head -20"
+            "cd /tmp/exec/workspaces/<id>/repo && git status"
             "docker run --rm alpine echo hello"
-        The string is split with shlex (quotes are respected, so args with spaces
-        work via quotes). Execution is shell=False: pipes/redirects/chaining
-        (| && ; > $()) are NOT interpreted — run such steps as separate calls.
+        The sandbox is isolated, so shell execution is safe here.
+        (A list of args is still accepted for back-compat — it runs directly
+        without a shell, so pipes/chaining in list mode are NOT interpreted.)
 
         Available features:
         - git clone / git pull / git push (internet access, tokens via env)

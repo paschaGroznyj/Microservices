@@ -129,7 +129,7 @@ class OutputFile(BaseModel):
 
 class ExecuteRequest(BaseModel):
     code: str | None = Field(None, description="Python код для исполнения")
-    commands: str | list[str] | None = Field(None, description="Команды для выполнения. Строкой (например, 'git commit -m \"fix\"') — разбирается через shlex, уважая кавычки. Список аргументов тоже поддерживается для обратной совместимости.")
+    commands: str | list[str] | None = Field(None, description="Команды. Строкой ('ls | grep py && echo ok') — выполняется через bash -lc: работают пайпы |, && || ;, редиректы, $(), glob. Список аргументов — прямой запуск без shell (back-compat).")
     is_shell: bool = Field(False, description="Флаг, указывающий, что нужно выполнить системные команды вместо Python-кода")
     timeout: int = Field(default=DEFAULT_TIMEOUT, ge=1, le=MAX_TIMEOUT)
     stdin: str = ""
@@ -410,18 +410,21 @@ def _run_code_sync(code: str, timeout: int, run_dir: str, stdin: str = "", task_
 
 def _run_commands_sync(commands: str | list[str], timeout: int, run_dir: str, stdin: str = "", task_id: str = None, ws_path: str = None) -> dict:
     """
-    Синхронный запуск системных команд в subprocess без записи Python-скрипта.
-    Принимает commands строкой ('git commit -m "fix"') — разбирает через shlex,
-    либо готовым списком ['git', 'commit', ...] для обратной совместимости.
-    Запуск всегда shell=False (без инъекций ; | && $()).
+    Синхронный запуск системных команд в subprocess.
+    Строка ('ls | grep py && echo ok') выполняется через bash -lc (shell=True):
+    работают пайпы |, цепочки && || ;, редиректы > >>, подстановки $() и glob *.
+    Список ['git','commit',...] выполняется напрямую (shell=False, back-compat).
+    Песочница изолированная, поэтому shell-режим допустим.
     """
-    if isinstance(commands, str):
-        try:
-            commands = shlex.split(commands)
-        except ValueError as e:
-            return {"ok": False, "error": f"Не удалось разобрать строку команды (проверь кавычки): {e}"}
-    if not commands:
-        return {"ok": False, "error": "Пустой список команд после разбора."}
+    use_shell = isinstance(commands, str)
+    if use_shell:
+        if not commands.strip():
+            return {"ok": False, "error": "Пустая команда."}
+        exec_arg = ["/bin/bash", "-lc", commands]
+    else:
+        if not commands:
+            return {"ok": False, "error": "Пустой список команд."}
+        exec_arg = commands
 
     base_run_dir = Path(ws_path) if ws_path else Path(run_dir)
 
@@ -450,7 +453,7 @@ def _run_commands_sync(commands: str | list[str], timeout: int, run_dir: str, st
     start = time.monotonic()
     try:
         proc = subprocess.run(
-            commands,           # <--- ПЕРЕДАЕМ СПИСОК КОМАНД НАПРЯМУЮ
+            exec_arg,           # строка -> [bash,-lc,cmd] (shell); список -> напрямую
             input=stdin,
             capture_output=True,
             text=True,
@@ -504,7 +507,7 @@ def _run_commands_sync(commands: str | list[str], timeout: int, run_dir: str, st
         duration_ms = int((time.monotonic() - start) * 1000)
         return {
             "ok": False, 
-            "error": f"Команда или бинарный файл не найдены: {commands[0]}", 
+            "error": f"Команда или бинарный файл не найдены: {exec_arg if isinstance(exec_arg, str) else exec_arg[0]}", 
             "duration_ms": duration_ms
         }
 

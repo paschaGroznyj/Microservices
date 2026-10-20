@@ -450,6 +450,35 @@ MAX_ARG_LEN   = 1200   # макс. символов для обычного ар
 MAX_CODE_LEN  = 800    # макс. символов для аргумента-кода
 MAX_RESULT_LEN = 200  # макс. символов результата в лог
 
+# ── Стриминг аргументов тулов как псевдо-reasoning ───────────────────────
+# Модели coder (gpt) и gemini не отдают reasoning в стрим — UI подвисает в
+# тишине на время tool-вызова. Для них показываем сами аргументы тулзы
+# (обрезанные), чтобы интерфейс оставался отзывчивым. Переиспользуем штатный
+# live-стрим: фронт рисует это приглушённым reasoning-стилем.
+STREAM_TOOL_ARGS_ENABLED = os.getenv("STREAM_TOOL_ARGS", "1") not in ("0", "false", "False", "")
+STREAM_ARGS_MODELS = set(
+    m.strip() for m in os.getenv("STREAM_TOOL_ARGS_MODELS", "coder,gemini").split(",") if m.strip()
+)
+STREAM_ARGS_MAX_LEN = int(os.getenv("STREAM_TOOL_ARGS_MAX_LEN", "1000"))
+
+
+def _fmt_tool_calls_preview(tool_calls: list) -> str:
+    """Человекочитаемая сводка вызовов тулов для псевдо-reasoning стрима.
+    Формат: "• имя_тула(args…)" построчно. Общая длина режется до лимита."""
+    lines = []
+    for tc in tool_calls:
+        name = tc.get("name", "?")
+        args = tc.get("args", {}) or {}
+        try:
+            rendered = _fmt_args(name, args)
+        except Exception:
+            rendered = str(args)
+        lines.append(f"• {name}({rendered})")
+    text = "\n".join(lines)
+    if len(text) > STREAM_ARGS_MAX_LEN:
+        text = text[:STREAM_ARGS_MAX_LEN].rstrip() + "…"
+    return text
+
 
 def _fmt_args(name: str, args: dict) -> str:
     """Форматирует аргументы для лога — код сокращает."""
@@ -1688,6 +1717,26 @@ class HarnessAgent:
                     # Выполняем все запрошенные инструменты параллельно
                     tool_calls = response.tool_calls
                     tool_names = [tc['name'] for tc in tool_calls]
+
+                    # Псевдо-reasoning для "немых" моделей (coder/gemini): показываем
+                    # аргументы тулов в reasoning-блоке, чтобы UI не висел в тишине.
+                    if (STREAM_TOOL_ARGS_ENABLED
+                            and agent_model in STREAM_ARGS_MODELS
+                            and not stream_state["sent"]):
+                        try:
+                            _preview = _fmt_tool_calls_preview(tool_calls)
+                            if _preview:
+                                await self._send_chunk(
+                                    _preview, request_id,
+                                    msg_id=str(request_id), kind="live",
+                                )
+                                await self._send_chunk(
+                                    "", request_id,
+                                    msg_id=str(request_id), kind="reasoning_end",
+                                )
+                        except Exception as _e:
+                            logger.debug(f"[stream-args] не удалось отправить аргументы тулов: {_e}")
+
                     tool_results = await asyncio.gather(
                         *[
                             self._invoke_tool(tools_by_name, tc, request_id)

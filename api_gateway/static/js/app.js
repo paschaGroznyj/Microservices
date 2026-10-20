@@ -215,10 +215,10 @@ class ChatApp {
         const titleEl = document.getElementById("main-title");
         if (titleEl) {
             if (tab === 'skills') titleEl.textContent = 'Магазин скиллов';
-            else if (tab === 'agent') titleEl.textContent = 'Agent Process Mining';
+            else if (tab === 'agent') titleEl.textContent = 'Агент';
             else if (tab === 'graph') titleEl.textContent = 'Граф';
             else if (tab === 'group') titleEl.textContent = 'Общий чат';
-            else titleEl.textContent = 'CatchPM';
+            else titleEl.textContent = 'AuGent';
         }
 
         // Таб-специфичная логика
@@ -473,7 +473,7 @@ class ChatApp {
             this.switchTab('agent');
 
             const titleEl = document.getElementById("main-title");
-            titleEl.textContent = 'Agent Process Mining';
+            titleEl.textContent = 'Агент';
         }
 
         await Promise.all([

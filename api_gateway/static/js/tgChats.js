@@ -383,7 +383,7 @@
         '</div>' +
         '<div class="tgc-field">' +
           '<span class="tgc-field-label">Имя агента</span>' +
-          '<input class="tgc-input" id="tgc-agentname" type="text" placeholder="Напр. CatchPM (пусто = дефолтный ассистент)" value=' + "'" + _form.agent_name + "'" + '/>' +
+          '<input class="tgc-input" id="tgc-agentname" type="text" placeholder="Напр. AuGent (пусто = дефолтный ассистент)" value=' + "'" + _form.agent_name + "'" + '/>' +
         '</div>' +
         ddToggle('Модель', modelDisplay(), modelContent, 'tgc-dd-model') +
         ddToggle('Инструменты', toolsDisplay(), toolsContent, 'tgc-dd-tools') +

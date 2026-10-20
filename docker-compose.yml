@@ -177,12 +177,12 @@ services:
         MAX_POLL_TIMEOUT:    "30"
         MAX_ALLOWED_TTL:     "60"
         CATCHPM_URL:         https://catchpm.uva-advanced.ru
+        ADMINS_INFO:         ${ADMINS_INFO}
       
       volumes:
         - ./certs/russian_trusted_root.pem:/etc/ssl/certs/russian_trusted_root.pem:ro
         
       restart: unless-stopped
-
 
   # token_service:
   #   build: ./token_service

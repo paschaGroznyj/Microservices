@@ -201,6 +201,14 @@ MAX_TRACE_FROM_DB_CHARS = int(os.getenv("MAX_TRACE_FROM_DB_CHARS", "2500"))
 TRACE_SUMMARY_THRESHOLD = int(os.getenv("TRACE_SUMMARY_THRESHOLD", "6000"))
 MAX_TRACE_HARD_CHARS = int(os.getenv("MAX_TRACE_HARD_CHARS", "12000"))
 
+# Имитация reasoning для моделей, которые НЕ отдают свой reasoning в стрим
+# (coder/gpt, gemini). Вместо тишины на шаге с tool_calls льём в reasoning-блок
+# короткую фразу-описание тула из словаря tool_status_messages.
+IMITATE_TOOL_STATUS = os.getenv("IMITATE_TOOL_STATUS", "1").strip() not in ("0", "false", "False", "")
+IMITATE_TOOL_STATUS_MODELS = {
+    m.strip() for m in os.getenv("IMITATE_TOOL_STATUS_MODELS", "coder,gemini").split(",") if m.strip()
+}
+
 def _truncate_text(text: str, max_chars: int = MAX_STDOUT_CHARS) -> str:
     """Обрезает текст, если он превышает лимит, добавляя плашку с указанием перерасхода."""
     if not isinstance(text, str) or len(text) <= max_chars:
@@ -377,6 +385,54 @@ def _sanitize_messages(messages):
         out.append(m)
     return out
 
+def _merge_tool_chunks(chunk, calls: dict, idx_map: dict, state: dict) -> None:
+    """Копит tool_call_chunks по id (а не по index). Имя пишется один раз."""
+    for tcc in getattr(chunk, "tool_call_chunks", None) or []:
+        cid, idx = tcc.get("id"), tcc.get("index")
+        if cid:                                   # пришёл id: новый или уже известный вызов
+            if cid not in calls:
+                calls[cid] = {"id": cid, "name": "", "args": ""}
+            key = cid
+            if idx is not None:
+                idx_map[idx] = key                # последний id на этом index выигрывает
+            state["cur"] = key
+        else:                                     # продолжение: ищем по index, иначе текущий
+            key = idx_map.get(idx, state.get("cur"))
+            if key is None:                       # id вообще не было — заводим синтетический
+                key = f"call_{len(calls)}"
+                calls[key] = {"id": key, "name": "", "args": ""}
+                state["cur"] = key
+                if idx is not None:
+                    idx_map[idx] = key
+        e = calls[key]
+        if tcc.get("name") and not e["name"]:     # имя — ОДИН раз, не конкатенируем
+            e["name"] = tcc["name"]
+        e["args"] += tcc.get("args") or ""
+
+
+def _build_final(aggregate, calls: dict) -> AIMessage:
+    tool_calls, invalid = [], []
+    for e in calls.values():
+        raw = e["args"].strip() or "{}"
+        try:
+            args = json.loads(raw)
+            tool_calls.append({"name": e["name"], "args": args, "id": e["id"], "type": "tool_call"})
+        except json.JSONDecodeError:
+            logging.warning(f"[stream] битый JSON args у {e['name']}: {raw[:200]!r}")
+            invalid.append({"name": e["name"], "args": raw, "id": e["id"],
+                            "error": "invalid json", "type": "invalid_tool_call"})
+    ak = dict(aggregate.additional_kwargs or {})
+    ak.pop("tool_calls", None)                    # сырой дубль провайдера не нужен
+    return AIMessage(
+        content=aggregate.content,
+        additional_kwargs=ak,
+        response_metadata=aggregate.response_metadata,
+        tool_calls=tool_calls,
+        invalid_tool_calls=invalid,
+        usage_metadata=aggregate.usage_metadata,
+        id=aggregate.id,
+    )
+
 
 async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, error_info: dict | None = None):
     """Стриминговая версия _invoke_with_retry.
@@ -425,8 +481,8 @@ async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, err
                 elif raw and on_chunk is not None:
                     await on_chunk(raw, kind="answer")
             if aggregate is not None:
+                # return _build_final(aggregate, calls)
                 return aggregate
-            # пустой стрим — уходим в фолбэк ainvoke
             return await llm.ainvoke(messages)
         except Exception as e:
             last_error = e
@@ -1653,8 +1709,23 @@ class HarnessAgent:
                         # В стек reasoning не тащим (как и раньше) — гасим content
                         # response.content = ""
                     elif _has_tool_calls and not _had_text:
-                        # Шаг без текста (сразу tool_calls). Если что-то всё же
-                        # успело улететь как live (пустой мусор) — закрываем блок.
+                        # Шаг без текста (сразу tool_calls). Модель не отдала свой
+                        # reasoning — для "немых" моделей (coder/gemini) имитируем его:
+                        # льём в reasoning-блок короткую фразу-описание тула из словаря.
+                        _imitate = (
+                            IMITATE_TOOL_STATUS
+                            and not stream_state["sent"]
+                            and agent_model in IMITATE_TOOL_STATUS_MODELS
+                        )
+                        if _imitate:
+                            _names = [tc.get("name", "") for tc in (response.tool_calls or [])]
+                            _phrase = get_tools_status(_names)
+                            if _phrase:
+                                await self._send_chunk(
+                                    _phrase, request_id, msg_id=str(request_id), kind="live"
+                                )
+                                stream_state["sent"] = True
+                        # Закрываем живой блок (реальный reasoning или имитацию).
                         if stream_state["sent"]:
                             await self._send_chunk(
                                 "", request_id, msg_id=str(request_id), kind="reasoning_end"
@@ -1888,7 +1959,7 @@ class HarnessAgent:
         """Вызвать один инструмент по его имени и аргументам."""
         name = tool_call["name"]
         args = tool_call.get("args", {})
-
+        logging.info(f"[tool call] {name}")
         # Анти-спам для check_task_status: разрешаем максимум 3 вызова подряд.
         # На 4-й и далее не дёргаем sandbox, а возвращаем инъекцию в контекст модели,
         # чтобы она завершала шаг ответом в чат и ждала асинхронного уведомления.

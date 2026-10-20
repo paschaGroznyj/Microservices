@@ -428,12 +428,12 @@ function switchTab(tab) {
   const titleEl = document.getElementById("main-title");
   if (titleEl) {
     const titles = {
-      "agent": "Agent Process Mining",
+      "agent": "AuGent",
       "arxiv": "Поиск статей",
       "graph":  "Граф знаний",
       "skills": "Магазин скиллов",
     };
-    titleEl.textContent = titles[tab] || "CatchPM";
+    titleEl.textContent = titles[tab] || "AuGent";
   }
 }
 

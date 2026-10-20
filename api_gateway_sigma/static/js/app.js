@@ -261,7 +261,7 @@ class ChatApp {
         const titleEl = document.getElementById("main-title");
         if (titleEl) {
             if (tab === 'skills') titleEl.textContent = 'Магазин скиллов';
-            else if (tab === 'agent') titleEl.textContent = 'AuGent';
+            else if (tab === 'agent') titleEl.textContent = 'Агент';
             else if (tab === 'graph') titleEl.textContent = 'Граф';
             else if (tab === 'group') titleEl.textContent = 'Общий чат';
             else titleEl.textContent = 'AuGent';
@@ -509,7 +509,7 @@ class ChatApp {
             this.switchTab('agent');
 
             const titleEl = document.getElementById("main-title");
-            titleEl.textContent = 'AuGent';
+            titleEl.textContent = 'Агент';
         }
 
         await Promise.all([
@@ -2896,15 +2896,6 @@ class ChatApp {
                     aria-label="Поле ввода"
                 ></div>
                 <div class="start-input-footer">
-                    <!-- tools-trigger вставляется сюда через ToolsPanel.inject() -->
-                    <button class="attach-btn" id="start-attach-btn" title="Прикрепить файл" type="button">
-                        <svg viewBox="0 0 24 24" fill="none">
-                            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19
-                                     a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
-                                  stroke="currentColor" stroke-width="2"
-                                  stroke-linecap="round" stroke-linejoin="round"/>
-                        </svg>
-                    </button>
                     <button class="start-send-btn" id="send-btn" disabled aria-label="Отправить">
                         <svg viewBox="0 0 24 24" fill="none">
                             <path d="M5 12h14M13 6l6 6-6 6"

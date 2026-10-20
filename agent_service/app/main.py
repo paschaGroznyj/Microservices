@@ -110,7 +110,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
 
     user_id = payload.get("user_id")
     chat_id = payload.get("chat_id")
-    text = payload.get("message")
+    text = payload.get("message", "")
     is_from_bot = payload.get("is_from_bot", False)
     type_agent = payload.get("type_agent")
     request_id = payload.get("request_id")
@@ -157,17 +157,17 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     # новый вход от сервиса, не ответ бота. Остальные bot/‑сообщения и user_id=-1 — отсекаем.
     if (is_from_bot or user_id == -1) and not loop_tick:
         return
-    # Для проактивной инициации текст в payload может быть пустым — генерим сами.
-    if (not text) and (not tg_initiated):
-        pass
-    if (not text and not tg_initiated) or chat_id is None:
-        logging.warning(f"Некорректное сообщение: {payload}")
-        return
+    # # Для проактивной инициации текст в payload может быть пустым — генерим сами.
+    # if (not text) and (not tg_initiated):
+    #     pass
+    # if (not text and not tg_initiated) or chat_id is None:
+    #     logging.warning(f"Некорректное сообщение: {payload}")
+    #     return
     print("ВНУТРИ АГЕНТА", payload)
     # Маршрутизация: ouroboros → Ouroboros API, pm → HarnessAgent
 
-    if type_agent != "pm":
-        return
+    # if type_agent != "pm":
+    #     return
 
     # message = f"[CatchPM, ТабельНомер: 23423423, Пользователь: Иванов Иванон Иваныч, user_id=-1234]\n" + text
     is_telegram = (gateway_target == "telegram")

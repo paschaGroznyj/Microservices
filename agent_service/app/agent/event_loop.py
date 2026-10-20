@@ -200,6 +200,14 @@ MAX_TRACE_FROM_DB_CHARS = int(os.getenv("MAX_TRACE_FROM_DB_CHARS", "2500"))
 TRACE_SUMMARY_THRESHOLD = int(os.getenv("TRACE_SUMMARY_THRESHOLD", "6000"))
 MAX_TRACE_HARD_CHARS = int(os.getenv("MAX_TRACE_HARD_CHARS", "12000"))
 
+# Имитация reasoning для моделей, которые НЕ отдают свой reasoning в стрим
+# (coder/gpt, gemini). Вместо тишины на шаге с tool_calls льём в reasoning-блок
+# короткую фразу-описание тула из словаря tool_status_messages.
+IMITATE_TOOL_STATUS = os.getenv("IMITATE_TOOL_STATUS", "1").strip() not in ("0", "false", "False", "")
+IMITATE_TOOL_STATUS_MODELS = {
+    m.strip() for m in os.getenv("IMITATE_TOOL_STATUS_MODELS", "coder,gemini").split(",") if m.strip()
+}
+
 def _truncate_text(text: str, max_chars: int = MAX_STDOUT_CHARS) -> str:
     """Обрезает текст, если он превышает лимит, добавляя плашку с указанием перерасхода."""
     if not isinstance(text, str) or len(text) <= max_chars:
@@ -1687,8 +1695,23 @@ class HarnessAgent:
                         # В стек reasoning не тащим (как и раньше) — гасим content
                         # response.content = ""
                     elif _has_tool_calls and not _had_text:
-                        # Шаг без текста (сразу tool_calls). Если что-то всё же
-                        # успело улететь как live (пустой мусор) — закрываем блок.
+                        # Шаг без текста (сразу tool_calls). Модель не отдала свой
+                        # reasoning — для "немых" моделей (coder/gemini) имитируем его:
+                        # льём в reasoning-блок короткую фразу-описание тула из словаря.
+                        _imitate = (
+                            IMITATE_TOOL_STATUS
+                            and not stream_state["sent"]
+                            and agent_model in IMITATE_TOOL_STATUS_MODELS
+                        )
+                        if _imitate:
+                            _names = [tc.get("name", "") for tc in (response.tool_calls or [])]
+                            _phrase = get_tools_status(_names)
+                            if _phrase:
+                                await self._send_chunk(
+                                    _phrase, request_id, msg_id=str(request_id), kind="live"
+                                )
+                                stream_state["sent"] = True
+                        # Закрываем живой блок (реальный reasoning или имитацию).
                         if stream_state["sent"]:
                             await self._send_chunk(
                                 "", request_id, msg_id=str(request_id), kind="reasoning_end"

@@ -385,7 +385,7 @@
     // ── Слайд 2. Главная страница: разбор интерфейса ──
     // Два кота выглядывают снизу по центру (duo_peek, режим bottom).
     slides.push({
-      hero: { side: "center", mode: "bottom", asset: "duo_peek" },
+      hero: null,
       node: h("div", {}, [
         h("h3", { class: "wn-title" }, ["Главная страница"]),
         h("p", { class: "wn-text" }, [
@@ -409,7 +409,7 @@
     // Герой + картинка перегенерятся отдельно (один герой + два экрана ПК).
     // Пока картинки нет — wn-shot с onerror скрывается, слайд не ломается.
     slides.push({
-      hero: { side: "center", mode: "scene", asset: "sigma_scene" },
+      hero: null,
       node: h("div", {}, [
         h("h3", { class: "wn-title wn-title--sidebar-header" }, ["Два интерфейса: базовый и Sigma"]),
         h("p", { class: "wn-text" }, [
@@ -497,7 +497,7 @@
     // Сцена-дуэт снизу: кот в короне/плаще + кот за терминалом "admin mode"
     // (scene_admin.png), статичная, без анимации/drag.
     slides.push({
-      hero: { side: "center", mode: "scene", asset: "admin_scene" },
+      hero: null,
       node: h("div", {}, [
         h("h3", { class: "wn-title" }, ["Режим администратора"]),
         h("p", { class: "wn-text" }, [
@@ -532,7 +532,7 @@
           "Всё готово. Открывайте новый чат, ставьте задачу — и поехали. " +
           "Добро пожаловать в AuGent 🚀",
         ]),
-        heroCenter("duo"),
+        null,
       ]),
     });
 

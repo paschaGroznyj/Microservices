@@ -51,6 +51,7 @@ def menu_root(is_admin: bool = False) -> list[dict]:
         [_btn("Модель", "max:menu:model")],
         [_btn("Инструменты", "max:menu:tools")],
         [_btn("Триггер", "max:menu:trigger")],
+        [_btn("Будильники", "max:menu:alarms")],
         [_btn("\U0001f4ac Сессии", "max:sess:list:0")],
     ]
     rows.append([_btn("Закрыть", "max:close")])

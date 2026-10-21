@@ -142,6 +142,7 @@ class ChatMessage(BaseModel):
     # (выше) теперь = session_id (ключ памяти агента), а push ответа идёт на
     # tg_chat_id. None -> обратная совместимость (push на chat_id, как раньше).
     tg_chat_id: str | None = None
+    max_chat_id: str | None = None
     input_format: str = "text"  # text | voice
     # Голосовая персона мобильного героя (Пейто/Атлантик). Прилетает из приложения
     # (его определяет wake-word: какое имя распознано). По ней agent_service
@@ -333,6 +334,7 @@ async def send_message(chat: ChatMessage):
         "agent_model": chat.agent_model,
         "gateway_target": chat.gateway_target,
         "tg_chat_id": chat.tg_chat_id,
+        "max_chat_id": chat.max_chat_id,
         "input_format": chat.input_format,
         "initiated": chat.initiated,
         "slot": chat.slot,

@@ -54,7 +54,29 @@ def menu_root(is_admin: bool = False) -> list[dict]:
         [_btn("Будильники", "max:menu:alarms")],
         [_btn("\U0001f4ac Сессии", "max:sess:list:0")],
     ]
+    if is_admin:
+        rows.append([_btn("\U0001f512 Кто жал /start", "max:admin:startlog")])
     rows.append([_btn("Закрыть", "max:close")])
+    return keyboard(rows)
+
+
+# ── Будильники (ЗАГЛУШКА) ──
+# Пресеты по образцу telegram_service. Бека проактивных триггеров у MAX пока нет —
+# кнопки неактивны, ведут на max:alarm:stub (показывает «в разработке»).
+MAX_ALARM_PRESETS = [
+    ("morning", "Утро", "09:00"),
+    ("day", "День", "13:00"),
+    ("evening", "Вечер", "18:00"),
+]
+
+
+def menu_alarms() -> list[dict]:
+    """Заглушка меню будильников: пресеты + пометка «скоро»."""
+    rows = []
+    for preset_key, title, default_time in MAX_ALARM_PRESETS:
+        rows.append([_btn(f"\U0001f550 {title} · {default_time} · скоро",
+                          f"max:alarm:stub:{preset_key}")])
+    rows.append([_btn("‹ Назад", "max:menu:root")])
     return keyboard(rows)
 
 

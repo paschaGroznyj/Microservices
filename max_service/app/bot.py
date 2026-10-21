@@ -39,7 +39,7 @@ from app.media import (
 )
 from app.menu import (
     settings_summary, menu_root, menu_model, menu_tools, menu_trigger,
-    menu_sessions,
+    menu_alarms, menu_sessions,
     MAX_MODELS, MAX_TRIGGERS, MAX_TOOL_CATEGORIES, MAX_ADMIN_TOOL_CATEGORIES,
 )
 
@@ -490,6 +490,31 @@ async def handle_callback(update: dict) -> None:
         await ack()
         s = await get_chat_settings(chat_id)
         await rerender(menu_trigger(s.get("trigger_mode")), s)
+        return
+
+    # Будильники (ЗАГЛУШКА: пресеты без бека проактивных триггеров)
+    if data == "max:menu:alarms":
+        await ack()
+        await rerender(menu_alarms())
+        return
+    if data.startswith("max:alarm:stub"):
+        await ack("Будильники скоро — в разработке")
+        return
+
+    # Кто жал /start (АДМИН, ЗАГЛУШКА: у MAX пока нет start_log на беке)
+    if data == "max:admin:startlog":
+        if not is_admin:
+            await ack("Только для админа")
+            return
+        await ack()
+        if message_id:
+            try:
+                await client.edit_message(
+                    message_id,
+                    "**🔒 Кто жал /start**\n\nЖурнал входов скоро — в разработке.",
+                    attachments=menu_root(is_admin=is_admin), fmt="markdown")
+            except Exception as e:
+                log.warning(f"startlog stub edit fail: {e}")
         return
 
     if data.startswith("max:set:model:"):

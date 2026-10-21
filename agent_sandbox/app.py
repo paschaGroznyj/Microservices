@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import resource
+import shlex
 import shutil
 import subprocess
 import time
@@ -128,7 +129,7 @@ class OutputFile(BaseModel):
 
 class ExecuteRequest(BaseModel):
     code: str | None = Field(None, description="Python код для исполнения")
-    commands: list[str] | None = Field(None, description="Список команд для выполнения (например, ['docker', 'ps'])")
+    commands: str | list[str] | None = Field(None, description="Команды. Строкой ('ls | grep py && echo ok') — выполняется через bash -lc: работают пайпы |, && || ;, редиректы, $(), glob. Список аргументов — прямой запуск без shell (back-compat).")
     is_shell: bool = Field(False, description="Флаг, указывающий, что нужно выполнить системные команды вместо Python-кода")
     timeout: int = Field(default=DEFAULT_TIMEOUT, ge=1, le=MAX_TIMEOUT)
     stdin: str = ""
@@ -407,11 +408,24 @@ def _run_code_sync(code: str, timeout: int, run_dir: str, stdin: str = "", task_
         return {"ok": False, "error": f"Внутренняя ошибка сервиса: {type(e).__name__}: {e}"}
 
 
-def _run_commands_sync(commands: list[str], timeout: int, run_dir: str, stdin: str = "", task_id: str = None, ws_path: str = None) -> dict:
+def _run_commands_sync(commands: str | list[str], timeout: int, run_dir: str, stdin: str = "", task_id: str = None, ws_path: str = None) -> dict:
     """
-    Синхронный запуск системных команд в subprocess без записи Python-скрипта.
-    Ожидает commands в виде списка: ["docker", "run", "--rm", "alpine", "echo", "hello"]
+    Синхронный запуск системных команд в subprocess.
+    Строка ('ls | grep py && echo ok') выполняется через bash -lc (shell=True):
+    работают пайпы |, цепочки && || ;, редиректы > >>, подстановки $() и glob *.
+    Список ['git','commit',...] выполняется напрямую (shell=False, back-compat).
+    Песочница изолированная, поэтому shell-режим допустим.
     """
+    use_shell = isinstance(commands, str)
+    if use_shell:
+        if not commands.strip():
+            return {"ok": False, "error": "Пустая команда."}
+        exec_arg = ["/bin/bash", "-lc", commands]
+    else:
+        if not commands:
+            return {"ok": False, "error": "Пустой список команд."}
+        exec_arg = commands
+
     base_run_dir = Path(ws_path) if ws_path else Path(run_dir)
 
     # 1. Если передана конкретная асинхронная таска — изолируем в .tasks/<task_id>
@@ -439,7 +453,7 @@ def _run_commands_sync(commands: list[str], timeout: int, run_dir: str, stdin: s
     start = time.monotonic()
     try:
         proc = subprocess.run(
-            commands,           # <--- ПЕРЕДАЕМ СПИСОК КОМАНД НАПРЯМУЮ
+            exec_arg,           # строка -> [bash,-lc,cmd] (shell); список -> напрямую
             input=stdin,
             capture_output=True,
             text=True,
@@ -493,7 +507,7 @@ def _run_commands_sync(commands: list[str], timeout: int, run_dir: str, stdin: s
         duration_ms = int((time.monotonic() - start) * 1000)
         return {
             "ok": False, 
-            "error": f"Команда или бинарный файл не найдены: {commands[0]}", 
+            "error": f"Команда или бинарный файл не найдены: {exec_arg if isinstance(exec_arg, str) else exec_arg[0]}", 
             "duration_ms": duration_ms
         }
 
@@ -610,7 +624,7 @@ async def _workspace_cleanup_loop():
 @app.post("/execute", response_model=ExecuteResponse)
 async def execute(req: ExecuteRequest):
     if req.is_shell and not req.commands:
-        raise HTTPException(status_code=400, detail="Для is_shell=True необходимо передать список 'commands'")
+        raise HTTPException(status_code=400, detail="Для is_shell=True необходимо передать 'commands' (строкой или списком)")
     if not req.is_shell and not req.code:
         raise HTTPException(status_code=400, detail="Для выполнения Python необходимо передать 'code'")
 

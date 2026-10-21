@@ -11,8 +11,8 @@
  * Разметку инжектит скрипт (chat.html не раздуваем).
  * Стиль — общие переменные темы (whatsnew.css).
  *
- * ГЕРОИ (коты с табличкой [>_] на груди):
- *   - два героя: чёрный кот и белый кот, обнимаются как друганы;
+ * ГЕРОИ (боковые иллюстрации-компаньоны):
+ *   - две фигуры: тёмная и светлая, выглядывают сбоку слайда;
  *   - слоты .wn-hero (левый / правый), внутри <img class="wn-hero-img">;
  *   - модификаторы .wn-hero--full (целиком) / .wn-hero--peek (выглядывает);
  *   - картинки со сменой темы: data-hero-light / data-hero-dark (js-theme-icon
@@ -256,7 +256,7 @@
       // Плейсхолдер с табличкой [>_]
       box.appendChild(h("div", { class: "wn-hero-ph" }, [
         h("span", { class: "wn-hero-tag" }, ["[>_]"]),
-        h("span", { class: "wn-hero-cap" }, ["кот-герой\nздесь"]),
+        h("span", { class: "wn-hero-cap" }, ["иллюстрация\nздесь"]),
       ]));
     }
     return box;
@@ -288,27 +288,21 @@
 
   // Иконки моделей (из tools-panel.js MP_MODELS: coder/designer/universal).
   const MODEL_ICONS = [
-    { label: "Кодер", accent: "#6366f1", svg:
+    { label: "GPT", accent: "#10a37f", svg:
       '<svg viewBox="0 0 24 24" fill="none" width="24" height="24" stroke="currentColor" ' +
-      'stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">' +
-      '<polyline points="7 8 3 12 7 16"/><polyline points="17 8 21 12 17 16"/>' +
-      '<line x1="14" y1="4" x2="10" y2="20"/></svg>' },
-    { label: "Дизайнер", accent: "#ec4899", svg:
+      'stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M12 3.2 L18.6 7 V15 L12 18.8 L5.4 15 V7 Z"/>' +
+      '<path d="M12 3.2 V11 L18.6 15"/><path d="M5.4 7 L12 11 L12 18.8"/></svg>' },
+    { label: "Claude", accent: "#d97757", svg:
       '<svg viewBox="0 0 24 24" fill="none" width="24" height="24" stroke="currentColor" ' +
-      'stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">' +
-      '<path d="M12 2a10 10 0 0 1 0 20c-1.657 0-3-1.343-3-3 0-.828.336-1.578.879-2.121' +
-      'A3 3 0 0 0 8 14.5c0-1.657 1.343-3 3-3"/>' +
-      '<circle cx="8" cy="9" r="1.2" fill="currentColor" stroke="none"/>' +
-      '<circle cx="12" cy="6" r="1.2" fill="currentColor" stroke="none"/>' +
-      '<circle cx="16" cy="9" r="1.2" fill="currentColor" stroke="none"/></svg>' },
-    { label: "Универсал", accent: "#10b981", svg:
+      'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
+      '<line x1="12" y1="4.5" x2="12" y2="19.5"/>' +
+      '<line x1="5.8" y1="8" x2="18.2" y2="16"/>' +
+      '<line x1="18.2" y1="8" x2="5.8" y2="16"/></svg>' },
+    { label: "GLM", accent: "#8b5cf6", svg:
       '<svg viewBox="0 0 24 24" fill="none" width="24" height="24" stroke="currentColor" ' +
-      'stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">' +
-      '<line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/>' +
-      '<line x1="4" y1="18" x2="20" y2="18"/>' +
-      '<circle cx="9" cy="6" r="2" fill="var(--surface)" stroke="currentColor"/>' +
-      '<circle cx="15" cy="12" r="2" fill="var(--surface)" stroke="currentColor"/>' +
-      '<circle cx="9" cy="18" r="2" fill="var(--surface)" stroke="currentColor"/></svg>' },
+      'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M7 6 H17 L8 14 H17"/><path d="M12 14 V20"/></svg>' },
   ];
 
   // Центральная картинка героев (под основным текстом, напр. на финале).
@@ -326,7 +320,7 @@
     } else {
       box.appendChild(h("div", { class: "wn-hero-ph wn-hero-ph--center" }, [
         h("span", { class: "wn-hero-tag" }, ["[>_]"]),
-        h("span", { class: "wn-hero-cap" }, ["коты-герои здесь"]),
+        h("span", { class: "wn-hero-cap" }, ["иллюстрация здесь"]),
       ]));
     }
     return box;
@@ -351,9 +345,9 @@
       node: h("div", {}, [
         h("img", {
           class: "wn-app-icon js-theme-icon",
-          src: "/static/img/icon_black.png",
-          "data-icon-light": "/static/img/icon_black.png",
-          "data-icon-dark": "/static/img/icon_white.png",
+          src: "/static/img/sage_black.png",
+          "data-icon-light": "/static/img/sage_black.png",
+          "data-icon-dark": "/static/img/sage_white.png",
           alt: "AuGent icon",
         }, []),
         h("h3", { class: "wn-title",
@@ -367,7 +361,6 @@
           h("li", { html: "<b>Чаты</b> — создавайте отдельные диалоги под разные темы, история сохраняется." }, []),
           h("li", { html: "<b>Генерация файлов</b> — презентации, отчёты, документы и изображения в разных форматах." }, []),
           h("li", { html: "<b>Журнал агента</b> — агент запоминает важные факты и артефакты в рамках чата." }, []),
-          h("li", { html: "<b>Process Mining</b> — дайджесты и поиск по научным статьям." }, []),
         ]),
       ]),
     });
@@ -375,7 +368,7 @@
     // ── Слайд 2. Главная страница: разбор интерфейса ──
     // Два кота выглядывают снизу по центру (duo_peek, режим bottom).
     slides.push({
-      hero: { side: "center", mode: "bottom", asset: "duo_peek" },
+      hero: null,
       node: h("div", {}, [
         h("h3", { class: "wn-title" }, ["Главная страница"]),
         h("p", { class: "wn-text" }, [
@@ -387,7 +380,6 @@
           h("li", { html: "<b>Кнопка профиля</b> — настройки пользователя внизу сайдбара." }, []),
           h("li", { html: "<b>Поиск по диалогам</b> — рядом с профилем, ищет по истории сообщений." }, []),
           h("li", { html: "<b>Поле ввода</b> — по центру, отсюда стартует новый запрос." }, []),
-          h("li", { html: "<b>Раздел графа</b> — визуализация базы знаний платформы." }, []),
         ]),
         h("span", { class: "wn-note",
           html: "Есть смена <b>дня и ночи</b> — переключатель темы вверху. Интерфейс " +
@@ -399,7 +391,7 @@
     // Герой + картинка перегенерятся отдельно (один герой + два экрана ПК).
     // Пока картинки нет — wn-shot с onerror скрывается, слайд не ломается.
     slides.push({
-      hero: { side: "center", mode: "scene", asset: "sigma_scene" },
+      hero: null,
       node: h("div", {}, [
         h("h3", { class: "wn-title wn-title--sidebar-header" }, ["Два интерфейса: базовый и Sigma"]),
         h("p", { class: "wn-text" }, [
@@ -452,9 +444,9 @@
           "выбирайте подходящую:",
         ]),
         h("ul", { class: "wn-list" }, [
-          h("li", { html: "<b>Кодер</b> — сбор данных, написание скриптов .py, работа с памятью." }, []),
-          h("li", { html: "<b>Дизайнер</b> — отчёты и презентации: красиво оформляет, легко читаемо. В базовом интерфейсе показывает ход рассуждений." }, []),
-          h("li", { html: "<b>Универсал</b> — лёгкий запасной вариант, если обе модели недоступны." }, []),
+          h("li", { html: "<b>GPT</b> — модель от OpenAI. Код, работа с инструментами и данными, длинный контекст." }, []),
+          h("li", { html: "<b>Claude</b> — модель от Anthropic. Сильна в коде, делает отчёты и презентации. Показывает ход рассуждений." }, []),
+          h("li", { html: "<b>GLM</b> — модель от Zhipu AI. Универсальная, показывает ход рассуждений." }, []),
         ]),
         h("span", { class: "wn-note",
           html: "Доступность моделей видно прямо в этом же переключателе. Если агент " +
@@ -476,6 +468,7 @@
           h("li", { html: "<b>Карточки скиллов</b> — каждый с темой, описанием и привязкой к инструментам." }, []),
           h("li", { html: "<b>Поиск и лайки</b> — сортировка по новизне и популярности, отмечайте полезные." }, []),
           h("li", { html: "<b>Перетаскивание в чат</b> — перетяните карточку в поле ввода — промт подставится автоматически." }, []),
+          h("li", { html: "<b>Выбор скилла</b> — нажмите на карточку, выбранный скилл подсветится зелёным и применится к следующему запросу." }, []),
         ]),
         h("span", { class: "wn-note",
           html: "Собранный скилл можно отредактировать или удалить — тело скилла пишется в Markdown и " +
@@ -488,7 +481,7 @@
     // Сцена-дуэт снизу: кот в короне/плаще + кот за терминалом "admin mode"
     // (scene_admin.png), статичная, без анимации/drag.
     slides.push({
-      hero: { side: "center", mode: "scene", asset: "admin_scene" },
+      hero: null,
       node: h("div", {}, [
         h("h3", { class: "wn-title" }, ["Режим администратора"]),
         h("p", { class: "wn-text" }, [
@@ -499,6 +492,7 @@
           h("li", { html: "<b>Внедрение и обкатка</b> новых функций до релиза." }, []),
           h("li", { html: "<b>Запросы к базе данных</b> напрямую." }, []),
           h("li", { html: "<b>Поднятие приложений</b> и работа с инфраструктурой." }, []),
+          h("li", { html: "<b>Генерация медиа</b> — озвучка, видео и музыкальные композиции (работает на стороннем провайдере)." }, []),
         ]),
         h("span", { class: "wn-note",
           html: "Обычным пользователям эти инструменты недоступны — по техническим " +
@@ -513,17 +507,17 @@
       node: h("div", {}, [
         h("img", {
           class: "wn-app-icon js-theme-icon",
-          src: "/static/img/icon_black.png",
-          "data-icon-light": "/static/img/icon_black.png",
-          "data-icon-dark": "/static/img/icon_white.png",
+          src: "/static/img/sage_black.png",
+          "data-icon-light": "/static/img/sage_black.png",
+          "data-icon-dark": "/static/img/sage_white.png",
           alt: "AuGent icon",
         }, []),
-        h("h3", { class: "wn-title" }, ["Погнали!"]),
+        h("h3", { class: "wn-title" }, ["В добрый путь"]),
         h("p", { class: "wn-text center" }, [
-          "Всё готово. Открывайте новый чат, ставьте задачу — и поехали. " +
-          "Добро пожаловать в AuGent 🚀",
+          "Всё готово. Откройте новый чат и сформулируйте задачу — " +
+          "агент возьмётся за дело. Добро пожаловать в AuGent.",
         ]),
-        heroCenter("duo"),
+        null,
       ]),
     });
 

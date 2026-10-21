@@ -130,6 +130,30 @@
     return '<svg viewBox="0 0 24 24" width="16" height="16" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/></svg>';
   }
 
+  function modelDisplay() {
+    var m = MAX_MODELS.find(function (x) { return x.id === _form.agent_model; });
+    return m ? '<span class="tgc-dd-ic" style="color:' + m.accent + '">' + m.svg + '</span>' + m.label : '\u2014';
+  }
+
+  function toolsDisplay() {
+    if (!_form.selected_tools.length) return 'Не выбраны';
+    return _form.selected_tools.map(function (id) {
+      var t = MAX_TOOLS.find(function (x) { return x.id === id; });
+      return t ? t.label : id;
+    }).join(', ');
+  }
+
+  function ddToggle(labelText, valueHtml, contentHtml, sectionId) {
+    return '<div class="tgc-dd" id="' + sectionId + '">' +
+      '<button class="tgc-dd-toggle" type="button">' +
+        '<span class="tgc-dd-label">' + labelText + '</span>' +
+        '<span class="tgc-dd-value">' + valueHtml + '</span>' +
+        '<svg class="tgc-dd-chevron" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+      '</button>' +
+      '<div class="tgc-dd-pop">' + contentHtml + '</div>' +
+    '</div>';
+  }
+
   function render() {
     if (!_mount) return;
     if (!_form) resetForm();
@@ -148,14 +172,8 @@
             '<span class="tgc-field-label">Имя агента</span>' +
             '<input type="text" class="tgc-input" id="maxc-name" placeholder="Напр. AuGent" value="' + esc(_form.agent_name) + '"/>' +
           '</div>' +
-          '<div class="tgc-field">' +
-            '<span class="tgc-field-label">Модель</span>' +
-            '<div class="tgc-opts">' + modelsHtml() + '</div>' +
-          '</div>' +
-          '<div class="tgc-field">' +
-            '<span class="tgc-field-label">Инструменты</span>' +
-            '<div class="tgc-topts">' + toolsHtml() + '</div>' +
-          '</div>' +
+          ddToggle('Модель', modelDisplay(), modelsHtml(), 'maxc-dd-model') +
+          ddToggle('Инструменты', toolsDisplay(), toolsHtml(), 'maxc-dd-tools') +
           '<div class="tgc-field">' +
             '<span class="tgc-field-label">Базовый промпт</span>' +
             '<textarea class="tgc-textarea" id="maxc-prompt" placeholder="Системный промпт для агента в этом чате...">' + esc(_form.system_prompt) + '</textarea>' +
@@ -179,6 +197,16 @@
   }
 
   function bindEvents() {
+    _mount.querySelectorAll('.tgc-dd-toggle').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var dd = btn.closest('.tgc-dd');
+        dd.classList.toggle('tgc-dd--open');
+        _mount.querySelectorAll('.tgc-dd').forEach(function (other) {
+          if (other !== dd) other.classList.remove('tgc-dd--open');
+        });
+      });
+    });
+
     _mount.querySelectorAll('[data-model]').forEach(function (b) {
       b.addEventListener('click', function (e) { _form.agent_model = e.currentTarget.dataset.model; render(); });
     });

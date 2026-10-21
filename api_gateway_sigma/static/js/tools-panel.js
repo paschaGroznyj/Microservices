@@ -454,9 +454,9 @@ window.ToolsPanel = new ToolsPanel();
 export default window.ToolsPanel;
 
 /* ══════════════════════════════════════════════════════════════════════════
-   MODEL PICKER — выбор агента (Кодер / Дизайнер / Универсал)
+   MODEL PICKER — выбор агента (GPT / Claude / GLM / Gemini)
    API:
-     ModelPicker.getModel()        → 'coder' | 'designer' | 'universal'
+     ModelPicker.getModel()        → 'coder' | 'designer' | 'universal' | 'gemini'
      ModelPicker.inject(container) → void
    Выбор хранится в localStorage.
 ══════════════════════════════════════════════════════════════════════════ */
@@ -464,79 +464,63 @@ export default window.ToolsPanel;
 const MP_MODELS = [
   {
     id:     'coder',
-    label:  'Кодер',
-    // Tabler: code — терминальные скобки с косой чертой
+    label:  'GPT',
+    // OpenAI — контур куба-узла
     svg: `<svg viewBox="0 0 24 24" fill="none" width="20" height="20"
-               stroke="currentColor" stroke-width="1.75"
+               stroke="currentColor" stroke-width="1.5"
                stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="7 8 3 12 7 16"/>
-            <polyline points="17 8 21 12 17 16"/>
-            <line x1="14" y1="4" x2="10" y2="20"/>
+            <path d="M12 3.2 L18.6 7 V15 L12 18.8 L5.4 15 V7 Z"/>
+            <path d="M12 3.2 V11 L18.6 15"/>
+            <path d="M5.4 7 L12 11 L12 18.8"/>
           </svg>`,
-    // Маленькая версия для кнопки-триггера (16px)
     svgSm: `<svg viewBox="0 0 24 24" fill="none" width="15" height="15"
                stroke="currentColor" stroke-width="2"
                stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="7 8 3 12 7 16"/>
-              <polyline points="17 8 21 12 17 16"/>
-              <line x1="14" y1="4" x2="10" y2="20"/>
+              <path d="M12 3.2 L18.6 7 V15 L12 18.8 L5.4 15 V7 Z"/>
+              <path d="M12 11 L18.6 7 M12 11 V18.8 M12 11 L5.4 7"/>
             </svg>`,
-    hint:   'Отлично пишет код и собирает парсеры. Не показывает ход своих рассуждений.',
-    accent: '#6366f1',
+    hint:   'Модель от OpenAI. Сильна в коде, инструментах и длинном контексте. Показывает tool-calling.',
+    accent: '#10a37f',
   },
   {
     id:     'designer',
-    label:  'Дизайнер',
-    // Tabler: palette — круг с цветовыми точками
+    label:  'Claude',
+    // Anthropic — искра-вспышка
     svg: `<svg viewBox="0 0 24 24" fill="none" width="20" height="20"
-               stroke="currentColor" stroke-width="1.75"
+               stroke="currentColor" stroke-width="2.2"
                stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 2a10 10 0 0 1 0 20c-1.657 0-3-1.343-3-3
-                     0-.828.336-1.578.879-2.121A3 3 0 0 0 8 14.5
-                     c0-1.657 1.343-3 3-3"/>
-            <circle cx="8"  cy="9"  r="1.2" fill="currentColor" stroke="none"/>
-            <circle cx="12" cy="6"  r="1.2" fill="currentColor" stroke="none"/>
-            <circle cx="16" cy="9"  r="1.2" fill="currentColor" stroke="none"/>
+            <line x1="12" y1="4.5" x2="12" y2="19.5"/>
+            <line x1="5.8" y1="8" x2="18.2" y2="16"/>
+            <line x1="18.2" y1="8" x2="5.8" y2="16"/>
           </svg>`,
     svgSm: `<svg viewBox="0 0 24 24" fill="none" width="15" height="15"
-               stroke="currentColor" stroke-width="2"
+               stroke="currentColor" stroke-width="2.4"
                stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 2a10 10 0 0 1 0 20c-1.657 0-3-1.343-3-3
-                       0-.828.336-1.578.879-2.121A3 3 0 0 0 8 14.5
-                       c0-1.657 1.343-3 3-3"/>
-              <circle cx="8"  cy="9"  r="1.2" fill="currentColor" stroke="none"/>
-              <circle cx="12" cy="6"  r="1.2" fill="currentColor" stroke="none"/>
-              <circle cx="16" cy="9"  r="1.2" fill="currentColor" stroke="none"/>
+              <line x1="12" y1="4.5" x2="12" y2="19.5"/>
+              <line x1="5.8" y1="8" x2="18.2" y2="16"/>
+              <line x1="18.2" y1="8" x2="5.8" y2="16"/>
             </svg>`,
-    hint:   'Генерирует презентации и отчёты. Показывает ход своих мыслей (пока не отображается в интерфейсе).',
-    accent: '#ec4899',
+    hint:   'Модель от Anthropic. Сильна в коде, генерирует презентации и отчёты. Показывает reasoning (размышления).',
+    accent: '#d97757',
   },
   {
     id:     'universal',
-    label:  'Универсал',
-    // Tabler: adjustments-horizontal — три горизонтальных слайдера
+    label:  'GLM',
+    // Zhipu AI — стилизованная Z
     svg: `<svg viewBox="0 0 24 24" fill="none" width="20" height="20"
-               stroke="currentColor" stroke-width="1.75"
+               stroke="currentColor" stroke-width="2.2"
                stroke-linecap="round" stroke-linejoin="round">
-            <line x1="4"  y1="6"  x2="20" y2="6"/>
-            <line x1="4"  y1="12" x2="20" y2="12"/>
-            <line x1="4"  y1="18" x2="20" y2="18"/>
-            <circle cx="9"  cy="6"  r="2" fill="var(--surface)" stroke="currentColor"/>
-            <circle cx="15" cy="12" r="2" fill="var(--surface)" stroke="currentColor"/>
-            <circle cx="9"  cy="18" r="2" fill="var(--surface)" stroke="currentColor"/>
+            <path d="M7 6 H17 L8 14 H17"/>
+            <path d="M12 14 V20"/>
           </svg>`,
     svgSm: `<svg viewBox="0 0 24 24" fill="none" width="15" height="15"
-               stroke="currentColor" stroke-width="2"
+               stroke="currentColor" stroke-width="2.4"
                stroke-linecap="round" stroke-linejoin="round">
-              <line x1="4"  y1="6"  x2="20" y2="6"/>
-              <line x1="4"  y1="12" x2="20" y2="12"/>
-              <line x1="4"  y1="18" x2="20" y2="18"/>
-              <circle cx="9"  cy="6"  r="2" fill="var(--surface)" stroke="currentColor"/>
-              <circle cx="15" cy="12" r="2" fill="var(--surface)" stroke="currentColor"/>
-              <circle cx="9"  cy="18" r="2" fill="var(--surface)" stroke="currentColor"/>
+              <path d="M7 6 H17 L8 14 H17"/>
+              <path d="M12 14 V20"/>
             </svg>`,
-    hint:   'Универсальная и более быстрая модель. Подходит для большинства задач.',
-    accent: '#10b981',
+    hint:   'Модель от Zhipu AI. Универсальная, показывает reasoning (размышления).',
+    accent: '#8b5cf6',
   },
   {
     id:     'gemini',
@@ -558,7 +542,7 @@ const MP_MODELS = [
                        C12 16.2 7.8 12 2.5 12
                        C7.8 12 12 7.8 12 2.5Z"/>
             </svg>`,
-    hint:   'Модель от Google. Хорошо справляется с длинными документами и разными типами данных.',
+    hint:   'Модель от Google. Показывает tool-calling.',
     accent: '#4285f4',
   },
 ];

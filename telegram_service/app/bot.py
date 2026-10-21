@@ -1970,6 +1970,7 @@ CATCHPM_URL = os.environ.get("CATCHPM_URL", "https://catchpm.cds.uva-advanced.ru
 
 # Доступные модели агента (без админских). Ключ = agent_model в БД.
 TG_MODELS = ["coder", "designer", "universal", "gemini"]
+TG_MODEL_LABELS = {"coder": "GPT", "designer": "Claude", "universal": "GLM", "gemini": "Gemini"}
 
 # Тул-категории, которые можно включать из телеги. Админская категория
 # намеренно ОТСУТСТВУЕТ — из телеги её включить нельзя.
@@ -2086,7 +2087,8 @@ def _menu_model(current) -> InlineKeyboardMarkup:
     rows = []
     for m in TG_MODELS:
         mark = "\u2713 " if m == cur else ""
-        rows.append([InlineKeyboardButton(f"{mark}{m}", callback_data=f"tg:set:model:{m}")])
+        label = TG_MODEL_LABELS.get(m, m)
+        rows.append([InlineKeyboardButton(f"{mark}{label}", callback_data=f"tg:set:model:{m}")])
     rows.append([InlineKeyboardButton("‹ Назад", callback_data="tg:menu:root")])
     return InlineKeyboardMarkup(rows)
 

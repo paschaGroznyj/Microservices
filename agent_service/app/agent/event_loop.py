@@ -1152,9 +1152,9 @@ class HarnessAgent:
         Использует готовый health-check эндпоинт того же процесса
         (кеш TTL 30с на его стороне). При любой ошибке — мягкий фолбэк."""
         _labels = {
-            "coder": "Кодер",
-            "designer": "Дизайнер",
-            "universal": "Универсал",
+            "coder": "GPT",
+            "designer": "Claude",
+            "universal": "GLM",
             "gemini": "Gemini"
         }
         try:

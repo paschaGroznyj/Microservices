@@ -387,6 +387,16 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             attached_files = []
             for f in files_to_send:
                 if f.get("kind") == "image":
+                    # Картинка с диска (agent сохранил файл: path есть и файл существует)
+                    # — тоже заливаем в OBS по тому же детерминированному ключу, иначе
+                    # после TTL-чистки /web/file не сможет её восстановить. Картинки из
+                    # generate_image лежат в БД (path=None/нет файла) — их в OBS не грузим.
+                    _img_path = f.get("path")
+                    if _img_path and os.path.isfile(_img_path):
+                        try:
+                            await obs_file_storage.upload_user_file(_img_path, chat_id)
+                        except Exception as _obs_err:
+                            logging.error(f"OBS upload failed for {_img_path}: {_obs_err}")
                     entry = {
                         "name": f.get("name") or "image.jpg",
                         "path": f.get("path"),

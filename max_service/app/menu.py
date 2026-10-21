@@ -12,6 +12,7 @@ callback_data у MAX зовётся payload (<=64 байта по контрак
 from __future__ import annotations
 
 MAX_MODELS = ["coder", "designer", "universal", "gemini"]
+MAX_MODEL_LABELS = {"coder": "GPT", "designer": "Claude", "universal": "GLM", "gemini": "Gemini"}
 MAX_TRIGGERS = ["mention", "orchestrator"]
 MAX_TOOL_CATEGORIES = ["internet", "content", "sessions"]
 # Платные/админские категории — видны только админу (аналог TG_ADMIN_TOOL_CATEGORIES).
@@ -29,6 +30,7 @@ def keyboard(rows: list[list[dict]]) -> list[dict]:
 
 def settings_summary(settings: dict) -> str:
     model = settings.get("agent_model") or "coder"
+    model_label = MAX_MODEL_LABELS.get(model, model)
     mode = settings.get("trigger_mode") or "orchestrator"
     tools = settings.get("selected_tools") or []
     tools_str = ", ".join(tools) if tools else "нет (только базовые)"
@@ -37,7 +39,7 @@ def settings_summary(settings: dict) -> str:
     return (
         "**Настройки агента для этого чата**\n\n"
         f"Имя: `{name_str}`\n"
-        f"Модель: `{model}`\n"
+        f"Модель: `{model_label}`\n"
         f"Триггер: `{mode}`\n"
         f"Инструменты: `{tools_str}`"
     )
@@ -57,7 +59,7 @@ def menu_root(is_admin: bool = False) -> list[dict]:
 
 def menu_model(current) -> list[dict]:
     cur = current or "coder"
-    rows = [[_btn(f"{'✓ ' if m == cur else ''}{m}", f"max:set:model:{m}")]
+    rows = [[_btn(f"{'✓ ' if m == cur else ''}{MAX_MODEL_LABELS.get(m, m)}", f"max:set:model:{m}")]
             for m in MAX_MODELS]
     rows.append([_btn("‹ Назад", "max:menu:root")])
     return keyboard(rows)

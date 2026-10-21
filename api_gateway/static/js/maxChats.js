@@ -86,29 +86,21 @@
     _chats = (data && data.chats) || [];
   }
 
-  function modelLabel(id) {
-    var m = MAX_MODELS.find(function (x) { return x.id === id; });
-    return m ? m.label : id;
-  }
-
   function chatsListHtml() {
-    if (!_chats.length) return '<div class="tgc-empty">Пока нет встроенных MAX-чатов</div>';
+    if (!_chats.length) return '<div class="tgc-empty">Нет встроенных чатов</div>';
     return _chats.map(function (c) {
       var s = c.settings || {};
-      return '<div class="tgc-chat-item' + (_editing === c.chat_id ? ' tgc-chat-item--active' : '') + '">' +
-        '<div class="tgc-chat-head">' +
-          '<span class="tgc-chat-id">' + esc(c.chat_id) + '</span>' +
-          '<span class="tgc-chat-actions">' +
-            '<button class="tgc-ic" type="button" data-edit="' + esc(c.chat_id) + '" title="Настроить">' +
-              '<svg viewBox="0 0 20 20" width="14" height="14" fill="none"><path d="M4 13.5V16h2.5l7-7-2.5-2.5-7 7zM14.8 6.2l-1-1 1.4-1.4a.8.8 0 0 1 1.1 0a.8.8 0 0 1 0 1.1L14.8 6.2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>' +
-            '</button>' +
-            '<button class="tgc-ic tgc-ic--del" type="button" data-del="' + esc(c.chat_id) + '" title="Удалить">' +
-              '<svg viewBox="0 0 20 20" width="14" height="14" fill="none"><path d="M5 6h10M8 6V4h4v2M6 6l1 10h6l1-10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
-            '</button>' +
-          '</span>' +
+      var mdl = MAX_MODELS.find(function (x) { return x.id === s.agent_model; });
+      return '<div class="tgc-row' + (_editing === c.chat_id ? ' tgc-row--active' : '') + '">' +
+        '<div class="tgc-row-main">' +
+          '<span class="tgc-cid">' + esc(c.chat_id) + '</span>' +
+          (s.agent_name ? '<span class="tgc-aname">' + esc(s.agent_name) + '</span>' : '') +
+          (mdl ? '<span class="tgc-model" style="color:' + mdl.accent + '">' + mdl.svg + ' ' + mdl.label + '</span>' : '') +
         '</div>' +
-        '<div class="tgc-chat-meta">' + esc(modelLabel(s.agent_model)) +
-          (s.agent_name ? ' · ' + esc(s.agent_name) : '') + '</div>' +
+        '<div class="tgc-row-actions">' +
+          '<button class="tgc-btn" data-edit="' + esc(c.chat_id) + '" title="Редактировать"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M11 2l3 3-9 9H2v-3l9-9z" stroke-linecap="round" stroke-linejoin="round"/></svg></button>' +
+          '<button class="tgc-btn tgc-del" data-del="' + esc(c.chat_id) + '" title="Удалить"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 4h10M6 4V2h4v2M5 4l1 10h4l1-10" stroke-linecap="round" stroke-linejoin="round"/></svg></button>' +
+        '</div>' +
       '</div>';
     }).join('');
   }
@@ -116,18 +108,26 @@
   function modelsHtml() {
     return MAX_MODELS.map(function (m) {
       var on = _form.agent_model === m.id;
-      return '<button type="button" class="tgc-model' + (on ? ' active' : '') + '" data-model="' + m.id + '"' +
-        (on ? ' style="border-color:' + m.accent + ';color:' + m.accent + '"' : '') + '>' +
-        '<span class="tgc-model-ic">' + m.svg + '</span>' + esc(m.label) + '</button>';
+      return '<button class="tgc-opt' + (on ? ' tgc-opt--on' : '') + '" data-model="' + m.id + '" type="button" style="--tgc-accent:' + m.accent + '">' +
+        '<span class="tgc-opt-ic">' + m.svg + '</span>' +
+        '<span class="tgc-opt-label">' + esc(m.label) + '</span>' +
+      '</button>';
     }).join('');
   }
 
   function toolsHtml() {
     return MAX_TOOLS.map(function (t) {
       var on = _form.selected_tools.indexOf(t.id) !== -1;
-      return '<button type="button" class="tgc-tool' + (on ? ' active' : '') + '" data-tool="' + t.id + '">' +
-        esc(t.label) + '</button>';
+      return '<button class="tgc-topt' + (on ? ' tgc-topt--on' : '') + '" data-tool="' + t.id + '" type="button">' +
+        '<span class="tgc-topt-ic">' + toolIcon(t.id) + '</span>' +
+        '<span>' + esc(t.label) + '</span>' +
+      '</button>';
     }).join('');
+  }
+
+  function toolIcon(iconId) {
+    if (window.__TP_ICONS && window.__TP_ICONS[iconId]) return window.__TP_ICONS[iconId];
+    return '<svg viewBox="0 0 24 24" width="16" height="16" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/></svg>';
   }
 
   function render() {
@@ -150,11 +150,11 @@
           '</div>' +
           '<div class="tgc-field">' +
             '<span class="tgc-field-label">Модель</span>' +
-            '<div class="tgc-models">' + modelsHtml() + '</div>' +
+            '<div class="tgc-opts">' + modelsHtml() + '</div>' +
           '</div>' +
           '<div class="tgc-field">' +
             '<span class="tgc-field-label">Инструменты</span>' +
-            '<div class="tgc-tools">' + toolsHtml() + '</div>' +
+            '<div class="tgc-topts">' + toolsHtml() + '</div>' +
           '</div>' +
           '<div class="tgc-field">' +
             '<span class="tgc-field-label">Базовый промпт</span>' +

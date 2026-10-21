@@ -55,6 +55,7 @@
 .tgc-topt--on{background:color-mix(in srgb,var(--accent,#6366f1) 12%,transparent);border-color:var(--accent,#6366f1);color:var(--text,#1a1a1a);font-weight:600}
 .tgc-topt-ic{display:inline-flex;align-items:center}
 .tgc-topt-ic svg{display:block}
+.tgc-opts,.tgc-topts{display:flex;flex-direction:column;gap:0}
 
 .tgc-check{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text,#e8eaed);margin-top:8px;cursor:pointer}
 .tgc-check input{accent-color:var(--accent,#6366f1)}

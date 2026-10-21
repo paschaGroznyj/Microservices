@@ -823,17 +823,25 @@ async def push_message(req: PushMessageRequest):
     if client is None:
         raise HTTPException(status_code=503, detail="MAX bot не инициализирован")
 
+    # chat_id для доставки в MAX ДОЛЖЕН быть числовым (физический max_chat_id).
+    # consumer присылает его из bot_message.max_chat_id; если прилетит нечисловой
+    # (напр. session_id-UUID при старом контракте) — не роняем 500, логируем и выходим.
+    try:
+        cid = int(req.chat_id)
+    except (TypeError, ValueError):
+        log.error(f"push_message: нечисловой chat_id={req.chat_id!r} — доставка невозможна")
+        return PushMessageResponse(ok=False, error=f"non-numeric chat_id: {req.chat_id}")
+
     # файлы агента (если пришли) — грузим и шлём отдельными сообщениями-вложениями
     if req.files:
         for f in req.files:
             try:
-                await _send_agent_file(int(req.chat_id), f)
+                await _send_agent_file(cid, f)
             except MaxApiError as e:
                 log.warning(f"[max-file] API error {e.status}: {e.data}")
             except Exception as e:
                 log.warning(f"[max-file] push file fail: {e}")
 
-    cid = int(req.chat_id)
     thinking_mid = _thinking_messages.pop(cid, None)
 
     if not req.text:

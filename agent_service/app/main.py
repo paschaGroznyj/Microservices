@@ -122,10 +122,12 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     has_files = payload.get("has_files", False)
     agent_model = payload.get("agent_model", "coder")
     gateway_target = payload.get("gateway_target", "main")
-    # Физический telegram chat id — адрес доставки ответа. chat_id (выше) для
-    # telegram теперь = session_id (ключ памяти), а push ответа идёт на tg_chat_id.
-    # Прокидываем его обратно в bot_message, чтобы endpoint_consumer знал, куда слать.
-    tg_chat_id = payload.get("tg_chat_id")
+    # Физический chat id мессенджера — УНИВЕРСАЛЬНЫЙ адрес доставки ответа (TG и MAX).
+    # chat_id (выше) для мессенджеров = session_id (ключ памяти агента), а push ответа
+    # идёт на физический chat_id. Бот кладёт его как max_chat_id (MAX) или tg_chat_id (TG) —
+    # берём любой непустой. Прокидываем обратно в bot_message, чтобы consumer знал, куда слать.
+    deliver_chat_id = payload.get("max_chat_id") or payload.get("tg_chat_id")
+    tg_chat_id = deliver_chat_id
     # Mobile-оркестратор: роутер в chats_service проставляет уровень обработки.
     #   agent_tier = "lite"  -> дешёвая модель (Haiku) отвечает сама (дефолт);
     #   agent_tier = "agent" -> полный агент с тулами (юзер явно позвал).
@@ -521,6 +523,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             "tokens_usage": response.get("tokens_usage"),
             "gateway_target": gateway_target,
             "tg_chat_id": tg_chat_id,
+            "max_chat_id": deliver_chat_id,
             "auto_title": response.get("auto_title"),
             # Mobile device actions (белый список): едут на телефон через
             # endpoint_consumer.push_to_mobile -> Redis -> long-poll мобилки.
@@ -548,7 +551,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                 "type_agent": "pm",
                 "action": "stopped",
                 "gateway_target": gateway_target,
-                "tg_chat_id": tg_chat_id
+                "tg_chat_id": tg_chat_id,
+                "max_chat_id": deliver_chat_id
             }
             await prod.send_and_wait("chat-messages", value=stop_message)
         except Exception as send_err:
@@ -567,7 +571,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                 "type_agent": "pm",
                 "action": "error",
                 "gateway_target": gateway_target,
-                "tg_chat_id": tg_chat_id
+                "tg_chat_id": tg_chat_id,
+                "max_chat_id": deliver_chat_id
             }
             await prod.send_and_wait("chat-messages", value=err_message)
         except Exception as send_err:

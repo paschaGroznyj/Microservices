@@ -298,27 +298,21 @@
 
   // Иконки моделей (из tools-panel.js MP_MODELS: coder/designer/universal).
   const MODEL_ICONS = [
-    { label: "Кодер", accent: "#6366f1", svg:
+    { label: "GPT", accent: "#10a37f", svg:
       '<svg viewBox="0 0 24 24" fill="none" width="24" height="24" stroke="currentColor" ' +
-      'stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">' +
-      '<polyline points="7 8 3 12 7 16"/><polyline points="17 8 21 12 17 16"/>' +
-      '<line x1="14" y1="4" x2="10" y2="20"/></svg>' },
-    { label: "Дизайнер", accent: "#ec4899", svg:
+      'stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M12 3.2 L18.6 7 V15 L12 18.8 L5.4 15 V7 Z"/>' +
+      '<path d="M12 3.2 V11 L18.6 15"/><path d="M5.4 7 L12 11 L12 18.8"/></svg>' },
+    { label: "Claude", accent: "#d97757", svg:
       '<svg viewBox="0 0 24 24" fill="none" width="24" height="24" stroke="currentColor" ' +
-      'stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">' +
-      '<path d="M12 2a10 10 0 0 1 0 20c-1.657 0-3-1.343-3-3 0-.828.336-1.578.879-2.121' +
-      'A3 3 0 0 0 8 14.5c0-1.657 1.343-3 3-3"/>' +
-      '<circle cx="8" cy="9" r="1.2" fill="currentColor" stroke="none"/>' +
-      '<circle cx="12" cy="6" r="1.2" fill="currentColor" stroke="none"/>' +
-      '<circle cx="16" cy="9" r="1.2" fill="currentColor" stroke="none"/></svg>' },
-    { label: "Универсал", accent: "#10b981", svg:
+      'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
+      '<line x1="12" y1="4.5" x2="12" y2="19.5"/>' +
+      '<line x1="5.8" y1="8" x2="18.2" y2="16"/>' +
+      '<line x1="18.2" y1="8" x2="5.8" y2="16"/></svg>' },
+    { label: "GLM", accent: "#8b5cf6", svg:
       '<svg viewBox="0 0 24 24" fill="none" width="24" height="24" stroke="currentColor" ' +
-      'stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">' +
-      '<line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/>' +
-      '<line x1="4" y1="18" x2="20" y2="18"/>' +
-      '<circle cx="9" cy="6" r="2" fill="var(--surface)" stroke="currentColor"/>' +
-      '<circle cx="15" cy="12" r="2" fill="var(--surface)" stroke="currentColor"/>' +
-      '<circle cx="9" cy="18" r="2" fill="var(--surface)" stroke="currentColor"/></svg>' },
+      'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M7 6 H17 L8 14 H17"/><path d="M12 14 V20"/></svg>' },
   ];
 
   // Центральная картинка героев (под основным текстом, напр. на финале).
@@ -460,9 +454,9 @@
           "выбирайте подходящую:",
         ]),
         h("ul", { class: "wn-list" }, [
-          h("li", { html: "<b>Кодер</b> — сбор данных, написание скриптов .py, работа с памятью." }, []),
-          h("li", { html: "<b>Дизайнер</b> — отчёты и презентации: красиво оформляет, легко читаемо. В базовом интерфейсе показывает ход рассуждений." }, []),
-          h("li", { html: "<b>Универсал</b> — лёгкий запасной вариант, если обе модели недоступны." }, []),
+          h("li", { html: "<b>GPT</b> — модель от OpenAI. Код, работа с инструментами и данными, длинный контекст." }, []),
+          h("li", { html: "<b>Claude</b> — модель от Anthropic. Сильна в коде, делает отчёты и презентации. Показывает ход рассуждений." }, []),
+          h("li", { html: "<b>GLM</b> — модель от Zhipu AI. Универсальная, показывает ход рассуждений." }, []),
         ]),
         h("span", { class: "wn-note",
           html: "Доступность моделей видно прямо в этом же переключателе. Если агент " +

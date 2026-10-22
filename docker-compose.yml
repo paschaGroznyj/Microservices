@@ -279,8 +279,10 @@ services:
       SECRET_KEY: ${SECRET_KEY}
       ALGORITHM: ${ALGORITHM}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      EDITOR_ROOT: ${EDITOR_ROOT:-/data/editor_workspaces}
     volumes:
       - ./api_gateway:/app
+      - editor_workspaces:/data/editor_workspaces
     depends_on:
       redis:
         condition: service_healthy
@@ -591,6 +593,7 @@ volumes:
   dind_data:
   wal_archive:
   redis_data:
+  editor_workspaces:
 #  parser_data:
 #  parser_logs:
 

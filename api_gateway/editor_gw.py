@@ -8,13 +8,15 @@
   GET /editor                         — страница редактора (за auth)
   GET /api/editor/workspaces          — список воркспейсов юзера (дерево проекта)
   GET /api/editor/tree?workspace_id=  — дерево файлов конкретного воркспейса
-  GET /api/editor/file?workspace_id=&path=  — содержимое файла (read-only)
+  GET /api/editor/file?workspace_id=&path=  — содержимое файла
+  PUT /api/editor/file?workspace_id=&path=  — сохранить файл (main gateway)
 
 Подключается в app.py: editor_gw.bind(http_client, chats_url, sandbox_url, get_current_user, templates)
 """
 import logging
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -100,4 +102,30 @@ async def api_file(request: Request, workspace_id: str, path: str):
                         params={"path": path})
     if r.status_code != 200:
         raise HTTPException(status_code=r.status_code, detail="Файл недоступен")
+    return r.json()
+
+
+class EditorSaveBody(BaseModel):
+    workspace_id: str
+    path: str
+    content: str
+
+
+@router.put("/api/editor/file")
+async def api_file_save(request: Request, body: EditorSaveBody):
+    user = await _require_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Не авторизован")
+    await _assert_owns(user["user_id"], body.workspace_id)
+    r = await _http.put(
+        f"{_sandbox_url}/workspace/{body.workspace_id}/editor/write",
+        json={"path": body.path, "content": body.content},
+    )
+    if r.status_code != 200:
+        detail = "Песочница: запись не удалась"
+        try:
+            detail = r.json().get("detail", detail)
+        except Exception:
+            pass
+        raise HTTPException(status_code=r.status_code, detail=detail)
     return r.json()

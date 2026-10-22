@@ -116,12 +116,12 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     request_id = payload.get("request_id")
     tb_name = payload.get("tb_name")
     username = payload.get("username")
-    selected_tools = payload.get("selected_tools")
-    context_size = payload.get("context_size")
+    selected_tools = payload.get("selected_tools") or []
+    context_size = payload.get("context_size") or "medium"
     message_id = payload.get("message_id")
     has_files = payload.get("has_files", False)
-    agent_model = payload.get("agent_model", "coder")
-    gateway_target = payload.get("gateway_target", "main")
+    agent_model = payload.get("agent_model") or "coder"
+    gateway_target = payload.get("gateway_target") or "main"
     # Физический chat id мессенджера — УНИВЕРСАЛЬНЫЙ адрес доставки ответа (TG и MAX).
     # chat_id (выше) для мессенджеров = session_id (ключ памяти агента), а push ответа
     # идёт на физический chat_id. Бот кладёт его как max_chat_id (MAX) или tg_chat_id (TG) —

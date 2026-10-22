@@ -1272,6 +1272,46 @@ async def editor_read_endpoint(workspace_id: str, path: str):
     }
 
 
+class EditorWriteRequest(BaseModel):
+    path: str
+    content: str
+
+
+EDITOR_MAX_WRITE_BYTES = 5 * 1024 * 1024
+
+
+@app.put("/workspace/{workspace_id}/editor/write")
+async def editor_write_endpoint(workspace_id: str, body: EditorWriteRequest):
+    ws_path = _get_workspace_path(workspace_id)
+    if ws_path is None:
+        raise HTTPException(status_code=404, detail="Workspace не найден")
+    try:
+        target = _safe_join(ws_path, body.path)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Путь вне workspace")
+    if os.path.isdir(target):
+        raise HTTPException(status_code=400, detail="Путь указывает на директорию")
+    data = body.content.encode("utf-8")
+    if len(data) > EDITOR_MAX_WRITE_BYTES:
+        raise HTTPException(status_code=413, detail=f"Файл слишком большой ({len(data)} байт)")
+    parent = os.path.dirname(target)
+    if not os.path.isdir(parent):
+        raise HTTPException(status_code=404, detail="Родительская папка не найдена")
+    tmp = target + ".tmp_editor_" + uuid.uuid4().hex[:8]
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, target)
+    except Exception as e:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=f"Ошибка записи: {e}")
+    return {"workspace_id": workspace_id, "path": body.path, "size": len(data), "ok": True}
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "version": "v3"}

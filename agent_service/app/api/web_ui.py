@@ -2,6 +2,7 @@ import os
 import base64
 import logging
 import asyncio
+import httpx
 from urllib.parse import quote
 from agent.core.db import AgentDB
 from agent.media import media_store
@@ -217,6 +218,7 @@ async def get_db_image(
     file_name: str | None = None,
     image_id: int | None = None,
     image_key: str | None = None,
+    chat_id: str | None = None,
 ):
     """Отдаёт бинарник картинки НАПРЯМУЮ из таблицы generated_images (BYTEA).
 
@@ -298,7 +300,56 @@ async def get_db_image(
                     "Access-Control-Expose-Headers": "X-Image-Key, X-Image-Source",
                 },
             )
-        raise HTTPException(status_code=404, detail="Image not found in DB or disk whitelist")
+        # Последний рубеж: файла нет ни в generated_images, ни по basename на
+        # диске (эфемерный том мог быть вычищен, либо имя в chat_files отличается
+        # от имени файла на диске). Источник истины для вложений чата — OBS.
+        # Резолвим реальный file_path через chats_service и восстанавливаем
+        # бинарник из OBS по детерминированному ключу — ровно как делает /web/file.
+        if chat_id and message_id and file_name:
+            try:
+                chats_url = os.getenv("CHATS_SERVICE_URL", "http://chats_service:8001")
+                async with httpx.AsyncClient(timeout=15) as client:
+                    rf = await client.get(
+                        f"{chats_url}/internal/resolve_file",
+                        params={"chat_id": chat_id, "message_id": message_id,
+                                "file_name": file_name},
+                    )
+                if rf.status_code == 200:
+                    real_fp = (rf.json() or {}).get("path")
+                    if real_fp:
+                        obs_key = obs_file_storage.build_obs_key(real_fp, chat_id)
+                        local = await obs_file_storage.download_to_local(obs_key, real_fp)
+                        if local and os.path.isfile(local):
+                            logging.info(
+                                f"/web/db_image: OBS restore -> {local} (key={obs_key})"
+                            )
+                            ext = os.path.splitext(local)[1].lower().lstrip(".")
+                            mime_map = {
+                                "png": "image/png", "jpg": "image/jpeg",
+                                "jpeg": "image/jpeg", "webp": "image/webp",
+                                "gif": "image/gif",
+                            }
+                            obs_mime = mime_map.get(ext, "application/octet-stream")
+                            obs_name = os.path.basename(local)
+
+                            def iterfile_obs():
+                                with open(local, "rb") as f:
+                                    yield from iter(lambda: f.read(1024 * 1024), b"")
+
+                            return StreamingResponse(
+                                iterfile_obs(),
+                                media_type=obs_mime,
+                                headers={
+                                    "Content-Disposition": _content_disposition(obs_name, "inline"),
+                                    "Cache-Control": "public, max-age=86400",
+                                    "X-Image-Source": "obs",
+                                    "Access-Control-Expose-Headers": "X-Image-Key, X-Image-Source",
+                                },
+                            )
+            except Exception as _obs_err:
+                logging.error(f"/web/db_image: OBS restore failed: {_obs_err}")
+
+        raise HTTPException(status_code=404, detail="Image not found in DB, disk or OBS")
 
     raw = bytes(row["image_data"])
     mime = row["mime_type"] or "image/png"

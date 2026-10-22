@@ -67,11 +67,15 @@ body { display:flex; flex-direction:column; }
   border:none; border-radius:4px; background:transparent; color:#9fdca0;
   cursor:pointer; font-size:12px; line-height:1; }
 .ed-ai-selhint button:hover { background:#3c5a3c; color:#fff; }
-.ed-ai-input textarea { flex:1; background:#2a2a2a; color:#eee; border:1px solid #3a3a3a;
+.ed-ai-input textarea { flex:1 0 100%; background:#2a2a2a; color:#eee; border:1px solid #3a3a3a;
   border-radius:12px; padding:10px 12px; resize:none; min-height:44px; max-height:140px;
   font-family:inherit; font-size:14px; line-height:1.4; outline:none; }
 .ed-ai-input textarea:focus { border-color:#0e639c; }
-.ed-ai-input button { flex:0 0 auto; width:40px; height:40px; border-radius:50%;
+/* нижний ряд: слева триггеры модели/инструментов (ToolsPanel+ModelPicker.inject),
+   справа — круглая кнопка отправки */
+.ed-ai-footer { flex:0 0 100%; display:flex; align-items:center; gap:6px;
+  background:transparent; border:none; padding:0; margin:0; }
+.ed-ai-send-btn { margin-left:auto; flex:0 0 auto; width:40px; height:40px; border-radius:50%;
   background:#0e639c; color:#fff; border:none; cursor:pointer;
   display:flex; align-items:center; justify-content:center; }
-.ed-ai-input button:hover { background:#1177bb; }
+.ed-ai-send-btn:hover { background:#1177bb; }

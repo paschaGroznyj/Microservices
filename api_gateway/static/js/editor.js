@@ -298,13 +298,37 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
-        body: JSON.stringify({ chat_id: CHAT_ID, message: msg, message_id: crypto.randomUUID() }),
+        body: JSON.stringify({
+          chat_id: CHAT_ID,
+          message: msg,
+          message_id: crypto.randomUUID(),
+          agent_model:    window.ModelPicker?.getModel() ?? "coder",
+          selected_tools: window.ToolsPanel?.getSelectedCategories() ?? [],
+          context_size:   window.ToolsPanel?.getContextSize() ?? "medium",
+        }),
       });
     } catch (e) {
       clearThinking();
       aiAppend("bot", `Ошибка отправки: ${e.message}`);
     }
   }
+  // Подключаем те же панели выбора модели и инструментов, что в основном чате.
+  // tools-panel.js грузится отдельным модулем — ждём появления window.ToolsPanel.
+  (function injectPanels(tries = 0) {
+    const footer = $("ed-ai")?.querySelector(".ed-ai-footer");
+    if (!footer) return;
+    if (!window.ToolsPanel || !window.ModelPicker) {
+      if (tries < 50) return void setTimeout(() => injectPanels(tries + 1), 100);
+      return;
+    }
+    // inject() ищет .chat-input-footer внутри переданного контейнера.
+    // setUser() сам тянет /api/auth/permissions по куке — права берутся оттуда.
+    const container = $("ed-ai");
+    try { window.ToolsPanel.setUser?.(""); } catch (_) {}
+    try { window.ToolsPanel.inject(container); } catch (_) {}
+    try { window.ModelPicker.inject(container); } catch (_) {}
+  })();
+
   $("ed-ai-send").addEventListener("click", sendAI);
   $("ed-ai-text").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendAI(); }

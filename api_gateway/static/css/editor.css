@@ -56,26 +56,96 @@ body { display:flex; flex-direction:column; }
 .ed-ai-thinking span:nth-child(3){ animation-delay:.4s; }
 @keyframes ed-blink { 0%,80%,100%{opacity:.25;transform:scale(.8)} 40%{opacity:1;transform:scale(1)} }
 
-/* input-container в стиле чата */
-.ed-ai-input { display:flex; flex-wrap:wrap; align-items:flex-end; gap:8px;
-  padding:12px 14px; border-top:1px solid #333; }
-/* чип-подсказка: вопрос только по выделенным строкам */
-.ed-ai-selhint { flex:0 0 100%; display:flex; align-items:center;
-  justify-content:space-between; gap:8px; background:#2d3b2d; color:#9fdca0;
+/* ── INPUT: 1:1 c .chat-input-box из chat.css, тёмная тема панели ── */
+/* Тёмные токены панели (в /editor нет chat-переменных — задаём явно) */
+.ed-ai-input {
+  --input-bg: #242424;
+  --input-border: #3a3a3a;
+  --input-focus: #0e639c;
+  --accent: #0e639c;
+  --text-primary: #eaeaea;
+  --text-muted: #8a8a8a;
+  --border: #333;
+  --surface2: #2a2a2a;
+  --btn-primary-bg: #0e639c;
+  --btn-primary-text: #fff;
+  --shadow-md: 0 6px 18px rgba(0,0,0,.35);
+  --transition: .18s ease;
+  flex-shrink:0; padding:0 14px 14px; border-top:none; background:transparent;
+}
+
+.ed-ai-input .chat-input-area { width:100%; margin:0 auto; padding:0; }
+
+.ed-ai-input .chat-input-box {
+  background:var(--input-bg);
+  border:1.5px solid var(--input-border);
+  border-radius:16px;
+  box-shadow:var(--shadow-md);
+  overflow:hidden;
+  transition:border-color var(--transition), box-shadow var(--transition);
+}
+.ed-ai-input .chat-input-box:focus-within {
+  border-color:var(--input-focus);
+  box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent), var(--shadow-md);
+}
+
+/* Поле ввода — та же геометрия, что .chat-input-field */
+.ed-ai-input .chat-input-field {
+  display:block; width:100%; box-sizing:border-box;
+  min-height:52px; max-height:200px; overflow-y:auto;
+  padding:16px 20px 8px;
+  background:transparent; border:none; outline:none; resize:none;
+  font-family:inherit; font-size:.95rem; line-height:1.6;
+  color:var(--text-primary); word-break:break-word;
+  scrollbar-width:thin; scrollbar-color:transparent transparent;
+}
+.ed-ai-input .chat-input-field::placeholder { color:var(--text-muted); }
+.ed-ai-input .chat-input-field::-webkit-scrollbar { width:6px; }
+.ed-ai-input .chat-input-field::-webkit-scrollbar-button { display:none!important; width:0!important; height:0!important; }
+.ed-ai-input .chat-input-field::-webkit-scrollbar-track { background:transparent; }
+.ed-ai-input .chat-input-field::-webkit-scrollbar-thumb {
+  background-color:transparent; border-radius:6px; border:1px solid transparent;
+  background-clip:padding-box; transition:background-color .2s ease; }
+.ed-ai-input .chat-input-field:hover::-webkit-scrollbar-thumb,
+.ed-ai-input .chat-input-field:focus::-webkit-scrollbar-thumb {
+  background-color:color-mix(in srgb, var(--border) 55%, transparent); }
+
+/* Нижняя панель — 1:1 .chat-input-footer */
+.ed-ai-footer {
+  display:flex; align-items:center; gap:8px;
+  padding:8px 12px 10px 12px; border-top:1px solid var(--border);
+}
+
+/* Кнопка прикрепить (якорь для inject) — 1:1 .attach-btn */
+.ed-ai-input .attach-btn {
+  width:34px; height:34px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center; flex-shrink:0;
+  background:transparent; border:none; color:var(--text-muted); cursor:pointer;
+  transition:all var(--transition);
+}
+.ed-ai-input .attach-btn svg { width:17px; height:17px; }
+.ed-ai-input .attach-btn:hover {
+  color:var(--accent); background:color-mix(in srgb, var(--accent) 8%, transparent); }
+
+/* Кнопка отправить — 1:1 .chat-send-btn */
+.ed-ai-footer .chat-send-btn {
+  margin-left:auto;
+  width:36px; height:36px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center; flex-shrink:0;
+  background:var(--surface2); border:1.5px solid var(--border);
+  color:var(--text-muted); cursor:pointer; transition:all var(--transition);
+}
+.ed-ai-footer .chat-send-btn svg { width:17px; height:17px; }
+.ed-ai-footer .chat-send-btn:not([disabled]) {
+  background:var(--btn-primary-bg); border-color:var(--btn-primary-bg); color:var(--btn-primary-text); }
+.ed-ai-footer .chat-send-btn:not([disabled]):hover { filter:brightness(1.1); transform:scale(1.05); }
+.ed-ai-footer .chat-send-btn[disabled] { opacity:.4; cursor:not-allowed; }
+
+/* чип-подсказка: вопрос только по выделенным строкам (над полем, внутри box) */
+.ed-ai-selhint { display:flex; align-items:center;
+  justify-content:space-between; gap:8px; margin:10px 12px 0; background:#2d3b2d; color:#9fdca0;
   border:1px solid #3c5a3c; border-radius:8px; padding:5px 10px; font-size:12px; }
 .ed-ai-selhint button { flex:0 0 auto; width:18px; height:18px; padding:0;
   border:none; border-radius:4px; background:transparent; color:#9fdca0;
   cursor:pointer; font-size:12px; line-height:1; }
 .ed-ai-selhint button:hover { background:#3c5a3c; color:#fff; }
-.ed-ai-input textarea { flex:1 0 100%; background:#2a2a2a; color:#eee; border:1px solid #3a3a3a;
-  border-radius:12px; padding:10px 12px; resize:none; min-height:44px; max-height:140px;
-  font-family:inherit; font-size:14px; line-height:1.4; outline:none; }
-.ed-ai-input textarea:focus { border-color:#0e639c; }
-/* нижний ряд: слева триггеры модели/инструментов (ToolsPanel+ModelPicker.inject),
-   справа — круглая кнопка отправки */
-.ed-ai-footer { flex:0 0 100%; display:flex; align-items:center; gap:6px;
-  background:transparent; border:none; padding:0; margin:0; }
-.ed-ai-send-btn { margin-left:auto; flex:0 0 auto; width:40px; height:40px; border-radius:50%;
-  background:#0e639c; color:#fff; border:none; cursor:pointer;
-  display:flex; align-items:center; justify-content:center; }
-.ed-ai-send-btn:hover { background:#1177bb; }

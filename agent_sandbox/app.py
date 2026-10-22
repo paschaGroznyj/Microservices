@@ -309,6 +309,26 @@ def _run_code_sync(code: str, timeout: int, run_dir: str, stdin: str = "", task_
             # Если симлинк не создался (например на Windows без прав), делаем фоллбэк
             pass
 
+    # 4b. Монтируем остальное содержимое корня воркспейса симлинками внутрь таски,
+    # чтобы Python-код видел не только output/, но и src/, assets/ и прочие папки
+    # (убирает класс ошибок "файл есть в воркспейсе, но из кода не виден").
+    # output/ уже смонтирован выше; служебные каталоги пропускаем.
+    _WS_MOUNT_SKIP = {".tasks", OUTPUT_DIR_NAME, ".git", ".ws_hold", "__pycache__"}
+    ws_root = Path(ws_path) if ws_path else base_run_dir
+    try:
+        for entry in ws_root.iterdir():
+            if entry.name in _WS_MOUNT_SKIP:
+                continue
+            link = task_dir / entry.name
+            if link.exists() or link.is_symlink():
+                continue
+            try:
+                link.symlink_to(entry)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
     script_path = task_dir / "script.py"
     cwd = task_dir
 

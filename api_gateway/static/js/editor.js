@@ -242,6 +242,18 @@
 
   // ── AI-панель ────────────────────────────────────────
   const aiLog = $("ed-ai-log");
+  // Делегат: любой клик по ссылке в логе открываем в новой вкладке,
+  // даже если realtime-рендер markdown не успел проставить target="_blank".
+  if (aiLog) {
+    aiLog.addEventListener("click", (e) => {
+      const a = e.target.closest("a[href]");
+      if (!a || !aiLog.contains(a)) return;
+      const href = a.getAttribute("href");
+      if (!href || href.startsWith("#") || href.startsWith("javascript:")) return;
+      e.preventDefault();
+      window.open(href, "_blank", "noopener,noreferrer");
+    });
+  }
   let pendingSelection = null; // {text, startLine, endLine} — контекст из выделения
 
   function updateSelectionHint() {

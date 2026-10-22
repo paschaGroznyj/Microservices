@@ -3438,8 +3438,12 @@ class ChatApp {
         const container = this.getInputContainer();
         const field = container?.querySelector('#message-input');
         if (!field) return '';
-        if (field.tagName === 'TEXTAREA') return field.value.trim();
-        return this._readInputWithChips(field).trim();
+        const raw = (field.tagName === 'TEXTAREA')
+            ? field.value
+            : this._readInputWithChips(field);
+        // Снимаем невидимые маркеры скилл-блока (skills.js _setSkillInInput),
+        // чтобы они не улетали в агента.
+        return raw.replace(/\u2063\[\/?skill\]\u2063/g, '').trim();
     }
 
     /* Собирает финальный текст из contenteditable, подставляя вместо

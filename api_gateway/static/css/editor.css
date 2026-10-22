@@ -1,6 +1,27 @@
 * { box-sizing: border-box; }
 html, body { margin:0; height:100%; background:#1e1e1e; color:#ccc;
   font-family: -apple-system, Segoe UI, Roboto, sans-serif; }
+
+/* ── Глобальные токены темы для попапов панелей (mp-panel/tp-section
+   рендерятся в document.body, вне скоупа .ed-ai-input) ── */
+body {
+  --surface: #252526;
+  --surface2: #2f2f31;
+  --surface-2: #2f2f31;
+  --border: #3a3a3a;
+  --accent: #4da6ff;
+  --text-primary: #eaeaea;
+  --text-secondary: #c5c5c5;
+  --text-muted: #8a8a8a;
+  --transition: .18s ease;
+}
+
+/* Подложка попапов — явный непрозрачный фон на случай нехватки переменных */
+.mp-panel, .tools-panel {
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: 0 8px 32px rgba(0,0,0,.45), 0 2px 8px rgba(0,0,0,.3) !important;
+}
 body { display:flex; flex-direction:column; }
 .ed-topbar { display:flex; align-items:center; gap:16px; padding:8px 14px;
   background:#252526; border-bottom:1px solid #333; flex:0 0 auto; }
@@ -141,11 +162,25 @@ body { display:flex; flex-direction:column; }
 .ed-ai-footer .chat-send-btn:not([disabled]):hover { filter:brightness(1.1); transform:scale(1.05); }
 .ed-ai-footer .chat-send-btn[disabled] { opacity:.4; cursor:not-allowed; }
 
-/* чип-подсказка: вопрос только по выделенным строкам (над полем, внутри box) */
-.ed-ai-selhint { display:flex; align-items:center;
-  justify-content:space-between; gap:8px; margin:10px 12px 0; background:#2d3b2d; color:#9fdca0;
-  border:1px solid #3c5a3c; border-radius:8px; padding:5px 10px; font-size:12px; }
-.ed-ai-selhint button { flex:0 0 auto; width:18px; height:18px; padding:0;
-  border:none; border-radius:4px; background:transparent; color:#9fdca0;
-  cursor:pointer; font-size:12px; line-height:1; }
-.ed-ai-selhint button:hover { background:#3c5a3c; color:#fff; }
+/* чип-подсказка: вопрос только по выделенным строкам — стиль .hint-chip */
+.ed-ai-selhint {
+  display:inline-flex; align-items:center; gap:8px; align-self:flex-start;
+  margin:10px 12px 0;
+  padding:4px 12px; border-radius:99px;
+  font-size:.78rem; color:var(--text-secondary);
+  background:var(--surface2); border:1px solid var(--border);
+  white-space:nowrap; user-select:none;
+  transition:all var(--transition);
+}
+.ed-ai-selhint:hover {
+  border-color:var(--accent); color:var(--accent);
+  background:color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+.ed-ai-selhint button {
+  flex:0 0 auto; width:16px; height:16px; padding:0;
+  display:flex; align-items:center; justify-content:center;
+  border:none; border-radius:50%; background:transparent;
+  color:inherit; cursor:pointer; font-size:12px; line-height:1;
+  transition:all var(--transition);
+}
+.ed-ai-selhint button:hover { background:color-mix(in srgb, var(--accent) 18%, transparent); color:var(--accent); }

@@ -154,6 +154,30 @@
       minimap: { enabled: true },
     });
     editor.addCommand(monacoRef.KeyMod.CtrlCmd | monacoRef.KeyCode.KeyS, saveFile);
+
+    editor.addAction({
+      id: "ed-ask-agent-selection",
+      label: "Спросить агента о выделенном",
+      contextMenuGroupId: "navigation",
+      contextMenuOrder: 0,
+      precondition: "editorHasSelection",
+      run: (ed) => {
+        const sel = ed.getSelection();
+        if (!sel || sel.isEmpty()) return;
+        const model = ed.getModel();
+        const text = model.getValueInRange(sel);
+        if (!text.trim()) return;
+        pendingSelection = {
+          text,
+          startLine: sel.startLineNumber,
+          endLine: sel.endLineNumber,
+        };
+        updateSelectionHint();
+        const ta = $("ed-ai-text");
+        ta.focus();
+      },
+    });
+
     loadWorkspaces();
   });
 
@@ -175,6 +199,33 @@
 
   // ── AI-панель ────────────────────────────────────────
   const aiLog = $("ed-ai-log");
+  let pendingSelection = null; // {text, startLine, endLine} — контекст из выделения
+
+  function updateSelectionHint() {
+    const ta = $("ed-ai-text");
+    let hint = $("ed-ai-selhint");
+    if (!hint) {
+      hint = document.createElement("div");
+      hint.id = "ed-ai-selhint";
+      hint.className = "ed-ai-selhint";
+      ta.parentNode.insertBefore(hint, ta);
+    }
+    if (pendingSelection) {
+      const { startLine, endLine } = pendingSelection;
+      const range = startLine === endLine ? `строка ${startLine}` : `строки ${startLine}–${endLine}`;
+      hint.innerHTML = `<span>📎 Вопрос о: ${range}</span><button type="button" id="ed-ai-selclear" title="Сбросить">✕</button>`;
+      hint.style.display = "";
+      $("ed-ai-selclear").addEventListener("click", () => {
+        pendingSelection = null;
+        updateSelectionHint();
+      });
+      ta.placeholder = "Спросить агента о выделенных строках...";
+    } else {
+      hint.style.display = "none";
+      hint.innerHTML = "";
+      ta.placeholder = "Спросить агента по открытому файлу...";
+    }
+  }
   if (window.marked) marked.setOptions({ breaks: true, gfm: true });
 
   function renderMd(text) {
@@ -229,11 +280,18 @@
     const text = ta.value.trim();
     if (!text || !CHAT_ID) return;
     let msg = text;
-    if (currentPath && !isBinary) {
+    if (pendingSelection) {
+      const { text: selText, startLine, endLine } = pendingSelection;
+      const loc = startLine === endLine ? `строка ${startLine}` : `строки ${startLine}–${endLine}`;
+      const file = currentPath ? ` ${currentPath}` : "";
+      msg = `[Выделенный фрагмент${file}, ${loc}]\n\`\`\`\n${selText.slice(0, 8000)}\n\`\`\`\n\nВопрос: ${text}`;
+    } else if (currentPath && !isBinary) {
       msg = `[Файл: ${currentPath}]\n\`\`\`\n${currentContent.slice(0, 8000)}\n\`\`\`\n\nВопрос: ${text}`;
     }
     aiAppend("user", text);
     ta.value = "";
+    pendingSelection = null;
+    updateSelectionHint();
     showThinking();
     try {
       await fetch("/api/chats/send_message", {

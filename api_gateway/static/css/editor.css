@@ -57,8 +57,16 @@ body { display:flex; flex-direction:column; }
 @keyframes ed-blink { 0%,80%,100%{opacity:.25;transform:scale(.8)} 40%{opacity:1;transform:scale(1)} }
 
 /* input-container в стиле чата */
-.ed-ai-input { display:flex; align-items:flex-end; gap:8px; padding:12px 14px;
-  border-top:1px solid #333; }
+.ed-ai-input { display:flex; flex-wrap:wrap; align-items:flex-end; gap:8px;
+  padding:12px 14px; border-top:1px solid #333; }
+/* чип-подсказка: вопрос только по выделенным строкам */
+.ed-ai-selhint { flex:0 0 100%; display:flex; align-items:center;
+  justify-content:space-between; gap:8px; background:#2d3b2d; color:#9fdca0;
+  border:1px solid #3c5a3c; border-radius:8px; padding:5px 10px; font-size:12px; }
+.ed-ai-selhint button { flex:0 0 auto; width:18px; height:18px; padding:0;
+  border:none; border-radius:4px; background:transparent; color:#9fdca0;
+  cursor:pointer; font-size:12px; line-height:1; }
+.ed-ai-selhint button:hover { background:#3c5a3c; color:#fff; }
 .ed-ai-input textarea { flex:1; background:#2a2a2a; color:#eee; border:1px solid #3a3a3a;
   border-radius:12px; padding:10px 12px; resize:none; min-height:44px; max-height:140px;
   font-family:inherit; font-size:14px; line-height:1.4; outline:none; }

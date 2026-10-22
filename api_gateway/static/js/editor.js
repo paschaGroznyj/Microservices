@@ -220,12 +220,35 @@
         updateSelectionHint();
       });
       ta.placeholder = "Спросить агента о выделенных строках...";
+      stopPlaceholderRotation();
     } else {
       hint.style.display = "none";
       hint.innerHTML = "";
-      ta.placeholder = "Спросить агента по открытому файлу...";
+      startPlaceholderRotation();
     }
   }
+
+  // Чередуем подсказку в placeholder: про весь файл и про точечный вопрос по ПКМ.
+  const PH_VARIANTS = [
+    "Спросить агента по открытому файлу…",
+    "Выдели участок → ПКМ «Спросить агента о выделенном» для точечного вопроса",
+  ];
+  let phTimer = null, phIdx = 0;
+  function startPlaceholderRotation() {
+    const ta = $("ed-ai-text");
+    if (!ta) return;
+    ta.placeholder = PH_VARIANTS[phIdx];
+    if (phTimer) return;
+    phTimer = setInterval(() => {
+      if (pendingSelection || document.activeElement === ta || ta.value) return;
+      phIdx = (phIdx + 1) % PH_VARIANTS.length;
+      ta.placeholder = PH_VARIANTS[phIdx];
+    }, 3500);
+  }
+  function stopPlaceholderRotation() {
+    if (phTimer) { clearInterval(phTimer); phTimer = null; }
+  }
+  startPlaceholderRotation();
   if (window.marked) marked.setOptions({ breaks: true, gfm: true });
 
   function renderMd(text) {
@@ -287,13 +310,20 @@
     const text = ta.value.trim();
     if (!text || !CHAT_ID) return;
     let msg = text;
+    const fileUrl = (currentWs && currentPath)
+      ? `${location.origin}/editor?chat_id=${encodeURIComponent(CHAT_ID)}`
+      : null;
     if (pendingSelection) {
       const { text: selText, startLine, endLine } = pendingSelection;
       const loc = startLine === endLine ? `строка ${startLine}` : `строки ${startLine}–${endLine}`;
       const file = currentPath ? ` ${currentPath}` : "";
-      msg = `[Выделенный фрагмент${file}, ${loc}]\n\`\`\`\n${selText.slice(0, 8000)}\n\`\`\`\n\nВопрос: ${text}`;
+      const link = fileUrl ? `\nСсылка на файл в редакторе: ${fileUrl}` : "";
+      msg = `[Выделенный фрагмент${file}, ${loc}]\n\`\`\`\n${selText.slice(0, 8000)}\n\`\`\`${link}\n\nВопрос: ${text}`;
     } else if (currentPath && !isBinary) {
-      msg = `[Файл: ${currentPath}]\n\`\`\`\n${currentContent.slice(0, 8000)}\n\`\`\`\n\nВопрос: ${text}`;
+      const lines = currentContent ? currentContent.split("\n").length : 0;
+      const bytes = currentContent ? new Blob([currentContent]).size : 0;
+      const link = fileUrl ? `\nСсылка на файл в редакторе: ${fileUrl}` : "";
+      msg = `[Открыт файл: ${currentPath} · воркспейс ${currentWs} · ${lines} строк · ${bytes} байт]${link}\n\nФайл целиком НЕ приложен — при необходимости спроси и я пришлю содержимое или выделю фрагмент.\n\nВопрос: ${text}`;
     }
     aiAppend("user", text);
     ta.value = "";

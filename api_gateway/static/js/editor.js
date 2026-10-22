@@ -45,6 +45,48 @@
     const data = await apiGet(`/api/editor/tree?workspace_id=${encodeURIComponent(currentWs)}`);
     treeEl.innerHTML = "";
     renderTree(data.tree || [], treeEl);
+    startTtl();
+  }
+
+  // ── TTL области ──────────────────────────────────────
+  const ttlEl = $("ed-ttl");
+  const ttlTextEl = $("ed-ttl-text");
+  let ttlTimer = null;
+
+  function fmtTtl(sec) {
+    if (sec <= 0) return "истекла";
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    if (h > 0) return `${h}ч ${m}м`;
+    if (m > 0) return `${m}м`;
+    return `${sec}с`;
+  }
+
+  async function refreshTtl() {
+    if (!currentWs) { ttlEl.hidden = true; return; }
+    try {
+      const d = await apiGet(`/api/editor/ttl?workspace_id=${encodeURIComponent(currentWs)}`);
+      ttlEl.hidden = false;
+      if (d.immortal || d.remaining_seconds == null) {
+        ttlTextEl.textContent = "бессрочно";
+        ttlEl.classList.remove("warn", "crit");
+        ttlEl.title = "Область закреплена (git/keep) — иммунитет к TTL";
+        return;
+      }
+      const rem = d.remaining_seconds;
+      ttlTextEl.textContent = `живёт ещё ${fmtTtl(rem)}`;
+      ttlEl.classList.toggle("crit", rem < 1800);
+      ttlEl.classList.toggle("warn", rem >= 1800 && rem < 3600);
+      ttlEl.title = `TTL области 10ч, обновляется при активности. Осталось ~${fmtTtl(rem)}`;
+    } catch (e) {
+      ttlEl.hidden = true;
+    }
+  }
+
+  function startTtl() {
+    if (ttlTimer) clearInterval(ttlTimer);
+    refreshTtl();
+    ttlTimer = setInterval(refreshTtl, 60000);
   }
 
   function iconFor(node) { return node.type === "dir" ? "📁" : "📄"; }
@@ -124,6 +166,7 @@
       currentContent = content;
       saving = false;
       setDirty(false);
+      refreshTtl();
     } catch (e) {
       saving = false;
       saveBtn.disabled = false;

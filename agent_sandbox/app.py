@@ -1312,6 +1312,39 @@ async def editor_write_endpoint(workspace_id: str, body: EditorWriteRequest):
     return {"workspace_id": workspace_id, "path": body.path, "size": len(data), "ok": True}
 
 
+@app.get("/workspace/{workspace_id}/editor/ttl")
+async def editor_ttl_endpoint(workspace_id: str):
+    ws_path = _get_workspace_path(workspace_id)
+    if ws_path is None:
+        raise HTTPException(status_code=404, detail="Workspace не найден")
+
+    now = time.time()
+    immortal = _has_git(ws_path) or _has_keep_hold(ws_path)
+
+    last_active_file = os.path.join(ws_path, ".last_active")
+    created_file = os.path.join(ws_path, ".created_at")
+    try:
+        if os.path.exists(last_active_file):
+            ts = float(open(last_active_file).read().strip())
+        elif os.path.exists(created_file):
+            ts = float(open(created_file).read().strip())
+        else:
+            ts = now
+    except (ValueError, OSError):
+        ts = now
+
+    age = max(0.0, now - ts)
+    remaining = None if immortal else max(0, int(WORKSPACE_TTL_SECONDS - age))
+
+    return {
+        "workspace_id": workspace_id,
+        "ttl_seconds": WORKSPACE_TTL_SECONDS,
+        "last_active": ts,
+        "remaining_seconds": remaining,
+        "immortal": immortal,
+    }
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "version": "v3"}

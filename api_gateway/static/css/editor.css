@@ -33,6 +33,15 @@ body { display:flex; flex-direction:column; }
   border-radius:4px; padding:4px 10px; cursor:pointer; }
 .ed-ws button:hover { background:#1177bb; }
 .ed-filename { margin-left:auto; font-size:13px; color:#9cdcfe; }
+.ed-ttl { display:flex; align-items:center; gap:6px; font-size:12px; color:#9aa0a6;
+  padding:4px 10px; border-radius:99px; border:1px solid var(--border);
+  background:var(--surface2); white-space:nowrap; cursor:default; }
+.ed-ttl-dot { width:7px; height:7px; border-radius:50%; background:#3fb950; flex:none; }
+.ed-ttl.warn { color:#e3b341; border-color:color-mix(in srgb, #e3b341 40%, var(--border)); }
+.ed-ttl.warn .ed-ttl-dot { background:#e3b341; }
+.ed-ttl.crit { color:#f85149; border-color:color-mix(in srgb, #f85149 45%, var(--border)); }
+.ed-ttl.crit .ed-ttl-dot { background:#f85149; animation:ed-ttl-blink 1.2s ease-in-out infinite; }
+@keyframes ed-ttl-blink { 0%,100%{opacity:1;} 50%{opacity:.3;} }
 .ed-actions { display:flex; align-items:center; gap:8px; }
 .ed-actions button { background:#0e7a3f; color:#fff; border:none;
   border-radius:4px; padding:5px 14px; cursor:pointer; font-size:13px; font-weight:500; }

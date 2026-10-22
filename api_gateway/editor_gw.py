@@ -92,6 +92,18 @@ async def api_tree(request: Request, workspace_id: str):
     return r.json()
 
 
+@router.get("/api/editor/ttl")
+async def api_ttl(request: Request, workspace_id: str):
+    user = await _require_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Не авторизован")
+    await _assert_owns(user["user_id"], workspace_id)
+    r = await _http.get(f"{_sandbox_url}/workspace/{workspace_id}/editor/ttl")
+    if r.status_code != 200:
+        raise HTTPException(status_code=r.status_code, detail="Песочница: TTL недоступен")
+    return r.json()
+
+
 @router.get("/api/editor/file")
 async def api_file(request: Request, workspace_id: str, path: str):
     user = await _require_user(request)

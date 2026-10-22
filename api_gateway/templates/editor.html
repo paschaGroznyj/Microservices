@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AuGent · Редактор</title>
+<link rel="icon" type="image/png" href="/static/img/editor_icon.png">
 <link rel="stylesheet" href="/static/css/tools-panel.css">
 <link rel="stylesheet" href="/static/css/editor.css">
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -20,6 +21,10 @@
       <button id="ed-refresh" title="Обновить дерево">⟳</button>
     </div>
     <div class="ed-filename" id="ed-filename"></div>
+    <div class="ed-ttl" id="ed-ttl" title="Время жизни области (TTL 10ч, обновляется при активности)" hidden>
+      <span class="ed-ttl-dot"></span>
+      <span class="ed-ttl-text" id="ed-ttl-text">—</span>
+    </div>
     <div class="ed-actions">
       <button id="ed-save" title="Сохранить (Ctrl+S)" disabled>Сохранить</button>
     </div>

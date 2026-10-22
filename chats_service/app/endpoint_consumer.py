@@ -15,6 +15,8 @@ import time
 # Обратный путь для Telegram: ответ агента (gateway_target=="telegram") шлём
 # не на гейтвей, а прямо телеграм-боту (host-режим) через docker gateway IP.
 TG_BOT_PUSH_URL = os.getenv("TG_BOT_PUSH_URL", "http://172.28.0.1:8010/push_message")
+# Обратный путь для MAX (аналог Telegram, host-режим бота).
+MAX_BOT_PUSH_URL = os.getenv("MAX_BOT_PUSH_URL", "http://172.28.0.1:8011/push_message")
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 MOBILE_REPLY_KEY = "mobile:reply:{chat_id}"
@@ -158,6 +160,10 @@ class DBConsumer:
             elapsed = time.perf_counter() - start
             # logging.info(f"Message Service. Время чтобы вытащить из кафки и положить в БД = {elapsed:.4f}s")
             # Если сообщение от бота, отправляем обратно в основной сервис для WebSocket
+            if is_from_bot and gateway_target == "max":
+                deliver_chat_id = payload.get("max_chat_id") or chat_id
+                await self.send_to_max(deliver_chat_id, message, attached_files, message_id=message_id)
+                return
             if is_from_bot and gateway_target == "telegram":
                 # Ответ агента для Telegram: пушим напрямую боту (host-режим).
                 # chat_id в payload = session_id (ключ памяти). Физический адрес
@@ -543,6 +549,32 @@ class DBConsumer:
             logging.info(f"Message Service. Время отправки ответа в Telegram = {elapsed:.4f}s")
         except Exception as e:
             logger.error(f"Ошибка отправки в Telegram: {e}")
+
+    async def send_to_max(self, chat_id: str, text: str, files=None, message_id=None):
+        """Ответ агента → MAX-бот (host-режим, эндпоинт /push_message).
+
+        Бот сам нарежет длинный текст (лимит MAX ~4000) и выполнит 2-шаговую
+        загрузку вложений. Картинки агента лежат в generated_images по image_key
+        (Вариант B): дочитываем file_b64 ЗДЕСЬ (переиспользуем _hydrate_tg_files),
+        чтобы не гнать base64 через Kafka. Дисковые файлы (голос/видео/документы)
+        догидрируются по file_url/path с agent_service.
+        """
+        try:
+            start = time.perf_counter()
+            files = await self._hydrate_tg_files(files, chat_id=chat_id)
+            payload = {
+                "chat_id": str(chat_id),
+                "text": text or "",
+                "files": files or None,
+                "agent_message_id": message_id,
+                "parse_mode": "markdown",
+            }
+            response = requests.post(MAX_BOT_PUSH_URL, json=payload, timeout=60)
+            logger.info(f"Ответ агента отправлен в MAX: {response.status_code}")
+            elapsed = time.perf_counter() - start
+            logging.info(f"Message Service. Время отправки ответа в MAX = {elapsed:.4f}s")
+        except Exception as e:
+            logger.error(f"Ошибка отправки в MAX: {e}")
 
     async def send_to_main_service(self, chat_id: str, message: dict, gateway_url: str):
         """Отправляем сообщение обратно в основной сервис для WebSocket"""

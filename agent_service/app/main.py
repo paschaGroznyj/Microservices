@@ -120,12 +120,14 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     context_size = payload.get("context_size")
     message_id = payload.get("message_id")
     has_files = payload.get("has_files", False)
-    agent_model = payload.get("agent_model")
+    agent_model = payload.get("agent_model", "coder")
     gateway_target = payload.get("gateway_target", "main")
-    # Физический telegram chat id — адрес доставки ответа. chat_id (выше) для
-    # telegram теперь = session_id (ключ памяти), а push ответа идёт на tg_chat_id.
-    # Прокидываем его обратно в bot_message, чтобы endpoint_consumer знал, куда слать.
-    tg_chat_id = payload.get("tg_chat_id")
+    # Физический chat id мессенджера — УНИВЕРСАЛЬНЫЙ адрес доставки ответа (TG и MAX).
+    # chat_id (выше) для мессенджеров = session_id (ключ памяти агента), а push ответа
+    # идёт на физический chat_id. Бот кладёт его как max_chat_id (MAX) или tg_chat_id (TG) —
+    # берём любой непустой. Прокидываем обратно в bot_message, чтобы consumer знал, куда слать.
+    deliver_chat_id = payload.get("max_chat_id") or payload.get("tg_chat_id")
+    tg_chat_id = deliver_chat_id
     # Mobile-оркестратор: роутер в chats_service проставляет уровень обработки.
     #   agent_tier = "lite"  -> дешёвая модель (Haiku) отвечает сама (дефолт);
     #   agent_tier = "agent" -> полный агент с тулами (юзер явно позвал).
@@ -171,6 +173,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
 
     # message = f"[CatchPM, ТабельНомер: 23423423, Пользователь: Иванов Иванон Иваныч, user_id=-1234]\n" + text
     is_telegram = (gateway_target == "telegram")
+    is_max = (gateway_target == "max")
     is_mobile = (gateway_target == "mobile") # Если это мобильный клиент
     if is_telegram:
         # Источник Telegram: своя шапка (без CatchPM/табельного).
@@ -205,6 +208,11 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                 )
         else:
             message = build_tg_prefix(username, chat_id, _chat_type) + text
+    elif is_max:
+        # Источник MAX: простая шапка (без CatchPM/табельного, по аналогии с TG).
+        from agent.max.max_integration import build_max_prefix
+        _chat_type_max = "group" if str(chat_id).startswith("-") else "private"
+        message = build_max_prefix(username, chat_id, _chat_type_max) + text
     elif loop_tick:
         # Самоцикл: служебный тик. Текст уже содержит установку (из consumer).
         # Даём спец-шапку вместо табельного (tb_name/username у сервиса пустые).
@@ -226,8 +234,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
         # чтобы герой был один на обоих мозгах. В agent-режиме здесь собираем
         # полную инструкцию с характером; lite соберёт свою в run_lite.
         message = build_agent_instruction(get_persona_prompt(mobile_persona)) + text
-    # Скиллы юзера — только для CatchPM (в Telegram user_id это tg-id, не наш users).
-    if not is_telegram:
+    # Скиллы юзера — только для CatchPM (в Telegram/MAX user_id — id мессенджера, не наш users).
+    if not is_telegram and not is_max:
         selected_skills = await db.get_selected_skills_for_user(int(user_id))
         if selected_skills:
             selected_chunks = []
@@ -314,7 +322,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                                             request_id=request_id, user_id=user_id,
                                             chat_id=chat_id, database=db, selected_tools=selected_tools,
                                             context_size=context_size,
-                                            source=("telegram" if is_telegram else "CatchPM"),
+                                            source=("telegram" if is_telegram else ("max" if is_max else "CatchPM")),
                                             agent_model=agent_model,
                                             images=images,
                                             gateway_target=gateway_target,
@@ -381,6 +389,16 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             attached_files = []
             for f in files_to_send:
                 if f.get("kind") == "image":
+                    # Картинка с диска (agent сохранил файл: path есть и файл существует)
+                    # — тоже заливаем в OBS по тому же детерминированному ключу, иначе
+                    # после TTL-чистки /web/file не сможет её восстановить. Картинки из
+                    # generate_image лежат в БД (path=None/нет файла) — их в OBS не грузим.
+                    _img_path = f.get("path")
+                    if _img_path and os.path.isfile(_img_path):
+                        try:
+                            await obs_file_storage.upload_user_file(_img_path, chat_id)
+                        except Exception as _obs_err:
+                            logging.error(f"OBS upload failed for {_img_path}: {_obs_err}")
                     entry = {
                         "name": f.get("name") or "image.jpg",
                         "path": f.get("path"),
@@ -505,6 +523,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             "tokens_usage": response.get("tokens_usage"),
             "gateway_target": gateway_target,
             "tg_chat_id": tg_chat_id,
+            "max_chat_id": deliver_chat_id,
             "auto_title": response.get("auto_title"),
             # Mobile device actions (белый список): едут на телефон через
             # endpoint_consumer.push_to_mobile -> Redis -> long-poll мобилки.
@@ -532,7 +551,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                 "type_agent": "pm",
                 "action": "stopped",
                 "gateway_target": gateway_target,
-                "tg_chat_id": tg_chat_id
+                "tg_chat_id": tg_chat_id,
+                "max_chat_id": deliver_chat_id
             }
             await prod.send_and_wait("chat-messages", value=stop_message)
         except Exception as send_err:
@@ -551,7 +571,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                 "type_agent": "pm",
                 "action": "error",
                 "gateway_target": gateway_target,
-                "tg_chat_id": tg_chat_id
+                "tg_chat_id": tg_chat_id,
+                "max_chat_id": deliver_chat_id
             }
             await prod.send_and_wait("chat-messages", value=err_message)
         except Exception as send_err:

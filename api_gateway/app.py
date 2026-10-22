@@ -29,6 +29,7 @@ from config import (
 import presence
 import run_status
 import group_chat_gw
+import max_chats_gw
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -56,6 +57,13 @@ async def lifespan(app: FastAPI):
         admin_usernames=ADMIN_USERNAMES,
     )
 
+    # MAX-чаты: прокси-роутер /api/max/*
+    max_chats_gw.bind(
+        http_client=app.state.http_client,
+        chats_url=SERVICES['chats']['url'],
+        get_current_user=get_current_user,
+    )
+
     yield
 
     # Shutdown
@@ -63,6 +71,7 @@ async def lifespan(app: FastAPI):
     await app.state.http_client.aclose()
 app = FastAPI(title="API Gateway", lifespan=lifespan)
 app.include_router(group_chat_gw.router)
+app.include_router(max_chats_gw.router)
 # app = FastAPI(title="API Gateway", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
 # Service Discovery

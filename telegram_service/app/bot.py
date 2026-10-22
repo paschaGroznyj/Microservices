@@ -1976,7 +1976,7 @@ TG_MODEL_LABELS = {"coder": "GPT", "designer": "Claude", "universal": "GLM", "ge
 # намеренно ОТСУТСТВУЕТ — из телеги её включить нельзя.
 # Админская категория тулов (платный RouterAPI: видео/аудио). Видна только админу.
 TG_ADMIN_TOOL_CATEGORIES = ["media_gen", "admin"]
-TG_TOOL_CATEGORIES = ["pm_research", "internet", "content", "sessions", "skills"]
+TG_TOOL_CATEGORIES = ["internet", "content", "sessions"]
 
 
 def _parse_tg_admin_ids():
@@ -2019,7 +2019,7 @@ TG_TRIGGERS = ["mention", "orchestrator"]
 
 
 def _settings_summary(settings: dict) -> str:
-    model = settings.get("agent_model") or "coder"
+    model = TG_MODEL_LABELS.get(settings.get("agent_model")) or "coder"
     mode = settings.get("trigger_mode") or "orchestrator"
     tools = settings.get("selected_tools") or []
     tools_str = ", ".join(tools) if tools else "нет (только базовые)"
@@ -2064,9 +2064,6 @@ def _menu_root(settings: dict | None = None, is_admin: bool = False) -> InlineKe
     proactive = settings.get("proactive_enabled")
     if proactive is None:
         proactive = True
-    # Будильники (завтрак/обед/ужин + poke)
-    poke_label = ("\U0001f514 Будильники: вкл" if proactive
-                  else "\U0001f515 Будильники: выкл")
     rows = [
         [InlineKeyboardButton("Имя агента", callback_data="tg:menu:name")],
         [InlineKeyboardButton("Модель", callback_data="tg:menu:model")],
@@ -2074,7 +2071,6 @@ def _menu_root(settings: dict | None = None, is_admin: bool = False) -> InlineKe
         [InlineKeyboardButton("Триггер", callback_data="tg:menu:trigger")],
         [InlineKeyboardButton("Будильники", callback_data="tg:menu:alarms")],
         [InlineKeyboardButton("\U0001f4ac Сессии", callback_data="tg:sess:list:0")],
-        [InlineKeyboardButton(poke_label, callback_data="tg:toggle:proactive")],
     ]
     if is_admin:
         rows.append([InlineKeyboardButton("🔒 Кто жал /start", callback_data="tg:admin:startlog")])

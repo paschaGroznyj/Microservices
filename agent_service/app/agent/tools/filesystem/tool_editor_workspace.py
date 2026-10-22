@@ -12,7 +12,9 @@ tools/filesystem/tool_editor_workspace.py
     register_editor_workspace = make_editor_workspace_tool(agent, chat_id, user_id)
 """
 import logging
+from urllib.parse import quote
 from langchain.tools import tool
+from agent.core.config import EDITOR_BASE_URL
 
 log = logging.getLogger(__name__)
 
@@ -34,11 +36,12 @@ def make_editor_workspace_tool(agent, chat_id, user_id):
         Pass the SAME workspace_id you used to create the files. Optionally give a
         human-readable title (shown in the editor's workspace dropdown).
 
-        The editor is READ-ONLY: the user can view and navigate the file tree and
-        open files, but cannot save changes from there. Editing stays with you via
-        the normal sandbox tools.
+        The editor is READ-WRITE: the user can browse the file tree, open and
+        EDIT files, and save changes back to the workspace (atomic write). It is
+        the main-gateway web interface, not reachable from the corporate network.
 
-        Returns a short status string.
+        Returns a short status string that ALREADY CONTAINS the ready-to-open
+        editor link (domain + chat_id). Pass this link straight to the user.
         """
         if not workspace_id:
             return "Ошибка: нужен workspace_id."
@@ -53,8 +56,12 @@ def make_editor_workspace_tool(agent, chat_id, user_id):
             )
             log.info(f"[editor] закреплён воркспейс {workspace_id} за user={user_id}")
             label = (row or {}).get("title") or workspace_id
+            base = EDITOR_BASE_URL.rstrip("/")
+            link = f"{base}/editor"
+            if chat_id is not None:
+                link = f"{link}?chat_id={quote(str(chat_id))}"
             return (f"Воркспейс '{label}' закреплён за пользователем. "
-                    f"Он может открыть файлы в редакторе /editor (read-only).")
+                    f"Файлы можно открыть и редактировать в редакторе: {link}")
         except Exception as e:
             log.error(f"[editor] ошибка регистрации воркспейса: {e}")
             return f"Не удалось закрепить воркспейс: {e}"

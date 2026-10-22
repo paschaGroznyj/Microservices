@@ -230,7 +230,14 @@
 
   function renderMd(text) {
     if (window.marked && window.DOMPurify) {
-      return DOMPurify.sanitize(marked.parse(text || ""));
+      const html = DOMPurify.sanitize(marked.parse(text || ""));
+      const tmp = document.createElement("div");
+      tmp.innerHTML = html;
+      tmp.querySelectorAll("a").forEach(a => {
+        a.setAttribute("target", "_blank");
+        a.setAttribute("rel", "noopener noreferrer");
+      });
+      return tmp.innerHTML;
     }
     const d = document.createElement("div"); d.textContent = text; return d.innerHTML;
   }

@@ -2425,6 +2425,10 @@ class ChatApp {
             ADD_ATTR: ['colspan','rowspan','align']
         });
         st.liveBlockEl.innerHTML = html;
+        st.liveBlockEl.querySelectorAll('a[href]').forEach(a => {
+            a.setAttribute('target', '_blank');
+            a.setAttribute('rel', 'noopener noreferrer');
+        });
 
         if (container) {
             const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
@@ -2656,6 +2660,10 @@ class ChatApp {
             ADD_ATTR: ['colspan','rowspan','align']
         });
         targetBlock.innerHTML = html;
+        targetBlock.querySelectorAll('a[href]').forEach(a => {
+            a.setAttribute('target', '_blank');
+            a.setAttribute('rel', 'noopener noreferrer');
+        });
 
         // Файлы / actions вешаем на общую обёртку ответа. Работает и для
         // фонового чата — узел откреплён, но полностью готов к вставке.

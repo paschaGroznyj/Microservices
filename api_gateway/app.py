@@ -65,6 +65,8 @@ async def lifespan(app: FastAPI):
         sandbox_url=SERVICES['sandbox']['url'],
         get_current_user=get_current_user,
         templates=templates,
+    )
+
     # MAX-чаты: прокси-роутер /api/max/*
     max_chats_gw.bind(
         http_client=app.state.http_client,
@@ -1452,7 +1454,8 @@ async def get_chat_db_image(chat_id: str, message_id: str, file_name: str, reque
             # file_name нужен для диск-фолбэка на стороне agent_service:
             # если картинки нет в generated_images, она резолвится по имени
             # СТРОГО в whitelist-корнях (/app/generated_files, /sandbox).
-            params={"message_id": message_id, "image_key": image_key, "file_name": file_name},
+            params={"message_id": message_id, "image_key": image_key,
+                    "file_name": file_name, "chat_id": chat_id},
         )
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Agent service unreachable: {e}")

@@ -1250,6 +1250,44 @@ class ChatApp {
      * @param {string|undefined} messageId
      * @returns {HTMLElement}
      */
+    /* Контекстное меню по файлу агента: «Открыть в редакторе» / «Скачать». */
+    _showFileContextMenu(e, { name, url, chatId }) {
+        document.querySelectorAll('.fa-file-ctxmenu').forEach(m => m.remove());
+        const menu = document.createElement('div');
+        menu.className = 'fa-file-ctxmenu';
+        menu.style.cssText = `position:fixed;z-index:9999;left:${e.clientX}px;top:${e.clientY}px;`
+            + 'background:#252526;border:1px solid #444;border-radius:8px;padding:4px;'
+            + 'box-shadow:0 6px 24px rgba(0,0,0,.4);min-width:190px;font-size:13px;';
+
+        const mkItem = (label, onClick) => {
+            const it = document.createElement('div');
+            it.textContent = label;
+            it.style.cssText = 'padding:8px 12px;cursor:pointer;color:#ddd;border-radius:5px;';
+            it.addEventListener('mouseenter', () => it.style.background = '#094771');
+            it.addEventListener('mouseleave', () => it.style.background = 'transparent');
+            it.addEventListener('click', () => { onClick(); menu.remove(); });
+            return it;
+        };
+
+        menu.appendChild(mkItem('Открыть в редакторе', () => {
+            const q = chatId ? `?chat_id=${encodeURIComponent(chatId)}` : '';
+            window.open(`/editor${q}`, '_blank');
+        }));
+        menu.appendChild(mkItem('Скачать', () => {
+            if (url && url !== '#') {
+                const a = document.createElement('a');
+                a.href = url; a.download = name; a.rel = 'noopener noreferrer';
+                document.body.appendChild(a); a.click(); a.remove();
+            }
+        }));
+
+        document.body.appendChild(menu);
+        const close = (ev) => {
+            if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('mousedown', close); }
+        };
+        setTimeout(() => document.addEventListener('mousedown', close), 0);
+    }
+
     _renderBotFiles(files, messageId) {
         console.log('ВНУТРИ РЕНДИНДА ФАЙЛОВ ', files, messageId)
         const EXT_LABEL = {
@@ -1296,6 +1334,12 @@ class ChatApp {
             chip.download  = name;
             chip.title     = name;
             chip.setAttribute('rel', 'noopener noreferrer');
+
+            // ПКМ по файлу: «Открыть в редакторе» / «Скачать».
+            chip.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                this._showFileContextMenu(e, { name, url, chatId: this.currentChat });
+            });
 
             chip.innerHTML = `
 <span class="fa-chip__icon" aria-hidden="true">

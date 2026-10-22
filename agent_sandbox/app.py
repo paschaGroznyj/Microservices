@@ -1200,6 +1200,78 @@ async def cleanup_workspaces_endpoint():
 
 # ── Health ─────────────────────────────────────────────────────────
 
+# ── Editor (read-only) ───────────────────────────────────────
+# Дерево и чтение файлов воркспейса для веб-редактора (Monaco). Без записи, без исполнения.
+
+EDITOR_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", ".tasks", ".ws_hold"}
+EDITOR_MAX_READ_BYTES = 5 * 1024 * 1024
+
+
+def _editor_build_tree(base: str) -> list:
+    base_real = os.path.realpath(base)
+
+    def walk(dir_path: str) -> list:
+        items = []
+        try:
+            entries = sorted(os.scandir(dir_path), key=lambda e: (not e.is_dir(), e.name.lower()))
+        except OSError:
+            return items
+        for e in entries:
+            if e.name in EDITOR_SKIP_DIRS:
+                continue
+            rel = os.path.relpath(e.path, base_real)
+            if e.is_dir(follow_symlinks=False):
+                items.append({"name": e.name, "path": rel, "type": "dir", "children": walk(e.path)})
+            else:
+                try:
+                    size = e.stat().st_size
+                except OSError:
+                    size = 0
+                items.append({"name": e.name, "path": rel, "type": "file", "size": size})
+        return items
+
+    return walk(base_real)
+
+
+@app.get("/workspace/{workspace_id}/editor/tree")
+async def editor_tree_endpoint(workspace_id: str):
+    ws_path = _get_workspace_path(workspace_id)
+    if ws_path is None:
+        raise HTTPException(status_code=404, detail="Workspace не найден")
+    return {"workspace_id": workspace_id, "tree": _editor_build_tree(ws_path)}
+
+
+@app.get("/workspace/{workspace_id}/editor/read")
+async def editor_read_endpoint(workspace_id: str, path: str):
+    ws_path = _get_workspace_path(workspace_id)
+    if ws_path is None:
+        raise HTTPException(status_code=404, detail="Workspace не найден")
+    try:
+        target = _safe_join(ws_path, path)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Путь вне workspace")
+    if not os.path.isfile(target):
+        raise HTTPException(status_code=404, detail=f"Файл '{path}' не найден")
+    size = os.path.getsize(target)
+    if size > EDITOR_MAX_READ_BYTES:
+        raise HTTPException(status_code=413, detail=f"Файл слишком большой ({size} байт)")
+    try:
+        with open(target, "rb") as f:
+            raw = f.read()
+        text = raw.decode("utf-8")
+        is_binary = False
+    except UnicodeDecodeError:
+        text = ""
+        is_binary = True
+    return {
+        "workspace_id": workspace_id,
+        "path": path,
+        "size": size,
+        "is_binary": is_binary,
+        "content": text,
+    }
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "version": "v3"}

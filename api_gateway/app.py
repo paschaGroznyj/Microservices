@@ -29,6 +29,8 @@ from config import (
 import presence
 import run_status
 import group_chat_gw
+import editor_gw
+import os
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -56,6 +58,14 @@ async def lifespan(app: FastAPI):
         admin_usernames=ADMIN_USERNAMES,
     )
 
+    editor_gw.bind(
+        http_client=app.state.http_client,
+        chats_url=SERVICES['chats']['url'],
+        sandbox_url=SERVICES['sandbox']['url'],
+        get_current_user=get_current_user,
+        templates=templates,
+    )
+
     yield
 
     # Shutdown
@@ -63,6 +73,7 @@ async def lifespan(app: FastAPI):
     await app.state.http_client.aclose()
 app = FastAPI(title="API Gateway", lifespan=lifespan)
 app.include_router(group_chat_gw.router)
+app.include_router(editor_gw.router)
 # app = FastAPI(title="API Gateway", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
 # Service Discovery
@@ -100,6 +111,10 @@ SERVICES = {
          },
     "agent_service": {
         "url": f"http://agent_service:{PORT_PM_AGENT}",
+        "health_endpoint": "/health",
+    },
+    "sandbox": {
+        "url": os.getenv("SANDBOX_SERVICE_URL", "http://agent_sandbox:8005"),
         "health_endpoint": "/health",
     }
 }

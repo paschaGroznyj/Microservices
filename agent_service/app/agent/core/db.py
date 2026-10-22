@@ -1872,6 +1872,41 @@ class AgentDB:
                  days_of_week, trigger_date, prompt, addressed)
         return dict(row)
 
+    async def register_editor_workspace(self, user_id, workspace_id: str,
+                                        chat_id=None, title=None) -> dict:
+        """Закрепить воркспейс песочницы за юзером в реестре editor_workspaces
+        (та же БД, что у chats_service). Читает редактор для дерева проекта."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                INSERT INTO editor_workspaces (user_id, workspace_id, chat_id, title)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (user_id, workspace_id) DO UPDATE SET
+                    chat_id    = COALESCE(EXCLUDED.chat_id, editor_workspaces.chat_id),
+                    title      = COALESCE(EXCLUDED.title, editor_workspaces.title),
+                    is_active  = TRUE,
+                    updated_at = CURRENT_TIMESTAMP
+                RETURNING id, user_id, workspace_id, chat_id, title, is_active, created_at
+            """, int(user_id), str(workspace_id), chat_id, title)
+        return dict(row) if row else None
+
+    async def list_editor_workspaces(self, user_id, chat_id=None) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            if chat_id:
+                rows = await conn.fetch("""
+                    SELECT id, workspace_id, chat_id, title, created_at
+                    FROM editor_workspaces
+                    WHERE user_id = $1 AND is_active = TRUE AND chat_id = $2
+                    ORDER BY updated_at DESC
+                """, int(user_id), str(chat_id))
+            else:
+                rows = await conn.fetch("""
+                    SELECT id, workspace_id, chat_id, title, created_at
+                    FROM editor_workspaces
+                    WHERE user_id = $1 AND is_active = TRUE
+                    ORDER BY updated_at DESC
+                """, int(user_id))
+        return [dict(r) for r in rows]
+
     async def list_tg_triggers(self, chat_id: str) -> list[dict]:
         """Активные триггеры чата — чтобы агент мог посмотреть что уже стоит."""
         async with self.pool.acquire() as conn:

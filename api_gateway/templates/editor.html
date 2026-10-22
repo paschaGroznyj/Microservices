@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AuGent · Редактор</title>
+<link rel="stylesheet" href="/static/css/editor.css">
+</head>
+<body data-chat-id="{{ chat_id }}">
+  <div class="ed-topbar">
+    <div class="ed-brand">AuGent · Редактор <span class="ed-ro">read-only</span></div>
+    <div class="ed-ws">
+      <label>Область:</label>
+      <select id="ed-ws-select"></select>
+      <button id="ed-refresh" title="Обновить дерево">⟳</button>
+    </div>
+    <div class="ed-filename" id="ed-filename"></div>
+  </div>
+  <div class="ed-main">
+    <aside class="ed-tree" id="ed-tree"></aside>
+    <section class="ed-editor" id="ed-editor"></section>
+    <aside class="ed-ai" id="ed-ai">
+      <div class="ed-ai-head">AI-ассистент</div>
+      <div class="ed-ai-log" id="ed-ai-log"></div>
+      <div class="ed-ai-input">
+        <textarea id="ed-ai-text" placeholder="Спросить агента по открытому файлу..."></textarea>
+        <button id="ed-ai-send">→</button>
+      </div>
+    </aside>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
+  <script src="/static/js/editor.js"></script>
+</body>
+</html>

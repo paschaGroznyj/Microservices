@@ -1,0 +1,38 @@
+* { box-sizing: border-box; }
+html, body { margin:0; height:100%; background:#1e1e1e; color:#ccc;
+  font-family: -apple-system, Segoe UI, Roboto, sans-serif; }
+body { display:flex; flex-direction:column; }
+.ed-topbar { display:flex; align-items:center; gap:16px; padding:8px 14px;
+  background:#252526; border-bottom:1px solid #333; flex:0 0 auto; }
+.ed-brand { font-weight:600; font-size:14px; }
+.ed-ro { font-size:11px; color:#888; border:1px solid #444; border-radius:4px;
+  padding:1px 6px; margin-left:6px; }
+.ed-ws { display:flex; align-items:center; gap:6px; font-size:13px; }
+.ed-ws select { background:#1e1e1e; color:#ccc; border:1px solid #444;
+  border-radius:4px; padding:4px 8px; min-width:200px; }
+.ed-ws button, .ed-ai-input button { background:#0e639c; color:#fff; border:none;
+  border-radius:4px; padding:4px 10px; cursor:pointer; }
+.ed-ws button:hover { background:#1177bb; }
+.ed-filename { margin-left:auto; font-size:13px; color:#9cdcfe; }
+.ed-main { flex:1 1 auto; display:flex; min-height:0; }
+.ed-tree { width:260px; flex:0 0 auto; overflow:auto; background:#252526;
+  border-right:1px solid #333; padding:6px 0; font-size:13px; }
+.ed-editor { flex:1 1 auto; min-width:0; }
+.ed-ai { width:340px; flex:0 0 auto; display:flex; flex-direction:column;
+  background:#252526; border-left:1px solid #333; }
+.ed-ai-head { padding:8px 12px; font-weight:600; border-bottom:1px solid #333; font-size:13px; }
+.ed-ai-log { flex:1 1 auto; overflow:auto; padding:10px 12px; font-size:13px;
+  line-height:1.5; white-space:pre-wrap; }
+.ed-ai-msg { margin-bottom:12px; }
+.ed-ai-msg.user { color:#9cdcfe; }
+.ed-ai-msg.bot { color:#ccc; }
+.ed-ai-input { display:flex; gap:6px; padding:8px; border-top:1px solid #333; }
+.ed-ai-input textarea { flex:1; background:#1e1e1e; color:#ccc; border:1px solid #444;
+  border-radius:4px; padding:6px 8px; resize:none; height:52px; font-family:inherit; font-size:13px; }
+.ed-node { padding:2px 8px; cursor:pointer; white-space:nowrap; user-select:none; }
+.ed-node:hover { background:#2a2d2e; }
+.ed-node.dir { color:#c5c5c5; font-weight:500; }
+.ed-node.file { color:#bbb; }
+.ed-node.sel { background:#094771; color:#fff; }
+.ed-children { padding-left:14px; }
+.ed-ic { display:inline-block; width:14px; text-align:center; margin-right:4px; opacity:.8; }

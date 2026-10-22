@@ -279,6 +279,7 @@ services:
       SECRET_KEY: ${SECRET_KEY}
       ALGORITHM: ${ALGORITHM}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      SANDBOX_SERVICE_URL: ${SANDBOX_SERVICE_URL:-http://agent_sandbox:8005}
     volumes:
       - ./api_gateway:/app
     depends_on:

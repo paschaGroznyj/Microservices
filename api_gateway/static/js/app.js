@@ -3734,30 +3734,37 @@ class ChatApp {
        VISIBILITY / ONLINE RECONNECT
     ══════════════════════════════════════════ */
     initVisibilityReconnect() {
-        // Переподключаемся когда вкладка снова становится активной
+        // Жив ли сокет АКТИВНОГО чата. Источник истины — this._sockets[key],
+        // а не легаси-поле this.ws (при мультиплексе оно почти всегда undefined).
+        const activeWsAlive = () => {
+            const key = String(this.currentChat);
+            const ws = this._sockets && this._sockets[key];
+            return ws && (ws.readyState === WebSocket.OPEN ||
+                          ws.readyState === WebSocket.CONNECTING);
+        };
+
+        // Пересоздать сокет при необходимости и ВСЕГДА авторитетно
+        // пересинхронизировать UI по серверу: при обрыве сети onclose гасит
+        // Stop-кнопку и открывает ввод, а генерация на бэке продолжается.
+        // _restoreRunningUI спросит Redis /run_status и поднимет Stop/плейсхолдер,
+        // если агент всё ещё в работе — ровно как это делает F5.
+        const resync = (reason) => {
+            if (!this.currentChat) return;
+            if (!activeWsAlive()) {
+                console.log(`[WS] ${reason} — reconnecting chat=${this.currentChat}`);
+                this.connectWebSocket(this.currentChat);
+            }
+            this._restoreRunningUI(this.currentChat).catch(() => {});
+        };
+
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible' && this.currentChat) {
-                const wsAlive = this.ws &&
-                    (this.ws.readyState === WebSocket.OPEN ||
-                     this.ws.readyState === WebSocket.CONNECTING);
-                if (!wsAlive) {
-                    console.log(`[WS] Tab became visible, ws is dead — reconnecting chat=${this.currentChat}`);
-                    this.connectWebSocket(this.currentChat);
-                }
+                resync('Tab became visible');
             }
         });
 
-        // Переподключаемся при восстановлении сети
         window.addEventListener('online', () => {
-            if (this.currentChat) {
-                const wsAlive = this.ws &&
-                    (this.ws.readyState === WebSocket.OPEN ||
-                     this.ws.readyState === WebSocket.CONNECTING);
-                if (!wsAlive) {
-                    console.log(`[WS] Network back online — reconnecting chat=${this.currentChat}`);
-                    this.connectWebSocket(this.currentChat);
-                }
-            }
+            resync('Network back online');
         });
     }
 

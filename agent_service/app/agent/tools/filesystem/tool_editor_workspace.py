@@ -57,9 +57,11 @@ def make_editor_workspace_tool(agent, chat_id, user_id):
             log.info(f"[editor] закреплён воркспейс {workspace_id} за user={user_id}")
             label = (row or {}).get("title") or workspace_id
             base = EDITOR_BASE_URL.rstrip("/")
-            link = f"{base}/editor"
+            params = []
             if chat_id is not None:
-                link = f"{link}?chat_id={quote(str(chat_id))}"
+                params.append(f"chat_id={quote(str(chat_id))}")
+            params.append(f"workspace_id={quote(str(workspace_id))}")
+            link = f"{base}/editor?{'&'.join(params)}"
             return (f"Воркспейс '{label}' закреплён за пользователем. "
                     f"Файлы можно открыть и редактировать в редакторе: {link}")
         except Exception as e:

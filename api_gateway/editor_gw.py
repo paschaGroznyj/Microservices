@@ -64,7 +64,8 @@ async def editor_page(request: Request):
     if not user:
         return RedirectResponse(url="/login-page", status_code=302)
     chat_id = request.query_params.get("chat_id", "")
-    return _templates.TemplateResponse("editor.html", {"request": request, "chat_id": chat_id})
+    workspace_id = request.query_params.get("workspace_id", "")
+    return _templates.TemplateResponse("editor.html", {"request": request, "chat_id": chat_id, "workspace_id": workspace_id})
 
 
 @router.get("/api/editor/workspaces")

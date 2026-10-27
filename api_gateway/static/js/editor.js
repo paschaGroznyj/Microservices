@@ -1,5 +1,11 @@
 (() => {
   const CHAT_ID = document.body.dataset.chatId || "";
+  const URL_WS = (() => {
+    const fromData = document.body.dataset.workspaceId || "";
+    if (fromData) return fromData;
+    try { return new URLSearchParams(location.search).get("workspace_id") || ""; }
+    catch (_) { return ""; }
+  })();
   let editor = null, monacoRef = null;
   let currentWs = null, currentPath = null, currentContent = "";
   let dirty = false, isBinary = false, saving = false;
@@ -9,6 +15,16 @@
   const wsSelect = $("ed-ws-select");
   const filenameEl = $("ed-filename");
   const saveBtn = $("ed-save");
+
+  // обновить workspace_id в адресной строке без перезагрузки (F5/копия ссылки держат область)
+  function syncUrlWs(wsId) {
+    try {
+      const u = new URL(location.href);
+      if (wsId) u.searchParams.set("workspace_id", wsId);
+      else u.searchParams.delete("workspace_id");
+      history.replaceState(null, "", u);
+    } catch (_) {}
+  }
 
   // ── API ──────────────────────────────────────────────
   async function apiGet(url) {
@@ -36,7 +52,10 @@
       o.textContent = w.title || w.workspace_id;
       wsSelect.appendChild(o);
     }
-    currentWs = list[0].workspace_id;
+    const wanted = URL_WS && list.some(w => w.workspace_id === URL_WS) ? URL_WS : null;
+    currentWs = wanted || list[0].workspace_id;
+    wsSelect.value = currentWs;
+    syncUrlWs(currentWs);
     await loadTree();
   }
 
@@ -232,6 +251,7 @@
     currentWs = wsSelect.value || null;
     currentPath = null; isBinary = false; setDirty(false);
     filenameEl.textContent = "";
+    syncUrlWs(currentWs);
     await loadTree();
   });
   $("ed-refresh").addEventListener("click", loadTree);

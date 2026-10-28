@@ -71,6 +71,17 @@ class MaxDB:
                     proactive_enabled      BOOLEAN DEFAULT FALSE,
                     updated_at             TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE TABLE IF NOT EXISTS max_chat_members (
+                    chat_id     TEXT NOT NULL,
+                    user_id     BIGINT NOT NULL,
+                    username    TEXT,
+                    first_name  TEXT,
+                    is_bot      BOOLEAN NOT NULL DEFAULT FALSE,
+                    last_seen   TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (chat_id, user_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_max_members_chat
+                    ON max_chat_members(chat_id);
             """)
 
     async def upsert_chat(self, chat_id: str, added_by_user_id: int | None) -> dict:
@@ -186,3 +197,25 @@ class MaxDB:
                 f"UPDATE max_chat_settings SET {', '.join(sets)} WHERE chat_id=${i}", *args
             )
         return await self.get_settings(chat_id)
+
+    async def upsert_member(self, chat_id: str, user_id: int,
+                            username: str | None, first_name: str | None,
+                            is_bot: bool = False) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO max_chat_members
+                    (chat_id, user_id, username, first_name, is_bot, last_seen)
+                VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+                ON CONFLICT (chat_id, user_id) DO UPDATE
+                    SET username   = COALESCE(EXCLUDED.username, max_chat_members.username),
+                        first_name = COALESCE(EXCLUDED.first_name, max_chat_members.first_name),
+                        last_seen  = CURRENT_TIMESTAMP;
+            """, str(chat_id), int(user_id), username, first_name, bool(is_bot))
+
+    async def get_random_member(self, chat_id: str) -> dict | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT user_id, username, first_name FROM max_chat_members "
+                "WHERE chat_id=$1 AND is_bot=FALSE ORDER BY random() LIMIT 1",
+                str(chat_id))
+            return dict(row) if row else None

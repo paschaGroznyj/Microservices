@@ -690,6 +690,29 @@ async def max_allowed():
     return {"chats": await max_db.list_active_chat_ids()}
 
 
+class MaxMemberIn(BaseModel):
+    chat_id: str
+    user_id: int
+    username: str | None = None
+    first_name: str | None = None
+    is_bot: bool = False
+
+
+@app.post("/max/members")
+async def max_upsert_member(body: MaxMemberIn):
+    """Пассивный сбор участников MAX-чата (бот шлёт каждого написавшего)."""
+    await max_db.upsert_member(
+        body.chat_id, body.user_id, body.username, body.first_name, body.is_bot
+    )
+    return {"status": "ok"}
+
+
+@app.get("/max/members/{chat_id}/random")
+async def max_random_member(chat_id: str):
+    m = await max_db.get_random_member(chat_id)
+    return {"member": m}
+
+
 @app.get("/max/settings/{chat_id}")
 async def max_get_settings(chat_id: str):
     return await max_db.get_settings(chat_id) or {}

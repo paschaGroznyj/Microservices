@@ -9,6 +9,8 @@ tools/telegram/tool_send_file.py
 import logging
 import os
 import re
+import base64
+import tempfile
 import httpx
 
 from langchain.tools import tool
@@ -62,15 +64,68 @@ async def _fetch_file_from_sandbox(
         return False
 
 
+async def _materialize_image_key(agent, image_key: str) -> dict | None:
+    """Достаёт сгенерированную картинку из БД (generated_images) по image_key
+    и пишет её во ВРЕМЕННЫЙ файл на диск, чтобы транспорт мог отдать её так же,
+    как обычный saved_files. БД остаётся источником истины — файл эфемерный.
+
+    Возвращает {"path", "name", "size_bytes"} или None, если не нашли/ошибка.
+    """
+    db = getattr(agent, "db", None)
+    pool = getattr(db, "pool", None) if db else None
+    if pool is None:
+        log.warning("send_file_to_user: нет пула БД для материализации image_key=%s", image_key)
+        return None
+
+    key = str(image_key).strip()
+    if not key:
+        return None
+
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT image_data, file_name, mime_type FROM generated_images "
+                "WHERE image_key::text = $1 LIMIT 1",
+                key,
+            )
+    except Exception as e:
+        log.error("send_file_to_user: ошибка запроса image_key=%s: %s", key, e)
+        return None
+
+    if not row or not row["image_data"]:
+        return None
+
+    try:
+        raw = bytes(row["image_data"])
+        fname = row["file_name"] or f"{key}.jpg"
+        ext = os.path.splitext(fname)[1].lower() or ".jpg"
+        # Кладём в /app/generated_files (разрешённый корень), а не в /tmp —
+        # чтобы путь прошёл валидацию _valid_send_path и пережил отдачу фронту.
+        dest_dir = os.path.join("/app/generated_files", "_img_keys")
+        os.makedirs(dest_dir, exist_ok=True)
+        fd, path = tempfile.mkstemp(prefix=f"gi_{key[:8]}_", suffix=ext, dir=dest_dir)
+        with os.fdopen(fd, "wb") as f:
+            f.write(raw)
+        return {"path": path, "name": os.path.basename(fname), "size_bytes": len(raw)}
+    except Exception as e:
+        log.error("send_file_to_user: не смог материализовать image_key=%s: %s", key, e)
+        return None
+
+
 def make_send_file_tool(agent):
 
     @tool
-    async def send_file_to_user(path: str) -> dict:
+    async def send_file_to_user(path: str = "", image_key: str = "") -> dict:
         """
         It sends the user an existing file from the sandbox or
         a folder of generated files. Use it when the user asks
         send/show/upload a file that was created earlier
         (for example, via execute_python_code in the same or previous session).
+
+        For images created by generate_image: pass image_key (the UUID from the
+        generate_image report) instead of path — the picture lives in the DB
+        (generated_images), it has NO disk path, so passing a path will fail.
+        With image_key the tool pulls the binary from the DB and sends it.
 
         It does not create a new file, but only marks the existing one for sending.
 
@@ -89,7 +144,40 @@ def make_send_file_tool(agent):
             It is possible to automatically swap files from the Factory, for this you need to specify the path to the file.
             in this format: /tmp/exec/workspaces/{workspace_id}/output/<filename>
             The file will be automatically saved in /app/generated_files/{workspace_id}.
+            image_key: UUID of a picture created by generate_image (from its report).
+                Use this instead of path for generated images — they live only in
+                the DB and have no disk path.
         """
+        # 0. Картинка generate_image: пути на диске нет, только image_key в БД.
+        #    Материализуем бинарник во временный файл и отдаём как обычный saved_files.
+        if image_key and str(image_key).strip():
+            mat = await _materialize_image_key(agent, image_key)
+            if mat is None:
+                return {
+                    "ok": False,
+                    "error": f"Картинка с image_key '{image_key}' не найдена в хранилище. "
+                             f"Проверь ключ через find_generated_image.",
+                }
+            return {
+                "ok": True,
+                "saved_files": [
+                    {
+                        "filename": mat["name"],
+                        "name": mat["name"],
+                        "path": mat["path"],
+                        "size_bytes": mat["size_bytes"],
+                        "kind": "image",
+                    }
+                ],
+            }
+
+        if not path or not str(path).strip():
+            return {
+                "ok": False,
+                "error": "Не передан ни path, ни image_key. Укажи путь к файлу "
+                         "или image_key сгенерированной картинки.",
+            }
+
         target = _valid_send_path(path)
 
         # 2. Если файла нет локально — пробуем подгрузить его из Sandbox

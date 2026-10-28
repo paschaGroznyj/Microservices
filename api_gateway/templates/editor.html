@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AuGent · Редактор</title>
+<link rel="icon" type="image/png" href="/static/img/editor_icon.png">
+<link rel="stylesheet" href="/static/css/tools-panel.css">
+<link rel="stylesheet" href="/static/css/editor.css">
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.5/dist/purify.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body data-chat-id="{{ chat_id }}" data-workspace-id="{{ workspace_id }}">
+  <div class="ed-topbar">
+    <div class="ed-brand">AuGent · Редактор</div>
+    <div class="ed-ws">
+      <label>Область:</label>
+      <select id="ed-ws-select"></select>
+      <button id="ed-refresh" title="Обновить дерево">⟳</button>
+    </div>
+    <div class="ed-filename" id="ed-filename"></div>
+    <div class="ed-ttl" id="ed-ttl" title="Время жизни области (TTL 10ч, обновляется при активности)" hidden>
+      <span class="ed-ttl-dot"></span>
+      <span class="ed-ttl-text" id="ed-ttl-text">—</span>
+    </div>
+    <div class="ed-actions">
+      <button id="ed-save" title="Сохранить (Ctrl+S)" disabled>Сохранить</button>
+    </div>
+  </div>
+  <div class="ed-main">
+    <aside class="ed-tree" id="ed-tree"></aside>
+    <section class="ed-editor" id="ed-editor"></section>
+    <aside class="ed-ai" id="ed-ai">
+      <div class="ed-ai-head">Агент</div>
+      <div class="ed-ai-log chat-main-inner chat-active" id="ed-ai-log"></div>
+      <div class="message-input-container ed-ai-input">
+        <div class="chat-input-area">
+          <div class="chat-input-box" id="ed-ai-input-box">
+            <textarea id="ed-ai-text" class="chat-input-field" placeholder="Спросить агента по открытому файлу..."></textarea>
+            <div class="chat-input-footer ed-ai-footer">
+              <span class="attach-btn ed-ai-attach-anchor" style="display:none"></span>
+              <!-- ToolsPanel.inject() + ModelPicker.inject() вставят сюда кнопки 🔧 и выбор модели -->
+              <button id="ed-ai-send" class="chat-send-btn" title="Отправить (Ctrl+Enter)" aria-label="Отправить">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
+  <script type="module" src="/static/js/tools-panel.js"></script>
+  <script type="module" src="/static/js/editor.js"></script>
+</body>
+</html>

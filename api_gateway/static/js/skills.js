@@ -274,7 +274,7 @@ ${body}`;
       const txt = data.prompt || '';
       this.app?.switchTab?.('agent');
       await this.app?.renderMessageInput?.();
-      this._appendToInput(txt);
+      this._setSkillInInput(txt);
       this.app?.showToast?.('Скилл скопирован в чат');
     },
     _enterInlineEdit(skillId){
@@ -593,6 +593,36 @@ ${body}`;
       } else {
         field.value = (field.value || '') + text;
       }
+      field.dispatchEvent(new Event('input', {bubbles:true}));
+    },
+    // Вставка скилла в поле ввода с ЗАМЕНОЙ ранее вставленного скилла.
+    // Повторный клик по той же кнопке или клик по другому скиллу подменяет
+    // скилл-блок, не плодя дубли и не затирая текст, набранный пользователем.
+    _setSkillInInput(text){
+      const field = document.getElementById('message-input');
+      if (!field) return;
+      const S = '\u2063[skill]\u2063';   // невидимые маркеры-границы скилл-блока
+      const E = '\u2063[/skill]\u2063';
+      const block = S + text + E;
+      const read = () => field.isContentEditable ? (field.innerText || '') : (field.value || '');
+      const write = (v) => {
+        if (field.isContentEditable) field.textContent = v;
+        else field.value = v;
+      };
+      const cur = read();
+      const si = cur.indexOf(S);
+      const ei = cur.indexOf(E);
+      let next;
+      if (si !== -1 && ei !== -1 && ei > si) {
+        // уже есть вставленный скилл — заменяем ровно его блок
+        next = cur.slice(0, si) + block + cur.slice(ei + E.length);
+      } else {
+        // первого скилла ещё нет — дописываем к пользовательскому тексту
+        const sep = cur && !cur.endsWith('\n') ? '\n' : '';
+        next = cur + sep + block;
+      }
+      field.focus();
+      write(next);
       field.dispatchEvent(new Event('input', {bubbles:true}));
     },
     _bindDropToInput(){

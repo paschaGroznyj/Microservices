@@ -403,49 +403,7 @@ So you can then spy on it/reuse it within the session.
             )
             Loading pattern: wait_until="domcontentloaded" (NOT networkidle — freezes
             on advertising pixels/analytics), then await page.evaluate("document.fonts.ready").
-
-        1b. MAXIMUM QUALITY (4K) + NO EXTRA MARGINS — when a slide/screenshot must be
-            crisp (code, hairline borders, gradients). render_html_to_image is NOT
-            suitable here: it is pinned to device_scale_factor=1 and JPEG. For high-DPI
-            write Playwright directly:
-              - RESOLUTION BY MULTIPLIER, NOT BY CANVAS. Keep the canvas at the logical
-                slide size (viewport 1280x720 for 16:9) and get sharpness via
-                device_scale_factor=2..3. Physical raster = canvas x scale
-                (1280x720 x 3 = 3840x2160 = 4K). Enlarging the canvas itself breaks the
-                tuned layout; the multiplier gives honest integer sharpness WITHOUT
-                touching the layout.
-              - FORMAT: PNG lossless (type="png"), NOT JPEG - JPEG artifacts on code and
-                thin lines are visible at once. JPEG q96 only if a compact file is needed.
-              - NO EXTRA MARGINS: full_page=False (capture exactly the viewport - with True
-                Playwright grabs the whole scroll and the aspect ratio drifts) PLUS a CSS
-                reset in each slide <head>:
-                    * { margin:0; padding:0; box-sizing:border-box; }
-                    html,body { width:1280px; height:720px; overflow:hidden; }
-                    .slide   { width:1280px; height:720px; overflow:hidden; position:relative; }
-                overflow:hidden + fixed 1280x720 guarantee full_page=False yields a frame
-                with no white edges.
-              - LOAD PATTERN: wait_until="domcontentloaded" + await
-                page.evaluate("document.fonts.ready") + await page.wait_for_timeout(400).
-            Skeleton (async wrapped in main()):
-                async def render_slide(html, out_png, w=1280, h=720, scale=3):
-                    async with async_playwright() as p:
-                        browser = await p.chromium.launch(args=["--no-sandbox"])
-                        page = await browser.new_page(
-                            viewport={"width": w, "height": h},
-                            device_scale_factor=scale,        # 2..3 -> up to 4K
-                        )
-                        await page.goto(f"file://{html}", wait_until="domcontentloaded")
-                        await page.evaluate("document.fonts.ready")
-                        await page.wait_for_timeout(400)
-                        await page.screenshot(path=out_png, type="png", full_page=False)
-                        await browser.close()
-            Two DIFFERENT "quality" levels, do not confuse: device_scale_factor decides the
-            sharpness that actually lands in the PPTX/PDF; -r 150/300 in pdftoppm is only for
-            QA (rendering the finished PDF to JPEG for inspection), those pixels do NOT go
-            into the file. Price: PNG + scale 3 inflates size (8 slides 4K ~ 1.5-2 MB vs
-            ~0.7 MB for JPEG q96 scale 1) - justified for a 4K screen, drop to JPEG q96 for
-            email.
-
+        
         IMPORTANT: the code is executed as normal.py script, top-level await is NOT working.
         All await calls (render_slides_to_pdf, render_html_to_image, parse_web_page)
         wrap in async def main(): ...; asyncio.run(main())

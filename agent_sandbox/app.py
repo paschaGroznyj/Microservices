@@ -309,6 +309,26 @@ def _run_code_sync(code: str, timeout: int, run_dir: str, stdin: str = "", task_
             # Если симлинк не создался (например на Windows без прав), делаем фоллбэк
             pass
 
+    # 4b. Монтируем остальное содержимое корня воркспейса симлинками внутрь таски,
+    # чтобы Python-код видел не только output/, но и src/, assets/ и прочие папки
+    # (убирает класс ошибок "файл есть в воркспейсе, но из кода не виден").
+    # output/ уже смонтирован выше; служебные каталоги пропускаем.
+    _WS_MOUNT_SKIP = {".tasks", OUTPUT_DIR_NAME, ".git", ".ws_hold", "__pycache__"}
+    ws_root = Path(ws_path) if ws_path else base_run_dir
+    try:
+        for entry in ws_root.iterdir():
+            if entry.name in _WS_MOUNT_SKIP:
+                continue
+            link = task_dir / entry.name
+            if link.exists() or link.is_symlink():
+                continue
+            try:
+                link.symlink_to(entry)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
     script_path = task_dir / "script.py"
     cwd = task_dir
 
@@ -1199,6 +1219,151 @@ async def cleanup_workspaces_endpoint():
 
 
 # ── Health ─────────────────────────────────────────────────────────
+
+# ── Editor (read-only) ───────────────────────────────────────
+# Дерево и чтение файлов воркспейса для веб-редактора (Monaco). Без записи, без исполнения.
+
+EDITOR_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", ".tasks", ".ws_hold"}
+EDITOR_MAX_READ_BYTES = 5 * 1024 * 1024
+
+
+def _editor_build_tree(base: str) -> list:
+    base_real = os.path.realpath(base)
+
+    def walk(dir_path: str) -> list:
+        items = []
+        try:
+            entries = sorted(os.scandir(dir_path), key=lambda e: (not e.is_dir(), e.name.lower()))
+        except OSError:
+            return items
+        for e in entries:
+            if e.name in EDITOR_SKIP_DIRS:
+                continue
+            rel = os.path.relpath(e.path, base_real)
+            if e.is_dir(follow_symlinks=False):
+                items.append({"name": e.name, "path": rel, "type": "dir", "children": walk(e.path)})
+            else:
+                try:
+                    size = e.stat().st_size
+                except OSError:
+                    size = 0
+                items.append({"name": e.name, "path": rel, "type": "file", "size": size})
+        return items
+
+    return walk(base_real)
+
+
+@app.get("/workspace/{workspace_id}/editor/tree")
+async def editor_tree_endpoint(workspace_id: str):
+    ws_path = _get_workspace_path(workspace_id)
+    if ws_path is None:
+        raise HTTPException(status_code=404, detail="Workspace не найден")
+    return {"workspace_id": workspace_id, "tree": _editor_build_tree(ws_path)}
+
+
+@app.get("/workspace/{workspace_id}/editor/read")
+async def editor_read_endpoint(workspace_id: str, path: str):
+    ws_path = _get_workspace_path(workspace_id)
+    if ws_path is None:
+        raise HTTPException(status_code=404, detail="Workspace не найден")
+    try:
+        target = _safe_join(ws_path, path)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Путь вне workspace")
+    if not os.path.isfile(target):
+        raise HTTPException(status_code=404, detail=f"Файл '{path}' не найден")
+    size = os.path.getsize(target)
+    if size > EDITOR_MAX_READ_BYTES:
+        raise HTTPException(status_code=413, detail=f"Файл слишком большой ({size} байт)")
+    try:
+        with open(target, "rb") as f:
+            raw = f.read()
+        text = raw.decode("utf-8")
+        is_binary = False
+    except UnicodeDecodeError:
+        text = ""
+        is_binary = True
+    return {
+        "workspace_id": workspace_id,
+        "path": path,
+        "size": size,
+        "is_binary": is_binary,
+        "content": text,
+    }
+
+
+class EditorWriteRequest(BaseModel):
+    path: str
+    content: str
+
+
+EDITOR_MAX_WRITE_BYTES = 5 * 1024 * 1024
+
+
+@app.put("/workspace/{workspace_id}/editor/write")
+async def editor_write_endpoint(workspace_id: str, body: EditorWriteRequest):
+    ws_path = _get_workspace_path(workspace_id)
+    if ws_path is None:
+        raise HTTPException(status_code=404, detail="Workspace не найден")
+    try:
+        target = _safe_join(ws_path, body.path)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Путь вне workspace")
+    if os.path.isdir(target):
+        raise HTTPException(status_code=400, detail="Путь указывает на директорию")
+    data = body.content.encode("utf-8")
+    if len(data) > EDITOR_MAX_WRITE_BYTES:
+        raise HTTPException(status_code=413, detail=f"Файл слишком большой ({len(data)} байт)")
+    parent = os.path.dirname(target)
+    if not os.path.isdir(parent):
+        raise HTTPException(status_code=404, detail="Родительская папка не найдена")
+    tmp = target + ".tmp_editor_" + uuid.uuid4().hex[:8]
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, target)
+    except Exception as e:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=f"Ошибка записи: {e}")
+    return {"workspace_id": workspace_id, "path": body.path, "size": len(data), "ok": True}
+
+
+@app.get("/workspace/{workspace_id}/editor/ttl")
+async def editor_ttl_endpoint(workspace_id: str):
+    ws_path = _get_workspace_path(workspace_id)
+    if ws_path is None:
+        raise HTTPException(status_code=404, detail="Workspace не найден")
+
+    now = time.time()
+    immortal = _has_git(ws_path) or _has_keep_hold(ws_path)
+
+    last_active_file = os.path.join(ws_path, ".last_active")
+    created_file = os.path.join(ws_path, ".created_at")
+    try:
+        if os.path.exists(last_active_file):
+            ts = float(open(last_active_file).read().strip())
+        elif os.path.exists(created_file):
+            ts = float(open(created_file).read().strip())
+        else:
+            ts = now
+    except (ValueError, OSError):
+        ts = now
+
+    age = max(0.0, now - ts)
+    remaining = None if immortal else max(0, int(WORKSPACE_TTL_SECONDS - age))
+
+    return {
+        "workspace_id": workspace_id,
+        "ttl_seconds": WORKSPACE_TTL_SECONDS,
+        "last_active": ts,
+        "remaining_seconds": remaining,
+        "immortal": immortal,
+    }
+
 
 @app.get("/health")
 async def health():

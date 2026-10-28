@@ -11,6 +11,7 @@ from fastapi import Depends, HTTPException, Request, status
 from jose import JWTError, jwt
 from app.core.config import SECRET_KEY, ALGORITHM, KAFKA_BROKER
 from app.db.group_chat_db import GroupChatDB
+from app.db.editor_db import EditorDB
 from app import group_chat as group_chat_module
 from app.db.telegram_db import TelegramDB
 from app.db.max_db import MaxDB
@@ -93,6 +94,7 @@ app = FastAPI(title="Chats Service")
 
 # Общий/групповой чат: отдельный слой БД + роутер (не раздуваем этот app.py)
 group_db = GroupChatDB(None)  # pool проставится на startup
+editor_db = EditorDB(None)  # pool проставится на startup
 app.include_router(group_chat_module.router)
 
 # Telegram-интеграция: отдельный слой БД (allow-list + per-chat настройки).
@@ -175,6 +177,9 @@ async def startup():
     group_db.pool = db.pool
     await group_db.init_schema()
     group_chat_module.bind(group_db, producer)
+
+    # Editor: тот же пул (таблица editor_workspaces создаётся миграцией).
+    editor_db.pool = db.pool
 
     # Telegram: переиспользуем тот же пул, создаём таблицы telegram_*.
     tg_db.pool = db.pool
@@ -627,6 +632,35 @@ async def get_user_chats(user_id: int = Query(..., alias="user_id"), chat_id: st
         raise HTTPException(status_code=500, detail="Не удалось загрузить список чатов")
 
 
+@app.post("/editor/register")
+async def editor_register(payload: dict):
+    """Регистрация воркспейса за юзером (вызывает тул агента)."""
+    user_id = payload.get("user_id")
+    workspace_id = payload.get("workspace_id")
+    if user_id is None or not workspace_id:
+        raise HTTPException(status_code=400, detail="user_id и workspace_id обязательны")
+    row = await editor_db.register(
+        int(user_id), str(workspace_id),
+        chat_id=payload.get("chat_id"),
+        title=payload.get("title"),
+    )
+    return {"ok": True, "workspace": row}
+
+
+@app.get("/editor/workspaces")
+async def editor_list(user_id: int, chat_id: str = None):
+    """Список воркспейсов юзера (для дерева проекта в редакторе)."""
+    items = await editor_db.list_for_user(int(user_id), chat_id=chat_id)
+    return {"workspaces": items}
+
+
+@app.get("/editor/owns")
+async def editor_owns(user_id: int, workspace_id: str):
+    """Гейт доступа: принадлежит ли воркспейс юзеру."""
+    ok = await editor_db.owns(int(user_id), str(workspace_id))
+    return {"owns": ok}
+
+
 # ══════════════════════════════════════════════════════════════
 # MAX-интеграция (аналог /tg/*). Ядро: allow-list + per-chat настройки.
 # ══════════════════════════════════════════════════════════════
@@ -701,6 +735,7 @@ async def max_set_settings(chat_id: str, body: MaxSettingsIn):
         chat_id, **{k: v for k, v in body.dict().items() if v is not None}
     )
     return {"status": "ok", "settings": s}
+
 
 
 

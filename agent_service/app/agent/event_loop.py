@@ -849,6 +849,9 @@ class HarnessAgent:
         # 18. Библиотека скиллов (вынесена в tools)
         from .tools.skills.tool_manage_skills import make_manage_skills_tool
         manage_skills = make_manage_skills_tool(agent, user_id)
+        # 19. Закрепление воркспейса песочницы за юзером для веб-редактора /editor
+        from .tools.filesystem.tool_editor_workspace import make_editor_workspace_tool
+        register_editor_workspace = make_editor_workspace_tool(agent, chat_id, user_id)
 
 
         # Тул анализа изображений (JPEG/PNG) через claude-opus-4.8.
@@ -897,7 +900,8 @@ class HarnessAgent:
             send_message_tool,
             work_with_email,
             send_email,
-            connect_mcp_git
+            connect_mcp_git,
+            register_editor_workspace,
             # knowledge_graph_tool
         ]
 

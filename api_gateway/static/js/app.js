@@ -1250,6 +1250,44 @@ class ChatApp {
      * @param {string|undefined} messageId
      * @returns {HTMLElement}
      */
+    /* Контекстное меню по файлу агента: «Открыть в редакторе» / «Скачать». */
+    _showFileContextMenu(e, { name, url, chatId }) {
+        document.querySelectorAll('.fa-file-ctxmenu').forEach(m => m.remove());
+        const menu = document.createElement('div');
+        menu.className = 'fa-file-ctxmenu';
+        menu.style.cssText = `position:fixed;z-index:9999;left:${e.clientX}px;top:${e.clientY}px;`
+            + 'background:#252526;border:1px solid #444;border-radius:8px;padding:4px;'
+            + 'box-shadow:0 6px 24px rgba(0,0,0,.4);min-width:190px;font-size:13px;';
+
+        const mkItem = (label, onClick) => {
+            const it = document.createElement('div');
+            it.textContent = label;
+            it.style.cssText = 'padding:8px 12px;cursor:pointer;color:#ddd;border-radius:5px;';
+            it.addEventListener('mouseenter', () => it.style.background = '#094771');
+            it.addEventListener('mouseleave', () => it.style.background = 'transparent');
+            it.addEventListener('click', () => { onClick(); menu.remove(); });
+            return it;
+        };
+
+        menu.appendChild(mkItem('Открыть в редакторе', () => {
+            const q = chatId ? `?chat_id=${encodeURIComponent(chatId)}` : '';
+            window.open(`/editor${q}`, '_blank');
+        }));
+        menu.appendChild(mkItem('Скачать', () => {
+            if (url && url !== '#') {
+                const a = document.createElement('a');
+                a.href = url; a.download = name; a.rel = 'noopener noreferrer';
+                document.body.appendChild(a); a.click(); a.remove();
+            }
+        }));
+
+        document.body.appendChild(menu);
+        const close = (ev) => {
+            if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('mousedown', close); }
+        };
+        setTimeout(() => document.addEventListener('mousedown', close), 0);
+    }
+
     _renderBotFiles(files, messageId) {
         console.log('ВНУТРИ РЕНДИНДА ФАЙЛОВ ', files, messageId)
         const EXT_LABEL = {
@@ -1296,6 +1334,12 @@ class ChatApp {
             chip.download  = name;
             chip.title     = name;
             chip.setAttribute('rel', 'noopener noreferrer');
+
+            // ПКМ по файлу: «Открыть в редакторе» / «Скачать».
+            chip.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                this._showFileContextMenu(e, { name, url, chatId: this.currentChat });
+            });
 
             chip.innerHTML = `
 <span class="fa-chip__icon" aria-hidden="true">
@@ -2099,6 +2143,10 @@ class ChatApp {
             }
             // Дедупликация: пользовательское сообщение уже показано оптимистично
             if (!msg.is_from_bot) {
+                // Эхо пользовательского сообщения рисуем ТОЛЬКО в активном чате.
+                // Иначе сообщение, отправленное в другой чат (например, из /editor),
+                // приходит по фоновому сокету и ложно дорисовывается в открытый чат.
+                if (!isActive) return;
                 // Основной ключ дедупа — message_id (совпадает с клиентским msgId,
                 // который бэк возвращает в эхе). Надёжно для длинного текста-чипа,
                 // где textContent не содержит полного сообщения.
@@ -2377,6 +2425,10 @@ class ChatApp {
             ADD_ATTR: ['colspan','rowspan','align']
         });
         st.liveBlockEl.innerHTML = html;
+        st.liveBlockEl.querySelectorAll('a[href]').forEach(a => {
+            a.setAttribute('target', '_blank');
+            a.setAttribute('rel', 'noopener noreferrer');
+        });
 
         if (container) {
             const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
@@ -2608,6 +2660,10 @@ class ChatApp {
             ADD_ATTR: ['colspan','rowspan','align']
         });
         targetBlock.innerHTML = html;
+        targetBlock.querySelectorAll('a[href]').forEach(a => {
+            a.setAttribute('target', '_blank');
+            a.setAttribute('rel', 'noopener noreferrer');
+        });
 
         // Файлы / actions вешаем на общую обёртку ответа. Работает и для
         // фонового чата — узел откреплён, но полностью готов к вставке.
@@ -3382,8 +3438,12 @@ class ChatApp {
         const container = this.getInputContainer();
         const field = container?.querySelector('#message-input');
         if (!field) return '';
-        if (field.tagName === 'TEXTAREA') return field.value.trim();
-        return this._readInputWithChips(field).trim();
+        const raw = (field.tagName === 'TEXTAREA')
+            ? field.value
+            : this._readInputWithChips(field);
+        // Снимаем невидимые маркеры скилл-блока (skills.js _setSkillInInput),
+        // чтобы они не улетали в агента.
+        return raw.replace(/\u2063\[\/?skill\]\u2063/g, '').trim();
     }
 
     /* Собирает финальный текст из contenteditable, подставляя вместо
@@ -3674,30 +3734,37 @@ class ChatApp {
        VISIBILITY / ONLINE RECONNECT
     ══════════════════════════════════════════ */
     initVisibilityReconnect() {
-        // Переподключаемся когда вкладка снова становится активной
+        // Жив ли сокет АКТИВНОГО чата. Источник истины — this._sockets[key],
+        // а не легаси-поле this.ws (при мультиплексе оно почти всегда undefined).
+        const activeWsAlive = () => {
+            const key = String(this.currentChat);
+            const ws = this._sockets && this._sockets[key];
+            return ws && (ws.readyState === WebSocket.OPEN ||
+                          ws.readyState === WebSocket.CONNECTING);
+        };
+
+        // Пересоздать сокет при необходимости и ВСЕГДА авторитетно
+        // пересинхронизировать UI по серверу: при обрыве сети onclose гасит
+        // Stop-кнопку и открывает ввод, а генерация на бэке продолжается.
+        // _restoreRunningUI спросит Redis /run_status и поднимет Stop/плейсхолдер,
+        // если агент всё ещё в работе — ровно как это делает F5.
+        const resync = (reason) => {
+            if (!this.currentChat) return;
+            if (!activeWsAlive()) {
+                console.log(`[WS] ${reason} — reconnecting chat=${this.currentChat}`);
+                this.connectWebSocket(this.currentChat);
+            }
+            this._restoreRunningUI(this.currentChat).catch(() => {});
+        };
+
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible' && this.currentChat) {
-                const wsAlive = this.ws &&
-                    (this.ws.readyState === WebSocket.OPEN ||
-                     this.ws.readyState === WebSocket.CONNECTING);
-                if (!wsAlive) {
-                    console.log(`[WS] Tab became visible, ws is dead — reconnecting chat=${this.currentChat}`);
-                    this.connectWebSocket(this.currentChat);
-                }
+                resync('Tab became visible');
             }
         });
 
-        // Переподключаемся при восстановлении сети
         window.addEventListener('online', () => {
-            if (this.currentChat) {
-                const wsAlive = this.ws &&
-                    (this.ws.readyState === WebSocket.OPEN ||
-                     this.ws.readyState === WebSocket.CONNECTING);
-                if (!wsAlive) {
-                    console.log(`[WS] Network back online — reconnecting chat=${this.currentChat}`);
-                    this.connectWebSocket(this.currentChat);
-                }
-            }
+            resync('Network back online');
         });
     }
 

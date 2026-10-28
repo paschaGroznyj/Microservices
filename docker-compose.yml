@@ -111,6 +111,7 @@ services:
       ADMINS_INFO: ${ADMINS_INFO}
       AGENT_POOL_PASSWORD: ${AGENT_POOL_PASSWORD}
       SANDBOX_SERVICE_URL: ${SANDBOX_SERVICE_URL}
+      EDITOR_BASE_URL: ${EDITOR_BASE_URL}
       TG_BOT_PUSH_URL: http://172.18.0.1:8010/push_message # docker network inspect pascha_microservices | grep Gateway
       MAX_BOT_PUSH_URL: http://172.18.0.1:8011/push_message
       TG_INLINE_B64_MAX: "700000"  # > порог = file_url вместо base64 в Kafka
@@ -280,6 +281,7 @@ services:
       SECRET_KEY: ${SECRET_KEY}
       ALGORITHM: ${ALGORITHM}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      SANDBOX_SERVICE_URL: ${SANDBOX_SERVICE_URL:-http://agent_sandbox:8005}
     volumes:
       - ./api_gateway:/app
     depends_on:

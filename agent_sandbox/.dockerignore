@@ -1,0 +1,20 @@
+# Рантайм-данные песочницы — НЕ часть образа, не слать в build-контекст.
+# Именно из-за них контекст пухнет и падает на чужом .loprofile (perm denied).
+workspaces/
+output/
+.tasks/
+
+# LibreOffice-профили/прогрев от pptx→pdf прогонов (чужой uid, 700 → permission denied)
+**/.loprofile/
+**/.lo_warmup
+**/.config/libreoffice/
+
+# Питоний мусор
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Логи и временное
+*.log
+*.tmp

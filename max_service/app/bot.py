@@ -1024,7 +1024,9 @@ async def _send_agent_file(chat_id: int, f: dict) -> None:
             return
     else:
         attachment = {"type": up_type, "payload": {"token": token}}
-    await client.send_message(
+    # send_message_with_attachment ретраит POST /messages при
+    # attachment.not.ready (файл ещё обрабатывается на стороне MAX после upload).
+    await client.send_message_with_attachment(
         text=f.get("caption") or "",
         chat_id=chat_id,
         attachments=[attachment],

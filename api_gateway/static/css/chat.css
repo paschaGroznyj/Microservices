@@ -1308,87 +1308,45 @@ pre {
   max-width: 720px;
   width: 100%;
   margin: 0 auto;
-  padding: 12px 24px 0;
-  /* min-height убран: место под ответ агента больше не резервируем,
-     блок держит только высоту живого индикатора-волны. */
+  padding: 10px 24px 2px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
   justify-content: flex-start;
+  opacity: 0;
+  transition: opacity 0.35s ease;
+}
+
+.agent-placeholder.bg-ready {
   opacity: 1;
-  transition: opacity 0.3s ease;
 }
 
 .agent-placeholder.placeholder-hide {
   opacity: 0;
 }
 
-/* ── Живой индикатор: граф с бегущим по нему сигналом ─────────────
-   Сигнал движется от узла A к узлу C и обратно (animateMotion по
-   graph-link). Узлы мягко мерцают со сдвигом фазы, линия чуть пульсирует.
-   Никакого вращения. На финале (.wave-flatten) всё замирает и гаснет. */
+/* ── Живой индикатор в стиле графа стартового экрана (.chat-start-screen.bg-ready) ── */
 .wave-indicator {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  padding: 4px 2px;
+  width: 116px;
+  height: 28px;
+  padding: 0;
   opacity: 1;
   transition: opacity 0.45s ease;
-}
-.wave-indicator svg {
-  width: 52px;
-  height: 16px;
-  overflow: visible;
-}
-.wave-indicator .graph-link {
-  stroke: var(--accent);
-  stroke-width: 1.8;
-  fill: none;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  animation: graph-link-pulse 1.6s ease-in-out infinite;
-}
-.wave-indicator .graph-dot {
-  fill: var(--accent);
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: graph-dot-flicker 1.6s ease-in-out infinite;
-}
-.wave-indicator .graph-dot-a { animation-delay: 0s; }
-.wave-indicator .graph-dot-b { animation-delay: 0.4s; }
-.wave-indicator .graph-dot-c { animation-delay: 0.8s; }
-.wave-indicator .graph-signal {
-  fill: var(--accent);
-  filter: drop-shadow(0 0 3px var(--accent));
-  animation: graph-signal-glow 1.6s ease-in-out infinite;
-}
-@keyframes graph-dot-flicker {
-  0%, 100% { opacity: 0.35; transform: scale(0.85); }
-  50%      { opacity: 1;    transform: scale(1.15); }
-}
-@keyframes graph-link-pulse {
-  0%, 100% { opacity: 0.4; }
-  50%      { opacity: 0.9; }
-}
-@keyframes graph-signal-glow {
-  0%, 100% { opacity: 0.6; }
-  50%      { opacity: 1; }
-}
-.wave-indicator.wave-flatten {
-  opacity: 0;
-}
-.wave-indicator.wave-flatten .graph-dot,
-.wave-indicator.wave-flatten .graph-link,
-.wave-indicator.wave-flatten .graph-signal {
-  animation: none;
+  pointer-events: none;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .wave-indicator .graph-dot,
-  .wave-indicator .graph-link,
-  .wave-indicator .graph-signal {
-    animation: none;
-  }
-  .wave-indicator .graph-signal { display: none; }
+.wave-indicator .placeholder-graph {
+  display: block;
+  width: 116px;
+  height: 28px;
+  will-change: transform;
+}
+
+.wave-indicator.wave-flatten {
+  opacity: 0;
 }
 
 /* ══════════════════════════════════════════════

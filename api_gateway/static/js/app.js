@@ -621,9 +621,12 @@ class ChatApp {
         this._activeRequestId = requestId;
         this._setSendButtonMode('stop');
 
-        const alreadyStreaming = container?.querySelector('.live-block, .reasoning-live, #agent-response-placeholder');
-        if (container && !alreadyStreaming && !this._botAnswered) {
+        const alreadyHasFinal = container?.querySelector('.live-block');
+        const hasPlaceholder = container?.querySelector('#agent-response-placeholder');
+        if (container && !alreadyHasFinal && !hasPlaceholder) {
             this._createBotPlaceholder(container);
+        } else if (container && hasPlaceholder && st?.pendingBotEl) {
+            this._ensureBotAfterLastUserMessage(container, st.pendingBotEl);
         }
     }
 
@@ -652,10 +655,15 @@ class ChatApp {
 
         // Убираем плейсхолдер-волну, если _restoreRunningUI успел её создать —
         // у нас есть реальный узел ответа.
-        this._removeBotPlaceholder();
+        if (st.streamDone || st.streamIsFinal) {
+            this._removeBotPlaceholder();
+        }
 
         // Re-attach узла строго после последнего user-message (и дедуп рассуждений).
         this._ensureBotAfterLastUserMessage(container, st.pendingBotEl);
+        if (!st.streamDone && !st.streamIsFinal && !container.querySelector('#agent-response-placeholder')) {
+            this._createBotPlaceholder(container);
+        }
         this._dedupeTurnReasoningAndActions(container, st);
         this._botAnswered = true;
 
@@ -2449,31 +2457,51 @@ class ChatApp {
      * Удаляется автоматически когда бот начинает реально отвечать.
      */
     _createBotPlaceholder(msgContainer) {
-        // Не создаём если ответ уже пришёл (race: бот ответил быстрее 400ms)
-        if (this._botAnswered) return;
+        const st = this._resolveStream(this.currentChat);
+        if (this._botAnswered && (st?.streamDone || st?.streamIsFinal)) return;
 
-        // Убираем предыдущий если был
         this._removeBotPlaceholder();
 
         const placeholder = document.createElement('div');
         placeholder.id = 'agent-response-placeholder';
         placeholder.className = 'agent-placeholder';
-        // Живой индикатор: синусоида в движении. Крутится всё время ожидания
-        // и во время размышлений; на финале распрямляется в линию и гаснет.
         placeholder.innerHTML = this._waveIndicatorSVG();
-        msgContainer.appendChild(placeholder);
 
-        // Скроллим контейнер чтобы placeholder был виден снизу
+        const userWrappers = msgContainer.querySelectorAll('.user-message-wrapper');
+        const lastUser = userWrappers.length ? userWrappers[userWrappers.length - 1] : null;
+        let activeBotEl = (st?.pendingBotEl && st.pendingBotEl.parentNode === msgContainer) ? st.pendingBotEl : null;
+        if (!activeBotEl && lastUser) {
+            let cur = lastUser.nextElementSibling;
+            while (cur) {
+                if (cur.classList?.contains('agent-message')) {
+                    activeBotEl = cur;
+                    break;
+                }
+                cur = cur.nextElementSibling;
+            }
+        }
+
+        if (activeBotEl && activeBotEl.parentNode === msgContainer) {
+            msgContainer.insertBefore(placeholder, activeBotEl);
+        } else if (lastUser && lastUser.nextSibling) {
+            msgContainer.insertBefore(placeholder, lastUser.nextSibling);
+        } else {
+            msgContainer.appendChild(placeholder);
+        }
+
+        this._initPlaceholderGraph(placeholder);
+        requestAnimationFrame(() => placeholder.classList.add('bg-ready'));
+
         msgContainer.scrollTop = msgContainer.scrollHeight;
     }
 
     /** Убирает placeholder — вызывается явно из WS-обработчика */
     _removeBotPlaceholder() {
-        // Отменяем гард-таймер чтобы он не убил следующий placeholder
         if (this._placeholderGuardTimer) {
             clearTimeout(this._placeholderGuardTimer);
             this._placeholderGuardTimer = null;
         }
+        this._stopPlaceholderGraph();
         const ph = document.getElementById('agent-response-placeholder');
         if (!ph) return;
         ph.classList.add('placeholder-hide');
@@ -3033,21 +3061,144 @@ class ChatApp {
        На финале индикатор просто замирает и плавно гаснет. */
     _waveIndicatorSVG() {
         return `<div class="wave-indicator">`
-             + `<svg viewBox="0 0 52 16" width="52" height="16" aria-hidden="true">`
-             + `<g class="graph-net">`
-             + `<path class="graph-link" d="M8 12 L26 4 L44 12"/>`
-             + `<circle class="graph-dot graph-dot-a" cx="8" cy="12" r="2.2"/>`
-             + `<circle class="graph-dot graph-dot-b" cx="26" cy="4" r="2.2"/>`
-             + `<circle class="graph-dot graph-dot-c" cx="44" cy="12" r="2.2"/>`
-             + `<circle class="graph-signal" r="2.6">`
-             + `<animateMotion dur="1.6s" repeatCount="indefinite" keyPoints="0;1;0" keyTimes="0;0.5;1" calcMode="linear" path="M8 12 L26 4 L44 12"/>`
-             + `</circle>`
-             + `</g>`
-             + `</svg></div>`;
+             + `<canvas class="placeholder-graph" aria-hidden="true"></canvas>`
+             + `</div>`;
     }
 
-    /* Финализация индикатора: останавливаем вращение и плавно гасим.
-       Индикатор живёт до рендера финального сообщения (_finalizeStream). */
+    _stopPlaceholderGraph() {
+        if (this._placeholderGraphRAF) {
+            cancelAnimationFrame(this._placeholderGraphRAF);
+            this._placeholderGraphRAF = null;
+        }
+        if (this._placeholderGraphCleanup) {
+            this._placeholderGraphCleanup();
+            this._placeholderGraphCleanup = null;
+        }
+    }
+
+    _initPlaceholderGraph(placeholder) {
+        this._stopPlaceholderGraph();
+        const cv = placeholder?.querySelector('.placeholder-graph');
+        if (!cv) return;
+
+        const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const W = 116, H = 28, L = 40;
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        cv.width = W * dpr;
+        cv.height = H * dpr;
+        cv.style.width = W + 'px';
+        cv.style.height = H + 'px';
+
+        const g = cv.getContext('2d');
+        if (!g) return;
+        g.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        const root = document.documentElement;
+        const parseAccent = () => {
+            const cs = getComputedStyle(root);
+            let v = cs.getPropertyValue('--accent').trim() || '#6366f1';
+            let r, gg, b;
+            if (v.startsWith('#')) {
+                if (v.length === 4) v = '#' + v[1]+v[1]+v[2]+v[2]+v[3]+v[3];
+                r = parseInt(v.slice(1,3),16); gg = parseInt(v.slice(3,5),16); b = parseInt(v.slice(5,7),16);
+            } else {
+                const mm = v.match(/\d+/g) || [99,102,241];
+                r = +mm[0]; gg = +mm[1]; b = +mm[2];
+            }
+            const clamp = (x) => Math.max(0, Math.min(255, Math.round(x)));
+            const shade = (k) => `${clamp(r*k)},${clamp(gg*k)},${clamp(b*k)}`;
+            return [`${r},${gg},${b}`, shade(1.18), shade(0.82)];
+        };
+        let COLS = parseAccent();
+
+        const N = 11;
+        const nodes = Array.from({ length: N }, (_, i) => ({
+            x: 8 + (i / Math.max(1, N - 1)) * (W - 16) + (Math.random() - 0.5) * 6,
+            y: 5 + Math.random() * (H - 10),
+            vx: (Math.random() - 0.5) * 0.42 || 0.22,
+            vy: (Math.random() - 0.5) * 0.34 || 0.18,
+            r: 1.5 + (i % 3) * 0.55,
+            c: COLS[i % 3],
+        }));
+
+        const m = { x: 0, y: 0, active: false };
+        const onMove = (e) => { m.x = e.clientX; m.y = e.clientY; m.active = true; };
+        const onLeave = () => { m.active = false; };
+        document.addEventListener('pointermove', onMove, { passive: true });
+        document.addEventListener('pointerleave', onLeave);
+        this._placeholderGraphCleanup = () => {
+            document.removeEventListener('pointermove', onMove);
+            document.removeEventListener('pointerleave', onLeave);
+        };
+
+        let frames = 0;
+        const vk = reduce ? 0.55 : 1;
+        const frame = () => {
+            if (!placeholder.isConnected) {
+                this._stopPlaceholderGraph();
+                return;
+            }
+            if ((frames & 63) === 0) {
+                COLS = parseAccent();
+                for (let i = 0; i < nodes.length; i++) nodes[i].c = COLS[i % 3];
+            }
+            frames++;
+
+            g.clearRect(0, 0, W, H);
+            const t = frames * 0.045;
+            let cx = W * 0.5 + Math.sin(t) * (W * 0.38);
+            let cy = H * 0.5 + Math.cos(t * 0.8) * (H * 0.26);
+            if (m.active) {
+                const rect = cv.getBoundingClientRect();
+                const mx = m.x - rect.left;
+                const my = m.y - rect.top;
+                if (mx >= -40 && mx <= W + 40 && my >= -40 && my <= H + 40) {
+                    cx = mx;
+                    cy = my;
+                }
+            }
+
+            const pad = 3.5;
+            for (const n of nodes) {
+                n.x += n.vx * vk;
+                n.y += n.vy * vk;
+                if (n.x < pad) { n.x = pad; n.vx = Math.abs(n.vx); }
+                if (n.x > W - pad) { n.x = W - pad; n.vx = -Math.abs(n.vx); }
+                if (n.y < pad) { n.y = pad; n.vy = Math.abs(n.vy); }
+                if (n.y > H - pad) { n.y = H - pad; n.vy = -Math.abs(n.vy); }
+            }
+
+            const GR = 46;
+            for (let i = 0; i < nodes.length; i++) {
+                const a = nodes[i];
+                for (let j = i + 1; j < nodes.length; j++) {
+                    const b = nodes[j];
+                    const d = Math.hypot(a.x - b.x, a.y - b.y);
+                    if (d < L) {
+                        const near = Math.max(0, 1 - Math.hypot((a.x + b.x) / 2 - cx, (a.y + b.y) / 2 - cy) / GR);
+                        const alpha = (1 - d / L) * (0.28 + near * 0.55);
+                        g.strokeStyle = `rgba(${a.c}, ${alpha})`;
+                        g.lineWidth = 1 + near * 0.85;
+                        g.beginPath();
+                        g.moveTo(a.x, a.y);
+                        g.lineTo(b.x, b.y);
+                        g.stroke();
+                    }
+                }
+            }
+            for (const n of nodes) {
+                const near = Math.max(0, 1 - Math.hypot(n.x - cx, n.y - cy) / GR);
+                g.fillStyle = `rgba(${n.c}, ${0.58 + near * 0.42})`;
+                g.beginPath();
+                g.arc(n.x, n.y, n.r + near * 1.15, 0, Math.PI * 2);
+                g.fill();
+            }
+
+            this._placeholderGraphRAF = requestAnimationFrame(frame);
+        };
+        this._placeholderGraphRAF = requestAnimationFrame(frame);
+    }
+
     _flattenWaveIndicator() {
         const ind = document.querySelector('#agent-response-placeholder .wave-indicator');
         if (!ind) return;
@@ -3111,35 +3262,32 @@ class ChatApp {
         const userWrappers = container.querySelectorAll('.user-message-wrapper');
         const lastUser = userWrappers.length ? userWrappers[userWrappers.length - 1] : null;
         if (botEl.parentNode !== container) {
-            if (placeholder && placeholder.parentNode === container) {
-                container.insertBefore(botEl, placeholder);
-            } else {
-                container.appendChild(botEl);
-            }
-            return;
+            container.appendChild(botEl);
+        } else if (lastUser && (lastUser.compareDocumentPosition(botEl) & Node.DOCUMENT_POSITION_PRECEDING)) {
+            container.appendChild(botEl);
         }
-        if (lastUser && (lastUser.compareDocumentPosition(botEl) & Node.DOCUMENT_POSITION_PRECEDING)) {
-            if (placeholder && placeholder.parentNode === container) {
-                container.insertBefore(botEl, placeholder);
-            } else {
-                container.appendChild(botEl);
-            }
+        // Плашка #agent-response-placeholder всегда строго СВЕРХУ рассуждений (перед botEl)
+        if (placeholder && placeholder.parentNode === container && botEl.parentNode === container) {
+            container.insertBefore(placeholder, botEl);
         }
     }
 
     /* Если новое .user-message добавилось в контейнер, где уже висел ранний узел рассуждений/плейсхолдер —
-       переносим активный узел бота и плейсхолдер строго НИЖЕ этого user-message. */
+       переносим плейсхолдер и активный узел бота строго НИЖЕ этого user-message (плейсхолдер сверху рассуждений). */
     _repositionActiveBotNodesAfterUser(container) {
         if (!container) return;
+        const placeholder = container.querySelector('#agent-response-placeholder');
+        if (placeholder && placeholder.parentNode === container) {
+            container.appendChild(placeholder);
+        }
         const st = this._resolveStream(this.currentChat);
         const botId = String(st?.pendingBotEl?.dataset?.id || '');
         const isCommittedDbMsg = /^\d+$/.test(botId);
         if (st?.pendingBotEl && st.pendingBotEl.parentNode === container && st.streamingActive && !st.streamDone && !isCommittedDbMsg) {
             container.appendChild(st.pendingBotEl);
         }
-        const placeholder = container.querySelector('#agent-response-placeholder');
-        if (placeholder && placeholder.parentNode === container) {
-            container.appendChild(placeholder);
+        if (placeholder && placeholder.parentNode === container && st?.pendingBotEl && st.pendingBotEl.parentNode === container && st.streamingActive && !st.streamDone && !isCommittedDbMsg) {
+            container.insertBefore(placeholder, st.pendingBotEl);
         }
     }
 

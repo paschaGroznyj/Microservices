@@ -535,12 +535,363 @@
     const d = document.createElement("div"); d.textContent = text; return d.innerHTML;
   }
 
+  // ── Client-Side Rendering of Structured Data (Component Mapping) ──
+  const POLL_COMPONENTS = new Set(["interactivepoll", "askuserquestion", "poll"]);
+
+  function tryParseComponentJson(raw) {
+    if (!raw || typeof raw !== "string") return null;
+    const trimmed = raw.trim();
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null;
+    try {
+      const obj = JSON.parse(trimmed);
+      if (!obj || typeof obj !== "object") return null;
+      const comp = String(obj.component || obj.type || "").trim().toLowerCase();
+      if (POLL_COMPONENTS.has(comp) && Array.isArray(obj.options) && obj.options.length > 0) {
+        return { component: "InteractivePoll", data: obj };
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  function extractBalancedJsonObjects(text) {
+    const results = [];
+    let i = 0;
+    const n = text.length;
+    while (i < n) {
+      const start = text.indexOf("{", i);
+      if (start === -1) break;
+      let depth = 0, inStr = false, esc = false, end = -1;
+      for (let j = start; j < n; j++) {
+        const ch = text[j];
+        if (inStr) {
+          if (esc) { esc = false; }
+          else if (ch === "\\") { esc = true; }
+          else if (ch === "\"") { inStr = false; }
+        } else {
+          if (ch === "\"") inStr = true;
+          else if (ch === "{") depth++;
+          else if (ch === "}") {
+            depth--;
+            if (depth === 0) { end = j; break; }
+          }
+        }
+      }
+      if (end !== -1) {
+        const candidate = text.slice(start, end + 1);
+        const parsed = tryParseComponentJson(candidate);
+        if (parsed) {
+          results.push({ start, end: end + 1, parsed });
+          i = end + 1;
+          continue;
+        }
+      }
+      i = start + 1;
+    }
+    return results;
+  }
+
+  function extractStructuredSegments(text) {
+    const src = String(text || "");
+    const segments = [];
+    const fenceRe = /```(?:json)?\s*([\s\S]*?)```/gi;
+    let lastIdx = 0;
+    let m;
+
+    const pushPlainOrInlineJson = (chunk) => {
+      if (!chunk) return;
+      const inlineMatches = extractBalancedJsonObjects(chunk);
+      if (!inlineMatches.length) {
+        if (chunk.trim()) segments.push({ kind: "md", text: chunk });
+        return;
+      }
+      let cur = 0;
+      for (const hit of inlineMatches) {
+        const before = chunk.slice(cur, hit.start);
+        if (before.trim()) segments.push({ kind: "md", text: before });
+        segments.push({ kind: "component", component: hit.parsed.component, data: hit.parsed.data });
+        cur = hit.end;
+      }
+      const after = chunk.slice(cur);
+      if (after.trim()) segments.push({ kind: "md", text: after });
+    };
+
+    while ((m = fenceRe.exec(src)) !== null) {
+      const parsed = tryParseComponentJson(m[1]);
+      if (parsed) {
+        pushPlainOrInlineJson(src.slice(lastIdx, m.index));
+        segments.push({ kind: "component", component: parsed.component, data: parsed.data });
+        lastIdx = m.index + m[0].length;
+      }
+    }
+    pushPlainOrInlineJson(src.slice(lastIdx));
+    return segments;
+  }
+
+  let pollSeq = 0;
+  function createInteractivePollEl(data) {
+    const uid = `_ed_poll_${++pollSeq}_`;
+    const titleText = String(data.title || data.question || "Выберите вариант:");
+    const rawOptions = Array.isArray(data.options) ? data.options : [];
+    const placeholder = String(data.placeholder || "Something else");
+    const skipLabel = String(data.skipLabel || "Skip");
+    const sendLabel = String(data.sendLabel || "Send");
+
+    const root = document.createElement("div");
+    root.setAttribute("data-ask-user-input-banner", "");
+    root.setAttribute("data-cds", "AskUserQuestion");
+    root.setAttribute("role", "group");
+    root.setAttribute("aria-labelledby", `${uid}label ${uid}cue`);
+    root.setAttribute("tabindex", "-1");
+    root.className = "ed-poll";
+
+    const header = document.createElement("div");
+    header.className = "ed-poll-header";
+
+    const titleSpan = document.createElement("span");
+    titleSpan.id = `${uid}label`;
+    titleSpan.tabIndex = -1;
+    titleSpan.className = "ed-poll-title";
+    const titleBdi = document.createElement("bdi");
+    titleBdi.textContent = titleText;
+    titleSpan.appendChild(titleBdi);
+
+    const cueSpan = document.createElement("span");
+    cueSpan.id = `${uid}cue`;
+    cueSpan.hidden = true;
+    cueSpan.textContent = `Choose one of ${rawOptions.length} options.`;
+
+    const minBtn = document.createElement("button");
+    minBtn.type = "button";
+    minBtn.setAttribute("data-cds", "Button");
+    minBtn.setAttribute("data-cds-icon-only", "");
+    minBtn.setAttribute("data-cds-ghost", "");
+    minBtn.setAttribute("data-size", "xs");
+    minBtn.setAttribute("aria-label", "Minimize");
+    minBtn.title = "Свернуть / развернуть";
+    minBtn.className = "ed-poll-min-btn";
+    minBtn.innerHTML = `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    minBtn.addEventListener("click", () => {
+      root.classList.toggle("is-minimized");
+    });
+
+    header.append(titleSpan, cueSpan, minBtn);
+
+    const bodyWrap = document.createElement("div");
+    const bodyInner = document.createElement("div");
+    bodyInner.className = "ed-poll-body";
+
+    const scrollBox = document.createElement("div");
+    scrollBox.className = "ed-poll-scroll";
+    scrollBox.setAttribute("data-orientation", "vertical");
+    scrollBox.setAttribute("role", "group");
+
+    const listEl = document.createElement("div");
+    listEl.className = "ed-poll-list";
+    listEl.setAttribute("role", "list");
+
+    const optionButtons = [];
+    let answered = false;
+
+    const lockAndSubmit = (selectedBtn, answerText) => {
+      if (answered) return;
+      answered = true;
+      root.classList.add("is-answered");
+      optionButtons.forEach((btn) => {
+        const isSel = btn === selectedBtn;
+        btn.classList.toggle("is-selected", isSel);
+        btn.setAttribute("aria-pressed", isSel ? "true" : "false");
+        btn.setAttribute("aria-disabled", "true");
+        if (isSel) {
+          const trail = btn.querySelector(".ed-poll-opt-trail");
+          if (trail) {
+            trail.innerHTML = `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 8.5l3 3 6-6.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+          }
+        }
+      });
+      if (otherInput) otherInput.disabled = true;
+      if (actionBtn) actionBtn.disabled = true;
+      if (answerText) {
+        dispatchAIMessage(answerText);
+      }
+    };
+
+    rawOptions.forEach((opt, idx) => {
+      const isObj = opt && typeof opt === "object";
+      const rawLabel = isObj ? String(opt.label || opt.title || opt.text || opt.value || "") : String(opt);
+      const descText = isObj && opt.description ? String(opt.description) : "";
+      const numPrefix = `${idx + 1}. `;
+      const displayLabel = /^\d+[.)]\s+/.test(rawLabel) ? rawLabel : `${numPrefix}${rawLabel}`;
+
+      const item = document.createElement("div");
+      item.setAttribute("role", "listitem");
+      item.className = "ed-poll-item";
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "ed-poll-opt";
+      btn.setAttribute("aria-disabled", "false");
+      btn.setAttribute("aria-pressed", "false");
+      btn.setAttribute("data-cds-option", String(idx));
+      btn.tabIndex = idx === 0 ? 0 : -1;
+
+      const badge = document.createElement("span");
+      badge.className = "ed-poll-badge";
+      badge.setAttribute("aria-hidden", "true");
+      const badgeNum = document.createElement("span");
+      badgeNum.textContent = String(idx + 1);
+      badge.appendChild(badgeNum);
+
+      const content = document.createElement("span");
+      content.className = "ed-poll-opt-content";
+      const labelSpan = document.createElement("span");
+      labelSpan.className = "ed-poll-opt-label";
+      const labelBdi = document.createElement("bdi");
+      labelBdi.textContent = displayLabel;
+      labelSpan.appendChild(labelBdi);
+      content.appendChild(labelSpan);
+
+      if (descText) {
+        const descSpan = document.createElement("span");
+        descSpan.className = "ed-poll-opt-desc";
+        descSpan.textContent = descText;
+        content.appendChild(descSpan);
+      }
+
+      const trail = document.createElement("span");
+      trail.className = "ed-poll-opt-trail";
+      trail.setAttribute("aria-hidden", "true");
+      trail.innerHTML = `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 3.5L10.5 8 6 12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+      btn.append(badge, content, trail);
+
+      btn.addEventListener("click", () => {
+        lockAndSubmit(btn, rawLabel);
+      });
+
+      btn.addEventListener("keydown", (e) => {
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          const dir = e.key === "ArrowDown" ? 1 : -1;
+          const nextIdx = (idx + dir + optionButtons.length) % optionButtons.length;
+          optionButtons.forEach((b, i) => { b.tabIndex = i === nextIdx ? 0 : -1; });
+          optionButtons[nextIdx]?.focus();
+        }
+      });
+
+      const divider = document.createElement("div");
+      divider.className = "ed-poll-divider";
+      divider.setAttribute("aria-hidden", "true");
+
+      item.append(btn, divider);
+      listEl.appendChild(item);
+      optionButtons.push(btn);
+    });
+
+    const otherWrap = document.createElement("div");
+    otherWrap.className = "ed-poll-other";
+
+    const otherDivider = document.createElement("div");
+    otherDivider.className = "ed-poll-divider";
+    otherDivider.setAttribute("aria-hidden", "true");
+
+    const form = document.createElement("form");
+    form.className = "ed-poll-other-form";
+
+    const label = document.createElement("label");
+    label.className = "ed-poll-other-label";
+
+    const otherBadge = document.createElement("span");
+    otherBadge.className = "ed-poll-badge ed-poll-other-badge";
+    otherBadge.setAttribute("aria-hidden", "true");
+    otherBadge.innerHTML = `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M11.2 2.5a1.4 1.4 0 0 1 2 2L5.5 12.2l-2.8.7.7-2.8L11.2 2.5Z" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+    const otherInput = document.createElement("input");
+    otherInput.type = "text";
+    otherInput.className = "ed-poll-other-input";
+    otherInput.placeholder = placeholder;
+    otherInput.setAttribute("aria-label", placeholder);
+    otherInput.value = "";
+
+    const actionBtn = document.createElement("button");
+    actionBtn.type = "button";
+    actionBtn.setAttribute("data-cds", "Button");
+    actionBtn.setAttribute("data-size", "sm");
+    actionBtn.className = "ed-poll-action-btn";
+    const actionBtnText = document.createElement("span");
+    actionBtnText.textContent = skipLabel;
+    actionBtn.appendChild(actionBtnText);
+
+    const updateActionBtn = () => {
+      const hasVal = otherInput.value.trim().length > 0;
+      actionBtnText.textContent = hasVal ? sendLabel : skipLabel;
+      actionBtn.classList.toggle("is-primary", hasVal);
+    };
+
+    otherInput.addEventListener("input", updateActionBtn);
+
+    const submitOtherOrSkip = () => {
+      if (answered) return;
+      const customVal = otherInput.value.trim();
+      if (customVal) {
+        lockAndSubmit(null, customVal);
+      } else {
+        lockAndSubmit(null, "Пропустить опрос — выбери оптимальный вариант на своё усмотрение.");
+      }
+    };
+
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      submitOtherOrSkip();
+    });
+
+    actionBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      submitOtherOrSkip();
+    });
+
+    label.append(otherBadge, otherInput, actionBtn);
+    form.appendChild(label);
+    otherWrap.append(otherDivider, form);
+
+    scrollBox.append(listEl, otherWrap);
+    bodyInner.appendChild(scrollBox);
+    bodyWrap.appendChild(bodyInner);
+    root.append(header, bodyWrap);
+
+    return root;
+  }
+
+  const COMPONENT_MAP = {
+    InteractivePoll: createInteractivePollEl,
+    AskUserQuestion: createInteractivePollEl,
+  };
+
+  function renderBotContent(container, text) {
+    container.innerHTML = "";
+    const segments = extractStructuredSegments(text);
+    if (!segments.length) {
+      container.innerHTML = renderMd(text);
+      container.querySelectorAll("pre code").forEach(b => { try { window.hljs && hljs.highlightElement(b); } catch (_) {} });
+      return;
+    }
+    for (const seg of segments) {
+      if (seg.kind === "component" && COMPONENT_MAP[seg.component]) {
+        container.appendChild(COMPONENT_MAP[seg.component](seg.data));
+      } else if (seg.kind === "md" && seg.text) {
+        const mdWrap = document.createElement("div");
+        mdWrap.className = "ed-ai-md-part";
+        mdWrap.innerHTML = renderMd(seg.text);
+        mdWrap.querySelectorAll("pre code").forEach(b => { try { window.hljs && hljs.highlightElement(b); } catch (_) {} });
+        container.appendChild(mdWrap);
+      }
+    }
+  }
+
   function aiAppend(role, text) {
     const d = document.createElement("div");
     d.className = `ed-ai-msg ${role}`;
     if (role === "bot") {
-      d.innerHTML = renderMd(text);
-      d.querySelectorAll("pre code").forEach(b => { try { window.hljs && hljs.highlightElement(b); } catch (_) {} });
+      renderBotContent(d, text);
     } else {
       d.textContent = text;
     }
@@ -575,9 +926,13 @@
     aiAppend("bot", "Чат не привязан — откройте редактор из чата, чтобы спросить агента.");
   }
 
-  async function sendAI() {
-    const ta = $("ed-ai-text");
-    const text = ta.value.trim();
+  const STRUCTURED_UI_HINT =
+    "\n\n[UI-компоненты редактора: если нужно уточнить у пользователя решение или предложить выбор из вариантов, верни в ответе JSON-блок:\n" +
+    "```json\n{\n  \"component\": \"InteractivePoll\",\n  \"title\": \"Текст вопроса\",\n  \"options\": [\"Вариант 1\", \"Вариант 2\"]\n}\n```\n" +
+    "Интерфейс автоматически отрендерит его как интерактивный опрос.]";
+
+  async function dispatchAIMessage(userVisibleText) {
+    const text = String(userVisibleText || "").trim();
     if (!text || !CHAT_ID) return;
     let msg = text;
     const fileUrl = (currentWs && currentPath)
@@ -588,15 +943,16 @@
       const loc = startLine === endLine ? `строка ${startLine}` : `строки ${startLine}–${endLine}`;
       const file = currentPath ? ` ${currentPath}` : "";
       const link = fileUrl ? `\nСсылка на файл в редакторе: ${fileUrl}` : "";
-      msg = `[Выделенный фрагмент${file}, ${loc}]\n\`\`\`\n${selText.slice(0, 8000)}\n\`\`\`${link}\n\nВопрос: ${text}`;
+      msg = `[Выделенный фрагмент${file}, ${loc}]\n\`\`\`\n${selText.slice(0, 8000)}\n\`\`\`${link}\n\nВопрос: ${text}${STRUCTURED_UI_HINT}`;
     } else if (currentPath && !isBinary) {
       const lines = currentContent ? currentContent.split("\n").length : 0;
       const bytes = currentContent ? new Blob([currentContent]).size : 0;
       const link = fileUrl ? `\nСсылка на файл в редакторе: ${fileUrl}` : "";
-      msg = `[Открыт файл: ${currentPath} · воркспейс ${currentWs} · ${lines} строк · ${bytes} байт]${link}\n\nФайл целиком НЕ приложен — при необходимости спроси и я пришлю содержимое или выделю фрагмент.\n\nВопрос: ${text}`;
+      msg = `[Открыт файл: ${currentPath} · воркспейс ${currentWs} · ${lines} строк · ${bytes} байт]${link}\n\nФайл целиком НЕ приложен — при необходимости спроси и я пришлю содержимое или выделю фрагмент.\n\nВопрос: ${text}${STRUCTURED_UI_HINT}`;
+    } else {
+      msg = `${text}${STRUCTURED_UI_HINT}`;
     }
     aiAppend("user", text);
-    ta.value = "";
     pendingSelection = null;
     updateSelectionHint();
     showThinking();
@@ -618,6 +974,14 @@
       clearThinking();
       aiAppend("bot", `Ошибка отправки: ${e.message}`);
     }
+  }
+
+  async function sendAI() {
+    const ta = $("ed-ai-text");
+    const text = ta.value.trim();
+    if (!text || !CHAT_ID) return;
+    ta.value = "";
+    await dispatchAIMessage(text);
   }
 
   (function injectPanels(tries = 0) {

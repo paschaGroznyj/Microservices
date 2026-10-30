@@ -1085,11 +1085,6 @@
     aiAppend("bot", "Чат не привязан — откройте редактор из чата, чтобы спросить агента.");
   }
 
-  const STRUCTURED_UI_HINT =
-    "\n\n[UI-компоненты редактора: если нужно уточнить у пользователя решение или предложить выбор из вариантов, верни в ответе JSON-блок:\n" +
-    "```json\n{\n  \"component\": \"InteractivePoll\",\n  \"title\": \"Текст вопроса\",\n  \"options\": [\"Вариант 1\", \"Вариант 2\"]\n}\n```\n" +
-    "Интерфейс автоматически отрендерит его как интерактивный опрос.]";
-
   async function dispatchAIMessage(userVisibleText, pollAnswer = null) {
     const text = String(userVisibleText || "").trim();
     if (!text || !CHAT_ID) return;
@@ -1102,14 +1097,14 @@
       const loc = startLine === endLine ? `строка ${startLine}` : `строки ${startLine}–${endLine}`;
       const file = currentPath ? ` ${currentPath}` : "";
       const link = fileUrl ? `\nСсылка на файл в редакторе: ${fileUrl}` : "";
-      msg = `[Выделенный фрагмент${file}, ${loc}]\n\`\`\`\n${selText.slice(0, 8000)}\n\`\`\`${link}\n\nВопрос: ${text}${STRUCTURED_UI_HINT}`;
+      msg = `[Выделенный фрагмент${file}, ${loc}]\n\`\`\`\n${selText.slice(0, 8000)}\n\`\`\`${link}\n\nВопрос: ${text}`;
     } else if (currentPath && !isBinary) {
       const lines = currentContent ? currentContent.split("\n").length : 0;
       const bytes = currentContent ? new Blob([currentContent]).size : 0;
       const link = fileUrl ? `\nСсылка на файл в редакторе: ${fileUrl}` : "";
-      msg = `[Открыт файл: ${currentPath} · воркспейс ${currentWs} · ${lines} строк · ${bytes} байт]${link}\n\nФайл целиком НЕ приложен — при необходимости спроси и я пришлю содержимое или выделю фрагмент.\n\nВопрос: ${text}${STRUCTURED_UI_HINT}`;
+      msg = `[Открыт файл: ${currentPath} · воркспейс ${currentWs} · ${lines} строк · ${bytes} байт]${link}\n\nФайл целиком НЕ приложен — при необходимости спроси и я пришлю содержимое или выделю фрагмент.\n\nВопрос: ${text}`;
     } else {
-      msg = `${text}${STRUCTURED_UI_HINT}`;
+      msg = `${text}`;
     }
     const clientMsgId = `msg-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
     aiAppend("user", text, { messageId: clientMsgId, pollAnswer });

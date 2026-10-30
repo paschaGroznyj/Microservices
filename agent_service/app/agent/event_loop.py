@@ -434,6 +434,28 @@ def _build_final(aggregate, calls: dict) -> AIMessage:
     )
 
 
+_THINKING_TAG_RE = re.compile(r"<thinking>([\s\S]*?)</thinking>", re.IGNORECASE)
+
+
+def _extract_thinking_and_clean_content(raw_content) -> tuple[str, str]:
+    """Извлекает текст из <thinking>...</thinking> и возвращает (thinking_text, clean_content)."""
+    if isinstance(raw_content, list):
+        text_parts = []
+        for block in raw_content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text_parts.append(str(block.get("text") or ""))
+            elif isinstance(block, str):
+                text_parts.append(block)
+        text = "".join(text_parts)
+    else:
+        text = str(raw_content or "")
+
+    found = [m.strip() for m in _THINKING_TAG_RE.findall(text) if m and m.strip()]
+    cleaned = _THINKING_TAG_RE.sub("", text).strip()
+    thinking_text = " ".join(found).strip()
+    return thinking_text, cleaned
+
+
 async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, error_info: dict | None = None):
     """Стриминговая версия _invoke_with_retry.
 
@@ -1676,22 +1698,16 @@ class HarnessAgent:
                     can_still_extend = not loop_state["extension_used"]
                     current_llm = llm if (is_last_step and not can_still_extend) else llm_with_tools
 
-                    # ── Живой стриминг текста модели ──────────────────────────
-                    # Заранее неизвестно, окажется ли текущий шаг финалом (без
-                    # tool_calls) или reasoning'ом перед вызовом тулзы.
+                    # ── Сбор ответа модели (без стриминга сырой пелены reasoning) ──
+                    # Короткую мысль из <thinking>...</thinking> отправляем готовым
+                    # предложением сразу после получения шага, а финальный ответ
+                    # отдаём чистым response.content.
                     stream_state = {"sent": False}
-
-                    async def _on_chunk(text: str, kind: str = "answer"):
-                        # kind из коллектора: "reasoning" | "answer".
-                        stream_state["sent"] = True
-                        await self._send_chunk(
-                            text, request_id, msg_id=str(request_id), kind="live"
-                        )
 
                     _llm_error = {}
                     try:
                         response = await _astream_collect(
-                            current_llm, messages, on_chunk=_on_chunk, iteration=iteration,
+                            current_llm, messages, on_chunk=None, iteration=iteration,
                             error_info=_llm_error
                         )
                     except Exception as _exc:
@@ -1717,19 +1733,26 @@ class HarnessAgent:
                             final_response = "Ошибка внутри цикла агента. Но агент запомнил шаги, попробуйте вернуться к запросу"
                         break
 
+                    _thinking_text, _clean_content = _extract_thinking_and_clean_content(
+                        getattr(response, "content", None)
+                    )
+                    response.content = _clean_content
+
                     _has_tool_calls = bool(getattr(response, "tool_calls", None))
-                    _had_text = bool(getattr(response, "content", None))
+                    _step_thinking = _thinking_text or (_clean_content if _has_tool_calls else "")
+                    _had_text = bool(_step_thinking)
 
                     if _has_tool_calls and _had_text:
-                        # Это был reasoning перед тулзой. Оставляем его на фронте,
-                        # но переклассифицируем живой блок в свёрнутый reasoning-блок.
-                        loop_state.setdefault("reasoning_trace", []).append(response.content)
-                        if stream_state["sent"]:
-                            await self._send_chunk(
-                                "", request_id, msg_id=str(request_id), kind="reasoning_end"
-                            )
-                        # В стек reasoning не тащим (как и раньше) — гасим content
-                        # response.content = ""
+                        # Короткое предложение из <thinking>...</thinking> (или fallback content на тул-шаге):
+                        # отправляем сразу готовым предложением и закрываем шаг рассуждений.
+                        loop_state.setdefault("reasoning_trace", []).append(_step_thinking)
+                        await self._send_chunk(
+                            _step_thinking, request_id, msg_id=str(request_id), kind="live"
+                        )
+                        stream_state["sent"] = True
+                        await self._send_chunk(
+                            "", request_id, msg_id=str(request_id), kind="reasoning_end"
+                        )
                     elif _has_tool_calls and not _had_text:
                         # Шаг без текста (сразу tool_calls). Модель не отдала свой
                         # reasoning — для "немых" моделей (coder/gemini) имитируем его:
@@ -1747,11 +1770,20 @@ class HarnessAgent:
                                     _phrase, request_id, msg_id=str(request_id), kind="live"
                                 )
                                 stream_state["sent"] = True
-                        # Закрываем живой блок (реальный reasoning или имитацию).
                         if stream_state["sent"]:
                             await self._send_chunk(
                                 "", request_id, msg_id=str(request_id), kind="reasoning_end"
                             )
+                    elif not _has_tool_calls and _thinking_text:
+                        # Если модель оставила <thinking> на финальном шаге — фиксируем мысль в свёртке,
+                        # а в final_response пойдёт уже очищенный response.content.
+                        loop_state.setdefault("reasoning_trace", []).append(_thinking_text)
+                        await self._send_chunk(
+                            _thinking_text, request_id, msg_id=str(request_id), kind="live"
+                        )
+                        await self._send_chunk(
+                            "", request_id, msg_id=str(request_id), kind="reasoning_end"
+                        )
 
                     messages.append(response)          # ← единственный аппенд
 

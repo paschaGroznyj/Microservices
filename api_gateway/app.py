@@ -254,7 +254,7 @@ async def bot_stream(payload: BotStream):
         logger.warning(f"[stream] Неизвестный request_id: {payload.request_id}")
         raise HTTPException(status_code=404, detail="request_id not found")
 
-    await run_status.append_reasoning_chunk(
+    active_requests = await run_status.append_reasoning_chunk(
         chat_id, payload.chunk, payload.kind, payload.id
     )
 
@@ -263,6 +263,7 @@ async def bot_stream(payload: BotStream):
         "chunk": payload.chunk,
         "id": payload.id,
         "kind": payload.kind,
+        "active_requests": active_requests,
     })
 
     return {"ok": True}
@@ -1337,6 +1338,7 @@ async def send_message(request: Request):
         except Exception:
             body = {}
         body["request_id"] = request_id
+        body["active_requests"] = await run_status.count_active_requests()
         return JSONResponse(content=body, status_code=response.status_code)
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Chats service unreachable: {str(e)}")
@@ -1395,10 +1397,12 @@ async def chat_run_status(chat_id: str, request: Request):
     loop_active = await run_status.is_loop_active(chat_id)
     if not info:
         last_reasoning = await run_status.get_reasoning_state(chat_id)
+        active_requests = await run_status.count_active_requests()
         return JSONResponse(content={
             "running": loop_active,
             "loop_active": loop_active,
             "reasoning": last_reasoning,
+            "active_requests": active_requests,
         })
     return JSONResponse(content={"running": True, "loop_active": loop_active, **info})
 

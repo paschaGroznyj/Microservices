@@ -1094,6 +1094,7 @@ async def send_message(request: Request):
         except Exception:
             body = {}
         body["request_id"] = request_id
+        body["active_requests"] = await run_status.count_active_requests()
         return JSONResponse(content=body, status_code=response.status_code)
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Chats service unreachable: {str(e)}")
@@ -1187,7 +1188,8 @@ async def chat_run_status(chat_id: str, request: Request):
     info = await run_status.get_running(chat_id)
     if not info:
         last_reasoning = await run_status.get_reasoning_state(chat_id)
-        return JSONResponse(content={"running": False, "reasoning": last_reasoning})
+        active_requests = await run_status.count_active_requests()
+        return JSONResponse(content={"running": False, "reasoning": last_reasoning, "active_requests": active_requests})
     return JSONResponse(content={"running": True, **info})
 
 
@@ -1314,13 +1316,14 @@ async def stream_chat_status(chat_id: str, request: Request):
                 except Exception:
                     continue
                 kind = frame.get("kind") or "live"
-                await run_status.append_reasoning_chunk(
+                active_requests = await run_status.append_reasoning_chunk(
                     chat_id, frame.get("chunk", ""), kind, frame.get("id")
                 )
                 out.append(_sse_pack(kind, {
                     "chunk": frame.get("chunk", ""),
                     "id": frame.get("id"),
                     "kind": kind,
+                    "active_requests": active_requests,
                 }))
             return out
 

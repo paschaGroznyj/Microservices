@@ -590,6 +590,10 @@ class ChatApp {
             }
         }
 
+        if (serverStatus?.active_requests !== undefined) {
+            this._updateActiveRequestsUI(chatId, serverStatus.active_requests);
+        }
+
         if (serverStatus?.elapsed_sec && st) {
             const elapsedSec = Math.max(1, Number(serverStatus.elapsed_sec) || 1);
             st.runStartedAt = Date.now() - (elapsedSec * 1000);
@@ -2402,6 +2406,9 @@ class ChatApp {
             try {
                 const j = await resp.clone().json();
                 this._activeRequestId = j?.request_id || null;
+                if (j?.active_requests !== undefined) {
+                    this._updateActiveRequestsUI(this.currentChat, j.active_requests);
+                }
             } catch (_) {
                 this._activeRequestId = null;
             }
@@ -2768,6 +2775,10 @@ class ChatApp {
             // Контейнер ленты нужен только активному чату (для скролла).
             const container = isActive ? this.getMessagesContainer() : null;
 
+            if (msg.active_requests !== undefined) {
+                this._updateActiveRequestsUI(key, msg.active_requests);
+            }
+
             // ── Управляющие маркеры стриминга (kind без нового текста) ──
             if (msg.kind === 'reasoning_end') {
                 this._commitReasoningBlock(key);
@@ -2822,6 +2833,9 @@ class ChatApp {
                 }
 
                 st.streamBuffer += msg.chunk;
+                if (!st.streamIsFinal) {
+                    this._setReasoningHeaderLabel(key, (st.streamShown || '') + (st.streamBuffer || ''), false);
+                }
 
             } else if (msg.done || msg.message !== undefined) {
                 const fullText = msg.message ?? st.pendingBotText;
@@ -3213,7 +3227,49 @@ class ChatApp {
 
     _formatReasoningDuration(sec) {
         const s = Math.max(1, Math.round(Number(sec) || 1));
-        return `Думаю ${s} сек.`;
+        if (s < 60) return `${s} сек.`;
+        const m = Math.floor(s / 60);
+        const rem = s % 60;
+        return rem > 0 ? `${m} мин. ${rem} сек.` : `${m} мин.`;
+    }
+
+    _activeUsersBadgeHTML(count) {
+        const n = Math.max(1, Number(count ?? this._activeRequestsCount) || 1);
+        return `<span class="reasoning-active-users" data-reasoning-active-users="" title="Активных запросов к агенту"><svg class="reasoning-users-icon" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.5 13.5v-1a2.5 2.5 0 0 0-2.5-2.5H4a2.5 2.5 0 0 0-2.5 2.5v1"/><circle cx="6" cy="5" r="2.5"/><path d="M14.5 13.5v-1a2.5 2.5 0 0 0-1.9-2.42"/><path d="M10.5 2.58a2.5 2.5 0 0 1 0 4.84"/></svg><span class="reasoning-active-count">${n}</span></span>`;
+    }
+
+    _updateActiveRequestsUI(chatId, count) {
+        if (count === undefined || count === null) return;
+        const n = Math.max(0, Number(count) || 0);
+        this._activeRequestsCount = n;
+        const st = this._resolveStream(chatId);
+        if (st) st.activeRequestsCount = n;
+        const isRunningNow = st && !st.streamDone && !st.streamIsFinal;
+        const displayNum = Math.max(isRunningNow ? 1 : 0, n);
+        const root = st?.pendingBotEl || st?.reasoningWrapEl || this.getMessagesContainer();
+        if (root) {
+            root.querySelectorAll('[data-reasoning-active-users] .reasoning-active-count').forEach(el => {
+                el.textContent = String(displayNum || 1);
+            });
+        }
+    }
+
+    _setReasoningHeaderLabel(chatId, text, isFinal = false) {
+        const st = this._resolveStream(chatId);
+        const root = st?.reasoningWrapEl || st?.pendingBotEl?.querySelector('.reasoning-block');
+        if (!root) return;
+        const labelEl = root.querySelector('.reasoning-header .reasoning-label');
+        if (!labelEl) return;
+        if (isFinal) {
+            labelEl.textContent = 'Размышления';
+            return;
+        }
+        const clean = String(text || '')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/[`*_~#>]+/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+        labelEl.textContent = clean || 'Размышления';
     }
 
     _updateReasoningDurationUI(chatId, overrideSec = null) {
@@ -3231,7 +3287,7 @@ class ChatApp {
         const label = this._formatReasoningDuration(sec);
         const root = st.pendingBotEl || st.reasoningWrapEl;
         if (root) {
-            root.querySelectorAll('.reasoning-footnote[data-reasoning-duration]').forEach(el => {
+            root.querySelectorAll('[data-reasoning-duration]').forEach(el => {
                 el.textContent = label;
             });
         }
@@ -3243,8 +3299,20 @@ class ChatApp {
         if (!st.runStartedAt) st.runStartedAt = Date.now();
         this._updateReasoningDurationUI(chatId);
         if (st.reasoningTimer) return;
+        st._pollTick = 0;
         st.reasoningTimer = setInterval(() => {
             this._updateReasoningDurationUI(chatId);
+            st._pollTick = (st._pollTick || 0) + 1;
+            if (st._pollTick % 3 === 0 && chatId) {
+                fetch(`/api/chats/${chatId}/run_status`, { credentials: 'include' })
+                    .then(r => r.ok ? r.json() : null)
+                    .then(j => {
+                        if (j && j.active_requests !== undefined) {
+                            this._updateActiveRequestsUI(chatId, j.active_requests);
+                        }
+                    })
+                    .catch(() => {});
+            }
         }, 1000);
     }
 
@@ -3256,6 +3324,7 @@ class ChatApp {
             st.reasoningTimer = null;
         }
         this._updateReasoningDurationUI(chatId, finalSec);
+        this._setReasoningHeaderLabel(chatId, 'Размышления', true);
         if (st.reasoningWrapEl) {
             st.reasoningWrapEl.setAttribute('data-state', 'done');
         }
@@ -3443,6 +3512,10 @@ class ChatApp {
             if (reasoningState.is_final) {
                 this._stopReasoningTimer(chatId, durSec);
             } else {
+                const latestStep = liveText || (steps.length ? steps[steps.length - 1] : '');
+                if (latestStep) {
+                    this._setReasoningHeaderLabel(chatId, latestStep, false);
+                }
                 this._startReasoningTimer(chatId);
             }
         } else if (steps.length) {
@@ -3467,11 +3540,11 @@ class ChatApp {
                 wrap.innerHTML = `
                     <div class="reasoning-header" data-cds-row="">
                         <span class="reasoning-label">Размышления</span>
+                        <span class="reasoning-timer" data-reasoning-duration="">${this._formatReasoningDuration(durSec)}</span>
+                        ${this._activeUsersBadgeHTML(st?.activeRequestsCount ?? this._activeRequestsCount ?? 1)}
                         ${this._reasoningCaretSVG()}
                     </div>
-                    <div class="reasoning-body" data-cds-row-panel="">
-                        <p class="reasoning-footnote" data-reasoning-duration="">${this._formatReasoningDuration(durSec)}</p>
-                    </div>
+                    <div class="reasoning-body" data-cds-row-panel=""></div>
                 `;
                 wrap.querySelector('.reasoning-header')?.addEventListener('click', () => {
                     wrap.classList.toggle('reasoning-collapsed');
@@ -3509,13 +3582,6 @@ class ChatApp {
         }
         if (st.reasoningWrapEl && st.pendingBotEl?.contains(st.reasoningWrapEl)) {
             const body = st.reasoningWrapEl.querySelector('.reasoning-body');
-            if (body && !body.querySelector('.reasoning-footnote[data-reasoning-duration]')) {
-                const durEl = document.createElement('p');
-                durEl.className = 'reasoning-footnote';
-                durEl.setAttribute('data-reasoning-duration', '');
-                durEl.textContent = this._formatReasoningDuration(st.reasoningDurationSec || 1);
-                body.insertBefore(durEl, body.firstElementChild);
-            }
             this._startReasoningTimer(chatId);
             return body;
         }
@@ -3525,11 +3591,11 @@ class ChatApp {
         wrap.innerHTML = `
             <div class="reasoning-header" data-cds-row="">
                 <span class="reasoning-label">Размышления</span>
+                <span class="reasoning-timer" data-reasoning-duration="">${this._formatReasoningDuration(st.reasoningDurationSec || 1)}</span>
+                ${this._activeUsersBadgeHTML(st.activeRequestsCount ?? this._activeRequestsCount ?? 1)}
                 ${this._reasoningCaretSVG()}
             </div>
-            <div class="reasoning-body" data-cds-row-panel="">
-                <p class="reasoning-footnote" data-reasoning-duration="">${this._formatReasoningDuration(st.reasoningDurationSec || 1)}</p>
-            </div>
+            <div class="reasoning-body" data-cds-row-panel=""></div>
         `;
         const header = wrap.querySelector('.reasoning-header');
         header?.addEventListener('click', () => {
@@ -3599,6 +3665,9 @@ class ChatApp {
         );
         if (!alreadyExists) {
             body.appendChild(step);
+        }
+        if (stepPlain && !st.streamIsFinal && !st.streamDone) {
+            this._setReasoningHeaderLabel(chatId, stepPlain, false);
         }
 
         const container = this._isActiveChat(chatId) ? this.getMessagesContainer() : null;

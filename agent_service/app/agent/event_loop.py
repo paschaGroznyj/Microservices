@@ -434,38 +434,71 @@ def _build_final(aggregate, calls: dict) -> AIMessage:
     )
 
 
-_THINKING_TAG_RE = re.compile(r"<thinking>([\s\S]*?)</?thinking>", re.IGNORECASE)
-_REASONING_TAG_RE = re.compile(r"<reasoning>([\s\S]*?)</?reasoning>", re.IGNORECASE)
-_STRAY_TAGS_RE = re.compile(r"</?(?:thinking|reasoning)>", re.IGNORECASE)
+_THINKING_OPEN   = re.compile(r"<thinking\s*>",   re.IGNORECASE)
+_THINKING_CLOSE  = re.compile(r"</thinking\s*>",  re.IGNORECASE)
+_REASONING_OPEN  = re.compile(r"<reasoning\s*>",  re.IGNORECASE)
+_REASONING_CLOSE = re.compile(r"</reasoning\s*>", re.IGNORECASE)
+_STRAY_TAGS_RE   = re.compile(r"</?(?:thinking|reasoning)\s*>", re.IGNORECASE)
+
+
+def _pop_block(
+    text: str,
+    open_re: re.Pattern,
+    close_re: re.Pattern,
+    stop_before_re: re.Pattern | None = None,
+) -> tuple[str, str]:
+    """Извлекает первый открывающий … ПОСЛЕДНИЙ закрывающий тег (до границы следующего блока)."""
+    m_open = open_re.search(text)
+    if not m_open:
+        return "", text
+
+    content_start = m_open.end()
+    search_end = len(text)
+    if stop_before_re is not None:
+        first_close = close_re.search(text, content_start)
+        if first_close:
+            m_stop = stop_before_re.search(text, first_close.end())
+            if m_stop:
+                search_end = m_stop.start()
+
+    all_closes = list(close_re.finditer(text, content_start, search_end))
+    if not all_closes and search_end < len(text):
+        all_closes = list(close_re.finditer(text, content_start))
+
+    if not all_closes:
+        return "", (text[:m_open.start()] + text[content_start:]).strip()
+
+    last_close = all_closes[-1]
+    content = text[content_start:last_close.start()].strip()
+    cleaned = (text[:m_open.start()] + text[last_close.end():]).strip()
+    return content, cleaned
 
 
 def _extract_thinking_and_clean_content(raw_content) -> tuple[str, str, str]:
-    """Извлекает (thinking_text, reasoning_text, clean_content) из raw_content.
-
-    - <thinking>...</thinking> (или <thinking>...<thinking>) -> краткая суть для UI
-    - <reasoning>...</reasoning> (или <reasoning>...<reasoning>) -> полное рассуждение (скрыто от UI)
-    - clean_content -> чистый текст ответа без тегов <thinking> и <reasoning>
-    """
     if isinstance(raw_content, list):
-        text_parts = []
+        parts = []
         for block in raw_content:
-            if isinstance(block, dict) and block.get("type") == "text":
-                text_parts.append(str(block.get("text") or ""))
+            if isinstance(block, dict):
+                btype = block.get("type", "")
+                if btype == "text":
+                    parts.append(str(block.get("text") or ""))
+                elif btype == "thinking":
+                    t_val = block.get("thinking", "")
+                    parts.append(f"<thinking>{t_val}</thinking>")
             elif isinstance(block, str):
-                text_parts.append(block)
-        text = "".join(text_parts)
+                parts.append(block)
+        text = "".join(parts)
     else:
         text = str(raw_content or "")
 
-    found_thinking = [m.strip() for m in _THINKING_TAG_RE.findall(text) if m and m.strip()]
-    found_reasoning = [m.strip() for m in _REASONING_TAG_RE.findall(text) if m and m.strip()]
+    thinking_text, text = _pop_block(
+        text, _THINKING_OPEN, _THINKING_CLOSE, stop_before_re=_REASONING_OPEN
+    )
+    reasoning_text, text = _pop_block(text, _REASONING_OPEN, _REASONING_CLOSE)
 
-    cleaned = _THINKING_TAG_RE.sub("", text)
-    cleaned = _REASONING_TAG_RE.sub("", cleaned)
-    cleaned = _STRAY_TAGS_RE.sub("", cleaned).strip()
+    thinking_text = _STRAY_TAGS_RE.sub("", thinking_text).strip()
+    cleaned = _STRAY_TAGS_RE.sub("", text).strip()
 
-    thinking_text = " ".join(found_thinking).strip()
-    reasoning_text = "\n".join(found_reasoning).strip()
     return thinking_text, reasoning_text, cleaned
 
 

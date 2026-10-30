@@ -119,15 +119,54 @@ async def mark_running(
         logger.debug("run_status.mark_running failed: %s", e)
 
 
+async def count_active_requests() -> int:
+    """Считает количество активных запросов пользователей к агенту по ключам Redis agent*."""
+    if _redis is None:
+        return 0
+    try:
+        active_chats: set[str] = set()
+        reasoning_candidates: list[tuple[str, str]] = []
+        async for key in _redis.scan_iter(match="agent*"):
+            k = str(key)
+            if k.startswith("agent:running:"):
+                cid = k[len("agent:running:"):]
+                if cid:
+                    active_chats.add(cid)
+            elif k.startswith("agent:loop:"):
+                cid = k[len("agent:loop:"):]
+                if cid:
+                    active_chats.add(cid)
+            elif k.startswith("agent:reasoning:"):
+                cid = k[len("agent:reasoning:"):]
+                if cid:
+                    reasoning_candidates.append((cid, k))
+        for cid, rkey in reasoning_candidates:
+            if cid in active_chats:
+                continue
+            raw = await _redis.get(rkey)
+            if not raw:
+                continue
+            try:
+                st = json.loads(raw)
+                if not st.get("completed") and not st.get("is_final"):
+                    active_chats.add(cid)
+            except Exception:
+                pass
+        return len(active_chats)
+    except Exception as e:
+        logger.debug("run_status.count_active_requests failed: %s", e)
+        return 0
+
+
 async def append_reasoning_chunk(
     chat_id,
     chunk: str,
     kind: str = "live",
     msg_id: str | None = None,
-) -> None:
+) -> int:
     """Накапливает шаги рассуждений и фиксирует время размышлений по TTL Redis."""
     if _redis is None or chat_id is None:
-        return
+        return 0
     try:
         raw = await _redis.get(_reasoning_key(chat_id))
         state = json.loads(raw) if raw else {
@@ -162,8 +201,10 @@ async def append_reasoning_chunk(
         pttl = await _redis.pttl(_reasoning_key(chat_id))
         ex_sec = max(60, int(round(pttl / 1000.0))) if (pttl and pttl > 0) else RUN_TTL
         await _redis.set(_reasoning_key(chat_id), json.dumps(state), ex=ex_sec)
+        return await count_active_requests()
     except Exception as e:
         logger.debug("run_status.append_reasoning_chunk failed: %s", e)
+        return 0
 
 
 async def get_reasoning_state(chat_id) -> dict | None:
@@ -222,6 +263,7 @@ async def get_running(chat_id) -> dict | None:
         reasoning = await get_reasoning_state(chat_id)
         if reasoning:
             data["reasoning"] = reasoning
+        data["active_requests"] = await count_active_requests()
         return data
     except Exception as e:
         logger.debug("run_status.get_running failed: %s", e)

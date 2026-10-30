@@ -3229,9 +3229,11 @@ class ChatApp {
             ADD_ATTR: ['colspan','rowspan','align']
         });
 
+        liveEl.remove();
+
         const body = this._ensureReasoningWrap(chatId);
         const step = document.createElement('div');
-        step.className = 'reasoning-step reasoning-step--popin';
+        step.className = 'reasoning-step reasoning-step--pop';
         step.setAttribute('data-cds', 'Prose');
         step.setAttribute('data-prose-font', 'sans');
         step.setAttribute('data-prose-size', 'inherit');
@@ -3244,37 +3246,14 @@ class ChatApp {
             body.appendChild(step);
         }
 
-        // Для фонового чата контейнера нет — скролл/анимации только активному.
         const container = this._isActiveChat(chatId) ? this.getMessagesContainer() : null;
         const nearBottom = () => {
             if (!container) return false;
             return (container.scrollHeight - container.scrollTop - container.clientHeight) < 120;
         };
-        const stick = nearBottom();
-
-        // Фаза 1 — «лопание» живого пузыря: схлопывается и растворяется.
-        liveEl.classList.add('reasoning-live--pop');
-        const POP_MS = 260;
-        const removeLive = () => {
-            liveEl.remove();
-            // Фаза 2 — «надуваем» новый пузырь в свёртке.
-            step.classList.add('reasoning-step--pop');
-            if (stick && container) container.scrollTop = container.scrollHeight;
-        };
-        // reduce-motion / отсутствие поддержки анимаций — без задержек.
-        const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        if (reduce) {
-            liveEl.remove();
-            step.classList.add('reasoning-step--pop');
-            if (stick && container) container.scrollTop = container.scrollHeight;
-        } else {
-            let done = false;
-            const fire = () => { if (done) return; done = true; removeLive(); };
-            liveEl.addEventListener('animationend', fire, { once: true });
-            setTimeout(fire, POP_MS + 60);   // страховка, если animationend не придёт
+        if (nearBottom() && container) {
+            container.scrollTop = container.scrollHeight;
         }
-
-        if (stick && container) container.scrollTop = container.scrollHeight;
     }
 
     /* Живой блок оказался финальным ответом — повышаем его стиль
@@ -3285,6 +3264,7 @@ class ChatApp {
         st.streamIsFinal = true;
         if (st.liveBlockEl) {
             st.liveBlockEl.className = 'live-block';
+            st.liveBlockEl.style.display = '';
             // Форсим немедленный ре-рендер уже видимого текста, чтобы новый
             // (обычный) стиль применился сразу, а не «дожидался» финализации.
             // Иначе финал визуально досыпается в приглушённом reasoning-стиле.
@@ -3623,8 +3603,14 @@ class ChatApp {
                 }
                 // Живой блок печатается в reasoning-стиле, пока не пришёл
                 // final_commit. Если финал уже объявлен — сразу .live-block.
+                if (!st.streamIsFinal) {
+                    this._ensureReasoningWrap(key);
+                }
                 st.liveBlockEl = document.createElement('div');
                 st.liveBlockEl.className = st.streamIsFinal ? 'live-block' : 'reasoning-live';
+                if (!st.streamIsFinal) {
+                    st.liveBlockEl.style.display = 'none';
+                }
                 st.pendingBotEl.appendChild(st.liveBlockEl);
                 st.streamBuffer = '';
                 st.streamShown  = '';

@@ -1539,30 +1539,27 @@ pre {
   color: var(--cds-reasoning-code-fg);
 }
 
-/* ── Переход reasoning-live → reasoning-block («лопание пузыря») ── */
-.reasoning-live--pop {
-  pointer-events: none;
-  transform-origin: 12px 50%;
-  animation: reasoning-bubble-pop 0.26s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+/* ── Плавное появление шагов и раскрытие панели «Размышления» ── */
+.reasoning-block.reasoning-collapsed ~ .reasoning-live {
+  display: none !important;
 }
-@keyframes reasoning-bubble-pop {
-  0%   { transform: scale(1);      opacity: 1; filter: blur(0); }
-  35%  { transform: scale(1.045);  opacity: 1; filter: blur(0); }
-  100% { transform: scale(0.62);   opacity: 0; filter: blur(3px); }
+.reasoning-live--pop {
+  display: none !important;
+}
+@keyframes reasoning-smooth-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 .reasoning-body .reasoning-step--popin {
-  transform: scale(0.7);
   opacity: 0;
-  transform-origin: left center;
+  transform: translateY(-4px);
 }
 .reasoning-body .reasoning-step--pop {
-  animation: reasoning-step-inflate 0.34s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  animation: reasoning-smooth-in 0.24s cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
 }
-@keyframes reasoning-step-inflate {
-  0%   { transform: scale(0.7);  opacity: 0; }
-  60%  { transform: scale(1.03); opacity: 1; }
-  100% { transform: scale(1);    opacity: 1; }
+.reasoning-block:not(.reasoning-collapsed) .reasoning-body {
+  animation: reasoning-smooth-in 0.24s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1624,7 +1621,7 @@ pre {
   width: 12px;
   height: 12px;
   color: var(--cds-reasoning-text);
-  transition: transform 0.15s ease;
+  transition: transform 0.22s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 .reasoning-block:not(.reasoning-collapsed) .reasoning-caret {
   transform: rotate(90deg);

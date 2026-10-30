@@ -684,12 +684,15 @@ class ModelPickerClass {
     if (footer.querySelector('.mp-trigger-btn')) return;
 
     const btn       = this._makeBtn();
-    const attachBtn = footer.querySelector(attachSel) ?? footer.querySelector('.attach-btn');
+    const attachBtn = footer.querySelector(attachSel);
+    const toolsBtn  = footer.querySelector('.tools-trigger-btn');
 
     if (attachBtn?.nextSibling) {
       footer.insertBefore(btn, attachBtn.nextSibling);
     } else if (attachBtn) {
       attachBtn.after(btn);
+    } else if (toolsBtn) {
+      footer.insertBefore(btn, toolsBtn);
     } else {
       footer.prepend(btn);
     }

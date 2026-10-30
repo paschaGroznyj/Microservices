@@ -481,6 +481,9 @@ class ChatApp {
             }
         }
 
+        if (String(this._noToolsWarnChatId ?? '') !== String(chatId)) {
+            this._resetNoToolsWarn(chatId);
+        }
         this.currentChat = chatId;
         this.subagentStates = {};
 
@@ -694,6 +697,7 @@ class ChatApp {
             }
         }
 
+        this._resetNoToolsWarn(null);
         this.currentChat = null;
         this.subagentStates = {};
 
@@ -4326,20 +4330,26 @@ class ChatApp {
        категория инструментов не выбрана. Закрывается
        по «Хорошо» или крестику. Не дублируется.
     ══════════════════════════════════════════ */
-    _showNoToolsHint() {
-        const STORAGE_KEY = 'catchpm:no_tools_warn_count';
-        let warnCount = Number(this._noToolsWarnCount);
-        if (!Number.isFinite(warnCount)) {
-            try {
-                warnCount = parseInt(sessionStorage.getItem(STORAGE_KEY) || '0', 10) || 0;
-            } catch (_) {
-                warnCount = 0;
-            }
+    _resetNoToolsWarn(chatId = null) {
+        this._noToolsWarnCount = 0;
+        this._noToolsWarnChatId = chatId != null ? String(chatId) : null;
+        try { sessionStorage.removeItem('catchpm:no_tools_warn_count'); } catch (_) {}
+        if (this._noToolsCleanup) {
+            this._noToolsCleanup(true);
         }
+    }
+
+    _showNoToolsHint() {
+        try { sessionStorage.removeItem('catchpm:no_tools_warn_count'); } catch (_) {}
+        const curChatKey = this.currentChat != null ? String(this.currentChat) : null;
+        if (curChatKey !== (this._noToolsWarnChatId ?? null)) {
+            this._noToolsWarnCount = 0;
+            this._noToolsWarnChatId = curChatKey;
+        }
+        let warnCount = Number(this._noToolsWarnCount) || 0;
         if (warnCount >= 2) return;
         warnCount += 1;
         this._noToolsWarnCount = warnCount;
-        try { sessionStorage.setItem(STORAGE_KEY, String(warnCount)); } catch (_) {}
 
         const inputContainer = this.getInputContainer();
         const triggerBtn = inputContainer?.querySelector('.tools-trigger-btn.attach-btn, .tools-trigger-btn')

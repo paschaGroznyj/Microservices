@@ -63,6 +63,10 @@
 
   async function refreshCount() {
     try {
+      // 1. Отправляем пинг присутствия (обновляет TTL в Redis)
+      fetch('/api/presence/ping', { method: 'POST', credentials: 'same-origin', cache: 'no-store' }).catch(()=>{});
+
+      // 2. Запрашиваем новые данные
       const r = await fetch('/api/presence/count', {
         credentials: 'same-origin',
         cache: 'no-store'
@@ -139,6 +143,9 @@
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeOverlay(); });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') refreshCount();
+    else if (document.visibilityState === 'hidden') {
+      navigator.sendBeacon('/api/presence/leave');
+    }
   });
 
   refreshCount();

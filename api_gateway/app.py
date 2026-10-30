@@ -557,6 +557,22 @@ async def gateway_health():
 # Счётчик — суммарно main + sigma из Redis. Оверлей — Redis-часть
 # склеивается с SQL-агрегатами от chats_service.
 # ────────────────────────────────────────────────────────
+@app.post("/api/presence/ping")
+async def presence_ping(request: Request):
+    """Heartbeat main-присутствия. Фронт дёргает его по таймеру (каждые 15с)."""
+    user = await get_current_user(request)
+    if user:
+        await presence.touch("main", user["username"])
+    return Response(status_code=204)
+
+@app.post("/api/presence/leave")
+async def presence_leave(request: Request):
+    """Немедленный выход из онлайна при закрытии вкладки."""
+    user = await get_current_user(request)
+    if user:
+        await presence.leave("main", user["username"])
+    return Response(status_code=204)
+
 @app.get("/api/presence/count")
 async def presence_count():
     """Лёгкий публичный счётчик онлайн (суммарно main+sigma) + живые запросы к агенту. Redis-only."""

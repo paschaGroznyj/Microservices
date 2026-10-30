@@ -15,7 +15,9 @@
 """
 import logging
 from fastapi import APIRouter, Request, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+import os
+from urllib.parse import quote
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -142,3 +144,27 @@ async def api_file_save(request: Request, body: EditorSaveBody):
             pass
         raise HTTPException(status_code=r.status_code, detail=detail)
     return r.json()
+
+
+@router.get("/api/editor/download")
+async def api_file_download(request: Request, workspace_id: str, path: str):
+    user = await _require_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Не авторизован")
+    await _assert_owns(user["user_id"], workspace_id)
+    clean_path = path.lstrip("/")
+    r = await _http.get(f"{_sandbox_url}/workspace/{workspace_id}/file/{clean_path}")
+    if r.status_code != 200:
+        raise HTTPException(status_code=r.status_code, detail="Файл недоступен для выгрузки")
+    file_name = os.path.basename(clean_path) or "file"
+    ascii_name = file_name.encode("ascii", "replace").decode("ascii")
+    return Response(
+        content=r.content,
+        media_type=r.headers.get("content-type", "application/octet-stream"),
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{ascii_name}"; '
+                f"filename*=UTF-8''{quote(file_name, safe='')}"
+            )
+        },
+    )

@@ -201,6 +201,103 @@
 
   function iconFor(node) { return node.type === "dir" ? "📁" : "📄"; }
 
+  let activeCtxMenu = null;
+  function closeTreeContextMenu() {
+    if (activeCtxMenu) {
+      activeCtxMenu.remove();
+      activeCtxMenu = null;
+    }
+  }
+
+  function downloadFile(path, name) {
+    if (!currentWs || !path) return;
+    const url = `/api/editor/download?workspace_id=${encodeURIComponent(currentWs)}&path=${encodeURIComponent(path)}`;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name || path.split("/").pop() || "file";
+    a.rel = "noopener noreferrer";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  function showTreeContextMenu(e, node, rowEl) {
+    e.preventDefault();
+    e.stopPropagation();
+    closeTreeContextMenu();
+
+    const menu = document.createElement("div");
+    menu.className = "ed-ctx-menu";
+    menu.setAttribute("role", "menu");
+
+    const addItem = (label, onClick) => {
+      const item = document.createElement("div");
+      item.className = "ed-ctx-item";
+      item.setAttribute("role", "menuitem");
+      const span = document.createElement("span");
+      span.textContent = label;
+      item.appendChild(span);
+      item.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        closeTreeContextMenu();
+        onClick();
+      });
+      menu.appendChild(item);
+    };
+
+    const addSep = () => {
+      const sep = document.createElement("div");
+      sep.className = "ed-ctx-sep";
+      sep.setAttribute("role", "separator");
+      menu.appendChild(sep);
+    };
+
+    // Верхний раздел (аналогично встроенному разделу Monaco «Спросить агента о выделенном»)
+    addItem("Спросить агента о файле", async () => {
+      if (currentPath !== node.path) {
+        if (dirty && !confirm("Есть несохранённые изменения. Открыть другой файл?")) return;
+        document.querySelectorAll(".ed-node.sel").forEach(n => n.classList.remove("sel"));
+        rowEl.classList.add("sel");
+        await openFile(node.path);
+      }
+      if (layoutEl?.classList.contains("ai-collapsed")) {
+        applyAiCollapsed(false);
+      }
+      $("ed-ai-text")?.focus();
+    });
+
+    addSep();
+
+    addItem("Открыть", () => {
+      if (dirty && !confirm("Есть несохранённые изменения. Открыть другой файл?")) return;
+      document.querySelectorAll(".ed-node.sel").forEach(n => n.classList.remove("sel"));
+      rowEl.classList.add("sel");
+      openFile(node.path);
+    });
+
+    addItem("Скачать файл", () => {
+      downloadFile(node.path, node.name);
+    });
+
+    document.body.appendChild(menu);
+    activeCtxMenu = menu;
+
+    const rect = menu.getBoundingClientRect();
+    const x = Math.min(e.clientX, window.innerWidth - rect.width - 6);
+    const y = Math.min(e.clientY, window.innerHeight - rect.height - 6);
+    menu.style.left = `${Math.max(4, x)}px`;
+    menu.style.top = `${Math.max(4, y)}px`;
+  }
+
+  document.addEventListener("mousedown", (e) => {
+    if (activeCtxMenu && !activeCtxMenu.contains(e.target)) closeTreeContextMenu();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeTreeContextMenu();
+  });
+  window.addEventListener("blur", closeTreeContextMenu);
+  treeEl?.addEventListener("scroll", closeTreeContextMenu);
+
   function renderTree(nodes, container) {
     for (const node of nodes) {
       const row = document.createElement("div");
@@ -229,6 +326,9 @@
           document.querySelectorAll(".ed-node.sel").forEach(n => n.classList.remove("sel"));
           row.classList.add("sel");
           openFile(node.path);
+        });
+        row.addEventListener("contextmenu", (e) => {
+          showTreeContextMenu(e, node, row);
         });
       }
     }

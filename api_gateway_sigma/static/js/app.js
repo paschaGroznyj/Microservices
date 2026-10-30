@@ -1787,6 +1787,21 @@ class ChatApp {
             this._activePreviewChipEl = activeChip || null;
         }
 
+        if (raw.trim().length === 0) {
+            const chipId = this._activePreviewChipId || activeChip?.getAttribute?.('data-chip-id') || null;
+            if (chipId) {
+                this.removeInputChip(chipId);
+            } else {
+                if (activeChip) {
+                    const bar = activeChip.closest('.fa-preview-bar');
+                    activeChip.remove();
+                    if (bar) this._syncInputPreviewBar(bar);
+                }
+                this.closeTextPreview();
+            }
+            return;
+        }
+
         if (activeChip) {
             this._updateChipData(activeChip, raw);
         } else if (this._activePreviewChipId && this._pendingChips) {
@@ -1814,6 +1829,17 @@ class ChatApp {
             text = this._pendingChips.get(chipId);
         } else {
             text = this._decodeTextB64(chipEl.dataset?.textB64 || '');
+        }
+
+        if (!text || text.trim().length === 0) {
+            if (chipId) {
+                this.removeInputChip(chipId);
+            } else {
+                const bar = chipEl.closest('.fa-preview-bar');
+                chipEl.remove();
+                if (bar) this._syncInputPreviewBar(bar);
+            }
+            return;
         }
 
         const panel = document.getElementById('text-preview-panel');
@@ -1856,7 +1882,7 @@ class ChatApp {
 
         if (activeId && this._pendingChips && this._pendingChips.has(activeId)) {
             const curText = this._pendingChips.get(activeId) || '';
-            if (curText.length === 0) {
+            if (curText.trim().length === 0) {
                 this.removeInputChip(activeId);
             }
         }

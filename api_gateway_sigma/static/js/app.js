@@ -5410,6 +5410,8 @@ class ChatApp {
 }
 
 /* ── Точка входа ──────────────────────────── */
-const app = new ChatApp();
-app.init();
+const app = window.__catchpmApp || new ChatApp();
+if (!window.__catchpmApp) {
+    app.init();
+}
 export default app;

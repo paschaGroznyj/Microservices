@@ -1,6 +1,4 @@
-// presence.js — онлайн-счётчик (авто-обновление) + оверлей по клику.
-// Гейтвей не ходит в БД: /api/presence/count — Redis-only число,
-// /api/presence/overlay — Redis + SQL-агрегаты от chats_service.
+// presence.js — онлайн-счётчик (авто-обновление) + оверлей по клику + детектор нового билда.
 (function () {
   const COUNT_INTERVAL = 15000; // мс
 
@@ -12,7 +10,10 @@
   const liveEl  = document.getElementById('presence-overlay-live');
   const topEl   = document.getElementById('presence-top');
   const wrap    = document.getElementById('presence-wrap');
-  if (!btn || !countEl) return;
+
+  let initialBuildId = document.querySelector('meta[name="app-build-id"]')?.getAttribute('content') || null;
+  let dismissedBuildId = null;
+  let updateToastEl = null;
 
   function escapeHtml(str) {
     return String(str == null ? '' : str)
@@ -20,14 +21,61 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
+  function showBuildUpdateToast(newBuildId) {
+    if (!newBuildId || newBuildId === dismissedBuildId) return;
+    if (updateToastEl) {
+      updateToastEl.dataset.buildId = newBuildId;
+      return;
+    }
+    const toast = document.createElement('div');
+    toast.className = 'build-update-toast';
+    toast.dataset.buildId = newBuildId;
+    toast.setAttribute('role', 'status');
+    toast.innerHTML =
+      '<span class="build-update-dot" aria-hidden="true"></span>' +
+      '<span class="build-update-text">Доступна новая версия интерфейса</span>' +
+      '<button type="button" class="build-update-btn">Обновить</button>' +
+      '<button type="button" class="build-update-close" aria-label="Скрыть">×</button>';
+
+    toast.querySelector('.build-update-btn').addEventListener('click', () => {
+      window.location.reload();
+    });
+    toast.querySelector('.build-update-close').addEventListener('click', () => {
+      dismissedBuildId = toast.dataset.buildId || newBuildId;
+      toast.remove();
+      updateToastEl = null;
+    });
+
+    document.body.appendChild(toast);
+    updateToastEl = toast;
+  }
+
+  function checkBuildId(serverBuildId) {
+    if (!serverBuildId) return;
+    if (!initialBuildId) {
+      initialBuildId = serverBuildId;
+      return;
+    }
+    if (serverBuildId !== initialBuildId) {
+      showBuildUpdateToast(serverBuildId);
+    }
+  }
+
   async function refreshCount() {
     try {
-      const r = await fetch('/api/presence/count', { credentials: 'same-origin' });
+      const r = await fetch('/api/presence/count', {
+        credentials: 'same-origin',
+        cache: 'no-store'
+      });
       if (!r.ok) return;
+      const hdrBuild = r.headers.get('x-build-id');
       const d = await r.json();
-      const n = Number(d.online || 0);
-      countEl.textContent = n;
-      btn.classList.toggle('is-empty', n === 0);
+      checkBuildId(d.build_id || hdrBuild);
+      if (btn && countEl) {
+        const n = Number(d.online || 0);
+        countEl.textContent = n;
+        btn.classList.toggle('is-empty', n === 0);
+      }
       if (liveEl && d.active_requests !== undefined) {
         const ar = Math.max(0, Number(d.active_requests || 0));
         liveEl.textContent = ar;
@@ -38,9 +86,13 @@
 
   async function loadOverlay() {
     try {
-      const r = await fetch('/api/presence/overlay', { credentials: 'same-origin' });
+      const r = await fetch('/api/presence/overlay', {
+        credentials: 'same-origin',
+        cache: 'no-store'
+      });
       if (!r.ok) { renderOverlayError(); return; }
       const d = await r.json();
+      checkBuildId(d.build_id || r.headers.get('x-build-id'));
       const by = d.by_gateway || {};
       if (nowEl) nowEl.textContent = Number(d.online || 0);
       if (subEl) subEl.textContent =
@@ -78,51 +130,16 @@
     overlay.hidden ? openOverlay() : closeOverlay();
   }
 
-  btn.addEventListener('click', (e) => { e.stopPropagation(); toggleOverlay(); });
+  if (btn) {
+    btn.addEventListener('click', (e) => { e.stopPropagation(); toggleOverlay(); });
+  }
   document.addEventListener('click', (e) => {
     if (overlay && !overlay.hidden && wrap && !wrap.contains(e.target)) closeOverlay();
   });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeOverlay(); });
-
-  // Heartbeat присутствия: sigma не держит сокет, поэтому онлайн
-  // фиксируется отдельным пингом (не завязан на ожидание ответа бота).
-  async function pingPresence() {
-    try {
-      await fetch('/api/presence/ping', { method: 'POST', credentials: 'same-origin' });
-    } catch (e) { /* presence — не критичный путь */ }
-  }
-
-  // Немедленный выход из онлайна при закрытии/скрытии вкладки.
-  // sendBeacon доживает отправку даже когда страница выгружается —
-  // обычный fetch на unload браузер может оборвать. Same-origin =>
-  // куки с токеном уходят, бэкенд снимает юзера из online:sigma.
-  let left = false;
-  function leavePresence() {
-    if (left) return;
-    left = true;
-    try {
-      if (navigator.sendBeacon) {
-        navigator.sendBeacon('/api/presence/leave');
-      } else {
-        fetch('/api/presence/leave', { method: 'POST', credentials: 'same-origin', keepalive: true });
-      }
-    } catch (e) { /* presence — не критичный путь */ }
-  }
-  // pagehide срабатывает и при закрытии вкладки, и при bfcache-переходе.
-  window.addEventListener('pagehide', leavePresence);
-  // visibilitychange: вкладку свернули/увели в фон — тоже снимаем.
-  // При возврате (visible) снова начинаем пинговать.
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') {
-      leavePresence();
-    } else {
-      left = false;
-      pingPresence();
-    }
+    if (document.visibilityState === 'visible') refreshCount();
   });
-
-  pingPresence();
-  setInterval(pingPresence, COUNT_INTERVAL);
 
   refreshCount();
   setInterval(refreshCount, COUNT_INTERVAL);

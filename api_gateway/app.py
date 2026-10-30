@@ -28,6 +28,7 @@ from config import (
 )
 import presence
 import run_status
+import cache_bust
 import group_chat_gw
 import editor_gw
 import os
@@ -131,8 +132,9 @@ SERVICES = {
 
 BASE_DIR = Path(__file__).resolve().parent
 # Статика и шаблоны
-app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
-templates = Jinja2Templates(directory=BASE_DIR / "templates")
+app.middleware("http")(cache_bust.cache_bust_middleware)
+app.mount("/static", cache_bust.CacheBustStaticFiles(directory=BASE_DIR / "static"), name="static")
+templates = cache_bust.CacheBustTemplates(directory=BASE_DIR / "templates")
 
 
 # Модели данных
@@ -561,7 +563,8 @@ async def presence_count():
     m = await presence.count_online("main")
     sg = await presence.count_online("sigma")
     active_req = await run_status.count_active_requests()
-    return {"online": m + sg, "main": m, "sigma": sg, "active_requests": active_req}
+    return {"online": m + sg, "main": m, "sigma": sg, "active_requests": active_req,
+        "build_id": cache_bust.get_build_id(), "build_id": cache_bust.get_build_id()}
 
 
 @app.get("/api/presence/overlay")

@@ -311,6 +311,7 @@
         // по позиции сообщения в ленте (по возрастанию created_at/id) — как в Telegram
         this.pinned = (data.pinned || []).slice().sort((a, b) => (a.id || 0) - (b.id || 0));
         this.pinnedCursor = Math.max(0, this.pinned.length - 1);
+        this._pinnedTouchedAfterJump = true;
         this._renderPinned();
       } catch (e) { console.warn('[group] pinned error', e); }
     },
@@ -949,6 +950,20 @@
     },
 
     _bindPinnedBar() {
+      this._pinnedTouchedAfterJump = true;
+      const box = document.getElementById('gc-messages');
+      if (box && !box._gcPinScrollBound) {
+        box._gcPinScrollBound = true;
+        const markTouched = () => {
+          if (!this._programmaticPinScroll) {
+            this._pinnedTouchedAfterJump = true;
+          }
+        };
+        box.addEventListener('wheel', () => { this._pinnedTouchedAfterJump = true; }, { passive: true });
+        box.addEventListener('touchmove', () => { this._pinnedTouchedAfterJump = true; }, { passive: true });
+        box.addEventListener('pointerdown', () => { this._pinnedTouchedAfterJump = true; }, { passive: true });
+        box.addEventListener('scroll', markTouched, { passive: true });
+      }
       const bar = document.getElementById('gc-pinned');
       if (!bar) return;
       bar.addEventListener('click', (e) => {
@@ -960,14 +975,14 @@
           return;
         }
         const barEl = e.target.closest('.gc-pinned-bar');
-        if (!barEl) return;
-        // клик по плашке: скроллим к текущему закрепу, затем сдвигаем карусель на следующий
-        const m = this.pinned[this.pinnedCursor];
-        if (m) this._scrollToMessage(m.id);
-        if (this.pinned.length > 1) {
+        if (!barEl || !this.pinned.length) return;
+        if (!this._pinnedTouchedAfterJump && this.pinned.length > 1) {
           this.pinnedCursor = (this.pinnedCursor - 1 + this.pinned.length) % this.pinned.length;
-          this._renderPinned();
         }
+        const m = this.pinned[this.pinnedCursor];
+        this._renderPinned();
+        if (m) this._scrollToMessage(m.id);
+        this._pinnedTouchedAfterJump = false;
       });
     },
 
@@ -976,6 +991,11 @@
       if (!box) return;
       const row = box.querySelector(`.gc-row[data-id="${id}"]`);
       if (!row) return;
+      this._programmaticPinScroll = true;
+      clearTimeout(this._programmaticPinScrollTimer);
+      this._programmaticPinScrollTimer = setTimeout(() => {
+        this._programmaticPinScroll = false;
+      }, 700);
       row.scrollIntoView({ behavior: 'smooth', block: 'center' });
       const bubble = row.querySelector('.gc-msg');
       if (bubble) {

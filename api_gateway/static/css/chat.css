@@ -2089,6 +2089,24 @@ pre {
 .image-lightbox__dl svg,
 .image-lightbox__close svg { width: 18px; height: 18px; }
 
+@media (max-width: 768px) {
+  .image-lightbox {
+    padding: 8px;
+  }
+  .image-lightbox__box {
+    width: 96vw;
+    max-width: 96vw;
+    max-height: 92vh;
+  }
+  .image-lightbox__img {
+    width: 96vw;
+    max-width: 96vw;
+    height: auto;
+    max-height: 84vh;
+    object-fit: contain;
+  }
+}
+
 /* ══════════════════════════════════════════════
    NO-TOOLS HINT (компактная плашка у кнопки ключа)
    Появляется рядом с .tools-trigger-btn на 5 сек

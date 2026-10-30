@@ -110,6 +110,25 @@
   overflow: visible;
 }
 
+.fa-chip__icon--thumb {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--fa-bg, #ede9fe);
+  border: 1px solid color-mix(in srgb, var(--fa-fold, #c4b5fd) 65%, transparent);
+}
+
+.fa-chip__thumb-img,
+.fa-chip__thumb-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  pointer-events: none;
+  border-radius: 7px;
+}
+
 /* Фон страницы */
 .fa-chip__bg {
   fill: var(--fa-bg, #e2e8f0);

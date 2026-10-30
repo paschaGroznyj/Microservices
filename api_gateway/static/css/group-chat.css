@@ -581,6 +581,20 @@
 .gc-lb__nav:hover { background: rgba(0, 0, 0, 0.65); }
 .gc-lb__nav--prev { left: -56px; }
 .gc-lb__nav--next { right: -56px; }
+@media (max-width: 768px) {
+  .gc-lightbox .image-lightbox__box {
+    width: 96vw;
+    max-width: 96vw;
+    max-height: 92vh;
+  }
+  .gc-lightbox .image-lightbox__img {
+    width: 96vw;
+    max-width: 96vw;
+    height: auto;
+    max-height: 84vh;
+    object-fit: contain;
+  }
+}
 @media (max-width: 640px) {
   .gc-lb__nav--prev { left: 6px; }
   .gc-lb__nav--next { right: 6px; }

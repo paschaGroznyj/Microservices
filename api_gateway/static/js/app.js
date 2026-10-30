@@ -1391,8 +1391,9 @@ class ChatApp {
         const container = this.getMessagesContainer();
         if (!container) return;
 
-        const isBot      = message.is_from_bot;
-        const rawContent = message.message || 'Тут было пусто';
+        const isBot        = message.is_from_bot;
+        const hasUserFiles = !isBot && Array.isArray(message.files) && message.files.length > 0;
+        const rawContent   = message.message || (hasUserFiles ? '' : 'Тут было пусто');
         // Убираем статус-индикатор при ответе бота (через метод, чтобы захватить субагентов)
         if (isBot) this._clearAllStatuses();
 
@@ -1512,7 +1513,9 @@ class ChatApp {
             container.querySelectorAll('.ed-poll:not(.is-answered)').forEach(pollEl => {
                 pollEl._syncWithUserReply?.(rawContent);
             });
-            wrapper.appendChild(messageEl);
+            if (rawContent.trim() || !hasUserFiles) {
+                wrapper.appendChild(messageEl);
+            }
             wrapper.appendChild(actions);
             container.appendChild(wrapper);
             this._repositionActiveBotNodesAfterUser(container);
@@ -1922,29 +1925,42 @@ class ChatApp {
             xls:'green', xlsx:'green', csv:'green',
             ppt:'orange', pptx:'orange',
             png:'purple', jpg:'purple', jpeg:'purple',
-            gif:'purple', webp:'purple', svg:'purple',
-            mp4:'pink', mov:'pink', avi:'pink',
+            gif:'purple', webp:'purple', svg:'purple', bmp:'purple', avif:'purple',
+            mp4:'purple', mov:'purple', avi:'purple', webm:'purple', mkv:'purple', m4v:'purple', ogv:'purple',
             zip:'gray', rar:'gray', '7z':'gray',
             json:'yellow', xml:'yellow',
             py:'teal', js:'yellow', ts:'blue', css:'purple',
         };
+        const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif', 'ico']);
 
         const getLabel = (ext) => EXT_LABEL[ext] || ext.toUpperCase().slice(0, 4) || 'FILE';
         const getColor = (ext) => EXT_COLOR[ext] || 'gray';
 
         const makeChip = (f) => {
-            const ext   = (f.ext || '').toLowerCase();
+            const rawName = f.name || 'файл';
+            const ext   = (f.ext || (rawName.includes('.') ? rawName.split('.').pop() : '') || '').toLowerCase();
             const label = getLabel(ext);
             const color = getColor(ext);
-            const name  = this.escapeHtml(f.name || 'файл');
-            return `<div class="fa-chip fa-chip--${color} fa-chip--readonly" title="${name}">
-<span class="fa-chip__icon" aria-hidden="true">
+            const name  = this.escapeHtml(rawName);
+            const isImg = f.kind === 'image' || IMAGE_EXTS.has(ext);
+            const thumbUrl = isImg
+                ? (f.localUrl || (messageId && this.currentChat
+                    ? `/api/chats/${this.currentChat}/files/${encodeURIComponent(messageId)}/${encodeURIComponent(rawName)}`
+                    : ''))
+                : '';
+            const iconInner = thumbUrl
+                ? `<span class="fa-chip__icon fa-chip__icon--thumb" aria-hidden="true">
+  <img class="fa-chip__thumb-img" src="${this.escapeHtml(thumbUrl)}" alt="">
+</span>`
+                : `<span class="fa-chip__icon" aria-hidden="true">
   <svg viewBox="0 0 36 44" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path d="M4 0h20l12 12v28a4 4 0 0 1-4 4H4a4 4 0 0 1-4-4V4a4 4 0 0 1 4-4z" class="fa-chip__bg"/>
     <path d="M24 0l12 12H28a4 4 0 0 1-4-4V0z" class="fa-chip__fold"/>
     <text x="18" y="32" text-anchor="middle" class="fa-chip__text">${label}</text>
   </svg>
-</span>
+</span>`;
+            return `<div class="fa-chip fa-chip--${color} fa-chip--readonly" title="${name}">
+${iconInner}
 <span class="fa-chip__name">${name}</span>
 </div>`;
         };
@@ -2641,22 +2657,26 @@ class ChatApp {
         if (this._runState !== 'idle') return;
 
         const text = isCustom ? customText.trim() : this.getInputText();
-        if (!text) return;
+        const hasAttached = !isCustom && this.hasAttachedFiles();
+        if (!text && !hasAttached) return;
 
-        if (!isCustom && /^\/(chat-id|workspaces)$/i.test(text.trim())) {
+        if (!isCustom && text && /^\/(chat-id|workspaces)$/i.test(text.trim())) {
             await this._executeSlashCommand(text.trim().toLowerCase());
             return;
         }
 
+        const attachedMeta = hasAttached ? (window.FileAttach?.getFilesMeta?.() || []) : [];
+        const chatPreviewText = text || (attachedMeta[0]?.name ? `📎 ${attachedMeta[0].name}` : 'Файл');
+
         if (!this.currentChat) {
             this.currentChat = this.generateChatId();
-            this.chats.push({ id: this.currentChat, last_message: text, timestamp: new Date().toISOString() });
+            this.chats.push({ id: this.currentChat, last_message: chatPreviewText, timestamp: new Date().toISOString() });
             this.renderChats(this.chats);
             await this.openChat(this.currentChat);
         } else {
             const existing = this.chats.find(c => c.id === this.currentChat);
             if (existing) {
-                existing.last_message = text;
+                existing.last_message = chatPreviewText;
                 existing.timestamp = new Date().toISOString();
                 this.renderChats(this.chats);
             }
@@ -4014,9 +4034,32 @@ class ChatApp {
         }
         sendBtn.setAttribute('aria-label', 'Отправить');
         sendBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-        const hasText = this.getInputText().length > 0;
-        sendBtn.disabled = !hasText;
-        sendBtn.classList.toggle('active', hasText);
+        const canSend = this.getInputText().length > 0 || this.hasAttachedFiles();
+        sendBtn.disabled = !canSend;
+        sendBtn.classList.toggle('active', canSend);
+    }
+
+    hasAttachedFiles() {
+        try {
+            const files = window.FileAttach?.getFiles?.() || [];
+            return Array.isArray(files) && files.length > 0;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    _syncSendButtonState() {
+        const container = this.getInputContainer();
+        const sendBtn = container?.querySelector('#send-btn');
+        if (!sendBtn) return;
+        if (this._runState !== 'idle') {
+            sendBtn.disabled = false;
+            sendBtn.classList.add('active');
+            return;
+        }
+        const canSend = this.getInputText().length > 0 || this.hasAttachedFiles();
+        sendBtn.classList.toggle('active', canSend);
+        sendBtn.disabled = !canSend;
     }
 
     async stopCurrentRun() {
@@ -5185,9 +5228,9 @@ class ChatApp {
                 sendBtn.classList.add('active');
                 return;
             }
-            const hasText = this.getInputText().length > 0;
-            sendBtn.classList.toggle('active', hasText);
-            sendBtn.disabled = !hasText;
+            const canSend = this.getInputText().length > 0 || this.hasAttachedFiles();
+            sendBtn.classList.toggle('active', canSend);
+            sendBtn.disabled = !canSend;
         };
 
         field.addEventListener('input', onInput);

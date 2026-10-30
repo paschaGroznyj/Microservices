@@ -198,6 +198,8 @@ async def clear_running(chat_id) -> None:
                 state["duration_sec"] = elapsed_sec
             state["completed"] = True
             state["live_text"] = ""
+            state.pop("user_message", None)
+            state.pop("user_message_id", None)
             await _redis.set(_reasoning_key(chat_id), json.dumps(state), ex=RUN_TTL)
         await _redis.delete(_key(chat_id))
     except Exception as e:

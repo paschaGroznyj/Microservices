@@ -564,15 +564,21 @@ class ChatApp {
         const container = this.getMessagesContainer();
         const st = this._ensureStream(chatId);
 
-        if (serverStatus && container) {
+        if (running && serverStatus && container) {
             const uMsgText = serverStatus.user_message || serverStatus.reasoning?.user_message;
             const uMsgId = serverStatus.user_message_id || serverStatus.reasoning?.user_message_id;
             if (uMsgText) {
-                const hasById = uMsgId && container.querySelector(`.user-message-wrapper[data-message-id="${uMsgId}"]`);
-                const hasByText = [...container.querySelectorAll('.user-message')].some(el =>
-                    el.textContent?.trim().includes(String(uMsgText).trim())
+                const hasById = uMsgId && container.querySelector(
+                    `.user-message-wrapper[data-message-id="${uMsgId}"], .user-message-wrapper[data-id="${uMsgId}"]`
                 );
-                if (!hasById && !hasByText) {
+                const normTarget = String(uMsgText).replace(/\s+/g, ' ').trim();
+                const hasByText = [...container.querySelectorAll('.user-message .message-text, .user-message')].some(el => {
+                    const normEl = (el.textContent || '').replace(/\s+/g, ' ').trim();
+                    return normEl && normTarget && (normEl.includes(normTarget) || normTarget.includes(normEl));
+                });
+                const lastChild = container.lastElementChild;
+                const botAlreadyBelow = lastChild && lastChild.classList?.contains('agent-message') && /^\d+$/.test(String(lastChild.dataset.id || ''));
+                if (!hasById && !hasByText && !botAlreadyBelow) {
                     this.addMessage({
                         id: uMsgId || `msg-${Date.now()}`,
                         message_id: uMsgId || '',
@@ -1441,11 +1447,17 @@ class ChatApp {
             }
             // При animate — actions и code-header вешает _streamRenderMessage в финале
         } else {
+            const _uClientMsgId = message.message_id || message.id || '';
+            if (_uClientMsgId && container.querySelector(
+                `.user-message-wrapper[data-message-id="${_uClientMsgId}"], .user-message-wrapper[data-id="${_uClientMsgId}"]`
+            )) {
+                return;
+            }
             const wrapper = document.createElement('div');
             wrapper.className = 'user-message-wrapper';
-            // id сообщения на wrapper — нужен для дедупа WS-эха (в т.ч. для чипов,
-            // где textContent не содержит полного текста).
-            if (message.id) wrapper.dataset.messageId = message.id;
+            // id и message_id сообщения на wrapper — нужны для дедупа WS-эха и истории БД
+            if (message.id) wrapper.dataset.id = message.id;
+            if (_uClientMsgId) wrapper.dataset.messageId = _uClientMsgId;
             // Прикреплённые файлы (чипы) — НАД пузырём сообщения, а не внутри него.
             const filesHtml = this._renderMessageFiles(message.files);
             if (filesHtml) {
@@ -2696,13 +2708,15 @@ class ChatApp {
                 // который бэк возвращает в эхе). Надёжно для длинного текста-чипа,
                 // где textContent не содержит полного сообщения.
                 if (msg.message_id &&
-                    document.querySelector(`.user-message-wrapper[data-message-id="${msg.message_id}"]`)) {
+                    document.querySelector(`.user-message-wrapper[data-message-id="${msg.message_id}"], .user-message-wrapper[data-id="${msg.message_id}"]`)) {
                     return;
                 }
-                // Fallback по тексту — для старых сообщений/эх без message_id.
-                const dup = [...document.querySelectorAll('.user-message')].find(el =>
-                    el.textContent?.trim().includes(msg.message?.trim())
-                );
+                // Fallback по тексту — для старых сообщений/эх без message_id (с нормализацией переводов строк).
+                const _normEcho = String(msg.message || '').replace(/\s+/g, ' ').trim();
+                const dup = [...document.querySelectorAll('.user-message .message-text, .user-message')].find(el => {
+                    const _normEl = (el.textContent || '').replace(/\s+/g, ' ').trim();
+                    return _normEl && _normEcho && _normEl.includes(_normEcho);
+                });
                 if (dup) return;
                 this.addMessage(msg, true, false);
                 return;

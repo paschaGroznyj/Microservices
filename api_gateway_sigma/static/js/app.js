@@ -38,7 +38,7 @@ class ChatApp {
             'pendingBotEl', 'pendingBotText', 'liveBlockEl', 'reasoningWrapEl',
             'streamBuffer', 'streamShown', 'streamDone', 'streamIsFinal',
             'streamFinalData', 'streamingActive', 'streamRaf', 'lastStreamRender',
-            'botAnswered',
+            'botAnswered', 'runStartedAt', 'reasoningDurationSec', 'reasoningTimer',
         ];
         for (const f of STREAM_FIELDS) {
             const prop = '_' + f;
@@ -73,6 +73,9 @@ class ChatApp {
             streamRaf: null,
             lastStreamRender: 0,
             botAnswered: false,
+            runStartedAt: 0,
+            reasoningDurationSec: 0,
+            reasoningTimer: null,
         };
     }
 
@@ -564,19 +567,19 @@ class ChatApp {
     async _restoreRunningUI(chatId, savedState = null) {
         let running = false;
         let requestId = savedState?.activeRequestId || null;
+        let serverStatus = null;
 
-        // Оптимистично поднимаем UI сразу, если локально знали что чат в работе
         if (savedState?.running) {
             running = true;
         }
 
-        // Авторитетная проверка по серверу (переживает F5)
         try {
             const r = await fetch(`/api/chats/${chatId}/run_status`, {
                 credentials: 'include'
             });
             if (r.ok) {
                 const j = await r.json();
+                serverStatus = j;
                 if (j?.running) {
                     running = true;
                     requestId = j.request_id || requestId;
@@ -586,8 +589,49 @@ class ChatApp {
             }
         } catch (_) { /* сеть недоступна — доверяем savedState */ }
 
-        // Чат мог смениться, пока ждали ответ — не трогаем чужой UI
         if (String(this.currentChat) !== String(chatId)) return;
+
+        const container = this.getMessagesContainer();
+        const st = this._ensureStream(chatId);
+
+        if (serverStatus && container) {
+            const uMsgText = serverStatus.user_message || serverStatus.reasoning?.user_message;
+            const uMsgId = serverStatus.user_message_id || serverStatus.reasoning?.user_message_id;
+            if (uMsgText) {
+                const hasById = uMsgId && container.querySelector(`.user-message-wrapper[data-message-id="${uMsgId}"]`);
+                const hasByText = [...container.querySelectorAll('.user-message')].some(el =>
+                    el.textContent?.trim().includes(String(uMsgText).trim())
+                );
+                if (!hasById && !hasByText) {
+                    this.addMessage({
+                        id: uMsgId || `msg-${Date.now()}`,
+                        message_id: uMsgId || '',
+                        message: uMsgText,
+                        is_from_bot: false,
+                        created_at: new Date().toISOString(),
+                    }, false);
+                }
+            }
+        }
+
+        if (serverStatus?.elapsed_sec && st) {
+            const elapsedSec = Math.max(1, Number(serverStatus.elapsed_sec) || 1);
+            st.runStartedAt = Date.now() - (elapsedSec * 1000);
+            st.reasoningDurationSec = elapsedSec;
+        } else if (serverStatus?.started_at && st) {
+            st.runStartedAt = Number(serverStatus.started_at) * 1000;
+        }
+
+        if (serverStatus?.reasoning) {
+            this._restoreReasoningFromServer(chatId, serverStatus.reasoning, running);
+        }
+
+        if (container) {
+            this._dedupeTurnReasoningAndActions(container, st);
+            if (st?.pendingBotEl) {
+                this._ensureBotAfterLastUserMessage(container, st.pendingBotEl);
+            }
+        }
 
         if (!running) {
             this._onRunFinished();
@@ -598,14 +642,10 @@ class ChatApp {
         this._activeRequestId = requestId;
         this._setSendButtonMode('stop');
 
-        // Если по чату ещё нет живого SSE-источника (например после F5) —
-        // поднимаем стрим, чтобы поймать хвост генерации.
         if (!this._sources[String(chatId)]) {
             this._startStatusPolling(chatId);
         }
 
-        // Плейсхолдер-волна, только если ответ ещё не пошёл в ленту
-        const container = this.getMessagesContainer();
         const alreadyStreaming = container?.querySelector('.live-block, .reasoning-live, #agent-response-placeholder');
         if (container && !alreadyStreaming && !this._botAnswered) {
             this._createBotPlaceholder(container);
@@ -636,7 +676,8 @@ class ChatApp {
         // Убираем плейсхолдер-волну, если _restoreRunningUI успел её создать.
         this._removeBotPlaceholder();
 
-        container.appendChild(st.pendingBotEl);
+        this._ensureBotAfterLastUserMessage(container, st.pendingBotEl);
+        this._dedupeTurnReasoningAndActions(container, st);
         this._botAnswered = true;
 
         // Показываем накопленное и (пере)запускаем RAF, если он был снят.
@@ -732,8 +773,16 @@ class ChatApp {
     ══════════════════════════════════════════ */
     async loadMessages(chatId) {
         const PAGE_SIZE = 50;
-        const res = await fetch(`/api/chats/${chatId}/messages?limit=${PAGE_SIZE}&offset=0`);
-        if (!res.ok) return;
+        this._loadingMessagesChat = String(chatId);
+        let res;
+        try {
+            res = await fetch(`/api/chats/${chatId}/messages?limit=${PAGE_SIZE}&offset=0`);
+        } finally {
+            if (this._loadingMessagesChat === String(chatId)) {
+                this._loadingMessagesChat = null;
+            }
+        }
+        if (!res || !res.ok) return;
         const data = await res.json();
         if (chatId !== this.currentChat) return; // гонка
 
@@ -1444,6 +1493,7 @@ class ChatApp {
             wrapper.appendChild(messageEl);
             wrapper.appendChild(actions);
             container.appendChild(wrapper);
+            this._repositionActiveBotNodesAfterUser(container);
 
             // Claude-collapsible: после вставки в DOM проверяем реальную высоту
             this._initCollapsibles(wrapper);
@@ -2260,6 +2310,11 @@ class ChatApp {
         sendBtn?.classList.remove('active');
         this._botAnswered = false;
         this._hardResetStreamState(this.currentChat);
+        const _curSt = this._ensureStream(this.currentChat);
+        if (_curSt) {
+            _curSt.runStartedAt = Date.now();
+            _curSt.reasoningDurationSec = 1;
+        }
 
         this._runState = 'running';
         this._setSendButtonMode('stop');
@@ -2643,13 +2698,304 @@ class ChatApp {
         ind.classList.add('wave-flatten');
     }
 
-    /* Гарантирует существование ЕДИНОГО свёртка «Размышления» для текущего
-       ответа и возвращает его .reasoning-body — контейнер, куда дописываются
-       все мысли между вызовами тулз. Не плодим блок на каждый шаг. */
+    _formatReasoningDuration(sec) {
+        const s = Math.max(1, Math.round(Number(sec) || 1));
+        return `Думаю ${s} сек.`;
+    }
+
+    _updateReasoningDurationUI(chatId, overrideSec = null) {
+        const st = this._resolveStream(chatId);
+        if (!st) return;
+        let sec = overrideSec;
+        if (sec == null) {
+            if (st.runStartedAt) {
+                sec = Math.max(1, Math.round((Date.now() - st.runStartedAt) / 1000));
+            } else {
+                sec = Math.max(1, Number(st.reasoningDurationSec) || 1);
+            }
+        }
+        st.reasoningDurationSec = sec;
+        const label = this._formatReasoningDuration(sec);
+        const root = st.pendingBotEl || st.reasoningWrapEl;
+        if (root) {
+            root.querySelectorAll('.reasoning-footnote[data-reasoning-duration]').forEach(el => {
+                el.textContent = label;
+            });
+        }
+    }
+
+    _startReasoningTimer(chatId) {
+        const st = this._resolveStream(chatId);
+        if (!st) return;
+        if (!st.runStartedAt) st.runStartedAt = Date.now();
+        this._updateReasoningDurationUI(chatId);
+        if (st.reasoningTimer) return;
+        st.reasoningTimer = setInterval(() => {
+            this._updateReasoningDurationUI(chatId);
+        }, 1000);
+    }
+
+    _stopReasoningTimer(chatId, finalSec = null) {
+        const st = this._resolveStream(chatId);
+        if (!st) return;
+        if (st.reasoningTimer) {
+            clearInterval(st.reasoningTimer);
+            st.reasoningTimer = null;
+        }
+        this._updateReasoningDurationUI(chatId, finalSec);
+        if (st.reasoningWrapEl) {
+            st.reasoningWrapEl.setAttribute('data-state', 'done');
+        }
+    }
+
+    _ensureBotAfterLastUserMessage(container, botEl) {
+        if (!container || !botEl) return;
+        const placeholder = container.querySelector('#agent-response-placeholder');
+        const userWrappers = container.querySelectorAll('.user-message-wrapper');
+        const lastUser = userWrappers.length ? userWrappers[userWrappers.length - 1] : null;
+        if (botEl.parentNode !== container) {
+            if (placeholder && placeholder.parentNode === container) {
+                container.insertBefore(botEl, placeholder);
+            } else {
+                container.appendChild(botEl);
+            }
+            return;
+        }
+        if (lastUser && (lastUser.compareDocumentPosition(botEl) & Node.DOCUMENT_POSITION_PRECEDING)) {
+            if (placeholder && placeholder.parentNode === container) {
+                container.insertBefore(botEl, placeholder);
+            } else {
+                container.appendChild(botEl);
+            }
+        }
+    }
+
+    _repositionActiveBotNodesAfterUser(container) {
+        if (!container) return;
+        const st = this._resolveStream(this.currentChat);
+        if (st?.pendingBotEl && st.pendingBotEl.parentNode === container) {
+            container.appendChild(st.pendingBotEl);
+        }
+        const placeholder = container.querySelector('#agent-response-placeholder');
+        if (placeholder && placeholder.parentNode === container) {
+            container.appendChild(placeholder);
+        }
+    }
+
+    _dedupeTurnReasoningAndActions(container, st, incomingId = null) {
+        if (!container) return;
+        const userWrappers = container.querySelectorAll('.user-message-wrapper');
+        const lastUser = userWrappers.length ? userWrappers[userWrappers.length - 1] : null;
+
+        const botCandidates = [];
+        if (lastUser) {
+            let cur = lastUser.nextElementSibling;
+            while (cur) {
+                if (cur.classList?.contains('agent-message')) botCandidates.push(cur);
+                cur = cur.nextElementSibling;
+            }
+        } else {
+            container.querySelectorAll(':scope > .agent-message').forEach(el => {
+                if (el.querySelector('.reasoning-block, .reasoning-live') || String(el.dataset.id || '').startsWith('msg-')) {
+                    botCandidates.push(el);
+                }
+            });
+        }
+
+        if (!botCandidates.length) return;
+
+        const primary = (st?.pendingBotEl && botCandidates.includes(st.pendingBotEl))
+            ? st.pendingBotEl
+            : botCandidates[0];
+
+        if (st && (!st.pendingBotEl || !container.contains(st.pendingBotEl))) {
+            const isUnfinished = !primary.querySelector('.live-block')?.textContent?.trim()
+                || String(primary.dataset.id || '').startsWith('msg-')
+                || (incomingId && String(primary.dataset.id || '') === String(incomingId))
+                || !st.streamDone;
+            if (isUnfinished) {
+                st.pendingBotEl = primary;
+            }
+        }
+
+        if (botCandidates.length > 1) {
+            for (let i = 1; i < botCandidates.length; i++) {
+                const dup = botCandidates[i];
+                if (dup === primary) continue;
+                const dupReasoning = dup.querySelector('.reasoning-block');
+                const dupLive = dup.querySelector('.reasoning-live, .live-block');
+                const isSplitTurn = dupReasoning || dupLive || String(dup.dataset.id || '').startsWith('msg-');
+                if (!isSplitTurn) continue;
+
+                while (dup.firstChild) {
+                    primary.appendChild(dup.firstChild);
+                }
+                dup.remove();
+            }
+        }
+
+        const rBlocks = [...primary.querySelectorAll('.reasoning-block')];
+        if (rBlocks.length > 0) {
+            const firstWrap = rBlocks[0];
+            const firstBody = firstWrap.querySelector('.reasoning-body');
+            const seenSteps = new Set(
+                [...(firstBody?.querySelectorAll('.reasoning-step') || [])].map(s => s.textContent.trim())
+            );
+            for (let i = 1; i < rBlocks.length; i++) {
+                const extra = rBlocks[i];
+                extra.querySelectorAll('.reasoning-step').forEach(step => {
+                    const key = step.textContent.trim();
+                    if (key && !seenSteps.has(key) && firstBody) {
+                        seenSteps.add(key);
+                        firstBody.appendChild(step);
+                    }
+                });
+                extra.remove();
+            }
+            if (st && st.pendingBotEl === primary) {
+                st.reasoningWrapEl = firstWrap;
+            }
+            if (primary.firstElementChild !== firstWrap) {
+                primary.insertBefore(firstWrap, primary.firstElementChild);
+            }
+        }
+
+        const actionsList = [...primary.querySelectorAll(':scope > .message-actions')];
+        if (st && st.pendingBotEl === primary && !st.streamDone) {
+            actionsList.forEach(a => a.remove());
+        } else if (actionsList.length > 1) {
+            for (let i = 0; i < actionsList.length - 1; i++) {
+                actionsList[i].remove();
+            }
+        }
+    }
+
+    _restoreReasoningFromServer(chatId, reasoningState, isRunning) {
+        if (!reasoningState) return;
+        const steps = Array.isArray(reasoningState.steps) ? reasoningState.steps.filter(Boolean) : [];
+        const liveText = (reasoningState.live_text || '').trim();
+        if (!steps.length && !liveText) return;
+
+        const container = this.getMessagesContainer();
+        if (!container) return;
+        const st = this._ensureStream(chatId);
+
+        const durSec = Math.max(1, Number(reasoningState.duration_sec || reasoningState.elapsed_sec || st?.reasoningDurationSec || 1));
+        if (st) {
+            st.reasoningDurationSec = durSec;
+            if (!st.runStartedAt && reasoningState.started_at) {
+                st.runStartedAt = Number(reasoningState.started_at) * 1000;
+            }
+        }
+
+        if (isRunning) {
+            this._dedupeTurnReasoningAndActions(container, st, reasoningState.request_id);
+            if (!st.pendingBotEl) {
+                st.pendingBotEl = document.createElement('div');
+                st.pendingBotEl.className = 'agent-message';
+                st.pendingBotEl.dataset.id = reasoningState.request_id || '';
+                this._ensureBotAfterLastUserMessage(container, st.pendingBotEl);
+                st.botAnswered = true;
+                st.streamingActive = true;
+            } else {
+                this._ensureBotAfterLastUserMessage(container, st.pendingBotEl);
+            }
+            const body = this._ensureReasoningWrap(chatId);
+            if (body) {
+                const existingTexts = new Set(
+                    [...body.querySelectorAll('.reasoning-step')].map(el => el.textContent.trim())
+                );
+                steps.forEach(rawStep => {
+                    let html = marked.parse(String(rawStep));
+                    if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html);
+                    const step = document.createElement('div');
+                    step.className = 'reasoning-step';
+                    step.setAttribute('data-cds', 'Prose');
+                    step.setAttribute('data-prose-font', 'sans');
+                    step.setAttribute('data-prose-size', 'inherit');
+                    step.innerHTML = html;
+                    const t = step.textContent.trim();
+                    if (t && !existingTexts.has(t)) {
+                        existingTexts.add(t);
+                        body.appendChild(step);
+                    }
+                });
+            }
+            if (reasoningState.is_final) {
+                this._stopReasoningTimer(chatId, durSec);
+            } else {
+                this._startReasoningTimer(chatId);
+            }
+        } else if (steps.length) {
+            const userWrappers = container.querySelectorAll('.user-message-wrapper');
+            const lastUser = userWrappers.length ? userWrappers[userWrappers.length - 1] : null;
+            let targetBotEl = null;
+            if (lastUser) {
+                let cur = lastUser.nextElementSibling;
+                while (cur) {
+                    if (cur.classList?.contains('agent-message')) {
+                        targetBotEl = cur;
+                        break;
+                    }
+                    cur = cur.nextElementSibling;
+                }
+            }
+            if (targetBotEl && !targetBotEl.querySelector('.reasoning-block')) {
+                const wrap = document.createElement('div');
+                wrap.className = 'reasoning-block reasoning-collapsed';
+                wrap.setAttribute('data-cds', 'TurnStatus');
+                wrap.setAttribute('data-state', 'done');
+                wrap.innerHTML = `
+                    <div class="reasoning-header" data-cds-row="">
+                        <span class="reasoning-label">Размышления</span>
+                        ${this._reasoningCaretSVG()}
+                    </div>
+                    <div class="reasoning-body" data-cds-row-panel="">
+                        <p class="reasoning-footnote" data-reasoning-duration="">${this._formatReasoningDuration(durSec)}</p>
+                    </div>
+                `;
+                wrap.querySelector('.reasoning-header')?.addEventListener('click', () => {
+                    wrap.classList.toggle('reasoning-collapsed');
+                });
+                const body = wrap.querySelector('.reasoning-body');
+                steps.forEach(rawStep => {
+                    let html = marked.parse(String(rawStep));
+                    if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html);
+                    const step = document.createElement('div');
+                    step.className = 'reasoning-step';
+                    step.setAttribute('data-cds', 'Prose');
+                    step.setAttribute('data-prose-font', 'sans');
+                    step.setAttribute('data-prose-size', 'inherit');
+                    step.innerHTML = html;
+                    body.appendChild(step);
+                });
+                targetBotEl.insertBefore(wrap, targetBotEl.firstElementChild);
+            }
+        }
+    }
+
     _ensureReasoningWrap(chatId) {
         const st = this._resolveStream(chatId);
+        if (!st) return null;
+        const container = this._isActiveChat(chatId) ? this.getMessagesContainer() : null;
+        if (container) {
+            this._dedupeTurnReasoningAndActions(container, st);
+        }
+        if (!st.reasoningWrapEl && st.pendingBotEl) {
+            const existingWrap = st.pendingBotEl.querySelector('.reasoning-block');
+            if (existingWrap) st.reasoningWrapEl = existingWrap;
+        }
         if (st.reasoningWrapEl && st.pendingBotEl?.contains(st.reasoningWrapEl)) {
-            return st.reasoningWrapEl.querySelector('.reasoning-body');
+            const body = st.reasoningWrapEl.querySelector('.reasoning-body');
+            if (body && !body.querySelector('.reasoning-footnote[data-reasoning-duration]')) {
+                const durEl = document.createElement('p');
+                durEl.className = 'reasoning-footnote';
+                durEl.setAttribute('data-reasoning-duration', '');
+                durEl.textContent = this._formatReasoningDuration(st.reasoningDurationSec || 1);
+                body.insertBefore(durEl, body.firstElementChild);
+            }
+            this._startReasoningTimer(chatId);
+            return body;
         }
         const wrap = document.createElement('div');
         wrap.className = 'reasoning-block reasoning-collapsed';
@@ -2659,19 +3005,28 @@ class ChatApp {
                 <span class="reasoning-label">Размышления</span>
                 ${this._reasoningCaretSVG()}
             </div>
-            <div class="reasoning-body" data-cds-row-panel=""></div>
+            <div class="reasoning-body" data-cds-row-panel="">
+                <p class="reasoning-footnote" data-reasoning-duration="">${this._formatReasoningDuration(st.reasoningDurationSec || 1)}</p>
+            </div>
         `;
         const header = wrap.querySelector('.reasoning-header');
         header?.addEventListener('click', () => {
             wrap.classList.toggle('reasoning-collapsed');
         });
-        // Свёрток всегда выше живого блока
-        if (st.liveBlockEl) {
-            st.pendingBotEl.insertBefore(wrap, st.liveBlockEl);
-        } else {
-            st.pendingBotEl.appendChild(wrap);
+        if (st.pendingBotEl) {
+            st.pendingBotEl.querySelectorAll(':scope > .reasoning-live').forEach(r => r.remove());
+        st.pendingBotEl.querySelectorAll(':scope > .message-actions').forEach(a => a.remove());
+            if (st.liveBlockEl && st.pendingBotEl.contains(st.liveBlockEl)) {
+                st.pendingBotEl.insertBefore(wrap, st.liveBlockEl);
+            } else {
+                st.pendingBotEl.insertBefore(wrap, st.pendingBotEl.firstElementChild);
+            }
+            if (container) {
+                this._ensureBotAfterLastUserMessage(container, st.pendingBotEl);
+            }
         }
         st.reasoningWrapEl = wrap;
+        this._startReasoningTimer(chatId);
         return wrap.querySelector('.reasoning-body');
     }
 
@@ -2709,14 +3064,18 @@ class ChatApp {
 
         const body = this._ensureReasoningWrap(chatId);
         const step = document.createElement('div');
-        // Стартуем step в «зажатом» состоянии — анимация pop-in надует его,
-        // как только лопнет живой пузырь (см. класс .reasoning-step--popin).
         step.className = 'reasoning-step reasoning-step--popin';
         step.setAttribute('data-cds', 'Prose');
         step.setAttribute('data-prose-font', 'sans');
         step.setAttribute('data-prose-size', 'inherit');
         step.innerHTML = html;
-        body.appendChild(step);
+        const stepPlain = step.textContent.trim();
+        const alreadyExists = [...body.querySelectorAll('.reasoning-step')].some(
+            s => s.textContent.trim() === stepPlain
+        );
+        if (!alreadyExists) {
+            body.appendChild(step);
+        }
 
         // Для фонового чата контейнера нет — скролл/анимации только активному.
         const container = this._isActiveChat(chatId) ? this.getMessagesContainer() : null;
@@ -2755,8 +3114,7 @@ class ChatApp {
        с приглушённого reasoning-live до обычного (основной шрифт). */
     _promoteLiveToFinal(chatId) {
         const st = this._resolveStream(chatId);
-        // Помечаем флаг ДО работы с блоком: если живого блока ещё нет (финальные
-        // чанки придут следом), новый блок создастся сразу как .live-block.
+        this._stopReasoningTimer(chatId);
         st.streamIsFinal = true;
         if (st.liveBlockEl) {
             st.liveBlockEl.className = 'live-block';
@@ -2780,6 +3138,10 @@ class ChatApp {
         if (st.streamRaf) {
             cancelAnimationFrame(st.streamRaf);
             st.streamRaf = null;
+        }
+        if (st.reasoningTimer) {
+            clearInterval(st.reasoningTimer);
+            st.reasoningTimer = null;
         }
         // Если прошлый живой блок так и остался в reasoning-стиле — нормализуем,
         // чтобы предыдущий ответ не выглядел как незавершённое размышление.
@@ -2838,7 +3200,15 @@ class ChatApp {
         if (data.message_id) {
             st.pendingBotEl.dataset.id = data.message_id;
         }
+        this._stopReasoningTimer(chatId);
+        const activeContainer = isActive ? this.getMessagesContainer() : null;
+        if (activeContainer) {
+            this._ensureBotAfterLastUserMessage(activeContainer, st.pendingBotEl);
+            this._dedupeTurnReasoningAndActions(activeContainer, st);
+        }
         this._applyCodeHeaders(st.pendingBotEl);
+        st.pendingBotEl.querySelectorAll(':scope > .reasoning-live').forEach(r => r.remove());
+        st.pendingBotEl.querySelectorAll(':scope > .message-actions').forEach(a => a.remove());
         const actions = this.createMessageActions(st.pendingBotEl.dataset.id, fullText, true);
         st.pendingBotEl.appendChild(actions);
         st.pendingBotEl.style.transition = '';
@@ -2964,27 +3334,38 @@ class ChatApp {
     async _handleRunDone(chatId) {
         const key = String(chatId);
         const isActive = this._isActiveChat(key);
-        // Гасим стрим-состояние (RAF + ссылки) ТОЛЬКО этого чата без финализации
-        // DOM — лента активного чата всё равно перерисуется из БД ниже.
+        const st = this._getStream(key);
+        this._stopReasoningTimer(key);
+        const savedReasoningWrap = st?.reasoningWrapEl || st?.pendingBotEl?.querySelector('.reasoning-block') || null;
         this._hardResetStreamState(key);
-        // Фоновый SSE-источник этого чата больше не нужен — закрываем.
         const src = this._sources[key];
         if (src) { try { src.close(); } catch (_) {} delete this._sources[key]; }
         if (this._chatStatuses) delete this._chatStatuses[key];
 
         if (isActive) {
-            // _finalizeStream мы обошли, значит placeholder с волной-индикатором и
-            // статусы тулов надо снять здесь вручную, иначе индикатор зависнет
-            // поверх уже перечитанной истории.
             this._botAnswered = true;
             this._flattenWaveIndicator();
             this._removeBotPlaceholder();
             this._clearAllStatuses();
             await this.loadMessages(chatId);
+            if (savedReasoningWrap) {
+                const container = this.getMessagesContainer();
+                const userWrappers = container?.querySelectorAll('.user-message-wrapper') || [];
+                const lastUser = userWrappers.length ? userWrappers[userWrappers.length - 1] : null;
+                let lastBot = null;
+                if (lastUser) {
+                    let cur = lastUser.nextElementSibling;
+                    while (cur) {
+                        if (cur.classList?.contains('agent-message')) { lastBot = cur; break; }
+                        cur = cur.nextElementSibling;
+                    }
+                }
+                if (lastBot && !lastBot.querySelector('.reasoning-block')) {
+                    lastBot.insertBefore(savedReasoningWrap, lastBot.firstElementChild);
+                }
+            }
             this._onRunFinished();
         }
-        // Для фонового чата UI не трогаем: при возврате openChat перечитает
-        // историю из БД, где уже лежит финальный ответ.
     }
 
     // Замена polling'а: держим один SSE (EventSource) и ждём push-события
@@ -3047,26 +3428,31 @@ class ChatApp {
             // (pendingBotEl не добавляется в DOM, живёт в st до возврата).
             const container = isActive ? this.getMessagesContainer() : null;
 
+            if (!st.runStartedAt) st.runStartedAt = Date.now();
+            if (isActive && container) {
+                this._dedupeTurnReasoningAndActions(container, st, frame.id);
+            }
             if (!st.liveBlockEl) {
-                // Обёртка ответа бота — создаём один раз на весь ответ.
                 if (!st.pendingBotEl) {
                     st.pendingBotEl = document.createElement('div');
                     st.pendingBotEl.className = 'agent-message';
                     st.pendingBotEl.dataset.id = frame.id || '';
-                    if (isActive && container) {
+                    if (isActive && container && this._loadingMessagesChat !== key) {
                         st.pendingBotEl.style.opacity = '0';
                         st.pendingBotEl.style.transition = 'opacity 0.25s ease';
-                        container.appendChild(st.pendingBotEl);
+                        this._ensureBotAfterLastUserMessage(container, st.pendingBotEl);
                         requestAnimationFrame(() => requestAnimationFrame(() => {
                             if (st.pendingBotEl) st.pendingBotEl.style.opacity = '1';
                         }));
-                        // Placeholder НЕ убираем здесь: волна-индикатор крутится и
-                        // во время размышлений. Снос — в _finalizeStream.
                         this._clearAllStatuses();
                     }
                     st.botAnswered = true;
                     st.streamingActive = true;
                     st.streamIsFinal   = false;
+                } else if (isActive && container && this._loadingMessagesChat !== key) {
+                    st.pendingBotEl.querySelectorAll(':scope > .reasoning-live').forEach(r => r.remove());
+        st.pendingBotEl.querySelectorAll(':scope > .message-actions').forEach(a => a.remove());
+                    this._ensureBotAfterLastUserMessage(container, st.pendingBotEl);
                 }
                 // Живой блок печатается в reasoning-стиле, пока не пришёл
                 // final_commit. Если финал уже объявлен — сразу .live-block.

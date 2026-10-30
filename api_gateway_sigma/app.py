@@ -1074,7 +1074,11 @@ async def send_message(request: Request):
     # Redis-флаг «агент в работе» (общий для обоих гейтвеев): переживает
     # F5/переключение чата, фронт по нему восстанавливает стоп-кнопку и индикатор.
     await run_status.mark_running(
-        data["chat_id"], request_id, data.get("type_agent")
+        data["chat_id"],
+        request_id,
+        data.get("type_agent"),
+        user_message=data.get("message"),
+        user_message_id=data.get("message_id"),
     )
     try:
         start = time.perf_counter()
@@ -1182,7 +1186,8 @@ async def chat_run_status(chat_id: str, request: Request):
 
     info = await run_status.get_running(chat_id)
     if not info:
-        return JSONResponse(content={"running": False})
+        last_reasoning = await run_status.get_reasoning_state(chat_id)
+        return JSONResponse(content={"running": False, "reasoning": last_reasoning})
     return JSONResponse(content={"running": True, **info})
 
 
@@ -1309,6 +1314,9 @@ async def stream_chat_status(chat_id: str, request: Request):
                 except Exception:
                     continue
                 kind = frame.get("kind") or "live"
+                await run_status.append_reasoning_chunk(
+                    chat_id, frame.get("chunk", ""), kind, frame.get("id")
+                )
                 out.append(_sse_pack(kind, {
                     "chunk": frame.get("chunk", ""),
                     "id": frame.get("id"),

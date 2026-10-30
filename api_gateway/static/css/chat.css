@@ -1702,13 +1702,16 @@ pre {
   word-break: break-word;
 }
 .reasoning-body .reasoning-footnote,
-.agent-message .reasoning-body .reasoning-footnote {
+.agent-message .reasoning-body .reasoning-footnote,
+.reasoning-body p.reasoning-footnote,
+.agent-message .reasoning-body p.reasoning-footnote {
   margin: 0;
   font-size: 12px;
   line-height: 15px;
   font-weight: 400;
   font-style: normal;
   color: var(--cds-reasoning-muted);
+  user-select: none;
 }
 .reasoning-body .reasoning-step {
   display: grid;
@@ -1732,8 +1735,8 @@ pre {
 .reasoning-body .reasoning-step + .reasoning-step {
   border-top: none;
 }
-.reasoning-body p,
-.agent-message .reasoning-body p {
+.reasoning-body p:not(.reasoning-footnote),
+.agent-message .reasoning-body p:not(.reasoning-footnote) {
   margin: 0;
   font-size: 13px;
   line-height: 19.5px;

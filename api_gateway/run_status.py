@@ -1,19 +1,7 @@
 # run_status.py
 """
-Флаг «агент в работе» через Redis (общий для обоих гейтвеев).
-
-Задача: после F5 или переключения чата фронт должен понимать, что по
-конкретному chat_id прямо сейчас крутится генерация (ещё не пришёл финал).
-In-memory dict pending_requests это не даёт — он в памяти процесса и фронту
-не виден. Redis-флаг переживает перезагрузку страницы.
-
-Модель данных:
-  agent:running:{chat_id}  STRING(json) = {request_id, model, started_at}
-                           TTL RUN_TTL — самоочистка, если финал потеряется.
-
-gw-агностично: оба гейтвея пишут/читают один и тот же ключ по chat_id.
-Все вызовы безопасны: если Redis недоступен — не роняем запрос, логируем
-и возвращаем безопасный дефолт (None / no-op).
+Флаг «агент в работе» + тайминг по TTL и буфер рассуждений через Redis
+(общий для обоих гейтвеев).
 """
 import os
 import json
@@ -22,15 +10,14 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# TTL флага. Если финал по какой-то причине не снял флаг (упал агент, потеря
-# сообщения) — ключ протухнет сам и фронт не застрянет в «running» навсегда.
-RUN_TTL = int(os.getenv("AGENT_RUN_TTL", "3600"))  # 60 минут
+RUN_TTL = int(os.getenv("AGENT_RUN_TTL", "3600"))
+LOOP_TTL = int(os.getenv("AGENT_LOOP_TTL", "86400"))
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
 try:
     import redis.asyncio as aioredis
     _redis = aioredis.from_url(REDIS_URL, decode_responses=True)
-except Exception as e:  # модуля нет / кривой конфиг
+except Exception as e:
     logger.warning("run_status: redis init failed: %s", e)
     _redis = None
 
@@ -39,20 +26,34 @@ def _key(chat_id) -> str:
     return f"agent:running:{chat_id}"
 
 
+def _reasoning_key(chat_id) -> str:
+    return f"agent:reasoning:{chat_id}"
+
+
 def _loop_key(chat_id) -> str:
     return f"agent:loop:{chat_id}"
 
 
-# TTL loop-флага: предохранитель на случай, если стоп потеряется и петля
-# как-то повиснет. Сутки — петля живёт долго, но не вечно.
-LOOP_TTL = int(os.getenv("AGENT_LOOP_TTL", "86400"))
+async def _compute_elapsed_from_ttl(chat_id, fallback_started_at: float | None = None) -> tuple[int, int | None]:
+    """Считает прошедшее время (в секундах) через механизм TTL ключа в Redis."""
+    if _redis is None or chat_id is None:
+        if fallback_started_at:
+            return max(1, int(round(time.time() - float(fallback_started_at)))), None
+        return 1, None
+    try:
+        pttl = await _redis.pttl(_key(chat_id))
+        if pttl is not None and pttl > 0:
+            ttl_rem = max(0, int(round(pttl / 1000.0)))
+            elapsed_ttl = max(0.0, float(RUN_TTL) - (float(pttl) / 1000.0))
+            return max(1, int(round(elapsed_ttl))), ttl_rem
+    except Exception as e:
+        logger.debug("run_status._compute_elapsed_from_ttl failed: %s", e)
+    if fallback_started_at:
+        return max(1, int(round(max(0.0, time.time() - float(fallback_started_at))))), None
+    return 1, None
 
 
 async def mark_loop(chat_id) -> None:
-    """Пометить, что по chat_id запущен САМОЦИКЛ. В отличие от agent:running
-    (эфемерный флаг одного хода, гаснет между тиками), этот флаг стабилен и
-    живёт всё время работы петли — по нему фронт после F5 понимает, что
-    работа продолжается, хотя текущего тика прямо сейчас может и не быть."""
     if _redis is None or chat_id is None:
         return
     try:
@@ -62,7 +63,6 @@ async def mark_loop(chat_id) -> None:
 
 
 async def clear_loop(chat_id) -> None:
-    """Снять флаг самоцикла: стоп-кнопка / deactivate. Идемпотентно."""
     if _redis is None or chat_id is None:
         return
     try:
@@ -72,7 +72,6 @@ async def clear_loop(chat_id) -> None:
 
 
 async def is_loop_active(chat_id) -> bool:
-    """Активен ли самоцикл по chat_id (стабильно между тиками)."""
     if _redis is None or chat_id is None:
         return False
     try:
@@ -82,41 +81,146 @@ async def is_loop_active(chat_id) -> bool:
         return False
 
 
-async def mark_running(chat_id, request_id: str, model: str | None = None) -> None:
-    """Пометить, что по chat_id стартовала генерация. Вызывается в send_message."""
+async def mark_running(
+    chat_id,
+    request_id: str,
+    model: str | None = None,
+    user_message: str | None = None,
+    user_message_id: str | None = None,
+) -> None:
+    """Пометить старт генерации и инициализировать TTL-трекер времени и рассуждений."""
     if _redis is None or chat_id is None:
         return
+    now = time.time()
     try:
         payload = json.dumps({
             "request_id": request_id,
             "model": model,
-            "started_at": time.time(),
+            "started_at": now,
+            "run_ttl": RUN_TTL,
+            "user_message": user_message,
+            "user_message_id": user_message_id,
         })
         await _redis.set(_key(chat_id), payload, ex=RUN_TTL)
+        reasoning_init = json.dumps({
+            "request_id": request_id,
+            "started_at": now,
+            "run_ttl": RUN_TTL,
+            "steps": [],
+            "live_text": "",
+            "is_final": False,
+            "completed": False,
+            "duration_sec": None,
+            "user_message": user_message,
+            "user_message_id": user_message_id,
+        })
+        await _redis.set(_reasoning_key(chat_id), reasoning_init, ex=RUN_TTL)
     except Exception as e:
         logger.debug("run_status.mark_running failed: %s", e)
 
 
-async def clear_running(chat_id) -> None:
-    """Снять флаг: пришёл финал / стоп / ошибка. Идемпотентно."""
+async def append_reasoning_chunk(
+    chat_id,
+    chunk: str,
+    kind: str = "live",
+    msg_id: str | None = None,
+) -> None:
+    """Накапливает шаги рассуждений и фиксирует время размышлений по TTL Redis."""
     if _redis is None or chat_id is None:
         return
     try:
+        raw = await _redis.get(_reasoning_key(chat_id))
+        state = json.loads(raw) if raw else {
+            "request_id": msg_id,
+            "started_at": time.time(),
+            "run_ttl": RUN_TTL,
+            "steps": [],
+            "live_text": "",
+            "is_final": False,
+            "completed": False,
+            "duration_sec": None,
+        }
+        elapsed_sec, _ = await _compute_elapsed_from_ttl(chat_id, state.get("started_at"))
+        if kind == "live":
+            if not state.get("is_final") and chunk:
+                state["live_text"] = (state.get("live_text") or "") + chunk
+                state["duration_sec"] = elapsed_sec
+        elif kind == "reasoning_end":
+            text = (state.get("live_text") or "").strip()
+            state["live_text"] = ""
+            if text:
+                steps = state.setdefault("steps", [])
+                if not steps or steps[-1] != text:
+                    steps.append(text)
+            state["duration_sec"] = elapsed_sec
+        elif kind == "final_commit":
+            state["is_final"] = True
+            state["live_text"] = ""
+            if state.get("duration_sec") is None or state.get("steps"):
+                state["duration_sec"] = elapsed_sec
+
+        pttl = await _redis.pttl(_reasoning_key(chat_id))
+        ex_sec = max(60, int(round(pttl / 1000.0))) if (pttl and pttl > 0) else RUN_TTL
+        await _redis.set(_reasoning_key(chat_id), json.dumps(state), ex=ex_sec)
+    except Exception as e:
+        logger.debug("run_status.append_reasoning_chunk failed: %s", e)
+
+
+async def get_reasoning_state(chat_id) -> dict | None:
+    if _redis is None or chat_id is None:
+        return None
+    try:
+        raw = await _redis.get(_reasoning_key(chat_id))
+        if not raw:
+            return None
+        state = json.loads(raw)
+        if not state.get("completed") and not state.get("is_final"):
+            elapsed_sec, _ = await _compute_elapsed_from_ttl(chat_id, state.get("started_at"))
+            state["elapsed_sec"] = elapsed_sec
+            if state.get("duration_sec") is None:
+                state["duration_sec"] = elapsed_sec
+        return state
+    except Exception as e:
+        logger.debug("run_status.get_reasoning_state failed: %s", e)
+        return None
+
+
+async def clear_running(chat_id) -> None:
+    """Снять флаг активной генерации и зафиксировать итоговое время рассуждений по TTL."""
+    if _redis is None or chat_id is None:
+        return
+    try:
+        raw_r = await _redis.get(_reasoning_key(chat_id))
+        if raw_r:
+            state = json.loads(raw_r)
+            elapsed_sec, _ = await _compute_elapsed_from_ttl(chat_id, state.get("started_at"))
+            if state.get("duration_sec") is None:
+                state["duration_sec"] = elapsed_sec
+            state["completed"] = True
+            state["live_text"] = ""
+            await _redis.set(_reasoning_key(chat_id), json.dumps(state), ex=RUN_TTL)
         await _redis.delete(_key(chat_id))
     except Exception as e:
         logger.debug("run_status.clear_running failed: %s", e)
 
 
 async def get_running(chat_id) -> dict | None:
-    """Вернуть {request_id, model, started_at} если по chat_id идёт работа,
-    иначе None. Фронт дёргает при загрузке/переключении чата."""
+    """Вернуть {request_id, model, started_at, elapsed_sec, ttl_remaining, reasoning}."""
     if _redis is None or chat_id is None:
         return None
     try:
         raw = await _redis.get(_key(chat_id))
         if not raw:
             return None
-        return json.loads(raw)
+        data = json.loads(raw)
+        elapsed_sec, ttl_rem = await _compute_elapsed_from_ttl(chat_id, data.get("started_at"))
+        data["elapsed_sec"] = elapsed_sec
+        data["ttl_remaining"] = ttl_rem
+        data["run_ttl"] = RUN_TTL
+        reasoning = await get_reasoning_state(chat_id)
+        if reasoning:
+            data["reasoning"] = reasoning
+        return data
     except Exception as e:
         logger.debug("run_status.get_running failed: %s", e)
         return None

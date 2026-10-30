@@ -254,6 +254,10 @@ async def bot_stream(payload: BotStream):
         logger.warning(f"[stream] Неизвестный request_id: {payload.request_id}")
         raise HTTPException(status_code=404, detail="request_id not found")
 
+    await run_status.append_reasoning_chunk(
+        chat_id, payload.chunk, payload.kind, payload.id
+    )
+
     await broadcast(chat_id, {
         "is_from_bot": True,
         "chunk": payload.chunk,
@@ -1309,7 +1313,11 @@ async def send_message(request: Request):
     # Флаг «агент в работе» в Redis: переживает F5/переключение чата,
     # фронт по нему восстанавливает стоп-кнопку и индикатор работы.
     await run_status.mark_running(
-        data["chat_id"], request_id, data.get("type_agent")
+        data["chat_id"],
+        request_id,
+        data.get("type_agent"),
+        user_message=data.get("message"),
+        user_message_id=data.get("message_id"),
     )
     # Старт самоцикла (реальный, не служебный тик): ставим стабильный loop-флаг,
     # чтобы фронт после F5/переключения чата знал, что работа идёт в цикле.
@@ -1386,8 +1394,12 @@ async def chat_run_status(chat_id: str, request: Request):
     info = await run_status.get_running(chat_id)
     loop_active = await run_status.is_loop_active(chat_id)
     if not info:
-        # Текущего тика нет, но петля может быть жива (зазор между тиками).
-        return JSONResponse(content={"running": loop_active, "loop_active": loop_active})
+        last_reasoning = await run_status.get_reasoning_state(chat_id)
+        return JSONResponse(content={
+            "running": loop_active,
+            "loop_active": loop_active,
+            "reasoning": last_reasoning,
+        })
     return JSONResponse(content={"running": True, "loop_active": loop_active, **info})
 
 

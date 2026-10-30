@@ -94,11 +94,13 @@
                 </div>
 
                 <div class="nav-item" data-tab="group">
+                    <span class="gc-nav-bg" aria-hidden="true"><canvas class="gc-nav-graph"></canvas></span>
                     <svg viewBox="0 0 16 16" fill="none">
                         <path d="M2 11.5c0-1.4 1.1-2.3 2.6-2.3s2.6.9 2.6 2.3M4.6 7.2a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2z" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
                         <path d="M8.8 12.5c0-1.7 1.3-2.8 3.1-2.8s3.1 1.1 3.1 2.8M11.9 7.6a1.9 1.9 0 1 0 0-3.8 1.9 1.9 0 0 0 0 3.8z" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>
-                    Общий чат
+                    <span class="gc-nav-label">Общий чат</span>
+                    <span class="presence-dot gc-nav-dot" hidden aria-hidden="true"></span>
                 </div>
 
 
@@ -659,6 +661,7 @@
 <script src="/static/js/mode_modal_info.js"></script>
 <script src="/static/js/profileModal.js"></script>
 <script src="/static/js/graph.js"></script>
+<script src="/static/js/animations.js"></script>
 <!-- <script src="/static/js/feedback_button.js"></script> -->
 <script type="module" src="/static/js/tools-panel.js"></script>
 <script src="/static/js/skills.js"></script>

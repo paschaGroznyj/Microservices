@@ -925,3 +925,142 @@
   border: 1px solid color-mix(in srgb, #67cc98 60%, var(--border));
 }
 .nav-item:not(.active) .nav-badge { opacity: .9; }
+
+
+/* ── Уведомление «Общий чат» (.nav-item[data-tab="group"]) ── */
+.nav-item[data-tab="group"] {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+.nav-item[data-tab="group"] > svg,
+.nav-item[data-tab="group"] > .gc-nav-label,
+.nav-item[data-tab="group"] > .gc-nav-dot {
+  position: relative;
+  z-index: 2;
+}
+.nav-item[data-tab="group"] .gc-nav-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nav-item[data-tab="group"] .gc-nav-dot {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.nav-item[data-tab="group"] .gc-nav-dot[hidden] {
+  display: none !important;
+}
+.nav-item[data-tab="group"] .gc-nav-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: inherit;
+  opacity: 0;
+  transition: opacity 0.45s ease;
+}
+.nav-item[data-tab="group"] .gc-nav-bg::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  background: linear-gradient(
+    115deg,
+    transparent 8%,
+    color-mix(in srgb, var(--accent, #6366f1) 18%, transparent) 42%,
+    color-mix(in srgb, var(--accent, #6366f1) 32%, transparent) 52%,
+    transparent 88%
+  );
+  background-size: 220% 100%;
+  animation: gc-nav-shimmer 2.4s ease-in-out infinite;
+}
+.nav-item[data-tab="group"] .gc-nav-graph {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  will-change: transform;
+}
+.nav-item[data-tab="group"].gc-nav-notify.bg-ready {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent, #6366f1) 8%, var(--sidebar-hover, rgba(255,255,255,0.04)));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent, #6366f1) 46%, transparent),
+    0 2px 14px color-mix(in srgb, var(--accent, #6366f1) 22%, transparent);
+  animation: gc-nav-glow 1.65s ease-in-out infinite;
+}
+.nav-item[data-tab="group"].gc-nav-notify.bg-ready .gc-nav-bg {
+  opacity: 1;
+}
+@keyframes gc-nav-shimmer {
+  0%   { background-position: 180% 0; }
+  100% { background-position: -40% 0; }
+}
+@keyframes gc-nav-glow {
+  0%, 100% {
+    box-shadow:
+      inset 0 0 0 1px color-mix(in srgb, var(--accent, #6366f1) 38%, transparent),
+      0 2px 12px color-mix(in srgb, var(--accent, #6366f1) 16%, transparent);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 0 1px color-mix(in srgb, var(--accent, #6366f1) 68%, transparent),
+      0 3px 18px color-mix(in srgb, var(--accent, #6366f1) 32%, transparent);
+  }
+}
+
+/* ── Мобильная 5px полоса уведомления вдоль левого края дисплея (когда сайдбар скрыт) ── */
+.gc-mobile-edge-notify {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 5px;
+  z-index: 950;
+  pointer-events: none;
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity 0.35s ease;
+  display: none;
+}
+@media (max-width: 768px) {
+  .gc-mobile-edge-notify {
+    display: block;
+  }
+  .gc-mobile-edge-notify::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      180deg,
+      transparent 0%,
+      color-mix(in srgb, var(--accent, #6366f1) 38%, transparent) 30%,
+      color-mix(in srgb, var(--accent, #6366f1) 82%, transparent) 50%,
+      color-mix(in srgb, var(--accent, #6366f1) 38%, transparent) 70%,
+      transparent 100%
+    );
+    background-size: 100% 220%;
+    animation: gc-edge-shimmer 1.8s ease-in-out infinite;
+  }
+  .gc-mobile-edge-notify .gc-mobile-edge-graph {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  .gc-mobile-edge-notify.gc-edge-active.bg-ready {
+    opacity: 1;
+    box-shadow:
+      0 0 12px color-mix(in srgb, var(--accent, #6366f1) 62%, transparent),
+      2px 0 8px color-mix(in srgb, var(--accent, #6366f1) 42%, transparent);
+  }
+}
+@keyframes gc-edge-shimmer {
+  0%   { background-position: 0 180%; }
+  100% { background-position: 0 -40%; }
+}

@@ -21,10 +21,265 @@
     pinnedCursor: 0,      // текущая позиция в карусели закреплённых
     isAdmin: false,       // права админа (из /api/auth/permissions)
 
+    _notifyTimer: null,
+    _edgeNotifyTimer: null,
+    _hasUnreadNotify: false,
+    _sidebarObserverBound: false,
+    _audioCtx: null,
+    _lastSoundAt: 0,
+
+    _isGroupTabActive() {
+      const navEl = document.querySelector('.nav-item[data-tab="group"]');
+      if (this.app && this.app.currentTab) {
+        return this.app.currentTab === 'group';
+      }
+      return !!(navEl && navEl.classList.contains('active'));
+    },
+
+    _isMobileSidebarHidden() {
+      if (window.innerWidth > 768) return false;
+      const sidebar = document.querySelector('.sidebar');
+      return !(sidebar && sidebar.classList.contains('open'));
+    },
+
+    _ensureNavElements() {
+      const navEl = document.querySelector('.nav-item[data-tab="group"]');
+      if (navEl) {
+        if (!navEl.querySelector('.gc-nav-bg')) {
+          const bg = document.createElement('span');
+          bg.className = 'gc-nav-bg';
+          bg.setAttribute('aria-hidden', 'true');
+          bg.innerHTML = '<canvas class="gc-nav-graph"></canvas>';
+          navEl.insertBefore(bg, navEl.firstChild);
+        }
+        if (!navEl.querySelector('.gc-nav-label')) {
+          Array.from(navEl.childNodes).forEach((n) => {
+            if (n.nodeType === Node.TEXT_NODE && n.textContent.trim()) {
+              const lbl = document.createElement('span');
+              lbl.className = 'gc-nav-label';
+              lbl.textContent = n.textContent.trim();
+              n.replaceWith(lbl);
+            }
+          });
+        }
+        let dot = navEl.querySelector('.gc-nav-dot');
+        if (!dot) {
+          dot = document.createElement('span');
+          dot.className = 'presence-dot gc-nav-dot';
+          dot.hidden = true;
+          dot.setAttribute('aria-hidden', 'true');
+          navEl.appendChild(dot);
+        }
+      }
+
+      if (!document.getElementById('gc-mobile-edge-notify') && document.body) {
+        const edge = document.createElement('div');
+        edge.id = 'gc-mobile-edge-notify';
+        edge.className = 'gc-mobile-edge-notify';
+        edge.setAttribute('aria-hidden', 'true');
+        edge.innerHTML = '<canvas class="gc-mobile-edge-graph"></canvas>';
+        document.body.appendChild(edge);
+      }
+
+      this._bindSidebarObserver();
+      return navEl;
+    },
+
+    _bindSidebarObserver() {
+      if (this._sidebarObserverBound) return;
+      const sidebar = document.querySelector('.sidebar');
+      if (!sidebar) return;
+      this._sidebarObserverBound = true;
+
+      const onSidebarStateChange = () => {
+        const isOpen = sidebar.classList.contains('open');
+        if (isOpen) {
+          // Сайдбар открыли на мобилке: убираем 5px полосу слева и показываем анимацию только на «Общем чате»
+          this._stopMobileEdgeNotify();
+          if (this._hasUnreadNotify && !this._isGroupTabActive()) {
+            this._startNavItemShimmer(5000);
+          }
+        }
+      };
+
+      const mo = new MutationObserver(onSidebarStateChange);
+      mo.observe(sidebar, { attributes: true, attributeFilter: ['class'] });
+      window.addEventListener('resize', () => {
+        if (window.innerWidth > 768) {
+          this._stopMobileEdgeNotify();
+        }
+      });
+    },
+
+    _initAudioUnlock() {
+      if (this._audioUnlockBound) return;
+      this._audioUnlockBound = true;
+      const unlock = () => {
+        try {
+          const Ctx = window.AudioContext || window.webkitAudioContext;
+          if (!Ctx) return;
+          if (!this._audioCtx) this._audioCtx = new Ctx();
+          if (this._audioCtx.state === 'suspended') {
+            this._audioCtx.resume().catch(() => {});
+          }
+        } catch (e) {}
+      };
+      document.addEventListener('pointerdown', unlock, { passive: true });
+      document.addEventListener('keydown', unlock, { passive: true });
+    },
+
+    _playNotifySound() {
+      const nowMs = Date.now();
+      if (nowMs - this._lastSoundAt < 1200) return;
+      this._lastSoundAt = nowMs;
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return;
+        if (!this._audioCtx) this._audioCtx = new Ctx();
+        const ctx = this._audioCtx;
+        if (ctx.state === 'suspended') {
+          ctx.resume().catch(() => {});
+        }
+        const t0 = ctx.currentTime + 0.01;
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(2400, t0);
+        filter.connect(ctx.destination);
+
+        const playTone = (freq, startOffset, duration, peakGain) => {
+          const osc = ctx.createOscillator();
+          const sub = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          sub.type = 'triangle';
+          osc.frequency.setValueAtTime(freq, t0 + startOffset);
+          sub.frequency.setValueAtTime(freq * 0.5, t0 + startOffset);
+
+          gain.gain.setValueAtTime(0.0001, t0 + startOffset);
+          gain.gain.exponentialRampToValueAtTime(peakGain, t0 + startOffset + 0.018);
+          gain.gain.exponentialRampToValueAtTime(0.0001, t0 + startOffset + duration);
+
+          osc.connect(gain);
+          sub.connect(gain);
+          gain.connect(filter);
+
+          osc.start(t0 + startOffset);
+          sub.start(t0 + startOffset);
+          osc.stop(t0 + startOffset + duration + 0.02);
+          sub.stop(t0 + startOffset + duration + 0.02);
+        };
+
+        playTone(587.33, 0.0, 0.24, 0.065);
+        playTone(880.0, 0.09, 0.34, 0.08);
+      } catch (e) {}
+    },
+
+    _stopNavGraph() {
+      window.ChatAnimations?.stopNavGraph?.();
+    },
+
+    _startNavGraph(navEl) {
+      window.ChatAnimations?.startNavGraph?.(navEl);
+    },
+
+    _startNavItemShimmer(durationMs = 5000) {
+      const navEl = this._ensureNavElements();
+      if (!navEl) return;
+      navEl.classList.add('gc-nav-notify');
+      requestAnimationFrame(() => navEl.classList.add('bg-ready'));
+      this._startNavGraph(navEl);
+
+      clearTimeout(this._notifyTimer);
+      this._notifyTimer = setTimeout(() => {
+        navEl.classList.remove('bg-ready');
+        setTimeout(() => {
+          if (!navEl.classList.contains('bg-ready')) {
+            navEl.classList.remove('gc-nav-notify');
+            this._stopNavGraph();
+          }
+        }, 450);
+      }, durationMs);
+    },
+
+    _startMobileEdgeNotify(durationMs = 5000) {
+      this._ensureNavElements();
+      const edgeEl = document.getElementById('gc-mobile-edge-notify');
+      if (!edgeEl) return;
+      edgeEl.classList.add('gc-edge-active');
+      requestAnimationFrame(() => edgeEl.classList.add('bg-ready'));
+      window.ChatAnimations?.startMobileEdgeGraph?.(edgeEl);
+
+      clearTimeout(this._edgeNotifyTimer);
+      this._edgeNotifyTimer = setTimeout(() => {
+        this._stopMobileEdgeNotify();
+      }, durationMs);
+    },
+
+    _stopMobileEdgeNotify() {
+      clearTimeout(this._edgeNotifyTimer);
+      this._edgeNotifyTimer = null;
+      const edgeEl = document.getElementById('gc-mobile-edge-notify');
+      if (!edgeEl) {
+        window.ChatAnimations?.stopMobileEdgeGraph?.();
+        return;
+      }
+      edgeEl.classList.remove('bg-ready');
+      setTimeout(() => {
+        if (!edgeEl.classList.contains('bg-ready')) {
+          edgeEl.classList.remove('gc-edge-active');
+          window.ChatAnimations?.stopMobileEdgeGraph?.();
+        }
+      }, 350);
+    },
+
+    _triggerNavNotification() {
+      const navEl = this._ensureNavElements();
+      if (!navEl) return;
+      this._hasUnreadNotify = true;
+      const dot = navEl.querySelector('.gc-nav-dot');
+      if (dot) dot.hidden = false;
+
+      this._playNotifySound();
+
+      if (this._isMobileSidebarHidden()) {
+        // На мобилке при скрытом сайдбаре подсвечиваем левую грань экрана (5px),
+        // а при открытии сайдбара покажем анимацию на плашке «Общий чат»
+        this._startMobileEdgeNotify(5000);
+      } else {
+        this._stopMobileEdgeNotify();
+        this._startNavItemShimmer(5000);
+      }
+    },
+
+    _clearNavNotification() {
+      this._hasUnreadNotify = false;
+      clearTimeout(this._notifyTimer);
+      this._notifyTimer = null;
+      this._stopNavGraph();
+      this._stopMobileEdgeNotify();
+      const navEl = document.querySelector('.nav-item[data-tab="group"]');
+      if (!navEl) return;
+      navEl.classList.remove('bg-ready', 'gc-nav-notify');
+      const dot = navEl.querySelector('.gc-nav-dot');
+      if (dot) dot.hidden = true;
+    },
+
+    init(app) {
+      this.app = app;
+      this.userId = app?.currentUser?.user_id ?? null;
+      this.username = app?.currentUser?.username ?? null;
+      this._ensureNavElements();
+      this._initAudioUnlock();
+      this._connectWs();
+    },
+
     open(app) {
       this.app = app;
       this.userId = app?.currentUser?.user_id ?? null;
       this.username = app?.currentUser?.username ?? null;
+      this._ensureNavElements();
+      this._initAudioUnlock();
+      this._clearNavNotification();
       if (!this.opened) {
         this._bindInput();
         this._bindPinnedBar();
@@ -107,13 +362,23 @@
     _upsertMessage(msg) {
       // дедуп по id или client_msg_id (своё оптимистичное -> замена)
       const byId = this.messages.findIndex(m => m.id === msg.id);
-      if (byId >= 0) { this.messages[byId] = msg; this._renderAll(); return; }
+      if (byId >= 0) {
+        this.messages[byId] = msg;
+        if (this.opened) this._renderAll();
+        return;
+      }
       const byClient = msg.client_msg_id
         ? this.messages.findIndex(m => m._optimistic && m.client_msg_id === msg.client_msg_id)
         : -1;
-      if (byClient >= 0) { this.messages[byClient] = msg; }
-      else { this.messages.push(msg); }
-      this._renderAll();
+      if (byClient >= 0) {
+        this.messages[byClient] = msg;
+      } else {
+        this.messages.push(msg);
+        if (!this._isGroupTabActive()) {
+          this._triggerNavNotification(msg);
+        }
+      }
+      if (this.opened) this._renderAll();
     },
 
     // Удаление сообщения (отыгрывается у всех на приём события delete_message).

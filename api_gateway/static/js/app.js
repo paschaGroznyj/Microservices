@@ -126,6 +126,7 @@ class ChatApp {
         this.initVisibilityReconnect();
         this.initTextPreview();
         window.SkillsPanel?.init(this);
+        window.GroupChat?.init(this);
         await this.renderMessageInput();
     }
 
@@ -3403,149 +3404,20 @@ class ChatApp {
        быстрый прокрут → пауза (CSS keyframes).
        На финале индикатор просто замирает и плавно гаснет. */
     _waveIndicatorSVG() {
-        return `<div class="wave-indicator">`
-             + `<canvas class="placeholder-graph" aria-hidden="true"></canvas>`
-             + `</div>`;
+        return window.ChatAnimations?.waveIndicatorSVG?.()
+            || '<div class="wave-indicator"><canvas class="placeholder-graph" aria-hidden="true"></canvas></div>';
     }
 
     _stopPlaceholderGraph() {
-        if (this._placeholderGraphRAF) {
-            cancelAnimationFrame(this._placeholderGraphRAF);
-            this._placeholderGraphRAF = null;
-        }
-        if (this._placeholderGraphCleanup) {
-            this._placeholderGraphCleanup();
-            this._placeholderGraphCleanup = null;
-        }
+        window.ChatAnimations?.stopPlaceholderGraph?.();
     }
 
     _initPlaceholderGraph(placeholder) {
-        this._stopPlaceholderGraph();
-        const cv = placeholder?.querySelector('.placeholder-graph');
-        if (!cv) return;
-
-        const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        const W = 116, H = 28, L = 40;
-        const dpr = Math.min(window.devicePixelRatio || 1, 2);
-        cv.width = W * dpr;
-        cv.height = H * dpr;
-        cv.style.width = W + 'px';
-        cv.style.height = H + 'px';
-
-        const g = cv.getContext('2d');
-        if (!g) return;
-        g.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-        const root = document.documentElement;
-        const parseAccent = () => {
-            const cs = getComputedStyle(root);
-            let v = cs.getPropertyValue('--accent').trim() || '#6366f1';
-            let r, gg, b;
-            if (v.startsWith('#')) {
-                if (v.length === 4) v = '#' + v[1]+v[1]+v[2]+v[2]+v[3]+v[3];
-                r = parseInt(v.slice(1,3),16); gg = parseInt(v.slice(3,5),16); b = parseInt(v.slice(5,7),16);
-            } else {
-                const mm = v.match(/\d+/g) || [99,102,241];
-                r = +mm[0]; gg = +mm[1]; b = +mm[2];
-            }
-            const clamp = (x) => Math.max(0, Math.min(255, Math.round(x)));
-            const shade = (k) => `${clamp(r*k)},${clamp(gg*k)},${clamp(b*k)}`;
-            return [`${r},${gg},${b}`, shade(1.18), shade(0.82)];
-        };
-        let COLS = parseAccent();
-
-        const N = 11;
-        const nodes = Array.from({ length: N }, (_, i) => ({
-            x: 8 + (i / Math.max(1, N - 1)) * (W - 16) + (Math.random() - 0.5) * 6,
-            y: 5 + Math.random() * (H - 10),
-            vx: (Math.random() - 0.5) * 0.42 || 0.22,
-            vy: (Math.random() - 0.5) * 0.34 || 0.18,
-            r: 1.5 + (i % 3) * 0.55,
-            c: COLS[i % 3],
-        }));
-
-        const m = { x: 0, y: 0, active: false };
-        const onMove = (e) => { m.x = e.clientX; m.y = e.clientY; m.active = true; };
-        const onLeave = () => { m.active = false; };
-        document.addEventListener('pointermove', onMove, { passive: true });
-        document.addEventListener('pointerleave', onLeave);
-        this._placeholderGraphCleanup = () => {
-            document.removeEventListener('pointermove', onMove);
-            document.removeEventListener('pointerleave', onLeave);
-        };
-
-        let frames = 0;
-        const vk = reduce ? 0.55 : 1;
-        const frame = () => {
-            if (!placeholder.isConnected) {
-                this._stopPlaceholderGraph();
-                return;
-            }
-            if ((frames & 63) === 0) {
-                COLS = parseAccent();
-                for (let i = 0; i < nodes.length; i++) nodes[i].c = COLS[i % 3];
-            }
-            frames++;
-
-            g.clearRect(0, 0, W, H);
-            const t = frames * 0.045;
-            let cx = W * 0.5 + Math.sin(t) * (W * 0.38);
-            let cy = H * 0.5 + Math.cos(t * 0.8) * (H * 0.26);
-            if (m.active) {
-                const rect = cv.getBoundingClientRect();
-                const mx = m.x - rect.left;
-                const my = m.y - rect.top;
-                if (mx >= -40 && mx <= W + 40 && my >= -40 && my <= H + 40) {
-                    cx = mx;
-                    cy = my;
-                }
-            }
-
-            const pad = 3.5;
-            for (const n of nodes) {
-                n.x += n.vx * vk;
-                n.y += n.vy * vk;
-                if (n.x < pad) { n.x = pad; n.vx = Math.abs(n.vx); }
-                if (n.x > W - pad) { n.x = W - pad; n.vx = -Math.abs(n.vx); }
-                if (n.y < pad) { n.y = pad; n.vy = Math.abs(n.vy); }
-                if (n.y > H - pad) { n.y = H - pad; n.vy = -Math.abs(n.vy); }
-            }
-
-            const GR = 46;
-            for (let i = 0; i < nodes.length; i++) {
-                const a = nodes[i];
-                for (let j = i + 1; j < nodes.length; j++) {
-                    const b = nodes[j];
-                    const d = Math.hypot(a.x - b.x, a.y - b.y);
-                    if (d < L) {
-                        const near = Math.max(0, 1 - Math.hypot((a.x + b.x) / 2 - cx, (a.y + b.y) / 2 - cy) / GR);
-                        const alpha = (1 - d / L) * (0.28 + near * 0.55);
-                        g.strokeStyle = `rgba(${a.c}, ${alpha})`;
-                        g.lineWidth = 1 + near * 0.85;
-                        g.beginPath();
-                        g.moveTo(a.x, a.y);
-                        g.lineTo(b.x, b.y);
-                        g.stroke();
-                    }
-                }
-            }
-            for (const n of nodes) {
-                const near = Math.max(0, 1 - Math.hypot(n.x - cx, n.y - cy) / GR);
-                g.fillStyle = `rgba(${n.c}, ${0.58 + near * 0.42})`;
-                g.beginPath();
-                g.arc(n.x, n.y, n.r + near * 1.15, 0, Math.PI * 2);
-                g.fill();
-            }
-
-            this._placeholderGraphRAF = requestAnimationFrame(frame);
-        };
-        this._placeholderGraphRAF = requestAnimationFrame(frame);
+        window.ChatAnimations?.initPlaceholderGraph?.(placeholder);
     }
 
     _flattenWaveIndicator() {
-        const ind = document.querySelector('#agent-response-placeholder .wave-indicator');
-        if (!ind) return;
-        ind.classList.add('wave-flatten');
+        window.ChatAnimations?.flattenWaveIndicator?.();
     }
 
     _formatReasoningDuration(sec) {
@@ -4637,225 +4509,11 @@ class ChatApp {
     }
 
     _animateStartHeader(container) {
-        const header = container.querySelector('.start-header');
-        if (!header) return;
-
-        // Оборачиваем каждый символ в <span class="letter">
-        // Пробел заменяем на неразрывный чтобы не схлопывался между inline-block
-        const wrap = (el) => {
-            el.childNodes.forEach(node => {
-                if (node.nodeType === Node.TEXT_NODE) {
-                    const frag = document.createDocumentFragment();
-                    [...node.textContent].forEach(ch => {
-                        const s = document.createElement('span');
-                        s.className = 'letter';
-                        s.textContent = ch === ' ' ? '\u00A0' : ch;
-                        frag.appendChild(s);
-                    });
-                    node.replaceWith(frag);
-                } else if (node.nodeType === Node.ELEMENT_NODE) {
-                    wrap(node);
-                }
-            });
-        };
-
-        header.querySelectorAll('.start-greeting, .start-title').forEach(wrap);
-
-        // Назначаем transition-delay по порядку
-        let i = 0;
-        header.querySelectorAll('.letter').forEach(s => {
-            s.style.transitionDelay = `${i * 28}ms`;
-            i++;
-        });
-
-        // Запускаем в следующем кадре
-        requestAnimationFrame(() => {
-            requestAnimationFrame(() => header.classList.add('animate'));
-        });
+        window.ChatAnimations?.animateStartHeader?.(container);
     }
 
-    /* ══════════════════════════════════════════
-       СТАРТОВЫЙ ЭКРАН: живой фон «за стеклом».
-       Граф (canvas) на весь экран БЕЗ цветных пятен — цвет узлов жёстко
-       завязан на --accent (3 тона от базового), меняется с палитрой.
-       Параллакс: граф > наклон панели. reduced-motion / touch —
-       деградируют мягко. Один rAF, курсор сглажен lerp-ом.
-    ══════════════════════════════════════════ */
     _initStartGraph(container) {
-        // Снять предыдущий цикл, если был (возврат на стартовый экран)
-        if (this._startGraphRAF) { cancelAnimationFrame(this._startGraphRAF); this._startGraphRAF = null; }
-        if (this._startGraphCleanup) { this._startGraphCleanup(); this._startGraphCleanup = null; }
-
-        const screen = container.querySelector('.chat-start-screen');
-        const cv = container.querySelector('#start-graph');
-        const body = container.querySelector('.start-body');
-        if (!screen || !cv || !body) return;
-
-        requestAnimationFrame(() => screen.classList.add('bg-ready'));
-
-        const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        const interactive = window.matchMedia('(hover: hover) and (pointer: fine)').matches && !reduce;
-
-        const CONFIG = {
-            nodes: 64, linkDist: 132, cursorRadius: 150, cursorForce: 0.9,
-            glowRadius: 180, cursorMode: 'repel', cursorLerp: 0.12,
-            graphParallax: 14, tilt: 2.5,
-        };
-
-        const g = cv.getContext('2d');
-        const root = document.documentElement;
-        let W = 0, H = 0, dpr = 1, nodes = [];
-        const m = { x: 0, y: 0, sx: 0, sy: 0, active: false, seeded: false };
-
-        // Цвет узлов жёстко завязан на --accent (меняется с палитрой).
-        // 3 тона: базовый + светлее/темнее для разнообразия.
-        const parseAccent = () => {
-            const cs = getComputedStyle(root);
-            let v = cs.getPropertyValue('--accent').trim() || '#6366f1';
-            let r, gg, b;
-            if (v.startsWith('#')) {
-                if (v.length === 4) v = '#' + v[1]+v[1]+v[2]+v[2]+v[3]+v[3];
-                r = parseInt(v.slice(1,3),16); gg = parseInt(v.slice(3,5),16); b = parseInt(v.slice(5,7),16);
-            } else {
-                const mm = v.match(/\d+/g) || [99,102,241];
-                r = +mm[0]; gg = +mm[1]; b = +mm[2];
-            }
-            const clamp = (x) => Math.max(0, Math.min(255, Math.round(x)));
-            const shade = (k) => `${clamp(r*k)},${clamp(gg*k)},${clamp(b*k)}`;
-            return [`${r},${gg},${b}`, shade(1.18), shade(0.82)];
-        };
-        let COLS = parseAccent();
-
-        function resize() {
-            const r = screen.getBoundingClientRect();
-            dpr = Math.min(window.devicePixelRatio || 1, 2);
-            W = Math.max(1, r.width); H = Math.max(1, r.height);
-            cv.width = W * dpr; cv.height = H * dpr;
-            cv.style.width = W + 'px'; cv.style.height = H + 'px';
-            g.setTransform(dpr, 0, 0, dpr, 0, 0);
-            const n = Math.round(CONFIG.nodes * Math.min(1, (W * H) / (1440 * 900)) + 16);
-            nodes = Array.from({ length: n }, (_, i) => ({
-                x: Math.random() * W, y: Math.random() * H,
-                vx: (Math.random() - .5) * .22, vy: (Math.random() - .5) * .22,
-                r: 1.5 + Math.random() * 2.3,
-                c: COLS[i % 3],
-            }));
-        }
-
-        // тилт панели — только мышь (desktop); реакция узлов графа — всегда (вкл. touch)
-        const seed = () => { if (!m.seeded) { m.sx = m.x; m.sy = m.y; m.seeded = true; } };
-        const onMove = (e) => { m.x = e.clientX; m.y = e.clientY; m.active = true; seed(); };
-        const onLeave = () => {
-            m.active = false;
-            body.style.setProperty('--rx', '0deg');
-            body.style.setProperty('--ry', '0deg');
-        };
-        const touchPoint = (e) => {
-            const t = e.touches && e.touches[0];
-            if (!t) return;
-            m.x = t.clientX; m.y = t.clientY; m.active = true; seed();
-        };
-        const onTouchEnd = () => { m.active = false; };
-        const onResize = () => resize();
-
-        if (interactive) {
-            document.addEventListener('pointermove', onMove, { passive: true });
-            document.addEventListener('pointerleave', onLeave);
-        }
-        // тач-взаимодействие с точками на любом устройстве (тап/свайп по экрану)
-        if (!reduce) {
-            screen.addEventListener('touchstart', touchPoint, { passive: true });
-            screen.addEventListener('touchmove', touchPoint, { passive: true });
-            screen.addEventListener('touchend', onTouchEnd, { passive: true });
-            screen.addEventListener('touchcancel', onTouchEnd, { passive: true });
-        }
-        window.addEventListener('resize', onResize);
-
-        this._startGraphCleanup = () => {
-            document.removeEventListener('pointermove', onMove);
-            document.removeEventListener('pointerleave', onLeave);
-            screen.removeEventListener('touchstart', touchPoint);
-            screen.removeEventListener('touchmove', touchPoint);
-            screen.removeEventListener('touchend', onTouchEnd);
-            screen.removeEventListener('touchcancel', onTouchEnd);
-            window.removeEventListener('resize', onResize);
-        };
-
-        resize();
-
-        const drawGraph = () => {
-            g.clearRect(0, 0, W, H);
-            const L = CONFIG.linkDist, RR = CONFIG.cursorRadius, GR = CONFIG.glowRadius;
-            const rect = screen.getBoundingClientRect();
-            const cx = m.sx - rect.left, cy = m.sy - rect.top;
-            const live = m.active;  // реакция узлов на курсор/тап — на любом устройстве
-
-            for (const n of nodes) {
-                if (!reduce) {
-                    n.x += n.vx; n.y += n.vy;
-                    if (n.x < -20) n.x = W + 20; if (n.x > W + 20) n.x = -20;
-                    if (n.y < -20) n.y = H + 20; if (n.y > H + 20) n.y = -20;
-                    if (live) {
-                        const dx = n.x - cx, dy = n.y - cy, dist = Math.hypot(dx, dy);
-                        if (dist < RR && dist > 0.1) {
-                            const f = (1 - dist / RR) * CONFIG.cursorForce;
-                            n.x += (dx / dist) * f; n.y += (dy / dist) * f;
-                        }
-                    }
-                }
-            }
-
-            for (let i = 0; i < nodes.length; i++) {
-                const a = nodes[i];
-                for (let j = i + 1; j < nodes.length; j++) {
-                    const b = nodes[j];
-                    const d = Math.hypot(a.x - b.x, a.y - b.y);
-                    if (d < L) {
-                        const near = live ? Math.max(0, 1 - Math.hypot((a.x + b.x) / 2 - cx, (a.y + b.y) / 2 - cy) / GR) : 0;
-                        const alpha = (1 - d / L) * (.26 + near * .5);
-                        g.strokeStyle = `rgba(${a.c}, ${alpha})`;
-                        g.lineWidth = 1 + near * .8;
-                        g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke();
-                    }
-                }
-            }
-            for (const n of nodes) {
-                const near = live ? Math.max(0, 1 - Math.hypot(n.x - cx, n.y - cy) / GR) : 0;
-                g.fillStyle = `rgba(${n.c}, ${.55 + near * .45})`;
-                g.beginPath(); g.arc(n.x, n.y, n.r + near * 1.5, 0, Math.PI * 2); g.fill();
-            }
-        };
-
-        let frames = 0;
-        const frame = () => {
-            if (m.seeded) {
-                m.sx += (m.x - m.sx) * CONFIG.cursorLerp;
-                m.sy += (m.y - m.sy) * CONFIG.cursorLerp;
-            }
-
-            if (interactive && m.active) {
-                const nx = (m.sx / window.innerWidth - .5) * 2;
-                const ny = (m.sy / window.innerHeight - .5) * 2;
-                const gp = CONFIG.graphParallax;
-                cv.style.transform = `translate3d(${(-nx * gp).toFixed(1)}px, ${(-ny * gp).toFixed(1)}px, 0)`;
-
-                const rect = body.getBoundingClientRect();
-                const bx = (m.sx - (rect.left + rect.width / 2)) / (rect.width / 2);
-                const by = (m.sy - (rect.top + rect.height / 2)) / (rect.height / 2);
-                body.style.setProperty('--ry', (Math.max(-1, Math.min(1, bx)) * CONFIG.tilt).toFixed(2) + 'deg');
-                body.style.setProperty('--rx', (-Math.max(-1, Math.min(1, by)) * CONFIG.tilt).toFixed(2) + 'deg');
-                body.style.setProperty('--mx', ((m.sx - rect.left) / rect.width * 100).toFixed(1) + '%');
-                body.style.setProperty('--my', ((m.sy - rect.top) / rect.height * 100).toFixed(1) + '%');
-            }
-
-            if ((frames++ & 63) === 0) {
-                COLS = parseAccent();
-                for (let i = 0; i < nodes.length; i++) nodes[i].c = COLS[i % 3];
-            }
-            drawGraph();
-            this._startGraphRAF = requestAnimationFrame(frame);
-        };
-        this._startGraphRAF = requestAnimationFrame(frame);
+        window.ChatAnimations?.initStartGraph?.(container);
     }
 
     /* ══════════════════════════════════════════

@@ -856,6 +856,406 @@ class ChatApp {
         }, { passive: true });
     }
 
+    /* ══════════════════════════════════════════
+       STRUCTURED UI (InteractivePoll / AskUserQuestion)
+    ══════════════════════════════════════════ */
+    _tryParseComponentJson(raw) {
+        if (!raw || typeof raw !== 'string') return null;
+        const trimmed = raw.trim();
+        if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
+        try {
+            const obj = JSON.parse(trimmed);
+            if (!obj || typeof obj !== 'object') return null;
+            const comp = String(obj.component || obj.type || '').trim().toLowerCase();
+            const opts = Array.isArray(obj.options) ? obj.options : (Array.isArray(obj.choices) ? obj.choices : null);
+            if ((comp === 'interactivepoll' || comp === 'askuserquestion' || comp === 'poll') && opts && opts.length > 0) {
+                return { component: 'InteractivePoll', data: { ...obj, options: opts } };
+            }
+        } catch (_) {}
+        return null;
+    }
+
+    _extractBalancedJsonObjects(text) {
+        const results = [];
+        let i = 0;
+        const n = text.length;
+        while (i < n) {
+            const start = text.indexOf('{', i);
+            if (start === -1) break;
+            let depth = 0, inStr = false, esc = false, end = -1;
+            for (let j = start; j < n; j++) {
+                const ch = text[j];
+                if (inStr) {
+                    if (esc) { esc = false; }
+                    else if (ch === '\\') { esc = true; }
+                    else if (ch === '"') { inStr = false; }
+                } else {
+                    if (ch === '"') inStr = true;
+                    else if (ch === '{') depth++;
+                    else if (ch === '}') {
+                        depth--;
+                        if (depth === 0) { end = j; break; }
+                    }
+                }
+            }
+            if (end !== -1) {
+                const candidate = text.slice(start, end + 1);
+                const parsed = this._tryParseComponentJson(candidate);
+                if (parsed) {
+                    results.push({ start, end: end + 1, parsed });
+                    i = end + 1;
+                    continue;
+                }
+            }
+            i = start + 1;
+        }
+        return results;
+    }
+
+    _extractStructuredSegments(text) {
+        const src = String(text || '');
+        const segments = [];
+        const fenceRe = /```(?:json)?\s*([\s\S]*?)```/gi;
+        let lastIdx = 0;
+        let m;
+
+        const pushPlainOrInlineJson = (chunk) => {
+            if (!chunk) return;
+            const inlineMatches = this._extractBalancedJsonObjects(chunk);
+            if (!inlineMatches.length) {
+                if (chunk.trim()) segments.push({ kind: 'md', text: chunk });
+                return;
+            }
+            let cur = 0;
+            for (const hit of inlineMatches) {
+                const before = chunk.slice(cur, hit.start);
+                if (before.trim()) segments.push({ kind: 'md', text: before });
+                segments.push({ kind: 'component', component: hit.parsed.component, data: hit.parsed.data });
+                cur = hit.end;
+            }
+            const after = chunk.slice(cur);
+            if (after.trim()) segments.push({ kind: 'md', text: after });
+        };
+
+        while ((m = fenceRe.exec(src)) !== null) {
+            const parsed = this._tryParseComponentJson(m[1]);
+            if (parsed) {
+                pushPlainOrInlineJson(src.slice(lastIdx, m.index));
+                segments.push({ kind: 'component', component: parsed.component, data: parsed.data });
+                lastIdx = m.index + m[0].length;
+            }
+        }
+        pushPlainOrInlineJson(src.slice(lastIdx));
+        return segments;
+    }
+
+    _renderSafeMarkdownHtml(mdText) {
+        let html = marked.parse(String(mdText || ''));
+        if (typeof DOMPurify !== 'undefined') {
+            html = DOMPurify.sanitize(html, {
+                ADD_TAGS: ['table', 'thead', 'tbody', 'tr', 'th', 'td'],
+                ADD_ATTR: ['colspan', 'rowspan', 'align']
+            });
+        }
+        const tmp = document.createElement('div');
+        tmp.innerHTML = html;
+        tmp.querySelectorAll('a[href]').forEach(a => {
+            a.setAttribute('target', '_blank');
+            a.setAttribute('rel', 'noopener noreferrer');
+        });
+        return tmp.innerHTML;
+    }
+
+    _createInteractivePollEl(data) {
+        this._pollSeq = (this._pollSeq || 0) + 1;
+        const uid = `_chat_poll_${this._pollSeq}_`;
+        const titleText = String(data.title || data.question || data.prompt || 'Выберите вариант').trim();
+        const rawOpts = Array.isArray(data.options) ? data.options : [];
+        const options = rawOpts.map((opt) => {
+            if (typeof opt === 'string') return { label: opt, value: opt, description: '' };
+            if (opt && typeof opt === 'object') {
+                const lbl = String(opt.label || opt.title || opt.text || opt.value || '').trim();
+                const val = String(opt.value || lbl).trim();
+                const desc = opt.description ? String(opt.description).trim() : '';
+                return { label: lbl, value: val, description: desc };
+            }
+            return { label: String(opt), value: String(opt), description: '' };
+        }).filter(o => o.label);
+
+        const allowCustom = data.allowCustom !== false;
+        const placeholder = String(data.placeholder || 'Something else');
+        const skipLabel = String(data.skipLabel || 'Skip');
+        const sendLabel = String(data.sendLabel || 'Send');
+
+        const root = document.createElement('div');
+        root.setAttribute('data-cds', 'AskUserQuestion');
+        root.setAttribute('role', 'region');
+        root.setAttribute('aria-labelledby', `${uid}label`);
+        root.tabIndex = -1;
+        root.className = 'ed-poll';
+
+        const header = document.createElement('div');
+        header.className = 'ed-poll-header';
+
+        const h2 = document.createElement('h2');
+        h2.id = `${uid}label`;
+        h2.tabIndex = -1;
+        h2.className = 'ed-poll-title';
+        h2.textContent = titleText;
+
+        const minBtn = document.createElement('button');
+        minBtn.type = 'button';
+        minBtn.className = 'ed-poll-min-btn';
+        minBtn.setAttribute('aria-label', 'Minimize');
+        minBtn.title = 'Свернуть / развернуть';
+        minBtn.innerHTML = `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 6L8 10.5L12.5 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+        minBtn.addEventListener('click', () => {
+            root.classList.toggle('is-minimized');
+        });
+
+        header.append(h2, minBtn);
+
+        const bodyWrap = document.createElement('div');
+        bodyWrap.className = 'ed-poll-body';
+        const bodyInner = document.createElement('div');
+        bodyInner.className = 'ed-poll-body-inner';
+        const scrollBox = document.createElement('div');
+        scrollBox.className = 'ed-poll-scroll';
+
+        const listEl = document.createElement('div');
+        listEl.setAttribute('role', 'listbox');
+        listEl.setAttribute('aria-labelledby', `${uid}label`);
+        listEl.tabIndex = -1;
+        listEl.className = 'ed-poll-list';
+
+        let answered = false;
+        const optionButtons = [];
+        let otherInput = null;
+        let actionBtn = null;
+        let actionBtnText = null;
+
+        const markLockedUI = (selectedBtn) => {
+            answered = true;
+            root.classList.add('is-answered');
+            optionButtons.forEach((b) => {
+                b.disabled = true;
+                if (b === selectedBtn) {
+                    b.classList.add('is-selected');
+                    b.setAttribute('aria-selected', 'true');
+                    const trail = b.querySelector('.ed-poll-opt-trail');
+                    if (trail) {
+                        trail.innerHTML = `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 8.5L6.5 11.5L12.5 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+                    }
+                }
+            });
+            if (otherInput) otherInput.disabled = true;
+            if (actionBtn) actionBtn.disabled = true;
+        };
+
+        const lockAndSubmit = (selectedBtn, valueToSend) => {
+            if (answered) return;
+            if (this._runState && this._runState !== 'idle') return;
+            markLockedUI(selectedBtn);
+            this.sendMessage(valueToSend);
+        };
+
+        options.forEach((opt, idx) => {
+            const item = document.createElement('div');
+            item.className = 'ed-poll-item';
+
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.id = `${uid}item-${idx}`;
+            btn.setAttribute('role', 'option');
+            btn.setAttribute('aria-selected', 'false');
+            btn.tabIndex = idx === 0 ? 0 : -1;
+            btn.className = 'ed-poll-opt';
+            btn.dataset.optLabel = opt.label;
+            btn.dataset.optValue = opt.value;
+
+            const badge = document.createElement('span');
+            badge.className = 'ed-poll-badge';
+            badge.setAttribute('aria-hidden', 'true');
+            badge.textContent = String(idx + 1);
+
+            const content = document.createElement('span');
+            content.className = 'ed-poll-opt-content';
+            const labelSpan = document.createElement('span');
+            labelSpan.className = 'ed-poll-opt-label';
+            labelSpan.textContent = opt.label;
+            content.appendChild(labelSpan);
+
+            if (opt.description) {
+                const descSpan = document.createElement('span');
+                descSpan.className = 'ed-poll-opt-desc';
+                descSpan.textContent = opt.description;
+                content.appendChild(descSpan);
+            }
+
+            const trail = document.createElement('span');
+            trail.className = 'ed-poll-opt-trail';
+            trail.setAttribute('aria-hidden', 'true');
+            trail.innerHTML = `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 3.5L10.5 8 6 12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+            btn.append(badge, content, trail);
+
+            btn.addEventListener('click', () => {
+                lockAndSubmit(btn, opt.value);
+            });
+
+            btn.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    const dir = e.key === 'ArrowDown' ? 1 : -1;
+                    const nextIdx = (idx + dir + optionButtons.length) % optionButtons.length;
+                    optionButtons.forEach((b, i) => { b.tabIndex = i === nextIdx ? 0 : -1; });
+                    optionButtons[nextIdx]?.focus();
+                }
+            });
+
+            const divider = document.createElement('div');
+            divider.className = 'ed-poll-divider';
+            divider.setAttribute('aria-hidden', 'true');
+
+            item.append(btn, divider);
+            listEl.appendChild(item);
+            optionButtons.push(btn);
+        });
+
+        scrollBox.appendChild(listEl);
+
+        if (allowCustom) {
+            const otherWrap = document.createElement('div');
+            otherWrap.className = 'ed-poll-other';
+
+            const otherDivider = document.createElement('div');
+            otherDivider.className = 'ed-poll-divider';
+            otherDivider.setAttribute('aria-hidden', 'true');
+
+            const form = document.createElement('form');
+            form.className = 'ed-poll-other-form';
+
+            const label = document.createElement('label');
+            label.className = 'ed-poll-other-label';
+
+            const otherBadge = document.createElement('span');
+            otherBadge.className = 'ed-poll-badge ed-poll-other-badge';
+            otherBadge.setAttribute('aria-hidden', 'true');
+            otherBadge.innerHTML = `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M11.2 2.5a1.4 1.4 0 0 1 2 2L5.5 12.2l-2.8.7.7-2.8L11.2 2.5Z" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+            otherInput = document.createElement('input');
+            otherInput.type = 'text';
+            otherInput.className = 'ed-poll-other-input';
+            otherInput.placeholder = placeholder;
+            otherInput.setAttribute('aria-label', placeholder);
+            otherInput.value = '';
+
+            actionBtn = document.createElement('button');
+            actionBtn.type = 'button';
+            actionBtn.setAttribute('data-cds', 'Button');
+            actionBtn.setAttribute('data-size', 'sm');
+            actionBtn.className = 'ed-poll-action-btn';
+            actionBtnText = document.createElement('span');
+            actionBtnText.textContent = skipLabel;
+            actionBtn.appendChild(actionBtnText);
+
+            const updateActionBtn = () => {
+                const hasVal = otherInput.value.trim().length > 0;
+                actionBtnText.textContent = hasVal ? sendLabel : skipLabel;
+                actionBtn.classList.toggle('is-primary', hasVal);
+            };
+
+            otherInput.addEventListener('input', updateActionBtn);
+
+            const submitOtherOrSkip = () => {
+                if (answered) return;
+                const customVal = otherInput.value.trim();
+                if (customVal) {
+                    lockAndSubmit(null, customVal);
+                } else {
+                    lockAndSubmit(null, 'Пропустить опрос — выбери оптимальный вариант на своё усмотрение.');
+                }
+            };
+
+            form.addEventListener('submit', (e) => {
+                e.preventDefault();
+                submitOtherOrSkip();
+            });
+
+            actionBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                submitOtherOrSkip();
+            });
+
+            label.append(otherBadge, otherInput, actionBtn);
+            form.appendChild(label);
+            otherWrap.append(otherDivider, form);
+            scrollBox.appendChild(otherWrap);
+        } else {
+            const lastDiv = listEl.lastElementChild?.querySelector('.ed-poll-divider');
+            if (lastDiv) lastDiv.remove();
+        }
+
+        root._syncWithUserReply = (replyText) => {
+            if (answered) return;
+            const norm = String(replyText || '').trim();
+            if (!norm) return;
+            const matchedBtn = optionButtons.find(
+                b => b.dataset.optValue === norm || b.dataset.optLabel === norm
+            );
+            if (matchedBtn) {
+                markLockedUI(matchedBtn);
+            } else {
+                if (otherInput && !norm.startsWith('Пропустить опрос')) {
+                    otherInput.value = norm;
+                    if (actionBtnText) actionBtnText.textContent = sendLabel;
+                    if (actionBtn) actionBtn.classList.add('is-primary');
+                }
+                markLockedUI(null);
+            }
+        };
+
+        bodyInner.appendChild(scrollBox);
+        bodyWrap.appendChild(bodyInner);
+        root.append(header, bodyWrap);
+        return root;
+    }
+
+    _renderBotStructuredContent(containerEl, rawText) {
+        if (!containerEl) return;
+        const src = String(rawText || '');
+        const segments = this._extractStructuredSegments(src);
+        const hasComponents = segments.some(s => s.kind === 'component');
+        if (!hasComponents) {
+            if (src.trimStart().startsWith('<')) {
+                let html = src;
+                if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html);
+                const tmp = document.createElement('div');
+                tmp.innerHTML = html;
+                tmp.querySelectorAll('a[href]').forEach(a => {
+                    a.setAttribute('target', '_blank');
+                    a.setAttribute('rel', 'noopener noreferrer');
+                });
+                containerEl.innerHTML = tmp.innerHTML;
+            } else {
+                containerEl.innerHTML = this._renderSafeMarkdownHtml(src);
+            }
+            return;
+        }
+
+        containerEl.innerHTML = '';
+        for (const seg of segments) {
+            if (seg.kind === 'component' && seg.component === 'InteractivePoll') {
+                containerEl.appendChild(this._createInteractivePollEl(seg.data));
+            } else {
+                const mdBlock = document.createElement('div');
+                mdBlock.className = 'bot-md-segment';
+                mdBlock.innerHTML = this._renderSafeMarkdownHtml(seg.text);
+                containerEl.appendChild(mdBlock);
+            }
+        }
+    }
+
     addMessage(message, scroll = true, animate = false) {
         const container = this.getMessagesContainer();
         if (!container) return;
@@ -906,11 +1306,11 @@ class ChatApp {
             messageEl.innerHTML = `<div class="${textCls}">${content}</div>${toggleHtml}<div class="timestamp">${time}</div>`;
         } else {
             messageEl.dataset.id = message.id;
-            messageEl.innerHTML = content;
             if (animate) {
                 messageEl.innerHTML = '';
                 this._streamRenderMessage(messageEl, rawContent, container, message.files, message.message_id);
             } else {
+                this._renderBotStructuredContent(messageEl, rawContent);
                 // Файлы агента из истории — вставляем после текста, перед actions
                 if (message.files?.length) {
                     messageEl.appendChild(
@@ -957,6 +1357,9 @@ class ChatApp {
                 const filesNode = filesWrap.firstElementChild;
                 if (filesNode) wrapper.appendChild(filesNode);
             }
+            container.querySelectorAll('.ed-poll:not(.is-answered)').forEach(pollEl => {
+                pollEl._syncWithUserReply?.(rawContent);
+            });
             wrapper.appendChild(messageEl);
             wrapper.appendChild(actions);
             container.appendChild(wrapper);
@@ -1725,19 +2128,20 @@ class ChatApp {
     /* ══════════════════════════════════════════
        SEND
     ══════════════════════════════════════════ */
-    async sendMessage() {
+    async sendMessage(customText = null) {
+        const isCustom = typeof customText === 'string';
         const container = this.getInputContainer();
         const field   = container?.querySelector('#message-input');
         const sendBtn = container?.querySelector('#send-btn');
-        if (!field) return;
+        if (!field && !isCustom) return;
 
-        if (this._runState === 'running') {
+        if (!isCustom && this._runState === 'running') {
             await this.stopCurrentRun();
             return;
         }
         if (this._runState !== 'idle') return;
 
-        const text = this.getInputText();
+        const text = isCustom ? customText.trim() : this.getInputText();
         if (!text) return;
 
         if (!this.currentChat) {
@@ -1765,12 +2169,12 @@ class ChatApp {
             if (_selTools.length === 0) this._showNoToolsHint();
         } catch (_) {}
 
-        this.clearInput(field);
-        // Сообщение ушло — черновик этого чата (и стартового экрана) больше
-        // не нужен, иначе openChat из sendMessage мог сохранить его под id.
-        if (this._inputDrafts) {
-            delete this._inputDrafts[this._inputDraftKey(this.currentChat)];
-            delete this._inputDrafts['__start__'];
+        if (!isCustom && field) {
+            this.clearInput(field);
+            if (this._inputDrafts) {
+                delete this._inputDrafts[this._inputDraftKey(this.currentChat)];
+                delete this._inputDrafts['__start__'];
+            }
         }
         sendBtn?.classList.remove('active');
         this._botAnswered = false;
@@ -2333,12 +2737,7 @@ class ChatApp {
         // final_commit не пришёл (например обрыв SSE) — снимаем reasoning-стиль.
         targetBlock.className = 'live-block';
 
-        let html = marked.parse(fullText);
-        if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
-            ADD_TAGS: ['table','thead','tbody','tr','th','td'],
-            ADD_ATTR: ['colspan','rowspan','align']
-        });
-        targetBlock.innerHTML = html;
+        this._renderBotStructuredContent(targetBlock, fullText);
 
         // Файлы / actions вешаем на общую обёртку ответа
         if (data.files?.length) {
@@ -3012,6 +3411,7 @@ class ChatApp {
 
         container.removeEventListener('scroll', onScroll);
 
+        this._renderBotStructuredContent(el, rawText);
         this._applyCodeHeaders(el);
 
         // 🎯 Файлы агента — добавляем ПОСЛЕ цикла, раз цикл больше не перезапишет innerHTML

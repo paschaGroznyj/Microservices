@@ -681,6 +681,7 @@
 ══════════════════════════════════════════════ */
 
 .chat-input-area {
+  position: relative;
   width: 100%;
   max-width: 720px;
   margin: 0 auto;
@@ -1261,34 +1262,63 @@ pre {
 }
 
 
-.scroll-to-bottom {
-  position: fixed;
-  bottom: 100px;
-  right: 32px;
-  z-index: 999;
+.scroll-to-bottom,
+.chat-send-btn.scroll-to-bottom:not([disabled]) {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 12px);
+  z-index: 40;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 50%;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 7px 14px 7px 10px;
-  background: var(--accent, #6366f1);
-  color: #fff;
-  border: none;
-  border-radius: 20px;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.30);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  backdrop-filter: blur(6px) saturate(115%);
+  -webkit-backdrop-filter: blur(6px) saturate(115%);
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.05);
+  color: var(--text-primary);
   cursor: pointer;
-  font-size: 13px;
-  font-weight: 500;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.18);
   opacity: 0;
   pointer-events: none;
-  transform: translateY(8px);
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  transform: translate(-50%, 8px);
+  transition: opacity 0.2s ease, transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
 }
-.scroll-to-bottom.visible {
+[data-theme="dark"] .scroll-to-bottom,
+[data-theme="dark"] .chat-send-btn.scroll-to-bottom:not([disabled]) {
+  background: rgba(15, 23, 37, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  backdrop-filter: blur(7px) saturate(115%);
+  -webkit-backdrop-filter: blur(7px) saturate(115%);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.30);
+  color: var(--text-primary);
+}
+.scroll-to-bottom.visible,
+.chat-send-btn.scroll-to-bottom.visible:not([disabled]) {
   opacity: 1;
   pointer-events: auto;
-  transform: translateY(0);
+  transform: translate(-50%, 0);
+}
+.scroll-to-bottom:not([disabled]):hover,
+.scroll-to-bottom.visible:hover,
+.chat-send-btn.scroll-to-bottom:not([disabled]):hover {
+  filter: none;
+  background: rgba(255, 255, 255, 0.46);
+  border-color: rgba(255, 255, 255, 0.38);
+  transform: translate(-50%, 0) scale(1.05);
+}
+[data-theme="dark"] .scroll-to-bottom:not([disabled]):hover,
+[data-theme="dark"] .scroll-to-bottom.visible:hover,
+[data-theme="dark"] .chat-send-btn.scroll-to-bottom:not([disabled]):hover {
+  background: rgba(15, 23, 37, 0.48);
+  border-color: rgba(255, 255, 255, 0.20);
 }
 .scroll-to-bottom svg {
+  width: 17px;
+  height: 17px;
   flex-shrink: 0;
 }
 

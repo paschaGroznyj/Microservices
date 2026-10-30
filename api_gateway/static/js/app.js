@@ -1534,8 +1534,6 @@ class ChatApp {
             const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
             if (distFromBottom < 80) {
                 container.scrollTop = container.scrollHeight;
-            } else {
-                this._showScrollArrow(container);
             }
         }
 
@@ -1544,38 +1542,46 @@ class ChatApp {
     }
 
     /* ══════════════════════════════════════════
-       SCROLL ARROW
+       SCROLL TO BOTTOM ARROW (> 500px)
     ══════════════════════════════════════════ */
-    _initScrollArrow(container) {
-        // Создаём кнопку один раз — вешаем на body (position: fixed)
-        if (document.getElementById('scroll-to-bottom-btn')) return;
-
-        const btn = document.createElement('button');
-        btn.id = 'scroll-to-bottom-btn';
-        btn.className = 'scroll-to-bottom';
-        btn.innerHTML = `
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <path d="M8 3v10M3 9l5 5 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-            Новое сообщение`;
-        btn.addEventListener('click', () => {
-            container.scrollTop = container.scrollHeight;
-            btn.classList.remove('visible');
-        });
-
-        // Скрываем если пользователь сам доскроллил до низа
-        container.addEventListener('scroll', () => {
-            const dist = container.scrollHeight - container.scrollTop - container.clientHeight;
-            if (dist < 40) btn.classList.remove('visible');
-        }, { passive: true });
-
-        document.body.appendChild(btn);
+    _ensureScrollArrowBtn() {
+        const inputArea = this.getInputContainer()?.querySelector('.chat-input-area');
+        if (!inputArea) return null;
+        let btn = inputArea.querySelector('#scroll-to-bottom-btn');
+        if (!btn) {
+            btn = document.createElement('button');
+            btn.id = 'scroll-to-bottom-btn';
+            btn.type = 'button';
+            btn.className = 'chat-send-btn active scroll-to-bottom';
+            btn.setAttribute('aria-label', 'Прокрутить вниз');
+            btn.innerHTML = `
+                <svg viewBox="0 0 24 24" fill="none">
+                    <path d="M12 5v14M18 13l-6 6-6-6"
+                          stroke="currentColor" stroke-width="2"
+                          stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>`;
+            btn.addEventListener('click', () => {
+                const container = this.getMessagesContainer();
+                if (container) {
+                    container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+                }
+                btn.classList.remove('visible');
+            });
+            inputArea.insertBefore(btn, inputArea.firstChild);
+        }
+        return btn;
     }
 
-    _showScrollArrow(container) {
-        this._initScrollArrow(container);
-        const btn = document.getElementById('scroll-to-bottom-btn');
-        if (btn) btn.classList.add('visible');
+    _syncScrollArrow(container) {
+        container = container || this.getMessagesContainer();
+        const btn = this._ensureScrollArrowBtn();
+        if (!btn) return;
+        if (!container || container.classList.contains('hidden')) {
+            btn.classList.remove('visible');
+            return;
+        }
+        const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+        btn.classList.toggle('visible', distFromBottom > 500);
     }
 
     /**
@@ -4298,6 +4304,8 @@ class ChatApp {
         if (!this.currentChat) {
             this._animateStartHeader(container);
             this._initStartGraph(container);
+        } else {
+            this._syncScrollArrow();
         }
 
         setTimeout(() => container.classList.remove('rending'), 0);
@@ -5504,6 +5512,7 @@ class ChatApp {
                 container.scrollHeight - container.scrollTop - container.clientHeight <= 4;
             container.classList.toggle('fade-top', scrollable && !atTop);
             container.classList.toggle('fade-bottom', scrollable && !atBottom);
+            this._syncScrollArrow(container);
         };
 
         // rAF-throttle на scroll: не чаще одного пересчёта layout на кадр.

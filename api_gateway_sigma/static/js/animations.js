@@ -472,87 +472,13 @@
     },
 
     startMobileEdgeGraph(edgeEl) {
-      this.stopMobileEdgeGraph();
-      const cv = edgeEl?.querySelector('.gc-mobile-edge-graph');
-      if (!cv) return;
-      const W = 5;
-      const H = Math.max(320, window.innerHeight || 640);
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      cv.width = W * dpr;
-      cv.height = H * dpr;
-      cv.style.width = W + 'px';
-      cv.style.height = H + 'px';
+      if (!edgeEl) return;
+      edgeEl.classList.add('gc-edge-active');
+    },
 
-      const g = cv.getContext('2d');
-      if (!g) return;
-      g.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-      const COLS = this.parseAccent();
-      const N = 18;
-      const L = 72;
-      const nodes = Array.from({ length: N }, (_, i) => ({
-        x: 1 + Math.random() * (W - 2),
-        y: (i / Math.max(1, N - 1)) * H,
-        vx: (Math.random() - 0.5) * 0.18,
-        vy: (Math.random() - 0.5) * 1.15 || 0.65,
-        r: 1.2 + (i % 2) * 0.5,
-        c: COLS[i % 3],
-      }));
-
-      let t = 0;
-      const frame = () => {
-        if (!edgeEl.isConnected || !edgeEl.classList.contains('gc-edge-active')) {
-          this.stopMobileEdgeGraph();
-          return;
-        }
-        t += 0.055;
-        g.clearRect(0, 0, W, H);
-
-        const sweepY = ((Math.sin(t) + 1) * 0.5) * H;
-        const grad = g.createLinearGradient(0, Math.max(0, sweepY - H * 0.35), 0, Math.min(H, sweepY + H * 0.35));
-        grad.addColorStop(0, `rgba(${COLS[0]}, 0.08)`);
-        grad.addColorStop(0.5, `rgba(${COLS[1]}, 0.72)`);
-        grad.addColorStop(1, `rgba(${COLS[2]}, 0.08)`);
-        g.fillStyle = grad;
-        g.fillRect(0, 0, W, H);
-
-        for (let i = 0; i < N; i++) {
-          const n = nodes[i];
-          n.x += n.vx;
-          n.y += n.vy;
-          if (n.x < 1 || n.x > W - 1) n.vx = -n.vx;
-          if (n.y < 0) n.y = H;
-          if (n.y > H) n.y = 0;
-        }
-
-        for (let i = 0; i < N; i++) {
-          const a = nodes[i];
-          for (let j = i + 1; j < N; j++) {
-            const b = nodes[j];
-            const d = Math.abs(a.y - b.y);
-            if (d < L) {
-              const alpha = (1 - d / L) * 0.65;
-              g.strokeStyle = `rgba(${a.c}, ${alpha})`;
-              g.lineWidth = 1.1;
-              g.beginPath();
-              g.moveTo(a.x, a.y);
-              g.lineTo(b.x, b.y);
-              g.stroke();
-            }
-          }
-        }
-
-        for (let i = 0; i < N; i++) {
-          const n = nodes[i];
-          g.fillStyle = `rgba(${n.c}, 0.95)`;
-          g.beginPath();
-          g.arc(n.x, n.y, n.r, 0, Math.PI * 2);
-          g.fill();
-        }
-
-        this._edgeGraphRAF = requestAnimationFrame(frame);
-      };
-      this._edgeGraphRAF = requestAnimationFrame(frame);
+    stopMobileEdgeGraph() {
+      const edgeEl = document.getElementById('gc-mobile-edge-notify');
+      if (edgeEl) edgeEl.classList.remove('gc-edge-active', 'bg-ready');
     },
   };
 

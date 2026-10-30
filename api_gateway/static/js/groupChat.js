@@ -77,7 +77,6 @@
         edge.id = 'gc-mobile-edge-notify';
         edge.className = 'gc-mobile-edge-notify';
         edge.setAttribute('aria-hidden', 'true');
-        edge.innerHTML = '<canvas class="gc-mobile-edge-graph"></canvas>';
         document.body.appendChild(edge);
       }
 

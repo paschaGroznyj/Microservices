@@ -1013,7 +1013,7 @@
   }
 }
 
-/* ── Мобильная 5px полоса уведомления вдоль левого края дисплея (когда сайдбар скрыт) ── */
+/* ── Мобильная 5px полоса уведомления вдоль левого края дисплея (плавное дыхание свечения без узлов) ── */
 .gc-mobile-edge-notify {
   position: fixed;
   top: 0;
@@ -1022,45 +1022,37 @@
   width: 5px;
   z-index: 950;
   pointer-events: none;
-  overflow: hidden;
   opacity: 0;
-  transition: opacity 0.35s ease;
+  transition: opacity 0.45s ease;
   display: none;
 }
 @media (max-width: 768px) {
   .gc-mobile-edge-notify {
     display: block;
-  }
-  .gc-mobile-edge-notify::before {
-    content: "";
-    position: absolute;
-    inset: 0;
     background: linear-gradient(
       180deg,
-      transparent 0%,
-      color-mix(in srgb, var(--accent, #6366f1) 38%, transparent) 30%,
-      color-mix(in srgb, var(--accent, #6366f1) 82%, transparent) 50%,
-      color-mix(in srgb, var(--accent, #6366f1) 38%, transparent) 70%,
-      transparent 100%
+      color-mix(in srgb, var(--accent, #6366f1) 18%, transparent) 0%,
+      color-mix(in srgb, var(--accent, #6366f1) 78%, transparent) 50%,
+      color-mix(in srgb, var(--accent, #6366f1) 18%, transparent) 100%
     );
-    background-size: 100% 220%;
-    animation: gc-edge-shimmer 1.8s ease-in-out infinite;
-  }
-  .gc-mobile-edge-notify .gc-mobile-edge-graph {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    display: block;
+    border-radius: 0 4px 4px 0;
   }
   .gc-mobile-edge-notify.gc-edge-active.bg-ready {
     opacity: 1;
-    box-shadow:
-      0 0 12px color-mix(in srgb, var(--accent, #6366f1) 62%, transparent),
-      2px 0 8px color-mix(in srgb, var(--accent, #6366f1) 42%, transparent);
+    animation: gc-edge-breathe 2.2s ease-in-out infinite;
   }
 }
-@keyframes gc-edge-shimmer {
-  0%   { background-position: 0 180%; }
-  100% { background-position: 0 -40%; }
+@keyframes gc-edge-breathe {
+  0%, 100% {
+    opacity: 0.42;
+    box-shadow:
+      0 0 8px color-mix(in srgb, var(--accent, #6366f1) 36%, transparent),
+      2px 0 10px color-mix(in srgb, var(--accent, #6366f1) 24%, transparent);
+  }
+  50% {
+    opacity: 1;
+    box-shadow:
+      0 0 16px color-mix(in srgb, var(--accent, #6366f1) 82%, transparent),
+      4px 0 20px color-mix(in srgb, var(--accent, #6366f1) 58%, transparent);
+  }
 }

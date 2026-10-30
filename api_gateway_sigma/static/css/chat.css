@@ -96,7 +96,7 @@
   font-size: .8125rem;
   background: color-mix(in srgb, var(--accent) 8%, var(--surface));
   border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
-  padding: 2px 6px;
+  padding: 1px 4px 1px 4px;
   border-radius: 5px;
   color: var(--accent);
   /* длинные пути/идентификаторы не должны вылезать за правую границу */
@@ -849,6 +849,63 @@
 }
 
 .chat-send-btn[disabled] { opacity: .4; cursor: not-allowed; }
+
+/* ── Кнопка остановки генерации (стеклянная красноватая + анимированное свечение) ── */
+.chat-send-btn.stop-mode,
+.chat-send-btn.stop-mode:not([disabled]),
+.start-send-btn.stop-mode,
+.start-send-btn.stop-mode:not([disabled]),
+#send-btn.stop-mode,
+#send-btn.stop-mode:not([disabled]) {
+  background: rgba(239, 68, 68, 0.16);
+  border: 1px solid rgba(239, 68, 68, 0.42);
+  color: #ef4444;
+  backdrop-filter: blur(7px) saturate(125%);
+  -webkit-backdrop-filter: blur(7px) saturate(125%);
+  animation: chat-stop-btn-glow 2s ease-in-out infinite;
+  cursor: pointer;
+}
+
+[data-theme="dark"] .chat-send-btn.stop-mode,
+[data-theme="dark"] .chat-send-btn.stop-mode:not([disabled]),
+[data-theme="dark"] .start-send-btn.stop-mode,
+[data-theme="dark"] .start-send-btn.stop-mode:not([disabled]),
+[data-theme="dark"] #send-btn.stop-mode,
+[data-theme="dark"] #send-btn.stop-mode:not([disabled]) {
+  background: rgba(239, 68, 68, 0.22);
+  border: 1px solid rgba(248, 113, 113, 0.48);
+  color: #f87171;
+}
+
+.chat-send-btn.stop-mode:not([disabled]):hover,
+.start-send-btn.stop-mode:not([disabled]):hover,
+#send-btn.stop-mode:not([disabled]):hover {
+  background: rgba(239, 68, 68, 0.26);
+  border-color: rgba(239, 68, 68, 0.62);
+  filter: none;
+  transform: scale(1.05);
+}
+
+[data-theme="dark"] .chat-send-btn.stop-mode:not([disabled]):hover,
+[data-theme="dark"] .start-send-btn.stop-mode:not([disabled]):hover,
+[data-theme="dark"] #send-btn.stop-mode:not([disabled]):hover {
+  background: rgba(239, 68, 68, 0.30);
+  border-color: rgba(248, 113, 113, 0.68);
+}
+
+@keyframes chat-stop-btn-glow {
+  0%, 100% {
+    box-shadow:
+      0 0 0 0 rgba(239, 68, 68, 0.16),
+      0 0 8px rgba(239, 68, 68, 0.28);
+  }
+  50% {
+    box-shadow:
+      0 0 0 3px rgba(239, 68, 68, 0.20),
+      0 0 14px rgba(239, 68, 68, 0.52);
+  }
+}
+
 
 /* ── Toast уведомление ───────────────────── */
 #pm-toast {

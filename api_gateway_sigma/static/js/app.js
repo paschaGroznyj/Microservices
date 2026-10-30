@@ -3633,11 +3633,12 @@ ${iconInner}
         if (!sendBtn) return;
         if (mode === 'stop') {
             sendBtn.disabled = false;
-            sendBtn.classList.add('active');
+            sendBtn.classList.add('active', 'stop-mode');
             sendBtn.setAttribute('aria-label', 'Остановить');
-            sendBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M9 9l6 6M15 9l-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
+            sendBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
             return;
         }
+        sendBtn.classList.remove('stop-mode');
         sendBtn.setAttribute('aria-label', 'Отправить');
         sendBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
         const canSend = this.getInputText().length > 0 || this.hasAttachedFiles();
@@ -3660,9 +3661,10 @@ ${iconInner}
         if (!sendBtn) return;
         if (this._runState !== 'idle') {
             sendBtn.disabled = false;
-            sendBtn.classList.add('active');
+            sendBtn.classList.add('active', 'stop-mode');
             return;
         }
+        sendBtn.classList.remove('stop-mode');
         const canSend = this.getInputText().length > 0 || this.hasAttachedFiles();
         sendBtn.classList.toggle('active', canSend);
         sendBtn.disabled = !canSend;
@@ -5072,9 +5074,10 @@ ${iconInner}
             this._enforceInputLimit(field);
             if (this._runState !== "idle") {
                 sendBtn.disabled = false;
-                sendBtn.classList.add('active');
+                sendBtn.classList.add('active', 'stop-mode');
                 return;
             }
+            sendBtn.classList.remove('stop-mode');
             const len = this.getInputText().length;
             const canSend = len > 0 || this.hasAttachedFiles();
             sendBtn.classList.toggle('active', canSend);

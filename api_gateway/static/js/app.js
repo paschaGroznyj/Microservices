@@ -259,6 +259,7 @@ class ChatApp {
             knowledgeGraph.init();
         }
         if (tab === 'skills') {
+            chatMain?.classList.remove('start-screen-mode');
             window.SkillsPanel?.open(this);
         }
         if (tab === 'group') {

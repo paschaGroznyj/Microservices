@@ -241,9 +241,12 @@
 
       function resize() {
         const r = screen.getBoundingClientRect();
+        if (r.width < 10 || r.height < 10) return;
+        const prevW = W;
+        const prevH = H;
         dpr = Math.min(window.devicePixelRatio || 1, 2);
-        W = Math.max(1, r.width);
-        H = Math.max(1, r.height);
+        W = Math.round(r.width);
+        H = Math.round(r.height);
         cv.width = W * dpr;
         cv.height = H * dpr;
         cv.style.width = W + 'px';
@@ -259,6 +262,13 @@
             r: 1.4 + Math.random() * 1.4,
             c: COLS[i % 3],
           }));
+        } else if (prevW > 10 && prevH > 10 && (prevW !== W || prevH !== H)) {
+          const sx = W / prevW;
+          const sy = H / prevH;
+          for (const n of nodes) {
+            n.x *= sx;
+            n.y *= sy;
+          }
         }
       }
       resize();
@@ -343,6 +353,17 @@
         if (!screen.isConnected) {
           this.stopStartGraph();
           return;
+        }
+        if (screen.offsetParent === null) {
+          this._startGraphRAF = requestAnimationFrame(frame);
+          return;
+        }
+        if (W < 10 || H < 10) {
+          resize();
+          if (W < 10 || H < 10) {
+            this._startGraphRAF = requestAnimationFrame(frame);
+            return;
+          }
         }
         if (m.seeded) {
           m.sx += (m.x - m.sx) * CONFIG.cursorLerp;

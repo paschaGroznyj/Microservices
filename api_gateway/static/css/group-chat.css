@@ -321,46 +321,92 @@
    плитки файлов, лайтбокс со стрелками.
    ══════════════════════════════════════════════ */
 
-/* сообщение только с медиа (без текста) — пузырь без внутренних отступов */
+/* сообщение с медиа: без рамок сверху, слева и справа; снизу — только если есть подпись.
+   Не больше 420px по ширине/высоте, но может быть уже или ниже по габаритам картинки (как в ТГ) */
+.gc-msg--has-images {
+  padding: 0;
+  border: none;
+  overflow: hidden;
+  width: min(var(--gc-media-w, 420px), 72vw);
+  max-width: min(420px, 72vw);
+}
 .gc-msg--media-only {
-  padding: 3px;
+  padding: 0;
+  border: none;
   overflow: hidden;
 }
 .gc-msg--media-only .gc-meta {
   position: absolute;
   right: 10px;
   bottom: 8px;
+  z-index: 3;
+  margin-top: 0;
   padding: 2px 8px;
   border-radius: 10px;
-  background: rgba(0, 0, 0, 0.42);
+  background: rgba(0, 0, 0, 0.44);
   color: #fff;
-  backdrop-filter: blur(3px);
+  opacity: 0.92;
+  -webkit-backdrop-filter: blur(6px) saturate(120%);
+  backdrop-filter: blur(6px) saturate(120%);
+}
+.gc-msg__caption {
+  width: 100%;
+  padding: 8px 14px 8px;
+  box-sizing: border-box;
 }
 .gc-msg { position: relative; }
 
 /* ---------- коллаж картинок ---------- */
 .gc-collage {
   display: grid;
-  gap: 3px;
-  width: min(420px, 68vw);
+  gap: 2px;
+  width: 100%;
   max-width: 100%;
-  border-radius: 12px;
+  border-radius: 0;
   overflow: hidden;
-  margin-bottom: 4px;
+  margin: 0;
 }
 .gc-bubble-text + .gc-collage,
-.gc-collage + .gc-bubble-text { margin-top: 6px; }
+.gc-collage + .gc-bubble-text { margin-top: 0; }
 
 .gc-collage__cell {
   position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 0;
   border: none;
   cursor: pointer;
   overflow: hidden;
-  /* без фона — во время загрузки видно только шиммер, картинка кропается cover */
   background: transparent;
   min-height: 0;
   min-width: 0;
+}
+/* стеклянная размытая подложка (как в ТГ) для полос сверху/снизу или слева/справа */
+.gc-collage__bg {
+  position: absolute;
+  inset: -22px;
+  z-index: 0;
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  filter: blur(22px) saturate(140%) brightness(0.92);
+  transform: scale(1.12);
+  opacity: 0;
+  transition: opacity 0.32s ease;
+  pointer-events: none;
+}
+.gc-collage__bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.14);
+}
+[data-theme="dark"] .gc-collage__bg::after {
+  background: rgba(15, 23, 37, 0.24);
+}
+.gc-collage__cell.is-loaded.gc-collage__cell--glass .gc-collage__bg {
+  opacity: 1;
 }
 /* шиммер загрузки: бегущий блик поверх фона, гаснет когда img загрузился */
 .gc-collage__cell::before {
@@ -391,7 +437,7 @@
   transition: opacity 0.32s ease;
 }
 .gc-collage__cell.is-loaded img { opacity: 1; }
-.gc-collage__cell:hover img { filter: brightness(0.92); }
+.gc-collage__cell:hover img { filter: brightness(0.95); }
 @keyframes gcShimmer {
   0%   { background-position: 140% 0; }
   100% { background-position: -40% 0; }
@@ -400,6 +446,7 @@
 .gc-collage__more {
   position: absolute;
   inset: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -409,19 +456,18 @@
   background: rgba(0, 0, 0, 0.45);
 }
 
-/* 1 картинка — фиксированная область, картинка кропается (cover),
-   без полей и без видимой рамки/фона по краям */
+/* 1 картинка — рендерится полностью (contain), 16:9 на всю ширину,
+   9:16 на всю высоту, недостающие края заполняются стеклянными полосами */
 .gc-collage--one {
   grid-template-columns: 1fr;
 }
 .gc-collage--one .gc-collage__cell {
-  /* фиксированный размер области — подгрузка img не двигает скролл */
-  aspect-ratio: 4 / 3;
+  aspect-ratio: var(--gc-cell-ar, 16 / 9);
 }
 .gc-collage--one .gc-collage__cell img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 /* 2 картинки — 50/50 */
@@ -538,5 +584,5 @@
 @media (max-width: 640px) {
   .gc-lb__nav--prev { left: 6px; }
   .gc-lb__nav--next { right: 6px; }
-  .gc-collage { width: 78vw; }
+  .gc-msg--has-images { width: 82vw; max-width: 86%; }
 }

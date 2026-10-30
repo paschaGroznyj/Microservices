@@ -274,17 +274,25 @@
         <svg class="msg-collapse-toggle__chevron" viewBox="0 0 12 12" width="12" height="12" fill="none" aria-hidden="true">
           <path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
         </svg></button>`;
-      const media = this._mediaHtml(m);
+      const mediaParts = this._mediaParts(m);
       const textBlock = (m.message_text && m.message_text.trim())
         ? `<div class="gc-bubble-text message-text message-text--collapsible">${this._esc(m.message_text)}</div>${collapseBtn}`
         : '';
-      const bubbleMod = media && !textBlock ? ' gc-msg--media-only' : '';
+      const hasImages = !!mediaParts.collage;
+      const hasCaption = !!(textBlock || mediaParts.docs);
+      const bubbleMod = hasImages
+        ? (hasCaption ? ' gc-msg--has-images gc-msg--with-caption' : ' gc-msg--has-images gc-msg--media-only')
+        : '';
+      const metaHtml = `<div class="gc-meta">${pin}${edited}<span class="gc-time">${this._fmtTime(m.created_at)}</span></div>`;
+      const innerHtml = hasImages
+        ? (hasCaption
+            ? `${mediaParts.collage}<div class="gc-msg__caption">${mediaParts.docs}${textBlock}${metaHtml}</div>`
+            : `${mediaParts.collage}${metaHtml}`)
+        : `${mediaParts.docs}${textBlock}${metaHtml}`;
       return `<div class="gc-row ${mine ? 'gc-row--mine' : ''}" data-id="${m.id}" data-mine="${mine ? 1 : 0}" data-pinned="${m.is_pinned ? 1 : 0}" data-can-del="${canDel ? 1 : 0}" data-can-edit="${canEdit ? 1 : 0}" data-can-pin="${canPin ? 1 : 0}">
         ${author}
         <div class="${cls}${bubbleMod}">
-          ${media}
-          ${textBlock}
-          <div class="gc-meta">${pin}${edited}<span class="gc-time">${this._fmtTime(m.created_at)}</span></div>
+          ${innerHtml}
         </div>
       </div>`;
     },
@@ -304,28 +312,31 @@
     },
 
     /* коллаж картинок (как в ТГ) + плитки не-картинок */
-    _mediaHtml(m) {
+    _mediaParts(m) {
       const files = Array.isArray(m.files) ? m.files : [];
-      if (!files.length) return '';
+      if (!files.length) return { collage: '', docs: '' };
       const images = files.filter(f => f.is_image);
       const docs = files.filter(f => !f.is_image);
-      let html = '';
+      let collage = '';
+      let docsHtml = '';
       if (images.length) {
         const n = images.length;
         const shown = images.slice(0, 4);
         const layout = n === 1 ? 'one' : n === 2 ? 'two' : n === 3 ? 'three' : 'four';
         const tiles = shown.map((f, i) => {
+          const url = this._esc(this._fileUrl(f));
           const more = (n > 4 && i === 3) ? `<span class="gc-collage__more">+${n - 4}</span>` : '';
           return `<button class="gc-collage__cell" type="button" data-lb="1" data-img-idx="${i}">
-            <img src="${this._fileUrl(f)}" alt="${this._esc(f.file_name || '')}" loading="lazy">${more}
+            <span class="gc-collage__bg" style="background-image:url('${url}')" aria-hidden="true"></span>
+            <img src="${url}" alt="${this._esc(f.file_name || '')}" loading="lazy">${more}
           </button>`;
         }).join('');
         const urls = images.map(f => this._fileUrl(f)).join('|');
         const names = images.map(f => (f.file_name || 'image')).join('|');
-        html += `<div class="gc-collage gc-collage--${layout}" data-imgs="${this._esc(urls)}" data-names="${this._esc(names)}">${tiles}</div>`;
+        collage = `<div class="gc-collage gc-collage--${layout}" data-imgs="${this._esc(urls)}" data-names="${this._esc(names)}">${tiles}</div>`;
       }
       if (docs.length) {
-        html += '<div class="gc-files">' + docs.map(f => `
+        docsHtml = '<div class="gc-files">' + docs.map(f => `
           <a class="gc-file" href="${this._fileUrl(f, 1)}" target="_blank" rel="noopener" title="${this._esc(f.file_name || '')}">
             <span class="gc-file__ico">
               <svg viewBox="0 0 24 24" width="20" height="20" fill="none"><path d="M14 3v5h5M6 3h9l5 5v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
@@ -336,7 +347,12 @@
             </span>
           </a>`).join('') + '</div>';
       }
-      return html;
+      return { collage, docs: docsHtml };
+    },
+
+    _mediaHtml(m) {
+      const p = this._mediaParts(m);
+      return p.collage + p.docs;
     },
 
     /* лайтбокс со стрелками (стиль image-lightbox основного чата) */
@@ -452,6 +468,7 @@
       scope.querySelectorAll('.gc-collage').forEach((col) => {
         const urls = (col.getAttribute('data-imgs') || '').split('|').filter(Boolean);
         const names = (col.getAttribute('data-names') || '').split('|');
+        const isOne = col.classList.contains('gc-collage--one');
         col.querySelectorAll('[data-lb]').forEach((cell) => {
           cell.onclick = () => {
             const idx = parseInt(cell.getAttribute('data-img-idx') || '0', 10) || 0;
@@ -459,7 +476,32 @@
           };
           const img = cell.querySelector('img');
           if (img) {
-            const done = () => cell.classList.add('is-loaded');
+            const done = () => {
+              cell.classList.add('is-loaded');
+              if (isOne && img.naturalWidth > 0 && img.naturalHeight > 0) {
+                const MAX_W = 420;
+                const MAX_H = 420;
+                const MIN_W = 300;
+                const MIN_H = 110;
+                const r = img.naturalWidth / img.naturalHeight;
+                let imgW, imgH;
+                if (r >= MAX_W / MAX_H) {
+                  imgW = MAX_W;
+                  imgH = Math.round(MAX_W / r);
+                } else {
+                  imgH = MAX_H;
+                  imgW = Math.round(MAX_H * r);
+                }
+                const boxW = Math.min(MAX_W, Math.max(MIN_W, imgW));
+                const boxH = Math.min(MAX_H, Math.max(MIN_H, imgH));
+                const msgEl = cell.closest('.gc-msg--has-images');
+                if (msgEl) msgEl.style.setProperty('--gc-media-w', boxW + 'px');
+                cell.style.setProperty('--gc-cell-ar', `${boxW} / ${boxH}`);
+                if (boxW > imgW + 2 || boxH > imgH + 2) {
+                  cell.classList.add('gc-collage__cell--glass');
+                }
+              }
+            };
             if (img.complete && img.naturalWidth > 0) done();
             else { img.addEventListener('load', done, { once: true });
                    img.addEventListener('error', done, { once: true }); }

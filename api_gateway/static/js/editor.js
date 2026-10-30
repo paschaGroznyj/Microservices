@@ -628,8 +628,11 @@
   }
 
   let pollSeq = 0;
-  function createInteractivePollEl(data) {
+  function createInteractivePollEl(data, meta = {}) {
     const uid = `_ed_poll_${++pollSeq}_`;
+    const botMessageId = String(meta.botMessageId || "").trim();
+    const pollIndex = Number(meta.pollIndex ?? 0);
+    const savedAnswer = meta.savedAnswer || null;
     const titleText = String(data.title || data.question || "Выберите вариант:");
     const rawOptions = Array.isArray(data.options) ? data.options : [];
     const placeholder = String(data.placeholder || "Something else");
@@ -643,6 +646,8 @@
     root.setAttribute("aria-labelledby", `${uid}label ${uid}cue`);
     root.setAttribute("tabindex", "-1");
     root.className = "ed-poll";
+    if (botMessageId) root.dataset.botMessageId = botMessageId;
+    root.dataset.pollIndex = String(pollIndex);
 
     const header = document.createElement("div");
     header.className = "ed-poll-header";
@@ -692,12 +697,12 @@
     const optionButtons = [];
     let answered = false;
 
-    const lockAndSubmit = (selectedBtn, answerText) => {
-      if (answered) return;
+    const markLockedUI = (selectedBtn) => {
       answered = true;
       root.classList.add("is-answered");
       optionButtons.forEach((btn) => {
         const isSel = btn === selectedBtn;
+        btn.disabled = true;
         btn.classList.toggle("is-selected", isSel);
         btn.setAttribute("aria-pressed", isSel ? "true" : "false");
         btn.setAttribute("aria-disabled", "true");
@@ -710,14 +715,33 @@
       });
       if (otherInput) otherInput.disabled = true;
       if (actionBtn) actionBtn.disabled = true;
+    };
+
+    const lockAndSubmit = (selectedBtn, answerText, extra = {}) => {
+      if (answered) return;
+      markLockedUI(selectedBtn);
       if (answerText) {
-        dispatchAIMessage(answerText);
+        const currentBotMsgId = root.dataset.botMessageId
+          || root.closest(".ed-ai-msg.bot")?.dataset?.messageId
+          || botMessageId
+          || "";
+        const pollAnswerMeta = currentBotMsgId ? {
+          bot_message_id: String(currentBotMsgId),
+          poll_index: pollIndex,
+          selected_index: extra.selectedIndex ?? null,
+          selected_value: answerText,
+          is_custom: !!extra.isCustom,
+          is_skipped: !!extra.isSkipped,
+          title: titleText,
+        } : null;
+        dispatchAIMessage(answerText, pollAnswerMeta);
       }
     };
 
     rawOptions.forEach((opt, idx) => {
       const isObj = opt && typeof opt === "object";
       const rawLabel = isObj ? String(opt.label || opt.title || opt.text || opt.value || "") : String(opt);
+      const rawValue = isObj ? String(opt.value || rawLabel) : rawLabel;
       const descText = isObj && opt.description ? String(opt.description) : "";
       const numPrefix = `${idx + 1}. `;
       const displayLabel = /^\d+[.)]\s+/.test(rawLabel) ? rawLabel : `${numPrefix}${rawLabel}`;
@@ -762,10 +786,12 @@
       trail.setAttribute("aria-hidden", "true");
       trail.innerHTML = `<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 3.5L10.5 8 6 12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
+      btn.dataset.optLabel = rawLabel;
+      btn.dataset.optValue = rawValue;
       btn.append(badge, content, trail);
 
       btn.addEventListener("click", () => {
-        lockAndSubmit(btn, rawLabel);
+        lockAndSubmit(btn, rawValue, { selectedIndex: idx, isCustom: false, isSkipped: false });
       });
 
       btn.addEventListener("keydown", (e) => {
@@ -833,9 +859,13 @@
       if (answered) return;
       const customVal = otherInput.value.trim();
       if (customVal) {
-        lockAndSubmit(null, customVal);
+        lockAndSubmit(null, customVal, { selectedIndex: null, isCustom: true, isSkipped: false });
       } else {
-        lockAndSubmit(null, "Пропустить опрос — выбери оптимальный вариант на своё усмотрение.");
+        lockAndSubmit(
+          null,
+          "Пропустить опрос — выбери оптимальный вариант на своё усмотрение.",
+          { selectedIndex: null, isCustom: false, isSkipped: true }
+        );
       }
     };
 
@@ -848,6 +878,54 @@
       e.preventDefault();
       submitOtherOrSkip();
     });
+
+    root._applySavedAnswer = (ans) => {
+      if (answered || !ans || typeof ans !== "object") return;
+      const selIdx = ans.selected_index != null ? Number(ans.selected_index) : null;
+      const selVal = String(ans.selected_value || "").trim();
+      if (selIdx != null && optionButtons[selIdx]) {
+        markLockedUI(optionButtons[selIdx]);
+        return;
+      }
+      if (!ans.is_custom && !ans.is_skipped && selVal) {
+        const matched = optionButtons.find(
+          b => b.dataset.optValue === selVal || b.dataset.optLabel === selVal
+        );
+        if (matched) {
+          markLockedUI(matched);
+          return;
+        }
+      }
+      if (ans.is_custom && otherInput && selVal) {
+        otherInput.value = selVal;
+        actionBtnText.textContent = sendLabel;
+        actionBtn.classList.add("is-primary");
+      }
+      markLockedUI(null);
+    };
+
+    root._syncWithUserReply = (replyText) => {
+      if (answered) return;
+      const norm = String(replyText || "").trim();
+      if (!norm) return;
+      const matched = optionButtons.find(
+        b => b.dataset.optValue === norm || b.dataset.optLabel === norm
+      );
+      if (matched) {
+        markLockedUI(matched);
+      } else {
+        if (otherInput && !norm.startsWith("Пропустить опрос")) {
+          otherInput.value = norm;
+          actionBtnText.textContent = sendLabel;
+          actionBtn.classList.add("is-primary");
+        }
+        markLockedUI(null);
+      }
+    };
+
+    if (savedAnswer) {
+      root._applySavedAnswer(savedAnswer);
+    }
 
     label.append(otherBadge, otherInput, actionBtn);
     form.appendChild(label);
@@ -866,7 +944,7 @@
     AskUserQuestion: createInteractivePollEl,
   };
 
-  function renderBotContent(container, text) {
+  function renderBotContent(container, text, meta = {}) {
     container.innerHTML = "";
     const segments = extractStructuredSegments(text);
     if (!segments.length) {
@@ -874,9 +952,19 @@
       container.querySelectorAll("pre code").forEach(b => { try { window.hljs && hljs.highlightElement(b); } catch (_) {} });
       return;
     }
+    const botMessageId = String(meta.botMessageId || "").trim();
+    const pollAnswers = Array.isArray(meta.pollAnswers) ? meta.pollAnswers : [];
+    let pollIdx = 0;
+
     for (const seg of segments) {
       if (seg.kind === "component" && COMPONENT_MAP[seg.component]) {
-        container.appendChild(COMPONENT_MAP[seg.component](seg.data));
+        const curIdx = pollIdx++;
+        const savedAnswer = pollAnswers.find(a => Number(a.poll_index || 0) === curIdx) || null;
+        container.appendChild(COMPONENT_MAP[seg.component](seg.data, {
+          botMessageId,
+          pollIndex: curIdx,
+          savedAnswer,
+        }));
       } else if (seg.kind === "md" && seg.text) {
         const mdWrap = document.createElement("div");
         mdWrap.className = "ed-ai-md-part";
@@ -887,13 +975,38 @@
     }
   }
 
-  function aiAppend(role, text) {
+  function stripEditorPromptEnvelope(rawText) {
+    const s = String(rawText || "");
+    const idx = s.indexOf("\n\n[UI-компоненты редактора:");
+    const cleaned = idx !== -1 ? s.slice(0, idx) : s;
+    const qMatch = cleaned.match(/\n\nВопрос:\s*([\s\S]*)$/);
+    return qMatch ? qMatch[1].trim() : cleaned.trim();
+  }
+
+  function aiAppend(role, text, meta = {}) {
     const d = document.createElement("div");
     d.className = `ed-ai-msg ${role}`;
+    if (meta.messageId) d.dataset.messageId = String(meta.messageId);
     if (role === "bot") {
-      renderBotContent(d, text);
+      renderBotContent(d, text, {
+        botMessageId: meta.botMessageId || meta.messageId || "",
+        pollAnswers: meta.pollAnswers || [],
+      });
     } else {
-      d.textContent = text;
+      const cleanUserText = stripEditorPromptEnvelope(text);
+      d.textContent = cleanUserText;
+      if (meta.pollAnswer && typeof meta.pollAnswer === "object") {
+        const bmid = String(meta.pollAnswer.bot_message_id || "");
+        const pidx = String(meta.pollAnswer.poll_index ?? 0);
+        if (bmid) {
+          aiLog.querySelectorAll(`.ed-poll[data-bot-message-id="${bmid}"][data-poll-index="${pidx}"]`).forEach(el => {
+            el._applySavedAnswer?.(meta.pollAnswer);
+          });
+        }
+      }
+      aiLog.querySelectorAll(".ed-poll:not(.is-answered)").forEach(el => {
+        el._syncWithUserReply?.(cleanUserText);
+      });
     }
     aiLog.appendChild(d);
     aiLog.scrollTop = aiLog.scrollHeight;
@@ -911,14 +1024,60 @@
   }
   function clearThinking() { if (thinkingEl) { thinkingEl.remove(); thinkingEl = null; } }
 
+  async function loadEditorChatHistory() {
+    if (!CHAT_ID) return;
+    try {
+      const data = await apiGet(`/api/chats/${encodeURIComponent(CHAT_ID)}?limit=50&offset=0`);
+      const msgs = Array.isArray(data?.messages) ? data.messages : [];
+      aiLog.innerHTML = "";
+      for (const m of msgs) {
+        const mid = m.message_id || (m.id != null ? String(m.id) : "");
+        if (m.is_from_bot) {
+          aiAppend("bot", m.message || "", {
+            messageId: mid,
+            botMessageId: mid,
+            pollAnswers: m.poll_answers || [],
+          });
+        } else {
+          aiAppend("user", m.message || "", {
+            messageId: mid,
+            pollAnswer: m.poll_answer || null,
+          });
+        }
+      }
+    } catch (_) {}
+  }
+
   if (CHAT_ID) {
+    loadEditorChatHistory();
     try {
       const proto = location.protocol === "https:" ? "wss" : "ws";
       const ws = new WebSocket(`${proto}://${location.host}/ws/chat/${encodeURIComponent(CHAT_ID)}`);
       ws.onmessage = (ev) => {
         try {
           const m = JSON.parse(ev.data);
-          if (m.is_from_bot && m.message) { clearThinking(); aiAppend("bot", m.message); }
+          if (m.is_from_bot && m.message) {
+            clearThinking();
+            const mid = m.message_id || (m.id != null ? String(m.id) : "");
+            aiAppend("bot", m.message, {
+              messageId: mid,
+              botMessageId: mid,
+              pollAnswers: m.poll_answers || [],
+            });
+          } else if (!m.is_from_bot) {
+            if (m.poll_answer && typeof m.poll_answer === "object") {
+              const bmid = String(m.poll_answer.bot_message_id || "");
+              const pidx = String(m.poll_answer.poll_index ?? 0);
+              if (bmid) {
+                aiLog.querySelectorAll(`.ed-poll[data-bot-message-id="${bmid}"][data-poll-index="${pidx}"]`).forEach(el => {
+                  el._applySavedAnswer?.(m.poll_answer);
+                });
+              }
+            }
+            if (m.message_id && aiLog.querySelector(`.ed-ai-msg.user[data-message-id="${m.message_id}"]`)) {
+              return;
+            }
+          }
         } catch (_) {}
       };
     } catch (_) {}
@@ -931,7 +1090,7 @@
     "```json\n{\n  \"component\": \"InteractivePoll\",\n  \"title\": \"Текст вопроса\",\n  \"options\": [\"Вариант 1\", \"Вариант 2\"]\n}\n```\n" +
     "Интерфейс автоматически отрендерит его как интерактивный опрос.]";
 
-  async function dispatchAIMessage(userVisibleText) {
+  async function dispatchAIMessage(userVisibleText, pollAnswer = null) {
     const text = String(userVisibleText || "").trim();
     if (!text || !CHAT_ID) return;
     let msg = text;
@@ -952,7 +1111,8 @@
     } else {
       msg = `${text}${STRUCTURED_UI_HINT}`;
     }
-    aiAppend("user", text);
+    const clientMsgId = `msg-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+    aiAppend("user", text, { messageId: clientMsgId, pollAnswer });
     pendingSelection = null;
     updateSelectionHint();
     showThinking();
@@ -964,10 +1124,11 @@
         body: JSON.stringify({
           chat_id: CHAT_ID,
           message: msg,
-          message_id: crypto.randomUUID(),
+          message_id: clientMsgId,
           agent_model:    window.ModelPicker?.getModel() ?? "coder",
           selected_tools: window.ToolsPanel?.getSelectedCategories() ?? [],
           context_size:   window.ToolsPanel?.getContextSize() ?? "medium",
+          ...(pollAnswer ? { poll_answer: pollAnswer } : {}),
         }),
       });
     } catch (e) {

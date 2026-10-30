@@ -133,7 +133,8 @@ class DBConsumer:
             tool_trace = payload.get("tool_trace")
             gateway_target = (payload.get("gateway_target") or "main").lower()
             input_format = payload.get("input_format") or "text"
-            
+            poll_answer = payload.get("poll_answer")
+
             model_type = None
             tokens_usage = None
             if is_from_bot:
@@ -156,6 +157,20 @@ class DBConsumer:
                 gateway_target=gateway_target,
                 input_format=input_format,
             )
+            if not is_from_bot and isinstance(poll_answer, dict):
+                try:
+                    saved_pa = await self.db.save_poll_answer(
+                        chat_id=chat_id,
+                        user_id=user_id,
+                        user_message_id=message_id,
+                        poll_answer=poll_answer,
+                    )
+                    if saved_pa:
+                        logger.info(
+                            f"Ответ опроса сохранён в БД: chat={chat_id}, bot_msg={saved_pa.get('bot_message_id')}, idx={saved_pa.get('poll_index')}"
+                        )
+                except Exception as pa_err:
+                    logger.error(f"Ошибка сохранения poll_answer chat={chat_id}: {pa_err}")
             logger.info(f"Сообщение сохранено в БД: chat={chat_id}, user={user_id}")
             elapsed = time.perf_counter() - start
             # logging.info(f"Message Service. Время чтобы вытащить из кафки и положить в БД = {elapsed:.4f}s")

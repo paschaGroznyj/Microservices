@@ -1689,7 +1689,24 @@ async def create_new_chat(request: Request):
             detail=f"Chats service unreachable: {str(e)}"
         )
 
-# ========= Найти чат по типу (ouroboros) ========
+@app.get("/api/chats/{chat_id}/poll_answers")
+async def get_chat_poll_answers(chat_id: str, request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        response = await app.state.http_client.get(
+            f"{SERVICES['chats']['url']}/chats/{chat_id}/poll_answers"
+        )
+        return Response(
+            content=response.content,
+            status_code=response.status_code,
+            media_type="application/json"
+        )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Chats service unreachable: {str(e)}")
+
+# ========= Найти чат по типу ========
 @app.get("/api/chats/by-type/{type_agent}")
 async def find_chat_by_type(type_agent: str, request: Request):
     user = await get_current_user(request)

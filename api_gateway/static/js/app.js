@@ -1,4 +1,4 @@
-// CatchPM — Chat SPA (без Ouroboros)
+// CatchPM — Chat SPA
 class ChatApp {
     constructor() {
         this.currentUser   = null;
@@ -943,9 +943,12 @@ class ChatApp {
         return tmp.innerHTML;
     }
 
-    _createInteractivePollEl(data) {
+    _createInteractivePollEl(data, meta = {}) {
         this._pollSeq = (this._pollSeq || 0) + 1;
         const uid = `_chat_poll_${this._pollSeq}_`;
+        const botMessageId = String(meta.botMessageId || '').trim();
+        const pollIndex = Number(meta.pollIndex ?? 0);
+        const savedAnswer = meta.savedAnswer || null;
         const titleText = String(data.title || data.question || data.prompt || 'Выберите вариант').trim();
         const rawOpts = Array.isArray(data.options) ? data.options : [];
         const options = rawOpts.map((opt) => {
@@ -970,6 +973,8 @@ class ChatApp {
         root.setAttribute('aria-labelledby', `${uid}label`);
         root.tabIndex = -1;
         root.className = 'ed-poll';
+        if (botMessageId) root.dataset.botMessageId = botMessageId;
+        root.dataset.pollIndex = String(pollIndex);
 
         const header = document.createElement('div');
         header.className = 'ed-poll-header';
@@ -1029,11 +1034,25 @@ class ChatApp {
             if (actionBtn) actionBtn.disabled = true;
         };
 
-        const lockAndSubmit = (selectedBtn, valueToSend) => {
+        const lockAndSubmit = (selectedBtn, valueToSend, extra = {}) => {
             if (answered) return;
             if (this._runState && this._runState !== 'idle') return;
             markLockedUI(selectedBtn);
-            this.sendMessage(valueToSend);
+            const currentBotMsgId = root.dataset.botMessageId
+                || root.closest('.agent-message')?.dataset?.messageId
+                || root.closest('.agent-message')?.dataset?.id
+                || botMessageId
+                || '';
+            const pollAnswerMeta = currentBotMsgId ? {
+                bot_message_id: String(currentBotMsgId),
+                poll_index: pollIndex,
+                selected_index: extra.selectedIndex ?? null,
+                selected_value: valueToSend,
+                is_custom: !!extra.isCustom,
+                is_skipped: !!extra.isSkipped,
+                title: titleText,
+            } : null;
+            this.sendMessage(valueToSend, pollAnswerMeta);
         };
 
         options.forEach((opt, idx) => {
@@ -1077,7 +1096,7 @@ class ChatApp {
             btn.append(badge, content, trail);
 
             btn.addEventListener('click', () => {
-                lockAndSubmit(btn, opt.value);
+                lockAndSubmit(btn, opt.value, { selectedIndex: idx, isCustom: false, isSkipped: false });
             });
 
             btn.addEventListener('keydown', (e) => {
@@ -1148,9 +1167,13 @@ class ChatApp {
                 if (answered) return;
                 const customVal = otherInput.value.trim();
                 if (customVal) {
-                    lockAndSubmit(null, customVal);
+                    lockAndSubmit(null, customVal, { selectedIndex: null, isCustom: true, isSkipped: false });
                 } else {
-                    lockAndSubmit(null, 'Пропустить опрос — выбери оптимальный вариант на своё усмотрение.');
+                    lockAndSubmit(
+                        null,
+                        'Пропустить опрос — выбери оптимальный вариант на своё усмотрение.',
+                        { selectedIndex: null, isCustom: false, isSkipped: true }
+                    );
                 }
             };
 
@@ -1173,6 +1196,31 @@ class ChatApp {
             if (lastDiv) lastDiv.remove();
         }
 
+        root._applySavedAnswer = (ans) => {
+            if (answered || !ans || typeof ans !== 'object') return;
+            const selIdx = ans.selected_index != null ? Number(ans.selected_index) : null;
+            const selVal = String(ans.selected_value || '').trim();
+            if (selIdx != null && optionButtons[selIdx]) {
+                markLockedUI(optionButtons[selIdx]);
+                return;
+            }
+            if (!ans.is_custom && !ans.is_skipped && selVal) {
+                const matched = optionButtons.find(
+                    b => b.dataset.optValue === selVal || b.dataset.optLabel === selVal
+                );
+                if (matched) {
+                    markLockedUI(matched);
+                    return;
+                }
+            }
+            if (ans.is_custom && otherInput && selVal) {
+                otherInput.value = selVal;
+                if (actionBtnText) actionBtnText.textContent = sendLabel;
+                if (actionBtn) actionBtn.classList.add('is-primary');
+            }
+            markLockedUI(null);
+        };
+
         root._syncWithUserReply = (replyText) => {
             if (answered) return;
             const norm = String(replyText || '').trim();
@@ -1192,13 +1240,17 @@ class ChatApp {
             }
         };
 
+        if (savedAnswer) {
+            root._applySavedAnswer(savedAnswer);
+        }
+
         bodyInner.appendChild(scrollBox);
         bodyWrap.appendChild(bodyInner);
         root.append(header, bodyWrap);
         return root;
     }
 
-    _renderBotStructuredContent(containerEl, rawText) {
+    _renderBotStructuredContent(containerEl, rawText, meta = {}) {
         if (!containerEl) return;
         const src = String(rawText || '');
         const segments = this._extractStructuredSegments(src);
@@ -1220,10 +1272,20 @@ class ChatApp {
             return;
         }
 
+        const botMessageId = String(meta.botMessageId || '').trim();
+        const pollAnswers = Array.isArray(meta.pollAnswers) ? meta.pollAnswers : [];
+        let pollIdx = 0;
+
         containerEl.innerHTML = '';
         for (const seg of segments) {
             if (seg.kind === 'component' && seg.component === 'InteractivePoll') {
-                containerEl.appendChild(this._createInteractivePollEl(seg.data));
+                const curIdx = pollIdx++;
+                const savedAnswer = pollAnswers.find(a => Number(a.poll_index || 0) === curIdx) || null;
+                containerEl.appendChild(this._createInteractivePollEl(seg.data, {
+                    botMessageId,
+                    pollIndex: curIdx,
+                    savedAnswer,
+                }));
             } else {
                 const mdBlock = document.createElement('div');
                 mdBlock.className = 'bot-md-segment';
@@ -1283,11 +1345,16 @@ class ChatApp {
             messageEl.innerHTML = `<div class="${textCls}">${content}</div>${toggleHtml}<div class="timestamp">${time}</div>`;
         } else {
             messageEl.dataset.id = message.id;
+            if (message.message_id) messageEl.dataset.messageId = message.message_id;
+            const _botMsgKey = message.message_id || (message.id != null ? String(message.id) : '');
             if (animate) {
                 messageEl.innerHTML = '';
                 this._streamRenderMessage(messageEl, rawContent, container, message.files, message.message_id);
             } else {
-                this._renderBotStructuredContent(messageEl, rawContent);
+                this._renderBotStructuredContent(messageEl, rawContent, {
+                    botMessageId: _botMsgKey,
+                    pollAnswers: message.poll_answers || [],
+                });
                 // Файлы агента из истории — вставляем после текста, перед actions
                 if (message.files?.length) {
                     messageEl.appendChild(
@@ -1333,6 +1400,16 @@ class ChatApp {
                 filesWrap.innerHTML = filesHtml;
                 const filesNode = filesWrap.firstElementChild;
                 if (filesNode) wrapper.appendChild(filesNode);
+            }
+            if (message.poll_answer && typeof message.poll_answer === 'object') {
+                const pa = message.poll_answer;
+                const bmid = String(pa.bot_message_id || '');
+                const pidx = String(pa.poll_index ?? 0);
+                if (bmid) {
+                    container.querySelectorAll(`.ed-poll[data-bot-message-id="${bmid}"][data-poll-index="${pidx}"]`).forEach(pollEl => {
+                        pollEl._applySavedAnswer?.(pa);
+                    });
+                }
             }
             container.querySelectorAll('.ed-poll:not(.is-answered)').forEach(pollEl => {
                 pollEl._syncWithUserReply?.(rawContent);
@@ -2153,7 +2230,7 @@ class ChatApp {
     /* ══════════════════════════════════════════
        SEND
     ══════════════════════════════════════════ */
-    async sendMessage(customText = null) {
+    async sendMessage(customText = null, pollAnswer = null) {
         const isCustom = typeof customText === 'string';
         const container = this.getInputContainer();
         const field   = container?.querySelector('#message-input');
@@ -2238,7 +2315,8 @@ class ChatApp {
                     loop:            window.ToolsPanel?.getLoopEnabled() ?? false,
                     loop_instruction: window.ToolsPanel?.getLoopEnabled() ? text : '',
                     has_files:      _hasFiles,
-                    files: isCustom ? [] : (window.FileAttach?.getFilesMeta() ?? [])
+                    files: isCustom ? [] : (window.FileAttach?.getFilesMeta() ?? []),
+                    ...(pollAnswer ? { poll_answer: pollAnswer } : {})
                 })
             });
             try {
@@ -3061,8 +3139,12 @@ class ChatApp {
         // Гарантия: финальный ответ всегда в обычном стиле, даже если маркер
         // final_commit не пришёл (например обрыв WS) — снимаем reasoning-стиль.
         targetBlock.className = 'live-block';
+        if (data.message_id) st.pendingBotEl.dataset.messageId = data.message_id;
 
-        this._renderBotStructuredContent(targetBlock, fullText);
+        this._renderBotStructuredContent(targetBlock, fullText, {
+            botMessageId: data.message_id || st.pendingBotEl?.dataset?.messageId || st.pendingBotEl?.dataset?.id || '',
+            pollAnswers: data.poll_answers || [],
+        });
 
         // Файлы / actions вешаем на общую обёртку ответа. Работает и для
         // фонового чата — узел откреплён, но полностью готов к вставке.
@@ -3513,7 +3595,9 @@ class ChatApp {
 
         container.removeEventListener('scroll', onScroll);
 
-        this._renderBotStructuredContent(el, rawText);
+        this._renderBotStructuredContent(el, rawText, {
+            botMessageId: messageId || el?.dataset?.messageId || el?.dataset?.id || '',
+        });
         this._applyCodeHeaders(el);
 
         // 🎯 Файлы агента — добавляем ПОСЛЕ цикла, раз цикл больше не перезапишет innerHTML

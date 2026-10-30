@@ -235,7 +235,112 @@ class DataBaseChats:
                 ('anthropic/claude-opus-4.8',  'designer',  0, 0),
                 ('zai-org/GLM-5.2',            'universal', 0, 0)
             ON CONFLICT (model_name) DO NOTHING;
+
+            CREATE TABLE IF NOT EXISTS chat_poll_answers (
+                id SERIAL PRIMARY KEY,
+                chat_id TEXT NOT NULL,
+                bot_message_id TEXT NOT NULL,
+                poll_index INTEGER NOT NULL DEFAULT 0,
+                user_id BIGINT NOT NULL,
+                user_message_id TEXT,
+                selected_index INTEGER,
+                selected_value TEXT NOT NULL,
+                is_custom BOOLEAN NOT NULL DEFAULT FALSE,
+                is_skipped BOOLEAN NOT NULL DEFAULT FALSE,
+                poll_payload JSONB,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (chat_id, bot_message_id, poll_index)
+            );
+            CREATE INDEX IF NOT EXISTS ix_chat_poll_answers_chat_id ON chat_poll_answers(chat_id);
+            CREATE INDEX IF NOT EXISTS ix_chat_poll_answers_bot_msg ON chat_poll_answers(bot_message_id);
         """)
+
+    async def save_poll_answer(
+        self,
+        chat_id: str,
+        user_id: int,
+        user_message_id: str | None,
+        poll_answer: dict,
+    ) -> dict | None:
+        if not chat_id or user_id is None or not isinstance(poll_answer, dict):
+            return None
+        bot_message_id = str(poll_answer.get("bot_message_id") or "").strip()
+        if not bot_message_id:
+            return None
+        try:
+            poll_index = int(poll_answer.get("poll_index") or 0)
+        except (TypeError, ValueError):
+            poll_index = 0
+        raw_sel = poll_answer.get("selected_index")
+        try:
+            selected_index = int(raw_sel) if raw_sel is not None else None
+        except (TypeError, ValueError):
+            selected_index = None
+        selected_value = str(poll_answer.get("selected_value") or "").strip()
+        is_custom = bool(poll_answer.get("is_custom", False))
+        is_skipped = bool(poll_answer.get("is_skipped", False))
+        payload_json = json.dumps(poll_answer, ensure_ascii=False)
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO chat_poll_answers (
+                    chat_id, bot_message_id, poll_index, user_id, user_message_id,
+                    selected_index, selected_value, is_custom, is_skipped, poll_payload
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+                ON CONFLICT (chat_id, bot_message_id, poll_index) DO NOTHING
+                RETURNING id, chat_id, bot_message_id, poll_index, user_id, user_message_id,
+                          selected_index, selected_value, is_custom, is_skipped, created_at;
+                """,
+                str(chat_id),
+                bot_message_id,
+                poll_index,
+                int(user_id),
+                user_message_id,
+                selected_index,
+                selected_value,
+                is_custom,
+                is_skipped,
+                payload_json,
+            )
+            return dict(row) if row else None
+
+    async def is_poll_answered(self, chat_id: str, bot_message_id: str, poll_index: int = 0) -> bool:
+        if not chat_id or not bot_message_id:
+            return False
+        val = await self.pool.fetchval(
+            "SELECT 1 FROM chat_poll_answers WHERE chat_id=$1 AND bot_message_id=$2 AND poll_index=$3 LIMIT 1;",
+            str(chat_id), str(bot_message_id), int(poll_index),
+        )
+        return val is not None
+
+    async def get_poll_answers(self, chat_id: str) -> list[dict]:
+        if not chat_id:
+            return []
+        rows = await self.pool.fetch(
+            """
+            SELECT bot_message_id, poll_index, user_id, user_message_id,
+                   selected_index, selected_value, is_custom, is_skipped, created_at
+            FROM chat_poll_answers
+            WHERE chat_id = $1
+            ORDER BY id ASC;
+            """,
+            str(chat_id),
+        )
+        return [
+            {
+                "bot_message_id": r["bot_message_id"],
+                "poll_index": r["poll_index"],
+                "user_id": r["user_id"],
+                "user_message_id": r["user_message_id"],
+                "selected_index": r["selected_index"],
+                "selected_value": r["selected_value"],
+                "is_custom": r["is_custom"],
+                "is_skipped": r["is_skipped"],
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            }
+            for r in rows
+        ]
 
     # ═══ САМОЦИКЛ АГЕНТА (agent_loop_tasks) ═══════════════════════════════
     async def upsert_loop_task(self, chat_id: str, user_id: int, instruction: str) -> dict | None:
@@ -786,7 +891,27 @@ class DataBaseChats:
                                     WHERE f.message_id = c.message_id
                                 ),
                                 '[]'::json
-                            ) AS files
+                            ) AS files,
+                            COALESCE(
+                                (
+                                    SELECT json_agg(
+                                        json_build_object(
+                                            'bot_message_id', p.bot_message_id,
+                                            'poll_index', p.poll_index,
+                                            'selected_index', p.selected_index,
+                                            'selected_value', p.selected_value,
+                                            'is_custom', p.is_custom,
+                                            'is_skipped', p.is_skipped,
+                                            'user_message_id', p.user_message_id
+                                        )
+                                        ORDER BY p.poll_index ASC
+                                    )
+                                    FROM chat_poll_answers p
+                                    WHERE p.chat_id = c.chat_id
+                                      AND (p.bot_message_id = c.message_id OR p.bot_message_id = c.id::text)
+                                ),
+                                '[]'::json
+                            ) AS poll_answers
                         FROM chats c
                         LEFT JOIN users u ON c.user_id = u.id
                         WHERE c.chat_id = $1 
@@ -805,6 +930,9 @@ class DataBaseChats:
                     files = row["files"]
                     if isinstance(files, str):
                         files = json.loads(files)
+                    poll_answers = row["poll_answers"]
+                    if isinstance(poll_answers, str):
+                        poll_answers = json.loads(poll_answers)
 
                     messages.append({
                         "id": row["id"],
@@ -815,6 +943,7 @@ class DataBaseChats:
                         "message_id": row["message_id"],
                         "created_at": row["created_at"].isoformat(),
                         "files": files or [],
+                        "poll_answers": poll_answers or [],
                     })
 
                 has_more = (offset + len(messages)) < (total_count or 0)

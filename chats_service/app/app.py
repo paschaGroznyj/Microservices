@@ -164,6 +164,7 @@ class ChatMessage(BaseModel):
     loop_instruction: str | None = None
     # loop_tick=True — служебный тик петли от consumer (user_id=-100), проходит гейт агента.
     loop_tick: bool = False
+    poll_answer: dict | None = None
     
 
 @app.on_event("startup")
@@ -322,6 +323,15 @@ async def send_message(chat: ChatMessage):
         except Exception as e:
             logging.error(f"[self-loop] не удалось завести установку chat={chat.chat_id}: {e}")
 
+    if isinstance(chat.poll_answer, dict):
+        bot_mid = str(chat.poll_answer.get("bot_message_id") or "").strip()
+        try:
+            p_idx = int(chat.poll_answer.get("poll_index") or 0)
+        except (TypeError, ValueError):
+            p_idx = 0
+        if bot_mid and await db.is_poll_answered(chat.chat_id, bot_mid, p_idx):
+            raise HTTPException(status_code=409, detail="Poll already answered")
+
     message = {
         "user_id": chat.user_id,
         "tb_name": chat.tb_name,
@@ -353,6 +363,7 @@ async def send_message(chat: ChatMessage):
         "loop": chat.loop,
         "loop_instruction": chat.loop_instruction,
         "loop_tick": chat.loop_tick,
+        "poll_answer": chat.poll_answer,
     }
     start = time.perf_counter()
     # отправка в Kafka
@@ -887,9 +898,14 @@ async def create_chat(request: Request):
     return {"chat_id": str(uuid.uuid4())}
 
 
+@app.get("/chats/{chat_id}/poll_answers")
+async def get_chat_poll_answers(chat_id: str):
+    return {"poll_answers": await db.get_poll_answers(chat_id)}
+
+
 @app.get("/chat/by-type/{type_agent}")
 async def find_chat_by_type(type_agent: str, x_user_id: str = Header(..., alias="X-User-Id")):
-    """Найти существующий чат пользователя по типу агента (ouroboros/pm)."""
+    """Найти существующий чат пользователя по типу агента."""
     chat_id = await db.find_chat_by_type(int(x_user_id), type_agent)
     logging.info(f"Пытались найти чат, для {x_user_id}, {type_agent}, {chat_id}")
     if chat_id:

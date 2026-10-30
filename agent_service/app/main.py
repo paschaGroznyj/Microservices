@@ -166,7 +166,6 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     #     logging.warning(f"Некорректное сообщение: {payload}")
     #     return
     print("ВНУТРИ АГЕНТА", payload)
-    # Маршрутизация: ouroboros → Ouroboros API, pm → HarnessAgent
 
     # if type_agent != "pm":
     #     return

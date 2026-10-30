@@ -1289,9 +1289,9 @@ async def send_message(request: Request):
             data["loop_tick"] = False
 
     data["user_id"] = user["user_id"]
-    data["tb_name"] = request.headers.get("X-Authentik-Username") # Передача табельника в chats_service -> promt Ouroboros
-    data["username"] = request.headers.get("X-Authentik-Name").encode('latin-1').decode('utf-8') # Передача имени в chats_service -> promt Ouroboros
-    data["type_agent"] = data.get("type_agent", "pm") # О Великий gateway
+    data["tb_name"] = request.headers.get("X-Authentik-Username")
+    data["username"] = request.headers.get("X-Authentik-Name").encode('latin-1').decode('utf-8')
+    data["type_agent"] = data.get("type_agent", "pm")
     data["request_id"] = request_id
     data["gateway_target"] = "main"
     logger.info(f"Что летит при отправке сообщений {data['chat_id']}, {data['message']}")
@@ -1300,10 +1300,8 @@ async def send_message(request: Request):
         "user_id": data["user_id"],
         "chat_id": data["chat_id"],
         "message": data["message"],
-        # Прокидываем клиентский message_id в WS-эхо — фронту он нужен
-        # для дедупа оптимистично отрисованного сообщения (особенно для
-        # длинного текста-чипа, где сверить по textContent нельзя).
         "message_id": data.get("message_id"),
+        "poll_answer": data.get("poll_answer"),
         "is_from_bot": False
     }
     print("Перед отправкой сообщения", data)
@@ -1709,7 +1707,24 @@ async def create_new_chat(request: Request):
             detail=f"Chats service unreachable: {str(e)}"
         )
 
-# ========= Найти чат по типу (ouroboros) ========
+@app.get("/api/chats/{chat_id}/poll_answers")
+async def get_chat_poll_answers(chat_id: str, request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        response = await app.state.http_client.get(
+            f"{SERVICES['chats']['url']}/chats/{chat_id}/poll_answers"
+        )
+        return Response(
+            content=response.content,
+            status_code=response.status_code,
+            media_type="application/json"
+        )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Chats service unreachable: {str(e)}")
+
+# ========= Найти чат по типу ========
 @app.get("/api/chats/by-type/{type_agent}")
 async def find_chat_by_type(type_agent: str, request: Request):
     user = await get_current_user(request)

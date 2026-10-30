@@ -278,7 +278,8 @@
       const textBlock = (m.message_text && m.message_text.trim())
         ? `<div class="gc-bubble-text message-text message-text--collapsible">${this._esc(m.message_text)}</div>${collapseBtn}`
         : '';
-      const hasImages = !!mediaParts.collage;
+      const mediaTop = (mediaParts.collage || '') + (mediaParts.videos || '');
+      const hasImages = !!mediaTop;
       const hasCaption = !!(textBlock || mediaParts.docs);
       const bubbleMod = hasImages
         ? (hasCaption ? ' gc-msg--has-images gc-msg--with-caption' : ' gc-msg--has-images gc-msg--media-only')
@@ -286,8 +287,8 @@
       const metaHtml = `<div class="gc-meta">${pin}${edited}<span class="gc-time">${this._fmtTime(m.created_at)}</span></div>`;
       const innerHtml = hasImages
         ? (hasCaption
-            ? `${mediaParts.collage}<div class="gc-msg__caption">${mediaParts.docs}${textBlock}${metaHtml}</div>`
-            : `${mediaParts.collage}${metaHtml}`)
+            ? `${mediaTop}<div class="gc-msg__caption">${mediaParts.docs}${textBlock}${metaHtml}</div>`
+            : `${mediaTop}${metaHtml}`)
         : `${mediaParts.docs}${textBlock}${metaHtml}`;
       return `<div class="gc-row ${mine ? 'gc-row--mine' : ''}" data-id="${m.id}" data-mine="${mine ? 1 : 0}" data-pinned="${m.is_pinned ? 1 : 0}" data-can-del="${canDel ? 1 : 0}" data-can-edit="${canEdit ? 1 : 0}" data-can-pin="${canPin ? 1 : 0}">
         ${author}
@@ -312,12 +313,33 @@
     },
 
     /* коллаж картинок (как в ТГ) + плитки не-картинок */
+    _isVideo(f) {
+      if (!f) return false;
+      if (f.is_video) return true;
+      const mime = String(f.mime_type || '').toLowerCase();
+      if (mime.startsWith('video/')) return true;
+      const ext = String(f.file_name || '').split('.').pop().toLowerCase();
+      return ['mp4', 'webm', 'mov', 'm4v', 'ogv', 'avi', 'mkv'].includes(ext);
+    },
+
+    _videoMime(f) {
+      const mime = String(f?.mime_type || '').toLowerCase();
+      if (mime.startsWith('video/')) return mime;
+      const ext = String(f?.file_name || '').split('.').pop().toLowerCase();
+      if (ext === 'webm') return 'video/webm';
+      if (ext === 'mov') return 'video/quicktime';
+      if (ext === 'ogv' || ext === 'ogg') return 'video/ogg';
+      return 'video/mp4';
+    },
+
     _mediaParts(m) {
       const files = Array.isArray(m.files) ? m.files : [];
-      if (!files.length) return { collage: '', docs: '' };
+      if (!files.length) return { collage: '', videos: '', docs: '' };
       const images = files.filter(f => f.is_image);
-      const docs = files.filter(f => !f.is_image);
+      const videos = files.filter(f => !f.is_image && this._isVideo(f));
+      const docs = files.filter(f => !f.is_image && !this._isVideo(f));
       let collage = '';
+      let videosHtml = '';
       let docsHtml = '';
       if (images.length) {
         const n = images.length;
@@ -347,12 +369,26 @@
             </span>
           </a>`).join('') + '</div>';
       }
-      return { collage, docs: docsHtml };
+      if (videos.length) {
+        videosHtml = '<div class="gc-videos">' + videos.map(f => {
+          const url = this._esc(this._fileUrl(f));
+          const vmime = this._esc(this._videoMime(f));
+          const vname = this._esc(f.file_name || 'video.mp4');
+          return `<div class="gc-video-wrap" title="${vname}">
+            <span class="gc-video__bg" aria-hidden="true"></span>
+            <video class="gc-video" controls preload="metadata" playsinline webkit-playsinline src="${url}">
+              <source src="${url}" type="${vmime}">
+              Ваш браузер не поддерживает видео. <a href="${this._esc(this._fileUrl(f, 1))}">Скачать видео</a>.
+            </video>
+          </div>`;
+        }).join('') + '</div>';
+      }
+      return { collage, videos: videosHtml, docs: docsHtml };
     },
 
     _mediaHtml(m) {
       const p = this._mediaParts(m);
-      return p.collage + p.docs;
+      return p.collage + (p.videos || '') + p.docs;
     },
 
     /* лайтбокс со стрелками (стиль image-lightbox основного чата) */
@@ -507,6 +543,40 @@
                    img.addEventListener('error', done, { once: true }); }
           }
         });
+      });
+      scope.querySelectorAll('.gc-video-wrap').forEach((wrap) => {
+        const vid = wrap.querySelector('video');
+        if (!vid) return;
+        const onMeta = () => {
+          wrap.classList.add('is-loaded');
+          const vw = vid.videoWidth || 0;
+          const vh = vid.videoHeight || 0;
+          if (vw > 0 && vh > 0) {
+            const MAX_W = 420;
+            const MAX_H = 420;
+            const MIN_W = 300;
+            const MIN_H = 180;
+            const r = vw / vh;
+            let vidW, vidH;
+            if (r >= MAX_W / MAX_H) {
+              vidW = MAX_W;
+              vidH = Math.round(MAX_W / r);
+            } else {
+              vidH = MAX_H;
+              vidW = Math.round(MAX_H * r);
+            }
+            const boxW = Math.min(MAX_W, Math.max(MIN_W, vidW));
+            const boxH = Math.min(MAX_H, Math.max(MIN_H, vidH));
+            const msgEl = wrap.closest('.gc-msg--has-images');
+            if (msgEl) msgEl.style.setProperty('--gc-media-w', boxW + 'px');
+            wrap.style.setProperty('--gc-video-ar', `${boxW} / ${boxH}`);
+            if (boxW > vidW + 2 || boxH > vidH + 2) {
+              wrap.classList.add('gc-video-wrap--glass');
+            }
+          }
+        };
+        if (vid.readyState >= 1 && vid.videoWidth > 0) onMeta();
+        else vid.addEventListener('loadedmetadata', onMeta, { once: true });
       });
     },
 

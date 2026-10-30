@@ -923,10 +923,15 @@ async def resolve_file(chat_id: str, message_id: str, file_name: str):
         LIMIT 1
     """, chat_id, message_id, file_name)
 
-    if not row or row["source"] != "agent" or not row["file_path"]:
+    if not row:
         raise HTTPException(status_code=404, detail="File not found")
-
-    return {"path": row["file_path"]}
+    if row["file_path"]:
+        return {"path": row["file_path"]}
+    if row["source"] == "user":
+        safe_name = os.path.basename(file_name or "") or "file"
+        safe_mid = os.path.basename(str(message_id or "")) or "msg"
+        return {"path": f"/app/generated_files/{safe_mid}/{safe_name}"}
+    raise HTTPException(status_code=404, detail="File not found")
 
 
 @app.get("/internal/stats/overlay")

@@ -1491,7 +1491,7 @@ class ChatApp {
             if (message.id) wrapper.dataset.id = message.id;
             if (_uClientMsgId) wrapper.dataset.messageId = _uClientMsgId;
             // Прикреплённые файлы (чипы) — НАД пузырём сообщения, а не внутри него.
-            const filesHtml = this._renderMessageFiles(message.files);
+            const filesHtml = this._renderMessageFiles(message.files, _uClientMsgId);
             if (filesHtml) {
                 const filesWrap = document.createElement('div');
                 filesWrap.innerHTML = filesHtml;
@@ -1869,7 +1869,40 @@ class ChatApp {
         }
     }
 
-    _renderMessageFiles(files) {
+    _applyVideoCardAspect(videoEl) {
+        if (!videoEl) return;
+        const card = videoEl.closest('.fa-video-card');
+        if (!card) return;
+        card.classList.remove('fa-image-card--loading');
+        const vw = videoEl.videoWidth || 0;
+        const vh = videoEl.videoHeight || 0;
+        if (vw > 0 && vh > 0) {
+            const MAX_W = 420;
+            const MAX_H = 420;
+            const MIN_W = 300;
+            const MIN_H = 180;
+            const r = vw / vh;
+            let vidW, vidH;
+            if (r >= MAX_W / MAX_H) {
+                vidW = MAX_W;
+                vidH = Math.round(MAX_W / r);
+            } else {
+                vidH = MAX_H;
+                vidW = Math.round(MAX_H * r);
+            }
+            const boxW = Math.min(MAX_W, Math.max(MIN_W, vidW));
+            const boxH = Math.min(MAX_H, Math.max(MIN_H, vidH));
+            card.style.setProperty('--fa-card-w', boxW + 'px');
+            card.style.setProperty('--fa-card-ar', `${boxW} / ${boxH}`);
+            if (boxW > vidW + 2 || boxH > vidH + 2) {
+                card.classList.add('fa-image-card--glass');
+            } else {
+                card.classList.remove('fa-image-card--glass');
+            }
+        }
+    }
+
+    _renderMessageFiles(files, messageId = '') {
         if (!files || files.length === 0) return '';
 
         const EXT_LABEL = {
@@ -1915,9 +1948,51 @@ class ChatApp {
 </div>`;
         };
 
+        const VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v', 'ogv', 'avi', 'mkv']);
+        const isVideo = (f) => {
+            let ext = (f.ext || '').toLowerCase();
+            if (!ext && f.name && f.name.includes('.')) {
+                ext = f.name.split('.').pop().toLowerCase();
+            }
+            return f.kind === 'video' || VIDEO_EXTS.has(ext);
+        };
+        const videoMime = (ext) => {
+            if (ext === 'webm') return 'video/webm';
+            if (ext === 'mov') return 'video/quicktime';
+            if (ext === 'ogv' || ext === 'ogg') return 'video/ogg';
+            return 'video/mp4';
+        };
+
+        const videoFiles = files.filter(isVideo);
+        const chipFiles  = files.filter(f => !isVideo(f));
+
+        let videosHtml = '';
+        if (videoFiles.length > 0) {
+            videosHtml = '<div class="fa-image-gallery fa-user-videos">' + videoFiles.map(f => {
+                const rawName = f.name || 'video.mp4';
+                const safeName = this.escapeHtml(rawName);
+                const ext = (f.ext || rawName.split('.').pop() || 'mp4').toLowerCase();
+                const url = f.localUrl
+                    ? f.localUrl
+                    : (messageId && this.currentChat
+                        ? `/api/chats/${this.currentChat}/files/${encodeURIComponent(messageId)}/${encodeURIComponent(rawName)}`
+                        : '');
+                if (!url) return makeChip(f);
+                const safeUrl = this.escapeHtml(url);
+                const mime = videoMime(ext);
+                return `<div class="fa-image-card fa-video-card" title="${safeName}">
+  <span class="fa-image-card__bg" aria-hidden="true"></span>
+  <video class="fa-video-card__video" controls preload="metadata" playsinline webkit-playsinline src="${safeUrl}"
+         onloadedmetadata="window.__catchpmApp && window.__catchpmApp._applyVideoCardAspect(this)">
+    <source src="${safeUrl}" type="${mime}">
+  </video>
+</div>`;
+            }).join('') + '</div>';
+        }
+
         const VISIBLE_LIMIT = 3;
-        const visible  = files.slice(0, VISIBLE_LIMIT);
-        const hidden   = files.slice(VISIBLE_LIMIT);
+        const visible  = chipFiles.slice(0, VISIBLE_LIMIT);
+        const hidden   = chipFiles.slice(VISIBLE_LIMIT);
 
         let chipsHtml = visible.map(makeChip).join('');
 
@@ -1935,7 +2010,8 @@ class ChatApp {
         })(this)">+${hidden.length} файл${hidden.length === 1 ? '' : hidden.length < 5 ? 'а' : 'ов'}</button>`;
         }
 
-        return `<div class="fa-message-files">${chipsHtml}${collapseHtml}</div>`;
+        const chipsWrap = (chipsHtml || collapseHtml) ? `<div class="fa-message-files">${chipsHtml}${collapseHtml}</div>` : '';
+        return `<div class="fa-user-media-wrap">${videosHtml}${chipsWrap}</div>`;
     }
     /* ══════════════════════════════════════════
        RENDER BOT FILES (под сообщением агента, над кнопкой копировать)
@@ -2163,19 +2239,82 @@ class ChatApp {
             return card;
         };
 
-        // Разделяем на картинки и обычные файлы.
+        const VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v', 'ogv', 'avi', 'mkv']);
+        const isVideoFile = (f) => {
+            let ext = (f.ext || '').toLowerCase();
+            if (!ext && f.name && f.name.includes('.')) {
+                ext = f.name.split('.').pop().toLowerCase();
+            }
+            return f.kind === 'video' || VIDEO_EXTS.has(ext);
+        };
+        const getVideoMime = (ext) => {
+            if (ext === 'webm') return 'video/webm';
+            if (ext === 'mov') return 'video/quicktime';
+            if (ext === 'ogv' || ext === 'ogg') return 'video/ogg';
+            return 'video/mp4';
+        };
+
+        const makeVideoCard = (f) => {
+            const name = f.name || 'video.mp4';
+            const ext = (f.ext || name.split('.').pop() || 'mp4').toLowerCase();
+            const streamUrl = messageId
+                ? `/api/chats/${this.currentChat}/files/${encodeURIComponent(messageId)}/${encodeURIComponent(name)}`
+                : '#';
+            const dlUrl = streamUrl !== '#' ? `${streamUrl}?download=1` : '#';
+
+            const card = document.createElement('div');
+            card.className = 'fa-image-card fa-video-card';
+            card.title = name;
+
+            const bg = document.createElement('span');
+            bg.className = 'fa-image-card__bg';
+            bg.setAttribute('aria-hidden', 'true');
+
+            const video = document.createElement('video');
+            video.className = 'fa-video-card__video';
+            video.controls = true;
+            video.preload = 'metadata';
+            video.playsInline = true;
+            video.setAttribute('playsinline', '');
+            video.setAttribute('webkit-playsinline', '');
+            video.src = streamUrl;
+
+            const source = document.createElement('source');
+            source.src = streamUrl;
+            source.type = getVideoMime(ext);
+            video.appendChild(source);
+
+            const onMeta = () => this._applyVideoCardAspect(video);
+            if (video.readyState >= 1 && video.videoWidth > 0) {
+                onMeta();
+            } else {
+                video.addEventListener('loadedmetadata', onMeta, { once: true });
+            }
+
+            card.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                this._showFileContextMenu(e, { name, url: dlUrl, chatId: this.currentChat });
+            });
+
+            card.appendChild(bg);
+            card.appendChild(video);
+            return card;
+        };
+
+        // Разделяем на картинки, видео и обычные файлы.
         const imageFiles = files.filter(isImageFile);
-        const otherFiles = files.filter(f => !isImageFile(f));
+        const videoFiles = files.filter(f => !isImageFile(f) && isVideoFile(f));
+        const otherFiles = files.filter(f => !isImageFile(f) && !isVideoFile(f));
 
         const wrap = document.createElement('div');
         wrap.className = 'fa-bot-files';
 
-        if (imageFiles.length) {
-            // Пришли реальные картинки — снимаем скелетон генерации.
-            this._removeImageGenSkeleton();
+        if (imageFiles.length || videoFiles.length) {
+            if (imageFiles.length) this._removeImageGenSkeleton();
             const gallery = document.createElement('div');
             gallery.className = 'fa-image-gallery';
             imageFiles.forEach(f => gallery.appendChild(makeImageCard(f)));
+            videoFiles.forEach(f => gallery.appendChild(makeVideoCard(f)));
             wrap.appendChild(gallery);
         }
 

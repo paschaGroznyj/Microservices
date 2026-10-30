@@ -1498,7 +1498,7 @@ async def get_chat_db_image(chat_id: str, message_id: str, file_name: str, reque
 
 
 @app.get("/api/chats/{chat_id}/files/{message_id}/{file_name}")
-async def download_chat_file(chat_id: str, message_id: str, file_name: str, request: Request):
+async def download_chat_file(chat_id: str, message_id: str, file_name: str, request: Request, download: int = 0):
     user = await get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -1517,29 +1517,48 @@ async def download_chat_file(chat_id: str, message_id: str, file_name: str, requ
 
     path = resolve_resp.json()["path"]
 
-    # 2. Стримим файл с agent_service
+    # 2. Стримим файл с agent_service (с поддержкой HTTP Range 206 для видео)
+    fwd_headers = {}
+    if request.headers.get("range"):
+        fwd_headers["Range"] = request.headers["range"]
     try:
         agent_resp = await app.state.http_client.get(
             f"{SERVICES['agent_service']['url']}/web/file",
-            params={"path": path, "chat_id": chat_id},
+            params={"path": path, "chat_id": chat_id, "download": download},
+            headers=fwd_headers,
         )
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Agent service unreachable: {e}")
 
-    if agent_resp.status_code != 200:
+    if agent_resp.status_code == 416:
+        out_hdrs = {}
+        if agent_resp.headers.get("content-range"):
+            out_hdrs["Content-Range"] = agent_resp.headers["content-range"]
+        return Response(content=b"", status_code=416, headers=out_hdrs)
+
+    if agent_resp.status_code not in (200, 206):
         raise HTTPException(status_code=agent_resp.status_code, detail="Failed to fetch file")
+
+    out_headers = {
+        "Content-Disposition": agent_resp.headers.get(
+            "content-disposition",
+            "attachment; "
+            f'filename="{file_name.encode("ascii", "replace").decode("ascii")}"; '
+            f"filename*=UTF-8''{quote(file_name, safe='')}",
+        ),
+        "Accept-Ranges": agent_resp.headers.get("accept-ranges", "bytes"),
+        "Cache-Control": agent_resp.headers.get("cache-control", "public, max-age=3600"),
+    }
+    if agent_resp.headers.get("content-range"):
+        out_headers["Content-Range"] = agent_resp.headers["content-range"]
+    if agent_resp.headers.get("content-length"):
+        out_headers["Content-Length"] = agent_resp.headers["content-length"]
 
     return Response(
         content=agent_resp.content,
+        status_code=agent_resp.status_code,
         media_type=agent_resp.headers.get("content-type", "application/octet-stream"),
-        headers={
-            "Content-Disposition": agent_resp.headers.get(
-                "content-disposition",
-                "attachment; "
-                f'filename="{file_name.encode("ascii", "replace").decode("ascii")}"; '
-                f"filename*=UTF-8''{quote(file_name, safe='')}",
-            )
-        },
+        headers=out_headers,
     )
 
 @app.post("/api/chats/{chat_id}/delete")
@@ -2081,22 +2100,40 @@ async def group_pinned(room_uid: str, request: Request):
 
 @app.get("/api/group/file/{file_id}")
 async def group_file(file_id: int, request: Request, download: int = 0):
-    """Sigma: только скачивание/отдача файла из chats_service (OBS).
+    """Sigma: только скачивание/потоковая отдача (HTTP Range 206) файла из chats_service (OBS).
     Загрузка через интерфейс не поддерживается (нет upload-эндпоинта)."""
     user = await get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    fwd_headers = {}
+    if request.headers.get("range"):
+        fwd_headers["Range"] = request.headers["range"]
     resp = await app.state.http_client.get(
         f"{SERVICES['chats']['url']}/group/file/{file_id}",
         params={"download": download},
+        headers=fwd_headers,
     )
+    if resp.status_code == 416:
+        out_hdrs = {}
+        if resp.headers.get("content-range"):
+            out_hdrs["Content-Range"] = resp.headers["content-range"]
+        return StreamingResponse(iter([b""]), status_code=416, headers=out_hdrs)
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail="файл не найден")
+    out_headers = {
+        "Content-Disposition": resp.headers.get("content-disposition", "inline"),
+        "Accept-Ranges": resp.headers.get("accept-ranges", "bytes"),
+        "Cache-Control": resp.headers.get("cache-control", "public, max-age=3600"),
+    }
+    if resp.headers.get("content-range"):
+        out_headers["Content-Range"] = resp.headers["content-range"]
+    if resp.headers.get("content-length"):
+        out_headers["Content-Length"] = resp.headers["content-length"]
     return StreamingResponse(
         iter([resp.content]),
+        status_code=resp.status_code,
         media_type=resp.headers.get("content-type", "application/octet-stream"),
-        headers={"Content-Disposition":
-                 resp.headers.get("content-disposition", "inline")},
+        headers=out_headers,
     )
 
 

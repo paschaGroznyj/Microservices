@@ -57,11 +57,18 @@ const FileAttach = (() => {
         return EXT_COLOR[ext] || 'gray';
     }
 
+    const VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v', 'ogv', 'avi', 'mkv']);
+
     function getFilesMeta() {
-        return _files.map(f => ({
-            name: f.name,
-            ext: _getExt(f.name),
-        }));
+        return _files.map(f => {
+            const ext = _getExt(f.name);
+            const isVid = (f.type || '').startsWith('video/') || VIDEO_EXTS.has(ext);
+            return {
+                name: f.name,
+                ext,
+                ...(isVid ? { localUrl: URL.createObjectURL(f) } : {}),
+            };
+        });
     }
 
     /* ─── создать скрытый input[file] ───────────────────────── */

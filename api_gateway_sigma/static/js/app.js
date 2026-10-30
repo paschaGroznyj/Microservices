@@ -2074,14 +2074,51 @@ class ChatApp {
             card.className = 'fa-image-card';
             card.title = name;
 
+            const bg = document.createElement('span');
+            bg.className = 'fa-image-card__bg';
+            bg.setAttribute('aria-hidden', 'true');
+            if (url && url !== '#') {
+                bg.style.backgroundImage = `url("${url.replace(/"/g, '\"')}")`;
+            }
+
             const img = document.createElement('img');
             img.className = 'fa-image-card__img';
             img.alt = safeName;
             img.loading = 'lazy';
             img.src = url;
-            // Пока грузится src — держим скелетон; снимаем по load/error.
             card.classList.add('fa-image-card--loading');
-            img.addEventListener('load', () => card.classList.remove('fa-image-card--loading'));
+            const applyCardAspect = () => {
+                card.classList.remove('fa-image-card--loading');
+                if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+                    const MAX_W = 420;
+                    const MAX_H = 420;
+                    const MIN_W = 300;
+                    const MIN_H = 110;
+                    const r = img.naturalWidth / img.naturalHeight;
+                    let imgW, imgH;
+                    if (r >= MAX_W / MAX_H) {
+                        imgW = MAX_W;
+                        imgH = Math.round(MAX_W / r);
+                    } else {
+                        imgH = MAX_H;
+                        imgW = Math.round(MAX_H * r);
+                    }
+                    const boxW = Math.min(MAX_W, Math.max(MIN_W, imgW));
+                    const boxH = Math.min(MAX_H, Math.max(MIN_H, imgH));
+                    card.style.setProperty('--fa-card-w', boxW + 'px');
+                    card.style.setProperty('--fa-card-ar', `${boxW} / ${boxH}`);
+                    if (boxW > imgW + 2 || boxH > imgH + 2) {
+                        card.classList.add('fa-image-card--glass');
+                    } else {
+                        card.classList.remove('fa-image-card--glass');
+                    }
+                }
+            };
+            if (img.complete && img.naturalWidth > 0) {
+                applyCardAspect();
+            } else {
+                img.addEventListener('load', applyCardAspect, { once: true });
+            }
             img.addEventListener('error', () => {
                 card.classList.remove('fa-image-card--loading');
                 card.classList.add('fa-image-card--error');
@@ -2101,6 +2138,7 @@ class ChatApp {
             skel.className = 'fa-image-card__skeleton';
             skel.innerHTML = '<div class="fa-pixel-grid"></div>';
 
+            card.appendChild(bg);
             card.appendChild(skel);
             card.appendChild(img);
             card.appendChild(overlay);

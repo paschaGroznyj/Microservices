@@ -52,7 +52,7 @@
         if (!res.ok) return;
         const data = await res.json();
         this.pinned = (data.pinned || []).slice().sort((a, b) => (a.id || 0) - (b.id || 0));
-        if (this.pinnedCursor >= this.pinned.length) this.pinnedCursor = 0;
+        this.pinnedCursor = Math.max(0, this.pinned.length - 1);
         this._renderPinned();
       } catch (e) { console.warn('[group] pinned error', e); }
     },
@@ -552,7 +552,7 @@
         if (gcBox) gcBox.classList.remove('gc-has-pinned');
         return;
       }
-      if (this.pinnedCursor >= this.pinned.length) this.pinnedCursor = 0;
+      if (this.pinnedCursor < 0 || this.pinnedCursor >= this.pinned.length) this.pinnedCursor = Math.max(0, this.pinned.length - 1);
       const m = this.pinned[this.pinnedCursor];
       const canAdmin = this.isAdmin;
       const idx = this.pinnedCursor + 1;
@@ -595,7 +595,7 @@
         const m = this.pinned[this.pinnedCursor];
         if (m) this._scrollToMessage(m.id);
         if (this.pinned.length > 1) {
-          this.pinnedCursor = (this.pinnedCursor + 1) % this.pinned.length;
+          this.pinnedCursor = (this.pinnedCursor - 1 + this.pinned.length) % this.pinned.length;
           this._renderPinned();
         }
       });

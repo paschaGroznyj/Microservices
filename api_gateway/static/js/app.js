@@ -5153,8 +5153,13 @@ class ChatApp {
         this._closeSlashCommandMenu();
         if (field) {
             this.clearInput(field);
-            this._clearInputDraft(null);
-            this._clearInputDraft(this.currentChat);
+            if (typeof this._clearInputDraft === 'function') {
+                this._clearInputDraft(null);
+                this._clearInputDraft(this.currentChat);
+            } else if (this._inputDrafts) {
+                delete this._inputDrafts[this._inputDraftKey(this.currentChat)];
+                delete this._inputDrafts['__start__'];
+            }
         }
         if (sendBtn && this._runState === 'idle') {
             sendBtn.classList.remove('active');
@@ -5230,6 +5235,9 @@ class ChatApp {
         const closeSvg = `<svg viewBox="0 0 20 20" fill="none" width="15" height="15"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>`;
         const wsSvg = `<svg viewBox="0 0 20 20" fill="none" width="15" height="15"><rect x="2.75" y="3.5" width="14.5" height="13" rx="2.5" stroke="currentColor" stroke-width="1.6"/><path d="M7.5 3.5V16.5M2.75 8H7.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
         const extSvg = `<svg viewBox="0 0 20 20" fill="none" width="14" height="14"><path d="M6 14L14 6M8 6h6v6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+        const checkSvg = `<svg viewBox="0 0 14 14" fill="none" width="11" height="11"><path d="M2.5 7.2L5.6 10.3L11.5 3.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+        const initialOnlyCurrent = Boolean(this._slashWsOnlyCurrentChat);
 
         card.innerHTML = `
             <div class="slash-card-header">
@@ -5237,11 +5245,19 @@ class ChatApp {
                     <span class="slash-card-badge">/workspaces</span>
                     <span class="slash-card-value is-muted">Загрузка областей…</span>
                 </div>
-                <button type="button" class="slash-card-close-btn" title="Закрыть" aria-label="Закрыть">${closeSvg}</button>
+                <div class="slash-card-actions">
+                    <label class="slash-ws-filter" title="Показать воркспейсы только для текущего чата">
+                        <input type="checkbox" class="slash-ws-filter-cb" ${initialOnlyCurrent ? 'checked' : ''}>
+                        <span class="slash-ws-filter-box" aria-hidden="true">${checkSvg}</span>
+                        <span class="slash-ws-filter-label">Текущий чат</span>
+                    </label>
+                    <button type="button" class="slash-card-close-btn" title="Закрыть" aria-label="Закрыть">${closeSvg}</button>
+                </div>
             </div>
             <div class="slash-ws-list"></div>`;
 
         card.querySelector('.slash-card-close-btn')?.addEventListener('click', () => card.remove());
+        const filterCb = card.querySelector('.slash-ws-filter-cb');
 
         let workspaces = [];
         try {
@@ -5257,30 +5273,68 @@ class ChatApp {
         const listEl   = card.querySelector('.slash-ws-list');
         if (!listEl) return;
 
-        if (!workspaces.length) {
-            if (statusEl) statusEl.textContent = 'Нет активных областей редактора';
-            listEl.remove();
-            return;
-        }
+        const renderList = () => {
+            const onlyCurrent = Boolean(filterCb?.checked);
+            this._slashWsOnlyCurrentChat = onlyCurrent;
+            const curChatId = this.currentChat !== null && this.currentChat !== undefined
+                ? String(this.currentChat).trim()
+                : '';
 
-        if (statusEl) statusEl.textContent = `Области редактора (${workspaces.length})`;
-        listEl.innerHTML = workspaces.map(w => {
-            const wsId = String(w.workspace_id || '');
-            const title = String(w.title || wsId);
-            const targetChat = w.chat_id || this.currentChat || '';
-            const href = `/editor?workspace_id=${encodeURIComponent(wsId)}${targetChat ? `&chat_id=${encodeURIComponent(targetChat)}` : ''}`;
-            return `
-                <a class="slash-ws-item" href="${this.escapeHtml(href)}" target="_blank" rel="noopener noreferrer">
-                    <div class="slash-ws-main">
-                        <span class="slash-ws-icon">${wsSvg}</span>
-                        <span class="slash-ws-title">${this.escapeHtml(title)}</span>
-                    </div>
-                    <div class="slash-ws-meta">
-                        <span class="slash-ws-id">${this.escapeHtml(wsId)}</span>
-                        <span class="slash-ws-ext" aria-hidden="true">${extSvg}</span>
-                    </div>
-                </a>`;
-        }).join('');
+            if (!workspaces.length) {
+                if (statusEl) {
+                    statusEl.textContent = 'Нет активных областей редактора';
+                    statusEl.classList.add('is-muted');
+                }
+                listEl.innerHTML = '';
+                listEl.style.display = 'none';
+                return;
+            }
+
+            const filtered = onlyCurrent
+                ? workspaces.filter(w => curChatId && String(w.chat_id ?? '').trim() === curChatId)
+                : workspaces;
+
+            if (statusEl) {
+                statusEl.classList.remove('is-muted');
+                statusEl.textContent = onlyCurrent
+                    ? `Области текущего чата (${filtered.length} из ${workspaces.length})`
+                    : `Области редактора (${workspaces.length})`;
+            }
+
+            listEl.style.display = '';
+            if (!filtered.length) {
+                listEl.innerHTML = `<div class="slash-ws-empty">${
+                    curChatId
+                        ? 'В текущем чате нет привязанных областей редактора'
+                        : 'Откройте чат, чтобы отфильтровать области по текущему чату'
+                }</div>`;
+                return;
+            }
+
+            listEl.innerHTML = filtered.map(w => {
+                const wsId = String(w.workspace_id || '');
+                const title = String(w.title || wsId);
+                const wsChatId = w.chat_id !== null && w.chat_id !== undefined ? String(w.chat_id).trim() : '';
+                const isCurrentChatWs = Boolean(curChatId && wsChatId && wsChatId === curChatId);
+                const targetChat = wsChatId || curChatId || '';
+                const href = `/editor?workspace_id=${encodeURIComponent(wsId)}${targetChat ? `&chat_id=${encodeURIComponent(targetChat)}` : ''}`;
+                return `
+                    <a class="slash-ws-item${isCurrentChatWs ? ' is-current-chat' : ''}" href="${this.escapeHtml(href)}" target="_blank" rel="noopener noreferrer">
+                        <div class="slash-ws-main">
+                            <span class="slash-ws-icon">${wsSvg}</span>
+                            <span class="slash-ws-title">${this.escapeHtml(title)}</span>
+                            ${isCurrentChatWs ? '<span class="slash-ws-chat-pill">этот чат</span>' : ''}
+                        </div>
+                        <div class="slash-ws-meta">
+                            <span class="slash-ws-id">${this.escapeHtml(wsId)}</span>
+                            <span class="slash-ws-ext" aria-hidden="true">${extSvg}</span>
+                        </div>
+                    </a>`;
+            }).join('');
+        };
+
+        filterCb?.addEventListener('change', renderList);
+        renderList();
     }
 
     attachInputHandlers() {

@@ -2543,6 +2543,90 @@ pre {
   color: var(--text-secondary);
 }
 
+/* ── Фильтр «Текущий чат» (галочка в /workspaces) ── */
+.slash-ws-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px 4px 7px;
+  border-radius: 9px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: rgba(255, 255, 255, 0.45);
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+[data-theme="dark"] .slash-ws-filter {
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.slash-ws-filter:hover {
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .slash-ws-filter:hover {
+  background: rgba(255, 255, 255, 0.10);
+  color: var(--text-primary);
+}
+
+.slash-ws-filter-cb {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.slash-ws-filter-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 4.5px;
+  border: 1.5px solid rgba(15, 23, 42, 0.28);
+  background: rgba(255, 255, 255, 0.55);
+  color: transparent;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  flex-shrink: 0;
+}
+
+[data-theme="dark"] .slash-ws-filter-box {
+  border-color: rgba(255, 255, 255, 0.26);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.slash-ws-filter-cb:checked + .slash-ws-filter-box {
+  background: var(--accent, #d97757);
+  border-color: var(--accent, #d97757);
+  color: #ffffff;
+}
+
+.slash-ws-filter:has(.slash-ws-filter-cb:checked) {
+  color: var(--text-primary);
+  border-color: rgba(217, 119, 87, 0.42);
+}
+
+.slash-ws-chat-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--accent, #d97757);
+  background: rgba(217, 119, 87, 0.13);
+  border: 1px solid rgba(217, 119, 87, 0.26);
+  flex-shrink: 0;
+}
+
+
 @media (max-width: 768px) {
   .slash-cmd-card {
     border-radius: 14px;

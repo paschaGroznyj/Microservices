@@ -9,6 +9,7 @@
   const overlay = document.getElementById('presence-overlay');
   const nowEl   = document.getElementById('presence-overlay-now');
   const subEl   = document.getElementById('presence-overlay-sub');
+  const liveEl  = document.getElementById('presence-overlay-live');
   const topEl   = document.getElementById('presence-top');
   const wrap    = document.getElementById('presence-wrap');
   if (!btn || !countEl) return;
@@ -27,6 +28,11 @@
       const n = Number(d.online || 0);
       countEl.textContent = n;
       btn.classList.toggle('is-empty', n === 0);
+      if (liveEl && d.active_requests !== undefined) {
+        const ar = Math.max(0, Number(d.active_requests || 0));
+        liveEl.textContent = ar;
+        liveEl.classList.toggle('is-busy', ar > 0);
+      }
     } catch (e) { /* presence — не критичный путь */ }
   }
 
@@ -39,6 +45,11 @@
       if (nowEl) nowEl.textContent = Number(d.online || 0);
       if (subEl) subEl.textContent =
         `main ${by.main || 0} · sigma ${by.sigma || 0} · пик за сутки ${d.peak_today || 0}`;
+      if (liveEl) {
+        const ar = Math.max(0, Number(d.active_requests || 0));
+        liveEl.textContent = ar;
+        liveEl.classList.toggle('is-busy', ar > 0);
+      }
       const top = Array.isArray(d.top_users) ? d.top_users : [];
       if (topEl) {
         topEl.innerHTML = top.length

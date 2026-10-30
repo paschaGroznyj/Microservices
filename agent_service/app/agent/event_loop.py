@@ -434,11 +434,22 @@ def _build_final(aggregate, calls: dict) -> AIMessage:
     )
 
 
-_THINKING_OPEN   = re.compile(r"<thinking\s*>",   re.IGNORECASE)
-_THINKING_CLOSE  = re.compile(r"</thinking\s*>",  re.IGNORECASE)
-_REASONING_OPEN  = re.compile(r"<reasoning\s*>",  re.IGNORECASE)
-_REASONING_CLOSE = re.compile(r"</reasoning\s*>", re.IGNORECASE)
+_THINKING_OPEN   = re.compile(r"^\s*<thinking\s*>",   re.IGNORECASE)
+_THINKING_CLOSE  = re.compile(r"(?<!`)</thinking\s*>(?!`)",  re.IGNORECASE)
+_REASONING_OPEN  = re.compile(r"^\s*<reasoning\s*>",  re.IGNORECASE)
+_REASONING_CLOSE = re.compile(r"(?<!`)</reasoning\s*>(?!`)", re.IGNORECASE)
+_REASONING_STOP  = re.compile(r"(?<!`)<reasoning\s*>(?!`)",  re.IGNORECASE)
 _STRAY_TAGS_RE   = re.compile(r"</?(?:thinking|reasoning)\s*>", re.IGNORECASE)
+_CODE_SPAN_RE    = re.compile(r"(```[\s\S]*?```|`[^`\n]+`)")
+
+
+def _strip_stray_tags_outside_code(text: str) -> str:
+    if not text:
+        return ""
+    parts = _CODE_SPAN_RE.split(text)
+    for i in range(0, len(parts), 2):
+        parts[i] = _STRAY_TAGS_RE.sub("", parts[i])
+    return "".join(parts).strip()
 
 
 def _pop_block(
@@ -447,7 +458,7 @@ def _pop_block(
     close_re: re.Pattern,
     stop_before_re: re.Pattern | None = None,
 ) -> tuple[str, str]:
-    """Извлекает первый открывающий … ПОСЛЕДНИЙ закрывающий тег (до границы следующего блока)."""
+    """Извлекает ведущий открывающий … ПОСЛЕДНИЙ закрывающий тег (до границы следующего блока)."""
     m_open = open_re.search(text)
     if not m_open:
         return "", text
@@ -492,12 +503,12 @@ def _extract_thinking_and_clean_content(raw_content) -> tuple[str, str, str]:
         text = str(raw_content or "")
 
     thinking_text, text = _pop_block(
-        text, _THINKING_OPEN, _THINKING_CLOSE, stop_before_re=_REASONING_OPEN
+        text, _THINKING_OPEN, _THINKING_CLOSE, stop_before_re=_REASONING_STOP
     )
     reasoning_text, text = _pop_block(text, _REASONING_OPEN, _REASONING_CLOSE)
 
-    thinking_text = _STRAY_TAGS_RE.sub("", thinking_text).strip()
-    cleaned = _STRAY_TAGS_RE.sub("", text).strip()
+    thinking_text = _strip_stray_tags_outside_code(thinking_text)
+    cleaned = _strip_stray_tags_outside_code(text)
 
     return thinking_text, reasoning_text, cleaned
 

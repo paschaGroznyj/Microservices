@@ -3233,24 +3233,16 @@ class ChatApp {
         return rem > 0 ? `${m} мин. ${rem} сек.` : `${m} мин.`;
     }
 
-    _activeUsersBadgeHTML(count) {
-        const n = Math.max(1, Number(count ?? this._activeRequestsCount) || 1);
-        return `<span class="reasoning-active-users" data-reasoning-active-users="" title="Активных запросов к агенту"><svg class="reasoning-users-icon" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.5 13.5v-1a2.5 2.5 0 0 0-2.5-2.5H4a2.5 2.5 0 0 0-2.5 2.5v1"/><circle cx="6" cy="5" r="2.5"/><path d="M14.5 13.5v-1a2.5 2.5 0 0 0-1.9-2.42"/><path d="M10.5 2.58a2.5 2.5 0 0 1 0 4.84"/></svg><span class="reasoning-active-count">${n}</span></span>`;
-    }
-
     _updateActiveRequestsUI(chatId, count) {
         if (count === undefined || count === null) return;
         const n = Math.max(0, Number(count) || 0);
         this._activeRequestsCount = n;
         const st = this._resolveStream(chatId);
         if (st) st.activeRequestsCount = n;
-        const isRunningNow = st && !st.streamDone && !st.streamIsFinal;
-        const displayNum = Math.max(isRunningNow ? 1 : 0, n);
-        const root = st?.pendingBotEl || st?.reasoningWrapEl || this.getMessagesContainer();
-        if (root) {
-            root.querySelectorAll('[data-reasoning-active-users] .reasoning-active-count').forEach(el => {
-                el.textContent = String(displayNum || 1);
-            });
+        const liveEl = document.getElementById('presence-overlay-live');
+        if (liveEl) {
+            liveEl.textContent = String(n);
+            liveEl.classList.toggle('is-busy', n > 0);
         }
     }
 
@@ -3541,7 +3533,6 @@ class ChatApp {
                     <div class="reasoning-header" data-cds-row="">
                         <span class="reasoning-label">Размышления</span>
                         <span class="reasoning-timer" data-reasoning-duration="">${this._formatReasoningDuration(durSec)}</span>
-                        ${this._activeUsersBadgeHTML(st?.activeRequestsCount ?? this._activeRequestsCount ?? 1)}
                         ${this._reasoningCaretSVG()}
                     </div>
                     <div class="reasoning-body" data-cds-row-panel=""></div>
@@ -3592,7 +3583,6 @@ class ChatApp {
             <div class="reasoning-header" data-cds-row="">
                 <span class="reasoning-label">Размышления</span>
                 <span class="reasoning-timer" data-reasoning-duration="">${this._formatReasoningDuration(st.reasoningDurationSec || 1)}</span>
-                ${this._activeUsersBadgeHTML(st.activeRequestsCount ?? this._activeRequestsCount ?? 1)}
                 ${this._reasoningCaretSVG()}
             </div>
             <div class="reasoning-body" data-cds-row-panel=""></div>

@@ -557,10 +557,11 @@ async def gateway_health():
 # ────────────────────────────────────────────────────────
 @app.get("/api/presence/count")
 async def presence_count():
-    """Лёгкий публичный счётчик онлайн (суммарно main+sigma). Redis-only."""
+    """Лёгкий публичный счётчик онлайн (суммарно main+sigma) + живые запросы к агенту. Redis-only."""
     m = await presence.count_online("main")
     sg = await presence.count_online("sigma")
-    return {"online": m + sg, "main": m, "sigma": sg}
+    active_req = await run_status.count_active_requests()
+    return {"online": m + sg, "main": m, "sigma": sg, "active_requests": active_req}
 
 
 @app.get("/api/presence/overlay")
@@ -593,6 +594,7 @@ async def presence_overlay(request: Request):
     except Exception as e:
         logging.error(f"presence_overlay: chats_service stats failed: {e}")
 
+    active_req = await run_status.count_active_requests()
     return {
         "online": m + sg,
         "by_gateway": {"main": m, "sigma": sg},
@@ -600,6 +602,7 @@ async def presence_overlay(request: Request):
         "online_usernames": online_names,
         "top_users": top_users,
         "messages_today": messages_today,
+        "active_requests": active_req,
     }
 
 

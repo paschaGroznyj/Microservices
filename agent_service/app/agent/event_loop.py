@@ -434,13 +434,56 @@ def _build_final(aggregate, calls: dict) -> AIMessage:
     )
 
 
-_THINKING_OPEN   = re.compile(r"^\s*<thinking\s*>",   re.IGNORECASE)
-_THINKING_CLOSE  = re.compile(r"(?<!`)</thinking\s*>(?!`)",  re.IGNORECASE)
-_REASONING_OPEN  = re.compile(r"^\s*<reasoning\s*>",  re.IGNORECASE)
-_REASONING_CLOSE = re.compile(r"(?<!`)</reasoning\s*>(?!`)", re.IGNORECASE)
-_REASONING_STOP  = re.compile(r"(?<!`)<reasoning\s*>(?!`)",  re.IGNORECASE)
-_STRAY_TAGS_RE   = re.compile(r"</?(?:thinking|reasoning)\s*>", re.IGNORECASE)
+_THINKING_OPEN   = re.compile(r"^\s*<thinking\s*>",              re.IGNORECASE)
+_THINKING_CLOSE  = re.compile(r"(?<!`)</thinking\s*>(?!`)",      re.IGNORECASE)
+_REASONING_OPEN  = re.compile(r"^\s*<reasoning\s*>",             re.IGNORECASE)
+_REASONING_CLOSE = re.compile(r"(?<!`)</reasoning\s*>(?!`)",     re.IGNORECASE)
+_REASONING_STOP  = re.compile(r"(?<!`)<reasoning\s*>(?!`)",      re.IGNORECASE)
+_STRAY_TAGS_RE   = re.compile(r"</?(?:thinking|reasoning)\s*>",  re.IGNORECASE)
 _CODE_SPAN_RE    = re.compile(r"(```[\s\S]*?```|`[^`\n]+`)")
+
+_ESCAPED_TAG_BRACKETS_RE = re.compile(
+    r"\\<(/?(?:thinking|reasoning)\s*)\\>",
+    re.IGNORECASE,
+)
+_FENCED_TAGS_ENVELOPE_RE = re.compile(
+    r"^\s*```(?:xml|html|markdown|md|text)?\s*(<(?:thinking|reasoning)\s*>[\s\S]*?</(?:thinking|reasoning)\s*>)\s*```",
+    re.IGNORECASE,
+)
+_WHOLE_BACKTICK_ENVELOPE_RE = re.compile(
+    r"^\s*`+\s*(<(?:thinking|reasoning)\s*>[\s\S]*?</(?:thinking|reasoning)\s*>)\s*`+\s*$",
+    re.IGNORECASE,
+)
+_LEADING_THINKING_BACKTICK_RE = re.compile(
+    r"^\s*`+\s*(<thinking\s*>[\s\S]*?</thinking\s*>)\s*`+",
+    re.IGNORECASE,
+)
+_FOLLOWING_REASONING_BACKTICK_RE = re.compile(
+    r"(</thinking\s*>\s*)`+\s*(<reasoning\s*>[\s\S]*?</reasoning\s*>)\s*`+",
+    re.IGNORECASE,
+)
+_LEADING_REASONING_BACKTICK_RE = re.compile(
+    r"^\s*`+\s*(<reasoning\s*>[\s\S]*?</reasoning\s*>)\s*`+",
+    re.IGNORECASE,
+)
+_TAG_ONLY_BACKTICKS_RE = re.compile(
+    r"`\s*(</?(?:thinking|reasoning)\s*>)\s*`",
+    re.IGNORECASE,
+)
+
+
+def _unwrap_escaped_tags(text: str) -> str:
+    if not text:
+        return ""
+    text = _ESCAPED_TAG_BRACKETS_RE.sub(r"<\1>", text)
+    text = _FENCED_TAGS_ENVELOPE_RE.sub(r"\1", text)
+    if re.match(r"^\s*`+\s*<(?:thinking|reasoning)\s*>\s*`+", text, re.IGNORECASE):
+        text = _TAG_ONLY_BACKTICKS_RE.sub(r"\1", text)
+    text = _LEADING_THINKING_BACKTICK_RE.sub(r"\1", text)
+    text = _FOLLOWING_REASONING_BACKTICK_RE.sub(r"\1\2", text)
+    text = _LEADING_REASONING_BACKTICK_RE.sub(r"\1", text)
+    text = _WHOLE_BACKTICK_ENVELOPE_RE.sub(r"\1", text)
+    return text
 
 
 def _strip_stray_tags_outside_code(text: str) -> str:
@@ -501,6 +544,8 @@ def _extract_thinking_and_clean_content(raw_content) -> tuple[str, str, str]:
         text = "".join(parts)
     else:
         text = str(raw_content or "")
+
+    text = _unwrap_escaped_tags(text)
 
     thinking_text, text = _pop_block(
         text, _THINKING_OPEN, _THINKING_CLOSE, stop_before_re=_REASONING_STOP

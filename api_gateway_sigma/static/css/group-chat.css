@@ -64,8 +64,7 @@
    чтобы верхнее сообщение не уезжало под неё (plashka top:64px + ~высота) */
 .gc-messages.gc-has-pinned {
   padding-top: 150px !important;
-  scroll-padding-top: 150px;
-}
+  }
 
 /* Строка сообщения: ограничена по центру как user-message-wrapper */
 .gc-row {
@@ -283,11 +282,19 @@
 
 /* Подсветка сообщения при переходе из закрепа */
 .gc-msg--flash {
-  animation: gcFlash 1.4s ease;
+  animation: gcFlash 1.8s cubic-bezier(0.22, 1, 0.36, 1);
 }
 @keyframes gcFlash {
-  0%   { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 55%, transparent); }
-  100% { box-shadow: 0 0 0 3px transparent; }
+  0%, 38% {
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--accent) 75%, transparent),
+      0 0 20px color-mix(in srgb, var(--accent) 38%, transparent);
+  }
+  100% {
+    box-shadow:
+      0 0 0 3px transparent,
+      0 0 0 transparent;
+  }
 }
 
 /* Коллапс длинного текста в облачке общего чата (как user-message) */

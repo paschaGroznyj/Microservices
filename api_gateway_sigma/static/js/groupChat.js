@@ -195,7 +195,7 @@
             navEl.classList.remove('gc-nav-notify');
             this._stopNavGraph();
           }
-        }, 450);
+        }, 1000);
       }, durationMs);
     },
 
@@ -227,7 +227,7 @@
           edgeEl.classList.remove('gc-edge-active');
           window.ChatAnimations?.stopMobileEdgeGraph?.();
         }
-      }, 350);
+      }, 1400);
     },
 
     _triggerNavNotification() {
@@ -308,6 +308,7 @@
         this.pinned = (data.pinned || []).slice().sort((a, b) => (a.id || 0) - (b.id || 0));
         this.pinnedCursor = Math.max(0, this.pinned.length - 1);
         this._pinnedTouchedAfterJump = true;
+        this._hasEverJumpedPin = false;
         this._renderPinned();
       } catch (e) { console.warn('[group] pinned error', e); }
     },
@@ -523,6 +524,7 @@
       this._initCollapsibles(box);
       if (nearBottom) box.scrollTop = box.scrollHeight;
       else box.scrollTop = prevTop;
+      this._syncScrollArrow(box);
     },
 
     _msgHtml(m) {
@@ -915,23 +917,140 @@
         </div>`;
     },
 
+    _ensureScrollArrowBtn() {
+      const inputArea = document.querySelector('#view-group .gc-input-area');
+      if (!inputArea) return null;
+      let btn = inputArea.querySelector('#gc-scroll-to-bottom-btn');
+      if (!btn) {
+        btn = document.createElement('button');
+        btn.id = 'gc-scroll-to-bottom-btn';
+        btn.type = 'button';
+        btn.className = 'chat-send-btn active scroll-to-bottom';
+        btn.setAttribute('aria-label', 'Прокрутить вниз');
+        btn.innerHTML = `
+          <svg viewBox="0 0 24 24" fill="none">
+            <path d="M12 5v14M18 13l-6 6-6-6"
+                  stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>`;
+        btn.addEventListener('click', () => {
+          const box = document.getElementById('gc-messages');
+          if (box) {
+            box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' });
+          }
+          btn.classList.remove('visible');
+        });
+        inputArea.insertBefore(btn, inputArea.firstChild);
+      }
+      return btn;
+    },
+
+    _syncScrollArrow(box) {
+      box = box || document.getElementById('gc-messages');
+      const btn = this._ensureScrollArrowBtn();
+      if (!btn) return;
+      if (!box) {
+        btn.classList.remove('visible');
+        return;
+      }
+      const distFromBottom = box.scrollHeight - box.scrollTop - box.clientHeight;
+      if (distFromBottom > 500) {
+        btn.classList.add('visible');
+      } else {
+        btn.classList.remove('visible');
+      }
+    },
+
+    _computePinTargetTop(box, row) {
+      const boxRect = box.getBoundingClientRect();
+      const rowRect = row.getBoundingClientRect();
+      const pinBar = document.getElementById('gc-pinned');
+      const topInset = (pinBar && !pinBar.hidden)
+        ? Math.max(84, (pinBar.getBoundingClientRect().bottom - boxRect.top) + 12)
+        : 24;
+      const availH = Math.max(100, box.clientHeight - topInset);
+      const rowTopInScroll = (rowRect.top - boxRect.top) + box.scrollTop;
+      const desired = rowTopInScroll - topInset - Math.max(0, (availH - rowRect.height) / 2);
+      const maxScroll = Math.max(0, box.scrollHeight - box.clientHeight);
+      return Math.max(0, Math.min(maxScroll, Math.round(desired)));
+    },
+
+    _syncPinnedByScroll(box) {
+      box = box || document.getElementById('gc-messages');
+      if (!box || !this.pinned || this.pinned.length <= 1) return;
+      const distFromBottom = box.scrollHeight - box.scrollTop - box.clientHeight;
+      if (distFromBottom < 36) {
+        const lastIdx = this.pinned.length - 1;
+        if (this.pinnedCursor !== lastIdx) {
+          this.pinnedCursor = lastIdx;
+          this._renderPinned();
+        }
+        return;
+      }
+      const boxRect = box.getBoundingClientRect();
+      const pinBar = document.getElementById('gc-pinned');
+      const topInset = (pinBar && !pinBar.hidden)
+        ? Math.max(84, (pinBar.getBoundingClientRect().bottom - boxRect.top) + 12)
+        : 24;
+      const availH = Math.max(100, box.clientHeight - topInset);
+      const probeY = box.scrollTop + topInset + availH * 0.56;
+
+      let matchedIdx = 0;
+      for (let i = 0; i < this.pinned.length; i++) {
+        const p = this.pinned[i];
+        const row = box.querySelector(`.gc-row[data-id="${p.id}"]`);
+        if (!row) continue;
+        const rowTop = (row.getBoundingClientRect().top - boxRect.top) + box.scrollTop;
+        if (rowTop <= probeY) {
+          matchedIdx = i;
+        }
+      }
+      if (matchedIdx !== this.pinnedCursor) {
+        this.pinnedCursor = matchedIdx;
+        this._renderPinned();
+      }
+    },
+
+    _cancelPinScrollAnim() {
+      if (this._pinScrollRaf) {
+        cancelAnimationFrame(this._pinScrollRaf);
+        this._pinScrollRaf = null;
+      }
+      clearTimeout(this._programmaticPinScrollTimer);
+      this._programmaticPinScroll = false;
+    },
+
     _bindPinnedBar() {
       this._pinnedTouchedAfterJump = true;
+      this._hasEverJumpedPin = false;
+      this._lastPinJumpTarget = null;
       const box = document.getElementById('gc-messages');
       if (box && !box._gcPinScrollBound) {
         box._gcPinScrollBound = true;
-        const markTouched = () => {
-          if (!this._programmaticPinScroll) {
-            this._pinnedTouchedAfterJump = true;
+        const onUserInteract = () => {
+          if (this._programmaticPinScroll) {
+            this._cancelPinScrollAnim();
           }
+          this._userScrollActive = true;
         };
-        box.addEventListener('wheel', () => { this._pinnedTouchedAfterJump = true; }, { passive: true });
-        box.addEventListener('touchmove', () => { this._pinnedTouchedAfterJump = true; }, { passive: true });
-        box.addEventListener('pointerdown', () => { this._pinnedTouchedAfterJump = true; }, { passive: true });
-        box.addEventListener('scroll', markTouched, { passive: true });
+        const onScroll = () => {
+          this._syncScrollArrow(box);
+          if (this._programmaticPinScroll) return;
+          if (this._lastPinJumpTarget != null && Math.abs(box.scrollTop - this._lastPinJumpTarget) < 14) {
+            return;
+          }
+          this._pinnedTouchedAfterJump = true;
+          this._lastPinJumpTarget = null;
+          this._syncPinnedByScroll(box);
+        };
+        box.addEventListener('wheel', onUserInteract, { passive: true });
+        box.addEventListener('touchmove', onUserInteract, { passive: true });
+        box.addEventListener('pointerdown', onUserInteract, { passive: true });
+        box.addEventListener('scroll', onScroll, { passive: true });
       }
       const bar = document.getElementById('gc-pinned');
-      if (!bar) return;
+      if (!bar || bar._gcPinClickBound) return;
+      bar._gcPinClickBound = true;
       bar.addEventListener('click', (e) => {
         const unpin = e.target.closest('.gc-pinned-unpin');
         if (unpin) {
@@ -942,14 +1061,36 @@
         }
         const barEl = e.target.closest('.gc-pinned-bar');
         if (!barEl || !this.pinned.length) return;
-        if (!this._pinnedTouchedAfterJump && this.pinned.length > 1) {
+        const msgBox = document.getElementById('gc-messages');
+        const curMsg = this.pinned[this.pinnedCursor];
+        const curRow = (msgBox && curMsg) ? msgBox.querySelector(`.gc-row[data-id="${curMsg.id}"]`) : null;
+        const alreadyCentered = (this._hasEverJumpedPin && msgBox && curRow)
+          ? Math.abs(msgBox.scrollTop - this._computePinTargetTop(msgBox, curRow)) <= 20
+          : false;
+
+        if (this._hasEverJumpedPin && (!this._pinnedTouchedAfterJump || alreadyCentered) && this.pinned.length > 1) {
           this.pinnedCursor = (this.pinnedCursor - 1 + this.pinned.length) % this.pinned.length;
         }
+        this._hasEverJumpedPin = true;
+        this._pinnedTouchedAfterJump = false;
+        this._userScrollActive = false;
         const m = this.pinned[this.pinnedCursor];
         this._renderPinned();
         if (m) this._scrollToMessage(m.id);
-        this._pinnedTouchedAfterJump = false;
       });
+    },
+
+    _flashBubble(row) {
+      if (!row) return;
+      const bubble = row.querySelector('.gc-msg');
+      if (!bubble) return;
+      if (bubble._gcFlashTimer) clearTimeout(bubble._gcFlashTimer);
+      bubble.classList.remove('gc-msg--flash');
+      void bubble.offsetWidth;
+      bubble.classList.add('gc-msg--flash');
+      bubble._gcFlashTimer = setTimeout(() => {
+        bubble.classList.remove('gc-msg--flash');
+      }, 1850);
     },
 
     _scrollToMessage(id) {
@@ -957,17 +1098,52 @@
       if (!box) return;
       const row = box.querySelector(`.gc-row[data-id="${id}"]`);
       if (!row) return;
+
+      this._cancelPinScrollAnim();
+      const startTop = box.scrollTop;
+      const initialTarget = this._computePinTargetTop(box, row);
+      const dist = Math.abs(startTop - initialTarget);
+
       this._programmaticPinScroll = true;
-      clearTimeout(this._programmaticPinScrollTimer);
-      this._programmaticPinScrollTimer = setTimeout(() => {
-        this._programmaticPinScroll = false;
-      }, 700);
-      row.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      const bubble = row.querySelector('.gc-msg');
-      if (bubble) {
-        bubble.classList.add('gc-msg--flash');
-        setTimeout(() => bubble.classList.remove('gc-msg--flash'), 1400);
+      this._lastPinJumpTarget = initialTarget;
+
+      if (dist <= 4) {
+        box.scrollTop = initialTarget;
+        this._lastPinJumpTarget = box.scrollTop;
+        this._flashBubble(row);
+        this._syncScrollArrow(box);
+        this._programmaticPinScrollTimer = setTimeout(() => {
+          this._programmaticPinScroll = false;
+        }, 60);
+        return;
       }
+
+      const duration = Math.min(420, Math.max(180, Math.round(dist * 0.22)));
+      const t0 = performance.now();
+
+      const step = (now) => {
+        const p = Math.min(1, (now - t0) / duration);
+        const ease = 1 - Math.pow(1 - p, 3);
+        const currentTarget = this._computePinTargetTop(box, row);
+        box.scrollTop = Math.round(startTop + (currentTarget - startTop) * ease);
+        this._syncScrollArrow(box);
+
+        if (p < 1) {
+          this._pinScrollRaf = requestAnimationFrame(step);
+        } else {
+          this._pinScrollRaf = null;
+          const finalTarget = this._computePinTargetTop(box, row);
+          box.scrollTop = finalTarget;
+          this._lastPinJumpTarget = box.scrollTop;
+          this._flashBubble(row);
+          this._syncScrollArrow(box);
+          this._programmaticPinScrollTimer = setTimeout(() => {
+            this._programmaticPinScroll = false;
+          }, 80);
+        }
+      };
+
+      this._pinScrollRaf = requestAnimationFrame(step);
     },
 
     _bindMsgActions(box) {

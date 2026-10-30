@@ -928,15 +928,19 @@
 .nav-item:not(.active) .nav-badge { opacity: .9; }
 
 
-/* ── Уведомление «Общий чат» (.nav-item[data-tab="group"]) ── */
+/* ── Уведомление «Общий чат» (графовый перелив 5с + пульсирующая точка) ── */
 .nav-item[data-tab="group"] {
   position: relative;
   overflow: hidden;
   isolation: isolate;
+  transition:
+    background 0.9s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.95s cubic-bezier(0.22, 1, 0.36, 1),
+    color 0.35s ease;
 }
 .nav-item[data-tab="group"] > svg,
-.nav-item[data-tab="group"] > .gc-nav-label,
-.nav-item[data-tab="group"] > .gc-nav-dot {
+.nav-item[data-tab="group"] .gc-nav-label,
+.nav-item[data-tab="group"] .gc-nav-dot {
   position: relative;
   z-index: 2;
 }
@@ -962,7 +966,7 @@
   overflow: hidden;
   border-radius: inherit;
   opacity: 0;
-  transition: opacity 0.45s ease;
+  transition: opacity 0.95s cubic-bezier(0.22, 1, 0.36, 1);
 }
 .nav-item[data-tab="group"] .gc-nav-bg::before {
   content: "";
@@ -1014,46 +1018,56 @@
   }
 }
 
-/* ── Мобильная 5px полоса уведомления вдоль левого края дисплея (плавное дыхание свечения без узлов) ── */
+/* ── Мобильное мягкое боковое свечение без выделяющейся полоски ── */
 .gc-mobile-edge-notify {
   position: fixed;
   top: 0;
   left: 0;
   bottom: 0;
-  width: 5px;
+  width: 36px;
   z-index: 950;
   pointer-events: none;
   opacity: 0;
-  transition: opacity 0.45s ease;
+  transition: opacity 1.35s cubic-bezier(0.22, 1, 0.36, 1);
   display: none;
 }
 @media (max-width: 768px) {
   .gc-mobile-edge-notify {
     display: block;
-    background: linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--accent, #6366f1) 18%, transparent) 0%,
-      color-mix(in srgb, var(--accent, #6366f1) 78%, transparent) 50%,
-      color-mix(in srgb, var(--accent, #6366f1) 18%, transparent) 100%
+    background: none;
+  }
+  .gc-mobile-edge-notify::before {
+    content: "";
+    position: absolute;
+    top: -6vh;
+    bottom: -6vh;
+    left: -16px;
+    width: 44px;
+    background: radial-gradient(
+      ellipse 100% 52% at 0% 50%,
+      color-mix(in srgb, var(--accent, #6366f1) 46%, transparent) 0%,
+      color-mix(in srgb, var(--accent, #6366f1) 22%, transparent) 42%,
+      color-mix(in srgb, var(--accent, #6366f1) 6%, transparent) 74%,
+      transparent 100%
     );
-    border-radius: 0 4px 4px 0;
+    filter: blur(10px);
+    transform-origin: left center;
+    will-change: transform, opacity;
+  }
+  .gc-mobile-edge-notify.gc-edge-active::before {
+    animation: gc-edge-breathe 2.6s ease-in-out infinite;
   }
   .gc-mobile-edge-notify.gc-edge-active.bg-ready {
     opacity: 1;
-    animation: gc-edge-breathe 2.2s ease-in-out infinite;
   }
 }
 @keyframes gc-edge-breathe {
   0%, 100% {
     opacity: 0.42;
-    box-shadow:
-      0 0 8px color-mix(in srgb, var(--accent, #6366f1) 36%, transparent),
-      2px 0 10px color-mix(in srgb, var(--accent, #6366f1) 24%, transparent);
+    transform: scaleX(0.76);
   }
   50% {
     opacity: 1;
-    box-shadow:
-      0 0 16px color-mix(in srgb, var(--accent, #6366f1) 82%, transparent),
-      4px 0 20px color-mix(in srgb, var(--accent, #6366f1) 58%, transparent);
+    transform: scaleX(1.18);
   }
 }

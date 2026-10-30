@@ -27,30 +27,63 @@
   const aiCollapseBtn   = $("ai-collapse-btn");
   const aiExpandBtn     = $("ai-expand-btn");
   const aiResizer       = $("ed-ai-resizer");
+  const mobileOverlay   = $("ed-mobile-overlay");
+
+  function isMobileViewport() {
+    return window.innerWidth <= 768;
+  }
+
+  function syncMobileOverlay() {
+    if (!layoutEl || !mobileOverlay) return;
+    const anyOpen = isMobileViewport() && (
+      !layoutEl.classList.contains("sidebar-collapsed") ||
+      !layoutEl.classList.contains("ai-collapsed")
+    );
+    mobileOverlay.classList.toggle("visible", anyOpen);
+  }
 
   function relayoutMonaco() {
     if (!editor) return;
     requestAnimationFrame(() => {
-      try { editor.layout(); } catch (_) {}
+      try {
+        editor.updateOptions({ minimap: { enabled: !isMobileViewport() } });
+        editor.layout();
+      } catch (_) {}
       setTimeout(() => { try { editor.layout(); } catch (_) {} }, 230);
     });
   }
 
-  function applyLeftCollapsed(collapsed) {
+  function applyLeftCollapsed(collapsed, opts = {}) {
     if (!layoutEl) return;
+    if (!collapsed && isMobileViewport() && !layoutEl.classList.contains("ai-collapsed")) {
+      layoutEl.classList.add("ai-collapsed");
+      aiCollapseBtn?.setAttribute("aria-expanded", "false");
+      aiExpandBtn?.setAttribute("aria-expanded", "false");
+    }
     layoutEl.classList.toggle("sidebar-collapsed", collapsed);
     leftCollapseBtn?.setAttribute("aria-expanded", String(!collapsed));
     leftExpandBtn?.setAttribute("aria-expanded", String(!collapsed));
-    try { localStorage.setItem(KEY_LEFT_COLLAPSED, collapsed ? "1" : "0"); } catch (_) {}
+    if (!opts.skipStorage && !isMobileViewport()) {
+      try { localStorage.setItem(KEY_LEFT_COLLAPSED, collapsed ? "1" : "0"); } catch (_) {}
+    }
+    syncMobileOverlay();
     relayoutMonaco();
   }
 
-  function applyAiCollapsed(collapsed) {
+  function applyAiCollapsed(collapsed, opts = {}) {
     if (!layoutEl) return;
+    if (!collapsed && isMobileViewport() && !layoutEl.classList.contains("sidebar-collapsed")) {
+      layoutEl.classList.add("sidebar-collapsed");
+      leftCollapseBtn?.setAttribute("aria-expanded", "false");
+      leftExpandBtn?.setAttribute("aria-expanded", "false");
+    }
     layoutEl.classList.toggle("ai-collapsed", collapsed);
     aiCollapseBtn?.setAttribute("aria-expanded", String(!collapsed));
     aiExpandBtn?.setAttribute("aria-expanded", String(!collapsed));
-    try { localStorage.setItem(KEY_AI_COLLAPSED, collapsed ? "1" : "0"); } catch (_) {}
+    if (!opts.skipStorage && !isMobileViewport()) {
+      try { localStorage.setItem(KEY_AI_COLLAPSED, collapsed ? "1" : "0"); } catch (_) {}
+    }
+    syncMobileOverlay();
     relayoutMonaco();
   }
 
@@ -63,18 +96,61 @@
     try { localStorage.setItem(KEY_AI_WIDTH, String(clamped)); } catch (_) {}
   }
 
-  // Восстановление состояния панелей из localStorage
+  // Восстановление состояния панелей (на мобилке по умолчанию обе панели свёрнуты)
   try {
     const savedW = parseInt(localStorage.getItem(KEY_AI_WIDTH) || "", 10);
     if (Number.isFinite(savedW) && savedW >= 260) applyAiWidth(savedW);
-    if (localStorage.getItem(KEY_LEFT_COLLAPSED) === "1") applyLeftCollapsed(true);
-    if (localStorage.getItem(KEY_AI_COLLAPSED) === "1") applyAiCollapsed(true);
+    if (isMobileViewport()) {
+      applyLeftCollapsed(true, { skipStorage: true });
+      applyAiCollapsed(true, { skipStorage: true });
+    } else {
+      if (localStorage.getItem(KEY_LEFT_COLLAPSED) === "1") applyLeftCollapsed(true, { skipStorage: true });
+      if (localStorage.getItem(KEY_AI_COLLAPSED) === "1") applyAiCollapsed(true, { skipStorage: true });
+    }
   } catch (_) {}
 
-  leftCollapseBtn?.addEventListener("click", () => applyLeftCollapsed(true));
-  leftExpandBtn?.addEventListener("click",   () => applyLeftCollapsed(false));
-  aiCollapseBtn?.addEventListener("click",   () => applyAiCollapsed(true));
-  aiExpandBtn?.addEventListener("click",     () => applyAiCollapsed(false));
+  leftCollapseBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    applyLeftCollapsed(true);
+  });
+  leftExpandBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const isCollapsed = layoutEl?.classList.contains("sidebar-collapsed");
+    applyLeftCollapsed(!isCollapsed);
+  });
+  aiCollapseBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    applyAiCollapsed(true);
+  });
+  aiExpandBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const isCollapsed = layoutEl?.classList.contains("ai-collapsed");
+    applyAiCollapsed(!isCollapsed);
+  });
+  mobileOverlay?.addEventListener("click", () => {
+    applyLeftCollapsed(true);
+    applyAiCollapsed(true);
+  });
+
+  let wasMobileViewport = isMobileViewport();
+  window.addEventListener("resize", () => {
+    const nowMobile = isMobileViewport();
+    if (nowMobile !== wasMobileViewport) {
+      wasMobileViewport = nowMobile;
+      if (nowMobile) {
+        applyLeftCollapsed(true, { skipStorage: true });
+        applyAiCollapsed(true, { skipStorage: true });
+      } else {
+        try {
+          applyLeftCollapsed(localStorage.getItem(KEY_LEFT_COLLAPSED) === "1", { skipStorage: true });
+          applyAiCollapsed(localStorage.getItem(KEY_AI_COLLAPSED) === "1", { skipStorage: true });
+        } catch (_) {}
+      }
+    } else {
+      syncMobileOverlay();
+      relayoutMonaco();
+    }
+  });
 
   if (aiResizer) {
     aiResizer.addEventListener("mousedown", (e) => {
@@ -273,6 +349,7 @@
       document.querySelectorAll(".ed-node.sel").forEach(n => n.classList.remove("sel"));
       rowEl.classList.add("sel");
       openFile(node.path);
+      if (isMobileViewport()) applyLeftCollapsed(true);
     });
 
     addItem("Скачать файл", () => {
@@ -293,7 +370,13 @@
     if (activeCtxMenu && !activeCtxMenu.contains(e.target)) closeTreeContextMenu();
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeTreeContextMenu();
+    if (e.key === "Escape") {
+      closeTreeContextMenu();
+      if (isMobileViewport()) {
+        if (!layoutEl?.classList.contains("sidebar-collapsed")) applyLeftCollapsed(true);
+        if (!layoutEl?.classList.contains("ai-collapsed")) applyAiCollapsed(true);
+      }
+    }
   });
   window.addEventListener("blur", closeTreeContextMenu);
   treeEl?.addEventListener("scroll", closeTreeContextMenu);
@@ -326,6 +409,7 @@
           document.querySelectorAll(".ed-node.sel").forEach(n => n.classList.remove("sel"));
           row.classList.add("sel");
           openFile(node.path);
+          if (isMobileViewport()) applyLeftCollapsed(true);
         });
         row.addEventListener("contextmenu", (e) => {
           showTreeContextMenu(e, node, row);
@@ -408,7 +492,7 @@
       theme: "vs-dark",
       readOnly: true,
       automaticLayout: true,
-      minimap: { enabled: true },
+      minimap: { enabled: !isMobileViewport() },
     });
     editor.addCommand(monacoRef.KeyMod.CtrlCmd | monacoRef.KeyCode.KeyS, saveFile);
 

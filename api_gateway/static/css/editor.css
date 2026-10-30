@@ -1134,3 +1134,204 @@ body.is-resizing .ed-ai.chat-main-inner {
 .ed-poll-action-btn.is-primary:hover:not(:disabled) {
   background: var(--cds-fill-accent-hover);
 }
+
+
+/* ═══════════════════════════════════════════════
+   MOBILE & TABLET ADAPTATION (<= 768px)
+════════════════════════════════════════════════ */
+.ed-mobile-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 850;
+  background: rgba(0, 0, 0, 0.48);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+.ed-mobile-overlay.visible {
+  display: block;
+}
+
+@media (max-width: 768px) {
+  .chat-layout.ed-layout {
+    position: relative;
+  }
+
+  /* Все 4 кнопки бургеров/панелей (2 в топбаре и по 1 внутри шапок сайдбаров) всегда доступны на мобилке */
+  .ed-layout .sidebar-collapse-btn,
+  .ed-layout .ed-expand-left,
+  .ed-layout .ed-expand-right {
+    display: inline-flex !important;
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
+    flex-shrink: 0;
+  }
+
+  /* Левый сайдбар (дерево файлов) — выезжающий drawer слева */
+  .sidebar.ed-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 900;
+    width: min(280px, 86vw) !important;
+    min-width: 0 !important;
+    max-width: 86vw;
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: auto;
+    box-shadow: 8px 0 32px rgba(0, 0, 0, 0.55);
+    transition: transform .24s cubic-bezier(0.22, 0.61, 0.36, 1), opacity .2s ease;
+  }
+
+  .ed-layout.sidebar-collapsed .sidebar.ed-sidebar {
+    width: min(280px, 86vw) !important;
+    min-width: 0 !important;
+    transform: translateX(-104%);
+    opacity: 0;
+    pointer-events: none;
+    box-shadow: none;
+  }
+
+  /* Ресайзер скрыт на мобильных */
+  .ed-ai-resizer {
+    display: none !important;
+  }
+
+  /* Правый сайдбар (Агент) — выезжающий drawer справа */
+  .ed-ai.chat-main-inner {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 900;
+    width: min(420px, 92vw) !important;
+    min-width: 0 !important;
+    max-width: 92vw !important;
+    border-left: 1px solid var(--border);
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: auto;
+    box-shadow: -8px 0 32px rgba(0, 0, 0, 0.55);
+    transition: transform .24s cubic-bezier(0.22, 0.61, 0.36, 1), opacity .2s ease;
+  }
+
+  .ed-layout.ai-collapsed .ed-ai.chat-main-inner {
+    width: min(420px, 92vw) !important;
+    min-width: 0 !important;
+    transform: translateX(104%);
+    opacity: 0;
+    pointer-events: none;
+    box-shadow: none;
+  }
+
+  /* Шапка внутри правого сайдбара */
+  .ed-ai-head {
+    padding: 0 12px;
+    height: 52px;
+    min-height: 52px;
+  }
+
+  /* Центральная шапка (ed-topbar) на мобилке */
+  .main-header.ed-topbar {
+    padding: 0 8px;
+    gap: 6px;
+    height: 52px;
+    min-height: 52px;
+  }
+
+  .ed-ws {
+    min-width: 0;
+    flex: 0 1 auto;
+    gap: 4px;
+  }
+
+  .ed-ws-label {
+    display: none;
+  }
+
+  .ed-ws-select {
+    min-width: 0;
+    width: auto;
+    max-width: 135px;
+    padding: 4px 6px;
+    font-size: .76rem;
+    text-overflow: ellipsis;
+  }
+
+  .ed-filename {
+    font-size: .76rem;
+    min-width: 0;
+    margin-left: 2px;
+  }
+
+  .header-actions.ed-actions {
+    gap: 4px;
+  }
+
+  .ed-ttl {
+    padding: 2px 6px;
+    font-size: .68rem;
+    gap: 4px;
+  }
+
+  .ed-header-btn {
+    padding: 0 9px;
+    height: 30px;
+    font-size: .75rem;
+  }
+
+  .ed-node {
+    padding: 8px 10px;
+    font-size: .86rem;
+  }
+
+  .ed-ai-log.chat-messages {
+    padding: 14px 12px 16px;
+  }
+
+  .message-input-container.ed-ai-input {
+    padding: 0 10px 10px;
+  }
+
+  .ed-ai-input .chat-input-field {
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 480px) {
+  .sidebar.ed-sidebar,
+  .ed-layout.sidebar-collapsed .sidebar.ed-sidebar {
+    width: min(280px, 88vw) !important;
+    max-width: 88vw !important;
+  }
+
+  .ed-ai.chat-main-inner,
+  .ed-layout.ai-collapsed .ed-ai.chat-main-inner {
+    width: 100vw !important;
+    max-width: 100vw !important;
+    border-left: none;
+  }
+
+  .ed-ws-select {
+    max-width: 106px;
+  }
+
+  .ed-header-btn span {
+    display: none;
+  }
+
+  .ed-header-btn {
+    padding: 0;
+    width: 32px;
+    justify-content: center;
+  }
+
+  .ed-ttl-text {
+    max-width: 52px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}

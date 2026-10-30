@@ -432,7 +432,7 @@ async def get_db_image(
         # бинарник из OBS по детерминированному ключу — ровно как делает /web/file.
         if chat_id and message_id and file_name:
             try:
-                chats_url = os.getenv("CHATS_SERVICE_URL", "http://chats_service:8001")
+                chats_url = os.getenv("CHATS_SERVICE_URL") or f"http://chats_service:{os.getenv('PORT_CHATS_SERVICE', '8001')}"
                 async with httpx.AsyncClient(timeout=15) as client:
                     rf = await client.get(
                         f"{chats_url}/internal/resolve_file",

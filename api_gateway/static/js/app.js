@@ -2035,7 +2035,6 @@ class ChatApp {
     }
 
     _renderBotFiles(files, messageId) {
-        console.log('ВНУТРИ РЕНДИНДА ФАЙЛОВ ', files, messageId)
         const EXT_LABEL = {
             pdf:'PDF', docx:'DOC', doc:'DOC',
             xlsx:'XLS', xls:'XLS', csv:'CSV',
@@ -2131,9 +2130,15 @@ class ChatApp {
             const imageKeyQs = f.image_key
                 ? `?image_key=${encodeURIComponent(f.image_key)}`
                 : '';
-            const url = messageId
+            const dbImageUrl = messageId
                 ? `/api/chats/${this.currentChat}/image/${encodeURIComponent(messageId)}/${encodeURIComponent(name)}${imageKeyQs}`
                 : '#';
+            const fileUrl = messageId
+                ? `/api/chats/${this.currentChat}/files/${encodeURIComponent(messageId)}/${encodeURIComponent(name)}`
+                : '#';
+            const preferFileEndpoint = (f.kind === 'file' && !f.image_key);
+            const url = preferFileEndpoint ? fileUrl : dbImageUrl;
+            const fallbackUrl = preferFileEndpoint ? dbImageUrl : fileUrl;
 
             const card = document.createElement('div');
             card.className = 'fa-image-card';
@@ -2142,9 +2147,6 @@ class ChatApp {
             const bg = document.createElement('span');
             bg.className = 'fa-image-card__bg';
             bg.setAttribute('aria-hidden', 'true');
-            if (url && url !== '#') {
-                bg.style.backgroundImage = `url("${url.replace(/"/g, '\"')}")`;
-            }
 
             const img = document.createElement('img');
             img.className = 'fa-image-card__img';
@@ -2152,8 +2154,11 @@ class ChatApp {
             img.loading = 'lazy';
             img.src = url;
             card.classList.add('fa-image-card--loading');
+            let triedFallback = false;
             const applyCardAspect = () => {
                 card.classList.remove('fa-image-card--loading');
+                card.classList.remove('fa-image-card--error');
+                const activeSrc = img.currentSrc || img.src || url;
                 if (img.naturalWidth > 0 && img.naturalHeight > 0) {
                     const MAX_W = 420;
                     const MAX_H = 420;
@@ -2173,6 +2178,9 @@ class ChatApp {
                     card.style.setProperty('--fa-card-w', boxW + 'px');
                     card.style.setProperty('--fa-card-ar', `${boxW} / ${boxH}`);
                     if (boxW > imgW + 2 || boxH > imgH + 2) {
+                        if (activeSrc && activeSrc !== '#') {
+                            bg.style.backgroundImage = `url("${activeSrc.replace(/"/g, '\"')}")`;
+                        }
                         card.classList.add('fa-image-card--glass');
                     } else {
                         card.classList.remove('fa-image-card--glass');
@@ -2182,15 +2190,20 @@ class ChatApp {
             if (img.complete && img.naturalWidth > 0) {
                 applyCardAspect();
             } else {
-                img.addEventListener('load', applyCardAspect, { once: true });
+                img.addEventListener('load', applyCardAspect);
             }
             img.addEventListener('error', () => {
+                if (!triedFallback && fallbackUrl && fallbackUrl !== '#' && fallbackUrl !== img.getAttribute('src')) {
+                    triedFallback = true;
+                    img.src = fallbackUrl;
+                    return;
+                }
                 card.classList.remove('fa-image-card--loading');
                 card.classList.add('fa-image-card--error');
             });
 
             // Клик — превью в лайтбоксе.
-            card.addEventListener('click', () => this._openImageLightbox(url, name, f.image_key));
+            card.addEventListener('click', () => this._openImageLightbox(img.currentSrc || img.src || url, name, f.image_key));
 
             const overlay = document.createElement('div');
             overlay.className = 'fa-image-card__overlay';
@@ -5095,7 +5108,10 @@ class ChatApp {
 
         let workspaces = [];
         try {
-            const resp = await fetch('/api/editor/workspaces', { credentials: 'include' });
+            let resp = await fetch('/api/chats/workspaces', { credentials: 'include' });
+            if (!resp.ok) {
+                resp = await fetch('/api/editor/workspaces', { credentials: 'include' });
+            }
             if (resp.ok) {
                 const data = await resp.json();
                 workspaces = Array.isArray(data?.workspaces) ? data.workspaces : [];

@@ -1287,6 +1287,21 @@ async def searching_default(request: Request):
         raise HTTPException(status_code=502, detail=f"Parsers service unreachable: {str(e)}")
 
 # ========== ПРОКСИ ДЛЯ ЧАТОВ ==========
+@app.get("/api/chats/workspaces")
+async def api_chats_workspaces(request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    chat_id = request.query_params.get("chat_id") or None
+    r = await app.state.http_client.get(
+        f"{SERVICES['chats']['url']}/editor/workspaces",
+        params={"user_id": user["user_id"], **({"chat_id": chat_id} if chat_id else {})},
+    )
+    if r.status_code != 200:
+        return {"workspaces": []}
+    return r.json()
+
+
 @app.post("/api/chats/send_message")
 async def send_message(request: Request):
     """Отправка сообщения (для SPA)"""
@@ -1507,6 +1522,30 @@ async def get_chat_db_image(chat_id: str, message_id: str, file_name: str, reque
         raise HTTPException(status_code=502, detail=f"Agent service unreachable: {e}")
 
     if agent_resp.status_code != 200:
+        try:
+            resolve_resp = await app.state.http_client.get(
+                f"{SERVICES['chats']['url']}/internal/resolve_file",
+                params={"chat_id": chat_id, "message_id": message_id, "file_name": file_name},
+            )
+            if resolve_resp.status_code == 200:
+                path = (resolve_resp.json() or {}).get("path")
+                if path:
+                    file_resp = await app.state.http_client.get(
+                        f"{SERVICES['agent_service']['url']}/web/file",
+                        params={"path": path, "chat_id": chat_id, "download": 0},
+                    )
+                    if file_resp.status_code in (200, 206):
+                        return Response(
+                            content=file_resp.content,
+                            media_type=file_resp.headers.get("content-type", "image/png"),
+                            headers={
+                                "Cache-Control": "public, max-age=86400",
+                                "X-Image-Source": "file_fallback",
+                                "Access-Control-Expose-Headers": "X-Image-Key, X-Image-Source",
+                            },
+                        )
+        except httpx.RequestError:
+            pass
         raise HTTPException(status_code=agent_resp.status_code, detail="Image not found")
 
     return Response(

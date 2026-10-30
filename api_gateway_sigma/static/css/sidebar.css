@@ -1024,7 +1024,7 @@
   top: 0;
   left: 0;
   bottom: 0;
-  width: 36px;
+  width: 88px;
   z-index: 950;
   pointer-events: none;
   opacity: 0;
@@ -1039,23 +1039,23 @@
   .gc-mobile-edge-notify::before {
     content: "";
     position: absolute;
-    top: -6vh;
-    bottom: -6vh;
-    left: -16px;
-    width: 44px;
+    top: -8vh;
+    bottom: -8vh;
+    left: -20px;
+    width: 96px;
     background: radial-gradient(
-      ellipse 100% 52% at 0% 50%,
-      color-mix(in srgb, var(--accent, #6366f1) 46%, transparent) 0%,
-      color-mix(in srgb, var(--accent, #6366f1) 22%, transparent) 42%,
-      color-mix(in srgb, var(--accent, #6366f1) 6%, transparent) 74%,
+      ellipse 100% 60% at 0% 50%,
+      color-mix(in srgb, var(--accent, #6366f1) 86%, transparent) 0%,
+      color-mix(in srgb, var(--accent, #6366f1) 54%, transparent) 38%,
+      color-mix(in srgb, var(--accent, #6366f1) 22%, transparent) 72%,
       transparent 100%
     );
-    filter: blur(10px);
+    filter: blur(14px);
     transform-origin: left center;
     will-change: transform, opacity;
   }
   .gc-mobile-edge-notify.gc-edge-active::before {
-    animation: gc-edge-breathe 2.6s ease-in-out infinite;
+    animation: gc-edge-breathe 2.4s ease-in-out infinite;
   }
   .gc-mobile-edge-notify.gc-edge-active.bg-ready {
     opacity: 1;
@@ -1063,11 +1063,11 @@
 }
 @keyframes gc-edge-breathe {
   0%, 100% {
-    opacity: 0.42;
-    transform: scaleX(0.76);
+    opacity: 0.58;
+    transform: scaleX(0.84);
   }
   50% {
     opacity: 1;
-    transform: scaleX(1.18);
+    transform: scaleX(1.36);
   }
 }

@@ -68,7 +68,7 @@ def make_parse_page_tool(agent):
         log.info("parse_web_page: %s", urls)
 
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.post(
                     f"{parsers_url}/parse/page",
                     json=payload,
@@ -83,7 +83,7 @@ def make_parse_page_tool(agent):
 
         except httpx.TimeoutException:
             log.error("parse_web_page timeout:")
-            return "Ошибка: страница не загрузилась за 60 секунд."
+            return "Ошибка: страница не загрузилась за 30 секунд."
 
         except Exception as e:
             log.error("parse_web_page failed: %s", e)

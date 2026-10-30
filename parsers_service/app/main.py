@@ -29,16 +29,22 @@ class ParsePageRequest(BaseModel):
 @app.post("/parse/page")
 async def parse_page(req: ParsePageRequest) -> JSONResponse:
     """
-    Парсит список страниц, возвращает единый текст агенту.
+    Парсит список страниц параллельно в одном браузере, возвращает единый текст агенту.
     headers — агент генерирует сам (User-Agent, Accept-Language и т.п.)
     """
-    parts: list[str] = []
- 
-    for url in req.urls:
-        text = await browser_parser(url, req.headers)
-        parts.append(text)
- 
-    combined = "\n\n" + "─" * 60 + "\n\n".join(parts)
+    if not req.urls:
+        return JSONResponse({"urls": [], "text": ""})
+
+    results = await asyncio.gather(
+        *(browser_parser(url, req.headers) for url in req.urls),
+        return_exceptions=True,
+    )
+    parts: list[str] = [
+        f"[URL: {url}]\nОшибка парсинга страницы: {res}" if isinstance(res, Exception) else str(res)
+        for url, res in zip(req.urls, results)
+    ]
+
+    combined = "\n\n" + ("\n\n" + "─" * 60 + "\n\n").join(parts)
     return JSONResponse({"urls": req.urls, "text": combined})
     
 @app.get("/health")

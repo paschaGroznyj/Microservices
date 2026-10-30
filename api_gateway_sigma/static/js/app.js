@@ -4327,47 +4327,112 @@ class ChatApp {
        по «Хорошо» или крестику. Не дублируется.
     ══════════════════════════════════════════ */
     _showNoToolsHint() {
-        const container = this.getMessagesContainer();
-        if (!container) return;
-        // Не плодим — если облачко уже висит, просто обновим позицию (в конец)
-        const existing = container.querySelector('.no-tools-hint');
-        if (existing) { container.appendChild(existing); return; }
+        const STORAGE_KEY = 'catchpm:no_tools_warn_count';
+        let warnCount = Number(this._noToolsWarnCount);
+        if (!Number.isFinite(warnCount)) {
+            try {
+                warnCount = parseInt(sessionStorage.getItem(STORAGE_KEY) || '0', 10) || 0;
+            } catch (_) {
+                warnCount = 0;
+            }
+        }
+        if (warnCount >= 2) return;
+        warnCount += 1;
+        this._noToolsWarnCount = warnCount;
+        try { sessionStorage.setItem(STORAGE_KEY, String(warnCount)); } catch (_) {}
+
+        const inputContainer = this.getInputContainer();
+        const triggerBtn = inputContainer?.querySelector('.tools-trigger-btn.attach-btn, .tools-trigger-btn')
+            || document.querySelector('.chat-input-footer .tools-trigger-btn, .start-input-footer .tools-trigger-btn');
+        if (!triggerBtn) return;
+
+        if (this._noToolsCleanup) {
+            this._noToolsCleanup(true);
+        }
+
+        document.querySelectorAll('.tools-trigger-btn').forEach(btn => {
+            btn.classList.add('tools-trigger-btn--alert');
+        });
 
         const hint = document.createElement('div');
         hint.className = 'no-tools-hint';
         hint.setAttribute('role', 'status');
         hint.innerHTML = `
-            <button class="no-tools-hint__close" type="button" aria-label="Закрыть">
-                <svg viewBox="0 0 24 24" fill="none">
-                    <path d="M6 6l12 12M18 6L6 18" stroke="currentColor"
-                          stroke-width="2" stroke-linecap="round"/>
-                </svg>
-            </button>
-            <div class="no-tools-hint__icon">
-                <svg viewBox="0 0 24 24" fill="none">
-                    <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4l-6 6a1.5 1.5 0 0 0 2.1 2.1l6-6a4 4 0 0 0 5.4-5.4l-2.3 2.3-2.1-2.1 2.3-2.3z"
-                          stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
-                </svg>
-            </div>
+            <span class="no-tools-hint__dot" aria-hidden="true"></span>
             <div class="no-tools-hint__body">
                 <div class="no-tools-hint__title">Инструменты не выбраны</div>
-                <div class="no-tools-hint__text">Сейчас агент отвечает с ограниченным функционалом: без поиска в интернете, генерации файлов, парсинга и запуска кода. Нажмите на ключ рядом с полем ввода и выберите нужные категории, затем повторите запрос.</div>
-                <button class="no-tools-hint__ok" type="button">Хорошо</button>
+                <div class="no-tools-hint__text">Нажмите на ключ, чтобы включить поиск, файлы и запуск кода</div>
             </div>
+            <span class="no-tools-hint__arrow" aria-hidden="true"></span>
         `;
+        document.body.appendChild(hint);
 
-        const close = () => {
-            hint.classList.add('no-tools-hint--closing');
-            setTimeout(() => hint.remove(), 220);
+        const positionHint = () => {
+            const activeBtn = this.getInputContainer()?.querySelector('.tools-trigger-btn')
+                || triggerBtn;
+            if (!activeBtn || !activeBtn.isConnected) return;
+            const rect = activeBtn.getBoundingClientRect();
+            const hintRect = hint.getBoundingClientRect();
+            const margin = 8;
+            const gap = 10;
+
+            let left = rect.left + rect.width / 2 - 28;
+            if (left < margin) left = margin;
+            if (left + hintRect.width > window.innerWidth - margin) {
+                left = window.innerWidth - hintRect.width - margin;
+            }
+            const top = Math.max(margin, rect.top - hintRect.height - gap);
+            const arrowX = Math.max(14, Math.min(hintRect.width - 14, (rect.left + rect.width / 2) - left));
+
+            hint.style.left = `${Math.round(left)}px`;
+            hint.style.top = `${Math.round(top)}px`;
+            hint.style.setProperty('--arrow-left', `${Math.round(arrowX)}px`);
         };
-        hint.querySelector('.no-tools-hint__close')?.addEventListener('click', close);
-        hint.querySelector('.no-tools-hint__ok')?.addEventListener('click', close);
 
-        container.appendChild(hint);
-        requestAnimationFrame(() => hint.classList.add('no-tools-hint--in'));
-        // Доскроллить, чтобы облачко было видно
-        const dist = container.scrollHeight - container.scrollTop - container.clientHeight;
-        if (dist < 200) container.scrollTop = container.scrollHeight;
+        positionHint();
+        requestAnimationFrame(() => {
+            positionHint();
+            hint.classList.add('no-tools-hint--in');
+        });
+
+        let closed = false;
+        const cleanup = (immediate = false) => {
+            if (closed) return;
+            closed = true;
+            if (this._noToolsTimer) {
+                clearTimeout(this._noToolsTimer);
+                this._noToolsTimer = null;
+            }
+            window.removeEventListener('resize', positionHint);
+            window.removeEventListener('scroll', positionHint, true);
+            triggerBtn.removeEventListener('click', onTriggerClick);
+            document.querySelectorAll('.tools-trigger-btn--alert').forEach(btn => {
+                btn.classList.remove('tools-trigger-btn--alert');
+            });
+            if (immediate) {
+                hint.remove();
+            } else {
+                hint.classList.add('no-tools-hint--closing');
+                setTimeout(() => hint.remove(), 200);
+            }
+            if (this._noToolsCleanup === cleanup) {
+                this._noToolsCleanup = null;
+            }
+        };
+
+        const onTriggerClick = () => cleanup(false);
+        triggerBtn.addEventListener('click', onTriggerClick, { once: true });
+        hint.addEventListener('click', (e) => {
+            e.stopPropagation();
+            cleanup(false);
+            const activeBtn = this.getInputContainer()?.querySelector('.tools-trigger-btn') || triggerBtn;
+            activeBtn?.click();
+        });
+
+        window.addEventListener('resize', positionHint);
+        window.addEventListener('scroll', positionHint, true);
+        this._noToolsCleanup = cleanup;
+        this._noToolsTimer = setTimeout(() => cleanup(false), 5000);
     }
 
     getMessagesContainer() {

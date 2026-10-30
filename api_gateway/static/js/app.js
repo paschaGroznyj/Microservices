@@ -596,16 +596,19 @@ class ChatApp {
             this._restoreReasoningFromServer(chatId, serverStatus.reasoning, running);
         }
 
-        if (container) {
-            this._dedupeTurnReasoningAndActions(container, st);
-            if (st?.pendingBotEl) {
-                this._ensureBotAfterLastUserMessage(container, st.pendingBotEl);
-            }
-        }
-
         if (!running) {
+            if (st) {
+                st.pendingBotEl = null;
+                st.liveBlockEl = null;
+                st.reasoningWrapEl = null;
+            }
             this._onRunFinished();
             return;
+        }
+
+        if (container && st?.pendingBotEl) {
+            this._dedupeTurnReasoningAndActions(container, st);
+            this._ensureBotAfterLastUserMessage(container, st.pendingBotEl);
         }
 
         this._runState = 'running';
@@ -2311,6 +2314,9 @@ class ChatApp {
             }
         }
 
+        this._botAnswered = false;
+        this._hardResetStreamState(this.currentChat);
+
         const msgId = `msg-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
         const _optimisticFiles = isCustom ? [] : (window.FileAttach?.getFilesMeta() ?? []);
         this.addMessage({ message: text, is_from_bot: false, id: msgId, created_at: new Date().toISOString(), files: _optimisticFiles });
@@ -2330,8 +2336,6 @@ class ChatApp {
             this._clearInputDraft(this.currentChat);
         }
         sendBtn?.classList.remove('active');
-        this._botAnswered = false;
-        this._hardResetStreamState(this.currentChat);
         const _curSt = this._ensureStream(this.currentChat);
         if (_curSt) {
             _curSt.runStartedAt = Date.now();
@@ -2773,7 +2777,29 @@ class ChatApp {
 
             } else if (msg.done || msg.message !== undefined) {
                 const fullText = msg.message ?? st.pendingBotText;
-                if (isActive && container) {
+                const incomingDbId = msg.id != null ? String(msg.id) : null;
+                const incomingReqId = msg.message_id ? String(msg.message_id) : null;
+                if (isActive && container && !st.pendingBotEl) {
+                    const existingBot = [...container.querySelectorAll(':scope > .agent-message')].find(el => {
+                        const eid = String(el.dataset.id || '');
+                        const emid = String(el.dataset.messageId || '');
+                        return (incomingDbId && eid === incomingDbId)
+                            || (incomingReqId && (eid === incomingReqId || emid === incomingReqId));
+                    });
+                    if (existingBot) {
+                        if (incomingDbId) existingBot.dataset.id = incomingDbId;
+                        if (incomingReqId) existingBot.dataset.messageId = incomingReqId;
+                        if (!existingBot.querySelector(':scope > .message-actions')) {
+                            existingBot.appendChild(this.createMessageActions(existingBot.dataset.id, fullText, true));
+                        }
+                        this._removeBotPlaceholder();
+                        this._clearAllStatuses();
+                        st.streamingActive = false;
+                        this._onRunFinished(msg.loop === true);
+                        return;
+                    }
+                }
+                if (isActive && container && st.pendingBotEl) {
                     this._dedupeTurnReasoningAndActions(container, st, msg.id || msg.message_id);
                 }
 
@@ -3092,7 +3118,9 @@ class ChatApp {
     _repositionActiveBotNodesAfterUser(container) {
         if (!container) return;
         const st = this._resolveStream(this.currentChat);
-        if (st?.pendingBotEl && st.pendingBotEl.parentNode === container) {
+        const botId = String(st?.pendingBotEl?.dataset?.id || '');
+        const isCommittedDbMsg = /^\d+$/.test(botId);
+        if (st?.pendingBotEl && st.pendingBotEl.parentNode === container && st.streamingActive && !st.streamDone && !isCommittedDbMsg) {
             container.appendChild(st.pendingBotEl);
         }
         const placeholder = container.querySelector('#agent-response-placeholder');
@@ -3128,12 +3156,12 @@ class ChatApp {
             ? st.pendingBotEl
             : botCandidates[0];
 
-        if (st && (!st.pendingBotEl || !container.contains(st.pendingBotEl))) {
-            const isUnfinished = !primary.querySelector('.live-block')?.textContent?.trim()
-                || String(primary.dataset.id || '').startsWith('msg-')
-                || (incomingId && String(primary.dataset.id || '') === String(incomingId))
-                || !st.streamDone;
-            if (isUnfinished) {
+        const primaryId = String(primary.dataset.id || '');
+        const isDbCommittedNode = /^\d+$/.test(primaryId);
+        if (st && (!st.pendingBotEl || !container.contains(st.pendingBotEl)) && !isDbCommittedNode) {
+            const hasActiveStreamChild = !!primary.querySelector('.reasoning-block, .reasoning-live, .live-block');
+            const matchesIncoming = incomingId && primaryId === String(incomingId);
+            if (hasActiveStreamChild && (primaryId.startsWith('msg-') || matchesIncoming)) {
                 st.pendingBotEl = primary;
             }
         }

@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 # TTL флага. Если финал по какой-то причине не снял флаг (упал агент, потеря
 # сообщения) — ключ протухнет сам и фронт не застрянет в «running» навсегда.
-RUN_TTL = int(os.getenv("AGENT_RUN_TTL", "900"))  # 15 минут
+RUN_TTL = int(os.getenv("AGENT_RUN_TTL", "3600"))  # 60 минут
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
 try:

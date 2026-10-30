@@ -19,6 +19,7 @@ Auth: заголовок Authorization: <token> — сырой токен бот
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import ssl
@@ -135,6 +136,50 @@ class MaxClient:
                     "disable_link_preview": disable_link_preview},
             json=body,
         )
+
+    async def send_message_with_attachment(
+        self, text: str, attachments: list[dict],
+        chat_id: int | None = None, user_id: int | None = None,
+        fmt: str | None = None, notify: bool = True,
+        max_retries: int = 6, base_delay: float = 0.8,
+    ) -> dict:
+        """
+        Отправка сообщения с вложением, устойчивая к гонке обработки файла.
+
+        После upload_file MAX принимает байты (upload.do -> 200), но сам файл
+        обрабатывается на их стороне АСИНХРОННО. Если сразу слать POST /messages
+        с attachment по token'у, прилетает 400 attachment.not.ready
+        (errors.process.attachment.file.not.processed). Для type=file (docx/pdf/
+        xlsx) обработка дольше, чем для image, поэтому файлы часто не успевают.
+
+        Решение: ретраим именно POST /messages при attachment.not.ready с
+        линейным backoff (0.8, 1.6, 2.4, ... c), пока файл не станет processed.
+        Любая другая ошибка пробрасывается сразу.
+        """
+        last_err: MaxApiError | None = None
+        for attempt in range(max_retries):
+            try:
+                return await self.send_message(
+                    text=text, chat_id=chat_id, user_id=user_id,
+                    attachments=attachments, fmt=fmt, notify=notify,
+                )
+            except MaxApiError as e:
+                code = ""
+                if isinstance(e.data, dict):
+                    code = str(e.data.get("code") or "")
+                if e.status == 400 and "attachment.not.ready" in code:
+                    last_err = e
+                    delay = base_delay * (attempt + 1)
+                    log.info(
+                        "[max-file] attachment.not.ready — retry %d/%d через %.1fс",
+                        attempt + 1, max_retries, delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                raise
+        if last_err is not None:
+            raise last_err
+        raise MaxApiError(500, {"message": "send_message_with_attachment: no attempts"})
 
     async def edit_message(self, message_id: str, text: str,
                           attachments: list[dict] | None = None,

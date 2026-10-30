@@ -56,6 +56,12 @@ CATCHPM_URL      = os.getenv("CATCHPM_URL", "https://catchpm.uva-advanced.ru")
 POLL_TIMEOUT     = int(os.getenv("MAX_POLL_TIMEOUT", "30"))
 ALLOWED_TTL      = int(os.getenv("MAX_ALLOWED_TTL", "60"))
 
+# ── Оркестратор / буфер реплик (как в telegram_service) ──
+ORCH_THROTTLE_SEC = float(os.getenv("ORCH_THROTTLE_SEC", "6"))
+BUF_MAXLEN        = int(os.getenv("BUF_MAXLEN", "40"))
+BUF_TTL           = int(os.getenv("BUF_TTL", "3600"))
+AGENT_BUF_CLIP    = int(os.getenv("AGENT_BUF_CLIP", "400"))
+
 # Типы апдейтов, которые слушаем на этапе ядра.
 UPDATE_TYPES = ["message_created", "bot_added", "bot_started", "message_callback"]
 
@@ -125,6 +131,10 @@ client: MaxClient | None = None
 _album = AlbumBuffer()
 _redis: aioredis.Redis | None = None
 _poll_task: asyncio.Task | None = None
+# Инфо о самом боте (из get_me) — для распознавания обращения в группах.
+_bot_id: int | None = None
+_bot_name: str | None = None
+_bot_username: str | None = None
 
 api = FastAPI(title="MAX Bot Push API")
 
@@ -190,6 +200,154 @@ async def save_chat_settings(chat_id: int, patch: dict) -> bool:
     except Exception as e:
         log.error(f"save_chat_settings fail chat={chat_id}: {e}")
         return False
+
+
+# ══════════════════════════════════════════════════════════════
+# Оркестрация: буфер реплик в Redis + lite-LLM-фильтр (как в TG)
+# ══════════════════════════════════════════════════════════════
+def _k_buf(chat_id: int) -> str:      return f"max:buf:{chat_id}"
+def _k_buf_mark(chat_id: int) -> str: return f"max:buf_mark:{chat_id}"
+def _k_orch_ts(chat_id: int) -> str:  return f"max:orch_ts:{chat_id}"
+
+
+async def buffer_push(chat_id: int, author: str, text: str) -> None:
+    """Добавляет реплику в буфер (rpush + ltrim + TTL)."""
+    r = await get_redis()
+    line = f"{author}: {text}".replace("\n", " ").strip()
+    if not line:
+        return
+    try:
+        pipe = r.pipeline()
+        pipe.rpush(_k_buf(chat_id), line)
+        pipe.ltrim(_k_buf(chat_id), -BUF_MAXLEN, -1)
+        pipe.expire(_k_buf(chat_id), BUF_TTL)
+        await pipe.execute()
+    except Exception as e:
+        log.warning(f"buffer_push fail chat={chat_id}: {e}")
+
+
+async def buffer_lines(chat_id: int) -> list[str]:
+    """Скользящее окно последних реплик (для оркестратора)."""
+    r = await get_redis()
+    try:
+        return await r.lrange(_k_buf(chat_id), 0, -1)
+    except Exception as e:
+        log.warning(f"buffer_lines fail chat={chat_id}: {e}")
+        return []
+
+
+async def buffer_push_agent(chat_id: int, agent_name: str | None, text: str) -> None:
+    """Кладёт ОТВЕТ агента в тот же буфер — чтобы оркестратор видел связь
+    «это продолжение диалога с ботом». Обрезаем до AGENT_BUF_CLIP."""
+    author = (agent_name or "").strip() or "Ассистент"
+    body = (text or "").replace("\n", " ").strip()
+    if not body:
+        return
+    if len(body) > AGENT_BUF_CLIP:
+        body = body[:AGENT_BUF_CLIP].rstrip() + "…"
+    await buffer_push(chat_id, author, body)
+
+
+async def buffer_flush(chat_id: int) -> list[str]:
+    """Берёт реплики ПОСЛЕ маркера (что ещё не отдавали агенту) и сдвигает
+    маркер. Буфер НЕ удаляется — оркестратор держит скользящее окно."""
+    r = await get_redis()
+    try:
+        async with r.pipeline(transaction=True) as pipe:
+            pipe.lrange(_k_buf(chat_id), 0, -1)
+            pipe.get(_k_buf_mark(chat_id))
+            res = await pipe.execute()
+        all_lines = res[0] or []
+        try:
+            mark = int(res[1]) if res[1] is not None else 0
+        except (TypeError, ValueError):
+            mark = 0
+        total = len(all_lines)
+        if mark > total:
+            mark = 0
+        fresh = all_lines[mark:]
+        await r.set(_k_buf_mark(chat_id), str(total), ex=BUF_TTL)
+        return fresh
+    except Exception as e:
+        log.warning(f"buffer_flush fail chat={chat_id}: {e}")
+        return []
+
+
+async def orchestrator_allowed(chat_id: int) -> bool:
+    """Throttle: не дёргать оркестратор чаще ORCH_THROTTLE_SEC на чат."""
+    r = await get_redis()
+    try:
+        ok = await r.set(_k_orch_ts(chat_id), "1", nx=True, ex=int(ORCH_THROTTLE_SEC))
+        return bool(ok)
+    except Exception as e:
+        log.warning(f"orch throttle fail chat={chat_id}: {e}")
+        return True
+
+
+async def orchestrator_should_respond(chat_id: int, lines: list[str]) -> bool:
+    """Спрашивает lite-LLM в agent_service — реагировать на буфер или нет.
+    Переиспользуем общий эндпоинт /api/tg/should_respond (платформонезависим)."""
+    if not lines:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            resp = await c.post(
+                f"{AGENT_SERVICE_URL}/api/tg/should_respond",
+                json={"chat_id": str(chat_id), "buffer_lines": lines},
+            )
+            resp.raise_for_status()
+            return bool(resp.json().get("respond", False))
+    except Exception as e:
+        log.warning(f"orchestrator call fail chat={chat_id}: {e}")
+        return False  # fail в сторону молчания
+
+
+async def upsert_member(chat_id: int, user_id: int, username: str | None,
+                        first_name: str | None) -> None:
+    """Пассивный сбор участников MAX-чата → chats_service /max/members.
+    Fail-open: если эндпоинта ещё нет (404) — молча пропускаем."""
+    if not user_id:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=5) as c:
+            await c.post(f"{CHATS_SERVICE_URL}/max/members", json={
+                "chat_id": str(chat_id),
+                "user_id": user_id,
+                "username": username,
+                "first_name": first_name,
+            })
+    except Exception as e:
+        log.warning(f"upsert_member fail chat={chat_id}: {e}")
+
+
+def _is_group(recipient: dict) -> bool:
+    """MAX: recipient.chat_type ∈ dialog|chat|channel. Группа — не dialog."""
+    ct = (recipient or {}).get("chat_type")
+    if ct:
+        return ct != "dialog"
+    # Фолбэк, если chat_type не пришёл: в dialog chat_id == user_id собеседника.
+    return True
+
+
+def _mentions_bot(msg: dict, text: str) -> bool:
+    """Прямое обращение к боту в группе: reply на сообщение бота ИЛИ
+    текстовый тег по имени/username бота. markup во входящем MAX-теле нет,
+    поэтому ловим reply (message.link.type==reply + sender==bot) и тег."""
+    # 1) reply на бота
+    link = msg.get("link") or {}
+    if link.get("type") == "reply":
+        ls = (link.get("sender") or {})
+        if _bot_id and ls.get("user_id") == _bot_id:
+            return True
+    # 2) тег по username / имени бота в тексте
+    low = (text or "").lower()
+    if _bot_username and f"@{_bot_username.lower()}" in low:
+        return True
+    if _bot_name:
+        name = _bot_name.strip().lower()
+        if name and name in low:
+            return True
+    return False
 
 
 def _registration_gate_text(chat_id: int) -> str:
@@ -395,6 +553,7 @@ def _extract_message(update: dict) -> dict | None:
     has_att = bool(body.get("attachments"))
     if chat_id is None or (not text and not has_att):
         return None
+    is_group = _is_group(recipient)
     return {
         "chat_id": int(chat_id),
         "user_id": int(sender.get("user_id") or 0),
@@ -402,6 +561,9 @@ def _extract_message(update: dict) -> dict | None:
         "text": text,
         "message_id": body.get("mid") or msg.get("message_id"),
         "has_attachments": has_att,
+        "is_group": is_group,
+        # прямое обращение к боту (reply/тег) — считаем только в группе
+        "is_mention": bool(is_group and _mentions_bot(msg, text)),
     }
 
 
@@ -650,6 +812,34 @@ async def handle_update(update: dict) -> None:
                       f"chat_id: {info['chat_id']}"),
                 chat_id=info["chat_id"], fmt=None)
         return
+
+    # ── Оркестрация (как в telegram_service) ──────────────────────────────
+    # Пассивный сбор участников (для будущих проактивных сценариев).
+    await upsert_member(info["chat_id"], info.get("user_id"),
+                        info.get("username"), info.get("username"))
+
+    is_group = info.get("is_group", True)
+    approved = True
+    if is_group:
+        # В группе всегда пишем реплику в буфер (контекст для оркестратора).
+        if (info.get("text") or "").strip():
+            await buffer_push(info["chat_id"], info.get("username") or "user",
+                              info["text"].strip())
+        # Прямое обращение (reply на бота / тег по имени) — отвечаем сразу.
+        if info.get("is_mention"):
+            approved = True
+        else:
+            # Иначе решает режим чата: mention — молчим, orchestrator — спрашиваем lite-LLM.
+            _settings = await get_chat_settings(info["chat_id"])
+            trigger_mode = (_settings or {}).get("trigger_mode") or "orchestrator"
+            approved = False
+            if trigger_mode == "orchestrator" and await orchestrator_allowed(info["chat_id"]):
+                lines = await buffer_lines(info["chat_id"])
+                approved = await orchestrator_should_respond(info["chat_id"], lines)
+        if not approved:
+            return
+    # Личка (dialog) — всегда обращение к агенту, отвечаем без фильтра.
+
     # Плашка "Думаю..." сразу на входящее — ответ агента отредактирует её.
     # Для альбома (дебаунс) шлём одну плашку на первое вложение серии.
     if info["chat_id"] not in _thinking_messages:
@@ -834,7 +1024,9 @@ async def _send_agent_file(chat_id: int, f: dict) -> None:
             return
     else:
         attachment = {"type": up_type, "payload": {"token": token}}
-    await client.send_message(
+    # send_message_with_attachment ретраит POST /messages при
+    # attachment.not.ready (файл ещё обрабатывается на стороне MAX после upload).
+    await client.send_message_with_attachment(
         text=f.get("caption") or "",
         chat_id=chat_id,
         attachments=[attachment],
@@ -896,6 +1088,11 @@ async def push_message(req: PushMessageRequest):
             else:
                 await client.send_message(text=chunk, chat_id=cid, fmt=fmt)
             first = False
+        # Ответ агента — в буфер оркестратора (чтобы видел продолжение диалога).
+        try:
+            await buffer_push_agent(cid, None, req.text)
+        except Exception as e:
+            log.warning(f"buffer_push_agent fail chat={cid}: {e}")
         return PushMessageResponse(ok=True)
     except MaxApiError as e:
         log.error(f"push_message API error {e.status}: {e.data}")
@@ -917,11 +1114,14 @@ async def health():
 # ══════════════════════════════════════════════════════════════
 @api.on_event("startup")
 async def _startup():
-    global client, _poll_task
+    global client, _poll_task, _bot_id, _bot_name, _bot_username
     client = MaxClient(MAX_TOKEN_API)
     try:
         me = await client.get_me()
-        log.info(f"MAX bot: {me.get('name')} (user_id={me.get('user_id')})")
+        _bot_id = me.get("user_id")
+        _bot_name = me.get("name")
+        _bot_username = me.get("username")
+        log.info(f"MAX bot: {_bot_name} (user_id={_bot_id}, username={_bot_username})")
     except Exception as e:
         log.error(f"get_me не удался (продолжаю): {e}")
     try:

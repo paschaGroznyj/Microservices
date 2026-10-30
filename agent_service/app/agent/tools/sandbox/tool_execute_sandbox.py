@@ -440,6 +440,63 @@ So you can then spy on it/reuse it within the session.
             IMPORTANT: the code is executed as .py script, top-level await is not working —
             always wrap asynchronous calls in async def main(): ...; asyncio.run(main()).
 
+        3. PDF-ПРЕЗЕНТАЦИЯ БЕЗ БЕЛЫХ ПОЛЕЙ (прямой Playwright → PNG → Pillow).
+           Используй ЭТОТ способ, а НЕ render_slides_to_pdf, когда нужна preza
+           фиксированного формата 16:9 (1920×1080) с вшитыми картинками и БЕЗ полей/
+           смещений по краям. Каждый слайд рендерится напрямую в PNG фиксированного
+           размера, затем PNG склеиваются в один PDF через Pillow.
+
+           ПРИЧИНА ПОЛЕЙ: белые поля появляются, когда размер .slide в HTML ≠ размеру
+           viewport рендера ≠ размеру страницы PDF. Решение — свести все три к одному
+           размеру (1920×1080) + CSS-reset в <head> КАЖДОГО слайда:
+               * { margin:0; padding:0; box-sizing:border-box; }
+               html,body { width:1920px; height:1080px; overflow:hidden; }
+               .slide    { width:1920px; height:1080px; overflow:hidden; position:relative; }
+           Картинку покрывать весь лист: <img style="width:100%;height:100%;object-fit:cover">
+           или background. Вшивать локально — через base64 (нет внешних зависимостей):
+               b64 = base64.b64encode(open(img_path,"rb").read()).decode()
+               img = f'<img src="data:image/png;base64,{b64}" style="width:100%;height:100%;object-fit:cover">'
+           либо <img> с ОТНОСИТЕЛЬНЫМ путём к файлу рядом с HTML в рабочей директории.
+
+           Скелет (viewport == размеру слайда, full_page=False — иначе поедут поля):
+
+               import asyncio, base64
+               from playwright.async_api import async_playwright
+               from PIL import Image
+
+               async def render_slide(html_path, out_png, w=1920, h=1080, scale=1):
+                   async with async_playwright() as p:
+                       browser = await p.chromium.launch(args=["--no-sandbox"])
+                       page = await browser.new_page(
+                           viewport={"width": w, "height": h},
+                           device_scale_factor=scale,   # 2..3 — физический растр до 4K
+                       )                                 # ХОЛСТ оставить логическим 1920×1080
+                       await page.goto(f"file://{html_path}", wait_until="domcontentloaded")
+                       await page.evaluate("document.fonts.ready")
+                       await page.wait_for_timeout(400)
+                       await page.screenshot(path=out_png, type="png", full_page=False)
+                       await browser.close()
+
+               async def main(html_files, out_pdf):
+                   pngs = []
+                   for i, html in enumerate(html_files):
+                       out = f"slide_{i}.png"
+                       await render_slide(html, out)
+                       pngs.append(out)
+                   imgs = [Image.open(p).convert("RGB") for p in pngs]
+                   imgs[0].save(out_pdf, save_all=True, append_images=imgs[1:])
+
+               asyncio.run(main(["slide1.html","slide2.html"], "output/deck.pdf"))
+
+           ЗАМЕТКИ:
+           - top-level await не работает — всё в async def main(): ...; asyncio.run(main()).
+           - PNG lossless даёт резкие линии/код; JPEG q96 — если нужен компактный файл.
+           - device_scale_factor=2..3 поднимает растр до 4K БЕЗ изменения вёрстки
+             (холст логический 1920×1080, резкость множителем, а не размером канвы).
+           - ПРОВЕРЯЙ фактический размер PNG после рендера: должен быть ровно W×H (×scale).
+             Если нет — где-то поле/несовпадение размеров .slide/viewport.
+           - Каждый слайд — ОТДЕЛЬНЫЙ HTML-файл (не page-break-after в одном HTML).
+
         ── Fonts ─────────────────────────────────────────────────────────
         /app/fonts/InterVariable.ttf — variable, NOT for reportlab/Pillow
         /app/fonts/extras/ttf/Inter-{Regular,Bold,Italic}.ttf — for reportlab/Pillow ✅

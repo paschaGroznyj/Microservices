@@ -87,15 +87,10 @@ const FileAttach = (() => {
     }
 
     function getFilesMeta() {
-        return _files.map(f => {
-            const ext = _getExt(f.name);
-            const isMedia = _isImageFile(f) || _isVideoFile(f);
-            return {
-                name: f.name,
-                ext,
-                ...(isMedia ? { localUrl: _getPreviewUrl(f) } : {}),
-            };
-        });
+        return _files.map(f => ({
+            name: f.name,
+            ext:  _getExt(f.name),
+        }));
     }
 
     /* ─── создать скрытый input[file] ───────────────────────── */
@@ -212,7 +207,7 @@ const FileAttach = (() => {
         wrapper.className = `fa-chip fa-chip--${color}`;
         wrapper.title     = file.name;
 
-        let iconHtml = `
+        const defaultIconHtml = `
 <span class="fa-chip__icon" aria-hidden="true">
   <svg viewBox="0 0 36 44" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path d="M4 0h20l12 12v28a4 4 0 0 1-4 4H4a4 4 0 0 1-4-4V4a4 4 0 0 1 4-4z"
@@ -222,17 +217,22 @@ const FileAttach = (() => {
     <text x="18" y="32" text-anchor="middle" class="fa-chip__text">${label}</text>
   </svg>
 </span>`;
+        let iconHtml = defaultIconHtml;
 
-        if (previewUrl && isImg) {
-            iconHtml = `
+        try {
+            if (previewUrl && isImg) {
+                iconHtml = `
 <span class="fa-chip__icon fa-chip__icon--thumb" aria-hidden="true">
   <img class="fa-chip__thumb-img" src="${_escHtml(previewUrl)}" alt="">
 </span>`;
-        } else if (previewUrl && isVid) {
-            iconHtml = `
+            } else if (previewUrl && isVid) {
+                iconHtml = `
 <span class="fa-chip__icon fa-chip__icon--thumb" aria-hidden="true">
   <video class="fa-chip__thumb-video" src="${_escHtml(previewUrl)}#t=0.001" preload="metadata" muted playsinline tabindex="-1"></video>
 </span>`;
+            }
+        } catch (_) {
+            iconHtml = defaultIconHtml;
         }
 
         wrapper.innerHTML = `${iconHtml}
@@ -243,7 +243,24 @@ const FileAttach = (() => {
   </svg>
 </button>`;
 
+        const imgEl = wrapper.querySelector('.fa-chip__thumb-img');
+        if (imgEl) {
+            imgEl.addEventListener('error', () => {
+                try {
+                    const iconSpan = wrapper.querySelector('.fa-chip__icon');
+                    if (iconSpan) iconSpan.outerHTML = defaultIconHtml;
+                } catch (_) {}
+            }, { once: true });
+        }
         const vidEl = wrapper.querySelector('.fa-chip__thumb-video');
+        if (vidEl) {
+            vidEl.addEventListener('error', () => {
+                try {
+                    const iconSpan = wrapper.querySelector('.fa-chip__icon');
+                    if (iconSpan) iconSpan.outerHTML = defaultIconHtml;
+                } catch (_) {}
+            }, { once: true });
+        }
         if (vidEl) {
             vidEl.muted = true;
             vidEl.playsInline = true;

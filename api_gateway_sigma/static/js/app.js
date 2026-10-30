@@ -1518,7 +1518,7 @@ class ChatApp {
             if (message.id) wrapper.dataset.id = message.id;
             if (_uClientMsgId) wrapper.dataset.messageId = _uClientMsgId;
             // Прикреплённые файлы (чипы) — НАД пузырём сообщения, а не внутри него.
-            const filesHtml = this._renderMessageFiles(message.files);
+            const filesHtml = this._renderMessageFiles(message.files, _uClientMsgId);
             if (filesHtml) {
                 const filesWrap = document.createElement('div');
                 filesWrap.innerHTML = filesHtml;
@@ -1898,130 +1898,83 @@ class ChatApp {
         }
     }
 
-    _renderMessageFiles(files) {
-        if (!files || files.length === 0) return '';
+    _renderMessageFiles(files, messageId = '') {
+        try {
+            if (!files || !Array.isArray(files) || files.length === 0) return '';
 
-        const EXT_LABEL = {
-            pdf:'PDF', docx:'DOC', doc:'DOC',
-            xlsx:'XLS', xls:'XLS', csv:'CSV',
-            pptx:'PPT', ppt:'PPT',
-            txt:'TXT', md:'MD',
-            png:'PNG', jpg:'JPG', jpeg:'JPG', gif:'GIF', webp:'WEBP', svg:'SVG',
-            mp4:'MP4', mov:'MOV', avi:'AVI',
-            zip:'ZIP', rar:'RAR', '7z':'7Z',
-            json:'JSON', xml:'XML', html:'HTML', py:'PY',
-            js:'JS', ts:'TS', css:'CSS',
-        };
-        const EXT_COLOR = {
-            pdf:'red', doc:'blue', docx:'blue',
-            xls:'green', xlsx:'green', csv:'green',
-            ppt:'orange', pptx:'orange',
-            png:'purple', jpg:'purple', jpeg:'purple',
-            gif:'purple', webp:'purple', svg:'purple', bmp:'purple', avif:'purple',
-            mp4:'purple', mov:'purple', avi:'purple', webm:'purple', mkv:'purple', m4v:'purple', ogv:'purple',
-            zip:'gray', rar:'gray', '7z':'gray',
-            json:'yellow', xml:'yellow',
-            py:'teal', js:'yellow', ts:'blue', css:'purple',
-        };
-        const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif', 'ico']);
+            const EXT_LABEL = {
+                pdf:'PDF', docx:'DOC', doc:'DOC',
+                xlsx:'XLS', xls:'XLS', csv:'CSV',
+                pptx:'PPT', ppt:'PPT',
+                txt:'TXT', md:'MD',
+                png:'PNG', jpg:'JPG', jpeg:'JPG', gif:'GIF', webp:'WEBP', svg:'SVG',
+                mp4:'MP4', mov:'MOV', avi:'AVI',
+                zip:'ZIP', rar:'RAR', '7z':'7Z',
+                json:'JSON', xml:'XML', html:'HTML', py:'PY',
+                js:'JS', ts:'TS', css:'CSS',
+            };
+            const EXT_COLOR = {
+                pdf:'red', doc:'blue', docx:'blue',
+                xls:'green', xlsx:'green', csv:'green',
+                ppt:'orange', pptx:'orange',
+                png:'purple', jpg:'purple', jpeg:'purple',
+                gif:'purple', webp:'purple', svg:'purple', bmp:'purple', avif:'purple',
+                mp4:'purple', mov:'purple', avi:'purple', webm:'purple', mkv:'purple', m4v:'purple', ogv:'purple',
+                zip:'gray', rar:'gray', '7z':'gray',
+                json:'yellow', xml:'yellow',
+                py:'teal', js:'yellow', ts:'blue', css:'purple',
+            };
 
-        const getLabel = (ext) => EXT_LABEL[ext] || ext.toUpperCase().slice(0, 4) || 'FILE';
-        const getColor = (ext) => EXT_COLOR[ext] || 'gray';
+            const getLabel = (ext) => EXT_LABEL[ext] || ext.toUpperCase().slice(0, 4) || 'FILE';
+            const getColor = (ext) => EXT_COLOR[ext] || 'gray';
 
-        const makeChip = (f) => {
-            const rawName = f.name || 'файл';
-            const ext   = (f.ext || (rawName.includes('.') ? rawName.split('.').pop() : '') || '').toLowerCase();
-            const label = getLabel(ext);
-            const color = getColor(ext);
-            const name  = this.escapeHtml(rawName);
-            const isImg = f.kind === 'image' || IMAGE_EXTS.has(ext);
-            const thumbUrl = isImg
-                ? (f.localUrl || (messageId && this.currentChat
-                    ? `/api/chats/${this.currentChat}/files/${encodeURIComponent(messageId)}/${encodeURIComponent(rawName)}`
-                    : ''))
-                : '';
-            const iconInner = thumbUrl
-                ? `<span class="fa-chip__icon fa-chip__icon--thumb" aria-hidden="true">
-  <img class="fa-chip__thumb-img" src="${this.escapeHtml(thumbUrl)}" alt="">
-</span>`
-                : `<span class="fa-chip__icon" aria-hidden="true">
+            const makeChip = (f) => {
+                try {
+                    const rawName = (f && f.name) ? String(f.name) : 'файл';
+                    const ext   = ((f && f.ext) || (rawName.includes('.') ? rawName.split('.').pop() : '') || '').toLowerCase();
+                    const label = getLabel(ext);
+                    const color = getColor(ext);
+                    const name  = this.escapeHtml(rawName);
+                    return `<div class="fa-chip fa-chip--${color} fa-chip--readonly" title="${name}">
+<span class="fa-chip__icon" aria-hidden="true">
   <svg viewBox="0 0 36 44" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path d="M4 0h20l12 12v28a4 4 0 0 1-4 4H4a4 4 0 0 1-4-4V4a4 4 0 0 1 4-4z" class="fa-chip__bg"/>
     <path d="M24 0l12 12H28a4 4 0 0 1-4-4V0z" class="fa-chip__fold"/>
     <text x="18" y="32" text-anchor="middle" class="fa-chip__text">${label}</text>
   </svg>
-</span>`;
-            return `<div class="fa-chip fa-chip--${color} fa-chip--readonly" title="${name}">
-${iconInner}
+</span>
 <span class="fa-chip__name">${name}</span>
 </div>`;
-        };
+                } catch (_) {
+                    return `<div class="fa-chip fa-chip--gray fa-chip--readonly"><span class="fa-chip__name">файл</span></div>`;
+                }
+            };
 
-        const VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v', 'ogv', 'avi', 'mkv']);
-        const isVideo = (f) => {
-            let ext = (f.ext || '').toLowerCase();
-            if (!ext && f.name && f.name.includes('.')) {
-                ext = f.name.split('.').pop().toLowerCase();
-            }
-            return f.kind === 'video' || VIDEO_EXTS.has(ext);
-        };
-        const videoMime = (ext) => {
-            if (ext === 'webm') return 'video/webm';
-            if (ext === 'mov') return 'video/quicktime';
-            if (ext === 'ogv' || ext === 'ogg') return 'video/ogg';
-            return 'video/mp4';
-        };
+            const VISIBLE_LIMIT = 3;
+            const visible  = files.slice(0, VISIBLE_LIMIT);
+            const hidden   = files.slice(VISIBLE_LIMIT);
 
-        const videoFiles = files.filter(isVideo);
-        const chipFiles  = files.filter(f => !isVideo(f));
+            let chipsHtml = visible.map(makeChip).join('');
 
-        let videosHtml = '';
-        if (videoFiles.length > 0) {
-            videosHtml = '<div class="fa-image-gallery fa-user-videos">' + videoFiles.map(f => {
-                const rawName = f.name || 'video.mp4';
-                const safeName = this.escapeHtml(rawName);
-                const ext = (f.ext || rawName.split('.').pop() || 'mp4').toLowerCase();
-                const url = f.localUrl
-                    ? f.localUrl
-                    : (messageId && this.currentChat
-                        ? `/api/chats/${this.currentChat}/files/${encodeURIComponent(messageId)}/${encodeURIComponent(rawName)}`
-                        : '');
-                if (!url) return makeChip(f);
-                const safeUrl = this.escapeHtml(url);
-                const mime = videoMime(ext);
-                return `<div class="fa-image-card fa-video-card" title="${safeName}">
-  <span class="fa-image-card__bg" aria-hidden="true"></span>
-  <video class="fa-video-card__video" controls preload="metadata" playsinline webkit-playsinline src="${safeUrl}"
-         onloadedmetadata="window.__catchpmApp && window.__catchpmApp._applyVideoCardAspect(this)">
-    <source src="${safeUrl}" type="${mime}">
-  </video>
-</div>`;
-            }).join('') + '</div>';
-        }
-
-        const VISIBLE_LIMIT = 3;
-        const visible  = chipFiles.slice(0, VISIBLE_LIMIT);
-        const hidden   = chipFiles.slice(VISIBLE_LIMIT);
-
-        let chipsHtml = visible.map(makeChip).join('');
-
-        let collapseHtml = '';
-        if (hidden.length > 0) {
-            const hiddenChips = hidden.map(makeChip).join('');
-            const uid = `fa-collapse-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-            collapseHtml = `
-<div class="fa-chips-hidden" id="${uid}" style="display:none;">${hiddenChips}</div>
+            let collapseHtml = '';
+            if (hidden.length > 0) {
+                const hiddenChips = hidden.map(makeChip).join('');
+                const uid = `fa-collapse-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+                collapseHtml = `
+<div class="fa-chips-hidden" id="${uid}">${hiddenChips}</div>
 <button class="fa-chips-toggle" type="button"
         onclick="(function(btn){
             var box = document.getElementById('${uid}');
-            var open = box.style.display !== 'none';
-            box.style.display = open ? 'none' : 'flex';
-            btn.textContent = open ? '+${hidden.length} файл${hidden.length === 1 ? '' : hidden.length < 5 ? 'а' : 'ов'}' : 'Скрыть';
+            var open = box.classList.toggle('fa-chips-hidden--open');
+            btn.textContent = open ? 'Скрыть' : '+${hidden.length} файл${hidden.length === 1 ? '' : hidden.length < 5 ? 'а' : 'ов'}';
         })(this)">+${hidden.length} файл${hidden.length === 1 ? '' : hidden.length < 5 ? 'а' : 'ов'}</button>`;
-        }
+            }
 
-        const chipsWrap = (chipsHtml || collapseHtml) ? `<div class="fa-message-files">${chipsHtml}${collapseHtml}</div>` : '';
-        return `<div class="fa-user-media-wrap">${videosHtml}${chipsWrap}</div>`;
+            return `<div class="fa-message-files">${chipsHtml}${collapseHtml}</div>`;
+        } catch (err) {
+            console.warn('_renderMessageFiles error:', err);
+            return '';
+        }
     }
     /* ══════════════════════════════════════════
        RENDER BOT FILES (под сообщением агента, над кнопкой копировать)

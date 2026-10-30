@@ -1,203 +1,707 @@
 * { box-sizing: border-box; }
-html, body { margin:0; height:100%; background:#1e1e1e; color:#ccc;
-  font-family: -apple-system, Segoe UI, Roboto, sans-serif; }
-
-/* ── Глобальные токены темы для попапов панелей (mp-panel/tp-section
-   рендерятся в document.body, вне скоупа .ed-ai-input) ── */
-body {
-  --surface: #252526;
-  --surface2: #2f2f31;
-  --surface-2: #2f2f31;
-  --border: #3a3a3a;
-  --accent: #4da6ff;
-  --text-primary: #eaeaea;
-  --text-secondary: #c5c5c5;
-  --text-muted: #8a8a8a;
-  --transition: .18s ease;
+html, body {
+  margin: 0;
+  height: 100dvh;
+  background: var(--bg);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  overflow: hidden;
 }
 
-/* Подложка попапов — явный непрозрачный фон на случай нехватки переменных */
+body {
+  --surface-2: var(--surface2);
+}
+
+/* Подложка попапов выбора модели и инструментов */
 .mp-panel, .tools-panel {
   background: var(--surface) !important;
   border: 1px solid var(--border) !important;
   box-shadow: 0 8px 32px rgba(0,0,0,.45), 0 2px 8px rgba(0,0,0,.3) !important;
 }
-body { display:flex; flex-direction:column; }
-.ed-topbar { display:flex; align-items:center; gap:16px; padding:8px 14px;
-  background:#252526; border-bottom:1px solid #333; flex:0 0 auto; }
-.ed-brand { font-weight:600; font-size:14px; }
-.ed-ws { display:flex; align-items:center; gap:6px; font-size:13px; }
-.ed-ws select { background:#1e1e1e; color:#ccc; border:1px solid #444;
-  border-radius:4px; padding:4px 8px; min-width:200px; }
-.ed-ws button { background:#0e639c; color:#fff; border:none;
-  border-radius:4px; padding:4px 10px; cursor:pointer; }
-.ed-ws button:hover { background:#1177bb; }
-.ed-filename { margin-left:auto; font-size:13px; color:#9cdcfe; }
-.ed-ttl { display:flex; align-items:center; gap:6px; font-size:12px; color:#9aa0a6;
-  padding:4px 10px; border-radius:99px; border:1px solid var(--border);
-  background:var(--surface2); white-space:nowrap; cursor:default; }
-.ed-ttl-dot { width:7px; height:7px; border-radius:50%; background:#3fb950; flex:none; }
-.ed-ttl.warn { color:#e3b341; border-color:color-mix(in srgb, #e3b341 40%, var(--border)); }
-.ed-ttl.warn .ed-ttl-dot { background:#e3b341; }
-.ed-ttl.crit { color:#f85149; border-color:color-mix(in srgb, #f85149 45%, var(--border)); }
-.ed-ttl.crit .ed-ttl-dot { background:#f85149; animation:ed-ttl-blink 1.2s ease-in-out infinite; }
-@keyframes ed-ttl-blink { 0%,100%{opacity:1;} 50%{opacity:.3;} }
-.ed-actions { display:flex; align-items:center; gap:8px; }
-.ed-actions button { background:#0e7a3f; color:#fff; border:none;
-  border-radius:4px; padding:5px 14px; cursor:pointer; font-size:13px; font-weight:500; }
-.ed-actions button:hover:not(:disabled) { background:#128a49; }
-.ed-actions button:disabled { background:#3a3a3a; color:#777; cursor:default; }
-.ed-main { flex:1 1 auto; display:flex; min-height:0; }
-.ed-tree { width:260px; flex:0 0 auto; overflow:auto; background:#252526;
-  border-right:1px solid #333; padding:6px 0; font-size:13px; }
-.ed-editor { flex:1 1 auto; min-width:0; }
-.ed-node { padding:2px 8px; cursor:pointer; white-space:nowrap; user-select:none; }
-.ed-node:hover { background:#2a2d2e; }
-.ed-node.dir { color:#c5c5c5; font-weight:500; }
-.ed-node.file { color:#bbb; }
-.ed-node.sel { background:#094771; color:#fff; }
-.ed-children { padding-left:14px; }
-.ed-ic { display:inline-block; width:14px; text-align:center; margin-right:4px; opacity:.8; }
 
-/* ── AI-панель (стиль chat-main) ── */
-.ed-ai { width:360px; flex:0 0 auto; display:flex; flex-direction:column;
-  background:#1e1e1e; border-left:1px solid #333; min-height:0; }
-.ed-ai-head {
-  padding:10px 14px; font-weight:600; font-size:13px;
-  position: sticky; top: 0; z-index: 10;
+/* ═══════════════════════════════════════════════
+   LAYOUT (Left Sidebar + Center + Right AI Sidebar)
+════════════════════════════════════════════════ */
+.chat-layout.ed-layout {
+  display: flex;
+  width: 100%;
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+body.is-resizing {
+  user-select: none !important;
+  cursor: col-resize !important;
+}
+body.is-resizing iframe,
+body.is-resizing .ed-editor {
+  pointer-events: none;
+}
+
+/* ═══════════════════════════════════════════════
+   LEFT SIDEBAR (аналогично .sidebar из api_gateway)
+════════════════════════════════════════════════ */
+.sidebar.ed-sidebar {
+  width: 250px;
+  min-width: 250px;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+  transition: width .22s ease, min-width .22s ease, opacity .18s ease,
+              background var(--transition), border-color .22s ease;
+}
+
+.ed-layout.sidebar-collapsed .sidebar.ed-sidebar {
+  width: 0;
+  min-width: 0;
+  border-right-color: transparent;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sidebar-header {
+  padding: 0 12px 0 14px;
+  height: 54px;
+  min-height: 54px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.brand-link {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+  color: var(--text-primary);
+  text-decoration: none;
+  font-family: var(--font-serif);
+  font-weight: 600;
+  font-size: 1.02rem;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.brand-link:hover { text-decoration: none; opacity: .88; }
+
+.brand-icon {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+.brand-icon-img {
+  display: block;
+  object-fit: contain;
+  border-radius: 6px;
+}
+
+.brand-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Кнопка сворачивания/разворачивания сайдбара (1:1 из sidebar.css) */
+.sidebar-collapse-btn {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+.sidebar-collapse-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+.sidebar-collapse-btn:active {
+  background: var(--sidebar-active);
+}
+.sidebar-collapse-icon {
+  display: block;
+}
+
+/* Кнопки возврата свёрнутых панелей в main-header */
+.ed-expand-left,
+.ed-expand-right {
+  display: none;
+}
+.ed-layout.sidebar-collapsed .ed-expand-left {
+  display: inline-flex;
+}
+.ed-layout.ai-collapsed .ed-expand-right {
+  display: inline-flex;
+}
+
+/* Дерево файлов в левом сайдбаре */
+.sidebar-section.ed-tree {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: auto;
+  min-height: 0;
+  padding: 8px 6px;
+  font-size: .82rem;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.ed-node {
+  display: flex;
+  align-items: center;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  color: var(--text-secondary);
+  transition: background var(--transition), color var(--transition);
+}
+.ed-node:hover {
+  background: var(--sidebar-hover);
+  color: var(--text-primary);
+}
+.ed-node.dir {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.ed-node.file {
+  color: var(--text-secondary);
+}
+.ed-node.sel {
+  background: var(--sidebar-active);
+  color: var(--accent);
+  font-weight: 500;
+}
+.ed-children {
+  padding-left: 14px;
+}
+.ed-ic {
+  display: inline-block;
+  width: 16px;
+  text-align: center;
+  margin-right: 5px;
+  opacity: .85;
+  flex-shrink: 0;
+}
+
+/* ═══════════════════════════════════════════════
+   CENTER AREA + MAIN-HEADER (ed-topbar)
+════════════════════════════════════════════════ */
+.chat-main.ed-center {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+  position: relative;
+}
+
+.main-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  height: 54px;
+  min-height: 54px;
   background: rgba(15, 23, 37, 0.28);
   border-bottom: 1px solid rgba(255, 255, 255, 0.10);
   backdrop-filter: blur(7px) saturate(115%);
   -webkit-backdrop-filter: blur(7px) saturate(115%);
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.30);
-}
-.ed-ai-log { flex:1 1 auto; overflow-y:auto; padding:14px; font-size:14px; line-height:1.55;
-  display:flex; flex-direction:column; gap:14px; }
-.ed-ai-msg { max-width:100%; word-wrap:break-word; }
-.ed-ai-msg.user { align-self:flex-end; background:#2b4a63; color:#eaf3fb;
-  padding:8px 12px; border-radius:14px 14px 4px 14px; max-width:85%; white-space:pre-wrap; }
-.ed-ai-msg.bot { align-self:flex-start; color:#dcdcdc; }
-.ed-ai-msg.bot p { margin:0 0 8px; }
-.ed-ai-msg.bot p:last-child { margin-bottom:0; }
-.ed-ai-msg.bot pre { background:#0d0d0d; border:1px solid #2a2a2a; border-radius:8px;
-  padding:10px 12px; overflow-x:auto; margin:8px 0; }
-.ed-ai-msg.bot code { font-family:"SF Mono",Consolas,Monaco,monospace; font-size:12.5px; }
-.ed-ai-msg.bot :not(pre) > code { background:#2a2a2a; padding:1px 5px; border-radius:4px; }
-.ed-ai-msg.bot table { border-collapse:collapse; margin:8px 0; font-size:13px; }
-.ed-ai-msg.bot th, .ed-ai-msg.bot td { border:1px solid #3a3a3a; padding:4px 8px; }
-.ed-ai-msg.bot a { color:#4da6ff; }
-.ed-ai-msg.bot ul, .ed-ai-msg.bot ol { margin:6px 0; padding-left:20px; }
-.ed-ai-thinking { display:flex; gap:5px; align-items:center; padding:6px 0; }
-.ed-ai-thinking span { width:7px; height:7px; border-radius:50%; background:#888;
-  animation:ed-blink 1.2s infinite ease-in-out both; }
-.ed-ai-thinking span:nth-child(2){ animation-delay:.2s; }
-.ed-ai-thinking span:nth-child(3){ animation-delay:.4s; }
-@keyframes ed-blink { 0%,80%,100%{opacity:.25;transform:scale(.8)} 40%{opacity:1;transform:scale(1)} }
-
-/* ── INPUT: 1:1 c .chat-input-box из chat.css, тёмная тема панели ── */
-/* Тёмные токены панели (в /editor нет chat-переменных — задаём явно) */
-.ed-ai-input {
-  --input-bg: #242424;
-  --input-border: #3a3a3a;
-  --input-focus: #0e639c;
-  --accent: #0e639c;
-  --text-primary: #eaeaea;
-  --text-muted: #8a8a8a;
-  --border: #333;
-  --surface2: #2a2a2a;
-  --btn-primary-bg: #0e639c;
-  --btn-primary-text: #fff;
-  --shadow-md: 0 6px 18px rgba(0,0,0,.35);
-  --transition: .18s ease;
-  flex-shrink:0; padding:0 14px 14px; border-top:none; background:transparent;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 10;
 }
 
-.ed-ai-input .chat-input-area { width:100%; margin:0 auto; padding:0; }
+.main-title {
+  font-family: var(--font-serif);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
+.ed-filename {
+  font-family: var(--font-anthropic-mono, var(--font-mono, monospace));
+  font-size: .84rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-left: 4px;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Контролы выбора области в main-header */
+.ed-ws {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.ed-ws-label {
+  font-size: .78rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.ed-ws-select {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 5px 10px;
+  min-width: 190px;
+  max-width: 280px;
+  font-family: inherit;
+  font-size: .8rem;
+  outline: none;
+  transition: border-color var(--transition), background var(--transition);
+}
+.ed-ws-select:hover,
+.ed-ws-select:focus {
+  border-color: var(--accent);
+  background: var(--surface2);
+}
+.ed-ws-select option {
+  background: var(--surface);
+  color: var(--text-primary);
+}
+
+/* Ghost icon-button в стиле main-header (.info-btn / .mobile-menu-toggle) */
+.ed-icon-btn {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
+}
+.ed-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.14);
+  color: var(--accent);
+}
+
+/* Кнопка действия в main-header (Сохранить) в стиле таблеток/кнопок шапки */
+.ed-header-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+  font-size: .8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.ed-header-btn:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--text-on-accent);
+}
+.ed-header-btn:disabled {
+  opacity: .42;
+  cursor: default;
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text-muted);
+}
+
+/* Индикатор TTL области */
+.ed-ttl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: .76rem;
+  color: var(--text-secondary);
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 99px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  white-space: nowrap;
+  cursor: default;
+}
+.ed-ttl[hidden] { display: none !important; }
+.ed-ttl-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #3fb950;
+  flex: none;
+}
+.ed-ttl.warn {
+  color: #e3b341;
+  border-color: color-mix(in srgb, #e3b341 40%, var(--border));
+}
+.ed-ttl.warn .ed-ttl-dot { background: #e3b341; }
+.ed-ttl.crit {
+  color: #f85149;
+  border-color: color-mix(in srgb, #f85149 45%, var(--border));
+}
+.ed-ttl.crit .ed-ttl-dot {
+  background: #f85149;
+  animation: ed-ttl-blink 1.2s ease-in-out infinite;
+}
+@keyframes ed-ttl-blink { 0%,100%{opacity:1;} 50%{opacity:.3;} }
+
+/* Холст Monaco */
+.ed-editor {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ═══════════════════════════════════════════════
+   RESIZER + RIGHT SIDEBAR (.ed-ai.chat-main-inner.chat-active)
+════════════════════════════════════════════════ */
+.ed-ai-resizer {
+  width: 5px;
+  flex: 0 0 5px;
+  cursor: col-resize;
+  background: transparent;
+  border-left: 1px solid var(--border);
+  position: relative;
+  z-index: 15;
+  transition: background .15s ease, border-color .15s ease;
+}
+.ed-ai-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  right: -3px;
+}
+.ed-ai-resizer:hover,
+body.is-resizing .ed-ai-resizer {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+  border-left-color: var(--accent);
+}
+
+.ed-ai.chat-main-inner {
+  width: var(--ed-ai-width, 380px);
+  min-width: 260px;
+  max-width: 70vw;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  min-height: 0;
+  overflow: hidden;
+  transition: width .22s ease, min-width .22s ease, opacity .18s ease;
+}
+body.is-resizing .ed-ai.chat-main-inner {
+  transition: none !important;
+}
+
+/* Полное скрытие правого сайдбара по второй кнопке sidebar-collapse-btn */
+.ed-layout.ai-collapsed .ed-ai.chat-main-inner {
+  width: 0 !important;
+  min-width: 0 !important;
+  opacity: 0;
+  pointer-events: none;
+}
+.ed-layout.ai-collapsed .ed-ai-resizer {
+  display: none;
+}
+
+.ed-ai-head {
+  justify-content: space-between;
+}
+
+/* Лента сообщений в стиле chat-main-inner chat-active */
+.ed-ai-log.chat-messages {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 18px 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.ed-ai-msg {
+  max-width: 100%;
+  word-wrap: break-word;
+}
+
+/* Сообщение пользователя — 1:1 .user-message из chat.css */
+.ed-ai-msg.user {
+  align-self: flex-end;
+  max-width: 82%;
+  padding: 10px 14px;
+  border-radius: 14px 14px 3px 14px;
+  background: var(--msg-user-bg);
+  color: var(--msg-user-text);
+  font-family: var(--font-anthropic-sans);
+  font-size: .875rem;
+  line-height: 1.35rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Сообщение агента — 1:1 .agent-message из chat.css */
+.ed-ai-msg.bot {
+  align-self: stretch;
+  color: var(--msg-bot-text);
+  font-family: var(--font-anthropic-serif);
+  font-size: .95rem;
+  line-height: 1.55;
+}
+.ed-ai-msg.bot h1,
+.ed-ai-msg.bot h2,
+.ed-ai-msg.bot h3 {
+  font-family: var(--font-anthropic-serif);
+  margin: .9em 0 .4em;
+  color: var(--text-primary);
+}
+.ed-ai-msg.bot h1 { font-size: 1.2rem; }
+.ed-ai-msg.bot h2 { font-size: 1.05rem; }
+.ed-ai-msg.bot h3 { font-size: .95rem; }
+.ed-ai-msg.bot p { margin: 0 0 .6em; }
+.ed-ai-msg.bot p:last-child { margin-bottom: 0; }
+.ed-ai-msg.bot ul,
+.ed-ai-msg.bot ol { margin: 0 0 .6em; padding-left: 1.3em; }
+.ed-ai-msg.bot li { margin-bottom: .2em; }
+.ed-ai-msg.bot code {
+  font-family: var(--font-anthropic-mono);
+  font-size: .8125rem;
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+  padding: 1px 5px;
+  border-radius: 5px;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.ed-ai-msg.bot pre {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  margin: .75em 0;
+  font-family: var(--font-anthropic-mono);
+  font-size: .8rem;
+  line-height: 1.45;
+  box-shadow: var(--shadow-sm);
+}
+.ed-ai-msg.bot pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+}
+.ed-ai-msg.bot a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.ed-ai-msg.bot table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: .6em 0;
+  font-size: .85rem;
+}
+.ed-ai-msg.bot th,
+.ed-ai-msg.bot td {
+  border: 1px solid var(--border);
+  padding: 5px 9px;
+}
+.ed-ai-msg.bot th {
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* Индикатор ожидания ответа */
+.ed-ai-thinking {
+  display: inline-flex;
+  gap: 5px;
+  padding: 10px 14px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  align-self: flex-start;
+}
+.ed-ai-thinking span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  animation: ed-blink 1.2s infinite ease-in-out;
+}
+.ed-ai-thinking span:nth-child(2) { animation-delay: .2s; }
+.ed-ai-thinking span:nth-child(3) { animation-delay: .4s; }
+@keyframes ed-blink {
+  0%, 80%, 100% { opacity: .25; transform: scale(.85); }
+  40% { opacity: 1; transform: scale(1); }
+}
+
+/* ── Контейнер ввода (1:1 .message-input-container из основного чата) ── */
+.ed-ai-input.message-input-container {
+  flex: 0 0 auto;
+  padding: 0 12px 14px;
+  border-top: none;
+  background: transparent;
+}
+.ed-ai-input .chat-input-area {
+  max-width: 720px;
+  margin: 0 auto;
+  width: 100%;
+}
 .ed-ai-input .chat-input-box {
-  background:var(--input-bg);
-  border:1.5px solid var(--input-border);
-  border-radius:16px;
-  box-shadow:var(--shadow-md);
-  overflow:hidden;
-  transition:border-color var(--transition), box-shadow var(--transition);
+  display: flex;
+  flex-direction: column;
+  background: var(--input-bg);
+  border: 1.5px solid var(--input-border);
+  border-radius: 20px;
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  transition: border-color var(--transition), box-shadow var(--transition);
 }
 .ed-ai-input .chat-input-box:focus-within {
-  border-color:var(--input-focus);
-  box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent), var(--shadow-md);
+  border-color: var(--input-focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent), var(--shadow-md);
 }
-
-/* Поле ввода — та же геометрия, что .chat-input-field */
 .ed-ai-input .chat-input-field {
-  display:block; width:100%; box-sizing:border-box;
-  min-height:52px; max-height:200px; overflow-y:auto;
-  padding:16px 20px 8px;
-  background:transparent; border:none; outline:none; resize:none;
-  font-family:inherit; font-size:.95rem; line-height:1.6;
-  color:var(--text-primary); word-break:break-word;
-  scrollbar-width:thin; scrollbar-color:transparent transparent;
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 52px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 14px 16px 8px;
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
+  font-family: inherit;
+  font-size: .92rem;
+  line-height: 1.55;
+  color: var(--text-primary);
+  word-break: break-word;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
 }
-.ed-ai-input .chat-input-field::placeholder { color:var(--text-muted); }
-.ed-ai-input .chat-input-field::-webkit-scrollbar { width:6px; }
-.ed-ai-input .chat-input-field::-webkit-scrollbar-button { display:none!important; width:0!important; height:0!important; }
-.ed-ai-input .chat-input-field::-webkit-scrollbar-track { background:transparent; }
-.ed-ai-input .chat-input-field::-webkit-scrollbar-thumb {
-  background-color:transparent; border-radius:6px; border:1px solid transparent;
-  background-clip:padding-box; transition:background-color .2s ease; }
-.ed-ai-input .chat-input-field:hover::-webkit-scrollbar-thumb,
-.ed-ai-input .chat-input-field:focus::-webkit-scrollbar-thumb {
-  background-color:color-mix(in srgb, var(--border) 55%, transparent); }
+.ed-ai-input .chat-input-field::placeholder { color: var(--text-muted); }
 
-/* Нижняя панель — 1:1 .chat-input-footer */
 .ed-ai-footer {
-  display:flex; align-items:center; gap:8px;
-  padding:8px 12px 10px 12px; border-top:1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 10px 12px;
+  border-top: 1px solid var(--border);
 }
 
-/* Кнопка прикрепить (якорь для inject) — 1:1 .attach-btn */
 .ed-ai-input .attach-btn {
-  width:34px; height:34px; border-radius:50%;
-  display:flex; align-items:center; justify-content:center; flex-shrink:0;
-  background:transparent; border:none; color:var(--text-muted); cursor:pointer;
-  transition:all var(--transition);
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--transition);
 }
-.ed-ai-input .attach-btn svg { width:17px; height:17px; }
-.ed-ai-input .attach-btn:hover {
-  color:var(--accent); background:color-mix(in srgb, var(--accent) 8%, transparent); }
 
-/* Кнопка отправить — 1:1 .chat-send-btn */
 .ed-ai-footer .chat-send-btn {
-  margin-left:auto;
-  width:36px; height:36px; border-radius:50%;
-  display:flex; align-items:center; justify-content:center; flex-shrink:0;
-  background:var(--surface2); border:1.5px solid var(--border);
-  color:var(--text-muted); cursor:pointer; transition:all var(--transition);
+  margin-left: auto;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--btn-primary-bg);
+  border: 1.5px solid var(--btn-primary-bg);
+  color: var(--btn-primary-text);
+  cursor: pointer;
+  transition: all var(--transition);
 }
-.ed-ai-footer .chat-send-btn svg { width:17px; height:17px; }
-.ed-ai-footer .chat-send-btn:not([disabled]) {
-  background:var(--btn-primary-bg); border-color:var(--btn-primary-bg); color:var(--btn-primary-text); }
-.ed-ai-footer .chat-send-btn:not([disabled]):hover { filter:brightness(1.1); transform:scale(1.05); }
-.ed-ai-footer .chat-send-btn[disabled] { opacity:.4; cursor:not-allowed; }
+.ed-ai-footer .chat-send-btn svg { width: 16px; height: 16px; }
+.ed-ai-footer .chat-send-btn:hover { filter: brightness(1.08); transform: scale(1.04); }
 
-/* чип-подсказка: вопрос только по выделенным строкам — стиль .hint-chip */
+/* Чип выделенных строк */
 .ed-ai-selhint {
-  display:inline-flex; align-items:center; gap:8px; align-self:flex-start;
-  margin:10px 12px 0;
-  padding:4px 12px; border-radius:99px;
-  font-size:.78rem; color:var(--text-secondary);
-  background:var(--surface2); border:1px solid var(--border);
-  white-space:nowrap; user-select:none;
-  transition:all var(--transition);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  margin: 10px 12px 0;
+  padding: 4px 12px;
+  border-radius: 99px;
+  font-size: .78rem;
+  color: var(--text-secondary);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+  user-select: none;
+  transition: all var(--transition);
 }
 .ed-ai-selhint:hover {
-  border-color:var(--accent); color:var(--accent);
-  background:color-mix(in srgb, var(--accent) 6%, var(--surface));
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
 }
 .ed-ai-selhint button {
-  flex:0 0 auto; width:16px; height:16px; padding:0;
-  display:flex; align-items:center; justify-content:center;
-  border:none; border-radius:50%; background:transparent;
-  color:inherit; cursor:pointer; font-size:12px; line-height:1;
-  transition:all var(--transition);
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
 }
-.ed-ai-selhint button:hover { background:color-mix(in srgb, var(--accent) 18%, transparent); color:var(--accent); }

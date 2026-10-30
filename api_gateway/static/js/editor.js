@@ -11,10 +11,101 @@
   let dirty = false, isBinary = false, saving = false;
 
   const $ = (id) => document.getElementById(id);
+  const layoutEl = $("ed-layout");
   const treeEl = $("ed-tree");
   const wsSelect = $("ed-ws-select");
   const filenameEl = $("ed-filename");
   const saveBtn = $("ed-save");
+
+  // ── Collapse / Expand Left & Right Sidebars + Resizer ──
+  const KEY_LEFT_COLLAPSED = "catchpm:ed-sidebar-collapsed";
+  const KEY_AI_COLLAPSED   = "catchpm:ed-ai-collapsed";
+  const KEY_AI_WIDTH       = "catchpm:ed-ai-width";
+
+  const leftCollapseBtn = $("sidebar-collapse-btn");
+  const leftExpandBtn   = $("sidebar-expand-btn");
+  const aiCollapseBtn   = $("ai-collapse-btn");
+  const aiExpandBtn     = $("ai-expand-btn");
+  const aiResizer       = $("ed-ai-resizer");
+
+  function relayoutMonaco() {
+    if (!editor) return;
+    requestAnimationFrame(() => {
+      try { editor.layout(); } catch (_) {}
+      setTimeout(() => { try { editor.layout(); } catch (_) {} }, 230);
+    });
+  }
+
+  function applyLeftCollapsed(collapsed) {
+    if (!layoutEl) return;
+    layoutEl.classList.toggle("sidebar-collapsed", collapsed);
+    leftCollapseBtn?.setAttribute("aria-expanded", String(!collapsed));
+    leftExpandBtn?.setAttribute("aria-expanded", String(!collapsed));
+    try { localStorage.setItem(KEY_LEFT_COLLAPSED, collapsed ? "1" : "0"); } catch (_) {}
+    relayoutMonaco();
+  }
+
+  function applyAiCollapsed(collapsed) {
+    if (!layoutEl) return;
+    layoutEl.classList.toggle("ai-collapsed", collapsed);
+    aiCollapseBtn?.setAttribute("aria-expanded", String(!collapsed));
+    aiExpandBtn?.setAttribute("aria-expanded", String(!collapsed));
+    try { localStorage.setItem(KEY_AI_COLLAPSED, collapsed ? "1" : "0"); } catch (_) {}
+    relayoutMonaco();
+  }
+
+  function applyAiWidth(px) {
+    if (!layoutEl) return;
+    const minW = 260;
+    const maxW = Math.max(minW, Math.min(900, Math.floor(window.innerWidth * 0.7)));
+    const clamped = Math.max(minW, Math.min(maxW, Math.round(px)));
+    layoutEl.style.setProperty("--ed-ai-width", `${clamped}px`);
+    try { localStorage.setItem(KEY_AI_WIDTH, String(clamped)); } catch (_) {}
+  }
+
+  // Восстановление состояния панелей из localStorage
+  try {
+    const savedW = parseInt(localStorage.getItem(KEY_AI_WIDTH) || "", 10);
+    if (Number.isFinite(savedW) && savedW >= 260) applyAiWidth(savedW);
+    if (localStorage.getItem(KEY_LEFT_COLLAPSED) === "1") applyLeftCollapsed(true);
+    if (localStorage.getItem(KEY_AI_COLLAPSED) === "1") applyAiCollapsed(true);
+  } catch (_) {}
+
+  leftCollapseBtn?.addEventListener("click", () => applyLeftCollapsed(true));
+  leftExpandBtn?.addEventListener("click",   () => applyLeftCollapsed(false));
+  aiCollapseBtn?.addEventListener("click",   () => applyAiCollapsed(true));
+  aiExpandBtn?.addEventListener("click",     () => applyAiCollapsed(false));
+
+  if (aiResizer) {
+    aiResizer.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      document.body.classList.add("is-resizing");
+
+      const onMove = (ev) => {
+        const rawW = window.innerWidth - ev.clientX;
+        if (rawW < 140) {
+          applyAiCollapsed(true);
+          return;
+        }
+        if (layoutEl.classList.contains("ai-collapsed")) {
+          applyAiCollapsed(false);
+        }
+        applyAiWidth(rawW);
+        try { editor?.layout(); } catch (_) {}
+      };
+
+      const onUp = () => {
+        document.body.classList.remove("is-resizing");
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+        relayoutMonaco();
+      };
+
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    });
+  }
 
   // обновить workspace_id в адресной строке без перезагрузки (F5/копия ссылки держат область)
   function syncUrlWs(wsId) {
@@ -114,8 +205,12 @@
     for (const node of nodes) {
       const row = document.createElement("div");
       row.className = `ed-node ${node.type}`;
-      row.innerHTML = `<span class="ed-ic">${iconFor(node)}</span>${node.name}`;
+      row.innerHTML = `<span class="ed-ic">${iconFor(node)}</span>`;
+      const name = document.createElement("span");
+      name.textContent = node.name;
+      row.appendChild(name);
       container.appendChild(row);
+
       if (node.type === "dir") {
         const kids = document.createElement("div");
         kids.className = "ed-children";
@@ -234,6 +329,9 @@
           startLine: sel.startLineNumber,
           endLine: sel.endLineNumber,
         };
+        if (layoutEl?.classList.contains("ai-collapsed")) {
+          applyAiCollapsed(false);
+        }
         updateSelectionHint();
         const ta = $("ed-ai-text");
         ta.focus();
@@ -262,8 +360,6 @@
 
   // ── AI-панель ────────────────────────────────────────
   const aiLog = $("ed-ai-log");
-  // Делегат: любой клик по ссылке в логе открываем в новой вкладке,
-  // даже если realtime-рендер markdown не успел проставить target="_blank".
   if (aiLog) {
     aiLog.addEventListener("click", (e) => {
       const a = e.target.closest("a[href]");
@@ -274,7 +370,7 @@
       window.open(href, "_blank", "noopener,noreferrer");
     });
   }
-  let pendingSelection = null; // {text, startLine, endLine} — контекст из выделения
+  let pendingSelection = null;
 
   function updateSelectionHint() {
     const ta = $("ed-ai-text");
@@ -303,7 +399,6 @@
     }
   }
 
-  // Чередуем подсказку в placeholder: про весь файл и про точечный вопрос по ПКМ.
   const PH_VARIANTS = [
     "Спросить агента по открытому файлу…",
     "Выдели участок → ПКМ «Спросить агента о выделенном» для точечного вопроса",
@@ -424,8 +519,7 @@
       aiAppend("bot", `Ошибка отправки: ${e.message}`);
     }
   }
-  // Подключаем те же панели выбора модели и инструментов, что в основном чате.
-  // tools-panel.js грузится отдельным модулем — ждём появления window.ToolsPanel.
+
   (function injectPanels(tries = 0) {
     const footer = $("ed-ai")?.querySelector(".ed-ai-footer");
     if (!footer) return;
@@ -433,8 +527,6 @@
       if (tries < 50) return void setTimeout(() => injectPanels(tries + 1), 100);
       return;
     }
-    // inject() ищет .chat-input-footer внутри переданного контейнера.
-    // setUser() сам тянет /api/auth/permissions по куке — права берутся оттуда.
     const container = $("ed-ai");
     try { window.ToolsPanel.setUser?.(""); } catch (_) {}
     try { window.ToolsPanel.inject(container); } catch (_) {}

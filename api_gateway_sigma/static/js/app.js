@@ -2612,7 +2612,7 @@ class ChatApp {
     /* SVG-каретка (Tabler chevron-right). Один стиль на весь свёрток —
        поворачивается через CSS-transform при раскрытии. */
     _reasoningCaretSVG() {
-        return `<svg class="reasoning-caret" viewBox="0 0 24 24" width="14" height="14" `
+        return `<svg class="reasoning-caret" viewBox="0 0 24 24" width="12" height="12" `
              + `fill="none" stroke="currentColor" stroke-width="2" `
              + `stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">`
              + `<path d="M9 6l6 6-6 6"/></svg>`;
@@ -2653,12 +2653,13 @@ class ChatApp {
         }
         const wrap = document.createElement('div');
         wrap.className = 'reasoning-block reasoning-collapsed';
+        wrap.setAttribute('data-cds', 'TurnStatus');
         wrap.innerHTML = `
-            <div class="reasoning-header">
-                ${this._reasoningCaretSVG()}
+            <div class="reasoning-header" data-cds-row="">
                 <span class="reasoning-label">Размышления</span>
+                ${this._reasoningCaretSVG()}
             </div>
-            <div class="reasoning-body"></div>
+            <div class="reasoning-body" data-cds-row-panel=""></div>
         `;
         const header = wrap.querySelector('.reasoning-header');
         header?.addEventListener('click', () => {
@@ -2711,6 +2712,9 @@ class ChatApp {
         // Стартуем step в «зажатом» состоянии — анимация pop-in надует его,
         // как только лопнет живой пузырь (см. класс .reasoning-step--popin).
         step.className = 'reasoning-step reasoning-step--popin';
+        step.setAttribute('data-cds', 'Prose');
+        step.setAttribute('data-prose-font', 'sans');
+        step.setAttribute('data-prose-size', 'inherit');
         step.innerHTML = html;
         body.appendChild(step);
 

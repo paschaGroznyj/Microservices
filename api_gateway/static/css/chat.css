@@ -1511,47 +1511,77 @@ pre {
 
 /* ══════════════════════════════════════════════
    REASONING — размышления модели между вызовами
-   инструментов. Два состояния:
+   инструментов (CDS TurnStatus / Prose). Два состояния:
      .reasoning-live  — живой стрим текущей мысли
-                        (приглушённый, курсив, печатается сразу)
      .reasoning-block — единый свёрток «Размышления»,
                         куда после reasoning_end сливаются
                         все мысли ответа (сворачиваемый).
    Финальный ответ повышается до .live-block (обычный стиль).
 ══════════════════════════════════════════════ */
 
+:root,
+[data-theme="light"] {
+  --cds-reasoning-text: #52514e;
+  --cds-reasoning-muted: #898781;
+  --cds-reasoning-ring: rgba(11, 11, 11, 0.1);
+  --cds-reasoning-code-bg: rgba(11, 11, 11, 0.05);
+  --cds-reasoning-code-fg: #8e2626;
+}
+
+[data-theme="dark"] {
+  --cds-reasoning-text: #c3c2b7;
+  --cds-reasoning-muted: #898781;
+  --cds-reasoning-ring: rgba(255, 255, 255, 0.1);
+  --cds-reasoning-code-bg: rgba(255, 255, 255, 0.05);
+  --cds-reasoning-code-fg: #ec7e7e;
+}
+
 /* Финальный блок — наследует обычный стиль .agent-message, без декора. */
 .live-block {
   animation: subagent-fadein 0.18s ease;
 }
 
-/* Живой стрим мысли: сразу в приглушённом стиле, чтобы визуально
-   отличаться от финального ответа ещё до прихода маркера kind. */
+/* Живой стрим мысли в стиле карточки CDS TurnStatus */
 .reasoning-live {
-  font-size: 0.9rem;
-  line-height: 1.6;
-  color: var(--text-muted);
-  font-style: italic;
-  padding-left: 12px;
-  border-left: 2px solid color-mix(in srgb, var(--text-muted) 32%, transparent);
+  font-family: var(--font-anthropic-sans, var(--font-sans));
+  font-size: 13px;
+  line-height: 19.5px;
+  font-weight: 400;
+  font-style: normal;
+  color: var(--cds-reasoning-text);
+  padding: 8px 8px;
+  margin: 4px 0 8px;
+  border: none;
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 1px var(--cds-reasoning-ring);
   animation: subagent-fadein 0.18s ease;
 }
-.reasoning-live code {
+.reasoning-live p,
+.agent-message .reasoning-live p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 19.5px;
+  font-style: normal;
+  color: var(--cds-reasoning-text);
+}
+.reasoning-live p + p,
+.agent-message .reasoning-live p + p {
+  margin-top: 9.75px;
+}
+.reasoning-live code,
+.agent-message .reasoning-live code {
   font-family: var(--font-mono);
   font-style: normal;
-  font-size: 0.82em;
-  background: color-mix(in srgb, var(--text-muted) 10%, var(--surface));
-  border: 1px solid color-mix(in srgb, var(--text-muted) 18%, var(--border));
-  border-radius: 4px;
-  padding: 1px 4px;
-  color: var(--text-secondary);
+  font-size: 11.7px;
+  line-height: 11.7px;
+  background: var(--cds-reasoning-code-bg);
+  border: none;
+  border-radius: 4.68px;
+  padding: 0.73px 2.93px;
+  color: var(--cds-reasoning-code-fg);
 }
 
-/* ── Переход reasoning-live → reasoning-block («лопание пузыря») ──
-   Фаза 1: живой блок схлопывается и растворяется (pop-out),
-   как лопнувший мыльный пузырь — лёгкий раздув, затем сжатие в ноль.
-   Фаза 2: новый шаг в свёртке «надувается» из точки (pop-in).
-   transform-origin слева, чтобы движение шло от бордюра-акцента. */
+/* ── Переход reasoning-live → reasoning-block («лопание пузыря») ── */
 .reasoning-live--pop {
   pointer-events: none;
   transform-origin: 12px 50%;
@@ -1563,13 +1593,11 @@ pre {
   100% { transform: scale(0.62);   opacity: 0; filter: blur(3px); }
 }
 
-/* Новый шаг стартует «зажатым» (popin) — до команды надуться. */
 .reasoning-body .reasoning-step--popin {
   transform: scale(0.7);
   opacity: 0;
   transform-origin: left center;
 }
-/* Надувание пузыря: из точки в полный размер с лёгким перелётом. */
 .reasoning-body .reasoning-step--pop {
   animation: reasoning-step-inflate 0.34s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
 }
@@ -1589,86 +1617,189 @@ pre {
   }
 }
 
-/* ── Единый свёрток «Размышления» ─────────────── */
+/* ── Единый свёрток «Размышления» (CDS TurnStatus) ─────────────── */
 .reasoning-block {
-  margin: 4px 0 14px;
-  border: 1px solid color-mix(in srgb, var(--text-muted) 22%, var(--border));
-  border-radius: var(--radius-md, 10px);
-  background: color-mix(in srgb, var(--text-muted) 4%, var(--surface));
-  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  margin: 4px 0 12px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
   animation: subagent-fadein 0.2s ease;
-  transition: border-color 0.15s ease, background 0.15s ease;
 }
 .reasoning-block:hover {
-  border-color: color-mix(in srgb, var(--text-muted) 34%, var(--border));
+  border-color: transparent;
 }
 
 .reasoning-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  min-width: 0;
   cursor: pointer;
   user-select: none;
-  padding: 8px 12px;
-  font-size: 0.74rem;
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  color: color-mix(in srgb, var(--text-muted) 75%, var(--text-secondary));
-  transition: color 0.15s ease, background 0.15s ease;
+  padding: 2.5px 4px;
+  margin: 0 -4px;
+  border-radius: 6px;
+  font-family: var(--font-anthropic-sans, var(--font-sans));
+  font-size: 13px;
+  line-height: 19px;
+  font-weight: 400;
+  font-style: normal;
+  letter-spacing: normal;
+  color: var(--cds-reasoning-text);
+  transition: color 0.15s ease, opacity 0.15s ease;
 }
 .reasoning-header:hover {
-  color: var(--text-secondary);
-  background: color-mix(in srgb, var(--text-muted) 6%, transparent);
+  color: var(--text-primary, var(--cds-reasoning-text));
+  background: transparent;
 }
 
 /* SVG-каретка: chevron-right, доворачивается на 90° при раскрытии */
 .reasoning-caret {
   flex: 0 0 auto;
-  color: color-mix(in srgb, var(--text-muted) 70%, var(--text-secondary));
-  transition: transform 0.18s ease;
+  width: 12px;
+  height: 12px;
+  color: var(--cds-reasoning-text);
+  transition: transform 0.15s ease;
 }
 .reasoning-block:not(.reasoning-collapsed) .reasoning-caret {
   transform: rotate(90deg);
 }
 
 .reasoning-label {
-  text-transform: uppercase;
+  min-width: 0;
+  overflow-x: clip;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: none;
 }
 
-/* Тело свёртка: приглушённый текст, отступы по краям */
+/* Тело свёртка: карточка CDS TurnStatus (rounded-card + shadow-card-ring + Prose) */
 .reasoning-body {
-  padding: 2px 14px 10px 34px;
-  font-size: 0.9rem;
-  line-height: 1.6;
-  color: var(--text-muted);
-  font-style: italic;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  margin: 6px 0 4px;
+  padding: 8px 8px;
+  border: none;
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 1px var(--cds-reasoning-ring), 0 0 0 0 var(--cds-reasoning-ring);
+  background: transparent;
+  overflow-y: clip;
+  font-family: var(--font-anthropic-sans, var(--font-sans));
+  font-size: 13px;
+  line-height: 19.5px;
+  font-weight: 400;
+  font-style: normal;
+  color: var(--cds-reasoning-text);
+  word-break: break-word;
+}
+.reasoning-body .reasoning-footnote,
+.agent-message .reasoning-body .reasoning-footnote {
+  margin: 0;
+  font-size: 12px;
+  line-height: 15px;
+  font-weight: 400;
+  font-style: normal;
+  color: var(--cds-reasoning-muted);
 }
 .reasoning-body .reasoning-step {
-  padding: 6px 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  border: none;
+  font-family: var(--font-anthropic-sans, var(--font-sans));
+  font-size: 13px;
+  line-height: 19.5px;
+  font-weight: 400;
+  font-style: normal;
+  color: var(--cds-reasoning-text);
+  white-space: normal;
+  word-break: break-word;
+}
+.reasoning-body .reasoning-step > * {
+  min-width: 0;
 }
 .reasoning-body .reasoning-step + .reasoning-step {
-  border-top: 1px dashed color-mix(in srgb, var(--text-muted) 20%, transparent);
+  border-top: none;
 }
-.reasoning-body p { margin-bottom: 0.4em; }
-.reasoning-body p:last-child { margin-bottom: 0; }
-.reasoning-body code {
+.reasoning-body p,
+.agent-message .reasoning-body p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 19.5px;
+  font-weight: 400;
+  font-style: normal;
+  color: var(--cds-reasoning-text);
+}
+.reasoning-body p + p,
+.agent-message .reasoning-body p + p {
+  margin-top: 9.75px;
+}
+.reasoning-body strong,
+.reasoning-body b,
+.agent-message .reasoning-body strong,
+.agent-message .reasoning-body b {
+  font-weight: 600;
+  color: var(--cds-reasoning-text);
+}
+.reasoning-body ul,
+.reasoning-body ol,
+.agent-message .reasoning-body ul,
+.agent-message .reasoning-body ol {
+  margin: 9.75px 0 0;
+  padding-left: 26px;
+  color: var(--cds-reasoning-text);
+}
+.reasoning-body li,
+.agent-message .reasoning-body li {
+  margin: 0;
+  padding-left: 6.5px;
+  color: var(--cds-reasoning-text);
+}
+.reasoning-body code:not(pre code),
+.agent-message .reasoning-body code:not(pre code) {
   font-family: var(--font-mono);
   font-style: normal;
-  font-size: 0.82em;
-  background: color-mix(in srgb, var(--text-muted) 10%, var(--surface));
-  border: 1px solid color-mix(in srgb, var(--text-muted) 18%, var(--border));
-  border-radius: 4px;
-  padding: 1px 4px;
-  color: var(--text-secondary);
+  font-size: 11.7px;
+  line-height: 11.7px;
+  font-weight: 400;
+  background: var(--cds-reasoning-code-bg);
+  border: none;
+  border-radius: 4.68px;
+  padding: 0.73px 2.93px;
+  color: var(--cds-reasoning-code-fg);
 }
-.reasoning-body pre {
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 10px 12px;
-  font-size: 0.82em;
+.reasoning-body pre,
+.agent-message .reasoning-body pre {
+  background: var(--cds-reasoning-code-bg);
+  border: none;
+  border-radius: 9px;
+  padding: 14px;
+  margin: 9.75px 0 0;
+  font-size: 11.375px;
+  line-height: 18.5px;
   font-style: normal;
+  color: var(--cds-reasoning-text);
   overflow-x: auto;
+}
+.reasoning-body pre code,
+.agent-message .reasoning-body pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  border: none;
+  font-size: inherit;
+  line-height: inherit;
 }
 
 /* Свёрнутое состояние — тело скрыто */

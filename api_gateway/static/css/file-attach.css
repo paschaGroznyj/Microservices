@@ -66,6 +66,22 @@
   white-space: nowrap;
 }
 
+.fa-chip--text.is-preview-open {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface2));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.input-chip-anchor {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  vertical-align: baseline;
+}
+
 @keyframes fa-chip-pop {
   from { opacity: 0; transform: scale(.8); }
   to   { opacity: 1; transform: scale(1); }

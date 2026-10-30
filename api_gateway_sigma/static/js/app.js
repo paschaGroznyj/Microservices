@@ -182,8 +182,28 @@ class ChatApp {
     ══════════════════════════════════════════ */
     initTextPreview() {
         window.__catchpmApp = this;
+        this._activePreviewChipEl = null;
+        this._activePreviewChipId = null;
         document.getElementById('text-preview-close')
             ?.addEventListener('click', () => this.closeTextPreview());
+
+        const body = document.getElementById('text-preview-body');
+        if (body && !body.dataset.previewBound) {
+            body.dataset.previewBound = '1';
+            body.addEventListener('input', () => {
+                this._syncActivePreviewChipFromBody();
+            });
+            body.addEventListener('paste', (e) => {
+                const cd = e.clipboardData || window.clipboardData;
+                if (!cd) return;
+                const pasted = cd.getData('text/plain') || cd.getData('text') || '';
+                e.preventDefault();
+                if (pasted) {
+                    document.execCommand('insertText', false, pasted);
+                }
+                this._syncActivePreviewChipFromBody();
+            });
+        }
     }
 
 
@@ -1716,24 +1736,100 @@ class ChatApp {
 </div>`;
     }
 
+    _encodeTextB64(rawText) {
+        try {
+            return btoa(unescape(encodeURIComponent(rawText || '')));
+        } catch (e) {
+            return '';
+        }
+    }
+
+    _decodeTextB64(b64) {
+        if (!b64) return '';
+        try {
+            return decodeURIComponent(escape(atob(b64)));
+        } catch (e) {
+            return '';
+        }
+    }
+
+    _updateChipData(chipEl, newText) {
+        const text = String(newText ?? '');
+        const chipId = chipEl?.getAttribute?.('data-chip-id') || null;
+        if (chipId && this._pendingChips) {
+            this._pendingChips.set(chipId, text);
+        }
+        if (!chipEl) return;
+
+        const chars = text.length;
+        const lines = chars > 0 ? text.split('\n').length : 0;
+        const firstLine = (text.split('\n').find(l => l.trim()) || 'Текст').trim();
+        const maxTitle = chipEl.classList.contains('input-chip') ? 32 : 40;
+        const title = firstLine.length > maxTitle ? firstLine.slice(0, maxTitle) + '…' : firstLine;
+
+        chipEl.setAttribute('data-text-b64', this._encodeTextB64(text));
+        const nameEl = chipEl.querySelector('.fa-chip__name');
+        if (nameEl) nameEl.textContent = title;
+        const metaEl = chipEl.querySelector('.fa-chip__meta');
+        if (metaEl) metaEl.textContent = `${chars} симв · ${lines} стр`;
+    }
+
+    _syncActivePreviewChipFromBody() {
+        const body = document.getElementById('text-preview-body');
+        if (!body) return;
+        const raw = (body.textContent || '') === ''
+            ? ''
+            : String(body.innerText ?? body.textContent ?? '').replace(/\r\n/g, '\n');
+
+        let activeChip = this._activePreviewChipEl;
+        if ((!activeChip || !activeChip.isConnected) && this._activePreviewChipId) {
+            activeChip = document.querySelector(`.input-chip[data-chip-id="${this._activePreviewChipId}"]`);
+            this._activePreviewChipEl = activeChip || null;
+        }
+
+        if (activeChip) {
+            this._updateChipData(activeChip, raw);
+        } else if (this._activePreviewChipId && this._pendingChips) {
+            this._pendingChips.set(this._activePreviewChipId, raw);
+        }
+
+        const titleEl = document.getElementById('text-preview-title');
+        if (titleEl) {
+            const first = (raw.split('\n').find(l => l.trim()) || 'Просмотр текста').trim();
+            titleEl.textContent = first.length > 60 ? first.slice(0, 60) + '…' : first;
+        }
+
+        const field = this.getInputContainer()?.querySelector('#message-input');
+        if (field) {
+            try { field.dispatchEvent(new Event('input')); } catch (_) {}
+        }
+    }
+
     /* Открывает правый сайдбар-превью с оригинальным текстом чипа. */
     openTextPreview(chipEl) {
-        const b64 = chipEl?.dataset?.textB64 || '';
+        if (!chipEl) return;
+        const chipId = chipEl.getAttribute?.('data-chip-id') || null;
         let text = '';
-        try {
-            text = decodeURIComponent(escape(atob(b64)));
-        } catch (e) {
-            text = '';
+        if (chipId && this._pendingChips && this._pendingChips.has(chipId)) {
+            text = this._pendingChips.get(chipId);
+        } else {
+            text = this._decodeTextB64(chipEl.dataset?.textB64 || '');
         }
+
         const panel = document.getElementById('text-preview-panel');
         const body  = document.getElementById('text-preview-body');
         const titleEl = document.getElementById('text-preview-title');
         const view  = document.getElementById('view-agent');
         if (!panel || !body || !view) return;
 
-        body.textContent = text;   // textContent — без интерпретации HTML, оригинальный вид
-        // Поле редактируемое (contenteditable): правки чисто клиентские,
-        // никуда не сохраняются — просто чтобы можно было выделить/поправить перед копированием.
+        if (this._activePreviewChipEl && this._activePreviewChipEl !== chipEl) {
+            this._activePreviewChipEl.classList.remove('is-preview-open');
+        }
+        this._activePreviewChipEl = chipEl;
+        this._activePreviewChipId = chipId;
+        chipEl.classList.add('is-preview-open');
+
+        body.textContent = text;
         if (titleEl) {
             const first = (text.split('\n').find(l => l.trim()) || 'Просмотр текста').trim();
             titleEl.textContent = first.length > 60 ? first.slice(0, 60) + '…' : first;
@@ -1743,13 +1839,26 @@ class ChatApp {
         body.scrollTop = 0;
     }
 
-    /* Закрывает правый сайдбар-превью. Панель уезжает по той же анимации
-       (translateX 0 -> 100%), лента и поле ввода не двигаются. */
+    /* Закрывает правый сайдбар-превью. */
     closeTextPreview() {
+        const activeId = this._activePreviewChipId;
+        if (this._activePreviewChipEl) {
+            this._activePreviewChipEl.classList.remove('is-preview-open');
+        }
+        this._activePreviewChipEl = null;
+        this._activePreviewChipId = null;
+
         const panel = document.getElementById('text-preview-panel');
         if (panel) {
             panel.classList.remove('open');
             panel.setAttribute('aria-hidden', 'true');
+        }
+
+        if (activeId && this._pendingChips && this._pendingChips.has(activeId)) {
+            const curText = this._pendingChips.get(activeId) || '';
+            if (curText.length === 0) {
+                this.removeInputChip(activeId);
+            }
         }
     }
 
@@ -4424,28 +4533,43 @@ class ChatApp {
        может печатать текст ДО и ПОСЛЕ чипа — порядок сохранится. */
     _readInputWithChips(field) {
         if (!this._pendingChips || this._pendingChips.size === 0) {
-            return field.innerText || field.textContent || '';
+            return (field.innerText || field.textContent || '').replace(/\u00A0/g, ' ');
         }
         let out = '';
+        const usedChipIds = new Set();
         const walk = (node) => {
             node.childNodes.forEach((n) => {
                 if (n.nodeType === Node.TEXT_NODE) {
-                    out += n.textContent;
+                    out += n.textContent.replace(/\u00A0/g, ' ');
                 } else if (n.nodeType === Node.ELEMENT_NODE) {
                     const chipId = n.getAttribute && n.getAttribute('data-chip-id');
                     if (chipId && this._pendingChips.has(chipId)) {
+                        usedChipIds.add(chipId);
                         out += this._pendingChips.get(chipId);
                     } else if (n.tagName === 'BR') {
                         out += '\n';
                     } else if (n.classList && n.classList.contains('fa-chip')) {
-                        // чип без активного id (edge) — пропускаем визуальную метку
+                        // пропускаем визуальную метку
                     } else {
+                        const isBlock = n.tagName === 'DIV' || n.tagName === 'P';
+                        if (isBlock && out.length > 0 && !out.endsWith('\n')) {
+                            out += '\n';
+                        }
                         walk(n);
                     }
                 }
             });
         };
         walk(field);
+
+        for (const [chipId, chipText] of this._pendingChips.entries()) {
+            if (!usedChipIds.has(chipId) && chipText) {
+                if (out.length > 0 && !out.endsWith('\n') && !/\s$/.test(out)) {
+                    out += '\n';
+                }
+                out += chipText;
+            }
+        }
         return out;
     }
 
@@ -4466,15 +4590,72 @@ class ChatApp {
         }
     }
 
+    _ensureInputPreviewBar(field) {
+        const box = field?.closest?.('.chat-input-box, .start-input-box, .gc-input-wrapper')
+                 || this.getInputContainer()?.querySelector('.chat-input-box, .start-input-box, .gc-input-wrapper');
+        if (!box) return null;
+        let bar = box.querySelector('.fa-preview-bar');
+        if (!bar) {
+            bar = document.createElement('div');
+            bar.className = 'fa-preview-bar';
+            box.insertBefore(bar, box.firstChild);
+        }
+        return bar;
+    }
+
+    _syncInputPreviewBar(barOrField) {
+        const bar = (barOrField && barOrField.classList?.contains('fa-preview-bar'))
+            ? barOrField
+            : this._ensureInputPreviewBar(barOrField);
+        if (!bar) return;
+        const hasChips = bar.querySelector('.fa-chip') !== null;
+        bar.classList.toggle('fa-preview-bar--visible', hasChips);
+    }
+
+    removeInputChip(chipId) {
+        if (!chipId) return;
+        if (this._pendingChips) {
+            this._pendingChips.delete(chipId);
+        }
+        if (this._activePreviewChipId === chipId) {
+            this._activePreviewChipId = null;
+            this.closeTextPreview();
+        }
+        const container = this.getInputContainer() || document;
+        container.querySelectorAll(`.input-chip[data-chip-id="${chipId}"]`).forEach(el => {
+            const bar = el.closest('.fa-preview-bar');
+            el.remove();
+            if (bar) this._syncInputPreviewBar(bar);
+        });
+        const field = container.querySelector('#message-input') || document.getElementById('message-input');
+        if (field) {
+            field.querySelectorAll(`.input-chip-anchor[data-chip-id="${chipId}"], [data-chip-id="${chipId}"]`).forEach(el => el.remove());
+            this._syncInputPreviewBar(field);
+            try { field.dispatchEvent(new Event('input')); } catch (_) {}
+        }
+    }
+
     clearInput(field) {
+        if (this._activePreviewChipId) {
+            this._activePreviewChipId = null;
+            this.closeTextPreview();
+        }
         if (this._pendingChips) this._pendingChips.clear();
         this._chipSeq = 0;
-        if (field.tagName === 'TEXTAREA') {
-            field.value = '';
-            field.style.height = 'auto';
-        } else {
-            field.innerHTML = '';
+        if (field) {
+            if (field.tagName === 'TEXTAREA') {
+                field.value = '';
+                field.style.height = 'auto';
+            } else {
+                field.innerHTML = '';
+            }
         }
+        const roots = new Set([field?.closest?.('.chat-input-box, .start-input-box'), this.getInputContainer(), document]);
+        roots.forEach(r => {
+            if (!r || !r.querySelectorAll) return;
+            r.querySelectorAll('.fa-preview-bar .input-chip').forEach(el => el.remove());
+            r.querySelectorAll('.fa-preview-bar').forEach(bar => this._syncInputPreviewBar(bar));
+        });
     }
 
     /* ── Черновики поля ввода per-chat ──────────────────────────────
@@ -4514,10 +4695,10 @@ class ChatApp {
         this.setInputText(field, draft);
     }
 
-    /* Вставляет свёрнутый длинный текст как inline-чип в поле ввода.
-       Полный текст кладём в this._pendingChips (не в DOM), а в поле —
-       компактный неразрушаемый чип. Каретка встаёт ПОСЛЕ чипа, чтобы
-       можно было продолжить печатать. */
+    /* Вставляет свёрнутый длинный текст как чип в полосу .fa-preview-bar,
+       а в поле ввода (#message-input) на текущую позицию каретки помещает
+       невидимый якорь .input-chip-anchor, чтобы сохранялся точный порядок
+       между текстом и вставленными чипами. */
     _insertInputChip(field, rawText) {
         if (!this._pendingChips) this._pendingChips = new Map();
         this._chipSeq = (this._chipSeq || 0) + 1;
@@ -4525,16 +4706,16 @@ class ChatApp {
         this._pendingChips.set(chipId, rawText);
 
         const chars = rawText.length;
-        const lines = rawText.split('\n').length;
+        const lines = rawText.length ? rawText.split('\n').length : 0;
         const firstLine = (rawText.split('\n').find(l => l.trim()) || 'Текст').trim();
         const title = firstLine.length > 32 ? firstLine.slice(0, 32) + '…' : firstLine;
         const safeTitle = this.escapeHtml(title);
-        let b64 = '';
-        try { b64 = btoa(unescape(encodeURIComponent(rawText))); } catch (e) { b64 = ''; }
+        const b64 = this._encodeTextB64(rawText);
 
-        const chip = document.createElement('span');
+        const chip = document.createElement('div');
         chip.className = 'fa-chip fa-chip--text fa-chip--gray input-chip';
-        chip.setAttribute('contenteditable', 'false');
+        chip.setAttribute('role', 'button');
+        chip.setAttribute('tabindex', '0');
         chip.setAttribute('data-chip-id', chipId);
         chip.setAttribute('data-text-b64', b64);
         chip.setAttribute('title', 'Открыть текст');
@@ -4546,28 +4727,70 @@ class ChatApp {
             '<text x="18" y="32" text-anchor="middle" class="fa-chip__text">TXT</text>' +
             '</svg></span>' +
             '<span class="fa-chip__name">' + safeTitle + '</span>' +
-            '<span class="fa-chip__meta">' + chars + ' симв · ' + lines + ' стр</span>';
-        chip.addEventListener('click', () => this.openTextPreview(chip));
+            '<span class="fa-chip__meta">' + chars + ' симв · ' + lines + ' стр</span>' +
+            '<button class="fa-chip__remove" type="button" title="Удалить" aria-label="Удалить вставленный текст">' +
+            '<svg viewBox="0 0 14 14" fill="none">' +
+            '<path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' +
+            '</svg></button>';
 
-        // Вставляем чип в текущую позицию каретки
+        const removeBtn = chip.querySelector('.fa-chip__remove');
+        if (removeBtn) {
+            removeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.removeInputChip(chipId);
+            });
+        }
+        chip.addEventListener('click', () => this.openTextPreview(chip));
+        chip.addEventListener('keydown', (e) => {
+            if (e.target === removeBtn) return;
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                this.openTextPreview(chip);
+            }
+        });
+
+        const bar = this._ensureInputPreviewBar(field);
+        if (bar) {
+            bar.appendChild(chip);
+            this._syncInputPreviewBar(bar);
+        }
+
+        const anchor = document.createElement('span');
+        anchor.className = 'input-chip-anchor';
+        anchor.setAttribute('data-chip-id', chipId);
+        anchor.setAttribute('contenteditable', 'false');
+        anchor.setAttribute('aria-hidden', 'true');
+
         const sel = window.getSelection();
         let range;
         if (sel && sel.rangeCount && field.contains(sel.anchorNode)) {
             range = sel.getRangeAt(0);
+            const preservedAnchors = [];
+            try {
+                const frag = range.cloneContents();
+                frag.querySelectorAll?.('.input-chip-anchor[data-chip-id]')?.forEach(a => {
+                    const clone = a.cloneNode(true);
+                    preservedAnchors.push(clone);
+                });
+            } catch (_) {}
             range.deleteContents();
+            for (const pa of preservedAnchors) {
+                range.insertNode(pa);
+                range.setStartAfter(pa);
+                range.collapse(true);
+            }
         } else {
             range = document.createRange();
             range.selectNodeContents(field);
             range.collapse(false);
         }
-        range.insertNode(chip);
-        // Пробел после чипа, чтобы каретка вышла из чипа и можно было печатать
-        const spacer = document.createTextNode('\u00A0');
-        chip.after(spacer);
-        range.setStartAfter(spacer);
+        range.insertNode(anchor);
+        range.setStartAfter(anchor);
         range.collapse(true);
-        sel.removeAllRanges();
-        sel.addRange(range);
+        if (sel) {
+            sel.removeAllRanges();
+            sel.addRange(range);
+        }
         field.focus();
     }
 
@@ -4698,6 +4921,76 @@ class ChatApp {
         });
 
         field.addEventListener('keydown', (e) => {
+            if ((e.key === 'Backspace' || e.key === 'Delete') && field.contentEditable === 'true') {
+                const sel = window.getSelection();
+                if (sel && sel.rangeCount) {
+                    const r = sel.getRangeAt(0);
+                    if (sel.isCollapsed) {
+                        const sc = r.startContainer;
+                        const so = r.startOffset;
+                        if (e.key === 'Backspace') {
+                            let prev = null;
+                            if (sc.nodeType === Node.TEXT_NODE) {
+                                if (so === 0) prev = sc.previousSibling;
+                            } else if (sc.nodeType === Node.ELEMENT_NODE) {
+                                prev = so > 0 ? sc.childNodes[so - 1] : null;
+                            }
+                            while (prev && prev.nodeType === Node.TEXT_NODE && prev.textContent.length === 0) {
+                                prev = prev.previousSibling;
+                            }
+                            if (prev && prev.nodeType === Node.ELEMENT_NODE && prev.classList?.contains('input-chip-anchor')) {
+                                while (prev.previousSibling && prev.previousSibling.nodeType === Node.ELEMENT_NODE && prev.previousSibling.classList?.contains('input-chip-anchor')) {
+                                    prev = prev.previousSibling;
+                                }
+                                const nr = document.createRange();
+                                nr.setStartBefore(prev);
+                                nr.collapse(true);
+                                sel.removeAllRanges();
+                                sel.addRange(nr);
+                            }
+                        } else if (e.key === 'Delete') {
+                            let next = null;
+                            if (sc.nodeType === Node.TEXT_NODE) {
+                                if (so === sc.textContent.length) next = sc.nextSibling;
+                            } else if (sc.nodeType === Node.ELEMENT_NODE) {
+                                next = so < sc.childNodes.length ? sc.childNodes[so] : null;
+                            }
+                            while (next && next.nodeType === Node.TEXT_NODE && next.textContent.length === 0) {
+                                next = next.nextSibling;
+                            }
+                            if (next && next.nodeType === Node.ELEMENT_NODE && next.classList?.contains('input-chip-anchor')) {
+                                while (next.nextSibling && next.nextSibling.nodeType === Node.ELEMENT_NODE && next.nextSibling.classList?.contains('input-chip-anchor')) {
+                                    next = next.nextSibling;
+                                }
+                                const nr = document.createRange();
+                                nr.setStartAfter(next);
+                                nr.collapse(true);
+                                sel.removeAllRanges();
+                                sel.addRange(nr);
+                            }
+                        }
+                    } else {
+                        try {
+                            const frag = r.cloneContents();
+                            const anchors = Array.from(frag.querySelectorAll?.('.input-chip-anchor[data-chip-id]') || []);
+                            if (anchors.length > 0) {
+                                e.preventDefault();
+                                r.deleteContents();
+                                for (const a of anchors) {
+                                    const clone = a.cloneNode(true);
+                                    r.insertNode(clone);
+                                    r.setStartAfter(clone);
+                                    r.collapse(true);
+                                }
+                                sel.removeAllRanges();
+                                sel.addRange(r);
+                                onInput();
+                                return;
+                            }
+                        } catch (_) {}
+                    }
+                }
+            }
             const isMobileViewport = window.matchMedia && window.matchMedia('(max-width: 900px)').matches;
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();

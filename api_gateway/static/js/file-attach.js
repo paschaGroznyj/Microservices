@@ -204,17 +204,13 @@ const FileAttach = (() => {
         const bar = _ensurePreviewBar();
         if (!bar) return;
 
-        bar.innerHTML = '';
+        bar.querySelectorAll('.fa-chip:not(.input-chip)').forEach(el => el.remove());
 
-        if (_files.length === 0) {
-            bar.classList.remove('fa-preview-bar--visible');
-            return;
-        }
-
-        bar.classList.add('fa-preview-bar--visible');
         _files.forEach((f, idx) => {
             bar.appendChild(_makeFileIcon(f, idx));
         });
+
+        bar.classList.toggle('fa-preview-bar--visible', bar.querySelector('.fa-chip') !== null);
     }
 
     /* ─── именованные хендлеры (для снятия слушателей) ───────── */
@@ -415,8 +411,10 @@ const FileAttach = (() => {
     function clear() {
         _files = [];
         if (_previewBar) {
-            _previewBar.innerHTML = '';
-            _previewBar.classList.remove('fa-preview-bar--visible');
+            _previewBar.querySelectorAll('.fa-chip:not(.input-chip)').forEach(el => el.remove());
+            if (!_previewBar.querySelector('.fa-chip')) {
+                _previewBar.classList.remove('fa-preview-bar--visible');
+            }
         }
         _updateAttachBtn();
     }

@@ -434,11 +434,18 @@ def _build_final(aggregate, calls: dict) -> AIMessage:
     )
 
 
-_THINKING_TAG_RE = re.compile(r"<thinking>([\s\S]*?)</thinking>", re.IGNORECASE)
+_THINKING_TAG_RE = re.compile(r"<thinking>([\s\S]*?)</?thinking>", re.IGNORECASE)
+_REASONING_TAG_RE = re.compile(r"<reasoning>([\s\S]*?)</?reasoning>", re.IGNORECASE)
+_STRAY_TAGS_RE = re.compile(r"</?(?:thinking|reasoning)>", re.IGNORECASE)
 
 
-def _extract_thinking_and_clean_content(raw_content) -> tuple[str, str]:
-    """Извлекает текст из <thinking>...</thinking> и возвращает (thinking_text, clean_content)."""
+def _extract_thinking_and_clean_content(raw_content) -> tuple[str, str, str]:
+    """Извлекает (thinking_text, reasoning_text, clean_content) из raw_content.
+
+    - <thinking>...</thinking> (или <thinking>...<thinking>) -> краткая суть для UI
+    - <reasoning>...</reasoning> (или <reasoning>...<reasoning>) -> полное рассуждение (скрыто от UI)
+    - clean_content -> чистый текст ответа без тегов <thinking> и <reasoning>
+    """
     if isinstance(raw_content, list):
         text_parts = []
         for block in raw_content:
@@ -450,10 +457,16 @@ def _extract_thinking_and_clean_content(raw_content) -> tuple[str, str]:
     else:
         text = str(raw_content or "")
 
-    found = [m.strip() for m in _THINKING_TAG_RE.findall(text) if m and m.strip()]
-    cleaned = _THINKING_TAG_RE.sub("", text).strip()
-    thinking_text = " ".join(found).strip()
-    return thinking_text, cleaned
+    found_thinking = [m.strip() for m in _THINKING_TAG_RE.findall(text) if m and m.strip()]
+    found_reasoning = [m.strip() for m in _REASONING_TAG_RE.findall(text) if m and m.strip()]
+
+    cleaned = _THINKING_TAG_RE.sub("", text)
+    cleaned = _REASONING_TAG_RE.sub("", cleaned)
+    cleaned = _STRAY_TAGS_RE.sub("", cleaned).strip()
+
+    thinking_text = " ".join(found_thinking).strip()
+    reasoning_text = "\n".join(found_reasoning).strip()
+    return thinking_text, reasoning_text, cleaned
 
 
 async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, error_info: dict | None = None):
@@ -1733,10 +1746,24 @@ class HarnessAgent:
                             final_response = "Ошибка внутри цикла агента. Но агент запомнил шаги, попробуйте вернуться к запросу"
                         break
 
-                    _thinking_text, _clean_content = _extract_thinking_and_clean_content(
+                    _thinking_text, _reasoning_text, _clean_content = _extract_thinking_and_clean_content(
                         getattr(response, "content", None)
                     )
-                    response.content = _clean_content
+                    if _reasoning_text:
+                        loop_state.setdefault("internal_reasoning_trace", []).append(_reasoning_text)
+                    # На шаге с tool_calls оставляем внутреннее рассуждение в стеке контекста модели,
+                    # а на финальном шаге (без тегов) отдаём чистый финальный ответ в response.content.
+                    if getattr(response, "tool_calls", None) and (_thinking_text or _reasoning_text):
+                        _ctx_parts = []
+                        if _thinking_text:
+                            _ctx_parts.append(f"<thinking>{_thinking_text}</thinking>")
+                        if _reasoning_text:
+                            _ctx_parts.append(f"<reasoning>{_reasoning_text}</reasoning>")
+                        if _clean_content:
+                            _ctx_parts.append(_clean_content)
+                        response.content = "".join(_ctx_parts)
+                    else:
+                        response.content = _clean_content
 
                     _has_tool_calls = bool(getattr(response, "tool_calls", None))
                     _step_thinking = _thinking_text or (_clean_content if _has_tool_calls else "")

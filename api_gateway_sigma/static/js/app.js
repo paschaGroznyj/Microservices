@@ -2442,6 +2442,11 @@ class ChatApp {
         const text = isCustom ? customText.trim() : this.getInputText();
         if (!text) return;
 
+        if (!isCustom && /^\/(chat-id|workspaces)$/i.test(text.trim())) {
+            await this._executeSlashCommand(text.trim().toLowerCase());
+            return;
+        }
+
         if (!this.currentChat) {
             this.currentChat = this.generateChatId();
             this.chats.push({ id: this.currentChat, last_message: text, timestamp: new Date().toISOString() });
@@ -4873,6 +4878,282 @@ class ChatApp {
         }
     }
 
+    /* ══════════════════════════════════════════
+       SLASH COMMANDS (/chat-id, /workspaces)
+    ══════════════════════════════════════════ */
+    _getSlashCommands() {
+        return [
+            {
+                cmd: '/chat-id',
+                name: 'chat-id',
+                icon: `<svg viewBox="0 0 20 20" fill="none" width="16" height="16"><path d="M7.5 3.5L5.5 16.5M14.5 3.5L12.5 16.5M3.5 7.5H16.5M3 12.5H16" stroke="currentColor" stroke-width="1.65" stroke-linecap="round"/></svg>`,
+            },
+            {
+                cmd: '/workspaces',
+                name: 'workspaces',
+                icon: `<svg viewBox="0 0 20 20" fill="none" width="16" height="16"><rect x="2.75" y="3.5" width="14.5" height="13" rx="2.5" stroke="currentColor" stroke-width="1.6"/><path d="M7.5 3.5V16.5M2.75 8H7.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`,
+            },
+        ];
+    }
+
+    _getInputAreaEl() {
+        const container = this.getInputContainer();
+        return container?.querySelector('.chat-input-area, .start-input-area') || null;
+    }
+
+    _getInputBoxEl() {
+        const container = this.getInputContainer();
+        return container?.querySelector('#chat-input-box, #start-input-box, .chat-input-box, .start-input-box') || null;
+    }
+
+    _syncSlashCommandMenu() {
+        const raw = (this.getInputText() || '').trim();
+        if (!/^\/[^\s]*$/.test(raw)) {
+            this._closeSlashCommandMenu();
+            return;
+        }
+        const query = raw.slice(1).toLowerCase();
+        const commands = this._getSlashCommands().filter(
+            c => c.name.startsWith(query) || c.cmd.startsWith(raw.toLowerCase())
+        );
+        if (!commands.length) {
+            this._closeSlashCommandMenu();
+            return;
+        }
+        this._slashFiltered = commands;
+        if (typeof this._slashActiveIdx !== 'number' || this._slashActiveIdx >= commands.length || this._slashActiveIdx < 0) {
+            this._slashActiveIdx = 0;
+        }
+        this._renderSlashCommandMenu();
+    }
+
+    _renderSlashCommandMenu() {
+        const area = this._getInputAreaEl();
+        if (!area) return;
+        const commands = this._slashFiltered || [];
+        if (!commands.length) {
+            this._closeSlashCommandMenu();
+            return;
+        }
+        let popover = area.querySelector('.slash-cmd-popover');
+        if (!popover) {
+            popover = document.createElement('div');
+            popover.className = 'slash-cmd-popover';
+            popover.setAttribute('role', 'menu');
+            area.appendChild(popover);
+        }
+        const activeIdx = Math.min(Math.max(0, this._slashActiveIdx || 0), commands.length - 1);
+        const itemsHtml = commands.map((c, idx) => {
+            const hl = idx === activeIdx ? ' data-highlighted=""' : '';
+            return `<div role="menuitem" tabindex="-1" data-cmd="${this.escapeHtml(c.cmd)}" data-idx="${idx}" class="slash-cmd-item cds-reset flex w-full items-center gap-xs compact:px-2 comfortable:px-2.5 py-[calc((var(--cds-h-control)-var(--cds-leading-body))/2)] rounded text-body font-normal font-control [--cds-shortcut-cap-ink:var(--cds-text-muted)] select-none outline-none focus-visible:outline-hidden data-[disabled]:opacity-disabled data-[disabled]:pointer-events-none data-[disabled]:focus-visible:shadow-focus text-primary data-[highlighted]:bg-fill-ghost-hover"${hl}><div class="slash-cmd-icon flex size-icon shrink-0 items-center justify-center opacity-50"><span data-cds="Icon" aria-hidden="true" style="font-size: calc(1.25rem * var(--cds-rem-scale, 1)); font-weight: 433.3;">${c.icon}</span></div><span class="slash-cmd-name min-w-0 flex-1 truncate">${this.escapeHtml(c.name)}</span></div>`;
+        }).join('');
+
+        popover.innerHTML = `<div class="slash-cmd-scroll relative min-h-0 overflow-y-auto overflow-x-hidden scroll-fade-y rounded-[inherit] border-b-[length:var(--cds-ring-inner)] border-transparent forced-colors:border-b-0 p-[var(--cds-menu-gutter,0.25rem)]"><div class="slash-cmd-list flex flex-col">${itemsHtml}</div></div>`;
+
+        popover.querySelectorAll('.slash-cmd-item').forEach(item => {
+            item.addEventListener('mouseenter', () => {
+                const idx = Number(item.dataset.idx || 0);
+                this._slashActiveIdx = idx;
+                popover.querySelectorAll('.slash-cmd-item').forEach((el, i) => {
+                    if (i === idx) el.setAttribute('data-highlighted', '');
+                    else el.removeAttribute('data-highlighted');
+                });
+            });
+            item.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                const cmd = item.dataset.cmd;
+                if (cmd) this._executeSlashCommand(cmd);
+            });
+        });
+    }
+
+    _closeSlashCommandMenu() {
+        this._slashFiltered = null;
+        this._slashActiveIdx = 0;
+        const container = this.getInputContainer();
+        container?.querySelectorAll('.slash-cmd-popover').forEach(el => el.remove());
+    }
+
+    _isSlashMenuOpen() {
+        const area = this._getInputAreaEl();
+        return Boolean(area?.querySelector('.slash-cmd-popover') && this._slashFiltered?.length);
+    }
+
+    _handleSlashKeydown(e) {
+        if (this._isSlashMenuOpen()) {
+            const len = this._slashFiltered.length;
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                this._slashActiveIdx = ((this._slashActiveIdx || 0) + 1) % len;
+                this._renderSlashCommandMenu();
+                return true;
+            }
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                this._slashActiveIdx = ((this._slashActiveIdx || 0) - 1 + len) % len;
+                this._renderSlashCommandMenu();
+                return true;
+            }
+            if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+                e.preventDefault();
+                const chosen = this._slashFiltered[this._slashActiveIdx || 0] || this._slashFiltered[0];
+                if (chosen) this._executeSlashCommand(chosen.cmd);
+                return true;
+            }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                this._closeSlashCommandMenu();
+                return true;
+            }
+        } else if (e.key === 'Escape') {
+            const area = this._getInputAreaEl();
+            const card = area?.querySelector('.slash-cmd-card');
+            if (card) {
+                e.preventDefault();
+                card.remove();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    async _executeSlashCommand(cmd) {
+        const container = this.getInputContainer();
+        const field   = container?.querySelector('#message-input');
+        const sendBtn = container?.querySelector('#send-btn');
+        this._closeSlashCommandMenu();
+        if (field) {
+            this.clearInput(field);
+            this._clearInputDraft(null);
+            this._clearInputDraft(this.currentChat);
+        }
+        if (sendBtn && this._runState === 'idle') {
+            sendBtn.classList.remove('active');
+            sendBtn.disabled = true;
+        }
+        const normalized = String(cmd || '').trim().toLowerCase();
+        if (normalized === '/chat-id') {
+            this._showChatIdSlashCard();
+        } else if (normalized === '/workspaces') {
+            await this._showWorkspacesSlashCard();
+        }
+    }
+
+    _mountSlashCard() {
+        const area = this._getInputAreaEl();
+        const box  = this._getInputBoxEl();
+        if (!area || !box) return null;
+        area.querySelectorAll('.slash-cmd-card').forEach(el => el.remove());
+        const card = document.createElement('div');
+        card.className = 'slash-cmd-card';
+        area.insertBefore(card, box);
+        return card;
+    }
+
+    _showChatIdSlashCard() {
+        const card = this._mountSlashCard();
+        if (!card) return;
+        const chatId = this.currentChat ? String(this.currentChat) : '';
+        const copySvg = `<svg viewBox="0 0 20 20" fill="none" width="14" height="14"><rect x="7" y="7" width="9.5" height="9.5" rx="2" stroke="currentColor" stroke-width="1.6"/><path d="M4.5 13H4a1.5 1.5 0 0 1-1.5-1.5V4A1.5 1.5 0 0 1 4 2.5h7.5A1.5 1.5 0 0 1 13 4v.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
+        const checkSvg = `<svg viewBox="0 0 20 20" fill="none" width="14" height="14"><path d="M4 10.5l4 4L16 6.5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+        const closeSvg = `<svg viewBox="0 0 20 20" fill="none" width="15" height="15"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>`;
+
+        card.innerHTML = `
+            <div class="slash-card-row">
+                <div class="slash-card-info">
+                    <span class="slash-card-badge">/chat-id</span>
+                    <span class="slash-card-value ${chatId ? '' : 'is-muted'}">${chatId ? this.escapeHtml(chatId) : 'Чат ещё не создан (отправьте сообщение)'}</span>
+                </div>
+                <div class="slash-card-actions">
+                    ${chatId ? `<button type="button" class="slash-card-copy-btn" title="Скопировать chat_id">${copySvg}<span>Копировать</span></button>` : ''}
+                    <button type="button" class="slash-card-close-btn" title="Закрыть" aria-label="Закрыть">${closeSvg}</button>
+                </div>
+            </div>`;
+
+        card.querySelector('.slash-card-close-btn')?.addEventListener('click', () => card.remove());
+        const copyBtn = card.querySelector('.slash-card-copy-btn');
+        if (copyBtn && chatId) {
+            copyBtn.addEventListener('click', async () => {
+                try {
+                    await navigator.clipboard.writeText(chatId);
+                } catch (_) {
+                    const ta = document.createElement('textarea');
+                    ta.value = chatId;
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand('copy');
+                    ta.remove();
+                }
+                copyBtn.classList.add('copied');
+                copyBtn.innerHTML = `${checkSvg}<span>Скопировано</span>`;
+                setTimeout(() => {
+                    if (!copyBtn.isConnected) return;
+                    copyBtn.classList.remove('copied');
+                    copyBtn.innerHTML = `${copySvg}<span>Копировать</span>`;
+                }, 1600);
+            });
+        }
+    }
+
+    async _showWorkspacesSlashCard() {
+        const card = this._mountSlashCard();
+        if (!card) return;
+        const closeSvg = `<svg viewBox="0 0 20 20" fill="none" width="15" height="15"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>`;
+        const wsSvg = `<svg viewBox="0 0 20 20" fill="none" width="15" height="15"><rect x="2.75" y="3.5" width="14.5" height="13" rx="2.5" stroke="currentColor" stroke-width="1.6"/><path d="M7.5 3.5V16.5M2.75 8H7.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
+        const extSvg = `<svg viewBox="0 0 20 20" fill="none" width="14" height="14"><path d="M6 14L14 6M8 6h6v6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+        card.innerHTML = `
+            <div class="slash-card-header">
+                <div class="slash-card-info">
+                    <span class="slash-card-badge">/workspaces</span>
+                    <span class="slash-card-value is-muted">Загрузка областей…</span>
+                </div>
+                <button type="button" class="slash-card-close-btn" title="Закрыть" aria-label="Закрыть">${closeSvg}</button>
+            </div>
+            <div class="slash-ws-list"></div>`;
+
+        card.querySelector('.slash-card-close-btn')?.addEventListener('click', () => card.remove());
+
+        let workspaces = [];
+        try {
+            const resp = await fetch('/api/editor/workspaces', { credentials: 'include' });
+            if (resp.ok) {
+                const data = await resp.json();
+                workspaces = Array.isArray(data?.workspaces) ? data.workspaces : [];
+            }
+        } catch (_) {}
+
+        if (!card.isConnected) return;
+        const statusEl = card.querySelector('.slash-card-header .slash-card-value');
+        const listEl   = card.querySelector('.slash-ws-list');
+        if (!listEl) return;
+
+        if (!workspaces.length) {
+            if (statusEl) statusEl.textContent = 'Нет активных областей редактора';
+            listEl.remove();
+            return;
+        }
+
+        if (statusEl) statusEl.textContent = `Области редактора (${workspaces.length})`;
+        listEl.innerHTML = workspaces.map(w => {
+            const wsId = String(w.workspace_id || '');
+            const title = String(w.title || wsId);
+            const targetChat = w.chat_id || this.currentChat || '';
+            const href = `/editor?workspace_id=${encodeURIComponent(wsId)}${targetChat ? `&chat_id=${encodeURIComponent(targetChat)}` : ''}`;
+            return `
+                <a class="slash-ws-item" href="${this.escapeHtml(href)}" target="_blank" rel="noopener noreferrer">
+                    <div class="slash-ws-main">
+                        <span class="slash-ws-icon">${wsSvg}</span>
+                        <span class="slash-ws-title">${this.escapeHtml(title)}</span>
+                    </div>
+                    <div class="slash-ws-meta">
+                        <span class="slash-ws-id">${this.escapeHtml(wsId)}</span>
+                        <span class="slash-ws-ext" aria-hidden="true">${extSvg}</span>
+                    </div>
+                </a>`;
+        }).join('');
+    }
+
     attachInputHandlers() {
         const container = this.getInputContainer();
         const field   = container?.querySelector('#message-input');
@@ -4880,6 +5161,7 @@ class ChatApp {
         if (!field || !sendBtn) return;
 
         const onInput = () => {
+            this._syncSlashCommandMenu();
             // Жёсткий предел длины ввода — обрезаем всё, что сверх лимита.
             this._enforceInputLimit(field);
             if (this._runState !== "idle") {
@@ -4955,6 +5237,9 @@ class ChatApp {
         });
 
         field.addEventListener('keydown', (e) => {
+            if (this._handleSlashKeydown(e)) {
+                return;
+            }
             if ((e.key === 'Backspace' || e.key === 'Delete') && field.contentEditable === 'true') {
                 const sel = window.getSelection();
                 if (sel && sel.rangeCount) {

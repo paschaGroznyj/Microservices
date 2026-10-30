@@ -1037,6 +1037,21 @@ async def searching_default(request: Request):
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Parsers service unreachable: {str(e)}")
 
+@app.get("/api/editor/workspaces")
+async def api_editor_workspaces(request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    chat_id = request.query_params.get("chat_id") or None
+    r = await app.state.http_client.get(
+        f"{SERVICES['chats']['url']}/editor/workspaces",
+        params={"user_id": user["user_id"], **({"chat_id": chat_id} if chat_id else {})},
+    )
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail="Реестр недоступен")
+    return r.json()
+
+
 # ========== ПРОКСИ ДЛЯ ЧАТОВ ==========
 @app.post("/api/chats/send_message")
 async def send_message(request: Request):
@@ -1048,6 +1063,16 @@ async def send_message(request: Request):
     # Получаем данные из запроса
     data = await request.json()
     logging.info(data)
+    raw_cmd = (data.get("message") or "").strip().lower()
+    if raw_cmd in ("/chat-id", "/workspaces"):
+        if raw_cmd == "/workspaces":
+            r = await app.state.http_client.get(
+                f"{SERVICES['chats']['url']}/editor/workspaces",
+                params={"user_id": user["user_id"]},
+            )
+            ws_list = r.json().get("workspaces", []) if r.status_code == 200 else []
+            return JSONResponse(content={"slash_command": "/workspaces", "workspaces": ws_list})
+        return JSONResponse(content={"slash_command": "/chat-id", "chat_id": data.get("chat_id")})
     request_id = str(uuid.uuid4()) # Генерация id для передачи его агенту с последующей реализацией ОС о его действиях
     # Запоминаем связь ДО отправки агенту
     pending_requests[request_id] = data["chat_id"]

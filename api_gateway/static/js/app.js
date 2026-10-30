@@ -1459,7 +1459,12 @@ class ChatApp {
             this._removeBotPlaceholder();
         }
 
-        const actions = this.createMessageActions(message.id, rawContent, isBot);
+        const actions = this.createMessageActions(message.id, rawContent, isBot, {
+            messageId: message.message_id || message.id || '',
+            dbId: message.id || '',
+            reaction: message.reaction ?? (typeof message.reactions === 'string' ? message.reactions : null),
+            createdAt: message.created_at || message.timestamp || new Date().toISOString(),
+        });
 
         if (isBot) {
             // Если есть placeholder и это стриминг — рендерим прямо внутрь него
@@ -3164,7 +3169,12 @@ class ChatApp {
                         if (incomingDbId) existingBot.dataset.id = incomingDbId;
                         if (incomingReqId) existingBot.dataset.messageId = incomingReqId;
                         if (!existingBot.querySelector(':scope > .message-actions')) {
-                            existingBot.appendChild(this.createMessageActions(existingBot.dataset.id, fullText, true));
+                            existingBot.appendChild(this.createMessageActions(existingBot.dataset.id, fullText, true, {
+                                messageId: existingBot.dataset.messageId || msg.message_id || existingBot.dataset.id || '',
+                                dbId: msg.id || existingBot.dataset.id || '',
+                                reaction: msg.reaction ?? (typeof msg.reactions === 'string' ? msg.reactions : null),
+                                createdAt: msg.created_at || new Date().toISOString(),
+                            }));
                         }
                         this._removeBotPlaceholder();
                         this._clearAllStatuses();
@@ -3959,7 +3969,12 @@ class ChatApp {
         this._applyCodeHeaders(st.pendingBotEl);
         st.pendingBotEl.querySelectorAll(':scope > .reasoning-live').forEach(r => r.remove());
         st.pendingBotEl.querySelectorAll(':scope > .message-actions').forEach(a => a.remove());
-        const actions = this.createMessageActions(st.pendingBotEl.dataset.id, fullText, true);
+        const actions = this.createMessageActions(st.pendingBotEl.dataset.id, fullText, true, {
+            messageId: data.message_id || st.pendingBotEl.dataset.messageId || st.pendingBotEl.dataset.id || '',
+            dbId: data.id || '',
+            reaction: data.reaction ?? (typeof data.reactions === 'string' ? data.reactions : null),
+            createdAt: data.created_at || new Date().toISOString(),
+        });
         st.pendingBotEl.appendChild(actions);
         st.pendingBotEl.style.transition = '';
         st.pendingBotEl.style.opacity    = '';
@@ -4440,7 +4455,11 @@ class ChatApp {
         const existingActions = el.querySelector('.message-actions');
         if (!existingActions) {
             const msgId = el.dataset.id;
-            const actions = this.createMessageActions(msgId, rawText, true);
+            const actions = this.createMessageActions(msgId, rawText, true, {
+                messageId: messageId || el.dataset.messageId || msgId || '',
+                dbId: msgId || '',
+                createdAt: new Date().toISOString(),
+            });
             el.appendChild(actions);
         }
 
@@ -5523,14 +5542,49 @@ class ChatApp {
     }
 
     /* ══════════════════════════════════════════
-       ACTIONS (copy)
+       ACTIONS (copy + reactions + bot time)
     ══════════════════════════════════════════ */
-    createMessageActions(messageId, messageText, isBot) {
+    _parseMessageDate(raw) {
+        if (!raw) return new Date();
+        if (raw instanceof Date) return raw;
+        if (typeof raw === 'number') return new Date(raw);
+        const s = String(raw).trim();
+        if (!s) return new Date();
+        if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(s) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) {
+            return new Date(s.replace(' ', 'T') + 'Z');
+        }
+        const d = new Date(s);
+        return Number.isNaN(d.getTime()) ? new Date() : d;
+    }
+
+    _formatBotMessageTime(rawCreatedAt) {
+        const msgDate = this._parseMessageDate(rawCreatedAt);
+        const diffMs = Math.max(0, Date.now() - msgDate.getTime());
+        const oneHourMs = 60 * 60 * 1000;
+        if (diffMs < oneHourMs) {
+            const mins = Math.max(1, Math.floor(diffMs / 60000));
+            return `${mins} мин назад`;
+        }
+        return msgDate.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    }
+
+    _ensureMessageTimeTicker() {
+        if (this._msgTimeTicker) return;
+        this._msgTimeTicker = setInterval(() => {
+            document.querySelectorAll('.message-actions .message-time[data-created-at]').forEach(el => {
+                const iso = el.dataset.createdAt;
+                if (iso) el.textContent = this._formatBotMessageTime(iso);
+            });
+        }, 30000);
+    }
+
+    createMessageActions(messageId, messageText, isBot, meta = {}) {
         const div = document.createElement('div');
         div.className = isBot ? 'message-actions' : 'user-actions';
-        div.dataset.messageId = messageId;
+        div.dataset.messageId = messageId ?? '';
 
         const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
         copyBtn.className = 'action-button copy-button';
         copyBtn.title = 'Копировать';
 
@@ -5545,7 +5599,7 @@ class ChatApp {
         copyBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
             await navigator.clipboard.writeText(messageText);
-                    const checkSVG = `<svg class="action-icon" viewBox="0 0 24 24" fill="none">
+            const checkSVG = `<svg class="action-icon" viewBox="0 0 24 24" fill="none">
                 <path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2"
                     stroke-linecap="round" stroke-linejoin="round"/>
             </svg>`;
@@ -5558,6 +5612,101 @@ class ChatApp {
         });
 
         div.appendChild(copyBtn);
+
+        if (isBot) {
+            const likeSvg = `<svg class="action-icon" viewBox="0 0 24 24" fill="none">
+                <path d="M7 22V11M2 13v7a2 2 0 0 0 2 2h12.4a2 2 0 0 0 1.96-1.61l1.38-7A2 2 0 0 0 17.78 11H14V6.5a2.5 2.5 0 0 0-2.5-2.5L7 11H4a2 2 0 0 0-2 2z"
+                    stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>`;
+            const dislikeSvg = `<svg class="action-icon" viewBox="0 0 24 24" fill="none">
+                <path d="M17 2v11M22 11V4a2 2 0 0 0-2-2H7.6a2 2 0 0 0-1.96 1.61l-1.38 7A2 2 0 0 0 6.22 13H10v4.5a2.5 2.5 0 0 0 2.5 2.5L17 13h3a2 2 0 0 0 2-2z"
+                    stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>`;
+
+            const likeBtn = document.createElement('button');
+            likeBtn.type = 'button';
+            likeBtn.className = 'action-button reaction-button like-button';
+            likeBtn.title = 'Нравится';
+            likeBtn.dataset.reaction = 'like';
+            likeBtn.innerHTML = likeSvg;
+
+            const dislikeBtn = document.createElement('button');
+            dislikeBtn.type = 'button';
+            dislikeBtn.className = 'action-button reaction-button dislike-button';
+            dislikeBtn.title = 'Не нравится';
+            dislikeBtn.dataset.reaction = 'dislike';
+            dislikeBtn.innerHTML = dislikeSvg;
+
+            const initReaction = String(meta.reaction || '').trim().toLowerCase();
+            if (initReaction === 'like') {
+                likeBtn.classList.add('active');
+            } else if (initReaction === 'dislike') {
+                dislikeBtn.classList.add('active');
+            }
+
+            const sendReaction = async (targetReaction) => {
+                const isAlreadyActive =
+                    (targetReaction === 'like' && likeBtn.classList.contains('active')) ||
+                    (targetReaction === 'dislike' && dislikeBtn.classList.contains('active'));
+                const nextReaction = isAlreadyActive ? null : targetReaction;
+
+                likeBtn.classList.toggle('active', nextReaction === 'like');
+                dislikeBtn.classList.toggle('active', nextReaction === 'dislike');
+
+                const parentMsg = div.closest('.agent-message');
+                const resolvedMsgId =
+                    meta.messageId ||
+                    parentMsg?.dataset?.messageId ||
+                    parentMsg?.dataset?.id ||
+                    messageId ||
+                    '';
+                const resolvedDbId =
+                    meta.dbId ||
+                    parentMsg?.dataset?.id ||
+                    messageId ||
+                    '';
+                const chatId = this.currentChat;
+                if (!chatId || (!resolvedMsgId && !resolvedDbId)) return;
+
+                try {
+                    await fetch(`/api/chats/${encodeURIComponent(chatId)}/reaction`, {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            chat_id: String(chatId),
+                            message_id: String(resolvedMsgId),
+                            id: String(resolvedDbId),
+                            reaction: nextReaction,
+                        }),
+                    });
+                } catch (err) {
+                    console.warn('[reaction] failed to save:', err);
+                }
+            };
+
+            likeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                sendReaction('like');
+            });
+            dislikeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                sendReaction('dislike');
+            });
+
+            div.appendChild(likeBtn);
+            div.appendChild(dislikeBtn);
+
+            const createdAtIso = this._parseMessageDate(meta.createdAt || new Date()).toISOString();
+            const timeEl = document.createElement('span');
+            timeEl.className = 'message-time';
+            timeEl.dataset.createdAt = createdAtIso;
+            timeEl.textContent = this._formatBotMessageTime(createdAtIso);
+            div.appendChild(timeEl);
+
+            this._ensureMessageTimeTicker();
+        }
+
         return div;
     }
 

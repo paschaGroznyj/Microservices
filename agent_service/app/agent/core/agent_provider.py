@@ -197,3 +197,24 @@ def get_router_api_config() -> dict:
         "music_model": ROUTER_MUSIC_MODEL,
         "avatar_model": ROUTER_AVATAR_MODEL,
     }
+
+
+def get_real_model_name(model_or_key) -> str:
+    """Возвращает точное название модели из провайдера (например 'openai/gpt-5.4')."""
+    if hasattr(model_or_key, "model_name") and getattr(model_or_key, "model_name"):
+        return str(model_or_key.model_name)
+    if hasattr(model_or_key, "model") and getattr(model_or_key, "model"):
+        return str(model_or_key.model)
+    key = str(model_or_key or "").strip()
+    builders = {
+        "coder": get_llm_model_gpt,
+        "designer": get_llm_model_claude,
+        "universal": get_llm_model_glm,
+        "gemini": get_llm_model_gemini,
+        "lite": get_llm_lite_model,
+    }
+    fn = builders.get(key)
+    if fn is not None:
+        llm = fn()
+        return str(getattr(llm, "model_name", None) or getattr(llm, "model", None) or key)
+    return key

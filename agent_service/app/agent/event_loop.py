@@ -20,7 +20,7 @@ from langchain_core.messages.utils import count_tokens_approximately
 from .core.agent_provider import (get_llm_lite_model, get_llm_model,
 get_llm_model_gpt, get_llm_model_claude, get_llm_model_gemini,
 get_llm_lite_model_gpt_mini, get_llm_lite_model_gemini_flash,
-get_llm_model_glm)
+get_llm_model_glm, get_real_model_name)
 from .core.botocore_client import OBSWorker
 from .core.config import (
     ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH,
@@ -1535,8 +1535,16 @@ class HarnessAgent:
                 "medium": {"limit_mem": 10, "max_tokens": 30_000},
                 "large":  {"limit_mem": 12, "max_tokens": 60_000},
             }
-            logging.info(f'Выбрана модель {agent_model}')
+            if agent_model not in self.AGENT_MODELS:
+                for _abs_k, _m_inst in self.AGENT_MODELS.items():
+                    if get_real_model_name(_m_inst) == agent_model:
+                        agent_model = _abs_k
+                        break
+                else:
+                    agent_model = 'coder'
             llm = self.AGENT_MODELS[agent_model]
+            real_agent_model = get_real_model_name(llm)
+            logging.info(f'Выбрана модель {agent_model} ({real_agent_model})')
             # Текущая модель нужна субагентам для корректного выбора LLM
             # при изолированном запуске через call_subagent.
             self.current_agent_model = agent_model
@@ -2116,7 +2124,7 @@ class HarnessAgent:
                 "success": True,
                 "files_to_send": files_to_send,
                 "tool_trace": trace_out,
-                "agent_model": agent_model,
+                "agent_model": real_agent_model,
                 "tokens_usage": tokens_usage,
                 "auto_title": auto_title
             }

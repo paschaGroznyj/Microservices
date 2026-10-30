@@ -315,6 +315,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                 response_text = response["message"]
                 is_lite = False  # дальше обрабатываем как полноценный ответ агента
             else:
+                from agent.core.agent_provider import get_real_model_name
+                response["agent_model"] = get_real_model_name("lite")
                 response_text = lite_raw
         else:
             response = await agent.process_query(user_input=message,

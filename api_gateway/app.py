@@ -1753,6 +1753,53 @@ async def search_chats(request: Request, q: str = "", limit: int = 30):
         raise HTTPException(status_code=500, detail="Failed to search chats")
 
 
+@app.post("/api/chats/{chat_id}/reaction")
+async def post_chat_message_reaction(chat_id: str, request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    data = await request.json()
+    message_id = data.get("message_id")
+    db_id = data.get("id")
+    reaction = data.get("reaction")
+    if reaction not in ("like", "dislike", None, ""):
+        raise HTTPException(status_code=400, detail="Invalid reaction")
+    norm_reaction = reaction if reaction in ("like", "dislike") else None
+    ok = await run_status.push_message_reaction(
+        chat_id=chat_id,
+        message_id=message_id,
+        reaction=norm_reaction,
+        user_id=user.get("user_id"),
+        db_id=db_id,
+    )
+    return {"ok": ok, "chat_id": str(chat_id), "message_id": message_id, "id": db_id, "reaction": norm_reaction}
+
+
+@app.post("/api/chats/reaction")
+async def post_chat_message_reaction_root(request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    data = await request.json()
+    chat_id = str(data.get("chat_id") or "").strip()
+    if not chat_id:
+        raise HTTPException(status_code=400, detail="chat_id required")
+    message_id = data.get("message_id")
+    db_id = data.get("id")
+    reaction = data.get("reaction")
+    if reaction not in ("like", "dislike", None, ""):
+        raise HTTPException(status_code=400, detail="Invalid reaction")
+    norm_reaction = reaction if reaction in ("like", "dislike") else None
+    ok = await run_status.push_message_reaction(
+        chat_id=chat_id,
+        message_id=message_id,
+        reaction=norm_reaction,
+        user_id=user.get("user_id"),
+        db_id=db_id,
+    )
+    return {"ok": ok, "chat_id": chat_id, "message_id": message_id, "id": db_id, "reaction": norm_reaction}
+
+
 @app.get("/api/chats/{chat_id}/messages")
 async def get_messages(chat_id: str, request: Request):
     """Получение сообщений чата (для SPA)"""

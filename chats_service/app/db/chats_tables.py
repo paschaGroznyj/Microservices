@@ -149,6 +149,7 @@ class DataBaseChats:
 
             -- Реакции TG на сообщения бота (аналитика + фидбек агенту)
             ALTER TABLE chats ADD COLUMN IF NOT EXISTS reactions JSONB DEFAULT '[]'::jsonb;
+            ALTER TABLE chats ADD COLUMN IF NOT EXISTS reaction TEXT DEFAULT NULL;
             ALTER TABLE chats ADD COLUMN IF NOT EXISTS input_format TEXT DEFAULT 'text';
 
             CREATE TABLE IF NOT EXISTS chat_files (
@@ -231,9 +232,10 @@ class DataBaseChats:
 
             INSERT INTO model_tariffs (model_name, abstract_model_name, input_per_1m, output_per_1m)
             VALUES
-                ('openai/gpt-5.4',             'coder',     0, 0),
-                ('anthropic/claude-opus-4.8',  'designer',  0, 0),
-                ('zai-org/GLM-5.2',            'universal', 0, 0)
+                ('openai/gpt-5.4',                  'coder',     0, 0),
+                ('anthropic/claude-opus-4.8',       'designer',  0, 0),
+                ('zai-org/GLM-5.2',                 'universal', 0, 0),
+                ('google/gemini-3.1-pro-preview',   'gemini',    0, 0)
             ON CONFLICT (model_name) DO NOTHING;
 
             CREATE TABLE IF NOT EXISTS chat_poll_answers (
@@ -438,12 +440,15 @@ class DataBaseChats:
             "SELECT model_name, abstract_model_name, input_per_1m, output_per_1m FROM model_tariffs;")
         out = {}
         for r in rows:
-            key = r["abstract_model_name"] or r["model_name"]
-            out[key] = {
+            entry = {
                 "model_name": r["model_name"],
                 "input_per_1m": float(r["input_per_1m"] or 0),
                 "output_per_1m": float(r["output_per_1m"] or 0),
             }
+            if r["abstract_model_name"]:
+                out[r["abstract_model_name"]] = entry
+            if r["model_name"]:
+                out[r["model_name"]] = entry
         return out
 
     async def add_message(
@@ -498,6 +503,47 @@ class DataBaseChats:
                         ])
         except asyncpg.UniqueViolationError:
             logging.error("Сообщение не может быть добавлено (дубликат message_id)")
+
+    async def set_message_reaction(
+        self,
+        chat_id: str,
+        message_id: str | None = None,
+        db_id: int | str | None = None,
+        reaction: str | None = None,
+    ) -> dict | None:
+        if not chat_id:
+            return None
+        mid_str = str(message_id or "").strip()
+        db_id_str = str(db_id if db_id is not None else "").strip()
+        if not mid_str and not db_id_str:
+            return None
+        norm_reaction = str(reaction).strip().lower() if reaction else None
+        if norm_reaction not in ("like", "dislike"):
+            norm_reaction = None
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                UPDATE chats
+                SET reaction = $1
+                WHERE id = (
+                    SELECT id FROM chats
+                    WHERE chat_id = $2
+                      AND is_from_bot = TRUE
+                      AND (
+                          ($3 <> '' AND (message_id = $3 OR id::text = $3))
+                          OR ($4 <> '' AND (id::text = $4 OR message_id = $4))
+                      )
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                )
+                RETURNING id, chat_id, message_id, reaction;
+                """,
+                norm_reaction,
+                str(chat_id),
+                mid_str,
+                db_id_str,
+            )
+            return dict(row) if row else None
 
     async def append_reaction(self, message_id: str, reaction: dict) -> dict | None:
         """Добавить реакцию к сообщению бота (JSONB-массив reactions).
@@ -880,6 +926,7 @@ class DataBaseChats:
                             c.is_from_bot, 
                             c.message_id,
                             c.created_at,
+                            c.reaction AS reaction,
                             COALESCE(
                                 (
                                     SELECT json_agg(
@@ -942,6 +989,7 @@ class DataBaseChats:
                         "is_from_bot": row["is_from_bot"],
                         "message_id": row["message_id"],
                         "created_at": row["created_at"].isoformat(),
+                        "reaction": row["reaction"],
                         "files": files or [],
                         "poll_answers": poll_answers or [],
                     })

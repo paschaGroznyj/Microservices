@@ -266,10 +266,35 @@
 /* ── MESSAGE ACTIONS ──────────────────────────── */
 .message-actions {
   display: flex;
+  align-items: center;
   gap: 4px;
   margin-top: 5px;
   opacity: 1;
   transition: opacity var(--transition);
+}
+
+.action-button.reaction-button.active {
+  color: var(--accent);
+  background: var(--surface2);
+}
+
+.action-button.reaction-button.active svg path {
+  fill: currentColor;
+  fill-opacity: 0.16;
+}
+
+.action-button.dislike-button.active {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.message-time {
+  margin-left: 6px;
+  font-size: 0.72rem;
+  line-height: 1;
+  color: var(--text-muted);
+  white-space: nowrap;
+  user-select: none;
 }
 
 /* Кнопки юзера — скрыты, появляются при наведении */

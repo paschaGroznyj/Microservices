@@ -268,3 +268,47 @@ async def get_running(chat_id) -> dict | None:
     except Exception as e:
         logger.debug("run_status.get_running failed: %s", e)
         return None
+
+
+REACTION_QUEUE_KEY = "chat:reactions:pending"
+REACTION_KEY_TTL = 86400
+
+
+def _reaction_key(chat_id, msg_key) -> str:
+    return f"chat:reaction:{chat_id}:{msg_key}"
+
+
+async def push_message_reaction(
+    chat_id,
+    message_id: str | None = None,
+    reaction: str | None = None,
+    user_id: int | None = None,
+    db_id: int | str | None = None,
+) -> bool:
+    if _redis is None or not chat_id:
+        return False
+    norm_reaction = str(reaction).strip().lower() if reaction else None
+    if norm_reaction not in ("like", "dislike"):
+        norm_reaction = None
+    mid_str = str(message_id or "").strip()
+    db_id_str = str(db_id if db_id is not None else "").strip()
+    if not mid_str and not db_id_str:
+        return False
+    payload = json.dumps({
+        "chat_id": str(chat_id),
+        "message_id": mid_str or None,
+        "id": db_id_str or None,
+        "reaction": norm_reaction,
+        "user_id": user_id,
+        "ts": time.time(),
+    })
+    try:
+        if mid_str:
+            await _redis.set(_reaction_key(chat_id, mid_str), payload, ex=REACTION_KEY_TTL)
+        if db_id_str and db_id_str != mid_str:
+            await _redis.set(_reaction_key(chat_id, db_id_str), payload, ex=REACTION_KEY_TTL)
+        await _redis.rpush(REACTION_QUEUE_KEY, payload)
+        return True
+    except Exception as e:
+        logger.warning("run_status.push_message_reaction failed: %s", e)
+        return False

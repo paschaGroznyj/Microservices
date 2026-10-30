@@ -212,8 +212,54 @@ async def startup():
         redis_client = None
         logging.error(f"[mobile] Redis недоступен ({REDIS_URL}): {e} — /mobile/poll вернёт 503")
 
+    # Фоновый воркер чтения реакций из Redis -> запись в БД
+    asyncio.create_task(_reactions_redis_worker())
+
     # # 🚀 старт watchdog-а
     # asyncio.create_task(bot_response_watchdog())
+
+
+REACTION_QUEUE_KEY = "chat:reactions:pending"
+
+
+async def _flush_pending_reactions_from_redis(max_items: int = 200) -> int:
+    if redis_client is None:
+        return 0
+    processed = 0
+    for _ in range(max_items):
+        try:
+            raw = await redis_client.lpop(REACTION_QUEUE_KEY)
+        except Exception as e:
+            logging.debug(f"[reactions] redis lpop failed: {e}")
+            break
+        if not raw:
+            break
+        try:
+            item = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(item, dict):
+                await db.set_message_reaction(
+                    chat_id=str(item.get("chat_id") or ""),
+                    message_id=item.get("message_id"),
+                    db_id=item.get("id"),
+                    reaction=item.get("reaction"),
+                )
+                processed += 1
+        except Exception as e:
+            logging.error(f"[reactions] failed to apply reaction from redis: {e}")
+    return processed
+
+
+async def _reactions_redis_worker():
+    while service_message_alive:
+        try:
+            count = await _flush_pending_reactions_from_redis()
+            if count == 0:
+                await asyncio.sleep(0.35)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logging.debug(f"[reactions] worker error: {e}")
+            await asyncio.sleep(1.0)
 
 
 @app.on_event("shutdown")
@@ -780,6 +826,7 @@ async def get_chat_messages(chat_id: str, limit: int = 50, offset: int = 0,  x_u
         limit = max(1, min(limit, 200))
         offset = max(0, offset)
 
+        await _flush_pending_reactions_from_redis()
         result = await db.get_chat_messages(chat_id, x_user_name, limit=limit, offset=offset)
         messages = result["messages"]
         logging.info(

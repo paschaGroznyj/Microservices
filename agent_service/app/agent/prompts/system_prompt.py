@@ -54,9 +54,6 @@ PARALLEL_TOOL_CALL_GUIDANCE = (
 
 TOOL_NAME_INTEGRITY_GUIDANCE = (
     "# Целостность имен при вызове инструментов и блоки <thinking> / <reasoning>\n"
-    "КРИТИЧЕСКИ ВАЖНО: Каждый вызов инструмента ДОЛЖЕН ссылаться ровно на один существующий инструмент, используя его точное зарегистрированное имя.\n"
-    "Запрещается объединять, сокращать, переименовывать или выдумывать имена инструментов. Нельзя комбинировать несколько имен инструментов в одном вызове или вкладывать имя одного инструмента в имя другого.\n"
-    "Формат обертки должен быть адаптирован под фреймворк Langchain.\n"
     "ПРАВИЛО РАССУЖДЕНИЙ (<thinking> и <reasoning>):\n"
     "- При КАЖДОМ вызове инструмента генерируй в поле content два блока подряд (БЕЗ обратных кавычек вокруг них и без кодовых блоков):\n"
     "  <thinking>Краткая суть действия в одном предложении на русском языке (показывается пользователю в UI)</thinking><reasoning>Более полное внутреннее рассуждение: анализ контекста, почему выбран этот шаг и план проверки (не попадает в UI)</reasoning>\n"
@@ -99,7 +96,7 @@ SYSTEM_PROMPT = (
    {role_block}
    Tools for administrators: all tools for working with the database
    """
-   + TOOL_USE_ENFORCEMENT_GUIDANCE + TOOL_NAME_INTEGRITY_GUIDANCE +
+   + TOOL_USE_ENFORCEMENT_GUIDANCE + TOOL_NAME_INTEGRITY_GUIDANCE + PARALLEL_TOOL_CALL_GUIDANCE +
    """
    # OPERATIONAL RULES
    1. ADMIN ACCESS: If non-admin users request administrative tools, gently explain that it is restricted and advise them to contact administrators. Full admin tools are reserved exclusively for administrators.

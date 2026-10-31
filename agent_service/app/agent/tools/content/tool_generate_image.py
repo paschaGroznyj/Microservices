@@ -410,7 +410,7 @@ def make_generate_image_tool(agent, images: list[dict] | None = None):
           extra_quality_prompt — optional: additional art direction in the system
                           (e.g. "Rembrandt light, 85mm portrait lens, f/1.8").
 
-        Returns a text report with the paths of saved images. The files themselves  are sent to the user in the chat automatically (preview in the interface).
+        Returns a text report with the paths of saved images.
         """
         if not prompt or not prompt.strip():
             return "Пустой промпт — нечего генерировать. Опиши, что нарисовать."
@@ -621,7 +621,6 @@ def make_generate_image_tool(agent, images: list[dict] | None = None):
         if errors:
             lines.append("Часть генераций не удалась:")
             lines.extend(f"  ! {e}" for e in errors)
-        lines.append("Файлы отправлены пользователю в интерфейс (превью доступно).")
         lines.append(
             "Картинки сохранены во внутреннем хранилище (prompt + model + aspect_ratio + "
             "created_at + сам бинарник). Чтобы вернуться к ранее сгенерированному "
@@ -629,7 +628,8 @@ def make_generate_image_tool(agent, images: list[dict] | None = None):
             "ключевым словам из описания (query), либо по image_key из отчёта выше. "
             "Он вернёт image_key и при необходимости подготовит временный путь, который "
             "можно передать в source_images для правки (image-to-image). НЕ используй SQL "
-            "для доступа к этому хранилищу."
+            "для доступа к этому хранилищу. "
+            "Нужно отправить изображение пользователю."
         )
         return "\n".join(lines)
 

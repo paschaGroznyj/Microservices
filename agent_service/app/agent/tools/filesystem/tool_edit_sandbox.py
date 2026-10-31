@@ -71,6 +71,7 @@ def make_sandbox_edit_tool(agent):
         Use it for spot edits instead of overwriting the entire file — it's safer this way.
         and more economical in terms of tokens. First, read the file through read_file, copy
         the exact fragment for old_str.
+        DO NOT use when working with the workspace
         """
         target = _valid_sandbox_path(path)
         if target is None:

@@ -386,6 +386,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                     pass # Нужно вернуть сигнал об ошибке. Дефолтные ГС на мобильном клиенте
 
         attached_files = None
+        logging.info(f"[files_to_send] {files_to_send}")
         if files_to_send:
             attached_files = []
             for f in files_to_send:

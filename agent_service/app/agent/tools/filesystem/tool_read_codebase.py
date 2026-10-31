@@ -214,6 +214,7 @@ def make_filesystem_tools(agent):
         To read files from the sandbox (/sandbox), specify the FULL absolute path,
         for example, "/sandbox/draft.py". Short relative paths (without "/")
         are resolved relative to /app, not /sandbox.
+        DO NOT use when working with the workspace
         """
         target = _safe_join(path)
         if target is None:
@@ -238,6 +239,7 @@ def make_filesystem_tools(agent):
             - If offset/limit is specified, it will return exactly the requested range of lines,
             regardless of the file size. This way, you can read a large file in parts:
             First, offset=0, limit=200, see total_lines in the response, then  offset=200, limit=200, and so on.
+        DO NOT use when working with the workspace
         """
         target = _safe_join(path)
         if target is None:
@@ -259,6 +261,7 @@ def make_filesystem_tools(agent):
 
         Use it to search for functions, classes, variables, and mentions of specific entities in the code.
         Example: pattern="def analyze_article" to find the function definition.
+        DO NOT use when working with the workspace
         """
         target = _safe_join(path)
         if target is None:
@@ -277,6 +280,7 @@ def make_filesystem_tools(agent):
             depth: search depth, 1-7
 
         Use when you know the approximate file name but not its location.
+        DO NOT use when working with the workspace
         """
         target = _safe_join(path)
         if target is None:

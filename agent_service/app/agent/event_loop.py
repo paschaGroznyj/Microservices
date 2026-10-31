@@ -198,8 +198,8 @@ async def tool_execute_sql_query(database, sql: str, max_rows: int = 10, sql_que
 MAX_STDOUT_CHARS = 2000  # Настройте максимальную длину (например, 2000 символов)
 MAX_TOOL_MSG_CHARS = int(os.getenv("MAX_TOOL_MSG_CHARS", "8000"))
 MAX_TRACE_FROM_DB_CHARS = int(os.getenv("MAX_TRACE_FROM_DB_CHARS", "2500"))
-TRACE_SUMMARY_THRESHOLD = int(os.getenv("TRACE_SUMMARY_THRESHOLD", "6000"))
-MAX_TRACE_HARD_CHARS = int(os.getenv("MAX_TRACE_HARD_CHARS", "12000"))
+TRACE_SUMMARY_THRESHOLD = int(os.getenv("TRACE_SUMMARY_THRESHOLD", "20000"))
+MAX_TRACE_HARD_CHARS = int(os.getenv("MAX_TRACE_HARD_CHARS", "21000"))
 
 # Имитация reasoning для моделей, которые НЕ отдают свой reasoning в стрим
 # (coder/gpt, gemini). Вместо тишины на шаге с tool_calls льём в reasoning-блок
@@ -1531,9 +1531,9 @@ class HarnessAgent:
         try:
             # ── Настройки контекста ────────────────────────────────────────
             CONTEXT_PRESETS = {
-                "small":  {"limit_mem": 8,  "max_tokens": 15_000},
-                "medium": {"limit_mem": 10, "max_tokens": 30_000},
-                "large":  {"limit_mem": 12, "max_tokens": 60_000},
+                "small":  {"limit_mem": 10,  "max_tokens": 7_500},
+                "medium": {"limit_mem": 12, "max_tokens": 15_000},
+                "large":  {"limit_mem": 14, "max_tokens": 30_000},
             }
             if agent_model not in self.AGENT_MODELS:
                 for _abs_k, _m_inst in self.AGENT_MODELS.items():
@@ -1846,6 +1846,7 @@ class HarnessAgent:
                     _thinking_text, _reasoning_text, _clean_content = _extract_thinking_and_clean_content(
                         getattr(response, "content", None)
                     )
+                    # logging.info(response)
                     if _reasoning_text:
                         loop_state.setdefault("internal_reasoning_trace", []).append(_reasoning_text)
                     # На шаге с tool_calls оставляем внутреннее рассуждение в стеке контекста модели,
@@ -1950,6 +1951,7 @@ class HarnessAgent:
 
                     # Выполняем все запрошенные инструменты параллельно
                     tool_calls = response.tool_calls
+                    # logging.info(response)
                     tool_names = [tc['name'] for tc in tool_calls]
                     tool_results = await asyncio.gather(
                         *[
@@ -2068,29 +2070,6 @@ class HarnessAgent:
                     "total_tokens": total_input_tokens + total_output_tokens,
                 }
 
-            # Авто-отправка изображений, сгенерированных тулом generate_image.
-            pending_images = self._ctx_get("pending_generated_images", [])
-            for gen_item in pending_images:
-                if isinstance(gen_item, dict):
-                    dedup = gen_item.get("image_key") or gen_item.get("name")
-                    if dedup and dedup not in seen_paths:
-                        seen_paths.add(dedup)
-                        files_to_send.append({
-                            "image_key": gen_item.get("image_key"),
-                            "name": gen_item.get("name") or "image.jpg",
-                            "kind": "image",
-                        })
-                else:
-                    gen_path = gen_item
-                    if gen_path not in seen_paths:
-                        seen_paths.add(gen_path)
-                        files_to_send.append({
-                            "path": gen_path,
-                            "name": os.path.basename(gen_path),
-                            "kind": "image",
-                        })
-
-            # logging.info(f"ФАЙЛЫ К ОТПРАВКЕ {files_to_send}")
             # Автогенерация заголовка чата по первому обмену (логика в title_generator.py).
             # Fail-open: не первый ход / ошибка -> auto_title=None.
             auto_title = None

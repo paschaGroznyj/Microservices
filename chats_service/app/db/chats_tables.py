@@ -276,6 +276,18 @@ class DataBaseChats:
             CREATE INDEX IF NOT EXISTS ix_editor_ws_user ON editor_workspaces(user_id, is_active);
             CREATE INDEX IF NOT EXISTS ix_editor_ws_wsid ON editor_workspaces(workspace_id);
             CREATE INDEX IF NOT EXISTS ix_editor_ws_chat ON editor_workspaces(chat_id);
+
+            CREATE TABLE IF NOT EXISTS user_settings (
+                user_id        BIGINT PRIMARY KEY,
+                selected_tools JSONB NOT NULL DEFAULT '[]'::jsonb,
+                selected_model VARCHAR(32) NOT NULL DEFAULT 'gpt',
+                active_chat_id TEXT DEFAULT NULL,
+                updated_at     TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            );
+            ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS selected_tools JSONB NOT NULL DEFAULT '[]'::jsonb;
+            ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS selected_model VARCHAR(32) NOT NULL DEFAULT 'gpt';
+            ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS active_chat_id TEXT DEFAULT NULL;
+            ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
         """)
 
     async def save_poll_answer(
@@ -745,6 +757,11 @@ class DataBaseChats:
                 ON CONFLICT (chat_id, user_id)
                 DO UPDATE SET is_deleted = TRUE, updated_at = CURRENT_TIMESTAMP
             """, chat_id, user_id)
+            await conn.execute("""
+                UPDATE user_settings
+                SET active_chat_id = NULL, updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = $1 AND active_chat_id = $2
+            """, user_id, str(chat_id))
 
     async def set_chat_auto_title(self, chat_id: str, user_id: int, auto_title: str):
         """Записывает автогенерированный заголовок чата (только если ещё не задан).
@@ -1136,4 +1153,139 @@ class DataBaseChats:
             return await conn.fetchval("""
                 SELECT chat_id FROM chat_types_agent WHERE user_id = $1 AND type_agent = $2
                 ORDER BY chat_id DESC LIMIT 1
-            """, user_id, type_agent)   
+            """, user_id, type_agent)
+
+    @staticmethod
+    def _normalize_setting_model(model: str | None) -> str:
+        raw = str(model or "").strip().lower()
+        mapping = {
+            "coder": "gpt",
+            "gpt": "gpt",
+            "designer": "claude",
+            "claude": "claude",
+            "universal": "glm",
+            "glm": "glm",
+            "gemini": "gemini",
+        }
+        return mapping.get(raw, "gpt")
+
+    async def upsert_user_settings(
+        self,
+        user_id: int,
+        selected_tools: list | None = None,
+        selected_model: str | None = None,
+        active_chat_id: str | None = None,
+        has_active_chat: bool = False,
+    ) -> dict:
+        uid = int(user_id)
+        norm_tools = None
+        if selected_tools is not None:
+            norm_tools = [str(t).strip() for t in selected_tools if str(t).strip()]
+        norm_model = self._normalize_setting_model(selected_model) if selected_model is not None else None
+        norm_chat = (str(active_chat_id).strip() or None) if active_chat_id is not None else None
+
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT selected_tools, selected_model, active_chat_id FROM user_settings WHERE user_id = $1",
+                uid,
+            )
+            cur_tools = []
+            cur_model = "gpt"
+            cur_chat = None
+            if row:
+                raw_t = row["selected_tools"]
+                if isinstance(raw_t, str):
+                    try:
+                        cur_tools = json.loads(raw_t)
+                    except Exception:
+                        cur_tools = []
+                elif isinstance(raw_t, list):
+                    cur_tools = raw_t
+                cur_model = self._normalize_setting_model(row["selected_model"])
+                cur_chat = row["active_chat_id"]
+
+            final_tools = norm_tools if norm_tools is not None else cur_tools
+            final_model = norm_model if norm_model is not None else cur_model
+            final_chat = norm_chat if has_active_chat else cur_chat
+
+            saved = await conn.fetchrow(
+                """
+                INSERT INTO user_settings (user_id, selected_tools, selected_model, active_chat_id, updated_at)
+                VALUES ($1, $2::jsonb, $3, $4, CURRENT_TIMESTAMP)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    selected_tools = EXCLUDED.selected_tools,
+                    selected_model = EXCLUDED.selected_model,
+                    active_chat_id = EXCLUDED.active_chat_id,
+                    updated_at = CURRENT_TIMESTAMP
+                RETURNING user_id, selected_tools, selected_model, active_chat_id
+                """,
+                uid,
+                json.dumps(final_tools, ensure_ascii=False),
+                final_model,
+                final_chat,
+            )
+            res_tools = saved["selected_tools"]
+            if isinstance(res_tools, str):
+                try:
+                    res_tools = json.loads(res_tools)
+                except Exception:
+                    res_tools = []
+            return {
+                "user_id": int(saved["user_id"]),
+                "selected_tools": res_tools if isinstance(res_tools, list) else [],
+                "selected_model": self._normalize_setting_model(saved["selected_model"]),
+                "active_chat_id": saved["active_chat_id"],
+            }
+
+    async def get_user_settings(self, user_id: int) -> dict:
+        uid = int(user_id)
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT user_id, selected_tools, selected_model, active_chat_id FROM user_settings WHERE user_id = $1",
+                uid,
+            )
+            if not row:
+                return {
+                    "user_id": uid,
+                    "selected_tools": [],
+                    "selected_model": "gpt",
+                    "active_chat_id": None,
+                }
+            tools = row["selected_tools"]
+            if isinstance(tools, str):
+                try:
+                    tools = json.loads(tools)
+                except Exception:
+                    tools = []
+            model = self._normalize_setting_model(row["selected_model"])
+            active_chat_id = str(row["active_chat_id"]).strip() if row["active_chat_id"] else None
+
+            if active_chat_id:
+                exists = await conn.fetchval(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM chats c
+                        LEFT JOIN chat_sidebar_meta m
+                          ON m.chat_id = c.chat_id AND m.user_id = c.user_id
+                        WHERE c.user_id = $1
+                          AND c.chat_id = $2
+                          AND COALESCE(m.is_deleted, FALSE) = FALSE
+                    )
+                    """,
+                    uid,
+                    active_chat_id,
+                )
+                if not exists:
+                    active_chat_id = None
+                    await conn.execute(
+                        "UPDATE user_settings SET active_chat_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE user_id = $1",
+                        uid,
+                    )
+
+            return {
+                "user_id": uid,
+                "selected_tools": tools if isinstance(tools, list) else [],
+                "selected_model": model,
+                "active_chat_id": active_chat_id,
+            }

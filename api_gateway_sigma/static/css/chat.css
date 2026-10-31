@@ -726,7 +726,7 @@
 }
 
 .chat-input-box:focus-within {
-  border-color: var(--input-focus);
+  border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent), var(--shadow-md);
 }
 
@@ -1085,7 +1085,7 @@
 }
 
 .start-input-box:focus-within {
-  border-color: var(--input-focus);
+  border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent), var(--shadow-md);
 }
 

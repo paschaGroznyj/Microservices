@@ -113,11 +113,13 @@ class ChatApp {
             return;
         }
 
-        // Передаём username в ToolsPanel для проверки прав
-        window.ToolsPanel?.setUser(this.currentUser.username);
+        // Передаём username в ToolsPanel для проверки прав и подтягиваем чаты + user_settings
+        await Promise.all([
+            window.ToolsPanel?.setUser(this.currentUser.username),
+            this.loadChats(),
+        ]);
+        const userSettings = await window.ToolsPanel?.loadUserSettings?.();
 
-        await this.loadChats();
-        // await loadFeedbacks();
         initMobileMenu();
         this.initTabSwitcher();
         this.initSidebarCollapse();
@@ -127,11 +129,13 @@ class ChatApp {
         this.initTextPreview();
         window.SkillsPanel?.init(this);
         window.GroupChat?.init(this);
-        await this.renderMessageInput();
-        await this._restoreSessionAfterAuthReload();
+        const restored = await this._restoreSessionAfterAuthReload(userSettings);
+        if (!restored) {
+            await this.renderMessageInput();
+        }
     }
 
-    async _restoreSessionAfterAuthReload() {
+    async _restoreSessionAfterAuthReload(userSettings = null) {
         try {
             const pendingRaw = sessionStorage.getItem('catchpm:pending_send_after_auth');
             const restoreChatId = sessionStorage.getItem('catchpm:restore_chat_id');
@@ -148,18 +152,32 @@ class ChatApp {
                             this.renderChats(this.chats);
                         }
                         await this.openChat(cid);
+                    } else {
+                        await this.renderMessageInput();
                     }
                     await this.sendMessage(pending.text, pending.pollAnswer || null);
-                    return;
+                    return true;
                 }
             }
 
-            if (restoreChatId && this.chats.some(c => String(c.id) === String(restoreChatId))) {
+            if (restoreChatId && this.chats.some(c => !c.is_deleted && String(c.id) === String(restoreChatId))) {
                 await this.openChat(restoreChatId);
+                return true;
+            }
+
+            const savedChatId = userSettings?.active_chat_id ? String(userSettings.active_chat_id).trim() : '';
+            if (savedChatId) {
+                const existsInDb = this.chats.some(c => !c.is_deleted && String(c.id) === savedChatId);
+                if (existsInDb) {
+                    await this.openChat(savedChatId, { skipSaveSettings: true });
+                    return true;
+                }
+                window.ToolsPanel?.saveUserSettings?.({ active_chat_id: null });
             }
         } catch (e) {
             console.warn('_restoreSessionAfterAuthReload error:', e);
         }
+        return false;
     }
 
     /* ══════════════════════════════════════════
@@ -454,7 +472,7 @@ class ChatApp {
     /* ══════════════════════════════════════════
        OPEN / CREATE CHAT
     ══════════════════════════════════════════ */
-    async openChat(chatId) {
+    async openChat(chatId, opts = {}) {
         // Сохраняем черновик поля ввода уходящего чата (в т.ч. стартовый
         // экран, если currentChat == null) перед сносом DOM.
         if (String(this.currentChat) !== String(chatId)) {
@@ -507,6 +525,9 @@ class ChatApp {
         }
         this.currentChat = chatId;
         this.subagentStates = {};
+        if (!opts?.skipSaveSettings && chatId != null) {
+            window.ToolsPanel?.saveUserSettings?.({ active_chat_id: String(chatId) });
+        }
 
         // Сбрасываем run-UI прошлого чата, чтобы стоп-кнопка/плейсхолдер не
         // «протекли» в новый чат. Ниже _restoreRunningUI поднимет их заново,
@@ -848,6 +869,7 @@ class ChatApp {
 
         this._resetNoToolsWarn(null);
         this.currentChat = null;
+        window.ToolsPanel?.saveUserSettings?.({ active_chat_id: null });
 
         // Сбрасываем run-UI, чтобы стоп-кнопка/индикатор стримящего чата не
         // «протекли» на стартовый экран. Остановить фоновый стрим можно
@@ -2998,6 +3020,7 @@ class ChatApp {
             // Сбрасываем интерфейс ТОЛЬКО если удалили именно открытый чат
             if (this.currentChat === chatId) {
                 this.currentChat = null;
+                window.ToolsPanel?.saveUserSettings?.({ active_chat_id: null });
                 if (this.ws) {
                     this._wsIntentionalClose = true;
                     this.ws.close();

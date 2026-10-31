@@ -214,12 +214,72 @@ async def startup():
 
     # Фоновый воркер чтения реакций из Redis -> запись в БД
     asyncio.create_task(_reactions_redis_worker())
+    asyncio.create_task(_user_settings_redis_worker())
 
     # # 🚀 старт watchdog-а
     # asyncio.create_task(bot_response_watchdog())
 
 
 REACTION_QUEUE_KEY = "chat:reactions:pending"
+USER_SETTINGS_QUEUE_KEY = "user:settings:pending"
+USER_SETTINGS_STATE_TTL = 7 * 86400
+
+
+def _user_settings_state_key(user_id: int) -> str:
+    return f"user:settings:state:{int(user_id)}"
+
+
+async def _flush_pending_user_settings_from_redis(max_items: int = 200) -> int:
+    if redis_client is None:
+        return 0
+    processed = 0
+    for _ in range(max_items):
+        try:
+            raw = await redis_client.lpop(USER_SETTINGS_QUEUE_KEY)
+        except Exception as e:
+            logging.debug(f"[user_settings] redis lpop failed: {e}")
+            break
+        if not raw:
+            break
+        try:
+            item = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(item, dict) and item.get("user_id") is not None:
+                uid = int(item["user_id"])
+                has_tools = "selected_tools" in item and item.get("selected_tools") is not None
+                has_model = "selected_model" in item and item.get("selected_model") is not None
+                has_chat = bool(item.get("has_active_chat")) or ("active_chat_id" in item)
+                saved = await db.upsert_user_settings(
+                    user_id=uid,
+                    selected_tools=item.get("selected_tools") if has_tools else None,
+                    selected_model=item.get("selected_model") if has_model else None,
+                    active_chat_id=item.get("active_chat_id") if has_chat else None,
+                    has_active_chat=has_chat,
+                )
+                try:
+                    await redis_client.set(
+                        _user_settings_state_key(uid),
+                        json.dumps(saved, ensure_ascii=False),
+                        ex=USER_SETTINGS_STATE_TTL,
+                    )
+                except Exception:
+                    pass
+                processed += 1
+        except Exception as e:
+            logging.error(f"[user_settings] failed to apply settings from redis: {e}")
+    return processed
+
+
+async def _user_settings_redis_worker():
+    while service_message_alive:
+        try:
+            count = await _flush_pending_user_settings_from_redis()
+            if count == 0:
+                await asyncio.sleep(0.25)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logging.debug(f"[user_settings] worker error: {e}")
+            await asyncio.sleep(1.0)
 
 
 async def _flush_pending_reactions_from_redis(max_items: int = 200) -> int:
@@ -983,6 +1043,55 @@ async def create_chat(request: Request):
 @app.get("/chats/{chat_id}/poll_answers")
 async def get_chat_poll_answers(chat_id: str):
     return {"poll_answers": await db.get_poll_answers(chat_id)}
+
+
+@app.get("/user/settings")
+async def get_user_settings_endpoint(x_user_id: str = Header(..., alias="X-User-Id")):
+    try:
+        uid = int(x_user_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid X-User-Id")
+    await _flush_pending_user_settings_from_redis()
+    settings = await db.get_user_settings(uid)
+    if redis_client is not None:
+        try:
+            await redis_client.set(
+                _user_settings_state_key(uid),
+                json.dumps(settings, ensure_ascii=False),
+                ex=USER_SETTINGS_STATE_TTL,
+            )
+        except Exception:
+            pass
+    return settings
+
+
+@app.post("/user/settings")
+async def post_user_settings_endpoint(request: Request, x_user_id: str = Header(..., alias="X-User-Id")):
+    try:
+        uid = int(x_user_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid X-User-Id")
+    data = await request.json()
+    has_tools = "selected_tools" in data and data.get("selected_tools") is not None
+    has_model = "selected_model" in data and data.get("selected_model") is not None
+    has_chat = "active_chat_id" in data
+    saved = await db.upsert_user_settings(
+        user_id=uid,
+        selected_tools=data.get("selected_tools") if has_tools else None,
+        selected_model=data.get("selected_model") if has_model else None,
+        active_chat_id=data.get("active_chat_id") if has_chat else None,
+        has_active_chat=has_chat,
+    )
+    if redis_client is not None:
+        try:
+            await redis_client.set(
+                _user_settings_state_key(uid),
+                json.dumps(saved, ensure_ascii=False),
+                ex=USER_SETTINGS_STATE_TTL,
+            )
+        except Exception:
+            pass
+    return saved
 
 
 @app.get("/chat/by-type/{type_agent}")

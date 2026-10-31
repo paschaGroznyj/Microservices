@@ -140,6 +140,7 @@
       '--accent-hover': hover,
       '--accent-muted': muted,
       '--text-on-accent': textOn(base),
+      '--input-focus': base,
     };
 
     // Нейтрали: тот же тон (hue + dH), мягкая насыщенность, фикс светлота.
@@ -174,7 +175,7 @@
     ['--accent', '--accent-hover', '--accent-muted', '--text-on-accent',
      '--bg', '--surface', '--surface2', '--surface3', '--border',
      '--border-light', '--sidebar-bg', '--sidebar-hover', '--sidebar-active',
-     '--input-border']
+     '--input-border', '--input-focus']
       .forEach(k => root.style.removeProperty(k));
   }
 

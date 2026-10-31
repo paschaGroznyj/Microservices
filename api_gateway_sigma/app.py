@@ -1780,6 +1780,79 @@ async def post_chat_message_reaction_root(request: Request):
     return {"ok": ok, "chat_id": chat_id, "message_id": message_id, "id": db_id, "reaction": norm_reaction}
 
 
+@app.get("/api/user/settings")
+async def get_user_settings_gw(request: Request):
+    user = await get_current_user(request)
+    if not user or not user.get("user_id"):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    uid = int(user["user_id"])
+    try:
+        resp = await app.state.http_client.get(
+            f"{SERVICES['chats']['url']}/user/settings",
+            headers={"X-User-Id": str(uid)},
+            timeout=5.0,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        logging.warning(f"get_user_settings_gw fallback error: {e}")
+    return {
+        "user_id": uid,
+        "selected_tools": [],
+        "selected_model": "gpt",
+        "active_chat_id": None,
+    }
+
+
+@app.post("/api/user/settings")
+async def post_user_settings_gw(request: Request):
+    user = await get_current_user(request)
+    if not user or not user.get("user_id"):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    uid = int(user["user_id"])
+    data = await request.json()
+    has_tools = "selected_tools" in data and isinstance(data.get("selected_tools"), list)
+    has_model = "selected_model" in data and data.get("selected_model") is not None
+    has_chat = "active_chat_id" in data
+
+    selected_tools = [str(t).strip() for t in data["selected_tools"] if str(t).strip()] if has_tools else None
+    selected_model = run_status.normalize_setting_model(data["selected_model"]) if has_model else None
+    active_chat_id = (str(data.get("active_chat_id") or "").strip() or None) if has_chat else None
+
+    ok = await run_status.push_user_settings(
+        user_id=uid,
+        selected_tools=selected_tools,
+        selected_model=selected_model,
+        active_chat_id=active_chat_id,
+        has_active_chat=has_chat,
+    )
+    if not ok:
+        try:
+            payload = {}
+            if has_tools:
+                payload["selected_tools"] = selected_tools
+            if has_model:
+                payload["selected_model"] = selected_model
+            if has_chat:
+                payload["active_chat_id"] = active_chat_id
+            await app.state.http_client.post(
+                f"{SERVICES['chats']['url']}/user/settings",
+                headers={"X-User-Id": str(uid)},
+                json=payload,
+                timeout=5.0,
+            )
+            ok = True
+        except Exception as e:
+            logging.warning(f"post_user_settings_gw fallback failed: {e}")
+    return {
+        "ok": ok,
+        "user_id": uid,
+        "selected_tools": selected_tools,
+        "selected_model": selected_model,
+        "active_chat_id": active_chat_id,
+    }
+
+
 @app.get("/api/chats/{chat_id}/messages")
 async def get_messages(chat_id: str, request: Request):
     """Получение сообщений чата (для SPA)"""

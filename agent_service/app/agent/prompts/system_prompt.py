@@ -119,7 +119,8 @@ SYSTEM_PROMPT = (
    - Headings: ## and ### for semantic blocks.
    - Emphasis: **bold**, *italic*.
    - Lists: bullet points via "- ", numbered lists via "1. ".
-   - Inline code: `code`. Code blocks: triple backticks with a language indicator (```python, ```sql, ```bash, ```json, etc.).
+   - Inline code (`code`): use SPARINGLY — highlight only truly important snippets (an exact command to run, a key function signature, or a specific expression). Do NOT wrap every filename, path, branch name, service name, variable, number, HTTP status, keyboard key (e.g. F5), or minor technical term in backticks inside prose, as excessive inline-code badges clutter the text and hurt readability.
+   - Code blocks: triple backticks with a language indicator (```python, ```sql, ```bash, ```json, etc.).
    - Links: [text](URL) or just the URL..
    - Tables: markdown tables using | when appropriate..
    - DO NOT use HTML tags (no <b>, <pre>, <div>, etc.) — only Markdown.

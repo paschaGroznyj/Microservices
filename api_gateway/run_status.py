@@ -312,3 +312,69 @@ async def push_message_reaction(
     except Exception as e:
         logger.warning("run_status.push_message_reaction failed: %s", e)
         return False
+
+
+USER_SETTINGS_QUEUE_KEY = "user:settings:pending"
+USER_SETTINGS_STATE_TTL = 7 * 86400
+
+_SETTING_MODEL_MAP = {
+    "coder": "gpt",
+    "gpt": "gpt",
+    "designer": "claude",
+    "claude": "claude",
+    "universal": "glm",
+    "glm": "glm",
+    "gemini": "gemini",
+}
+
+
+def normalize_setting_model(model: str | None) -> str:
+    raw = str(model or "").strip().lower()
+    return _SETTING_MODEL_MAP.get(raw, "gpt")
+
+
+def _user_settings_state_key(user_id: int) -> str:
+    return f"user:settings:state:{int(user_id)}"
+
+
+async def push_user_settings(
+    user_id: int,
+    selected_tools: list | None = None,
+    selected_model: str | None = None,
+    active_chat_id: str | None = None,
+    has_active_chat: bool = False,
+) -> bool:
+    if _redis is None or user_id is None:
+        return False
+    uid = int(user_id)
+    event: dict = {"user_id": uid, "ts": time.time()}
+    if selected_tools is not None:
+        event["selected_tools"] = [str(t).strip() for t in selected_tools if str(t).strip()]
+    if selected_model is not None:
+        event["selected_model"] = normalize_setting_model(selected_model)
+    if has_active_chat:
+        norm_chat = str(active_chat_id).strip() if active_chat_id is not None else ""
+        event["active_chat_id"] = norm_chat or None
+        event["has_active_chat"] = True
+
+    try:
+        state_key = _user_settings_state_key(uid)
+        raw_cur = await _redis.get(state_key)
+        cur = json.loads(raw_cur) if raw_cur else {
+            "user_id": uid,
+            "selected_tools": [],
+            "selected_model": "gpt",
+            "active_chat_id": None,
+        }
+        if "selected_tools" in event:
+            cur["selected_tools"] = event["selected_tools"]
+        if "selected_model" in event:
+            cur["selected_model"] = event["selected_model"]
+        if has_active_chat:
+            cur["active_chat_id"] = event["active_chat_id"]
+        await _redis.set(state_key, json.dumps(cur, ensure_ascii=False), ex=USER_SETTINGS_STATE_TTL)
+        await _redis.rpush(USER_SETTINGS_QUEUE_KEY, json.dumps(event, ensure_ascii=False))
+        return True
+    except Exception as e:
+        logger.warning("run_status.push_user_settings failed: %s", e)
+        return False

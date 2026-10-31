@@ -1535,6 +1535,14 @@ class HarnessAgent:
                 "medium": {"limit_mem": 12, "max_tokens": 15_000},
                 "large":  {"limit_mem": 14, "max_tokens": 30_000},
             }
+            _MODEL_ALIASES = {
+                "gpt": "coder",
+                "claude": "designer",
+                "glm": "universal",
+                "gemini": "gemini",
+            }
+            if agent_model in _MODEL_ALIASES:
+                agent_model = _MODEL_ALIASES[agent_model]
             if agent_model not in self.AGENT_MODELS:
                 for _abs_k, _m_inst in self.AGENT_MODELS.items():
                     if get_real_model_name(_m_inst) == agent_model:

@@ -51,7 +51,7 @@ log = logging.getLogger("sandbox")
 app = FastAPI(title="Agent Code Sandbox v3")
 
 # ── Конфиг ─────────────────────────────────────────────────────────
-MAX_CODE_SIZE = 100_000
+MAX_CODE_SIZE = 500_000
 DEFAULT_TIMEOUT = 120
 MAX_TIMEOUT = 3600
 MAX_OUTPUT_SIZE = 20_000

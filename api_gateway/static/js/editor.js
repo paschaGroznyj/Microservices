@@ -216,7 +216,9 @@
     for (const w of list) {
       const o = document.createElement("option");
       o.value = w.workspace_id;
-      o.textContent = w.title || w.workspace_id;
+      const baseLabel = w.title || w.workspace_id;
+      const ttlSuffix = w.is_permanent ? " · бессрочно" : (w.ttl_text ? ` · ${w.ttl_text}` : "");
+      o.textContent = `${baseLabel}${ttlSuffix}`;
       wsSelect.appendChild(o);
     }
     const wanted = URL_WS && list.some(w => w.workspace_id === URL_WS) ? URL_WS : null;

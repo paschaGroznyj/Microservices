@@ -691,15 +691,26 @@ async def get_user_chats(user_id: int = Query(..., alias="user_id"), chat_id: st
 
 @app.post("/editor/register")
 async def editor_register(payload: dict):
-    """Регистрация воркспейса за юзером (вызывает тул агента)."""
+    """Регистрация воркспейса за юзером с учётом TTL (по дефолту 10ч или бессрочно)."""
     user_id = payload.get("user_id")
     workspace_id = payload.get("workspace_id")
     if user_id is None or not workspace_id:
         raise HTTPException(status_code=400, detail="user_id и workspace_id обязательны")
+    raw_ttl = payload.get("ttl_hours", 10)
+    is_perm = bool(payload.get("is_permanent") or payload.get("permanent"))
+    try:
+        ttl_hours = None if raw_ttl is None else int(raw_ttl)
+    except (TypeError, ValueError):
+        ttl_hours = 10
+    if ttl_hours is not None and ttl_hours <= 0:
+        is_perm = True
+        ttl_hours = None
     row = await editor_db.register(
         int(user_id), str(workspace_id),
         chat_id=payload.get("chat_id"),
         title=payload.get("title"),
+        ttl_hours=ttl_hours,
+        is_permanent=is_perm,
     )
     return {"ok": True, "workspace": row}
 
@@ -716,6 +727,30 @@ async def editor_owns(user_id: int, workspace_id: str):
     """Гейт доступа: принадлежит ли воркспейс юзеру."""
     ok = await editor_db.owns(int(user_id), str(workspace_id))
     return {"owns": ok}
+
+
+@app.post("/editor/workspaces/ttl")
+async def editor_update_workspace_ttl(payload: dict):
+    """Обновление TTL / бессрочного хранения (.ws_hold) по запросу от agent_sandbox."""
+    workspace_id = payload.get("workspace_id")
+    if not workspace_id:
+        raise HTTPException(status_code=400, detail="workspace_id обязателен")
+    is_active = payload.get("is_active")
+    is_perm = payload.get("is_permanent")
+    if is_perm is None and "permanent" in payload:
+        is_perm = bool(payload.get("permanent"))
+    raw_ttl = payload.get("ttl_hours", 10)
+    try:
+        ttl_hours = None if raw_ttl is None else int(raw_ttl)
+    except (TypeError, ValueError):
+        ttl_hours = 10
+    updated = await editor_db.update_ttl_status(
+        str(workspace_id),
+        is_permanent=is_perm,
+        ttl_hours=ttl_hours,
+        is_active=is_active,
+    )
+    return {"ok": True, "workspace_id": str(workspace_id), "updated": updated}
 
 
 # ══════════════════════════════════════════════════════════════

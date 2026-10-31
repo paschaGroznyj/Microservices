@@ -255,6 +255,27 @@ class DataBaseChats:
             );
             CREATE INDEX IF NOT EXISTS ix_chat_poll_answers_chat_id ON chat_poll_answers(chat_id);
             CREATE INDEX IF NOT EXISTS ix_chat_poll_answers_bot_msg ON chat_poll_answers(bot_message_id);
+
+            CREATE TABLE IF NOT EXISTS editor_workspaces (
+                id            BIGSERIAL PRIMARY KEY,
+                user_id       BIGINT NOT NULL,
+                workspace_id  TEXT   NOT NULL,
+                chat_id       TEXT,
+                title         TEXT,
+                ttl_hours     INTEGER DEFAULT 10,
+                is_permanent  BOOLEAN NOT NULL DEFAULT FALSE,
+                expires_at    TIMESTAMPTZ DEFAULT (CURRENT_TIMESTAMP + INTERVAL '10 hours'),
+                is_active     BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (user_id, workspace_id)
+            );
+            ALTER TABLE editor_workspaces ADD COLUMN IF NOT EXISTS ttl_hours INTEGER DEFAULT 10;
+            ALTER TABLE editor_workspaces ADD COLUMN IF NOT EXISTS is_permanent BOOLEAN NOT NULL DEFAULT FALSE;
+            ALTER TABLE editor_workspaces ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ DEFAULT (CURRENT_TIMESTAMP + INTERVAL '10 hours');
+            CREATE INDEX IF NOT EXISTS ix_editor_ws_user ON editor_workspaces(user_id, is_active);
+            CREATE INDEX IF NOT EXISTS ix_editor_ws_wsid ON editor_workspaces(workspace_id);
+            CREATE INDEX IF NOT EXISTS ix_editor_ws_chat ON editor_workspaces(chat_id);
         """)
 
     async def save_poll_answer(

@@ -5441,6 +5441,38 @@ class ChatApp {
                 return;
             }
 
+            const formatWsTtl = (w) => {
+                const isPerm = Boolean(
+                    w.is_permanent || w.immortal || w.ttl_text === 'бессрочно' ||
+                    (w.ttl_hours !== undefined && w.ttl_hours !== null && Number(w.ttl_hours) <= 0)
+                );
+                if (isPerm) {
+                    return { text: '∞ бессрочно', cls: ' is-permanent', title: 'Бессрочное хранение (.ws_hold)' };
+                }
+                let remSec = (typeof w.remaining_seconds === 'number') ? w.remaining_seconds : null;
+                if (remSec === null && w.expires_at) {
+                    const expMs = Date.parse(w.expires_at);
+                    if (!Number.isNaN(expMs)) {
+                        remSec = Math.max(0, Math.floor((expMs - Date.now()) / 1000));
+                    }
+                }
+                const ttlHours = Number(w.ttl_hours) > 0 ? Number(w.ttl_hours) : 10;
+                if (remSec === null && w.created_at) {
+                    const baseMs = Date.parse(w.updated_at || w.created_at);
+                    if (!Number.isNaN(baseMs)) {
+                        remSec = Math.max(0, Math.floor((baseMs + ttlHours * 3600 * 1000 - Date.now()) / 1000));
+                    }
+                }
+                if (remSec !== null) {
+                    const h = Math.floor(remSec / 3600);
+                    const m = Math.floor((remSec % 3600) / 60);
+                    const label = h > 0 ? (m > 0 ? `${h}ч ${m}м` : `${h}ч`) : (m > 0 ? `${m}м` : `${remSec}с`);
+                    const cls = remSec < 1800 ? ' is-crit' : (remSec < 3600 ? ' is-warn' : '');
+                    return { text: label, cls, title: `Время жизни области: осталось ~${label} (TTL ${ttlHours}ч)` };
+                }
+                return { text: `${ttlHours}ч`, cls: '', title: `Время жизни области: TTL ${ttlHours}ч` };
+            };
+
             listEl.innerHTML = filtered.map(w => {
                 const wsId = String(w.workspace_id || '');
                 const title = String(w.title || wsId);
@@ -5448,6 +5480,7 @@ class ChatApp {
                 const isCurrentChatWs = Boolean(curChatId && wsChatId && wsChatId === curChatId);
                 const targetChat = wsChatId || curChatId || '';
                 const href = `/editor?workspace_id=${encodeURIComponent(wsId)}${targetChat ? `&chat_id=${encodeURIComponent(targetChat)}` : ''}`;
+                const ttlInfo = formatWsTtl(w);
                 return `
                     <a class="slash-ws-item${isCurrentChatWs ? ' is-current-chat' : ''}" href="${this.escapeHtml(href)}" target="_blank" rel="noopener noreferrer">
                         <div class="slash-ws-main">
@@ -5456,6 +5489,7 @@ class ChatApp {
                             ${isCurrentChatWs ? '<span class="slash-ws-chat-pill">этот чат</span>' : ''}
                         </div>
                         <div class="slash-ws-meta">
+                            <span class="slash-ws-ttl${ttlInfo.cls}" title="${this.escapeHtml(ttlInfo.title)}">${this.escapeHtml(ttlInfo.text)}</span>
                             <span class="slash-ws-id">${this.escapeHtml(wsId)}</span>
                             <span class="slash-ws-ext" aria-hidden="true">${extSvg}</span>
                         </div>

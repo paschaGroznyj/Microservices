@@ -4805,7 +4805,7 @@ class ChatApp {
         </div>
     </div>
 
-    <p class="start-footer-note">ИИ может ошибаться — перепроверяйте важную информацию</p>
+    <p class="start-footer-note">Агент может ошибаться — перепроверяйте важную информацию</p>
 
 </div>`;
         } else {
@@ -4827,8 +4827,6 @@ class ChatApp {
         ></div>
 
         <div class="chat-input-footer">
-            <span class="input-footer-note">ИИ может ошибаться — перепроверяйте важную информацию</span>
-
             <button class="chat-send-btn" id="send-btn" disabled aria-label="Отправить">
                 <svg viewBox="0 0 24 24" fill="none">
                     <path d="M5 12h14M13 6l6 6-6 6"
@@ -4839,6 +4837,7 @@ class ChatApp {
         </div>
 
     </div>
+    <span class="input-footer-note">Агент может ошибаться — перепроверяйте важную информацию</span>
 </div>`;
         }
 
@@ -6161,6 +6160,16 @@ class ChatApp {
         });
 
         div.appendChild(copyBtn);
+
+        if (!isBot) {
+            const skillsCount = document.createElement('span');
+            skillsCount.className = 'user-skills-count';
+            skillsCount.title = 'Выбранные скиллы';
+            const selSize = window.SkillsPanel?._selectedIds?.size || 0;
+            const selLimit = window.SkillsPanel?._selectedLimit || 5;
+            skillsCount.textContent = `${selSize}/${selLimit}`;
+            div.appendChild(skillsCount);
+        }
 
         if (isBot) {
             const likeSvg = `<svg class="action-icon" viewBox="0 0 24 24" fill="none">

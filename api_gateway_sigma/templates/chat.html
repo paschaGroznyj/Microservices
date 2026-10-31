@@ -79,7 +79,7 @@
                     <svg viewBox="0 0 16 16" fill="none">
                         <path d="M9.2 1.7a2.3 2.3 0 1 0 3.1 3.1l1.2 1.2-1.4 1.4-1.2-1.2a2.3 2.3 0 0 0-3.1 3.1l-3.9 3.9a1.3 1.3 0 1 1-1.8-1.8l3.9-3.9a2.3 2.3 0 0 0 3.1-3.1l1.4-1.4-1.3-1.3z" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>
-                    Скиллы <span class="nav-badge" id="skills-selected-nav-count">0</span>
+                    Скиллы <span class="nav-badge" id="skills-selected-nav-count">0/5</span>
                 </div>
 
                 <div class="nav-item" data-tab="graph">
@@ -256,47 +256,43 @@
                         </div>
                         <div class="skills-toolbar" id="skills-toolbar">
                             <div class="skills-toolbar-actions">
+                                <div class="skills-search-field" id="skills-search-field">
+                                    <input id="skills-query" class="skills-search" type="text" placeholder="Поиск…" autocomplete="off"/>
+                                    <button type="button" id="skills-search-clear" class="skills-search-clear" aria-label="Закрыть поиск" title="Закрыть поиск" hidden>
+                                        <svg viewBox="0 0 20 20" width="15" height="15" fill="none" aria-hidden="true"><path d="M6 6l8 8M14 6l-8 8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+                                    </button>
+                                </div>
                                 <button type="button" id="skills-search-toggle" class="skills-icon-btn" aria-label="Поиск" title="Поиск" aria-expanded="false">
                                     <svg viewBox="0 0 20 20" width="18" height="18" fill="none" aria-hidden="true"><circle cx="9" cy="9" r="6" stroke="currentColor" stroke-width="1.7"/><line x1="14" y1="14" x2="18" y2="18" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
                                 </button>
-                                <div class="skills-menu-wrap">
-                                    <button type="button" id="skills-filter-btn" class="skills-icon-btn" aria-label="Фильтр" title="Фильтр" aria-haspopup="menu" aria-expanded="false">
-                                        <svg viewBox="0 0 20 20" width="18" height="18" fill="none" aria-hidden="true"><path d="M3 5h14M6 10h8M8.5 15h3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
-                                    </button>
-                                    <div class="skills-menu" id="skills-filter-menu" role="menu" hidden>
-                                        <button type="button" class="skills-menu-item" role="menuitemradio" data-filter="all" aria-checked="true">Все скиллы</button>
-                                        <button type="button" class="skills-menu-item" role="menuitemradio" data-filter="liked" aria-checked="false">С моими лайками</button>
-                                        <button type="button" class="skills-menu-item" role="menuitemradio" data-filter="selected" aria-checked="false">Выбранные в чат</button>
+                                <div class="skills-toolbar-rest" id="skills-toolbar-rest">
+                                    <div class="skills-menu-wrap">
+                                        <button type="button" id="skills-filter-btn" class="skills-icon-btn" aria-label="Фильтр" title="Фильтр" aria-haspopup="menu" aria-expanded="false">
+                                            <svg viewBox="0 0 20 20" width="18" height="18" fill="none" aria-hidden="true"><path d="M3 5h14M6 10h8M8.5 15h3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+                                        </button>
+                                        <div class="skills-menu" id="skills-filter-menu" role="menu" hidden>
+                                            <button type="button" class="skills-menu-item" role="menuitemradio" data-filter="all" aria-checked="true">Все скиллы</button>
+                                            <button type="button" class="skills-menu-item" role="menuitemradio" data-filter="liked" aria-checked="false">С моими лайками</button>
+                                            <button type="button" class="skills-menu-item" role="menuitemradio" data-filter="selected" aria-checked="false">Выбранные в чат</button>
+                                        </div>
                                     </div>
-                                </div>
-                                <div class="skills-menu-wrap">
-                                    <button type="button" id="skills-sort-btn" class="skills-icon-btn" aria-label="Сортировка" title="Сортировка" aria-haspopup="menu" aria-expanded="false">
-                                        <svg viewBox="0 0 20 20" width="18" height="18" fill="none" aria-hidden="true"><path d="M6 4v12M6 16l-2.5-2.5M6 16l2.5-2.5M13 5h5M13 9h4M13 13h2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                                    </button>
-                                    <div class="skills-menu" id="skills-sort-menu" role="menu" hidden>
-                                        <button type="button" class="skills-menu-item" role="menuitemradio" data-sort="new" aria-checked="true">Сначала новые</button>
-                                        <button type="button" class="skills-menu-item" role="menuitemradio" data-sort="popular" aria-checked="false">Сначала популярные</button>
+                                    <div class="skills-menu-wrap">
+                                        <button type="button" id="skills-sort-btn" class="skills-icon-btn" aria-label="Сортировка" title="Сортировка" aria-haspopup="menu" aria-expanded="false">
+                                            <svg viewBox="0 0 20 20" width="18" height="18" fill="none" aria-hidden="true"><path d="M6 4v12M6 16l-2.5-2.5M6 16l2.5-2.5M13 5h5M13 9h4M13 13h2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                        </button>
+                                        <div class="skills-menu" id="skills-sort-menu" role="menu" hidden>
+                                            <button type="button" class="skills-menu-item" role="menuitemradio" data-sort="new" aria-checked="true">Сначала новые</button>
+                                            <button type="button" class="skills-menu-item" role="menuitemradio" data-sort="popular" aria-checked="false">Сначала популярные</button>
+                                            <button type="button" class="skills-menu-item" role="menuitemradio" data-sort="liked" aria-checked="false">Сначала отмеченные</button>
+                                        </div>
                                     </div>
+                                    <span class="skills-count" id="skills-count"></span>
                                 </div>
-                                <!-- Кнопка Add временно скрыта (скиллы публикует только агент)
-                                <button type="button" id="skills-add-btn" class="skills-primary-btn" aria-label="Добавить скилл" title="Добавить скилл" hidden>
-                                    <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true"><path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-                                    <span>Add</span>
-                                </button>
-                                -->
-                                <span class="skills-count" id="skills-count"></span>
                             </div>
-                            <div class="skills-search-row" id="skills-search-row" hidden>
-                                <div class="skills-search-field">
-                                    <input id="skills-query" class="skills-search" type="text" placeholder="Поиск по теме или содержанию…" autocomplete="off"/>
-                                    <button type="button" id="skills-search-clear" class="skills-search-clear" aria-label="Закрыть поиск" title="Закрыть поиск">
-                                        <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true"><path d="M6 6l8 8M14 6l-8 8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
-                                    </button>
-                                </div>
-                                <select id="skills-sort" class="skills-sort-hidden" aria-hidden="true" tabindex="-1"><option value="new">new</option><option value="popular">popular</option></select>
-                            </div>
+                            <select id="skills-sort" class="skills-sort-hidden" aria-hidden="true" tabindex="-1"><option value="new">new</option><option value="popular">popular</option><option value="liked">liked</option></select>
                         </div>
                         <div class="skills-list" id="skills-list"></div>
+                        <div class="skill-detail" id="skill-detail-view" hidden></div>
                     </div>
                 </div>
 
@@ -310,10 +306,10 @@
                             <div class="chat-input-box" id="gc-input-box">
                                 <div class="chat-input-field gc-input" id="gc-input" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Написать в общий чат..."></div>
                                 <div class="chat-input-footer">
-                                    <span class="input-footer-note">Общий чат команды</span>
                                     <button class="send-btn" id="gc-send-btn" disabled aria-label="Отправить"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
                                 </div>
                             </div>
+                            <span class="input-footer-note">Общий чат команды</span>
                         </div>
                         </div>
                     </div>

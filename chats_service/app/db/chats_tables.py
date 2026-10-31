@@ -288,6 +288,17 @@ class DataBaseChats:
             ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS selected_model VARCHAR(32) NOT NULL DEFAULT 'gpt';
             ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS active_chat_id TEXT DEFAULT NULL;
             ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;
+
+            ALTER TABLE IF EXISTS agent_skills ADD COLUMN IF NOT EXISTS uses_count INTEGER NOT NULL DEFAULT 0;
+            CREATE TABLE IF NOT EXISTS agent_skill_selected (
+                skill_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (skill_id, user_id)
+            );
+            CREATE INDEX IF NOT EXISTS ix_agent_skill_selected_user_id
+                ON agent_skill_selected(user_id, created_at DESC);
         """)
 
     async def save_poll_answer(
@@ -1289,3 +1300,270 @@ class DataBaseChats:
                 "selected_model": model,
                 "active_chat_id": active_chat_id,
             }
+
+    async def _fetch_clean_selected_skill_ids(self, conn, uid: int, max_selected: int = 5) -> list[int]:
+        await conn.execute(
+            """
+            DELETE FROM agent_skill_selected ss
+            WHERE ss.user_id = $1
+              AND NOT EXISTS (
+                  SELECT 1 FROM agent_skills s
+                  WHERE s.id = ss.skill_id AND s.is_deleted = FALSE
+              )
+            """,
+            uid,
+        )
+        rows = await conn.fetch(
+            """
+            SELECT ss.skill_id
+            FROM agent_skill_selected ss
+            JOIN agent_skills s ON s.id = ss.skill_id
+            WHERE ss.user_id = $1
+              AND s.is_deleted = FALSE
+            ORDER BY ss.created_at ASC
+            LIMIT $2
+            """,
+            uid,
+            int(max_selected),
+        )
+        return [int(r["skill_id"]) for r in rows]
+
+    async def get_selected_skill_ids(self, user_id: int, conn=None) -> list[int]:
+        uid = int(user_id)
+        if conn is not None:
+            return await self._fetch_clean_selected_skill_ids(conn, uid)
+        async with self.pool.acquire() as c:
+            return await self._fetch_clean_selected_skill_ids(c, uid)
+
+    async def apply_skill_selection(
+        self,
+        user_id: int,
+        skill_id: int,
+        selected: bool | None = None,
+        selected_ids_hint: list[int] | None = None,
+        max_selected: int = 5,
+    ) -> dict:
+        uid = int(user_id)
+        sid = int(skill_id)
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    DELETE FROM agent_skill_selected ss
+                    WHERE ss.user_id = $1
+                      AND NOT EXISTS (
+                          SELECT 1 FROM agent_skills s
+                          WHERE s.id = ss.skill_id AND s.is_deleted = FALSE
+                      )
+                    """,
+                    uid,
+                )
+
+                skill_exists = await conn.fetchval(
+                    "SELECT 1 FROM agent_skills WHERE id = $1 AND is_deleted = FALSE",
+                    sid,
+                )
+                if not skill_exists:
+                    await conn.execute(
+                        "DELETE FROM agent_skill_selected WHERE skill_id = $1 AND user_id = $2",
+                        sid,
+                        uid,
+                    )
+                    selected_ids = await self._fetch_clean_selected_skill_ids(conn, uid, max_selected)
+                    return {
+                        "ok": False,
+                        "reason": "not_found",
+                        "skill_id": sid,
+                        "selected": False,
+                        "selected_ids": selected_ids,
+                        "count": len(selected_ids),
+                        "max_selected": max_selected,
+                    }
+
+                exists = await conn.fetchval(
+                    "SELECT 1 FROM agent_skill_selected WHERE skill_id = $1 AND user_id = $2",
+                    sid,
+                    uid,
+                )
+                target = (not bool(exists)) if selected is None else bool(selected)
+
+                if not target:
+                    await conn.execute(
+                        "DELETE FROM agent_skill_selected WHERE skill_id = $1 AND user_id = $2",
+                        sid,
+                        uid,
+                    )
+                    is_selected = False
+                else:
+                    if not exists:
+                        cnt = await conn.fetchval(
+                            """
+                            SELECT COUNT(*)::int
+                            FROM agent_skill_selected ss
+                            JOIN agent_skills s ON s.id = ss.skill_id
+                            WHERE ss.user_id = $1
+                              AND s.is_deleted = FALSE
+                            """,
+                            uid,
+                        )
+                        if int(cnt or 0) >= int(max_selected):
+                            selected_ids = await self._fetch_clean_selected_skill_ids(conn, uid, max_selected)
+                            return {
+                                "ok": False,
+                                "reason": "limit",
+                                "skill_id": sid,
+                                "selected": False,
+                                "selected_ids": selected_ids,
+                                "count": len(selected_ids),
+                                "max_selected": max_selected,
+                            }
+                    await conn.execute(
+                        """
+                        INSERT INTO agent_skill_selected (skill_id, user_id)
+                        VALUES ($1, $2)
+                        ON CONFLICT (skill_id, user_id)
+                        DO UPDATE SET updated_at = CURRENT_TIMESTAMP
+                        """,
+                        sid,
+                        uid,
+                    )
+                    is_selected = True
+
+                if isinstance(selected_ids_hint, list):
+                    clean_hint = []
+                    for x in selected_ids_hint:
+                        try:
+                            xi = int(x)
+                            if xi > 0 and xi not in clean_hint:
+                                clean_hint.append(xi)
+                        except (TypeError, ValueError):
+                            pass
+                    if len(clean_hint) == 0 and not is_selected:
+                        await conn.execute(
+                            "DELETE FROM agent_skill_selected WHERE user_id = $1",
+                            uid,
+                        )
+
+                selected_ids = await self._fetch_clean_selected_skill_ids(conn, uid, max_selected)
+                return {
+                    "ok": True,
+                    "skill_id": sid,
+                    "selected": is_selected,
+                    "selected_ids": selected_ids,
+                    "count": len(selected_ids),
+                    "max_selected": max_selected,
+                }
+
+
+
+    async def get_liked_skill_ids(self, user_id: int, conn=None) -> list[int]:
+        uid = int(user_id)
+        if conn is not None:
+            return await self._fetch_clean_liked_skill_ids(conn, uid)
+        async with self.pool.acquire() as c:
+            return await self._fetch_clean_liked_skill_ids(c, uid)
+
+    async def _fetch_clean_liked_skill_ids(self, conn, uid: int) -> list[int]:
+        await conn.execute(
+            """
+            DELETE FROM agent_skill_likes sl
+            WHERE sl.user_id = $1
+              AND NOT EXISTS (
+                  SELECT 1 FROM agent_skills s
+                  WHERE s.id = sl.skill_id AND s.is_deleted = FALSE
+              )
+            """,
+            uid,
+        )
+        rows = await conn.fetch(
+            """
+            SELECT sl.skill_id
+            FROM agent_skill_likes sl
+            JOIN agent_skills s ON s.id = sl.skill_id
+            WHERE sl.user_id = $1
+              AND s.is_deleted = FALSE
+            ORDER BY sl.created_at ASC
+            """,
+            uid,
+        )
+        return [int(r["skill_id"]) for r in rows]
+
+    async def apply_skill_like(self, user_id: int, skill_id: int, liked: bool | None = None) -> dict:
+        uid = int(user_id)
+        sid = int(skill_id)
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    DELETE FROM agent_skill_likes sl
+                    WHERE sl.user_id = $1
+                      AND NOT EXISTS (
+                          SELECT 1 FROM agent_skills s
+                          WHERE s.id = sl.skill_id AND s.is_deleted = FALSE
+                      )
+                    """,
+                    uid,
+                )
+
+                skill_exists = await conn.fetchval(
+                    "SELECT 1 FROM agent_skills WHERE id = $1 AND is_deleted = FALSE",
+                    sid,
+                )
+                if not skill_exists:
+                    await conn.execute(
+                        "DELETE FROM agent_skill_likes WHERE skill_id = $1 AND user_id = $2",
+                        sid, uid,
+                    )
+                    liked_ids = await self._fetch_clean_liked_skill_ids(conn, uid)
+                    return {
+                        "ok": False,
+                        "reason": "not_found",
+                        "skill_id": sid,
+                        "liked": False,
+                        "liked_ids": liked_ids,
+                        "likes_count": 0,
+                    }
+
+                exists = await conn.fetchval(
+                    "SELECT 1 FROM agent_skill_likes WHERE skill_id = $1 AND user_id = $2",
+                    sid, uid,
+                )
+                target = (not bool(exists)) if liked is None else bool(liked)
+
+                if not target:
+                    await conn.execute(
+                        "DELETE FROM agent_skill_likes WHERE skill_id = $1 AND user_id = $2",
+                        sid, uid,
+                    )
+                    is_liked = False
+                else:
+                    if not exists:
+                        await conn.execute(
+                            """
+                            INSERT INTO agent_skill_likes (skill_id, user_id)
+                            VALUES ($1, $2)
+                            ON CONFLICT (skill_id, user_id) DO NOTHING
+                            """,
+                            sid, uid,
+                        )
+                    is_liked = True
+
+                likes_count = await conn.fetchval(
+                    """
+                    UPDATE agent_skills 
+                    SET likes_count = (SELECT COUNT(*)::int FROM agent_skill_likes WHERE skill_id = $1),
+                        updated_at = NOW()
+                    WHERE id = $1
+                    RETURNING likes_count
+                    """,
+                    sid
+                )
+
+                liked_ids = await self._fetch_clean_liked_skill_ids(conn, uid)
+                return {
+                    "ok": True,
+                    "skill_id": sid,
+                    "liked": is_liked,
+                    "liked_ids": liked_ids,
+                    "likes_count": likes_count,
+                }

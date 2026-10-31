@@ -378,3 +378,210 @@ async def push_user_settings(
     except Exception as e:
         logger.warning("run_status.push_user_settings failed: %s", e)
         return False
+
+
+SKILL_SELECT_QUEUE_KEY = "skills:selected:pending"
+SKILL_SELECT_STATE_TTL = 7 * 86400
+
+SKILL_LIKE_QUEUE_KEY = "skills:likes:pending"
+SKILL_LIKE_STATE_TTL = 7 * 86400
+
+def _skill_liked_state_key(user_id: int) -> str:
+    return f"skills:likes:state:{int(user_id)}"
+
+def _skill_likes_count_key(skill_id: int) -> str:
+    return f"skills:likes:count:{int(skill_id)}"
+
+async def push_skill_like(
+    user_id: int,
+    skill_id: int,
+    liked: bool | None = None,
+    liked_ids: list | None = None,
+    likes_count: int | None = None,
+) -> dict:
+    if _redis is None or not user_id or not skill_id:
+        return {"ok": False, "reason": "redis_unavailable"}
+    uid = int(user_id)
+    sid = int(skill_id)
+    try:
+        state_key = _skill_liked_state_key(uid)
+        if isinstance(liked_ids, list):
+            cur_ids = []
+            for x in liked_ids:
+                try:
+                    xi = int(x or 0)
+                    if xi > 0 and xi not in cur_ids:
+                        cur_ids.append(xi)
+                except (TypeError, ValueError):
+                    pass
+        else:
+            raw_state = await _redis.get(state_key)
+            if raw_state:
+                state_data = json.loads(raw_state)
+                cur_ids = state_data.get("liked_ids") or []
+            else:
+                cur_ids = []
+
+        target = liked
+        if target is None:
+            target = sid not in cur_ids
+            
+        if target and sid not in cur_ids:
+            cur_ids.append(sid)
+        elif not target and sid in cur_ids:
+            cur_ids.remove(sid)
+            
+        if likes_count is not None:
+            next_count = max(0, int(likes_count) + (1 if target and liked is None else 0))
+        else:
+            count_key = _skill_likes_count_key(sid)
+            raw_c = await _redis.get(count_key)
+            base = int(raw_c or 0)
+            next_count = max(0, base + (1 if target else -1))
+            
+        count_key = _skill_likes_count_key(sid)
+        await _redis.set(count_key, next_count, ex=SKILL_LIKE_STATE_TTL)
+
+        event = {
+            "user_id": uid,
+            "skill_id": sid,
+            "liked": target,
+            "ts": __import__("time").time()
+        }
+        
+        state_obj = {
+            "user_id": uid,
+            "skill_id": sid,
+            "liked": target,
+            "liked_ids": cur_ids,
+            "ts": __import__("time").time(),
+        }
+        await _redis.set(state_key, json.dumps(state_obj, ensure_ascii=False), ex=SKILL_LIKE_STATE_TTL)
+        await _redis.rpush(SKILL_LIKE_QUEUE_KEY, json.dumps(event, ensure_ascii=False))
+        return {
+            "ok": True,
+            "skill_id": sid,
+            "liked": target,
+            "liked_ids": cur_ids,
+            "likes_count": next_count,
+        }
+    except Exception as e:
+        logger.warning("run_status.push_skill_like failed: %s", e)
+        return {"ok": False, "reason": "redis_error"}
+
+
+
+def _skill_selected_state_key(user_id: int) -> str:
+    return f"skills:selected:state:{int(user_id)}"
+
+
+async def push_skill_select(
+    user_id: int,
+    skill_id: int,
+    selected: bool | None = None,
+    selected_ids: list | None = None,
+    max_selected: int = 5,
+) -> dict:
+    if _redis is None or not user_id or not skill_id:
+        return {"ok": False, "reason": "redis_unavailable"}
+    uid = int(user_id)
+    sid = int(skill_id)
+    try:
+        state_key = _skill_selected_state_key(uid)
+        if isinstance(selected_ids, list):
+            cur_ids = []
+            for x in selected_ids:
+                try:
+                    xi = int(x or 0)
+                    if xi > 0 and xi not in cur_ids:
+                        cur_ids.append(xi)
+                except (TypeError, ValueError):
+                    pass
+        else:
+            raw_cur = await _redis.get(state_key)
+            if raw_cur:
+                cur_data = json.loads(raw_cur)
+                cur_ids = [int(x) for x in (cur_data.get("selected_ids") or []) if int(x or 0) > 0]
+            else:
+                cur_ids = []
+
+        target = (sid not in cur_ids) if selected is None else bool(selected)
+        if target:
+            if sid not in cur_ids:
+                if len(cur_ids) >= max_selected:
+                    return {
+                        "ok": False,
+                        "reason": "limit",
+                        "skill_id": sid,
+                        "selected": False,
+                        "selected_ids": cur_ids,
+                        "count": len(cur_ids),
+                        "max_selected": max_selected,
+                    }
+                cur_ids.append(sid)
+        else:
+            cur_ids = [x for x in cur_ids if x != sid]
+
+        state_obj = {
+            "user_id": uid,
+            "selected_ids": cur_ids,
+            "count": len(cur_ids),
+            "max_selected": max_selected,
+        }
+        event = {
+            "user_id": uid,
+            "skill_id": sid,
+            "selected": target,
+            "selected_ids": cur_ids,
+            "ts": time.time(),
+        }
+        await _redis.set(state_key, json.dumps(state_obj, ensure_ascii=False), ex=SKILL_SELECT_STATE_TTL)
+        await _redis.rpush(SKILL_SELECT_QUEUE_KEY, json.dumps(event, ensure_ascii=False))
+        return {
+            "ok": True,
+            "skill_id": sid,
+            "selected": target,
+            "selected_ids": cur_ids,
+            "count": len(cur_ids),
+            "max_selected": max_selected,
+        }
+    except Exception as e:
+        logger.warning("run_status.push_skill_select failed: %s", e)
+        return {"ok": False, "reason": "redis_error"}
+
+
+
+async def evict_deleted_skill(skill_id: int) -> None:
+    if _redis is None or not skill_id:
+        return
+    sid = int(skill_id)
+    try:
+        async for key in _redis.scan_iter(match="skills:selected:state:*", count=100):
+            k = key.decode() if isinstance(key, (bytes, bytearray)) else str(key)
+            raw = await _redis.get(k)
+            if not raw:
+                continue
+            try:
+                data = json.loads(raw)
+                ids = [int(x) for x in (data.get("selected_ids") or []) if int(x or 0) > 0 and int(x) != sid]
+                data["selected_ids"] = ids
+                data["count"] = len(ids)
+                await _redis.set(k, json.dumps(data, ensure_ascii=False), ex=SKILL_SELECT_STATE_TTL)
+            except Exception:
+                pass
+    except Exception as e:
+        logger.debug("run_status.evict_deleted_skill failed: %s", e)
+        
+    try:
+        await _redis.delete(_skill_likes_count_key(sid))
+        async for key in _redis.scan_iter(match="skills:likes:state:*", count=100):
+            k = key.decode() if isinstance(key, (bytes, bytearray)) else str(key)
+            raw = await _redis.get(k)
+            if not raw: continue
+            try:
+                data = json.loads(raw)
+                if "liked_ids" in data:
+                    data["liked_ids"] = [int(x) for x in data["liked_ids"] if int(x) != sid]
+                    await _redis.set(k, json.dumps(data, ensure_ascii=False), ex=SKILL_LIKE_STATE_TTL)
+            except Exception: pass
+    except Exception: pass

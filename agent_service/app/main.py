@@ -237,6 +237,12 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     if not is_telegram and not is_max:
         selected_skills = await db.get_selected_skills_for_user(int(user_id))
         if selected_skills:
+            try:
+                used_skill_ids = [int(sk["id"]) for sk in selected_skills if sk.get("id")]
+                if used_skill_ids:
+                    await db.increment_skills_uses(used_skill_ids)
+            except Exception as e:
+                logging.warning(f"Failed to increment skills uses_count: {e}")
             selected_chunks = []
             for idx, sk in enumerate(selected_skills, start=1):
                 tools = ", ".join(sk.get("tools") or []) or "не указаны"
@@ -1071,6 +1077,22 @@ async def api_get_selected_skills(user_id: int):
         raise HTTPException(status_code=400, detail='user_id required')
     selected_ids = await db.get_selected_skill_ids(int(user_id))
     return {'selected_ids': selected_ids, 'count': len(selected_ids), 'max_selected': 5}
+
+
+
+@app.get('/api/skills/liked')
+async def api_get_liked_skills(user_id: int):
+    if int(user_id or 0) <= 0: raise HTTPException(status_code=400)
+    liked_ids = await db.get_liked_skill_ids(int(user_id))
+    return {'liked_ids': liked_ids, 'count': len(liked_ids)}
+
+
+@app.get('/api/skills/{skill_id}')
+async def api_get_skill(skill_id: int):
+    row = await db.get_skill_by_id(skill_id)
+    if not row:
+        raise HTTPException(status_code=404, detail='Skill not found')
+    return {'skill': row}
 
 
 @app.post('/api/skills/{skill_id}/select')

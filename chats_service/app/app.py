@@ -223,10 +223,103 @@ async def startup():
 REACTION_QUEUE_KEY = "chat:reactions:pending"
 USER_SETTINGS_QUEUE_KEY = "user:settings:pending"
 USER_SETTINGS_STATE_TTL = 7 * 86400
+SKILL_SELECT_QUEUE_KEY = "skills:selected:pending"
+SKILL_SELECT_STATE_TTL = 7 * 86400
 
 
 def _user_settings_state_key(user_id: int) -> str:
     return f"user:settings:state:{int(user_id)}"
+
+
+def _skill_selected_state_key(user_id: int) -> str:
+    return f"skills:selected:state:{int(user_id)}"
+
+
+
+SKILL_LIKE_QUEUE_KEY = "skills:likes:pending"
+SKILL_LIKE_STATE_TTL = 7 * 86400
+def _skill_liked_state_key(user_id: int) -> str:
+    return f"skills:likes:state:{int(user_id)}"
+def _skill_likes_count_key(skill_id: int) -> str:
+    return f"skills:likes:count:{int(skill_id)}"
+
+async def _flush_pending_skill_likes_from_redis(max_items: int = 50) -> int:
+    if redis_client is None: return 0
+    processed = 0
+    for _ in range(max_items):
+        try:
+            raw = await redis_client.lpop(SKILL_LIKE_QUEUE_KEY)
+        except Exception: break
+        if not raw: break
+        try:
+            item = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(item, dict):
+                uid = int(item.get("user_id") or 0)
+                sid = int(item.get("skill_id") or 0)
+                if uid > 0 and sid > 0:
+                    res = await db.apply_skill_like(
+                        user_id=uid,
+                        skill_id=sid,
+                        liked=item.get("liked")
+                    )
+                    if res.get("ok"):
+                        try:
+                            await redis_client.set(
+                                _skill_liked_state_key(uid),
+                                json.dumps(res, ensure_ascii=False),
+                                ex=SKILL_LIKE_STATE_TTL,
+                            )
+                            await redis_client.set(
+                                _skill_likes_count_key(sid),
+                                int(res.get("likes_count") or 0),
+                                ex=SKILL_LIKE_STATE_TTL,
+                            )
+                        except Exception: pass
+                processed += 1
+        except Exception: pass
+    return processed
+
+async def _flush_pending_skill_selections_from_redis(max_items: int = 200) -> int:
+    if redis_client is None:
+        return 0
+    processed = 0
+    for _ in range(max_items):
+        try:
+            raw = await redis_client.lpop(SKILL_SELECT_QUEUE_KEY)
+        except Exception as e:
+            logging.debug(f"[skills_select] redis lpop failed: {e}")
+            break
+        if not raw:
+            break
+        try:
+            item = json.loads(raw)
+            uid = int(item.get("user_id") or 0)
+            sid = int(item.get("skill_id") or 0)
+            if uid > 0 and sid > 0:
+                sel = item.get("selected")
+                res = await db.apply_skill_selection(
+                    user_id=uid,
+                    skill_id=sid,
+                    selected=bool(sel) if sel is not None else None,
+                    selected_ids_hint=item.get("selected_ids") if isinstance(item.get("selected_ids"), list) else None,
+                )
+                try:
+                    await redis_client.set(
+                        _skill_selected_state_key(uid),
+                        json.dumps({
+                            "user_id": uid,
+                            "selected_ids": res.get("selected_ids") or [],
+                            "count": res.get("count") or 0,
+                            "max_selected": res.get("max_selected") or 5,
+                        }, ensure_ascii=False),
+                        ex=SKILL_SELECT_STATE_TTL,
+                    )
+                except Exception:
+                    pass
+                processed += 1
+        except Exception as e:
+            logging.error(f"[skills_select] failed to apply skill selection from redis: {e}")
+    return processed
 
 
 async def _flush_pending_user_settings_from_redis(max_items: int = 200) -> int:
@@ -272,8 +365,10 @@ async def _flush_pending_user_settings_from_redis(max_items: int = 200) -> int:
 async def _user_settings_redis_worker():
     while service_message_alive:
         try:
-            count = await _flush_pending_user_settings_from_redis()
-            if count == 0:
+            c1 = await _flush_pending_user_settings_from_redis()
+            c2 = await _flush_pending_skill_selections_from_redis()
+            c3 = await _flush_pending_skill_likes_from_redis()
+            if (c1 + c2 + c3) == 0:
                 await asyncio.sleep(0.25)
         except asyncio.CancelledError:
             break
@@ -1094,6 +1189,68 @@ async def post_user_settings_endpoint(request: Request, x_user_id: str = Header(
     return saved
 
 
+@app.get("/skills/selected")
+async def get_selected_skills_chats_ep(user_id: int = 0, x_user_id: str | None = Header(default=None, alias="X-User-Id")):
+    uid = int(user_id or (x_user_id if x_user_id and str(x_user_id).isdigit() else 0) or 0)
+    if uid <= 0:
+        raise HTTPException(status_code=400, detail="user_id required")
+    await _flush_pending_skill_selections_from_redis()
+    selected_ids = await db.get_selected_skill_ids(uid)
+    state_obj = {
+        "user_id": uid,
+        "selected_ids": selected_ids,
+        "count": len(selected_ids),
+        "max_selected": 5,
+    }
+    if redis_client is not None:
+        try:
+            await redis_client.set(
+                _skill_selected_state_key(uid),
+                json.dumps(state_obj, ensure_ascii=False),
+                ex=SKILL_SELECT_STATE_TTL,
+            )
+        except Exception:
+            pass
+    return state_obj
+
+
+@app.post("/skills/{skill_id}/select")
+async def post_select_skill_chats_ep(skill_id: int, request: Request, x_user_id: str | None = Header(default=None, alias="X-User-Id")):
+    payload = await request.json()
+    uid = int(payload.get("user_id") or (x_user_id if x_user_id and str(x_user_id).isdigit() else 0) or 0)
+    if uid <= 0:
+        raise HTTPException(status_code=400, detail="user_id required")
+    await _flush_pending_skill_selections_from_redis()
+    sel = payload.get("selected")
+    res = await db.apply_skill_selection(
+        user_id=uid,
+        skill_id=skill_id,
+        selected=bool(sel) if sel is not None else None,
+        selected_ids_hint=payload.get("selected_ids") if isinstance(payload.get("selected_ids"), list) else None,
+    )
+    if redis_client is not None:
+        try:
+            await redis_client.set(
+                _skill_selected_state_key(uid),
+                json.dumps({
+                    "user_id": uid,
+                    "selected_ids": res.get("selected_ids") or [],
+                    "count": res.get("count") or 0,
+                    "max_selected": res.get("max_selected") or 5,
+                }, ensure_ascii=False),
+                ex=SKILL_SELECT_STATE_TTL,
+            )
+        except Exception:
+            pass
+    if not res.get("ok"):
+        if res.get("reason") == "not_found":
+            raise HTTPException(status_code=404, detail="Skill not found")
+        if res.get("reason") == "limit":
+            raise HTTPException(status_code=400, detail="Max 5 selected skills per user")
+        raise HTTPException(status_code=400, detail="Cannot toggle selected skill")
+    return res
+
+
 @app.get("/chat/by-type/{type_agent}")
 async def find_chat_by_type(type_agent: str, x_user_id: str = Header(..., alias="X-User-Id")):
     """Найти существующий чат пользователя по типу агента."""
@@ -1302,3 +1459,21 @@ async def health():
 #     uvicorn.run("chats_service.app.app:app", host="127.0.0.1", port=int(PORT_CHATS_SERVICE), reload=True)
 
 
+
+
+@app.get('/skills/liked')
+async def get_liked_skills(user_id: int, request: Request):
+    await _flush_pending_skill_likes_from_redis(max_items=100)
+    liked_ids = await db.get_liked_skill_ids(int(user_id))
+    return {'liked_ids': liked_ids, 'count': len(liked_ids)}
+
+@app.post('/skills/{skill_id}/like')
+async def api_toggle_liked_skill(skill_id: int, payload: dict, request: Request):
+    user_id = int(payload.get('user_id') or 0)
+    if user_id <= 0: raise HTTPException(status_code=400)
+    await _flush_pending_skill_likes_from_redis(max_items=10)
+    result = await db.apply_skill_like(user_id=user_id, skill_id=skill_id, liked=payload.get('liked'))
+    if not result.get('ok'):
+        if result.get('reason') == 'not_found': raise HTTPException(status_code=404)
+        raise HTTPException(status_code=400)
+    return result

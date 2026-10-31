@@ -756,9 +756,9 @@
 /* Убираем кнопки-стрелки на концах скроллбара (up/down). */
 .chat-input-field::-webkit-scrollbar-button,
 .start-input-field::-webkit-scrollbar-button {
-  display: none;
-  width: 0;
-  height: 0;
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
 }
 .chat-input-field::-webkit-scrollbar-track,
 .start-input-field::-webkit-scrollbar-track {
@@ -813,14 +813,21 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px 10px 12px;
-  border-top: 1px solid var(--border);
+  padding: 6px 12px 10px 12px;
+  border-top: none;
+}
+
+.chat-input-footer .chat-send-btn,
+.chat-input-footer .send-btn {
+  margin-left: auto;
 }
 
 .input-footer-note {
-  flex: 1;
+  display: block;
+  margin-top: 6px;
   text-align: center;
   font-size: .68rem;
+  line-height: 1.3;
   color: var(--text-muted);
   user-select: none;
 }
@@ -1119,7 +1126,7 @@
   justify-content: flex-start;
   padding: 8px 12px 10px 14px;
   gap: 4px;
-  border-top: 1px solid var(--border);
+  border-top: none;
 }
 
 /* send-btn всегда прижат к правому краю */
@@ -1223,6 +1230,7 @@
     inset 0 1px 0 rgba(255, 255, 255, .08);
   color: #e6ebf5;
 }
+
 
 /* ── Мобильный override ───────────────────── */
 @media (max-width: 768px) {
@@ -1545,7 +1553,7 @@ pre {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  border-top: 1px solid var(--border);
+  border-top: none;
 }
 
 .subagent-log-step {
@@ -2983,4 +2991,17 @@ pre {
   box-shadow: 0 10px 40px rgba(0,0,0,0.6);
   background: #000;
   outline: none;
+}
+
+/* Счётчик скиллов под сообщением юзера */
+.user-skills-count {
+  margin-left: 6px;
+  font-size: .7rem;
+  font-family: var(--font-anthropic-sans);
+  color: var(--text-muted);
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
 }

@@ -547,12 +547,85 @@
   font-variant-numeric: tabular-nums;
 }
 
+
+.gc-collage__cell--video-single {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-height: 420px;
+  background: #0a0e17;
+  overflow: hidden;
+}
+.gc-collage__cell--video-single .gc-collage__bg {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.14), rgba(15, 23, 37, 0.36));
+  -webkit-backdrop-filter: blur(18px) saturate(135%);
+  backdrop-filter: blur(18px) saturate(135%);
+  transform: none;
+}
+.gc-video {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-height: 420px;
+  object-fit: contain;
+  background: transparent;
+  outline: none;
+}
+.gc-collage__cell--video-thumb {
+  background: #000;
+}
+.gc-collage__thumb-video {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.9;
+  transition: opacity 0.3s ease;
+}
+.gc-collage__cell:hover .gc-collage__thumb-video { filter: brightness(0.8); }
+.gc-collage__play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  backdrop-filter: blur(4px);
+  pointer-events: none;
+}
+
 /* ---------- лайтбокс: счётчик + стрелки навигации ---------- */
 /* базовые .image-lightbox* берём из chat.css; здесь только доп. элементы */
 /* отступы под стрелки, чтобы они не липли к краю экрана */
 .gc-lightbox .image-lightbox__box {
   max-width: calc(100vw - 160px);
   max-height: 88vh;
+}
+
+.image-lightbox__media-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+.gc-lightbox .image-lightbox__video {
+  max-width: 100%;
+  max-height: 82vh;
+  outline: none;
 }
 .gc-lightbox .image-lightbox__img {
   max-width: 100%;
@@ -594,7 +667,8 @@
     max-width: 96vw;
     max-height: 92vh;
   }
-  .gc-lightbox .image-lightbox__img {
+  .gc-lightbox .image-lightbox__img,
+  .gc-lightbox .image-lightbox__video {
     width: 96vw;
     max-width: 96vw;
     height: auto;
@@ -608,48 +682,3 @@
   .gc-msg--has-images { width: 82vw; max-width: 86%; }
 }
 
-/* ---------- Потоковый видеоплеер в сообщениях общего чата ---------- */
-.gc-videos {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  width: 100%;
-  max-width: 100%;
-  margin: 0;
-}
-.gc-video-wrap {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  max-height: 420px;
-  aspect-ratio: var(--gc-video-ar, 16 / 9);
-  overflow: hidden;
-  background: #0a0e17;
-}
-.gc-video__bg {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.14), rgba(15, 23, 37, 0.36));
-  -webkit-backdrop-filter: blur(18px) saturate(135%);
-  backdrop-filter: blur(18px) saturate(135%);
-  opacity: 0;
-  transition: opacity 0.3s ease;
-  pointer-events: none;
-}
-.gc-video-wrap--glass .gc-video__bg {
-  opacity: 1;
-}
-.gc-video {
-  position: relative;
-  z-index: 1;
-  display: block;
-  width: 100%;
-  height: 100%;
-  max-height: 420px;
-  object-fit: contain;
-  background: transparent;
-  outline: none;
-}

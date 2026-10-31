@@ -2078,6 +2078,40 @@ class ChatApp {
         }
     }
 
+    _bindVideoPreviewLoop(videoEl, maxSec = 5) {
+        if (!videoEl) return;
+        videoEl.muted = true;
+        videoEl.defaultMuted = true;
+        videoEl.autoplay = true;
+        videoEl.playsInline = true;
+        videoEl.preload = 'auto';
+        videoEl.setAttribute('muted', '');
+        videoEl.setAttribute('autoplay', '');
+        videoEl.setAttribute('playsinline', '');
+        videoEl.setAttribute('webkit-playsinline', '');
+        videoEl.dataset.previewLoop = '1';
+
+        const restartLoop = () => {
+            if (videoEl.dataset.previewLoop === '0') return;
+            try { videoEl.currentTime = 0; } catch (_) {}
+            const pr = videoEl.play();
+            if (pr && typeof pr.catch === 'function') pr.catch(() => {});
+        };
+        videoEl.addEventListener('timeupdate', () => {
+            if (videoEl.dataset.previewLoop === '0') return;
+            if (videoEl.currentTime >= maxSec) {
+                restartLoop();
+            }
+        });
+        videoEl.addEventListener('ended', restartLoop);
+        videoEl.addEventListener('loadeddata', () => {
+            if (videoEl.paused && videoEl.dataset.previewLoop !== '0') {
+                const pr = videoEl.play();
+                if (pr && typeof pr.catch === 'function') pr.catch(() => {});
+            }
+        }, { once: true });
+    }
+
     _applyVideoCardAspect(videoEl) {
         if (!videoEl) return;
         const card = videoEl.closest('.fa-video-card');
@@ -2320,18 +2354,40 @@ class ChatApp {
             return f.kind === 'image' || IMAGE_EXTS.has(ext);
         };
 
-        const makeImageCard = (f) => {
-            const name = f.name || 'image';
-            const safeName = this.escapeHtml(name);
-            // Сгенерированные тулом картинки (kind==='image') тянем ИЗ БД
-            // (generated_images), а не с диска: эфемерный файл живёт ~30 мин
-            // и чистится по TTL, после чего /files/... вернёт 404. Эндпоинт
-            // /image/... проксирует бинарник из таблицы по (message_id, name).
-            // Обычные вложения (kind иной) оставляем на файловом пути.
-            // Любой файл-картинку тянем из БД через /image/... — эндпоинт умеет
-            // искать и по image_key, и по паре (message_id, file_name). Это чинит
-            // legacy-записи (kind/image_key = NULL), у которых файл на диске уже
-            // вычищен по TTL: раньше они шли в /files/... и падали в 404.
+        const VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v', 'ogv', 'avi', 'mkv']);
+        const isVideoFile = (f) => {
+            let ext = (f.ext || '').toLowerCase();
+            if (!ext && f.name && f.name.includes('.')) {
+                ext = f.name.split('.').pop().toLowerCase();
+            }
+            return f.kind === 'video' || VIDEO_EXTS.has(ext);
+        };
+        const getVideoMime = (ext) => {
+            if (ext === 'webm') return 'video/webm';
+            if (ext === 'mov') return 'video/quicktime';
+            if (ext === 'ogv' || ext === 'ogg') return 'video/ogg';
+            return 'video/mp4';
+        };
+
+        const resolveMediaItem = (f) => {
+            const isVid = !isImageFile(f) && isVideoFile(f);
+            const name = f.name || (isVid ? 'video.mp4' : 'image');
+            const ext = (f.ext || (name.includes('.') ? name.split('.').pop() : '') || (isVid ? 'mp4' : 'png')).toLowerCase();
+            if (isVid) {
+                const streamUrl = messageId
+                    ? `/api/chats/${this.currentChat}/files/${encodeURIComponent(messageId)}/${encodeURIComponent(name)}`
+                    : '#';
+                const dlUrl = streamUrl !== '#' ? `${streamUrl}?download=1` : '#';
+                return {
+                    isVideo: true,
+                    name,
+                    ext,
+                    url: streamUrl,
+                    dlUrl,
+                    mime: getVideoMime(ext),
+                    file: f,
+                };
+            }
             const imageKeyQs = f.image_key
                 ? `?image_key=${encodeURIComponent(f.image_key)}`
                 : '';
@@ -2344,6 +2400,23 @@ class ChatApp {
             const preferFileEndpoint = (f.kind === 'file' && !f.image_key);
             const url = preferFileEndpoint ? fileUrl : dbImageUrl;
             const fallbackUrl = preferFileEndpoint ? dbImageUrl : fileUrl;
+            return {
+                isVideo: false,
+                name,
+                ext,
+                url,
+                fallbackUrl,
+                dlUrl: url,
+                imageKey: f.image_key || null,
+                file: f,
+            };
+        };
+
+        const makeImageCard = (item, idx, allItems) => {
+            const name = item.name || 'image';
+            const safeName = this.escapeHtml(name);
+            const url = item.url;
+            const fallbackUrl = item.fallbackUrl;
 
             const card = document.createElement('div');
             card.className = 'fa-image-card';
@@ -2364,6 +2437,7 @@ class ChatApp {
                 card.classList.remove('fa-image-card--loading');
                 card.classList.remove('fa-image-card--error');
                 const activeSrc = img.currentSrc || img.src || url;
+                item.url = activeSrc;
                 if (img.naturalWidth > 0 && img.naturalHeight > 0) {
                     const MAX_W = 420;
                     const MAX_H = 420;
@@ -2407,8 +2481,13 @@ class ChatApp {
                 card.classList.add('fa-image-card--error');
             });
 
-            // Клик — превью в лайтбоксе.
-            card.addEventListener('click', () => this._openImageLightbox(img.currentSrc || img.src || url, name, f.image_key));
+            card.addEventListener('click', () => this._openMediaLightbox(allItems, idx));
+            if (typeof this._showFileContextMenu === 'function') {
+                card.addEventListener('contextmenu', (e) => {
+                    e.preventDefault();
+                    this._showFileContextMenu(e, { name, url: item.url, chatId: this.currentChat });
+                });
+            }
 
             const overlay = document.createElement('div');
             overlay.className = 'fa-image-card__overlay';
@@ -2428,50 +2507,32 @@ class ChatApp {
             return card;
         };
 
-        const VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v', 'ogv', 'avi', 'mkv']);
-        const isVideoFile = (f) => {
-            let ext = (f.ext || '').toLowerCase();
-            if (!ext && f.name && f.name.includes('.')) {
-                ext = f.name.split('.').pop().toLowerCase();
-            }
-            return f.kind === 'video' || VIDEO_EXTS.has(ext);
-        };
-        const getVideoMime = (ext) => {
-            if (ext === 'webm') return 'video/webm';
-            if (ext === 'mov') return 'video/quicktime';
-            if (ext === 'ogv' || ext === 'ogg') return 'video/ogg';
-            return 'video/mp4';
-        };
-
-        const makeVideoCard = (f) => {
-            const name = f.name || 'video.mp4';
-            const ext = (f.ext || name.split('.').pop() || 'mp4').toLowerCase();
-            const streamUrl = messageId
-                ? `/api/chats/${this.currentChat}/files/${encodeURIComponent(messageId)}/${encodeURIComponent(name)}`
-                : '#';
-            const dlUrl = streamUrl !== '#' ? `${streamUrl}?download=1` : '#';
+        const makeVideoCard = (item, idx, allItems) => {
+            const name = item.name || 'video.mp4';
+            const streamUrl = item.url;
+            const dlUrl = item.dlUrl;
 
             const card = document.createElement('div');
-            card.className = 'fa-image-card fa-video-card';
+            card.className = 'fa-image-card fa-video-card fa-image-card--loading';
             card.title = name;
 
             const bg = document.createElement('span');
             bg.className = 'fa-image-card__bg';
             bg.setAttribute('aria-hidden', 'true');
 
+            const skel = document.createElement('div');
+            skel.className = 'fa-image-card__skeleton';
+            skel.innerHTML = '<div class="fa-pixel-grid"></div>';
+
             const video = document.createElement('video');
             video.className = 'fa-video-card__video';
-            video.controls = true;
-            video.preload = 'metadata';
-            video.playsInline = true;
-            video.setAttribute('playsinline', '');
-            video.setAttribute('webkit-playsinline', '');
             video.src = streamUrl;
-
             const source = document.createElement('source');
             source.src = streamUrl;
-            source.type = getVideoMime(ext);
+            source.type = item.mime;
             video.appendChild(source);
+
+            this._bindVideoPreviewLoop(video, 5);
 
             const onMeta = () => this._applyVideoCardAspect(video);
             if (video.readyState >= 1 && video.videoWidth > 0) {
@@ -2479,31 +2540,165 @@ class ChatApp {
             } else {
                 video.addEventListener('loadedmetadata', onMeta, { once: true });
             }
+            video.addEventListener('error', () => {
+                card.classList.remove('fa-image-card--loading');
+            }, { once: true });
 
-            card.addEventListener('contextmenu', (e) => {
-                e.preventDefault();
-                this._showFileContextMenu(e, { name, url: dlUrl, chatId: this.currentChat });
-            });
+            const playBadge = document.createElement('span');
+            playBadge.className = 'fa-collage__play';
+            playBadge.setAttribute('aria-hidden', 'true');
+            playBadge.innerHTML = '<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+
+            card.addEventListener('click', () => this._openMediaLightbox(allItems, idx));
+            if (typeof this._showFileContextMenu === 'function') {
+                card.addEventListener('contextmenu', (e) => {
+                    e.preventDefault();
+                    this._showFileContextMenu(e, { name, url: dlUrl, chatId: this.currentChat });
+                });
+            }
 
             card.appendChild(bg);
+            card.appendChild(skel);
             card.appendChild(video);
+            card.appendChild(playBadge);
             return card;
         };
 
-        // Разделяем на картинки, видео и обычные файлы.
-        const imageFiles = files.filter(isImageFile);
-        const videoFiles = files.filter(f => !isImageFile(f) && isVideoFile(f));
+        const makeMediaCollage = (allItems) => {
+            const n = allItems.length;
+            const shown = allItems.slice(0, 4);
+            const layout = n === 2 ? 'two' : n === 3 ? 'three' : 'four';
+            const collage = document.createElement('div');
+            collage.className = `fa-media-collage fa-media-collage--${layout}`;
+
+            shown.forEach((item, i) => {
+                const cell = document.createElement('button');
+                cell.type = 'button';
+                cell.className = 'fa-collage__cell fa-collage__cell--loading' + (item.isVideo ? ' fa-collage__cell--video' : '');
+                cell.title = item.name || '';
+
+                const skel = document.createElement('div');
+                skel.className = 'fa-image-card__skeleton';
+                skel.innerHTML = '<div class="fa-pixel-grid"></div>';
+                cell.appendChild(skel);
+
+                if (item.isVideo) {
+                    const video = document.createElement('video');
+                    video.className = 'fa-collage__video';
+                    video.src = item.url;
+                    const source = document.createElement('source');
+                    source.src = item.url;
+                    source.type = item.mime;
+                    video.appendChild(source);
+
+                    this._bindVideoPreviewLoop(video, 5);
+
+                    const onLoaded = () => cell.classList.remove('fa-collage__cell--loading');
+                    if (video.readyState >= 1) onLoaded();
+                    else {
+                        video.addEventListener('loadedmetadata', onLoaded, { once: true });
+                        video.addEventListener('loadeddata', onLoaded, { once: true });
+                        video.addEventListener('error', onLoaded, { once: true });
+                    }
+                    cell.appendChild(video);
+
+                    const playBadge = document.createElement('span');
+                    playBadge.className = 'fa-collage__play';
+                    playBadge.setAttribute('aria-hidden', 'true');
+                    playBadge.innerHTML = '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+                    cell.appendChild(playBadge);
+                } else {
+                    const bg = document.createElement('span');
+                    bg.className = 'fa-image-card__bg';
+                    bg.setAttribute('aria-hidden', 'true');
+                    if (item.url && item.url !== '#') {
+                        bg.style.backgroundImage = `url("${item.url.replace(/"/g, '\"')}")`;
+                    }
+                    cell.appendChild(bg);
+
+                    const img = document.createElement('img');
+                    img.className = 'fa-collage__img';
+                    img.alt = this.escapeHtml(item.name || 'image');
+                    img.loading = 'lazy';
+                    img.src = item.url;
+                    let triedFallback = false;
+                    const onImgLoad = () => {
+                        cell.classList.remove('fa-collage__cell--loading');
+                        const activeSrc = img.currentSrc || img.src || item.url;
+                        item.url = activeSrc;
+                        if (activeSrc && activeSrc !== '#') {
+                            bg.style.backgroundImage = `url("${activeSrc.replace(/"/g, '\"')}")`;
+                        }
+                    };
+                    if (img.complete && img.naturalWidth > 0) onImgLoad();
+                    else img.addEventListener('load', onImgLoad);
+                    img.addEventListener('error', () => {
+                        if (!triedFallback && item.fallbackUrl && item.fallbackUrl !== '#' && item.fallbackUrl !== img.getAttribute('src')) {
+                            triedFallback = true;
+                            img.src = item.fallbackUrl;
+                            return;
+                        }
+                        cell.classList.remove('fa-collage__cell--loading');
+                        cell.classList.add('fa-image-card--error');
+                    });
+                    cell.appendChild(img);
+
+                    if (!(n > 4 && i === 3)) {
+                        const overlay = document.createElement('div');
+                        overlay.className = 'fa-image-card__overlay';
+                        overlay.innerHTML = `
+<span class="fa-image-card__zoom" aria-hidden="true">
+  <svg viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="1.8"/><path d="M20 20l-3.5-3.5M11 8v6M8 11h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+</span>`;
+                        cell.appendChild(overlay);
+                    }
+                }
+
+                if (n > 4 && i === 3) {
+                    const more = document.createElement('span');
+                    more.className = 'fa-collage__more';
+                    more.textContent = `+${n - 4}`;
+                    cell.appendChild(more);
+                }
+
+                cell.addEventListener('click', () => this._openMediaLightbox(allItems, i));
+                if (typeof this._showFileContextMenu === 'function') {
+                    cell.addEventListener('contextmenu', (e) => {
+                        e.preventDefault();
+                        this._showFileContextMenu(e, {
+                            name: item.name,
+                            url: item.isVideo ? item.dlUrl : item.url,
+                            chatId: this.currentChat
+                        });
+                    });
+                }
+
+                collage.appendChild(cell);
+            });
+
+            return collage;
+        };
+
+        // Разделяем на визуальные медиафайлы (в порядке следования) и обычные файлы.
+        const visualFiles = files.filter(f => isImageFile(f) || isVideoFile(f));
         const otherFiles = files.filter(f => !isImageFile(f) && !isVideoFile(f));
 
         const wrap = document.createElement('div');
         wrap.className = 'fa-bot-files';
 
-        if (imageFiles.length || videoFiles.length) {
-            if (imageFiles.length) this._removeImageGenSkeleton();
+        if (visualFiles.length) {
+            if (visualFiles.some(isImageFile)) this._removeImageGenSkeleton();
+            const mediaItems = visualFiles.map(resolveMediaItem);
             const gallery = document.createElement('div');
             gallery.className = 'fa-image-gallery';
-            imageFiles.forEach(f => gallery.appendChild(makeImageCard(f)));
-            videoFiles.forEach(f => gallery.appendChild(makeVideoCard(f)));
+            if (mediaItems.length === 1) {
+                const single = mediaItems[0];
+                gallery.appendChild(single.isVideo
+                    ? makeVideoCard(single, 0, mediaItems)
+                    : makeImageCard(single, 0, mediaItems));
+            } else {
+                gallery.appendChild(makeMediaCollage(mediaItems));
+            }
             wrap.appendChild(gallery);
         }
 
@@ -3082,114 +3277,212 @@ class ChatApp {
         setTimeout(() => el.remove(), 250);
     }
 
-    /** Открывает картинку в модальном лайтбоксе (превью в общем стиле). */
+    /** Открывает картинку или галерею медиа в модальном лайтбоксе. */
     _openImageLightbox(url, name, imageKey) {
-        // Один оверлей на весь UI — пересоздаём при каждом открытии.
+        this._openMediaLightbox([{
+            isVideo: false,
+            url,
+            dlUrl: url,
+            name: name || 'image',
+            imageKey: imageKey || null,
+        }], 0);
+    }
+
+    _openMediaLightbox(items, startIdx = 0) {
+        if (!Array.isArray(items) || !items.length) return;
         document.getElementById('image-lightbox')?.remove();
 
-        // Расширение для имени файла берём из исходного name (там .jpg/.png от тула).
-        const rawName = name || 'image';
-        let ext = rawName.includes('.') ? rawName.split('.').pop().toLowerCase() : 'jpg';
-        if (!/^[a-z0-9]{2,5}$/.test(ext)) ext = 'jpg';
+        let idx = Math.max(0, Math.min(items.length - 1, Number(startIdx) || 0));
 
-        // Уникальное имя для скачивания: img_{первые 8 символов image_key}.{ext}.
-        // image_key (вариант Б) НЕ полагается на WS-пейлоад: если он не пришёл
-        // аргументом, добираем его из заголовка X-Image-Key ответа /image/...
-        // (см. загрузку через fetch ниже). До этого показываем rawName.
-        const buildDlName = (key) => (key
-            ? `img_${String(key).slice(0, 8)}.${ext}`
-            : rawName);
+        const buildDlName = (rawName, key, isVideo) => {
+            const fallback = isVideo ? 'video.mp4' : 'image';
+            const nm = String(rawName || fallback);
+            let ext = nm.includes('.') ? nm.split('.').pop().toLowerCase() : (isVideo ? 'mp4' : 'jpg');
+            if (!/^[a-z0-9]{2,5}$/.test(ext)) ext = isVideo ? 'mp4' : 'jpg';
+            return key ? `img_${String(key).slice(0, 8)}.${ext}` : nm;
+        };
 
         const overlay = document.createElement('div');
         overlay.id = 'image-lightbox';
-        overlay.className = 'image-lightbox';
+        overlay.className = 'image-lightbox gc-lightbox';
 
         const box = document.createElement('div');
         box.className = 'image-lightbox__box';
 
-        const img = document.createElement('img');
-        img.className = 'image-lightbox__img';
-        img.alt = this.escapeHtml(rawName);
-
         const bar = document.createElement('div');
         bar.className = 'image-lightbox__bar';
-        const dlName0 = buildDlName(imageKey);
         bar.innerHTML = `
-<span class="image-lightbox__name" title="${this.escapeHtml(imageKey || dlName0)}">${this.escapeHtml(dlName0)}</span>
-<span class="image-lightbox__dim" title="Разрешение">…</span>
-<a class="image-lightbox__dl" href="${url}" download="${this.escapeHtml(dlName0)}" title="Скачать">
+<span class="image-lightbox__name"></span>
+<span class="image-lightbox__dim" title="Разрешение"></span>
+<span class="gc-lb__counter"></span>
+<a class="image-lightbox__dl" href="#" download title="Скачать">
   <svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
 </a>
 <button class="image-lightbox__close" type="button" title="Закрыть" aria-label="Закрыть">
   <svg viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
 </button>`;
 
-        const nameEl = bar.querySelector('.image-lightbox__name');
-        const dimEl = bar.querySelector('.image-lightbox__dim');
-        const dlEl = bar.querySelector('.image-lightbox__dl');
+        const mediaContainer = document.createElement('div');
+        mediaContainer.className = 'image-lightbox__media-container';
 
-        // Разрешение проставляем после загрузки картинки (natural размеры).
-        const setDim = () => {
-            if (img.naturalWidth && img.naturalHeight) {
-                dimEl.textContent = `${img.naturalWidth}×${img.naturalHeight}`;
-            } else {
-                dimEl.textContent = '';
-            }
-        };
-        img.addEventListener('load', setDim);
-        img.addEventListener('error', () => { dimEl.textContent = ''; });
+        const prevBtn = document.createElement('button');
+        prevBtn.type = 'button';
+        prevBtn.className = 'gc-lb__nav gc-lb__nav--prev';
+        prevBtn.setAttribute('aria-label', 'Назад');
+        if (items.length < 2) prevBtn.hidden = true;
+        prevBtn.innerHTML = '<svg viewBox="0 0 24 24" width="26" height="26" fill="none"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
-        // Обновляем имя/скачивание по image_key из заголовка X-Image-Key.
-        const applyKey = (key) => {
-            if (!key) return;
-            const dlName = buildDlName(key);
-            nameEl.textContent = dlName;
-            nameEl.title = key;
-            dlEl.setAttribute('download', dlName);
-        };
-
-        // Грузим картинку через fetch, чтобы прочитать X-Image-Key из ответа
-        // (браузер не отдаёт заголовки для обычного <img src>). Blob-URL идёт
-        // и в <img>, и в href скачивания — чтобы скачивался тот же байт-в-байт
-        // файл под уникальным именем.
-        if (imageKey) {
-            // Ключ уже есть — незачем ходить через fetch, ставим src напрямую.
-            img.src = url;
-        } else {
-            fetch(url, { credentials: 'same-origin' })
-                .then((resp) => {
-                    const key = resp.headers.get('X-Image-Key');
-                    return resp.blob().then((blob) => ({ key, blob }));
-                })
-                .then(({ key, blob }) => {
-                    const objUrl = URL.createObjectURL(blob);
-                    img.src = objUrl;
-                    dlEl.setAttribute('href', objUrl);
-                    applyKey(key);
-                    // objUrl живёт до закрытия оверлея — освобождаем в close().
-                    overlay._objUrl = objUrl;
-                })
-                .catch(() => { img.src = url; });  // фолбэк на прямой src
-        }
+        const nextBtn = document.createElement('button');
+        nextBtn.type = 'button';
+        nextBtn.className = 'gc-lb__nav gc-lb__nav--next';
+        nextBtn.setAttribute('aria-label', 'Вперёд');
+        if (items.length < 2) nextBtn.hidden = true;
+        nextBtn.innerHTML = '<svg viewBox="0 0 24 24" width="26" height="26" fill="none"><path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
         box.appendChild(bar);
-        box.appendChild(img);
+        box.appendChild(mediaContainer);
+        box.appendChild(prevBtn);
+        box.appendChild(nextBtn);
         overlay.appendChild(box);
         document.body.appendChild(overlay);
+
+        const nameEl = bar.querySelector('.image-lightbox__name');
+        const dimEl = bar.querySelector('.image-lightbox__dim');
+        const cntEl = bar.querySelector('.gc-lb__counter');
+        const dlEl = bar.querySelector('.image-lightbox__dl');
+
+        const revokeObjUrl = () => {
+            if (overlay._objUrl) {
+                URL.revokeObjectURL(overlay._objUrl);
+                overlay._objUrl = null;
+            }
+        };
+
+        let renderToken = 0;
+        const showCurrent = () => {
+            renderToken += 1;
+            const myToken = renderToken;
+            revokeObjUrl();
+            mediaContainer.innerHTML = '';
+
+            const it = items[idx] || {};
+            const isVid = !!it.isVideo;
+            const dlName0 = buildDlName(it.name, it.imageKey, isVid);
+            nameEl.textContent = dlName0;
+            nameEl.title = it.imageKey || dlName0;
+            dimEl.textContent = '…';
+            cntEl.textContent = items.length > 1 ? `${idx + 1}/${items.length}` : '';
+            const href0 = (isVid ? (it.dlUrl || it.url) : it.url) || '#';
+            dlEl.setAttribute('href', href0);
+            dlEl.setAttribute('download', dlName0);
+
+            if (isVid) {
+                const video = document.createElement('video');
+                video.className = 'image-lightbox__video';
+                video.controls = true;
+                video.autoplay = true;
+                video.playsInline = true;
+                video.setAttribute('playsinline', '');
+                video.setAttribute('webkit-playsinline', '');
+                video.src = it.url || '';
+                if (it.mime) {
+                    const source = document.createElement('source');
+                    source.src = it.url || '';
+                    source.type = it.mime;
+                    video.appendChild(source);
+                }
+                video.addEventListener('loadedmetadata', () => {
+                    if (myToken !== renderToken) return;
+                    if (video.videoWidth && video.videoHeight) {
+                        dimEl.textContent = `${video.videoWidth}×${video.videoHeight}`;
+                    } else {
+                        dimEl.textContent = '';
+                    }
+                });
+                video.addEventListener('error', () => {
+                    if (myToken !== renderToken) return;
+                    dimEl.textContent = '';
+                });
+                mediaContainer.appendChild(video);
+            } else {
+                const img = document.createElement('img');
+                img.className = 'image-lightbox__img';
+                img.alt = this.escapeHtml(dlName0);
+                img.addEventListener('load', () => {
+                    if (myToken !== renderToken) return;
+                    if (img.naturalWidth && img.naturalHeight) {
+                        dimEl.textContent = `${img.naturalWidth}×${img.naturalHeight}`;
+                    } else {
+                        dimEl.textContent = '';
+                    }
+                });
+                img.addEventListener('error', () => {
+                    if (myToken !== renderToken) return;
+                    dimEl.textContent = '';
+                });
+
+                const applyKey = (key) => {
+                    if (!key || myToken !== renderToken) return;
+                    const dlName = buildDlName(it.name, key, false);
+                    nameEl.textContent = dlName;
+                    nameEl.title = key;
+                    dlEl.setAttribute('download', dlName);
+                };
+
+                if (it.imageKey) {
+                    img.src = it.url;
+                } else {
+                    fetch(it.url, { credentials: 'same-origin' })
+                        .then((resp) => {
+                            const key = resp.headers.get('X-Image-Key');
+                            return resp.blob().then((blob) => ({ key, blob }));
+                        })
+                        .then(({ key, blob }) => {
+                            if (myToken !== renderToken) return;
+                            const objUrl = URL.createObjectURL(blob);
+                            img.src = objUrl;
+                            dlEl.setAttribute('href', objUrl);
+                            applyKey(key);
+                            overlay._objUrl = objUrl;
+                        })
+                        .catch(() => {
+                            if (myToken !== renderToken) return;
+                            img.src = it.url;
+                        });
+                }
+                mediaContainer.appendChild(img);
+            }
+        };
+
+        const nav = (delta) => {
+            if (items.length < 2) return;
+            idx = (idx + delta + items.length) % items.length;
+            showCurrent();
+        };
+
+        prevBtn.addEventListener('click', (e) => { e.stopPropagation(); nav(-1); });
+        nextBtn.addEventListener('click', (e) => { e.stopPropagation(); nav(1); });
 
         const close = () => {
             overlay.classList.add('image-lightbox--hide');
             setTimeout(() => overlay.remove(), 200);
             document.removeEventListener('keydown', onKey);
-            if (overlay._objUrl) { URL.revokeObjectURL(overlay._objUrl); overlay._objUrl = null; }
+            revokeObjUrl();
         };
-        const onKey = (e) => { if (e.key === 'Escape') close(); };
+        const onKey = (e) => {
+            if (e.key === 'Escape') close();
+            else if (e.key === 'ArrowLeft') nav(-1);
+            else if (e.key === 'ArrowRight') nav(1);
+        };
 
-        overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay || e.target === box || e.target === mediaContainer) close();
+        });
         bar.querySelector('.image-lightbox__close').addEventListener('click', close);
         bar.querySelector('.image-lightbox__dl').addEventListener('click', (e) => e.stopPropagation());
         document.addEventListener('keydown', onKey);
 
+        showCurrent();
         requestAnimationFrame(() => overlay.classList.add('image-lightbox--shown'));
     }
 

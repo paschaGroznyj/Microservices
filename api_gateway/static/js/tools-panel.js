@@ -603,6 +603,7 @@ class ModelPickerClass {
   /* ── Публичный API ──────────────────────────────────────────────────── */
 
   getModel() { return this._selected; }
+  getModels() { return MP_MODELS; }
 
   /* Тянет доступность провайдеров с бэка (с TTL-кешем и дедупом запросов).
      Возвращает объект providers ({id: {up, name, reason?}}) или null. */
@@ -844,4 +845,5 @@ class ModelPickerClass {
   }
 }
 
+window.__MP_MODELS = MP_MODELS;
 window.ModelPicker = new ModelPickerClass();

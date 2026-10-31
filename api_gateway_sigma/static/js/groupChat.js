@@ -620,7 +620,7 @@
       const textBlock = (m.message_text && m.message_text.trim())
         ? `<div class="gc-bubble-text message-text message-text--collapsible">${this._esc(m.message_text)}</div>${collapseBtn}`
         : '';
-      const mediaTop = (mediaParts.collage || '') + (mediaParts.videos || '');
+      const mediaTop = mediaParts.collage || '';
       const hasImages = !!mediaTop;
       const hasCaption = !!(textBlock || mediaParts.docs);
       const bubbleMod = hasImages
@@ -676,29 +676,65 @@
 
     _mediaParts(m) {
       const files = Array.isArray(m.files) ? m.files : [];
-      if (!files.length) return { collage: '', videos: '', docs: '' };
-      const images = files.filter(f => f.is_image);
-      const videos = files.filter(f => !f.is_image && this._isVideo(f));
+      if (!files.length) return { collage: '', docs: '' };
+      
+      const visuals = files.filter(f => f.is_image || (!f.is_image && this._isVideo(f)));
       const docs = files.filter(f => !f.is_image && !this._isVideo(f));
+      
       let collage = '';
-      let videosHtml = '';
       let docsHtml = '';
-      if (images.length) {
-        const n = images.length;
-        const shown = images.slice(0, 4);
+      
+      if (visuals.length) {
+        const n = visuals.length;
+        const shown = visuals.slice(0, 4);
         const layout = n === 1 ? 'one' : n === 2 ? 'two' : n === 3 ? 'three' : 'four';
+        
         const tiles = shown.map((f, i) => {
           const url = this._esc(this._fileUrl(f));
+          const isVid = !f.is_image && this._isVideo(f);
+          const name = this._esc(f.file_name || (isVid ? 'video.mp4' : 'image'));
           const more = (n > 4 && i === 3) ? `<span class="gc-collage__more">+${n - 4}</span>` : '';
-          return `<button class="gc-collage__cell" type="button" data-lb="1" data-img-idx="${i}">
-            <span class="gc-collage__bg" style="background-image:url('${url}')" aria-hidden="true"></span>
-            <img src="${url}" alt="${this._esc(f.file_name || '')}" loading="lazy">${more}
-          </button>`;
+          
+          if (isVid) {
+            const vmime = this._esc(this._videoMime(f));
+            if (n === 1) {
+              // Одиночное видео рендерится сразу с контролами в размер
+              return `<div class="gc-collage__cell gc-collage__cell--video-single" data-img-idx="0">
+                <span class="gc-collage__bg" aria-hidden="true"></span>
+                <video class="gc-video" controls preload="metadata" playsinline webkit-playsinline src="${url}">
+                  <source src="${url}" type="${vmime}">
+                </video>
+              </div>`;
+            } else {
+              // Видео в сетке 2x2/3x3 - просто превью (первый кадр) + кнопка Play поверх
+              return `<button class="gc-collage__cell gc-collage__cell--video-thumb" type="button" data-lb="1" data-img-idx="${i}" title="${name}">
+                <video class="gc-collage__thumb-video" src="${url}" preload="auto" autoplay playsinline webkit-playsinline muted></video>
+                <span class="gc-collage__play"><svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
+                ${more}
+              </button>`;
+            }
+          } else {
+            return `<button class="gc-collage__cell" type="button" data-lb="1" data-img-idx="${i}">
+              <span class="gc-collage__bg" style="background-image:url('${url}')" aria-hidden="true"></span>
+              <img src="${url}" alt="${name}" loading="lazy">${more}
+            </button>`;
+          }
         }).join('');
-        const urls = images.map(f => this._fileUrl(f)).join('|');
-        const names = images.map(f => (f.file_name || 'image')).join('|');
-        collage = `<div class="gc-collage gc-collage--${layout}" data-imgs="${this._esc(urls)}" data-names="${this._esc(names)}">${tiles}</div>`;
+        
+        // Массивы для лайтбокса
+        const items = visuals.map(f => {
+          return {
+            url: this._fileUrl(f),
+            name: f.file_name || (f.is_image ? 'image' : 'video'),
+            isVideo: (!f.is_image && this._isVideo(f)),
+            mime: this._videoMime(f)
+          };
+        });
+        
+        const itemsJson = this._esc(JSON.stringify(items));
+        collage = `<div class="gc-collage gc-collage--${layout}" data-items="${itemsJson}">${tiles}</div>`;
       }
+      
       if (docs.length) {
         docsHtml = '<div class="gc-files">' + docs.map(f => `
           <a class="gc-file" href="${this._fileUrl(f, 1)}" target="_blank" rel="noopener" title="${this._esc(f.file_name || '')}">
@@ -711,30 +747,16 @@
             </span>
           </a>`).join('') + '</div>';
       }
-      if (videos.length) {
-        videosHtml = '<div class="gc-videos">' + videos.map(f => {
-          const url = this._esc(this._fileUrl(f));
-          const vmime = this._esc(this._videoMime(f));
-          const vname = this._esc(f.file_name || 'video.mp4');
-          return `<div class="gc-video-wrap" title="${vname}">
-            <span class="gc-video__bg" aria-hidden="true"></span>
-            <video class="gc-video" controls preload="metadata" playsinline webkit-playsinline src="${url}">
-              <source src="${url}" type="${vmime}">
-              Ваш браузер не поддерживает видео. <a href="${this._esc(this._fileUrl(f, 1))}">Скачать видео</a>.
-            </video>
-          </div>`;
-        }).join('') + '</div>';
-      }
-      return { collage, videos: videosHtml, docs: docsHtml };
+      return { collage, docs: docsHtml };
     },
 
     _mediaHtml(m) {
       const p = this._mediaParts(m);
-      return p.collage + (p.videos || '') + p.docs;
+      return p.collage + p.docs;
     },
 
     /* лайтбокс со стрелками (стиль image-lightbox основного чата) */
-    _openLightbox(urls, names, startIdx) {
+    _openLightbox(items, startIdx) {
       document.getElementById('image-lightbox')?.remove();
       let idx = startIdx || 0;
       const overlay = document.createElement('div');
@@ -752,65 +774,84 @@
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
             </button>
           </div>
-          <img class="image-lightbox__img" src="" alt="">
-          <button class="gc-lb__nav gc-lb__nav--prev" type="button" aria-label="Назад" ${urls.length < 2 ? 'hidden' : ''}>
+          <div class="image-lightbox__media-container"></div>
+          <button class="gc-lb__nav gc-lb__nav--prev" type="button" aria-label="Назад" ${items.length < 2 ? 'hidden' : ''}>
             <svg viewBox="0 0 24 24" width="26" height="26" fill="none"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </button>
-          <button class="gc-lb__nav gc-lb__nav--next" type="button" aria-label="Вперёд" ${urls.length < 2 ? 'hidden' : ''}>
+          <button class="gc-lb__nav gc-lb__nav--next" type="button" aria-label="Вперёд" ${items.length < 2 ? 'hidden' : ''}>
             <svg viewBox="0 0 24 24" width="26" height="26" fill="none"><path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </button>
         </div>`;
       document.body.appendChild(overlay);
-      const img = overlay.querySelector('.image-lightbox__img');
+      const container = overlay.querySelector('.image-lightbox__media-container');
       const nameEl = overlay.querySelector('.image-lightbox__name');
       const cntEl = overlay.querySelector('.gc-lb__counter');
       const dlEl = overlay.querySelector('.image-lightbox__dl');
-      const show = () => {
-        img.src = urls[idx];
-        nameEl.textContent = names[idx] || '';
-        cntEl.textContent = urls.length > 1 ? `${idx + 1}/${urls.length}` : '';
-        dlEl.href = urls[idx] + (urls[idx].indexOf('/api/group/file/') === 0 ? '?download=1' : '');
-        dlEl.setAttribute('download', names[idx] || 'image');
-      };
-      const prevBtn = overlay.querySelector('.gc-lb__nav--prev');
-      const nextBtn = overlay.querySelector('.gc-lb__nav--next');
-
-      // ── зум колесом + панорамирование + двойной клик ──
-      let scale = 1, panX = 0, panY = 0, dragging = false, lastX = 0, lastY = 0;
-      const MIN = 1, MAX = 4;
+      
+      let scale = 1, panX = 0, panY = 0, dragging = false, lastX, lastY;
+      let currentMedia = null;
+      
       const applyTransform = () => {
-        img.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
-        img.style.cursor = scale > 1 ? 'grab' : 'zoom-in';
-        const showNav = scale <= 1 && urls.length > 1;
-        if (prevBtn) prevBtn.style.display = showNav ? '' : 'none';
-        if (nextBtn) nextBtn.style.display = showNav ? '' : 'none';
+        if (!currentMedia || currentMedia.tagName === 'VIDEO') return;
+        currentMedia.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
       };
       const resetZoom = () => { scale = 1; panX = 0; panY = 0; applyTransform(); };
 
-      const nav = (d) => { idx = (idx + d + urls.length) % urls.length; resetZoom(); show(); };
-      prevBtn.onclick = (e) => { e.stopPropagation(); nav(-1); };
-      nextBtn.onclick = (e) => { e.stopPropagation(); nav(1); };
+      const show = () => {
+        const it = items[idx];
+        nameEl.textContent = it.name || '';
+        cntEl.textContent = items.length > 1 ? `${idx + 1}/${items.length}` : '';
+        dlEl.href = it.url + (it.url.indexOf('/api/group/file/') === 0 ? '?download=1' : '');
+        dlEl.setAttribute('download', it.name || 'file');
+        
+        container.innerHTML = '';
+        resetZoom();
+        
+        if (it.isVideo) {
+          const vid = document.createElement('video');
+          vid.className = 'image-lightbox__video';
+          vid.controls = true;
+          vid.autoplay = true;
+          vid.playsInline = true;
+          vid.src = it.url;
+          container.appendChild(vid);
+          currentMedia = vid;
+        } else {
+          const img = document.createElement('img');
+          img.className = 'image-lightbox__img';
+          img.src = it.url;
+          container.appendChild(img);
+          currentMedia = img;
+          
+          img.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const step = e.deltaY < 0 ? 1.15 : (1 / 1.15);
+            scale = Math.min(6, Math.max(1, scale * step));
+            if (scale === 1) { panX = 0; panY = 0; }
+            applyTransform();
+          }, { passive: false });
+          img.addEventListener('dblclick', (e) => {
+            e.stopPropagation();
+            if (scale > 1) resetZoom();
+            else { scale = 2; applyTransform(); }
+          });
+          img.addEventListener('mousedown', (e) => {
+            if (scale <= 1) return;
+            e.preventDefault(); dragging = true; lastX = e.clientX; lastY = e.clientY;
+            img.style.cursor = 'grabbing';
+          });
+        }
+      };
+      
+      const prevBtn = overlay.querySelector('.gc-lb__nav--prev');
+      const nextBtn = overlay.querySelector('.gc-lb__nav--next');
+      const nav = (dir) => {
+        idx = (idx + dir + items.length) % items.length;
+        show();
+      };
+      if (prevBtn) prevBtn.onclick = (e) => { e.stopPropagation(); nav(-1); };
+      if (nextBtn) nextBtn.onclick = (e) => { e.stopPropagation(); nav(1); };
 
-      img.addEventListener('wheel', (e) => {
-        e.preventDefault();
-        const delta = -e.deltaY;
-        const step = delta > 0 ? 1.15 : 1 / 1.15;
-        scale = Math.min(MAX, Math.max(MIN, scale * step));
-        if (scale === 1) { panX = 0; panY = 0; }
-        applyTransform();
-      }, { passive: false });
-
-      img.addEventListener('dblclick', (e) => {
-        e.stopPropagation();
-        if (scale > 1) resetZoom();
-        else { scale = 2; applyTransform(); }
-      });
-
-      img.addEventListener('mousedown', (e) => {
-        if (scale <= 1) return;
-        e.preventDefault(); dragging = true; lastX = e.clientX; lastY = e.clientY;
-        img.style.cursor = 'grabbing';
-      });
       window.addEventListener('mousemove', (e) => {
         if (!dragging) return;
         panX += e.clientX - lastX; panY += e.clientY - lastY;
@@ -818,7 +859,7 @@
         applyTransform();
       });
       window.addEventListener('mouseup', () => {
-        if (dragging) { dragging = false; img.style.cursor = scale > 1 ? 'grab' : 'zoom-in'; }
+        if (dragging) { dragging = false; currentMedia.style.cursor = scale > 1 ? 'grab' : 'zoom-in'; }
       });
 
       const close = () => {
@@ -826,7 +867,11 @@
         overlay.remove();
       };
       overlay.querySelector('.image-lightbox__close').onclick = close;
-      overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay || e.target.classList.contains('image-lightbox__box') || e.target.classList.contains('image-lightbox__media-container')) {
+          close();
+        }
+      });
       const onKey = (e) => {
         if (e.key === 'Escape') close();
         else if (e.key === 'ArrowLeft' && scale <= 1) nav(-1);
@@ -834,7 +879,6 @@
       };
       document.addEventListener('keydown', onKey);
       show();
-      applyTransform();
       requestAnimationFrame(() => overlay.classList.add('image-lightbox--shown'));
     },
 
@@ -844,81 +888,86 @@
     _bindCollages(root) {
       const scope = root || document;
       scope.querySelectorAll('.gc-collage').forEach((col) => {
-        const urls = (col.getAttribute('data-imgs') || '').split('|').filter(Boolean);
-        const names = (col.getAttribute('data-names') || '').split('|');
+        const itemsAttr = col.getAttribute('data-items');
+        if (!itemsAttr) return;
+        const items = JSON.parse(itemsAttr);
         const isOne = col.classList.contains('gc-collage--one');
+        
         col.querySelectorAll('[data-lb]').forEach((cell) => {
           cell.onclick = () => {
             const idx = parseInt(cell.getAttribute('data-img-idx') || '0', 10) || 0;
-            this._openLightbox(urls, names, idx);
+            this._openLightbox(items, idx);
           };
+          
           const img = cell.querySelector('img');
+          const vidThumb = cell.querySelector('.gc-collage__thumb-video');
+          
           if (img) {
             const done = () => {
               cell.classList.add('is-loaded');
               if (isOne && img.naturalWidth > 0 && img.naturalHeight > 0) {
-                const MAX_W = 420;
-                const MAX_H = 420;
-                const MIN_W = 300;
-                const MIN_H = 110;
+                const MAX_W = 420; const MAX_H = 420; const MIN_W = 300; const MIN_H = 110;
                 const r = img.naturalWidth / img.naturalHeight;
-                let imgW, imgH;
-                if (r >= MAX_W / MAX_H) {
-                  imgW = MAX_W;
-                  imgH = Math.round(MAX_W / r);
-                } else {
-                  imgH = MAX_H;
-                  imgW = Math.round(MAX_H * r);
-                }
-                const boxW = Math.min(MAX_W, Math.max(MIN_W, imgW));
-                const boxH = Math.min(MAX_H, Math.max(MIN_H, imgH));
+                let w = MAX_W, h = Math.round(MAX_W / r);
+                if (r < MAX_W / MAX_H) { h = MAX_H; w = Math.round(MAX_H * r); }
+                const boxW = Math.min(MAX_W, Math.max(MIN_W, w));
+                const boxH = Math.min(MAX_H, Math.max(MIN_H, h));
                 const msgEl = cell.closest('.gc-msg--has-images');
                 if (msgEl) msgEl.style.setProperty('--gc-media-w', boxW + 'px');
                 cell.style.setProperty('--gc-cell-ar', `${boxW} / ${boxH}`);
-                if (boxW > imgW + 2 || boxH > imgH + 2) {
-                  cell.classList.add('gc-collage__cell--glass');
-                }
+                if (boxW > w + 2 || boxH > h + 2) cell.classList.add('gc-collage__cell--glass');
               }
             };
             if (img.complete && img.naturalWidth > 0) done();
-            else { img.addEventListener('load', done, { once: true });
-                   img.addEventListener('error', done, { once: true }); }
+            else { img.addEventListener('load', done, { once: true }); img.addEventListener('error', done, { once: true }); }
+          } else if (vidThumb) {
+            vidThumb.muted = true;
+            vidThumb.defaultMuted = true;
+            vidThumb.autoplay = true;
+            vidThumb.playsInline = true;
+            const restartPreview = () => {
+              try { vidThumb.currentTime = 0; } catch (_) {}
+              const pr = vidThumb.play();
+              if (pr && typeof pr.catch === 'function') pr.catch(() => {});
+            };
+            vidThumb.addEventListener('timeupdate', () => {
+              if (vidThumb.currentTime >= 5) restartPreview();
+            });
+            vidThumb.addEventListener('ended', restartPreview);
+            const doneVid = () => {
+              cell.classList.add('is-loaded');
+              if (vidThumb.paused) {
+                const pr = vidThumb.play();
+                if (pr && typeof pr.catch === 'function') pr.catch(() => {});
+              }
+            };
+            if (vidThumb.readyState >= 1) doneVid();
+            else vidThumb.addEventListener('loadedmetadata', doneVid, { once: true });
           }
         });
-      });
-      scope.querySelectorAll('.gc-video-wrap').forEach((wrap) => {
-        const vid = wrap.querySelector('video');
-        if (!vid) return;
-        const onMeta = () => {
-          wrap.classList.add('is-loaded');
-          const vw = vid.videoWidth || 0;
-          const vh = vid.videoHeight || 0;
-          if (vw > 0 && vh > 0) {
-            const MAX_W = 420;
-            const MAX_H = 420;
-            const MIN_W = 300;
-            const MIN_H = 180;
-            const r = vw / vh;
-            let vidW, vidH;
-            if (r >= MAX_W / MAX_H) {
-              vidW = MAX_W;
-              vidH = Math.round(MAX_W / r);
-            } else {
-              vidH = MAX_H;
-              vidW = Math.round(MAX_H * r);
+        
+        // Для одиночного видео прямо в чате
+        col.querySelectorAll('.gc-collage__cell--video-single .gc-video').forEach(vid => {
+          const wrap = vid.closest('.gc-collage__cell--video-single');
+          const doneVid = () => {
+            wrap.classList.add('is-loaded');
+            const vw = vid.videoWidth || 0, vh = vid.videoHeight || 0;
+            if (vw > 0 && vh > 0) {
+              const MAX_W = 420; const MAX_H = 420; const MIN_W = 300; const MIN_H = 180;
+              const r = vw / vh;
+              let w = MAX_W, h = Math.round(MAX_W / r);
+              if (r < MAX_W / MAX_H) { h = MAX_H; w = Math.round(MAX_H * r); }
+              const boxW = Math.min(MAX_W, Math.max(MIN_W, w));
+              const boxH = Math.min(MAX_H, Math.max(MIN_H, h));
+              const msgEl = wrap.closest('.gc-msg--has-images');
+              if (msgEl) msgEl.style.setProperty('--gc-media-w', boxW + 'px');
+              wrap.style.setProperty('--gc-cell-ar', `${boxW} / ${boxH}`);
+              if (boxW > w + 2 || boxH > h + 2) wrap.classList.add('gc-collage__cell--glass');
             }
-            const boxW = Math.min(MAX_W, Math.max(MIN_W, vidW));
-            const boxH = Math.min(MAX_H, Math.max(MIN_H, vidH));
-            const msgEl = wrap.closest('.gc-msg--has-images');
-            if (msgEl) msgEl.style.setProperty('--gc-media-w', boxW + 'px');
-            wrap.style.setProperty('--gc-video-ar', `${boxW} / ${boxH}`);
-            if (boxW > vidW + 2 || boxH > vidH + 2) {
-              wrap.classList.add('gc-video-wrap--glass');
-            }
-          }
-        };
-        if (vid.readyState >= 1 && vid.videoWidth > 0) onMeta();
-        else vid.addEventListener('loadedmetadata', onMeta, { once: true });
+          };
+          if (vid.readyState >= 1 && vid.videoWidth > 0) doneVid();
+          else vid.addEventListener('loadedmetadata', doneVid, { once: true });
+        });
       });
     },
 

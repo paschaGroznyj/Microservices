@@ -258,7 +258,9 @@
 .user-message .message-text { white-space: pre-wrap; width: 100%; }
 
 .timestamp {
+  font-family: var(--font-anthropic-sans);
   font-size: .7rem;
+  line-height: 1.25rem;
   color: var(--text-muted);
   margin-top: 3px;
 }
@@ -290,8 +292,9 @@
 
 .message-time {
   margin-left: 6px;
-  font-size: 0.72rem;
-  line-height: 1;
+  font-family: var(--font-anthropic-sans);
+  font-size: .7rem;
+  line-height: 1.25rem;
   color: var(--text-muted);
   white-space: nowrap;
   user-select: none;
@@ -1746,6 +1749,8 @@ pre {
   text-overflow: ellipsis;
   white-space: nowrap;
   text-transform: none;
+  padding-bottom: 3px;
+  margin-bottom: -2px;
 }
 
 .reasoning-timer {

@@ -12,16 +12,26 @@
 (function () {
   'use strict';
 
-  const MAX_MODELS = [
-    { id: 'coder', label: 'GPT', accent: '#10a37f',
-      svg: '<svg viewBox="0 0 24 24" fill="none" width="16" height="16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 4v10l-7 4-7-4V7z"/><path d="M12 3v8l7 4M12 11l-7 4M12 11v10"/></svg>' },
-    { id: 'designer', label: 'Claude', accent: '#d97757',
-      svg: '<svg viewBox="0 0 24 24" fill="none" width="16" height="16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6M12 16v6M2 12h6M16 12h6M5 5l4 4M15 15l4 4M19 5l-4 4M9 15l-4 4"/></svg>' },
-    { id: 'universal', label: 'GLM', accent: '#8b5cf6',
-      svg: '<svg viewBox="0 0 24 24" fill="none" width="16" height="16" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 5h12L7 19h11"/></svg>' },
-    { id: 'gemini', label: 'Gemini', accent: '#4285f4',
-      svg: '<svg viewBox="0 0 24 24" fill="none" width="16" height="16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2c0 5.5 4.5 10 10 10-5.5 0-10 4.5-10 10 0-5.5-4.5-10-10-10 5.5 0 10-4.5 10-10z"/></svg>' },
-  ];
+  
+  function getActualModels() {
+    if (window.ModelPicker && typeof window.ModelPicker.getModels === 'function') {
+      return window.ModelPicker.getModels().map(function(m) {
+        return {
+          id: m.id,
+          label: m.label,
+          accent: m.accent || '#10a37f',
+          svg: m.svgSm || m.svg || ''
+        };
+      });
+    }
+    return [
+      { id: 'coder',     label: 'GPT',    accent: '#10a37f', svg: '<svg viewBox="0 0 24 24" fill="none" width="16" height="16" stroke="currentColor" stroke-width="2"><path d="M12 3.2 L18.6 7 V15 L12 18.8 L5.4 15 V7 Z"/><path d="M12 11 L18.6 7 M12 11 V18.8 M12 11 L5.4 7"/></svg>' },
+      { id: 'designer',  label: 'Claude', accent: '#d97757', svg: '<svg viewBox="0 0 24 24" fill="none" width="16" height="16" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="4.5" x2="12" y2="19.5"/><line x1="5.8" y1="8" x2="18.2" y2="16"/><line x1="18.2" y1="8" x2="5.8" y2="16"/></svg>' },
+      { id: 'universal', label: 'GLM',    accent: '#8b5cf6', svg: '<svg viewBox="0 0 24 24" fill="none" width="16" height="16" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 6 H17 L8 14 H17"/><path d="M12 14 V20"/></svg>' },
+      { id: 'gemini',    label: 'Gemini', accent: '#4285f4', svg: '<svg viewBox="0 0 24 24" fill="none" width="16" height="16" stroke="currentColor" stroke-width="2"><path d="M12 2.5C12 7.8 16.2 12 21.5 12 C16.2 12 12 16.2 12 21.5 C12 16.2 7.8 12 2.5 12 C7.8 12 12 7.8 12 2.5Z"/></svg>' }
+    ];
+  }
+
 
   const MAX_TOOLS = [
     { id: 'internet', label: 'Интернет' },
@@ -90,7 +100,7 @@
     if (!_chats.length) return '<div class="tgc-empty">Нет встроенных чатов</div>';
     return _chats.map(function (c) {
       var s = c.settings || {};
-      var mdl = MAX_MODELS.find(function (x) { return x.id === s.agent_model; });
+      var mdl = getActualModels().find(function (x) { return x.id === s.agent_model; });
       return '<div class="tgc-row' + (_editing === c.chat_id ? ' tgc-row--active' : '') + '">' +
         '<div class="tgc-row-main">' +
           '<span class="tgc-cid">' + esc(c.chat_id) + '</span>' +
@@ -106,7 +116,7 @@
   }
 
   function modelsHtml() {
-    return MAX_MODELS.map(function (m) {
+    return getActualModels().map(function (m) {
       var on = _form.agent_model === m.id;
       return '<button class="tgc-opt' + (on ? ' tgc-opt--on' : '') + '" data-model="' + m.id + '" type="button" style="--tgc-accent:' + m.accent + '">' +
         '<span class="tgc-opt-ic">' + m.svg + '</span>' +
@@ -131,7 +141,7 @@
   }
 
   function modelDisplay() {
-    var m = MAX_MODELS.find(function (x) { return x.id === _form.agent_model; });
+    var m = getActualModels().find(function (x) { return x.id === _form.agent_model; });
     return m ? '<span class="tgc-dd-ic" style="color:' + m.accent + '">' + m.svg + '</span>' + m.label : '\u2014';
   }
 

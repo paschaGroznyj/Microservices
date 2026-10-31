@@ -1613,8 +1613,12 @@ class ChatApp {
         if (!container) return;
 
         const isBot        = message.is_from_bot;
-        const hasUserFiles = !isBot && Array.isArray(message.files) && message.files.length > 0;
-        const rawContent   = message.message || (hasUserFiles ? '' : 'Тут было пусто');
+        const hasFiles     = Array.isArray(message.files) && message.files.length > 0;
+        const hasUserFiles = !isBot && hasFiles;
+        const emptyNotice  = isBot
+            ? (hasFiles ? '' : 'Агент завершил шаг без текстового ответа — попробуйте повторить или уточнить запрос.')
+            : (hasUserFiles ? '' : 'Сообщение без текста');
+        const rawContent   = (message.message && String(message.message).trim()) ? message.message : emptyNotice;
         // Убираем статус-индикатор при ответе бота (через метод, чтобы захватить субагентов)
         if (isBot) this._clearAllStatuses();
 
@@ -3269,7 +3273,7 @@ class ChatApp {
         }
         const clean = String(text || '')
             .replace(/<[^>]+>/g, ' ')
-            .replace(/[`*_~#>]+/g, '')
+            .replace(/[`*~#>]+/g, '')
             .replace(/\s+/g, ' ')
             .trim();
         labelEl.textContent = clean || 'Размышления';
@@ -3664,7 +3668,7 @@ class ChatApp {
             body.appendChild(step);
         }
         if (stepPlain && !st.streamIsFinal && !st.streamDone) {
-            this._setReasoningHeaderLabel(chatId, stepPlain, false);
+            this._setReasoningHeaderLabel(chatId, text, false);
         }
 
         const container = this._isActiveChat(chatId) ? this.getMessagesContainer() : null;
@@ -3739,7 +3743,10 @@ class ChatApp {
         if (isActive) this._removeImageGenSkeleton();
 
         const data = st.streamFinalData || {};
-        const fullText = data.fullText ?? st.streamShown ?? '';
+        const rawFullText = data.fullText ?? st.streamShown ?? '';
+        const fullText = (rawFullText && String(rawFullText).trim())
+            ? rawFullText
+            : (data.files?.length ? '' : 'Агент завершил шаг без текстового ответа — попробуйте повторить или уточнить запрос.');
 
         // Финальный полный рендер финального ответа — в живой блок (если он есть).
         // reasoning-блоки остаются выше нетронутыми.

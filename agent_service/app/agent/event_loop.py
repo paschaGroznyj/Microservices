@@ -1851,7 +1851,7 @@ class HarnessAgent:
                         loop_state.setdefault("internal_reasoning_trace", []).append(_reasoning_text)
                     # На шаге с tool_calls оставляем внутреннее рассуждение в стеке контекста модели,
                     # а на финальном шаге (без тегов) отдаём чистый финальный ответ в response.content.
-                    if getattr(response, "tool_calls", None) and (_thinking_text or _reasoning_text):
+                    if (getattr(response, "tool_calls", None) or not (_clean_content or "").strip()) and (_thinking_text or _reasoning_text):
                         _ctx_parts = []
                         if _thinking_text:
                             _ctx_parts.append(f"<thinking>{_thinking_text}</thinking>")
@@ -1940,10 +1940,10 @@ class HarnessAgent:
                     # --------------------------------------------------------------
 
                     if not getattr(response, "tool_calls", None):
-                        final_response = response.content or ""
+                        final_response = (_clean_content or "").strip()
 
                         # Финальный шаг: фиксируем живой блок как финальный ответ.
-                        if stream_state["sent"]:
+                        if stream_state["sent"] and final_response:
                             await self._send_chunk(
                                 "", request_id, msg_id=str(request_id), kind="final_commit"
                             )
@@ -2062,7 +2062,26 @@ class HarnessAgent:
 
                 return final_response, tool_trace
 
-            final_response, tool_trace = await agent_event_loop(messages=messages)
+            MAX_EMPTY_RESPONSE_RETRIES = 5
+            for _empty_attempt in range(MAX_EMPTY_RESPONSE_RETRIES + 1):
+                final_response, tool_trace = await agent_event_loop(messages=messages)
+                if (final_response or "").strip():
+                    break
+                if _empty_attempt < MAX_EMPTY_RESPONSE_RETRIES:
+                    logging.warning(
+                        f"[empty_response] Агент вернул пустой final_response, "
+                        f"перезапускаю agent_event_loop ({_empty_attempt + 1}/{MAX_EMPTY_RESPONSE_RETRIES})"
+                    )
+                    messages.append(
+                        HumanMessage(
+                            content=(
+                                "ВНИМАНИЕ: Твой предыдущий шаг завершился пустым ответом "
+                                "(без текста для пользователя и без вызова инструментов). "
+                                "Доделай начатую работу (при необходимости вызови инструменты) "
+                                "и обязательно верни полный итоговый ответ пользователю в content."
+                            )
+                        )
+                    )
 
             tokens_usage = {
                     "input_tokens": total_input_tokens,

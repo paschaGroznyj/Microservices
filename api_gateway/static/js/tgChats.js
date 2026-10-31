@@ -12,14 +12,26 @@
 (function () {
   'use strict';
 
-  const TG_MODELS = [
-    { id: 'coder',     label: 'GPT',    accent: '#10a37f',
-      svg: '<svg viewBox="0 0 24 24" fill="none" width="16" height="16" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.2 L18.6 7 V15 L12 18.8 L5.4 15 V7 Z"/><path d="M12 11 L18.6 7 M12 11 V18.8 M12 11 L5.4 7"/></svg>' },
-    { id: 'designer',  label: 'Claude', accent: '#d97757',
-      svg: '<svg viewBox="0 0 24 24" fill="none" width="16" height="16" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="4.5" x2="12" y2="19.5"/><line x1="5.8" y1="8" x2="18.2" y2="16"/><line x1="18.2" y1="8" x2="5.8" y2="16"/></svg>' },
-    { id: 'universal', label: 'GLM',    accent: '#8b5cf6',
-      svg: '<svg viewBox="0 0 24 24" fill="none" width="16" height="16" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 6 H17 L8 14 H17"/><path d="M12 14 V20"/></svg>' },
-  ];
+  
+  function getActualModels() {
+    if (window.ModelPicker && typeof window.ModelPicker.getModels === 'function') {
+      return window.ModelPicker.getModels().map(function(m) {
+        return {
+          id: m.id,
+          label: m.label,
+          accent: m.accent || '#10a37f',
+          svg: m.svgSm || m.svg || ''
+        };
+      });
+    }
+    return [
+      { id: 'coder',     label: 'GPT',    accent: '#10a37f', svg: '<svg viewBox="0 0 24 24" fill="none" width="16" height="16" stroke="currentColor" stroke-width="2"><path d="M12 3.2 L18.6 7 V15 L12 18.8 L5.4 15 V7 Z"/><path d="M12 11 L18.6 7 M12 11 V18.8 M12 11 L5.4 7"/></svg>' },
+      { id: 'designer',  label: 'Claude', accent: '#d97757', svg: '<svg viewBox="0 0 24 24" fill="none" width="16" height="16" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="4.5" x2="12" y2="19.5"/><line x1="5.8" y1="8" x2="18.2" y2="16"/><line x1="18.2" y1="8" x2="5.8" y2="16"/></svg>' },
+      { id: 'universal', label: 'GLM',    accent: '#8b5cf6', svg: '<svg viewBox="0 0 24 24" fill="none" width="16" height="16" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 6 H17 L8 14 H17"/><path d="M12 14 V20"/></svg>' },
+      { id: 'gemini',    label: 'Gemini', accent: '#4285f4', svg: '<svg viewBox="0 0 24 24" fill="none" width="16" height="16" stroke="currentColor" stroke-width="2"><path d="M12 2.5C12 7.8 16.2 12 21.5 12 C16.2 12 12 16.2 12 21.5 C12 16.2 7.8 12 2.5 12 C7.8 12 12 7.8 12 2.5Z"/></svg>' }
+    ];
+  }
+
 
   const TG_TOOLS = [
     { id: 'internet', label: 'Интернет' },
@@ -135,7 +147,7 @@
   }
 
   function modelDisplay() {
-    var m = TG_MODELS.find(function (x) { return x.id === _form.agent_model; });
+    var m = getActualModels().find(function (x) { return x.id === _form.agent_model; });
     return m ? '<span class="tgc-dd-ic" style="color:' + m.accent + '">' + m.svg + '</span>' + m.label : '\u2014';
   }
 
@@ -335,7 +347,7 @@
       ? '<div class="tgc-empty">Нет встроенных чатов</div>'
       : _chats.map(function (c) {
           var s = c.settings || {};
-          var mdl = TG_MODELS.find(function (m) { return m.id === s.agent_model; });
+          var mdl = getActualModels().find(function (m) { return m.id === s.agent_model; });
           var isEditing = _editing === c.chat_id;
           return '<div class="tgc-row' + (isEditing ? ' tgc-row--active' : '') + '">' +
             '<div class="tgc-row-main">' +
@@ -351,7 +363,7 @@
           '</div>';
         }).join('');
 
-    var modelContent = TG_MODELS.map(function (m) {
+    var modelContent = getActualModels().map(function (m) {
       return '<button class="tgc-opt' + (m.id === _form.agent_model ? ' tgc-opt--on' : '') + '" data-model="' + m.id + '" type="button" style="--tgc-accent:' + m.accent + '">' +
         '<span class="tgc-opt-ic">' + m.svg + '</span>' +
         '<span class="tgc-opt-label">' + m.label + '</span>' +

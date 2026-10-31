@@ -174,6 +174,38 @@ class ChatApp {
         window.SkillsPanel?.init(this);
         window.GroupChat?.init(this);
         await this.renderMessageInput();
+        await this._restoreSessionAfterAuthReload();
+    }
+
+    async _restoreSessionAfterAuthReload() {
+        try {
+            const pendingRaw = sessionStorage.getItem('catchpm:pending_send_after_auth');
+            const restoreChatId = sessionStorage.getItem('catchpm:restore_chat_id');
+            sessionStorage.removeItem('catchpm:pending_send_after_auth');
+            sessionStorage.removeItem('catchpm:restore_chat_id');
+
+            if (pendingRaw) {
+                const pending = JSON.parse(pendingRaw);
+                if (pending && pending.text && (Date.now() - Number(pending.ts || 0) < 180_000)) {
+                    const cid = pending.chatId || restoreChatId;
+                    if (cid) {
+                        if (!this.chats.some(c => String(c.id) === String(cid))) {
+                            this.chats.unshift({ id: cid, last_message: pending.text, timestamp: new Date().toISOString() });
+                            this.renderChats(this.chats);
+                        }
+                        await this.openChat(cid);
+                    }
+                    await this.sendMessage(pending.text, pending.pollAnswer || null);
+                    return;
+                }
+            }
+
+            if (restoreChatId && this.chats.some(c => String(c.id) === String(restoreChatId))) {
+                await this.openChat(restoreChatId);
+            }
+        } catch (e) {
+            console.warn('_restoreSessionAfterAuthReload error:', e);
+        }
     }
 
     /* ══════════════════════════════════════════
@@ -595,10 +627,16 @@ class ChatApp {
             running = true;
         }
 
+        if (window.__authSessionExpired) return;
         try {
             const r = await fetch(`/api/chats/${chatId}/run_status`, {
-                credentials: 'include'
+                credentials: 'include',
+                redirect: 'manual'
             });
+            if (window.__isAuthRedirectOrUnauthorized?.(r)) {
+                window.__onAuthSessionExpired?.();
+                return;
+            }
             if (r.ok) {
                 const j = await r.json();
                 serverStatus = j;
@@ -659,12 +697,60 @@ class ChatApp {
         }
 
         if (!running) {
+            const hasUnfinishedDom = !!(container && (
+                container.querySelector('#agent-response-placeholder') ||
+                container.querySelector('#agent-status-indicator') ||
+                container.querySelector('.agent-message:not([data-id])')
+            ));
+            const wasRunningBeforeCheck = (
+                this._runState === 'running' ||
+                this._runState === 'stopping' ||
+                !!(st && (st.pendingBotEl || st.reasoningWrapEl || st.streamingActive)) ||
+                hasUnfinishedDom
+            );
+            const savedReasoningWrap = st?.reasoningWrapEl
+                || st?.pendingBotEl?.querySelector('.reasoning-block')
+                || container?.querySelector('.agent-message:not([data-id]) .reasoning-block')
+                || null;
+
             if (st) {
+                this._stopReasoningTimer?.(chatId, true);
                 st.pendingBotEl = null;
                 st.liveBlockEl = null;
                 st.reasoningWrapEl = null;
+                st.streamingActive = false;
+                st.streamBuffer = '';
             }
+            if (this._chatStatuses) delete this._chatStatuses[chatId];
+            this._removeBotPlaceholder?.();
+            this._clearAllStatuses?.();
             this._onRunFinished();
+
+            if (serverStatus !== null && wasRunningBeforeCheck && !this._loadingMessagesChat) {
+                await this.loadMessages(chatId);
+                if (savedReasoningWrap && String(this.currentChat) === String(chatId)) {
+                    savedReasoningWrap.classList.add('reasoning-collapsed', 'reasoning-done');
+                    const liveEl = savedReasoningWrap.querySelector('.reasoning-live');
+                    if (liveEl) liveEl.remove();
+                    const freshContainer = this.getMessagesContainer();
+                    const userWrappers = freshContainer?.querySelectorAll('.user-message-wrapper') || [];
+                    const lastUser = userWrappers.length ? userWrappers[userWrappers.length - 1] : null;
+                    let lastBot = null;
+                    if (lastUser) {
+                        let cur = lastUser.nextElementSibling;
+                        while (cur) {
+                            if (cur.classList?.contains('.agent-message') || cur.classList?.contains('agent-message')) {
+                                lastBot = cur;
+                                break;
+                            }
+                            cur = cur.nextElementSibling;
+                        }
+                    }
+                    if (lastBot && !lastBot.querySelector('.reasoning-block')) {
+                        lastBot.insertBefore(savedReasoningWrap, lastBot.firstElementChild);
+                    }
+                }
+            }
             return;
         }
 
@@ -815,18 +901,37 @@ class ChatApp {
     ══════════════════════════════════════════ */
     async loadMessages(chatId) {
         const PAGE_SIZE = 50;
-        this._loadingMessagesChat = String(chatId);
+        const key = String(chatId);
+        this._loadingMessagesChat = key;
         let res;
         try {
-            res = await fetch(`/api/chats/${chatId}/messages?limit=${PAGE_SIZE}&offset=0`);
+            res = await fetch(`/api/chats/${chatId}/messages?limit=${PAGE_SIZE}&offset=0`, {
+                credentials: 'include',
+                redirect: 'manual'
+            });
+        } catch (_) {
+            this._messagesLoadFailedChat = key;
+            return false;
         } finally {
-            if (this._loadingMessagesChat === String(chatId)) {
+            if (this._loadingMessagesChat === key) {
                 this._loadingMessagesChat = null;
             }
         }
-        if (!res || !res.ok) return;
+        if (window.__isAuthRedirectOrUnauthorized?.(res)) {
+            this._messagesLoadFailedChat = key;
+            window.__onAuthSessionExpired?.();
+            return false;
+        }
+        if (!res || !res.ok) {
+            this._messagesLoadFailedChat = key;
+            return false;
+        }
         const data = await res.json();
-        if (chatId !== this.currentChat) return; // гонка
+        if (String(chatId) !== String(this.currentChat)) return false; // гонка
+
+        if (this._messagesLoadFailedChat === key) {
+            this._messagesLoadFailedChat = null;
+        }
 
         // Состояние пагинации по конкретному чату
         this._pagination = {
@@ -839,6 +944,84 @@ class ChatApp {
 
         this.renderMessages(data.messages);
         this._initHistoryScrollLoader();
+        return true;
+    }
+
+    async _syncMissedMessages(chatId) {
+        if (!chatId || window.__authSessionExpired) return;
+        const key = String(chatId);
+        if (String(this.currentChat) !== key || this._loadingMessagesChat === key) return;
+
+        const container = this.getMessagesContainer();
+        if (!container) return;
+
+        const existingNodes = container.querySelectorAll('.user-message-wrapper, .agent-message[data-id]');
+        if (this._messagesLoadFailedChat === key || existingNodes.length === 0) {
+            await this.loadMessages(chatId);
+            return;
+        }
+
+        let res;
+        try {
+            res = await fetch(`/api/chats/${chatId}/messages?limit=50&offset=0`, {
+                credentials: 'include',
+                redirect: 'manual'
+            });
+        } catch (_) {
+            return;
+        }
+        if (window.__isAuthRedirectOrUnauthorized?.(res)) {
+            window.__onAuthSessionExpired?.();
+            return;
+        }
+        if (!res || !res.ok) return;
+
+        const data = await res.json();
+        if (String(this.currentChat) !== key) return;
+        const serverMsgs = Array.isArray(data?.messages) ? data.messages : [];
+        if (!serverMsgs.length) return;
+
+        const hasMessageInDom = (msg) => {
+            if (msg.id != null) {
+                const byId = container.querySelector(
+                    `[data-id="${msg.id}"], [data-message-id="${msg.id}"]`
+                );
+                if (byId) return true;
+            }
+            if (msg.message_id) {
+                const byUuid = container.querySelector(
+                    `[data-id="${msg.message_id}"], [data-message-id="${msg.message_id}"]`
+                );
+                if (byUuid) return true;
+            }
+            if (!msg.is_from_bot && msg.message) {
+                const normTarget = String(msg.message).replace(/\s+/g, ' ').trim();
+                const wrappers = container.querySelectorAll('.user-message-wrapper');
+                for (const w of wrappers) {
+                    const txtEl = w.querySelector('.user-message .message-text, .user-message');
+                    const normEl = (txtEl?.textContent || '').replace(/\s+/g, ' ').trim();
+                    if (normEl && normTarget && normEl === normTarget) {
+                        if (msg.id != null) w.dataset.messageId = String(msg.id);
+                        if (msg.message_id) w.dataset.id = String(msg.message_id);
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+
+        const missing = serverMsgs.filter(m => !hasMessageInDom(m));
+        if (!missing.length) return;
+
+        missing.forEach(msg => this.addMessage(msg, false));
+        const st = this._getStream(key);
+        if (st && st.pendingBotEl && st.pendingBotEl.parentNode === container) {
+            this._ensureBotAfterLastUserMessage(container, st.pendingBotEl);
+        }
+        if (this._pagination && String(this._pagination.chatId) === key) {
+            this._pagination.loaded = Math.max(this._pagination.loaded || 0, serverMsgs.length);
+        }
+        container.scrollTop = container.scrollHeight;
     }
 
     renderMessages(messages) {
@@ -1044,8 +1227,20 @@ class ChatApp {
         return segments;
     }
 
+    _parseMarkdown(mdText) {
+        const raw = String(mdText || '');
+        if (typeof marked !== 'undefined' && marked && typeof marked.parse === 'function') {
+            try { return marked.parse(raw); } catch (_) {}
+        }
+        return raw
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/\n/g, '<br>');
+    }
+
     _renderSafeMarkdownHtml(mdText) {
-        let html = marked.parse(String(mdText || ''));
+        let html = this._parseMarkdown(mdText);
         if (typeof DOMPurify !== 'undefined') {
             html = DOMPurify.sanitize(html, {
                 ADD_TAGS: ['table', 'thead', 'tbody', 'tr', 'th', 'td'],
@@ -1430,7 +1625,7 @@ class ChatApp {
         if (rawContent.trimStart().startsWith('<')) {
             content = rawContent; // уже HTML — не трогаем
         } else {
-            content = marked.parse(rawContent);
+            content = this._parseMarkdown(rawContent);
         }
         if (isBot) {
             if (typeof DOMPurify !== 'undefined') content = DOMPurify.sanitize(content);
@@ -2636,6 +2831,7 @@ class ChatApp {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
+                redirect: 'manual',
                 body: JSON.stringify({
                     chat_id:        this.currentChat,
                     message:        text,
@@ -2649,6 +2845,19 @@ class ChatApp {
                     ...(pollAnswer ? { poll_answer: pollAnswer } : {})
                 })
             });
+            if (window.__isAuthRedirectOrUnauthorized?.(resp)) {
+                try {
+                    sessionStorage.setItem('catchpm:pending_send_after_auth', JSON.stringify({
+                        chatId: this.currentChat,
+                        text: text,
+                        pollAnswer: pollAnswer || null,
+                        ts: Date.now()
+                    }));
+                    sessionStorage.setItem('catchpm:restore_chat_id', String(this.currentChat || ''));
+                } catch (_) {}
+                window.__onAuthSessionExpired?.({ forceReload: true });
+                return;
+            }
             try {
                 const j = await resp.clone().json();
                 this._activeRequestId = j?.request_id || null;
@@ -2984,7 +3193,7 @@ class ChatApp {
         // только для активного чата.
         const container = this._isActiveChat(chatId) ? this.getMessagesContainer() : null;
 
-        let html = marked.parse(st.streamShown || '');
+        let html = this._parseMarkdown(st.streamShown || '');
         if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
             ADD_TAGS: ['table','thead','tbody','tr','th','td'],
             ADD_ATTR: ['colspan','rowspan','align']
@@ -3097,9 +3306,15 @@ class ChatApp {
         st.reasoningTimer = setInterval(() => {
             this._updateReasoningDurationUI(chatId);
             st._pollTick = (st._pollTick || 0) + 1;
-            if (st._pollTick % 3 === 0 && chatId) {
-                fetch(`/api/chats/${chatId}/run_status`, { credentials: 'include' })
-                    .then(r => r.ok ? r.json() : null)
+            if (st._pollTick % 3 === 0 && chatId && !window.__authSessionExpired && document.visibilityState !== 'hidden') {
+                fetch(`/api/chats/${chatId}/run_status`, { credentials: 'include', redirect: 'manual' })
+                    .then(r => {
+                        if (window.__isAuthRedirectOrUnauthorized?.(r)) {
+                            window.__onAuthSessionExpired?.();
+                            return null;
+                        }
+                        return r.ok ? r.json() : null;
+                    })
                     .then(j => {
                         if (j && j.active_requests !== undefined) {
                             this._updateActiveRequestsUI(chatId, j.active_requests);
@@ -3281,7 +3496,7 @@ class ChatApp {
                     [...body.querySelectorAll('.reasoning-step')].map(el => el.textContent.trim())
                 );
                 steps.forEach(rawStep => {
-                    let html = marked.parse(String(rawStep));
+                    let html = this._parseMarkdown(rawStep);
                     if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html);
                     const step = document.createElement('div');
                     step.className = 'reasoning-step';
@@ -3337,7 +3552,7 @@ class ChatApp {
                 });
                 const body = wrap.querySelector('.reasoning-body');
                 steps.forEach(rawStep => {
-                    let html = marked.parse(String(rawStep));
+                    let html = this._parseMarkdown(rawStep);
                     if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html);
                     const step = document.createElement('div');
                     step.className = 'reasoning-step';
@@ -3426,7 +3641,7 @@ class ChatApp {
             return;
         }
 
-        let html = marked.parse(text);
+        let html = this._parseMarkdown(text);
         if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
             ADD_TAGS: ['table','thead','tbody','tr','th','td'],
             ADD_ATTR: ['colspan','rowspan','align']
@@ -3898,10 +4113,25 @@ class ChatApp {
         });
         // 'running' игнорируем — индикатор уже показан оптимистично.
 
-        es.onerror = () => {
-            // EventSource сам ретраит соединение. Но если браузер вообще не
-            // смог подключиться ( es.readyState === CLOSED) — уходим в фолбэк
-            // (только для активного чата, у фонового своего placeholder нет).
+        es.onerror = async () => {
+            if (window.__authSessionExpired) {
+                try { es.close(); } catch (_) {}
+                if (this._sources[key] === es) delete this._sources[key];
+                return;
+            }
+            try {
+                const probe = await fetch('/api/presence/count', {
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                    redirect: 'manual'
+                });
+                if (window.__isAuthRedirectOrUnauthorized?.(probe)) {
+                    try { es.close(); } catch (_) {}
+                    if (this._sources[key] === es) delete this._sources[key];
+                    window.__onAuthSessionExpired?.();
+                    return;
+                }
+            } catch (_) {}
             if (es.readyState === EventSource.CLOSED && st.streamingActive) {
                 if (this._sources[key] === es) delete this._sources[key];
                 if (this._isActiveChat(key)) this._startStatusPollingFallback(chatId);
@@ -3911,18 +4141,20 @@ class ChatApp {
 
     // Старый short-polling — фолбэк на случай недоступности SSE.
     _startStatusPollingFallback(chatId) {
-        if (!chatId) return;
+        if (!chatId || window.__authSessionExpired) return;
         if (this._statusPollTimer) {
             clearInterval(this._statusPollTimer);
             this._statusPollTimer = null;
         }
 
-        const POLL_MS = 800;
+        const POLL_MS = 1500;
+        let failCount = 0;
         this._statusPollTimer = setInterval(async () => {
-            // если ран уже завершён локально — polling больше не нужен
-            if (this._runState === 'idle') {
-                clearInterval(this._statusPollTimer);
-                this._statusPollTimer = null;
+            if (this._runState === 'idle' || window.__authSessionExpired || document.visibilityState === 'hidden') {
+                if (this._runState === 'idle' || window.__authSessionExpired) {
+                    clearInterval(this._statusPollTimer);
+                    this._statusPollTimer = null;
+                }
                 return;
             }
 
@@ -3930,9 +4162,23 @@ class ChatApp {
                 const resp = await fetch(`/api/chats/${chatId}/status`, {
                     method: 'GET',
                     credentials: 'include',
-                    cache: 'no-store'
+                    cache: 'no-store',
+                    redirect: 'manual'
                 });
-                if (!resp.ok) return;
+                if (window.__isAuthRedirectOrUnauthorized?.(resp)) {
+                    clearInterval(this._statusPollTimer);
+                    this._statusPollTimer = null;
+                    window.__onAuthSessionExpired?.();
+                    return;
+                }
+                if (!resp.ok) {
+                    if (++failCount >= 6) {
+                        clearInterval(this._statusPollTimer);
+                        this._statusPollTimer = null;
+                    }
+                    return;
+                }
+                failCount = 0;
 
                 const state = await resp.json();
                 if (state?.status === 'done' || state?.status === 'idle') {
@@ -4260,7 +4506,7 @@ class ChatApp {
         for (let i = 0; i < tokens.length; i += BATCH) {
             accumulated += tokens.slice(i, i + BATCH).join('');
 
-            let html = marked.parse(accumulated);
+            let html = this._parseMarkdown(accumulated);
             if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html);
 
             const tmp = document.createElement('div');
@@ -5258,7 +5504,48 @@ class ChatApp {
        VISIBILITY / ONLINE RECONNECT (disabled in sigma)
     ══════════════════════════════════════════ */
     initVisibilityReconnect() {
-        // WS отключен: переподключение не требуется
+        const resync = async (forceSyncMessages = false) => {
+            if (window.__authSessionExpired) return;
+            const needSync = forceSyncMessages || this._wasOfflineOrDisconnected ||
+                (this.currentChat && this._messagesLoadFailedChat === String(this.currentChat));
+            this._wasOfflineOrDisconnected = false;
+
+            if (needSync || !this.chats?.length) {
+                this.loadChats?.().catch(() => {});
+            }
+            if (!this.currentChat) return;
+
+            if (needSync) {
+                await this._syncMissedMessages(this.currentChat).catch(() => {});
+            }
+            if (window.__authSessionExpired) return;
+            await this._restoreRunningUI(this.currentChat).catch(() => {});
+            if (window.__authSessionExpired) return;
+            if (this._runState === 'running') {
+                const key = String(this.currentChat);
+                const es = this._sources?.[key];
+                if (!es || es.readyState === EventSource.CLOSED) {
+                    this._startStatusPolling(this.currentChat);
+                }
+            }
+        };
+        window.addEventListener('offline', () => {
+            this._wasOfflineOrDisconnected = true;
+        });
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') resync(true);
+        });
+        window.addEventListener('pageshow', () => {
+            if (document.visibilityState === 'visible') resync(true);
+        });
+        window.addEventListener('focus', () => {
+            if (document.visibilityState === 'visible' && (this._wasOfflineOrDisconnected || (this.currentChat && this._messagesLoadFailedChat === String(this.currentChat)))) {
+                resync(true);
+            }
+        });
+        window.addEventListener('online', () => {
+            resync(true);
+        });
     }
 
     initChatsSectionToggle() {

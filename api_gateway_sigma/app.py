@@ -503,8 +503,12 @@ async def presence_leave(request: Request):
 
 
 @app.get("/api/presence/count")
-async def presence_count():
+async def presence_count(request: Request, ping: int = 0):
     """Лёгкий публичный счётчик онлайн (суммарно main+sigma) + живые запросы к агенту. Redis-only."""
+    if ping:
+        user = await get_current_user(request)
+        if user:
+            await presence.touch("sigma", user["username"])
     m = await presence.count_online("main")
     sg = await presence.count_online("sigma")
     active_req = await run_status.count_active_requests()

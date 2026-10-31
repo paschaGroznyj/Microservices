@@ -269,6 +269,7 @@
       this.username = app?.currentUser?.username ?? null;
       this._ensureNavElements();
       this._initAudioUnlock();
+      this._bindVisibilityLifecycle();
       this._connectWs();
     },
 
@@ -278,6 +279,7 @@
       this.username = app?.currentUser?.username ?? null;
       this._ensureNavElements();
       this._initAudioUnlock();
+      this._bindVisibilityLifecycle();
       this._clearNavNotification();
       if (!this.opened) {
         this._bindInput();
@@ -291,10 +293,37 @@
       this._connectWs();
     },
 
+    _bindVisibilityLifecycle() {
+      if (this._visLifecycleBound) return;
+      this._visLifecycleBound = true;
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+          clearTimeout(this._hiddenSuspendTimer);
+          this._hiddenSuspendTimer = setTimeout(() => {
+            if (document.visibilityState !== 'hidden') return;
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+            if (this.ws) {
+              try { this.ws.onclose = null; this.ws.close(); } catch (_) {}
+              this.ws = null;
+            }
+          }, 45000);
+        } else if (document.visibilityState === 'visible') {
+          clearTimeout(this._hiddenSuspendTimer);
+          this._hiddenSuspendTimer = null;
+          if (!window.__authSessionExpired) {
+            this._probeAndReconnect(200);
+          }
+        }
+      });
+    },
+
     /* ---------- сеть ---------- */
     async _loadHistory() {
+      if (window.__authSessionExpired) return;
       try {
-        const res = await fetch(`/api/group/${ROOM_UID}/messages?limit=80`, { credentials: 'include' });
+        const res = await fetch(`/api/group/${ROOM_UID}/messages?limit=80`, { credentials: 'include', redirect: 'manual' });
+        if (window.__isAuthRedirectOrUnauthorized?.(res)) { window.__onAuthSessionExpired?.(); return; }
         if (!res.ok) return;
         const data = await res.json();
         this.messages = data.messages || [];
@@ -303,8 +332,10 @@
     },
 
     async _loadPinned() {
+      if (window.__authSessionExpired) return;
       try {
-        const res = await fetch(`/api/group/${ROOM_UID}/pinned`, { credentials: 'include' });
+        const res = await fetch(`/api/group/${ROOM_UID}/pinned`, { credentials: 'include', redirect: 'manual' });
+        if (window.__isAuthRedirectOrUnauthorized?.(res)) { window.__onAuthSessionExpired?.(); return; }
         if (!res.ok) return;
         const data = await res.json();
         // по позиции сообщения в ленте (по возрастанию created_at/id) — как в Telegram
@@ -317,9 +348,11 @@
     },
 
     async _loadPermissions() {
+      if (window.__authSessionExpired) return;
       // Права админа нет в currentUser (/profile/me) — тянем из отдельного эндпоинта.
       try {
-        const res = await fetch('/api/auth/permissions', { credentials: 'include' });
+        const res = await fetch('/api/auth/permissions', { credentials: 'include', redirect: 'manual' });
+        if (window.__isAuthRedirectOrUnauthorized?.(res)) { window.__onAuthSessionExpired?.(); return; }
         if (!res.ok) { this.isAdmin = false; return; }
         const data = await res.json();
         this.isAdmin = !!data.is_admin;
@@ -329,19 +362,60 @@
       this._renderPinned();
     },
 
+    _scheduleReconnect(customDelayMs) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+      if (window.__authSessionExpired || document.visibilityState === 'hidden') return;
+      const attempt = Math.min(this._reconnectAttempts || 0, 5);
+      const delay = typeof customDelayMs === 'number'
+        ? customDelayMs
+        : Math.min(60000, 3000 * Math.pow(2, attempt));
+      this._reconnectAttempts = (this._reconnectAttempts || 0) + 1;
+      this.reconnectTimer = setTimeout(() => this._probeAndReconnect(), delay);
+    },
+
+    async _probeAndReconnect() {
+      if (window.__authSessionExpired || document.visibilityState === 'hidden') return;
+      if (this.ws && (this.ws.readyState === 0 || this.ws.readyState === 1)) return;
+      try {
+        const r = await fetch('/api/presence/count', {
+          credentials: 'same-origin',
+          cache: 'no-store',
+          redirect: 'manual',
+        });
+        if (window.__isAuthRedirectOrUnauthorized?.(r) || r.type === 'opaqueredirect' || r.status === 401 || r.status === 302) {
+          window.__onAuthSessionExpired?.();
+          return;
+        }
+        if (!r.ok) {
+          this._scheduleReconnect();
+          return;
+        }
+      } catch (_) {
+        this._scheduleReconnect();
+        return;
+      }
+      this._connectWs();
+    },
+
     _connectWs() {
+      if (window.__authSessionExpired || document.visibilityState === 'hidden') return;
       if (this.ws && (this.ws.readyState === 0 || this.ws.readyState === 1)) return;
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       try {
         this.ws = new WebSocket(`${proto}://${location.host}/ws/group/${ROOM_UID}`);
       } catch (e) { return; }
+      this.ws.onopen = () => {
+        this._reconnectAttempts = 0;
+      };
       this.ws.onmessage = (ev) => {
+        this._reconnectAttempts = 0;
         let data; try { data = JSON.parse(ev.data); } catch { return; }
         this._onEvent(data);
       };
       this.ws.onclose = () => {
-        clearTimeout(this.reconnectTimer);
-        this.reconnectTimer = setTimeout(() => this._connectWs(), 3000);
+        this.ws = null;
+        this._scheduleReconnect();
       };
     },
 

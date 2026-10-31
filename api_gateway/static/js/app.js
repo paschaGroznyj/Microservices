@@ -128,6 +128,38 @@ class ChatApp {
         window.SkillsPanel?.init(this);
         window.GroupChat?.init(this);
         await this.renderMessageInput();
+        await this._restoreSessionAfterAuthReload();
+    }
+
+    async _restoreSessionAfterAuthReload() {
+        try {
+            const pendingRaw = sessionStorage.getItem('catchpm:pending_send_after_auth');
+            const restoreChatId = sessionStorage.getItem('catchpm:restore_chat_id');
+            sessionStorage.removeItem('catchpm:pending_send_after_auth');
+            sessionStorage.removeItem('catchpm:restore_chat_id');
+
+            if (pendingRaw) {
+                const pending = JSON.parse(pendingRaw);
+                if (pending && pending.text && (Date.now() - Number(pending.ts || 0) < 180_000)) {
+                    const cid = pending.chatId || restoreChatId;
+                    if (cid) {
+                        if (!this.chats.some(c => String(c.id) === String(cid))) {
+                            this.chats.unshift({ id: cid, last_message: pending.text, timestamp: new Date().toISOString() });
+                            this.renderChats(this.chats);
+                        }
+                        await this.openChat(cid);
+                    }
+                    await this.sendMessage(pending.text, pending.pollAnswer || null);
+                    return;
+                }
+            }
+
+            if (restoreChatId && this.chats.some(c => String(c.id) === String(restoreChatId))) {
+                await this.openChat(restoreChatId);
+            }
+        } catch (e) {
+            console.warn('_restoreSessionAfterAuthReload error:', e);
+        }
     }
 
     /* ══════════════════════════════════════════
@@ -563,10 +595,16 @@ class ChatApp {
             running = true;
         }
 
+        if (window.__authSessionExpired) return;
         try {
             const r = await fetch(`/api/chats/${chatId}/run_status`, {
-                credentials: 'include'
+                credentials: 'include',
+                redirect: 'manual'
             });
+            if (window.__isAuthRedirectOrUnauthorized?.(r)) {
+                window.__onAuthSessionExpired?.();
+                return;
+            }
             if (r.ok) {
                 const j = await r.json();
                 serverStatus = j;
@@ -629,12 +667,60 @@ class ChatApp {
         }
 
         if (!running) {
+            const hasUnfinishedDom = !!(container && (
+                container.querySelector('#agent-response-placeholder') ||
+                container.querySelector('#agent-status-indicator') ||
+                container.querySelector('.agent-message:not([data-id])')
+            ));
+            const wasRunningBeforeCheck = (
+                this._runState === 'running' ||
+                this._runState === 'stopping' ||
+                !!(st && (st.pendingBotEl || st.reasoningWrapEl || st.streamingActive)) ||
+                hasUnfinishedDom
+            );
+            const savedReasoningWrap = st?.reasoningWrapEl
+                || st?.pendingBotEl?.querySelector('.reasoning-block')
+                || container?.querySelector('.agent-message:not([data-id]) .reasoning-block')
+                || null;
+
             if (st) {
+                this._stopReasoningTimer?.(chatId, true);
                 st.pendingBotEl = null;
                 st.liveBlockEl = null;
                 st.reasoningWrapEl = null;
+                st.streamingActive = false;
+                st.streamBuffer = '';
             }
+            if (this._chatStatuses) delete this._chatStatuses[chatId];
+            this._removeBotPlaceholder?.();
+            this._clearAllStatuses?.();
             this._onRunFinished();
+
+            if (serverStatus !== null && wasRunningBeforeCheck && !this._loadingMessagesChat) {
+                await this.loadMessages(chatId);
+                if (savedReasoningWrap && String(this.currentChat) === String(chatId)) {
+                    savedReasoningWrap.classList.add('reasoning-collapsed', 'reasoning-done');
+                    const liveEl = savedReasoningWrap.querySelector('.reasoning-live');
+                    if (liveEl) liveEl.remove();
+                    const freshContainer = this.getMessagesContainer();
+                    const userWrappers = freshContainer?.querySelectorAll('.user-message-wrapper') || [];
+                    const lastUser = userWrappers.length ? userWrappers[userWrappers.length - 1] : null;
+                    let lastBot = null;
+                    if (lastUser) {
+                        let cur = lastUser.nextElementSibling;
+                        while (cur) {
+                            if (cur.classList?.contains('.agent-message') || cur.classList?.contains('agent-message')) {
+                                lastBot = cur;
+                                break;
+                            }
+                            cur = cur.nextElementSibling;
+                        }
+                    }
+                    if (lastBot && !lastBot.querySelector('.reasoning-block')) {
+                        lastBot.insertBefore(savedReasoningWrap, lastBot.firstElementChild);
+                    }
+                }
+            }
             return;
         }
 
@@ -795,18 +881,37 @@ class ChatApp {
     ══════════════════════════════════════════ */
     async loadMessages(chatId) {
         const PAGE_SIZE = 50;
-        this._loadingMessagesChat = String(chatId);
+        const key = String(chatId);
+        this._loadingMessagesChat = key;
         let res;
         try {
-            res = await fetch(`/api/chats/${chatId}/messages?limit=${PAGE_SIZE}&offset=0`);
+            res = await fetch(`/api/chats/${chatId}/messages?limit=${PAGE_SIZE}&offset=0`, {
+                credentials: 'include',
+                redirect: 'manual'
+            });
+        } catch (_) {
+            this._messagesLoadFailedChat = key;
+            return false;
         } finally {
-            if (this._loadingMessagesChat === String(chatId)) {
+            if (this._loadingMessagesChat === key) {
                 this._loadingMessagesChat = null;
             }
         }
-        if (!res || !res.ok) return;
+        if (window.__isAuthRedirectOrUnauthorized?.(res)) {
+            this._messagesLoadFailedChat = key;
+            window.__onAuthSessionExpired?.();
+            return false;
+        }
+        if (!res || !res.ok) {
+            this._messagesLoadFailedChat = key;
+            return false;
+        }
         const data = await res.json();
-        if (chatId !== this.currentChat) return; // гонка
+        if (String(chatId) !== String(this.currentChat)) return false; // гонка
+
+        if (this._messagesLoadFailedChat === key) {
+            this._messagesLoadFailedChat = null;
+        }
 
         // Состояние пагинации по конкретному чату
         this._pagination = {
@@ -819,6 +924,84 @@ class ChatApp {
 
         this.renderMessages(data.messages);
         this._initHistoryScrollLoader();
+        return true;
+    }
+
+    async _syncMissedMessages(chatId) {
+        if (!chatId || window.__authSessionExpired) return;
+        const key = String(chatId);
+        if (String(this.currentChat) !== key || this._loadingMessagesChat === key) return;
+
+        const container = this.getMessagesContainer();
+        if (!container) return;
+
+        const existingNodes = container.querySelectorAll('.user-message-wrapper, .agent-message[data-id]');
+        if (this._messagesLoadFailedChat === key || existingNodes.length === 0) {
+            await this.loadMessages(chatId);
+            return;
+        }
+
+        let res;
+        try {
+            res = await fetch(`/api/chats/${chatId}/messages?limit=50&offset=0`, {
+                credentials: 'include',
+                redirect: 'manual'
+            });
+        } catch (_) {
+            return;
+        }
+        if (window.__isAuthRedirectOrUnauthorized?.(res)) {
+            window.__onAuthSessionExpired?.();
+            return;
+        }
+        if (!res || !res.ok) return;
+
+        const data = await res.json();
+        if (String(this.currentChat) !== key) return;
+        const serverMsgs = Array.isArray(data?.messages) ? data.messages : [];
+        if (!serverMsgs.length) return;
+
+        const hasMessageInDom = (msg) => {
+            if (msg.id != null) {
+                const byId = container.querySelector(
+                    `[data-id="${msg.id}"], [data-message-id="${msg.id}"]`
+                );
+                if (byId) return true;
+            }
+            if (msg.message_id) {
+                const byUuid = container.querySelector(
+                    `[data-id="${msg.message_id}"], [data-message-id="${msg.message_id}"]`
+                );
+                if (byUuid) return true;
+            }
+            if (!msg.is_from_bot && msg.message) {
+                const normTarget = String(msg.message).replace(/\s+/g, ' ').trim();
+                const wrappers = container.querySelectorAll('.user-message-wrapper');
+                for (const w of wrappers) {
+                    const txtEl = w.querySelector('.user-message .message-text, .user-message');
+                    const normEl = (txtEl?.textContent || '').replace(/\s+/g, ' ').trim();
+                    if (normEl && normTarget && normEl === normTarget) {
+                        if (msg.id != null) w.dataset.messageId = String(msg.id);
+                        if (msg.message_id) w.dataset.id = String(msg.message_id);
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+
+        const missing = serverMsgs.filter(m => !hasMessageInDom(m));
+        if (!missing.length) return;
+
+        missing.forEach(msg => this.addMessage(msg, false));
+        const st = this._getStream(key);
+        if (st && st.pendingBotEl && st.pendingBotEl.parentNode === container) {
+            this._ensureBotAfterLastUserMessage(container, st.pendingBotEl);
+        }
+        if (this._pagination && String(this._pagination.chatId) === key) {
+            this._pagination.loaded = Math.max(this._pagination.loaded || 0, serverMsgs.length);
+        }
+        container.scrollTop = container.scrollHeight;
     }
 
     renderMessages(messages) {
@@ -1019,8 +1202,20 @@ class ChatApp {
         return segments;
     }
 
+    _parseMarkdown(mdText) {
+        const raw = String(mdText || '');
+        if (typeof marked !== 'undefined' && marked && typeof marked.parse === 'function') {
+            try { return marked.parse(raw); } catch (_) {}
+        }
+        return raw
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/\n/g, '<br>');
+    }
+
     _renderSafeMarkdownHtml(mdText) {
-        let html = marked.parse(String(mdText || ''));
+        let html = this._parseMarkdown(mdText);
         if (typeof DOMPurify !== 'undefined') {
             html = DOMPurify.sanitize(html, {
                 ADD_TAGS: ['table', 'thead', 'tbody', 'tr', 'th', 'td'],
@@ -1405,7 +1600,7 @@ class ChatApp {
         if (rawContent.trimStart().startsWith('<')) {
             content = rawContent; // уже HTML — не трогаем
         } else {
-            content = marked.parse(rawContent);
+            content = this._parseMarkdown(rawContent);
         }
         if (isBot) {
             if (typeof DOMPurify !== 'undefined') content = DOMPurify.sanitize(content);
@@ -2705,6 +2900,7 @@ class ChatApp {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
+                redirect: 'manual',
                 body: JSON.stringify({
                     chat_id:        this.currentChat,
                     message:        text,
@@ -2720,6 +2916,19 @@ class ChatApp {
                     ...(pollAnswer ? { poll_answer: pollAnswer } : {})
                 })
             });
+            if (window.__isAuthRedirectOrUnauthorized?.(resp)) {
+                try {
+                    sessionStorage.setItem('catchpm:pending_send_after_auth', JSON.stringify({
+                        chatId: this.currentChat,
+                        text: text,
+                        pollAnswer: pollAnswer || null,
+                        ts: Date.now()
+                    }));
+                    sessionStorage.setItem('catchpm:restore_chat_id', String(this.currentChat || ''));
+                } catch (_) {}
+                window.__onAuthSessionExpired?.({ forceReload: true });
+                return;
+            }
             try {
                 const j = await resp.clone().json();
                 this._activeRequestId = j?.request_id || null;
@@ -3003,10 +3212,26 @@ class ChatApp {
         }
 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wasReconnect = (this._wsReconnectAttempts || 0) > 0;
         const ws = new WebSocket(`${protocol}//${window.location.host}/ws/chat/${chatId}`);
         this._sockets[key] = ws;
 
-        // ws.onopen = () => console.log(`✅ WS connected chat=${chatId}`);
+        ws.onopen = () => {
+            this._wsReconnectAttempts = 0;
+            const needResync = wasReconnect || this._wasOfflineOrDisconnected || this._messagesLoadFailedChat === key;
+            this._wasOfflineOrDisconnected = false;
+            if (needResync) {
+                this.loadChats?.().catch(() => {});
+            }
+            if (String(this.currentChat) === key && (needResync || this._runState === 'running' || this._runState === 'stopping')) {
+                (async () => {
+                    if (needResync) {
+                        await this._syncMissedMessages(key).catch(() => {});
+                    }
+                    await this._restoreRunningUI(key).catch(() => {});
+                })();
+            }
+        };
 
         ws.onmessage = (event) => this._onWsMessage(key, event);
         ws.onerror   = (e) => console.warn(`WS error chat=${key}:`, e);
@@ -3266,14 +3491,29 @@ class ChatApp {
             // Фоновые чаты не реконнектим — если их сокет упал, стрим финализируется
             // тем, что накопили; лишние соединения не плодим.
             const isNormalClose = event.code === 1000;
+            if (!isNormalClose) {
+                this._wasOfflineOrDisconnected = true;
+            }
             delete this._sockets[key];
-            if (isActive && this.currentChat && !isNormalClose) {
+            if (isActive && this.currentChat && !isNormalClose && !window.__authSessionExpired && document.visibilityState !== 'hidden') {
                 clearTimeout(this._wsReconnectTimer);
                 this._wsReconnectAttempts = (this._wsReconnectAttempts || 0) + 1;
                 // Exponential backoff: 2s, 4s, 8s, 16s, cap 30s
                 const delay = Math.min(2000 * Math.pow(2, this._wsReconnectAttempts - 1), 30000);
-                this._wsReconnectTimer = setTimeout(() => {
+                this._wsReconnectTimer = setTimeout(async () => {
+                    if (window.__authSessionExpired || document.visibilityState === 'hidden') return;
                     if (String(this.currentChat) === key) {
+                        try {
+                            const r = await fetch('/api/presence/count', {
+                                credentials: 'same-origin',
+                                cache: 'no-store',
+                                redirect: 'manual'
+                            });
+                            if (window.__isAuthRedirectOrUnauthorized?.(r)) {
+                                window.__onAuthSessionExpired?.();
+                                return;
+                            }
+                        } catch (_) {}
                         this.connectWebSocket(this.currentChat);
                     }
                 }, delay);
@@ -3371,7 +3611,7 @@ class ChatApp {
         // Скролл только для активного чата (фоновый пишет в открепленный узел).
         const container = this._isActiveChat(chatId) ? this.getMessagesContainer() : null;
 
-        let html = marked.parse(st.streamShown || '');
+        let html = this._parseMarkdown(st.streamShown || '');
         if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
             ADD_TAGS: ['table','thead','tbody','tr','th','td'],
             ADD_ATTR: ['colspan','rowspan','align']
@@ -3488,9 +3728,15 @@ class ChatApp {
         st.reasoningTimer = setInterval(() => {
             this._updateReasoningDurationUI(chatId);
             st._pollTick = (st._pollTick || 0) + 1;
-            if (st._pollTick % 3 === 0 && chatId) {
-                fetch(`/api/chats/${chatId}/run_status`, { credentials: 'include' })
-                    .then(r => r.ok ? r.json() : null)
+            if (st._pollTick % 3 === 0 && chatId && !window.__authSessionExpired && document.visibilityState !== 'hidden') {
+                fetch(`/api/chats/${chatId}/run_status`, { credentials: 'include', redirect: 'manual' })
+                    .then(r => {
+                        if (window.__isAuthRedirectOrUnauthorized?.(r)) {
+                            window.__onAuthSessionExpired?.();
+                            return null;
+                        }
+                        return r.ok ? r.json() : null;
+                    })
                     .then(j => {
                         if (j && j.active_requests !== undefined) {
                             this._updateActiveRequestsUI(chatId, j.active_requests);
@@ -3679,7 +3925,7 @@ class ChatApp {
                     [...body.querySelectorAll('.reasoning-step')].map(el => el.textContent.trim())
                 );
                 steps.forEach(rawStep => {
-                    let html = marked.parse(String(rawStep));
+                    let html = this._parseMarkdown(rawStep);
                     if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html);
                     const step = document.createElement('div');
                     step.className = 'reasoning-step';
@@ -3735,7 +3981,7 @@ class ChatApp {
                 });
                 const body = wrap.querySelector('.reasoning-body');
                 steps.forEach(rawStep => {
-                    let html = marked.parse(String(rawStep));
+                    let html = this._parseMarkdown(rawStep);
                     if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html);
                     const step = document.createElement('div');
                     step.className = 'reasoning-step';
@@ -3827,7 +4073,7 @@ class ChatApp {
             return;
         }
 
-        let html = marked.parse(text);
+        let html = this._parseMarkdown(text);
         if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
             ADD_TAGS: ['table','thead','tbody','tr','th','td'],
             ADD_ATTR: ['colspan','rowspan','align']
@@ -4415,7 +4661,7 @@ class ChatApp {
         for (let i = 0; i < tokens.length; i += BATCH) {
             accumulated += tokens.slice(i, i + BATCH).join('');
 
-            let html = marked.parse(accumulated);
+            let html = this._parseMarkdown(accumulated);
             if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html);
 
             const tmp = document.createElement('div');
@@ -4521,19 +4767,33 @@ class ChatApp {
     }
 
     /** Ждёт пока this.ws перейдёт в OPEN (max 5s) */
-    _waitForWS(timeout = 5000) {
-        return new Promise((resolve, reject) => {
-            if (!this.ws) return resolve(); // нет WS — пропускаем
-            if (this.ws.readyState === WebSocket.OPEN) return resolve();
+    _waitForWS(timeout = 3500) {
+        return new Promise((resolve) => {
+            if (!this.currentChat) return resolve();
+            if (!this.ws ||
+                this.ws.readyState === WebSocket.CLOSED ||
+                this.ws.readyState === WebSocket.CLOSING) {
+                try {
+                    this.connectWebSocket(this.currentChat);
+                } catch (_) {
+                    return resolve();
+                }
+            }
+            if (!this.ws || this.ws.readyState === WebSocket.OPEN) return resolve();
             const deadline = Date.now() + timeout;
+            let reconnectedOnce = false;
             const check = () => {
                 if (!this.ws || this.ws.readyState === WebSocket.OPEN) return resolve();
-                // Если WS уже мёртв — нет смысла ждать до таймаута
                 if (this.ws.readyState === WebSocket.CLOSED ||
                     this.ws.readyState === WebSocket.CLOSING) {
-                    return reject(new Error('WS closed before open'));
+                    if (!reconnectedOnce && this.currentChat && !window.__authSessionExpired) {
+                        reconnectedOnce = true;
+                        try { this.connectWebSocket(this.currentChat); } catch (_) {}
+                    } else {
+                        return resolve();
+                    }
                 }
-                if (Date.now() > deadline) return reject(new Error('WS connect timeout'));
+                if (Date.now() > deadline) return resolve();
                 setTimeout(check, 50);
             };
             check();
@@ -5389,23 +5649,53 @@ class ChatApp {
         // Stop-кнопку и открывает ввод, а генерация на бэке продолжается.
         // _restoreRunningUI спросит Redis /run_status и поднимет Stop/плейсхолдер,
         // если агент всё ещё в работе — ровно как это делает F5.
-        const resync = (reason) => {
+        const resync = async (reason, forceSyncMessages = false) => {
+            if (window.__authSessionExpired) return;
+            const needSync = forceSyncMessages || this._wasOfflineOrDisconnected || !activeWsAlive() ||
+                (this.currentChat && this._messagesLoadFailedChat === String(this.currentChat));
+            this._wasOfflineOrDisconnected = false;
+
+            if (needSync || !this.chats?.length) {
+                this.loadChats?.().catch(() => {});
+            }
             if (!this.currentChat) return;
+
+            if (needSync) {
+                await this._syncMissedMessages(this.currentChat).catch(() => {});
+            }
+            if (window.__authSessionExpired) return;
+            await this._restoreRunningUI(this.currentChat).catch(() => {});
+            if (window.__authSessionExpired) return;
             if (!activeWsAlive()) {
                 console.log(`[WS] ${reason} — reconnecting chat=${this.currentChat}`);
                 this.connectWebSocket(this.currentChat);
             }
-            this._restoreRunningUI(this.currentChat).catch(() => {});
         };
 
+        window.addEventListener('offline', () => {
+            this._wasOfflineOrDisconnected = true;
+        });
+
         document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible' && this.currentChat) {
-                resync('Tab became visible');
+            if (document.visibilityState === 'visible') {
+                resync('Tab became visible', true);
+            }
+        });
+
+        window.addEventListener('pageshow', () => {
+            if (document.visibilityState === 'visible') {
+                resync('Page show', true);
+            }
+        });
+
+        window.addEventListener('focus', () => {
+            if (document.visibilityState === 'visible' && (this._wasOfflineOrDisconnected || !activeWsAlive() || (this.currentChat && this._messagesLoadFailedChat === String(this.currentChat)))) {
+                resync('Window focus', true);
             }
         });
 
         window.addEventListener('online', () => {
-            resync('Network back online');
+            resync('Network back online', true);
         });
     }
 

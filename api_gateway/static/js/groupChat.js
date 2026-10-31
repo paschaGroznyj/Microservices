@@ -613,6 +613,137 @@
       } catch { return ''; }
     },
 
+    _dateInfo(iso) {
+      if (!iso) return null;
+      try {
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return null;
+        const y = d.getFullYear();
+        const m = d.getMonth();
+        const day = d.getDate();
+        const key = `${y}-${String(m + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        const months = [
+          'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+          'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'
+        ];
+        const nowYear = new Date().getFullYear();
+        const label = (y === nowYear)
+          ? `${day} ${months[m]}`
+          : `${day} ${months[m]} ${y}`;
+        return { key, label };
+      } catch {
+        return null;
+      }
+    },
+
+    _ensureFloatingDatePill() {
+      const inner = document.querySelector('#view-group .gc-inner');
+      if (!inner) return null;
+      let el = inner.querySelector('#gc-floating-date');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'gc-floating-date';
+        el.className = 'gc-date-float';
+        el.setAttribute('aria-hidden', 'true');
+        el.innerHTML = '<span class="gc-date-pill" id="gc-floating-date-text"></span>';
+        inner.appendChild(el);
+      }
+      return el;
+    },
+
+    _clearMergedDateSeps(box) {
+      box = box || document.getElementById('gc-messages');
+      if (!box) return;
+      box.querySelectorAll('.gc-date-sep.is-merged').forEach(s => s.classList.remove('is-merged'));
+    },
+
+    _syncFloatingDate(box, isScrollEvent) {
+      box = box || document.getElementById('gc-messages');
+      const floatEl = this._ensureFloatingDatePill();
+      if (!box || !floatEl) return;
+      const pillEl = floatEl.querySelector('.gc-date-pill');
+      const seps = Array.from(box.querySelectorAll('.gc-date-sep'));
+      if (!seps.length || !pillEl) {
+        floatEl.classList.remove('is-visible');
+        this._clearMergedDateSeps(box);
+        return;
+      }
+
+      const boxRect = box.getBoundingClientRect();
+      const scrollbarGap = Math.max(0, box.offsetWidth - box.clientWidth);
+      floatEl.style.right = scrollbarGap + 'px';
+      const pinBar = document.getElementById('gc-pinned');
+      const topOffset = (pinBar && !pinBar.hidden)
+        ? Math.max(64, Math.round((pinBar.getBoundingClientRect().bottom - boxRect.top) + 8))
+        : 64;
+      floatEl.style.top = topOffset + 'px';
+
+      const pillH = pillEl.offsetHeight || 26;
+      let activeIdx = -1;
+      for (let i = 0; i < seps.length; i++) {
+        const sepTop = seps[i].getBoundingClientRect().top - boxRect.top;
+        if (sepTop <= topOffset + 4) {
+          activeIdx = i;
+        } else {
+          break;
+        }
+      }
+
+      this._clearMergedDateSeps(box);
+
+      if (activeIdx < 0) {
+        floatEl.classList.remove('is-visible');
+        floatEl.style.transform = 'translate3d(0, 0, 0)';
+        clearTimeout(this._dateFloatHideTimer);
+        return;
+      }
+
+      const activeSep = seps[activeIdx];
+      const activeSepTop = activeSep.getBoundingClientRect().top - boxRect.top;
+      const nextSep = (activeIdx + 1 < seps.length) ? seps[activeIdx + 1] : null;
+      const label = activeSep.getAttribute('data-date-label') || '';
+
+      if (pillEl.textContent !== label) {
+        pillEl.textContent = label;
+      }
+
+      // Если мы остановились/дошли прямо до самой статичной плашки этого дня в потоке —
+      // показываем саму статичную плашку на границе, плавающая не нужна
+      if (activeSepTop >= topOffset - 4) {
+        floatEl.classList.remove('is-visible');
+        floatEl.style.transform = 'translate3d(0, 0, 0)';
+        clearTimeout(this._dateFloatHideTimer);
+        return;
+      }
+
+      // Мягкое выталкивание следующей плашкой снизу при подходе к границе
+      let pushY = 0;
+      if (nextSep) {
+        const nextTop = nextSep.getBoundingClientRect().top - boxRect.top;
+        const overlap = (topOffset + pillH + 4) - nextTop;
+        if (overlap > 0 && overlap < pillH + 12) {
+          pushY = -Math.round(overlap);
+        }
+      }
+      floatEl.style.transform = `translate3d(0, ${pushY}px, 0)`;
+
+      if (isScrollEvent) {
+        floatEl.classList.add('is-visible');
+        if (Math.abs(activeSepTop - topOffset) < pillH) {
+          activeSep.classList.add('is-merged');
+        }
+        clearTimeout(this._dateFloatHideTimer);
+        this._dateFloatHideTimer = setTimeout(() => {
+          floatEl.classList.remove('is-visible');
+          this._clearMergedDateSeps(box);
+        }, 1050);
+      } else if (floatEl.classList.contains('is-visible')) {
+        if (Math.abs(activeSepTop - topOffset) < pillH) {
+          activeSep.classList.add('is-merged');
+        }
+      }
+    },
+
     _renderAll() {
       const box = document.getElementById('gc-messages');
       if (!box) return;
@@ -622,13 +753,28 @@
       // Запоминаем позицию и держим её, если пользователь НЕ у низа.
       const prevTop = box.scrollTop;
       const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
-      box.innerHTML = this.messages.map(m => this._msgHtml(m)).join('');
+      let lastDateKey = '';
+      const chunks = [];
+      for (const m of this.messages) {
+        const di = this._dateInfo(m.created_at);
+        if (di && di.key !== lastDateKey) {
+          lastDateKey = di.key;
+          chunks.push(
+            `<div class="gc-date-sep" data-date-key="${di.key}" data-date-label="${this._esc(di.label)}"><span class="gc-date-pill">${this._esc(di.label)}</span></div>`
+          );
+        }
+        chunks.push(this._msgHtml(m, di));
+      }
+      box.innerHTML = chunks.join('');
       this._bindMsgActions(box);
       this._bindCollages(box);
       this._initCollapsibles(box);
+      this._ignoreNextDateScroll = true;
       if (nearBottom) box.scrollTop = box.scrollHeight;
       else box.scrollTop = prevTop;
+      requestAnimationFrame(() => { this._ignoreNextDateScroll = false; });
       this._syncScrollArrow(box);
+      this._syncFloatingDate(box, false);
     },
 
     _msgHtml(m) {
@@ -1219,6 +1365,7 @@
         };
         const onScroll = () => {
           this._syncScrollArrow(box);
+          this._syncFloatingDate(box, !this._ignoreNextDateScroll);
           if (this._programmaticPinScroll) return;
           if (this._lastPinJumpTarget != null && Math.abs(box.scrollTop - this._lastPinJumpTarget) < 14) {
             return;

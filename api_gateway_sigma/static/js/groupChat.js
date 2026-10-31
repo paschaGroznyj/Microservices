@@ -621,19 +621,28 @@
         ? `<div class="gc-bubble-text message-text message-text--collapsible">${this._esc(m.message_text)}</div>${collapseBtn}`
         : '';
       const mediaTop = mediaParts.collage || '';
+      const audiosHtml = mediaParts.audios || '';
       const hasImages = !!mediaTop;
+      const hasAudios = !!audiosHtml;
       const hasCaption = !!(textBlock || mediaParts.docs);
-      const bubbleMod = hasImages
-        ? (hasCaption ? ' gc-msg--has-images gc-msg--with-caption' : ' gc-msg--has-images gc-msg--media-only')
-        : '';
+      const audioOnly = hasAudios && !hasImages && !hasCaption;
+      const bubbleMod = audioOnly
+        ? ' gc-msg--audio-only'
+        : (hasImages
+            ? (hasCaption ? ' gc-msg--has-images gc-msg--with-caption' : ' gc-msg--has-images gc-msg--media-only')
+            : '');
       const metaHtml = `<div class="gc-meta">${pin}${edited}<span class="gc-time">${this._fmtTime(m.created_at)}</span></div>`;
-      const innerHtml = hasImages
-        ? (hasCaption
-            ? `${mediaTop}<div class="gc-msg__caption">${mediaParts.docs}${textBlock}${metaHtml}</div>`
-            : `${mediaTop}${metaHtml}`)
-        : `${mediaParts.docs}${textBlock}${metaHtml}`;
+      const innerHtml = audioOnly
+        ? `${audiosHtml}${metaHtml}`
+        : (hasImages
+            ? (hasCaption
+                ? `${mediaTop}<div class="gc-msg__caption">${mediaParts.docs}${textBlock}${metaHtml}</div>`
+                : `${mediaTop}${metaHtml}`)
+            : `${mediaParts.docs}${textBlock}${metaHtml}`);
+      const topAudios = (!audioOnly && hasAudios) ? audiosHtml : '';
       return `<div class="gc-row ${mine ? 'gc-row--mine' : ''}" data-id="${m.id}" data-mine="${mine ? 1 : 0}" data-pinned="${m.is_pinned ? 1 : 0}" data-can-del="${canDel ? 1 : 0}" data-can-edit="${canEdit ? 1 : 0}" data-can-pin="${canPin ? 1 : 0}">
         ${author}
+        ${topAudios}
         <div class="${cls}${bubbleMod}">
           ${innerHtml}
         </div>
@@ -674,14 +683,24 @@
       return 'video/mp4';
     },
 
+    _isAudio(f) {
+      if (!f) return false;
+      if (window.ChatAnimations && typeof window.ChatAnimations.isPlayableAudioFile === 'function') {
+        return window.ChatAnimations.isPlayableAudioFile(f, f.mime_type);
+      }
+      return /^audio\//i.test(String(f.mime_type || '')) || /\.(mp3|mpga|wav|wave|ogg|oga|opus|m4a|aac|flac|weba|caf|aif|aiff)$/i.test(String(f.file_name || ''));
+    },
+
     _mediaParts(m) {
       const files = Array.isArray(m.files) ? m.files : [];
-      if (!files.length) return { collage: '', docs: '' };
+      if (!files.length) return { collage: '', audios: '', docs: '' };
       
-      const visuals = files.filter(f => f.is_image || (!f.is_image && this._isVideo(f)));
-      const docs = files.filter(f => !f.is_image && !this._isVideo(f));
+      const visuals = files.filter(f => f && (f.is_image || (!f.is_image && this._isVideo(f))));
+      const audios = files.filter(f => f && !f.is_image && !this._isVideo(f) && this._isAudio(f));
+      const docs = files.filter(f => f && !f.is_image && !this._isVideo(f) && !this._isAudio(f));
       
       let collage = '';
+      let audiosHtml = '';
       let docsHtml = '';
       
       if (visuals.length) {
@@ -735,11 +754,19 @@
         collage = `<div class="gc-collage gc-collage--${layout}" data-items="${itemsJson}">${tiles}</div>`;
       }
       
+      if (audios.length && window.ChatAnimations && typeof window.ChatAnimations.renderAudioChipHtml === 'function') {
+        audiosHtml = '<div class="gc-audios">' + audios.map(f => window.ChatAnimations.renderAudioChipHtml({
+          name: f.file_name || 'audio',
+          url: this._fileUrl(f),
+          dlUrl: this._fileUrl(f, 1),
+        })).join('') + '</div>';
+      }
+
       if (docs.length) {
         docsHtml = '<div class="gc-files">' + docs.map(f => `
           <a class="gc-file" href="${this._fileUrl(f, 1)}" target="_blank" rel="noopener" title="${this._esc(f.file_name || '')}">
             <span class="gc-file__ico">
-              <svg viewBox="0 0 24 24" width="20" height="20" fill="none"><path d="M14 3v5h5M6 3h9l5 5v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none"><path d="M14 3v5h5M6 3h9l5 5v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
             </span>
             <span class="gc-file__meta">
               <span class="gc-file__name">${this._esc(f.file_name || 'файл')}</span>
@@ -747,12 +774,12 @@
             </span>
           </a>`).join('') + '</div>';
       }
-      return { collage, docs: docsHtml };
+      return { collage, audios: audiosHtml, docs: docsHtml };
     },
 
     _mediaHtml(m) {
       const p = this._mediaParts(m);
-      return p.collage + p.docs;
+      return (p.audios || '') + p.collage + p.docs;
     },
 
     /* лайтбокс со стрелками (стиль image-lightbox основного чата) */
@@ -887,6 +914,9 @@
        (шиммер гаснет, картинка проявляется через opacity-transition) */
     _bindCollages(root) {
       const scope = root || document;
+      if (window.ChatAnimations && typeof window.ChatAnimations.bindAudioChips === 'function') {
+        window.ChatAnimations.bindAudioChips(scope);
+      }
       scope.querySelectorAll('.gc-collage').forEach((col) => {
         const itemsAttr = col.getAttribute('data-items');
         if (!itemsAttr) return;
@@ -1271,12 +1301,12 @@
 
     _bindMsgActions(box) {
       box.querySelectorAll('.gc-row').forEach(row => {
-        const msgEl = row.querySelector('.gc-msg');
-        if (!msgEl) return;
-        msgEl.oncontextmenu = (e) => {
-          e.preventDefault();
-          this._showCtxMenu(e, row);
-        };
+        row.querySelectorAll('.gc-msg, .gc-audios').forEach(el => {
+          el.oncontextmenu = (e) => {
+            e.preventDefault();
+            this._showCtxMenu(e, row);
+          };
+        });
       });
     },
 

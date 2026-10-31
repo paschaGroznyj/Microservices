@@ -501,6 +501,590 @@
       const edgeEl = document.getElementById('gc-mobile-edge-notify');
       if (edgeEl) edgeEl.classList.remove('gc-edge-active', 'bg-ready');
     },
+    /* ══════════════════════════════════════════════════════════════════════
+       АУДИО-ПЛАШКИ В СТИЛЕ ГРАФА (03 Dot matrix — .fa-chip--audio.v-matrix)
+    ══════════════════════════════════════════════════════════════════════ */
+    _audioStates: [],
+    _audioLoopRunning: false,
+    _audioCtx: null,
+
+    _PLAYABLE_AUDIO_EXTS: new Set([
+      'mp3', 'mpga', 'wav', 'wave', 'ogg', 'oga', 'opus',
+      'm4a', 'aac', 'flac', 'weba', 'caf', 'aif', 'aiff'
+    ]),
+
+    isPlayableAudioFile(fileOrName, mimeType) {
+      let name = '';
+      let ext = '';
+      let mime = String(mimeType || '').toLowerCase();
+      if (typeof fileOrName === 'string') {
+        name = fileOrName;
+      } else if (fileOrName && typeof fileOrName === 'object') {
+        if (fileOrName.kind === 'audio' || fileOrName.is_audio) return true;
+        name = fileOrName.name || fileOrName.file_name || '';
+        ext = String(fileOrName.ext || '').toLowerCase();
+        if (!mime && fileOrName.mime_type) mime = String(fileOrName.mime_type).toLowerCase();
+      }
+      if (!ext && name && name.includes('.')) {
+        ext = name.split('.').pop().toLowerCase();
+      }
+      if (mime.startsWith('audio/')) return true;
+      if (this._PLAYABLE_AUDIO_EXTS.has(ext)) return true;
+      return false;
+    },
+
+    _escAttr(s) {
+      return String(s || '').replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    },
+
+    _getAudioIcons() {
+      return {
+        play: '<svg class="fa-glyph ic-play" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6.2 4.9a1.3 1.3 0 0 1 1.98-1.1l10.2 6.35a1.3 1.3 0 0 1 0 2.2L8.18 18.7a1.3 1.3 0 0 1-1.98-1.1V4.9Z" fill="currentColor" fill-opacity="0.28" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path><path d="M19.8 8.2a5.2 5.2 0 0 1 0 7.6" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"></path></svg>',
+        pause: '<svg class="fa-glyph ic-pause" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="6.25" y="4.75" width="4" height="14.5" rx="2" fill="currentColor" fill-opacity="0.28" stroke="currentColor" stroke-width="2" stroke-linejoin="round"></rect><rect x="13.75" y="4.75" width="4" height="14.5" rx="2" fill="currentColor" fill-opacity="0.28" stroke="currentColor" stroke-width="2" stroke-linejoin="round"></rect></svg>',
+        dl: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>'
+      };
+    },
+
+    renderAudioChipHtml({ name = 'audio.mp3', url = '#', dlUrl = '' } = {}) {
+      const safeName = this._escAttr(name);
+      const safeUrl = this._escAttr(url);
+      const safeDl = this._escAttr(dlUrl || url);
+      const ic = this._getAudioIcons();
+      return (
+        `<div class="fa-chip fa-chip--gray fa-chip--bot fa-chip--audio v-matrix" data-audio-url="${safeUrl}" data-audio-name="${safeName}" style="--lvl: 0;">` +
+          `<button class="fa-chip__icon fa-audio-play" type="button" aria-label="Воспроизвести"><svg class="fa-glyph ic-play" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7.4 5.2c0-1.15 1.26-1.85 2.24-1.24l10.1 6.3c.93.58.93 1.9 0 2.48l-10.1 6.3c-.98.61-2.24-.09-2.24-1.24V5.2Z" fill="currentColor"/></svg><svg class="fa-glyph ic-pause" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="6.2" y="5" width="4.2" height="14" rx="2.1" fill="currentColor"/><rect x="13.6" y="5" width="4.2" height="14" rx="2.1" fill="currentColor"/></svg></button>` +
+          `<div class="fa-audio-body">` +
+            `<div class="fa-audio-head">` +
+              `<span class="fa-chip__name" title="${safeName}">${safeName}</span>` +
+              `<span class="fa-audio-time"><b class="cur">0:00</b><span class="fa-audio-dur"> / 0:00</span></span>` +
+            `</div>` +
+            `<canvas class="fa-audio-viz" role="slider" tabindex="0" aria-label="Перемотка: ${safeName}" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" aria-valuetext="0:00 из 0:00"></canvas>` +
+          `</div>` +
+          `<a class="fa-chip__download" href="${safeDl}" download="${safeName}" aria-label="Скачать ${safeName}">${ic.dl}</a>` +
+        `</div>`
+      );
+    },
+
+    createAudioChip({ name = 'audio.mp3', url = '#', dlUrl = '', onContextMenu = null } = {}) {
+      const holder = document.createElement('div');
+      holder.innerHTML = this.renderAudioChipHtml({ name, url, dlUrl });
+      const chip = holder.firstElementChild;
+      if (chip && typeof onContextMenu === 'function') {
+        chip.addEventListener('contextmenu', onContextMenu);
+      }
+      if (chip) this.bindAudioChip(chip);
+      return chip;
+    },
+
+    bindAudioChips(root) {
+      const scope = root || document;
+      scope.querySelectorAll('.fa-chip--audio:not([data-audio-bound="1"])').forEach(chip => {
+        this.bindAudioChip(chip);
+      });
+    },
+
+    _seedFromStr(str) {
+      let h = 2166136261 >>> 0;
+      const s = String(str || 'audio');
+      for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      return ((h >>> 0) % 9000) / 1000 + 1.1;
+    },
+
+    _rng(seed) {
+      let a = Math.floor(seed * 100000) >>> 0;
+      return () => {
+        a |= 0;
+        a = (a + 0x6D2B79F5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    },
+
+    _shape(n, seed) {
+      const r = this._rng(seed);
+      const p1 = r() * 6, p2 = r() * 6, p3 = r() * 6;
+      const out = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        const v = 0.5 + 0.5 * Math.sin(i * 0.35 + p1) * Math.sin(i * 0.11 + p2) + 0.25 * Math.sin(i * 0.9 + p3);
+        out[i] = Math.min(1, Math.max(0.15, 0.15 + Math.abs(v) * 0.85));
+      }
+      return out;
+    },
+
+    _synthSpectrum(s, t, out) {
+      const N = out.length;
+      const sd = s.seed;
+      const bps = 112 / 60;
+      const beat = Math.pow(Math.max(0, Math.sin(t * Math.PI * bps)), 6);
+      const phrase = 0.6 + 0.4 * Math.sin(t * 0.9 + sd);
+      for (let i = 0; i < N; i++) {
+        const f = i / (N - 1);
+        const env = 1 - 0.62 * Math.pow(f, 0.6);
+        const w1 = 0.5 + 0.5 * Math.sin(t * (3 + i * 0.55) + sd * (i + 1));
+        const w2 = 0.5 + 0.5 * Math.sin(t * (7.3 + i * 0.21) + i * 1.7);
+        const val = (env * (0.34 * w1 + 0.3 * w2) * phrase + beat * (1 - f) * 0.6) * 1.25;
+        out[i] = Math.min(1, Math.max(0, val));
+      }
+    },
+
+    _fmtAudioSec(sec) {
+      const v = Number.isFinite(sec) && sec > 0 ? Math.max(0, Math.floor(sec)) : 0;
+      return Math.floor(v / 60) + ':' + String(v % 60).padStart(2, '0');
+    },
+
+    _readAudioThemeColors() {
+      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      const cols = this.parseAccent();
+      const acc = Array.isArray(cols) ? cols[0] : String(cols || '99,102,241');
+      const soft = isDark ? '162, 157, 192' : '107, 103, 133';
+      return { acc, soft };
+    },
+
+    bindAudioChip(chip) {
+      if (!chip || chip.dataset.audioBound === '1') return;
+      chip.dataset.audioBound = '1';
+
+      const url = chip.dataset.audioUrl || chip.querySelector('.fa-chip__download')?.getAttribute('href') || '';
+      const name = chip.dataset.audioName || chip.querySelector('.fa-chip__name')?.textContent || 'audio';
+      const viz = chip.querySelector('.fa-audio-viz');
+      const playBtn = chip.querySelector('.fa-audio-play');
+      const curEl = chip.querySelector('.cur');
+      const durEl = chip.querySelector('.fa-audio-dur');
+      if (!viz || !playBtn || !curEl) return;
+
+      const N = 32;
+      const seed = this._seedFromStr(name);
+      const audio = new Audio();
+      audio.preload = 'metadata';
+
+      const s = {
+        chip,
+        name,
+        url,
+        seed,
+        N,
+        dur: 0,
+        t: 0,
+        playing: false,
+        lvl: 0,
+        scrub: false,
+        hoverX: null,
+        lastSec: -1,
+        level: new Float32Array(N),
+        target: new Float32Array(N),
+        peak: new Float32Array(64),
+        idle: this._shape(N, seed),
+        freqBuf: new Uint8Array(N),
+        audio,
+        analyser: null,
+        sourceConnected: false,
+        w: 0,
+        h: 0,
+        ctx: viz.getContext('2d'),
+        el: { chip, viz, play: playBtn, cur: curEl, dur: durEl }
+      };
+
+      const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+
+      const syncDuration = () => {
+        let d = audio.duration;
+        if (!Number.isFinite(d) || d <= 0) {
+          if (audio.seekable && audio.seekable.length > 0) {
+            const end = audio.seekable.end(audio.seekable.length - 1);
+            if (Number.isFinite(end) && end > 0) d = end;
+          }
+        }
+        if (Number.isFinite(d) && d > 0) {
+          s.dur = d;
+          if (s.el.dur) s.el.dur.textContent = ' / ' + this._fmtAudioSec(s.dur);
+          s.el.viz.setAttribute('aria-valuemax', Math.floor(s.dur));
+          updateTime(true);
+        }
+      };
+
+      const updateTime = (force) => {
+        const sec = Math.floor(s.t);
+        if (force || sec !== s.lastSec) {
+          s.lastSec = sec;
+          const curStr = this._fmtAudioSec(s.t);
+          const durStr = this._fmtAudioSec(s.dur);
+          s.el.cur.textContent = curStr;
+          if (s.el.dur) s.el.dur.textContent = ' / ' + durStr;
+          s.el.viz.setAttribute('aria-valuenow', sec);
+          s.el.viz.setAttribute('aria-valuetext', curStr + ' из ' + durStr);
+        }
+      };
+
+      const connectAnalyser = () => {
+        if (s.sourceConnected) return;
+        try {
+          const AudioCtx = window.AudioContext || window.webkitAudioContext;
+          if (!AudioCtx) return;
+          if (!this._audioCtx) this._audioCtx = new AudioCtx();
+          if (this._audioCtx.state === 'suspended') {
+            this._audioCtx.resume().catch(() => {});
+          }
+          const srcNode = this._audioCtx.createMediaElementSource(audio);
+          const analyser = this._audioCtx.createAnalyser();
+          analyser.fftSize = 64;
+          analyser.smoothingTimeConstant = 0.72;
+          srcNode.connect(analyser);
+          analyser.connect(this._audioCtx.destination);
+          s.analyser = analyser;
+          s.freqBuf = new Uint8Array(analyser.frequencyBinCount);
+          s.sourceConnected = true;
+        } catch (_) {
+          s.sourceConnected = true;
+        }
+      };
+
+      const setPlaying = (val) => {
+        if (val) {
+          this._audioStates.forEach(o => {
+            if (o !== s && o.playing) o.setPlaying(false);
+          });
+          connectAnalyser();
+          if (this._audioCtx && this._audioCtx.state === 'suspended') {
+            this._audioCtx.resume().catch(() => {});
+          }
+          if (s.dur > 0 && s.t >= s.dur - 0.05) {
+            s.t = 0;
+            try { audio.currentTime = 0; } catch (_) {}
+          }
+          s.playing = true;
+          chip.classList.add('is-playing');
+          playBtn.setAttribute('aria-label', 'Пауза');
+          if (audio.src) {
+            const p = audio.play();
+            if (p && typeof p.catch === 'function') {
+              p.catch((err) => {
+                if (err && err.name === 'NotAllowedError') {
+                  s.playing = false;
+                  chip.classList.remove('is-playing');
+                  playBtn.setAttribute('aria-label', 'Воспроизвести');
+                }
+              });
+            }
+          }
+        } else {
+          s.playing = false;
+          chip.classList.remove('is-playing');
+          playBtn.setAttribute('aria-label', 'Воспроизвести');
+          try { audio.pause(); } catch (_) {}
+        }
+      };
+      s.setPlaying = setPlaying;
+      s.updateTime = updateTime;
+
+      const seek = (targetSec) => {
+        const maxDur = s.dur > 0 ? s.dur : (Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 0);
+        const clamped = maxDur > 0 ? clamp(targetSec, 0, maxDur) : Math.max(0, targetSec);
+        s.t = clamped;
+        try {
+          if (maxDur > 0) audio.currentTime = clamped;
+        } catch (_) {}
+        updateTime(true);
+      };
+
+      audio.addEventListener('loadedmetadata', syncDuration);
+      audio.addEventListener('durationchange', syncDuration);
+      audio.addEventListener('canplay', syncDuration);
+      if (url && url !== '#') {
+        audio.src = url;
+      }
+      if (audio.readyState >= 1) {
+        syncDuration();
+      }
+      chip._audioState = s;
+      audio.addEventListener('timeupdate', () => {
+        if (!s.scrub && audio.getAttribute('src')) {
+          s.t = audio.currentTime || 0;
+          if (s.t > s.dur) {
+            s.dur = s.t;
+            if (s.el.dur) s.el.dur.textContent = ' / ' + this._fmtAudioSec(s.dur);
+          }
+          updateTime(false);
+        }
+      });
+      audio.addEventListener('ended', () => {
+        if (s.t > 0 && (!s.dur || s.t > s.dur)) s.dur = s.t;
+        s.t = 0;
+        setPlaying(false);
+        try { audio.currentTime = 0; } catch (_) {}
+        updateTime(true);
+      });
+      audio.addEventListener('pause', () => {
+        if (s.playing && !audio.ended && !s.scrub) {
+          s.playing = false;
+          chip.classList.remove('is-playing');
+          playBtn.setAttribute('aria-label', 'Воспроизвести');
+        }
+      });
+
+      const syncCanvasSize = () => {
+        const cw = viz.clientWidth || viz.getBoundingClientRect().width;
+        const ch = viz.clientHeight || viz.getBoundingClientRect().height;
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        if (cw > 0 && ch > 0 && (Math.abs(cw - s.w) > 0.5 || Math.abs(ch - s.h) > 0.5 || s.dpr !== dpr)) {
+          s.w = cw;
+          s.h = ch;
+          s.dpr = dpr;
+          viz.width = Math.max(1, Math.round(cw * dpr));
+          viz.height = Math.max(1, Math.round(ch * dpr));
+          s.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+      };
+      s.syncCanvasSize = syncCanvasSize;
+
+      const ro = new ResizeObserver(syncCanvasSize);
+      ro.observe(viz);
+      s._ro = ro;
+
+      playBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setPlaying(!s.playing);
+      });
+
+      const dlLink = chip.querySelector('.fa-chip__download');
+      if (dlLink) {
+        dlLink.addEventListener('click', (e) => {
+          e.stopPropagation();
+        });
+      }
+
+      const fracFrom = (e) => {
+        const r = viz.getBoundingClientRect();
+        return clamp((e.clientX - r.left) / Math.max(1, r.width), 0, 1);
+      };
+
+      const localXFrom = (e) => {
+        syncCanvasSize();
+        const w = s.w || viz.clientWidth || 1;
+        return fracFrom(e) * w;
+      };
+
+      viz.addEventListener('pointerdown', (e) => {
+        e.stopPropagation();
+        s.scrub = true;
+        s.hoverX = localXFrom(e);
+        try { viz.setPointerCapture(e.pointerId); } catch (_) {}
+        if (s.dur > 0) seek(fracFrom(e) * s.dur);
+      });
+
+      viz.addEventListener('pointermove', (e) => {
+        s.hoverX = localXFrom(e);
+        if (s.scrub && s.dur > 0) seek(fracFrom(e) * s.dur);
+      });
+
+      const endScrub = () => { s.scrub = false; };
+      viz.addEventListener('pointerup', endScrub);
+      viz.addEventListener('pointercancel', endScrub);
+      viz.addEventListener('pointerleave', () => { if (!s.scrub) s.hoverX = null; });
+      viz.addEventListener('keydown', (e) => {
+        const k = 5;
+        if (e.key === 'ArrowRight') { seek(s.t + k); e.preventDefault(); }
+        else if (e.key === 'ArrowLeft') { seek(s.t - k); e.preventDefault(); }
+        else if (e.key === 'Home') { seek(0); e.preventDefault(); }
+        else if (e.key === 'End' && s.dur > 0) { seek(s.dur); e.preventDefault(); }
+        else if (e.key === ' ') { setPlaying(!s.playing); e.preventDefault(); }
+      });
+
+      updateTime(true);
+      this._audioStates.push(s);
+      this._ensureAudioLoop();
+    },
+
+    _drawAudioMatrix(ctx, s, w, h, dt, C) {
+      const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+      const rgba = (c, a) => `rgba(${c}, ${a})`;
+      const lv = (i, n) => s.level[Math.min(s.N - 1, Math.floor((i + 0.5) * s.N / n))];
+
+      const mh = h - 6;
+      const cols = Math.max(8, Math.floor(w / 8));
+      const rows = 5;
+      const cw = w / cols;
+      const ch = mh / rows;
+      const r = Math.min(cw, ch) * 0.2 + 0.5;
+      const p = s.dur > 0 ? clamp(s.t / s.dur, 0, 1) : 0;
+
+      for (let c = 0; c < cols; c++) {
+        const l = clamp(lv(c, cols), 0, 1);
+        const lit = Math.round(l * rows);
+        const played = (c + 0.5) / cols <= p;
+        s.peak[c] = Math.max(lit, (s.peak[c] || 0) - dt * 5);
+
+        for (let k = 0; k < rows; k++) {
+          const x = cw * (c + 0.5);
+          const y = mh - ch * (k + 0.5);
+          ctx.beginPath();
+          ctx.arc(x, y, r, 0, Math.PI * 2);
+          if (k < lit) {
+            ctx.fillStyle = played ? rgba(C.acc, 0.55 + 0.45 * (k / rows)) : rgba(C.soft, 0.75);
+          } else {
+            ctx.fillStyle = rgba(C.soft, 0.16);
+          }
+          ctx.fill();
+        }
+
+        const pk = Math.round(s.peak[c]) - 1;
+        if (pk >= lit && pk >= 0) {
+          ctx.beginPath();
+          ctx.arc(cw * (c + 0.5), mh - ch * (pk + 0.5), r * 1.05, 0, Math.PI * 2);
+          ctx.fillStyle = rgba(C.acc, 1);
+          ctx.fill();
+        }
+      }
+
+      const x0 = 1;
+      const x1 = w - 1;
+      const px = x0 + p * (x1 - x0);
+      ctx.lineWidth = 1.5;
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = rgba(C.soft, 0.25);
+      ctx.beginPath();
+      ctx.moveTo(x0, h - 2);
+      ctx.lineTo(x1, h - 2);
+      ctx.stroke();
+
+      ctx.strokeStyle = rgba(C.acc, 0.9);
+      ctx.beginPath();
+      ctx.moveTo(x0, h - 2);
+      ctx.lineTo(px, h - 2);
+      ctx.stroke();
+      ctx.lineCap = 'butt';
+
+      if (s.hoverX != null && s.dur > 0) {
+        const hx = clamp(s.hoverX, 0, w);
+        ctx.save();
+        ctx.strokeStyle = rgba(C.acc, 0.5);
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 3]);
+        ctx.beginPath();
+        ctx.moveTo(hx, 0);
+        ctx.lineTo(hx, h);
+        ctx.stroke();
+        ctx.restore();
+
+        const tm = this._fmtAudioSec(clamp(hx / Math.max(1, w), 0, 1) * s.dur);
+        ctx.save();
+        ctx.font = '600 9.5px Inter, system-ui, sans-serif';
+        const tw = ctx.measureText(tm).width + 8;
+        const tx = clamp(hx - tw / 2, 0, w - tw);
+        ctx.fillStyle = rgba(C.acc, 0.92);
+        ctx.beginPath();
+        if (typeof ctx.roundRect === 'function') {
+          ctx.roundRect(tx, 0, tw, 13, 6.5);
+        } else {
+          ctx.rect(tx, 0, tw, 13);
+        }
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(tm, tx + tw / 2, 6.8);
+        ctx.restore();
+      }
+    },
+
+    _ensureAudioLoop() {
+      if (this._audioLoopRunning) return;
+      this._audioLoopRunning = true;
+      let prev = performance.now();
+      const attack = 28;
+      const release = 7;
+
+      const step = (now) => {
+        const dt = Math.min(0.05, (now - prev) / 1000);
+        prev = now;
+        const up = 1 - Math.exp(-dt * attack);
+        const down = 1 - Math.exp(-dt * release);
+        const C = this._readAudioThemeColors();
+
+        for (let idx = this._audioStates.length - 1; idx >= 0; idx--) {
+          const s = this._audioStates[idx];
+          if (s.chip.isConnected) {
+            s._wasConnected = true;
+          } else if (s._wasConnected) {
+            if (s.playing) {
+              try { s.audio.pause(); } catch (_) {}
+            }
+            if (s._ro) {
+              try { s._ro.disconnect(); } catch (_) {}
+            }
+            this._audioStates.splice(idx, 1);
+            continue;
+          } else {
+            continue;
+          }
+
+          if (s.playing && !s.scrub) {
+            if (!s.audio.paused) {
+              s.t = s.audio.currentTime || 0;
+              if (Number.isFinite(s.audio.duration) && s.audio.duration > 0) {
+                s.dur = s.audio.duration;
+              } else if (s.t > s.dur) {
+                s.dur = s.t + 1;
+              }
+            } else {
+              s.t += dt;
+            }
+          }
+
+          if (s.playing) {
+            let hasRealFreq = false;
+            if (s.analyser) {
+              s.analyser.getByteFrequencyData(s.freqBuf);
+              let sum = 0;
+              for (let i = 0; i < s.N; i++) {
+                const v = (s.freqBuf[i] || 0) / 255;
+                s.target[i] = v;
+                sum += v;
+              }
+              hasRealFreq = sum > 0.02;
+            }
+            if (!hasRealFreq) {
+              this._synthSpectrum(s, s.t || (now / 1000), s.target);
+            }
+          } else {
+            for (let i = 0; i < s.N; i++) {
+              s.target[i] = s.idle[i] * 0.42;
+            }
+          }
+
+          let bass = 0;
+          for (let i = 0; i < s.N; i++) {
+            const k = s.target[i] > s.level[i] ? up : down;
+            s.level[i] += (s.target[i] - s.level[i]) * k;
+            if (i < 10) bass += s.level[i];
+          }
+          s.lvl = Math.min(1, Math.max(0, (bass / 10) * 1.5));
+          s.chip.style.setProperty('--lvl', s.lvl.toFixed(3));
+          s.updateTime(false);
+
+          if (typeof s.syncCanvasSize === 'function') s.syncCanvasSize();
+          if (s.w > 0 && s.h > 0) {
+            s.ctx.clearRect(0, 0, s.w, s.h);
+            this._drawAudioMatrix(s.ctx, s, s.w, s.h, dt, C);
+          }
+        }
+
+        if (this._audioStates.length > 0) {
+          requestAnimationFrame(step);
+        } else {
+          this._audioLoopRunning = false;
+        }
+      };
+
+      requestAnimationFrame(step);
+    },
+
   };
 
   window.ChatAnimations = ChatAnimations;

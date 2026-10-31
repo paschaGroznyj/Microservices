@@ -271,12 +271,22 @@
   margin-bottom: 6px;
 }
 
+/* Фиксированная ширина чипа в истории — ровная сетка во всех строках,
+   чтобы последняя неполная строка не растягивала чипы (flex-grow:0). */
+.fa-message-files .fa-chip {
+  flex: 0 0 150px;
+  width: 150px;
+  max-width: 150px;
+}
+
 /* Чипы вложений над пузырём сообщения пользователя — выравниваем
    по правому краю (как сам пузырь), т.к. wrapper центрирует column. */
 .user-message-wrapper > .fa-message-files {
-  justify-content: flex-end;
+  justify-content: flex-start;
+  width: fit-content;
   max-width: 75%;
   margin-bottom: 8px;
+  margin-left: auto;
   align-self: flex-end;
 }
 
@@ -293,12 +303,16 @@
   padding: 4px 8px 4px 6px; /* убираем правый паддинг под крестик */
 }
 
-/* Скрытый блок дополнительных файлов */
+/* Скрытый блок дополнительных файлов.
+   display:contents — когда раскрыт, вложенные чипы встают в общий
+   flex-wrap родителя единой сеткой (без паразитного width:100%,
+   который ломал выравнивание и растягивал чипы на всю строку). */
 .fa-chips-hidden {
   display: none;
-  flex-wrap: wrap;
-  gap: 6px;
-  width: 100%;
+}
+
+.fa-chips-hidden.fa-chips-hidden--open {
+  display: contents;
 }
 
 /* Кнопка «+N файлов / Скрыть» */
@@ -475,5 +489,239 @@
   .fa-chip__remove svg {
     width: 7px;
     height: 7px;
+  }
+
+  /* История сообщений на мобиле: фикс 150px не влезает в узкий пузырь
+     и чипы падают в столбик. Делаем гибкую 2-колоночную сетку. */
+  .fa-message-files .fa-chip {
+    flex: 1 1 calc(50% - 3px);
+    width: auto;
+    max-width: none;
+    min-width: 0;
+  }
+
+  .user-message-wrapper > .fa-message-files {
+    max-width: 100%;
+  }
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════
+   АУДИО-ПЛАШКИ В СТИЛЕ ГРАФА (03 Dot matrix — .fa-chip--audio.v-matrix)
+══════════════════════════════════════════════════════════════════════ */
+.fa-chip.fa-chip--audio {
+  --lvl: 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 100%;
+  height: 60px;
+  min-height: 60px;
+  max-height: 60px;
+  padding: 5px 34px 5px 10px;
+  box-sizing: border-box;
+  cursor: default;
+  overflow: hidden;
+  transition: border-color .18s ease, background .18s ease, box-shadow .22s ease, transform .18s ease;
+}
+
+.fa-chip.fa-chip--audio:hover {
+  transform: none;
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface2));
+  box-shadow: 0 2px 6px rgba(0,0,0,.12);
+}
+
+.fa-chip.fa-chip--audio.is-playing {
+  border-color: color-mix(in srgb, var(--accent) 52%, var(--border));
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface2));
+  box-shadow:
+    0 2px 10px rgba(0,0,0,.12),
+    0 0 22px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.fa-chip.fa-chip--audio .fa-chip__icon.fa-audio-play {
+  position: relative;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 0;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  padding: 0;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--accent) 72%, #a78bfa), var(--accent, #5b21b6));
+  box-shadow:
+    0 0 0 calc(var(--lvl) * 7px) color-mix(in srgb, var(--accent) 26%, transparent),
+    0 4px 10px color-mix(in srgb, var(--accent) 36%, transparent);
+  transition: transform .15s ease, box-shadow .08s linear;
+}
+
+.fa-chip.fa-chip--audio .fa-chip__icon.fa-audio-play:hover {
+  transform: scale(1.05);
+}
+
+.fa-chip.fa-chip--audio .fa-chip__icon.fa-audio-play:active {
+  transform: scale(0.95);
+}
+
+.fa-chip.fa-chip--audio .fa-chip__icon svg.fa-glyph {
+  grid-area: 1 / 1;
+  width: 15px;
+  height: 15px;
+  transition: opacity .18s, transform .18s;
+}
+
+.fa-chip.fa-chip--audio .fa-glyph.ic-play {
+  margin-left: 1px;
+}
+
+.fa-chip.fa-chip--audio .fa-glyph.ic-pause {
+  opacity: 0;
+  transform: scale(.55);
+}
+
+.fa-chip.fa-chip--audio.is-playing .fa-glyph.ic-play {
+  opacity: 0;
+  transform: scale(.55);
+}
+
+.fa-chip.fa-chip--audio.is-playing .fa-glyph.ic-pause {
+  opacity: 1;
+  transform: none;
+}
+
+.fa-chip.fa-chip--audio .fa-audio-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+
+.fa-chip.fa-chip--audio .fa-audio-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  line-height: 1.15;
+}
+
+.fa-chip.fa-chip--audio .fa-chip__name {
+  font-size: .8rem;
+  font-weight: 500;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  max-width: none;
+  color: var(--text-primary);
+}
+
+.fa-chip.fa-chip--audio .fa-audio-time {
+  flex: none;
+  font-size: .6875rem;
+  line-height: 1.15;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.fa-chip.fa-chip--audio .fa-audio-time b {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.fa-chip.fa-chip--audio .fa-audio-viz {
+  display: block;
+  width: 100%;
+  height: 30px;
+  cursor: pointer;
+  touch-action: none;
+  border-radius: 6px;
+  outline: none;
+}
+
+.fa-chip.fa-chip--audio .fa-audio-viz:focus,
+.fa-chip.fa-chip--audio .fa-audio-viz:focus-visible {
+  outline: none;
+}
+
+.fa-chip.fa-chip--audio.v-matrix .fa-audio-viz {
+  height: 30px;
+}
+
+.fa-chip.fa-chip--audio .fa-chip__download {
+  position: absolute;
+  right: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+  opacity: .65;
+  border-radius: 50%;
+  text-decoration: none;
+  transition: color .18s, background .18s, opacity .18s;
+}
+
+.fa-chip.fa-chip--audio:hover .fa-chip__download,
+.fa-chip.fa-chip--audio .fa-chip__download:hover {
+  opacity: 1;
+  color: var(--accent);
+}
+
+.fa-chip.fa-chip--audio .fa-chip__download:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.fa-chip.fa-chip--audio .fa-chip__download svg {
+  width: 15px;
+  height: 15px;
+}
+
+.gc-files .fa-chip.fa-chip--audio,
+.gc-audios .fa-chip.fa-chip--audio {
+  min-width: min(320px, 78vw);
+}
+
+@media (max-width: 768px) {
+  .fa-bot-files .fa-chip.fa-chip--audio,
+  .gc-files .fa-chip.fa-chip--audio,
+  .gc-audios .fa-chip.fa-chip--audio {
+    width: 100%;
+    max-width: 100%;
+    min-width: min(250px, 74vw);
+    height: 60px;
+    min-height: 60px;
+    max-height: 60px;
+    padding: 5px 30px 5px 8px;
+    border-radius: 11px;
+  }
+
+  .fa-chip.fa-chip--audio .fa-chip__icon.fa-audio-play {
+    width: 30px;
+    height: 30px;
+  }
+
+  .fa-chip.fa-chip--audio .fa-chip__icon svg.fa-glyph {
+    width: 13px;
+    height: 13px;
+  }
+
+  .fa-chip.fa-chip--audio .fa-chip__name {
+    font-size: .75rem;
+    max-width: none;
+  }
+
+  .fa-chip.fa-chip--audio .fa-audio-dur {
+    display: none;
   }
 }

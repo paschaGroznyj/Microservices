@@ -342,6 +342,30 @@
   border: none;
   overflow: hidden;
 }
+.gc-msg--audio-only {
+  padding: 0;
+  border: none;
+  background: transparent;
+  border-radius: 0;
+  color: var(--text-primary);
+  max-width: min(380px, 82vw);
+}
+.gc-msg--audio-only .gc-meta {
+  color: var(--text-muted);
+  opacity: .75;
+  margin-top: 4px;
+  padding-right: 4px;
+}
+.gc-audios {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(360px, 80vw);
+  max-width: 100%;
+}
+.gc-row > .gc-audios {
+  margin-bottom: 6px;
+}
 .gc-msg--media-only .gc-meta {
   position: absolute;
   right: 10px;

@@ -2287,6 +2287,18 @@ class ChatApp {
         const getLabel = (ext) => EXT_LABEL[ext] || ext.toUpperCase().slice(0, 4) || 'FILE';
         const getColor = (ext) => EXT_COLOR[ext] || 'gray';
 
+        const AUDIO_EXTS = new Set(['mp3', 'mpga', 'wav', 'wave', 'ogg', 'oga', 'opus', 'm4a', 'aac', 'flac', 'weba', 'caf', 'aif', 'aiff']);
+        const isAudioFile = (f) => {
+            if (window.ChatAnimations && typeof window.ChatAnimations.isPlayableAudioFile === 'function') {
+                return window.ChatAnimations.isPlayableAudioFile(f);
+            }
+            let ext = (f.ext || '').toLowerCase();
+            if (!ext && f.name && f.name.includes('.')) {
+                ext = f.name.split('.').pop().toLowerCase();
+            }
+            return f.kind === 'audio' || AUDIO_EXTS.has(ext);
+        };
+
         const makeChip = (f) => {
             const ext   = (f.ext || '').toLowerCase();
             const label = getLabel(ext);
@@ -2298,6 +2310,19 @@ class ChatApp {
             const url = messageId
                 ? `/api/chats/${this.currentChat}/files/${encodeURIComponent(messageId)}/${encodeURIComponent(name)}`
                 : '#';
+
+            if (isAudioFile(f) && window.ChatAnimations && typeof window.ChatAnimations.createAudioChip === 'function') {
+                const dlUrl = url !== '#' ? `${url}?download=1` : '#';
+                return window.ChatAnimations.createAudioChip({
+                    name,
+                    url,
+                    dlUrl,
+                    onContextMenu: (e) => {
+                        e.preventDefault();
+                        this._showFileContextMenu(e, { name, url: dlUrl, chatId: this.currentChat });
+                    },
+                });
+            }
 
             const chip = document.createElement('a');
             chip.className = `fa-chip fa-chip--${color} fa-chip--bot`;

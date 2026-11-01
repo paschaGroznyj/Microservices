@@ -3315,9 +3315,14 @@ class ChatApp {
         overlay.innerHTML = `
 <div class="delete-chat-modal">
     <div class="delete-chat-modal__icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M4 7h16M9 7V5h6v2m-8 0l1 12h8l1-12"/>
-        </svg>
+        <span class="chat-item-dropdown-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                <path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M3 6h18"/>
+                <path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/>
+                <path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                <path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M10 11v6M14 11v6"/>
+            </svg>
+        </span>
     </div>
     <div class="delete-chat-modal__title">Удалить чат?</div>
     <p class="delete-chat-modal__text">Это действие необратимо. История сообщений будет удалена.</p>

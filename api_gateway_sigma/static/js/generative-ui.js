@@ -61,6 +61,28 @@
     danger: 'Ошибка'
   };
 
+  function resolveStatusCell(val) {
+    if (val && typeof val === 'object') {
+      var rawTone = String(val.status || val.tone || val.type || '').toLowerCase();
+      var tone = STATUS[rawTone] ? (rawTone === 'danger' ? 'error' : rawTone) : '';
+      var lbl = val.label != null ? String(val.label) : (val.text != null ? String(val.text) : (STATUS[rawTone] || ''));
+      return { tone: tone, label: lbl };
+    }
+    var s = String(val == null ? '' : val).trim();
+    var low = s.toLowerCase();
+    if (STATUS[low]) {
+      return { tone: low === 'danger' ? 'error' : low, label: STATUS[low] };
+    }
+    return { tone: '', label: s };
+  }
+
+  function cellPlainText(val) {
+    if (val && typeof val === 'object') {
+      return String(val.label != null ? val.label : (val.text != null ? val.text : (val.value != null ? val.value : '')));
+    }
+    return String(val == null ? '' : val);
+  }
+
   var ICONS = {
     'files': 'M14 3v4a1 1 0 0 0 1 1h4M17 21h-10a2 2 0 0 1-2-2v-14a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z',
     'database': 'M4 6a8 3 0 1 0 16 0a8 3 0 1 0-16 0M4 6v6a8 3 0 0 0 16 0v-6M4 12v6a8 3 0 0 0 16 0v-6',
@@ -576,16 +598,17 @@
           var anchor = isRight ? 'end' : 'start';
 
           if (col.type === 'badge' || col.type === 'status') {
-            var txt = col.type === 'status' ? (STATUS[val] || String(val || '')) : String(val || '');
-            var stTone = col.type === 'status' ? c.status[String(val || '').toLowerCase()] : null;
+            var stInfo = col.type === 'status' ? resolveStatusCell(val) : { tone: '', label: cellPlainText(val) };
+            var txt = truncText(stInfo.label, colW - 24, 11.5, 500);
+            var stTone = stInfo.tone ? c.status[stInfo.tone] : null;
             var pBg = stTone ? stTone.bg : c.fillSec;
             var pFg = stTone ? stTone.fg : c.t1;
-            var pw = Math.max(36, txt.length * 7.4 + 16);
+            var pw = Math.min(colW - 12, Math.max(36, measureTextPx(txt, 11.5, 500) + 16));
             var px = isRight ? (tx - pw) : tx;
             tSvg += '<rect x="' + px + '" y="' + (y + 9) + '" width="' + pw + '" height="20" rx="6" fill="' + pBg + '"/>';
             tSvg += '<text x="' + (px + pw / 2) + '" y="' + (y + 23) + '" text-anchor="middle" font-size="11.5" font-weight="500" fill="' + pFg + '">' + esc(txt) + '</text>';
           } else {
-            var disp = col.type === 'number' ? fmt(val) : truncText(String(val == null ? '' : val), colW - 18, 13.5, 400);
+            var disp = col.type === 'number' ? fmt(val) : truncText(cellPlainText(val), colW - 18, 13.5, 400);
             tSvg += '<text x="' + tx + '" y="' + (y + 24) + '" text-anchor="' + anchor + '" font-size="13.5" fill="' + c.t1 + '">' + esc(disp) + '</text>';
           }
         });
@@ -772,11 +795,15 @@
     var pager = body.querySelector('.pager');
 
     function cell(col, v) {
-      var al = col.align === 'right' ? ' r' : '';
-      if (col.type === 'badge') return '<td><span class="pill">' + esc(v) + '</span></td>';
-      if (col.type === 'status') return '<td><span class="pill ' + esc(v) + '">' + esc(STATUS[v] || v) + '</span></td>';
-      if (col.type === 'number') return '<td class="r' + al + '">' + fmt(v) + '</td>';
-      return '<td class="' + al.trim() + '">' + esc(v) + '</td>';
+      var al = col.align === 'right' ? 'r' : '';
+      if (col.type === 'badge') return '<td' + (al ? ' class="' + al + '"' : '') + '><span class="pill">' + esc(cellPlainText(v)) + '</span></td>';
+      if (col.type === 'status') {
+        var stInfo = resolveStatusCell(v);
+        var cls = 'pill' + (stInfo.tone ? ' ' + esc(stInfo.tone) : '');
+        return '<td' + (al ? ' class="' + al + '"' : '') + '><span class="' + cls + '">' + esc(stInfo.label) + '</span></td>';
+      }
+      if (col.type === 'number') return '<td class="r">' + fmt(v) + '</td>';
+      return '<td' + (al ? ' class="' + al + '"' : '') + '>' + esc(cellPlainText(v)) + '</td>';
     }
 
     function draw() {
@@ -794,7 +821,7 @@
       var rows = rawData.filter(function (r) {
         if (!st.q) return true;
         return Object.keys(r).some(function (k) {
-          return String(r[k] == null ? '' : r[k]).toLowerCase().indexOf(st.q) > -1;
+          return cellPlainText(r[k]).toLowerCase().indexOf(st.q) > -1;
         });
       });
 
@@ -802,7 +829,8 @@
         rows = rows.slice().sort(function (a, b) {
           var va = a[st.k], vb = b[st.k];
           if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * st.d;
-          return (String(va) > String(vb) ? 1 : String(va) < String(vb) ? -1 : 0) * st.d;
+          var sa = cellPlainText(va), sb = cellPlainText(vb);
+          return (sa > sb ? 1 : sa < sb ? -1 : 0) * st.d;
         });
       }
 

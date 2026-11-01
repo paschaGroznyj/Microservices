@@ -370,7 +370,7 @@
 /* Кнопки действий в модалке */
 .tgc-actions{display:flex;gap:8px;margin-top:8px}
 .tgc-save{
-  flex:1;padding:9px 14px;border:none;border-radius:999px;
+  flex:1;padding:9px 14px;border:none;border-radius:10px;
   background:var(--accent,#6366f1);color:#fff;
   font-family:inherit;font-size:13px;font-weight:500;cursor:pointer;
   transition:filter .12s,transform .1s;
@@ -379,9 +379,9 @@
 .tgc-save:hover{filter:brightness(1.08)}
 .tgc-save:active{transform:scale(0.98)}
 .tgc-cancel{
-  padding:9px 14px;border:none;border-radius:999px;
+  padding:9px 14px;border:none;border-radius:10px;
   background:var(--cds-fill-secondary);color:var(--cds-text-primary);
-  font-family:inherit;font-size:13px;font-weight:450;cursor:pointer;
+  font-family:inherit;font-size:13px;font-weight:500;cursor:pointer;
   transition:background .12s,transform .1s;
 }
 .tgc-cancel:hover{background:var(--cds-fill-secondary-hover)}

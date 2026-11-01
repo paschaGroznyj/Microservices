@@ -461,20 +461,20 @@
           var cy = curY;
           var stKey = String(it.status || '').toLowerCase();
           var stTone = c.status[stKey] || null;
-          var cardFill = stTone ? stTone.bg : c.alpha1;
-          var valFill = stTone ? stTone.fg : c.t1;
+          var cardFill = c.alpha1;
+          var valFill = c.t1;
           var lblFill = stTone ? stTone.fg : c.t2;
 
           cardsSvg += '<rect x="' + cx + '" y="' + cy + '" width="' + cardW + '" height="' + cardH + '" rx="12" fill="' + cardFill + '"/>';
           var iconPath = ICONS[it.icon] || ICONS['default'];
           cardsSvg += '<g transform="translate(' + (cx + 14) + ',' + (cy + 14) + ') scale(0.6667)" fill="none" stroke="' + lblFill + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="' + iconPath + '"/></g>';
           cardsSvg += '<text x="' + (cx + 36) + '" y="' + (cy + 26) + '" font-size="13" fill="' + lblFill + '">' + esc(truncText(it.label || '', cardW - 48, 13, 400)) + '</text>';
-          cardsSvg += '<text x="' + (cx + 14) + '" y="' + (cy + 58) + '" font-size="24" font-weight="600" fill="' + valFill + '">' + esc(fmt(it.value)) + '</text>';
+          cardsSvg += '<text x="' + (cx + 14) + '" y="' + (cy + 58) + '" font-size="24" font-weight="500" fill="' + valFill + '">' + esc(fmt(it.value)) + '</text>';
 
           if (it.description) {
             var dLines = wrapLines(it.description, Math.floor((cardW - 28) / 6.6));
             dLines.forEach(function (dln, di) {
-              cardsSvg += '<text x="' + (cx + 14) + '" y="' + (cy + 78 + di * 16) + '" font-size="12" fill="' + c.t2 + '">' + esc(dln) + '</text>';
+              cardsSvg += '<text x="' + (cx + 14) + '" y="' + (cy + 78 + di * 16) + '" font-size="12" fill="' + c.tm + '">' + esc(dln) + '</text>';
             });
           }
         });

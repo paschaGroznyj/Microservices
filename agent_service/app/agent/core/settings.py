@@ -121,7 +121,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "upload_to_workspace": "Заливает файлы/сгенерированные картинки в workspace фабрики.",
     "read_workspace_file": "Читает текстовый файл внутри workspace фабрики.",
     "edit_workspace_file": "Точечно правит файл внутри workspace фабрики (find&replace).",
-    "send_file_to_user": "Отправляет пользователю существующий файл из песочницы/generated_files.",
+    "send_file_to_user": "Отправляет пользователю один или список существующих файлов из песочницы/generated_files за один вызов.",
     "delete_workspace": "Удаляет workspace и все файлы в нём.",
     "cleanup_workspaces": "Очищает просроченные workspace (при лимите).",
     "submit_task": "Ставит долгую задачу на асинхронное исполнение в песочнице (не блокирует).",

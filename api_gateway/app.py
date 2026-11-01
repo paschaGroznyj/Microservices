@@ -2073,16 +2073,29 @@ async def get_providers_status(request: Request):
 
 
 @app.get("/api/skills")
-async def api_list_skills(request: Request, query: str = "", sort_by: str = "new"):
-    """Прокси списка скиллов из agent_service."""
+async def api_list_skills(request: Request, query: str = "", sort_by: str = "new", filter_by: str = "all"):
+    """Прокси списка скиллов из agent_service (с поддержкой фильтрации liked/selected)."""
     user = await get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = int(user.get("user_id") or 0)
+    chats_url = SERVICES['chats']['url']
+    if user_id > 0 and filter_by in ("liked", "selected"):
+        ep = "/skills/liked" if filter_by == "liked" else "/skills/selected"
+        try:
+            await app.state.http_client.get(
+                f"{chats_url}{ep}",
+                params={"user_id": user_id},
+                headers={"X-User-Id": str(user_id)},
+                timeout=8.0,
+            )
+        except httpx.RequestError:
+            pass
     agent_url = SERVICES['agent_service']['url']
     try:
         resp = await app.state.http_client.get(
             f"{agent_url}/api/skills",
-            params={"query": query, "sort_by": sort_by},
+            params={"query": query, "sort_by": sort_by, "filter_by": filter_by, "user_id": user_id},
             timeout=20.0,
         )
         return JSONResponse(status_code=resp.status_code, content=resp.json())
@@ -2141,16 +2154,47 @@ async def api_get_selected_skills(request: Request):
         raise HTTPException(status_code=502, detail=f"PM Agent unreachable: {e}")
 
 
+@app.get("/api/skills/liked")
+async def api_get_liked_skills(request: Request):
+    user = await get_current_user(request)
+    if not user: raise HTTPException(status_code=401)
+    user_id = user.get("user_id")
+    chats_url = SERVICES['chats']['url']
+    try:
+        resp = await app.state.http_client.get(
+            f"{chats_url}/skills/liked",
+            params={"user_id": user_id},
+            headers={"X-User-Id": str(user_id)},
+            timeout=10.0,
+        )
+        if resp.status_code == 200:
+            return JSONResponse(status_code=200, content=resp.json())
+    except httpx.RequestError: pass
+
+    agent_url = SERVICES['agent_service']['url']
+    try:
+        resp = await app.state.http_client.get(
+            f"{agent_url}/api/skills/liked",
+            params={"user_id": user_id},
+            timeout=20.0,
+        )
+        return JSONResponse(status_code=resp.status_code, content=resp.json())
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"PM Agent unreachable: {e}")
+
+
 @app.get("/api/skills/{skill_id}")
 async def api_get_skill_detail(skill_id: int, request: Request):
     """Полный текст и метаданные конкретного скилла из agent_service."""
     user = await get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = int(user.get("user_id") or 0)
     agent_url = SERVICES['agent_service']['url']
     try:
         resp = await app.state.http_client.get(
             f"{agent_url}/api/skills/{skill_id}",
+            params={"user_id": user_id},
             timeout=20.0,
         )
         return JSONResponse(status_code=resp.status_code, content=resp.json())
@@ -2195,34 +2239,6 @@ async def api_toggle_selected_skill(skill_id: int, request: Request):
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Chats service unreachable: {e}")
 
-
-@app.get("/api/skills/liked")
-async def api_get_liked_skills(request: Request):
-    user = await get_current_user(request)
-    if not user: raise HTTPException(status_code=401)
-    user_id = user.get("user_id")
-    chats_url = SERVICES['chats']['url']
-    try:
-        resp = await app.state.http_client.get(
-            f"{chats_url}/skills/liked",
-            params={"user_id": user_id},
-            headers={"X-User-Id": str(user_id)},
-            timeout=10.0,
-        )
-        if resp.status_code == 200:
-            return JSONResponse(status_code=200, content=resp.json())
-    except httpx.RequestError: pass
-
-    agent_url = SERVICES['agent_service']['url']
-    try:
-        resp = await app.state.http_client.get(
-            f"{agent_url}/api/skills/liked",
-            params={"user_id": user_id},
-            timeout=20.0,
-        )
-        return JSONResponse(status_code=resp.status_code, content=resp.json())
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"PM Agent unreachable: {e}")
 
 @app.post("/api/skills/{skill_id}/like")
 async def api_like_skill(skill_id: int, request: Request):

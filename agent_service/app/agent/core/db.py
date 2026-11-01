@@ -1560,8 +1560,11 @@ class AgentDB:
         tool: str | None = None,
         limit: int = 100,
         include_body: bool = False,
+        filter_by: str = "all",
+        user_id: int = 0,
     ) -> list[dict]:
         limit = max(1, min(int(limit), 200))
+        uid = int(user_id or 0)
         if sort_by == "popular":
             order_sql = "COALESCE(agent_skills.uses_count, 0) DESC, agent_skills.likes_count DESC, agent_skills.created_at DESC"
         elif sort_by in ("liked", "likes"):
@@ -1588,6 +1591,19 @@ class AgentDB:
             args.append(tool.strip())
             idx += 1
 
+        liked_col = "FALSE AS liked_by_me"
+        if uid > 0:
+            uid_idx = idx
+            args.append(uid)
+            idx += 1
+            liked_col = f"EXISTS (SELECT 1 FROM agent_skill_likes sl WHERE sl.skill_id = agent_skills.id AND sl.user_id = ${uid_idx}) AS liked_by_me"
+            if filter_by == "liked":
+                where.append(f"EXISTS (SELECT 1 FROM agent_skill_likes sl WHERE sl.skill_id = agent_skills.id AND sl.user_id = ${uid_idx})")
+            elif filter_by == "selected":
+                where.append(f"EXISTS (SELECT 1 FROM user_selected_skills uss WHERE uss.skill_id = agent_skills.id AND uss.user_id = ${uid_idx})")
+        elif filter_by in ("liked", "selected"):
+            return []
+
         args.append(limit)
         where_j = [w.replace('theme', 'agent_skills.theme').replace('body', 'agent_skills.body').replace('tools', 'agent_skills.tools') for w in where]
         body_col = ", agent_skills.body" if include_body else ""
@@ -1597,6 +1613,7 @@ class AgentDB:
                    agent_skills.tools, agent_skills.model_used,
                    agent_skills.likes_count,
                    COALESCE(agent_skills.uses_count, 0) AS uses_count,
+                   {liked_col},
                    agent_skills.created_at
             FROM agent_skills
             WHERE {' AND '.join(where_j)}
@@ -1607,7 +1624,8 @@ class AgentDB:
             rows = await conn.fetch(sql, *args)
             return [dict(r) for r in rows]
 
-    async def get_skill_by_id(self, skill_id: int) -> dict | None:
+    async def get_skill_by_id(self, skill_id: int, user_id: int = 0) -> dict | None:
+        uid = int(user_id or 0)
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
@@ -1617,12 +1635,17 @@ class AgentDB:
                        agent_skills.tools, agent_skills.model_used,
                        agent_skills.likes_count,
                        COALESCE(agent_skills.uses_count, 0) AS uses_count,
+                       CASE WHEN $2::bigint > 0 THEN EXISTS (
+                           SELECT 1 FROM agent_skill_likes sl
+                           WHERE sl.skill_id = agent_skills.id AND sl.user_id = $2::bigint
+                       ) ELSE FALSE END AS liked_by_me,
                        agent_skills.created_at, agent_skills.updated_at
                 FROM agent_skills
                 LEFT JOIN users u ON u.id = agent_skills.published_by_user_id
                 WHERE agent_skills.id = $1 AND agent_skills.is_deleted = FALSE
                 """,
                 skill_id,
+                uid,
             )
             return dict(row) if row else None
 

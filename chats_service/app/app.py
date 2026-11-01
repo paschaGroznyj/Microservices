@@ -1462,10 +1462,27 @@ async def health():
 
 
 @app.get('/skills/liked')
-async def get_liked_skills(user_id: int, request: Request):
-    await _flush_pending_skill_likes_from_redis(max_items=100)
-    liked_ids = await db.get_liked_skill_ids(int(user_id))
-    return {'liked_ids': liked_ids, 'count': len(liked_ids)}
+async def get_liked_skills(user_id: int = 0, x_user_id: str | None = Header(default=None, alias="X-User-Id")):
+    uid = int(user_id or (x_user_id if x_user_id and str(x_user_id).isdigit() else 0) or 0)
+    if uid <= 0:
+        raise HTTPException(status_code=400, detail="user_id required")
+    await _flush_pending_skill_likes_from_redis(max_items=200)
+    liked_ids = await db.get_liked_skill_ids(uid)
+    state_obj = {
+        'user_id': uid,
+        'liked_ids': liked_ids,
+        'count': len(liked_ids),
+    }
+    if redis_client is not None:
+        try:
+            await redis_client.set(
+                _skill_liked_state_key(uid),
+                json.dumps(state_obj, ensure_ascii=False),
+                ex=SKILL_LIKE_STATE_TTL,
+            )
+        except Exception:
+            pass
+    return state_obj
 
 @app.post('/skills/{skill_id}/like')
 async def api_toggle_liked_skill(skill_id: int, payload: dict, request: Request):

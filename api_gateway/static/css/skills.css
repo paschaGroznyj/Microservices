@@ -999,3 +999,37 @@
 [data-theme="dark"] .skill-raw-line__text.is-heading {
   color: #a78bfa;
 }
+
+/* ── Подсветка лайкнутого скилла в дропдауне действий ── */
+.chat-item-dropdown-action.is-liked,
+.skill-actions-dropdown .chat-item-dropdown-action[data-liked="true"] {
+  color: #e0245e;
+  background: color-mix(in srgb, #e0245e 9%, var(--surface, #ffffff));
+  font-weight: 600;
+}
+
+.chat-item-dropdown-action.is-liked .chat-item-dropdown-icon,
+.skill-actions-dropdown .chat-item-dropdown-action[data-liked="true"] .chat-item-dropdown-icon {
+  color: #e0245e;
+}
+
+.chat-item-dropdown-action.is-liked:hover,
+.skill-actions-dropdown .chat-item-dropdown-action[data-liked="true"]:hover {
+  background: color-mix(in srgb, #e0245e 15%, var(--surface, #ffffff));
+}
+
+[data-theme="dark"] .chat-item-dropdown-action.is-liked,
+[data-theme="dark"] .skill-actions-dropdown .chat-item-dropdown-action[data-liked="true"] {
+  color: #fb7185;
+  background: color-mix(in srgb, #fb7185 14%, var(--surface2, #1e2430));
+}
+
+[data-theme="dark"] .chat-item-dropdown-action.is-liked .chat-item-dropdown-icon,
+[data-theme="dark"] .skill-actions-dropdown .chat-item-dropdown-action[data-liked="true"] .chat-item-dropdown-icon {
+  color: #fb7185;
+}
+
+[data-theme="dark"] .chat-item-dropdown-action.is-liked:hover,
+[data-theme="dark"] .skill-actions-dropdown .chat-item-dropdown-action[data-liked="true"]:hover {
+  background: color-mix(in srgb, #fb7185 20%, var(--surface2, #1e2430));
+}

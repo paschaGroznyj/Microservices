@@ -97,7 +97,7 @@
         if (e.key === 'Escape') closeSearch();
       });
 
-      this._bindMenu('skills-filter-btn', 'skills-filter-menu', 'filter', (val) => { this._filter = val; this._applyFilterSort(); });
+      this._bindMenu('skills-filter-btn', 'skills-filter-menu', 'filter', (val) => { this._filter = val; this.load(); });
       this._bindMenu('skills-sort-btn', 'skills-sort-menu', 'sort', (val) => { this._sort = val; this.load(); });
 
       document.addEventListener('click', (e) => {
@@ -109,7 +109,7 @@
 
       this._bindDropToInput();
       this._bindDropToChats();
-      this._loadSelected().then(() => this._updateSelectedCounterUi()).catch(() => {});
+      Promise.all([this._loadSelected(), this._loadLiked()]).then(() => this._updateSelectedCounterUi()).catch(() => {});
     },
 
     _bindMenu(btnId, menuId, dataAttr, onPick){
@@ -156,16 +156,23 @@
     async load(){
       const q = document.getElementById('skills-query')?.value || '';
       const sort = this._sort || 'new';
+      const filter = this._filter || 'all';
       let skills = [];
       await Promise.all([this._loadSelected(), this._loadLiked()]);
       try {
-        const res = await fetch(`/api/skills?query=${encodeURIComponent(q)}&sort_by=${encodeURIComponent(sort)}`, {credentials:'include'});
+        const res = await fetch(`/api/skills?query=${encodeURIComponent(q)}&sort_by=${encodeURIComponent(sort)}&filter_by=${encodeURIComponent(filter)}`, {credentials:'include'});
         const data = res.ok ? await res.json() : {skills:[]};
         skills = data.skills || [];
       } catch (e) { skills = []; }
       await this._fetchIsAdmin();
+      for (const s of skills) {
+        const sid = Number(s?.id || 0);
+        if (sid > 0 && s?.liked_by_me === true) {
+          this._likedIds.add(sid);
+        }
+      }
       this._allSkills = skills;
-      if (!q.trim()) {
+      if (!q.trim() && (!this._filter || this._filter === 'all')) {
         const aliveIds = new Set(skills.map(s => Number(s.id)));
         for (const selId of Array.from(this._selectedIds)) {
           if (!aliveIds.has(Number(selId))) {
@@ -299,14 +306,14 @@
       if (wasExpanded) return;
 
       anchorBtn.setAttribute('aria-expanded', 'true');
-      const liked = this._likedIds.has(sid);
+      const liked = this._likedIds.has(sid) || Boolean(skillObj?.liked_by_me);
       const likesCount = Number(skillObj?.likes_count || 0);
       const canEditOwn = Number(skillObj?.published_by_user_id || 0) === Number(this.app?.currentUser?.user_id || 0) || this._isAdmin;
 
       const dd = document.createElement('div');
       dd.className = 'chat-item-dropdown skill-actions-dropdown';
       dd.innerHTML = `
-        <button type="button" class="chat-item-dropdown-action" data-dd-act="like">
+        <button type="button" class="chat-item-dropdown-action${liked ? ' is-liked' : ''}" data-dd-act="like" data-liked="${liked ? 'true' : 'false'}" aria-pressed="${liked ? 'true' : 'false'}">
           <span class="chat-item-dropdown-icon">${liked ? ICON_HEART_FILLED : ICON_HEART_OUTLINE}</span>
           <span class="chat-item-dropdown-text">${liked ? 'Убрать лайк' : 'Лайкнуть'} (${likesCount})</span>
         </button>
@@ -390,6 +397,10 @@
         }
         const data = await res.json();
         const skill = data.skill || data;
+        if (typeof skill?.liked_by_me === 'boolean') {
+          if (skill.liked_by_me) this._likedIds.add(sid);
+          else this._likedIds.delete(sid);
+        }
         this._activeSkillData = skill;
         this._renderSkillDetail(skill);
         if (opts.edit) {
@@ -771,19 +782,30 @@
           return;
         }
         const data = await res.json().catch(()=>({}));
-        if (typeof data.liked === 'boolean') {
+        if (Array.isArray(data.liked_ids)) {
+          this._likedIds = new Set(data.liked_ids.map(Number));
+        } else if (typeof data.liked === 'boolean') {
           if (data.liked) this._likedIds.add(sid); else this._likedIds.delete(sid);
         }
+        const isNowLiked = this._likedIds.has(sid);
         const finalCount = data.likes_count !== undefined ? Number(data.likes_count) : nextCount;
-        if (itemInList) itemInList.likes_count = finalCount;
+        if (itemInList) {
+          itemInList.likes_count = finalCount;
+          itemInList.liked_by_me = isNowLiked;
+        }
         if (this._activeSkillId === sid && this._activeSkillData) {
           this._activeSkillData.likes_count = finalCount;
+          this._activeSkillData.liked_by_me = isNowLiked;
           this._renderSkillDetail(this._activeSkillData);
         }
       } catch (e) {
         if (wasLiked) this._likedIds.add(sid); else this._likedIds.delete(sid);
       }
-      this._applyFilterSort();
+      if (this._filter === 'liked' && this._activeSkillId === null) {
+        await this.load();
+      } else {
+        this._applyFilterSort();
+      }
     },
 
     async copyToChat(skillId){

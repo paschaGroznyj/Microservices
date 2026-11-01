@@ -1052,8 +1052,22 @@ async def _ping_provider(model_id: str, model_name: str, factory) -> dict:
 
 
 @app.get('/api/skills')
-async def api_list_skills(query: str = '', sort_by: str = 'new', tool: str | None = None, limit: int = 100):
-    skills = await db.list_skills(query=query, sort_by=sort_by, tool=tool, limit=limit)
+async def api_list_skills(
+    query: str = '',
+    sort_by: str = 'new',
+    filter_by: str = 'all',
+    user_id: int = 0,
+    tool: str | None = None,
+    limit: int = 100,
+):
+    skills = await db.list_skills(
+        query=query,
+        sort_by=sort_by,
+        tool=tool,
+        limit=limit,
+        filter_by=filter_by,
+        user_id=user_id,
+    )
     return {'skills': skills}
 
 
@@ -1088,8 +1102,8 @@ async def api_get_liked_skills(user_id: int):
 
 
 @app.get('/api/skills/{skill_id}')
-async def api_get_skill(skill_id: int):
-    row = await db.get_skill_by_id(skill_id)
+async def api_get_skill(skill_id: int, user_id: int = 0):
+    row = await db.get_skill_by_id(skill_id, user_id=user_id)
     if not row:
         raise HTTPException(status_code=404, detail='Skill not found')
     return {'skill': row}

@@ -635,6 +635,10 @@
       if (POLL_COMPONENTS.has(comp) && Array.isArray(obj.options) && obj.options.length > 0) {
         return { component: "InteractivePoll", data: obj };
       }
+      if (window.GenerativeUI && typeof window.GenerativeUI.tryParseComponentJson === "function") {
+        const genParsed = window.GenerativeUI.tryParseComponentJson(trimmed);
+        if (genParsed) return genParsed;
+      }
     } catch (_) {}
     return null;
   }
@@ -1025,9 +1029,13 @@
     return root;
   }
 
+  const renderGenUiEl = (data) => (window.GenerativeUI ? window.GenerativeUI.createBlockEl(data) : document.createElement("div"));
   const COMPONENT_MAP = {
     InteractivePoll: createInteractivePollEl,
     AskUserQuestion: createInteractivePollEl,
+    Chart: renderGenUiEl,
+    MetricCards: renderGenUiEl,
+    DataTable: renderGenUiEl,
   };
 
   function renderBotContent(container, text, meta = {}) {

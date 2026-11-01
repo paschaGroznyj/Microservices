@@ -63,27 +63,195 @@ TOOL_NAME_INTEGRITY_GUIDANCE = (
     "- Когда все задачи выполнены и ты даешь финальный ответ пользователю (без вызова инструментов) — тегов <thinking> и <reasoning> быть НЕ должно, сразу пиши чистый финальный ответ в content."
 )
 
-INTERACTIVE_POLL_GUIDANCE = (
-    "\n   # ИНТЕРАКТИВНЫЕ ВАРИАНТЫ ОТВЕТА (InteractivePoll / AskUserQuestion)\n"
-    "   Когда нужно уточнить у пользователя решение, развить мысль по одному из сценариев или предложить выбор из нескольких вариантов (2–6 пунктов), "
-    "встраивай в ответ JSON-блок в кодовом блоке ```json — Web UI автоматически отрендерит его как интерактивную карточку опроса:\n"
-    "   ```json\n"
-    "   {{\n"
-    '     "component": "InteractivePoll",\n'
-    '     "title": "Короткий и понятный вопрос пользователю?",\n'
-    '     "options": [\n'
-    '       "Вариант 1 — краткое описание",\n'
-    '       "Вариант 2 — краткое описание",\n'
-    '       "Вариант 3 — краткое описание"\n'
-    "     ]\n"
-    "   }}\n"
-    "   ```\n"
-    "   Правила использования:\n"
-    '   - Поле `"component"` строго `"InteractivePoll"` (или `"AskUserQuestion"`).\n'
-    '   - `"title"` — заголовок карточки с вопросом.\n'
-    '   - `"options"` — массив строк `["..."]` или объектов `[{{"label": "Текст на кнопке", "value": "Текст, который отправится в чат"}}]`.\n'
-    "   - Не дублируй те же самые варианты обычным маркированным списком вокруг JSON-блока — карточка уже содержит все кнопки и поле для своего варианта.\n"
-)
+INTERACTIVE_POLL_GUIDANCE = """
+   # GENERATIVE UI & ИНТЕРАКТИВНЫЕ КОМПОНЕНТЫ (InteractivePoll, Chart, MetricCards, DataTable)
+   Web UI автоматически рендерит специальные JSON-блоки (внутри ```json ... ```) как интерактивные карточки, графики, KPI-метрики и таблицы с поиском/сортировкой/экспортом в PNG и SVG.
+   Единый подход: поле `"component"` определяет тип UI-компонента, а данные и настройки задают его содержимое. Не дублируй содержимое JSON-блока обычным списком или markdown-таблицей рядом.
+
+   ### 1. Интерактивный опрос — InteractivePoll (или AskUserQuestion)
+   Используй, когда нужно уточнить решение у пользователя или предложить выбор из 2–6 вариантов:
+   ```json
+   {
+     "component": "InteractivePoll",
+     "title": "Короткий и понятный вопрос пользователю?",
+     "options": [
+       "Вариант 1 — краткое описание",
+       "Вариант 2 — краткое описание",
+       "Вариант 3 — краткое описание"
+     ]
+   }
+   ```
+
+   ### 2. Круговая диаграмма — Chart (type: "pie")
+   ```json
+   {
+     "component": "Chart",
+     "type": "pie",
+     "title": "Распределение документов по статусам",
+     "description": "Текущее состояние базы знаний",
+     "data": [
+       { "label": "Опубликованы", "value": 120 },
+       { "label": "На проверке", "value": 35 },
+       { "label": "Черновики", "value": 45 }
+     ],
+     "config": {
+       "showLegend": true,
+       "showLabels": true,
+       "showTooltip": true,
+       "showPercentage": true
+     }
+   }
+   ```
+
+   ### 3. Столбчатая диаграмма — Chart (type: "bar")
+   ```json
+   {
+     "component": "Chart",
+     "type": "bar",
+     "title": "Количество документов по категориям",
+     "description": "Сравнение наполненности разделов базы знаний",
+     "xAxis": { "key": "category", "label": "Категория" },
+     "yAxis": { "label": "Количество документов", "min": 0 },
+     "series": [
+       { "key": "count", "label": "Документы" }
+     ],
+     "data": [
+       { "category": "Регламенты", "count": 85 },
+       { "category": "Инструкции", "count": 120 },
+       { "category": "Исследования", "count": 47 },
+       { "category": "Отчёты", "count": 63 }
+     ],
+     "config": {
+       "showLegend": false,
+       "showTooltip": true,
+       "showValues": true,
+       "orientation": "vertical"
+     }
+   }
+   ```
+
+   ### 4. Линейный график — Chart (type: "line")
+   ```json
+   {
+     "component": "Chart",
+     "type": "line",
+     "title": "Динамика использования базы знаний",
+     "description": "Количество обращений по месяцам",
+     "xAxis": { "key": "month", "label": "Месяц" },
+     "yAxis": { "label": "Количество обращений", "min": 0 },
+     "series": [
+       { "key": "requests", "label": "Обращения" },
+       { "key": "successful", "label": "Успешные обращения" }
+     ],
+     "data": [
+       { "month": "Июль", "requests": 120, "successful": 95 },
+       { "month": "Август", "requests": 185, "successful": 154 },
+       { "month": "Сентябрь", "requests": 240, "successful": 210 },
+       { "month": "Октябрь", "requests": 310, "successful": 278 }
+     ],
+     "config": {
+       "showLegend": true,
+       "showTooltip": true,
+       "showGrid": true,
+       "showDots": true,
+       "connectNulls": false
+     }
+   }
+   ```
+
+   ### 5. Диаграмма рассеяния — Chart (type: "scatter")
+   ```json
+   {
+     "component": "Chart",
+     "type": "scatter",
+     "title": "Размер документа и время обработки",
+     "description": "Зависимость времени обработки от объёма документа",
+     "xAxis": { "key": "documentSize", "label": "Размер документа", "unit": "КБ" },
+     "yAxis": { "key": "processingTime", "label": "Время обработки", "unit": "мс" },
+     "series": [
+       { "key": "documents", "label": "Документы", "xKey": "documentSize", "yKey": "processingTime" }
+     ],
+     "data": [
+       { "id": "doc-001", "documentSize": 120, "processingTime": 180 },
+       { "id": "doc-002", "documentSize": 250, "processingTime": 310 },
+       { "id": "doc-003", "documentSize": 180, "processingTime": 240 }
+     ],
+     "config": {
+       "showTooltip": true,
+       "showGrid": true,
+       "showTrendLine": false
+     }
+   }
+   ```
+
+   ### 6. Информационные карточки KPI — MetricCards
+   Поддерживаемые `icon`: `"files"`, `"database"`, `"alert-triangle"`, `"users"`, `"clock"`, `"check"`, `"activity"`, `"trending-up"`, `"chart"`, `"folder"`, `"shield"`, `"zap"`. Поле `status`: `"success"`, `"warning"`, `"danger"`.
+   ```json
+   {
+     "component": "MetricCards",
+     "title": "Аналитика базы знаний",
+     "description": "Основные показатели текущего состояния",
+     "layout": { "columns": 3, "density": "comfortable" },
+     "items": [
+       {
+         "id": "total-documents",
+         "label": "Всего документов",
+         "value": 1250,
+         "format": "integer",
+         "icon": "files",
+         "description": "Общее количество документов в системе"
+       },
+       {
+         "id": "indexed-documents",
+         "label": "Проиндексировано",
+         "value": 1125,
+         "format": "integer",
+         "icon": "database",
+         "status": "success",
+         "description": "Документы, доступные для поиска"
+       },
+       {
+         "id": "indexing-errors",
+         "label": "Ошибки индексации",
+         "value": 18,
+         "format": "integer",
+         "icon": "alert-triangle",
+         "status": "warning",
+         "description": "Документы, требующие повторной обработки"
+       }
+     ],
+     "config": { "showIcons": true, "showDescriptions": true, "showStatus": true }
+   }
+   ```
+
+   ### 7. Интерактивная таблица — DataTable
+   Типы колонок `type`: `"text"`, `"badge"`, `"number"`, `"status"` (значения статуса: `"success"`, `"processing"`, `"warning"`, `"error"`).
+   ```json
+   {
+     "component": "DataTable",
+     "title": "Результаты индексации документов",
+     "description": "Сводка по последним обработанным документам",
+     "columns": [
+       { "key": "name", "label": "Документ", "type": "text", "sortable": true },
+       { "key": "format", "label": "Формат", "type": "badge", "sortable": true },
+       { "key": "size", "label": "Размер", "type": "number", "unit": "КБ", "sortable": true, "align": "right" },
+       { "key": "status", "label": "Статус", "type": "status", "sortable": true },
+       { "key": "chunks", "label": "Фрагменты", "type": "number", "sortable": true, "align": "right" }
+     ],
+     "data": [
+       { "id": "doc-001", "name": "Положение о работе с БЗ", "format": "MD", "size": 42, "status": "success", "chunks": 12 },
+       { "id": "doc-002", "name": "Регламент обработки заявок", "format": "PDF", "size": 850, "status": "processing", "chunks": 0 }
+     ],
+     "config": {
+       "showHeader": true,
+       "sortable": true,
+       "searchable": true,
+       "pagination": { "enabled": true, "pageSize": 10 },
+       "emptyMessage": "Данные отсутствуют"
+     }
+   }
+   ```
+"""
 
 SYSTEM_PROMPT = (
    DEFAULT_AGENT_IDENTITY + 
@@ -112,7 +280,7 @@ SYSTEM_PROMPT = (
       - Links: <URL>
       Do NOT add this header for standard conversational answers without created artifacts.
    """
-   + TASK_COMPLETION_GUIDANCE + INTERACTIVE_POLL_GUIDANCE +
+   + TASK_COMPLETION_GUIDANCE +
    """
    FORMATTING (MARKDOWN):
    - Format all answers in Markdown. The frontend renders it as markdown.

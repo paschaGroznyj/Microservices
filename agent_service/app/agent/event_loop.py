@@ -31,7 +31,7 @@ from .core.config import (
 )
 from .core.settings import TOOLS_SETTINGS, UNIVERSAL_TOOLS, ADMIN_ONLY_CATEGORIES
 from .prompts.summary_prompt import SUMMARIZE_CUT_PROMPT, TOOL_TRACE_SUMMARY_PROMPT
-from .prompts.system_prompt import SYSTEM_PROMPT
+from .prompts.system_prompt import SYSTEM_PROMPT, INTERACTIVE_POLL_GUIDANCE
 from .title_generator import generate_chat_title, is_first_turn
 
 from .tool_status_messages import get_tool_status, get_thinking_status, get_tools_status
@@ -1628,6 +1628,9 @@ class HarnessAgent:
             else:
                 role_block = get_role(user_id)
             system_content = SYSTEM_PROMPT.format(datetime=current_datetime, role_block=role_block)
+            _gw_target = (gateway_target or "main").strip().lower()
+            if _gw_target in ("main", "sigma") and not is_telegram and not is_max:
+                system_content += "\n" + INTERACTIVE_POLL_GUIDANCE
             # Медиа-хранилище чата (Redis, пер-chat_id): картинки/файлы из недавних
             # сообщений — чтобы агент видел их даже когда в текущем сообщении вложений нет.
             try:

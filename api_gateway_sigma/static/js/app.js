@@ -1386,6 +1386,10 @@ class ChatApp {
             if ((comp === 'interactivepoll' || comp === 'askuserquestion' || comp === 'poll') && opts && opts.length > 0) {
                 return { component: 'InteractivePoll', data: { ...obj, options: opts } };
             }
+            if (window.GenerativeUI && typeof window.GenerativeUI.tryParseComponentJson === 'function') {
+                const genParsed = window.GenerativeUI.tryParseComponentJson(trimmed);
+                if (genParsed) return genParsed;
+            }
         } catch (_) {}
         return null;
     }
@@ -1836,6 +1840,8 @@ class ChatApp {
                     pollIndex: curIdx,
                     savedAnswer,
                 }));
+            } else if (seg.kind === 'component' && window.GenerativeUI && window.GenerativeUI.isGenerativeComponent(seg.component)) {
+                containerEl.appendChild(window.GenerativeUI.createBlockEl(seg.data));
             } else {
                 const mdBlock = document.createElement('div');
                 mdBlock.className = 'bot-md-segment';

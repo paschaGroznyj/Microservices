@@ -60,6 +60,9 @@
   line-height: 1.5;
   color: var(--msg-bot-text);
   position: relative;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 /* typography inside bot message */

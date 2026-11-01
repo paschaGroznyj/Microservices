@@ -145,17 +145,33 @@
     };
   }
 
-  function ticks(max) {
-    max = Number(max) || 1;
-    if (max <= 0) max = 1;
-    var raw = max / 4;
-    var p = Math.pow(10, Math.floor(Math.log10(raw)));
-    var m = raw / p;
-    var s = (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * p;
-    var n = Math.ceil(max / s);
-    var t = [];
-    for (var i = 0; i <= n; i++) t.push(+(i * s).toFixed(6));
-    return { t: t, max: n * s };
+  function ticks(max, min) {
+    min = Number(min) || 0;
+    max = Number(max) || 0;
+    if (min >= 0) {
+      if (max <= 0) max = 1;
+      var raw = max / 4;
+      var p = Math.pow(10, Math.floor(Math.log10(raw)));
+      var m = raw / p;
+      var s = (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * p;
+      var n = Math.ceil(max / s);
+      var t = [];
+      for (var i = 0; i <= n; i++) t.push(+(i * s).toFixed(6));
+      return { t: t, min: 0, max: +(n * s).toFixed(6) };
+    }
+    var hi = Math.max(0, max);
+    var lo = min;
+    var span = (hi - lo) || 1;
+    var rawSpan = span / 4;
+    var pSpan = Math.pow(10, Math.floor(Math.log10(rawSpan)));
+    var mSpan = rawSpan / pSpan;
+    var step = (mSpan <= 1 ? 1 : mSpan <= 2 ? 2 : mSpan <= 5 ? 5 : 10) * pSpan;
+    var nMin = Math.floor(lo / step);
+    var nMax = Math.ceil(hi / step);
+    if (nMin === nMax) nMax = nMin + 1;
+    var tRange = [];
+    for (var j = nMin; j <= nMax; j++) tRange.push(+(j * step).toFixed(6));
+    return { t: tRange, min: +(nMin * step).toFixed(6), max: +(nMax * step).toFixed(6) };
   }
 
   function legendSvg(items, c, y) {
@@ -232,24 +248,37 @@
       }
     }
     var leg = S.length > 1 && cfg.showLegend !== false;
-    var m = { l: ya.label ? 68 : 52, r: 22, t: leg ? 40 : 18, b: xa.label ? 56 : 36 };
-    var pw = W - m.l - m.r, ph = H - m.t - m.b, o = '', unitY = ya.unit || '', unitX = xa.unit || '';
     var xk = (S[0] && S[0].xKey) || xa.key;
     var yk = (S[0] && S[0].yKey) || ya.key || (S[0] && S[0].key);
-    var max = 0;
+    var min = 0, max = 0;
     rows.forEach(function (row) {
       S.forEach(function (s) {
         var v = Number(type === 'scatter' ? row[s.yKey || yk] : row[s.key]) || 0;
         if (v > max) max = v;
+        if (v < min) min = v;
       });
     });
-    if (ya.max != null) max = Number(ya.max);
-    var ty = ticks(max), ymax = (ya.max != null ? Number(ya.max) : ty.max) || 1;
-    function Y(v) { return m.t + ph - ((Number(v) || 0) / ymax) * ph; }
+    if (min < 0 && ya.min != null && Number(ya.min) < min) min = Number(ya.min);
+    if (ya.max != null && Number(ya.max) > max) max = Number(ya.max);
+    var ty = ticks(max, min);
+    var ymin = ty.min;
+    var ymax = (ya.max != null && ymin >= 0 ? Number(ya.max) : ty.max);
+    if (ymax <= ymin) ymax = ymin + 1;
+    var ySpan = (ymax - ymin) || 1;
+    var hasNegBarVals = ymin < 0 && type === 'bar' && cfg.showValues;
+    var m = {
+      l: ya.label ? 68 : 52,
+      r: 22,
+      t: leg ? 40 : 18,
+      b: (xa.label ? 56 : 36) + (hasNegBarVals ? 10 : 0)
+    };
+    var pw = W - m.l - m.r, ph = H - m.t - m.b, o = '', unitY = ya.unit || '', unitX = xa.unit || '';
+    function Y(v) { return m.t + ph - (((Number(v) || 0) - ymin) / ySpan) * ph; }
     if (leg) {
       o += legendSvg(S.map(function (s, i) { return { label: s.label || s.key, color: PAL[i % PAL.length] }; }), c, 18);
     }
-    (ya.max != null ? ticks(ya.max).t.filter(function (t) { return t <= ya.max; }) : ty.t).forEach(function (t) {
+    var yTicks = (ya.max != null && ymin >= 0) ? ticks(ya.max, 0).t.filter(function (t) { return t <= ya.max; }) : ty.t;
+    yTicks.forEach(function (t) {
       if (cfg.showGrid !== false || t === 0) {
         o += '<line x1="' + m.l + '" x2="' + (W - m.r) + '" y1="' + Y(t) + '" y2="' + Y(t) + '" stroke="' + c.grid + '" stroke-dasharray="' + (t === 0 ? '0' : '3 3') + '"/>';
       }
@@ -263,10 +292,20 @@
     }
 
     if (type === 'scatter') {
-      var mx = 0;
-      rows.forEach(function (r) { var vx = Number(r[xk]) || 0; if (vx > mx) mx = vx; });
-      var tx = ticks(mx);
-      function X(v) { return m.l + ((Number(v) || 0) / (tx.max || 1)) * pw; }
+      var minX = 0, maxX = 0;
+      rows.forEach(function (r) {
+        var vx = Number(r[xk]) || 0;
+        if (vx > maxX) maxX = vx;
+        if (vx < minX) minX = vx;
+      });
+      if (minX < 0 && xa.min != null && Number(xa.min) < minX) minX = Number(xa.min);
+      if (xa.max != null && Number(xa.max) > maxX) maxX = Number(xa.max);
+      var tx = ticks(maxX, minX);
+      var xmin = tx.min, xmax = tx.max, xSpan = (xmax - xmin) || 1;
+      function X(v) { return m.l + (((Number(v) || 0) - xmin) / xSpan) * pw; }
+      if (xmin < 0) {
+        o += '<line x1="' + X(0) + '" x2="' + X(0) + '" y1="' + m.t + '" y2="' + (m.t + ph) + '" stroke="' + c.grid + '" stroke-dasharray="0"/>';
+      }
       tx.t.forEach(function (t) {
         o += '<text x="' + X(t) + '" y="' + (m.t + ph + 18) + '" text-anchor="middle" font-size="12" fill="' + c.tm + '">' + fmt(t) + '</text>';
       });
@@ -280,9 +319,9 @@
         if (Math.abs(denom) > 1e-9) {
           var slope = (nPts * sxy - sx * sy) / denom;
           var inter = (sy - slope * sx) / nPts;
-          var xMin = 0, xMax = tx.max;
-          var y0 = Math.max(0, Math.min(ymax, slope * xMin + inter));
-          var y1 = Math.max(0, Math.min(ymax, slope * xMax + inter));
+          var xMin = xmin, xMax = xmax;
+          var y0 = Math.max(ymin, Math.min(ymax, slope * xMin + inter));
+          var y1 = Math.max(ymin, Math.min(ymax, slope * xMax + inter));
           o += '<line x1="' + X(xMin) + '" y1="' + Y(y0) + '" x2="' + X(xMax) + '" y2="' + Y(y1) + '" stroke="' + PAL[1] + '" stroke-width="1.5" stroke-dasharray="5 4" opacity="0.75"/>';
         }
       }
@@ -297,26 +336,41 @@
 
     var n = Math.max(1, rows.length), band = pw / n;
     var xKey = xa.key || Object.keys(rows[0] || {})[0] || 'label';
+    var xLblY = m.t + ph + (hasNegBarVals ? 26 : 18);
     rows.forEach(function (r, i) {
       var lab = String(r[xKey] != null ? r[xKey] : '');
       var shortXLbl = truncText(lab, Math.max(36, band - 8), 12, 400);
       var xTip = shortXLbl !== lab ? ' data-tip="' + esc(lab) + '"' : '';
-      o += '<text x="' + (m.l + band * (i + .5)) + '" y="' + (m.t + ph + 18) + '" text-anchor="middle" font-size="12" fill="' + c.tm + '"' + xTip + '>' + esc(shortXLbl) + '</text>';
+      o += '<text x="' + (m.l + band * (i + .5)) + '" y="' + xLblY + '" text-anchor="middle" font-size="12" fill="' + c.tm + '"' + xTip + '>' + esc(shortXLbl) + '</text>';
     });
     if (type === 'bar') {
       var sCount = Math.max(1, S.length);
       var groupW = Math.min(band * .68, sCount * 48);
       var bw = Math.min(groupW / sCount - (sCount > 1 ? 3 : 0), 48);
+      var yZero = Y(0);
       S.forEach(function (s, si) {
         rows.forEach(function (r, i) {
           var v = Number(r[s.key]) || 0;
-          var h = Math.max(0, (v / ymax) * ph);
           var groupStart = m.l + band * (i + .5) - (sCount * bw + (sCount - 1) * 3) / 2;
           var x = sCount === 1 ? (m.l + band * (i + .5) - bw / 2) : (groupStart + si * (bw + 3));
-          var y = m.t + ph - h, rr = Math.min(4, h), col = PAL[si % PAL.length];
-          o += '<path d="M' + x + ',' + (m.t + ph) + ' V' + (y + rr) + ' Q' + x + ',' + y + ' ' + (x + rr) + ',' + y + ' H' + (x + bw - rr) + ' Q' + (x + bw) + ',' + y + ' ' + (x + bw) + ',' + (y + rr) + ' V' + (m.t + ph) + ' Z" fill="' + col + '" data-tip="' + esc(r[xKey]) + '\n' + esc(s.label || s.key) + ': ' + fmt(v) + '"/>';
-          if (cfg.showValues) {
-            o += '<text x="' + (x + bw / 2) + '" y="' + (y - 6) + '" text-anchor="middle" font-size="12" font-weight="500" fill="' + c.t1 + '">' + fmt(v) + '</text>';
+          var col = PAL[si % PAL.length];
+          var tipAttr = ' data-tip="' + esc(r[xKey]) + '\n' + esc(s.label || s.key) + ': ' + fmt(v) + '"';
+          if (v >= 0) {
+            var yTop = Y(v);
+            var hPos = Math.max(0, yZero - yTop);
+            var rrPos = Math.min(4, hPos);
+            o += '<path d="M' + x + ',' + yZero + ' V' + (yTop + rrPos) + ' Q' + x + ',' + yTop + ' ' + (x + rrPos) + ',' + yTop + ' H' + (x + bw - rrPos) + ' Q' + (x + bw) + ',' + yTop + ' ' + (x + bw) + ',' + (yTop + rrPos) + ' V' + yZero + ' Z" fill="' + col + '"' + tipAttr + '/>';
+            if (cfg.showValues) {
+              o += '<text x="' + (x + bw / 2) + '" y="' + (yTop - 6) + '" text-anchor="middle" font-size="12" font-weight="500" fill="' + c.t1 + '">' + fmt(v) + '</text>';
+            }
+          } else {
+            var yBot = Y(v);
+            var hNeg = Math.max(0, yBot - yZero);
+            var rrNeg = Math.min(4, hNeg);
+            o += '<path d="M' + x + ',' + yZero + ' V' + (yBot - rrNeg) + ' Q' + x + ',' + yBot + ' ' + (x + rrNeg) + ',' + yBot + ' H' + (x + bw - rrNeg) + ' Q' + (x + bw) + ',' + yBot + ' ' + (x + bw) + ',' + (yBot - rrNeg) + ' V' + yZero + ' Z" fill="' + col + '"' + tipAttr + '/>';
+            if (cfg.showValues) {
+              o += '<text x="' + (x + bw / 2) + '" y="' + (yBot + 13) + '" text-anchor="middle" font-size="12" font-weight="500" fill="' + c.t1 + '">' + fmt(v) + '</text>';
+            }
           }
         });
       });

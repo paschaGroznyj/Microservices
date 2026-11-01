@@ -10,6 +10,8 @@
   const ICON_CHECK         = '<svg viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2.2 6.2L4.8 8.8L9.8 3.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   const ICON_SKILL_DOC     = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" aria-hidden="true"><path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7l-5-5Z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 2v5h5M9 13h6M9 17h4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   const ICON_USER          = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const ICON_EYE           = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const ICON_CODE          = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   const ICON_BACK_ARROW    = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true" style="transform:rotate(180deg);"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
   function formatSkillDate(iso) {
@@ -483,7 +485,27 @@
               </div>
             ` : `
               <div class="skill-detail__section-label">Содержимое</div>
-              <div class="skill-detail__body reasoning-body md-content" id="skill-detail-body" draggable="false"></div>
+              <div class="skill-detail__body-wrap">
+                <div class="skill-detail__body reasoning-body md-content" id="skill-detail-body" draggable="false">
+                  <div class="skill-detail__body-head">
+                    <span class="skill-detail__body-path">/SKILL.md</span>
+                    <div class="skill-detail__body-actions">
+                      <button type="button" class="skill-detail__copy-btn glass-mode-btn" id="skill-detail-copy-raw-btn" title="Скопировать raw Markdown" aria-label="Скопировать raw Markdown">
+                        ${ICON_COPY}
+                      </button>
+                      <div class="skill-detail__mode-switch" role="group" aria-label="Режим просмотра">
+                        <button type="button" class="skill-detail__mode-btn glass-mode-btn is-active" data-body-mode="preview" title="Превью" aria-label="Превью">
+                          ${ICON_EYE}
+                        </button>
+                        <button type="button" class="skill-detail__mode-btn glass-mode-btn" data-body-mode="raw" title="Сырой код" aria-label="Сырой код">
+                          ${ICON_CODE}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="skill-detail__body-content is-preview" id="skill-detail-body-content" draggable="false"></div>
+                </div>
+              </div>
             `}
           </div>
 
@@ -516,19 +538,90 @@
       `;
 
       const bodyEl = document.getElementById('skill-detail-body');
-      if (bodyEl) {
-        const raw = skill.body || '';
-        try {
-          if (typeof marked !== 'undefined') {
-            let html = marked.parse(raw);
-            if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html);
-            bodyEl.innerHTML = html;
+      const contentEl = document.getElementById('skill-detail-body-content');
+      const copyRawBtn = document.getElementById('skill-detail-copy-raw-btn');
+      const modeBtns = bodyEl ? Array.from(bodyEl.querySelectorAll('[data-body-mode]')) : [];
+
+      if (bodyEl && contentEl) {
+        const raw = String(skill.body || '');
+        let currentMode = this._detailBodyMode === 'raw' ? 'raw' : 'preview';
+
+        const buildRawLinesHtml = (text) => {
+          const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+          return `<div class="skill-raw-lines">${lines.map((line, idx) => {
+            const isHeading = /^\s*#{1,6}\s+/.test(line);
+            const cls = isHeading ? 'skill-raw-line__text is-heading' : 'skill-raw-line__text';
+            return `<div class="skill-raw-line"><span class="skill-raw-line__num">${idx + 1}</span><span class="${cls}">${line.length ? esc(line) : '&#8203;'}</span></div>`;
+          }).join('')}</div>`;
+        };
+
+        const renderBody = () => {
+          const isPreview = currentMode === 'preview';
+          contentEl.classList.toggle('is-preview', isPreview);
+          contentEl.classList.toggle('is-raw', !isPreview);
+          modeBtns.forEach(btn => {
+            const active = btn.dataset.bodyMode === currentMode;
+            btn.classList.toggle('is-active', active);
+            btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+          });
+          if (isPreview) {
+            try {
+              if (typeof marked !== 'undefined') {
+                let html = marked.parse(raw);
+                if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html);
+                contentEl.innerHTML = html;
+              } else {
+                contentEl.textContent = raw;
+              }
+            } catch (e) {
+              contentEl.textContent = raw;
+            }
           } else {
-            bodyEl.textContent = raw;
+            contentEl.innerHTML = buildRawLinesHtml(raw);
           }
-        } catch (e) {
-          bodyEl.textContent = raw;
-        }
+        };
+
+        renderBody();
+
+        modeBtns.forEach(btn => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const nextMode = btn.dataset.bodyMode === 'raw' ? 'raw' : 'preview';
+            if (nextMode === currentMode) return;
+            currentMode = nextMode;
+            this._detailBodyMode = currentMode;
+            renderBody();
+          });
+        });
+
+        copyRawBtn?.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          try {
+            if (navigator.clipboard?.writeText) {
+              await navigator.clipboard.writeText(raw);
+            } else {
+              const ta = document.createElement('textarea');
+              ta.value = raw;
+              ta.style.position = 'fixed';
+              ta.style.opacity = '0';
+              document.body.appendChild(ta);
+              ta.select();
+              document.execCommand('copy');
+              ta.remove();
+            }
+            copyRawBtn.innerHTML = ICON_CHECK;
+            copyRawBtn.classList.add('is-copied');
+            this.app?.showToast?.('Скилл скопирован в raw-формате');
+            setTimeout(() => {
+              if (copyRawBtn.isConnected) {
+                copyRawBtn.innerHTML = ICON_COPY;
+                copyRawBtn.classList.remove('is-copied');
+              }
+            }, 1400);
+          } catch (err) {
+            this.app?.showToast?.('Не удалось скопировать');
+          }
+        });
       }
 
       detail.addEventListener('dragstart', (e) => {

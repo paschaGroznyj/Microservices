@@ -3483,6 +3483,201 @@ class ChatApp {
                             img.src = it.url;
                         });
                 }
+                
+
+                                // --- ЗУМ И МОБИЛЬНЫЕ ЖЕСТЫ ---
+
+                                let scale = 1, panX = 0, panY = 0;
+
+                                const applyTransform = () => {
+
+                                    img.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+
+                                };
+
+                                const resetZoom = () => {
+
+                                    scale = 1; panX = 0; panY = 0;
+
+                                    img.style.transition = 'transform 0.2s ease-out';
+
+                                    applyTransform();
+
+                                };
+
+                                
+
+                                let dragging = false, lastX, lastY;
+
+                                let touchStartDist = 0, touchStartScale = 1;
+
+                                let lastTap = 0;
+
+                                
+
+                                const clampPan = () => {
+
+                                    if (scale <= 1) { panX = 0; panY = 0; return; }
+
+                                    const rect = img.getBoundingClientRect();
+
+                                    const boxRect = mediaContainer.getBoundingClientRect();
+
+                                    const maxPx = Math.max(0, (rect.width - boxRect.width) / 2);
+
+                                    const maxPy = Math.max(0, (rect.height - boxRect.height) / 2);
+
+                                    panX = Math.max(-maxPx, Math.min(maxPx, panX));
+
+                                    panY = Math.max(-maxPy, Math.min(maxPy, panY));
+
+                                };
+
+                                
+
+                                img.addEventListener('wheel', (e) => {
+
+                                    e.preventDefault();
+
+                                    const step = e.deltaY < 0 ? 1.15 : (1 / 1.15);
+
+                                    scale = Math.min(6, Math.max(1, scale * step));
+
+                                    if (scale === 1) { panX = 0; panY = 0; } else clampPan();
+
+                                    applyTransform();
+
+                                }, { passive: false });
+
+                                
+
+                                img.addEventListener('dblclick', (e) => {
+
+                                    e.stopPropagation();
+
+                                    if (scale > 1.05) resetZoom();
+
+                                    else { scale = 2.25; applyTransform(); }
+
+                                });
+
+                                img.addEventListener('mousedown', (e) => {
+
+                                    if (scale <= 1) return;
+
+                                    e.preventDefault(); dragging = true; lastX = e.clientX; lastY = e.clientY;
+
+                                    img.style.cursor = 'grabbing';
+
+                                    img.style.transition = 'none';
+
+                                });
+
+                                window.addEventListener('mousemove', (e) => {
+
+                                    if (!dragging) return;
+
+                                    panX += e.clientX - lastX; panY += e.clientY - lastY;
+
+                                    lastX = e.clientX; lastY = e.clientY;
+
+                                    clampPan(); applyTransform();
+
+                                });
+
+                                window.addEventListener('mouseup', () => {
+
+                                    if (dragging) { dragging = false; img.style.cursor = scale > 1 ? 'grab' : 'zoom-in'; img.style.transition = 'transform 0.08s ease-out'; }
+
+                                });
+
+                                
+
+                                img.addEventListener('touchstart', (e) => {
+
+                                    if (e.touches.length === 1) {
+
+                                        lastX = e.touches[0].clientX; lastY = e.touches[0].clientY;
+
+                                        img.style.transition = 'none';
+
+                                    } else if (e.touches.length === 2) {
+
+                                        const dx = e.touches[0].clientX - e.touches[1].clientX;
+
+                                        const dy = e.touches[0].clientY - e.touches[1].clientY;
+
+                                        touchStartDist = Math.sqrt(dx*dx + dy*dy);
+
+                                        touchStartScale = scale;
+
+                                        img.style.transition = 'none';
+
+                                    }
+
+                                }, { passive: false });
+
+                
+
+                                img.addEventListener('touchmove', (e) => {
+
+                                    if (e.touches.length === 1 && scale > 1.01) {
+
+                                        e.preventDefault();
+
+                                        panX += e.touches[0].clientX - lastX; panY += e.touches[0].clientY - lastY;
+
+                                        lastX = e.touches[0].clientX; lastY = e.touches[0].clientY;
+
+                                        clampPan(); applyTransform();
+
+                                    } else if (e.touches.length === 2) {
+
+                                        e.preventDefault();
+
+                                        const dx = e.touches[0].clientX - e.touches[1].clientX;
+
+                                        const dy = e.touches[0].clientY - e.touches[1].clientY;
+
+                                        const dist = Math.sqrt(dx*dx + dy*dy);
+
+                                        scale = Math.min(6, Math.max(1, touchStartScale * (dist / touchStartDist)));
+
+                                        clampPan(); applyTransform();
+
+                                    }
+
+                                }, { passive: false });
+
+                
+
+                                img.addEventListener('touchend', (e) => {
+
+                                    if (e.touches.length === 0) {
+
+                                        const now = Date.now();
+
+                                        if (now - lastTap < 300) {
+
+                                            if (scale > 1.05) resetZoom();
+
+                                            else { scale = 2.25; applyTransform(); }
+
+                                        }
+
+                                        lastTap = now;
+
+                                        if (scale <= 1) resetZoom();
+
+                                        img.style.transition = 'transform 0.08s ease-out';
+
+                                    }
+
+                                });
+
+                                // -----------------------------
+
+                
                 mediaContainer.appendChild(img);
             }
         };

@@ -557,18 +557,39 @@ class ChatApp {
             titleEl.textContent = 'Агент';
         }
 
+        const isNewChat = !!opts?.isNewChat;
         const targetMsgId = opts?.targetMessageId || opts?.targetDbId || null;
-        await Promise.all([
-            targetMsgId
-                ? this.loadMessagesAround(chatId, targetMsgId, opts?.radius || 10, { dbId: opts?.targetDbId })
-                : this.loadMessages(chatId),
-            this.renderMessageInput()
-        ]);
+        if (isNewChat) {
+            this._pagination = {
+                chatId,
+                pageSize: 50,
+                loaded: 0,
+                hasMore: false,
+                hasNewer: false,
+                oldestId: null,
+                newestId: null,
+                loading: false,
+                loadingNewer: false,
+            };
+            this.renderMessages([]);
+            this._initHistoryScrollLoader();
+            await this.renderMessageInput();
+        } else {
+            await Promise.all([
+                targetMsgId
+                    ? this.loadMessagesAround(chatId, targetMsgId, opts?.radius || 10, { dbId: opts?.targetDbId })
+                    : this.loadMessages(chatId),
+                this.renderMessageInput()
+            ]);
+        }
 
         // Восстанавливаем черновик поля ввода этого чата (если был сохранён).
-        this._restoreInputDraft(chatId);
+        if (!isNewChat) {
+            this._restoreInputDraft(chatId);
+        }
 
         this.connectWebSocket(chatId);
+        if (isNewChat) return;
 
         // ВАЖНО: раньше здесь был ранний return по наличию любого
         // .agent-message в ленте («ответ уже есть → агент свободен»).
@@ -611,6 +632,7 @@ class ChatApp {
      * переключении вкладок; run_status — авторитетная проверка по серверу.
      */
     async _restoreRunningUI(chatId, savedState = null) {
+        if (chatId != null && String(this._sendingInFlightChat) === String(chatId)) return;
         let running = false;
         let requestId = savedState?.activeRequestId || null;
         let serverStatus = null;
@@ -1120,6 +1142,7 @@ class ChatApp {
     async _syncMissedMessages(chatId) {
         if (!chatId || window.__authSessionExpired) return;
         const key = String(chatId);
+        if (String(this._sendingInFlightChat) === key) return;
         if (String(this.currentChat) !== key || this._loadingMessagesChat === key) return;
         if (this._pagination && String(this._pagination.chatId) === key && this._pagination.hasNewer) return;
 
@@ -3419,10 +3442,15 @@ class ChatApp {
         const chatPreviewText = text || (attachedMeta[0]?.name ? `📎 ${attachedMeta[0].name}` : 'Файл');
 
         if (!this.currentChat) {
-            this.currentChat = this.generateChatId();
-            this.chats.push({ id: this.currentChat, last_message: chatPreviewText, timestamp: new Date().toISOString() });
+            if (!isCustom && field) {
+                this.clearInput(field);
+                this._clearInputDraft(null);
+            }
+            const newChatId = this.generateChatId();
+            this._sendingInFlightChat = String(newChatId);
+            this.chats.push({ id: newChatId, last_message: chatPreviewText, timestamp: new Date().toISOString() });
             this.renderChats(this.chats);
-            await this.openChat(this.currentChat);
+            await this.openChat(newChatId, { isNewChat: true });
         } else {
             const existing = this.chats.find(c => c.id === this.currentChat);
             if (existing) {
@@ -3462,6 +3490,7 @@ class ChatApp {
 
         this._runState = 'running';
         this._setSendButtonMode('stop');
+        this._sendingInFlightChat = String(this.currentChat);
 
         try {
             await this._waitForWS();
@@ -3529,6 +3558,8 @@ class ChatApp {
             this._runState = 'idle';
             this._setSendButtonMode('send');
             this._activeRequestId = null;
+        } finally {
+            this._sendingInFlightChat = null;
         }
     }
 
@@ -4098,7 +4129,7 @@ class ChatApp {
             if (needResync) {
                 this.loadChats?.().catch(() => {});
             }
-            if (String(this.currentChat) === key && (needResync || this._runState === 'running' || this._runState === 'stopping')) {
+            if (String(this.currentChat) === key && String(this._sendingInFlightChat) !== key && (needResync || this._runState === 'running' || this._runState === 'stopping')) {
                 (async () => {
                     if (needResync) {
                         await this._syncMissedMessages(key).catch(() => {});

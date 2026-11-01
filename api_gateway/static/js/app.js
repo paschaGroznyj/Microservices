@@ -2506,6 +2506,7 @@ class ChatApp {
                     if (boxW > imgW + 2 || boxH > imgH + 2) {
                         if (activeSrc && activeSrc !== '#') {
                             bg.style.backgroundImage = `url("${activeSrc.replace(/"/g, '\"')}")`;
+                            if (item._dlBtn) item._dlBtn.href = item.dlUrl || activeSrc;
                         }
                         card.classList.add('fa-image-card--glass');
                     } else {
@@ -2543,6 +2544,17 @@ class ChatApp {
   <svg viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="1.8"/><path d="M20 20l-3.5-3.5M11 8v6M8 11h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
 </span>`;
 
+            const dlBtn = document.createElement('a');
+            dlBtn.className = 'image-lightbox__dl fa-card-dl-btn';
+            dlBtn.href = item.dlUrl || item.url;
+            dlBtn.download = safeName;
+            dlBtn.title = 'Скачать';
+            dlBtn.innerHTML = '<svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+            dlBtn.addEventListener('click', (e) => e.stopPropagation());
+
+            // Обновляем ссылку при фолбэке
+            item._dlBtn = dlBtn;
+
             const skel = document.createElement('div');
             skel.className = 'fa-image-card__skeleton';
             skel.innerHTML = '<div class="fa-pixel-grid"></div>';
@@ -2551,6 +2563,7 @@ class ChatApp {
             card.appendChild(skel);
             card.appendChild(img);
             card.appendChild(overlay);
+            if (!allItems || allItems.length <= 1) { card.appendChild(dlBtn); }
             return card;
         };
 
@@ -2595,6 +2608,14 @@ class ChatApp {
             playBadge.className = 'fa-collage__play';
             playBadge.setAttribute('aria-hidden', 'true');
             playBadge.innerHTML = '<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+            
+            const dlBtn = document.createElement('a');
+            dlBtn.className = 'image-lightbox__dl fa-card-dl-btn';
+            dlBtn.href = dlUrl;
+            dlBtn.download = name;
+            dlBtn.title = 'Скачать';
+            dlBtn.innerHTML = '<svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+            dlBtn.addEventListener('click', (e) => e.stopPropagation());
 
             card.addEventListener('click', () => this._openMediaLightbox(allItems, idx));
             if (typeof this._showFileContextMenu === 'function') {
@@ -2608,6 +2629,7 @@ class ChatApp {
             card.appendChild(skel);
             card.appendChild(video);
             card.appendChild(playBadge);
+            if (!allItems || allItems.length <= 1) { card.appendChild(dlBtn); }
             return card;
         };
 
@@ -2675,6 +2697,7 @@ class ChatApp {
                         item.url = activeSrc;
                         if (activeSrc && activeSrc !== '#') {
                             bg.style.backgroundImage = `url("${activeSrc.replace(/"/g, '\"')}")`;
+                            if (item._dlBtn) item._dlBtn.href = item.dlUrl || activeSrc;
                         }
                     };
                     if (img.complete && img.naturalWidth > 0) onImgLoad();
@@ -2706,6 +2729,8 @@ class ChatApp {
                     more.className = 'fa-collage__more';
                     more.textContent = `+${n - 4}`;
                     cell.appendChild(more);
+                } else {
+                    
                 }
 
                 cell.addEventListener('click', () => this._openMediaLightbox(allItems, i));

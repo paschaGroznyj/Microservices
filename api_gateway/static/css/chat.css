@@ -2132,6 +2132,7 @@ pre {
   flex-direction: column;
   transform: scale(0.96);
   transition: transform 0.2s ease;
+  touch-action: none;
 }
 .image-lightbox--shown .image-lightbox__box { transform: scale(1); }
 
@@ -2141,10 +2142,15 @@ pre {
   object-fit: contain;
   border-radius: 10px;
   box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+  will-change: transform;
+  transform-origin: center center;
+  touch-action: none;
 }
 
 .image-lightbox__bar {
   display: flex;
+  position: relative;
+  z-index: 10;
   align-items: center;
   gap: 12px;
   padding: 8px 4px 10px;
@@ -2196,11 +2202,14 @@ pre {
     max-height: 92vh;
   }
   .image-lightbox__img {
-    width: 96vw;
+    width: auto;
     max-width: 96vw;
     height: auto;
     max-height: 84vh;
     object-fit: contain;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-drag: none;
   }
 }
 
@@ -3007,4 +3016,65 @@ pre {
   align-items: center;
   justify-content: center;
   padding: 0 4px;
+}
+
+/* ── Кнопка скачивания на карточке изображения/видео (стекло) ── */
+.image-lightbox__dl.fa-card-dl-btn,
+.fa-card-dl-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 4;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.30);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  backdrop-filter: blur(6px) saturate(115%);
+  -webkit-backdrop-filter: blur(6px) saturate(115%);
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  color: var(--text-primary, #0f172a);
+  text-decoration: none;
+  opacity: 1;
+  pointer-events: auto;
+  transition: opacity 0.2s ease, background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+[data-theme="dark"] .image-lightbox__dl.fa-card-dl-btn,
+[data-theme="dark"] .fa-card-dl-btn {
+  background: rgba(15, 23, 37, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(7px) saturate(115%);
+  -webkit-backdrop-filter: blur(7px) saturate(115%);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.30), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.92);
+}
+.fa-image-card:hover .fa-card-dl-btn,
+.gc-collage__cell:hover .fa-card-dl-btn {
+  opacity: 1;
+  pointer-events: auto;
+}
+.fa-image-card--loading .fa-card-dl-btn,
+.fa-collage__cell--loading .fa-card-dl-btn {
+  display: none !important;
+}
+.image-lightbox__dl.fa-card-dl-btn:hover,
+.fa-card-dl-btn:hover {
+  background: rgba(255, 255, 255, 0.46);
+  border-color: rgba(255, 255, 255, 0.42);
+  color: var(--text-primary, #0f172a);
+  transform: scale(1.05);
+}
+[data-theme="dark"] .image-lightbox__dl.fa-card-dl-btn:hover,
+[data-theme="dark"] .fa-card-dl-btn:hover {
+  background: rgba(15, 23, 37, 0.52);
+  border-color: rgba(255, 255, 255, 0.22);
+  color: #fff;
+}
+
+.gc-lb__nav[hidden],
+.gc-lb__nav--hidden {
+  display: none !important;
 }

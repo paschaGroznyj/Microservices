@@ -668,6 +668,7 @@
 }
 .gc-lb__nav {
   position: absolute;
+  z-index: 10;
   top: 50%;
   transform: translateY(-50%);
   display: inline-flex;
@@ -693,11 +694,14 @@
   }
   .gc-lightbox .image-lightbox__img,
   .gc-lightbox .image-lightbox__video {
-    width: 96vw;
+    width: auto;
     max-width: 96vw;
     height: auto;
     max-height: 84vh;
     object-fit: contain;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-drag: none;
   }
 }
 @media (max-width: 640px) {

@@ -864,25 +864,35 @@
             const vmime = this._esc(this._videoMime(f));
             if (n === 1) {
               // Одиночное видео рендерится сразу с контролами в размер
+              const dlUrl = url + (url.indexOf('/api/group/file/') === 0 ? '?download=1' : '');
               return `<div class="gc-collage__cell gc-collage__cell--video-single" data-img-idx="0">
                 <span class="gc-collage__bg" aria-hidden="true"></span>
                 <video class="gc-video" controls preload="metadata" playsinline webkit-playsinline src="${url}">
                   <source src="${url}" type="${vmime}">
                 </video>
+                <a class="image-lightbox__dl fa-card-dl-btn" href="${dlUrl}" download="${name}" title="Скачать" onclick="event.stopPropagation()">
+                  <svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </a>
               </div>`;
             } else {
               // Видео в сетке 2x2/3x3 - просто превью (первый кадр) + кнопка Play поверх
-              return `<button class="gc-collage__cell gc-collage__cell--video-thumb" type="button" data-lb="1" data-img-idx="${i}" title="${name}">
+              const dlUrl = url + (url.indexOf('/api/group/file/') === 0 ? '?download=1' : '');
+              return `<div class="gc-collage__cell gc-collage__cell--video-thumb" role="button" tabindex="0" data-lb="1" data-img-idx="${i}" title="${name}">
                 <video class="gc-collage__thumb-video" src="${url}" preload="auto" autoplay playsinline webkit-playsinline muted></video>
                 <span class="gc-collage__play"><svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
                 ${more}
-              </button>`;
+              </div>`;
             }
           } else {
-            return `<button class="gc-collage__cell" type="button" data-lb="1" data-img-idx="${i}">
+            const dlUrl = url + (url.indexOf('/api/group/file/') === 0 ? '?download=1' : '');
+            const dlBtn = (n === 1) ? `<a class="image-lightbox__dl fa-card-dl-btn" href="${dlUrl}" download="${name}" title="Скачать" onclick="event.stopPropagation()">
+              <svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </a>` : '';
+            return `<div class="gc-collage__cell" role="button" tabindex="0" data-lb="1" data-img-idx="${i}">
               <span class="gc-collage__bg" style="background-image:url('${url}')" aria-hidden="true"></span>
               <img src="${url}" alt="${name}" loading="lazy">${more}
-            </button>`;
+              ${dlBtn}
+            </div>`;
           }
         }).join('');
         
@@ -961,19 +971,25 @@
       const cntEl = overlay.querySelector('.gc-lb__counter');
       const dlEl = overlay.querySelector('.image-lightbox__dl');
       
-      let scale = 1, panX = 0, panY = 0, dragging = false, lastX, lastY;
+
+      let scale = 1, panX = 0, panY = 0;
       let currentMedia = null;
       
       const applyTransform = () => {
         if (!currentMedia || currentMedia.tagName === 'VIDEO') return;
-        currentMedia.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+        currentMedia.style.transform = `translate3d(${panX}px, ${panY}px, 0) scale(${scale})`;
       };
       const resetZoom = () => { scale = 1; panX = 0; panY = 0; applyTransform(); };
 
       const show = () => {
         const it = items[idx];
         nameEl.textContent = it.name || '';
-        cntEl.textContent = items.length > 1 ? `${idx + 1}/${items.length}` : '';
+        
+        const hasMultiple = items.length > 1;
+        cntEl.textContent = hasMultiple ? `${idx + 1}/${items.length}` : '';
+        if (prevBtn) { prevBtn.hidden = !hasMultiple; prevBtn.style.display = hasMultiple ? '' : 'none'; }
+        if (nextBtn) { nextBtn.hidden = !hasMultiple; nextBtn.style.display = hasMultiple ? '' : 'none'; }
+        
         dlEl.href = it.url + (it.url.indexOf('/api/group/file/') === 0 ? '?download=1' : '');
         dlEl.setAttribute('download', it.name || 'file');
         
@@ -996,22 +1012,101 @@
           container.appendChild(img);
           currentMedia = img;
           
+          let dragging = false, lastX, lastY;
+          let touchStartDist = 0, touchStartScale = 1;
+          let lastTap = 0;
+          
+          const clampPan = () => {
+              if (scale <= 1) { panX = 0; panY = 0; return; }
+              const rect = img.getBoundingClientRect();
+              const boxRect = container.getBoundingClientRect();
+              const maxPx = Math.max(0, (rect.width - boxRect.width) / 2);
+              const maxPy = Math.max(0, (rect.height - boxRect.height) / 2);
+              panX = Math.max(-maxPx, Math.min(maxPx, panX));
+              panY = Math.max(-maxPy, Math.min(maxPy, panY));
+          };
+          
           img.addEventListener('wheel', (e) => {
             e.preventDefault();
             const step = e.deltaY < 0 ? 1.15 : (1 / 1.15);
             scale = Math.min(6, Math.max(1, scale * step));
-            if (scale === 1) { panX = 0; panY = 0; }
+            if (scale === 1) { panX = 0; panY = 0; } else clampPan();
             applyTransform();
           }, { passive: false });
+          
           img.addEventListener('dblclick', (e) => {
-            e.stopPropagation();
-            if (scale > 1) resetZoom();
-            else { scale = 2; applyTransform(); }
-          });
-          img.addEventListener('mousedown', (e) => {
+                    e.stopPropagation();
+                    if (scale > 1.05) resetZoom();
+                    else { scale = 2.25; applyTransform(); }
+                });
+                img.addEventListener('mousedown', (e) => {
             if (scale <= 1) return;
             e.preventDefault(); dragging = true; lastX = e.clientX; lastY = e.clientY;
             img.style.cursor = 'grabbing';
+            img.style.transition = 'none';
+          });
+          window.addEventListener('mousemove', (e) => {
+            if (!dragging) return;
+            panX += e.clientX - lastX; panY += e.clientY - lastY;
+            lastX = e.clientX; lastY = e.clientY;
+            clampPan(); applyTransform();
+          });
+          window.addEventListener('mouseup', () => {
+            if (dragging) { dragging = false; img.style.cursor = scale > 1 ? 'grab' : 'zoom-in'; img.style.transition = 'transform 0.08s ease-out'; }
+          });
+          
+          img.addEventListener('touchstart', (e) => {
+              if (e.touches.length === 1) {
+                  lastX = e.touches[0].clientX; lastY = e.touches[0].clientY;
+                  img.style.transition = 'none';
+              } else if (e.touches.length === 2) {
+                  const dx = e.touches[0].clientX - e.touches[1].clientX;
+                  const dy = e.touches[0].clientY - e.touches[1].clientY;
+                  touchStartDist = Math.sqrt(dx*dx + dy*dy);
+                  touchStartScale = scale;
+                  img.style.transition = 'none';
+              }
+          }, { passive: false });
+
+          img.addEventListener('touchmove', (e) => {
+              if (e.touches.length === 1 && scale > 1.01) {
+                  e.preventDefault();
+                  panX += e.touches[0].clientX - lastX; panY += e.touches[0].clientY - lastY;
+                  lastX = e.touches[0].clientX; lastY = e.touches[0].clientY;
+                  clampPan(); applyTransform();
+              } else if (e.touches.length === 2) {
+                  e.preventDefault();
+                  const dx = e.touches[0].clientX - e.touches[1].clientX;
+                  const dy = e.touches[0].clientY - e.touches[1].clientY;
+                  const dist = Math.sqrt(dx*dx + dy*dy);
+                  scale = Math.min(6, Math.max(1, touchStartScale * (dist / touchStartDist)));
+                  if (scale <= 1) { panX = 0; panY = 0; }
+                  applyTransform();
+              }
+          }, { passive: false });
+
+          img.addEventListener('touchend', (e) => {
+              img.style.transition = 'transform 0.08s ease-out';
+              if (e.touches.length === 0) {
+                  const now = Date.now();
+                  if (now - lastTap < 300) {
+                      if (scale > 1.05) resetZoom(); else { scale = 2.5; applyTransform(); }
+                      lastTap = 0;
+                  } else lastTap = now;
+              }
+          });
+          
+          let swipeStartX = 0, swipeStartY = 0;
+          overlay.addEventListener('touchstart', (e) => {
+              if (e.touches.length === 1 && scale <= 1.01) { swipeStartX = e.touches[0].clientX; swipeStartY = e.touches[0].clientY; }
+          }, { passive: true });
+          overlay.addEventListener('touchend', (e) => {
+              if (e.touches.length === 0 && e.changedTouches.length === 1 && scale <= 1.01 && hasMultiple && swipeStartX > 0) {
+                  const dx = e.changedTouches[0].clientX - swipeStartX;
+                  const dy = e.changedTouches[0].clientY - swipeStartY;
+                  if (Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) * 1.5) nav(dx > 0 ? -1 : 1);
+                  swipeStartX = 0;
+              }
           });
         }
       };
@@ -1025,15 +1120,7 @@
       if (prevBtn) prevBtn.onclick = (e) => { e.stopPropagation(); nav(-1); };
       if (nextBtn) nextBtn.onclick = (e) => { e.stopPropagation(); nav(1); };
 
-      window.addEventListener('mousemove', (e) => {
-        if (!dragging) return;
-        panX += e.clientX - lastX; panY += e.clientY - lastY;
-        lastX = e.clientX; lastY = e.clientY;
-        applyTransform();
-      });
-      window.addEventListener('mouseup', () => {
-        if (dragging) { dragging = false; currentMedia.style.cursor = scale > 1 ? 'grab' : 'zoom-in'; }
-      });
+
 
       const close = () => {
         document.removeEventListener('keydown', onKey);
@@ -1070,7 +1157,8 @@
         const isOne = col.classList.contains('gc-collage--one');
         
         col.querySelectorAll('[data-lb]').forEach((cell) => {
-          cell.onclick = () => {
+          cell.onclick = (e) => {
+            if (e.target.closest('a')) return;
             const idx = parseInt(cell.getAttribute('data-img-idx') || '0', 10) || 0;
             this._openLightbox(items, idx);
           };

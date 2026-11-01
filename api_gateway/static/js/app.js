@@ -1505,6 +1505,8 @@ class ChatApp {
 
         const root = document.createElement('div');
         root.setAttribute('data-cds', 'AskUserQuestion');
+        root.setAttribute('data-gen-component', 'InteractivePoll');
+        root.setAttribute('data-gen-state', 'rendered');
         root.setAttribute('role', 'region');
         root.setAttribute('aria-labelledby', `${uid}label`);
         root.tabIndex = -1;
@@ -1789,12 +1791,21 @@ class ChatApp {
     _renderBotStructuredContent(containerEl, rawText, meta = {}) {
         if (!containerEl) return;
         const src = String(rawText || '');
-        const segments = this._extractStructuredSegments(src);
-        const hasComponents = segments.some(s => s.kind === 'component');
-        if (!hasComponents) {
+        const isStreaming = !!meta.isStreaming;
+        const segments = window.GenerativeUI && typeof window.GenerativeUI.extractStructuredSegments === 'function'
+            ? window.GenerativeUI.extractStructuredSegments(src, (r) => this._tryParseComponentJson(r), { isStreaming })
+            : this._extractStructuredSegments(src);
+
+        const hasSpecial = segments.some(s => s.kind === 'component' || s.kind === 'skeleton');
+        const hadStructuredNodes = !!containerEl.querySelector(':scope > [data-seg-kind]');
+
+        if (!hasSpecial && !hadStructuredNodes && !isStreaming) {
             if (src.trimStart().startsWith('<')) {
                 let html = src;
-                if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html);
+                if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
+                    ADD_TAGS: ['table','thead','tbody','tr','th','td'],
+                    ADD_ATTR: ['colspan','rowspan','align']
+                });
                 const tmp = document.createElement('div');
                 tmp.innerHTML = html;
                 tmp.querySelectorAll('a[href]').forEach(a => {
@@ -1812,24 +1823,93 @@ class ChatApp {
         const pollAnswers = Array.isArray(meta.pollAnswers) ? meta.pollAnswers : [];
         let pollIdx = 0;
 
-        containerEl.innerHTML = '';
-        for (const seg of segments) {
-            if (seg.kind === 'component' && seg.component === 'InteractivePoll') {
-                const curIdx = pollIdx++;
-                const savedAnswer = pollAnswers.find(a => Number(a.poll_index || 0) === curIdx) || null;
-                containerEl.appendChild(this._createInteractivePollEl(seg.data, {
-                    botMessageId,
-                    pollIndex: curIdx,
-                    savedAnswer,
-                }));
-            } else if (seg.kind === 'component' && window.GenerativeUI && window.GenerativeUI.isGenerativeComponent(seg.component)) {
-                containerEl.appendChild(window.GenerativeUI.createBlockEl(seg.data));
-            } else {
-                const mdBlock = document.createElement('div');
-                mdBlock.className = 'bot-md-segment';
-                mdBlock.innerHTML = this._renderSafeMarkdownHtml(seg.text);
-                containerEl.appendChild(mdBlock);
+        const existingNodes = [...containerEl.querySelectorAll(':scope > [data-seg-kind]')];
+        [...containerEl.childNodes].forEach(node => {
+            if (node.nodeType === Node.TEXT_NODE) {
+                node.remove();
+            } else if (node.nodeType === Node.ELEMENT_NODE) {
+                if (!node.hasAttribute('data-seg-kind') &&
+                    !node.classList.contains('fa-bot-files') &&
+                    !node.classList.contains('message-actions') &&
+                    !node.classList.contains('reasoning-live') &&
+                    !node.classList.contains('live-block') &&
+                    !node.classList.contains('reasoning-block')) {
+                    node.remove();
+                }
             }
+        });
+
+        const firstSystemNode = containerEl.querySelector(':scope > .fa-bot-files, :scope > .message-actions, :scope > .reasoning-live');
+
+        for (let i = 0; i < segments.length; i++) {
+            const seg = segments[i];
+            const curNode = existingNodes[i] || null;
+
+            if (seg.kind === 'md') {
+                if (curNode && curNode.dataset.segKind === 'md') {
+                    if (curNode._rawMd !== seg.text) {
+                        curNode.innerHTML = this._renderSafeMarkdownHtml(seg.text);
+                        curNode._rawMd = seg.text;
+                    }
+                } else {
+                    const mdBlock = document.createElement('div');
+                    mdBlock.className = 'bot-md-segment';
+                    mdBlock.dataset.segKind = 'md';
+                    mdBlock._rawMd = seg.text;
+                    mdBlock.innerHTML = this._renderSafeMarkdownHtml(seg.text);
+                    if (curNode) containerEl.replaceChild(mdBlock, curNode);
+                    else containerEl.insertBefore(mdBlock, firstSystemNode);
+                }
+            } else if (seg.kind === 'skeleton') {
+                if (curNode && curNode.dataset.segKind === 'skeleton' && window.GenerativeUI && window.GenerativeUI.updateSkeletonEl) {
+                    window.GenerativeUI.updateSkeletonEl(curNode, seg);
+                } else {
+                    const skelEl = window.GenerativeUI ? window.GenerativeUI.createSkeletonEl(seg) : document.createElement('div');
+                    skelEl.dataset.segKind = 'skeleton';
+                    if (curNode) containerEl.replaceChild(skelEl, curNode);
+                    else containerEl.insertBefore(skelEl, firstSystemNode);
+                }
+            } else if (seg.kind === 'component') {
+                let curIdx = 0;
+                if (seg.component === 'InteractivePoll' || seg.component === 'AskUserQuestion' || seg.component === 'poll') {
+                    curIdx = pollIdx++;
+                }
+                const savedAnswer = pollAnswers.find(a => Number(a.poll_index || 0) === curIdx) || null;
+                const segKey = seg.component + ':' + (seg.rawKey || JSON.stringify(seg.data));
+
+                if (curNode && curNode.dataset.segKind === 'component' && curNode._segKey === segKey) {
+                    if (seg.component === 'InteractivePoll' || seg.component === 'AskUserQuestion' || seg.component === 'poll') {
+                        if (botMessageId) curNode.dataset.botMessageId = botMessageId;
+                        if (savedAnswer && typeof curNode._applySavedAnswer === 'function') {
+                            curNode._applySavedAnswer(savedAnswer);
+                        }
+                    }
+                } else {
+                    let compEl = null;
+                    if (seg.component === 'InteractivePoll' || seg.component === 'AskUserQuestion' || seg.component === 'poll') {
+                        compEl = this._createInteractivePollEl(seg.data, {
+                            botMessageId,
+                            pollIndex: curIdx,
+                            savedAnswer,
+                        });
+                    } else if (window.GenerativeUI && window.GenerativeUI.isGenerativeComponent(seg.component)) {
+                        compEl = window.GenerativeUI.createBlockEl(seg.data);
+                    } else {
+                        compEl = document.createElement('div');
+                    }
+                    compEl.dataset.segKind = 'component';
+                    compEl._segKey = segKey;
+                    if (curNode && curNode.dataset.segKind === 'skeleton') {
+                        compEl.classList.add('gen-ui-blk--appear');
+                    }
+                    if (curNode) containerEl.replaceChild(compEl, curNode);
+                    else containerEl.insertBefore(compEl, firstSystemNode);
+                }
+            }
+        }
+
+        for (let i = segments.length; i < existingNodes.length; i++) {
+            existingNodes[i].remove();
         }
     }
 
@@ -4208,12 +4288,16 @@ class ChatApp {
                 }
 
                 if (st.pendingBotEl) {
+                    st.streamIsFinal = true;
                     if (!st.liveBlockEl) {
                         st.liveBlockEl = document.createElement('div');
                         st.liveBlockEl.className = 'live-block';
                         st.pendingBotEl.appendChild(st.liveBlockEl);
                         st.streamShown = '';
                         st.streamBuffer = '';
+                    } else {
+                        st.liveBlockEl.className = 'live-block';
+                        st.liveBlockEl.style.display = '';
                     }
                     const alreadyQueued = (st.streamShown || '') + (st.streamBuffer || '');
                     if (fullText.startsWith(alreadyQueued)) {
@@ -4331,14 +4415,15 @@ class ChatApp {
     // от быстрой генерации, но не рвать плавность.
     _streamTypewriterStep(st) {
         st = st || this._resolveStream(null);
-        const CHARS_PER_FRAME = 7;      // базовый темп (чуть быстрее, ~420 симв/сек)
+        const CHARS_PER_FRAME = 7;
         const buffered = (st && st.streamBuffer) ? st.streamBuffer.length : 0;
-
-        // Автоускорение: чем больше накопилось, тем крупнее порция.
         let step = CHARS_PER_FRAME;
         if (buffered > 400)  step = Math.min(16, CHARS_PER_FRAME + Math.floor(buffered / 150));
         if (buffered > 2000) step = Math.min(48, Math.floor(buffered / 50));
 
+        if (st && window.GenerativeUI && typeof window.GenerativeUI.computeStreamStep === 'function') {
+            return window.GenerativeUI.computeStreamStep(st.streamShown || '', st.streamBuffer || '', step);
+        }
         return step;
     }
 
@@ -4403,19 +4488,27 @@ class ChatApp {
     _renderStreamPartial(chatId) {
         const st = this._resolveStream(chatId);
         if (!st || !st.liveBlockEl) return;
-        // Скролл только для активного чата (фоновый пишет в открепленный узел).
         const container = this._isActiveChat(chatId) ? this.getMessagesContainer() : null;
 
-        let html = this._parseMarkdown(st.streamShown || '');
-        if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
-            ADD_TAGS: ['table','thead','tbody','tr','th','td'],
-            ADD_ATTR: ['colspan','rowspan','align']
-        });
-        st.liveBlockEl.innerHTML = html;
-        st.liveBlockEl.querySelectorAll('a[href]').forEach(a => {
-            a.setAttribute('target', '_blank');
-            a.setAttribute('rel', 'noopener noreferrer');
-        });
+        if (st.streamIsFinal || st.streamDone || st.liveBlockEl.classList.contains('live-block')) {
+            const data = st.streamFinalData || {};
+            this._renderBotStructuredContent(st.liveBlockEl, st.streamShown || '', {
+                botMessageId: data.message_id || st.pendingBotEl?.dataset?.messageId || st.pendingBotEl?.dataset?.id || '',
+                pollAnswers: data.poll_answers || [],
+                isStreaming: true,
+            });
+        } else {
+            let html = this._parseMarkdown(st.streamShown || '');
+            if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
+                ADD_TAGS: ['table','thead','tbody','tr','th','td'],
+                ADD_ATTR: ['colspan','rowspan','align']
+            });
+            st.liveBlockEl.innerHTML = html;
+            st.liveBlockEl.querySelectorAll('a[href]').forEach(a => {
+                a.setAttribute('target', '_blank');
+                a.setAttribute('rel', 'noopener noreferrer');
+            });
+        }
 
         if (container) {
             const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
@@ -5444,9 +5537,10 @@ class ChatApp {
     ══════════════════════════════════════════ */
     async _streamRenderMessage(el, rawText, container, files, messageId) {
         let accumulated = '';
-        const tokens = rawText.split(/(\s+)/);
-        const BATCH = 2;
-        const DELAY = 22;
+        let cursor = 0;
+        const totalLen = (rawText || '').length;
+        const BASE_STEP = 14;
+        const DELAY = 20;
 
         let userScrolled = false;
         const onScroll = () => {
@@ -5455,28 +5549,23 @@ class ChatApp {
         };
         container.addEventListener('scroll', onScroll, { passive: true });
 
-        for (let i = 0; i < tokens.length; i += BATCH) {
-            accumulated += tokens.slice(i, i + BATCH).join('');
+        while (cursor < totalLen) {
+            const rem = rawText.slice(cursor);
+            const step = (window.GenerativeUI && typeof window.GenerativeUI.computeStreamStep === 'function')
+                ? window.GenerativeUI.computeStreamStep(accumulated, rem, BASE_STEP)
+                : BASE_STEP;
+            const chunk = rem.slice(0, step || 1);
+            accumulated += chunk;
+            cursor += (step || 1);
 
-            let html = this._parseMarkdown(accumulated);
-            if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html);
-
-            const tmp = document.createElement('div');
-            tmp.innerHTML = html;
-            tmp.querySelectorAll('a').forEach(a => {
-                a.setAttribute('target', '_blank');
-                a.setAttribute('rel', 'noopener noreferrer');
-            });
-
-            el.innerHTML = tmp.innerHTML;
-            el.querySelectorAll('pre code').forEach(b => {
-                delete b.dataset.highlighted;
+            this._renderBotStructuredContent(el, accumulated, {
+                botMessageId: messageId || el?.dataset?.messageId || el?.dataset?.id || '',
+                isStreaming: cursor < totalLen,
             });
 
             if (!userScrolled && container) {
                 container.scrollTop = container.scrollHeight;
             }
-
             await this._sleep(DELAY);
         }
 

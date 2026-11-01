@@ -63,195 +63,62 @@ TOOL_NAME_INTEGRITY_GUIDANCE = (
     "- Когда все задачи выполнены и ты даешь финальный ответ пользователю (без вызова инструментов) — тегов <thinking> и <reasoning> быть НЕ должно, сразу пиши чистый финальный ответ в content."
 )
 
+
 INTERACTIVE_POLL_GUIDANCE = """
-   # GENERATIVE UI & ИНТЕРАКТИВНЫЕ КОМПОНЕНТЫ (InteractivePoll, Chart, MetricCards, DataTable)
-   Web UI автоматически рендерит специальные JSON-блоки (внутри ```json ... ```) как интерактивные карточки, графики, KPI-метрики и таблицы с поиском/сортировкой/экспортом в PNG и SVG.
-   Единый подход: поле `"component"` определяет тип UI-компонента, а данные и настройки задают его содержимое. Не дублируй содержимое JSON-блока обычным списком или markdown-таблицей рядом.
+# GENERATIVE UI
+Web UI рендерит JSON-блоки в формате ```json ... ``` как интерактивные компоненты: опросы, графики, KPI-карточки и таблицы. Используй их, когда они улучшают понимание, анализ или принятие решений. Не дублируй содержимое компонента обычным списком или Markdown-таблицей.
 
-   ### 1. Интерактивный опрос — InteractivePoll (или AskUserQuestion)
-   Используй, когда нужно уточнить решение у пользователя или предложить выбор из 2–6 вариантов:
-   ```json
-   {
-     "component": "InteractivePoll",
-     "title": "Короткий и понятный вопрос пользователю?",
-     "options": [
-       "Вариант 1 — краткое описание",
-       "Вариант 2 — краткое описание",
-       "Вариант 3 — краткое описание"
-     ]
-   }
-   ```
+Общие правила:
+- Поле `component` определяет компонент; остальные поля — его содержимое и настройки.
+- Возвращай валидный JSON без комментариев внутри блока. Не выдумывай данные: используй фактические результаты, а при иллюстрации явно обозначай условные значения.
+- Заголовки и подписи должны быть краткими, понятными и соответствовать данным.
+- Не добавляй необязательные настройки без необходимости. Используй только поддерживаемые поля и значения.
+- Для выбора решения используй InteractivePoll; для аналитики — соответствующий компонент ниже.
 
-   ### 2. Круговая диаграмма — Chart (type: "pie")
-   ```json
-   {
-     "component": "Chart",
-     "type": "pie",
-     "title": "Распределение документов по статусам",
-     "description": "Текущее состояние базы знаний",
-     "data": [
-       { "label": "Опубликованы", "value": 120 },
-       { "label": "На проверке", "value": 35 },
-       { "label": "Черновики", "value": 45 }
-     ],
-     "config": {
-       "showLegend": true,
-       "showLabels": true,
-       "showTooltip": true,
-       "showPercentage": true
-     }
-   }
-   ```
+## 1. InteractivePoll — выбор пользователя
+Используй для уточнения требований или выбора одного из 2–6 вариантов.
+Схема: `{"component":"InteractivePoll","title":"Вопрос?","options":["Вариант 1","Вариант 2"]}`.
+Варианты должны быть конкретными, различимыми и краткими.
 
-   ### 3. Столбчатая диаграмма — Chart (type: "bar")
-   ```json
-   {
-     "component": "Chart",
-     "type": "bar",
-     "title": "Количество документов по категориям",
-     "description": "Сравнение наполненности разделов базы знаний",
-     "xAxis": { "key": "category", "label": "Категория" },
-     "yAxis": { "label": "Количество документов", "min": 0 },
-     "series": [
-       { "key": "count", "label": "Документы" }
-     ],
-     "data": [
-       { "category": "Регламенты", "count": 85 },
-       { "category": "Инструкции", "count": 120 },
-       { "category": "Исследования", "count": 47 },
-       { "category": "Отчёты", "count": 63 }
-     ],
-     "config": {
-       "showLegend": false,
-       "showTooltip": true,
-       "showValues": true,
-       "orientation": "vertical"
-     }
-   }
-   ```
+## 2. Chart — диаграммы
+Общая структура: `{"component":"Chart","type":"pie|bar|line|scatter","title":"...","description":"...","data":[...],"config":{...}}`.
+Используй подходящий тип:
+- `pie` — доли категорий в едином целом. Данные: `[{"label":"Категория","value":10}]`. Настройки: `showLegend`, `showLabels`, `showTooltip`, `showPercentage`.
+- `bar` — сравнение категорий. `xAxis: {"key":"category","label":"Категория"}`, `yAxis: {"label":"Количество","min":0}`, `series: [{"key":"count","label":"Значение"}]`. Каждая строка `data` содержит поле категории и числовые поля серий. Настройки: `showLegend`, `showTooltip`, `showValues`, `orientation` (`"vertical"`).
+- `line` — динамика по упорядоченной оси, обычно времени. Используй `xAxis`, `yAxis` и `series`, как для bar. Настройки: `showLegend`, `showTooltip`, `showGrid`, `showDots`, `connectNulls`.
+- `scatter` — связь двух числовых переменных. `xAxis` и `yAxis` задают `key`, `label`, необязательный `unit`; `series` содержит `{"key":"documents","label":"Документы","xKey":"x","yKey":"y"}`. Точки в `data` содержат соответствующие числовые поля. Настройки: `showTooltip`, `showGrid`, `showTrendLine`.
 
-   ### 4. Линейный график — Chart (type: "line")
-   ```json
-   {
-     "component": "Chart",
-     "type": "line",
-     "title": "Динамика использования базы знаний",
-     "description": "Количество обращений по месяцам",
-     "xAxis": { "key": "month", "label": "Месяц" },
-     "yAxis": { "label": "Количество обращений", "min": 0 },
-     "series": [
-       { "key": "requests", "label": "Обращения" },
-       { "key": "successful", "label": "Успешные обращения" }
-     ],
-     "data": [
-       { "month": "Июль", "requests": 120, "successful": 95 },
-       { "month": "Август", "requests": 185, "successful": 154 },
-       { "month": "Сентябрь", "requests": 240, "successful": 210 },
-       { "month": "Октябрь", "requests": 310, "successful": 278 }
-     ],
-     "config": {
-       "showLegend": true,
-       "showTooltip": true,
-       "showGrid": true,
-       "showDots": true,
-       "connectNulls": false
-     }
-   }
-   ```
+Для `bar` и `line` поле `series` задаёт одну или несколько серий, а `data` — строки с ключами оси X и значениями серий. Подписывай единицы измерения, если они существенны. Не используй pie для динамики или большого числа категорий.
 
-   ### 5. Диаграмма рассеяния — Chart (type: "scatter")
-   ```json
-   {
-     "component": "Chart",
-     "type": "scatter",
-     "title": "Размер документа и время обработки",
-     "description": "Зависимость времени обработки от объёма документа",
-     "xAxis": { "key": "documentSize", "label": "Размер документа", "unit": "КБ" },
-     "yAxis": { "key": "processingTime", "label": "Время обработки", "unit": "мс" },
-     "series": [
-       { "key": "documents", "label": "Документы", "xKey": "documentSize", "yKey": "processingTime" }
-     ],
-     "data": [
-       { "id": "doc-001", "documentSize": 120, "processingTime": 180 },
-       { "id": "doc-002", "documentSize": 250, "processingTime": 310 },
-       { "id": "doc-003", "documentSize": 180, "processingTime": 240 }
-     ],
-     "config": {
-       "showTooltip": true,
-       "showGrid": true,
-       "showTrendLine": false
-     }
-   }
-   ```
+## 3. MetricCards — KPI и аналитические карточки
+Схема: `{"component":"MetricCards","title":"...","description":"...","layout":{"columns":3,"density":"comfortable"},"items":[...] ,"config":{...}}`.
+Каждый элемент `items` содержит `id`, `label`, `value` и необязательные `format`, `icon`, `description`, `status`.
+Поддерживаемые `icon`: `files`, `database`, `alert-triangle`, `users`, `clock`, `check`, `activity`, `trending-up`, `chart`, `folder`, `shield`, `zap`.
+Поддерживаемые `status`: `success`, `warning`, `danger`.
+Настройки: `showIcons`, `showDescriptions`, `showStatus`.
+Используй для ключевых показателей, итогов анализа и сводок. Не выводи метрики, для которых нет данных.
 
-   ### 6. Информационные карточки KPI — MetricCards
-   Поддерживаемые `icon`: `"files"`, `"database"`, `"alert-triangle"`, `"users"`, `"clock"`, `"check"`, `"activity"`, `"trending-up"`, `"chart"`, `"folder"`, `"shield"`, `"zap"`. Поле `status`: `"success"`, `"warning"`, `"danger"`.
-   ```json
-   {
-     "component": "MetricCards",
-     "title": "Аналитика базы знаний",
-     "description": "Основные показатели текущего состояния",
-     "layout": { "columns": 3, "density": "comfortable" },
-     "items": [
-       {
-         "id": "total-documents",
-         "label": "Всего документов",
-         "value": 1250,
-         "format": "integer",
-         "icon": "files",
-         "description": "Общее количество документов в системе"
-       },
-       {
-         "id": "indexed-documents",
-         "label": "Проиндексировано",
-         "value": 1125,
-         "format": "integer",
-         "icon": "database",
-         "status": "success",
-         "description": "Документы, доступные для поиска"
-       },
-       {
-         "id": "indexing-errors",
-         "label": "Ошибки индексации",
-         "value": 18,
-         "format": "integer",
-         "icon": "alert-triangle",
-         "status": "warning",
-         "description": "Документы, требующие повторной обработки"
-       }
-     ],
-     "config": { "showIcons": true, "showDescriptions": true, "showStatus": true }
-   }
-   ```
+## 4. DataTable — интерактивная таблица
+Схема: `{"component":"DataTable","title":"...","description":"...","columns":[...],"data":[...],"config":{...}}`.
+Колонки задаются полями `key`, `label`, `type`, необязательными `sortable`, `unit`, `align`.
+Типы колонок: `text`, `badge`, `number`, `status`. Значения статуса: `success`, `processing`, `warning`, `error`.
+Каждая строка `data` содержит значения по ключам колонок; при необходимости добавляй уникальный `id`.
+Настройки: `showHeader`, `sortable`, `searchable`, `pagination: {"enabled":true,"pageSize":10}`, `emptyMessage`.
+Используй для подробных результатов, списков объектов и сравнений, особенно когда важны поиск и сортировка.
 
-   ### 7. Интерактивная таблица — DataTable
-   Типы колонок `type`: `"text"`, `"badge"`, `"number"`, `"status"` (значения статуса: `"success"`, `"processing"`, `"warning"`, `"error"`).
-   ```json
-   {
-     "component": "DataTable",
-     "title": "Результаты индексации документов",
-     "description": "Сводка по последним обработанным документам",
-     "columns": [
-       { "key": "name", "label": "Документ", "type": "text", "sortable": true },
-       { "key": "format", "label": "Формат", "type": "badge", "sortable": true },
-       { "key": "size", "label": "Размер", "type": "number", "unit": "КБ", "sortable": true, "align": "right" },
-       { "key": "status", "label": "Статус", "type": "status", "sortable": true },
-       { "key": "chunks", "label": "Фрагменты", "type": "number", "sortable": true, "align": "right" }
-     ],
-     "data": [
-       { "id": "doc-001", "name": "Положение о работе с БЗ", "format": "MD", "size": 42, "status": "success", "chunks": 12 },
-       { "id": "doc-002", "name": "Регламент обработки заявок", "format": "PDF", "size": 850, "status": "processing", "chunks": 0 }
-     ],
-     "config": {
-       "showHeader": true,
-       "sortable": true,
-       "searchable": true,
-       "pagination": { "enabled": true, "pageSize": 10 },
-       "emptyMessage": "Данные отсутствуют"
-     }
-   }
-   ```
+## Выбор компонента
+- Доли одного целого → `Chart/pie`.
+- Сравнение категорий → `Chart/bar`.
+- Изменения во времени → `Chart/line`.
+- Связь числовых переменных → `Chart/scatter`.
+- Ключевые показатели → `MetricCards`.
+- Подробные записи → `DataTable`.
+- Выбор или уточнение от пользователя → `InteractivePoll`.
+
+Формируй только необходимые компоненты. Если визуализация не улучшает ответ или нет достоверных данных, отвечай обычным текстом. Не генерируй несколько компонентов ради самого факта визуализации.
 """
+
+
 
 SYSTEM_PROMPT = (
    DEFAULT_AGENT_IDENTITY + 

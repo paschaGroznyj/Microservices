@@ -925,6 +925,276 @@
     obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class'] });
   }
 
+
+  var STATUS_LABELS = {
+    'InteractivePoll': 'Подготавливаю варианты ответа…',
+    'pie': 'Строю круговую диаграмму…',
+    'bar': 'Строю столбчатую диаграмму…',
+    'line': 'Строю график динамики…',
+    'scatter': 'Строю диаграмму рассеяния…',
+    'chart': 'Строю диаграмму…',
+    'MetricCards': 'Рассчитываю показатели…',
+    'DataTable': 'Формирую таблицу…'
+  };
+
+  function detectStreamingComponent(rawPartial) {
+    if (!rawPartial || typeof rawPartial !== 'string') return null;
+    var compMatch = rawPartial.match(/"component"\s*:\s*"([^"\r\n]*)/i);
+    if (!compMatch) return null;
+    var compRaw = String(compMatch[1] || '').trim().toLowerCase();
+    if (!compRaw) return null;
+
+    if (compRaw === 'interactivepoll' || compRaw === 'askuserquestion' || compRaw === 'poll' ||
+        'interactivepoll'.indexOf(compRaw) === 0 || 'askuserquestion'.indexOf(compRaw) === 0) {
+      return { component: 'InteractivePoll', subType: 'poll', label: STATUS_LABELS['InteractivePoll'] };
+    }
+
+    if (compRaw === 'chart' || 'chart'.indexOf(compRaw) === 0) {
+      var typeMatch = rawPartial.match(/"type"\s*:\s*"([^"\r\n]*)/i);
+      var tRaw = typeMatch ? String(typeMatch[1] || '').trim().toLowerCase() : '';
+      if (tRaw === 'pie' || (tRaw && 'pie'.indexOf(tRaw) === 0)) return { component: 'Chart', subType: 'pie', label: STATUS_LABELS['pie'] };
+      if (tRaw === 'bar' || (tRaw && 'bar'.indexOf(tRaw) === 0)) return { component: 'Chart', subType: 'bar', label: STATUS_LABELS['bar'] };
+      if (tRaw === 'line' || (tRaw && 'line'.indexOf(tRaw) === 0)) return { component: 'Chart', subType: 'line', label: STATUS_LABELS['line'] };
+      if (tRaw === 'scatter' || (tRaw && 'scatter'.indexOf(tRaw) === 0)) return { component: 'Chart', subType: 'scatter', label: STATUS_LABELS['scatter'] };
+      return { component: 'Chart', subType: 'chart', label: STATUS_LABELS['chart'] };
+    }
+
+    if (compRaw === 'metriccards' || compRaw === 'metric_cards' || compRaw === 'metrics' || 'metriccards'.indexOf(compRaw) === 0) {
+      return { component: 'MetricCards', subType: 'metrics', label: STATUS_LABELS['MetricCards'] };
+    }
+
+    if (compRaw === 'datatable' || compRaw === 'data_table' || compRaw === 'table' || 'datatable'.indexOf(compRaw) === 0) {
+      return { component: 'DataTable', subType: 'table', label: STATUS_LABELS['DataTable'] };
+    }
+
+    return null;
+  }
+
+  function getSkeletonIcon(subType, component) {
+    if (subType === 'pie') return '<svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9h-9v-9z"/><path d="M15 3.5a9 9 0 0 1 5.5 5.5h-5.5v-5.5z"/></svg>';
+    if (subType === 'bar' || component === 'Chart') return '<svg viewBox="0 0 24 24"><path d="M3 12m0 1a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v6a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1zM9 8m0 1a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v10a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1zM15 4m0 1a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v14a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z"/></svg>';
+    if (subType === 'line') return '<svg viewBox="0 0 24 24"><path d="M3 17l6 -6l4 4l8 -8M14 7h7v7"/></svg>';
+    if (subType === 'scatter') return '<svg viewBox="0 0 24 24"><path d="M4 4v16h16 M8 14h.01 M12 10h.01 M16 13h.01 M17 7h.01 M9 8h.01" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    if (component === 'MetricCards') return '<svg viewBox="0 0 24 24"><path d="M3 12h4l3 8l4 -16l3 8h4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    if (component === 'DataTable') return '<svg viewBox="0 0 24 24"><path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6z M4 10h16 M10 10v10"/></svg>';
+    if (component === 'InteractivePoll') return '<svg viewBox="0 0 24 24"><path d="M8 6h12 M8 12h12 M8 18h12 M4 6h.01 M4 12h.01 M4 18h.01" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    return '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg>';
+  }
+
+  function createSkeletonEl(spec) {
+    var sec = document.createElement('section');
+    sec.className = 'gen-ui-blk gen-ui-blk--skeleton';
+    sec.setAttribute('data-gen-component', spec.component || 'Chart');
+    sec.setAttribute('data-gen-type', spec.subType || '');
+    sec.setAttribute('data-gen-state', 'generating');
+    sec.innerHTML =
+      '<div class="gen-ui-skeleton-body">' +
+        '<span class="gen-ui-skeleton-icon" aria-hidden="true">' + getSkeletonIcon(spec.subType, spec.component) + '</span>' +
+        '<span class="gen-ui-skeleton-text">' + esc(spec.label || 'Подготовка…') + '</span>' +
+      '</div>';
+    return sec;
+  }
+
+  function updateSkeletonEl(el, spec) {
+    if (!el || !spec) return;
+    var curSub = el.getAttribute('data-gen-type') || '';
+    if (curSub !== spec.subType || el.getAttribute('data-gen-component') !== spec.component) {
+      el.setAttribute('data-gen-component', spec.component || '');
+      el.setAttribute('data-gen-type', spec.subType || '');
+      var ic = el.querySelector('.gen-ui-skeleton-icon');
+      if (ic) ic.innerHTML = getSkeletonIcon(spec.subType, spec.component);
+    }
+    var txt = el.querySelector('.gen-ui-skeleton-text');
+    if (txt && txt.textContent !== spec.label) {
+      txt.textContent = spec.label || 'Подготовка…';
+    }
+  }
+
+  function extractBalancedJsonObjects(text, tryParseFn) {
+    var results = [];
+    var i = 0;
+    var n = text.length;
+    while (i < n) {
+      var start = text.indexOf('{', i);
+      if (start === -1) break;
+      var depth = 0, inStr = false, esc = false, end = -1;
+      for (var j = start; j < n; j++) {
+        var ch = text[j];
+        if (inStr) {
+          if (esc) { esc = false; }
+          else if (ch === '\\') { esc = true; }
+          else if (ch === '"') { inStr = false; }
+        } else {
+          if (ch === '"') inStr = true;
+          else if (ch === '{') depth++;
+          else if (ch === '}') {
+            depth--;
+            if (depth === 0) { end = j; break; }
+          }
+        }
+      }
+      if (end !== -1) {
+        var candidate = text.slice(start, end + 1);
+        var parsed = tryParseFn ? tryParseFn(candidate) : tryParseComponentJson(candidate);
+        if (parsed) {
+          results.push({ start: start, end: end + 1, parsed: parsed });
+          i = end + 1;
+          continue;
+        }
+      }
+      i = start + 1;
+    }
+    return results;
+  }
+
+  function extractStructuredSegments(text, tryParseFn, options) {
+    var src = String(text || '');
+    var isStreaming = !!(options && options.isStreaming);
+    var segments = [];
+    var fenceRe = /```(?:json)?\s*([\s\S]*?)```/gi;
+    var lastIdx = 0;
+    var m;
+
+    var pushPlainOrInlineJson = function(chunk, isTail) {
+      if (!chunk) return;
+      var inlineMatches = extractBalancedJsonObjects(chunk, tryParseFn);
+      if (!inlineMatches.length) {
+        if (isTail) {
+          var braceIdx = chunk.lastIndexOf('{');
+          if (braceIdx !== -1) {
+            var tailBrace = chunk.slice(braceIdx);
+            var detInline = detectStreamingComponent(tailBrace);
+            if (detInline) {
+              var beforeBrace = chunk.slice(0, braceIdx);
+              if (beforeBrace.trim()) segments.push({ kind: 'md', text: beforeBrace });
+              segments.push({ kind: 'skeleton', component: detInline.component, subType: detInline.subType, label: detInline.label });
+              return;
+            }
+          }
+        }
+        if (chunk.trim()) segments.push({ kind: 'md', text: chunk });
+        return;
+      }
+      var cur = 0;
+      for (var k = 0; k < inlineMatches.length; k++) {
+        var hit = inlineMatches[k];
+        var before = chunk.slice(cur, hit.start);
+        if (before.trim()) segments.push({ kind: 'md', text: before });
+        segments.push({ kind: 'component', component: hit.parsed.component, data: hit.parsed.data, rawKey: chunk.slice(hit.start, hit.end) });
+        cur = hit.end;
+      }
+      var after = chunk.slice(cur);
+      if (after.trim()) {
+        if (isTail) {
+          var bIdx = after.lastIndexOf('{');
+          if (bIdx !== -1) {
+            var detAfter = detectStreamingComponent(after.slice(bIdx));
+            if (detAfter) {
+              var bef = after.slice(0, bIdx);
+              if (bef.trim()) segments.push({ kind: 'md', text: bef });
+              segments.push({ kind: 'skeleton', component: detAfter.component, subType: detAfter.subType, label: detAfter.label });
+              return;
+            }
+          }
+        }
+        segments.push({ kind: 'md', text: after });
+      }
+    };
+
+    while ((m = fenceRe.exec(src)) !== null) {
+      var parsed = tryParseFn ? tryParseFn(m[1]) : tryParseComponentJson(m[1]);
+      if (parsed) {
+        pushPlainOrInlineJson(src.slice(lastIdx, m.index), false);
+        segments.push({ kind: 'component', component: parsed.component, data: parsed.data, rawKey: m[1].trim() });
+        lastIdx = m.index + m[0].length;
+      }
+    }
+
+    var tail = src.slice(lastIdx);
+    if (!isStreaming) {
+      pushPlainOrInlineJson(tail, false);
+      return segments;
+    }
+
+    var openFenceMatch = /```(json)?(?:\s+|$)([\s\S]*)$/i.exec(tail);
+    if (openFenceMatch) {
+      var beforeOpen = tail.slice(0, openFenceMatch.index);
+      pushPlainOrInlineJson(beforeOpen, false);
+
+      var isExplicit = Boolean(openFenceMatch[1]);
+      var partialBody = openFenceMatch[2] || '';
+      var detected = detectStreamingComponent(partialBody);
+
+      if (detected) {
+        segments.push({ kind: 'skeleton', component: detected.component, subType: detected.subType, label: detected.label });
+      } else if (isExplicit && partialBody.trim().length < 60 && /^\{\s*(?:"(?:c(?:o(?:m(?:p(?:o(?:n(?:e(?:n(?:t)?)?)?)?)?)?)?)?)?"?\s*:?\s*"?)?$/i.test(partialBody.trim())) {
+        // Удерживаем сырой префикс до появления "component"
+      } else {
+        segments.push({ kind: 'md', text: tail.slice(openFenceMatch.index) });
+      }
+    } else {
+      var rawEndMatch = /(\n|^)\s*`{1,3}(?:j(?:s(?:o(?:n)?)?)?)?$/i.exec(tail);
+      if (rawEndMatch) {
+        var beforeRawEnd = tail.slice(0, rawEndMatch.index);
+        pushPlainOrInlineJson(beforeRawEnd, false);
+      } else {
+        pushPlainOrInlineJson(tail, true);
+      }
+    }
+
+    return segments;
+  }
+
+  function computeStreamStep(shownText, bufferText, baseStep) {
+    var shown = String(shownText || '');
+    var buf = String(bufferText || '');
+    if (!buf.length) return 0;
+
+    var lastClosedEnd = 0;
+    var fenceRe = /```(?:json)?\s*[\s\S]*?```/gi;
+    var m;
+    while ((m = fenceRe.exec(shown)) !== null) {
+      lastClosedEnd = m.index + m[0].length;
+    }
+
+    var tailShown = shown.slice(lastClosedEnd);
+    var openMatch = /```(?:json)?(?:\s+|$)([\s\S]*)$/i.exec(tailShown);
+
+    if (openMatch) {
+      var closeIdxInBuf = buf.indexOf('```');
+      if (closeIdxInBuf !== -1) {
+        var alreadyInFence = openMatch[0].length;
+        var remainingToClose = closeIdxInBuf + 3;
+        var totalFenceLen = alreadyInFence + remainingToClose;
+        var hasComponent = /"component"\s*:/i.test(openMatch[1]);
+        if (!hasComponent) {
+          var compIntroMatch = /("type"\s*:\s*"[^"]*"|"component"\s*:\s*"[^"]*")/i.exec(buf);
+          if (compIntroMatch && compIntroMatch.index + compIntroMatch[0].length < remainingToClose && compIntroMatch.index < 120) {
+            return Math.min(compIntroMatch.index + compIntroMatch[0].length + 1, remainingToClose);
+          }
+        }
+        var targetFrames = 42;
+        var fenceStep = Math.max(4, Math.ceil(totalFenceLen / targetFrames));
+        return Math.min(fenceStep, remainingToClose);
+      }
+      return baseStep;
+    }
+
+    var nextFenceIdx = buf.indexOf('```');
+    if (nextFenceIdx > 0 && nextFenceIdx <= baseStep) {
+      return nextFenceIdx;
+    }
+    if (nextFenceIdx === 0) {
+      var compIntroMatch2 = /("type"\s*:\s*"[^"]*"|"component"\s*:\s*"[^"]*")/i.exec(buf);
+      var nextClose = buf.indexOf('```', 3);
+      if (nextClose !== -1 && compIntroMatch2 && compIntroMatch2.index < nextClose && compIntroMatch2.index < 220) {
+        return Math.min(compIntroMatch2.index + compIntroMatch2[0].length + 1, nextClose + 3);
+      }
+    }
+
+    return baseStep;
+  }
+
   window.GenerativeUI = {
     createBlockEl: createGenerativeBlockEl,
     createBlock: createGenerativeBlockEl,
@@ -932,6 +1202,11 @@
     tryParse: tryParseComponentJson,
     isGenerativeComponent: isGenerativeComponent,
     isComponent: isGenerativeComponent,
+    detectStreamingComponent: detectStreamingComponent,
+    createSkeletonEl: createSkeletonEl,
+    updateSkeletonEl: updateSkeletonEl,
+    extractStructuredSegments: extractStructuredSegments,
+    computeStreamStep: computeStreamStep,
     refreshCharts: refreshAllCharts
   };
 })();

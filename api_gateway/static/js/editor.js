@@ -732,6 +732,8 @@
     const root = document.createElement("div");
     root.setAttribute("data-ask-user-input-banner", "");
     root.setAttribute("data-cds", "AskUserQuestion");
+    root.setAttribute("data-gen-component", "InteractivePoll");
+    root.setAttribute("data-gen-state", "rendered");
     root.setAttribute("role", "group");
     root.setAttribute("aria-labelledby", `${uid}label ${uid}cue`);
     root.setAttribute("tabindex", "-1");
@@ -1039,34 +1041,117 @@
   };
 
   function renderBotContent(container, text, meta = {}) {
-    container.innerHTML = "";
-    const segments = extractStructuredSegments(text);
-    if (!segments.length) {
+    if (!container) return;
+    const isStreaming = !!meta.isStreaming;
+    const segments = window.GenerativeUI && typeof window.GenerativeUI.extractStructuredSegments === 'function'
+      ? window.GenerativeUI.extractStructuredSegments(text, tryParseComponentJson, { isStreaming })
+      : extractStructuredSegments(text);
+
+    const hasSpecial = segments.some(s => s.kind === 'component' || s.kind === 'skeleton');
+    const hadStructuredNodes = !!container.querySelector(':scope > [data-seg-kind]');
+
+    if (!hasSpecial && !hadStructuredNodes && !isStreaming) {
       container.innerHTML = renderMd(text);
       container.querySelectorAll("pre code").forEach(b => { try { window.hljs && hljs.highlightElement(b); } catch (_) {} });
       return;
     }
+
     const botMessageId = String(meta.botMessageId || "").trim();
     const pollAnswers = Array.isArray(meta.pollAnswers) ? meta.pollAnswers : [];
     let pollIdx = 0;
 
-    for (const seg of segments) {
-      if (seg.kind === "component" && COMPONENT_MAP[seg.component]) {
+    const existingNodes = [...container.querySelectorAll(':scope > [data-seg-kind]')];
+    [...container.childNodes].forEach(node => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        node.remove();
+      } else if (node.nodeType === Node.ELEMENT_NODE && !node.hasAttribute('data-seg-kind')) {
+        node.remove();
+      }
+    });
+
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      const curNode = existingNodes[i] || null;
+
+      if (seg.kind === 'md') {
+        if (curNode && curNode.dataset.segKind === 'md') {
+          if (curNode._rawMd !== seg.text) {
+            curNode.innerHTML = renderMd(seg.text);
+            curNode._rawMd = seg.text;
+            curNode.querySelectorAll("pre code").forEach(b => { try { window.hljs && hljs.highlightElement(b); } catch (_) {} });
+          }
+        } else {
+          const mdBlock = document.createElement('div');
+          mdBlock.className = 'ed-ai-md-part';
+          mdBlock.dataset.segKind = 'md';
+          mdBlock._rawMd = seg.text;
+          mdBlock.innerHTML = renderMd(seg.text);
+          mdBlock.querySelectorAll("pre code").forEach(b => { try { window.hljs && hljs.highlightElement(b); } catch (_) {} });
+          if (curNode) container.replaceChild(mdBlock, curNode);
+          else container.appendChild(mdBlock);
+        }
+      } else if (seg.kind === 'skeleton') {
+        if (curNode && curNode.dataset.segKind === 'skeleton' && window.GenerativeUI && window.GenerativeUI.updateSkeletonEl) {
+          window.GenerativeUI.updateSkeletonEl(curNode, seg);
+        } else {
+          const skelEl = window.GenerativeUI ? window.GenerativeUI.createSkeletonEl(seg) : document.createElement('div');
+          skelEl.dataset.segKind = 'skeleton';
+          if (curNode) container.replaceChild(skelEl, curNode);
+          else container.appendChild(skelEl);
+        }
+      } else if (seg.kind === 'component' && COMPONENT_MAP[seg.component]) {
         const curIdx = pollIdx++;
         const savedAnswer = pollAnswers.find(a => Number(a.poll_index || 0) === curIdx) || null;
-        container.appendChild(COMPONENT_MAP[seg.component](seg.data, {
-          botMessageId,
-          pollIndex: curIdx,
-          savedAnswer,
-        }));
-      } else if (seg.kind === "md" && seg.text) {
-        const mdWrap = document.createElement("div");
-        mdWrap.className = "ed-ai-md-part";
-        mdWrap.innerHTML = renderMd(seg.text);
-        mdWrap.querySelectorAll("pre code").forEach(b => { try { window.hljs && hljs.highlightElement(b); } catch (_) {} });
-        container.appendChild(mdWrap);
+        const segKey = seg.component + ':' + (seg.rawKey || JSON.stringify(seg.data));
+
+        if (curNode && curNode.dataset.segKind === 'component' && curNode._segKey === segKey) {
+          if (seg.component === 'InteractivePoll' || seg.component === 'AskUserQuestion' || seg.component === 'poll') {
+            if (botMessageId) curNode.dataset.botMessageId = botMessageId;
+            if (savedAnswer && typeof curNode._applySavedAnswer === 'function') {
+              curNode._applySavedAnswer(savedAnswer);
+            }
+          }
+        } else {
+          const compEl = COMPONENT_MAP[seg.component](seg.data, {
+            botMessageId,
+            pollIndex: curIdx,
+            savedAnswer,
+          });
+          compEl.dataset.segKind = 'component';
+          compEl._segKey = segKey;
+          if (curNode && curNode.dataset.segKind === 'skeleton') {
+            compEl.classList.add('gen-ui-blk--appear');
+          }
+          if (curNode) container.replaceChild(compEl, curNode);
+          else container.appendChild(compEl);
+        }
       }
     }
+    for (let i = segments.length; i < existingNodes.length; i++) {
+      existingNodes[i].remove();
+    }
+  }
+
+  async function streamRenderBotContent(container, rawText, meta = {}) {
+    const full = String(rawText || "");
+    let accumulated = "";
+    let cursor = 0;
+    const totalLen = full.length;
+    const BASE_STEP = 14;
+    const DELAY = 20;
+    while (cursor < totalLen) {
+      const rem = full.slice(cursor);
+      const step = (window.GenerativeUI && typeof window.GenerativeUI.computeStreamStep === "function")
+        ? window.GenerativeUI.computeStreamStep(accumulated, rem, BASE_STEP)
+        : BASE_STEP;
+      accumulated += rem.slice(0, step || 1);
+      cursor += (step || 1);
+      renderBotContent(container, accumulated, { ...meta, isStreaming: cursor < totalLen });
+      aiLog.scrollTop = aiLog.scrollHeight;
+      await new Promise(r => setTimeout(r, DELAY));
+    }
+    renderBotContent(container, full, { ...meta, isStreaming: false });
+    aiLog.scrollTop = aiLog.scrollHeight;
   }
 
   function stripEditorPromptEnvelope(rawText) {
@@ -1082,10 +1167,18 @@
     d.className = `ed-ai-msg ${role}`;
     if (meta.messageId) d.dataset.messageId = String(meta.messageId);
     if (role === "bot") {
-      renderBotContent(d, text, {
-        botMessageId: meta.botMessageId || meta.messageId || "",
-        pollAnswers: meta.pollAnswers || [],
-      });
+      if (meta.animate) {
+        streamRenderBotContent(d, text, {
+          botMessageId: meta.botMessageId || meta.messageId || "",
+          pollAnswers: meta.pollAnswers || [],
+        });
+      } else {
+        renderBotContent(d, text, {
+          botMessageId: meta.botMessageId || meta.messageId || "",
+          pollAnswers: meta.pollAnswers || [],
+          isStreaming: !!meta.isStreaming,
+        });
+      }
     } else {
       const cleanUserText = stripEditorPromptEnvelope(text);
       d.textContent = cleanUserText;
@@ -1157,6 +1250,7 @@
               messageId: mid,
               botMessageId: mid,
               pollAnswers: m.poll_answers || [],
+              animate: true,
             });
           } else if (!m.is_from_bot) {
             if (m.poll_answer && typeof m.poll_answer === "object") {

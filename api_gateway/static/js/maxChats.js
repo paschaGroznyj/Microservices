@@ -1,21 +1,9 @@
-// maxChats.js — раздел «MAX-чаты» в профиле (#max-chats-mount).
-// Любой юзер видит и редактирует свои добавленные MAX-чаты.
-// Зеркало tgChats.js, но без триггеров/членов (в max_db только chats+settings).
-//
-// API (через api_gateway -> chats_service /max/*):
-//   GET    /api/max/chats               → { chats: [...] }
-//   POST   /api/max/chats               → встроить чат + настройки
-//   DELETE /api/max/chats/{chat_id}     → деактивировать
-//   GET    /api/max/settings/{chat_id}  → { settings }
-//   POST   /api/max/settings/{chat_id}  → обновить настройки
-
 (function () {
   'use strict';
 
-  
   function getActualModels() {
     if (window.ModelPicker && typeof window.ModelPicker.getModels === 'function') {
-      return window.ModelPicker.getModels().map(function(m) {
+      return window.ModelPicker.getModels().map(function (m) {
         return {
           id: m.id,
           label: m.label,
@@ -32,58 +20,58 @@
     ];
   }
 
-
-  const MAX_TOOLS = [
+  var MAX_TOOLS = [
     { id: 'internet', label: 'Интернет' },
     { id: 'content',  label: 'Контент и файлы' },
-    { id: 'sessions', label: 'Бортовой журнал' },
+    { id: 'sessions', label: 'Бортовой журнал' }
   ];
 
-  const DEFAULTS = {
-    system_prompt: '',
-    agent_name: '',
-    agent_model: 'universal',
-    selected_tools: ['internet', 'content'],
-  };
-
   var _mount = null;
+  var _modalOverlay = null;
+  var _modalOpen = false;
   var _chats = [];
-  var _editing = null;   // chat_id редактируемого чата или null
+  var _editing = null;
   var _form = null;
-
-  function esc(s) {
-    return String(s == null ? '' : s)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
-  }
 
   function resetForm() {
     _editing = null;
     _form = {
       chat_id: '',
-      system_prompt: DEFAULTS.system_prompt,
-      agent_name: DEFAULTS.agent_name,
-      agent_model: DEFAULTS.agent_model,
-      selected_tools: DEFAULTS.selected_tools.slice(),
+      agent_name: '',
+      agent_model: 'coder',
+      selected_tools: ['internet', 'content', 'sessions'],
+      system_prompt: ''
     };
   }
 
   function fillFormFrom(chat) {
-    _editing = chat.chat_id;
     var s = chat.settings || {};
+    _editing = chat.chat_id;
     _form = {
       chat_id: chat.chat_id,
-      system_prompt: s.system_prompt || '',
       agent_name: s.agent_name || '',
-      agent_model: s.agent_model || DEFAULTS.agent_model,
-      selected_tools: Array.isArray(s.selected_tools) ? s.selected_tools.slice() : DEFAULTS.selected_tools.slice(),
+      agent_model: s.agent_model || 'coder',
+      selected_tools: Array.isArray(s.selected_tools) ? s.selected_tools.slice() : ['internet', 'content', 'sessions'],
+      system_prompt: s.system_prompt || ''
     };
   }
 
+  function esc(str) {
+    return String(str == null ? '' : str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   async function api(method, url, body) {
-    var opt = { method: method, headers: {} };
-    if (body !== undefined) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
-    var r = await fetch(url, opt);
+    var opts = { method: method, credentials: 'include', headers: {} };
+    if (body !== undefined) {
+      opts.headers['Content-Type'] = 'application/json';
+      opts.body = JSON.stringify(body);
+    }
+    var r = await fetch(url, opts);
     if (!r.ok) {
       var t = await r.text().catch(function () { return ''; });
       throw new Error(r.status + ' ' + t.slice(0, 200));
@@ -101,15 +89,15 @@
     return _chats.map(function (c) {
       var s = c.settings || {};
       var mdl = getActualModels().find(function (x) { return x.id === s.agent_model; });
-      return '<div class="tgc-row' + (_editing === c.chat_id ? ' tgc-row--active' : '') + '">' +
+      return '<div class="tgc-row' + (_modalOpen && _editing === c.chat_id ? ' tgc-row--active' : '') + '">' +
         '<div class="tgc-row-main">' +
           '<span class="tgc-cid">' + esc(c.chat_id) + '</span>' +
           (s.agent_name ? '<span class="tgc-aname">' + esc(s.agent_name) + '</span>' : '') +
           (mdl ? '<span class="tgc-model" style="color:' + mdl.accent + '">' + mdl.svg + ' ' + mdl.label + '</span>' : '') +
         '</div>' +
         '<div class="tgc-row-actions">' +
-          '<button class="tgc-btn" data-edit="' + esc(c.chat_id) + '" title="Редактировать"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M11 2l3 3-9 9H2v-3l9-9z" stroke-linecap="round" stroke-linejoin="round"/></svg></button>' +
-          '<button class="tgc-btn tgc-del" data-del="' + esc(c.chat_id) + '" title="Удалить"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 4h10M6 4V2h4v2M5 4l1 10h4l1-10" stroke-linecap="round" stroke-linejoin="round"/></svg></button>' +
+          '<button class="tgc-btn" data-edit="' + esc(c.chat_id) + '" title="Редактировать"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M12 20h9"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>' +
+          '<button class="tgc-btn tgc-del" data-del="' + esc(c.chat_id) + '" title="Удалить"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M3 6h18"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M10 11v6M14 11v6"/></svg></button>' +
         '</div>' +
       '</div>';
     }).join('');
@@ -164,103 +152,203 @@
     '</div>';
   }
 
-  function render() {
-    if (!_mount) return;
-    if (!_form) resetForm();
+  function ensureModal() {
+    if (_modalOverlay && document.body.contains(_modalOverlay)) return _modalOverlay;
+    var el = document.getElementById('maxc-modal-overlay');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'maxc-modal-overlay';
+      el.className = 'tgc-modal-overlay';
+      el.setAttribute('role', 'dialog');
+      el.setAttribute('aria-modal', 'true');
+      el.setAttribute('aria-label', 'MAX-чат');
+      document.body.appendChild(el);
+    }
+    el.addEventListener('mousedown', function (e) {
+      if (e.target === el) closeModal();
+    });
+    _modalOverlay = el;
+    return el;
+  }
 
+  function openModal(chat) {
+    ensureModal();
+    if (chat) {
+      fillFormFrom(chat);
+    } else {
+      resetForm();
+    }
+    _modalOpen = true;
+    _modalOverlay.classList.remove('closing');
+    _modalOverlay.classList.add('active');
+    render();
+    setTimeout(function () {
+      var cidInput = _modalOverlay && _modalOverlay.querySelector('#maxc-chatid:not([disabled])');
+      if (cidInput) cidInput.focus();
+    }, 60);
+  }
+
+  function closeModal() {
+    if (!_modalOverlay || !_modalOpen) return;
+    _modalOpen = false;
+    _modalOverlay.classList.remove('active');
+    _modalOverlay.classList.add('closing');
+    resetForm();
+    renderSidebar();
+    setTimeout(function () {
+      if (_modalOverlay) _modalOverlay.classList.remove('closing');
+    }, 220);
+  }
+
+  function updatePanelCount() {
+    var cnt = document.getElementById('maxc-panel-count');
+    if (cnt) cnt.textContent = _chats.length ? String(_chats.length) : '';
+  }
+
+  function renderSidebar() {
+    if (!_mount) return;
     _mount.innerHTML =
       '<div class="tgc-wrap">' +
         '<div class="tgc-list">' + chatsListHtml() + '</div>' +
-        '<div class="tgc-form">' +
-          '<div class="tgc-form-title">' + (_editing ? 'Настройка чата ' + esc(_editing) : 'Встроить MAX-чат') + '</div>' +
-          (_editing ? '' :
-            '<div class="tgc-field">' +
-              '<span class="tgc-field-label">ID чата MAX</span>' +
-              '<input type="text" class="tgc-input" id="maxc-chatid" placeholder="Напр. 123456789" value="' + esc(_form.chat_id) + '"/>' +
-            '</div>') +
-          '<div class="tgc-field">' +
-            '<span class="tgc-field-label">Имя агента</span>' +
-            '<input type="text" class="tgc-input" id="maxc-name" placeholder="Напр. AuGent" value="' + esc(_form.agent_name) + '"/>' +
-          '</div>' +
-          ddToggle('Модель', modelDisplay(), modelsHtml(), 'maxc-dd-model') +
-          ddToggle('Инструменты', toolsDisplay(), toolsHtml(), 'maxc-dd-tools') +
-          '<div class="tgc-field">' +
-            '<span class="tgc-field-label">Базовый промпт</span>' +
-            '<textarea class="tgc-textarea" id="maxc-prompt" placeholder="Системный промпт для агента в этом чате...">' + esc(_form.system_prompt) + '</textarea>' +
-          '</div>' +
-          '<div class="tgc-actions">' +
-            '<button class="tgc-save" id="maxc-save" type="button">' + (_editing ? 'Сохранить' : 'Встроить чат') + '</button>' +
-            (_editing ? '<button class="tgc-cancel" id="maxc-cancel" type="button">Отмена</button>' : '') +
-          '</div>' +
-          '<div class="tgc-msg" id="maxc-msg"></div>' +
-        '</div>' +
+        '<button class="tgc-open-modal-btn" id="maxc-open-create" type="button">' +
+          '<svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M10 4v12M4 10h12"/></svg>' +
+          '<span>Встроить чат</span>' +
+        '</button>' +
       '</div>';
 
-    bindEvents();
-  }
-
-  function showMsg(text, isErr) {
-    var el = _mount.querySelector('#maxc-msg');
-    if (!el) return;
-    el.textContent = text;
-    el.className = 'tgc-msg' + (isErr ? ' tgc-msg--err' : ' tgc-msg--ok');
-  }
-
-  function bindEvents() {
-    _mount.querySelectorAll('.tgc-dd-toggle').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        var dd = btn.closest('.tgc-dd');
-        dd.classList.toggle('tgc-dd--open');
-        _mount.querySelectorAll('.tgc-dd').forEach(function (other) {
-          if (other !== dd) other.classList.remove('tgc-dd--open');
-        });
+    var createBtn = _mount.querySelector('#maxc-open-create');
+    if (createBtn) {
+      createBtn.addEventListener('click', function () {
+        openModal(null);
       });
-    });
+    }
 
-    _mount.querySelectorAll('[data-model]').forEach(function (b) {
-      b.addEventListener('click', function (e) { _form.agent_model = e.currentTarget.dataset.model; render(); });
-    });
-    _mount.querySelectorAll('[data-tool]').forEach(function (b) {
-      b.addEventListener('click', function (e) {
-        var id = e.currentTarget.dataset.tool;
-        var i = _form.selected_tools.indexOf(id);
-        if (i >= 0) _form.selected_tools.splice(i, 1); else _form.selected_tools.push(id);
-        render();
-      });
-    });
     _mount.querySelectorAll('[data-edit]').forEach(function (b) {
       b.addEventListener('click', function (e) {
         var cid = e.currentTarget.dataset.edit;
         var chat = _chats.find(function (c) { return c.chat_id === cid; });
-        if (chat) { fillFormFrom(chat); render(); }
+        if (chat) openModal(chat);
       });
     });
+
     _mount.querySelectorAll('[data-del]').forEach(function (b) {
       b.addEventListener('click', async function (e) {
         var cid = e.currentTarget.dataset.del;
         if (!confirm('Удалить MAX-чат ' + cid + '?')) return;
         try {
           await api('DELETE', '/api/max/chats/' + encodeURIComponent(cid));
-          if (_editing === cid) resetForm();
-          
-          await loadChats(); render();
-        } catch (err) { showMsg('Ошибка: ' + err.message, true); }
+          if (_editing === cid) closeModal();
+          await loadChats();
+          render();
+        } catch (err) {
+          alert('Ошибка: ' + err.message);
+        }
       });
     });
 
-    var cidEl = _mount.querySelector('#maxc-chatid');
+    updatePanelCount();
+  }
+
+  function renderModal() {
+    if (!_modalOpen) return;
+    ensureModal();
+    if (!_form) resetForm();
+
+    var maxIconSvg = '<svg class="tgc-modal-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M8 14V9l4 3 4-3v5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+    _modalOverlay.innerHTML =
+      '<div class="tgc-modal" id="maxc-modal">' +
+        '<div class="tgc-modal-head">' +
+          maxIconSvg +
+          '<div class="tgc-modal-title">' + (_editing ? 'Редактирование MAX-чата' : 'Встроить MAX-чат') + '</div>' +
+          '<button class="tgc-modal-close" id="maxc-modal-close" type="button" aria-label="Закрыть">✕</button>' +
+        '</div>' +
+        '<div class="tgc-modal-body">' +
+          '<div class="tgc-form">' +
+            '<div class="tgc-field">' +
+              '<span class="tgc-field-label">ID чата MAX</span>' +
+              '<input type="text" class="tgc-input" id="maxc-chatid" placeholder="Напр. 123456789" value="' + esc(_form.chat_id) + '"' + (_editing ? ' disabled' : '') + '/>' +
+            '</div>' +
+            '<div class="tgc-field">' +
+              '<span class="tgc-field-label">Имя агента</span>' +
+              '<input type="text" class="tgc-input" id="maxc-name" placeholder="Напр. AuGent" value="' + esc(_form.agent_name) + '"/>' +
+            '</div>' +
+            ddToggle('Модель', modelDisplay(), modelsHtml(), 'maxc-dd-model') +
+            ddToggle('Инструменты', toolsDisplay(), toolsHtml(), 'maxc-dd-tools') +
+            '<div class="tgc-field">' +
+              '<span class="tgc-field-label">Базовый промпт</span>' +
+              '<textarea class="tgc-textarea" id="maxc-prompt" placeholder="Системный промпт для агента в этом чате...">' + esc(_form.system_prompt) + '</textarea>' +
+            '</div>' +
+            '<div class="tgc-actions">' +
+              '<button class="tgc-save" id="maxc-save" type="button">' + (_editing ? 'Сохранить' : 'Встроить чат') + '</button>' +
+              '<button class="tgc-cancel" id="maxc-cancel" type="button">Отмена</button>' +
+            '</div>' +
+            '<div class="tgc-msg" id="maxc-msg"></div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+
+    bindModalEvents();
+  }
+
+  function render() {
+    renderSidebar();
+    if (_modalOpen) renderModal();
+  }
+
+  function showMsg(text, isErr) {
+    var el = _modalOverlay && _modalOverlay.querySelector('#maxc-msg');
+    if (!el) return;
+    el.textContent = text;
+    el.className = 'tgc-msg' + (isErr ? ' tgc-msg--err' : ' tgc-msg--ok');
+  }
+
+  function bindModalEvents() {
+    if (!_modalOverlay) return;
+
+    var closeBtn = _modalOverlay.querySelector('#maxc-modal-close');
+    if (closeBtn) closeBtn.addEventListener('click', closeModal);
+
+    _modalOverlay.querySelectorAll('.tgc-dd-toggle').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var dd = btn.closest('.tgc-dd');
+        dd.classList.toggle('tgc-dd--open');
+        _modalOverlay.querySelectorAll('.tgc-dd').forEach(function (other) {
+          if (other !== dd) other.classList.remove('tgc-dd--open');
+        });
+      });
+    });
+
+    _modalOverlay.querySelectorAll('[data-model]').forEach(function (b) {
+      b.addEventListener('click', function (e) {
+        _form.agent_model = e.currentTarget.dataset.model;
+        renderModal();
+      });
+    });
+
+    _modalOverlay.querySelectorAll('[data-tool]').forEach(function (b) {
+      b.addEventListener('click', function (e) {
+        var id = e.currentTarget.dataset.tool;
+        var i = _form.selected_tools.indexOf(id);
+        if (i === -1) _form.selected_tools.push(id);
+        else _form.selected_tools.splice(i, 1);
+        renderModal();
+      });
+    });
+
+    var cidEl = _modalOverlay.querySelector('#maxc-chatid');
     if (cidEl) cidEl.addEventListener('input', function (e) { _form.chat_id = e.target.value.trim(); });
 
-    var nameEl = _mount.querySelector('#maxc-name');
+    var nameEl = _modalOverlay.querySelector('#maxc-name');
     if (nameEl) nameEl.addEventListener('input', function (e) { _form.agent_name = e.target.value; });
 
-    var promptEl = _mount.querySelector('#maxc-prompt');
+    var promptEl = _modalOverlay.querySelector('#maxc-prompt');
     if (promptEl) promptEl.addEventListener('input', function (e) { _form.system_prompt = e.target.value; });
 
-    var cancelEl = _mount.querySelector('#maxc-cancel');
-    if (cancelEl) cancelEl.addEventListener('click', function () { resetForm(); render(); });
+    var cancelEl = _modalOverlay.querySelector('#maxc-cancel');
+    if (cancelEl) cancelEl.addEventListener('click', closeModal);
 
-    var saveEl = _mount.querySelector('#maxc-save');
+    var saveEl = _modalOverlay.querySelector('#maxc-save');
     if (saveEl) saveEl.addEventListener('click', onSave);
   }
 
@@ -271,9 +359,12 @@
           system_prompt: _form.system_prompt,
           agent_name: _form.agent_name,
           agent_model: _form.agent_model,
-          selected_tools: _form.selected_tools,
+          selected_tools: _form.selected_tools
         });
-        showMsg('Сохранено', false);
+        await loadChats();
+        renderSidebar();
+        showMsg('Настройки сохранены', false);
+        setTimeout(function () { closeModal(); }, 450);
       } else {
         var cid = (_form.chat_id || '').trim();
         if (!cid) { showMsg('Укажите ID чата', true); return; }
@@ -282,17 +373,24 @@
           system_prompt: _form.system_prompt,
           agent_name: _form.agent_name,
           agent_model: _form.agent_model,
-          selected_tools: _form.selected_tools,
+          selected_tools: _form.selected_tools
         });
+        await loadChats();
+        renderSidebar();
         showMsg('Чат встроен', false);
-        resetForm();
+        setTimeout(function () { closeModal(); }, 450);
       }
-      await loadChats();
-      render();
     } catch (err) {
       showMsg('Ошибка: ' + err.message, true);
     }
   }
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && _modalOpen) {
+      e.stopPropagation();
+      closeModal();
+    }
+  });
 
   function wirePanel() {
     var panel = document.getElementById('maxc-panel');

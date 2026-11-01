@@ -1611,7 +1611,7 @@ class HarnessAgent:
             extension_tool = make_extension_tool(loop_state)
             tools.append(extension_tool)          # тулза аппендится прямо внутри цикла, офигеть имбово
 
-            subagent_tl = make_subagent_tool(self)
+            subagent_tl = make_subagent_tool(self, parent_tools=list(tools))
             tools.append(subagent_tl)
 
             print(f"ЛИМИТ ПО КОНТЕКСТУ = {limit_mem}, ЧИСЛО ТОКЕНОВ = {max_tokens}")

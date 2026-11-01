@@ -557,8 +557,11 @@ class ChatApp {
             titleEl.textContent = 'Агент';
         }
 
+        const targetMsgId = opts?.targetMessageId || opts?.targetDbId || null;
         await Promise.all([
-            this.loadMessages(chatId),
+            targetMsgId
+                ? this.loadMessagesAround(chatId, targetMsgId, opts?.radius || 10, { dbId: opts?.targetDbId })
+                : this.loadMessages(chatId),
             this.renderMessageInput()
         ]);
 
@@ -935,24 +938,190 @@ class ChatApp {
             this._messagesLoadFailedChat = null;
         }
 
+        const msgs = data.messages || [];
         // Состояние пагинации по конкретному чату
         this._pagination = {
             chatId,
             pageSize: PAGE_SIZE,
-            loaded: (data.messages || []).length,
+            loaded: msgs.length,
             hasMore: !!data.has_more,
+            hasNewer: false,
+            oldestId: msgs.length ? msgs[0].id : null,
+            newestId: msgs.length ? msgs[msgs.length - 1].id : null,
             loading: false,
+            loadingNewer: false,
         };
 
-        this.renderMessages(data.messages);
+        this.renderMessages(msgs);
         this._initHistoryScrollLoader();
         return true;
+    }
+
+    async loadMessagesAround(chatId, targetId, radius = 10, opts = {}) {
+        const rad = Math.max(1, Number(radius) || 15);
+        const key = String(chatId);
+        this._loadingMessagesChat = key;
+        let res;
+        try {
+            res = await fetch(
+                `/api/chats/${encodeURIComponent(chatId)}/messages?around_id=${encodeURIComponent(String(targetId))}&radius=${rad}`,
+                {
+                    credentials: 'include',
+                    redirect: 'manual'
+                }
+            );
+        } catch (_) {
+            this._messagesLoadFailedChat = key;
+            return false;
+        } finally {
+            if (this._loadingMessagesChat === key) {
+                this._loadingMessagesChat = null;
+            }
+        }
+        if (window.__isAuthRedirectOrUnauthorized?.(res)) {
+            this._messagesLoadFailedChat = key;
+            window.__onAuthSessionExpired?.();
+            return false;
+        }
+        if (!res || !res.ok) {
+            this._messagesLoadFailedChat = key;
+            return false;
+        }
+        const data = await res.json();
+        if (String(chatId) !== String(this.currentChat)) return false;
+
+        if (this._messagesLoadFailedChat === key) {
+            this._messagesLoadFailedChat = null;
+        }
+
+        const msgs = data.messages || [];
+        this._pagination = {
+            chatId,
+            pageSize: rad,
+            loaded: msgs.length,
+            hasMore: !!data.has_more,
+            hasNewer: !!data.has_newer,
+            oldestId: msgs.length ? msgs[0].id : null,
+            newestId: msgs.length ? msgs[msgs.length - 1].id : null,
+            loading: false,
+            loadingNewer: false,
+        };
+
+        this.renderMessages(msgs, { scrollToBottom: false });
+        this._initHistoryScrollLoader();
+
+        const container = this.getMessagesContainer();
+        if (container) {
+            const resolvedMsgId = data.target_message_id || targetId;
+            const resolvedDbId = opts?.dbId || data.target_id || targetId;
+            const targetEl = this._findMessageElement(container, resolvedMsgId, resolvedDbId);
+            if (targetEl) {
+                this._scrollToAndHighlightMessage(targetEl, { immediate: true });
+            } else {
+                container.scrollTop = container.scrollHeight;
+            }
+        }
+        return true;
+    }
+
+    _findMessageElement(container, messageId, dbId) {
+        if (!container) return null;
+        const candidates = [];
+        if (messageId != null && String(messageId).trim() !== '') {
+            candidates.push(String(messageId).trim());
+        }
+        if (dbId != null && String(dbId).trim() !== '' && !candidates.includes(String(dbId).trim())) {
+            candidates.push(String(dbId).trim());
+        }
+        for (const idVal of candidates) {
+            const safe = (typeof CSS !== 'undefined' && CSS.escape)
+                ? CSS.escape(idVal)
+                : idVal.replace(/["\\]/g, '\\$&');
+            const found = container.querySelector(
+                `.user-message-wrapper[data-message-id="${safe}"], .user-message-wrapper[data-id="${safe}"], .agent-message[data-message-id="${safe}"], .agent-message[data-id="${safe}"]`
+            );
+            if (found) return found;
+        }
+        return null;
+    }
+
+    _scrollToAndHighlightMessage(el, opts = {}) {
+        if (!el) return;
+        const container = this.getMessagesContainer();
+        const highlightNode = el.classList.contains('user-message-wrapper')
+            ? (el.querySelector('.user-message') || el)
+            : el;
+
+        const doScroll = (behavior) => {
+            try {
+                el.scrollIntoView({ behavior, block: 'center' });
+            } catch (_) {
+                if (container) {
+                    const top = el.offsetTop - Math.max(40, (container.clientHeight - el.offsetHeight) / 2);
+                    container.scrollTop = Math.max(0, top);
+                }
+            }
+        };
+
+        if (opts?.immediate) {
+            doScroll('auto');
+            requestAnimationFrame(() => {
+                doScroll('auto');
+            });
+        } else {
+            doScroll('smooth');
+        }
+
+        if (highlightNode) {
+            highlightNode.classList.remove('search-jump-highlight');
+            void highlightNode.offsetWidth;
+            highlightNode.classList.add('search-jump-highlight');
+            if (highlightNode._searchHighlightTimer) {
+                clearTimeout(highlightNode._searchHighlightTimer);
+            }
+            highlightNode._searchHighlightTimer = setTimeout(() => {
+                highlightNode.classList.remove('search-jump-highlight');
+            }, 2400);
+        }
+    }
+
+    async navigateToSearchMessage(chatId, { messageId = null, dbId = null } = {}) {
+        if (!chatId) return;
+        const targetChatId = String(chatId).trim();
+        if (!targetChatId) return;
+
+        const isSameChat = String(this.currentChat ?? '') === targetChatId;
+        if (isSameChat) {
+            if (this.currentTab !== 'agent') {
+                this.switchTab('agent');
+                const titleEl = document.getElementById('main-title');
+                if (titleEl) titleEl.textContent = 'Агент';
+            }
+            const container = this.getMessagesContainer();
+            const existingEl = this._findMessageElement(container, messageId, dbId);
+            if (existingEl) {
+                this._scrollToAndHighlightMessage(existingEl, { immediate: false });
+                return;
+            }
+            const targetKey = messageId || dbId;
+            if (targetKey) {
+                await this.loadMessagesAround(targetChatId, targetKey, 15, { dbId });
+                return;
+            }
+        }
+
+        await this.openChat(targetChatId, {
+            targetMessageId: messageId || dbId || null,
+            targetDbId: dbId || null,
+            radius: 15,
+        });
     }
 
     async _syncMissedMessages(chatId) {
         if (!chatId || window.__authSessionExpired) return;
         const key = String(chatId);
         if (String(this.currentChat) !== key || this._loadingMessagesChat === key) return;
+        if (this._pagination && String(this._pagination.chatId) === key && this._pagination.hasNewer) return;
 
         const container = this.getMessagesContainer();
         if (!container) return;
@@ -1026,43 +1195,49 @@ class ChatApp {
         container.scrollTop = container.scrollHeight;
     }
 
-    renderMessages(messages) {
+    renderMessages(messages, opts = {}) {
+        const scrollToBottom = opts?.scrollToBottom !== false;
         const container = this.getMessagesContainer();
         if (!container) return;
         container.innerHTML = '';
-        messages.forEach(msg => this.addMessage(msg, false));
-        container.scrollTop = container.scrollHeight;
+        const prevSuppress = this._suppressHistoryAutoScroll;
+        this._suppressHistoryAutoScroll = !scrollToBottom;
+        try {
+            messages.forEach(msg => this.addMessage(msg, false));
+        } finally {
+            this._suppressHistoryAutoScroll = prevSuppress;
+        }
+        if (scrollToBottom) {
+            container.scrollTop = container.scrollHeight;
+        }
         this._initMessagesFade(container);
         container._syncFade && container._syncFade();
     }
 
     /**
-     * Дозагрузка более старых сообщений при скролле вверх.
-     * offset считается "с конца": уже загружено `loaded` последних сообщений,
-     * следующая пачка — offset=loaded.
+     * Дозагрузка более старых сообщений (head) при скролле вверх.
      */
     async loadOlderMessages() {
         const p = this._pagination;
         if (!p || p.loading || !p.hasMore) return;
-        if (p.chatId !== this.currentChat) return;
+        if (String(p.chatId) !== String(this.currentChat)) return;
 
         const container = this.getMessagesContainer();
         if (!container) return;
 
         p.loading = true;
 
-        // Anchor: запоминаем позицию, чтобы после вставки сверху
-        // видимая часть чата не "прыгнула".
         const prevScrollHeight = container.scrollHeight;
         const prevScrollTop = container.scrollTop;
 
         try {
-            const res = await fetch(
-                `/api/chats/${p.chatId}/messages?limit=${p.pageSize}&offset=${p.loaded}`
-            );
+            const url = p.oldestId != null
+                ? `/api/chats/${encodeURIComponent(p.chatId)}/messages?limit=${p.pageSize}&before_id=${encodeURIComponent(p.oldestId)}`
+                : `/api/chats/${encodeURIComponent(p.chatId)}/messages?limit=${p.pageSize}&offset=${p.loaded}`;
+            const res = await fetch(url, { credentials: 'include' });
             if (!res.ok) { p.loading = false; return; }
             const data = await res.json();
-            if (p.chatId !== this.currentChat) return; // чат переключили пока грузили
+            if (String(p.chatId) !== String(this.currentChat)) return;
 
             const older = data.messages || [];
             if (!older.length) {
@@ -1071,8 +1246,6 @@ class ChatApp {
                 return;
             }
 
-            // Собираем узлы старых сообщений в отдельный фрагмент и вставляем
-            // ПЕРЕД текущими, в верх контейнера.
             const buffer = document.createDocumentFragment();
             const staging = document.createElement('div');
             older.forEach(msg => this._renderMessageInto(staging, msg));
@@ -1080,9 +1253,11 @@ class ChatApp {
             container.insertBefore(buffer, container.firstChild);
 
             p.loaded += older.length;
+            if (older[0]?.id != null) {
+                p.oldestId = older[0].id;
+            }
             p.hasMore = !!data.has_more;
 
-            // Восстанавливаем позицию скролла
             const newScrollHeight = container.scrollHeight;
             container.scrollTop = prevScrollTop + (newScrollHeight - prevScrollHeight);
         } catch (e) {
@@ -1093,13 +1268,59 @@ class ChatApp {
     }
 
     /**
+     * Дозагрузка более новых сообщений (tail) при скролле вниз после прыжка из поиска.
+     */
+    async loadNewerMessages() {
+        const p = this._pagination;
+        if (!p || p.loadingNewer || !p.hasNewer || p.newestId == null) return;
+        if (String(p.chatId) !== String(this.currentChat)) return;
+
+        const container = this.getMessagesContainer();
+        if (!container) return;
+
+        p.loadingNewer = true;
+
+        try {
+            const url = `/api/chats/${encodeURIComponent(p.chatId)}/messages?limit=${p.pageSize}&after_id=${encodeURIComponent(p.newestId)}`;
+            const res = await fetch(url, { credentials: 'include' });
+            if (!res.ok) { p.loadingNewer = false; return; }
+            const data = await res.json();
+            if (String(p.chatId) !== String(this.currentChat)) return;
+
+            const newer = data.messages || [];
+            if (!newer.length) {
+                p.hasNewer = false;
+                p.loadingNewer = false;
+                return;
+            }
+
+            const prevSuppress = this._suppressHistoryAutoScroll;
+            this._suppressHistoryAutoScroll = true;
+            try {
+                newer.forEach(msg => this.addMessage(msg, false));
+            } finally {
+                this._suppressHistoryAutoScroll = prevSuppress;
+            }
+
+            p.loaded += newer.length;
+            const lastMsg = newer[newer.length - 1];
+            if (lastMsg?.id != null) {
+                p.newestId = lastMsg.id;
+            }
+            p.hasNewer = !!data.has_newer;
+            container._syncFade && container._syncFade();
+        } catch (e) {
+            console.error('[pagination] loadNewerMessages error', e);
+        } finally {
+            p.loadingNewer = false;
+        }
+    }
+
+    /**
      * Рендерит одно сообщение из истории в произвольный контейнер
      * (используется для вставки старых сообщений сверху).
      */
     _renderMessageInto(targetContainer, message) {
-        const realContainer = this.getMessagesContainer();
-        // addMessage жёстко пишет в getMessagesContainer(); временно подменяем,
-        // чтобы переиспользовать всю логику рендера без дублирования.
         const origGetter = this.getMessagesContainer;
         this.getMessagesContainer = () => targetContainer;
         try {
@@ -1115,17 +1336,18 @@ class ChatApp {
         if (container._historyLoaderBound) return;
         container._historyLoaderBound = true;
 
-        // rAF-throttle: scroll сыплется десятками событий/кадр, а чтение
-        // container.scrollTop форсит layout. Сводим к одной проверке на кадр.
         let ticking = false;
         container.addEventListener('scroll', () => {
             if (ticking) return;
             ticking = true;
             requestAnimationFrame(() => {
                 ticking = false;
-                // Триггерим подгрузку, когда почти доскроллили до верха
                 if (container.scrollTop < 120) {
                     this.loadOlderMessages();
+                }
+                const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+                if (distFromBottom < 140) {
+                    this.loadNewerMessages();
                 }
             });
         }, { passive: true });
@@ -1757,9 +1979,9 @@ class ChatApp {
         }
 
         if (!isBot) {
-            // Скролл вниз только при загрузке истории (scroll=false).
+            // Скролл вниз только при загрузке истории (scroll=false), если не отключён принудительно.
             // При новом сообщении (scroll=true) скроллом управляет _scrollToUserMessageAndReserve.
-            if (!scroll) container.scrollTop = container.scrollHeight;
+            if (!scroll && !this._suppressHistoryAutoScroll) container.scrollTop = container.scrollHeight;
         } else if (scroll) {
             // Сообщение агента — только для живых ws-сообщений (scroll=true)
             const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
@@ -1791,9 +2013,11 @@ class ChatApp {
                           stroke="currentColor" stroke-width="2"
                           stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>`;
-            btn.addEventListener('click', () => {
+            btn.addEventListener('click', async () => {
                 const container = this.getMessagesContainer();
-                if (container) {
+                if (this._pagination && String(this._pagination.chatId) === String(this.currentChat) && this._pagination.hasNewer) {
+                    await this.loadMessages(this.currentChat);
+                } else if (container) {
                     container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
                 }
                 btn.classList.remove('visible');

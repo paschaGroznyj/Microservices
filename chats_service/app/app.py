@@ -1010,28 +1010,50 @@ async def max_set_settings(chat_id: str, body: MaxSettingsIn):
 
 
 @app.get("/chat/{chat_id}/messages")
-async def get_chat_messages(chat_id: str, limit: int = 50, offset: int = 0,  x_user_name: str = Header(..., alias="X-User-Name")):
+async def get_chat_messages(
+    chat_id: str,
+    limit: int = 50,
+    offset: int = 0,
+    around_id: str | None = None,
+    radius: int = 10,
+    before_id: int | None = None,
+    after_id: int | None = None,
+    x_user_name: str = Header(..., alias="X-User-Name"),
+):
     try:
-        # Страховка от неадекватных значений с фронта
         limit = max(1, min(limit, 200))
         offset = max(0, offset)
+        radius = max(1, min(radius, 100))
 
         await _flush_pending_reactions_from_redis()
-        result = await db.get_chat_messages(chat_id, x_user_name, limit=limit, offset=offset)
+        result = await db.get_chat_messages(
+            chat_id,
+            x_user_name,
+            limit=limit,
+            offset=offset,
+            around_id=around_id,
+            radius=radius,
+            before_id=before_id,
+            after_id=after_id,
+        )
         messages = result["messages"]
         logging.info(
-            f"🦧Чат {chat_id}: отдано {len(messages)} (offset={offset}, "
-            f"total={result['total_count']}, has_more={result['has_more']})"
+            f"🦧Чат {chat_id}: отдано {len(messages)} (offset={offset}, around={around_id}, "
+            f"before={before_id}, after={after_id}, total={result['total_count']}, "
+            f"has_more={result['has_more']}, has_newer={result.get('has_newer', False)})"
         )
         return {
             "chat_id": chat_id,
             "total": len(messages),
             "total_count": result["total_count"],
             "has_more": result["has_more"],
+            "has_newer": result.get("has_newer", False),
+            "target_id": result.get("target_id"),
+            "target_message_id": result.get("target_message_id"),
             "limit": limit,
             "offset": offset,
             "messages": messages,
-            "username": x_user_name
+            "username": x_user_name,
         }
     except Exception as e:
         logging.error(f"Ошибка в эндпоинте: {e}")

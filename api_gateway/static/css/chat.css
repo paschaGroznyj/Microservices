@@ -3078,3 +3078,21 @@ pre {
 .gc-lb__nav--hidden {
   display: none !important;
 }
+
+/* Подсветка сообщения при переходе из поиска */
+@keyframes searchJumpPulse {
+  0% {
+    box-shadow: 0 0 0 1.5px var(--accent), 0 0 0 4px color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 50%, transparent), 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+  100% {
+    box-shadow: none;
+  }
+}
+
+.search-jump-highlight {
+  border-radius: 14px;
+  animation: searchJumpPulse 2.3s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}

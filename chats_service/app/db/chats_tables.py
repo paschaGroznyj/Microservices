@@ -680,15 +680,14 @@ class DataBaseChats:
     async def search_user_messages(self, username: str, query: str, limit: int = 30):
         """
         Живой поиск по сообщениям пользователя во всех его (не удалённых) чатах.
-        Возвращает по одному лучшему совпадению на чат: chat_id, заголовок для
-        сайдбара (renamed_title или превью), фрагмент найденного сообщения (snippet),
-        флаг is_from_bot и время. ILIKE по message_text, группировка по chat_id.
+        Возвращает найденные сообщения с id, message_id, chat_id, заголовком чата
+        (renamed_title / auto_title / last_message), фрагментом (snippet),
+        флагом is_from_bot и временем.
         """
         try:
             q = (query or "").strip()
             if len(q) < 2:
                 return []
-            # экранируем спецсимволы LIKE, чтобы % и _ искались буквально
             escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             pattern = f"%{escaped}%"
             async with self.pool.acquire() as conn:
@@ -702,47 +701,59 @@ class DataBaseChats:
                         JOIN target_user tu ON tu.user_id = c.user_id
                     ),
                     matches AS (
-                        SELECT DISTINCT ON (c.chat_id)
-                            c.chat_id, c.message_text, c.is_from_bot, c.created_at
+                        SELECT
+                            c.id,
+                            c.message_id,
+                            c.chat_id,
+                            c.message_text,
+                            c.is_from_bot,
+                            c.created_at
                         FROM chats c
                         JOIN user_chats uc ON uc.chat_id = c.chat_id
                         LEFT JOIN chat_sidebar_meta m
                              ON m.chat_id = c.chat_id AND m.user_id = (SELECT user_id FROM target_user)
                         WHERE COALESCE(m.is_deleted, FALSE) = FALSE
-                        AND c.message_text ILIKE $2 ESCAPE '\'
-                        ORDER BY c.chat_id, c.created_at DESC
+                          AND (c.user_id = (SELECT user_id FROM target_user) OR c.user_id = -1)
+                          AND c.message_text ILIKE $2 ESCAPE '\'
+                        ORDER BY c.created_at DESC, c.id DESC
+                        LIMIT $3
                     )
                     SELECT
+                        mt.id,
+                        mt.message_id,
                         mt.chat_id,
                         mt.message_text,
                         mt.is_from_bot,
                         mt.created_at,
                         meta.renamed_title,
+                        meta.auto_title,
                         (
                             SELECT c2.message_text
                             FROM chats c2
                             JOIN target_user tu2 ON tu2.user_id = c2.user_id
                             WHERE c2.chat_id = mt.chat_id
-                            ORDER BY c2.created_at DESC
+                            ORDER BY c2.created_at DESC, c2.id DESC
                             LIMIT 1
                         ) AS last_message
                     FROM matches mt
                     LEFT JOIN chat_sidebar_meta meta
                            ON meta.chat_id = mt.chat_id
                           AND meta.user_id = (SELECT user_id FROM target_user)
-                    ORDER BY mt.created_at DESC
-                    LIMIT $3
+                    ORDER BY mt.created_at DESC, mt.id DESC
                 """, username, pattern, limit)
 
                 results = []
                 for row in rows:
                     results.append({
-                        "chat_id": row["chat_id"],
+                        "id": row["id"],
+                        "message_id": row["message_id"] or str(row["id"]),
+                        "chat_id": str(row["chat_id"]),
                         "renamed_title": row["renamed_title"],
+                        "auto_title": row["auto_title"],
                         "last_message": row["last_message"],
-                        "snippet": row["message_text"],
-                        "is_from_bot": row["is_from_bot"],
-                        "timestamp": row["created_at"].isoformat(),
+                        "snippet": row["message_text"] or "",
+                        "is_from_bot": bool(row["is_from_bot"]),
+                        "timestamp": row["created_at"].isoformat() if row["created_at"] else "",
                     })
                 return results
         except Exception as e:
@@ -939,18 +950,26 @@ class DataBaseChats:
             )
             return []
 
-    async def get_chat_messages(self, chat_id: str, username: str, limit: int = 50, offset: int = 0):
+    async def get_chat_messages(
+        self,
+        chat_id: str,
+        username: str,
+        limit: int = 50,
+        offset: int = 0,
+        around_id: str | None = None,
+        radius: int = 15,
+        before_id: int | None = None,
+        after_id: int | None = None,
+    ):
         """
         Возвращает страницу сообщений в чате для пользователя (и сообщения бота),
         вместе со списком прикреплённых файлов на каждое сообщение.
 
-        Пагинация "с конца": offset=0 -> последние `limit` сообщений,
-        offset=limit -> предыдущая пачка (более старые) и т.д.
-        Внутри страницы сообщения всегда отсортированы по created_at ASC
-        (хронологический порядок для рендера).
-
-        Возвращает dict:
-            {"messages": [...], "total_count": int, "has_more": bool}
+        Поддерживает:
+          1) around_id + radius (по умолчанию ±15 сообщений вокруг найденного сообщения)
+          2) before_id (дозагрузка более старых сообщений вверх от курсора id)
+          3) after_id (дозагрузка более новых сообщений вниз от курсора id)
+          4) стандартную пагинацию с конца (limit + offset)
         """
         try:
             async with self.pool.acquire() as conn:
@@ -964,62 +983,137 @@ class DataBaseChats:
                         )
                 """, chat_id, username)
 
-                rows = await conn.fetch("""
-                    SELECT * FROM (
-                        SELECT 
-                            c.id, 
-                            c.user_id,
-                            u.username as username,
-                            c.chat_id, 
-                            c.message_text, 
-                            c.is_from_bot, 
-                            c.message_id,
-                            c.created_at,
-                            c.reaction AS reaction,
-                            COALESCE(
-                                (
-                                    SELECT json_agg(
-                                        json_build_object('name', f.file_name, 'ext', f.file_ext,
-                                        'source', f.source, 'kind', f.file_kind, 'image_key', f.image_key)
-                                        ORDER BY f.id ASC
+                base_select = """
+                    SELECT 
+                        c.id, 
+                        c.user_id,
+                        u.username as username,
+                        c.chat_id, 
+                        c.message_text, 
+                        c.is_from_bot, 
+                        c.message_id,
+                        c.created_at,
+                        c.reaction AS reaction,
+                        COALESCE(
+                            (
+                                SELECT json_agg(
+                                    json_build_object('name', f.file_name, 'ext', f.file_ext,
+                                    'source', f.source, 'kind', f.file_kind, 'image_key', f.image_key)
+                                    ORDER BY f.id ASC
+                                )
+                                FROM chat_files f
+                                WHERE f.message_id = c.message_id
+                            ),
+                            '[]'::json
+                        ) AS files,
+                        COALESCE(
+                            (
+                                SELECT json_agg(
+                                    json_build_object(
+                                        'bot_message_id', p.bot_message_id,
+                                        'poll_index', p.poll_index,
+                                        'selected_index', p.selected_index,
+                                        'selected_value', p.selected_value,
+                                        'is_custom', p.is_custom,
+                                        'is_skipped', p.is_skipped,
+                                        'user_message_id', p.user_message_id
                                     )
-                                    FROM chat_files f
-                                    WHERE f.message_id = c.message_id
-                                ),
-                                '[]'::json
-                            ) AS files,
-                            COALESCE(
-                                (
-                                    SELECT json_agg(
-                                        json_build_object(
-                                            'bot_message_id', p.bot_message_id,
-                                            'poll_index', p.poll_index,
-                                            'selected_index', p.selected_index,
-                                            'selected_value', p.selected_value,
-                                            'is_custom', p.is_custom,
-                                            'is_skipped', p.is_skipped,
-                                            'user_message_id', p.user_message_id
-                                        )
-                                        ORDER BY p.poll_index ASC
-                                    )
-                                    FROM chat_poll_answers p
-                                    WHERE p.chat_id = c.chat_id
-                                      AND (p.bot_message_id = c.message_id OR p.bot_message_id = c.id::text)
-                                ),
-                                '[]'::json
-                            ) AS poll_answers
+                                    ORDER BY p.poll_index ASC
+                                )
+                                FROM chat_poll_answers p
+                                WHERE p.chat_id = c.chat_id
+                                  AND (p.bot_message_id = c.message_id OR p.bot_message_id = c.id::text)
+                            ),
+                            '[]'::json
+                        ) AS poll_answers
+                    FROM chats c
+                    LEFT JOIN users u ON c.user_id = u.id
+                    WHERE c.chat_id = $1 
+                        AND (
+                            c.user_id = (SELECT id FROM users WHERE username = $2)
+                            OR c.user_id = -1
+                        )
+                """
+
+                target_db_id = None
+                target_msg_id = None
+                rows = None
+                mode = "default"
+
+                if around_id:
+                    target_str = str(around_id).strip()
+                    target_row = await conn.fetchrow("""
+                        SELECT c.id, c.message_id
                         FROM chats c
-                        LEFT JOIN users u ON c.user_id = u.id
-                        WHERE c.chat_id = $1 
+                        WHERE c.chat_id = $1
                             AND (
                                 c.user_id = (SELECT id FROM users WHERE username = $2)
                                 OR c.user_id = -1
                             )
-                        ORDER BY c.created_at DESC, c.id DESC
-                        LIMIT $3 OFFSET $4
-                    ) sub
-                    ORDER BY sub.created_at ASC, sub.id ASC
-                """, chat_id, username, limit, offset)
+                            AND (
+                                c.message_id = $3
+                                OR ($3 ~ '^[0-9]+$' AND c.id = $3::bigint)
+                            )
+                        ORDER BY c.id DESC
+                        LIMIT 1
+                    """, chat_id, username, target_str)
+                    if target_row:
+                        mode = "around"
+                        target_db_id = int(target_row["id"])
+                        target_msg_id = target_row["message_id"] or str(target_db_id)
+                        rad = max(1, min(int(radius or 15), 100))
+                        rows = await conn.fetch(f"""
+                            SELECT * FROM (
+                                (
+                                    {base_select}
+                                      AND c.id < $3
+                                    ORDER BY c.id DESC
+                                    LIMIT $4
+                                )
+                                UNION ALL
+                                (
+                                    {base_select}
+                                      AND c.id >= $3
+                                    ORDER BY c.id ASC
+                                    LIMIT $5
+                                )
+                            ) sub
+                            ORDER BY sub.created_at ASC, sub.id ASC
+                        """, chat_id, username, target_db_id, rad, rad + 1)
+
+                if rows is None and before_id is not None:
+                    mode = "before"
+                    rows = await conn.fetch(f"""
+                        SELECT * FROM (
+                            {base_select}
+                              AND c.id < $3
+                            ORDER BY c.id DESC
+                            LIMIT $4
+                        ) sub
+                        ORDER BY sub.created_at ASC, sub.id ASC
+                    """, chat_id, username, int(before_id), limit)
+
+                if rows is None and after_id is not None:
+                    mode = "after"
+                    rows = await conn.fetch(f"""
+                        SELECT * FROM (
+                            {base_select}
+                              AND c.id > $3
+                            ORDER BY c.id ASC
+                            LIMIT $4
+                        ) sub
+                        ORDER BY sub.created_at ASC, sub.id ASC
+                    """, chat_id, username, int(after_id), limit)
+
+                if rows is None:
+                    rows = await conn.fetch(f"""
+                        SELECT * FROM (
+                            {base_select}
+                            ORDER BY c.created_at DESC, c.id DESC
+                            LIMIT $3 OFFSET $4
+                        ) sub
+                        ORDER BY sub.created_at ASC, sub.id ASC
+                    """, chat_id, username, limit, offset)
 
                 messages = []
                 for row in rows:
@@ -1043,11 +1137,40 @@ class DataBaseChats:
                         "poll_answers": poll_answers or [],
                     })
 
-                has_more = (offset + len(messages)) < (total_count or 0)
+                if mode in ("around", "before", "after"):
+                    if messages:
+                        oldest_id = int(messages[0]["id"])
+                        newest_id = int(messages[-1]["id"])
+                        has_more = bool(await conn.fetchval("""
+                            SELECT EXISTS(
+                                SELECT 1 FROM chats c
+                                WHERE c.chat_id = $1
+                                  AND (c.user_id = (SELECT id FROM users WHERE username = $2) OR c.user_id = -1)
+                                  AND c.id < $3
+                            )
+                        """, chat_id, username, oldest_id))
+                        has_newer = bool(await conn.fetchval("""
+                            SELECT EXISTS(
+                                SELECT 1 FROM chats c
+                                WHERE c.chat_id = $1
+                                  AND (c.user_id = (SELECT id FROM users WHERE username = $2) OR c.user_id = -1)
+                                  AND c.id > $3
+                            )
+                        """, chat_id, username, newest_id))
+                    else:
+                        has_more = False
+                        has_newer = False
+                else:
+                    has_more = (offset + len(messages)) < (total_count or 0)
+                    has_newer = offset > 0
+
                 return {
                     "messages": messages,
                     "total_count": total_count or 0,
                     "has_more": has_more,
+                    "has_newer": has_newer,
+                    "target_id": target_db_id,
+                    "target_message_id": target_msg_id,
                 }
         except Exception as e:
             logging.error(f"Ошибка при получении сообщений чата {chat_id}: {e}")

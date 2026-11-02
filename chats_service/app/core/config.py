@@ -15,16 +15,12 @@ ALGORITHM = os.getenv("ALGORITHM")
 
 KAFKA_BROKER = os.getenv("KAFKA_BROKER")
 
-API_GIGACHAT = os.getenv("API_KEY")
 
-PORT_PM_AGENT = os.getenv("PORT_PM_AGENT")
 PORT_DB_CONSUMER = os.getenv("PORT_DB_CONSUMER")
 PORT_AUTH_SERVICE = os.getenv("PORT_AUTH_SERVICE")
 PORT_CHATS_SERVICE = os.getenv("PORT_CHATS_SERVICE")
-PORT_CRB_SERVICE = os.getenv("PORT_CRB_SERVICE")
 PORT_GATEWAY_PORT = os.getenv("PORT_GATEWAY_PORT")
 
-MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 
 ACTIVITY_URL = os.getenv("ACTIVITY_URL", "https://grafana.uva-advanced.ru/cloudru-activity")
 ACTIVITY_TOKEN = os.getenv("ACTIVITY_TOKEN")

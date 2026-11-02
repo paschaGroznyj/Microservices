@@ -16,7 +16,5 @@ ALGORITHM = os.getenv("ALGORITHM")
 
 PORT_AUTH_SERVICE = os.getenv("PORT_AUTH_SERVICE")
 
-PORT_PM_AGENT = os.getenv("PORT_PM_AGENT")
-
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 

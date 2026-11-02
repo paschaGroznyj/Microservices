@@ -3,6 +3,7 @@ import logging
 import os
 import uuid
 import requests
+import asyncio
 from fastapi import FastAPI, Header, Query
 from kafka import KafkaProducer
 from pydantic import BaseModel

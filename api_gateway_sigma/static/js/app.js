@@ -10,7 +10,7 @@ class ChatApp {
         this._runState = 'idle';      // idle | running | stopping
         this._activeRequestId = null;
         this._statusPollTimer = null;  // фолбэк-таймер, если SSE недоступен
-        this.INPUT_MAX_CHARS = 10000;  // жёсткий предел длины поля ввода
+        this.INPUT_MAX_CHARS = 20000;  // жёсткий предел длины поля ввода
 
         /* ══════════════════════════════════════════
            ВАРИАНТ 2: МУЛЬТИПЛЕКС СТРИМИНГА ПО ЧАТАМ (SSE)

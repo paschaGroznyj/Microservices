@@ -80,32 +80,13 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down API Gateway...")
     await app.state.http_client.aclose()
-app = FastAPI(title="API Gateway", lifespan=lifespan)
+app = FastAPI(title="API Gateway", lifespan=lifespan, docs_url=None)
 app.include_router(group_chat_gw.router)
 
 app.include_router(editor_gw.router)
 app.include_router(max_chats_gw.router)
 # app = FastAPI(title="API Gateway", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
-# Service Discovery
-# SERVICES = {
-#     "auth": {
-#         "url": f"http://auth_service:{PORT_AUTH_SERVICE}",
-#         "health_endpoint": "/health",
-#     },
-#     "chats": {
-#         "url": f"http://chats_service:{PORT_CHATS_SERVICE}",
-#         "health_endpoint": "/health",
-#     },
-#     "parsers": {
-#              "url": f"http://parsers_service:{PORT_PARSERS_SERVICE}",
-#              "health_endpoint": "/health",
-#          },
-#     "agent_service": {
-#         "url": f"http://agent_service:{PORT_LLM_CONSUMER}",
-#         "health_endpoint": "/health",
-#     }
-# }
 
 SERVICES = {
     "auth": {

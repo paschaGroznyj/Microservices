@@ -1311,6 +1311,8 @@
           agent_model:    window.ModelPicker?.getModel() ?? "coder",
           selected_tools: window.ToolsPanel?.getSelectedCategories() ?? [],
           context_size:   window.ToolsPanel?.getContextSize() ?? "medium",
+          timezone_name:  (Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Moscow"),
+          tz_offset_minutes: new Date().getTimezoneOffset(),
           ...(pollAnswer ? { poll_answer: pollAnswer } : {}),
         }),
       });

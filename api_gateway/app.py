@@ -1362,6 +1362,7 @@ async def send_message(request: Request):
     data["type_agent"] = data.get("type_agent", "pm")
     data["request_id"] = request_id
     data["gateway_target"] = "main"
+    data["timezone_name"] = (data.get("timezone_name") or request.headers.get("X-Timezone") or "Europe/Moscow").strip()
     logger.info(f"Что летит при отправке сообщений {data['chat_id']}, {data['message']}")
 
     message = {

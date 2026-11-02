@@ -60,23 +60,52 @@ def menu_root(is_admin: bool = False) -> list[dict]:
     return keyboard(rows)
 
 
-# ── Будильники (ЗАГЛУШКА) ──
-# Пресеты по образцу telegram_service. Бека проактивных триггеров у MAX пока нет —
-# кнопки неактивны, ведут на max:alarm:stub (показывает «в разработке»).
+# ── Будильники ──
 MAX_ALARM_PRESETS = [
-    ("morning", "Утро", "09:00"),
-    ("day", "День", "13:00"),
-    ("evening", "Вечер", "18:00"),
+    ("breakfast", "Завтрак", "09:00"),
+    ("lunch", "Обед", "13:00"),
+    ("dinner", "Ужин", "18:00"),
 ]
+MAX_ALARM_TITLES = {k: t for k, t, _ in MAX_ALARM_PRESETS}
 
 
-def menu_alarms() -> list[dict]:
-    """Заглушка меню будильников: пресеты + пометка «скоро»."""
+def menu_alarms(settings: dict | None = None, triggers: list[dict] | None = None) -> list[dict]:
+    settings = settings or {}
+    enabled = settings.get("proactive_enabled")
+    if enabled is None:
+        enabled = True
     rows = []
+    rows.append([_btn(("🔔 Будильники: вкл" if enabled else "🔕 Будильники: выкл"), "max:toggle:proactive")])
+    tz = settings.get("timezone_name") or "Europe/Moscow"
+    rows.append([_btn(f"TZ: {tz}", "max:alarm:tz")])
+
+    def _find_trig(preset_key: str):
+        for t in triggers or []:
+            if t.get("preset_key") == preset_key:
+                return t
+        return None
+
     for preset_key, title, default_time in MAX_ALARM_PRESETS:
-        rows.append([_btn(f"\U0001f550 {title} · {default_time} · скоро",
-                          f"max:alarm:stub:{preset_key}")])
+        trig = _find_trig(preset_key)
+        active = bool(trig.get("is_active", True)) if trig else True
+        hhmm = (trig or {}).get("time_msk") or default_time
+        label = f"{'✅' if active else '⏸'} {title}: {hhmm}"
+        rows.append([_btn(label, f"max:alarm:open:{preset_key}")])
     rows.append([_btn("‹ Назад", "max:menu:root")])
+    return keyboard(rows)
+
+
+def menu_alarm_detail(preset_key: str, trig: dict | None) -> list[dict]:
+    title = MAX_ALARM_TITLES.get(preset_key, preset_key)
+    active = bool((trig or {}).get("is_active", True))
+    tm = (trig or {}).get("time_msk") or "09:00"
+    rows = [
+        [_btn(f"Время: {tm}", f"max:alarm:edit_time:{preset_key}")],
+        [_btn("Промпт", f"max:alarm:edit_prompt:{preset_key}")],
+        [_btn(("Выключить" if active else "Включить"), f"max:alarm:toggle:{preset_key}")],
+        [_btn("Сбросить промпт", f"max:alarm:clear_prompt:{preset_key}")],
+        [_btn(f"‹ К будильникам ({title})", "max:menu:alarms")],
+    ]
     return keyboard(rows)
 
 

@@ -26,6 +26,14 @@ import logging
 import os
 import time
 import uuid
+import re
+import random
+from datetime import datetime, timezone
+try:
+    from zoneinfo import ZoneInfo
+    MAX_TZ = ZoneInfo("Europe/Moscow")
+except Exception:
+    MAX_TZ = None
 
 import httpx
 import redis.asyncio as aioredis
@@ -39,8 +47,9 @@ from app.media import (
 )
 from app.menu import (
     settings_summary, menu_root, menu_model, menu_tools, menu_trigger,
-    menu_alarms, menu_sessions,
+    menu_alarms, menu_alarm_detail, menu_sessions,
     MAX_MODELS, MAX_TRIGGERS, MAX_TOOL_CATEGORIES, MAX_ADMIN_TOOL_CATEGORIES,
+    MAX_ALARM_PRESETS, MAX_ALARM_TITLES, _btn, keyboard,
 )
 
 logging.basicConfig(level=logging.INFO,
@@ -201,6 +210,148 @@ async def save_chat_settings(chat_id: int, patch: dict) -> bool:
         log.error(f"save_chat_settings fail chat={chat_id}: {e}")
         return False
 
+
+
+# ══════════════════════════════════════════════════════════════
+# Триггеры и Будильники
+# ══════════════════════════════════════════════════════════════
+def _k_alarmedit(max_chat_id: int, uid: int) -> str: return f"max:alarmedit:{max_chat_id}:{uid}"
+def _k_trig(tid: int, stamp: str) -> str: return f"max:trig:{tid}:{stamp}"
+
+async def fetch_chat_triggers(chat_id: int) -> list[dict]:
+    try:
+        async with httpx.AsyncClient(timeout=5) as c:
+            resp = await c.get(f"{CHATS_SERVICE_URL}/max/triggers/{chat_id}")
+            resp.raise_for_status()
+            return resp.json().get("triggers", []) or []
+    except Exception as e:
+        log.error(f"fetch_chat_triggers fail chat={chat_id}: {e}")
+        return []
+
+def _find_alarm_trigger(triggers: list[dict], preset_key: str) -> dict | None:
+    for t in triggers or []:
+        if t.get("preset_key") == preset_key:
+            return t
+    return None
+
+async def ensure_alarm_trigger(chat_id: int, uid: int, preset_key: str) -> dict | None:
+    triggers = await fetch_chat_triggers(chat_id)
+    hit = _find_alarm_trigger(triggers, preset_key)
+    if hit:
+        return hit
+    from app.menu import MAX_ALARM_TITLES, MAX_ALARM_PRESETS
+    title = MAX_ALARM_TITLES.get(preset_key, preset_key)
+    default_time = next((tm for k, _, tm in MAX_ALARM_PRESETS if k == preset_key), "09:00")
+    body = {
+        "kind": "recurring",
+        "title": title,
+        "time_msk": default_time,
+        "days_of_week": [],
+        "prompt": None,
+        "preset_key": preset_key,
+        "addressed": False,
+        "added_by_user_id": uid,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=5) as c:
+            resp = await c.post(f"{CHATS_SERVICE_URL}/max/triggers/{chat_id}", json=body)
+            resp.raise_for_status()
+            return resp.json().get("trigger")
+    except Exception as e:
+        log.error(f"ensure_alarm_trigger fail chat={chat_id} preset={preset_key}: {e}")
+        return None
+
+async def patch_trigger(chat_id: int, trigger_id: int, patch: dict) -> dict | None:
+    try:
+        async with httpx.AsyncClient(timeout=5) as c:
+            resp = await c.patch(f"{CHATS_SERVICE_URL}/max/triggers/{chat_id}/{trigger_id}", json=patch)
+            resp.raise_for_status()
+            return resp.json().get("trigger")
+    except Exception as e:
+        log.error(f"patch_trigger fail chat={chat_id} trigger={trigger_id}: {e}")
+        return None
+
+async def fetch_due_triggers(now_utc: datetime) -> list[dict]:
+    try:
+        async with httpx.AsyncClient(timeout=5) as c:
+            resp = await c.get(
+                f"{CHATS_SERVICE_URL}/max/triggers_due",
+                params={"utc_ts": now_utc.astimezone(timezone.utc).isoformat()}
+            )
+            resp.raise_for_status()
+            return resp.json().get("triggers", []) or []
+    except Exception as e:
+        log.warning(f"fetch_due_triggers fail: {e}")
+        return []
+
+async def mark_trigger_fired_remote(chat_id: str, trigger_id: int) -> None:
+    try:
+        async with httpx.AsyncClient(timeout=5) as c:
+            await c.post(f"{CHATS_SERVICE_URL}/max/triggers/{chat_id}/{trigger_id}/fired")
+    except Exception as e:
+        log.warning(f"mark_trigger_fired fail tid={trigger_id}: {e}")
+
+async def run_trigger_scan():
+    now_utc = datetime.now(timezone.utc)
+    stamp = now_utc.strftime("%Y%m%d%H%M")
+    triggers = await fetch_due_triggers(now_utc)
+    if not triggers:
+        return
+    r = await get_redis()
+    log.info(f"[scheduler] max-trigger-scan utc={now_utc.isoformat()} due={len(triggers)}")
+    for t in triggers:
+        tid = t["id"]
+        cid = t["chat_id"]
+        try:
+            fire_stamp = t.get("fire_stamp") or stamp
+            fresh = await r.set(_k_trig(tid, fire_stamp), "1", nx=True, ex=180)
+            if not fresh:
+                continue
+            addressed = bool(t.get("addressed"))
+            slot = t.get("preset_key") or t.get("kind") or "custom"
+            custom_prompt = t.get("prompt")
+            
+            # Для проактивной инициации в MAX: собираем payload и отправляем в chats_service
+            settings = await get_chat_settings(int(cid))
+            session_id = await ensure_session(int(cid), 0)
+            payload = {
+                "user_id": 0,
+                "username": "чат",
+                "chat_id": str(session_id),
+                "max_chat_id": str(cid),
+                "message": "",
+                "type_agent": "pm",
+                "gateway_target": "max",
+                "request_id": str(uuid.uuid4()),
+                "message_id": str(uuid.uuid4()),
+                "selected_tools": settings.get("selected_tools") or [],
+                "agent_model": settings.get("agent_model"),
+                "context_size": "medium",
+                "has_files": False,
+                "is_from_bot": False,
+                "tb_name": None,
+                "initiated": True,
+                "slot": slot,
+                "addressed": addressed,
+                "target_username": None,
+                "sad_followup": False,
+                "custom_prompt": custom_prompt,
+            }
+            async with httpx.AsyncClient(timeout=15) as client:
+                await client.post(f"{CHATS_SERVICE_URL}/send_message", json=payload)
+            await mark_trigger_fired_remote(cid, tid)
+        except Exception as e:
+            log.warning(f"max-trigger-scan fire fail tid={tid} chat={cid}: {e}")
+
+def build_scheduler():
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.triggers.interval import IntervalTrigger
+    sched = AsyncIOScheduler(timezone=MAX_TZ)
+    sched.add_job(run_trigger_scan,
+                  IntervalTrigger(minutes=1, timezone=MAX_TZ),
+                  id="max-trigger-scan", misfire_grace_time=45, max_instances=1,
+                  coalesce=True)
+    return sched
 
 # ══════════════════════════════════════════════════════════════
 # Оркестрация: буфер реплик в Redis + lite-LLM-фильтр (как в TG)
@@ -455,6 +606,61 @@ async def list_sessions(max_chat_id: int) -> list:
         return []
 
 
+async def _consume_alarmedit(max_chat_id: int, user_id, text: str) -> bool:
+    """Перехват текстового ввода для настройки будильников (tz / time:<preset> / prompt:<preset>)."""
+    if not user_id:
+        return False
+    try:
+        r = await get_redis()
+        key = _k_alarmedit(max_chat_id, int(user_id))
+        alarm_flag = await r.get(key)
+        if not alarm_flag:
+            return False
+        await r.delete(key)
+    except Exception as e:
+        log.warning(f"consume_alarmedit fail chat={max_chat_id}: {e}")
+        return False
+
+    value = (text or "").strip()
+    reply_msg = None
+    if alarm_flag == "tz":
+        tz_ok = False
+        try:
+            if ZoneInfo is not None:
+                ZoneInfo(value)
+                tz_ok = True
+        except Exception:
+            tz_ok = False
+        if not tz_ok:
+            reply_msg = "Неизвестный часовой пояс. Пример: Europe/Moscow или Europe/Samara."
+        else:
+            ok = await save_chat_settings(max_chat_id, {"timezone_name": value})
+            reply_msg = f"Timezone: {value}" if ok else "Ошибка сохранения."
+    else:
+        kind_flag, _, preset_key = str(alarm_flag).partition(":")
+        if kind_flag == "time":
+            if not re.match(r"^([01]?[0-9]|2[0-3]):[0-5][0-9]$", value):
+                reply_msg = "Формат времени HH:MM (например 08:00)."
+            else:
+                hh, mm = value.split(":")
+                norm = f"{int(hh):02d}:{mm}"
+                trig = await ensure_alarm_trigger(max_chat_id, int(user_id), preset_key)
+                ok = trig and await patch_trigger(max_chat_id, int(trig["id"]), {"time_msk": norm})
+                reply_msg = f"{MAX_ALARM_TITLES.get(preset_key, preset_key)}: {norm}" if ok else "Ошибка сохранения."
+        elif kind_flag == "prompt":
+            new_prompt = value[:2000]
+            trig = await ensure_alarm_trigger(max_chat_id, int(user_id), preset_key)
+            ok = trig and await patch_trigger(max_chat_id, int(trig["id"]), {"prompt": new_prompt})
+            reply_msg = f"Промпт для {MAX_ALARM_TITLES.get(preset_key, preset_key)} сохранён." if ok else "Ошибка сохранения."
+
+    if reply_msg and client is not None:
+        try:
+            await client.send_message(text=reply_msg, chat_id=max_chat_id, fmt=None)
+        except Exception:
+            pass
+    return True
+
+
 async def _consume_setname(max_chat_id: int, user_id, text: str) -> bool:
     """Если для чата/юзера висит флаг ожидания имени — сохраняем имя
     и гасим флаг. Возвращает True, если сообщение было поглощено."""
@@ -654,13 +860,96 @@ async def handle_callback(update: dict) -> None:
         await rerender(menu_trigger(s.get("trigger_mode")), s)
         return
 
-    # Будильники (ЗАГЛУШКА: пресеты без бека проактивных триггеров)
+    from app.menu import menu_alarms, menu_alarm_detail, MAX_ALARM_TITLES
+    if data == "max:toggle:proactive":
+        s = await get_chat_settings(chat_id)
+        cur = s.get("proactive_enabled")
+        if cur is None: cur = True
+        ok = await save_chat_settings(chat_id, {"proactive_enabled": not cur})
+        await ack(("Будильники " + ("выкл" if cur else "вкл")) if ok else "Ошибка")
+        s = await get_chat_settings(chat_id)
+        triggers = await fetch_chat_triggers(chat_id)
+        await rerender(menu_alarms(s, triggers), s)
+        return
+
     if data == "max:menu:alarms":
         await ack()
-        await rerender(menu_alarms())
+        s = await get_chat_settings(chat_id)
+        triggers = await fetch_chat_triggers(chat_id)
+        await rerender(menu_alarms(s, triggers), s)
         return
-    if data.startswith("max:alarm:stub"):
-        await ack("Будильники скоро — в разработке")
+
+    if data == "max:alarm:tz":
+        try:
+            r = await get_redis()
+            await r.set(_k_alarmedit(chat_id, user_id), "tz", ex=300)
+        except Exception:
+            pass
+        await ack()
+        if message_id:
+            try:
+                await client.edit_message(message_id, 
+                    "Отправь timezone чата в формате IANA, например: `Europe/Moscow` или `Europe/Samara`",
+                    attachments=keyboard([[_btn("‹ К будильникам", "max:menu:alarms")]]), fmt="markdown")
+            except Exception:
+                pass
+        return
+
+    if data.startswith("max:alarm:open:"):
+        preset_key = data.rsplit(":", 1)[-1]
+        trig = await ensure_alarm_trigger(chat_id, user_id, preset_key)
+        await ack()
+        s = await get_chat_settings(chat_id)
+        await rerender(menu_alarm_detail(preset_key, trig), s)
+        return
+
+    if data.startswith("max:alarm:edit_time:"):
+        preset_key = data.rsplit(":", 1)[-1]
+        r = await get_redis()
+        await r.set(_k_alarmedit(chat_id, user_id), f"time:{preset_key}", ex=300)
+        await ack()
+        if message_id:
+            try:
+                await client.edit_message(message_id,
+                    f"Отправь новое время для {MAX_ALARM_TITLES.get(preset_key, preset_key)} в формате `HH:MM` по локальной timezone чата.",
+                    attachments=keyboard([[_btn("‹ Назад", f"max:alarm:open:{preset_key}")]]), fmt="markdown")
+            except Exception:
+                pass
+        return
+
+    if data.startswith("max:alarm:edit_prompt:"):
+        preset_key = data.rsplit(":", 1)[-1]
+        r = await get_redis()
+        await r.set(_k_alarmedit(chat_id, user_id), f"prompt:{preset_key}", ex=300)
+        await ack()
+        if message_id:
+            try:
+                await client.edit_message(message_id,
+                    f"Отправь новый промпт для {MAX_ALARM_TITLES.get(preset_key, preset_key)}. Он будет выполнен как custom_prompt триггера.",
+                    attachments=keyboard([[_btn("‹ Назад", f"max:alarm:open:{preset_key}")]]), fmt="markdown")
+            except Exception:
+                pass
+        return
+
+    if data.startswith("max:alarm:toggle:"):
+        preset_key = data.rsplit(":", 1)[-1]
+        trig = await ensure_alarm_trigger(chat_id, user_id, preset_key)
+        cur = bool((trig or {}).get("is_active", True))
+        ok = trig and await patch_trigger(chat_id, int(trig["id"]), {"is_active": (not cur)})
+        await ack("Сохранено" if ok else "Ошибка")
+        trig = await ensure_alarm_trigger(chat_id, user_id, preset_key)
+        s = await get_chat_settings(chat_id)
+        await rerender(menu_alarm_detail(preset_key, trig), s)
+        return
+
+    if data.startswith("max:alarm:clear_prompt:"):
+        preset_key = data.rsplit(":", 1)[-1]
+        trig = await ensure_alarm_trigger(chat_id, user_id, preset_key)
+        ok = trig and await patch_trigger(chat_id, int(trig["id"]), {"prompt": ""})
+        await ack("Промпт очищен" if ok else "Ошибка")
+        trig = await ensure_alarm_trigger(chat_id, user_id, preset_key)
+        s = await get_chat_settings(chat_id)
+        await rerender(menu_alarm_detail(preset_key, trig), s)
         return
 
     # Кто жал /start (АДМИН, ЗАГЛУШКА: у MAX пока нет start_log на беке)
@@ -805,6 +1094,8 @@ async def handle_update(update: dict) -> None:
     # Ввод имени агента: если висит флаг ожидания — следующее сообщение = имя.
     if await _consume_setname(info["chat_id"], info.get("user_id"), info.get("text") or ""):
         return
+    if await _consume_alarmedit(info["chat_id"], info.get("user_id"), info.get("text") or ""):
+        return
     if not await is_allowed(info["chat_id"]):
         if client is not None:
             await client.send_message(
@@ -926,6 +1217,45 @@ class PushMessageRequest(BaseModel):
 class PushMessageResponse(BaseModel):
     ok: bool
     error: str | None = None
+
+
+class ReasoningRequest(BaseModel):
+    chat_id: int
+    text: str
+
+
+@api.post("/max/reasoning")
+async def max_reasoning(req: ReasoningRequest):
+    """Трансляция reasoning-блока агента в плашку "Думаю...".
+
+    Агент копит живой reasoning целым блоком и шлёт сюда на каждом
+    завершённом шаге (reasoning_end). Мы редактируем существующее
+    сообщение "Думаю..." (_thinking_messages[chat_id]), показывая последний
+    блок курсивом. Это НЕ финал — финал придёт отдельно через push_message
+    (он же снимет плашку).
+
+    Fail-safe: любые ошибки гасим — трансляция не критична.
+    """
+    if client is None:
+        return {"ok": False, "error": "bot not ready"}
+    text = (req.text or "").strip()
+    if not text:
+        return {"ok": False, "error": "empty"}
+    thinking_mid = _thinking_messages.get(req.chat_id)
+    if not thinking_mid:
+        # плашки нет (уже снята финалом / не создана) — нечего редактировать
+        return {"ok": False, "error": "no thinking message"}
+    # Экранируем HTML и оформляем курсивом с индикатором.
+    safe = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    rendered = f"💭 <i>{safe}</i>"
+    if len(rendered) > 4000:
+        rendered = rendered[:3990] + "...</i>"
+    try:
+        await client.edit_message(thinking_mid, rendered, fmt="html")
+        return {"ok": True}
+    except Exception as e:
+        log.debug(f"[max-reasoning] edit fail chat={req.chat_id}: {e}")
+        return {"ok": False, "error": str(e)}
 
 
 MAX_MSG_LIMIT = 4000
@@ -1131,15 +1461,20 @@ async def _startup():
     except Exception as e:
         log.warning(f"set_commands не удался (продолжаю): {e}")
     _poll_task = asyncio.create_task(poll_loop())
+    global _scheduler
+    _scheduler = build_scheduler()
+    _scheduler.start()
 
 
 @api.on_event("shutdown")
 async def _shutdown():
-    global _poll_task
+    global _poll_task, _scheduler
     if _poll_task:
         _poll_task.cancel()
     if client:
         await client.close()
+    if '_scheduler' in globals() and _scheduler:
+        _scheduler.shutdown()
 
 
 def main():

@@ -72,22 +72,23 @@ async def get_tg_chat_settings(db, chat_id: str) -> dict:
         "selected_tools": DEFAULT_TG_TOOLS,
         "trigger_mode": "orchestrator",
         "orchestrator_context_n": 6,
+        "proactive_enabled": True,
+        "timezone_name": "Europe/Moscow",
     }
     try:
         pool = getattr(db, "pool", None)
-        if pool is None:
+        if pool is None or chat_id is None:
             return defaults
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT system_prompt, agent_name, agent_model, selected_tools, "
-                "trigger_mode, orchestrator_context_n "
+                "trigger_mode, orchestrator_context_n, proactive_enabled, timezone_name "
                 "FROM telegram_chat_settings WHERE chat_id=$1",
                 str(chat_id),
             )
         if not row:
             return defaults
         d = dict(row)
-        # selected_tools может прийти как JSON-строка
         st = d.get("selected_tools")
         if isinstance(st, str):
             try:
@@ -96,7 +97,6 @@ async def get_tg_chat_settings(db, chat_id: str) -> dict:
                 st = None
         if not st:
             st = DEFAULT_TG_TOOLS
-        # отфильтровать запрещённые (админские) тулы на всякий случай
         st = [t for t in st if t not in TG_FORBIDDEN_TOOLS]
         return {
             "system_prompt": d.get("system_prompt"),
@@ -105,6 +105,8 @@ async def get_tg_chat_settings(db, chat_id: str) -> dict:
             "selected_tools": st,
             "trigger_mode": d.get("trigger_mode") or "orchestrator",
             "orchestrator_context_n": d.get("orchestrator_context_n") or 6,
+            "proactive_enabled": True if d.get("proactive_enabled") is None else bool(d.get("proactive_enabled")),
+            "timezone_name": d.get("timezone_name") or "Europe/Moscow",
         }
     except Exception as e:
         log.warning(f"[tg] get_tg_chat_settings fail chat={chat_id}: {e}")

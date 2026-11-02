@@ -264,4 +264,5 @@ def get_role_max(max_id) -> str:
 
 AGENT_POOL_PASSWORD = os.getenv("AGENT_POOL_PASSWORD")
 TG_BOT_PUSH_URL = os.environ.get("TG_BOT_PUSH_URL")
+MAX_BOT_PUSH_URL = os.environ.get("MAX_BOT_PUSH_URL")
 

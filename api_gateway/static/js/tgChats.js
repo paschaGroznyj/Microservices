@@ -353,6 +353,7 @@
       resetForm();
     }
     _modalOpen = true;
+    _modalOverlay.innerHTML = '';
     _modalOverlay.classList.remove('closing');
     _modalOverlay.classList.add('active');
     render();
@@ -442,6 +443,14 @@
   function renderModal() {
     if (!_modalOpen) return;
     ensureModal();
+    var prevBody = _modalOverlay.querySelector('.tgc-modal-body');
+    var savedScrollTop = prevBody ? prevBody.scrollTop : 0;
+    var prevTrList = _modalOverlay.querySelector('.tgc-tr-list');
+    var savedTrListScroll = prevTrList ? prevTrList.scrollTop : 0;
+    var openDdIds = Array.prototype.map.call(
+      _modalOverlay.querySelectorAll('.tgc-dd.tgc-dd--open'),
+      function (el) { return el.id; }
+    ).filter(Boolean);
 
     var modelContent = getActualModels().map(function (m) {
       return '<button class="tgc-opt' + (m.id === _form.agent_model ? ' tgc-opt--on' : '') + '" data-model="' + m.id + '" type="button" style="--tgc-accent:' + m.accent + '">' +
@@ -511,6 +520,15 @@
       '</div>';
 
     bindModalEvents();
+
+    openDdIds.forEach(function (id) {
+      var dd = _modalOverlay.querySelector('#' + id);
+      if (dd) dd.classList.add('tgc-dd--open');
+    });
+    var newBody = _modalOverlay.querySelector('.tgc-modal-body');
+    if (newBody && savedScrollTop > 0) newBody.scrollTop = savedScrollTop;
+    var newTrList = _modalOverlay.querySelector('.tgc-tr-list');
+    if (newTrList && savedTrListScroll > 0) newTrList.scrollTop = savedTrListScroll;
   }
 
   function render() {
@@ -536,6 +554,8 @@
 
     _modalOverlay.querySelectorAll('[data-model]').forEach(function (b) {
       b.addEventListener('click', function (e) {
+        var dd = e.currentTarget.closest('.tgc-dd');
+        if (dd) dd.classList.remove('tgc-dd--open');
         _form.agent_model = e.currentTarget.dataset.model;
         renderModal();
       });
@@ -552,6 +572,8 @@
 
     _modalOverlay.querySelectorAll('[data-trigger]').forEach(function (b) {
       b.addEventListener('click', function (e) {
+        var dd = e.currentTarget.closest('.tgc-dd');
+        if (dd) dd.classList.remove('tgc-dd--open');
         _form.trigger_mode = e.currentTarget.dataset.trigger;
         renderModal();
       });

@@ -165,6 +165,8 @@ class ChatMessage(BaseModel):
     # loop_tick=True — служебный тик петли от consumer (user_id=-100), проходит гейт агента.
     loop_tick: bool = False
     poll_answer: dict | None = None
+    timezone_name: str | None = None
+    tz_offset_minutes: int | None = None
     
 
 @app.on_event("startup")
@@ -565,6 +567,8 @@ async def send_message(chat: ChatMessage):
         "loop_instruction": chat.loop_instruction,
         "loop_tick": chat.loop_tick,
         "poll_answer": chat.poll_answer,
+        "timezone_name": chat.timezone_name,
+        "tz_offset_minutes": chat.tz_offset_minutes,
     }
     start = time.perf_counter()
     # отправка в Kafka
@@ -592,6 +596,7 @@ class TgChatIn(BaseModel):
     orchestrator_context_n: int | None = None
     proactive_enabled: bool | None = None
     timezone_name: str | None = None
+    timezone_name: str | None = None
 
 
 class TgSettingsIn(BaseModel):
@@ -602,6 +607,7 @@ class TgSettingsIn(BaseModel):
     trigger_mode: str | None = None
     orchestrator_context_n: int | None = None
     proactive_enabled: bool | None = None
+    timezone_name: str | None = None
     timezone_name: str | None = None
 
 
@@ -626,6 +632,7 @@ async def tg_add_chat(body: TgChatIn):
             "trigger_mode": body.trigger_mode,
             "orchestrator_context_n": body.orchestrator_context_n,
             "proactive_enabled": body.proactive_enabled,
+            "timezone_name": body.timezone_name,
         }.items() if v is not None
     }
     settings = None
@@ -662,6 +669,7 @@ async def tg_set_settings(chat_id: str, body: TgSettingsIn):
         **{k: v for k, v in body.dict().items() if v is not None},
     )
     return {"status": "ok", "settings": s}
+
 
 
 class TgMemberIn(BaseModel):
@@ -921,6 +929,7 @@ class MaxChatIn(BaseModel):
     trigger_mode: str | None = None
     orchestrator_context_n: int | None = None
     proactive_enabled: bool | None = None
+    timezone_name: str | None = None
 
 
 class MaxSettingsIn(BaseModel):
@@ -931,6 +940,7 @@ class MaxSettingsIn(BaseModel):
     trigger_mode: str | None = None
     orchestrator_context_n: int | None = None
     proactive_enabled: bool | None = None
+    timezone_name: str | None = None
 
 
 @app.get("/max/chats")
@@ -950,6 +960,7 @@ async def max_add_chat(body: MaxChatIn):
             "trigger_mode": body.trigger_mode,
             "orchestrator_context_n": body.orchestrator_context_n,
             "proactive_enabled": body.proactive_enabled,
+            "timezone_name": body.timezone_name,
         }.items() if v is not None
     }
     if settings_fields:
@@ -1005,6 +1016,69 @@ async def max_set_settings(chat_id: str, body: MaxSettingsIn):
         chat_id, **{k: v for k, v in body.dict().items() if v is not None}
     )
     return {"status": "ok", "settings": s}
+
+
+@app.get("/max/proactive_chats")
+async def max_proactive_chats():
+    return {"chats": await max_db.list_proactive_chats()}
+
+@app.get("/max/triggers/{chat_id}")
+async def max_list_triggers(chat_id: str):
+    return {"triggers": await max_db.list_triggers(chat_id)}
+
+@app.post("/max/triggers/{chat_id}")
+async def max_create_trigger(chat_id: str, body: TgTriggerIn):
+    from datetime import date as _date
+    td = None
+    if body.trigger_date:
+        try:
+            td = _date.fromisoformat(body.trigger_date)
+        except ValueError:
+            return {"status": "error", "detail": "bad trigger_date"}
+    row = await max_db.create_trigger(
+        chat_id, body.added_by_user_id, body.kind, body.time_msk,
+        title=body.title, days_of_week=body.days_of_week,
+        trigger_date=td, prompt=body.prompt, preset_key=body.preset_key, addressed=body.addressed,
+    )
+    return {"status": "ok", "trigger": row}
+
+@app.patch("/max/triggers/{chat_id}/{trigger_id}")
+async def max_update_trigger(chat_id: str, trigger_id: int, body: TgTriggerPatch):
+    from datetime import date as _date
+    fields = {k: v for k, v in body.dict().items() if v is not None}
+    if "trigger_date" in fields:
+        try:
+            fields["trigger_date"] = _date.fromisoformat(fields["trigger_date"])
+        except ValueError:
+            return {"status": "error", "detail": "bad trigger_date"}
+    row = await max_db.update_trigger(trigger_id, **fields)
+    return {"status": "ok" if row else "not_found", "trigger": row}
+
+@app.delete("/max/triggers/{chat_id}/{trigger_id}")
+async def max_delete_trigger(chat_id: str, trigger_id: int):
+    ok = await max_db.delete_trigger(trigger_id)
+    return {"status": "ok" if ok else "not_found"}
+
+@app.get("/max/triggers_due")
+async def max_triggers_due(utc_ts: str | None = None):
+    from datetime import datetime, timezone
+    now_utc = datetime.now(timezone.utc)
+    if utc_ts:
+        try:
+            now_utc = datetime.fromisoformat(utc_ts.replace('Z', '+00:00')).astimezone(timezone.utc)
+        except ValueError:
+            pass
+    return {"triggers": await max_db.scan_due_triggers(now_utc)}
+
+@app.post("/max/triggers/{chat_id}/{trigger_id}/fired")
+async def max_trigger_fired(chat_id: str, trigger_id: int):
+    await max_db.mark_trigger_fired(trigger_id)
+    return {"status": "ok"}
+
+@app.get("/max/trigger/{trigger_id}")
+async def max_get_trigger(trigger_id: int):
+    row = await max_db.get_trigger(trigger_id)
+    return {"trigger": row}
 
 
 

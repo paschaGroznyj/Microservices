@@ -3490,6 +3490,8 @@ class ChatApp {
                     context_size:   window.ToolsPanel?.getContextSize()   ?? 'medium',
                     has_files:      false,
                     files: [],
+                    timezone_name:  (Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow'),
+                    tz_offset_minutes: new Date().getTimezoneOffset(),
                     ...(pollAnswer ? { poll_answer: pollAnswer } : {})
                 })
             });

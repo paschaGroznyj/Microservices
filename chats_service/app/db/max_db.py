@@ -10,6 +10,12 @@ chats_service/app/db/max_db.py
 chat_id MAX храним как TEXT (совпадает с chats.chat_id).
 """
 import asyncio
+from datetime import datetime
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    pass
+
 import json
 import logging
 
@@ -21,7 +27,7 @@ log = logging.getLogger("max_db")
 
 _SETTINGS_FIELDS = {
     "system_prompt", "agent_name", "agent_model", "selected_tools",
-    "trigger_mode", "orchestrator_context_n", "proactive_enabled",
+    "trigger_mode", "orchestrator_context_n", "proactive_enabled", "timezone_name",
 }
 
 
@@ -68,9 +74,34 @@ class MaxDB:
                     selected_tools         JSONB,
                     trigger_mode           TEXT DEFAULT 'mention',
                     orchestrator_context_n INTEGER DEFAULT 8,
-                    proactive_enabled      BOOLEAN DEFAULT FALSE,
+                    proactive_enabled      BOOLEAN NOT NULL DEFAULT TRUE,
+                    timezone_name          TEXT NOT NULL DEFAULT 'Europe/Moscow',
                     updated_at             TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
                 );
+
+                CREATE TABLE IF NOT EXISTS max_triggers (
+                    id               SERIAL PRIMARY KEY,
+                    chat_id          TEXT NOT NULL REFERENCES max_chats(chat_id) ON DELETE CASCADE,
+                    added_by_user_id BIGINT,
+                    kind             TEXT NOT NULL DEFAULT 'recurring',
+                    title            TEXT,
+                    time_msk         TEXT NOT NULL,
+                    days_of_week     INT[],
+                    trigger_date     DATE,
+                    prompt           TEXT,
+                    preset_key       TEXT,
+                    addressed        BOOLEAN NOT NULL DEFAULT FALSE,
+                    is_active        BOOLEAN NOT NULL DEFAULT TRUE,
+                    last_fired_at    TIMESTAMPTZ,
+                    created_at       TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                    updated_at       TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS ix_max_triggers_scan ON max_triggers(is_active, time_msk);
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_max_triggers_chat_preset
+                    ON max_triggers(chat_id, preset_key) WHERE preset_key IS NOT NULL;
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_max_triggers_custom_natkey
+                    ON max_triggers(chat_id, kind, time_msk, COALESCE(title,''), COALESCE(trigger_date,'0001-01-01'::date))
+                    WHERE preset_key IS NULL;
                 CREATE TABLE IF NOT EXISTS max_chat_members (
                     chat_id     TEXT NOT NULL,
                     user_id     BIGINT NOT NULL,
@@ -83,6 +114,7 @@ class MaxDB:
                 CREATE INDEX IF NOT EXISTS idx_max_members_chat
                     ON max_chat_members(chat_id);
             """)
+            await conn.execute("ALTER TABLE max_chat_settings ADD COLUMN IF NOT EXISTS timezone_name TEXT NOT NULL DEFAULT 'Europe/Moscow';")
 
     async def upsert_chat(self, chat_id: str, added_by_user_id: int | None) -> dict:
         chat_id = str(chat_id).strip()
@@ -105,6 +137,7 @@ class MaxDB:
                     INSERT INTO max_chat_settings (chat_id)
                     VALUES ($1) ON CONFLICT (chat_id) DO NOTHING;
                 """, chat_id)
+        await self.ensure_default_alarm_triggers(chat_id, added_by_user_id)
         return dict(row)
 
     async def deactivate_chat(self, chat_id: str) -> bool:
@@ -127,7 +160,7 @@ class MaxDB:
                        c.created_at, c.updated_at,
                        s.system_prompt, s.agent_name, s.agent_model,
                        s.selected_tools, s.trigger_mode,
-                       s.orchestrator_context_n, s.proactive_enabled
+                       s.orchestrator_context_n, s.proactive_enabled, s.timezone_name
                 FROM max_chats c
                 LEFT JOIN max_chat_settings s ON s.chat_id = c.chat_id
                 WHERE c.is_active = TRUE
@@ -152,6 +185,7 @@ class MaxDB:
                 "trigger_mode": d.pop("trigger_mode", None),
                 "orchestrator_context_n": d.pop("orchestrator_context_n", None),
                 "proactive_enabled": d.pop("proactive_enabled", None),
+                "timezone_name": d.pop("timezone_name", None) or "Europe/Moscow",
             }
             out.append(d)
         return out
@@ -219,3 +253,189 @@ class MaxDB:
                 "WHERE chat_id=$1 AND is_bot=FALSE ORDER BY random() LIMIT 1",
                 str(chat_id))
             return dict(row) if row else None
+
+    async def list_proactive_chats(self) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT c.chat_id, c.chat_type
+                FROM max_chats c
+                JOIN max_chat_settings s ON s.chat_id = c.chat_id
+                WHERE c.is_active = TRUE AND s.proactive_enabled = TRUE
+            """)
+        return [dict(r) for r in rows]
+
+    async def list_triggers(self, chat_id: str) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT id, chat_id, added_by_user_id, kind, title,
+                       time_msk, days_of_week, trigger_date, prompt, preset_key,
+                       addressed, is_active, last_fired_at, created_at, updated_at
+                FROM max_triggers
+                WHERE chat_id = $1
+                ORDER BY kind, time_msk
+            """, chat_id)
+        return [dict(r) for r in rows]
+
+    async def create_trigger(self, chat_id: str, added_by_user_id: int | None,
+                             kind: str, time_msk: str, title: str | None = None,
+                             days_of_week: list | None = None, trigger_date=None,
+                             prompt: str | None = None, preset_key: str | None = None,
+                             addressed: bool = False) -> dict:
+        if preset_key is not None:
+            conflict = "(chat_id, preset_key) WHERE preset_key IS NOT NULL"
+        else:
+            conflict = ("(chat_id, kind, time_msk, COALESCE(title,''), "
+                        "COALESCE(trigger_date,'0001-01-01'::date)) "
+                        "WHERE preset_key IS NULL")
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(f"""
+                INSERT INTO max_triggers
+                    (chat_id, added_by_user_id, kind, title, time_msk,
+                     days_of_week, trigger_date, prompt, preset_key, addressed)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                ON CONFLICT {conflict} DO UPDATE SET
+                    added_by_user_id = EXCLUDED.added_by_user_id,
+                    days_of_week     = EXCLUDED.days_of_week,
+                    trigger_date     = EXCLUDED.trigger_date,
+                    prompt           = EXCLUDED.prompt,
+                    addressed        = EXCLUDED.addressed,
+                    updated_at       = CURRENT_TIMESTAMP
+                RETURNING id, chat_id, added_by_user_id, kind, title,
+                          time_msk, days_of_week, trigger_date, prompt, preset_key,
+                          addressed, is_active, last_fired_at, created_at, updated_at
+            """, chat_id, added_by_user_id, kind, title, time_msk,
+                 days_of_week, trigger_date, prompt, preset_key, addressed)
+        return dict(row)
+
+    async def update_trigger(self, trigger_id: int, **fields) -> dict | None:
+        allowed = {"kind", "title", "time_msk", "days_of_week",
+                   "trigger_date", "prompt", "preset_key", "addressed", "is_active"}
+        sets, vals = [], []
+        for k, v in fields.items():
+            if k in allowed:
+                vals.append(v)
+                sets.append(f"{k} = ${len(vals)}")
+        if not sets:
+            return None
+        vals.append(trigger_id)
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(f"""
+                UPDATE max_triggers
+                SET {', '.join(sets)}, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ${len(vals)}
+                RETURNING id, chat_id, added_by_user_id, kind, title,
+                          time_msk, days_of_week, trigger_date, prompt, preset_key,
+                          addressed, is_active, last_fired_at, created_at, updated_at
+            """, *vals)
+        return dict(row) if row else None
+
+    async def delete_trigger(self, trigger_id: int) -> bool:
+        async with self.pool.acquire() as conn:
+            res = await conn.execute("DELETE FROM max_triggers WHERE id = $1", trigger_id)
+        return res.endswith("1")
+
+    async def scan_due_triggers(self, now_utc: datetime) -> list[dict]:
+        GRACE_SEC = 120
+        MSK = ZoneInfo("Europe/Moscow")
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT t.id, t.chat_id, t.kind, t.title, t.time_msk,
+                       t.days_of_week, t.trigger_date, t.prompt, t.preset_key,
+                       t.addressed, c.chat_type, s.timezone_name, t.last_fired_at
+                FROM max_triggers t
+                JOIN max_chats c ON c.chat_id = t.chat_id
+                JOIN max_chat_settings s ON s.chat_id = t.chat_id
+                WHERE t.is_active = TRUE
+                  AND c.is_active = TRUE
+                  AND s.proactive_enabled = TRUE
+            """)
+        due = []
+        for row in rows:
+            d = dict(row)
+            hhmm = d.get("time_msk")
+            if not hhmm:
+                continue
+            try:
+                hh, mm = [int(x) for x in str(hhmm).split(":")]
+            except Exception:
+                continue
+            tz_name = (d.get("timezone_name") or "Europe/Moscow").strip()
+            try:
+                chat_tz = ZoneInfo(tz_name)
+            except Exception:
+                chat_tz = MSK
+            now_chat = now_utc.astimezone(chat_tz)
+            scheduled = now_chat.replace(hour=hh, minute=mm, second=0, microsecond=0)
+            delta = (now_chat - scheduled).total_seconds()
+            if delta < 0 or delta >= GRACE_SEC:
+                continue
+            if d.get("kind") == "recurring":
+                days = d.get("days_of_week") or []
+                if days and now_chat.isoweekday() not in days:
+                    continue
+            elif d.get("kind") == "once":
+                td = d.get("trigger_date")
+                if td != now_chat.date():
+                    continue
+            else:
+                continue
+            lf = d.get("last_fired_at")
+            if lf is not None:
+                try:
+                    lf_chat = lf.astimezone(chat_tz)
+                    if lf_chat >= scheduled:
+                        continue
+                except Exception:
+                    pass
+            d["fire_stamp"] = scheduled.strftime("%Y%m%d%H%M")
+            d.pop("timezone_name", None)
+            due.append(d)
+        return due
+
+    async def mark_trigger_fired(self, trigger_id: int) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE max_triggers
+                SET last_fired_at = CURRENT_TIMESTAMP,
+                    is_active = CASE WHEN kind = 'once' THEN FALSE ELSE is_active END,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = $1
+            """, trigger_id)
+
+    async def get_trigger(self, trigger_id: int) -> dict | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT id, chat_id, added_by_user_id, kind, title,
+                       time_msk, days_of_week, trigger_date, prompt, preset_key,
+                       addressed, is_active, last_fired_at, created_at, updated_at
+                FROM max_triggers
+                WHERE id = $1
+            """, trigger_id)
+        return dict(row) if row else None
+
+    async def ensure_default_alarm_triggers(self, chat_id: str, added_by_user_id: int | None = None) -> None:
+        defaults = [
+            ("breakfast", "Завтрак", "09:00"),
+            ("lunch", "Обед", "13:00"),
+            ("dinner", "Ужин", "18:00"),
+        ]
+        async with self.pool.acquire() as conn:
+            for preset_key, title, time_msk in defaults:
+                await conn.execute("""
+                    INSERT INTO max_triggers
+                        (chat_id, added_by_user_id, kind, title, time_msk,
+                         days_of_week, trigger_date, prompt, preset_key, addressed, is_active)
+                    VALUES ($1,$2,'recurring',$3,$4,NULL,NULL,NULL,$5,FALSE,TRUE)
+                    ON CONFLICT (chat_id, preset_key) WHERE preset_key IS NOT NULL DO NOTHING
+                """, str(chat_id), added_by_user_id, title, time_msk, preset_key)
+
+    async def get_alarm_trigger(self, chat_id: str, preset_key: str) -> dict | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT id, chat_id, added_by_user_id, kind, title,
+                       time_msk, days_of_week, trigger_date, prompt, preset_key,
+                       addressed, is_active, last_fired_at, created_at, updated_at
+                FROM max_triggers
+                WHERE chat_id = $1 AND preset_key = $2
+            """, str(chat_id), preset_key)
+        return dict(row) if row else None

@@ -1163,6 +1163,7 @@ async def send_message(request: Request):
     data["type_agent"] = data.get("type_agent", "pm") # О Великий gateway
     data["request_id"] = request_id
     data["gateway_target"] = "sigma"
+    data["timezone_name"] = (data.get("timezone_name") or request.headers.get("X-Timezone") or "Europe/Moscow").strip()
     logger.info(f"Что летит при отправке сообщений {data['chat_id']}, {data['message']}")
 
     # SIGMA: WS-эхо убрано. Помечаем в store, что для этого чата ожидается

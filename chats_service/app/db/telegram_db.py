@@ -548,9 +548,13 @@ class TelegramDB:
 
     async def mark_trigger_fired(self, trigger_id: int) -> None:
         async with self.pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE telegram_triggers SET last_fired_at = CURRENT_TIMESTAMP WHERE id = $1",
-                trigger_id)
+            await conn.execute("""
+                UPDATE telegram_triggers
+                SET last_fired_at = CURRENT_TIMESTAMP,
+                    is_active = CASE WHEN kind = 'once' THEN FALSE ELSE is_active END,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = $1
+            """, trigger_id)
 
     async def get_trigger(self, trigger_id: int) -> dict | None:
         """Один триггер по id (для debug-прогона)."""

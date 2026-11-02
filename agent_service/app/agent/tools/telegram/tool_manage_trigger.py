@@ -112,7 +112,8 @@ def make_manage_trigger_tool(
                         dw = r.get("days_of_week") or []
                         days = ",".join(_DOW.get(d, str(d)) for d in dw) if dw else "каждый день"
                         when = f"{r['time_msk']} ({tz_label}, {days})"
-                    lines.append(f"#{r['id']} [{r['kind']}] {when} — {r.get('title') or ''}: {r['prompt'][:80]}")
+                    prompt_preview = (r.get("prompt") or f"[preset: {r.get('preset_key')}]")[:80]
+                    lines.append(f"#{r['id']} [{r['kind']}] {when} — {r.get('title') or ''}: {prompt_preview}")
                 return "Активные триггеры:\n" + "\n".join(lines)
 
             if act == "cancel":

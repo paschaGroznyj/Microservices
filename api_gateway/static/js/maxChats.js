@@ -520,15 +520,6 @@
       '</div>';
 
     bindModalEvents();
-  }
-
-  function render() {
-    renderSidebar();
-    if (_modalOpen) renderModal();
-  }
-
-  function bindModalEvents() {
-    if (!_modalOverlay) return;
 
     openDdIds.forEach(function (id) {
       var dd = _modalOverlay.querySelector('#' + id);
@@ -538,6 +529,15 @@
     if (newBody && savedScrollTop > 0) newBody.scrollTop = savedScrollTop;
     var newTrList = _modalOverlay.querySelector('.tgc-tr-list');
     if (newTrList && savedTrListScroll > 0) newTrList.scrollTop = savedTrListScroll;
+  }
+
+  function render() {
+    renderSidebar();
+    if (_modalOpen) renderModal();
+  }
+
+  function bindModalEvents() {
+    if (!_modalOverlay) return;
 
     var closeBtn = _modalOverlay.querySelector('#tgc-modal-close');
     if (closeBtn) closeBtn.addEventListener('click', closeModal);

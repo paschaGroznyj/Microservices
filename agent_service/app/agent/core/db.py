@@ -1958,11 +1958,12 @@ class AgentDB:
                     ON CONFLICT (chat_id, kind, time_msk, COALESCE(title,''), COALESCE(trigger_date,'0001-01-01'::date))
                         WHERE preset_key IS NULL
                     DO UPDATE SET
-                        days_of_week = EXCLUDED.days_of_week,
-                        prompt       = EXCLUDED.prompt,
-                        addressed    = EXCLUDED.addressed,
-                        is_active    = TRUE,
-                        updated_at   = CURRENT_TIMESTAMP
+                        days_of_week  = EXCLUDED.days_of_week,
+                        prompt        = EXCLUDED.prompt,
+                        addressed     = EXCLUDED.addressed,
+                        is_active     = TRUE,
+                        last_fired_at = NULL,
+                        updated_at    = CURRENT_TIMESTAMP
                     RETURNING id, chat_id, kind, title, time_msk,
                               days_of_week, trigger_date, prompt, addressed,
                               is_active, created_at
@@ -2008,11 +2009,17 @@ class AgentDB:
     async def list_tg_triggers(self, chat_id: str) -> list[dict]:
         """Активные триггеры чата — чтобы агент мог посмотреть что уже стоит."""
         async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE telegram_triggers
+                SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP
+                WHERE chat_id = $1 AND kind = 'once' AND last_fired_at IS NOT NULL AND is_active = TRUE
+            """, chat_id)
             rows = await conn.fetch("""
                 SELECT id, kind, title, time_msk, days_of_week,
-                       trigger_date, prompt, addressed, is_active, last_fired_at
+                       trigger_date, prompt, preset_key, addressed, is_active, last_fired_at
                 FROM telegram_triggers
                 WHERE chat_id = $1 AND is_active = TRUE
+                  AND NOT (kind = 'once' AND last_fired_at IS NOT NULL)
                 ORDER BY kind, time_msk
             """, chat_id)
         return [dict(r) for r in rows]
@@ -2057,11 +2064,12 @@ class AgentDB:
                     ON CONFLICT (chat_id, kind, time_msk, COALESCE(title,''), COALESCE(trigger_date,'0001-01-01'::date))
                         WHERE preset_key IS NULL
                     DO UPDATE SET
-                        days_of_week = EXCLUDED.days_of_week,
-                        prompt       = EXCLUDED.prompt,
-                        addressed    = EXCLUDED.addressed,
-                        is_active    = TRUE,
-                        updated_at   = CURRENT_TIMESTAMP
+                        days_of_week  = EXCLUDED.days_of_week,
+                        prompt        = EXCLUDED.prompt,
+                        addressed     = EXCLUDED.addressed,
+                        is_active     = TRUE,
+                        last_fired_at = NULL,
+                        updated_at    = CURRENT_TIMESTAMP
                     RETURNING id, chat_id, kind, title, time_msk,
                               days_of_week, trigger_date, prompt, addressed,
                               is_active, created_at
@@ -2071,11 +2079,17 @@ class AgentDB:
 
     async def list_max_triggers(self, chat_id: str) -> list[dict]:
         async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE max_triggers
+                SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP
+                WHERE chat_id = $1 AND kind = 'once' AND last_fired_at IS NOT NULL AND is_active = TRUE
+            """, chat_id)
             rows = await conn.fetch("""
                 SELECT id, kind, title, time_msk, days_of_week,
-                       trigger_date, prompt, addressed, is_active, last_fired_at
+                       trigger_date, prompt, preset_key, addressed, is_active, last_fired_at
                 FROM max_triggers
                 WHERE chat_id = $1 AND is_active = TRUE
+                  AND NOT (kind = 'once' AND last_fired_at IS NOT NULL)
                 ORDER BY kind, time_msk
             """, chat_id)
         return [dict(r) for r in rows]

@@ -3538,6 +3538,8 @@ class ChatApp {
                     loop_instruction: window.ToolsPanel?.getLoopEnabled() ? text : '',
                     has_files:      _hasFiles,
                     files: isCustom ? [] : (window.FileAttach?.getFilesMeta() ?? []),
+                    timezone_name:  (Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow'),
+                    tz_offset_minutes: new Date().getTimezoneOffset(),
                     ...(pollAnswer ? { poll_answer: pollAnswer } : {})
                 })
             });

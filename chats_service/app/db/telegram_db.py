@@ -508,19 +508,24 @@ class TelegramDB:
             except Exception:
                 continue
 
-            # запланированная минута сегодня по МСК
-            scheduled = now_msk.replace(hour=hh, minute=mm, second=0, microsecond=0)
-            delta = (now_msk - scheduled).total_seconds()
+            tz_name = (d.get("timezone_name") or "Europe/Moscow").strip()
+            try:
+                chat_tz = ZoneInfo(tz_name)
+            except Exception:
+                chat_tz = MSK
+            now_chat = now_utc.astimezone(chat_tz)
+            scheduled = now_chat.replace(hour=hh, minute=mm, second=0, microsecond=0)
+            delta = (now_chat - scheduled).total_seconds()
             if delta < 0 or delta >= GRACE_SEC:
                 continue
 
             if d.get("kind") == "recurring":
                 days = d.get("days_of_week") or []
-                if days and now_msk.isoweekday() not in days:
+                if days and now_chat.isoweekday() not in days:
                     continue
             elif d.get("kind") == "once":
                 td = d.get("trigger_date")
-                if td != now_msk.date():
+                if td != now_chat.date():
                     continue
             else:
                 continue
@@ -529,8 +534,8 @@ class TelegramDB:
             lf = d.get("last_fired_at")
             if lf is not None:
                 try:
-                    lf_msk = lf.astimezone(MSK)
-                    if lf_msk >= scheduled:
+                    lf_chat = lf.astimezone(chat_tz)
+                    if lf_chat >= scheduled:
                         continue
                 except Exception:
                     pass

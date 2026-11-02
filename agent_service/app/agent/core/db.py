@@ -1933,17 +1933,41 @@ class AgentDB:
         """Создать запись в telegram_triggers (та же БД, что у chats_service).
         days_of_week — список 1..7 (пн..вс) или None. trigger_date — date для once.
         Сканер chats_service подхватит запись автоматически (proactive_enabled должен быть TRUE)."""
+        chat_id = str(chat_id).strip()
+        try:
+            chat_type = "group" if int(chat_id) < 0 else "private"
+        except ValueError:
+            chat_type = "group"
         async with self.pool.acquire() as conn:
-            row = await conn.fetchrow("""
-                INSERT INTO telegram_triggers
-                    (chat_id, added_by_user_id, kind, title, time_msk,
+            async with conn.transaction():
+                await conn.execute("""
+                    INSERT INTO telegram_chats (chat_id, chat_type, is_active, added_by_user_id)
+                    VALUES ($1, $2, TRUE, $3)
+                    ON CONFLICT (chat_id) DO UPDATE SET is_active = TRUE, updated_at = CURRENT_TIMESTAMP
+                """, chat_id, chat_type, added_by_user_id)
+                await conn.execute("""
+                    INSERT INTO telegram_chat_settings (chat_id, proactive_enabled)
+                    VALUES ($1, TRUE)
+                    ON CONFLICT (chat_id) DO UPDATE SET proactive_enabled = TRUE, updated_at = CURRENT_TIMESTAMP
+                """, chat_id)
+                row = await conn.fetchrow("""
+                    INSERT INTO telegram_triggers
+                        (chat_id, added_by_user_id, kind, title, time_msk,
+                         days_of_week, trigger_date, prompt, addressed)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                    ON CONFLICT (chat_id, kind, time_msk, COALESCE(title,''), COALESCE(trigger_date,'0001-01-01'::date))
+                        WHERE preset_key IS NULL
+                    DO UPDATE SET
+                        days_of_week = EXCLUDED.days_of_week,
+                        prompt       = EXCLUDED.prompt,
+                        addressed    = EXCLUDED.addressed,
+                        is_active    = TRUE,
+                        updated_at   = CURRENT_TIMESTAMP
+                    RETURNING id, chat_id, kind, title, time_msk,
+                              days_of_week, trigger_date, prompt, addressed,
+                              is_active, created_at
+                """, chat_id, added_by_user_id, kind, title, time_msk,
                      days_of_week, trigger_date, prompt, addressed)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-                RETURNING id, chat_id, kind, title, time_msk,
-                          days_of_week, trigger_date, prompt, addressed,
-                          is_active, created_at
-            """, chat_id, added_by_user_id, kind, title, time_msk,
-                 days_of_week, trigger_date, prompt, addressed)
         return dict(row)
 
     async def register_editor_workspace(self, user_id, workspace_id: str,
@@ -2008,17 +2032,41 @@ class AgentDB:
                                  title=None, days_of_week=None,
                                  trigger_date=None, prompt=None,
                                  addressed: bool = False) -> dict:
+        chat_id = str(chat_id).strip()
+        try:
+            chat_type = "group" if int(chat_id) < 0 else "private"
+        except ValueError:
+            chat_type = "group"
         async with self.pool.acquire() as conn:
-            row = await conn.fetchrow("""
-                INSERT INTO max_triggers
-                    (chat_id, added_by_user_id, kind, title, time_msk,
+            async with conn.transaction():
+                await conn.execute("""
+                    INSERT INTO max_chats (chat_id, chat_type, is_active, added_by_user_id)
+                    VALUES ($1, $2, TRUE, $3)
+                    ON CONFLICT (chat_id) DO UPDATE SET is_active = TRUE, updated_at = CURRENT_TIMESTAMP
+                """, chat_id, chat_type, added_by_user_id)
+                await conn.execute("""
+                    INSERT INTO max_chat_settings (chat_id, proactive_enabled)
+                    VALUES ($1, TRUE)
+                    ON CONFLICT (chat_id) DO UPDATE SET proactive_enabled = TRUE, updated_at = CURRENT_TIMESTAMP
+                """, chat_id)
+                row = await conn.fetchrow("""
+                    INSERT INTO max_triggers
+                        (chat_id, added_by_user_id, kind, title, time_msk,
+                         days_of_week, trigger_date, prompt, addressed)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                    ON CONFLICT (chat_id, kind, time_msk, COALESCE(title,''), COALESCE(trigger_date,'0001-01-01'::date))
+                        WHERE preset_key IS NULL
+                    DO UPDATE SET
+                        days_of_week = EXCLUDED.days_of_week,
+                        prompt       = EXCLUDED.prompt,
+                        addressed    = EXCLUDED.addressed,
+                        is_active    = TRUE,
+                        updated_at   = CURRENT_TIMESTAMP
+                    RETURNING id, chat_id, kind, title, time_msk,
+                              days_of_week, trigger_date, prompt, addressed,
+                              is_active, created_at
+                """, chat_id, added_by_user_id, kind, title, time_msk,
                      days_of_week, trigger_date, prompt, addressed)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-                RETURNING id, chat_id, kind, title, time_msk,
-                          days_of_week, trigger_date, prompt, addressed,
-                          is_active, created_at
-            """, chat_id, added_by_user_id, kind, title, time_msk,
-                 days_of_week, trigger_date, prompt, addressed)
         return dict(row)
 
     async def list_max_triggers(self, chat_id: str) -> list[dict]:

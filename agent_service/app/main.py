@@ -127,6 +127,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     # идёт на физический chat_id. Бот кладёт его как max_chat_id (MAX) или tg_chat_id (TG) —
     # берём любой непустой. Прокидываем обратно в bot_message, чтобы consumer знал, куда слать.
     deliver_chat_id = payload.get("max_chat_id") or payload.get("tg_chat_id")
+    client_tz_name = payload.get("timezone_name")
+    client_tz_offset = payload.get("tz_offset_minutes")
     tg_chat_id = deliver_chat_id
     # Mobile-оркестратор: роутер в chats_service проставляет уровень обработки.
     #   agent_tier = "lite"  -> дешёвая модель (Haiku) отвечает сама (дефолт);
@@ -337,7 +339,9 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                                                 agent_model=agent_model,
                                                 images=images,
                                                 gateway_target=gateway_target,
-                                                tg_chat_id=tg_chat_id)
+                                                tg_chat_id=tg_chat_id,
+                                                timezone_name=client_tz_name,
+                                                tz_offset_minutes=client_tz_offset)
                 response_text = response["message"]
                 is_lite = False  # дальше обрабатываем как полноценный ответ агента
             else:
@@ -353,7 +357,9 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                                             agent_model=agent_model,
                                             images=images,
                                             gateway_target=gateway_target,
-                                            tg_chat_id=tg_chat_id)
+                                            tg_chat_id=tg_chat_id,
+                                            timezone_name=client_tz_name,
+                                            tz_offset_minutes=client_tz_offset)
             response_text = response["message"]
         # Mobile: ответ приходит СТРОГИМ JSON {"v","speech","actions","style",...}.
         # Парсер fallback-safe: при кривом JSON весь текст уходит в speech.

@@ -74,7 +74,7 @@ class MaxDB:
                     selected_tools         JSONB,
                     trigger_mode           TEXT DEFAULT 'mention',
                     orchestrator_context_n INTEGER DEFAULT 8,
-                    proactive_enabled      BOOLEAN DEFAULT FALSE,
+                    proactive_enabled      BOOLEAN NOT NULL DEFAULT TRUE,
                     timezone_name          TEXT NOT NULL DEFAULT 'Europe/Moscow',
                     updated_at             TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
                 );
@@ -160,7 +160,7 @@ class MaxDB:
                        c.created_at, c.updated_at,
                        s.system_prompt, s.agent_name, s.agent_model,
                        s.selected_tools, s.trigger_mode,
-                       s.orchestrator_context_n, s.proactive_enabled
+                       s.orchestrator_context_n, s.proactive_enabled, s.timezone_name
                 FROM max_chats c
                 LEFT JOIN max_chat_settings s ON s.chat_id = c.chat_id
                 WHERE c.is_active = TRUE
@@ -185,6 +185,7 @@ class MaxDB:
                 "trigger_mode": d.pop("trigger_mode", None),
                 "orchestrator_context_n": d.pop("orchestrator_context_n", None),
                 "proactive_enabled": d.pop("proactive_enabled", None),
+                "timezone_name": d.pop("timezone_name", None) or "Europe/Moscow",
             }
             out.append(d)
         return out
@@ -336,7 +337,6 @@ class MaxDB:
     async def scan_due_triggers(self, now_utc: datetime) -> list[dict]:
         GRACE_SEC = 120
         MSK = ZoneInfo("Europe/Moscow")
-        now_msk = now_utc.astimezone(MSK)
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("""
                 SELECT t.id, t.chat_id, t.kind, t.title, t.time_msk,
@@ -359,25 +359,31 @@ class MaxDB:
                 hh, mm = [int(x) for x in str(hhmm).split(":")]
             except Exception:
                 continue
-            scheduled = now_msk.replace(hour=hh, minute=mm, second=0, microsecond=0)
-            delta = (now_msk - scheduled).total_seconds()
+            tz_name = (d.get("timezone_name") or "Europe/Moscow").strip()
+            try:
+                chat_tz = ZoneInfo(tz_name)
+            except Exception:
+                chat_tz = MSK
+            now_chat = now_utc.astimezone(chat_tz)
+            scheduled = now_chat.replace(hour=hh, minute=mm, second=0, microsecond=0)
+            delta = (now_chat - scheduled).total_seconds()
             if delta < 0 or delta >= GRACE_SEC:
                 continue
             if d.get("kind") == "recurring":
                 days = d.get("days_of_week") or []
-                if days and now_msk.isoweekday() not in days:
+                if days and now_chat.isoweekday() not in days:
                     continue
             elif d.get("kind") == "once":
                 td = d.get("trigger_date")
-                if td != now_msk.date():
+                if td != now_chat.date():
                     continue
             else:
                 continue
             lf = d.get("last_fired_at")
             if lf is not None:
                 try:
-                    lf_msk = lf.astimezone(MSK)
-                    if lf_msk >= scheduled:
+                    lf_chat = lf.astimezone(chat_tz)
+                    if lf_chat >= scheduled:
                         continue
                 except Exception:
                     pass

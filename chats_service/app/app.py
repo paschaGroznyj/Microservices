@@ -165,6 +165,8 @@ class ChatMessage(BaseModel):
     # loop_tick=True — служебный тик петли от consumer (user_id=-100), проходит гейт агента.
     loop_tick: bool = False
     poll_answer: dict | None = None
+    timezone_name: str | None = None
+    tz_offset_minutes: int | None = None
     
 
 @app.on_event("startup")
@@ -565,6 +567,8 @@ async def send_message(chat: ChatMessage):
         "loop_instruction": chat.loop_instruction,
         "loop_tick": chat.loop_tick,
         "poll_answer": chat.poll_answer,
+        "timezone_name": chat.timezone_name,
+        "tz_offset_minutes": chat.tz_offset_minutes,
     }
     start = time.perf_counter()
     # отправка в Kafka

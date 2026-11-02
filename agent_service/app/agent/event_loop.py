@@ -826,6 +826,8 @@ class HarnessAgent:
         agent_model: str | None = None,
         is_telegram: bool = False,
         is_max: bool = False,
+        tg_chat_id=None,
+        timezone_name: str = "Europe/Moscow",
     ):
         """Возвращает список LangChain @tool-функций, привязанных к контексту агента."""
 
@@ -929,9 +931,17 @@ class HarnessAgent:
         # 5. Точка эндпоинта для создания сессии start/end
         from .tools.sessions.tool_session_point import make_session_point_tool
         session_point = make_session_point_tool(agent)
-        # 5.1 Планировщик собственных Telegram-триггеров (агент сам ставит
+        # 5.1 Планировщик собственных триггеров (Telegram / MAX)
         from .tools.telegram.tool_manage_trigger import make_manage_trigger_tool
-        manage_trigger = make_manage_trigger_tool(agent, chat_id, user_id)
+        manage_trigger = make_manage_trigger_tool(
+            agent,
+            chat_id,
+            user_id,
+            tg_chat_id=tg_chat_id,
+            is_max=is_max,
+            is_telegram=is_telegram,
+            timezone_name=timezone_name,
+        )
         # 6. Тулзы для работы с кодовой базой проекта и песочницы. tree/grep/cat
         from .tools.filesystem.tool_read_codebase import make_filesystem_tools
         fs_tools = make_filesystem_tools(agent)
@@ -1499,6 +1509,8 @@ class HarnessAgent:
         images=None,
         gateway_target: str = "main",
         tg_chat_id=None,
+        timezone_name: str | None = None,
+        tz_offset_minutes: int | None = None,
     ) -> Dict[str, Any]:
         if not self.db:
             self.db = database
@@ -1587,6 +1599,18 @@ class HarnessAgent:
             selected_tools = selected_tools or []
             use_journal = is_telegram or is_max or ("sessions" in selected_tools)
 
+            from .core.timezone_utils import resolve_chat_context_and_timezone
+            user_tz_name, current_datetime, _tg_settings, _max_settings = await resolve_chat_context_and_timezone(
+                self.db,
+                chat_id=chat_id,
+                tg_chat_id=tg_chat_id,
+                is_telegram=is_telegram,
+                is_max=is_max,
+                timezone_name=timezone_name,
+                tz_offset_minutes=tz_offset_minutes,
+                request_ctx=self._request_ctx.get(),
+            )
+
             logging.info(f"🙂 {user_input[:200]}")
             tools = self._build_tools(
                 user_id,
@@ -1598,6 +1622,8 @@ class HarnessAgent:
                 agent_model=agent_model,
                 is_telegram=is_telegram,
                 is_max=is_max,
+                tg_chat_id=tg_chat_id,
+                timezone_name=user_tz_name,
             )
             loop_state = {
                 "iteration": 0,
@@ -1616,9 +1642,7 @@ class HarnessAgent:
 
             print(f"ЛИМИТ ПО КОНТЕКСТУ = {limit_mem}, ЧИСЛО ТОКЕНОВ = {max_tokens}")
             # Привязываем инструменты к модели
-        
 
-            current_datetime = datetime.now().strftime("%d.%m.%Y %H:%M, %A")
 
             # РОЛЬ РЕШАЕТСЯ КОДОМ по verified user_id (не моделью, не по тексту/табельному/тегу).
             if is_telegram:
@@ -1641,28 +1665,24 @@ class HarnessAgent:
             except Exception as _e:
                 logging.warning(f"[media_store] prompt block fail: {_e}")
             # Telegram: подмешиваем HTML-инструкцию форматирования + per-chat промпт из БД.
-            if is_telegram:
+            if is_telegram and _tg_settings:
                 try:
-                    from agent.telegram.tg_integration import (
-                        get_tg_chat_settings, build_tg_system_suffix,
-                    )
-                    _tg_settings = await get_tg_chat_settings(self.db, chat_id)
                     _tg_name = _tg_settings.get("agent_name")
                     if _tg_name and _tg_name.strip():
                         system_content += (
                             "\n\nВ этом чате тебя зовут «" + _tg_name.strip() + "». "
                             "Участники обращаются к тебе по этому имени — воспринимай его как своё и при необходимости так и представляйся."
                         )
-                    system_content += "\n\n" + _tg_settings.get("system_prompt")
+                    _tg_sp = _tg_settings.get("system_prompt")
+                    if _tg_sp and _tg_sp.strip():
+                        system_content += "\n\n" + _tg_sp
                 except Exception as _e:
                     logging.warning(f"[tg] system suffix fail: {_e}")
 
             # MAX: per-chat имя агента + кастомный промпт. Настройки привязаны
             # к ФИЗИЧЕСКОМУ max_chat_id (= tg_chat_id), а не к chat_id/session_id.
-            if is_max:
+            if is_max and _max_settings:
                 try:
-                    from agent.max.max_integration import get_max_chat_settings
-                    _max_settings = await get_max_chat_settings(self.db, tg_chat_id or chat_id)
                     _max_name = _max_settings.get("agent_name")
                     if _max_name and _max_name.strip():
                         system_content += (

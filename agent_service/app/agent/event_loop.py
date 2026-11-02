@@ -26,7 +26,7 @@ from .core.config import (
     ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH,
     METADATA_FILE, PORT_GATEWAY_PORT, PORT_GATEWAY_SIGMA_PORT, ADMINS_INFO,
     PORT_PARSERS_SERVICE, get_role, ADMINS_BY_USER_ID,
-    ADMINS_BY_TG_ID, get_role_tg, TG_BOT_PUSH_URL,
+    ADMINS_BY_TG_ID, get_role_tg, TG_BOT_PUSH_URL, MAX_BOT_PUSH_URL,
     ADMINS_BY_MAX_ID, get_role_max,
 )
 from .core.settings import TOOLS_SETTINGS, UNIVERSAL_TOOLS, ADMIN_ONLY_CATEGORIES
@@ -1408,7 +1408,7 @@ class HarnessAgent:
             "kind": kind,
         }
 
-        if target == "telegram":
+        if target in ("telegram", "max"):
             # Буфер reasoning — СТРОГО request-local (ContextVar), а не self.*,
             # иначе параллельные чаты пишут в один список и reasoning смешивается.
             ctx = self._request_ctx.get()
@@ -1423,11 +1423,14 @@ class HarnessAgent:
                 block = "".join(buf).strip()
                 buf.clear()
                 if block:
-                    # Адрес плашки "Думаю..." — ФИЗИЧЕСКИЙ числовой tg chat id,
+                    # Адрес плашки "Думаю..." — ФИЗИЧЕСКИЙ числовой chat id (tg или max),
                     # а НЕ session_id (после мульти-сессий chat_id = UUID сессии).
                     # Фолбэк на chat_id для обратной совместимости (старые клиенты).
                     rid = ctx.get("tg_chat_id") or ctx.get("chat_id")
-                    await self._tg_edit_reasoning(rid, block)
+                    if target == "max":
+                        await self._max_edit_reasoning(rid, block)
+                    else:
+                        await self._tg_edit_reasoning(rid, block)
                 return
             if kind == "final_commit":
                 # финал уедет по Kafka целиком — просто чистим буфер
@@ -1489,6 +1492,40 @@ class HarnessAgent:
             )
         except Exception as e:
             logger.debug(f"[tg-reasoning] не удалось отправить блок: {e}")
+
+    async def _max_edit_reasoning(self, chat_id, text: str) -> None:
+        """Трансляция reasoning-блока в MAX: редактирует плашку "Думаю..."
+        целым блоком (последний блок размышлений, обрезка до 500 символов).
+        Дебаунс ~1с на chat_id, чтобы не упираться в rate limit edit_message.
+        Любые ошибки гасим — трансляция не должна ронять основной ответ."""
+        if not chat_id or not text or not MAX_BOT_PUSH_URL:
+            return
+        try:
+            chat_id = int(chat_id)
+        except (TypeError, ValueError):
+            return
+        try:
+            snippet = text.strip()
+            if len(snippet) > 500:
+                snippet = snippet[:500].rstrip() + "..."
+            now = asyncio.get_event_loop().time()
+            dbg = getattr(self, "_max_reasoning_last", None)
+            if dbg is None:
+                dbg = {}
+                self._max_reasoning_last = dbg
+            last = dbg.get(chat_id, 0.0)
+            if now - last < 1.0:
+                return
+            dbg[chat_id] = now
+            url = MAX_BOT_PUSH_URL.replace("/push_message", "/max/reasoning")
+            client = await self._get_http_client()
+            await client.post(
+                url,
+                json={"chat_id": chat_id, "text": snippet},
+                timeout=3,
+            )
+        except Exception as e:
+            logger.debug(f"[max-reasoning] не удалось отправить блок: {e}")
 
 
     # ------------------------------------------------------------------

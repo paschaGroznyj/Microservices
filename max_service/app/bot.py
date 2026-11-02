@@ -1219,6 +1219,45 @@ class PushMessageResponse(BaseModel):
     error: str | None = None
 
 
+class ReasoningRequest(BaseModel):
+    chat_id: int
+    text: str
+
+
+@api.post("/max/reasoning")
+async def max_reasoning(req: ReasoningRequest):
+    """Трансляция reasoning-блока агента в плашку "Думаю...".
+
+    Агент копит живой reasoning целым блоком и шлёт сюда на каждом
+    завершённом шаге (reasoning_end). Мы редактируем существующее
+    сообщение "Думаю..." (_thinking_messages[chat_id]), показывая последний
+    блок курсивом. Это НЕ финал — финал придёт отдельно через push_message
+    (он же снимет плашку).
+
+    Fail-safe: любые ошибки гасим — трансляция не критична.
+    """
+    if client is None:
+        return {"ok": False, "error": "bot not ready"}
+    text = (req.text or "").strip()
+    if not text:
+        return {"ok": False, "error": "empty"}
+    thinking_mid = _thinking_messages.get(req.chat_id)
+    if not thinking_mid:
+        # плашки нет (уже снята финалом / не создана) — нечего редактировать
+        return {"ok": False, "error": "no thinking message"}
+    # Экранируем HTML и оформляем курсивом с индикатором.
+    safe = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    rendered = f"💭 <i>{safe}</i>"
+    if len(rendered) > 4000:
+        rendered = rendered[:3990] + "...</i>"
+    try:
+        await client.edit_message(thinking_mid, rendered, fmt="html")
+        return {"ok": True}
+    except Exception as e:
+        log.debug(f"[max-reasoning] edit fail chat={req.chat_id}: {e}")
+        return {"ok": False, "error": str(e)}
+
+
 MAX_MSG_LIMIT = 4000
 
 

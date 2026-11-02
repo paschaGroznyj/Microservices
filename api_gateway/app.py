@@ -334,9 +334,10 @@ async def get_current_user(request: Request):
                 data = response.json()
                 user_id = data.get("user_id")
                 return {
-                    "username": authentik_user, 
+                    "username": authentik_user,
                     "user_id": user_id,
-                    "authenticated": True}
+                    "authenticated": True,
+                    "source": "authentik"}
         except httpx.RequestError as e:
             raise HTTPException(status_code=502, detail=f"Auth service unreachable: {str(e)}")
         # return user
@@ -391,6 +392,8 @@ async def homepage(request: Request):
 @app.get("/login-page", response_class=HTMLResponse)
 async def login_page(request: Request):
     """Страница логина"""
+    if request.headers.get("X-Authentik-Username") or await get_current_user(request):
+        return RedirectResponse(url="/", status_code=303)
     return templates.TemplateResponse("login.html", {
         "request": request,
         "error": None,
@@ -400,6 +403,8 @@ async def login_page(request: Request):
 @app.get("/register-page", response_class=HTMLResponse)
 async def register_page(request: Request):
     """Страница регистрации"""
+    if request.headers.get("X-Authentik-Username") or await get_current_user(request):
+        return RedirectResponse(url="/", status_code=303)
     return templates.TemplateResponse("register.html", {
         "request": request,
         "error": None

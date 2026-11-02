@@ -38,7 +38,7 @@
 
     <script src="/static/js/palette.js"></script>
 </head>
-<body>
+<body data-auth-source="{{ user.source|default('') if user else '' }}">
 
 
 

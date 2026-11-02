@@ -216,14 +216,41 @@ async def discover_services():
             logger.warning(f"Service {service_name} is down: {e}")
 
 
+_AUTHENTIK_HEADERS = (
+    "X-Authentik-Username",
+    "X-Authentik-Name",
+    "X-Authentik-Uid",
+    "X-Authentik-Email",
+)
+
+
+def _decode_header_val(raw: Optional[str]) -> str:
+    if not raw:
+        return ""
+    try:
+        return raw.encode("latin-1").decode("utf-8").strip()
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return raw.strip()
+
+
+def _has_authentik_headers(request: Request) -> bool:
+    return any(_decode_header_val(request.headers.get(h)) for h in _AUTHENTIK_HEADERS)
+
+
+def _extract_authentik_username(request: Request) -> Optional[str]:
+    for h in ("X-Authentik-Username", "X-Authentik-Uid", "X-Authentik-Email", "X-Authentik-Name"):
+        val = _decode_header_val(request.headers.get(h))
+        if val:
+            return val
+    return None
+
+
 # Аутентификация через Gateway
 async def get_current_user(request: Request):
-    """Получение текущего пользователя из cookie"""
-    authentik_user = request.headers.get("X-Authentik-Username")
+    """Получение текущего пользователя из заголовков Authentik или cookie"""
+    authentik_user = _extract_authentik_username(request)
     if authentik_user:
-        # Автоматически создаём/находим юзера в БД
         logging.info(authentik_user)
-        # user = await db.get_or_create_user(authentik_user)
         auth_url = SERVICES['auth']['url']
         try:
             response = await app.state.http_client.post(
@@ -234,13 +261,13 @@ async def get_current_user(request: Request):
                 data = response.json()
                 user_id = data.get("user_id")
                 return {
-                    "username": authentik_user, 
+                    "username": authentik_user,
                     "user_id": user_id,
                     "authenticated": True,
-                    "source": "authentik"}
+                    "source": "authentik",
+                }
         except httpx.RequestError as e:
             raise HTTPException(status_code=502, detail=f"Auth service unreachable: {str(e)}")
-        # return user
 
     token = request.cookies.get("users_access_token")
 
@@ -278,6 +305,16 @@ async def homepage(request: Request):
     user = await get_current_user(request)
 
     if not user:
+        if _has_authentik_headers(request):
+            return templates.TemplateResponse("chat.html", {
+                "request": request,
+                "user": {
+                    "username": _extract_authentik_username(request) or "user",
+                    "user_id": None,
+                    "authenticated": True,
+                    "source": "authentik",
+                },
+            })
         # Не авторизован - показываем приветственную страницу
         return templates.TemplateResponse("login.html", {
             "request": request,
@@ -293,6 +330,8 @@ async def homepage(request: Request):
 @app.get("/login-page", response_class=HTMLResponse)
 async def login_page(request: Request):
     """Страница логина"""
+    if _has_authentik_headers(request) or await get_current_user(request):
+        return RedirectResponse(url="/", status_code=303)
     return templates.TemplateResponse("login.html", {
         "request": request,
         "error": None,
@@ -302,6 +341,8 @@ async def login_page(request: Request):
 @app.get("/register-page", response_class=HTMLResponse)
 async def register_page(request: Request):
     """Страница регистрации"""
+    if _has_authentik_headers(request) or await get_current_user(request):
+        return RedirectResponse(url="/", status_code=303)
     return templates.TemplateResponse("register.html", {
         "request": request,
         "error": None

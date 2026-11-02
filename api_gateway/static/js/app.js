@@ -109,6 +109,11 @@ class ChatApp {
     async init() {
         await this.checkAuth();
         if (!this.currentUser) {
+            const isAuthentik = document.body?.dataset?.authSource === 'authentik' || this._authRedirectDetected;
+            if (isAuthentik) {
+                window.__onAuthSessionExpired?.({ forceReload: false });
+                return;
+            }
             window.location.href = '/login-page';
             return;
         }
@@ -324,7 +329,11 @@ class ChatApp {
     ══════════════════════════════════════════ */
     async checkAuth() {
         try {
-            const res = await fetch('/api/auth/me', { credentials: 'include' });
+            const res = await fetch('/api/auth/me', { credentials: 'include', redirect: 'manual' });
+            if (res.type === 'opaqueredirect' || res.status === 302 || (res.redirected && res.url && res.url.includes('/application/o/authorize'))) {
+                this._authRedirectDetected = true;
+                return false;
+            }
             if (!res.ok) return false;
             const data = await res.json();
             this.currentUser = data;

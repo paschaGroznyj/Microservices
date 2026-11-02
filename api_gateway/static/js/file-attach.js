@@ -36,15 +36,39 @@ const FileAttach = (() => {
         xls:  'green', xlsx: 'green', csv: 'green',
         ppt:  'orange', pptx: 'orange',
         png:  'purple', jpg: 'purple', jpeg: 'purple',
-        gif:  'purple', webp: 'purple', svg: 'purple',
-        mp4:  'pink',  mov: 'pink', avi: 'pink',
+        gif:  'purple', webp: 'purple', svg: 'purple', bmp: 'purple', avif: 'purple',
+        mp4:  'purple', mov: 'purple', avi: 'purple', webm: 'purple', mkv: 'purple', m4v: 'purple', ogv: 'purple',
         zip:  'gray',  rar: 'gray', '7z': 'gray',
         json: 'yellow', xml: 'yellow',
         py:   'teal',  js: 'yellow', ts: 'blue', css: 'purple',
     };
 
+    const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif', 'ico']);
+    const VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v', 'ogv', 'avi', 'mkv']);
+
     function _getExt(filename) {
         return (filename.split('.').pop() || '').toLowerCase();
+    }
+
+    function _isImageFile(file) {
+        const ext = _getExt(file?.name || '');
+        const mime = (file?.type || '').toLowerCase();
+        return mime.startsWith('image/') || IMAGE_EXTS.has(ext);
+    }
+
+    function _isVideoFile(file) {
+        if (_isImageFile(file)) return false;
+        const ext = _getExt(file?.name || '');
+        const mime = (file?.type || '').toLowerCase();
+        return mime.startsWith('video/') || VIDEO_EXTS.has(ext);
+    }
+
+    function _getPreviewUrl(file) {
+        if (!file) return '';
+        if (!file._previewUrl) {
+            try { file._previewUrl = URL.createObjectURL(file); } catch (_) { file._previewUrl = ''; }
+        }
+        return file._previewUrl;
     }
 
     function _getLabel(filename) {
@@ -52,15 +76,20 @@ const FileAttach = (() => {
         return EXT_LABEL[ext] || ext.toUpperCase().slice(0, 4) || 'FILE';
     }
 
-    function _getColor(filename) {
-        const ext = _getExt(filename);
+    function _getColor(fileOrName) {
+        if (fileOrName && typeof fileOrName === 'object') {
+            if (_isImageFile(fileOrName) || _isVideoFile(fileOrName)) return 'purple';
+            const ext = _getExt(fileOrName.name || '');
+            return EXT_COLOR[ext] || 'gray';
+        }
+        const ext = _getExt(String(fileOrName || ''));
         return EXT_COLOR[ext] || 'gray';
     }
 
     function getFilesMeta() {
         return _files.map(f => ({
             name: f.name,
-            ext: _getExt(f.name),
+            ext:  _getExt(f.name),
         }));
     }
 
@@ -145,8 +174,11 @@ const FileAttach = (() => {
 
     /* ─── обновить подсветку кнопки прикрепить ──────────────── */
     function _updateAttachBtn() {
-        if (!_attachBtn) return;
-        _attachBtn.classList.toggle('has-files', _files.length > 0);
+        if (_attachBtn) {
+            _attachBtn.classList.toggle('has-files', _files.length > 0);
+        }
+        try { window.__catchpmApp?._syncSendButtonState?.(); } catch (_) {}
+        try { window.GroupChat?._syncInputBtn?.(); } catch (_) {}
     }
 
     /* ─── создать/найти preview-bar внутри inputBox ─────────── */
@@ -163,17 +195,19 @@ const FileAttach = (() => {
         return bar;
     }
 
-    /* ─── SVG-иконка файла ───────────────────────────────────── */
+    /* ─── SVG-иконка файла или превью медиа ──────────────────── */
     function _makeFileIcon(file, idx) {
         const label = _getLabel(file.name);
-        const color = _getColor(file.name);
+        const color = _getColor(file);
+        const isImg = _isImageFile(file);
+        const isVid = _isVideoFile(file);
+        const previewUrl = (isImg || isVid) ? _getPreviewUrl(file) : '';
 
         const wrapper = document.createElement('div');
         wrapper.className = `fa-chip fa-chip--${color}`;
         wrapper.title     = file.name;
 
-        // Иконка (кастомный svg)
-        wrapper.innerHTML = `
+        const defaultIconHtml = `
 <span class="fa-chip__icon" aria-hidden="true">
   <svg viewBox="0 0 36 44" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path d="M4 0h20l12 12v28a4 4 0 0 1-4 4H4a4 4 0 0 1-4-4V4a4 4 0 0 1 4-4z"
@@ -182,13 +216,68 @@ const FileAttach = (() => {
           class="fa-chip__fold"/>
     <text x="18" y="32" text-anchor="middle" class="fa-chip__text">${label}</text>
   </svg>
-</span>
+</span>`;
+        let iconHtml = defaultIconHtml;
+
+        try {
+            if (previewUrl && isImg) {
+                iconHtml = `
+<span class="fa-chip__icon fa-chip__icon--thumb" aria-hidden="true">
+  <img class="fa-chip__thumb-img" src="${_escHtml(previewUrl)}" alt="">
+</span>`;
+            } else if (previewUrl && isVid) {
+                iconHtml = `
+<span class="fa-chip__icon fa-chip__icon--thumb" aria-hidden="true">
+  <video class="fa-chip__thumb-video" src="${_escHtml(previewUrl)}#t=0.001" preload="metadata" muted playsinline tabindex="-1"></video>
+</span>`;
+            }
+        } catch (_) {
+            iconHtml = defaultIconHtml;
+        }
+
+        wrapper.innerHTML = `${iconHtml}
 <span class="fa-chip__name">${_escHtml(file.name)}</span>
 <button class="fa-chip__remove" data-idx="${idx}" type="button" aria-label="Удалить файл ${_escHtml(file.name)}">
   <svg viewBox="0 0 14 14" fill="none">
     <path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
   </svg>
 </button>`;
+
+        const imgEl = wrapper.querySelector('.fa-chip__thumb-img');
+        if (imgEl) {
+            imgEl.addEventListener('error', () => {
+                try {
+                    const iconSpan = wrapper.querySelector('.fa-chip__icon');
+                    if (iconSpan) iconSpan.outerHTML = defaultIconHtml;
+                } catch (_) {}
+            }, { once: true });
+        }
+        const vidEl = wrapper.querySelector('.fa-chip__thumb-video');
+        if (vidEl) {
+            vidEl.addEventListener('error', () => {
+                try {
+                    const iconSpan = wrapper.querySelector('.fa-chip__icon');
+                    if (iconSpan) iconSpan.outerHTML = defaultIconHtml;
+                } catch (_) {}
+            }, { once: true });
+        }
+        if (vidEl) {
+            vidEl.muted = true;
+            vidEl.playsInline = true;
+            vidEl.addEventListener('loadedmetadata', () => {
+                try {
+                    vidEl.currentTime = vidEl.duration && isFinite(vidEl.duration)
+                        ? Math.min(0.05, vidEl.duration * 0.05)
+                        : 0.001;
+                } catch (_) {}
+            }, { once: true });
+            vidEl.addEventListener('loadeddata', () => {
+                try { vidEl.pause(); } catch (_) {}
+            }, { once: true });
+            vidEl.addEventListener('seeked', () => {
+                try { vidEl.pause(); } catch (_) {}
+            }, { once: true });
+        }
 
         wrapper.querySelector('.fa-chip__remove').addEventListener('click', (e) => {
             e.stopPropagation();
@@ -204,17 +293,13 @@ const FileAttach = (() => {
         const bar = _ensurePreviewBar();
         if (!bar) return;
 
-        bar.innerHTML = '';
+        bar.querySelectorAll('.fa-chip:not(.input-chip)').forEach(el => el.remove());
 
-        if (_files.length === 0) {
-            bar.classList.remove('fa-preview-bar--visible');
-            return;
-        }
-
-        bar.classList.add('fa-preview-bar--visible');
         _files.forEach((f, idx) => {
             bar.appendChild(_makeFileIcon(f, idx));
         });
+
+        bar.classList.toggle('fa-preview-bar--visible', bar.querySelector('.fa-chip') !== null);
     }
 
     /* ─── именованные хендлеры (для снятия слушателей) ───────── */
@@ -415,8 +500,10 @@ const FileAttach = (() => {
     function clear() {
         _files = [];
         if (_previewBar) {
-            _previewBar.innerHTML = '';
-            _previewBar.classList.remove('fa-preview-bar--visible');
+            _previewBar.querySelectorAll('.fa-chip:not(.input-chip)').forEach(el => el.remove());
+            if (!_previewBar.querySelector('.fa-chip')) {
+                _previewBar.classList.remove('fa-preview-bar--visible');
+            }
         }
         _updateAttachBtn();
     }

@@ -164,6 +164,7 @@ class ChatMessage(BaseModel):
     loop_instruction: str | None = None
     # loop_tick=True — служебный тик петли от consumer (user_id=-100), проходит гейт агента.
     loop_tick: bool = False
+    poll_answer: dict | None = None
     
 
 @app.on_event("startup")
@@ -211,8 +212,209 @@ async def startup():
         redis_client = None
         logging.error(f"[mobile] Redis недоступен ({REDIS_URL}): {e} — /mobile/poll вернёт 503")
 
+    # Фоновый воркер чтения реакций из Redis -> запись в БД
+    asyncio.create_task(_reactions_redis_worker())
+    asyncio.create_task(_user_settings_redis_worker())
+
     # # 🚀 старт watchdog-а
     # asyncio.create_task(bot_response_watchdog())
+
+
+REACTION_QUEUE_KEY = "chat:reactions:pending"
+USER_SETTINGS_QUEUE_KEY = "user:settings:pending"
+USER_SETTINGS_STATE_TTL = 7 * 86400
+SKILL_SELECT_QUEUE_KEY = "skills:selected:pending"
+SKILL_SELECT_STATE_TTL = 7 * 86400
+
+
+def _user_settings_state_key(user_id: int) -> str:
+    return f"user:settings:state:{int(user_id)}"
+
+
+def _skill_selected_state_key(user_id: int) -> str:
+    return f"skills:selected:state:{int(user_id)}"
+
+
+
+SKILL_LIKE_QUEUE_KEY = "skills:likes:pending"
+SKILL_LIKE_STATE_TTL = 7 * 86400
+def _skill_liked_state_key(user_id: int) -> str:
+    return f"skills:likes:state:{int(user_id)}"
+def _skill_likes_count_key(skill_id: int) -> str:
+    return f"skills:likes:count:{int(skill_id)}"
+
+async def _flush_pending_skill_likes_from_redis(max_items: int = 50) -> int:
+    if redis_client is None: return 0
+    processed = 0
+    for _ in range(max_items):
+        try:
+            raw = await redis_client.lpop(SKILL_LIKE_QUEUE_KEY)
+        except Exception: break
+        if not raw: break
+        try:
+            item = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(item, dict):
+                uid = int(item.get("user_id") or 0)
+                sid = int(item.get("skill_id") or 0)
+                if uid > 0 and sid > 0:
+                    res = await db.apply_skill_like(
+                        user_id=uid,
+                        skill_id=sid,
+                        liked=item.get("liked")
+                    )
+                    if res.get("ok"):
+                        try:
+                            await redis_client.set(
+                                _skill_liked_state_key(uid),
+                                json.dumps(res, ensure_ascii=False),
+                                ex=SKILL_LIKE_STATE_TTL,
+                            )
+                            await redis_client.set(
+                                _skill_likes_count_key(sid),
+                                int(res.get("likes_count") or 0),
+                                ex=SKILL_LIKE_STATE_TTL,
+                            )
+                        except Exception: pass
+                processed += 1
+        except Exception: pass
+    return processed
+
+async def _flush_pending_skill_selections_from_redis(max_items: int = 200) -> int:
+    if redis_client is None:
+        return 0
+    processed = 0
+    for _ in range(max_items):
+        try:
+            raw = await redis_client.lpop(SKILL_SELECT_QUEUE_KEY)
+        except Exception as e:
+            logging.debug(f"[skills_select] redis lpop failed: {e}")
+            break
+        if not raw:
+            break
+        try:
+            item = json.loads(raw)
+            uid = int(item.get("user_id") or 0)
+            sid = int(item.get("skill_id") or 0)
+            if uid > 0 and sid > 0:
+                sel = item.get("selected")
+                res = await db.apply_skill_selection(
+                    user_id=uid,
+                    skill_id=sid,
+                    selected=bool(sel) if sel is not None else None,
+                    selected_ids_hint=item.get("selected_ids") if isinstance(item.get("selected_ids"), list) else None,
+                )
+                try:
+                    await redis_client.set(
+                        _skill_selected_state_key(uid),
+                        json.dumps({
+                            "user_id": uid,
+                            "selected_ids": res.get("selected_ids") or [],
+                            "count": res.get("count") or 0,
+                            "max_selected": res.get("max_selected") or 5,
+                        }, ensure_ascii=False),
+                        ex=SKILL_SELECT_STATE_TTL,
+                    )
+                except Exception:
+                    pass
+                processed += 1
+        except Exception as e:
+            logging.error(f"[skills_select] failed to apply skill selection from redis: {e}")
+    return processed
+
+
+async def _flush_pending_user_settings_from_redis(max_items: int = 200) -> int:
+    if redis_client is None:
+        return 0
+    processed = 0
+    for _ in range(max_items):
+        try:
+            raw = await redis_client.lpop(USER_SETTINGS_QUEUE_KEY)
+        except Exception as e:
+            logging.debug(f"[user_settings] redis lpop failed: {e}")
+            break
+        if not raw:
+            break
+        try:
+            item = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(item, dict) and item.get("user_id") is not None:
+                uid = int(item["user_id"])
+                has_tools = "selected_tools" in item and item.get("selected_tools") is not None
+                has_model = "selected_model" in item and item.get("selected_model") is not None
+                has_chat = bool(item.get("has_active_chat")) or ("active_chat_id" in item)
+                saved = await db.upsert_user_settings(
+                    user_id=uid,
+                    selected_tools=item.get("selected_tools") if has_tools else None,
+                    selected_model=item.get("selected_model") if has_model else None,
+                    active_chat_id=item.get("active_chat_id") if has_chat else None,
+                    has_active_chat=has_chat,
+                )
+                try:
+                    await redis_client.set(
+                        _user_settings_state_key(uid),
+                        json.dumps(saved, ensure_ascii=False),
+                        ex=USER_SETTINGS_STATE_TTL,
+                    )
+                except Exception:
+                    pass
+                processed += 1
+        except Exception as e:
+            logging.error(f"[user_settings] failed to apply settings from redis: {e}")
+    return processed
+
+
+async def _user_settings_redis_worker():
+    while service_message_alive:
+        try:
+            c1 = await _flush_pending_user_settings_from_redis()
+            c2 = await _flush_pending_skill_selections_from_redis()
+            c3 = await _flush_pending_skill_likes_from_redis()
+            if (c1 + c2 + c3) == 0:
+                await asyncio.sleep(0.25)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logging.debug(f"[user_settings] worker error: {e}")
+            await asyncio.sleep(1.0)
+
+
+async def _flush_pending_reactions_from_redis(max_items: int = 200) -> int:
+    if redis_client is None:
+        return 0
+    processed = 0
+    for _ in range(max_items):
+        try:
+            raw = await redis_client.lpop(REACTION_QUEUE_KEY)
+        except Exception as e:
+            logging.debug(f"[reactions] redis lpop failed: {e}")
+            break
+        if not raw:
+            break
+        try:
+            item = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(item, dict):
+                await db.set_message_reaction(
+                    chat_id=str(item.get("chat_id") or ""),
+                    message_id=item.get("message_id"),
+                    db_id=item.get("id"),
+                    reaction=item.get("reaction"),
+                )
+                processed += 1
+        except Exception as e:
+            logging.error(f"[reactions] failed to apply reaction from redis: {e}")
+    return processed
+
+
+async def _reactions_redis_worker():
+    while service_message_alive:
+        try:
+            count = await _flush_pending_reactions_from_redis()
+            if count == 0:
+                await asyncio.sleep(0.35)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logging.debug(f"[reactions] worker error: {e}")
+            await asyncio.sleep(1.0)
 
 
 @app.on_event("shutdown")
@@ -322,6 +524,15 @@ async def send_message(chat: ChatMessage):
         except Exception as e:
             logging.error(f"[self-loop] не удалось завести установку chat={chat.chat_id}: {e}")
 
+    if isinstance(chat.poll_answer, dict):
+        bot_mid = str(chat.poll_answer.get("bot_message_id") or "").strip()
+        try:
+            p_idx = int(chat.poll_answer.get("poll_index") or 0)
+        except (TypeError, ValueError):
+            p_idx = 0
+        if bot_mid and await db.is_poll_answered(chat.chat_id, bot_mid, p_idx):
+            raise HTTPException(status_code=409, detail="Poll already answered")
+
     message = {
         "user_id": chat.user_id,
         "tb_name": chat.tb_name,
@@ -353,6 +564,7 @@ async def send_message(chat: ChatMessage):
         "loop": chat.loop,
         "loop_instruction": chat.loop_instruction,
         "loop_tick": chat.loop_tick,
+        "poll_answer": chat.poll_answer,
     }
     start = time.perf_counter()
     # отправка в Kafka
@@ -634,15 +846,26 @@ async def get_user_chats(user_id: int = Query(..., alias="user_id"), chat_id: st
 
 @app.post("/editor/register")
 async def editor_register(payload: dict):
-    """Регистрация воркспейса за юзером (вызывает тул агента)."""
+    """Регистрация воркспейса за юзером с учётом TTL (по дефолту 10ч или бессрочно)."""
     user_id = payload.get("user_id")
     workspace_id = payload.get("workspace_id")
     if user_id is None or not workspace_id:
         raise HTTPException(status_code=400, detail="user_id и workspace_id обязательны")
+    raw_ttl = payload.get("ttl_hours", 10)
+    is_perm = bool(payload.get("is_permanent") or payload.get("permanent"))
+    try:
+        ttl_hours = None if raw_ttl is None else int(raw_ttl)
+    except (TypeError, ValueError):
+        ttl_hours = 10
+    if ttl_hours is not None and ttl_hours <= 0:
+        is_perm = True
+        ttl_hours = None
     row = await editor_db.register(
         int(user_id), str(workspace_id),
         chat_id=payload.get("chat_id"),
         title=payload.get("title"),
+        ttl_hours=ttl_hours,
+        is_permanent=is_perm,
     )
     return {"ok": True, "workspace": row}
 
@@ -659,6 +882,30 @@ async def editor_owns(user_id: int, workspace_id: str):
     """Гейт доступа: принадлежит ли воркспейс юзеру."""
     ok = await editor_db.owns(int(user_id), str(workspace_id))
     return {"owns": ok}
+
+
+@app.post("/editor/workspaces/ttl")
+async def editor_update_workspace_ttl(payload: dict):
+    """Обновление TTL / бессрочного хранения (.ws_hold) по запросу от agent_sandbox."""
+    workspace_id = payload.get("workspace_id")
+    if not workspace_id:
+        raise HTTPException(status_code=400, detail="workspace_id обязателен")
+    is_active = payload.get("is_active")
+    is_perm = payload.get("is_permanent")
+    if is_perm is None and "permanent" in payload:
+        is_perm = bool(payload.get("permanent"))
+    raw_ttl = payload.get("ttl_hours", 10)
+    try:
+        ttl_hours = None if raw_ttl is None else int(raw_ttl)
+    except (TypeError, ValueError):
+        ttl_hours = 10
+    updated = await editor_db.update_ttl_status(
+        str(workspace_id),
+        is_permanent=is_perm,
+        ttl_hours=ttl_hours,
+        is_active=is_active,
+    )
+    return {"ok": True, "workspace_id": str(workspace_id), "updated": updated}
 
 
 # ══════════════════════════════════════════════════════════════
@@ -763,27 +1010,50 @@ async def max_set_settings(chat_id: str, body: MaxSettingsIn):
 
 
 @app.get("/chat/{chat_id}/messages")
-async def get_chat_messages(chat_id: str, limit: int = 50, offset: int = 0,  x_user_name: str = Header(..., alias="X-User-Name")):
+async def get_chat_messages(
+    chat_id: str,
+    limit: int = 50,
+    offset: int = 0,
+    around_id: str | None = None,
+    radius: int = 10,
+    before_id: int | None = None,
+    after_id: int | None = None,
+    x_user_name: str = Header(..., alias="X-User-Name"),
+):
     try:
-        # Страховка от неадекватных значений с фронта
         limit = max(1, min(limit, 200))
         offset = max(0, offset)
+        radius = max(1, min(radius, 100))
 
-        result = await db.get_chat_messages(chat_id, x_user_name, limit=limit, offset=offset)
+        await _flush_pending_reactions_from_redis()
+        result = await db.get_chat_messages(
+            chat_id,
+            x_user_name,
+            limit=limit,
+            offset=offset,
+            around_id=around_id,
+            radius=radius,
+            before_id=before_id,
+            after_id=after_id,
+        )
         messages = result["messages"]
         logging.info(
-            f"🦧Чат {chat_id}: отдано {len(messages)} (offset={offset}, "
-            f"total={result['total_count']}, has_more={result['has_more']})"
+            f"🦧Чат {chat_id}: отдано {len(messages)} (offset={offset}, around={around_id}, "
+            f"before={before_id}, after={after_id}, total={result['total_count']}, "
+            f"has_more={result['has_more']}, has_newer={result.get('has_newer', False)})"
         )
         return {
             "chat_id": chat_id,
             "total": len(messages),
             "total_count": result["total_count"],
             "has_more": result["has_more"],
+            "has_newer": result.get("has_newer", False),
+            "target_id": result.get("target_id"),
+            "target_message_id": result.get("target_message_id"),
             "limit": limit,
             "offset": offset,
             "messages": messages,
-            "username": x_user_name
+            "username": x_user_name,
         }
     except Exception as e:
         logging.error(f"Ошибка в эндпоинте: {e}")
@@ -887,9 +1157,125 @@ async def create_chat(request: Request):
     return {"chat_id": str(uuid.uuid4())}
 
 
+@app.get("/chats/{chat_id}/poll_answers")
+async def get_chat_poll_answers(chat_id: str):
+    return {"poll_answers": await db.get_poll_answers(chat_id)}
+
+
+@app.get("/user/settings")
+async def get_user_settings_endpoint(x_user_id: str = Header(..., alias="X-User-Id")):
+    try:
+        uid = int(x_user_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid X-User-Id")
+    await _flush_pending_user_settings_from_redis()
+    settings = await db.get_user_settings(uid)
+    if redis_client is not None:
+        try:
+            await redis_client.set(
+                _user_settings_state_key(uid),
+                json.dumps(settings, ensure_ascii=False),
+                ex=USER_SETTINGS_STATE_TTL,
+            )
+        except Exception:
+            pass
+    return settings
+
+
+@app.post("/user/settings")
+async def post_user_settings_endpoint(request: Request, x_user_id: str = Header(..., alias="X-User-Id")):
+    try:
+        uid = int(x_user_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid X-User-Id")
+    data = await request.json()
+    has_tools = "selected_tools" in data and data.get("selected_tools") is not None
+    has_model = "selected_model" in data and data.get("selected_model") is not None
+    has_chat = "active_chat_id" in data
+    saved = await db.upsert_user_settings(
+        user_id=uid,
+        selected_tools=data.get("selected_tools") if has_tools else None,
+        selected_model=data.get("selected_model") if has_model else None,
+        active_chat_id=data.get("active_chat_id") if has_chat else None,
+        has_active_chat=has_chat,
+    )
+    if redis_client is not None:
+        try:
+            await redis_client.set(
+                _user_settings_state_key(uid),
+                json.dumps(saved, ensure_ascii=False),
+                ex=USER_SETTINGS_STATE_TTL,
+            )
+        except Exception:
+            pass
+    return saved
+
+
+@app.get("/skills/selected")
+async def get_selected_skills_chats_ep(user_id: int = 0, x_user_id: str | None = Header(default=None, alias="X-User-Id")):
+    uid = int(user_id or (x_user_id if x_user_id and str(x_user_id).isdigit() else 0) or 0)
+    if uid <= 0:
+        raise HTTPException(status_code=400, detail="user_id required")
+    await _flush_pending_skill_selections_from_redis()
+    selected_ids = await db.get_selected_skill_ids(uid)
+    state_obj = {
+        "user_id": uid,
+        "selected_ids": selected_ids,
+        "count": len(selected_ids),
+        "max_selected": 5,
+    }
+    if redis_client is not None:
+        try:
+            await redis_client.set(
+                _skill_selected_state_key(uid),
+                json.dumps(state_obj, ensure_ascii=False),
+                ex=SKILL_SELECT_STATE_TTL,
+            )
+        except Exception:
+            pass
+    return state_obj
+
+
+@app.post("/skills/{skill_id}/select")
+async def post_select_skill_chats_ep(skill_id: int, request: Request, x_user_id: str | None = Header(default=None, alias="X-User-Id")):
+    payload = await request.json()
+    uid = int(payload.get("user_id") or (x_user_id if x_user_id and str(x_user_id).isdigit() else 0) or 0)
+    if uid <= 0:
+        raise HTTPException(status_code=400, detail="user_id required")
+    await _flush_pending_skill_selections_from_redis()
+    sel = payload.get("selected")
+    res = await db.apply_skill_selection(
+        user_id=uid,
+        skill_id=skill_id,
+        selected=bool(sel) if sel is not None else None,
+        selected_ids_hint=payload.get("selected_ids") if isinstance(payload.get("selected_ids"), list) else None,
+    )
+    if redis_client is not None:
+        try:
+            await redis_client.set(
+                _skill_selected_state_key(uid),
+                json.dumps({
+                    "user_id": uid,
+                    "selected_ids": res.get("selected_ids") or [],
+                    "count": res.get("count") or 0,
+                    "max_selected": res.get("max_selected") or 5,
+                }, ensure_ascii=False),
+                ex=SKILL_SELECT_STATE_TTL,
+            )
+        except Exception:
+            pass
+    if not res.get("ok"):
+        if res.get("reason") == "not_found":
+            raise HTTPException(status_code=404, detail="Skill not found")
+        if res.get("reason") == "limit":
+            raise HTTPException(status_code=400, detail="Max 5 selected skills per user")
+        raise HTTPException(status_code=400, detail="Cannot toggle selected skill")
+    return res
+
+
 @app.get("/chat/by-type/{type_agent}")
 async def find_chat_by_type(type_agent: str, x_user_id: str = Header(..., alias="X-User-Id")):
-    """Найти существующий чат пользователя по типу агента (ouroboros/pm)."""
+    """Найти существующий чат пользователя по типу агента."""
     chat_id = await db.find_chat_by_type(int(x_user_id), type_agent)
     logging.info(f"Пытались найти чат, для {x_user_id}, {type_agent}, {chat_id}")
     if chat_id:
@@ -907,10 +1293,15 @@ async def resolve_file(chat_id: str, message_id: str, file_name: str):
         LIMIT 1
     """, chat_id, message_id, file_name)
 
-    if not row or row["source"] != "agent" or not row["file_path"]:
+    if not row:
         raise HTTPException(status_code=404, detail="File not found")
-
-    return {"path": row["file_path"]}
+    if row["file_path"]:
+        return {"path": row["file_path"]}
+    if row["source"] == "user":
+        safe_name = os.path.basename(file_name or "") or "file"
+        safe_mid = os.path.basename(str(message_id or "")) or "msg"
+        return {"path": f"/app/generated_files/{safe_mid}/{safe_name}"}
+    raise HTTPException(status_code=404, detail="File not found")
 
 
 @app.get("/internal/stats/overlay")
@@ -1090,3 +1481,38 @@ async def health():
 #     uvicorn.run("chats_service.app.app:app", host="127.0.0.1", port=int(PORT_CHATS_SERVICE), reload=True)
 
 
+
+
+@app.get('/skills/liked')
+async def get_liked_skills(user_id: int = 0, x_user_id: str | None = Header(default=None, alias="X-User-Id")):
+    uid = int(user_id or (x_user_id if x_user_id and str(x_user_id).isdigit() else 0) or 0)
+    if uid <= 0:
+        raise HTTPException(status_code=400, detail="user_id required")
+    await _flush_pending_skill_likes_from_redis(max_items=200)
+    liked_ids = await db.get_liked_skill_ids(uid)
+    state_obj = {
+        'user_id': uid,
+        'liked_ids': liked_ids,
+        'count': len(liked_ids),
+    }
+    if redis_client is not None:
+        try:
+            await redis_client.set(
+                _skill_liked_state_key(uid),
+                json.dumps(state_obj, ensure_ascii=False),
+                ex=SKILL_LIKE_STATE_TTL,
+            )
+        except Exception:
+            pass
+    return state_obj
+
+@app.post('/skills/{skill_id}/like')
+async def api_toggle_liked_skill(skill_id: int, payload: dict, request: Request):
+    user_id = int(payload.get('user_id') or 0)
+    if user_id <= 0: raise HTTPException(status_code=400)
+    await _flush_pending_skill_likes_from_redis(max_items=10)
+    result = await db.apply_skill_like(user_id=user_id, skill_id=skill_id, liked=payload.get('liked'))
+    if not result.get('ok'):
+        if result.get('reason') == 'not_found': raise HTTPException(status_code=404)
+        raise HTTPException(status_code=400)
+    return result

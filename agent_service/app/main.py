@@ -166,7 +166,6 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     #     logging.warning(f"Некорректное сообщение: {payload}")
     #     return
     print("ВНУТРИ АГЕНТА", payload)
-    # Маршрутизация: ouroboros → Ouroboros API, pm → HarnessAgent
 
     # if type_agent != "pm":
     #     return
@@ -238,6 +237,12 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     if not is_telegram and not is_max:
         selected_skills = await db.get_selected_skills_for_user(int(user_id))
         if selected_skills:
+            try:
+                used_skill_ids = [int(sk["id"]) for sk in selected_skills if sk.get("id")]
+                if used_skill_ids:
+                    await db.increment_skills_uses(used_skill_ids)
+            except Exception as e:
+                logging.warning(f"Failed to increment skills uses_count: {e}")
             selected_chunks = []
             for idx, sk in enumerate(selected_skills, start=1):
                 tools = ", ".join(sk.get("tools") or []) or "не указаны"
@@ -316,6 +321,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                 response_text = response["message"]
                 is_lite = False  # дальше обрабатываем как полноценный ответ агента
             else:
+                from agent.core.agent_provider import get_real_model_name
+                response["agent_model"] = get_real_model_name("lite")
                 response_text = lite_raw
         else:
             response = await agent.process_query(user_input=message,
@@ -385,6 +392,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                     pass # Нужно вернуть сигнал об ошибке. Дефолтные ГС на мобильном клиенте
 
         attached_files = None
+        logging.info(f"[files_to_send] {files_to_send}")
         if files_to_send:
             attached_files = []
             for f in files_to_send:
@@ -1044,8 +1052,22 @@ async def _ping_provider(model_id: str, model_name: str, factory) -> dict:
 
 
 @app.get('/api/skills')
-async def api_list_skills(query: str = '', sort_by: str = 'new', tool: str | None = None, limit: int = 100):
-    skills = await db.list_skills(query=query, sort_by=sort_by, tool=tool, limit=limit)
+async def api_list_skills(
+    query: str = '',
+    sort_by: str = 'new',
+    filter_by: str = 'all',
+    user_id: int = 0,
+    tool: str | None = None,
+    limit: int = 100,
+):
+    skills = await db.list_skills(
+        query=query,
+        sort_by=sort_by,
+        tool=tool,
+        limit=limit,
+        filter_by=filter_by,
+        user_id=user_id,
+    )
     return {'skills': skills}
 
 
@@ -1069,6 +1091,22 @@ async def api_get_selected_skills(user_id: int):
         raise HTTPException(status_code=400, detail='user_id required')
     selected_ids = await db.get_selected_skill_ids(int(user_id))
     return {'selected_ids': selected_ids, 'count': len(selected_ids), 'max_selected': 5}
+
+
+
+@app.get('/api/skills/liked')
+async def api_get_liked_skills(user_id: int):
+    if int(user_id or 0) <= 0: raise HTTPException(status_code=400)
+    liked_ids = await db.get_liked_skill_ids(int(user_id))
+    return {'liked_ids': liked_ids, 'count': len(liked_ids)}
+
+
+@app.get('/api/skills/{skill_id}')
+async def api_get_skill(skill_id: int, user_id: int = 0):
+    row = await db.get_skill_by_id(skill_id, user_id=user_id)
+    if not row:
+        raise HTTPException(status_code=404, detail='Skill not found')
+    return {'skill': row}
 
 
 @app.post('/api/skills/{skill_id}/select')

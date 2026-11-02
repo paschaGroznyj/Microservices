@@ -28,6 +28,7 @@ from config import (
 )
 import presence
 import run_status
+import cache_bust
 import group_chat_gw
 import editor_gw
 import os
@@ -131,8 +132,9 @@ SERVICES = {
 
 BASE_DIR = Path(__file__).resolve().parent
 # Статика и шаблоны
-app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
-templates = Jinja2Templates(directory=BASE_DIR / "templates")
+app.middleware("http")(cache_bust.cache_bust_middleware)
+app.mount("/static", cache_bust.CacheBustStaticFiles(directory=BASE_DIR / "static"), name="static")
+templates = cache_bust.CacheBustTemplates(directory=BASE_DIR / "templates")
 
 
 # Модели данных
@@ -254,11 +256,16 @@ async def bot_stream(payload: BotStream):
         logger.warning(f"[stream] Неизвестный request_id: {payload.request_id}")
         raise HTTPException(status_code=404, detail="request_id not found")
 
+    active_requests = await run_status.append_reasoning_chunk(
+        chat_id, payload.chunk, payload.kind, payload.id
+    )
+
     await broadcast(chat_id, {
         "is_from_bot": True,
         "chunk": payload.chunk,
         "id": payload.id,
         "kind": payload.kind,
+        "active_requests": active_requests,
     })
 
     return {"ok": True}
@@ -327,9 +334,10 @@ async def get_current_user(request: Request):
                 data = response.json()
                 user_id = data.get("user_id")
                 return {
-                    "username": authentik_user, 
+                    "username": authentik_user,
                     "user_id": user_id,
-                    "authenticated": True}
+                    "authenticated": True,
+                    "source": "authentik"}
         except httpx.RequestError as e:
             raise HTTPException(status_code=502, detail=f"Auth service unreachable: {str(e)}")
         # return user
@@ -384,6 +392,8 @@ async def homepage(request: Request):
 @app.get("/login-page", response_class=HTMLResponse)
 async def login_page(request: Request):
     """Страница логина"""
+    if request.headers.get("X-Authentik-Username") or await get_current_user(request):
+        return RedirectResponse(url="/", status_code=303)
     return templates.TemplateResponse("login.html", {
         "request": request,
         "error": None,
@@ -393,6 +403,8 @@ async def login_page(request: Request):
 @app.get("/register-page", response_class=HTMLResponse)
 async def register_page(request: Request):
     """Страница регистрации"""
+    if request.headers.get("X-Authentik-Username") or await get_current_user(request):
+        return RedirectResponse(url="/", status_code=303)
     return templates.TemplateResponse("register.html", {
         "request": request,
         "error": None
@@ -550,12 +562,34 @@ async def gateway_health():
 # Счётчик — суммарно main + sigma из Redis. Оверлей — Redis-часть
 # склеивается с SQL-агрегатами от chats_service.
 # ────────────────────────────────────────────────────────
+@app.post("/api/presence/ping")
+async def presence_ping(request: Request):
+    """Heartbeat main-присутствия. Фронт дёргает его по таймеру (каждые 15с)."""
+    user = await get_current_user(request)
+    if user:
+        await presence.touch("main", user["username"])
+    return Response(status_code=204)
+
+@app.post("/api/presence/leave")
+async def presence_leave(request: Request):
+    """Немедленный выход из онлайна при закрытии вкладки."""
+    user = await get_current_user(request)
+    if user:
+        await presence.leave("main", user["username"])
+    return Response(status_code=204)
+
 @app.get("/api/presence/count")
-async def presence_count():
-    """Лёгкий публичный счётчик онлайн (суммарно main+sigma). Redis-only."""
+async def presence_count(request: Request, ping: int = 0):
+    """Лёгкий публичный счётчик онлайн (суммарно main+sigma) + живые запросы к агенту. Redis-only."""
+    if ping:
+        user = await get_current_user(request)
+        if user:
+            await presence.touch("main", user["username"])
     m = await presence.count_online("main")
     sg = await presence.count_online("sigma")
-    return {"online": m + sg, "main": m, "sigma": sg}
+    active_req = await run_status.count_active_requests()
+    return {"online": m + sg, "main": m, "sigma": sg, "active_requests": active_req,
+        "build_id": cache_bust.get_build_id(), "build_id": cache_bust.get_build_id()}
 
 
 @app.get("/api/presence/overlay")
@@ -588,6 +622,7 @@ async def presence_overlay(request: Request):
     except Exception as e:
         logging.error(f"presence_overlay: chats_service stats failed: {e}")
 
+    active_req = await run_status.count_active_requests()
     return {
         "online": m + sg,
         "by_gateway": {"main": m, "sigma": sg},
@@ -595,6 +630,7 @@ async def presence_overlay(request: Request):
         "online_usernames": online_names,
         "top_users": top_users,
         "messages_today": messages_today,
+        "active_requests": active_req,
     }
 
 
@@ -890,14 +926,21 @@ async def whatsnew_update_seen(request: Request):
 
     data = await request.json()
     update_id = data.get("update_id")
-    if update_id is None:
-        raise HTTPException(status_code=400, detail="update_id обязателен")
+    update_ids = data.get("update_ids")
+    if update_id is None and not update_ids:
+        raise HTTPException(status_code=400, detail="update_id или update_ids обязателен")
+
+    payload = {"user_id": user["user_id"]}
+    if update_id is not None:
+        payload["update_id"] = update_id
+    if isinstance(update_ids, list):
+        payload["update_ids"] = update_ids
 
     auth_url = SERVICES['auth']['url']
     try:
         response = await app.state.http_client.post(
             f"{auth_url}/whatsnew/updates/seen",
-            json={"user_id": user["user_id"], "update_id": update_id},
+            json=payload,
             timeout=10.0
         )
         return JSONResponse(content=response.json(), status_code=response.status_code)
@@ -1260,6 +1303,21 @@ async def searching_default(request: Request):
         raise HTTPException(status_code=502, detail=f"Parsers service unreachable: {str(e)}")
 
 # ========== ПРОКСИ ДЛЯ ЧАТОВ ==========
+@app.get("/api/chats/workspaces")
+async def api_chats_workspaces(request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    chat_id = request.query_params.get("chat_id") or None
+    r = await app.state.http_client.get(
+        f"{SERVICES['chats']['url']}/editor/workspaces",
+        params={"user_id": user["user_id"], **({"chat_id": chat_id} if chat_id else {})},
+    )
+    if r.status_code != 200:
+        return {"workspaces": []}
+    return r.json()
+
+
 @app.post("/api/chats/send_message")
 async def send_message(request: Request):
     """Отправка сообщения (для SPA)"""
@@ -1270,6 +1328,16 @@ async def send_message(request: Request):
     # Получаем данные из запроса
     data = await request.json()
     logging.info(data)
+    raw_cmd = (data.get("message") or "").strip().lower()
+    if raw_cmd in ("/chat-id", "/workspaces"):
+        if raw_cmd == "/workspaces":
+            r = await app.state.http_client.get(
+                f"{SERVICES['chats']['url']}/editor/workspaces",
+                params={"user_id": user["user_id"]},
+            )
+            ws_list = r.json().get("workspaces", []) if r.status_code == 200 else []
+            return JSONResponse(content={"slash_command": "/workspaces", "workspaces": ws_list})
+        return JSONResponse(content={"slash_command": "/chat-id", "chat_id": data.get("chat_id")})
     request_id = str(uuid.uuid4()) # Генерация id для передачи его агенту с последующей реализацией ОС о его действиях
     # Запоминаем связь ДО отправки агенту
     pending_requests[request_id] = data["chat_id"]
@@ -1289,9 +1357,9 @@ async def send_message(request: Request):
             data["loop_tick"] = False
 
     data["user_id"] = user["user_id"]
-    data["tb_name"] = request.headers.get("X-Authentik-Username") # Передача табельника в chats_service -> promt Ouroboros
-    data["username"] = request.headers.get("X-Authentik-Name").encode('latin-1').decode('utf-8') # Передача имени в chats_service -> promt Ouroboros
-    data["type_agent"] = data.get("type_agent", "pm") # О Великий gateway
+    data["tb_name"] = request.headers.get("X-Authentik-Username")
+    data["username"] = request.headers.get("X-Authentik-Name").encode('latin-1').decode('utf-8')
+    data["type_agent"] = data.get("type_agent", "pm")
     data["request_id"] = request_id
     data["gateway_target"] = "main"
     logger.info(f"Что летит при отправке сообщений {data['chat_id']}, {data['message']}")
@@ -1300,10 +1368,8 @@ async def send_message(request: Request):
         "user_id": data["user_id"],
         "chat_id": data["chat_id"],
         "message": data["message"],
-        # Прокидываем клиентский message_id в WS-эхо — фронту он нужен
-        # для дедупа оптимистично отрисованного сообщения (особенно для
-        # длинного текста-чипа, где сверить по textContent нельзя).
         "message_id": data.get("message_id"),
+        "poll_answer": data.get("poll_answer"),
         "is_from_bot": False
     }
     print("Перед отправкой сообщения", data)
@@ -1311,7 +1377,11 @@ async def send_message(request: Request):
     # Флаг «агент в работе» в Redis: переживает F5/переключение чата,
     # фронт по нему восстанавливает стоп-кнопку и индикатор работы.
     await run_status.mark_running(
-        data["chat_id"], request_id, data.get("type_agent")
+        data["chat_id"],
+        request_id,
+        data.get("type_agent"),
+        user_message=data.get("message"),
+        user_message_id=data.get("message_id"),
     )
     # Старт самоцикла (реальный, не служебный тик): ставим стабильный loop-флаг,
     # чтобы фронт после F5/переключения чата знал, что работа идёт в цикле.
@@ -1331,6 +1401,7 @@ async def send_message(request: Request):
         except Exception:
             body = {}
         body["request_id"] = request_id
+        body["active_requests"] = await run_status.count_active_requests()
         return JSONResponse(content=body, status_code=response.status_code)
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Chats service unreachable: {str(e)}")
@@ -1388,8 +1459,14 @@ async def chat_run_status(chat_id: str, request: Request):
     info = await run_status.get_running(chat_id)
     loop_active = await run_status.is_loop_active(chat_id)
     if not info:
-        # Текущего тика нет, но петля может быть жива (зазор между тиками).
-        return JSONResponse(content={"running": loop_active, "loop_active": loop_active})
+        last_reasoning = await run_status.get_reasoning_state(chat_id)
+        active_requests = await run_status.count_active_requests()
+        return JSONResponse(content={
+            "running": loop_active,
+            "loop_active": loop_active,
+            "reasoning": last_reasoning,
+            "active_requests": active_requests,
+        })
     return JSONResponse(content={"running": True, "loop_active": loop_active, **info})
 
 
@@ -1461,6 +1538,30 @@ async def get_chat_db_image(chat_id: str, message_id: str, file_name: str, reque
         raise HTTPException(status_code=502, detail=f"Agent service unreachable: {e}")
 
     if agent_resp.status_code != 200:
+        try:
+            resolve_resp = await app.state.http_client.get(
+                f"{SERVICES['chats']['url']}/internal/resolve_file",
+                params={"chat_id": chat_id, "message_id": message_id, "file_name": file_name},
+            )
+            if resolve_resp.status_code == 200:
+                path = (resolve_resp.json() or {}).get("path")
+                if path:
+                    file_resp = await app.state.http_client.get(
+                        f"{SERVICES['agent_service']['url']}/web/file",
+                        params={"path": path, "chat_id": chat_id, "download": 0},
+                    )
+                    if file_resp.status_code in (200, 206):
+                        return Response(
+                            content=file_resp.content,
+                            media_type=file_resp.headers.get("content-type", "image/png"),
+                            headers={
+                                "Cache-Control": "public, max-age=86400",
+                                "X-Image-Source": "file_fallback",
+                                "Access-Control-Expose-Headers": "X-Image-Key, X-Image-Source",
+                            },
+                        )
+        except httpx.RequestError:
+            pass
         raise HTTPException(status_code=agent_resp.status_code, detail="Image not found")
 
     return Response(
@@ -1476,7 +1577,7 @@ async def get_chat_db_image(chat_id: str, message_id: str, file_name: str, reque
 
 
 @app.get("/api/chats/{chat_id}/files/{message_id}/{file_name}")
-async def download_chat_file(chat_id: str, message_id: str, file_name: str, request: Request):
+async def download_chat_file(chat_id: str, message_id: str, file_name: str, request: Request, download: int = 0):
     user = await get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -1495,29 +1596,48 @@ async def download_chat_file(chat_id: str, message_id: str, file_name: str, requ
 
     path = resolve_resp.json()["path"]
 
-    # 2. Стримим файл с agent_service
+    # 2. Стримим файл с agent_service (с поддержкой HTTP Range 206 для видео)
+    fwd_headers = {}
+    if request.headers.get("range"):
+        fwd_headers["Range"] = request.headers["range"]
     try:
         agent_resp = await app.state.http_client.get(
             f"{SERVICES['agent_service']['url']}/web/file",
-            params={"path": path, "chat_id": chat_id},
+            params={"path": path, "chat_id": chat_id, "download": download},
+            headers=fwd_headers,
         )
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Agent service unreachable: {e}")
 
-    if agent_resp.status_code != 200:
+    if agent_resp.status_code == 416:
+        out_hdrs = {}
+        if agent_resp.headers.get("content-range"):
+            out_hdrs["Content-Range"] = agent_resp.headers["content-range"]
+        return Response(content=b"", status_code=416, headers=out_hdrs)
+
+    if agent_resp.status_code not in (200, 206):
         raise HTTPException(status_code=agent_resp.status_code, detail="Failed to fetch file")
+
+    out_headers = {
+        "Content-Disposition": agent_resp.headers.get(
+            "content-disposition",
+            "attachment; "
+            f'filename="{file_name.encode("ascii", "replace").decode("ascii")}"; '
+            f"filename*=UTF-8''{quote(file_name, safe='')}",
+        ),
+        "Accept-Ranges": agent_resp.headers.get("accept-ranges", "bytes"),
+        "Cache-Control": agent_resp.headers.get("cache-control", "public, max-age=3600"),
+    }
+    if agent_resp.headers.get("content-range"):
+        out_headers["Content-Range"] = agent_resp.headers["content-range"]
+    if agent_resp.headers.get("content-length"):
+        out_headers["Content-Length"] = agent_resp.headers["content-length"]
 
     return Response(
         content=agent_resp.content,
+        status_code=agent_resp.status_code,
         media_type=agent_resp.headers.get("content-type", "application/octet-stream"),
-        headers={
-            "Content-Disposition": agent_resp.headers.get(
-                "content-disposition",
-                "attachment; "
-                f'filename="{file_name.encode("ascii", "replace").decode("ascii")}"; '
-                f"filename*=UTF-8''{quote(file_name, safe='')}",
-            )
-        },
+        headers=out_headers,
     )
 
 @app.post("/api/chats/{chat_id}/delete")
@@ -1649,6 +1769,126 @@ async def search_chats(request: Request, q: str = "", limit: int = 30):
         raise HTTPException(status_code=500, detail="Failed to search chats")
 
 
+@app.post("/api/chats/{chat_id}/reaction")
+async def post_chat_message_reaction(chat_id: str, request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    data = await request.json()
+    message_id = data.get("message_id")
+    db_id = data.get("id")
+    reaction = data.get("reaction")
+    if reaction not in ("like", "dislike", None, ""):
+        raise HTTPException(status_code=400, detail="Invalid reaction")
+    norm_reaction = reaction if reaction in ("like", "dislike") else None
+    ok = await run_status.push_message_reaction(
+        chat_id=chat_id,
+        message_id=message_id,
+        reaction=norm_reaction,
+        user_id=user.get("user_id"),
+        db_id=db_id,
+    )
+    return {"ok": ok, "chat_id": str(chat_id), "message_id": message_id, "id": db_id, "reaction": norm_reaction}
+
+
+@app.post("/api/chats/reaction")
+async def post_chat_message_reaction_root(request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    data = await request.json()
+    chat_id = str(data.get("chat_id") or "").strip()
+    if not chat_id:
+        raise HTTPException(status_code=400, detail="chat_id required")
+    message_id = data.get("message_id")
+    db_id = data.get("id")
+    reaction = data.get("reaction")
+    if reaction not in ("like", "dislike", None, ""):
+        raise HTTPException(status_code=400, detail="Invalid reaction")
+    norm_reaction = reaction if reaction in ("like", "dislike") else None
+    ok = await run_status.push_message_reaction(
+        chat_id=chat_id,
+        message_id=message_id,
+        reaction=norm_reaction,
+        user_id=user.get("user_id"),
+        db_id=db_id,
+    )
+    return {"ok": ok, "chat_id": chat_id, "message_id": message_id, "id": db_id, "reaction": norm_reaction}
+
+
+@app.get("/api/user/settings")
+async def get_user_settings_gw(request: Request):
+    user = await get_current_user(request)
+    if not user or not user.get("user_id"):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    uid = int(user["user_id"])
+    try:
+        resp = await app.state.http_client.get(
+            f"{SERVICES['chats']['url']}/user/settings",
+            headers={"X-User-Id": str(uid)},
+            timeout=5.0,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        logging.warning(f"get_user_settings_gw fallback error: {e}")
+    return {
+        "user_id": uid,
+        "selected_tools": [],
+        "selected_model": "gpt",
+        "active_chat_id": None,
+    }
+
+
+@app.post("/api/user/settings")
+async def post_user_settings_gw(request: Request):
+    user = await get_current_user(request)
+    if not user or not user.get("user_id"):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    uid = int(user["user_id"])
+    data = await request.json()
+    has_tools = "selected_tools" in data and isinstance(data.get("selected_tools"), list)
+    has_model = "selected_model" in data and data.get("selected_model") is not None
+    has_chat = "active_chat_id" in data
+
+    selected_tools = [str(t).strip() for t in data["selected_tools"] if str(t).strip()] if has_tools else None
+    selected_model = run_status.normalize_setting_model(data["selected_model"]) if has_model else None
+    active_chat_id = (str(data.get("active_chat_id") or "").strip() or None) if has_chat else None
+
+    ok = await run_status.push_user_settings(
+        user_id=uid,
+        selected_tools=selected_tools,
+        selected_model=selected_model,
+        active_chat_id=active_chat_id,
+        has_active_chat=has_chat,
+    )
+    if not ok:
+        try:
+            payload = {}
+            if has_tools:
+                payload["selected_tools"] = selected_tools
+            if has_model:
+                payload["selected_model"] = selected_model
+            if has_chat:
+                payload["active_chat_id"] = active_chat_id
+            await app.state.http_client.post(
+                f"{SERVICES['chats']['url']}/user/settings",
+                headers={"X-User-Id": str(uid)},
+                json=payload,
+                timeout=5.0,
+            )
+            ok = True
+        except Exception as e:
+            logging.warning(f"post_user_settings_gw fallback failed: {e}")
+    return {
+        "ok": ok,
+        "user_id": uid,
+        "selected_tools": selected_tools,
+        "selected_model": selected_model,
+        "active_chat_id": active_chat_id,
+    }
+
+
 @app.get("/api/chats/{chat_id}/messages")
 async def get_messages(chat_id: str, request: Request):
     """Получение сообщений чата (для SPA)"""
@@ -1709,7 +1949,24 @@ async def create_new_chat(request: Request):
             detail=f"Chats service unreachable: {str(e)}"
         )
 
-# ========= Найти чат по типу (ouroboros) ========
+@app.get("/api/chats/{chat_id}/poll_answers")
+async def get_chat_poll_answers(chat_id: str, request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        response = await app.state.http_client.get(
+            f"{SERVICES['chats']['url']}/chats/{chat_id}/poll_answers"
+        )
+        return Response(
+            content=response.content,
+            status_code=response.status_code,
+            media_type="application/json"
+        )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Chats service unreachable: {str(e)}")
+
+# ========= Найти чат по типу ========
 @app.get("/api/chats/by-type/{type_agent}")
 async def find_chat_by_type(type_agent: str, request: Request):
     user = await get_current_user(request)
@@ -1828,16 +2085,29 @@ async def get_providers_status(request: Request):
 
 
 @app.get("/api/skills")
-async def api_list_skills(request: Request, query: str = "", sort_by: str = "new"):
-    """Прокси списка скиллов из agent_service."""
+async def api_list_skills(request: Request, query: str = "", sort_by: str = "new", filter_by: str = "all"):
+    """Прокси списка скиллов из agent_service (с поддержкой фильтрации liked/selected)."""
     user = await get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = int(user.get("user_id") or 0)
+    chats_url = SERVICES['chats']['url']
+    if user_id > 0 and filter_by in ("liked", "selected"):
+        ep = "/skills/liked" if filter_by == "liked" else "/skills/selected"
+        try:
+            await app.state.http_client.get(
+                f"{chats_url}{ep}",
+                params={"user_id": user_id},
+                headers={"X-User-Id": str(user_id)},
+                timeout=8.0,
+            )
+        except httpx.RequestError:
+            pass
     agent_url = SERVICES['agent_service']['url']
     try:
         resp = await app.state.http_client.get(
             f"{agent_url}/api/skills",
-            params={"query": query, "sort_by": sort_by},
+            params={"query": query, "sort_by": sort_by, "filter_by": filter_by, "user_id": user_id},
             timeout=20.0,
         )
         return JSONResponse(status_code=resp.status_code, content=resp.json())
@@ -1866,11 +2136,24 @@ async def api_create_skill(request: Request):
 
 @app.get("/api/skills/selected")
 async def api_get_selected_skills(request: Request):
-    """Текущие выбранные скиллы пользователя (для подсветки после F5)."""
+    """Текущие выбранные скиллы пользователя (через chats_service с дренажем Redis)."""
     user = await get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     user_id = user.get("user_id")
+    chats_url = SERVICES['chats']['url']
+    try:
+        resp = await app.state.http_client.get(
+            f"{chats_url}/skills/selected",
+            params={"user_id": user_id},
+            headers={"X-User-Id": str(user_id)},
+            timeout=10.0,
+        )
+        if resp.status_code == 200:
+            return JSONResponse(status_code=200, content=resp.json())
+    except httpx.RequestError:
+        pass
+
     agent_url = SERVICES['agent_service']['url']
     try:
         resp = await app.state.http_client.get(
@@ -1883,44 +2166,122 @@ async def api_get_selected_skills(request: Request):
         raise HTTPException(status_code=502, detail=f"PM Agent unreachable: {e}")
 
 
-@app.post("/api/skills/{skill_id}/select")
-async def api_toggle_selected_skill(skill_id: int, request: Request):
-    """Тоггл выбранного скилла (лимит 5 на пользователя)."""
+@app.get("/api/skills/liked")
+async def api_get_liked_skills(request: Request):
     user = await get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    payload = await request.json()
-    payload["user_id"] = user.get("user_id")
+    if not user: raise HTTPException(status_code=401)
+    user_id = user.get("user_id")
+    chats_url = SERVICES['chats']['url']
+    try:
+        resp = await app.state.http_client.get(
+            f"{chats_url}/skills/liked",
+            params={"user_id": user_id},
+            headers={"X-User-Id": str(user_id)},
+            timeout=10.0,
+        )
+        if resp.status_code == 200:
+            return JSONResponse(status_code=200, content=resp.json())
+    except httpx.RequestError: pass
 
     agent_url = SERVICES['agent_service']['url']
     try:
-        resp = await app.state.http_client.post(
-            f"{agent_url}/api/skills/{skill_id}/select",
-            json=payload,
+        resp = await app.state.http_client.get(
+            f"{agent_url}/api/skills/liked",
+            params={"user_id": user_id},
             timeout=20.0,
         )
         return JSONResponse(status_code=resp.status_code, content=resp.json())
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"PM Agent unreachable: {e}")
+
+
+@app.get("/api/skills/{skill_id}")
+async def api_get_skill_detail(skill_id: int, request: Request):
+    """Полный текст и метаданные конкретного скилла из agent_service."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = int(user.get("user_id") or 0)
+    agent_url = SERVICES['agent_service']['url']
+    try:
+        resp = await app.state.http_client.get(
+            f"{agent_url}/api/skills/{skill_id}",
+            params={"user_id": user_id},
+            timeout=20.0,
+        )
+        return JSONResponse(status_code=resp.status_code, content=resp.json())
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"PM Agent unreachable: {e}")
+
+
+@app.post("/api/skills/{skill_id}/select")
+async def api_toggle_selected_skill(skill_id: int, request: Request):
+    """Тоггл выбранного скилла через Redis -> chats_service (лимит 5 на пользователя)."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    uid = int(user.get("user_id") or 0)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    payload["user_id"] = uid
+
+    res = await run_status.push_skill_select(
+        user_id=uid,
+        skill_id=skill_id,
+        selected=payload.get("selected"),
+        selected_ids=payload.get("selected_ids"),
+        max_selected=5,
+    )
+    if res.get("ok"):
+        return JSONResponse(status_code=200, content=res)
+    if res.get("reason") == "limit":
+        raise HTTPException(status_code=400, detail="Max 5 selected skills per user")
+
+    chats_url = SERVICES['chats']['url']
+    try:
+        resp = await app.state.http_client.post(
+            f"{chats_url}/skills/{skill_id}/select",
+            headers={"X-User-Id": str(uid)},
+            json=payload,
+            timeout=10.0,
+        )
+        return JSONResponse(status_code=resp.status_code, content=resp.json())
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Chats service unreachable: {e}")
 
 
 @app.post("/api/skills/{skill_id}/like")
 async def api_like_skill(skill_id: int, request: Request):
-    """Прокси лайка/анлайка скилла."""
     user = await get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    payload = await request.json()
-    agent_url = SERVICES['agent_service']['url']
+    if not user: raise HTTPException(status_code=401)
+    uid = int(user.get("user_id") or 0)
+    try: payload = await request.json()
+    except Exception: payload = {}
+    payload["user_id"] = uid
+
+    res = await run_status.push_skill_like(
+        user_id=uid,
+        skill_id=skill_id,
+        liked=payload.get("liked"),
+        liked_ids=payload.get("liked_ids"),
+        likes_count=payload.get("likes_count"),
+    )
+    if res.get("ok"):
+        return JSONResponse(status_code=200, content=res)
+
+    chats_url = SERVICES['chats']['url']
     try:
         resp = await app.state.http_client.post(
-            f"{agent_url}/api/skills/{skill_id}/like",
+            f"{chats_url}/skills/{skill_id}/like",
+            headers={"X-User-Id": str(uid)},
             json=payload,
-            timeout=20.0,
+            timeout=10.0,
         )
         return JSONResponse(status_code=resp.status_code, content=resp.json())
     except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"PM Agent unreachable: {e}")
+        raise HTTPException(status_code=502, detail=f"Chats service unreachable: {e}")
 
 
 @app.get("/api/skills/{skill_id}/prompt")
@@ -1976,6 +2337,8 @@ async def api_delete_skill(skill_id: int, request: Request):
             f"{agent_url}/api/skills/{skill_id}",
             timeout=20.0,
         )
+        if resp.status_code == 200:
+            await run_status.evict_deleted_skill(skill_id)
         return JSONResponse(status_code=resp.status_code, content=resp.json())
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"PM Agent unreachable: {e}")

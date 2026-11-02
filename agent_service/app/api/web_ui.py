@@ -142,17 +142,43 @@ async def upload_web_files(
             )
             continue
 
+        VIDEO_MIME = {
+            ".mp4": "video/mp4",
+            ".m4v": "video/mp4",
+            ".webm": "video/webm",
+            ".mov": "video/quicktime",
+            ".ogv": "video/ogg",
+            ".avi": "video/x-msvideo",
+            ".mkv": "video/x-matroska",
+        }
+        safe_fname = os.path.basename(f.filename or "file") or "file"
+        safe_mid = os.path.basename(str(message_id or "msg")) or "msg"
+        try:
+            user_dir = os.path.join("/app/generated_files", safe_mid)
+            os.makedirs(user_dir, exist_ok=True)
+            user_fpath = os.path.join(user_dir, safe_fname)
+            with open(user_fpath, "wb") as _uf:
+                _uf.write(raw)
+            await obs_file_storage.upload_user_file(user_fpath, chat_id)
+        except Exception as _uerr:
+            logging.warning(f"[upload_files] не удалось сохранить файл на диск/OBS: {_uerr}")
+
         # Не-image файл: тоже кладём бинарник в media_store (kind=file) — чтобы
         # его можно было залить в workspace через upload_to_workspace(media_ids=[...]).
         _fmid = None
         try:
             _fmid = await media_store.put_media(
                 chat_id, raw, f.filename,
-                "application/octet-stream", kind="file"
+                VIDEO_MIME.get(ext, "application/octet-stream"), kind="file"
             )
         except Exception as _e:
             logging.warning(f"[media_store] put_media(file) пропущен: {_e}")
         _fmid_hint = (f" [media_id={_fmid}]" if _fmid else "")
+        if ext in VIDEO_MIME:
+            parts.append(
+                f"\n\n🎬[VIDEO] [Прикрепленное видео: {f.filename}]{_fmid_hint}"
+            )
+            continue
         try:
             extracted_text = await asyncio.to_thread(parse_file, f.filename, raw)
             parts.append(f"\n\n📎[FILE] [Прикрепленный файл: {f.filename}]{_fmid_hint}\nСодержимое файла:\n```\n{extracted_text}\n```")
@@ -176,8 +202,75 @@ async def upload_web_files(
 
 
 
+_WEB_FILE_MIME_MAP = {
+    "mp4": "video/mp4",
+    "m4v": "video/mp4",
+    "webm": "video/webm",
+    "mov": "video/quicktime",
+    "ogv": "video/ogg",
+    "avi": "video/x-msvideo",
+    "mkv": "video/x-matroska",
+    "mp3": "audio/mpeg",
+    "mpga": "audio/mpeg",
+    "wav": "audio/wav",
+    "wave": "audio/wav",
+    "ogg": "audio/ogg",
+    "oga": "audio/ogg",
+    "opus": "audio/ogg",
+    "m4a": "audio/mp4",
+    "aac": "audio/aac",
+    "flac": "audio/flac",
+    "weba": "audio/webm",
+    "caf": "audio/x-caf",
+    "aif": "audio/aiff",
+    "aiff": "audio/aiff",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
+    "gif": "image/gif",
+    "pdf": "application/pdf",
+}
+_WEB_STREAM_MAX_CHUNK = 2 * 1024 * 1024  # 2 МБ (sendfile_max_chunk 2m)
+
+
+def _parse_web_byte_range(range_header: str, total_size: int, max_chunk: int = _WEB_STREAM_MAX_CHUNK) -> tuple[int, int] | None:
+    if not range_header or not range_header.strip().lower().startswith("bytes=") or total_size <= 0:
+        return None
+    spec = range_header.strip()[6:].split(",", 1)[0].strip()
+    if "-" not in spec:
+        return None
+    start_s, end_s = spec.split("-", 1)
+    start_s, end_s = start_s.strip(), end_s.strip()
+    try:
+        if start_s == "":
+            suffix = int(end_s)
+            if suffix <= 0:
+                return None
+            start = max(0, total_size - suffix)
+            end = total_size - 1
+        else:
+            start = int(start_s)
+            if start < 0 or start >= total_size:
+                return None
+            if end_s == "":
+                end = min(start + max_chunk - 1, total_size - 1)
+            else:
+                end = min(int(end_s), total_size - 1)
+        if start > end:
+            return None
+        return start, end
+    except ValueError:
+        return None
+
+
 @web_router.get("/web/file")
-async def get_generated_file(path: str, chat_id: str | None = None):
+async def get_generated_file(
+    path: str,
+    request: Request,
+    chat_id: str | None = None,
+    download: int = 0,
+):
     real_path = os.path.realpath(path)
 
     # Защита: файл обязан лежать внутри одного из разрешённых корней.
@@ -200,6 +293,49 @@ async def get_generated_file(path: str, chat_id: str | None = None):
             raise HTTPException(status_code=404, detail="File not found")
 
     filename = os.path.basename(real_path)
+    ext = os.path.splitext(filename)[1].lower().lstrip(".")
+    media_type = _WEB_FILE_MIME_MAP.get(ext, "application/octet-stream")
+    is_inline_media = media_type.startswith(("video/", "audio/", "image/"))
+    disposition = "attachment" if (download or not is_inline_media) else "inline"
+    file_size = os.path.getsize(real_path)
+    base_headers = {
+        "Content-Disposition": _content_disposition(filename, disposition),
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "public, max-age=3600",
+    }
+
+    range_hdr = request.headers.get("range")
+    if range_hdr and not download and file_size > 0:
+        parsed = _parse_web_byte_range(range_hdr, file_size)
+        if parsed is None:
+            return Response(
+                status_code=416,
+                headers={**base_headers, "Content-Range": f"bytes */{file_size}"},
+            )
+        start, end = parsed
+        length = end - start + 1
+
+        def iter_range():
+            with open(real_path, "rb") as f:
+                f.seek(start)
+                remaining = length
+                while remaining > 0:
+                    chunk = f.read(min(256 * 1024, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    yield chunk
+
+        return StreamingResponse(
+            iter_range(),
+            status_code=206,
+            media_type=media_type,
+            headers={
+                **base_headers,
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Content-Length": str(length),
+            },
+        )
 
     def iterfile():
         with open(real_path, "rb") as f:
@@ -207,8 +343,8 @@ async def get_generated_file(path: str, chat_id: str | None = None):
 
     return StreamingResponse(
         iterfile(),
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": _content_disposition(filename, "attachment")},
+        media_type=media_type,
+        headers={**base_headers, "Content-Length": str(file_size)},
     )
 
 
@@ -307,7 +443,7 @@ async def get_db_image(
         # бинарник из OBS по детерминированному ключу — ровно как делает /web/file.
         if chat_id and message_id and file_name:
             try:
-                chats_url = os.getenv("CHATS_SERVICE_URL", "http://chats_service:8001")
+                chats_url = os.getenv("CHATS_SERVICE_URL") or f"http://chats_service:{os.getenv('PORT_CHATS_SERVICE', '8001')}"
                 async with httpx.AsyncClient(timeout=15) as client:
                     rf = await client.get(
                         f"{chats_url}/internal/resolve_file",

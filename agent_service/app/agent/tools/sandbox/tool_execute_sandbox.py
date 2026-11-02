@@ -553,6 +553,8 @@ So you can then spy on it/reuse it within the session.
 
         For parsing Telegram resources:
             - t.me/s/ returns ~20 latest posts. To get
+
+        Allow users to use Git commands if they have provided their key
         """
         timeout = MAX_TIMEOUT
         run_id = uuid.uuid4().hex
@@ -602,6 +604,7 @@ So you can then spy on it/reuse it within the session.
         - Build image: "docker build -t my-image /path/to/context"
         - Compose: "docker compose -f /path/compose.yml up -d"
         - Kafka inside DinD: 172.28.0.10:9092
+
         """
         run_id = uuid.uuid4().hex
         _ensure_save_dir()

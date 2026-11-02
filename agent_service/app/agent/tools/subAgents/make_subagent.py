@@ -135,18 +135,26 @@ def _fmt(agent_name: str, text: str) -> str:
 
 # ── Фабрика ───────────────────────────────────────────────────────────────────
 
-def make_subagent_tool(agent_instance):
+_SUBAGENT_BLOCKED_TOOLS = {"call_subagent", "request_more_steps", "no_tools_selected"}
+
+
+def make_subagent_tool(agent_instance, parent_tools=None):
     """
-    Принимает экземпляр KnowledgeAgent (self).
+    Принимает экземпляр KnowledgeAgent (self) и список доступных родительскому
+    агенту инструментов (parent_tools).
     Возвращает @tool call_subagent, готовую к добавлению в список тулзов PMыча.
 
     Пример добавления в _build_tools:
 
         from .tools.subAgents.make_subagent import make_subagent_tool
-        tools.append(make_subagent_tool(self))
+        tools.append(make_subagent_tool(self, parent_tools=list(tools)))
     """
 
     agent = agent_instance  # захват self в замыкание
+    available_parent_tools = [
+        t for t in (parent_tools or [])
+        if getattr(t, "name", None) and t.name not in _SUBAGENT_BLOCKED_TOOLS
+    ]
 
     @tool
     async def call_subagent(
@@ -217,39 +225,30 @@ def make_subagent_tool(agent_instance):
         if extra_context:
             sys_prompt += f"\n\n## Дополнительный контекст\n{extra_context}"
 
-        # ── 2. Строим и фильтруем тулзы ──────────────────────────────────────
-        try:
-            all_tools = agent._build_tools(
-                user_id=0,
-                chat_id=agent._ctx_get("chat_id", getattr(agent, "current_chat_id", 0)) or 0,
-                user_input=task,
-                selected_tools=[],
-                allow_all=True,
-                images=None,
-                agent_model=agent._ctx_get("agent_model", getattr(agent, "current_agent_model", "universal")),
-            )
-        except Exception as e:
-            logger.error("[SubAgent] Не удалось получить тулзы: %s", e)
-            await send(_STATUS_ERROR)
-            return f"Ошибка инициализации субагента '{agent_name}': {e}"
+        # ── 2. Строим и фильтруем тулзы (строго из parent_tools без call_subagent) ─
+        all_tools = [
+            t for t in available_parent_tools
+            if getattr(t, "name", None) and t.name not in _SUBAGENT_BLOCKED_TOOLS
+        ]
 
-        allowed_set  = set(allowed_tools)
+        allowed_set  = set(allowed_tools) - _SUBAGENT_BLOCKED_TOOLS
         filtered     = [t for t in all_tools if t.name in allowed_set]
         filtered_map = {t.name: t for t in filtered}
 
-        missing = allowed_set - set(filtered_map)
+        missing = set(allowed_tools) - set(filtered_map)
         if missing:
             logger.warning(
-                "[SubAgent] '%s': тулзы не найдены (проигнорированы): %s",
+                "[SubAgent] '%s': тулзы недоступны или запрещены (проигнорированы): %s",
                 agent_name, missing,
             )
 
         if not filtered:
             await send(_STATUS_ERROR)
+            available_names = sorted(t.name for t in all_tools)
             return (
-                f"Для субагента '{agent_name}' не переданы валидные инструменты: "
-                f"allowed_tools={sorted(allowed_set)}. "
-                f"Проверьте TOOLS_SETTINGS/allowed_tools."
+                f"Для субагента '{agent_name}' не переданы доступные инструменты: "
+                f"allowed_tools={sorted(set(allowed_tools))}. "
+                f"Доступные в текущем запросе инструменты: {available_names}."
             )
 
         # ── 3. Привязываем тулзы к LLM ───────────────────────────────────────

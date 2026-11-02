@@ -296,7 +296,19 @@
     'stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">' +
     '<path d="M13 2L4.5 12.5a.6.6 0 0 0 .46 1H11l-1 8.5L18.5 11.5a.6.6 0 0 0-.46-1H12l1-8.5z"/></svg>';
 
-  // Иконки моделей (из tools-panel.js MP_MODELS: coder/designer/universal).
+  const ICON_GEN_UI = '<svg viewBox="0 0 24 24" fill="none" width="24" height="24" stroke="currentColor" ' +
+    'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
+    '<rect x="3" y="3" width="7" height="9" rx="1.5"/>' +
+    '<rect x="14" y="3" width="7" height="5" rx="1.5"/>' +
+    '<rect x="14" y="12" width="7" height="9" rx="1.5"/>' +
+    '<rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>';
+
+  const ICON_EDITOR = '<svg viewBox="0 0 24 24" fill="none" width="24" height="24" stroke="currentColor" ' +
+    'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
+    '<polyline points="16 18 22 12 16 6"/>' +
+    '<polyline points="8 6 2 12 8 18"/></svg>';
+
+  // Иконки моделей (из tools-panel.js MP_MODELS: coder/designer/universal/gemini).
   const MODEL_ICONS = [
     { label: "GPT", accent: "#10a37f", svg:
       '<svg viewBox="0 0 24 24" fill="none" width="24" height="24" stroke="currentColor" ' +
@@ -313,6 +325,10 @@
       '<svg viewBox="0 0 24 24" fill="none" width="24" height="24" stroke="currentColor" ' +
       'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
       '<path d="M7 6 H17 L8 14 H17"/><path d="M12 14 V20"/></svg>' },
+    { label: "Gemini", accent: "#4285f4", svg:
+      '<svg viewBox="0 0 24 24" fill="none" width="24" height="24" stroke="currentColor" ' +
+      'stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M12 2.5C12 7.8 16.2 12 21.5 12C16.2 12 12 16.2 12 21.5C12 16.2 7.8 12 2.5 12C7.8 12 12 7.8 12 2.5Z"/></svg>' },
   ];
 
   // Центральная картинка героев (под основным текстом, напр. на финале).
@@ -376,30 +392,26 @@
     });
 
     // ── Слайд 2. Главная страница: разбор интерфейса ──
-    // Два кота выглядывают снизу по центру (duo_peek, режим bottom).
     slides.push({
       hero: null,
       node: h("div", {}, [
         h("h3", { class: "wn-title" }, ["Главная страница"]),
         h("p", { class: "wn-text" }, [
-          "Слева — сайдбар управления. Здесь всё, чтобы держать работу под рукой:",
+          "Слева — сайдбар управления и быстрый доступ ко всем разделам:",
         ]),
         h("ul", { class: "wn-list" }, [
-          h("li", { html: "<b>Создание чатов</b> — новая кнопка запускает свежий диалог." }, []),
-          h("li", { html: "<b>Хранение диалогов</b> — все ваши чаты списком, можно вернуться к любому." }, []),
-          h("li", { html: "<b>Кнопка профиля</b> — настройки пользователя внизу сайдбара." }, []),
-          h("li", { html: "<b>Поиск по диалогам</b> — рядом с профилем, ищет по истории сообщений." }, []),
-          h("li", { html: "<b>Поле ввода</b> — по центру, отсюда стартует новый запрос." }, []),
+          h("li", { html: "<b>Диалоги и поиск</b> — создавайте чаты, закрепляйте важные и ищите сообщения по всей истории." }, []),
+          h("li", { html: "<b>Общий чат</b> — живая лента команды с медиа-коллажами, закрепами и индикатором участников онлайн." }, []),
+          h("li", { html: "<b>Сохранение настроек</b> — выбранная модель, инструменты, скилл, тема и открытый чат сохраняются между сессиями." }, []),
+          h("li", { html: "<b>Слэш-команды</b> — введите <code>/workspaces</code> или <code>/chat-id</code> в поле ввода для быстрого вызова меню." }, []),
         ]),
         h("span", { class: "wn-note",
-          html: "Есть смена <b>дня и ночи</b> — переключатель темы вверху. Интерфейс " +
+          html: "Есть смена <b>дня и ночи</b> и выбор цветовой палитры в профиле. Интерфейс " +
                 "полностью адаптирован под мобильные экраны." }, []),
       ]),
     });
 
-    // ── Слайд 3. Sigma vs CatchPM ──
-    // Герой + картинка перегенерятся отдельно (один герой + два экрана ПК).
-    // Пока картинки нет — wn-shot с onerror скрывается, слайд не ломается.
+    // ── Слайд 3. Sigma vs AuGent ──
     slides.push({
       hero: null,
       node: h("div", {}, [
@@ -409,17 +421,16 @@
           "различия только в оболочке и способе входа.",
         ]),
         h("span", { class: "wn-note",
-          html: "<b>Базовый AuGent</b> — <code>catchpm.uva-advanced.ru</code><br>" +
-                "Подтягивает настоящее имя из платформы УВА (authentik), можно " +
-                "прикладывать файлы и изображения, поле ввода без жёсткого лимита." }, []),
+          html: "<b>Базовый AuGent</b> — <code>augent.uva-advanced.ru</code><br>" +
+                "Подтягивает настоящее имя из платформы УВА (authentik), интерфейсы " +
+                "синхронизируются по имени пользователя. Можно прикладывать файлы " +
+                "и изображения, поле ввода без жёсткого лимита." }, []),
         h("span", { class: "wn-note",
-          html: "<b>Sigma</b> — <code>catchpm.cds.uva-advanced.ru</code><br>" +
-                "Имя пользователя из УВА не подтягивается. Нельзя прикладывать файлы " +
+          html: "<b>Sigma</b> — <code>augent.cds.uva-advanced.ru</code><br>" +
+                "Подтягивает настоящее имя из платформы УВА (authentik), интерфейсы " +
+                "синхронизируются по имени пользователя. Нельзя прикладывать файлы " +
                 "и изображения, поле ввода ограничено по длине текста. Всё остальное — " +
                 "как в базовом." }, []),
-        h("span", { class: "wn-note",
-          html: "Если вы зашли через страницу аутентификации или как гость — вы на " +
-                (IS_SIGMA ? "<b>Sigma</b> (сейчас вы здесь)." : "<b>Sigma</b>.") }, []),
       ]),
     });
 
@@ -457,6 +468,7 @@
           h("li", { html: "<b>GPT</b> — модель от OpenAI. Код, работа с инструментами и данными, длинный контекст." }, []),
           h("li", { html: "<b>Claude</b> — модель от Anthropic. Сильна в коде, делает отчёты и презентации. Показывает ход рассуждений." }, []),
           h("li", { html: "<b>GLM</b> — модель от Zhipu AI. Универсальная, показывает ход рассуждений." }, []),
+          h("li", { html: "<b>Gemini</b> — модель от Google. Быстрый анализ данных, кода, мультимодальных задач и больших текстов." }, []),
         ]),
         h("span", { class: "wn-note",
           html: "Доступность моделей видно прямо в этом же переключателе. Если агент " +
@@ -465,7 +477,7 @@
       ]),
     });
 
-            // ── Слайд 6. Магазин скиллов ──
+    // ── Слайд 6. Магазин скиллов ──
     slides.push({
       node: h("div", {}, [
         h("h3", { class: "wn-title" }, ["Магазин скиллов"]),
@@ -475,18 +487,53 @@
           "найти чужой или собрать свой и применить в один клик:",
         ]),
         h("ul", { class: "wn-list" }, [
-          h("li", { html: "<b>Карточки скиллов</b> — каждый с темой, описанием и привязкой к инструментам." }, []),
-          h("li", { html: "<b>Поиск и лайки</b> — сортировка по новизне и популярности, отмечайте полезные." }, []),
+          h("li", { html: "<b>Карточки и превью</b> — переключение между красивым Markdown-превью и исходной разметкой." }, []),
+          h("li", { html: "<b>Поиск и избранное</b> — сортировка по новизне, популярности и фильтр по вашим лайкам." }, []),
           h("li", { html: "<b>Перетаскивание в чат</b> — перетяните карточку в поле ввода — промт подставится автоматически." }, []),
-          h("li", { html: "<b>Выбор скилла</b> — нажмите на карточку, выбранный скилл подсветится зелёным и применится к следующему запросу." }, []),
+          h("li", { html: "<b>Сохранение выбора</b> — выбранный скилл отмечается чекбоксом и сохраняется для следующих запросов." }, []),
         ]),
         h("span", { class: "wn-note",
-          html: "Собранный скилл можно отредактировать или удалить — тело скилла пишется в Markdown и " +
-                "красиво рендерится при раскрытии карточки." }, []),
+          html: "Собранный скилл можно отредактировать или удалить прямо из карточки в магазине." }, []),
       ]),
     });
 
-    // ── Слайд 7. Возможности администратора ──
+    // ── Слайд 7. Динамический UI и медиа ──
+    slides.push({
+      hero: { side: "right", mode: "peek", asset: "black" },
+      node: h("div", {}, [
+        h("h3", { class: "wn-title" }, ["Интерактивный UI и медиа"]),
+        iconRow([{ svg: ICON_GEN_UI, label: "Generative UI & Media" }]),
+        h("p", { class: "wn-text" }, [
+          "Агент встраивает интерактивные виджеты и медиаплееры прямо в поток ответа:",
+        ]),
+        h("ul", { class: "wn-list" }, [
+          h("li", { html: "<b>Диаграммы и KPI</b> — круговые, столбчатые, линейные и точечные графики, а также карточки метрик с выгрузкой в PNG." }, []),
+          h("li", { html: "<b>Интерактивные таблицы и опросы</b> — таблицы с поиском и сортировкой, карточки опросов для быстрого выбора варианта." }, []),
+          h("li", { html: "<b>Рендер медиафайлов</b> — потоковое видео, адаптивные коллажи с лайтбоксом и матричный аудиоплеер." }, []),
+          h("li", { html: "<b>Чипы длинного текста</b> — объёмные вставки сворачиваются в компактные плашки с боковой панелью редактирования." }, []),
+        ]),
+      ]),
+    });
+
+    // ── Слайд 8. Веб-редактор Monaco и воркспейсы ──
+    slides.push({
+      hero: { side: "left", mode: "peek", asset: "white" },
+      node: h("div", {}, [
+        h("h3", { class: "wn-title" }, ["Редактор кода и воркспейсы"]),
+        iconRow([{ svg: ICON_EDITOR, label: "Monaco Editor" }]),
+        h("p", { class: "wn-text" }, [
+          "Для работы с кодом, скриптами и собранными артефактами встроен полноценный веб-редактор:",
+        ]),
+        h("ul", { class: "wn-list" }, [
+          h("li", { html: "<b>Редактор Monaco (/editor)</b> — дерево файлов проекта, подсветка синтаксиса, сохранение правок и скачивание по ПКМ." }, []),
+          h("li", { html: "<b>Панель агента рядом с кодом</b> — обсуждайте открытый файл с ИИ-ассистентом прямо внутри редактора." }, []),
+          h("li", { html: "<b>Команда /workspaces</b> — быстрый переход к рабочим областям текущего чата и закрепление постоянных воркспейсов." }, []),
+          h("li", { html: "<b>Интеграция с Telegram и MAX</b> — подключение агента к рабочим группам с настройкой модели, тулов и расписания триггеров." }, []),
+        ]),
+      ]),
+    });
+
+    // ── Слайд 9. Возможности администратора ──
     // Сцена-дуэт снизу: кот в короне/плаще + кот за терминалом "admin mode"
     // (scene_admin.png), статичная, без анимации/drag.
     slides.push({
@@ -655,7 +702,7 @@
   }
 
     // ── Модалка обновлений с навигацией по истории ──────────────────────────────
-    function showUpdates(updates, onSeen) {
+    function showUpdates(updates, onSeen, onSeenAll) {
       return new Promise((resolve) => {
         // Сортируем от старых к новым (устойчиво к порядку с бэка).
         const list = updates.slice().sort((a, b) => {
@@ -666,6 +713,7 @@
         });
         const total = list.length;
         let idx = total - 1;              // стартуем на самом свежем
+        let prevIdx = idx;
         const seen = new Set();           // чтобы не слать seen повторно
 
         const closeBtn = h("button", { class: "wn-close", type: "button", "aria-label": "Закрыть" }, []);
@@ -680,10 +728,67 @@
         const bodyEl  = h("div", { class: "wn-update-body" }, []);
         const scroll  = h("div", { class: "wn-scroll" }, [titleEl, bodyEl]);
 
-        // Кнопка "Предыдущие" (листать назад), "Дальше" (к более свежим), "Понятно".
-        const prevBtn = h("button", { class: "wn-btn wn-btn-secondary", type: "button" }, ["👈Предыдущие"]);
-        const fwdBtn  = h("button", { class: "wn-btn wn-btn-ghost", type: "button" }, ["Дальше👉"]);
-        const okBtn   = h("button", { class: "wn-btn wn-btn-primary", type: "button" }, ["Понятно"]);
+        // Иконочные кнопки истории без текста: каскадный SVG-шеврон + анимированный барабан-счётчик и стек точек
+        const prevBtn = h("button", {
+          class: "wn-btn wn-btn-secondary wn-nav-btn wn-nav-prev",
+          type: "button",
+          "aria-label": "Предыдущее обновление",
+          title: "Предыдущее обновление",
+        }, []);
+        const reelSlot = h("span", { class: "wn-count-reel", "aria-hidden": "true" }, [
+          h("span", { class: "wn-count-digit" }, [String(idx)]),
+        ]);
+        const prevSvgWrap = h("span", { class: "wn-nav-icon-wrap", html:
+          '<svg class="wn-nav-svg" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+            '<path class="wn-chev-echo" d="M17.5 7.5L13 12l4.5 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>' +
+            '<path class="wn-chev-main" d="M12.5 6.5L7 12l5.5 5.5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>' +
+          '</svg>'
+        }, []);
+        prevBtn.appendChild(prevSvgWrap);
+        prevBtn.appendChild(reelSlot);
+
+        const dotsWrap = h("div", { class: "wn-nav-dots", "aria-hidden": "true" },
+          list.map((_, i) => h("span", {
+            class: "wn-nav-dot" + (i === idx ? " active" : ""),
+            "data-idx": String(i),
+          }, []))
+        );
+
+        const fwdBtn = h("button", {
+          class: "wn-btn wn-btn-ghost wn-nav-btn wn-nav-next",
+          type: "button",
+          "aria-label": "Следующее обновление",
+          title: "Следующее обновление",
+          html:
+            '<span class="wn-nav-icon-wrap">' +
+              '<svg class="wn-nav-svg" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+                '<path class="wn-chev-echo" d="M6.5 7.5L11 12l-4.5 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>' +
+                '<path class="wn-chev-main" d="M11.5 6.5L17 12l-5.5 5.5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>' +
+              '</svg>' +
+            '</span>',
+        }, []);
+
+        const okBtn = h("button", { class: "wn-btn wn-btn-primary", type: "button" }, ["Понятно"]);
+
+        function animateReel(newVal, dir) {
+          const cur = reelSlot.querySelector(".wn-count-digit:last-child");
+          if (!cur || cur.textContent === String(newVal)) {
+            if (cur) cur.textContent = String(newVal);
+            return;
+          }
+          const enterCls = dir < 0 ? "wn-digit-enter-down" : "wn-digit-enter-up";
+          const exitCls  = dir < 0 ? "wn-digit-exit-down"  : "wn-digit-exit-up";
+          cur.classList.remove("wn-digit-enter-up", "wn-digit-enter-down");
+          cur.classList.add(exitCls);
+          const next = h("span", { class: "wn-count-digit " + enterCls }, [String(newVal)]);
+          reelSlot.appendChild(next);
+          reelSlot.classList.remove("wn-reel-bump");
+          void reelSlot.offsetWidth;
+          reelSlot.classList.add("wn-reel-bump");
+          setTimeout(() => {
+            if (cur.parentNode === reelSlot) reelSlot.removeChild(cur);
+          }, 280);
+        }
 
         function markSeen(i) {
           const u = list[i];
@@ -692,7 +797,22 @@
           try { onSeen && onSeen(u); } catch (e) { /* не критично */ }
         }
 
-        function render() {
+        function markAllSeen() {
+          const allIds = [];
+          for (let i = 0; i < list.length; i++) {
+            const u = list[i];
+            if (!u || u.id == null) continue;
+            allIds.push(u.id);
+            seen.add(u.id);
+          }
+          if (onSeenAll && allIds.length) {
+            try { onSeenAll(allIds); } catch (e) { /* не критично */ }
+          } else {
+            for (let i = 0; i < list.length; i++) markSeen(i);
+          }
+        }
+
+        function render(dir) {
           const u = list[idx];
           const dateStr = u.created_at
             ? new Date(u.created_at).toLocaleDateString("ru-RU",
@@ -709,24 +829,85 @@
           const htmlBody = wnRenderMarkdown(u.body || "");
           bodyEl.innerHTML = (window.DOMPurify ? window.DOMPurify.sanitize(htmlBody) : htmlBody);
 
+          if (dir) {
+            const animCls = dir < 0 ? "wn-scroll--anim-prev" : "wn-scroll--anim-next";
+            scroll.classList.remove("wn-scroll--anim-prev", "wn-scroll--anim-next");
+            void scroll.offsetWidth;
+            scroll.classList.add(animCls);
+          }
+
           // Навигация: idx==0 — самое старое, idx==total-1 — самое свежее.
           prevBtn.style.display = idx > 0 ? "" : "none";
           fwdBtn.style.display  = idx < total - 1 ? "" : "none";
+          dotsWrap.style.display = total > 1 ? "" : "none";
 
-          // Счётчик позиции, если обновлений больше одного.
-          if (total > 1) {
-            prevBtn.textContent = "👈Предыдущие (" + idx + ")";
+          // Анимация барабана числа прошлых обновлений
+          if (total > 1 && idx > 0) {
+            reelSlot.style.display = "";
+            animateReel(idx, dir || 0);
+          } else {
+            reelSlot.style.display = "none";
           }
 
+          // Обновляем точки-индикаторы (компактное скользящее окно до 5 точек)
+          const dotNodes = dotsWrap.querySelectorAll(".wn-nav-dot");
+          const isNarrow = typeof window !== "undefined" && window.innerWidth <= 430;
+          const maxVisible = isNarrow ? 4 : 5;
+          let winStart = 0;
+          let winEnd = total - 1;
+          if (total > maxVisible) {
+            const half = Math.floor(maxVisible / 2);
+            winStart = Math.max(0, Math.min(idx - half, total - maxVisible));
+            winEnd = winStart + maxVisible - 1;
+          }
+          dotNodes.forEach((dot, i) => {
+            dot.classList.toggle("active", i === idx);
+            dot.classList.toggle("passed", i > idx);
+            const visible = i >= winStart && i <= winEnd;
+            dot.style.display = visible ? "" : "none";
+            const edge = total > maxVisible && ((i === winStart && winStart > 0) || (i === winEnd && winEnd < total - 1));
+            dot.classList.toggle("far", edge);
+          });
+
+          prevIdx = idx;
           markSeen(idx);
           scroll.scrollTop = 0;
           syncThemeIcons(scroll);
         }
 
-        function done() { closeOverlay().then(resolve); }
+        function done() {
+          markAllSeen();
+          closeOverlay().then(resolve);
+        }
 
-        prevBtn.addEventListener("click", () => { if (idx > 0) { idx--; render(); } });
-        fwdBtn.addEventListener("click",  () => { if (idx < total - 1) { idx++; render(); } });
+        prevBtn.addEventListener("click", () => {
+          if (idx > 0) {
+            prevBtn.classList.remove("wn-nav-pulse");
+            void prevBtn.offsetWidth;
+            prevBtn.classList.add("wn-nav-pulse");
+            idx--;
+            render(-1);
+          }
+        });
+        fwdBtn.addEventListener("click", () => {
+          if (idx < total - 1) {
+            fwdBtn.classList.remove("wn-nav-pulse");
+            void fwdBtn.offsetWidth;
+            fwdBtn.classList.add("wn-nav-pulse");
+            idx++;
+            render(1);
+          }
+        });
+        dotsWrap.addEventListener("click", (e) => {
+          const t = e.target.closest(".wn-nav-dot");
+          if (!t) return;
+          const targetIdx = parseInt(t.getAttribute("data-idx"), 10);
+          if (!Number.isNaN(targetIdx) && targetIdx !== idx && targetIdx >= 0 && targetIdx < total) {
+            const dir = targetIdx < idx ? -1 : 1;
+            idx = targetIdx;
+            render(dir);
+          }
+        });
         okBtn.addEventListener("click", done);
         closeBtn.addEventListener("click", done);
 
@@ -734,15 +915,16 @@
           h("div", { class: "wn-topbar" }, [topInfo, closeBtn]),
           h("div", { class: "wn-stage" }, [scroll]),
           h("div", { class: "wn-footer" }, [
-            h("div", { class: "wn-footer-left" }, [prevBtn, fwdBtn]),
+            h("div", { class: "wn-footer-left" }, [prevBtn, dotsWrap, fwdBtn]),
             okBtn,
           ]),
         ]);
 
-        render();
+        render(0);
         openOverlay(card);
       });
     }
+
 
   // ── Оркестрация ────────────────────────────────────────────────────────────
   async function run() {
@@ -758,9 +940,15 @@
 
     const updates = Array.isArray(data.updates) ? data.updates : [];
     if (updates.length) {
-      await showUpdates(updates, (upd) => {
-        apiPost(API.updateSeen, { update_id: upd.id }).catch(() => {});
-      });
+      await showUpdates(
+        updates,
+        (upd) => {
+          apiPost(API.updateSeen, { update_id: upd.id }).catch(() => {});
+        },
+        (allIds) => {
+          apiPost(API.updateSeen, { update_ids: allIds }).catch(() => {});
+        }
+      );
     }
   }
 

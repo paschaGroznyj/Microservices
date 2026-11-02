@@ -1,40 +1,101 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="ru" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AuGent · Редактор</title>
 <link rel="icon" type="image/png" href="/static/img/editor_icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/theme.css">
 <link rel="stylesheet" href="/static/css/tools-panel.css">
+<link rel="stylesheet" href="/static/css/presence.css">
 <link rel="stylesheet" href="/static/css/editor.css">
-<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.5/dist/purify.min.js"></script>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<link rel="stylesheet" href="/static/css/generative-ui.css">
+<script src="/static/js/palette.js"></script>
+<script src="/static/js/vendor/marked.min.js"></script>
+<script src="/static/js/vendor/purify.min.js"></script>
+<link rel="stylesheet" href="/static/js/vendor/github-dark.min.css">
+<script src="/static/js/vendor/highlight.min.js"></script>
 </head>
 <body data-chat-id="{{ chat_id }}" data-workspace-id="{{ workspace_id }}">
-  <div class="ed-topbar">
-    <div class="ed-brand">AuGent · Редактор</div>
-    <div class="ed-ws">
-      <label>Область:</label>
-      <select id="ed-ws-select"></select>
-      <button id="ed-refresh" title="Обновить дерево">⟳</button>
-    </div>
-    <div class="ed-filename" id="ed-filename"></div>
-    <div class="ed-ttl" id="ed-ttl" title="Время жизни области (TTL 10ч, обновляется при активности)" hidden>
-      <span class="ed-ttl-dot"></span>
-      <span class="ed-ttl-text" id="ed-ttl-text">—</span>
-    </div>
-    <div class="ed-actions">
-      <button id="ed-save" title="Сохранить (Ctrl+S)" disabled>Сохранить</button>
-    </div>
-  </div>
-  <div class="ed-main">
-    <aside class="ed-tree" id="ed-tree"></aside>
-    <section class="ed-editor" id="ed-editor"></section>
-    <aside class="ed-ai" id="ed-ai">
-      <div class="ed-ai-head">Агент</div>
-      <div class="ed-ai-log chat-main-inner chat-active" id="ed-ai-log"></div>
+  <div class="chat-layout ed-layout" id="ed-layout">
+
+    <div class="ed-mobile-overlay" id="ed-mobile-overlay" aria-hidden="true"></div>
+
+    <!-- ══════════════════════════════
+         LEFT SIDEBAR (Файлы области)
+    ══════════════════════════════ -->
+    <aside class="sidebar ed-sidebar" id="ed-sidebar">
+      <div class="sidebar-header">
+        <a href="/" class="brand-link" title="AuGent Редактор">
+          <img class="brand-icon brand-icon-img" src="/static/img/sage_white.png" alt="AuGent icon">
+          <span class="brand-name">AuGent Редактор</span>
+        </a>
+        <button type="button" class="sidebar-collapse-btn" id="sidebar-collapse-btn" aria-label="Свернуть панель" aria-expanded="true" title="Свернуть панель">
+          <svg class="sidebar-collapse-icon" viewBox="0 0 20 20" width="18" height="18" fill="none" aria-hidden="true"><rect x="2.75" y="3.75" width="14.5" height="12.5" rx="2.25" stroke="currentColor" stroke-width="1.4"></rect><line x1="8" y1="3.75" x2="8" y2="16.25" stroke="currentColor" stroke-width="1.4"></line></svg>
+        </button>
+      </div>
+      <div class="sidebar-section ed-tree" id="ed-tree"></div>
+    </aside>
+
+    <!-- ══════════════════════════════
+         CENTER (Topbar + Monaco Editor)
+    ══════════════════════════════ -->
+    <main class="chat-main ed-center">
+      <header class="main-header ed-topbar">
+        <button type="button" class="sidebar-collapse-btn ed-expand-left" id="sidebar-expand-btn" aria-label="Развернуть панель файлов" aria-expanded="false" title="Развернуть панель файлов">
+          <svg class="sidebar-collapse-icon" viewBox="0 0 20 20" width="18" height="18" fill="none" aria-hidden="true"><rect x="2.75" y="3.75" width="14.5" height="12.5" rx="2.25" stroke="currentColor" stroke-width="1.4"></rect><line x1="8" y1="3.75" x2="8" y2="16.25" stroke="currentColor" stroke-width="1.4"></line></svg>
+        </button>
+
+        <div class="ed-ws">
+          <label class="ed-ws-label" for="ed-ws-select">Область</label>
+          <select id="ed-ws-select" class="ed-ws-select"></select>
+          <button type="button" id="ed-refresh" class="ed-icon-btn" title="Обновить дерево" aria-label="Обновить дерево">
+            <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+              <path d="M16.5 10a6.5 6.5 0 1 1-1.9-4.6M16.5 3.5v3.8h-3.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </div>
+
+        <div class="main-title ed-filename" id="ed-filename"></div>
+
+        <div class="header-actions ed-actions">
+          <div class="ed-ttl" id="ed-ttl" title="Время жизни области (TTL 10ч, обновляется при активности)" hidden>
+            <span class="ed-ttl-dot"></span>
+            <span class="ed-ttl-text" id="ed-ttl-text">—</span>
+          </div>
+          <button type="button" id="ed-save" class="ed-header-btn" title="Сохранить (Ctrl+S)" disabled>
+            <svg viewBox="0 0 20 20" width="15" height="15" fill="none" aria-hidden="true">
+              <path d="M4 10.5l4 4L16 6.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span>Сохранить</span>
+          </button>
+          <button type="button" class="sidebar-collapse-btn ed-expand-right" id="ai-expand-btn" aria-label="Развернуть панель агента" aria-expanded="false" title="Развернуть панель агента">
+            <svg class="sidebar-collapse-icon" viewBox="0 0 20 20" width="18" height="18" fill="none" aria-hidden="true"><rect x="2.75" y="3.75" width="14.5" height="12.5" rx="2.25" stroke="currentColor" stroke-width="1.4"></rect><line x1="12" y1="3.75" x2="12" y2="16.25" stroke="currentColor" stroke-width="1.4"></line></svg>
+          </button>
+        </div>
+      </header>
+
+      <section class="ed-editor" id="ed-editor"></section>
+    </main>
+
+    <!-- ══════════════════════════════
+         RESIZER + RIGHT SIDEBAR (Агент)
+    ══════════════════════════════ -->
+    <div class="ed-ai-resizer" id="ed-ai-resizer" role="separator" aria-orientation="vertical" title="Потяните, чтобы изменить ширину панели"></div>
+
+    <aside class="ed-ai chat-main-inner chat-active" id="ed-ai">
+      <div class="main-header ed-ai-head">
+        <div class="main-title">Агент</div>
+        <div class="header-actions">
+          <button type="button" class="sidebar-collapse-btn" id="ai-collapse-btn" aria-label="Свернуть панель агента" aria-expanded="true" title="Свернуть панель агента">
+            <svg class="sidebar-collapse-icon" viewBox="0 0 20 20" width="18" height="18" fill="none" aria-hidden="true"><rect x="2.75" y="3.75" width="14.5" height="12.5" rx="2.25" stroke="currentColor" stroke-width="1.4"></rect><line x1="12" y1="3.75" x2="12" y2="16.25" stroke="currentColor" stroke-width="1.4"></line></svg>
+          </button>
+        </div>
+      </div>
+      <div class="ed-ai-log chat-messages" id="ed-ai-log"></div>
       <div class="message-input-container ed-ai-input">
         <div class="chat-input-area">
           <div class="chat-input-box" id="ed-ai-input-box">
@@ -50,9 +111,12 @@
         </div>
       </div>
     </aside>
+
   </div>
   <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
   <script type="module" src="/static/js/tools-panel.js"></script>
+  <script src="/static/js/generative-ui.js"></script>
   <script type="module" src="/static/js/editor.js"></script>
+  <script src="/static/js/presence.js"></script>
 </body>
 </html>

@@ -49,3 +49,7 @@ CREATE TABLE IF NOT EXISTS agent_skill_selected (
 
 CREATE INDEX IF NOT EXISTS ix_agent_skill_selected_user_id
     ON agent_skill_selected(user_id, created_at DESC);
+
+-- Популярность скилла: счётчик использований в запросах к агенту
+ALTER TABLE agent_skills ADD COLUMN IF NOT EXISTS uses_count INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS ix_agent_skills_uses_count ON agent_skills(uses_count DESC);

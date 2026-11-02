@@ -1,8 +1,7 @@
 // static/js/chatSearchModal.js
-// Модалка живого поиска по сообщениям пользователя.
+// Модалка живого поиска по сообщениям пользователя (в стиле ed-poll).
 // Открывается по кнопке-лупе в футере сайдбара или Ctrl+K,
-// блюрит фон (как profile-overlay), ищет от 2 символов с дебаунсом,
-// клик по результату открывает чат через app.openChat().
+// ищет от 2 символов с дебаунсом и перебрасывает к найденному message_id (±15 сообщений).
 
 import app from './app.js';
 
@@ -19,6 +18,7 @@ const openBtn = document.getElementById('chat-search-btn');
 let debounceTimer = null;
 let currentReqId = 0;
 let lastResultsCount = 0;
+let activeIndex = -1;
 const CSE_ITEM_LIFT_COEFF = 0.50;
 
 function setLiftPx(px = 0) {
@@ -27,18 +27,13 @@ function setLiftPx(px = 0) {
   modal.style.setProperty('--cse-lift-px', `${lift}px`);
 }
 
-const CSE_TOP_SAFE_VH = 0.10; // минимальный безопасный отступ верхней грани модалки
+const CSE_TOP_SAFE_VH = 0.10;
 
 function calcMaxLiftPx() {
-  // Предел подъёма считаем по РЕАЛЬНОЙ верхней грани модалки, а не по её центру.
-  // Модалка центрируется через translateY(-50%), поэтому верхняя грань = top - height/2.
-  // Гарантируем, что верхняя грань не поднимется выше CSE_TOP_SAFE_VH от края экрана.
   const vh = window.innerHeight;
   const centerY = vh * 0.5;
   const modalHeight = modal ? modal.getBoundingClientRect().height : 0;
   const minTopEdge = vh * CSE_TOP_SAFE_VH;
-  // top = centerY - lift; верхняя грань = top - modalHeight/2 >= minTopEdge
-  // => lift <= centerY - modalHeight/2 - minTopEdge
   return Math.max(0, centerY - modalHeight / 2 - minTopEdge);
 }
 
@@ -52,7 +47,7 @@ function applyLiftByResultsCount(count) {
   }
 
   const firstItem = resultsBox?.querySelector('.cse-item');
-  const itemHeight = firstItem ? firstItem.getBoundingClientRect().height : 52;
+  const itemHeight = firstItem ? firstItem.getBoundingClientRect().height : 56;
   const desiredLift = itemHeight * safeCount * CSE_ITEM_LIFT_COEFF;
   const maxLift = calcMaxLiftPx();
   setLiftPx(Math.min(desiredLift, maxLift));
@@ -67,25 +62,23 @@ function escapeHtml(str) {
     .replace(/'/g, '&#39;');
 }
 
-// Подсветка найденной подстроки в тексте (регистронезависимо).
 function highlight(text, query) {
   const safe = escapeHtml(text);
   if (!query) return safe;
   const q = query.trim();
   if (!q) return safe;
-  // экранируем regex-спецсимволы в запросе
   const rx = new RegExp('(' + q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'ig');
   return safe.replace(rx, '<mark class="cse-mark">$1</mark>');
 }
 
-// Обрезаем длинный сниппет вокруг найденного вхождения.
-function makeSnippet(text, query, radius = 60) {
-  const t = String(text ?? '');
+function makeSnippet(text, query, radius = 64) {
+  const t = String(text ?? '').replace(/\s+/g, ' ').trim();
   if (!query) return t.slice(0, radius * 2);
-  const idx = t.toLowerCase().indexOf(query.trim().toLowerCase());
+  const q = query.trim();
+  const idx = t.toLowerCase().indexOf(q.toLowerCase());
   if (idx < 0) return t.slice(0, radius * 2);
   const start = Math.max(0, idx - radius);
-  const end = Math.min(t.length, idx + query.length + radius);
+  const end = Math.min(t.length, idx + q.length + radius);
   let s = t.slice(start, end);
   if (start > 0) s = '…' + s;
   if (end < t.length) s = s + '…';
@@ -93,17 +86,53 @@ function makeSnippet(text, query, radius = 60) {
 }
 
 function titleFor(item) {
-  if (item.renamed_title && item.renamed_title.trim()) return item.renamed_title.trim();
-  const lm = (item.last_message || '').trim();
-  if (lm) return lm.length > 48 ? lm.slice(0, 48) + '…' : lm;
+  if (item.renamed_title && String(item.renamed_title).trim()) return String(item.renamed_title).trim();
+  if (item.auto_title && String(item.auto_title).trim()) return String(item.auto_title).trim();
+  const lm = String(item.last_message || '').replace(/\s+/g, ' ').trim();
+  if (lm) return lm.length > 56 ? lm.slice(0, 56) + '…' : lm;
   return 'Чат #' + item.chat_id;
 }
 
 function setHint(msg) {
+  activeIndex = -1;
+  if (!resultsBox) return;
   resultsBox.innerHTML = `<div class="cse-hint" id="chat-search-hint">${escapeHtml(msg)}</div>`;
 }
 
+function activateResultElement(el) {
+  if (!el) return;
+  const chatId = String(el.dataset.chatId || '').trim();
+  const messageId = String(el.dataset.messageId || '').trim();
+  const dbId = String(el.dataset.id || '').trim();
+  closeModal();
+  if (!chatId) return;
+  if (typeof app.navigateToSearchMessage === 'function') {
+    app.navigateToSearchMessage(chatId, {
+      messageId: messageId || dbId || null,
+      dbId: dbId || null,
+    });
+  } else if (typeof app.openChat === 'function') {
+    app.openChat(chatId, {
+      targetMessageId: messageId || dbId || null,
+      targetDbId: dbId || null,
+    });
+  }
+}
+
+function updateActiveItemUI() {
+  if (!resultsBox) return;
+  const items = [...resultsBox.querySelectorAll('.cse-item')];
+  items.forEach((el, idx) => {
+    const isSel = idx === activeIndex;
+    el.classList.toggle('is-selected', isSel);
+    if (isSel) {
+      el.scrollIntoView({ block: 'nearest' });
+    }
+  });
+}
+
 function renderResults(items, query) {
+  activeIndex = -1;
   if (!items || !items.length) {
     setHint('Ничего не найдено');
     applyLiftByResultsCount(0);
@@ -113,8 +142,11 @@ function renderResults(items, query) {
     const title = escapeHtml(titleFor(item));
     const snippet = highlight(makeSnippet(item.snippet, query), query);
     const who = item.is_from_bot ? 'Ассистент' : 'Вы';
+    const chatId = escapeHtml(String(item.chat_id ?? ''));
+    const msgId = escapeHtml(String(item.message_id || item.id || ''));
+    const dbId = escapeHtml(String(item.id ?? ''));
     return `
-      <button class="cse-item" data-chat-id="${escapeHtml(String(item.chat_id))}">
+      <button type="button" class="cse-item" data-chat-id="${chatId}" data-message-id="${msgId}" data-id="${dbId}">
         <div class="cse-item-title">${title}</div>
         <div class="cse-item-snippet"><span class="cse-who">${who}:</span> ${snippet}</div>
       </button>`;
@@ -124,13 +156,7 @@ function renderResults(items, query) {
   applyLiftByResultsCount(items.length);
 
   resultsBox.querySelectorAll('.cse-item').forEach((el) => {
-    el.addEventListener('click', () => {
-      const chatId = Number(el.dataset.chatId);
-      closeModal();
-      if (chatId && typeof app.openChat === 'function') {
-        app.openChat(chatId);
-      }
-    });
+    el.addEventListener('click', () => activateResultElement(el));
   });
 }
 
@@ -140,7 +166,7 @@ async function doSearch(query) {
     const resp = await fetch(`/api/chats/search?q=${encodeURIComponent(query)}&limit=30`, {
       credentials: 'same-origin',
     });
-    if (reqId !== currentReqId) return; // пришёл устаревший ответ — игнор
+    if (reqId !== currentReqId) return;
     if (!resp.ok) {
       setHint('Ошибка поиска, попробуйте позже');
       return;
@@ -158,23 +184,17 @@ function onInput() {
   const q = input.value.trim();
   clearTimeout(debounceTimer);
 
-  // Поле полностью пустое — только тогда возвращаем модалку в центр.
   if (!q.length) {
-    currentReqId++; // отменяем висящие ответы
+    currentReqId++;
     setLiftPx(0);
     setHint(`Введите минимум ${MIN_CHARS} символа для поиска`);
     return;
   }
 
-  // Слишком короткий запрос: НЕ трогаем текущее положение и НЕ затираем
-  // список — просто ждём, пока пользователь доберёт символы.
-  // Позицию меняем строго по факту нового результата поиска.
   if (q.length < MIN_CHARS) {
     return;
   }
 
-  // Идёт поиск: список и высота модалки остаются как есть,
-  // renderResults пересчитает положение только когда придут новые данные.
   debounceTimer = setTimeout(() => doSearch(q), DEBOUNCE_MS);
 }
 
@@ -185,7 +205,6 @@ function openModal() {
   input.value = '';
   setLiftPx(0);
   setHint(`Введите минимум ${MIN_CHARS} символа для поиска`);
-  // фокус после старта transition
   setTimeout(() => input.focus(), 60);
 }
 
@@ -196,16 +215,15 @@ function closeModal() {
   setLiftPx(0);
   document.body.classList.remove('cse-open');
   clearTimeout(debounceTimer);
-  currentReqId++; // отменяем висящие ответы
+  currentReqId++;
+  activeIndex = -1;
   setTimeout(() => overlay.classList.remove('closing'), 300);
 }
 
-// --- События ---
 if (openBtn) openBtn.addEventListener('click', openModal);
 if (closeBtn) closeBtn.addEventListener('click', closeModal);
 if (input) input.addEventListener('input', onInput);
 
-// клик по затемнённому фону закрывает (клик внутри модалки — нет)
 if (overlay) {
   overlay.addEventListener('mousedown', (e) => {
     if (e.target === overlay) closeModal();
@@ -217,7 +235,6 @@ window.addEventListener('resize', () => {
   applyLiftByResultsCount(lastResultsCount);
 });
 
-// Ctrl+K / Cmd+K открывает, Escape закрывает
 document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
     e.preventDefault();
@@ -230,11 +247,28 @@ document.addEventListener('keydown', (e) => {
 
 if (input) {
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
+    const items = resultsBox ? [...resultsBox.querySelectorAll('.cse-item')] : [];
+    if (e.key === 'ArrowDown' && items.length) {
       e.preventDefault();
-      input.value = '';
-      setLiftPx(0);
-      setHint(`Введите минимум ${MIN_CHARS} символа для поиска`);
+      activeIndex = (activeIndex + 1) % items.length;
+      updateActiveItemUI();
+    } else if (e.key === 'ArrowUp' && items.length) {
+      e.preventDefault();
+      activeIndex = activeIndex <= 0 ? items.length - 1 : activeIndex - 1;
+      updateActiveItemUI();
+    } else if (e.key === 'Enter' && items.length) {
+      e.preventDefault();
+      const target = items[activeIndex >= 0 ? activeIndex : 0];
+      if (target) activateResultElement(target);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      if (input.value) {
+        input.value = '';
+        setLiftPx(0);
+        setHint(`Введите минимум ${MIN_CHARS} символа для поиска`);
+      } else {
+        closeModal();
+      }
     }
   });
 }

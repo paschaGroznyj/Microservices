@@ -123,6 +123,10 @@ class ToolsPanel {
     this._selected = new Set(
       // TOOL_CATEGORIES.filter(c => !c.adminOnly).map(c => c.id)
     );
+    this._saveDebounceTimer = null;
+    this._pendingSettingsPatch = {};
+    this._saveDebounceMs = 1000;
+    window.addEventListener("pagehide", () => this.flushUserSettings());
   }
 
   /* ── публичное API ──────────────────────────────────────────────────── */
@@ -144,8 +148,97 @@ class ToolsPanel {
     }
     // Если не админ — снимаем admin-категорию
     if (!this._isAdmin) {
-      this._selected.delete("admin");
+      const validIds = new Set(TOOL_CATEGORIES.filter(c => !c.adminOnly).map(c => c.id));
+      for (const id of [...this._selected]) {
+        if (!validIds.has(id)) this._selected.delete(id);
+      }
+      this._updateTriggerBadge();
     }
+  }
+
+  async loadUserSettings() {
+    try {
+      const res = await fetch("/api/user/settings", { credentials: "include" });
+      if (!res.ok) return null;
+      const data = await res.json();
+      this.applyUserSettings(data);
+      return data;
+    } catch (e) {
+      console.warn("[ToolsPanel] loadUserSettings failed:", e);
+      return null;
+    }
+  }
+
+  applyUserSettings(data) {
+    if (!data || typeof data !== "object") return;
+    if (Array.isArray(data.selected_tools)) {
+      const allowed = new Set(
+        TOOL_CATEGORIES.filter(c => !c.adminOnly || this._isAdmin).map(c => c.id)
+      );
+      this._selected = new Set(
+        data.selected_tools.map(x => String(x)).filter(id => allowed.has(id))
+      );
+      this._updateTriggerBadge();
+    }
+    if (data.selected_model) {
+      window.ModelPicker?.applySettingModel?.(data.selected_model);
+    }
+  }
+
+  saveUserSettings(patch = {}, opts = {}) {
+    if (!patch || typeof patch !== "object") return;
+    if ("selected_tools" in patch) {
+      this._pendingSettingsPatch.selected_tools = Array.isArray(patch.selected_tools)
+        ? [...patch.selected_tools]
+        : this.getSelectedCategories();
+    }
+    if ("selected_model" in patch) {
+      this._pendingSettingsPatch.selected_model = patch.selected_model;
+    }
+    if ("active_chat_id" in patch) {
+      this._pendingSettingsPatch.active_chat_id = patch.active_chat_id ?? null;
+    }
+    if (this._saveDebounceTimer) {
+      clearTimeout(this._saveDebounceTimer);
+      this._saveDebounceTimer = null;
+    }
+    if (opts && opts.immediate) {
+      this.flushUserSettings();
+      return;
+    }
+    this._saveDebounceTimer = setTimeout(() => {
+      this.flushUserSettings();
+    }, this._saveDebounceMs);
+  }
+
+  flushUserSettings() {
+    if (this._saveDebounceTimer) {
+      clearTimeout(this._saveDebounceTimer);
+      this._saveDebounceTimer = null;
+    }
+    const patch = this._pendingSettingsPatch;
+    if (!patch || Object.keys(patch).length === 0) return;
+    this._pendingSettingsPatch = {};
+
+    const body = {};
+    if ("selected_tools" in patch) {
+      body.selected_tools = Array.isArray(patch.selected_tools)
+        ? patch.selected_tools
+        : this.getSelectedCategories();
+    }
+    if ("selected_model" in patch) {
+      body.selected_model = patch.selected_model;
+    }
+    if ("active_chat_id" in patch) {
+      body.active_chat_id = patch.active_chat_id ?? null;
+    }
+    fetch("/api/user/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      keepalive: true,
+      body: JSON.stringify(body),
+    }).catch(e => console.warn("[ToolsPanel] saveUserSettings failed:", e));
   }
 
   /** Возвращает id выбранных категорий — бэк сам знает какие тулы за ними */
@@ -314,6 +407,10 @@ class ToolsPanel {
           box.innerHTML = "";
         }
         this._updateTriggerBadge(triggerBtn);
+        this.saveUserSettings({
+          selected_tools: this.getSelectedCategories(),
+          selected_model: window.ModelPicker?.getSettingModel?.() ?? "gpt",
+        });
       });
 
       toolsSection.appendChild(row);
@@ -582,6 +679,26 @@ const MP_MODELS = [
 
 const MP_STORAGE_KEY = 'mp_selected_model';
 
+const MP_ID_TO_SETTING = {
+  coder:     'gpt',
+  designer:  'claude',
+  universal: 'glm',
+  gemini:    'gemini',
+  gpt:       'gpt',
+  claude:    'claude',
+  glm:       'glm',
+};
+
+const MP_SETTING_TO_ID = {
+  gpt:       'coder',
+  claude:    'designer',
+  glm:       'universal',
+  gemini:    'gemini',
+  coder:     'coder',
+  designer:  'designer',
+  universal: 'universal',
+};
+
 // Доступность провайдеров под моделями. Тянется с /api/providers/status
 // (проксирует agent_service). Бейдж в опции показывает, что модель может быть
 // недоступна из-за ПРОВАЙДЕРА, а не из-за агента. Кешируем на клиенте, чтобы
@@ -603,6 +720,7 @@ class ModelPickerClass {
   /* ── Публичный API ──────────────────────────────────────────────────── */
 
   getModel() { return this._selected; }
+  getModels() { return MP_MODELS; }
 
   /* Тянет доступность провайдеров с бэка (с TTL-кешем и дедупом запросов).
      Возвращает объект providers ({id: {up, name, reason?}}) или null. */
@@ -684,12 +802,15 @@ class ModelPickerClass {
     if (footer.querySelector('.mp-trigger-btn')) return;
 
     const btn       = this._makeBtn();
-    const attachBtn = footer.querySelector(attachSel) ?? footer.querySelector('.attach-btn');
+    const attachBtn = footer.querySelector(attachSel);
+    const toolsBtn  = footer.querySelector('.tools-trigger-btn');
 
     if (attachBtn?.nextSibling) {
       footer.insertBefore(btn, attachBtn.nextSibling);
     } else if (attachBtn) {
       attachBtn.after(btn);
+    } else if (toolsBtn) {
+      footer.insertBefore(btn, toolsBtn);
     } else {
       footer.prepend(btn);
     }
@@ -803,8 +924,24 @@ class ModelPickerClass {
   }
 
   _select(modelId) {
-    this._selected = modelId;
-    localStorage.setItem(MP_STORAGE_KEY, modelId);
+    this._selected = MP_SETTING_TO_ID[modelId] || modelId;
+    localStorage.setItem(MP_STORAGE_KEY, this._selected);
+    this._syncAllBtns();
+    window.ToolsPanel?.saveUserSettings?.({
+      selected_model: this.getSettingModel(),
+      selected_tools: window.ToolsPanel?.getSelectedCategories?.() ?? [],
+    });
+  }
+
+  getSettingModel() {
+    return MP_ID_TO_SETTING[this._selected] || 'gpt';
+  }
+
+  applySettingModel(settingModel) {
+    const mapped = MP_SETTING_TO_ID[String(settingModel || '').trim().toLowerCase()];
+    if (!mapped) return;
+    this._selected = mapped;
+    localStorage.setItem(MP_STORAGE_KEY, mapped);
     this._syncAllBtns();
   }
 
@@ -841,4 +978,5 @@ class ModelPickerClass {
   }
 }
 
+window.__MP_MODELS = MP_MODELS;
 window.ModelPicker = new ModelPickerClass();

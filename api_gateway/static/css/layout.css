@@ -208,8 +208,8 @@
 
 /* ══════════════════════════════════════════════
    TEXT PREVIEW PANEL — правый сайдбар просмотра
-   длинного текста (>1000 символов из сообщения).
-   Рендер как txt на белом фоне, оригинальный вид.
+   длинного текста (>1000 символов) в стиле приложения
+   и карточки .reasoning-body (светлая + тёмная тема).
 ══════════════════════════════════════════════ */
 .text-preview-panel {
   position: absolute;
@@ -221,13 +221,19 @@
   max-width: 720px;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
-  border-left: 1px solid var(--border);
-  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.12);
+  background: var(--sidebar-bg, var(--bg));
+  border-left: 1px solid var(--cds-reasoning-ring, var(--border));
+  box-shadow: var(--shadow-lg, -8px 0 28px rgba(0, 0, 0, 0.16));
   transform: translateX(100%);
-  transition: transform .26s cubic-bezier(0.22, 0.61, 0.36, 1);
+  transition: transform .26s cubic-bezier(0.22, 0.61, 0.36, 1), background var(--transition);
   pointer-events: none;
   will-change: transform;
+}
+
+[data-theme="dark"] .text-preview-panel {
+  background: var(--sidebar-bg, #111111);
+  border-left: 1px solid var(--cds-reasoning-ring, rgba(255, 255, 255, 0.10));
+  box-shadow: -12px 0 36px rgba(0, 0, 0, 0.55);
 }
 
 .text-preview-panel.open {
@@ -240,15 +246,29 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  gap: 10px;
+  height: 54px;
+  min-height: 54px;
+  padding: 0 12px 0 16px;
+  border-bottom: 1px solid var(--cds-reasoning-ring, rgba(11, 11, 11, 0.08));
+  background: rgba(255, 255, 255, 0.30);
+  backdrop-filter: blur(7px) saturate(115%);
+  -webkit-backdrop-filter: blur(7px) saturate(115%);
+}
+
+[data-theme="dark"] .text-preview-header {
+  background: rgba(15, 23, 37, 0.28);
+  border-bottom: 1px solid var(--cds-reasoning-ring, rgba(255, 255, 255, 0.10));
 }
 
 .text-preview-title {
-  font-size: .9rem;
-  font-weight: 600;
-  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-anthropic-sans, var(--font-sans));
+  font-size: 13px;
+  line-height: 19px;
+  font-weight: 500;
+  color: var(--cds-reasoning-text, var(--text-primary));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -256,47 +276,66 @@
 
 .text-preview-close {
   flex-shrink: 0;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
   border: none;
-  border-radius: 7px;
+  border-radius: 6px;
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--cds-reasoning-muted, var(--text-secondary));
   cursor: pointer;
-  transition: background .15s, color .15s;
+  transition: background var(--transition), color var(--transition);
 }
 .text-preview-close:hover {
-  background: var(--surface2);
+  background: var(--sidebar-hover, var(--surface2));
   color: var(--text-primary);
 }
+.text-preview-close:active {
+  background: var(--sidebar-active, var(--surface3));
+}
 
-/* Тело — оригинальный текст как txt на белом фоне */
+/* Тело — карточка в стиле .reasoning-body (CDS TurnStatus / Prose) */
 .text-preview-body {
   flex: 1;
-  margin: 0;
-  padding: 20px 22px;
+  min-width: 0;
+  margin: 12px 14px 14px;
+  padding: 12px 14px;
   overflow: auto;
-  background: #ffffff;
-  color: #1a1a1a;
-  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
-  font-size: .82rem;
-  line-height: 1.6;
+  border: none;
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 1px var(--cds-reasoning-ring, rgba(11, 11, 11, 0.10));
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--cds-reasoning-text, #52514e);
+  font-family: var(--font-anthropic-sans, var(--font-sans));
+  font-size: 13px;
+  line-height: 19.5px;
+  font-weight: 400;
+  font-style: normal;
   white-space: pre-wrap;
   word-break: break-word;
   tab-size: 4;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  transition: box-shadow .18s ease, background .18s ease;
 }
 
-/* Редактируемый режим: курсор-текст, без фокус-рамки. */
+[data-theme="dark"] .text-preview-body {
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--cds-reasoning-text, #c3c2b7);
+  box-shadow: inset 0 0 0 1px var(--cds-reasoning-ring, rgba(255, 255, 255, 0.10));
+}
+
+/* Редактируемый режим: курсор-текст, деликатное кольцо при фокусе. */
 .text-preview-body[contenteditable="true"] {
   cursor: text;
   outline: none;
 }
 .text-preview-body[contenteditable="true"]:focus {
   outline: none;
-  box-shadow: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, var(--cds-reasoning-ring, var(--border)));
 }
 
 @media (max-width: 900px) {

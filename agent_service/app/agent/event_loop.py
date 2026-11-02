@@ -20,7 +20,7 @@ from langchain_core.messages.utils import count_tokens_approximately
 from .core.agent_provider import (get_llm_lite_model, get_llm_model,
 get_llm_model_gpt, get_llm_model_claude, get_llm_model_gemini,
 get_llm_lite_model_gpt_mini, get_llm_lite_model_gemini_flash,
-get_llm_model_glm)
+get_llm_model_glm, get_real_model_name)
 from .core.botocore_client import OBSWorker
 from .core.config import (
     ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH,
@@ -31,7 +31,7 @@ from .core.config import (
 )
 from .core.settings import TOOLS_SETTINGS, UNIVERSAL_TOOLS, ADMIN_ONLY_CATEGORIES
 from .prompts.summary_prompt import SUMMARIZE_CUT_PROMPT, TOOL_TRACE_SUMMARY_PROMPT
-from .prompts.system_prompt import SYSTEM_PROMPT
+from .prompts.system_prompt import SYSTEM_PROMPT, INTERACTIVE_POLL_GUIDANCE
 from .title_generator import generate_chat_title, is_first_turn
 
 from .tool_status_messages import get_tool_status, get_thinking_status, get_tools_status
@@ -198,8 +198,8 @@ async def tool_execute_sql_query(database, sql: str, max_rows: int = 10, sql_que
 MAX_STDOUT_CHARS = 2000  # Настройте максимальную длину (например, 2000 символов)
 MAX_TOOL_MSG_CHARS = int(os.getenv("MAX_TOOL_MSG_CHARS", "8000"))
 MAX_TRACE_FROM_DB_CHARS = int(os.getenv("MAX_TRACE_FROM_DB_CHARS", "2500"))
-TRACE_SUMMARY_THRESHOLD = int(os.getenv("TRACE_SUMMARY_THRESHOLD", "6000"))
-MAX_TRACE_HARD_CHARS = int(os.getenv("MAX_TRACE_HARD_CHARS", "12000"))
+TRACE_SUMMARY_THRESHOLD = int(os.getenv("TRACE_SUMMARY_THRESHOLD", "20000"))
+MAX_TRACE_HARD_CHARS = int(os.getenv("MAX_TRACE_HARD_CHARS", "21000"))
 
 # Имитация reasoning для моделей, которые НЕ отдают свой reasoning в стрим
 # (coder/gpt, gemini). Вместо тишины на шаге с tool_calls льём в reasoning-блок
@@ -432,6 +432,130 @@ def _build_final(aggregate, calls: dict) -> AIMessage:
         usage_metadata=aggregate.usage_metadata,
         id=aggregate.id,
     )
+
+
+_THINKING_OPEN   = re.compile(r"^\s*<thinking\s*>",              re.IGNORECASE)
+_THINKING_CLOSE  = re.compile(r"(?<!`)</thinking\s*>(?!`)",      re.IGNORECASE)
+_REASONING_OPEN  = re.compile(r"^\s*<reasoning\s*>",             re.IGNORECASE)
+_REASONING_CLOSE = re.compile(r"(?<!`)</reasoning\s*>(?!`)",     re.IGNORECASE)
+_REASONING_STOP  = re.compile(r"(?<!`)<reasoning\s*>(?!`)",      re.IGNORECASE)
+_STRAY_TAGS_RE   = re.compile(r"</?(?:thinking|reasoning)\s*>",  re.IGNORECASE)
+_CODE_SPAN_RE    = re.compile(r"(```[\s\S]*?```|`[^`\n]+`)")
+
+_ESCAPED_TAG_BRACKETS_RE = re.compile(
+    r"\\<(/?(?:thinking|reasoning)\s*)\\>",
+    re.IGNORECASE,
+)
+_FENCED_TAGS_ENVELOPE_RE = re.compile(
+    r"^\s*```(?:xml|html|markdown|md|text)?\s*(<(?:thinking|reasoning)\s*>[\s\S]*?</(?:thinking|reasoning)\s*>)\s*```",
+    re.IGNORECASE,
+)
+_WHOLE_BACKTICK_ENVELOPE_RE = re.compile(
+    r"^\s*`+\s*(<(?:thinking|reasoning)\s*>[\s\S]*?</(?:thinking|reasoning)\s*>)\s*`+\s*$",
+    re.IGNORECASE,
+)
+_LEADING_THINKING_BACKTICK_RE = re.compile(
+    r"^\s*`+\s*(<thinking\s*>[\s\S]*?</thinking\s*>)\s*`+",
+    re.IGNORECASE,
+)
+_FOLLOWING_REASONING_BACKTICK_RE = re.compile(
+    r"(</thinking\s*>\s*)`+\s*(<reasoning\s*>[\s\S]*?</reasoning\s*>)\s*`+",
+    re.IGNORECASE,
+)
+_LEADING_REASONING_BACKTICK_RE = re.compile(
+    r"^\s*`+\s*(<reasoning\s*>[\s\S]*?</reasoning\s*>)\s*`+",
+    re.IGNORECASE,
+)
+_TAG_ONLY_BACKTICKS_RE = re.compile(
+    r"`\s*(</?(?:thinking|reasoning)\s*>)\s*`",
+    re.IGNORECASE,
+)
+
+
+def _unwrap_escaped_tags(text: str) -> str:
+    if not text:
+        return ""
+    text = _ESCAPED_TAG_BRACKETS_RE.sub(r"<\1>", text)
+    text = _FENCED_TAGS_ENVELOPE_RE.sub(r"\1", text)
+    if re.match(r"^\s*`+\s*<(?:thinking|reasoning)\s*>\s*`+", text, re.IGNORECASE):
+        text = _TAG_ONLY_BACKTICKS_RE.sub(r"\1", text)
+    text = _LEADING_THINKING_BACKTICK_RE.sub(r"\1", text)
+    text = _FOLLOWING_REASONING_BACKTICK_RE.sub(r"\1\2", text)
+    text = _LEADING_REASONING_BACKTICK_RE.sub(r"\1", text)
+    text = _WHOLE_BACKTICK_ENVELOPE_RE.sub(r"\1", text)
+    return text
+
+
+def _strip_stray_tags_outside_code(text: str) -> str:
+    if not text:
+        return ""
+    parts = _CODE_SPAN_RE.split(text)
+    for i in range(0, len(parts), 2):
+        parts[i] = _STRAY_TAGS_RE.sub("", parts[i])
+    return "".join(parts).strip()
+
+
+def _pop_block(
+    text: str,
+    open_re: re.Pattern,
+    close_re: re.Pattern,
+    stop_before_re: re.Pattern | None = None,
+) -> tuple[str, str]:
+    """Извлекает ведущий открывающий … ПОСЛЕДНИЙ закрывающий тег (до границы следующего блока)."""
+    m_open = open_re.search(text)
+    if not m_open:
+        return "", text
+
+    content_start = m_open.end()
+    search_end = len(text)
+    if stop_before_re is not None:
+        first_close = close_re.search(text, content_start)
+        if first_close:
+            m_stop = stop_before_re.search(text, first_close.end())
+            if m_stop:
+                search_end = m_stop.start()
+
+    all_closes = list(close_re.finditer(text, content_start, search_end))
+    if not all_closes and search_end < len(text):
+        all_closes = list(close_re.finditer(text, content_start))
+
+    if not all_closes:
+        return "", (text[:m_open.start()] + text[content_start:]).strip()
+
+    last_close = all_closes[-1]
+    content = text[content_start:last_close.start()].strip()
+    cleaned = (text[:m_open.start()] + text[last_close.end():]).strip()
+    return content, cleaned
+
+
+def _extract_thinking_and_clean_content(raw_content) -> tuple[str, str, str]:
+    if isinstance(raw_content, list):
+        parts = []
+        for block in raw_content:
+            if isinstance(block, dict):
+                btype = block.get("type", "")
+                if btype == "text":
+                    parts.append(str(block.get("text") or ""))
+                elif btype == "thinking":
+                    t_val = block.get("thinking", "")
+                    parts.append(f"<thinking>{t_val}</thinking>")
+            elif isinstance(block, str):
+                parts.append(block)
+        text = "".join(parts)
+    else:
+        text = str(raw_content or "")
+
+    text = _unwrap_escaped_tags(text)
+
+    thinking_text, text = _pop_block(
+        text, _THINKING_OPEN, _THINKING_CLOSE, stop_before_re=_REASONING_STOP
+    )
+    reasoning_text, text = _pop_block(text, _REASONING_OPEN, _REASONING_CLOSE)
+
+    thinking_text = _strip_stray_tags_outside_code(thinking_text)
+    cleaned = _strip_stray_tags_outside_code(text)
+
+    return thinking_text, reasoning_text, cleaned
 
 
 async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, error_info: dict | None = None):
@@ -1407,12 +1531,28 @@ class HarnessAgent:
         try:
             # ── Настройки контекста ────────────────────────────────────────
             CONTEXT_PRESETS = {
-                "small":  {"limit_mem": 8,  "max_tokens": 15_000},
-                "medium": {"limit_mem": 10, "max_tokens": 30_000},
-                "large":  {"limit_mem": 12, "max_tokens": 60_000},
+                "small":  {"limit_mem": 10,  "max_tokens": 7_500},
+                "medium": {"limit_mem": 12, "max_tokens": 15_000},
+                "large":  {"limit_mem": 14, "max_tokens": 30_000},
             }
-            logging.info(f'Выбрана модель {agent_model}')
+            _MODEL_ALIASES = {
+                "gpt": "coder",
+                "claude": "designer",
+                "glm": "universal",
+                "gemini": "gemini",
+            }
+            if agent_model in _MODEL_ALIASES:
+                agent_model = _MODEL_ALIASES[agent_model]
+            if agent_model not in self.AGENT_MODELS:
+                for _abs_k, _m_inst in self.AGENT_MODELS.items():
+                    if get_real_model_name(_m_inst) == agent_model:
+                        agent_model = _abs_k
+                        break
+                else:
+                    agent_model = 'coder'
             llm = self.AGENT_MODELS[agent_model]
+            real_agent_model = get_real_model_name(llm)
+            logging.info(f'Выбрана модель {agent_model} ({real_agent_model})')
             # Текущая модель нужна субагентам для корректного выбора LLM
             # при изолированном запуске через call_subagent.
             self.current_agent_model = agent_model
@@ -1471,7 +1611,7 @@ class HarnessAgent:
             extension_tool = make_extension_tool(loop_state)
             tools.append(extension_tool)          # тулза аппендится прямо внутри цикла, офигеть имбово
 
-            subagent_tl = make_subagent_tool(self)
+            subagent_tl = make_subagent_tool(self, parent_tools=list(tools))
             tools.append(subagent_tl)
 
             print(f"ЛИМИТ ПО КОНТЕКСТУ = {limit_mem}, ЧИСЛО ТОКЕНОВ = {max_tokens}")
@@ -1488,6 +1628,9 @@ class HarnessAgent:
             else:
                 role_block = get_role(user_id)
             system_content = SYSTEM_PROMPT.format(datetime=current_datetime, role_block=role_block)
+            _gw_target = (gateway_target or "main").strip().lower()
+            if _gw_target in ("main", "sigma") and not is_telegram and not is_max:
+                system_content += "\n" + INTERACTIVE_POLL_GUIDANCE
             # Медиа-хранилище чата (Redis, пер-chat_id): картинки/файлы из недавних
             # сообщений — чтобы агент видел их даже когда в текущем сообщении вложений нет.
             try:
@@ -1676,22 +1819,16 @@ class HarnessAgent:
                     can_still_extend = not loop_state["extension_used"]
                     current_llm = llm if (is_last_step and not can_still_extend) else llm_with_tools
 
-                    # ── Живой стриминг текста модели ──────────────────────────
-                    # Заранее неизвестно, окажется ли текущий шаг финалом (без
-                    # tool_calls) или reasoning'ом перед вызовом тулзы.
+                    # ── Сбор ответа модели (без стриминга сырой пелены reasoning) ──
+                    # Короткую мысль из <thinking>...</thinking> отправляем готовым
+                    # предложением сразу после получения шага, а финальный ответ
+                    # отдаём чистым response.content.
                     stream_state = {"sent": False}
-
-                    async def _on_chunk(text: str, kind: str = "answer"):
-                        # kind из коллектора: "reasoning" | "answer".
-                        stream_state["sent"] = True
-                        await self._send_chunk(
-                            text, request_id, msg_id=str(request_id), kind="live"
-                        )
 
                     _llm_error = {}
                     try:
                         response = await _astream_collect(
-                            current_llm, messages, on_chunk=_on_chunk, iteration=iteration,
+                            current_llm, messages, on_chunk=None, iteration=iteration,
                             error_info=_llm_error
                         )
                     except Exception as _exc:
@@ -1717,19 +1854,41 @@ class HarnessAgent:
                             final_response = "Ошибка внутри цикла агента. Но агент запомнил шаги, попробуйте вернуться к запросу"
                         break
 
+                    _thinking_text, _reasoning_text, _clean_content = _extract_thinking_and_clean_content(
+                        getattr(response, "content", None)
+                    )
+                    # logging.info(response)
+                    if _reasoning_text:
+                        loop_state.setdefault("internal_reasoning_trace", []).append(_reasoning_text)
+                    # На шаге с tool_calls оставляем внутреннее рассуждение в стеке контекста модели,
+                    # а на финальном шаге (без тегов) отдаём чистый финальный ответ в response.content.
+                    if (getattr(response, "tool_calls", None) or not (_clean_content or "").strip()) and (_thinking_text or _reasoning_text):
+                        _ctx_parts = []
+                        if _thinking_text:
+                            _ctx_parts.append(f"<thinking>{_thinking_text}</thinking>")
+                        if _reasoning_text:
+                            _ctx_parts.append(f"<reasoning>{_reasoning_text}</reasoning>")
+                        if _clean_content:
+                            _ctx_parts.append(_clean_content)
+                        response.content = "".join(_ctx_parts)
+                    else:
+                        response.content = _clean_content
+
                     _has_tool_calls = bool(getattr(response, "tool_calls", None))
-                    _had_text = bool(getattr(response, "content", None))
+                    _step_thinking = _thinking_text or (_clean_content if _has_tool_calls else "")
+                    _had_text = bool(_step_thinking)
 
                     if _has_tool_calls and _had_text:
-                        # Это был reasoning перед тулзой. Оставляем его на фронте,
-                        # но переклассифицируем живой блок в свёрнутый reasoning-блок.
-                        loop_state.setdefault("reasoning_trace", []).append(response.content)
-                        if stream_state["sent"]:
-                            await self._send_chunk(
-                                "", request_id, msg_id=str(request_id), kind="reasoning_end"
-                            )
-                        # В стек reasoning не тащим (как и раньше) — гасим content
-                        # response.content = ""
+                        # Короткое предложение из <thinking>...</thinking> (или fallback content на тул-шаге):
+                        # отправляем сразу готовым предложением и закрываем шаг рассуждений.
+                        loop_state.setdefault("reasoning_trace", []).append(_step_thinking)
+                        await self._send_chunk(
+                            _step_thinking, request_id, msg_id=str(request_id), kind="live"
+                        )
+                        stream_state["sent"] = True
+                        await self._send_chunk(
+                            "", request_id, msg_id=str(request_id), kind="reasoning_end"
+                        )
                     elif _has_tool_calls and not _had_text:
                         # Шаг без текста (сразу tool_calls). Модель не отдала свой
                         # reasoning — для "немых" моделей (coder/gemini) имитируем его:
@@ -1747,11 +1906,20 @@ class HarnessAgent:
                                     _phrase, request_id, msg_id=str(request_id), kind="live"
                                 )
                                 stream_state["sent"] = True
-                        # Закрываем живой блок (реальный reasoning или имитацию).
                         if stream_state["sent"]:
                             await self._send_chunk(
                                 "", request_id, msg_id=str(request_id), kind="reasoning_end"
                             )
+                    elif not _has_tool_calls and _thinking_text:
+                        # Если модель оставила <thinking> на финальном шаге — фиксируем мысль в свёртке,
+                        # а в final_response пойдёт уже очищенный response.content.
+                        loop_state.setdefault("reasoning_trace", []).append(_thinking_text)
+                        await self._send_chunk(
+                            _thinking_text, request_id, msg_id=str(request_id), kind="live"
+                        )
+                        await self._send_chunk(
+                            "", request_id, msg_id=str(request_id), kind="reasoning_end"
+                        )
 
                     messages.append(response)          # ← единственный аппенд
 
@@ -1783,10 +1951,10 @@ class HarnessAgent:
                     # --------------------------------------------------------------
 
                     if not getattr(response, "tool_calls", None):
-                        final_response = response.content or ""
+                        final_response = (_clean_content or "").strip()
 
                         # Финальный шаг: фиксируем живой блок как финальный ответ.
-                        if stream_state["sent"]:
+                        if stream_state["sent"] and final_response:
                             await self._send_chunk(
                                 "", request_id, msg_id=str(request_id), kind="final_commit"
                             )
@@ -1794,6 +1962,7 @@ class HarnessAgent:
 
                     # Выполняем все запрошенные инструменты параллельно
                     tool_calls = response.tool_calls
+                    # logging.info(response)
                     tool_names = [tc['name'] for tc in tool_calls]
                     tool_results = await asyncio.gather(
                         *[
@@ -1904,7 +2073,26 @@ class HarnessAgent:
 
                 return final_response, tool_trace
 
-            final_response, tool_trace = await agent_event_loop(messages=messages)
+            MAX_EMPTY_RESPONSE_RETRIES = 5
+            for _empty_attempt in range(MAX_EMPTY_RESPONSE_RETRIES + 1):
+                final_response, tool_trace = await agent_event_loop(messages=messages)
+                if (final_response or "").strip():
+                    break
+                if _empty_attempt < MAX_EMPTY_RESPONSE_RETRIES:
+                    logging.warning(
+                        f"[empty_response] Агент вернул пустой final_response, "
+                        f"перезапускаю agent_event_loop ({_empty_attempt + 1}/{MAX_EMPTY_RESPONSE_RETRIES})"
+                    )
+                    messages.append(
+                        HumanMessage(
+                            content=(
+                                "ВНИМАНИЕ: Твой предыдущий шаг завершился пустым ответом "
+                                "(без текста для пользователя и без вызова инструментов). "
+                                "Доделай начатую работу (при необходимости вызови инструменты) "
+                                "и обязательно верни полный итоговый ответ пользователю в content."
+                            )
+                        )
+                    )
 
             tokens_usage = {
                     "input_tokens": total_input_tokens,
@@ -1912,29 +2100,6 @@ class HarnessAgent:
                     "total_tokens": total_input_tokens + total_output_tokens,
                 }
 
-            # Авто-отправка изображений, сгенерированных тулом generate_image.
-            pending_images = self._ctx_get("pending_generated_images", [])
-            for gen_item in pending_images:
-                if isinstance(gen_item, dict):
-                    dedup = gen_item.get("image_key") or gen_item.get("name")
-                    if dedup and dedup not in seen_paths:
-                        seen_paths.add(dedup)
-                        files_to_send.append({
-                            "image_key": gen_item.get("image_key"),
-                            "name": gen_item.get("name") or "image.jpg",
-                            "kind": "image",
-                        })
-                else:
-                    gen_path = gen_item
-                    if gen_path not in seen_paths:
-                        seen_paths.add(gen_path)
-                        files_to_send.append({
-                            "path": gen_path,
-                            "name": os.path.basename(gen_path),
-                            "kind": "image",
-                        })
-
-            # logging.info(f"ФАЙЛЫ К ОТПРАВКЕ {files_to_send}")
             # Автогенерация заголовка чата по первому обмену (логика в title_generator.py).
             # Fail-open: не первый ход / ошибка -> auto_title=None.
             auto_title = None
@@ -1968,7 +2133,7 @@ class HarnessAgent:
                 "success": True,
                 "files_to_send": files_to_send,
                 "tool_trace": trace_out,
-                "agent_model": agent_model,
+                "agent_model": real_agent_model,
                 "tokens_usage": tokens_usage,
                 "auto_title": auto_title
             }

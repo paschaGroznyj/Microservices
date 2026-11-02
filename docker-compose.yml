@@ -298,7 +298,7 @@ services:
   gateway_sigma:
     build: ./api_gateway_sigma
     container_name: api_gateway_sigma
-    command: uvicorn app:app --host 0.0.0.0 --port 7010
+    command: uvicorn app:app --host 0.0.0.0 --port 7010 --reload
     ports:
       - "7010:7010"
     environment:
@@ -556,7 +556,8 @@ services:
       - DOCKER_HOST=tcp://sandbox_dind:2375
       - KAFKA_BROKER_DIND=172.28.0.10:9092    # для контейнеров, которые agent_sandbox поднимает внутри dind
       - GATEWAY_IP=${GATEWAY_IP}
-      - CAPTION_API_PORT=${CAPTION_API_PORT}     
+      - CAPTION_API_PORT=${CAPTION_API_PORT}
+      - PORT_CHATS_SERVICE=${PORT_CHATS_SERVICE:-8001}     
     volumes:
       - ./agent_sandbox/fonts:/app/fonts:ro
       - ./agent_sandbox/dev_utils:/app/dev_utils:ro

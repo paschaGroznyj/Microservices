@@ -47,7 +47,7 @@
 
   --input-bg:      #ffffff;
   --input-border:  #d8d3cb;
-  --input-focus:   #8b4513;
+  --input-focus:   var(--accent);
 
   --msg-user-bg:   #1a1612;
   --msg-user-text: #f3f1ee;
@@ -106,7 +106,7 @@
 
   --input-bg:      #1a1a1a;
   --input-border:  #2e2e2e;
-  --input-focus:   #cc785c;
+  --input-focus:   var(--accent);
 
   --msg-user-bg:   #e8e4df;
   --msg-user-text: #0d0d0d;

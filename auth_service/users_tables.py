@@ -545,12 +545,19 @@ class DataBaseUser:
 
     async def mark_update_seen(self, user_id: int, update_id: int) -> bool:
         """Отметить, что юзер закрыл конкретное обновление (идемпотентно)."""
+        return await self.mark_updates_seen(user_id, [int(update_id)])
+
+    async def mark_updates_seen(self, user_id: int, update_ids: list[int]) -> bool:
+        """Отметить список обновлений просмотренными для пользователя (идемпотентно)."""
+        clean_ids = sorted({int(x) for x in (update_ids or []) if x is not None})
+        if not clean_ids:
+            return True
         async with self.pool.acquire() as conn:
             await conn.execute("""
                 INSERT INTO user_seen_updates (user_id, update_id)
-                VALUES ($1, $2)
+                SELECT $1, unnest($2::int[])
                 ON CONFLICT (user_id, update_id) DO NOTHING
-            """, user_id, update_id)
+            """, int(user_id), clean_ids)
             return True
 
     async def add_app_update(self, title: str, body: str,

@@ -34,6 +34,7 @@ import shlex
 import shutil
 import subprocess
 import time
+import urllib.request
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -51,7 +52,7 @@ log = logging.getLogger("sandbox")
 app = FastAPI(title="Agent Code Sandbox v3")
 
 # ── Конфиг ─────────────────────────────────────────────────────────
-MAX_CODE_SIZE = 100_000
+MAX_CODE_SIZE = 500_000
 DEFAULT_TIMEOUT = 120
 MAX_TIMEOUT = 3600
 MAX_OUTPUT_SIZE = 20_000
@@ -72,6 +73,14 @@ WORKSPACE_CLEANUP_INTERVAL = 3600
 # workspace НЕ удаляется НИКОГДА, пока файл физически лежит (полный иммунитет к TTL).
 # Имя намеренно неочевидное и переопределяемо через env.
 WORKSPACE_KEEP_MARKER = os.environ.get("WORKSPACE_KEEP_MARKER", ".ws_hold")
+
+_raw_chats_port = os.getenv("PORT_CHATS_SERVICE", "8001")
+CHATS_SERVICE_URL = os.getenv(
+    "CHATS_SERVICE_URL",
+    _raw_chats_port if str(_raw_chats_port).startswith("http") else f"http://chats_service:{_raw_chats_port}",
+).rstrip("/")
+
+_synced_hold_state: dict[str, bool] = {}
 
 KAFKA_BROKER = os.getenv("KAFKA_BROKER")
 KAFKA_TASK_EVENTS_TOPIC = "task-events"
@@ -585,6 +594,70 @@ def _has_keep_hold(ws_path: str) -> bool:
     Наличие маркера = полный иммунитет к TTL-удалению (без проверки возраста)."""
     return os.path.exists(os.path.join(ws_path, WORKSPACE_KEEP_MARKER))
 
+
+def _notify_chats_workspace_ttl_sync(
+    workspace_id: str,
+    is_permanent: Optional[bool] = None,
+    ttl_hours: Optional[int] = 10,
+    is_active: Optional[bool] = None,
+) -> bool:
+    if not workspace_id or not CHATS_SERVICE_URL:
+        return False
+    payload = {
+        "workspace_id": str(workspace_id),
+        "is_permanent": is_permanent,
+        "ttl_hours": ttl_hours,
+        "is_active": is_active,
+    }
+    try:
+        req = urllib.request.Request(
+            f"{CHATS_SERVICE_URL}/editor/workspaces/ttl",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=3.0) as resp:
+            if 200 <= resp.status < 300:
+                body = json.loads(resp.read().decode("utf-8") or "{}")
+                updated = int(body.get("updated") or 0)
+                if updated > 0:
+                    log.info(
+                        "[workspace] Синхронизирован TTL в chats_service: wid=%s permanent=%s active=%s (updated=%d)",
+                        workspace_id, is_permanent, is_active, updated,
+                    )
+                    return True
+                return is_active is False
+    except Exception as e:
+        log.warning("[workspace] Не удалось уведомить chats_service по wid=%s: %s", workspace_id, e)
+    return False
+
+
+def _sync_workspaces_hold_sync(target_workspace_id: Optional[str] = None) -> None:
+    if not os.path.isdir(WORKSPACES_DIR):
+        return
+    default_ttl_h = max(1, int(WORKSPACE_TTL_SECONDS // 3600))
+    candidates = set()
+    if target_workspace_id:
+        candidates.add(str(target_workspace_id))
+    try:
+        for entry in os.listdir(WORKSPACES_DIR):
+            candidates.add(entry)
+    except OSError:
+        pass
+
+    for wid in candidates:
+        ws_path = os.path.join(WORKSPACES_DIR, wid)
+        if not os.path.isdir(ws_path):
+            continue
+        has_hold = _has_keep_hold(ws_path)
+        prev = _synced_hold_state.get(wid)
+        if has_hold and prev is not True:
+            if _notify_chats_workspace_ttl_sync(wid, is_permanent=True, ttl_hours=None):
+                _synced_hold_state[wid] = True
+        elif not has_hold and prev is True:
+            if _notify_chats_workspace_ttl_sync(wid, is_permanent=False, ttl_hours=default_ttl_h):
+                _synced_hold_state[wid] = False
+
 def _cleanup_expired_workspaces():
     """Удаляет workspace с истёкшим TTL."""
     if not os.path.isdir(WORKSPACES_DIR):
@@ -619,6 +692,8 @@ def _cleanup_expired_workspaces():
 
             if now - ts > WORKSPACE_TTL_SECONDS:
                 shutil.rmtree(ws_path, ignore_errors=True)
+                _synced_hold_state.pop(entry, None)
+                _notify_chats_workspace_ttl_sync(entry, is_active=False)
                 removed += 1
                 log.info("[workspace] TTL-удаление %s", entry)
         except (ValueError, OSError):
@@ -637,6 +712,16 @@ async def _workspace_cleanup_loop():
                 log.info("[workspace] Очищено %d просроченных workspace", removed)
         except Exception as e:
             log.error("[workspace] Ошибка очистки: %s", e)
+
+
+async def _workspace_hold_sync_loop():
+    """Фоновый таск: отслеживает появление/удаление .ws_hold и синхронизирует с chats_service."""
+    while True:
+        await asyncio.sleep(10)
+        try:
+            await asyncio.to_thread(_sync_workspaces_hold_sync, None)
+        except Exception as e:
+            log.debug("[workspace] Ошибка синхронизации .ws_hold: %s", e)
 
 
 # ── /execute (синхронный, изолированный — как раньше) ──────────────
@@ -674,6 +759,8 @@ async def execute(req: ExecuteRequest):
         shutil.rmtree(run_dir, ignore_errors=True)
     except OSError as e:
         log.warning(f"Не удалось удалить {run_dir}: {e}")
+
+    await asyncio.to_thread(_sync_workspaces_hold_sync, req.workspace_id)
 
     return ExecuteResponse(
         ok=result.get("ok", False),
@@ -998,6 +1085,7 @@ async def _run_task_background(req: SubmitRequest):
 
     # Файлы в output/ НЕ удаляем — persistent workspace
     _touch_workspace(req.workspace_id)
+    await asyncio.to_thread(_sync_workspaces_hold_sync, req.workspace_id)
 
     # Готовим file list (без base64 — только метаданные для Kafka)
     file_list = []
@@ -1171,6 +1259,8 @@ async def delete_workspace_endpoint(workspace_id: str):
         raise HTTPException(status_code=404, detail="Workspace не найден")
 
     shutil.rmtree(ws_path, ignore_errors=True)
+    _synced_hold_state.pop(workspace_id, None)
+    await asyncio.to_thread(_notify_chats_workspace_ttl_sync, workspace_id, None, None, False)
 
     # Чистим задачи этого workspace
     to_remove = [tid for tid, t in _tasks.items() if t.get("workspace_id") == workspace_id]
@@ -1189,6 +1279,8 @@ async def keep_workspace_endpoint(workspace_id: str):
     marker = os.path.join(ws_path, WORKSPACE_KEEP_MARKER)
     with open(marker, "w") as f:
         f.write(str(time.time()))
+    if await asyncio.to_thread(_notify_chats_workspace_ttl_sync, workspace_id, True, None, True):
+        _synced_hold_state[workspace_id] = True
     return {
         "status": "kept",
         "workspace_id": workspace_id,
@@ -1206,6 +1298,9 @@ async def unkeep_workspace_endpoint(workspace_id: str):
     existed = os.path.exists(marker)
     if existed:
         os.remove(marker)
+        default_ttl_h = max(1, int(WORKSPACE_TTL_SECONDS // 3600))
+        if await asyncio.to_thread(_notify_chats_workspace_ttl_sync, workspace_id, False, default_ttl_h, True):
+            _synced_hold_state[workspace_id] = False
     return {"status": "released" if existed else "no_marker", "workspace_id": workspace_id}
 
 
@@ -1378,8 +1473,9 @@ async def startup():
     os.makedirs(WORKSPACES_DIR, exist_ok=True)
     # Kafka producer (ленивый — запустится при первом /submit)
     asyncio.create_task(get_kafka_producer())
-    # Фоновая очистка workspace
+    # Фоновая очистка workspace и синхронизация .ws_hold
     asyncio.create_task(_workspace_cleanup_loop())
+    asyncio.create_task(_workspace_hold_sync_loop())
     log.info("Sandbox v3 запущен. WORKDIR=%s KAFKA=%s", WORKDIR, KAFKA_BROKER)
 
 

@@ -17,8 +17,9 @@ import logging
 import time
 import uuid
 
+import os
 from fastapi import (APIRouter, File, Form, Header, HTTPException, Request,
-                     UploadFile)
+                     Response, UploadFile)
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -188,25 +189,135 @@ async def group_upload(
     return {"ok": True, "files": saved}
 
 
+_MEDIA_MIME_BY_EXT = {
+    "mp4": "video/mp4",
+    "m4v": "video/mp4",
+    "webm": "video/webm",
+    "mov": "video/quicktime",
+    "ogv": "video/ogg",
+    "avi": "video/x-msvideo",
+    "mkv": "video/x-matroska",
+    "mp3": "audio/mpeg",
+    "mpga": "audio/mpeg",
+    "wav": "audio/wav",
+    "wave": "audio/wav",
+    "ogg": "audio/ogg",
+    "oga": "audio/ogg",
+    "opus": "audio/ogg",
+    "m4a": "audio/mp4",
+    "aac": "audio/aac",
+    "flac": "audio/flac",
+    "weba": "audio/webm",
+    "caf": "audio/x-caf",
+    "aif": "audio/aiff",
+    "aiff": "audio/aiff",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
+    "gif": "image/gif",
+}
+_STREAM_MAX_CHUNK = 2 * 1024 * 1024  # 2 МБ (аналог sendfile_max_chunk 2m)
+
+
+def _guess_media_mime(file_name: str | None, stored_mime: str | None) -> str:
+    ext = os.path.splitext(file_name or "")[1].lower().lstrip(".")
+    if ext in _MEDIA_MIME_BY_EXT:
+        return _MEDIA_MIME_BY_EXT[ext]
+    if stored_mime and stored_mime != "application/octet-stream":
+        return stored_mime
+    return "application/octet-stream"
+
+
+def _parse_byte_range(range_header: str, total_size: int, max_chunk: int = _STREAM_MAX_CHUNK) -> tuple[int, int] | None:
+    if not range_header or not range_header.strip().lower().startswith("bytes=") or total_size <= 0:
+        return None
+    spec = range_header.strip()[6:].split(",", 1)[0].strip()
+    if "-" not in spec:
+        return None
+    start_s, end_s = spec.split("-", 1)
+    start_s, end_s = start_s.strip(), end_s.strip()
+    try:
+        if start_s == "":
+            suffix = int(end_s)
+            if suffix <= 0:
+                return None
+            start = max(0, total_size - suffix)
+            end = total_size - 1
+        else:
+            start = int(start_s)
+            if start < 0 or start >= total_size:
+                return None
+            if end_s == "":
+                end = min(start + max_chunk - 1, total_size - 1)
+            else:
+                end = min(int(end_s), total_size - 1)
+        if start > end:
+            return None
+        return start, end
+    except ValueError:
+        return None
+
+
 @router.get("/file/{file_id}")
-async def group_file(file_id: int, download: int = 0):
-    """Отдаёт файл вложения из OBS (StreamingResponse). Общий эндпоинт
-    для main и sigma — оба только скачивают."""
+async def group_file(file_id: int, request: Request, download: int = 0):
+    """Отдаёт файл вложения из OBS с поддержкой потокового HTTP Range (206 Partial Content)."""
     if group_db is None:
         raise HTTPException(status_code=503, detail="db not ready")
     rec = await group_db.get_file_by_id(file_id)
     if not rec or not rec.get("obs_key"):
         raise HTTPException(status_code=404, detail="файл не найден")
+    fname = rec.get("file_name") or "file"
+    mime = _guess_media_mime(fname, rec.get("mime_type"))
+    disposition = "attachment" if download else "inline"
+    base_headers = {
+        "Content-Disposition": _content_disposition(fname, disposition),
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "public, max-age=3600",
+    }
+    range_hdr = request.headers.get("range")
+    total_size = int(rec.get("size_bytes") or 0)
+
+    if range_hdr and not download and total_size > 0:
+        parsed = _parse_byte_range(range_hdr, total_size)
+        if parsed is None:
+            return Response(
+                status_code=416,
+                headers={**base_headers, "Content-Range": f"bytes */{total_size}"},
+            )
+        start, end = parsed
+        chunk_data, obs_total = await obs_file_storage.download_range(rec["obs_key"], start, end)
+        if chunk_data is not None:
+            actual_end = start + len(chunk_data) - 1
+            total = obs_total or total_size
+            headers = {
+                **base_headers,
+                "Content-Range": f"bytes {start}-{actual_end}/{total}",
+                "Content-Length": str(len(chunk_data)),
+            }
+            return Response(content=chunk_data, status_code=206, media_type=mime, headers=headers)
+
     data = await obs_file_storage.download_bytes(rec["obs_key"])
     if data is None:
         raise HTTPException(status_code=404, detail="файл недоступен в хранилище")
-    mime = rec.get("mime_type") or "application/octet-stream"
-    disposition = "attachment" if download else "inline"
-    headers = {
-        "Content-Disposition": _content_disposition(
-            rec.get("file_name") or "file", disposition),
-        "Cache-Control": "private, max-age=86400",
-    }
+    total_size = len(data)
+    if range_hdr and not download and total_size > 0:
+        parsed = _parse_byte_range(range_hdr, total_size)
+        if parsed is None:
+            return Response(
+                status_code=416,
+                headers={**base_headers, "Content-Range": f"bytes */{total_size}"},
+            )
+        start, end = parsed
+        sub = data[start : end + 1]
+        headers = {
+            **base_headers,
+            "Content-Range": f"bytes {start}-{start + len(sub) - 1}/{total_size}",
+            "Content-Length": str(len(sub)),
+        }
+        return Response(content=sub, status_code=206, media_type=mime, headers=headers)
+
+    headers = {**base_headers, "Content-Length": str(total_size)}
     return StreamingResponse(io.BytesIO(data), media_type=mime, headers=headers)
 
 

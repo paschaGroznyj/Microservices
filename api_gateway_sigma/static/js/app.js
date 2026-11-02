@@ -6689,6 +6689,78 @@ class ChatApp {
         }, 30000);
     }
 
+    _componentDataToMarkdown(data) {
+        if (!data || typeof data !== 'object') return '';
+        const title = String(data.title || data.question || '').trim().replace(/^["«]+|["»]+$/g, '');
+        const desc = String(data.description || data.subtitle || '').trim().replace(/^["«]+|["»]+$/g, '');
+        const lines = [];
+        if (title) lines.push(`### ${title}`);
+        if (desc) lines.push(desc);
+        return lines.join('\n');
+    }
+
+    _formatMessageForCopy(rawText) {
+        const src = String(rawText || '');
+        if (!src) return '';
+
+        const unescapeJsonStr = (s) => {
+            if (!s) return '';
+            try { return JSON.parse(`"${s}"`); } catch (_) { return s.replace(/\\"/g, '"').replace(/\\n/g, ' '); }
+        };
+
+        const replaceJsonCandidate = (candidate) => {
+            const parsed = this._tryParseComponentJson(candidate);
+            if (parsed && parsed.data) {
+                return { matched: true, md: this._componentDataToMarkdown(parsed.data) };
+            }
+            if (/"component"\s*:\s*"(?:DataTable|Chart|MetricCards|InteractivePoll|AskUserQuestion|poll|pie|bar|line|scatter|metric_cards|metrics|data_table|table)"/i.test(candidate)) {
+                const tMatch = candidate.match(/"(?:title|question)"\s*:\s*"((?:[^"\\]|\\.)*)"/i);
+                const dMatch = candidate.match(/"(?:description|subtitle)"\s*:\s*"((?:[^"\\]|\\.)*)"/i);
+                const title = tMatch ? unescapeJsonStr(tMatch[1]).trim() : '';
+                const desc = dMatch ? unescapeJsonStr(dMatch[1]).trim() : '';
+                return { matched: true, md: this._componentDataToMarkdown({ title, description: desc }) };
+            }
+            return { matched: false, md: '' };
+        };
+
+        const stripInlineComponents = (chunk) => {
+            if (!chunk) return '';
+            const inlineMatches = this._extractBalancedJsonObjects(chunk);
+            if (!inlineMatches.length) return chunk;
+            let out = '';
+            let cur = 0;
+            for (const hit of inlineMatches) {
+                out += chunk.slice(cur, hit.start);
+                const md = this._componentDataToMarkdown(hit.parsed && hit.parsed.data);
+                if (md) {
+                    if (out && !out.endsWith('\n\n')) out = out.replace(/\s*$/, '\n\n');
+                    out += md + '\n\n';
+                }
+                cur = hit.end;
+            }
+            out += chunk.slice(cur);
+            return out;
+        };
+
+        const fenceRe = /```(?:json)?\s*([\s\S]*?)```/gi;
+        let result = '';
+        let lastIdx = 0;
+        let m;
+        while ((m = fenceRe.exec(src)) !== null) {
+            const check = replaceJsonCandidate(m[1]);
+            if (check.matched) {
+                result += stripInlineComponents(src.slice(lastIdx, m.index));
+                if (check.md) {
+                    if (result && !result.endsWith('\n\n')) result = result.replace(/[ \t]*\n?$/, '\n\n');
+                    result += check.md + '\n\n';
+                }
+                lastIdx = m.index + m[0].length;
+            }
+        }
+        result += stripInlineComponents(src.slice(lastIdx));
+        return result.replace(/\n{3,}/g, '\n\n').trim();
+    }
+
     createMessageActions(messageId, messageText, isBot, meta = {}) {
         const div = document.createElement('div');
         div.className = isBot ? 'message-actions' : 'user-actions';
@@ -6709,7 +6781,7 @@ class ChatApp {
 
         copyBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
-            await navigator.clipboard.writeText(messageText);
+            await navigator.clipboard.writeText(this._formatMessageForCopy(messageText));
             const checkSVG = `<svg class="action-icon" viewBox="0 0 24 24" fill="none">
                 <path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2"
                     stroke-linecap="round" stroke-linejoin="round"/>

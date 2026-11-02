@@ -921,14 +921,21 @@ async def whatsnew_update_seen(request: Request):
 
     data = await request.json()
     update_id = data.get("update_id")
-    if update_id is None:
-        raise HTTPException(status_code=400, detail="update_id обязателен")
+    update_ids = data.get("update_ids")
+    if update_id is None and not update_ids:
+        raise HTTPException(status_code=400, detail="update_id или update_ids обязателен")
+
+    payload = {"user_id": user["user_id"]}
+    if update_id is not None:
+        payload["update_id"] = update_id
+    if isinstance(update_ids, list):
+        payload["update_ids"] = update_ids
 
     auth_url = SERVICES['auth']['url']
     try:
         response = await app.state.http_client.post(
             f"{auth_url}/whatsnew/updates/seen",
-            json={"user_id": user["user_id"], "update_id": update_id},
+            json=payload,
             timeout=10.0
         )
         return JSONResponse(content=response.json(), status_code=response.status_code)

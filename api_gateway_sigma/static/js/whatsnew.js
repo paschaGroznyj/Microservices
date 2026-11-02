@@ -702,7 +702,7 @@
   }
 
     // ── Модалка обновлений с навигацией по истории ──────────────────────────────
-    function showUpdates(updates, onSeen) {
+    function showUpdates(updates, onSeen, onSeenAll) {
       return new Promise((resolve) => {
         // Сортируем от старых к новым (устойчиво к порядку с бэка).
         const list = updates.slice().sort((a, b) => {
@@ -713,6 +713,7 @@
         });
         const total = list.length;
         let idx = total - 1;              // стартуем на самом свежем
+        let prevIdx = idx;
         const seen = new Set();           // чтобы не слать seen повторно
 
         const closeBtn = h("button", { class: "wn-close", type: "button", "aria-label": "Закрыть" }, []);
@@ -727,10 +728,67 @@
         const bodyEl  = h("div", { class: "wn-update-body" }, []);
         const scroll  = h("div", { class: "wn-scroll" }, [titleEl, bodyEl]);
 
-        // Кнопка "Предыдущие" (листать назад), "Дальше" (к более свежим), "Понятно".
-        const prevBtn = h("button", { class: "wn-btn wn-btn-secondary", type: "button" }, ["👈Предыдущие"]);
-        const fwdBtn  = h("button", { class: "wn-btn wn-btn-ghost", type: "button" }, ["Дальше👉"]);
-        const okBtn   = h("button", { class: "wn-btn wn-btn-primary", type: "button" }, ["Понятно"]);
+        // Иконочные кнопки истории без текста: каскадный SVG-шеврон + анимированный барабан-счётчик и стек точек
+        const prevBtn = h("button", {
+          class: "wn-btn wn-btn-secondary wn-nav-btn wn-nav-prev",
+          type: "button",
+          "aria-label": "Предыдущее обновление",
+          title: "Предыдущее обновление",
+        }, []);
+        const reelSlot = h("span", { class: "wn-count-reel", "aria-hidden": "true" }, [
+          h("span", { class: "wn-count-digit" }, [String(idx)]),
+        ]);
+        const prevSvgWrap = h("span", { class: "wn-nav-icon-wrap", html:
+          '<svg class="wn-nav-svg" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+            '<path class="wn-chev-echo" d="M17.5 7.5L13 12l4.5 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>' +
+            '<path class="wn-chev-main" d="M12.5 6.5L7 12l5.5 5.5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>' +
+          '</svg>'
+        }, []);
+        prevBtn.appendChild(prevSvgWrap);
+        prevBtn.appendChild(reelSlot);
+
+        const dotsWrap = h("div", { class: "wn-nav-dots", "aria-hidden": "true" },
+          list.map((_, i) => h("span", {
+            class: "wn-nav-dot" + (i === idx ? " active" : ""),
+            "data-idx": String(i),
+          }, []))
+        );
+
+        const fwdBtn = h("button", {
+          class: "wn-btn wn-btn-ghost wn-nav-btn wn-nav-next",
+          type: "button",
+          "aria-label": "Следующее обновление",
+          title: "Следующее обновление",
+          html:
+            '<span class="wn-nav-icon-wrap">' +
+              '<svg class="wn-nav-svg" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+                '<path class="wn-chev-echo" d="M6.5 7.5L11 12l-4.5 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>' +
+                '<path class="wn-chev-main" d="M11.5 6.5L17 12l-5.5 5.5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>' +
+              '</svg>' +
+            '</span>',
+        }, []);
+
+        const okBtn = h("button", { class: "wn-btn wn-btn-primary", type: "button" }, ["Понятно"]);
+
+        function animateReel(newVal, dir) {
+          const cur = reelSlot.querySelector(".wn-count-digit:last-child");
+          if (!cur || cur.textContent === String(newVal)) {
+            if (cur) cur.textContent = String(newVal);
+            return;
+          }
+          const enterCls = dir < 0 ? "wn-digit-enter-down" : "wn-digit-enter-up";
+          const exitCls  = dir < 0 ? "wn-digit-exit-down"  : "wn-digit-exit-up";
+          cur.classList.remove("wn-digit-enter-up", "wn-digit-enter-down");
+          cur.classList.add(exitCls);
+          const next = h("span", { class: "wn-count-digit " + enterCls }, [String(newVal)]);
+          reelSlot.appendChild(next);
+          reelSlot.classList.remove("wn-reel-bump");
+          void reelSlot.offsetWidth;
+          reelSlot.classList.add("wn-reel-bump");
+          setTimeout(() => {
+            if (cur.parentNode === reelSlot) reelSlot.removeChild(cur);
+          }, 280);
+        }
 
         function markSeen(i) {
           const u = list[i];
@@ -739,7 +797,22 @@
           try { onSeen && onSeen(u); } catch (e) { /* не критично */ }
         }
 
-        function render() {
+        function markAllSeen() {
+          const allIds = [];
+          for (let i = 0; i < list.length; i++) {
+            const u = list[i];
+            if (!u || u.id == null) continue;
+            allIds.push(u.id);
+            seen.add(u.id);
+          }
+          if (onSeenAll && allIds.length) {
+            try { onSeenAll(allIds); } catch (e) { /* не критично */ }
+          } else {
+            for (let i = 0; i < list.length; i++) markSeen(i);
+          }
+        }
+
+        function render(dir) {
           const u = list[idx];
           const dateStr = u.created_at
             ? new Date(u.created_at).toLocaleDateString("ru-RU",
@@ -756,24 +829,85 @@
           const htmlBody = wnRenderMarkdown(u.body || "");
           bodyEl.innerHTML = (window.DOMPurify ? window.DOMPurify.sanitize(htmlBody) : htmlBody);
 
+          if (dir) {
+            const animCls = dir < 0 ? "wn-scroll--anim-prev" : "wn-scroll--anim-next";
+            scroll.classList.remove("wn-scroll--anim-prev", "wn-scroll--anim-next");
+            void scroll.offsetWidth;
+            scroll.classList.add(animCls);
+          }
+
           // Навигация: idx==0 — самое старое, idx==total-1 — самое свежее.
           prevBtn.style.display = idx > 0 ? "" : "none";
           fwdBtn.style.display  = idx < total - 1 ? "" : "none";
+          dotsWrap.style.display = total > 1 ? "" : "none";
 
-          // Счётчик позиции, если обновлений больше одного.
-          if (total > 1) {
-            prevBtn.textContent = "👈Предыдущие (" + idx + ")";
+          // Анимация барабана числа прошлых обновлений
+          if (total > 1 && idx > 0) {
+            reelSlot.style.display = "";
+            animateReel(idx, dir || 0);
+          } else {
+            reelSlot.style.display = "none";
           }
 
+          // Обновляем точки-индикаторы (компактное скользящее окно до 5 точек)
+          const dotNodes = dotsWrap.querySelectorAll(".wn-nav-dot");
+          const isNarrow = typeof window !== "undefined" && window.innerWidth <= 430;
+          const maxVisible = isNarrow ? 4 : 5;
+          let winStart = 0;
+          let winEnd = total - 1;
+          if (total > maxVisible) {
+            const half = Math.floor(maxVisible / 2);
+            winStart = Math.max(0, Math.min(idx - half, total - maxVisible));
+            winEnd = winStart + maxVisible - 1;
+          }
+          dotNodes.forEach((dot, i) => {
+            dot.classList.toggle("active", i === idx);
+            dot.classList.toggle("passed", i > idx);
+            const visible = i >= winStart && i <= winEnd;
+            dot.style.display = visible ? "" : "none";
+            const edge = total > maxVisible && ((i === winStart && winStart > 0) || (i === winEnd && winEnd < total - 1));
+            dot.classList.toggle("far", edge);
+          });
+
+          prevIdx = idx;
           markSeen(idx);
           scroll.scrollTop = 0;
           syncThemeIcons(scroll);
         }
 
-        function done() { closeOverlay().then(resolve); }
+        function done() {
+          markAllSeen();
+          closeOverlay().then(resolve);
+        }
 
-        prevBtn.addEventListener("click", () => { if (idx > 0) { idx--; render(); } });
-        fwdBtn.addEventListener("click",  () => { if (idx < total - 1) { idx++; render(); } });
+        prevBtn.addEventListener("click", () => {
+          if (idx > 0) {
+            prevBtn.classList.remove("wn-nav-pulse");
+            void prevBtn.offsetWidth;
+            prevBtn.classList.add("wn-nav-pulse");
+            idx--;
+            render(-1);
+          }
+        });
+        fwdBtn.addEventListener("click", () => {
+          if (idx < total - 1) {
+            fwdBtn.classList.remove("wn-nav-pulse");
+            void fwdBtn.offsetWidth;
+            fwdBtn.classList.add("wn-nav-pulse");
+            idx++;
+            render(1);
+          }
+        });
+        dotsWrap.addEventListener("click", (e) => {
+          const t = e.target.closest(".wn-nav-dot");
+          if (!t) return;
+          const targetIdx = parseInt(t.getAttribute("data-idx"), 10);
+          if (!Number.isNaN(targetIdx) && targetIdx !== idx && targetIdx >= 0 && targetIdx < total) {
+            const dir = targetIdx < idx ? -1 : 1;
+            idx = targetIdx;
+            render(dir);
+          }
+        });
         okBtn.addEventListener("click", done);
         closeBtn.addEventListener("click", done);
 
@@ -781,15 +915,16 @@
           h("div", { class: "wn-topbar" }, [topInfo, closeBtn]),
           h("div", { class: "wn-stage" }, [scroll]),
           h("div", { class: "wn-footer" }, [
-            h("div", { class: "wn-footer-left" }, [prevBtn, fwdBtn]),
+            h("div", { class: "wn-footer-left" }, [prevBtn, dotsWrap, fwdBtn]),
             okBtn,
           ]),
         ]);
 
-        render();
+        render(0);
         openOverlay(card);
       });
     }
+
 
   // ── Оркестрация ────────────────────────────────────────────────────────────
   async function run() {
@@ -805,9 +940,15 @@
 
     const updates = Array.isArray(data.updates) ? data.updates : [];
     if (updates.length) {
-      await showUpdates(updates, (upd) => {
-        apiPost(API.updateSeen, { update_id: upd.id }).catch(() => {});
-      });
+      await showUpdates(
+        updates,
+        (upd) => {
+          apiPost(API.updateSeen, { update_id: upd.id }).catch(() => {});
+        },
+        (allIds) => {
+          apiPost(API.updateSeen, { update_ids: allIds }).catch(() => {});
+        }
+      );
     }
   }
 

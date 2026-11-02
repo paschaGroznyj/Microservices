@@ -439,14 +439,20 @@ async def whatsnew_demo_seen(request: Request):
 
 @app.post("/whatsnew/updates/seen")
 async def whatsnew_update_seen(request: Request):
-    """Юзер закрыл конкретное обновление — помечаем как просмотренное."""
+    """Юзер закрыл обновление(я) — помечаем как просмотренные в user_seen_updates."""
     data = await request.json()
     user_id = data.get("user_id")
     update_id = data.get("update_id")
-    if user_id is None or update_id is None:
-        raise HTTPException(status_code=400, detail="user_id и update_id обязательны")
-    await db.mark_update_seen(user_id=int(user_id), update_id=int(update_id))
-    return {"status": "ok"}
+    update_ids = data.get("update_ids")
+    ids = []
+    if isinstance(update_ids, list):
+        ids.extend(int(x) for x in update_ids if x is not None)
+    if update_id is not None:
+        ids.append(int(update_id))
+    if user_id is None or not ids:
+        raise HTTPException(status_code=400, detail="user_id и update_id/update_ids обязательны")
+    await db.mark_updates_seen(user_id=int(user_id), update_ids=ids)
+    return {"status": "ok", "seen_count": len(set(ids))}
 
 
 @app.get("/health")

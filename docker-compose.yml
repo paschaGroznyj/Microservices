@@ -313,6 +313,12 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     volumes:
       - ./api_gateway_sigma:/app
+      - ./api_gateway/static:/app/static
+      - ./api_gateway/templates:/app/templates
+      - ./api_gateway/cache_bust.py:/app/cache_bust.py
+      - ./api_gateway/config.py:/app/config.py
+      - ./api_gateway/presence.py:/app/presence.py
+      - ./api_gateway/run_status.py:/app/run_status.py
     depends_on:
       broker:
         condition: service_healthy

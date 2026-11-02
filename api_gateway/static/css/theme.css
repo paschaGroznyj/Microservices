@@ -217,3 +217,61 @@ input, textarea {
 /* В тёмной теме — показываем солнце, прячем луну */
 [data-theme="dark"] .theme-icon-sun  { display: block; }
 [data-theme="dark"] .theme-icon-moon { display: none; }
+
+
+/* ── SIGMA PILL TOGGLE ── */
+body[data-gateway="sigma"] .theme-toggle {
+  position: relative;
+  z-index: auto;
+  flex-shrink: 0;
+  width: 60px;
+  height: 30px;
+  padding: 0;
+  border-radius: 15px;
+  background: var(--btn-primary-bg);
+  border: 1px solid var(--btn-primary-bg);
+  box-shadow: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+}
+body[data-gateway="sigma"] .theme-toggle::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--btn-primary-text);
+  box-shadow: var(--shadow-sm);
+  transition: left var(--transition), background var(--transition);
+  z-index: 1;
+}
+body[data-gateway="sigma"] .theme-toggle:hover {
+  background: var(--btn-primary-bg);
+  border-color: var(--btn-primary-bg);
+  filter: brightness(1.1);
+  transform: none;
+  box-shadow: none;
+}
+body[data-gateway="sigma"] .theme-icon {
+  width: 15px;
+  height: 15px;
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--btn-primary-text);
+  opacity: .65;
+  transition: opacity var(--transition);
+  z-index: 0;
+}
+[data-theme="light"] body[data-gateway="sigma"] .theme-toggle::before { left: 3px; }
+[data-theme="light"] body[data-gateway="sigma"] .theme-icon-sun  { display: none; }
+[data-theme="light"] body[data-gateway="sigma"] .theme-icon-moon { display: block; right: 8px; left: auto; }
+[data-theme="dark"] body[data-gateway="sigma"] .theme-toggle::before { left: 33px; }
+[data-theme="dark"] body[data-gateway="sigma"] .theme-icon-sun  { display: block; left: 8px; right: auto; }
+[data-theme="dark"] body[data-gateway="sigma"] .theme-icon-moon { display: none; }

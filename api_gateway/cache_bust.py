@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -10,6 +11,7 @@ from fastapi.templating import Jinja2Templates
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 TEMPLATES_DIR = BASE_DIR / "templates"
+IS_SIGMA_GATEWAY = (BASE_DIR / "sigma_status_store.py").exists() or os.getenv("GATEWAY_FLAVOR", "").lower() == "sigma"
 
 _FILE_HASH_CACHE: dict[str, tuple[int, int, str]] = {}
 _BUILD_ID_CACHE: dict[str, object] = {"ts": 0.0, "sig": None, "build_id": "init"}
@@ -101,6 +103,9 @@ def inject_cache_bust_html(html: str) -> str:
             rel_url = f"/static/js/{jf.name}"
             ver = _file_version(rel_url)
             imports_map[rel_url] = f"{rel_url}?v={ver}"
+        if IS_SIGMA_GATEWAY and (js_dir / "app_sigma.js").exists():
+            sigma_ver = _file_version("/static/js/app_sigma.js")
+            imports_map["/static/js/app.js"] = f"/static/js/app_sigma.js?v={sigma_ver}"
 
     meta_and_map = (
         f'\n    <meta name="app-build-id" content="{build_id}">'
@@ -114,6 +119,10 @@ def inject_cache_bust_html(html: str) -> str:
 
 class CacheBustTemplates(Jinja2Templates):
     def TemplateResponse(self, *args, **kwargs):
+        if len(args) >= 2 and isinstance(args[1], dict):
+            args[1].setdefault("is_sigma", IS_SIGMA_GATEWAY)
+        elif isinstance(kwargs.get("context"), dict):
+            kwargs["context"].setdefault("is_sigma", IS_SIGMA_GATEWAY)
         resp = super().TemplateResponse(*args, **kwargs)
         try:
             raw = bytes(resp.body).decode("utf-8")

@@ -6,11 +6,13 @@
 ============================================================ */
 (function () {
   const ROOM_UID = 'global';
+  const IS_SIGMA = () => document.body?.dataset?.gateway === 'sigma' || /(?:^|\.)cds\./i.test(location.hostname) || /sigma/i.test(location.hostname);
   const COLLAPSE_MAX = 240; // px — порог сворачивания длинных сообщений (как у user-message)
 
   const GroupChat = {
     app: null,
     ws: null,
+    es: null,
     opened: false,
     userId: null,
     username: null,
@@ -307,6 +309,10 @@
               try { this.ws.onclose = null; this.ws.close(); } catch (_) {}
               this.ws = null;
             }
+            if (this.es) {
+              try { this.es.close(); } catch (_) {}
+              this.es = null;
+            }
           }, 45000);
         } else if (document.visibilityState === 'visible') {
           clearTimeout(this._hiddenSuspendTimer);
@@ -376,7 +382,7 @@
 
     async _probeAndReconnect() {
       if (window.__authSessionExpired || document.visibilityState === 'hidden') return;
-      if (this.ws && (this.ws.readyState === 0 || this.ws.readyState === 1)) return;
+      if (IS_SIGMA() ? (this.es && this.es.readyState !== 2) : (this.ws && (this.ws.readyState === 0 || this.ws.readyState === 1))) return;
       try {
         const r = await fetch('/api/presence/count', {
           credentials: 'same-origin',
@@ -399,6 +405,7 @@
     },
 
     _connectWs() {
+      if (IS_SIGMA()) return this._connectSse();
       if (window.__authSessionExpired || document.visibilityState === 'hidden') return;
       if (this.ws && (this.ws.readyState === 0 || this.ws.readyState === 1)) return;
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -415,6 +422,28 @@
       };
       this.ws.onclose = () => {
         this.ws = null;
+        this._scheduleReconnect();
+      };
+    },
+
+    _connectSse() {
+      if (window.__authSessionExpired || document.visibilityState === 'hidden') return;
+      if (this.es && this.es.readyState !== 2) return;
+      if (this.es) { try { this.es.close(); } catch (e) {} this.es = null; }
+      try {
+        this.es = new EventSource(`/api/group/${ROOM_UID}/stream`, { withCredentials: true });
+      } catch (e) { return; }
+      this.es.onopen = () => {
+        this._reconnectAttempts = 0;
+      };
+      this.es.addEventListener('group', (ev) => {
+        this._reconnectAttempts = 0;
+        let data; try { data = JSON.parse(ev.data); } catch { return; }
+        this._onEvent(data);
+      });
+      this.es.onerror = () => {
+        try { this.es.close(); } catch (e) {}
+        this.es = null;
         this._scheduleReconnect();
       };
     },

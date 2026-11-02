@@ -50,7 +50,7 @@ def make_manage_trigger_tool(agent, chat_id: str, user_id):
         addressed: bool = False,
     ) -> str:
         """
-        Scheduler for your own delayed launches (Telegram triggers).
+        Scheduler for your own delayed launches (Telegram and MAX triggers).
         Allows you to SCHEDULE a future action in this chat yourself: the listener
         checks the time in Moscow every minute and, at the right moment, will wake you up
         with the text from the prompt field — you will complete it as a task and write in the chat.
@@ -89,12 +89,20 @@ def make_manage_trigger_tool(agent, chat_id: str, user_id):
         """
         try:
             act = (action or "").strip().lower()
+            
+            # Физический ID чата и мессенджер
+            target_chat_id = str(agent._ctx_get("tg_chat_id") or chat_id)
+            gateway = str(agent._ctx_get("gateway_target") or "main").lower()
+            is_max = (gateway == "max")
 
             # текущее время МСК
             now_msk = datetime.now(_MSK) if _MSK else datetime.utcnow()
 
             if act == "list":
-                rows = await agent.db.list_tg_triggers(str(chat_id))
+                if is_max:
+                    rows = await agent.db.list_max_triggers(target_chat_id)
+                else:
+                    rows = await agent.db.list_tg_triggers(target_chat_id)
                 if not rows:
                     return "Активных триггеров нет."
                 lines = []
@@ -112,7 +120,10 @@ def make_manage_trigger_tool(agent, chat_id: str, user_id):
             if act == "cancel":
                 if not trigger_id:
                     return "Для cancel нужен trigger_id (см. action=list)."
-                ok = await agent.db.deactivate_tg_trigger(int(trigger_id), str(chat_id))
+                if is_max:
+                    ok = await agent.db.deactivate_max_trigger(int(trigger_id), target_chat_id)
+                else:
+                    ok = await agent.db.deactivate_tg_trigger(int(trigger_id), target_chat_id)
                 return f"Триггер #{trigger_id} отменён." if ok else f"Триггер #{trigger_id} не найден в этом чате."
 
             if act == "create":
@@ -144,9 +155,19 @@ def make_manage_trigger_tool(agent, chat_id: str, user_id):
                         if not dow:
                             return "days_of_week: допустимы только числа 1..7 (1=пн..7=вс)."
 
-                row = await agent.db.create_tg_trigger(
-                    chat_id=str(chat_id),
-                    added_by_user_id=int(user_id) if user_id else None,
+                if is_max:
+                    row = await agent.db.create_max_trigger(
+                        chat_id=target_chat_id,
+                        added_by_user_id=int(user_id) if user_id else None,
+                        kind=k, time_msk=time_msk,
+                        title=(title or None), days_of_week=dow,
+                        trigger_date=td, prompt=prompt.strip(),
+                        addressed=bool(addressed),
+                    )
+                else:
+                    row = await agent.db.create_tg_trigger(
+                        chat_id=target_chat_id,
+                        added_by_user_id=int(user_id) if user_id else None,
                     kind=k, time_msk=time_msk,
                     title=(title or None), days_of_week=dow,
                     trigger_date=td, prompt=prompt.strip(),

@@ -208,10 +208,30 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
         else:
             message = build_tg_prefix(username, chat_id, _chat_type) + text
     elif is_max:
-        # Источник MAX: простая шапка (без CatchPM/табельного, по аналогии с TG).
-        from agent.max.max_integration import build_max_prefix
-        _chat_type_max = "group" if str(chat_id).startswith("-") else "private"
-        message = build_max_prefix(username, chat_id, _chat_type_max) + text
+        from agent.max.max_integration import (
+            build_max_prefix, build_initiation_prompt,
+            build_sad_followup_prompt, build_custom_trigger_prompt,
+        )
+        _chat_type_max = "group" if str(deliver_chat_id or chat_id).startswith("-") else "private"
+        _preset_slots = {"breakfast", "lunch", "dinner", "morning"}
+        if tg_initiated:
+            if tg_slot == "reaction" and tg_custom_prompt:
+                message = tg_custom_prompt
+            elif tg_sad:
+                message = build_sad_followup_prompt(tg_target_username)
+            elif (tg_custom_prompt and tg_custom_prompt.strip()) or (tg_slot in _preset_slots):
+                message = build_custom_trigger_prompt(
+                    tg_custom_prompt or "", tg_target_username,
+                    chat_type=_chat_type_max, addressed=tg_addressed,
+                    preset_key=tg_slot,
+                )
+            else:
+                message = build_initiation_prompt(
+                    tg_slot or "poke", tg_target_username,
+                    chat_type=_chat_type_max, addressed=tg_addressed,
+                )
+        else:
+            message = build_max_prefix(username, deliver_chat_id or chat_id, _chat_type_max) + text
     elif loop_tick:
         # Самоцикл: служебный тик. Текст уже содержит установку (из consumer).
         # Даём спец-шапку вместо табельного (tb_name/username у сервиса пустые).

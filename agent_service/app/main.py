@@ -616,33 +616,6 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             active_tasks.pop(request_id, None)
 
 
-async def _process_service_message(message_id: int, enriched_text: str):
-    """Обрабатывает сообщение сервиса в фоне, пишет ответ в service_chats."""
-    try:
-        await _db.update_service_status(message_id)
- 
-        result = await _agent.process_query(
-            user_input=enriched_text,
-            request_id=None,
-            user_id=None,           # нет пользователя — это сервис
-            chat_id=None,
-            database=_db,
-            source="service",
-        )
-        reply = result.get("message", "Агент не вернул ответ.")
-        status = "done"
- 
-    except Exception as e:
-        logging.error("Ошибка обработки service message id=%s: %s", message_id, e, exc_info=True)
-        reply  = f"Ошибка агента: {e}"
-        status = "error"
- 
-    async with _db.pool.acquire() as conn:
-        await conn.execute(_SQL_UPDATE_DONE, reply, status, message_id)
- 
-    logging.info("service_chats id=%s → status=%s | %.60s", message_id, status, reply)
-
-
 async def kafka_consumer():
     global consumer_alive
 
@@ -740,7 +713,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 tg_router = APIRouter(prefix="/api/tg", tags=["telegram"])
-service_router = APIRouter(prefix="/service", tags=["service"])
 
 
 
@@ -768,16 +740,6 @@ class TgMessageResponse(BaseModel):
 
 class ParsingMessage(BaseModel):
     status: str
-
-class ServiceMessageRequest(BaseModel):
-    service_name: str           # "parsers_service"
-    service_port: Optional[int] = None   # 8003
-    message: str                # текст команды для агента
- 
- 
-class ServiceMessageResponse(BaseModel):
-    status: str                 # "accepted"
-    message_id: int             # ID записи в service_chats
 
 _agent = None
 _db    = None

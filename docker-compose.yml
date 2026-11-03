@@ -5,9 +5,8 @@ services:
     ports:
       - "127.0.0.1:9092:9092"
       - "127.0.0.1:9093:9093"
-      - "9094:9094"
-    mem_limit: 1g
-    memswap_limit: 1g
+    mem_limit: 2g
+    memswap_limit: 2g
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -22,12 +21,12 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_NUM_PARTITIONS: 3
-      KAFKA_HEAP_OPTS: "-Xmx512m -Xms128m"
+      KAFKA_HEAP_OPTS: "-Xmx1g -Xms512m"
       KAFKA_LOG_RETENTION_HOURS: 6
       KAFKA_LOG_RETENTION_BYTES: 1073741824
 
-      KAFKA_MESSAGE_MAX_BYTES: 10485760
-      KAFKA_REPLICA_FETCH_MAX_BYTES: 10485760
+      KAFKA_MESSAGE_MAX_BYTES: 5242880
+      KAFKA_REPLICA_FETCH_MAX_BYTES: 5242880
     volumes:
       - kafka-data:/var/lib/kafka/data
 
@@ -47,7 +46,7 @@ services:
     build: ./agent_service
     container_name: agent_service
     ports:
-      - "9001:9001"
+      - "127.0.0.1:9001:9001"
     depends_on:
       broker:
         condition: service_healthy
@@ -201,29 +200,14 @@ services:
    build: ./parsers_service
    container_name: parsers_service
    ports:
-     - "8003:8003"
+     - "127.0.0.1:8003:8003"
+   init: true
    environment:
      PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
-     PORT_PM_AGENT: ${PORT_PM_AGENT}
-     STORAGE_PATH: ${STORAGE_PATH}
-     SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES}
-     SYNC_INTERVAL_SCHEDULER: ${SYNC_INTERVAL_SCHEDULER}
-     ARTICLES_FOLDER: ${ARTICLES_FOLDER}
-     METADATA_FOLDER: ${METADATA_FOLDER}
-
-     OBS_BUCKET: ${OBS_BUCKET}
-     OBS_ACCESS_KEY: ${OBS_ACCESS_KEY}
-     OBS_SECRET_KEY: ${OBS_SECRET_KEY}
-     OBS_REGION: ${OBS_REGION}
-     OBS_ENDPOINT: ${OBS_ENDPOINT}
-
-     DB_HOST: ${DB_HOST}
-     DB_PORT: ${DB_PORT}
-     DB_USER: ${DB_USER}
-     DB_PASSWORD: ${DB_PASSWORD}
-     DB_NAME: ${DB_NAME}
-
-     SCRAPINGDOG_API_KEY: ${SCRAPINGDOG_API_KEY} # Мой ключ по умолчанию для всех
+   deploy:
+    resources:
+      limits:
+        memory: 4.0g
    depends_on:
     - postgres
    volumes:
@@ -257,7 +241,7 @@ services:
     container_name: searxng
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - ./searxng:/etc/searxng
     depends_on:
@@ -270,7 +254,7 @@ services:
     build: ./api_gateway
     container_name: api_gateway
     ports:
-      - "7000:7000"
+      - "127.0.0.1:7000:7000"
     environment:
       PORT_AUTH_SERVICE: ${PORT_AUTH_SERVICE}
       PORT_CHATS_SERVICE: ${PORT_CHATS_SERVICE}
@@ -292,15 +276,12 @@ services:
       - catchPM
 
   # SIGMA-фронт: копия gateway без WebSocket и без загрузки файлов.
-  # Обратный канал агент→фронт заменён на GET-polling + собственный
-  # Kafka-consumer (group_id=sigma-gateway-group). Kafka общая с основным
-  # gateway. Порт 7010 (nginx на хосте настраивается отдельно).
   gateway_sigma:
     build: ./api_gateway_sigma
     container_name: api_gateway_sigma
     command: uvicorn app:app --host 0.0.0.0 --port 7010 --reload
     ports:
-      - "7010:7010"
+      - "127.0.0.1:7010:7010"
     environment:
       PORT_AUTH_SERVICE: ${PORT_AUTH_SERVICE}
       PORT_CHATS_SERVICE: ${PORT_CHATS_SERVICE}
@@ -309,7 +290,6 @@ services:
       PORT_PARSERS_SERVICE: ${PORT_PARSERS_SERVICE}
       SECRET_KEY: ${SECRET_KEY}
       ALGORITHM: ${ALGORITHM}
-      KAFKA_BROKER: ${KAFKA_BROKER}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     volumes:
       - ./api_gateway_sigma:/app
@@ -326,10 +306,9 @@ services:
     build: ./auth_service
     container_name: auth_service
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
         PORT_AUTH_SERVICE: ${PORT_AUTH_SERVICE}
-        PORT_PM_AGENT: ${PORT_PM_AGENT}
         SECRET_KEY: ${SECRET_KEY}
         ALGORITHM: ${ALGORITHM}
         DB_HOST: ${DB_HOST}
@@ -346,16 +325,6 @@ services:
     restart: unless-stopped
     networks:
       - catchPM
-
-  # postgres_old:
-  #     image: postgres:15
-  #     container_name: postgres
-  #     environment:
-  #       POSTGRES_DB: ${DB_NAME}           # Особенность Postgres
-  #       POSTGRES_USER: ${DB_USER}
-  #       POSTGRES_PASSWORD: ${DB_PASSWORD}
-  #     ports:
-  #       - "5433:5432"
   
   postgres:
     image: pgvector/pgvector:pg15
@@ -410,13 +379,6 @@ services:
       retries: 10
       start_period: 10s # Даем время на первый запуск и инициализацию
     
-    command: >
-      postgres
-      -c wal_level=replica
-      -c archive_mode=on
-      -c archive_command='test ! -f /var/lib/postgresql/wal_archive/%f && cp %p /var/lib/postgresql/wal_archive/%f'
-      -c max_wal_size=2GB
-      -c min_wal_size=500MB
     networks:
       - catchPM
 
@@ -425,7 +387,7 @@ services:
     build: ./chats_service
     command: uvicorn app.app:app --host 0.0.0.0 --port 8001
     ports:
-      - "8001:8001"
+      - "127.0.0.1:8001:8001"
     environment:
       PORT_CHATS_SERVICE: ${PORT_CHATS_SERVICE}
       PORT_GATEWAY_PORT: ${PORT_GATEWAY_PORT}
@@ -525,6 +487,7 @@ services:
     build: ./agent_sandbox
     container_name: agent_sandbox
     read_only: true
+    init: true
     depends_on:
       - broker
     ports:
@@ -569,7 +532,7 @@ services:
   sandbox_dind:
     image: docker:24-dind
     container_name: sandbox_dind
-    privileged: true 
+    privileged: true
     environment:
       - DOCKER_TLS_CERTDIR=
     networks:

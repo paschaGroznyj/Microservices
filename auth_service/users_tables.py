@@ -505,6 +505,22 @@ class DataBaseUser:
                      (по возрастанию created_at — показываем от старых к новым).
         """
         async with self.pool.acquire() as conn:
+            # --- MOCK для тестового юзера 56: всегда демо + все published-обновления ---
+            if user_id == 56:
+                rows = await conn.fetch("""
+                    SELECT au.id, au.version, au.title, au.body, au.created_at
+                    FROM app_updates au
+                    WHERE au.is_published = TRUE
+                    ORDER BY au.created_at ASC, au.id ASC
+                """)
+                updates = []
+                for r in rows:
+                    item = dict(r)
+                    if item.get("created_at"):
+                        item["created_at"] = item["created_at"].isoformat()
+                    updates.append(item)
+                return {"demo": True, "updates": updates}
+            # --- конец MOCK ---
             demo_seen = await conn.fetchval("""
                 SELECT demo_seen FROM user_onboarding WHERE user_id = $1
             """, user_id)

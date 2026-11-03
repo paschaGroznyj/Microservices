@@ -23,7 +23,7 @@ from config import (
     PORT_AUTH_SERVICE, PORT_CHATS_SERVICE,
     PORT_CRB_SERVICE, SECRET_KEY, ALGORITHM,
     PORT_GATEWAY_PORT, PORT_PARSERS_SERVICE,
-    ADMIN_USERNAMES, KAFKA_BROKER
+    ADMIN_USERNAMES
 )
 
 from sigma_status_store import status_store
@@ -85,25 +85,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="API Gateway SIGMA", lifespan=lifespan)
 # app = FastAPI(title="API Gateway", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
-# Service Discovery
-# SERVICES = {
-#     "auth": {
-#         "url": f"http://auth_service:{PORT_AUTH_SERVICE}",
-#         "health_endpoint": "/health",
-#     },
-#     "chats": {
-#         "url": f"http://chats_service:{PORT_CHATS_SERVICE}",
-#         "health_endpoint": "/health",
-#     },
-#     "parsers": {
-#              "url": f"http://parsers_service:{PORT_PARSERS_SERVICE}",
-#              "health_endpoint": "/health",
-#          },
-#     "agent_service": {
-#         "url": f"http://agent_service:{PORT_LLM_CONSUMER}",
-#         "health_endpoint": "/health",
-#     }
-# }
 
 SERVICES = {
     "auth": {
@@ -2544,13 +2525,3 @@ async def status_page(request: Request):
         "timestamp": datetime.now()
     })
 
-
-# if __name__ == "__main__":
-#     import uvicorn
-#
-#     uvicorn.run(
-#         "api_gateway.app:app",
-#         host="127.0.0.1",
-#         port=int(PORT_GATEWAY_PORT),
-#         reload=True
-#     )

@@ -957,52 +957,8 @@ async def tg_transcribe(req: TgTranscribeRequest) -> TgTranscribeResponse:
         return TgTranscribeResponse(error=str(e)[:300])
 
 
-@service_router.post("/message", response_model=ServiceMessageResponse, status_code=202)
-async def handle_service_message(req: ServiceMessageRequest):
-    """
-    Принимает команду от внешнего сервиса, сохраняет в service_chats,
-    запускает обработку агентом в фоне и сразу возвращает 202 Accepted.
- 
-    Пример тела от parsers_service:
-        {
-          "service_name": "parsers_service",
-          "service_port": 8003,
-          "message": "Я сервис парсинга на порту 8003, подготовил для тебя 42 новые статьи.
-                      Посмотри papers_metadata и отбери релевантные (is_relevant IS NULL).
-                      Для каждой проставь is_relevant=true/false и relevance_score."
-        }
-    """
-    if _agent is None:
-        raise HTTPException(status_code=503, detail="Agent not initialized")
- 
-    # 1. Записываем входящее сообщение в service_chats
-    row = await _db.add_service_message(req.service_name, req.service_port, req.message)
-    message_id = row["id"]
- 
-    log.info(
-        "service_chats: новое сообщение id=%s от %s:%s | %.80s",
-        message_id, req.service_name, req.service_port, req.message,
-    )
- 
-    # 2. Обогащаем текст для агента
-    enriched = (
-        f"[SERVICE | from={req.service_name} port={req.service_port} "
-        f"msg_id={message_id}]\n{req.message}"
-    )
- 
-    # 3. Fire-and-forget — сразу возвращаем 202
-    task = asyncio.create_task(_process_service_message(message_id, enriched))
- 
-    def _on_done(t: asyncio.Task):
-        if t.exception():
-            log.error("_process_service_message упал: %s", t.exception())
- 
-    task.add_done_callback(_on_done)
- 
-    return ServiceMessageResponse(status="accepted", message_id=message_id)
 
-
-routers = [tg_router, service_router, web_router]
+routers = [tg_router, web_router]
 
 for rout in routers:
     app.include_router(rout)

@@ -277,7 +277,18 @@
     ttlTimer = setInterval(refreshTtl, 60000);
   }
 
-  function iconFor(node) { return node.type === "dir" ? "📁" : "📄"; }
+  const CHEV = '<svg class="ed-chev" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3l3 3-3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const IC_DIR = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true"><path d="M2 4.5A1.2 1.2 0 0 1 3.2 3.3h2.6l1.3 1.4h5.7A1.2 1.2 0 0 1 14 5.9v5.9a1.2 1.2 0 0 1-1.2 1.2H3.2A1.2 1.2 0 0 1 2 11.8z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>';
+  const IC_FILE = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true"><path d="M4 2.5h5l3 3v8H4z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M9 2.5v3h3" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>';
+  const IC_IMG = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="1.5" stroke="currentColor" stroke-width="1.2"/><circle cx="6" cy="6.5" r="1.1" fill="currentColor"/><path d="M3 11.5l3.2-3 2.3 2 1.8-1.5 2.7 2.5" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>';
+  const IC_CODE = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true"><path d="M6 5L3 8l3 3M10 5l3 3-3 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const CODE_EXT = new Set(["py","js","ts","tsx","jsx","html","htm","css","json","sh","sql","go","rs","java","c","cpp","h","rb","php","yml","yaml","xml","vue"]);
+  function iconFor(node) {
+    if (node.type === "dir") return CHEV + IC_DIR;
+    const e = String(node.name || "").split(".").pop().toLowerCase();
+    const ic = ["png","jpg","jpeg","gif","webp","svg","bmp","ico","avif"].includes(e) ? IC_IMG : (CODE_EXT.has(e) ? IC_CODE : IC_FILE);
+    return '<span class="ed-chev-sp"></span>' + ic;
+  }
 
   let activeCtxMenu = null;
   function closeTreeContextMenu() {
@@ -403,6 +414,7 @@
           e.stopPropagation();
           if (!built) { renderTree(node.children || [], kids); built = true; }
           kids.style.display = kids.style.display === "none" ? "" : "none";
+          row.classList.toggle("open", kids.style.display !== "none");
         });
       } else {
         row.addEventListener("click", (e) => {
@@ -437,11 +449,17 @@
       const lang = guessLang(path);
       if (editor) {
         const model = monacoRef.editor.createModel(currentContent, lang);
+        const prevModel = editor.getModel();
         editor.setModel(model);
+        if (prevModel && prevModel !== model) prevModel.dispose();
         editor.updateOptions({ readOnly: isBinary });
-        model.onDidChangeContent(() => setDirty(editor.getValue() !== currentContent));
+        model.onDidChangeContent(() => {
+          setDirty(editor.getValue() !== currentContent);
+          if (previewOn) schedulePreview();
+        });
       }
       setDirty(false);
+      onFileOpened();
     } catch (e) {
       filenameEl.textContent = `Ошибка: ${e.message}`;
     }
@@ -484,14 +502,131 @@
     return map[ext] || "plaintext";
   }
 
-  // ── Monaco init ──────────────────────────────────────
-  require.config({ paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs" } });
-  require(["vs/editor/editor.main"], () => {
+  // ── Monaco: локальная копия + тема из токенов приложения ──
+  const MONACO_BASE = "/static/js/vendor/monaco/vs";
+  require.config({ paths: { vs: MONACO_BASE } });
+  // Воркеры Monaco (html/css/json/ts) грузятся с того же origin; абсолютный baseUrl нужен,
+  // иначе importScripts внутри воркера не разрешает относительный путь /static/...
+  window.MonacoEnvironment = {
+    getWorkerUrl() {
+      const base = `${location.origin}/static/js/vendor/monaco/`;
+      const src = `self.MonacoEnvironment={baseUrl:${JSON.stringify(base)}};importScripts(${JSON.stringify(base + "vs/base/worker/workerMain.js")});`;
+      return `data:text/javascript;charset=utf-8,${encodeURIComponent(src)}`;
+    },
+  };
+
+  function cssVar(name, fallback = "") {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback;
+  }
+  const _colorCtx = document.createElement("canvas").getContext("2d");
+  function toHex(color, fallback = "#000000") {
+    try {
+      _colorCtx.fillStyle = fallback;
+      _colorCtx.fillStyle = color || fallback;
+      const v = _colorCtx.fillStyle;
+      return /^#[0-9a-f]{6}$/i.test(v) ? v : fallback;
+    } catch (_) { return fallback; }
+  }
+  function isDarkTheme() {
+    return document.documentElement.getAttribute("data-theme") === "dark";
+  }
+  function applyMonacoTheme() {
+    if (!monacoRef) return;
+    const dark = isDarkTheme();
+    const bg = toHex(cssVar("--bg"), dark ? "#0d0d0d" : "#faf9f7");
+    const surface = toHex(cssVar("--surface"), dark ? "#141414" : "#ffffff");
+    const surface2 = toHex(cssVar("--surface2"), dark ? "#1a1a1a" : "#f3f1ee");
+    const border = toHex(cssVar("--border"), dark ? "#2a2a2a" : "#e0dbd4");
+    const text = toHex(cssVar("--text-primary"), dark ? "#e8e4df" : "#1a1612");
+    const secondary = toHex(cssVar("--text-secondary"), dark ? "#8a8580" : "#5c5650");
+    const muted = toHex(cssVar("--text-muted"), dark ? "#555555" : "#9e9890");
+    const accent = toHex(cssVar("--accent"), dark ? "#cc785c" : "#8b4513");
+    const h = (c) => c.slice(1);
+    monacoRef.editor.defineTheme("augent", {
+      base: dark ? "vs-dark" : "vs",
+      inherit: true,
+      rules: [
+        { token: "comment", foreground: dark ? "7d776f" : h(muted), fontStyle: "italic" },
+        { token: "keyword", foreground: h(accent) },
+        { token: "string", foreground: dark ? "a8c69f" : "3f7d3a" },
+        { token: "number", foreground: dark ? "d7a96b" : "a35a00" },
+        { token: "type", foreground: dark ? "8fb8de" : "2c5d8f" },
+        { token: "tag", foreground: h(accent) },
+        { token: "attribute.name", foreground: dark ? "8fb8de" : "2c5d8f" },
+      ],
+      colors: {
+        "editor.background": bg,
+        "editor.foreground": text,
+        "editorGutter.background": bg,
+        "minimap.background": bg,
+        "editorLineNumber.foreground": muted,
+        "editorLineNumber.activeForeground": secondary,
+        "editorCursor.foreground": accent,
+        "editor.selectionBackground": accent + "40",
+        "editor.inactiveSelectionBackground": accent + "22",
+        "editor.selectionHighlightBackground": accent + "1c",
+        "editor.lineHighlightBackground": surface2 + (dark ? "99" : "cc"),
+        "editor.lineHighlightBorder": "#00000000",
+        "editorIndentGuide.background1": border,
+        "editorIndentGuide.activeBackground1": muted,
+        "editorWhitespace.foreground": border,
+        "editorBracketMatch.background": accent + "18",
+        "editorBracketMatch.border": accent + "88",
+        "editorWidget.background": surface,
+        "editorWidget.border": border,
+        "editorSuggestWidget.background": surface,
+        "editorSuggestWidget.border": border,
+        "editorSuggestWidget.selectedBackground": surface2,
+        "editorHoverWidget.background": surface,
+        "editorHoverWidget.border": border,
+        "editorStickyScroll.background": bg,
+        "menu.background": surface,
+        "menu.foreground": text,
+        "menu.selectionBackground": surface2,
+        "menu.selectionForeground": text,
+        "menu.separatorBackground": border,
+        "menu.border": border,
+        "input.background": surface,
+        "input.border": border,
+        "focusBorder": accent + "88",
+        "scrollbarSlider.background": muted + "44",
+        "scrollbarSlider.hoverBackground": muted + "77",
+        "scrollbarSlider.activeBackground": muted + "99",
+      },
+    });
+    monacoRef.editor.setTheme("augent");
+  }
+  new MutationObserver(() => {
+    applyMonacoTheme();
+    onThemeChangedPreview();
+  }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+  function bootMonaco(cb) {
+    // русская локализация Monaco должна загрузиться раньше editor.main
+    require(["vs/nls.messages.ru"], () => require(["vs/editor/editor.main"], cb),
+            () => require(["vs/editor/editor.main"], cb));
+  }
+  bootMonaco(() => {
     monacoRef = window.monaco;
+    applyMonacoTheme();
     editor = monacoRef.editor.create($("ed-editor"), {
-      value: "// Выберите файл в дереве слева",
+      value: isMobileViewport() ? "// Откройте файл: кнопка с папкой в шапке" : "// Выберите файл в дереве слева (Ctrl+B — показать/скрыть)",
+      overviewRulerBorder: false,
       language: "plaintext",
-      theme: "vs-dark",
+      theme: "augent",
+      fontFamily: cssVar("--font-mono", "monospace"),
+      fontSize: 13,
+      lineHeight: 20,
+      padding: { top: 10, bottom: 10 },
+      smoothScrolling: true,
+      cursorSmoothCaretAnimation: "on",
+      bracketPairColorization: { enabled: true },
+      guides: { bracketPairs: true, indentation: true },
+      stickyScroll: { enabled: true },
+      scrollBeyondLastLine: false,
+      renderLineHighlight: "all",
+      scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
       readOnly: true,
       automaticLayout: true,
       minimap: { enabled: !isMobileViewport() },
@@ -524,7 +659,157 @@
       },
     });
 
+    const runCmdOnEditor = (cmdName) => {
+      const sel = editor.getSelection();
+      const model = editor.getModel();
+      if (sel && !sel.isEmpty()) {
+        pendingSelection = { text: model.getValueInRange(sel), startLine: sel.startLineNumber, endLine: sel.endLineNumber };
+        updateSelectionHint();
+      }
+      if (layoutEl?.classList.contains("ai-collapsed")) applyAiCollapsed(false);
+      runSlashCommand(cmdName, "");
+    };
+    [["tests", "Агент: написать тесты"], ["explain", "Агент: объяснить код"],
+     ["review", "Агент: код-ревью"], ["refactor", "Агент: рефакторинг"], ["docs", "Агент: добавить документацию"]]
+      .forEach(([name, label], i) => {
+        editor.addAction({ id: `ed-cmd-${name}`, label, contextMenuGroupId: "navigation", contextMenuOrder: 0.1 + i * 0.01, run: () => runCmdOnEditor(name) });
+      });
+
     loadWorkspaces();
+  });
+
+  // ── Превью файлов (HTML / Markdown / SVG / картинки / CSV) ──
+  const workareaEl = $("ed-workarea");
+  const previewEl = $("ed-preview");
+  const previewBtn = $("ed-preview-toggle");
+  const KEY_PREVIEW = "catchpm:ed-preview";
+  const IMG_EXT = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "avif"]);
+  let previewOn = false, previewTimer = null, previewBlobUrl = null;
+
+  function fileExt(p) {
+    const n = String(p || "").split("/").pop().toLowerCase();
+    return n.includes(".") ? n.split(".").pop() : n;
+  }
+  function previewKind(p) {
+    if (!p) return null;
+    const e = fileExt(p);
+    if (e === "html" || e === "htm") return "html";
+    if (e === "md" || e === "markdown") return "md";
+    if (e === "svg") return "svg";
+    if (IMG_EXT.has(e)) return "image";
+    if (e === "csv" || e === "tsv") return "csv";
+    return null;
+  }
+  function revokePreviewBlob() {
+    if (previewBlobUrl) { try { URL.revokeObjectURL(previewBlobUrl); } catch (_) {} previewBlobUrl = null; }
+  }
+  function currentText() { return editor && !isBinary ? editor.getValue() : currentContent; }
+  function rawFileUrl() {
+    return `/api/editor/download?workspace_id=${encodeURIComponent(currentWs || "")}&path=${encodeURIComponent(currentPath || "")}`;
+  }
+  function parseDelimited(text, delim, maxRows) {
+    const rows = []; let row = [], cell = "", q = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (q) {
+        if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; }
+        else cell += ch;
+      } else if (ch === '"') q = true;
+      else if (ch === delim) { row.push(cell); cell = ""; }
+      else if (ch === "\n" || ch === "\r") {
+        if (ch === "\r" && text[i + 1] === "\n") i++;
+        row.push(cell); cell = ""; rows.push(row); row = [];
+        if (rows.length >= maxRows) return { rows, truncated: true };
+      } else cell += ch;
+    }
+    if (cell || row.length) { row.push(cell); rows.push(row); }
+    return { rows, truncated: false };
+  }
+  function renderPreview() {
+    if (!previewOn || !currentPath || !previewEl) return;
+    const kind = previewKind(currentPath);
+    revokePreviewBlob();
+    if (kind === "html") {
+      let frame = previewEl.querySelector("iframe.ed-preview-frame");
+      if (!frame) {
+        previewEl.innerHTML = "";
+        frame = document.createElement("iframe");
+        frame.className = "ed-preview-frame";
+        // без allow-same-origin: скрипты страницы изолированы от cookie и API приложения
+        frame.setAttribute("sandbox", "allow-scripts allow-forms allow-modals allow-popups");
+        frame.setAttribute("referrerpolicy", "no-referrer");
+        frame.title = "Превью HTML";
+        previewEl.appendChild(frame);
+      }
+      frame.srcdoc = currentText();
+    } else if (kind === "md") {
+      const st = previewEl.scrollTop;
+      const wrap = document.createElement("div");
+      wrap.className = "ed-preview-md";
+      wrap.innerHTML = renderMd(currentText());
+      wrap.querySelectorAll("pre code").forEach(b => { try { window.hljs && hljs.highlightElement(b); } catch (_) {} });
+      previewEl.replaceChildren(wrap);
+      previewEl.scrollTop = st;
+    } else if (kind === "svg" || kind === "image") {
+      const box = document.createElement("div");
+      box.className = "ed-preview-img";
+      const img = document.createElement("img");
+      img.alt = currentPath;
+      if (kind === "svg" && !isBinary) {
+        previewBlobUrl = URL.createObjectURL(new Blob([currentText()], { type: "image/svg+xml" }));
+        img.src = previewBlobUrl;
+      } else {
+        img.src = rawFileUrl();
+      }
+      img.onerror = () => { box.innerHTML = '<div class="ed-preview-empty">Не удалось показать изображение</div>'; };
+      box.appendChild(img);
+      previewEl.replaceChildren(box);
+    } else if (kind === "csv") {
+      const delim = fileExt(currentPath) === "tsv" ? "\t" : (currentText().split("\n", 1)[0].includes(";") && !currentText().split("\n", 1)[0].includes(",") ? ";" : ",");
+      const { rows, truncated } = parseDelimited(currentText(), delim, 501);
+      const wrap = document.createElement("div");
+      wrap.className = "ed-preview-table";
+      const table = document.createElement("table");
+      rows.forEach((r, i) => {
+        const tr = document.createElement("tr");
+        r.forEach(c => { const td = document.createElement(i === 0 ? "th" : "td"); td.textContent = c; td.title = c; tr.appendChild(td); });
+        table.appendChild(tr);
+      });
+      wrap.appendChild(table);
+      const note = document.createElement("div");
+      note.className = "ed-preview-note";
+      note.textContent = truncated ? "Показаны первые 500 строк" : `Строк: ${Math.max(0, rows.length - 1)}`;
+      previewEl.replaceChildren(note, wrap);
+    }
+  }
+  function schedulePreview() {
+    if (previewTimer) clearTimeout(previewTimer);
+    previewTimer = setTimeout(renderPreview, 250);
+  }
+  function onThemeChangedPreview() { if (previewOn) schedulePreview(); }
+  function setPreview(on) {
+    if (!previewEl || !workareaEl || !previewBtn) return;
+    previewOn = !!on && !!previewKind(currentPath);
+    previewEl.hidden = !previewOn;
+    workareaEl.classList.toggle("preview-on", previewOn);
+    workareaEl.classList.toggle("preview-only", previewOn && isBinary);
+    previewBtn.classList.toggle("is-active", previewOn);
+    previewBtn.setAttribute("aria-pressed", String(previewOn));
+    if (previewOn) renderPreview(); else { previewEl.replaceChildren(); revokePreviewBlob(); }
+    relayoutMonaco();
+  }
+  function onFileOpened() {
+    const kind = previewKind(currentPath);
+    if (previewBtn) previewBtn.hidden = !kind;
+    if (!kind) { setPreview(false); return; }
+    let want = false;
+    if (isBinary) want = kind === "image";
+    else { try { want = localStorage.getItem(KEY_PREVIEW) === "1"; } catch (_) {} }
+    setPreview(want);
+  }
+  previewBtn?.addEventListener("click", () => {
+    setPreview(!previewOn);
+    if (!isBinary) { try { localStorage.setItem(KEY_PREVIEW, previewOn ? "1" : "0"); } catch (_) {} }
   });
 
   // ── UI events ────────────────────────────────────────
@@ -535,6 +820,7 @@
     currentWs = wsSelect.value || null;
     currentPath = null; isBinary = false; setDirty(false);
     filenameEl.textContent = "";
+    onFileOpened();
     syncUrlWs(currentWs);
     await loadTree();
   });
@@ -1181,22 +1467,24 @@
       }
     } else {
       const cleanUserText = stripEditorPromptEnvelope(text);
+      const pollRoot = meta.into || aiLog;
       d.textContent = cleanUserText;
       if (meta.pollAnswer && typeof meta.pollAnswer === "object") {
         const bmid = String(meta.pollAnswer.bot_message_id || "");
         const pidx = String(meta.pollAnswer.poll_index ?? 0);
         if (bmid) {
-          aiLog.querySelectorAll(`.ed-poll[data-bot-message-id="${bmid}"][data-poll-index="${pidx}"]`).forEach(el => {
+          pollRoot.querySelectorAll(`.ed-poll[data-bot-message-id="${bmid}"][data-poll-index="${pidx}"]`).forEach(el => {
             el._applySavedAnswer?.(meta.pollAnswer);
           });
         }
       }
-      aiLog.querySelectorAll(".ed-poll:not(.is-answered)").forEach(el => {
+      pollRoot.querySelectorAll(".ed-poll:not(.is-answered)").forEach(el => {
         el._syncWithUserReply?.(cleanUserText);
       });
     }
-    aiLog.appendChild(d);
-    aiLog.scrollTop = aiLog.scrollHeight;
+    if (!meta.into) aiLog.querySelector(":scope > .ed-ai-empty")?.remove();
+    (meta.into || aiLog).appendChild(d);
+    if (!meta.noScroll) aiLog.scrollTop = aiLog.scrollHeight;
     return d;
   }
 
@@ -1206,33 +1494,126 @@
     thinkingEl = document.createElement("div");
     thinkingEl.className = "ed-ai-msg bot ed-ai-thinking";
     thinkingEl.innerHTML = "<span></span><span></span><span></span>";
+    aiLog.querySelector(":scope > .ed-ai-empty")?.remove();
     aiLog.appendChild(thinkingEl);
     aiLog.scrollTop = aiLog.scrollHeight;
   }
   function clearThinking() { if (thinkingEl) { thinkingEl.remove(); thinkingEl = null; } }
 
+  // ── История чата агента: первая страница + дозагрузка вверх (как в основном чате) ──
+  const HISTORY_PAGE = 50;
+  const hist = { loaded: 0, oldestId: null, hasMore: false, loading: false };
+
+  function historyTopEl() {
+    let el = aiLog.querySelector(":scope > .ed-ai-history-top");
+    if (!el) {
+      el = document.createElement("div");
+      el.className = "ed-ai-history-top";
+      el.dataset.state = "";
+      aiLog.prepend(el);
+    }
+    return el;
+  }
+  function setHistoryState(state, text = "") {
+    const el = historyTopEl();
+    el.dataset.state = state;
+    el.textContent = text;
+  }
+  function appendHistoryMessage(m, into = null) {
+    const mid = m.message_id || (m.id != null ? String(m.id) : "");
+    if (m.is_from_bot) {
+      aiAppend("bot", m.message || "", { messageId: mid, botMessageId: mid, pollAnswers: m.poll_answers || [], into, noScroll: true });
+    } else {
+      aiAppend("user", m.message || "", { messageId: mid, pollAnswer: m.poll_answer || null, into, noScroll: true });
+    }
+  }
+  function renderEmptyState() {
+    const box = document.createElement("div");
+    box.className = "ed-ai-empty";
+    box.innerHTML = '<div class="ed-ai-empty-title">Агент рядом с кодом</div>' +
+      '<div>Спросите про открытый файл, выделите фрагмент и нажмите ПКМ, или наберите <b>/</b> для быстрых команд.</div>' +
+      '<div class="ed-ai-empty-cmds"></div>';
+    const cmds = box.querySelector(".ed-ai-empty-cmds");
+    ["tests", "explain", "review", "summary"].forEach(name => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "ed-ai-chip";
+      b.textContent = `/${name}`;
+      b.addEventListener("click", () => {
+        const ta = $("ed-ai-text");
+        ta.value = `/${name}`;
+        ta.focus();
+        ta.dispatchEvent(new Event("input"));
+      });
+      cmds.appendChild(b);
+    });
+    aiLog.appendChild(box);
+  }
+  function fetchHistoryPage(query) {
+    return apiGet(`/api/chats/${encodeURIComponent(CHAT_ID)}/messages?${query}`);
+  }
   async function loadEditorChatHistory() {
-    if (!CHAT_ID) return;
+    if (!CHAT_ID || !aiLog) return;
+    hist.loading = true;
+    aiLog.innerHTML = "";
+    setHistoryState("loading", "Загрузка истории…");
     try {
-      const data = await apiGet(`/api/chats/${encodeURIComponent(CHAT_ID)}?limit=50&offset=0`);
+      const data = await fetchHistoryPage(`limit=${HISTORY_PAGE}&offset=0`);
       const msgs = Array.isArray(data?.messages) ? data.messages : [];
-      aiLog.innerHTML = "";
-      for (const m of msgs) {
-        const mid = m.message_id || (m.id != null ? String(m.id) : "");
-        if (m.is_from_bot) {
-          aiAppend("bot", m.message || "", {
-            messageId: mid,
-            botMessageId: mid,
-            pollAnswers: m.poll_answers || [],
-          });
-        } else {
-          aiAppend("user", m.message || "", {
-            messageId: mid,
-            pollAnswer: m.poll_answer || null,
-          });
-        }
+      for (const m of msgs) appendHistoryMessage(m);
+      hist.loaded = msgs.length;
+      hist.oldestId = msgs.length && msgs[0].id != null ? msgs[0].id : null;
+      hist.hasMore = !!data?.has_more;
+      setHistoryState(hist.hasMore ? "more" : "", hist.hasMore ? "Прокрутите вверх, чтобы загрузить ранние сообщения" : "");
+      if (!msgs.length) renderEmptyState();
+      aiLog.scrollTop = aiLog.scrollHeight;
+    } catch (_) {
+      setHistoryState("error", "Не удалось загрузить историю");
+    } finally {
+      hist.loading = false;
+    }
+  }
+  async function loadOlderHistory() {
+    if (!CHAT_ID || hist.loading || !hist.hasMore) return;
+    hist.loading = true;
+    setHistoryState("loading", "Загрузка…");
+    const prevHeight = aiLog.scrollHeight, prevTop = aiLog.scrollTop;
+    try {
+      const q = hist.oldestId != null
+        ? `limit=${HISTORY_PAGE}&before_id=${encodeURIComponent(hist.oldestId)}`
+        : `limit=${HISTORY_PAGE}&offset=${hist.loaded}`;
+      const data = await fetchHistoryPage(q);
+      const older = Array.isArray(data?.messages) ? data.messages : [];
+      if (!older.length) {
+        hist.hasMore = false;
+      } else {
+        const staging = document.createElement("div");
+        older.forEach(m => appendHistoryMessage(m, staging));
+        const frag = document.createDocumentFragment();
+        while (staging.firstChild) frag.appendChild(staging.firstChild);
+        historyTopEl().after(frag);
+        hist.loaded += older.length;
+        if (older[0]?.id != null) hist.oldestId = older[0].id;
+        hist.hasMore = !!data.has_more;
+        aiLog.scrollTop = prevTop + (aiLog.scrollHeight - prevHeight);
       }
-    } catch (_) {}
+      setHistoryState(hist.hasMore ? "more" : "end", hist.hasMore ? "Прокрутите вверх, чтобы загрузить ещё" : "Начало диалога");
+    } catch (_) {
+      setHistoryState("error", "Не удалось загрузить, прокрутите ещё раз");
+    } finally {
+      hist.loading = false;
+    }
+  }
+  if (aiLog) {
+    let histTicking = false;
+    aiLog.addEventListener("scroll", () => {
+      if (histTicking) return;
+      histTicking = true;
+      requestAnimationFrame(() => {
+        histTicking = false;
+        if (aiLog.scrollTop < 120) loadOlderHistory();
+      });
+    }, { passive: true });
   }
 
   if (CHAT_ID) {
@@ -1273,7 +1654,7 @@
     aiAppend("bot", "Чат не привязан — откройте редактор из чата, чтобы спросить агента.");
   }
 
-  async function dispatchAIMessage(userVisibleText, pollAnswer = null) {
+  async function dispatchAIMessage(userVisibleText, pollAnswer = null, opts = {}) {
     const text = String(userVisibleText || "").trim();
     if (!text || !CHAT_ID) return;
     let msg = text;
@@ -1294,6 +1675,7 @@
     } else {
       msg = `${text}`;
     }
+    if (opts.command) msg = buildCommandMessage(opts.command, opts.extra || "", fileUrl);
     const clientMsgId = `msg-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
     aiAppend("user", text, { messageId: clientMsgId, pollAnswer });
     pendingSelection = null;
@@ -1327,6 +1709,10 @@
     const text = ta.value.trim();
     if (!text || !CHAT_ID) return;
     ta.value = "";
+    autosizeAiInput();
+    closeSlash();
+    const m = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text);
+    if (m && findSlashCmd(m[1])) { await runSlashCommand(m[1], (m[2] || "").trim()); return; }
     await dispatchAIMessage(text);
   }
 
@@ -1343,8 +1729,173 @@
     try { window.ModelPicker.inject(container); } catch (_) {}
   })();
 
+
+  // ── Slash-команды агента (/tests, /explain, …) ──
+  const SLASH_ICON = {
+    tests: '<path d="M7.5 3.5h5M8.5 3.5v4.2L4.6 14.4A1.4 1.4 0 0 0 5.8 16.5h8.4a1.4 1.4 0 0 0 1.2-2.1L11.5 7.7V3.5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M6.5 12h7" stroke="currentColor" stroke-width="1.5"/>',
+    explain: '<circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M8 8a2 2 0 1 1 2.8 1.8c-.5.3-.8.7-.8 1.3v.4M10 13.8v.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
+    review: '<path d="M3 10s2.6-5 7-5 7 5 7 5-2.6 5-7 5-7-5-7-5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><circle cx="10" cy="10" r="2" stroke="currentColor" stroke-width="1.5"/>',
+    refactor: '<path d="M4 7h10l-2.5-2.5M16 13H6l2.5 2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>',
+    docs: '<path d="M6 3.5h5.5L15 7v9.5H6z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8.5 10.5h4M8.5 13h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
+    summary: '<path d="M4.5 5.5h11M4.5 10h11M4.5 14.5h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
+    describe: '<path d="M4 15.5l1-3.5 7.5-7.5 2.5 2.5L7.5 14.5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>',
+    fix: '<path d="M12.5 4a3.5 3.5 0 0 0-3.3 4.6L4.5 13.3a1.5 1.5 0 0 0 2.1 2.1l4.7-4.7A3.5 3.5 0 0 0 16 7.5l-2 2-2-.5-.5-2 2-2z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>',
+  };
+  const SLASH_CMDS = [
+    { name: "tests", desc: "Написать тесты", prompt: "Напиши unit-тесты для этого кода. Используй тестовый фреймворк, принятый в проекте (для Python по умолчанию pytest). Покрой основные сценарии, граничные случаи и ошибки. Верни готовый файл тестов и коротко перечисли, что покрыто." },
+    { name: "explain", desc: "Объяснить код", prompt: "Объясни, что делает этот код: назначение, ключевые шаги, входы и выходы, неочевидные места. Коротко и по делу." },
+    { name: "review", desc: "Код-ревью", prompt: "Сделай код-ревью: баги, уязвимости, гонки, утечки ресурсов, проблемы читаемости. Для каждого пункта укажи строку и предложи исправление. Отсортируй по важности." },
+    { name: "fix", desc: "Найти и исправить ошибки", prompt: "Найди вероятные ошибки в этом коде и исправь их. Покажи исправленный фрагмент и объясни причину каждой ошибки." },
+    { name: "refactor", desc: "Рефакторинг", prompt: "Предложи рефакторинг без изменения поведения: упростить, убрать дублирование, улучшить имена. Покажи итоговый код и перечисли изменения." },
+    { name: "docs", desc: "Docstring и комментарии", prompt: "Добавь документацию: docstring или JSDoc для функций и классов, комментарии в неочевидных местах. Логику не меняй. Верни код с документацией." },
+    { name: "summary", desc: "Саммари файла", prompt: "Сделай краткое саммари: назначение файла, основные сущности (классы, функции, роуты) по одной строке, внешние зависимости и что важно знать перед правкой." },
+    { name: "describe", desc: "Описание для README или PR", prompt: "Напиши описание этого кода для README или PR в Markdown: что делает, как использовать, пример вызова или запуска." },
+  ];
+  const SLASH_MAX_CHARS = 60000;
+
+  function findSlashCmd(name) {
+    return SLASH_CMDS.find(c => c.name === String(name || "").toLowerCase()) || null;
+  }
+  function codeFence(body, lang) {
+    const fence = body.includes("```") ? "````" : "```";
+    return `${fence}${lang || ""}\n${body}\n${fence}`;
+  }
+  function buildCommandMessage(cmd, extra, fileUrl) {
+    const link = fileUrl ? `\nСсылка на файл в редакторе: ${fileUrl}` : "";
+    const lang = currentPath ? guessLang(currentPath) : "";
+    let ctx;
+    if (pendingSelection) {
+      const { text: selText, startLine, endLine } = pendingSelection;
+      const loc = startLine === endLine ? `строка ${startLine}` : `строки ${startLine}–${endLine}`;
+      ctx = `[Выделенный фрагмент ${currentPath || ""}, ${loc}]\n${codeFence(selText.slice(0, SLASH_MAX_CHARS), lang)}`;
+    } else if (currentPath && !isBinary) {
+      const body = currentText() || "";
+      const lines = body ? body.split("\n").length : 0;
+      const cut = body.length > SLASH_MAX_CHARS ? `\n(показаны первые ${SLASH_MAX_CHARS} символов из ${body.length})` : "";
+      ctx = `[Файл: ${currentPath} · воркспейс ${currentWs} · ${lines} строк]\n${codeFence(body.slice(0, SLASH_MAX_CHARS), lang)}${cut}`;
+    } else {
+      ctx = "[Файл в редакторе не открыт]";
+    }
+    const extraLine = extra ? `\nДополнительно от пользователя: ${extra}` : "";
+    return `[Команда редактора /${cmd.name}]\n${cmd.prompt}${extraLine}\n\n${ctx}${link}\n\nВопрос: /${cmd.name}${extra ? " " + extra : ""}`;
+  }
+  async function runSlashCommand(name, extra = "") {
+    const cmd = findSlashCmd(name);
+    if (!cmd || !CHAT_ID) return;
+    const visible = `/${cmd.name}${extra ? " " + extra : ""}`;
+    await dispatchAIMessage(visible, null, { command: cmd, extra });
+  }
+
+  const aiTa = $("ed-ai-text");
+  const aiInputArea = $("ed-ai")?.querySelector(".chat-input-area");
+  let slashMatches = [], slashIdx = 0;
+
+  function autosizeAiInput() {
+    if (!aiTa) return;
+    aiTa.style.height = "auto";
+    aiTa.style.height = `${Math.min(aiTa.scrollHeight, 200)}px`;
+  }
+  function closeSlash() {
+    aiInputArea?.querySelector(".slash-cmd-popover")?.remove();
+    slashMatches = [];
+    slashIdx = 0;
+  }
+  function slashContextLabel() {
+    if (pendingSelection) {
+      const { startLine, endLine } = pendingSelection;
+      return startLine === endLine ? `Контекст: строка ${startLine}` : `Контекст: строки ${startLine}–${endLine}`;
+    }
+    if (currentPath && !isBinary) return `Контекст: ${currentPath.split("/").pop()}`;
+    return "Файл не открыт";
+  }
+  function renderSlash() {
+    if (!aiInputArea) return;
+    let pop = aiInputArea.querySelector(".slash-cmd-popover");
+    if (!pop) {
+      pop = document.createElement("div");
+      pop.className = "slash-cmd-popover ed-slash-popover";
+      pop.setAttribute("role", "menu");
+      aiInputArea.appendChild(pop);
+    }
+    const items = slashMatches.map((c, i) => {
+      const hl = i === slashIdx ? ' data-highlighted=""' : "";
+      return `<div role="menuitem" class="slash-cmd-item" data-idx="${i}"${hl}>` +
+        `<div class="slash-cmd-icon"><svg viewBox="0 0 20 20" width="16" height="16" fill="none">${SLASH_ICON[c.name] || ""}</svg></div>` +
+        `<span class="slash-cmd-name">/${c.name}</span><span class="ed-slash-desc">${c.desc}</span></div>`;
+    }).join("");
+    pop.innerHTML = `<div class="slash-cmd-scroll"><div class="slash-cmd-list">${items}</div></div>` +
+      `<div class="ed-slash-ctx"><span></span><span>Enter запустить · Tab дописать</span></div>`;
+    pop.querySelector(".ed-slash-ctx span").textContent = slashContextLabel();
+    pop.querySelectorAll(".slash-cmd-item").forEach(el => {
+      el.addEventListener("mousedown", (e) => e.preventDefault());
+      el.addEventListener("mouseenter", () => {
+        slashIdx = Number(el.dataset.idx) || 0;
+        pop.querySelectorAll(".slash-cmd-item").forEach((x, i) => x.toggleAttribute("data-highlighted", i === slashIdx));
+      });
+      el.addEventListener("click", () => pickSlash(Number(el.dataset.idx) || 0, true));
+    });
+    pop.querySelector("[data-highlighted]")?.scrollIntoView({ block: "nearest" });
+  }
+  function syncSlash() {
+    const m = /^\/(\S*)$/.exec(aiTa?.value || "");
+    if (!m) { closeSlash(); return; }
+    const q = m[1].toLowerCase();
+    slashMatches = SLASH_CMDS.filter(c => c.name.startsWith(q) || c.desc.toLowerCase().includes(q));
+    if (!slashMatches.length) { closeSlash(); return; }
+    if (slashIdx >= slashMatches.length) slashIdx = 0;
+    renderSlash();
+  }
+  function pickSlash(idx, run) {
+    const cmd = slashMatches[idx];
+    if (!cmd) return;
+    closeSlash();
+    if (run) {
+      aiTa.value = "";
+      autosizeAiInput();
+      runSlashCommand(cmd.name, "");
+    } else {
+      aiTa.value = `/${cmd.name} `;
+      aiTa.focus();
+      autosizeAiInput();
+    }
+  }
+
   $("ed-ai-send").addEventListener("click", sendAI);
-  $("ed-ai-text").addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendAI(); }
+  aiTa?.addEventListener("input", () => { autosizeAiInput(); syncSlash(); });
+  aiTa?.addEventListener("blur", () => setTimeout(closeSlash, 120));
+  aiTa?.addEventListener("keydown", (e) => {
+    const popOpen = slashMatches.length > 0;
+    if (popOpen) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const d = e.key === "ArrowDown" ? 1 : -1;
+        slashIdx = (slashIdx + d + slashMatches.length) % slashMatches.length;
+        renderSlash();
+        return;
+      }
+      if (e.key === "Tab") { e.preventDefault(); pickSlash(slashIdx, false); return; }
+      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); pickSlash(slashIdx, true); return; }
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeSlash(); return; }
+    }
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendAI(); }
   });
+
+  // Горячие клавиши редактора
+  document.addEventListener("keydown", (e) => {
+    const mod = e.ctrlKey || e.metaKey;
+    if (!mod) return;
+    if (e.shiftKey && e.code === "KeyA") {
+      e.preventDefault();
+      const opening = layoutEl?.classList.contains("ai-collapsed");
+      applyAiCollapsed(!opening);
+      if (opening) setTimeout(() => aiTa?.focus(), 60);
+    } else if (e.shiftKey && e.code === "KeyV" && e.target !== aiTa && previewBtn && !previewBtn.hidden) {
+      e.preventDefault();
+      previewBtn.click();
+    } else if (!e.shiftKey && e.code === "KeyB") {
+      e.preventDefault();
+      applyLeftCollapsed(!layoutEl?.classList.contains("sidebar-collapsed"));
+    }
+  }, true);
+
 })();

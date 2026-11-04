@@ -896,7 +896,11 @@
 
 .profile-info {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
+  /* button центрирует текст по умолчанию: без этого имя уезжало от
+     аватара к середине при расширении сайдбара */
+  text-align: left;
 }
 
 .profile-name {
@@ -965,22 +969,13 @@
      постоянной. NB: hover-подсветки строки на тач нет, поэтому дымку
      красим в ФОН сайдбара (--sidebar-bg), а не в --sidebar-hover — иначе тёмная
      плашка выделяется на фоне строки. Шире и плавнее, чтобы не было шва. */
-  .chat-line-wrap::after {
-    content: "";
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: 48px;
-    pointer-events: none;
-    background: linear-gradient(to right, transparent, var(--sidebar-bg) 55%);
-  }
-
-  /* Под активным чатом фон строки = --sidebar-active, значит и дымку там
-     красим под него, чтобы совпадала с подложкой активной строки. */
-  .chat-item.active .chat-line-wrap::after {
-    background: linear-gradient(to right, transparent, var(--sidebar-active) 55%);
-  }
+  /* Кнопка ⋯ видна всегда, поэтому место под неё резервируем отступом:
+     строка заканчивается до кнопки и гаснет маской chat-line--clamped,
+     текст под ⋯ не подлезает. Дымка поверх больше не нужна. */
+  .chat-item .chat-line-wrap { padding-right: 30px; }
+  .chat-item .chat-line-wrap::after,
+  .chat-item:hover .chat-line-wrap::after,
+  .chat-item.active .chat-line-wrap::after { display: none; }
 
 }
 

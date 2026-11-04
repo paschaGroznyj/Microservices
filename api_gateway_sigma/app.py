@@ -2377,13 +2377,14 @@ async def group_send(room_uid: str, body: GroupSendBody, request: Request):
 
 
 @app.get("/api/group/{room_uid}/messages")
-async def group_messages(room_uid: str, request: Request, limit: int = 50, offset: int = 0):
+async def group_messages(room_uid: str, request: Request, limit: int = 50, offset: int = 0,
+                             before_id: int | None = None):
     user = await get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     resp = await app.state.http_client.get(
         f"{SERVICES['chats']['url']}/group/{room_uid}/messages",
-        params={"limit": limit, "offset": offset},
+        params={k: v for k, v in {"limit": limit, "offset": offset, "before_id": before_id}.items() if v is not None},
     )
     return resp.json()
 

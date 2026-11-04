@@ -115,11 +115,13 @@ async def group_send(payload: GroupSendPayload):
 # ── Выгрузка истории ────────────────────────────────────
 
 @router.get("/{room_uid}/messages")
-async def group_messages(room_uid: str, limit: int = 50, offset: int = 0):
+async def group_messages(room_uid: str, limit: int = 50, offset: int = 0,
+                         before_id: int | None = None):
     if group_db is None:
         raise HTTPException(status_code=503, detail="db not ready")
     try:
-        result = await group_db.get_messages(room_uid, limit=limit, offset=offset)
+        result = await group_db.get_messages(room_uid, limit=limit, offset=offset,
+                                             before_id=before_id)
         return {
             "room_uid": room_uid,
             "messages": result["messages"],
@@ -127,6 +129,7 @@ async def group_messages(room_uid: str, limit: int = 50, offset: int = 0):
             "has_more": result["has_more"],
             "limit": max(1, min(limit, 200)),
             "offset": max(0, offset),
+            "before_id": before_id,
         }
     except Exception as e:
         logger.error(f"[group-chat] messages error: {e}")

@@ -17,10 +17,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libcairo2 \
-    libcairo2-dev \
-    pkg-config \
-    python3-dev \
-    build-essential \
     curl \
     gnupg \
     git \
@@ -61,17 +57,20 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 RUN useradd -m -u 1500 -s /usr/sbin/nologin sandboxrunner
 
-RUN playwright install chromium
-RUN playwright install-deps chromium
+# Полный chromium + headless shell: channel="chromium" и headless=False
+# (headless=False под Xvfb: `Xvfb :99 &` + DISPLAY=:99; xvfb-run без xauth не работает).
+RUN playwright install chromium && playwright install-deps chromium
 
 RUN --mount=type=cache,target=/tmp/npm_cache \
     npm install --no-save animejs
 RUN --mount=type=cache,target=/tmp/npm_cache \
     npm install -g @playwright/mcp@latest ctx7 skillui
 
+# /opt/playwright-browsers не chown-им: браузерам хватает прав на чтение/запуск,
+# а chown -R копирует их в новый слой целиком (+650 МБ).
 RUN mkdir -p /tmp/matplotlib_cache /tmp/npm_cache /tmp/.local /tmp/.config /tmp/.cache /home/sandboxrunner/.local && \
     chmod 1777 /tmp/matplotlib_cache /tmp/npm_cache /tmp/.local /tmp/.config /tmp/.cache && \
-    chown -R sandboxrunner:sandboxrunner /app /opt/playwright-browsers /home/sandboxrunner
+    chown -R sandboxrunner:sandboxrunner /app /home/sandboxrunner
 
 RUN npx -y skills add -y emilkowalski/skills
 RUN npx skills

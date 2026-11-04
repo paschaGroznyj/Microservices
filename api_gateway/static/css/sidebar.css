@@ -3,8 +3,10 @@
 ════════════════════════════════════════════════ */
 
 .sidebar {
-  width: 250px;
-  min-width: 250px;
+  /* --sidebar-w ставит sidebar-ui.js при перетаскивании края (250–500px). */
+  width: var(--sidebar-w, 250px);
+  min-width: var(--sidebar-w, 250px);
+  position: relative;
   display: flex;
   flex-direction: column;
   background: var(--sidebar-bg);
@@ -314,6 +316,48 @@
   color: var(--text-primary);
   font-weight: 400;
 }
+
+/* Строка чата в сайдбаре: остаётся строго однострочной (высота не меняется),
+   а при переполнении гаснет к правому краю маской, как
+   .reasoning-step--clampable, даже без наведения. */
+.chat-line.chat-line--title,
+.chat-line.chat-line--preview {
+  text-overflow: clip;
+}
+.chat-line.chat-line--clamped {
+  -webkit-mask-image: linear-gradient(to right, #000 55%, transparent 96%);
+          mask-image: linear-gradient(to right, #000 55%, transparent 96%);
+}
+
+/* Ручка изменения ширины сайдбара (только десктоп). */
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 6px;
+  z-index: 5;
+  cursor: col-resize;
+  touch-action: none;
+}
+.sidebar-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 2px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.sidebar-resizer:hover::after,
+.sidebar-resizer:focus-visible::after,
+.chat-layout.sidebar-resizing .sidebar-resizer::after { opacity: 0.6; }
+.sidebar-resizer:focus-visible { outline: none; }
+.chat-layout.sidebar-resizing .sidebar { transition: none; }
+.chat-layout.sidebar-resizing { cursor: col-resize; user-select: none; }
+.chat-layout.sidebar-collapsed .sidebar-resizer { display: none; }
 
 /* Только ручное переименование выделяется жирным. */
 .chat-line--renamed {
@@ -872,6 +916,7 @@
      Кнопка-панелька внутри сайдбара не нужна (после сворачивания
      блокирует доступ) — прячем её. */
   .sidebar-collapse-btn { display: none; }
+  .sidebar-resizer { display: none; }
 
   .sidebar {
     position: fixed;

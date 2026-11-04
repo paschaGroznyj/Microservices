@@ -108,6 +108,7 @@
             `title="${esc(name)}"`, `data-kind="${kind}"`, `data-name="${esc(name)}"`,
             `data-url="${esc(url)}"`, `data-meta="${esc(meta)}"`,
         ];
+        if (f.type) attrs.push(`data-mime="${esc(f.type)}"`);
         if (f.dlUrl) attrs.push(`data-dl-url="${esc(f.dlUrl)}"`);
         if (kind === 'audio') attrs.push(`data-audio-url="${esc(url)}"`, `data-audio-name="${esc(name)}"`);
         const metaHtml = kind === 'audio'
@@ -271,13 +272,390 @@
         a.remove();
     }
 
+    /* ── Превью текстовых файлов в правой панели (#text-preview-panel) ── */
+    const PV_MD = new Set(['md', 'markdown', 'mdx']);
+    const PV_JSON = new Set(['json', 'jsonl', 'ndjson', 'geojson', 'ipynb']);
+    const PV_CSV = new Set(['csv', 'tsv']);
+    const PV_HTML = new Set(['html', 'htm']);
+    const PV_CODE = {
+        py: 'python', js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
+        ts: 'typescript', tsx: 'typescript', css: 'css', scss: 'scss', less: 'less',
+        sql: 'sql', sh: 'bash', bash: 'bash', zsh: 'bash', yml: 'yaml', yaml: 'yaml',
+        toml: 'ini', ini: 'ini', cfg: 'ini', conf: 'ini', env: 'bash', xml: 'xml',
+        go: 'go', rs: 'rust', java: 'java', kt: 'kotlin', c: 'c', h: 'c', cpp: 'cpp',
+        hpp: 'cpp', cs: 'csharp', php: 'php', rb: 'ruby', swift: 'swift', lua: 'lua',
+        r: 'r', diff: 'diff', patch: 'diff', dockerfile: 'dockerfile', makefile: 'makefile',
+        vue: 'xml', svelte: 'xml', graphql: 'graphql', proto: 'protobuf',
+    };
+    const PV_TEXT = new Set(['txt', 'log', 'text', 'rst', 'tex', 'srt', 'vtt', 'gitignore', 'editorconfig']);
+    const PV_MAX_BYTES = 2 * 1024 * 1024;
+    const PV_HL_MAX = 200 * 1024;
+    const PV_CSV_ROWS = 500;
+
+    // Тип превью файла: md | json | csv | html | code | text | null (рендерить нечего).
+    function previewTypeOf(name, mime) {
+        const n = String(name || '').toLowerCase();
+        const base = n.split('/').pop();
+        let ext = extOf(base);
+        if (!ext && (base === 'dockerfile' || base === 'makefile')) ext = base;
+        if (!ext && base.startsWith('.')) ext = base.slice(1);
+        const m = String(mime || '').toLowerCase();
+        if (PV_MD.has(ext)) return 'md';
+        if (PV_JSON.has(ext)) return 'json';
+        if (PV_CSV.has(ext)) return 'csv';
+        if (PV_HTML.has(ext)) return 'html';
+        if (Object.prototype.hasOwnProperty.call(PV_CODE, ext)) return 'code';
+        if (PV_TEXT.has(ext)) return 'text';
+        if (m === 'text/markdown') return 'md';
+        if (m === 'application/json') return 'json';
+        if (m === 'text/csv') return 'csv';
+        if (m.startsWith('text/')) return 'text';
+        return null;
+    }
+    const PV_HAS_RENDER = new Set(['md', 'json', 'csv', 'html']);
+
+    function hl(text, lang) {
+        const h = window.hljs;
+        if (h && lang && text.length <= PV_HL_MAX && h.getLanguage && h.getLanguage(lang)) {
+            try { return h.highlight(text, { language: lang, ignoreIllegals: true }).value; } catch (_) {}
+        }
+        return esc(text);
+    }
+
+    function pvEls() {
+        return {
+            panel: document.getElementById('text-preview-panel'),
+            body: document.getElementById('text-preview-body'),
+            render: document.getElementById('text-preview-render'),
+            title: document.getElementById('text-preview-title'),
+            modes: document.getElementById('text-preview-modes'),
+            note: document.getElementById('text-preview-note'),
+        };
+    }
+    // В файловом режиме кнопка «Скачать» живёт в шапке, чтобы не перекрывать таблицы и код.
+    function placeDlBtn(inHeader) {
+        const a = document.getElementById('text-preview-dl');
+        const head = document.querySelector('#text-preview-panel .text-preview-header');
+        const wrap = document.querySelector('#text-preview-panel .text-preview-wrap');
+        if (!a || !head || !wrap) return;
+        if (inHeader) {
+            const close = document.getElementById('text-preview-close');
+            if (a.parentElement !== head) head.insertBefore(a, close || null);
+        } else if (a.parentElement !== wrap) {
+            wrap.appendChild(a);
+        }
+    }
+    function setNote(text, isErr) {
+        const { note } = pvEls();
+        if (!note) return;
+        note.hidden = !text;
+        note.textContent = text || '';
+        note.classList.toggle('is-error', !!isErr);
+    }
+
+    const FP = { token: 0, tile: null, type: null, text: '', loaded: false, truncated: false, totalSize: 0, name: '', modePref: {} };
+
+    function exitFilePreview(opts = {}) {
+        const { panel, body, render, modes } = pvEls();
+        if (FP.tile) FP.tile.classList.remove('is-preview-open');
+        const wasFile = !!(panel && panel.classList.contains('text-preview-panel--file'));
+        FP.token++;
+        FP.tile = null; FP.type = null; FP.text = ''; FP.loaded = false;
+        if (!wasFile) return;
+        const tok = FP.token;
+        const reset = () => {
+            if (tok !== FP.token) return; // за это время открыли что-то новое
+            panel.classList.remove('text-preview-panel--file');
+            if (body) {
+                body.setAttribute('contenteditable', 'true');
+                body.setAttribute('aria-label', 'Редактируемый текст');
+                body.hidden = false;
+                body.classList.remove('is-code');
+                if (opts.deferred) body.textContent = '';
+            }
+            if (render) { render.hidden = true; render.innerHTML = ''; render.className = 'text-preview-body text-preview-render'; }
+            placeDlBtn(false);
+            if (modes) modes.hidden = true;
+            setNote('');
+        };
+        if (opts.deferred) setTimeout(reset, 300); else reset();
+    }
+
+    function pvSource(t) {
+        const file = t && t._faFile;
+        if (file instanceof Blob) return { blob: file };
+        const url = (t && (t.dataset.url || t.dataset.dlUrl)) || '';
+        return { url };
+    }
+
+    async function openFilePreview(t) {
+        const type = previewTypeOf(t.dataset.name, t.dataset.mime);
+        if (!type) return false;
+        const { panel, body, render, title, modes } = pvEls();
+        if (!panel || !body || !render) return false;
+        const app = window.__catchpmApp;
+        // Закрыть чип вставленного текста, если он был открыт в панели.
+        if (app && app._activePreviewChipEl) {
+            app._activePreviewChipEl.classList.remove('is-preview-open');
+            app._activePreviewChipEl = null;
+            app._activePreviewChipId = null;
+        }
+        if (FP.tile && FP.tile !== t) FP.tile.classList.remove('is-preview-open');
+        const tok = ++FP.token;
+        FP.tile = t; FP.type = type; FP.text = ''; FP.loaded = false;
+        FP.truncated = false; FP.totalSize = 0; FP.name = t.dataset.name || 'файл';
+        t.classList.add('is-preview-open');
+
+        panel.classList.add('text-preview-panel--file');
+        placeDlBtn(true);
+        body.setAttribute('contenteditable', 'false');
+        body.setAttribute('aria-label', 'Содержимое файла');
+        if (title) title.textContent = FP.name;
+        if (modes) modes.hidden = !PV_HAS_RENDER.has(type);
+        syncModeBtns();
+        render.hidden = true; render.innerHTML = '';
+        body.hidden = false; body.classList.remove('is-code');
+        body.textContent = 'Загружаю…';
+        setNote('');
+        panel.classList.add('open');
+        panel.setAttribute('aria-hidden', 'false');
+
+        let text = '';
+        try {
+            const src = pvSource(t);
+            let blob = src.blob || null;
+            if (!blob) {
+                if (!src.url) throw new Error('нет ссылки на файл');
+                const headers = src.url.startsWith('blob:') ? {} : { Range: `bytes=0-${PV_MAX_BYTES - 1}` };
+                const r = await fetch(src.url, { headers, credentials: 'same-origin' });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                const cr = r.headers.get('Content-Range');
+                const m = cr && cr.match(/\/(\d+)\s*$/);
+                blob = await r.blob();
+                FP.totalSize = m ? Number(m[1]) : blob.size;
+            } else {
+                FP.totalSize = blob.size;
+            }
+            if (blob.size > PV_MAX_BYTES) blob = blob.slice(0, PV_MAX_BYTES);
+            FP.truncated = FP.totalSize > PV_MAX_BYTES;
+            text = await blob.text();
+        } catch (err) {
+            if (tok !== FP.token) return true;
+            body.textContent = '';
+            setNote(`Не удалось загрузить файл: ${err && err.message ? err.message : err}`, true);
+            return true;
+        }
+        if (tok !== FP.token) return true;
+        if (text.slice(0, 4096).includes('\u0000')) {
+            body.textContent = '';
+            if (modes) modes.hidden = true;
+            setNote('Похоже на бинарный файл, текстовое превью недоступно.', true);
+            return true;
+        }
+        FP.text = text.replace(/\r\n/g, '\n');
+        FP.loaded = true;
+        renderFilePreview();
+        body.scrollTop = 0; render.scrollTop = 0;
+        return true;
+    }
+
+    function curMode() {
+        if (!PV_HAS_RENDER.has(FP.type)) return 'preview';
+        return FP.modePref[FP.type] || 'preview';
+    }
+    function syncModeBtns() {
+        const { modes } = pvEls();
+        if (!modes) return;
+        const mode = curMode();
+        modes.querySelectorAll('[data-body-mode]').forEach((b) => {
+            const on = b.dataset.bodyMode === mode;
+            b.classList.toggle('is-active', on);
+            b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
+    }
+
+    function renderFilePreview() {
+        const { body, render } = pvEls();
+        if (!FP.loaded || !body || !render) return;
+        const mode = curMode();
+        syncModeBtns();
+        const sizeNote = FP.truncated
+            ? `Показаны первые ${fmtSize(PV_MAX_BYTES)} из ${fmtSize(FP.totalSize)}. Полный файл можно скачать.`
+            : '';
+        if (mode === 'raw' && PV_HAS_RENDER.has(FP.type)) {
+            render.hidden = true; render.innerHTML = '';
+            body.hidden = false;
+            body.classList.remove('is-code');
+            body.textContent = FP.text;
+            setNote(sizeNote);
+            return;
+        }
+        const out = buildRendered(FP.type, FP.text, FP.name);
+        body.hidden = true; body.textContent = '';
+        render.className = `text-preview-body text-preview-render text-preview-render--${out.cls}`;
+        render.hidden = false;
+        if (out.node) { render.innerHTML = ''; render.appendChild(out.node); } else render.innerHTML = out.html;
+        if (out.after) out.after(render);
+        setNote([out.note, sizeNote].filter(Boolean).join(' '), !!out.err);
+    }
+
+    function sniffDelim(text, ext) {
+        if (ext === 'tsv') return '\t';
+        const first = text.split('\n', 1)[0] || '';
+        let best = ',', bestN = 0;
+        for (const d of [',', ';', '\t', '|']) {
+            const n = first.split(d).length - 1;
+            if (n > bestN) { best = d; bestN = n; }
+        }
+        return best;
+    }
+    function parseCsv(text, delim, maxRows) {
+        const rows = [];
+        let row = [], cell = '', q = false, i = 0;
+        const n = text.length;
+        while (i < n) {
+            const c = text[i];
+            if (q) {
+                if (c === '"') {
+                    if (text[i + 1] === '"') { cell += '"'; i += 2; continue; }
+                    q = false; i++; continue;
+                }
+                cell += c; i++; continue;
+            }
+            if (c === '"' && cell === '') { q = true; i++; continue; }
+            if (c === delim) { row.push(cell); cell = ''; i++; continue; }
+            if (c === '\n') {
+                row.push(cell); rows.push(row); row = []; cell = ''; i++;
+                if (rows.length > maxRows) return { rows: rows.slice(0, maxRows), more: true };
+                continue;
+            }
+            cell += c; i++;
+        }
+        if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+        const more = rows.length > maxRows;
+        return { rows: more ? rows.slice(0, maxRows) : rows, more };
+    }
+
+    function buildRendered(type, text, name) {
+        const ext = extOf(name);
+        if (type === 'md') {
+            let html;
+            try {
+                html = window.marked ? window.marked.parse(text) : `<pre>${esc(text)}</pre>`;
+                if (window.DOMPurify) html = window.DOMPurify.sanitize(html);
+                else if (window.marked) html = `<pre>${esc(text)}</pre>`;
+            } catch (_) { html = `<pre>${esc(text)}</pre>`; }
+            return {
+                cls: 'md', html,
+                after: (root) => {
+                    root.querySelectorAll('a[href]').forEach((a) => { a.target = '_blank'; a.rel = 'noopener noreferrer'; });
+                    if (window.hljs && text.length <= PV_HL_MAX) {
+                        root.querySelectorAll('pre code').forEach((c) => { try { window.hljs.highlightElement(c); } catch (_) {} });
+                    }
+                },
+            };
+        }
+        if (type === 'json') {
+            try {
+                let pretty;
+                if (ext === 'jsonl' || ext === 'ndjson') {
+                    pretty = text.split('\n').filter((l) => l.trim())
+                        .map((l) => JSON.stringify(JSON.parse(l), null, 2)).join('\n\n');
+                } else {
+                    pretty = JSON.stringify(JSON.parse(text), null, 2);
+                }
+                return { cls: 'code', html: `<pre class="tp-code"><code class="hljs language-json">${hl(pretty, 'json')}</code></pre>` };
+            } catch (err) {
+                return {
+                    cls: 'code', err: true,
+                    html: `<pre class="tp-code"><code class="hljs">${esc(text)}</code></pre>`,
+                    note: `JSON не разобран: ${err && err.message ? err.message : err}`,
+                };
+            }
+        }
+        if (type === 'csv') {
+            const { rows, more } = parseCsv(text, sniffDelim(text, ext), PV_CSV_ROWS + 1);
+            if (!rows.length) return { cls: 'md', html: '<p>Файл пуст.</p>' };
+            const [head, ...data] = rows;
+            const cols = rows.reduce((m, r) => Math.max(m, r.length), 0);
+            const NUM = /^\s*[-+]?[\d\s]*[.,]?\d+\s*%?\s*$/;
+            const isNum = Array.from({ length: cols }, (_, i) => {
+                const vals = data.map((r) => r[i]).filter((v) => v != null && String(v).trim() !== '');
+                return vals.length > 0 && vals.every((v) => NUM.test(v));
+            });
+            const nc = (i) => (isNum[i] ? ' class="tp-num"' : '');
+            const th = Array.from({ length: cols }, (_, i) => `<th${nc(i)}>${esc(head[i] ?? '')}</th>`).join('');
+            const tb = data.map((r) => `<tr>${Array.from({ length: cols }, (_, i) => `<td${nc(i)}>${esc(r[i] ?? '')}</td>`).join('')}</tr>`).join('');
+            const note = more ? `Показаны первые ${PV_CSV_ROWS} строк.` : `Строк: ${data.length}, столбцов: ${cols}.`;
+            return { cls: 'table', html: `<table class="tp-table"><thead><tr>${th}</tr></thead><tbody>${tb}</tbody></table>`, note };
+        }
+        if (type === 'html') {
+            const fr = document.createElement('iframe');
+            fr.className = 'tp-frame';
+            fr.setAttribute('sandbox', '');
+            fr.setAttribute('referrerpolicy', 'no-referrer');
+            fr.title = name;
+            const csp = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data: blob:; style-src \'unsafe-inline\'; font-src data:">';
+            fr.srcdoc = csp + text;
+            return { cls: 'frame', node: fr, note: 'Скрипты и внешние ресурсы отключены.' };
+        }
+        // code | text
+        if (type === 'code') {
+            let base = String(name || '').toLowerCase().split('/').pop();
+            let e = extOf(base) || base;
+            const lang = PV_CODE[e] || '';
+            return { cls: 'code', html: `<pre class="tp-code"><code class="hljs${lang ? ' language-' + lang : ''}">${hl(text, lang)}</code></pre>` };
+        }
+        return { cls: 'text', html: `<pre class="tp-plain">${esc(text)}</pre>` };
+    }
+
+    // Переключатель «Превью / Исходник» в шапке панели.
+    document.addEventListener('click', (e) => {
+        const btn = e.target && e.target.closest ? e.target.closest('#text-preview-modes [data-body-mode]') : null;
+        if (!btn || !FP.type) return;
+        e.preventDefault();
+        const next = btn.dataset.bodyMode === 'raw' ? 'raw' : 'preview';
+        if (curMode() === next) return;
+        FP.modePref[FP.type] = next;
+        renderFilePreview();
+    });
+
+    // Плитка без рендера в поле ввода: вместо скачивания коротко показываем «Нет превью».
+    function flashNoPreview(t) {
+        const meta = t.querySelector('.fa-tile__meta');
+        if (!meta || t.classList.contains('fa-tile--nopreview')) return;
+        const prev = meta.textContent;
+        t.classList.add('fa-tile--nopreview');
+        meta.textContent = 'Нет превью';
+        setTimeout(() => {
+            t.classList.remove('fa-tile--nopreview');
+            if (meta.isConnected) meta.textContent = t.dataset.meta || prev;
+        }, 1400);
+    }
+
     function activate(t, e) {
         if (t.classList.contains('fa-tile--broken')) return;
         const kind = t.dataset.kind;
         if (kind === 'image' || kind === 'video') return openLightbox(t);
         if (kind === 'audio') return toggleTileAudio(t);
+        if (previewTypeOf(t.dataset.name, t.dataset.mime)) { openFilePreview(t); return; }
+        // Только что приложенный файл повторно не скачиваем.
+        if (t.closest('.fa-preview-bar')) {
+            const url = t.dataset.dlUrl || t.dataset.url || '';
+            if (extOf(t.dataset.name) === 'pdf' && url) { window.open(url, '_blank', 'noopener'); return; }
+            return flashNoPreview(t);
+        }
         return downloadDoc(t);
     }
+
+    // Плитку убрали из DOM (крестик, отправка) — закрываем её превью.
+    new MutationObserver(() => {
+        if (FP.tile && !FP.tile.isConnected) {
+            const app = window.__catchpmApp;
+            if (app && typeof app.closeTextPreview === 'function') app.closeTextPreview();
+            else exitFilePreview({ deferred: true });
+        }
+    }).observe(document.documentElement, { childList: true, subtree: true });
 
     const isFileTile = (t) => !!t && !t.classList.contains('fa-chip--text') && !t.classList.contains('input-chip');
 
@@ -332,6 +710,19 @@
         const a = e.target && e.target.closest ? e.target.closest('#text-preview-dl') : null;
         if (!a) return;
         e.stopPropagation();
+        if (FP.tile) {
+            const t = FP.tile;
+            const file = t._faFile;
+            let url = t.dataset.dlUrl || t.dataset.url || '';
+            if (!url && file instanceof Blob) {
+                if (_textDlUrl) { try { URL.revokeObjectURL(_textDlUrl); } catch (_) {} }
+                url = _textDlUrl = URL.createObjectURL(file);
+            }
+            if (!url) { e.preventDefault(); return; }
+            a.href = url;
+            a.download = t.dataset.name || 'file';
+            return;
+        }
         const body = document.getElementById('text-preview-body');
         const text = body ? (body.innerText || body.textContent || '') : '';
         if (!text.trim()) { e.preventDefault(); return; }
@@ -344,5 +735,6 @@
     window.FileTiles = {
         tileHtml, groupHtml, enhanceScroller, trackOf, stopAudioFor, bindAudioTiles,
         kindOf, labelOf, fmtSize,
+        previewTypeOf, openFilePreview, exitFilePreview,
     };
 })();

@@ -2382,6 +2382,7 @@ class ChatApp {
     /* Открывает правый сайдбар-превью с оригинальным текстом чипа. */
     openTextPreview(chipEl) {
         if (!chipEl) return;
+        window.FileTiles?.exitFilePreview?.();
         const chipId = chipEl.getAttribute?.('data-chip-id') || null;
         let text = '';
         if (chipId && this._pendingChips && this._pendingChips.has(chipId)) {
@@ -2426,6 +2427,7 @@ class ChatApp {
 
     /* Закрывает правый сайдбар-превью. */
     closeTextPreview() {
+        window.FileTiles?.exitFilePreview?.({ deferred: true });
         const activeId = this._activePreviewChipId;
         if (this._activePreviewChipEl) {
             this._activePreviewChipEl.classList.remove('is-preview-open');

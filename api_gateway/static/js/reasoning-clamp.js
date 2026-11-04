@@ -2,7 +2,7 @@
    Каждый .reasoning-step в «Размышлениях» обрезается до 2 строк. Клик по шагу
    раскрывает или сворачивает его (выделение текста клик не считает).
    Если .reasoning-body стал выше экрана, внизу карточки появляется
-   кнопка «Свернуть размышления», она закреплена у нижнего края чата.
+   кнопка «Свернуть размышления», она всегда последняя в карточке.
    Работает и для живого стрима, и для истории: новые узлы ловит
    MutationObserver, высоту отслеживает ResizeObserver. */
 (function () {
@@ -36,7 +36,11 @@
 
     function ensureButton(body) {
         var btn = body.querySelector(':scope > .reasoning-collapse-btn');
-        if (btn) return btn;
+        if (btn) {
+            // Шаги стрима дописываются в конец body, кнопку возвращаем вниз.
+            if (body.lastElementChild !== btn) body.appendChild(btn);
+            return btn;
+        }
         btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'reasoning-collapse-btn';

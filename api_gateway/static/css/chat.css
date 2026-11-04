@@ -3138,55 +3138,44 @@ pre {
 .reasoning-body .reasoning-collapse-btn {
   display: none;
 }
-/* Липкая полоса внизу карточки: фон чата под кнопкой закрывает текст. */
+/* Кнопка «Свернуть»: зафиксирована в самом низу карточки .reasoning-body
+   по центру (JS возвращает её последним элементом при стриме) и не двигается
+   при прокрутке ленты; при скролле над полем ввода появляется только
+   круглая кнопка scroll-to-bottom. */
 .reasoning-body.reasoning-body--tall .reasoning-collapse-btn {
-  position: sticky;
-  bottom: 0;
-  z-index: 2;
-  display: flex;
+  display: inline-flex;
+  align-self: center;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
-  margin: 0 -7px -7px;
-  padding: 46px 0 9px;
+  gap: 4px;
+  margin: 4px 0 0;
+  padding: 3px 10px 3px 8px;
   border: none;
-  border-radius: 0 0 9px 9px;
-  background: linear-gradient(to bottom, color-mix(in srgb, var(--bg, #faf9f7) 0%, transparent), var(--bg, #faf9f7) 44px);
-  color: var(--text-primary, var(--cds-reasoning-text));
+  border-radius: 999px;
+  background: var(--surface, var(--bg, #fff));
+  box-shadow: inset 0 0 0 1px var(--cds-reasoning-ring), 0 1px 4px rgba(0, 0, 0, 0.12);
+  color: var(--cds-reasoning-muted);
   font-weight: 500;
   font-family: var(--font-anthropic-sans, var(--font-sans));
   font-size: 12px;
   line-height: 16px;
   cursor: pointer;
-}
-.reasoning-body.reasoning-body--tall .reasoning-collapse-btn::before {
-  content: "";
-  position: absolute;
-  left: 50%;
-  bottom: 4px;
-  width: 112px;
-  height: 26px;
-  transform: translateX(-50%);
-  border-radius: 999px;
-  background: var(--surface, #fff);
-  box-shadow: inset 0 0 0 1px var(--cds-reasoning-muted), 0 1px 4px rgba(0, 0, 0, 0.08);
-  opacity: 0.9;
-  transition: opacity 0.15s ease;
-  pointer-events: none;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 .reasoning-body.reasoning-body--tall .reasoning-collapse-btn:hover {
+  background: color-mix(in srgb, var(--cds-reasoning-ring) 60%, var(--surface, var(--bg, #fff)));
   color: var(--text-primary, var(--cds-reasoning-text));
 }
-.reasoning-body.reasoning-body--tall .reasoning-collapse-btn:hover::before {
-  opacity: 1;
+.reasoning-body.reasoning-body--tall .reasoning-collapse-btn:focus-visible {
+  outline: 1px solid var(--cds-reasoning-muted);
+  outline-offset: 2px;
 }
 .reasoning-body .reasoning-collapse-btn svg,
 .reasoning-body .reasoning-collapse-btn span {
   position: relative;
 }
 .reasoning-body .reasoning-collapse-btn svg {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
 }
 @media (prefers-reduced-motion: reduce) {
   .reasoning-body .reasoning-step--clampable { transition: none; }

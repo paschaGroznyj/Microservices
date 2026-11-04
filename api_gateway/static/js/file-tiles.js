@@ -37,7 +37,6 @@
     const VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v', 'ogv', 'avi', 'mkv']);
     const AUDIO_EXTS = new Set(['mp3', 'mpga', 'wav', 'wave', 'ogg', 'oga', 'opus', 'm4a', 'aac', 'flac', 'weba', 'aif', 'aiff']);
     const OPEN_IN_TAB_EXTS = new Set(['pdf', 'txt']);
-    const WAVE_BARS = 22;
 
     const IC = {
         play: '<svg class="fa-tile__ic fa-tile__ic--play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.2c0-1.1 1.2-1.8 2.2-1.2l9.6 6c.9.6.9 1.9 0 2.4l-9.6 6c-1 .6-2.2-.1-2.2-1.2V5.2Z" fill="currentColor"/></svg>',
@@ -78,23 +77,6 @@
         if (b < 1024 * 1024) return `${Math.round(b / 1024)} КБ`;
         return `${(b / 1024 / 1024).toFixed(b < 10 * 1024 * 1024 ? 1 : 0)} МБ`;
     }
-    function fmtTime(sec) {
-        const s = Math.max(0, Math.floor(Number(sec) || 0));
-        return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-    }
-    /* Псевдо-волна: стабильная для имени файла, без декодирования аудио. */
-    function waveHtml(name) {
-        let h = 2166136261;
-        const str = String(name || 'audio');
-        for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
-        let out = '';
-        for (let i = 0; i < WAVE_BARS; i++) {
-            h ^= h << 13; h ^= h >>> 17; h ^= h << 5;
-            out += `<i style="--h:${28 + ((h >>> 0) % 72)}%"></i>`;
-        }
-        return out;
-    }
-
     function tileHtml(file, opts = {}) {
         const f = file || {};
         const name = String(f.name || 'файл');
@@ -111,7 +93,8 @@
         } else if (kind === 'video') {
             media = `<video class="fa-tile__video" src="${esc(url)}#t=0.1" preload="metadata" muted playsinline disablepictureinpicture tabindex="-1"></video><span class="fa-tile__badge">${IC.play}</span>`;
         } else if (kind === 'audio') {
-            media = `<span class="fa-tile__audio"><span class="fa-tile__play">${IC.play}${IC.pause}</span><span class="fa-tile__wave">${waveHtml(name)}</span></span>`;
+            media = `<span class="fa-tile__audio"><button class="fa-tile__play fa-audio-play" type="button" tabindex="-1" aria-label="Воспроизвести">${IC.play}${IC.pause}</button>`
+                + `<canvas class="fa-tile__viz fa-audio-viz" role="slider" tabindex="0" aria-label="Перемотка: ${esc(name)}" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" aria-valuetext="0:00 из 0:00"></canvas></span>`;
         } else {
             media = `<span class="fa-tile__label">${esc(label)}</span>`;
         }
@@ -126,11 +109,15 @@
             `data-url="${esc(url)}"`, `data-meta="${esc(meta)}"`,
         ];
         if (f.dlUrl) attrs.push(`data-dl-url="${esc(f.dlUrl)}"`);
+        if (kind === 'audio') attrs.push(`data-audio-url="${esc(url)}"`, `data-audio-name="${esc(name)}"`);
+        const metaHtml = kind === 'audio'
+            ? `<span class="fa-tile__meta"><span class="fa-tile__meta-txt">${esc(meta)}</span><span class="fa-tile__time"><b class="cur">0:00</b><span class="fa-audio-dur"> / 0:00</span></span></span>`
+            : `<span class="fa-tile__meta">${esc(meta)}</span>`;
         const removeBtn = opts.removable
             ? `<button class="fa-chip__remove" type="button" aria-label="Убрать ${esc(name)}"${idxAttr}>${IC.close}</button>`
             : '';
         return `<div ${attrs.join(' ')}${idxAttr}><span class="fa-tile__media">${media}</span>`
-            + `<span class="fa-tile__cap"><span class="fa-chip__name">${esc(name)}</span><span class="fa-tile__meta">${esc(meta)}</span></span>`
+            + `<span class="fa-tile__cap"><span class="fa-chip__name">${esc(name)}</span>${metaHtml}</span>`
             + `${removeBtn}</div>`;
     }
 
@@ -197,89 +184,54 @@
         return track;
     }
 
-    /* ── Аудио внутри плитки ──────────────────────────────────── */
-    let _audio = null;
-    let _audioTile = null;
-    let _raf = 0;
-
-    function stopAudio() {
-        cancelAnimationFrame(_raf);
-        const a = _audio;
-        const t = _audioTile;
-        _audio = null;
-        _audioTile = null;
-        if (a) {
-            try { a.pause(); } catch (_) {}
-            try { a.removeAttribute('src'); a.load(); } catch (_) {}
+    /* ── Аудио внутри плитки: тот же матричный визуализатор, что у fa-audio-viz ── */
+    function bindAudioTile(t) {
+        if (!t) return null;
+        if (t.dataset.audioBound === '1') return t._audioState || null;
+        const anim = window.ChatAnimations;
+        if (!anim || typeof anim.bindAudioChip !== 'function') return null;
+        anim.bindAudioChip(t);
+        const s = t._audioState;
+        if (s && s.audio) {
+            s.audio.addEventListener('play', () => t.classList.add('fa-tile--active'));
+            s.audio.addEventListener('error', () => {
+                if (!s.audio.getAttribute('src') || !t.isConnected) return;
+                try { s.setPlaying(false); } catch (_) {}
+                t.classList.remove('fa-tile--active');
+                t.classList.add('fa-tile--broken');
+                const txt = t.querySelector('.fa-tile__meta-txt');
+                if (txt) txt.textContent = 'Файл недоступен';
+            });
         }
-        if (t) {
-            t.classList.remove('is-playing', 'is-active');
-            t.querySelectorAll('.fa-tile__wave i.on').forEach((i) => i.classList.remove('on'));
-            const m = t.querySelector('.fa-tile__meta');
-            if (m) m.textContent = t.dataset.meta || '';
-        }
+        return s || null;
+    }
+    function bindAudioTiles(root) {
+        const scope = root && root.querySelectorAll ? root : document;
+        if (scope.matches && scope.matches('.fa-tile--audio')) bindAudioTile(scope);
+        scope.querySelectorAll('.fa-tile--audio:not([data-audio-bound="1"])').forEach(bindAudioTile);
     }
     function stopAudioFor(el) {
-        if (_audioTile && el && (el === _audioTile || el.contains(_audioTile))) stopAudio();
+        if (!el) return;
+        const tiles = el.matches && el.matches('.fa-tile--audio')
+            ? [el]
+            : Array.from(el.querySelectorAll ? el.querySelectorAll('.fa-tile--audio') : []);
+        tiles.forEach((t) => {
+            const s = t._audioState;
+            if (s && s.playing) { try { s.setPlaying(false); } catch (_) {} }
+        });
     }
-    function paint() {
-        const a = _audio;
-        const t = _audioTile;
-        if (!a || !t) return;
-        const d = a.duration;
-        const c = a.currentTime;
-        const p = isFinite(d) && d > 0 ? c / d : 0;
-        const bars = t.querySelectorAll('.fa-tile__wave i');
-        const on = Math.round(p * bars.length);
-        bars.forEach((b, i) => b.classList.toggle('on', i < on));
-        const m = t.querySelector('.fa-tile__meta');
-        if (m) m.textContent = `${fmtTime(c)} / ${isFinite(d) && d > 0 ? fmtTime(d) : '–:––'}`;
+    function toggleTileAudio(t) {
+        const s = bindAudioTile(t);
+        if (s && typeof s.setPlaying === 'function') s.setPlaying(!s.playing);
     }
-    function loop() {
-        cancelAnimationFrame(_raf);
-        const step = () => {
-            paint();
-            if (_audio && !_audio.paused) _raf = requestAnimationFrame(step);
-        };
-        _raf = requestAnimationFrame(step);
-    }
-    function toggleAudio(t, e) {
-        const url = t.dataset.url;
-        if (!url) return;
-        const wave = e && e.target && e.target.closest ? e.target.closest('.fa-tile__wave') : null;
-        if (_audioTile !== t) {
-            stopAudio();
-            const a = new Audio();
-            a.preload = 'auto';
-            a.src = url;
-            _audio = a;
-            _audioTile = t;
-            t.classList.add('is-active');
-            a.addEventListener('loadedmetadata', () => { if (a === _audio) paint(); });
-            a.addEventListener('play', () => { if (a === _audio) { t.classList.add('is-playing'); loop(); } });
-            a.addEventListener('pause', () => { if (a === _audio) { t.classList.remove('is-playing'); paint(); } });
-            a.addEventListener('ended', () => { if (a === _audio) stopAudio(); });
-            a.addEventListener('error', () => {
-                if (a !== _audio) return;
-                stopAudio();
-                t.classList.add('fa-tile--error');
-            });
-        } else if (wave && isFinite(_audio.duration) && _audio.duration > 0) {
-            // Клик по волне у уже играющего файла — перемотка.
-            const r = wave.getBoundingClientRect();
-            _audio.currentTime = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * _audio.duration;
-            paint();
-            if (!_audio.paused) return;
-        }
-        const a = _audio;
-        if (a.paused) {
-            a.play().catch((err) => {
-                console.warn('FileTiles audio:', err);
-                if (a === _audio) stopAudio();
-            });
-        } else {
-            a.pause();
-        }
+    if (typeof MutationObserver === 'function') {
+        const mo = new MutationObserver((list) => {
+            for (const m of list) {
+                for (const n of m.addedNodes) if (n.nodeType === 1) bindAudioTiles(n);
+            }
+        });
+        const start = () => { bindAudioTiles(document); mo.observe(document.body, { childList: true, subtree: true }); };
+        if (document.body) start(); else document.addEventListener('DOMContentLoaded', start, { once: true });
     }
 
     /* ── Лайтбокс для картинок/видео ──────────────────────────── */
@@ -323,7 +275,7 @@
         if (t.classList.contains('fa-tile--broken')) return;
         const kind = t.dataset.kind;
         if (kind === 'image' || kind === 'video') return openLightbox(t);
-        if (kind === 'audio') return toggleAudio(t, e);
+        if (kind === 'audio') return toggleTileAudio(t);
         return downloadDoc(t);
     }
 
@@ -332,7 +284,7 @@
     document.addEventListener('click', (e) => {
         const t = e.target && e.target.closest ? e.target.closest('.fa-tile') : null;
         if (!isFileTile(t)) return;
-        if (e.target.closest('.fa-chip__remove, .fa-tiles__nav')) return;
+        if (e.target.closest('.fa-chip__remove, .fa-tiles__nav, .fa-audio-viz, .fa-audio-play')) return;
         e.preventDefault();
         activate(t, e);
     });
@@ -364,8 +316,33 @@
         if (meta) meta.textContent = 'Файл недоступен';
     }, true);
 
+    /* ── Скачать вставленный текст из панели предпросмотра (#text-preview-dl) ── */
+    let _textDlUrl = '';
+    function textFileName(text) {
+        const first = (String(text).split('\n').find((l) => l.trim()) || '').trim();
+        let base = first.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 48).trim();
+        if (!base) {
+            const d = new Date();
+            const p2 = (n) => String(n).padStart(2, '0');
+            base = `text-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}`;
+        }
+        return base.replace(/[.\s]+$/, '') + '.txt';
+    }
+    document.addEventListener('click', (e) => {
+        const a = e.target && e.target.closest ? e.target.closest('#text-preview-dl') : null;
+        if (!a) return;
+        e.stopPropagation();
+        const body = document.getElementById('text-preview-body');
+        const text = body ? (body.innerText || body.textContent || '') : '';
+        if (!text.trim()) { e.preventDefault(); return; }
+        if (_textDlUrl) { try { URL.revokeObjectURL(_textDlUrl); } catch (_) {} }
+        _textDlUrl = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+        a.href = _textDlUrl;
+        a.download = textFileName(text);
+    }, true);
+
     window.FileTiles = {
-        tileHtml, groupHtml, enhanceScroller, trackOf, stopAudioFor,
+        tileHtml, groupHtml, enhanceScroller, trackOf, stopAudioFor, bindAudioTiles,
         kindOf, labelOf, fmtSize,
     };
 })();

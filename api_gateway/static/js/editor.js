@@ -841,6 +841,10 @@
           text,
           startLine: sel.startLineNumber,
           endLine: sel.endLineNumber,
+          startCol: sel.startColumn,
+          endCol: sel.endColumn,
+          path: currentPath,
+          ws: currentWs,
         };
         if (layoutEl?.classList.contains("ai-collapsed")) {
           applyAiCollapsed(false);
@@ -855,7 +859,7 @@
       const sel = editor.getSelection();
       const model = editor.getModel();
       if (sel && !sel.isEmpty()) {
-        pendingSelection = { text: model.getValueInRange(sel), startLine: sel.startLineNumber, endLine: sel.endLineNumber };
+        pendingSelection = { text: model.getValueInRange(sel), startLine: sel.startLineNumber, endLine: sel.endLineNumber, startCol: sel.startColumn, endCol: sel.endColumn, path: currentPath, ws: currentWs };
         updateSelectionHint();
       }
       if (layoutEl?.classList.contains("ai-collapsed")) applyAiCollapsed(false);
@@ -1050,7 +1054,9 @@
     if (pendingSelection) {
       const { startLine, endLine } = pendingSelection;
       const range = startLine === endLine ? `строка ${startLine}` : `строки ${startLine}–${endLine}`;
-      hint.innerHTML = `<span>📎 Вопрос о: ${range}</span><button type="button" id="ed-ai-selclear" title="Сбросить">✕</button>`;
+      const fname = String(pendingSelection.path || currentPath || "").split("/").pop();
+      hint.innerHTML = `<span></span><button type="button" id="ed-ai-selclear" title="Сбросить">✕</button>`;
+      hint.firstElementChild.textContent = `📎 Вопрос о: ${fname ? fname + " · " : ""}${range}`;
       hint.style.display = "";
       $("ed-ai-selclear").addEventListener("click", () => {
         pendingSelection = null;
@@ -1848,24 +1854,57 @@
     aiAppend("bot", "Чат не привязан — откройте редактор из чата, чтобы спросить агента.");
   }
 
+  // Метаданные контекста для агента: воркспейс (id + название), позиция выделения, язык, правки.
+  function wsLabel(ws) {
+    if (!ws) return "—";
+    const o = Array.from(wsSelect.options || []).find(x => x.value === ws);
+    const name = o ? String(o.textContent || "").trim() : "";
+    return name && name !== ws ? `${ws} («${name}»)` : ws;
+  }
+  function editorLink(ws) {
+    if (!CHAT_ID) return null;
+    const u = new URL("/editor", location.origin);
+    u.searchParams.set("chat_id", CHAT_ID);
+    if (ws) u.searchParams.set("workspace_id", ws);
+    return u.toString();
+  }
+  function selectionHeader(sel, maxChars) {
+    const path = sel.path || currentPath || "";
+    const ws = sel.ws || currentWs || "";
+    const lineLoc = sel.startLine === sel.endLine ? `строка ${sel.startLine}` : `строки ${sel.startLine}–${sel.endLine}`;
+    const pos = (sel.startCol && sel.endCol) ? ` (${sel.startLine}:${sel.startCol} → ${sel.endLine}:${sel.endCol})` : "";
+    const nLines = sel.endLine - sel.startLine + 1;
+    const total = path && path === currentPath ? String(currentText() || "").split("\n").length : 0;
+    const lang = path ? guessLang(path) : "";
+    const parts = [
+      `файл ${path || "—"}`,
+      `воркспейс ${wsLabel(ws)}`,
+      `${lineLoc}${pos}`,
+      `выделено ${nLines} стр. · ${sel.text.length} симв.`,
+    ];
+    if (lang) parts.push(`язык ${lang}`);
+    if (total) parts.push(`в файле ${total} строк`);
+    if (dirty && path === currentPath) parts.push("есть несохранённые правки");
+    const cut = sel.text.length > maxChars ? `\n(показаны первые ${maxChars} символов из ${sel.text.length})` : "";
+    return { head: `[Выделенный фрагмент · ${parts.join(" · ")}]`, cut, lang };
+  }
+
   async function dispatchAIMessage(userVisibleText, pollAnswer = null, opts = {}) {
     const text = String(userVisibleText || "").trim();
     if (!text || !CHAT_ID) return;
     let msg = text;
-    const fileUrl = (currentWs && currentPath)
-      ? `${location.origin}/editor?chat_id=${encodeURIComponent(CHAT_ID)}`
-      : null;
+    const fileUrl = (currentWs && currentPath) ? editorLink(currentWs) : null;
     if (pendingSelection) {
-      const { text: selText, startLine, endLine } = pendingSelection;
-      const loc = startLine === endLine ? `строка ${startLine}` : `строки ${startLine}–${endLine}`;
-      const file = currentPath ? ` ${currentPath}` : "";
-      const link = fileUrl ? `\nСсылка на файл в редакторе: ${fileUrl}` : "";
-      msg = `[Выделенный фрагмент${file}, ${loc}]\n\`\`\`\n${selText.slice(0, 8000)}\n\`\`\`${link}\n\nВопрос: ${text}`;
+      const sel = pendingSelection;
+      const { head, cut, lang } = selectionHeader(sel, 8000);
+      const selUrl = editorLink(sel.ws || currentWs) || fileUrl;
+      const link = selUrl ? `\nСсылка на файл в редакторе: ${selUrl}` : "";
+      msg = `${head}\n${codeFence(sel.text.slice(0, 8000), lang)}${cut}${link}\n\nВопрос: ${text}`;
     } else if (currentPath && !isBinary) {
       const lines = currentContent ? currentContent.split("\n").length : 0;
       const bytes = currentContent ? new Blob([currentContent]).size : 0;
       const link = fileUrl ? `\nСсылка на файл в редакторе: ${fileUrl}` : "";
-      msg = `[Открыт файл: ${currentPath} · воркспейс ${currentWs} · ${lines} строк · ${bytes} байт]${link}\n\nФайл целиком НЕ приложен — при необходимости спроси и я пришлю содержимое или выделю фрагмент.\n\nВопрос: ${text}`;
+      msg = `[Открыт файл: ${currentPath} · воркспейс ${wsLabel(currentWs)} · ${lines} строк · ${bytes} байт]${link}\n\nФайл целиком НЕ приложен — при необходимости спроси и я пришлю содержимое или выделю фрагмент.\n\nВопрос: ${text}`;
     } else {
       msg = `${text}`;
     }
@@ -1959,14 +1998,13 @@
     const lang = currentPath ? guessLang(currentPath) : "";
     let ctx;
     if (pendingSelection) {
-      const { text: selText, startLine, endLine } = pendingSelection;
-      const loc = startLine === endLine ? `строка ${startLine}` : `строки ${startLine}–${endLine}`;
-      ctx = `[Выделенный фрагмент ${currentPath || ""}, ${loc}]\n${codeFence(selText.slice(0, SLASH_MAX_CHARS), lang)}`;
+      const { head, cut, lang: selLang } = selectionHeader(pendingSelection, SLASH_MAX_CHARS);
+      ctx = `${head}\n${codeFence(pendingSelection.text.slice(0, SLASH_MAX_CHARS), selLang || lang)}${cut}`;
     } else if (currentPath && !isBinary) {
       const body = currentText() || "";
       const lines = body ? body.split("\n").length : 0;
       const cut = body.length > SLASH_MAX_CHARS ? `\n(показаны первые ${SLASH_MAX_CHARS} символов из ${body.length})` : "";
-      ctx = `[Файл: ${currentPath} · воркспейс ${currentWs} · ${lines} строк]\n${codeFence(body.slice(0, SLASH_MAX_CHARS), lang)}${cut}`;
+      ctx = `[Файл: ${currentPath} · воркспейс ${wsLabel(currentWs)} · ${lines} строк]\n${codeFence(body.slice(0, SLASH_MAX_CHARS), lang)}${cut}`;
     } else {
       ctx = "[Файл в редакторе не открыт]";
     }

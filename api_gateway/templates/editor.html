@@ -21,7 +21,7 @@
 <link rel="stylesheet" href="/static/js/vendor/github-dark.min.css" id="hljs-theme-dark" disabled>
 <script src="/static/js/vendor/highlight.min.js"></script>
 </head>
-<body data-chat-id="{{ chat_id }}" data-workspace-id="{{ workspace_id }}">
+<body data-chat-id="{{ chat_id }}" data-workspace-id="{{ workspace_id }}" data-readonly="{{ '1' if readonly else '0' }}" data-chat-transport="{{ chat_transport or 'ws' }}">
   <div class="chat-layout ed-layout" id="ed-layout">
 
     <div class="ed-mobile-overlay" id="ed-mobile-overlay" aria-hidden="true"></div>
@@ -73,7 +73,7 @@
             <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><path d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
             <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
           </button>
-          <button type="button" id="ed-save" class="ed-header-btn" title="Сохранить (Ctrl+S)" disabled>
+          <button type="button" id="ed-save" class="ed-header-btn" title="Сохранить (Ctrl+S)" disabled{% if readonly %} hidden{% endif %}>
             <svg viewBox="0 0 20 20" width="15" height="15" fill="none" aria-hidden="true">
               <path d="M4 10.5l4 4L16 6.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>

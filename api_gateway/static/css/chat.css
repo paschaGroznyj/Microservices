@@ -208,13 +208,21 @@
   text-align: left;
   vertical-align: top;
   line-height: 1.5;
+  /* .agent-message наследует word-break: break-word, а он обнуляет
+     min-content ячейки: авто-раскладка сжимала колонку подписей до одной
+     буквы («M / o / n / a…»). Переносим только между словами; если слово
+     не влезает, таблица скроллится по x, а не рвёт его. */
+  word-break: normal;
+  overflow-wrap: break-word;
+  min-width: 4.5em;
 }
 
 .agent-message th {
   background: color-mix(in srgb, var(--accent) 8%, var(--surface));
   color: var(--text-primary);
   font-weight: 600;
-  white-space: nowrap;
+  /* nowrap у длинного заголовка забирал ширину у остальных колонок */
+  white-space: normal;
 }
 
 .agent-message tbody tr:nth-child(even) td {

@@ -1507,7 +1507,12 @@ async def editor_ttl_endpoint(workspace_id: str):
 # /edit и /upload — по известным путям, keep/unkeep — смена TTL, delete/TTL-очистка — gone.
 # Gateway (editor_gw) раздаёт событие открытым SSE-подпискам редактора.
 
-EDITOR_NOTIFY_URL = os.environ.get("EDITOR_NOTIFY_URL", "http://api_gateway:7000/internal/editor/notify")
+# Через запятую — несколько gateway (main + Sigma): у каждого свой in-memory хаб SSE.
+EDITOR_NOTIFY_URL = os.environ.get(
+    "EDITOR_NOTIFY_URL",
+    "http://api_gateway:7000/internal/editor/notify,http://api_gateway_sigma:7010/internal/editor/notify",
+)
+EDITOR_NOTIFY_URLS = [u.strip() for u in EDITOR_NOTIFY_URL.split(",") if u.strip()]
 EDITOR_NOTIFY_TOKEN = os.environ.get("EDITOR_NOTIFY_TOKEN", "")
 EDITOR_NOTIFY_TIMEOUT = 1.5
 EDITOR_NOTIFY_MAX_PATHS = 200
@@ -1709,20 +1714,23 @@ def _ws_meta_apply(ws_path: str, rels: list[str], full: bool, source: str) -> di
     }
 
 def _editor_notify_sync(workspace_id: str, event: str, data: dict) -> bool:
-    if not EDITOR_NOTIFY_TOKEN or not EDITOR_NOTIFY_URL:
+    """Шлёт событие всем gateway из EDITOR_NOTIFY_URLS. True — доставлено хотя бы в один."""
+    if not EDITOR_NOTIFY_TOKEN or not EDITOR_NOTIFY_URLS:
         return False
     body = json.dumps({"workspace_id": workspace_id, "event": event, "data": data},
                       ensure_ascii=False).encode("utf-8")
-    req = urllib.request.Request(
-        EDITOR_NOTIFY_URL, data=body, method="POST",
-        headers={"Content-Type": "application/json", "X-Editor-Token": EDITOR_NOTIFY_TOKEN},
-    )
-    try:
-        with _editor_opener.open(req, timeout=EDITOR_NOTIFY_TIMEOUT) as r:
-            return 200 <= r.status < 300
-    except Exception as e:
-        log.debug("[editor-notify] %s %s не доставлено: %s", event, workspace_id, e)
-        return False
+    ok = False
+    for url in EDITOR_NOTIFY_URLS:
+        req = urllib.request.Request(
+            url, data=body, method="POST",
+            headers={"Content-Type": "application/json", "X-Editor-Token": EDITOR_NOTIFY_TOKEN},
+        )
+        try:
+            with _editor_opener.open(req, timeout=EDITOR_NOTIFY_TIMEOUT) as r:
+                ok = ok or (200 <= r.status < 300)
+        except Exception as e:
+            log.debug("[editor-notify] %s %s -> %s не доставлено: %s", event, workspace_id, url, e)
+    return ok
 
 
 def _editor_notify(workspace_id: str, event: str, data: dict) -> None:

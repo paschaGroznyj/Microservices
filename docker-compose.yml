@@ -292,6 +292,8 @@ services:
       SECRET_KEY: ${SECRET_KEY}
       ALGORITHM: ${ALGORITHM}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      SANDBOX_SERVICE_URL: ${SANDBOX_SERVICE_URL:-http://agent_sandbox:8005}
+      EDITOR_NOTIFY_TOKEN: ${EDITOR_NOTIFY_TOKEN:-}
     volumes:
       - ./api_gateway_sigma:/app
       - ./api_gateway/static:/app/static
@@ -300,6 +302,7 @@ services:
       - ./api_gateway/config.py:/app/config.py
       - ./api_gateway/presence.py:/app/presence.py
       - ./api_gateway/run_status.py:/app/run_status.py
+      - ./api_gateway/editor_gw.py:/app/editor_gw.py
     depends_on:
       broker:
         condition: service_healthy
@@ -529,7 +532,7 @@ services:
       - CAPTION_API_PORT=${CAPTION_API_PORT}
       - PORT_CHATS_SERVICE=${PORT_CHATS_SERVICE:-8001}     
       - EDITOR_NOTIFY_TOKEN=${EDITOR_NOTIFY_TOKEN:-}
-      - EDITOR_NOTIFY_URL=${EDITOR_NOTIFY_URL:-http://api_gateway:7000/internal/editor/notify}
+      - EDITOR_NOTIFY_URL=${EDITOR_NOTIFY_URL:-http://api_gateway:7000/internal/editor/notify,http://api_gateway_sigma:7010/internal/editor/notify}
     volumes:
       - ./agent_sandbox/fonts:/app/fonts:ro
       - ./agent_sandbox/dev_utils:/app/dev_utils:ro

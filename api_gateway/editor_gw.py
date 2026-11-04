@@ -9,7 +9,7 @@
   GET /api/editor/workspaces          — список воркспейсов юзера (дерево проекта)
   GET /api/editor/tree?workspace_id=  — дерево файлов конкретного воркспейса
   GET /api/editor/file?workspace_id=&path=  — содержимое файла
-  PUT /api/editor/file?workspace_id=&path=  — сохранить файл (main gateway)
+  PUT /api/editor/file?workspace_id=&path=  — сохранить файл (main gateway; в readonly -> 403)
   GET /api/editor/watch?workspace_id=  — SSE: live-изменения файлов (события пушит agent_sandbox)
   POST /internal/editor/notify         — приём событий от agent_sandbox (X-Editor-Token)
 
@@ -35,16 +35,23 @@ _chats_url = None
 _sandbox_url = None
 _get_current_user = None
 _templates = None
+_readonly = False
+_chat_transport = "ws"
 _WS_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
-def bind(http_client, chats_url, sandbox_url, get_current_user, templates):
-    global _http, _chats_url, _sandbox_url, _get_current_user, _templates
+def bind(http_client, chats_url, sandbox_url, get_current_user, templates,
+         readonly: bool = False, chat_transport: str = "ws"):
+    """readonly=True — редактор только для просмотра (Sigma): PUT /api/editor/file -> 403.
+    chat_transport — как AI-панель редактора получает ответы агента: "ws" (main) или "sse" (Sigma)."""
+    global _http, _chats_url, _sandbox_url, _get_current_user, _templates, _readonly, _chat_transport
     _http = http_client
     _chats_url = chats_url
     _sandbox_url = sandbox_url
     _get_current_user = get_current_user
     _templates = templates
+    _readonly = bool(readonly)
+    _chat_transport = "sse" if chat_transport == "sse" else "ws"
 
 
 async def _require_user(request: Request):
@@ -74,7 +81,10 @@ async def editor_page(request: Request):
         return RedirectResponse(url="/login-page", status_code=302)
     chat_id = request.query_params.get("chat_id", "")
     workspace_id = request.query_params.get("workspace_id", "")
-    return _templates.TemplateResponse("editor.html", {"request": request, "chat_id": chat_id, "workspace_id": workspace_id})
+    return _templates.TemplateResponse("editor.html", {
+        "request": request, "chat_id": chat_id, "workspace_id": workspace_id,
+        "readonly": _readonly, "chat_transport": _chat_transport,
+    })
 
 
 @router.get("/api/editor/workspaces")
@@ -257,6 +267,8 @@ async def api_file_save(request: Request, body: EditorSaveBody):
     user = await _require_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Не авторизован")
+    if _readonly:
+        raise HTTPException(status_code=403, detail="Редактор открыт только для просмотра")
     await _assert_owns(user["user_id"], body.workspace_id)
     r = await _http.put(
         f"{_sandbox_url}/workspace/{body.workspace_id}/editor/write",

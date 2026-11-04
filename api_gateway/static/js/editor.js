@@ -16,6 +16,11 @@
   const wsSelect = $("ed-ws-select");
   const filenameEl = $("ed-filename");
   const saveBtn = $("ed-save");
+  // Sigma: редактор только для просмотра (gateway отвечает 403 на PUT /api/editor/file)
+  const READONLY = document.body.dataset.readonly === "1";
+  // Как AI-панель получает ответы агента: "ws" (main) или "sse" (Sigma, без WebSocket)
+  const CHAT_TRANSPORT = document.body.dataset.chatTransport === "sse" ? "sse" : "ws";
+  if (READONLY && saveBtn) saveBtn.hidden = true;
 
   // ── Collapse / Expand Left & Right Sidebars + Resizer ──
   const KEY_LEFT_COLLAPSED = "catchpm:ed-sidebar-collapsed";
@@ -624,9 +629,10 @@
   }
 
   function setDirty(v) {
-    dirty = v;
-    saveBtn.disabled = !v || isBinary || saving;
-    filenameEl.textContent = (currentPath || "") + (isBinary ? " (бинарный)" : "") + (v ? " •" : "");
+    dirty = READONLY ? false : v;
+    saveBtn.disabled = READONLY || !dirty || isBinary || saving;
+    const roMark = READONLY && currentPath && !isBinary ? " (только чтение)" : "";
+    filenameEl.textContent = (currentPath || "") + (isBinary ? " (бинарный)" : "") + roMark + (dirty ? " •" : "");
   }
 
   async function openFile(path) {
@@ -644,7 +650,7 @@
         const prevModel = editor.getModel();
         editor.setModel(model);
         if (prevModel && prevModel !== model) prevModel.dispose();
-        editor.updateOptions({ readOnly: isBinary });
+        editor.updateOptions({ readOnly: READONLY || isBinary });
         model.onDidChangeContent(() => {
           setDirty(editor.getValue() !== currentContent);
           if (previewOn) schedulePreview();
@@ -658,7 +664,7 @@
   }
 
   async function saveFile() {
-    if (!editor || !currentWs || !currentPath || isBinary || saving || !dirty) return;
+    if (READONLY || !editor || !currentWs || !currentPath || isBinary || saving || !dirty) return;
     saving = true; saveBtn.disabled = true;
     const content = editor.getValue();
     try {
@@ -1818,38 +1824,63 @@
 
   if (CHAT_ID) {
     loadEditorChatHistory();
-    try {
-      const proto = location.protocol === "https:" ? "wss" : "ws";
-      const ws = new WebSocket(`${proto}://${location.host}/ws/chat/${encodeURIComponent(CHAT_ID)}`);
-      ws.onmessage = (ev) => {
-        try {
-          const m = JSON.parse(ev.data);
-          if (m.is_from_bot && m.message) {
-            clearThinking();
-            const mid = m.message_id || (m.id != null ? String(m.id) : "");
-            aiAppend("bot", m.message, {
-              messageId: mid,
-              botMessageId: mid,
-              pollAnswers: m.poll_answers || [],
-              animate: true,
+    // Входящее сообщение чата (из WS main или из SSE-финала Sigma)
+    const handleIncoming = (m) => {
+      if (!m || typeof m !== "object") return;
+      if (m.is_from_bot && m.message) {
+        clearThinking();
+        const mid = m.message_id || (m.id != null ? String(m.id) : "");
+        aiAppend("bot", m.message, {
+          messageId: mid,
+          botMessageId: mid,
+          pollAnswers: m.poll_answers || [],
+          animate: true,
+        });
+      } else if (!m.is_from_bot) {
+        if (m.poll_answer && typeof m.poll_answer === "object") {
+          const bmid = String(m.poll_answer.bot_message_id || "");
+          const pidx = String(m.poll_answer.poll_index ?? 0);
+          if (bmid) {
+            aiLog.querySelectorAll(`.ed-poll[data-bot-message-id="${bmid}"][data-poll-index="${pidx}"]`).forEach(el => {
+              el._applySavedAnswer?.(m.poll_answer);
             });
-          } else if (!m.is_from_bot) {
-            if (m.poll_answer && typeof m.poll_answer === "object") {
-              const bmid = String(m.poll_answer.bot_message_id || "");
-              const pidx = String(m.poll_answer.poll_index ?? 0);
-              if (bmid) {
-                aiLog.querySelectorAll(`.ed-poll[data-bot-message-id="${bmid}"][data-poll-index="${pidx}"]`).forEach(el => {
-                  el._applySavedAnswer?.(m.poll_answer);
-                });
-              }
-            }
-            if (m.message_id && aiLog.querySelector(`.ed-ai-msg.user[data-message-id="${m.message_id}"]`)) {
-              return;
-            }
           }
-        } catch (_) {}
+        }
+        if (m.message_id && aiLog.querySelector(`.ed-ai-msg.user[data-message-id="${m.message_id}"]`)) {
+          return;
+        }
+      }
+    };
+    if (CHAT_TRANSPORT === "ws") {
+      try {
+        const proto = location.protocol === "https:" ? "wss" : "ws";
+        const ws = new WebSocket(`${proto}://${location.host}/ws/chat/${encodeURIComponent(CHAT_ID)}`);
+        ws.onmessage = (ev) => {
+          try { handleIncoming(JSON.parse(ev.data)); } catch (_) {}
+        };
+      } catch (_) {}
+    } else {
+      // Sigma: WebSocket нет. После отправки держим SSE /api/chats/{id}/stream до done/idle.
+      let sigmaEs = null;
+      window.__edWatchSigmaRun = () => {
+        if (!window.EventSource) return;
+        if (sigmaEs) { try { sigmaEs.close(); } catch (_) {} }
+        const es = new EventSource(`/api/chats/${encodeURIComponent(CHAT_ID)}/stream`, { withCredentials: true });
+        sigmaEs = es;
+        const finish = () => { try { es.close(); } catch (_) {} if (sigmaEs === es) sigmaEs = null; };
+        es.addEventListener("done", (ev) => {
+          finish();
+          let st = null;
+          try { st = JSON.parse(ev.data); } catch (_) {}
+          const msg = st && st.message;
+          if (msg && typeof msg === "object") handleIncoming({ is_from_bot: true, ...msg });
+          else clearThinking();
+        });
+        es.addEventListener("idle", () => { finish(); clearThinking(); });
+        es.addEventListener("timeout", () => { finish(); window.__edWatchSigmaRun(); });
+        es.onerror = () => { if (es.readyState === EventSource.CLOSED) finish(); };
       };
-    } catch (_) {}
+    }
   } else {
     aiAppend("bot", "Чат не привязан — откройте редактор из чата, чтобы спросить агента.");
   }
@@ -1931,6 +1962,7 @@
           ...(pollAnswer ? { poll_answer: pollAnswer } : {}),
         }),
       });
+      if (CHAT_TRANSPORT === "sse" && typeof window.__edWatchSigmaRun === "function") window.__edWatchSigmaRun();
     } catch (e) {
       clearThinking();
       aiAppend("bot", `Ошибка отправки: ${e.message}`);

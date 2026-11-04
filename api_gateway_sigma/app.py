@@ -28,6 +28,8 @@ from config import (
 
 from sigma_status_store import status_store
 import presence
+import editor_gw
+import os as _os_env
 import run_status
 import cache_bust
 
@@ -77,12 +79,25 @@ async def lifespan(app: FastAPI):
         follow_redirects=True
     )
 
+    # Веб-редактор (/editor): общий роутер main gateway, но только просмотр
+    # (PUT /api/editor/file -> 403) и AI-панель через SSE вместо WebSocket.
+    editor_gw.bind(
+        http_client=app.state.http_client,
+        chats_url=SERVICES['chats']['url'],
+        sandbox_url=SERVICES['sandbox']['url'],
+        get_current_user=get_current_user,
+        templates=templates,
+        readonly=True,
+        chat_transport="sse",
+    )
+
     yield
 
     # Shutdown
     logger.info("Shutting down API Gateway SIGMA...")
     await app.state.http_client.aclose()
 app = FastAPI(title="API Gateway SIGMA", lifespan=lifespan)
+app.include_router(editor_gw.router)
 # app = FastAPI(title="API Gateway", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
 
@@ -102,7 +117,11 @@ SERVICES = {
     "agent_service": {
         "url": f"http://agent_service:{PORT_PM_AGENT}",
         "health_endpoint": "/health",
-    }
+    },
+    "sandbox": {
+        "url": _os_env.getenv("SANDBOX_SERVICE_URL", "http://agent_sandbox:8005"),
+        "health_endpoint": "/health",
+    },
 }
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -1069,21 +1088,6 @@ async def searching_default(request: Request):
             raise HTTPException(status_code=response.status_code, detail="Parser error")
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Parsers service unreachable: {str(e)}")
-
-@app.get("/api/editor/workspaces")
-async def api_editor_workspaces(request: Request):
-    user = await get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    chat_id = request.query_params.get("chat_id") or None
-    r = await app.state.http_client.get(
-        f"{SERVICES['chats']['url']}/editor/workspaces",
-        params={"user_id": user["user_id"], **({"chat_id": chat_id} if chat_id else {})},
-    )
-    if r.status_code != 200:
-        raise HTTPException(status_code=502, detail="Реестр недоступен")
-    return r.json()
-
 
 # ========== ПРОКСИ ДЛЯ ЧАТОВ ==========
 @app.get("/api/chats/workspaces")

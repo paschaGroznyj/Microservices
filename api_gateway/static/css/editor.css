@@ -1770,3 +1770,6 @@ body.is-resizing .ed-ai.chat-main-inner {
   .ed-ws { max-width: 58%; }
   .ed-topbar .ed-filename { display: none; }
 }
+
+/* readonly (Sigma): кнопка «Сохранить» скрыта */
+.ed-header-btn[hidden] { display: none !important; }

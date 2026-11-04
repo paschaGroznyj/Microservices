@@ -24,7 +24,7 @@ import zipfile
 import httpx
 from urllib.parse import quote
 from langchain.tools import tool
-from agent.core.config import EDITOR_BASE_URL
+from agent.core.config import editor_base_url
 from pathlib import Path
 
 
@@ -857,6 +857,8 @@ So you can then spy on it/reuse it within the session.
 
         chat_id = agent._ctx_get("chat_id", getattr(agent, "current_chat_id", None))
         user_id = agent._ctx_get("user_id")
+        gw_target = str(agent._ctx_get("gateway_target") or getattr(agent, "_gateway_target", "main") or "main").lower()
+        editor_readonly = gw_target == "sigma"
         editor_url, editor_note = None, None
         if user_id is None or getattr(agent, "db", None) is None:
             editor_note = "редактор недоступен: нет user_id/БД в контексте запроса"
@@ -872,7 +874,7 @@ So you can then spy on it/reuse it within the session.
                 if chat_id is not None:
                     params.append(f"chat_id={quote(str(chat_id))}")
                 params.append(f"workspace_id={quote(wid)}")
-                editor_url = f"{EDITOR_BASE_URL.rstrip('/')}/editor?{'&'.join(params)}"
+                editor_url = f"{editor_base_url(gw_target)}/editor?{'&'.join(params)}"
                 log.info(f"[editor] {wid} закреплён за user={user_id}")
             except Exception as e:
                 log.error(f"[editor] не удалось закрепить {wid}: {e}")
@@ -892,6 +894,10 @@ So you can then spy on it/reuse it within the session.
                 "Каждое изменение файлов продлевает жизнь области до 10 часов."
             ),
         }
+        if editor_readonly and editor_url:
+            out["editor_readonly"] = True
+            out["editor_note"] = ("В этом интерфейсе редактор открыт только для просмотра: "
+                                  "пользователь видит файлы и live-изменения, но сохранять не может.")
         if editor_note:
             out["editor_note"] = editor_note
         return str(out)

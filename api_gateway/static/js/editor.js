@@ -697,13 +697,13 @@
   // ── Monaco: локальная копия + тема из токенов приложения ──
   const MONACO_BASE = "/static/js/vendor/monaco/vs";
   require.config({ paths: { vs: MONACO_BASE } });
-  // Воркеры Monaco (html/css/json/ts) грузятся с того же origin; абсолютный baseUrl нужен,
-  // иначе importScripts внутри воркера не разрешает относительный путь /static/...
+  // Воркеры Monaco грузим напрямую с того же origin, без data:-обёртки.
+  // data:-воркер имеет opaque origin: его importScripts уходит без SameSite-cookie,
+  // forward-auth отвечает редиректом на логин, и воркер падает с NetworkError.
+  // workerMain.js сам вычисляет baseUrl ("../../../" от своего URL) = /static/js/vendor/monaco/.
   window.MonacoEnvironment = {
     getWorkerUrl() {
-      const base = `${location.origin}/static/js/vendor/monaco/`;
-      const src = `self.MonacoEnvironment={baseUrl:${JSON.stringify(base)}};importScripts(${JSON.stringify(base + "vs/base/worker/workerMain.js")});`;
-      return `data:text/javascript;charset=utf-8,${encodeURIComponent(src)}`;
+      return `${location.origin}/static/js/vendor/monaco/vs/base/worker/workerMain.js`;
     },
   };
 

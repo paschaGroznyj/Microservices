@@ -2065,7 +2065,10 @@ class ChatApp {
                 const filesWrap = document.createElement('div');
                 filesWrap.innerHTML = filesHtml;
                 const filesNode = filesWrap.firstElementChild;
-                if (filesNode) wrapper.appendChild(filesNode);
+                if (filesNode) {
+                    wrapper.appendChild(filesNode);
+                    window.FileTiles?.enhanceScroller(filesNode);
+                }
             }
             if (message.poll_answer && typeof message.poll_answer === 'object') {
                 const pa = message.poll_answer;
@@ -2274,20 +2277,20 @@ class ChatApp {
         } catch (e) {
             b64 = '';
         }
-        return `<div class="fa-chip fa-chip--text fa-chip--gray" role="button" tabindex="0"
+        return `<div class="fa-chip fa-chip--text fa-chip--gray fa-tile fa-tile--text" role="button" tabindex="0"
      title="Открыть текст" data-text-b64="${b64}"
      onclick="window.__catchpmApp && window.__catchpmApp.openTextPreview(this)"
      onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();window.__catchpmApp && window.__catchpmApp.openTextPreview(this);}">
-<span class="fa-chip__icon" aria-hidden="true">
-  <svg viewBox="0 0 36 44" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path d="M4 0h20l12 12v28a4 4 0 0 1-4 4H4a4 4 0 0 1-4-4V4a4 4 0 0 1 4-4z" class="fa-chip__bg"/>
-    <path d="M24 0l12 12H28a4 4 0 0 1-4-4V0z" class="fa-chip__fold"/>
-    <text x="18" y="32" text-anchor="middle" class="fa-chip__text">TXT</text>
-  </svg>
-</span>
-<span class="fa-chip__name">${safeTitle}</span>
-<span class="fa-chip__meta">${meta}</span>
+<span class="fa-tile__media"><span class="fa-tile__snippet">${this._chipSnippetHtml(rawText)}</span></span>
+<span class="fa-tile__cap"><span class="fa-chip__name">${safeTitle}</span><span class="fa-chip__meta">${meta}</span></span>
 </div>`;
+    }
+
+    /* Начало текста для превью внутри квадратного чипа (переносы — сущностью,
+       чтобы markdown не разорвал HTML-блок пустой строкой). */
+    _chipSnippetHtml(rawText) {
+        const s = String(rawText || '').slice(0, 320);
+        return this.escapeHtml(s).replace(/\r?\n/g, '&#10;');
     }
 
     _encodeTextB64(rawText) {
@@ -2326,6 +2329,8 @@ class ChatApp {
         if (nameEl) nameEl.textContent = title;
         const metaEl = chipEl.querySelector('.fa-chip__meta');
         if (metaEl) metaEl.textContent = `${chars} симв · ${lines} стр`;
+        const snipEl = chipEl.querySelector('.fa-tile__snippet');
+        if (snipEl) snipEl.textContent = text.slice(0, 320);
     }
 
     _syncActivePreviewChipFromBody() {
@@ -2512,6 +2517,24 @@ class ChatApp {
     _renderMessageFiles(files, messageId = '') {
         try {
             if (!files || !Array.isArray(files) || files.length === 0) return '';
+
+            // Квадратные плитки с превью: картинки/видео → лайтбокс, аудио → плеер.
+            if (window.FileTiles) {
+                const chatId = this.currentChat;
+                const mid = String(messageId || '');
+                const canServe = !!(chatId && mid);
+                const items = files.map((f) => {
+                    const name = String((f && f.name) || 'файл');
+                    let url = (f && f.url) || '';
+                    if (!url && canServe) {
+                        url = `/api/chats/${encodeURIComponent(chatId)}/files/${encodeURIComponent(mid)}/${encodeURIComponent(name)}`;
+                    }
+                    const dlUrl = (f && f.dlUrl) || (url && !url.startsWith('blob:')
+                        ? `${url}${url.includes('?') ? '&' : '?'}download=1` : url);
+                    return { name, size: f && f.size, type: f && f.type, url, dlUrl };
+                });
+                return window.FileTiles.groupHtml(items);
+            }
 
             const EXT_LABEL = {
                 pdf:'PDF', docx:'DOC', doc:'DOC',
@@ -3478,7 +3501,7 @@ class ChatApp {
         this._hardResetStreamState(this.currentChat);
 
         const msgId = `msg-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
-        const _optimisticFiles = isCustom ? [] : (window.FileAttach?.getFilesMeta() ?? []);
+        const _optimisticFiles = isCustom ? [] : (window.FileAttach?.getPreviewItems?.() ?? window.FileAttach?.getFilesMeta() ?? []);
         this.addMessage({ message: text, is_from_bot: false, id: msgId, created_at: new Date().toISOString(), files: _optimisticFiles });
         this._scrollToUserMessageAndReserve();
 
@@ -5864,6 +5887,7 @@ class ChatApp {
             bar.className = 'fa-preview-bar';
             box.insertBefore(bar, box.firstChild);
         }
+        if (window.FileTiles) window.FileTiles.enhanceScroller(bar, { wheel: true });
         return bar;
     }
 
@@ -5872,7 +5896,8 @@ class ChatApp {
             ? barOrField
             : this._ensureInputPreviewBar(barOrField);
         if (!bar) return;
-        const hasChips = bar.querySelector('.fa-chip') !== null;
+        const hasChips = bar.querySelector('.fa-chip:not(.fa-tile--leave)') !== null;
+        if (hasChips && !bar.classList.contains('fa-preview-bar--visible')) void bar.offsetHeight;
         bar.classList.toggle('fa-preview-bar--visible', hasChips);
     }
 
@@ -5940,24 +5965,19 @@ class ChatApp {
         const b64 = this._encodeTextB64(rawText);
 
         const chip = document.createElement('div');
-        chip.className = 'fa-chip fa-chip--text fa-chip--gray input-chip';
+        chip.className = 'fa-chip fa-chip--text fa-chip--gray fa-tile fa-tile--text fa-tile--enter input-chip';
         chip.setAttribute('role', 'button');
         chip.setAttribute('tabindex', '0');
         chip.setAttribute('data-chip-id', chipId);
         chip.setAttribute('data-text-b64', b64);
         chip.setAttribute('title', 'Открыть текст');
         chip.innerHTML =
-            '<span class="fa-chip__icon" aria-hidden="true">' +
-            '<svg viewBox="0 0 36 44" fill="none" xmlns="http://www.w3.org/2000/svg">' +
-            '<path d="M4 0h20l12 12v28a4 4 0 0 1-4 4H4a4 4 0 0 1-4-4V4a4 4 0 0 1 4-4z" class="fa-chip__bg"/>' +
-            '<path d="M24 0l12 12H28a4 4 0 0 1-4-4V0z" class="fa-chip__fold"/>' +
-            '<text x="18" y="32" text-anchor="middle" class="fa-chip__text">TXT</text>' +
-            '</svg></span>' +
-            '<span class="fa-chip__name">' + safeTitle + '</span>' +
-            '<span class="fa-chip__meta">' + chars + ' симв · ' + lines + ' стр</span>' +
+            '<span class="fa-tile__media"><span class="fa-tile__snippet">' + this._chipSnippetHtml(rawText) + '</span></span>' +
+            '<span class="fa-tile__cap"><span class="fa-chip__name">' + safeTitle + '</span>' +
+            '<span class="fa-chip__meta">' + chars + ' симв · ' + lines + ' стр</span></span>' +
             '<button class="fa-chip__remove" type="button" title="Удалить" aria-label="Удалить вставленный текст">' +
             '<svg viewBox="0 0 14 14" fill="none">' +
-            '<path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' +
+            '<path d="M3 3l8 8M11 3L3 11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' +
             '</svg></button>';
 
         const removeBtn = chip.querySelector('.fa-chip__remove');
@@ -5978,8 +5998,10 @@ class ChatApp {
 
         const bar = this._ensureInputPreviewBar(field);
         if (bar) {
-            bar.appendChild(chip);
+            const _track = window.FileTiles ? window.FileTiles.trackOf(bar) : bar;
+            _track.appendChild(chip);
             this._syncInputPreviewBar(bar);
+            if (_track !== bar) requestAnimationFrame(() => _track.scrollTo({ left: _track.scrollWidth, behavior: 'smooth' }));
         }
 
         const anchor = document.createElement('span');

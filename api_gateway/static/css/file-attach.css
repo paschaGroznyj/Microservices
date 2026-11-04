@@ -725,3 +725,344 @@
     display: none;
   }
 }
+
+/* ══════════════════════════════════════════════
+   КВАДРАТНЫЕ ПЛИТКИ ВЛОЖЕНИЙ (.fa-tile, 130×130)
+   Превью внутри квадрата, подпись поверх нижнего
+   края, без рамок. Полоса ввода + история.
+══════════════════════════════════════════════ */
+:root { --fa-tile: 130px; }
+
+.fa-tiles { position: relative; }
+
+.fa-preview-bar.fa-tiles,
+.fa-message-files.fa-tiles {
+  display: block;
+  overflow: hidden;
+}
+
+.fa-tiles__track {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  margin: -4px;
+  padding: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  scroll-padding-inline: 4px;
+}
+.fa-tiles__track::-webkit-scrollbar { display: none; }
+.fa-tiles__track > .fa-chip { scroll-snap-align: start; }
+
+/* Мягкое затухание краёв, когда есть что листать */
+.fa-tiles.has-next > .fa-tiles__track {
+  -webkit-mask-image: linear-gradient(to left, transparent 0, #000 56px);
+          mask-image: linear-gradient(to left, transparent 0, #000 56px);
+}
+.fa-tiles.has-prev > .fa-tiles__track {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 56px);
+          mask-image: linear-gradient(to right, transparent 0, #000 56px);
+}
+.fa-tiles.has-prev.has-next > .fa-tiles__track {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 56px, #000 calc(100% - 56px), transparent 100%);
+          mask-image: linear-gradient(to right, transparent 0, #000 56px, #000 calc(100% - 56px), transparent 100%);
+}
+
+.fa-tiles__nav {
+  position: absolute;
+  top: 50%;
+  z-index: 5;
+  width: 30px;
+  height: 30px;
+  margin-top: -15px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--text-primary) 92%, transparent);
+  color: var(--bg, #111);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .35);
+  -webkit-backdrop-filter: blur(6px);
+          backdrop-filter: blur(6px);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .18s ease, transform .18s ease;
+}
+.fa-tiles__nav svg { width: 16px; height: 16px; }
+.fa-tiles__nav--prev { left: 6px; }
+.fa-tiles__nav--next { right: 6px; }
+.fa-tiles.has-prev > .fa-tiles__nav--prev,
+.fa-tiles.has-next > .fa-tiles__nav--next { opacity: 1; pointer-events: auto; }
+.fa-tiles__nav:hover { transform: scale(1.08); }
+@media (hover: none) { .fa-tiles__nav { display: none; } }
+
+/* ── Сама плитка ──────────────────────────────── */
+.fa-chip.fa-tile {
+  position: relative;
+  display: inline-block;
+  vertical-align: top;
+  flex: 0 0 var(--fa-tile);
+  width: var(--fa-tile);
+  min-width: var(--fa-tile);
+  max-width: none;
+  height: var(--fa-tile);
+  padding: 0;
+  gap: 0;
+  border: 0;
+  border-radius: 14px;
+  overflow: hidden;
+  isolation: isolate;
+  background: var(--fa-bg, var(--surface2));
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .18);
+  cursor: pointer;
+  outline: none;
+  animation: none;
+  transform: none;
+  transition: transform .18s ease, box-shadow .18s ease, opacity .18s ease;
+}
+.fa-chip.fa-tile:hover {
+  transform: translateY(-2px);
+  border-color: transparent;
+  background: var(--fa-bg, var(--surface2));
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .28);
+}
+.fa-chip.fa-tile:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+
+.fa-tile__media {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.fa-tile__img,
+.fa-tile__video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  pointer-events: none;
+  user-select: none;
+  transition: transform .35s ease;
+}
+.fa-chip.fa-tile:hover .fa-tile__img,
+.fa-chip.fa-tile:hover .fa-tile__video { transform: scale(1.05); }
+
+.fa-tile__label {
+  margin-bottom: 30px;
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  color: var(--fa-label, #64748b);
+  user-select: none;
+}
+
+.fa-tile__badge {
+  position: absolute;
+  left: 50%;
+  top: 40%;
+  width: 38px;
+  height: 38px;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: rgba(0, 0, 0, .45);
+  -webkit-backdrop-filter: blur(4px);
+          backdrop-filter: blur(4px);
+  pointer-events: none;
+}
+.fa-tile__badge svg { width: 16px; height: 16px; margin-left: 2px; }
+
+/* ── Подпись внутри квадрата ──────────────────── */
+.fa-tile__cap {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 20px 9px 8px;
+  text-align: left;
+  pointer-events: none;
+}
+.fa-tile--image .fa-tile__cap,
+.fa-tile--video .fa-tile__cap {
+  background: linear-gradient(to top, rgba(0, 0, 0, .86) 0%, rgba(0, 0, 0, .6) 55%, transparent 100%);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .6);
+}
+.fa-chip.fa-tile .fa-chip__name {
+  display: block;
+  max-width: 100%;
+  font-size: .72rem;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fa-tile__meta,
+.fa-chip.fa-tile .fa-chip__meta {
+  font-size: .62rem;
+  line-height: 1.2;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.fa-tile--doc .fa-tile__meta { color: color-mix(in srgb, var(--fa-label, #64748b) 55%, var(--text-primary)); }
+.fa-chip.fa-tile.fa-tile--image .fa-chip__name,
+.fa-chip.fa-tile.fa-tile--video .fa-chip__name { color: #fff; }
+.fa-chip.fa-tile.fa-tile--image .fa-tile__meta,
+.fa-chip.fa-tile.fa-tile--video .fa-tile__meta { color: rgba(255, 255, 255, .8); }
+
+/* ── Аудио: прослушивание прямо в плитке ──────── */
+.fa-chip.fa-tile.fa-tile--audio,
+.fa-chip.fa-tile.fa-tile--audio:hover {
+  background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 28%, var(--surface2)), var(--surface2) 78%);
+}
+.fa-tile__audio {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px 12px 42px;
+}
+.fa-tile__play {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--accent);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 42%, transparent);
+  transition: transform .15s ease;
+}
+.fa-tile__play svg { grid-area: 1 / 1; width: 18px; height: 18px; transition: opacity .15s, transform .15s; }
+.fa-tile__ic--play { margin-left: 2px; }
+.fa-tile__ic--pause,
+.fa-tile.is-playing .fa-tile__ic--play { opacity: 0; transform: scale(.6); }
+.fa-tile.is-playing .fa-tile__ic--pause { opacity: 1; transform: none; }
+.fa-chip.fa-tile--audio:hover .fa-tile__play { transform: scale(1.06); }
+.fa-tile__wave {
+  width: 100%;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.fa-tile__wave i {
+  flex: 1;
+  height: var(--h, 50%);
+  min-height: 3px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text-primary) 28%, transparent);
+  transition: background .12s;
+  pointer-events: none;
+}
+.fa-tile__wave i.on { background: var(--accent); }
+.fa-tile--error .fa-tile__play { background: var(--error, #ef4444); }
+
+/* ── Длинный вставленный текст ────────────────── */
+.fa-chip.fa-tile.fa-chip--text,
+.fa-chip.fa-tile.fa-chip--text:hover { background: var(--surface2); }
+.fa-tile__snippet {
+  position: absolute;
+  inset: 0;
+  padding: 10px 10px 44px;
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 9.5px;
+  line-height: 1.38;
+  color: var(--text-secondary);
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 40%, transparent 80%);
+          mask-image: linear-gradient(to bottom, #000 40%, transparent 80%);
+  pointer-events: none;
+}
+.fa-chip.fa-tile.is-preview-open {
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface2));
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+/* ── Кнопка «убрать» внутри плитки ────────────── */
+.fa-chip.fa-tile .fa-chip__remove {
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  color: #fff;
+  background: rgba(0, 0, 0, .55);
+  -webkit-backdrop-filter: blur(4px);
+          backdrop-filter: blur(4px);
+  opacity: 0;
+  z-index: 4;
+}
+.fa-chip.fa-tile .fa-chip__remove svg { width: 10px; height: 10px; }
+.fa-chip.fa-tile:hover .fa-chip__remove,
+.fa-chip.fa-tile:focus-within .fa-chip__remove { opacity: 1; }
+.fa-chip.fa-tile .fa-chip__remove:hover { background: var(--error, #ef4444); }
+@media (hover: none) { .fa-chip.fa-tile .fa-chip__remove { opacity: 1; } }
+
+.fa-chip.fa-tile.fa-tile--broken { cursor: default; }
+.fa-chip.fa-tile.fa-tile--broken .fa-tile__label { opacity: .45; }
+.fa-chip.fa-tile.fa-tile--broken .fa-tile__meta { color: var(--error, #ef4444); }
+
+/* ── Появление / удаление: без «капли» ────────── */
+.fa-chip.fa-tile.fa-tile--enter { animation: fa-tile-in .26s cubic-bezier(.2, .7, .2, 1) both; }
+.fa-chip.fa-tile.fa-tile--leave { animation: fa-tile-out .2s ease forwards; pointer-events: none; }
+@keyframes fa-tile-in {
+  from { opacity: 0; transform: translateX(-10px) scale(.97); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes fa-tile-out {
+  to { opacity: 0; transform: scale(.92); flex-basis: 0; width: 0; min-width: 0; margin-right: -8px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fa-preview-bar,
+  .fa-chip.fa-tile,
+  .fa-tile__img,
+  .fa-tile__video { transition: none; }
+  .fa-chip.fa-tile.fa-tile--enter,
+  .fa-chip.fa-tile.fa-tile--leave { animation: none; }
+}
+
+/* Полоса ввода с плитками: раскрывается по высоте и проявляется
+   (вместо прыжка display:none → flex и «капли» у чипов). */
+.fa-preview-bar.fa-tiles {
+  max-height: 0;
+  opacity: 0;
+  padding: 0 14px;
+  border-bottom-color: transparent;
+  animation: none;
+  transition: max-height .28s cubic-bezier(.2, .7, .2, 1), opacity .2s ease,
+              padding .28s cubic-bezier(.2, .7, .2, 1), border-color .2s ease;
+}
+.fa-preview-bar.fa-tiles.fa-preview-bar--visible {
+  max-height: 170px;
+  opacity: 1;
+  padding: 10px 14px 8px;
+  border-bottom-color: var(--border);
+}

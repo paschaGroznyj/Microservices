@@ -195,6 +195,29 @@ async def upload_bytes(obs_key: str, body: bytes,
         return None
 
 
+async def download_range(obs_key: str, start: int, end: int) -> tuple[Optional[bytes], Optional[int]]:
+    """Читает байтовый диапазон [start..end] из OBS для HTTP 206 Range-стриминга."""
+    try:
+        async with AioSession().create_client(**_obs_params()) as client:
+            resp = await client.get_object(
+                Bucket=_bucket(),
+                Key=obs_key,
+                Range=f"bytes={start}-{end}",
+            )
+            data = await resp["Body"].read()
+            total = None
+            cr = resp.get("ContentRange") or resp.get("ResponseMetadata", {}).get("HTTPHeaders", {}).get("content-range")
+            if cr and "/" in str(cr):
+                try:
+                    total = int(str(cr).rsplit("/", 1)[-1])
+                except ValueError:
+                    total = None
+            return data, total
+    except Exception as e:
+        log.warning("[obs] не удалось скачать range %s (%d-%d): %s", obs_key, start, end, e)
+        return None, None
+
+
 async def download_bytes(obs_key: str) -> Optional[bytes]:
     """Тянет объект из OBS в память. Возвращает bytes либо None."""
     try:

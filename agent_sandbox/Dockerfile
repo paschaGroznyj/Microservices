@@ -56,30 +56,30 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 
 
 COPY requirements-sandbox.txt .
-RUN uv pip install --no-cache -r requirements-sandbox.txt
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install -r requirements-sandbox.txt
 
 RUN useradd -m -u 1500 -s /usr/sbin/nologin sandboxrunner
 
 RUN playwright install chromium
 RUN playwright install-deps chromium
 
-RUN npm install --no-save animejs
+RUN --mount=type=cache,target=/tmp/npm_cache \
+    npm install --no-save animejs
+RUN --mount=type=cache,target=/tmp/npm_cache \
+    npm install -g @playwright/mcp@latest ctx7 skillui
 
-# --- Устанавливаем сам MCP-сервер глобально, чтобы npx не лез в сеть на рантайме ---
-RUN npm install -g @playwright/mcp@latest ctx7 skillui
-
-# --- Предварительное создание временных папок и каталога пользователя ---
 RUN mkdir -p /tmp/matplotlib_cache /tmp/npm_cache /tmp/.local /tmp/.config /tmp/.cache /home/sandboxrunner/.local && \
     chmod 1777 /tmp/matplotlib_cache /tmp/npm_cache /tmp/.local /tmp/.config /tmp/.cache && \
     chown -R sandboxrunner:sandboxrunner /app /opt/playwright-browsers /home/sandboxrunner
-    
-RUN npx -y skills add -y emilkowalski/skills
 
-COPY app.py .
+RUN npx -y skills add -y emilkowalski/skills
+RUN npx skills
+
+# КОД копируем В САМОМ КОНЦЕ — это уже так и есть
+COPY . .
 
 USER sandboxrunner
-
 RUN python3 -c "import matplotlib.pyplot"
 EXPOSE 8005
-
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8005"]

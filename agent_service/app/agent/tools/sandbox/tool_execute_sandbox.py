@@ -22,7 +22,9 @@ import re
 import zipfile
 
 import httpx
+from urllib.parse import quote
 from langchain.tools import tool
+from agent.core.config import editor_base_url
 from pathlib import Path
 
 
@@ -139,12 +141,13 @@ def _save_output_files(files: list[dict], run_id: str) -> tuple[list[dict], list
 
 async def _call_sandbox(
     code: str | None = None, 
-    commands: list[str] | None = None, 
+    commands: str | list[str] | None = None, 
     is_shell: bool = False, 
     timeout: int = 30, 
     stdin: str = "", 
     workspace_id: str | None = None,
-    persist_script: bool = True
+    persist_script: bool = True,
+    changed_files: str | list[str] = "",
 ) -> dict:
     try:
         payload = {
@@ -154,7 +157,8 @@ async def _call_sandbox(
             "timeout": timeout,
             "stdin": stdin,
             "workspace_id": workspace_id,
-            "persist_script": persist_script
+            "persist_script": persist_script,
+            "changed_files": changed_files or "",
         }
         
         async with httpx.AsyncClient(timeout=timeout + HTTP_TIMEOUT_BUFFER) as client:
@@ -336,7 +340,7 @@ def make_sandbox_execute_tool(agent):
 
     @tool
     async def execute_python_code(code: str, timeout: int = DEFAULT_TIMEOUT, reusable: bool = False,
-        workspace_id: str = None, persist_script: bool = True) -> dict:
+        workspace_id: str = None, persist_script: bool = True, changed_files: str = "") -> dict:
         """
         Executes Python code in an isolated sandbox (a separate container,         there is internet access, but no access to the project’s file system).
         Use it for calculations, data processing, generating graphs/files/presentations, parsing web pages, and checking code before showing it to the user.
@@ -440,6 +444,63 @@ So you can then spy on it/reuse it within the session.
             IMPORTANT: the code is executed as .py script, top-level await is not working —
             always wrap asynchronous calls in async def main(): ...; asyncio.run(main()).
 
+        3. PDF-ПРЕЗЕНТАЦИЯ БЕЗ БЕЛЫХ ПОЛЕЙ (прямой Playwright → PNG → Pillow).
+           Используй ЭТОТ способ, а НЕ render_slides_to_pdf, когда нужна preza
+           фиксированного формата 16:9 (1920×1080) с вшитыми картинками и БЕЗ полей/
+           смещений по краям. Каждый слайд рендерится напрямую в PNG фиксированного
+           размера, затем PNG склеиваются в один PDF через Pillow.
+
+           ПРИЧИНА ПОЛЕЙ: белые поля появляются, когда размер .slide в HTML ≠ размеру
+           viewport рендера ≠ размеру страницы PDF. Решение — свести все три к одному
+           размеру (1920×1080) + CSS-reset в <head> КАЖДОГО слайда:
+               * { margin:0; padding:0; box-sizing:border-box; }
+               html,body { width:1920px; height:1080px; overflow:hidden; }
+               .slide    { width:1920px; height:1080px; overflow:hidden; position:relative; }
+           Картинку покрывать весь лист: <img style="width:100%;height:100%;object-fit:cover">
+           или background. Вшивать локально — через base64 (нет внешних зависимостей):
+               b64 = base64.b64encode(open(img_path,"rb").read()).decode()
+               img = f'<img src="data:image/png;base64,{b64}" style="width:100%;height:100%;object-fit:cover">'
+           либо <img> с ОТНОСИТЕЛЬНЫМ путём к файлу рядом с HTML в рабочей директории.
+
+           Скелет (viewport == размеру слайда, full_page=False — иначе поедут поля):
+
+               import asyncio, base64
+               from playwright.async_api import async_playwright
+               from PIL import Image
+
+               async def render_slide(html_path, out_png, w=1920, h=1080, scale=1):
+                   async with async_playwright() as p:
+                       browser = await p.chromium.launch(args=["--no-sandbox"])
+                       page = await browser.new_page(
+                           viewport={"width": w, "height": h},
+                           device_scale_factor=scale,   # 2..3 — физический растр до 4K
+                       )                                 # ХОЛСТ оставить логическим 1920×1080
+                       await page.goto(f"file://{html_path}", wait_until="domcontentloaded")
+                       await page.evaluate("document.fonts.ready")
+                       await page.wait_for_timeout(400)
+                       await page.screenshot(path=out_png, type="png", full_page=False)
+                       await browser.close()
+
+               async def main(html_files, out_pdf):
+                   pngs = []
+                   for i, html in enumerate(html_files):
+                       out = f"slide_{i}.png"
+                       await render_slide(html, out)
+                       pngs.append(out)
+                   imgs = [Image.open(p).convert("RGB") for p in pngs]
+                   imgs[0].save(out_pdf, save_all=True, append_images=imgs[1:])
+
+               asyncio.run(main(["slide1.html","slide2.html"], "output/deck.pdf"))
+
+           ЗАМЕТКИ:
+           - top-level await не работает — всё в async def main(): ...; asyncio.run(main()).
+           - PNG lossless даёт резкие линии/код; JPEG q96 — если нужен компактный файл.
+           - device_scale_factor=2..3 поднимает растр до 4K БЕЗ изменения вёрстки
+             (холст логический 1920×1080, резкость множителем, а не размером канвы).
+           - ПРОВЕРЯЙ фактический размер PNG после рендера: должен быть ровно W×H (×scale).
+             Если нет — где-то поле/несовпадение размеров .slide/viewport.
+           - Каждый слайд — ОТДЕЛЬНЫЙ HTML-файл (не page-break-after в одном HTML).
+
         ── Fonts ─────────────────────────────────────────────────────────
         /app/fonts/InterVariable.ttf — variable, NOT for reportlab/Pillow
         /app/fonts/extras/ttf/Inter-{Regular,Bold,Italic}.ttf — for reportlab/Pillow ✅
@@ -472,6 +533,13 @@ So you can then spy on it/reuse it within the session.
         python-multipart
         gdown
 
+            changed_files: what this run changes inside the workspace (only with workspace_id),
+                  for the user's live web editor. "" (default) — nothing / don't notify;
+                  "*" — files changed but you don't know which (full refresh);
+                  otherwise comma-separated paths relative to the workspace root
+                  (e.g. "repo/app.py,repo/static/main.css"). The editor is notified
+                  only after the run finishes. Pass it whenever you write/delete files.
+
         Returns: stdout, stderr, exit_code, saved_files (paths to the created files).
 
         4. Playwright MCP via CDP (for JS-SPA without WAF):
@@ -496,6 +564,8 @@ So you can then spy on it/reuse it within the session.
 
         For parsing Telegram resources:
             - t.me/s/ returns ~20 latest posts. To get
+
+        Allow users to use Git commands if they have provided their key
         """
         timeout = MAX_TIMEOUT
         run_id = uuid.uuid4().hex
@@ -508,18 +578,36 @@ So you can then spy on it/reuse it within the session.
             timeout=timeout, 
             workspace_id=workspace_id, 
             is_shell=False,
-            persist_script=persist_script
+            persist_script=persist_script,
+            changed_files=changed_files,
         )
         return await _process_sandbox_result(result, start, run_id, code_for_saving=code, reusable=reusable)
 
     @tool
-    async def execute_shell_commands(commands: list[str], timeout: int = DEFAULT_TIMEOUT, workspace_id: str = None) -> dict:
+    async def execute_shell_commands(commands: str, timeout: int = DEFAULT_TIMEOUT, workspace_id: str = None,
+                                     changed_files: str = "") -> dict:
         """
-        Executes system commands in an isolated sandbox without using a shell (shell).
-        Suitable for running third‑party binaries (e.g., docker, curl, git).
+        Executes a system command in an isolated sandbox via bash.
+        Suitable for running third‑party binaries (git, docker, curl, npx, etc.).
 
-        PLEASE NOTE: commands must be passed strictly as a list of arguments!
-        For example: ["docker", "run", "--rm", "alpine", "echo", "hello"]
+        PASS THE COMMAND AS ONE STRING — not a list. The string runs through
+        `bash -lc`, so FULL shell syntax works: pipes |, chaining && || ;,
+        redirects > >>, command substitution $(), globs *.
+            "git add -A && git commit -m \"fix: обновил конфиг\""
+            "ls -la | grep .py | wc -l"
+            "cat file.txt | head -20"
+            "cd /tmp/exec/workspaces/<id>/repo && git status"
+            "docker run --rm alpine echo hello"
+        The sandbox is isolated, so shell execution is safe here.
+        (A list of args is still accepted for back-compat — it runs directly
+        without a shell, so pipes/chaining in list mode are NOT interpreted.)
+
+            changed_files: what these commands changes inside the workspace (only with workspace_id),
+                  for the user's live web editor. "" (default) — nothing / don't notify;
+                  "*" — files changed but you don't know which (full refresh);
+                  otherwise comma-separated paths relative to the workspace root
+                  (e.g. "repo/app.py,repo/static/main.css"). The editor is notified
+                  only after the run finishes. Pass it whenever you write/delete files.
 
         Available features:
         - git clone / git pull / git push (internet access, tokens via env)
@@ -527,16 +615,16 @@ So you can then spy on it/reuse it within the session.
         - curl, wget — network requests
         - apt-get install — package installation within the session
 
-        If you plan to work with files within the session, you need to create a workspace
-        via create_workspace (files inside the area will be stored for 10 hours)
-
-        If you initialize the repository.git inside /tmp/exec/workspaces/<work_name>, it will not be deleted by timer
+        If you plan to work with files within the session, create a workspace
+        via create_workspace (files inside the area live for 10 hours).
+        If you init a git repo inside /tmp/exec/workspaces/<id>, it won't be swept by the timer.
 
         Docker specifics:
         - The daemon is accessible via unix:///var/run/docker.sock
-        - To build an image: ["docker", "build", "-t", "my-image", "/path/to/context"]
-        - For compose: ["docker", "compose", "-f", "/path/compose.yml", "up", "-d"]
-        - Running Kafka inside DinD: 172.28.0.10:9092
+        - Build image: "docker build -t my-image /path/to/context"
+        - Compose: "docker compose -f /path/compose.yml up -d"
+        - Kafka inside DinD: 172.28.0.10:9092
+
         """
         run_id = uuid.uuid4().hex
         _ensure_save_dir()
@@ -546,7 +634,8 @@ So you can then spy on it/reuse it within the session.
             commands=commands, 
             timeout=timeout, 
             workspace_id=workspace_id, 
-            is_shell=True
+            is_shell=True,
+            changed_files=changed_files,
         )
         return await _process_sandbox_result(result, start, run_id, code_for_saving=None, reusable=False)
 
@@ -718,37 +807,41 @@ So you can then spy on it/reuse it within the session.
     # ══════════════════════════════════════════════════════════════
 
     @tool
-    async def create_workspace() -> dict:
+    async def create_workspace(title: str = "") -> dict:
         """
-        Creates a new persistent workspace in the sandbox service.
-        Returns the workspace_id, which must be passed to execute_python_code
-        to save files between calls.
+        Creates a new persistent workspace in the sandbox service AND registers it
+        in the user's web editor (/editor) right away. Returns workspace_id and
+        editor_url.
 
-        Use for multi‑step tasks:
-        - Data collection (step 1) → parsing (step 2) → file generation (step 3)
+        Pass workspace_id to execute_python_code / execute_shell_commands /
+        submit_task / upload_to_workspace / edit_workspace_file to keep files
+        between calls. Give editor_url to the user as a link: there they can
+        browse, edit and save the workspace files in a Monaco editor, and the
+        tree refreshes live when your tools report changed_files.
+
+        title — optional human-readable name for the editor's workspace list
+        (e.g. "DashPM promo", "parser fix"). Empty = workspace_id.
+
+        Use for multi-step tasks:
+        - Data collection (step 1) -> parsing (step 2) -> file generation (step 3)
         - When each step is a separate call to execute_python_code,
-          but files from step 1 are needed in step 3
+          but files from step 1 are needed in step 3
 
-        IMPORTANT (working with files/presentations/media): if the user requests
-        assemble/send a file, presentation, document, video, or any other
-        the artifact that needs to be given to him — FIRST create a workspace through
-        this tool, collect the artifact in it (upload_to_workspace /
-        edit_workspace_file / execute_python_code with this workspace_id), put
-        the result is in output/ and send via send_file_to_user along the way
-        /tmp/exec/workspaces/{workspace_id}/output/<filename>. Give it away without a workspace
-        heavy/composite files will not work reliably.
+        IMPORTANT (files/presentations/media): if the user asks to assemble/send
+        a file, presentation, document, video or any other artifact — FIRST
+        create a workspace with this tool, build the artifact there, put the
+        result in output/ and send it via send_file_to_user with the path
+        /tmp/exec/workspaces/{workspace_id}/output/<filename>.
 
-        ALWAYS create a workspace and pass its id in a bunch of heavy operations to generate execute_python_code.
+        TTL: the workspace is deleted after 10 hours WITHOUT activity. Every
+        file change in it (execute/submit with a workspace_id, edit, upload,
+        save from the editor) resets the timer back to 10 hours.
 
-        The workspace is automatically deleted after 10 hours of inactivity, so
-        It is not necessary to delete an area within the dialog.
+        To keep the workspace permanently, create the file
+        `/tmp/exec/workspaces/<wid>/.ws_hold` at the workspace root (not inside
+        output/ or repo/). Do it only if the user plans to continue working.
 
-        To preserve the workspace permanently, you need to create a file at the workspace root—specifically
-        at `/tmp/exec/workspaces/<wid>/.ws_hold`—alongside your folders (not inside `output/` or `repo/`, but at the root itself).
-
-        Save the workspace only if the user plans to continue working with it.
-
-        Returns: workspace_id, created_at, path
+        Returns: workspace_id, created_at, path, editor_url
         """
         result = await _call_sandbox_endpoint("POST", "/workspace/create")
 
@@ -759,22 +852,55 @@ So you can then spy on it/reuse it within the session.
                 "detail": result.get("detail", ""),
             })
 
-        log.info(f"[workspace] Создан {result['workspace_id']}")
-        return str({
+        wid = str(result["workspace_id"])
+        log.info(f"[workspace] Создан {wid}")
+
+        chat_id = agent._ctx_get("chat_id", getattr(agent, "current_chat_id", None))
+        user_id = agent._ctx_get("user_id")
+        gw_target = str(agent._ctx_get("gateway_target") or getattr(agent, "_gateway_target", "main") or "main").lower()
+        editor_readonly = gw_target == "sigma"
+        editor_url, editor_note = None, None
+        if user_id is None or getattr(agent, "db", None) is None:
+            editor_note = "редактор недоступен: нет user_id/БД в контексте запроса"
+        else:
+            try:
+                await agent.db.register_editor_workspace(
+                    user_id=user_id,
+                    workspace_id=wid,
+                    chat_id=str(chat_id) if chat_id is not None else None,
+                    title=(title.strip() or None),
+                )
+                params = []
+                if chat_id is not None:
+                    params.append(f"chat_id={quote(str(chat_id))}")
+                params.append(f"workspace_id={quote(wid)}")
+                editor_url = f"{editor_base_url(gw_target)}/editor?{'&'.join(params)}"
+                log.info(f"[editor] {wid} закреплён за user={user_id}")
+            except Exception as e:
+                log.error(f"[editor] не удалось закрепить {wid}: {e}")
+                editor_note = f"не удалось открыть в редакторе: {e}"
+
+        out = {
             "ok": True,
-            "workspace_id": result["workspace_id"],
+            "workspace_id": wid,
             "created_at": result.get("created_at"),
             "path": result.get("path"),
+            "editor_url": editor_url,
             "hint": (
                 "Передавай этот workspace_id в execute_python_code для "
                 "сохранения файлов между вызовами. Файлы пишутся в output/ "
-                "и доступны в последующих вызовах с тем же workspace_id."
+                "и доступны в последующих вызовах с тем же workspace_id. "
+                "Дай пользователю ссылку editor_url на редактор. "
+                "Каждое изменение файлов продлевает жизнь области до 10 часов."
             ),
-        })
-
-    # ══════════════════════════════════════════════════════════════
-    # 3. LIST_WORKSPACE_FILES
-    # ══════════════════════════════════════════════════════════════
+        }
+        if editor_readonly and editor_url:
+            out["editor_readonly"] = True
+            out["editor_note"] = ("В этом интерфейсе редактор открыт только для просмотра: "
+                                  "пользователь видит файлы и live-изменения, но сохранять не может.")
+        if editor_note:
+            out["editor_note"] = editor_note
+        return str(out)
 
     @tool
     async def list_workspace_files(workspace_id: str) -> dict:

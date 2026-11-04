@@ -64,8 +64,7 @@
    чтобы верхнее сообщение не уезжало под неё (plashka top:64px + ~высота) */
 .gc-messages.gc-has-pinned {
   padding-top: 150px !important;
-  scroll-padding-top: 150px;
-}
+  }
 
 /* Строка сообщения: ограничена по центру как user-message-wrapper */
 .gc-row {
@@ -283,11 +282,19 @@
 
 /* Подсветка сообщения при переходе из закрепа */
 .gc-msg--flash {
-  animation: gcFlash 1.4s ease;
+  animation: gcFlash 1.8s cubic-bezier(0.22, 1, 0.36, 1);
 }
 @keyframes gcFlash {
-  0%   { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 55%, transparent); }
-  100% { box-shadow: 0 0 0 3px transparent; }
+  0%, 38% {
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--accent) 75%, transparent),
+      0 0 20px color-mix(in srgb, var(--accent) 38%, transparent);
+  }
+  100% {
+    box-shadow:
+      0 0 0 3px transparent,
+      0 0 0 transparent;
+  }
 }
 
 /* Коллапс длинного текста в облачке общего чата (как user-message) */
@@ -321,46 +328,116 @@
    плитки файлов, лайтбокс со стрелками.
    ══════════════════════════════════════════════ */
 
-/* сообщение только с медиа (без текста) — пузырь без внутренних отступов */
-.gc-msg--media-only {
-  padding: 3px;
+/* сообщение с медиа: без рамок сверху, слева и справа; снизу — только если есть подпись.
+   Не больше 420px по ширине/высоте, но может быть уже или ниже по габаритам картинки (как в ТГ) */
+.gc-msg--has-images {
+  padding: 0;
+  border: none;
   overflow: hidden;
+  width: min(var(--gc-media-w, 420px), 72vw);
+  max-width: min(420px, 72vw);
+}
+.gc-msg--media-only {
+  padding: 0;
+  border: none;
+  overflow: hidden;
+}
+.gc-msg--audio-only {
+  padding: 0;
+  border: none;
+  background: transparent;
+  border-radius: 0;
+  color: var(--text-primary);
+  max-width: min(380px, 82vw);
+}
+.gc-msg--audio-only .gc-meta {
+  color: var(--text-muted);
+  opacity: .75;
+  margin-top: 4px;
+  padding-right: 4px;
+}
+.gc-audios {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(360px, 80vw);
+  max-width: 100%;
+}
+.gc-row > .gc-audios {
+  margin-bottom: 6px;
 }
 .gc-msg--media-only .gc-meta {
   position: absolute;
   right: 10px;
   bottom: 8px;
+  z-index: 3;
+  margin-top: 0;
   padding: 2px 8px;
   border-radius: 10px;
-  background: rgba(0, 0, 0, 0.42);
+  background: rgba(0, 0, 0, 0.44);
   color: #fff;
-  backdrop-filter: blur(3px);
+  opacity: 0.92;
+  -webkit-backdrop-filter: blur(6px) saturate(120%);
+  backdrop-filter: blur(6px) saturate(120%);
+}
+.gc-msg__caption {
+  width: 100%;
+  padding: 8px 14px 8px;
+  box-sizing: border-box;
 }
 .gc-msg { position: relative; }
 
 /* ---------- коллаж картинок ---------- */
 .gc-collage {
   display: grid;
-  gap: 3px;
-  width: min(420px, 68vw);
+  gap: 2px;
+  width: 100%;
   max-width: 100%;
-  border-radius: 12px;
+  border-radius: 0;
   overflow: hidden;
-  margin-bottom: 4px;
+  margin: 0;
 }
 .gc-bubble-text + .gc-collage,
-.gc-collage + .gc-bubble-text { margin-top: 6px; }
+.gc-collage + .gc-bubble-text { margin-top: 0; }
 
 .gc-collage__cell {
   position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 0;
   border: none;
   cursor: pointer;
   overflow: hidden;
-  /* без фона — во время загрузки видно только шиммер, картинка кропается cover */
   background: transparent;
   min-height: 0;
   min-width: 0;
+}
+/* стеклянная размытая подложка (как в ТГ) для полос сверху/снизу или слева/справа */
+.gc-collage__bg {
+  position: absolute;
+  inset: -22px;
+  z-index: 0;
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  filter: blur(22px) saturate(140%) brightness(0.92);
+  transform: scale(1.12);
+  opacity: 0;
+  transition: opacity 0.32s ease;
+  pointer-events: none;
+}
+.gc-collage__bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.14);
+}
+[data-theme="dark"] .gc-collage__bg::after {
+  background: rgba(15, 23, 37, 0.24);
+}
+.gc-collage__cell.is-loaded.gc-collage__cell--glass .gc-collage__bg {
+  opacity: 1;
 }
 /* шиммер загрузки: бегущий блик поверх фона, гаснет когда img загрузился */
 .gc-collage__cell::before {
@@ -391,7 +468,7 @@
   transition: opacity 0.32s ease;
 }
 .gc-collage__cell.is-loaded img { opacity: 1; }
-.gc-collage__cell:hover img { filter: brightness(0.92); }
+.gc-collage__cell:hover img { filter: brightness(0.95); }
 @keyframes gcShimmer {
   0%   { background-position: 140% 0; }
   100% { background-position: -40% 0; }
@@ -400,6 +477,7 @@
 .gc-collage__more {
   position: absolute;
   inset: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -409,19 +487,18 @@
   background: rgba(0, 0, 0, 0.45);
 }
 
-/* 1 картинка — фиксированная область, картинка кропается (cover),
-   без полей и без видимой рамки/фона по краям */
+/* 1 картинка — рендерится полностью (contain), 16:9 на всю ширину,
+   9:16 на всю высоту, недостающие края заполняются стеклянными полосами */
 .gc-collage--one {
   grid-template-columns: 1fr;
 }
 .gc-collage--one .gc-collage__cell {
-  /* фиксированный размер области — подгрузка img не двигает скролл */
-  aspect-ratio: 4 / 3;
+  aspect-ratio: var(--gc-cell-ar, 16 / 9);
 }
 .gc-collage--one .gc-collage__cell img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 /* 2 картинки — 50/50 */
@@ -494,12 +571,85 @@
   font-variant-numeric: tabular-nums;
 }
 
+
+.gc-collage__cell--video-single {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-height: 420px;
+  background: #0a0e17;
+  overflow: hidden;
+}
+.gc-collage__cell--video-single .gc-collage__bg {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.14), rgba(15, 23, 37, 0.36));
+  -webkit-backdrop-filter: blur(18px) saturate(135%);
+  backdrop-filter: blur(18px) saturate(135%);
+  transform: none;
+}
+.gc-video {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-height: 420px;
+  object-fit: contain;
+  background: transparent;
+  outline: none;
+}
+.gc-collage__cell--video-thumb {
+  background: #000;
+}
+.gc-collage__thumb-video {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.9;
+  transition: opacity 0.3s ease;
+}
+.gc-collage__cell:hover .gc-collage__thumb-video { filter: brightness(0.8); }
+.gc-collage__play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  backdrop-filter: blur(4px);
+  pointer-events: none;
+}
+
 /* ---------- лайтбокс: счётчик + стрелки навигации ---------- */
 /* базовые .image-lightbox* берём из chat.css; здесь только доп. элементы */
 /* отступы под стрелки, чтобы они не липли к краю экрана */
 .gc-lightbox .image-lightbox__box {
   max-width: calc(100vw - 160px);
   max-height: 88vh;
+}
+
+.image-lightbox__media-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+.gc-lightbox .image-lightbox__video {
+  max-width: 100%;
+  max-height: 82vh;
+  outline: none;
 }
 .gc-lightbox .image-lightbox__img {
   max-width: 100%;
@@ -518,6 +668,7 @@
 }
 .gc-lb__nav {
   position: absolute;
+  z-index: 10;
   top: 50%;
   transform: translateY(-50%);
   display: inline-flex;
@@ -535,8 +686,116 @@
 .gc-lb__nav:hover { background: rgba(0, 0, 0, 0.65); }
 .gc-lb__nav--prev { left: -56px; }
 .gc-lb__nav--next { right: -56px; }
+@media (max-width: 768px) {
+  .gc-lightbox .image-lightbox__box {
+    width: 96vw;
+    max-width: 96vw;
+    max-height: 92vh;
+  }
+  .gc-lightbox .image-lightbox__img,
+  .gc-lightbox .image-lightbox__video {
+    width: auto;
+    max-width: 96vw;
+    height: auto;
+    max-height: 84vh;
+    object-fit: contain;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+}
 @media (max-width: 640px) {
   .gc-lb__nav--prev { left: 6px; }
   .gc-lb__nav--next { right: 6px; }
-  .gc-collage { width: 78vw; }
+  .gc-msg--has-images { width: 82vw; max-width: 86%; }
 }
+
+/* ── Разделитель дня (как в Telegram) + плавающая стеклянная плашка ── */
+.gc-date-sep {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  max-width: 720px;
+  margin: 6px auto 2px;
+  padding: 0 24px;
+  pointer-events: none;
+  user-select: none;
+  transition: opacity 0.18s ease;
+}
+.gc-date-sep.is-merged {
+  opacity: 0;
+}
+
+.gc-date-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-family: var(--font-anthropic-sans);
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.01em;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--surface) 72%, rgba(15, 23, 42, 0.08));
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+  -webkit-backdrop-filter: blur(10px) saturate(120%);
+  backdrop-filter: blur(10px) saturate(120%);
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.08);
+  white-space: nowrap;
+  user-select: none;
+}
+[data-theme="dark"] .gc-date-pill {
+  color: #ffffff;
+  background: color-mix(in srgb, var(--surface2) 66%, rgba(15, 23, 42, 0.45));
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.32);
+}
+
+.gc-date-float {
+  position: absolute;
+  top: 64px;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: auto;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0 24px;
+  z-index: 8;
+  pointer-events: none;
+  user-select: none;
+  opacity: 0;
+  transform: translate3d(0, 0, 0);
+  transition: opacity 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform, opacity;
+}
+.gc-date-float.is-visible {
+  opacity: 1;
+}
+
+/* Индикатор подгрузки старых сообщений вверху ленты */
+.gc-history-loader {
+  display: flex;
+  justify-content: center;
+  gap: 5px;
+  height: 18px;
+  align-items: center;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity .2s ease;
+}
+.gc-history-loader.is-loading { opacity: 1; }
+.gc-history-loader span {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--text-muted);
+  animation: gcHistDot 1s ease-in-out infinite;
+}
+.gc-history-loader span:nth-child(2) { animation-delay: .15s; }
+.gc-history-loader span:nth-child(3) { animation-delay: .3s; }
+@keyframes gcHistDot { 0%, 100% { opacity: .25; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-2px); } }
+@media (prefers-reduced-motion: reduce) { .gc-history-loader span { animation: none; opacity: .6; } }

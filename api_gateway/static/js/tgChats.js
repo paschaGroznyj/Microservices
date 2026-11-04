@@ -1,54 +1,54 @@
-// tgChats.js — раздел «Telegram-чаты» в профиле (#tg-chats-mount).
-// Любой юзер видит и редактирует свои добавленные чаты.
-// Переиспользает ICONS из tools-panel.js (window.__TP_ICONS).
-//
-// API (через api_gateway):
-//   GET    /api/tg/chats               → { chats: [...] }
-//   POST   /api/tg/chats               → встроить чат + настройки
-//   DELETE /api/tg/chats/{chat_id}     → деактивировать
-//   GET    /api/tg/settings/{chat_id}  → { settings }
-//   POST   /api/tg/settings/{chat_id}  → обновить настройки
-
 (function () {
   'use strict';
 
-  const TG_MODELS = [
-    { id: 'coder',     label: 'Кодер',     accent: '#6366f1',
-      svg: '<svg viewBox="0 0 24 24" fill="none" width="16" height="16" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 8 3 12 7 16"/><polyline points="17 8 21 12 17 16"/><line x1="14" y1="4" x2="10" y2="20"/></svg>' },
-    { id: 'designer',  label: 'Дизайнер',  accent: '#ec4899',
-      svg: '<svg viewBox="0 0 24 24" fill="none" width="16" height="16" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 0 1 0 20c-1.657 0-3-1.343-3-3 0-.828.336-1.578.879-2.121A3 3 0 0 0 8 14.5c0-1.657 1.343-3 3-3"/><circle cx="8" cy="9" r="1.2" fill="currentColor" stroke="none"/><circle cx="12" cy="6" r="1.2" fill="currentColor" stroke="none"/><circle cx="16" cy="9" r="1.2" fill="currentColor" stroke="none"/></svg>' },
-    { id: 'universal', label: 'Универсал', accent: '#10b981',
-      svg: '<svg viewBox="0 0 24 24" fill="none" width="16" height="16" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="9" cy="6" r="2" fill="var(--surface,#fff)" stroke="currentColor"/><circle cx="15" cy="12" r="2" fill="var(--surface,#fff)" stroke="currentColor"/><circle cx="9" cy="18" r="2" fill="var(--surface,#fff)" stroke="currentColor"/></svg>' },
-  ];
+  function getActualModels() {
+    if (window.ModelPicker && typeof window.ModelPicker.getModels === 'function') {
+      return window.ModelPicker.getModels().map(function (m) {
+        return {
+          id: m.id,
+          label: m.label,
+          accent: m.accent || '#10a37f',
+          svg: m.svgSm || m.svg || ''
+        };
+      });
+    }
+    return [
+      { id: 'coder',     label: 'GPT',    accent: '#10a37f', svg: '<svg viewBox="0 0 24 24" fill="none" width="16" height="16" stroke="currentColor" stroke-width="2"><path d="M12 3.2 L18.6 7 V15 L12 18.8 L5.4 15 V7 Z"/><path d="M12 11 L18.6 7 M12 11 V18.8 M12 11 L5.4 7"/></svg>' },
+      { id: 'designer',  label: 'Claude', accent: '#d97757', svg: '<svg viewBox="0 0 24 24" fill="none" width="16" height="16" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="4.5" x2="12" y2="19.5"/><line x1="5.8" y1="8" x2="18.2" y2="16"/><line x1="18.2" y1="8" x2="5.8" y2="16"/></svg>' },
+      { id: 'universal', label: 'GLM',    accent: '#8b5cf6', svg: '<svg viewBox="0 0 24 24" fill="none" width="16" height="16" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 6 H17 L8 14 H17"/><path d="M12 14 V20"/></svg>' },
+      { id: 'gemini',    label: 'Gemini', accent: '#4285f4', svg: '<svg viewBox="0 0 24 24" fill="none" width="16" height="16" stroke="currentColor" stroke-width="2"><path d="M12 2.5C12 7.8 16.2 12 21.5 12 C16.2 12 12 16.2 12 21.5 C12 16.2 7.8 12 2.5 12 C7.8 12 12 7.8 12 2.5Z"/></svg>' }
+    ];
+  }
 
-  const TG_TOOLS = [
+  var TG_TOOLS = [
     { id: 'internet', label: 'Интернет' },
     { id: 'content',  label: 'Контент и файлы' },
-    { id: 'sessions', label: 'Бортовой журнал' },
+    { id: 'sessions', label: 'Бортовой журнал' }
   ];
 
-  const TG_TRIGGERS = [
+  var TG_TRIGGERS = [
     { id: 'mention',      label: 'По упоминанию' },
-    { id: 'orchestrator', label: 'Оркестратор'  },
+    { id: 'orchestrator', label: 'Оркестратор'  }
   ];
 
-  // Дни недели: value = 1..7 (пн..вс), совпадает с бэкендом days_of_week
-  const TG_DOW = [
+  var TG_DOW = [
     { v: 1, s: 'Пн' }, { v: 2, s: 'Вт' }, { v: 3, s: 'Ср' },
-    { v: 4, s: 'Чт' }, { v: 5, s: 'Пт' }, { v: 6, s: 'Сб' }, { v: 7, s: 'Вс' },
+    { v: 4, s: 'Чт' }, { v: 5, s: 'Пт' }, { v: 6, s: 'Сб' }, { v: 7, s: 'Вс' }
   ];
-  const MONTHS_RU = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
-  const DOW_HDR = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+  var MONTHS_RU = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
+  var DOW_HDR = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+  var CHECK_SVG = '<svg viewBox="0 0 14 14" fill="none" width="11" height="11"><path d="M2.5 7.2L5.6 10.3L11.5 3.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
-  // Состояние секции триггеров (per открытый чат)
-  var _triggers = [];        // список триггеров текущего редактируемого чата
-  var _trForm = null;        // черновик нового/редактируемого триггера или null
-  var _calOpen = false;      // открыт ли календарик
-  var _calView = null;       // {year, month} текущий показываемый месяц календаря
+  var _triggers = [];
+  var _trForm = null;
+  var _calOpen = false;
+  var _calView = null;
 
   function trDefaults() {
-    return { id: null, kind: 'recurring', title: '', time_msk: '09:00',
-             days_of_week: [], trigger_date: '', prompt: '', addressed: false, is_active: true };
+    return {
+      id: null, kind: 'recurring', title: '', time_msk: '09:00',
+      days_of_week: [], trigger_date: '', prompt: '', addressed: false, is_active: true
+    };
   }
 
   function toolIcon(iconId) {
@@ -56,32 +56,34 @@
     return '<svg viewBox="0 0 24 24" width="16" height="16" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/></svg>';
   }
 
-  const DEFAULTS = {
+  var DEFAULTS = {
     system_prompt: '',
     agent_name: '',
-    agent_model: 'designer',
-    selected_tools: ['internet', 'content'],
-    trigger_mode: 'orchestrator',
-    orchestrator_context_n: 6,
-    proactive_enabled: false,
+    agent_model: 'coder',
+    selected_tools: ['internet', 'content', 'sessions'],
+    trigger_mode: 'mention',
+    orchestrator_context_n: 5,
+    proactive_enabled: false
   };
 
-  let _mount = null;
-  let _chats = [];
-  let _editing = null;
-  let _form = Object.assign({}, DEFAULTS, { chat_id: '' });
+  var _mount = null;
+  var _modalOverlay = null;
+  var _modalOpen = false;
+  var _chats = [];
+  var _editing = null;
+  var _form = Object.assign({}, DEFAULTS, { chat_id: '' });
 
   async function api(method, path, body) {
-    const opts = { method, credentials: 'include', headers: {} };
+    var opts = { method: method, credentials: 'include', headers: {} };
     if (body !== undefined) {
       opts.headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(body);
     }
-    const res = await fetch(path, opts);
-    let data = null;
+    var res = await fetch(path, opts);
+    var data = null;
     try { data = await res.json(); } catch (_) {}
     if (!res.ok) {
-      const msg = (data && (data.detail || data.error)) || ('HTTP ' + res.status);
+      var msg = (data && (data.detail || data.error)) || ('HTTP ' + res.status);
       throw new Error(msg);
     }
     return data;
@@ -89,7 +91,7 @@
 
   async function loadChats() {
     try {
-      const data = await api('GET', '/api/tg/chats');
+      var data = await api('GET', '/api/tg/chats');
       _chats = (data && data.chats) || [];
     } catch (e) {
       _chats = [];
@@ -99,24 +101,24 @@
 
   function resetForm() {
     _editing = null;
-    _form = Object.assign({}, DEFAULTS, { chat_id: '' });
+    _form = Object.assign({}, DEFAULTS, { chat_id: '', selected_tools: DEFAULTS.selected_tools.slice() });
     _triggers = [];
     _trForm = null;
     _calOpen = false;
   }
 
   function fillFormFrom(chat) {
-    const s = chat.settings || {};
+    var s = chat.settings || {};
     _editing = chat.chat_id;
     _form = {
       chat_id: chat.chat_id,
       system_prompt: s.system_prompt || '',
       agent_name: s.agent_name || '',
       agent_model: s.agent_model || DEFAULTS.agent_model,
-      selected_tools: s.selected_tools || DEFAULTS.selected_tools,
+      selected_tools: Array.isArray(s.selected_tools) ? s.selected_tools.slice() : DEFAULTS.selected_tools.slice(),
       trigger_mode: s.trigger_mode || DEFAULTS.trigger_mode,
       orchestrator_context_n: s.orchestrator_context_n != null ? s.orchestrator_context_n : DEFAULTS.orchestrator_context_n,
-      proactive_enabled: s.proactive_enabled != null ? s.proactive_enabled : DEFAULTS.proactive_enabled,
+      proactive_enabled: s.proactive_enabled != null ? s.proactive_enabled : DEFAULTS.proactive_enabled
     };
     _triggers = [];
     _trForm = null;
@@ -126,16 +128,16 @@
 
   async function loadTriggers(chatId) {
     try {
-      const data = await api('GET', '/api/tg/triggers/' + encodeURIComponent(chatId));
+      var data = await api('GET', '/api/tg/triggers/' + encodeURIComponent(chatId));
       _triggers = (data && data.triggers) || [];
     } catch (e) {
       _triggers = [];
     }
-    render();
+    if (_modalOpen) renderModal();
   }
 
   function modelDisplay() {
-    var m = TG_MODELS.find(function (x) { return x.id === _form.agent_model; });
+    var m = getActualModels().find(function (x) { return x.id === _form.agent_model; });
     return m ? '<span class="tgc-dd-ic" style="color:' + m.accent + '">' + m.svg + '</span>' + m.label : '\u2014';
   }
 
@@ -183,7 +185,6 @@
                  .map(function (d) { return d.s; }).join(', ');
   }
 
-  // --- Список существующих триггеров чата ---
   function triggersListHtml() {
     if (!_triggers || _triggers.length === 0) {
       return '<div class="tgc-tr-empty">Триггеров пока нет</div>';
@@ -200,10 +201,10 @@
           '<span class="tgc-tr-title">' + esc(t.title || (t.kind === 'once' ? 'Разовый триггер' : 'Регулярный триггер')) + '</span>' +
           '<span class="tgc-tr-actions">' +
             '<button class="tgc-tr-ic" type="button" data-tr-edit="' + t.id + '" title="Редактировать">' +
-              '<svg viewBox="0 0 20 20" width="14" height="14" fill="none"><path d="M4 13.5V16h2.5l7-7-2.5-2.5-7 7zM14.8 6.2l-1-1 1.4-1.4a.8.8 0 0 1 1.1 0l0 0a.8.8 0 0 1 0 1.1L14.8 6.2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>' +
+              '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M12 20h9"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>' +
             '</button>' +
             '<button class="tgc-tr-ic tgc-tr-ic--del" type="button" data-tr-del="' + t.id + '" title="Удалить">' +
-              '<svg viewBox="0 0 20 20" width="14" height="14" fill="none"><path d="M5 6h10M8 6V4h4v2M6 6l1 10h6l1-10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+              '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M3 6h18"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M10 11v6M14 11v6"/></svg>' +
             '</button>' +
           '</span>' +
         '</div>' +
@@ -213,7 +214,6 @@
     }).join('');
   }
 
-  // --- Кастомный календарик (без либ) ---
   function calendarHtml() {
     var view = _calView || (function () {
       var d = _trForm && _trForm.trigger_date ? new Date(_trForm.trigger_date + 'T00:00:00') : new Date();
@@ -221,7 +221,6 @@
     })();
     _calView = view;
     var first = new Date(view.year, view.month, 1);
-    // getDay: 0=вс..6=сб; приводим к пн=0..вс=6
     var startShift = (first.getDay() + 6) % 7;
     var daysInMonth = new Date(view.year, view.month + 1, 0).getDate();
     var sel = _trForm && _trForm.trigger_date ? _trForm.trigger_date : '';
@@ -248,7 +247,6 @@
     '</div>';
   }
 
-  // --- Форма создания/редактирования триггера ---
   function triggerFormHtml() {
     if (!_trForm) {
       return '<button class="tgc-tr-add" type="button" id="tgc-tr-add">+ Добавить триггер</button>';
@@ -306,8 +304,9 @@
         '<textarea class="tgc-textarea" id="tgc-tr-prompt" placeholder="Что агент должен сделать при срабатывании...">' + esc(f.prompt) + '</textarea>' +
       '</div>' +
       '<label class="tgc-check tgc-check--sm">' +
-        '<input type="checkbox" id="tgc-tr-addressed"' + (f.addressed ? ' checked' : '') + '/>' +
-        '<span>Адресно случайному участнику (иначе — всем)</span>' +
+        '<input type="checkbox" class="tgc-check-cb" id="tgc-tr-addressed"' + (f.addressed ? ' checked' : '') + '/>' +
+        '<span class="tgc-check-box" aria-hidden="true">' + CHECK_SVG + '</span>' +
+        '<span class="tgc-check-label">Адресно случайному участнику (иначе — всем)</span>' +
       '</label>' +
       '<div class="tgc-tr-editor-actions">' +
         '<button class="tgc-save tgc-save--sm" type="button" id="tgc-tr-save">' + (f.id ? 'Сохранить' : 'Добавить') + '</button>' +
@@ -317,7 +316,6 @@
   }
 
   function triggersSectionHtml() {
-    // Показываем секцию только при редактировании существующего чата
     if (!_editing) {
       return '<div class="tgc-tr-section tgc-tr-section--hint">Сохраните чат, чтобы настраивать индивидуальные триггеры.</div>';
     }
@@ -328,30 +326,133 @@
     '</div>';
   }
 
-  function render() {
+  function ensureModal() {
+    if (_modalOverlay && document.body.contains(_modalOverlay)) return _modalOverlay;
+    var el = document.getElementById('tgc-modal-overlay');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'tgc-modal-overlay';
+      el.className = 'tgc-modal-overlay';
+      el.setAttribute('role', 'dialog');
+      el.setAttribute('aria-modal', 'true');
+      el.setAttribute('aria-label', 'Telegram-чат');
+      document.body.appendChild(el);
+    }
+    el.addEventListener('mousedown', function (e) {
+      if (e.target === el) closeModal();
+    });
+    _modalOverlay = el;
+    return el;
+  }
+
+  function openModal(chat) {
+    ensureModal();
+    if (chat) {
+      fillFormFrom(chat);
+    } else {
+      resetForm();
+    }
+    _modalOpen = true;
+    _modalOverlay.innerHTML = '';
+    _modalOverlay.classList.remove('closing');
+    _modalOverlay.classList.add('active');
+    render();
+    setTimeout(function () {
+      var cidInput = _modalOverlay && _modalOverlay.querySelector('#tgc-chatid:not([disabled])');
+      if (cidInput) cidInput.focus();
+    }, 60);
+  }
+
+  function closeModal() {
+    if (!_modalOverlay || !_modalOpen) return;
+    _modalOpen = false;
+    _modalOverlay.classList.remove('active');
+    _modalOverlay.classList.add('closing');
+    resetForm();
+    renderSidebar();
+    setTimeout(function () {
+      if (_modalOverlay) _modalOverlay.classList.remove('closing');
+    }, 220);
+  }
+
+  function renderSidebar() {
     if (!_mount) return;
 
     var listHtml = _chats.length === 0
       ? '<div class="tgc-empty">Нет встроенных чатов</div>'
       : _chats.map(function (c) {
           var s = c.settings || {};
-          var mdl = TG_MODELS.find(function (m) { return m.id === s.agent_model; });
-          var isEditing = _editing === c.chat_id;
+          var mdl = getActualModels().find(function (m) { return m.id === s.agent_model; });
+          var isEditing = _modalOpen && _editing === c.chat_id;
           return '<div class="tgc-row' + (isEditing ? ' tgc-row--active' : '') + '">' +
             '<div class="tgc-row-main">' +
-              '<span class="tgc-cid">' + c.chat_id + '</span>' +
+              '<span class="tgc-cid">' + esc(c.chat_id) + '</span>' +
               '<span class="tgc-badge tgc-badge--' + (c.chat_type || 'private') + '">' + (c.chat_type === 'group' ? 'группа' : 'личка') + '</span>' +
-              (s.agent_name ? '<span class="tgc-aname">' + s.agent_name + '</span>' : '') +
+              (s.agent_name ? '<span class="tgc-aname">' + esc(s.agent_name) + '</span>' : '') +
               (mdl ? '<span class="tgc-model" style="color:' + mdl.accent + '">' + mdl.svg + ' ' + mdl.label + '</span>' : '') +
             '</div>' +
             '<div class="tgc-row-actions">' +
-              '<button class="tgc-btn" data-edit="' + c.chat_id + '" title="Редактировать"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M11 2l3 3-9 9H2v-3l9-9z" stroke-linecap="round" stroke-linejoin="round"/></svg></button>' +
-              '<button class="tgc-btn tgc-del" data-del="' + c.chat_id + '" title="Удалить"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 4h10M6 4V2h4v2M5 4l1 10h4l1-10" stroke-linecap="round" stroke-linejoin="round"/></svg></button>' +
+              '<button class="tgc-btn" data-edit="' + esc(c.chat_id) + '" title="Редактировать"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M12 20h9"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>' +
+              '<button class="tgc-btn tgc-del" data-del="' + esc(c.chat_id) + '" title="Удалить"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M3 6h18"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M10 11v6M14 11v6"/></svg></button>' +
             '</div>' +
           '</div>';
         }).join('');
 
-    var modelContent = TG_MODELS.map(function (m) {
+    _mount.innerHTML =
+      '<div class="tgc-wrap">' +
+        '<div class="tgc-list">' + listHtml + '</div>' +
+        '<button class="tgc-open-modal-btn" id="tgc-open-create" type="button">' +
+          '<svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M10 4v12M4 10h12"/></svg>' +
+          '<span>Встроить чат</span>' +
+        '</button>' +
+      '</div>';
+
+    var createBtn = _mount.querySelector('#tgc-open-create');
+    if (createBtn) {
+      createBtn.addEventListener('click', function () {
+        openModal(null);
+      });
+    }
+
+    _mount.querySelectorAll('[data-edit]').forEach(function (b) {
+      b.addEventListener('click', function (e) {
+        var cid = e.currentTarget.dataset.edit;
+        var chat = _chats.find(function (c) { return c.chat_id === cid; });
+        if (chat) openModal(chat);
+      });
+    });
+
+    _mount.querySelectorAll('[data-del]').forEach(function (b) {
+      b.addEventListener('click', async function (e) {
+        var cid = e.currentTarget.dataset.del;
+        if (!confirm('Удалить чат ' + cid + '?')) return;
+        try {
+          await api('DELETE', '/api/tg/chats/' + encodeURIComponent(cid));
+          if (_editing === cid) closeModal();
+          await loadChats();
+          render();
+        } catch (err) {
+          alert('Ошибка: ' + err.message);
+        }
+      });
+    });
+
+    updatePanelCount();
+  }
+
+  function renderModal() {
+    if (!_modalOpen) return;
+    ensureModal();
+    var prevBody = _modalOverlay.querySelector('.tgc-modal-body');
+    var savedScrollTop = prevBody ? prevBody.scrollTop : 0;
+    var prevTrList = _modalOverlay.querySelector('.tgc-tr-list');
+    var savedTrListScroll = prevTrList ? prevTrList.scrollTop : 0;
+    var openDdIds = Array.prototype.map.call(
+      _modalOverlay.querySelectorAll('.tgc-dd.tgc-dd--open'),
+      function (el) { return el.id; }
+    ).filter(Boolean);
+
+    var modelContent = getActualModels().map(function (m) {
       return '<button class="tgc-opt' + (m.id === _form.agent_model ? ' tgc-opt--on' : '') + '" data-model="' + m.id + '" type="button" style="--tgc-accent:' + m.accent + '">' +
         '<span class="tgc-opt-ic">' + m.svg + '</span>' +
         '<span class="tgc-opt-label">' + m.label + '</span>' +
@@ -372,128 +473,140 @@
       '</button>';
     }).join('');
 
-    _mount.innerHTML =
-      '<div class="tgc-list">' + listHtml + '</div>' +
-      '<div class="tgc-form">' +
-        '<div class="tgc-form-title">' + (_editing ? 'Редактирование чата' : 'Встроить новый чат') + '</div>' +
-        '<div class="tgc-field">' +
-          '<span class="tgc-field-label">Chat ID</span>' +
-          '<input class="tgc-input" id="tgc-chatid" type="text" placeholder="-1004313379449 или 123456789" value="' + _form.chat_id + '"' + (_editing ? ' disabled' : '') + '/>' +
-          '<span class="tgc-field-hint">Минус \u2192 группа, без минуса \u2192 личка</span>' +
+    var tgIconSvg = '<svg class="tgc-modal-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M21 4L3 11l6.5 2.5L18 7l-6 8.5v4.5l3.2-3.2L19 19l2-15z"/></svg>';
+
+    _modalOverlay.innerHTML =
+      '<div class="tgc-modal" id="tgc-modal">' +
+        '<div class="tgc-modal-head">' +
+          tgIconSvg +
+          '<div class="tgc-modal-title">' + (_editing ? 'Редактирование чата' : 'Встроить новый чат') + '</div>' +
+          '<button class="tgc-modal-close" id="tgc-modal-close" type="button" aria-label="Закрыть">✕</button>' +
         '</div>' +
-        '<div class="tgc-field">' +
-          '<span class="tgc-field-label">Имя агента</span>' +
-          '<input class="tgc-input" id="tgc-agentname" type="text" placeholder="Напр. CatchPM (пусто = дефолтный ассистент)" value=' + "'" + _form.agent_name + "'" + '/>' +
+        '<div class="tgc-modal-body">' +
+          '<div class="tgc-form">' +
+            '<div class="tgc-field">' +
+              '<span class="tgc-field-label">Chat ID</span>' +
+              '<input class="tgc-input" id="tgc-chatid" type="text" placeholder="-1004313379449 или 123456789" value="' + esc(_form.chat_id) + '"' + (_editing ? ' disabled' : '') + '/>' +
+              '<span class="tgc-field-hint">Минус \u2192 группа, без минуса \u2192 личка</span>' +
+            '</div>' +
+            '<div class="tgc-field">' +
+              '<span class="tgc-field-label">Имя агента</span>' +
+              '<input class="tgc-input" id="tgc-agentname" type="text" placeholder="Напр. AuGent (пусто \u2192 дефолт)" value="' + esc(_form.agent_name || '') + '"/>' +
+            '</div>' +
+            ddToggle('Модель', modelDisplay(), modelContent, 'tgc-dd-model') +
+            ddToggle('Инструменты', toolsDisplay(), toolsContent, 'tgc-dd-tools') +
+            ddToggle('Триггер', triggerDisplay(), triggerContent, 'tgc-dd-trigger') +
+            '<div class="tgc-field">' +
+              '<span class="tgc-field-label">Глубина контекста</span>' +
+              '<input class="tgc-input tgc-input--sm" id="tgc-ctxn" type="number" min="1" max="20" value="' + esc(_form.orchestrator_context_n) + '"/>' +
+            '</div>' +
+            '<label class="tgc-check">' +
+              '<input type="checkbox" class="tgc-check-cb" id="tgc-proactive"' + (_form.proactive_enabled ? ' checked' : '') + '/>' +
+              '<span class="tgc-check-box" aria-hidden="true">' + CHECK_SVG + '</span>' +
+              '<span class="tgc-check-label">Проактивные триггеры</span>' +
+            '</label>' +
+            '<div class="tgc-field">' +
+              '<span class="tgc-field-label">Базовый промпт</span>' +
+              '<textarea class="tgc-textarea" id="tgc-prompt" placeholder="Системный промпт для агента в этом чате...">' + esc(_form.system_prompt) + '</textarea>' +
+            '</div>' +
+            triggersSectionHtml() +
+            '<div class="tgc-actions">' +
+              '<button class="tgc-save" id="tgc-save" type="button">' + (_editing ? 'Сохранить' : 'Встроить чат') + '</button>' +
+              '<button class="tgc-cancel" id="tgc-cancel" type="button">Отмена</button>' +
+            '</div>' +
+            '<div class="tgc-msg" id="tgc-msg"></div>' +
+          '</div>' +
         '</div>' +
-        ddToggle('Модель', modelDisplay(), modelContent, 'tgc-dd-model') +
-        ddToggle('Инструменты', toolsDisplay(), toolsContent, 'tgc-dd-tools') +
-        ddToggle('Триггер', triggerDisplay(), triggerContent, 'tgc-dd-trigger') +
-        '<div class="tgc-field">' +
-          '<span class="tgc-field-label">Глубина контекста</span>' +
-          '<input class="tgc-input tgc-input--sm" id="tgc-ctxn" type="number" min="1" max="20" value="' + _form.orchestrator_context_n + '"/>' +
-        '</div>' +
-        '<label class="tgc-check">' +
-          '<input type="checkbox" id="tgc-proactive"' + (_form.proactive_enabled ? ' checked' : '') + '/>' +
-          '<span>Проактивные триггеры</span>' +
-        '</label>' +
-        '<div class="tgc-field">' +
-          '<span class="tgc-field-label">Базовый промпт</span>' +
-          '<textarea class="tgc-textarea" id="tgc-prompt" placeholder="Системный промпт для агента в этом чате...">' + _form.system_prompt + '</textarea>' +
-        '</div>' +
-        triggersSectionHtml() +
-        '<div class="tgc-actions">' +
-          '<button class="tgc-save" id="tgc-save" type="button">' + (_editing ? 'Сохранить' : 'Встроить чат') + '</button>' +
-          (_editing ? '<button class="tgc-cancel" id="tgc-cancel" type="button">Отмена</button>' : '') +
-        '</div>' +
-        '<div class="tgc-msg" id="tgc-msg"></div>' +
       '</div>';
 
-    bindEvents();
-    updatePanelCount();
+    bindModalEvents();
+
+    openDdIds.forEach(function (id) {
+      var dd = _modalOverlay.querySelector('#' + id);
+      if (dd) dd.classList.add('tgc-dd--open');
+    });
+    var newBody = _modalOverlay.querySelector('.tgc-modal-body');
+    if (newBody && savedScrollTop > 0) newBody.scrollTop = savedScrollTop;
+    var newTrList = _modalOverlay.querySelector('.tgc-tr-list');
+    if (newTrList && savedTrListScroll > 0) newTrList.scrollTop = savedTrListScroll;
   }
 
-  function bindEvents() {
-    _mount.querySelectorAll('.tgc-dd-toggle').forEach(function (btn) {
+  function render() {
+    renderSidebar();
+    if (_modalOpen) renderModal();
+  }
+
+  function bindModalEvents() {
+    if (!_modalOverlay) return;
+
+    var closeBtn = _modalOverlay.querySelector('#tgc-modal-close');
+    if (closeBtn) closeBtn.addEventListener('click', closeModal);
+
+    _modalOverlay.querySelectorAll('.tgc-dd-toggle').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var dd = btn.closest('.tgc-dd');
         dd.classList.toggle('tgc-dd--open');
-        _mount.querySelectorAll('.tgc-dd').forEach(function (other) {
+        _modalOverlay.querySelectorAll('.tgc-dd').forEach(function (other) {
           if (other !== dd) other.classList.remove('tgc-dd--open');
         });
       });
     });
 
-    _mount.querySelectorAll('[data-model]').forEach(function (b) {
+    _modalOverlay.querySelectorAll('[data-model]').forEach(function (b) {
       b.addEventListener('click', function (e) {
+        var dd = e.currentTarget.closest('.tgc-dd');
+        if (dd) dd.classList.remove('tgc-dd--open');
         _form.agent_model = e.currentTarget.dataset.model;
-        render();
+        renderModal();
       });
     });
 
-    _mount.querySelectorAll('[data-tool]').forEach(function (b) {
+    _modalOverlay.querySelectorAll('[data-tool]').forEach(function (b) {
       b.addEventListener('click', function (e) {
         var id = e.currentTarget.dataset.tool;
         var i = _form.selected_tools.indexOf(id);
         if (i >= 0) _form.selected_tools.splice(i, 1); else _form.selected_tools.push(id);
-        render();
+        renderModal();
       });
     });
 
-    _mount.querySelectorAll('[data-trigger]').forEach(function (b) {
+    _modalOverlay.querySelectorAll('[data-trigger]').forEach(function (b) {
       b.addEventListener('click', function (e) {
+        var dd = e.currentTarget.closest('.tgc-dd');
+        if (dd) dd.classList.remove('tgc-dd--open');
         _form.trigger_mode = e.currentTarget.dataset.trigger;
-        render();
+        renderModal();
       });
     });
 
-    _mount.querySelectorAll('[data-edit]').forEach(function (b) {
-      b.addEventListener('click', function (e) {
-        var cid = e.currentTarget.dataset.edit;
-        var chat = _chats.find(function (c) { return c.chat_id === cid; });
-        if (chat) { fillFormFrom(chat); render(); }
-      });
-    });
-
-    _mount.querySelectorAll('[data-del]').forEach(function (b) {
-      b.addEventListener('click', async function (e) {
-        var cid = e.currentTarget.dataset.del;
-        if (!confirm('Удалить чат ' + cid + '?')) return;
-        try {
-          await api('DELETE', '/api/tg/chats/' + encodeURIComponent(cid));
-          if (_editing === cid) resetForm();
-          await loadChats(); render();
-        } catch (err) { showMsg('Ошибка: ' + err.message, true); }
-      });
-    });
-
-    var cidEl = _mount.querySelector('#tgc-chatid');
+    var cidEl = _modalOverlay.querySelector('#tgc-chatid');
     if (cidEl) cidEl.addEventListener('input', function (e) { _form.chat_id = e.target.value.trim(); });
-    var ctxEl = _mount.querySelector('#tgc-ctxn');
+    var ctxEl = _modalOverlay.querySelector('#tgc-ctxn');
     if (ctxEl) ctxEl.addEventListener('input', function (e) { _form.orchestrator_context_n = parseInt(e.target.value, 10) || 1; });
-    var proEl = _mount.querySelector('#tgc-proactive');
+    var proEl = _modalOverlay.querySelector('#tgc-proactive');
     if (proEl) proEl.addEventListener('change', function (e) { _form.proactive_enabled = e.target.checked; });
-    var prEl = _mount.querySelector('#tgc-prompt');
+    var prEl = _modalOverlay.querySelector('#tgc-prompt');
     if (prEl) prEl.addEventListener('input', function (e) { _form.system_prompt = e.target.value; });
-    var anEl = _mount.querySelector('#tgc-agentname');
+    var anEl = _modalOverlay.querySelector('#tgc-agentname');
     if (anEl) anEl.addEventListener('input', function (e) { _form.agent_name = e.target.value; });
 
-    var saveBtn = _mount.querySelector('#tgc-save');
+    var saveBtn = _modalOverlay.querySelector('#tgc-save');
     if (saveBtn) saveBtn.addEventListener('click', onSave);
-    var cancelBtn = _mount.querySelector('#tgc-cancel');
-    if (cancelBtn) cancelBtn.addEventListener('click', function () { resetForm(); render(); });
+    var cancelBtn = _modalOverlay.querySelector('#tgc-cancel');
+    if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
 
     bindTriggerEvents();
   }
 
   function bindTriggerEvents() {
-    // Открыть форму нового триггера
-    var addBtn = _mount.querySelector('#tgc-tr-add');
+    if (!_modalOverlay) return;
+
+    var addBtn = _modalOverlay.querySelector('#tgc-tr-add');
     if (addBtn) addBtn.addEventListener('click', function () {
-      _trForm = trDefaults(); _calOpen = false; _calView = null; render();
+      _trForm = trDefaults(); _calOpen = false; _calView = null; renderModal();
     });
 
-    // Редактировать существующий
-    _mount.querySelectorAll('[data-tr-edit]').forEach(function (b) {
+    _modalOverlay.querySelectorAll('[data-tr-edit]').forEach(function (b) {
       b.addEventListener('click', function (e) {
         var id = parseInt(e.currentTarget.dataset.trEdit, 10);
         var t = _triggers.find(function (x) { return x.id === id; });
@@ -504,14 +617,13 @@
           days_of_week: (t.days_of_week || []).slice(),
           trigger_date: t.trigger_date || '',
           prompt: t.prompt || '', addressed: !!t.addressed,
-          is_active: t.is_active != null ? t.is_active : true,
+          is_active: t.is_active != null ? t.is_active : true
         };
-        _calOpen = false; _calView = null; render();
+        _calOpen = false; _calView = null; renderModal();
       });
     });
 
-    // Удалить триггер
-    _mount.querySelectorAll('[data-tr-del]').forEach(function (b) {
+    _modalOverlay.querySelectorAll('[data-tr-del]').forEach(function (b) {
       b.addEventListener('click', async function (e) {
         var id = e.currentTarget.dataset.trDel;
         if (!confirm('Удалить триггер?')) return;
@@ -524,63 +636,53 @@
 
     if (!_trForm) return;
 
-    // Переключение типа (recurring/once)
-    _mount.querySelectorAll('[data-tr-kind]').forEach(function (b) {
+    _modalOverlay.querySelectorAll('[data-tr-kind]').forEach(function (b) {
       b.addEventListener('click', function (e) {
         _trForm.kind = e.currentTarget.dataset.trKind;
-        _calOpen = false; render();
+        _calOpen = false; renderModal();
       });
     });
 
-    // Название
-    var tEl = _mount.querySelector('#tgc-tr-title');
+    var tEl = _modalOverlay.querySelector('#tgc-tr-title');
     if (tEl) tEl.addEventListener('input', function (e) { _trForm.title = e.target.value; });
-    // Время
-    var tmEl = _mount.querySelector('#tgc-tr-time');
+    var tmEl = _modalOverlay.querySelector('#tgc-tr-time');
     if (tmEl) tmEl.addEventListener('input', function (e) { _trForm.time_msk = e.target.value; });
-    // Промпт
-    var pEl = _mount.querySelector('#tgc-tr-prompt');
+    var pEl = _modalOverlay.querySelector('#tgc-tr-prompt');
     if (pEl) pEl.addEventListener('input', function (e) { _trForm.prompt = e.target.value; });
-    // Адресность
-    var adEl = _mount.querySelector('#tgc-tr-addressed');
+    var adEl = _modalOverlay.querySelector('#tgc-tr-addressed');
     if (adEl) adEl.addEventListener('change', function (e) { _trForm.addressed = e.target.checked; });
 
-    // Дни недели
-    _mount.querySelectorAll('[data-tr-dow]').forEach(function (b) {
+    _modalOverlay.querySelectorAll('[data-tr-dow]').forEach(function (b) {
       b.addEventListener('click', function (e) {
         var v = parseInt(e.currentTarget.dataset.trDow, 10);
         var i = _trForm.days_of_week.indexOf(v);
         if (i === -1) _trForm.days_of_week.push(v); else _trForm.days_of_week.splice(i, 1);
         _trForm.days_of_week.sort(function (a, b) { return a - b; });
-        render();
+        renderModal();
       });
     });
 
-    // Календарь: открыть/закрыть
-    var calOpenBtn = _mount.querySelector('#tgc-cal-open');
-    if (calOpenBtn) calOpenBtn.addEventListener('click', function () { _calOpen = !_calOpen; render(); });
-    // Навигация по месяцам
-    var prevBtn = _mount.querySelector('[data-cal-prev]');
+    var calOpenBtn = _modalOverlay.querySelector('#tgc-cal-open');
+    if (calOpenBtn) calOpenBtn.addEventListener('click', function () { _calOpen = !_calOpen; renderModal(); });
+    var prevBtn = _modalOverlay.querySelector('[data-cal-prev]');
     if (prevBtn) prevBtn.addEventListener('click', function () {
-      _calView.month--; if (_calView.month < 0) { _calView.month = 11; _calView.year--; } render();
+      _calView.month--; if (_calView.month < 0) { _calView.month = 11; _calView.year--; } renderModal();
     });
-    var nextBtn = _mount.querySelector('[data-cal-next]');
+    var nextBtn = _modalOverlay.querySelector('[data-cal-next]');
     if (nextBtn) nextBtn.addEventListener('click', function () {
-      _calView.month++; if (_calView.month > 11) { _calView.month = 0; _calView.year++; } render();
+      _calView.month++; if (_calView.month > 11) { _calView.month = 0; _calView.year++; } renderModal();
     });
-    // Выбор дня
-    _mount.querySelectorAll('[data-cal-day]').forEach(function (b) {
+    _modalOverlay.querySelectorAll('[data-cal-day]').forEach(function (b) {
       b.addEventListener('click', function (e) {
         _trForm.trigger_date = e.currentTarget.dataset.calDay;
-        _calOpen = false; render();
+        _calOpen = false; renderModal();
       });
     });
 
-    // Сохранить триггер
-    var trSave = _mount.querySelector('#tgc-tr-save');
+    var trSave = _modalOverlay.querySelector('#tgc-tr-save');
     if (trSave) trSave.addEventListener('click', onSaveTrigger);
-    var trCancel = _mount.querySelector('#tgc-tr-cancel');
-    if (trCancel) trCancel.addEventListener('click', function () { _trForm = null; _calOpen = false; render(); });
+    var trCancel = _modalOverlay.querySelector('#tgc-tr-cancel');
+    if (trCancel) trCancel.addEventListener('click', function () { _trForm = null; _calOpen = false; renderModal(); });
   }
 
   async function onSaveTrigger() {
@@ -595,7 +697,7 @@
       trigger_date: f.kind === 'once' ? f.trigger_date : null,
       prompt: f.prompt,
       addressed: f.addressed,
-      is_active: f.is_active,
+      is_active: f.is_active
     };
     try {
       if (f.id) {
@@ -612,7 +714,7 @@
   }
 
   function showMsg(text, isErr) {
-    var el = _mount.querySelector('#tgc-msg');
+    var el = _modalOverlay && _modalOverlay.querySelector('#tgc-msg');
     if (!el) return;
     el.textContent = text;
     el.className = 'tgc-msg ' + (isErr ? 'tgc-msg--err' : 'tgc-msg--ok');
@@ -627,25 +729,35 @@
       selected_tools: _form.selected_tools,
       trigger_mode: _form.trigger_mode,
       orchestrator_context_n: _form.orchestrator_context_n,
-      proactive_enabled: _form.proactive_enabled,
+      proactive_enabled: _form.proactive_enabled
     };
     try {
       if (_editing) {
         await api('POST', '/api/tg/settings/' + encodeURIComponent(_editing), payload);
+        await loadChats();
+        renderSidebar();
         showMsg('Настройки сохранены');
+        setTimeout(function () { closeModal(); }, 450);
       } else {
         var cid = (_form.chat_id || '').trim();
         if (!cid) { showMsg('Укажи Chat ID', true); return; }
         await api('POST', '/api/tg/chats', Object.assign({ chat_id: cid }, payload));
+        await loadChats();
+        renderSidebar();
         showMsg('Чат встроен');
-        resetForm();
+        setTimeout(function () { closeModal(); }, 450);
       }
-      await loadChats();
-      render();
     } catch (err) {
       showMsg('Ошибка: ' + err.message, true);
     }
   }
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && _modalOpen) {
+      e.stopPropagation();
+      closeModal();
+    }
+  });
 
   function updatePanelCount() {
     var cnt = document.getElementById('tgc-panel-count');

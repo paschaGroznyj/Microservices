@@ -124,8 +124,17 @@ document.addEventListener('click', async (e) => {
     if (confirm('Выйти из приложения?')) {
       localStorage.removeItem('scholar_api_token');
       showToast('Выход...');
-      setTimeout(() => { 
-          window.location.href = 'https://uva-advanced.ru'; 
+      setTimeout(() => {
+          const isSigma = document.body?.dataset?.gateway === 'sigma' || /(?:^|\.)cds\.|sigma/i.test(location.hostname);
+          if (isSigma) {
+              const form = document.createElement('form');
+              form.method = 'POST';
+              form.action = '/logout-web';
+              document.body.appendChild(form);
+              form.submit();
+          } else {
+              window.location.href = 'https://uva-advanced.ru';
+          }
       }, 800);
     }
   }

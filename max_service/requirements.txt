@@ -4,4 +4,5 @@ fastapi
 uvicorn[standard]
 pydantic
 redis>=5.0
+apscheduler
 pytest

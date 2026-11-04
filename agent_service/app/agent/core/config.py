@@ -1,4 +1,5 @@
 import os
+import re
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -10,6 +11,46 @@ PORT_PM_AGENT = os.getenv("PORT_PM_AGENT")
 PORT_GATEWAY_PORT = os.getenv("PORT_GATEWAY_PORT")
 PORT_GATEWAY_SIGMA_PORT = os.getenv("PORT_GATEWAY_SIGMA_PORT", "7010")
 PORT_PARSERS_SERVICE = os.getenv("PORT_PARSERS_SERVICE")
+
+# Публичный адрес веб-редактора (/editor). Домен НЕ хардкодить — берётся из .env.
+# Одна переменная, три формата:
+#   EDITOR_BASE_URL=https://catchpm.example                         — один домен на все target
+#   EDITOR_BASE_URL={"main":"https://a.example","sigma":"https://b.example"}
+#   EDITOR_BASE_URL=main=https://a.example,sigma=https://b.example
+# Ключ — gateway_target запроса (main / sigma / ...). Нет ключа -> "main" -> первый в карте.
+EDITOR_BASE_URL = os.getenv("EDITOR_BASE_URL", "http://localhost:7000")
+
+
+def _parse_editor_base_urls(raw: str) -> dict:
+    import json as _json
+    raw = (raw or "").strip()
+    if not raw:
+        return {}
+    if raw.startswith("{"):
+        try:
+            data = _json.loads(raw)
+            return {str(k).strip().lower(): str(v).strip()
+                    for k, v in data.items() if str(v).strip()}
+        except Exception:
+            return {}
+    if re.match(r"^[A-Za-z0-9_-]+=", raw):
+        out = {}
+        for part in raw.split(","):
+            k, sep, v = part.partition("=")
+            if sep and k.strip() and v.strip():
+                out[k.strip().lower()] = v.strip()
+        return out
+    return {"main": raw}
+
+
+EDITOR_BASE_URLS = _parse_editor_base_urls(EDITOR_BASE_URL) or {"main": "http://localhost:7000"}
+
+
+def editor_base_url(target: str | None = None) -> str:
+    """Базовый URL редактора для gateway_target (main/sigma/...)."""
+    t = (target or "main").strip().lower()
+    url = EDITOR_BASE_URLS.get(t) or EDITOR_BASE_URLS.get("main") or next(iter(EDITOR_BASE_URLS.values()))
+    return url.rstrip("/")
 
 STORAGE_PATH = os.getenv("STORAGE_PATH", "./knowledge_base")
 ARTICLES_FOLDER = "articles"
@@ -261,4 +302,5 @@ def get_role_max(max_id) -> str:
 
 AGENT_POOL_PASSWORD = os.getenv("AGENT_POOL_PASSWORD")
 TG_BOT_PUSH_URL = os.environ.get("TG_BOT_PUSH_URL")
+MAX_BOT_PUSH_URL = os.environ.get("MAX_BOT_PUSH_URL")
 

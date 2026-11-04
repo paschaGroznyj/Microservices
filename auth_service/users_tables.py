@@ -505,6 +505,22 @@ class DataBaseUser:
                      (по возрастанию created_at — показываем от старых к новым).
         """
         async with self.pool.acquire() as conn:
+            # --- MOCK для тестового юзера 56: всегда демо + все published-обновления ---
+            if user_id == 56:
+                rows = await conn.fetch("""
+                    SELECT au.id, au.version, au.title, au.body, au.created_at
+                    FROM app_updates au
+                    WHERE au.is_published = TRUE
+                    ORDER BY au.created_at ASC, au.id ASC
+                """)
+                updates = []
+                for r in rows:
+                    item = dict(r)
+                    if item.get("created_at"):
+                        item["created_at"] = item["created_at"].isoformat()
+                    updates.append(item)
+                return {"demo": True, "updates": updates}
+            # --- конец MOCK ---
             demo_seen = await conn.fetchval("""
                 SELECT demo_seen FROM user_onboarding WHERE user_id = $1
             """, user_id)
@@ -545,12 +561,19 @@ class DataBaseUser:
 
     async def mark_update_seen(self, user_id: int, update_id: int) -> bool:
         """Отметить, что юзер закрыл конкретное обновление (идемпотентно)."""
+        return await self.mark_updates_seen(user_id, [int(update_id)])
+
+    async def mark_updates_seen(self, user_id: int, update_ids: list[int]) -> bool:
+        """Отметить список обновлений просмотренными для пользователя (идемпотентно)."""
+        clean_ids = sorted({int(x) for x in (update_ids or []) if x is not None})
+        if not clean_ids:
+            return True
         async with self.pool.acquire() as conn:
             await conn.execute("""
                 INSERT INTO user_seen_updates (user_id, update_id)
-                VALUES ($1, $2)
+                SELECT $1, unnest($2::int[])
                 ON CONFLICT (user_id, update_id) DO NOTHING
-            """, user_id, update_id)
+            """, int(user_id), clean_ids)
             return True
 
     async def add_app_update(self, title: str, body: str,

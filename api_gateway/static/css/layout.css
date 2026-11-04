@@ -208,8 +208,8 @@
 
 /* ══════════════════════════════════════════════
    TEXT PREVIEW PANEL — правый сайдбар просмотра
-   длинного текста (>1000 символов из сообщения).
-   Рендер как txt на белом фоне, оригинальный вид.
+   длинного текста (>1000 символов) в стиле приложения
+   и карточки .reasoning-body (светлая + тёмная тема).
 ══════════════════════════════════════════════ */
 .text-preview-panel {
   position: absolute;
@@ -221,13 +221,19 @@
   max-width: 720px;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
-  border-left: 1px solid var(--border);
-  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.12);
+  background: var(--sidebar-bg, var(--bg));
+  border-left: 1px solid var(--cds-reasoning-ring, var(--border));
+  box-shadow: var(--shadow-lg, -8px 0 28px rgba(0, 0, 0, 0.16));
   transform: translateX(100%);
-  transition: transform .26s cubic-bezier(0.22, 0.61, 0.36, 1);
+  transition: transform .26s cubic-bezier(0.22, 0.61, 0.36, 1), background var(--transition);
   pointer-events: none;
   will-change: transform;
+}
+
+[data-theme="dark"] .text-preview-panel {
+  background: var(--sidebar-bg, #111111);
+  border-left: 1px solid var(--cds-reasoning-ring, rgba(255, 255, 255, 0.10));
+  box-shadow: -12px 0 36px rgba(0, 0, 0, 0.55);
 }
 
 .text-preview-panel.open {
@@ -240,15 +246,29 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  gap: 10px;
+  height: 54px;
+  min-height: 54px;
+  padding: 0 12px 0 16px;
+  border-bottom: 1px solid var(--cds-reasoning-ring, rgba(11, 11, 11, 0.08));
+  background: rgba(255, 255, 255, 0.30);
+  backdrop-filter: blur(7px) saturate(115%);
+  -webkit-backdrop-filter: blur(7px) saturate(115%);
+}
+
+[data-theme="dark"] .text-preview-header {
+  background: rgba(15, 23, 37, 0.28);
+  border-bottom: 1px solid var(--cds-reasoning-ring, rgba(255, 255, 255, 0.10));
 }
 
 .text-preview-title {
-  font-size: .9rem;
-  font-weight: 600;
-  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-anthropic-sans, var(--font-sans));
+  font-size: 13px;
+  line-height: 19px;
+  font-weight: 500;
+  color: var(--cds-reasoning-text, var(--text-primary));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -256,48 +276,84 @@
 
 .text-preview-close {
   flex-shrink: 0;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
   border: none;
-  border-radius: 7px;
+  border-radius: 6px;
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--cds-reasoning-muted, var(--text-secondary));
   cursor: pointer;
-  transition: background .15s, color .15s;
+  transition: background var(--transition), color var(--transition);
 }
 .text-preview-close:hover {
-  background: var(--surface2);
+  background: var(--sidebar-hover, var(--surface2));
   color: var(--text-primary);
 }
+.text-preview-close:active {
+  background: var(--sidebar-active, var(--surface3));
+}
 
-/* Тело — оригинальный текст как txt на белом фоне */
+/* Тело — карточка в стиле .reasoning-body (CDS TurnStatus / Prose) */
 .text-preview-body {
   flex: 1;
-  margin: 0;
-  padding: 20px 22px;
+  min-width: 0;
+  margin: 12px 14px 14px;
+  padding: 12px 14px;
   overflow: auto;
-  background: #ffffff;
-  color: #1a1a1a;
-  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
-  font-size: .82rem;
-  line-height: 1.6;
+  border: none;
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 1px var(--cds-reasoning-ring, rgba(11, 11, 11, 0.10));
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--cds-reasoning-text, #52514e);
+  font-family: var(--font-anthropic-sans, var(--font-sans));
+  font-size: 13px;
+  line-height: 19.5px;
+  font-weight: 400;
+  font-style: normal;
   white-space: pre-wrap;
   word-break: break-word;
   tab-size: 4;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  transition: box-shadow .18s ease, background .18s ease;
 }
 
-/* Редактируемый режим: курсор-текст, без фокус-рамки. */
+[data-theme="dark"] .text-preview-body {
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--cds-reasoning-text, #c3c2b7);
+  box-shadow: inset 0 0 0 1px var(--cds-reasoning-ring, rgba(255, 255, 255, 0.10));
+}
+
+/* Редактируемый режим: курсор-текст, деликатное кольцо при фокусе. */
 .text-preview-body[contenteditable="true"] {
   cursor: text;
   outline: none;
 }
 .text-preview-body[contenteditable="true"]:focus {
   outline: none;
-  box-shadow: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, var(--cds-reasoning-ring, var(--border)));
 }
+
+/* Обёртка тела и кнопка «Скачать» в шапке text-preview-header */
+.text-preview-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+#text-preview-dl.fa-card-dl-btn {
+  position: static;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+#text-preview-dl svg { width: 14px; height: 14px; }
 
 @media (max-width: 900px) {
   .text-preview-panel {
@@ -759,3 +815,126 @@
 }
 .sidebar-expand-btn:hover { background: var(--sidebar-hover); color: var(--text-primary); }
 .sidebar-expand-btn:active { background: var(--sidebar-active); }
+
+/* text-preview: файловый режим (превью приложенных txt/md/json/csv/код) */
+.text-preview-modes { flex-shrink: 0; }
+.text-preview-modes[hidden] { display: none; }
+.text-preview-body[hidden] { display: none; }
+.text-preview-wrap > .text-preview-body { min-height: 0; }
+.text-preview-panel--file .text-preview-body[contenteditable="false"] { cursor: default; }
+.text-preview-panel--file .text-preview-wrap > .text-preview-body { padding-right: 14px; }
+/* Кнопка «Скачать» в шапке: тот же стеклянный стиль, но в потоке */
+.text-preview-header > #text-preview-dl.fa-card-dl-btn {
+  position: static;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+.text-preview-header > #text-preview-dl svg { width: 14px; height: 14px; }
+
+.text-preview-render { white-space: normal; }
+.text-preview-wrap > .text-preview-render--code,
+.text-preview-wrap > .text-preview-render--text,
+.text-preview-wrap > .text-preview-render--table,
+.text-preview-wrap > .text-preview-render--frame { padding: 0; }
+.text-preview-render .tp-code,
+.text-preview-render .tp-plain {
+  margin: 0;
+  padding: 12px 14px;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 19px;
+  white-space: pre;
+  tab-size: 4;
+}
+.text-preview-render .tp-plain { white-space: pre-wrap; word-break: break-word; font-family: var(--font-anthropic-sans, var(--font-sans)); font-size: 13px; line-height: 19.5px; }
+.text-preview-render .tp-code code.hljs { padding: 0; background: transparent; font: inherit; }
+
+/* Markdown */
+.text-preview-render--md { line-height: 1.6; font-size: 13.5px; color: var(--text-primary); }
+.text-preview-render--md > :first-child { margin-top: 0; }
+.text-preview-render--md > :last-child { margin-bottom: 0; }
+.text-preview-render--md h1, .text-preview-render--md h2, .text-preview-render--md h3,
+.text-preview-render--md h4 { margin: 1.1em 0 .45em; line-height: 1.3; font-weight: 600; }
+.text-preview-render--md h1 { font-size: 1.45em; }
+.text-preview-render--md h2 { font-size: 1.25em; }
+.text-preview-render--md h3 { font-size: 1.1em; }
+.text-preview-render--md p, .text-preview-render--md ul, .text-preview-render--md ol,
+.text-preview-render--md blockquote, .text-preview-render--md pre, .text-preview-render--md table { margin: 0 0 .8em; }
+.text-preview-render--md ul, .text-preview-render--md ol { padding-left: 1.4em; }
+.text-preview-render--md a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; text-decoration-thickness: 1px; }
+.text-preview-render--md code { font-family: var(--font-mono); font-size: .9em; padding: 1px 5px; border-radius: 4px; background: color-mix(in srgb, var(--text-secondary) 14%, transparent); }
+.text-preview-render--md pre { padding: 10px 12px; border-radius: 8px; overflow: auto; background: color-mix(in srgb, var(--text-secondary) 13%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 70%, transparent); }
+.text-preview-render--md pre code,
+.text-preview-render--md pre code.hljs { display: block; padding: 0; background: transparent; font-size: 12.5px; line-height: 19px; }
+.text-preview-render--md blockquote { margin-left: 0; padding: 2px 0 2px 12px; border-left: 3px solid color-mix(in srgb, var(--accent) 55%, transparent); color: var(--text-secondary); }
+.text-preview-render--md img { max-width: 100%; border-radius: 6px; }
+.text-preview-render--md hr { border: none; border-top: 1px solid var(--border); margin: 1.2em 0; }
+
+/* Таблицы (CSV и markdown) */
+.text-preview-render .tp-table,
+.text-preview-render--md table { border-collapse: separate; border-spacing: 0; font-size: 12.5px; line-height: 1.45; }
+.text-preview-render .tp-table { min-width: 100%; }
+.text-preview-render .tp-table th,
+.text-preview-render .tp-table td,
+.text-preview-render--md th,
+.text-preview-render--md td { padding: 6px 12px; border-bottom: 1px solid color-mix(in srgb, var(--border) 85%, transparent); text-align: left; white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+.text-preview-render .tp-table th,
+.text-preview-render--md th {
+  position: sticky; top: 0; z-index: 1;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-secondary) 10%, var(--sidebar-bg, var(--surface)));
+  border-bottom: 1px solid color-mix(in srgb, var(--text-secondary) 35%, transparent);
+}
+.text-preview-render .tp-table .tp-num { text-align: right; font-variant-numeric: tabular-nums; }
+.text-preview-render .tp-table tbody tr:hover td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+
+/* Markdown-превью: горизонтальной прокрутки у всего тела нет.
+   Ячейки переносятся, а слишком широкая таблица скроллится сама по себе. */
+.text-preview-render--md { overflow-x: hidden; overflow-wrap: anywhere; }
+.text-preview-render--md table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.text-preview-render--md th,
+.text-preview-render--md td {
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: break-word;
+  vertical-align: top;
+  min-width: 56px;
+  max-width: 260px;
+  overflow: visible;
+  text-overflow: clip;
+}
+.text-preview-render--md th { position: static; }
+
+/* HTML в песочнице */
+.text-preview-render--frame { overflow: hidden; display: flex; }
+.text-preview-render .tp-frame { flex: 1; width: 100%; border: 0; border-radius: 10px; background: #fff; }
+
+.text-preview-note {
+  flex-shrink: 0;
+  margin: -4px 14px 12px;
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--text-secondary);
+}
+.text-preview-note.is-error { color: #c2410c; }
+[data-theme="dark"] .text-preview-note.is-error { color: #fb923c; }
+.fa-tile--nopreview .fa-tile__meta { color: var(--text-secondary); font-style: italic; }
+
+/* chat.css задаёт глобально pre { padding-top: 36px !important } под шапку code-header — в панели её нет */
+.text-preview-render .tp-code,
+.text-preview-render .tp-plain { padding-top: 12px !important; }
+.text-preview-render--md pre { padding-top: 10px !important; }
+.text-preview-panel--file .text-preview-wrap > .text-preview-render--table,
+.text-preview-panel--file .text-preview-wrap > .text-preview-render--code,
+.text-preview-panel--file .text-preview-wrap > .text-preview-render--text,
+.text-preview-panel--file .text-preview-wrap > .text-preview-render--frame { padding: 0; }

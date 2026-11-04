@@ -24,6 +24,7 @@ def get_llm_lite_model():
         model="anthropic/claude-haiku-4.5",
         base_url="https://foundation-models.api.cloud.ru/v1",
         api_key=CLOUD_LLM_ACCESS_KEY,
+        max_tokens=8192,
         model_kwargs={
             "extra_headers": {
                 "X-Enable-Prompt-Cache": "true"
@@ -39,6 +40,7 @@ def get_llm_lite_model_gpt_mini():
         model="openai/gpt-5-mini",
         base_url="https://foundation-models.api.cloud.ru/v1",
         api_key=CLOUD_LLM_ACCESS_KEY,
+        max_tokens=8192,
         model_kwargs={
             "extra_headers": {
                 "X-Enable-Prompt-Cache": "true"
@@ -54,6 +56,7 @@ def get_llm_lite_model_gemini_flash():
         model="google/gemini-3-flash-preview",
         base_url="https://foundation-models.api.cloud.ru/v1",
         api_key=CLOUD_LLM_ACCESS_KEY,
+        max_tokens=8192,
         model_kwargs={
             "extra_headers": {
                 "X-Enable-Prompt-Cache": "true"
@@ -69,6 +72,7 @@ def get_llm_model():
         # model="google/gemini-3.1-pro-preview",
         base_url="https://foundation-models.api.cloud.ru/v1",
         api_key=CLOUD_LLM_ACCESS_KEY,
+        max_tokens=16384,
         model_kwargs={
             "extra_headers": {
                 "X-Enable-Prompt-Cache": "true"
@@ -83,6 +87,7 @@ def get_llm_model_gpt():
         model="openai/gpt-5.4",
         base_url="https://foundation-models.api.cloud.ru/v1",
         api_key=CLOUD_LLM_ACCESS_KEY,
+        max_tokens=16384,
         model_kwargs={
             "extra_headers": {
                 "X-Enable-Prompt-Cache": "true"
@@ -101,6 +106,7 @@ def get_llm_model_claude():
         model="anthropic/claude-opus-4.8",
         base_url="https://foundation-models.api.cloud.ru/v1",
         api_key=CLOUD_LLM_ACCESS_KEY,
+        max_tokens=16384,
         model_kwargs={
             "extra_headers": {
                 "X-Enable-Prompt-Cache": "true"
@@ -114,6 +120,7 @@ def get_llm_model_gemini():
         model="google/gemini-3.1-pro-preview",
         base_url="https://foundation-models.api.cloud.ru/v1",
         api_key=CLOUD_LLM_ACCESS_KEY,
+        max_tokens=16384,
         model_kwargs={
             "extra_headers": {
                 "X-Enable-Prompt-Cache": "true"
@@ -132,6 +139,7 @@ def get_llm_model_glm():
         model="zai-org/GLM-5.2",
         base_url="https://foundation-models.api.cloud.ru/v1",
         api_key=CLOUD_LLM_ACCESS_KEY,
+        max_tokens=16384,
         model_kwargs={
             "extra_headers": {
                 "X-Enable-Prompt-Cache": "true"
@@ -189,3 +197,24 @@ def get_router_api_config() -> dict:
         "music_model": ROUTER_MUSIC_MODEL,
         "avatar_model": ROUTER_AVATAR_MODEL,
     }
+
+
+def get_real_model_name(model_or_key) -> str:
+    """Возвращает точное название модели из провайдера (например 'openai/gpt-5.4')."""
+    if hasattr(model_or_key, "model_name") and getattr(model_or_key, "model_name"):
+        return str(model_or_key.model_name)
+    if hasattr(model_or_key, "model") and getattr(model_or_key, "model"):
+        return str(model_or_key.model)
+    key = str(model_or_key or "").strip()
+    builders = {
+        "coder": get_llm_model_gpt,
+        "designer": get_llm_model_claude,
+        "universal": get_llm_model_glm,
+        "gemini": get_llm_model_gemini,
+        "lite": get_llm_lite_model,
+    }
+    fn = builders.get(key)
+    if fn is not None:
+        llm = fn()
+        return str(getattr(llm, "model_name", None) or getattr(llm, "model", None) or key)
+    return key

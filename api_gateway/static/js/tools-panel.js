@@ -123,6 +123,10 @@ class ToolsPanel {
     this._selected = new Set(
       // TOOL_CATEGORIES.filter(c => !c.adminOnly).map(c => c.id)
     );
+    this._saveDebounceTimer = null;
+    this._pendingSettingsPatch = {};
+    this._saveDebounceMs = 1000;
+    window.addEventListener("pagehide", () => this.flushUserSettings());
   }
 
   /* ── публичное API ──────────────────────────────────────────────────── */
@@ -144,8 +148,97 @@ class ToolsPanel {
     }
     // Если не админ — снимаем admin-категорию
     if (!this._isAdmin) {
-      this._selected.delete("admin");
+      const validIds = new Set(TOOL_CATEGORIES.filter(c => !c.adminOnly).map(c => c.id));
+      for (const id of [...this._selected]) {
+        if (!validIds.has(id)) this._selected.delete(id);
+      }
+      this._updateTriggerBadge();
     }
+  }
+
+  async loadUserSettings() {
+    try {
+      const res = await fetch("/api/user/settings", { credentials: "include" });
+      if (!res.ok) return null;
+      const data = await res.json();
+      this.applyUserSettings(data);
+      return data;
+    } catch (e) {
+      console.warn("[ToolsPanel] loadUserSettings failed:", e);
+      return null;
+    }
+  }
+
+  applyUserSettings(data) {
+    if (!data || typeof data !== "object") return;
+    if (Array.isArray(data.selected_tools)) {
+      const allowed = new Set(
+        TOOL_CATEGORIES.filter(c => !c.adminOnly || this._isAdmin).map(c => c.id)
+      );
+      this._selected = new Set(
+        data.selected_tools.map(x => String(x)).filter(id => allowed.has(id))
+      );
+      this._updateTriggerBadge();
+    }
+    if (data.selected_model) {
+      window.ModelPicker?.applySettingModel?.(data.selected_model);
+    }
+  }
+
+  saveUserSettings(patch = {}, opts = {}) {
+    if (!patch || typeof patch !== "object") return;
+    if ("selected_tools" in patch) {
+      this._pendingSettingsPatch.selected_tools = Array.isArray(patch.selected_tools)
+        ? [...patch.selected_tools]
+        : this.getSelectedCategories();
+    }
+    if ("selected_model" in patch) {
+      this._pendingSettingsPatch.selected_model = patch.selected_model;
+    }
+    if ("active_chat_id" in patch) {
+      this._pendingSettingsPatch.active_chat_id = patch.active_chat_id ?? null;
+    }
+    if (this._saveDebounceTimer) {
+      clearTimeout(this._saveDebounceTimer);
+      this._saveDebounceTimer = null;
+    }
+    if (opts && opts.immediate) {
+      this.flushUserSettings();
+      return;
+    }
+    this._saveDebounceTimer = setTimeout(() => {
+      this.flushUserSettings();
+    }, this._saveDebounceMs);
+  }
+
+  flushUserSettings() {
+    if (this._saveDebounceTimer) {
+      clearTimeout(this._saveDebounceTimer);
+      this._saveDebounceTimer = null;
+    }
+    const patch = this._pendingSettingsPatch;
+    if (!patch || Object.keys(patch).length === 0) return;
+    this._pendingSettingsPatch = {};
+
+    const body = {};
+    if ("selected_tools" in patch) {
+      body.selected_tools = Array.isArray(patch.selected_tools)
+        ? patch.selected_tools
+        : this.getSelectedCategories();
+    }
+    if ("selected_model" in patch) {
+      body.selected_model = patch.selected_model;
+    }
+    if ("active_chat_id" in patch) {
+      body.active_chat_id = patch.active_chat_id ?? null;
+    }
+    fetch("/api/user/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      keepalive: true,
+      body: JSON.stringify(body),
+    }).catch(e => console.warn("[ToolsPanel] saveUserSettings failed:", e));
   }
 
   /** Возвращает id выбранных категорий — бэк сам знает какие тулы за ними */
@@ -170,8 +263,10 @@ class ToolsPanel {
       const attachBtn = chatFooter.querySelector(".attach-btn");
       if (attachBtn?.nextSibling) {
         chatFooter.insertBefore(btn, attachBtn.nextSibling);
+      } else if (attachBtn) {
+        attachBtn.after(btn);
       } else {
-        chatFooter.appendChild(btn);
+        chatFooter.prepend(btn);
       }
       // Синхронизируем badge сразу при вставке
       this._updateTriggerBadge(btn);
@@ -314,13 +409,18 @@ class ToolsPanel {
           box.innerHTML = "";
         }
         this._updateTriggerBadge(triggerBtn);
+        this.saveUserSettings({
+          selected_tools: this.getSelectedCategories(),
+          selected_model: window.ModelPicker?.getSettingModel?.() ?? "gpt",
+        });
       });
 
       toolsSection.appendChild(row);
     });
 
-    // ── Самоцикл агента (только админ) ─────────────
-    if (this._isAdmin) {
+    // ── Самоцикл агента (только админ, на main) ─────────────
+    const isSigma = document.body?.dataset?.gateway === 'sigma' || /(?:^|\.)cds\.|sigma/i.test(location.hostname);
+    if (this._isAdmin && !isSigma) {
       const loopRow = document.createElement("label");
       loopRow.className = "tp-row tp-row--admin";
       loopRow.innerHTML = `
@@ -487,9 +587,9 @@ window.ToolsPanel = new ToolsPanel();
 window.__TP_ICONS = ICONS;
 export default window.ToolsPanel;
 /* ══════════════════════════════════════════════════════════════════════════
-   MODEL PICKER — выбор агента (Кодер / Дизайнер / Универсал)
+   MODEL PICKER — выбор агента (GPT / Claude / GLM / Gemini)
    API:
-     ModelPicker.getModel()        → 'coder' | 'designer' | 'universal'
+     ModelPicker.getModel()        → 'coder' | 'designer' | 'universal' | 'gemini'
      ModelPicker.inject(container) → void
    Выбор хранится в localStorage.
 ══════════════════════════════════════════════════════════════════════════ */
@@ -497,79 +597,63 @@ export default window.ToolsPanel;
 const MP_MODELS = [
   {
     id:     'coder',
-    label:  'Кодер',
-    // Tabler: code — терминальные скобки с косой чертой
+    label:  'GPT',
+    // OpenAI — контур куба-узла
     svg: `<svg viewBox="0 0 24 24" fill="none" width="20" height="20"
-               stroke="currentColor" stroke-width="1.75"
+               stroke="currentColor" stroke-width="1.5"
                stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="7 8 3 12 7 16"/>
-            <polyline points="17 8 21 12 17 16"/>
-            <line x1="14" y1="4" x2="10" y2="20"/>
+            <path d="M12 3.2 L18.6 7 V15 L12 18.8 L5.4 15 V7 Z"/>
+            <path d="M12 3.2 V11 L18.6 15"/>
+            <path d="M5.4 7 L12 11 L12 18.8"/>
           </svg>`,
-    // Маленькая версия для кнопки-триггера (16px)
     svgSm: `<svg viewBox="0 0 24 24" fill="none" width="15" height="15"
                stroke="currentColor" stroke-width="2"
                stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="7 8 3 12 7 16"/>
-              <polyline points="17 8 21 12 17 16"/>
-              <line x1="14" y1="4" x2="10" y2="20"/>
+              <path d="M12 3.2 L18.6 7 V15 L12 18.8 L5.4 15 V7 Z"/>
+              <path d="M12 11 L18.6 7 M12 11 V18.8 M12 11 L5.4 7"/>
             </svg>`,
-    hint:   'Отлично пишет код и собирает парсеры. Не показывает ход своих рассуждений.',
-    accent: '#6366f1',
+    hint:   'Модель от OpenAI. Сильна в коде, инструментах и длинном контексте. Показывает tool-calling.',
+    accent: '#10a37f',
   },
   {
     id:     'designer',
-    label:  'Дизайнер',
-    // Tabler: palette — круг с цветовыми точками
+    label:  'Claude',
+    // Anthropic — искра-вспышка
     svg: `<svg viewBox="0 0 24 24" fill="none" width="20" height="20"
-               stroke="currentColor" stroke-width="1.75"
+               stroke="currentColor" stroke-width="2.2"
                stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 2a10 10 0 0 1 0 20c-1.657 0-3-1.343-3-3
-                     0-.828.336-1.578.879-2.121A3 3 0 0 0 8 14.5
-                     c0-1.657 1.343-3 3-3"/>
-            <circle cx="8"  cy="9"  r="1.2" fill="currentColor" stroke="none"/>
-            <circle cx="12" cy="6"  r="1.2" fill="currentColor" stroke="none"/>
-            <circle cx="16" cy="9"  r="1.2" fill="currentColor" stroke="none"/>
+            <line x1="12" y1="4.5" x2="12" y2="19.5"/>
+            <line x1="5.8" y1="8" x2="18.2" y2="16"/>
+            <line x1="18.2" y1="8" x2="5.8" y2="16"/>
           </svg>`,
     svgSm: `<svg viewBox="0 0 24 24" fill="none" width="15" height="15"
-               stroke="currentColor" stroke-width="2"
+               stroke="currentColor" stroke-width="2.4"
                stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 2a10 10 0 0 1 0 20c-1.657 0-3-1.343-3-3
-                       0-.828.336-1.578.879-2.121A3 3 0 0 0 8 14.5
-                       c0-1.657 1.343-3 3-3"/>
-              <circle cx="8"  cy="9"  r="1.2" fill="currentColor" stroke="none"/>
-              <circle cx="12" cy="6"  r="1.2" fill="currentColor" stroke="none"/>
-              <circle cx="16" cy="9"  r="1.2" fill="currentColor" stroke="none"/>
+              <line x1="12" y1="4.5" x2="12" y2="19.5"/>
+              <line x1="5.8" y1="8" x2="18.2" y2="16"/>
+              <line x1="18.2" y1="8" x2="5.8" y2="16"/>
             </svg>`,
-    hint:   'Генерирует презентации и отчёты. Показывает ход своих мыслей.',
-    accent: '#ec4899',
+    hint:   'Модель от Anthropic. Сильна в коде, генерирует презентации и отчёты. Показывает reasoning (размышления).',
+    accent: '#d97757',
   },
   {
     id:     'universal',
-    label:  'Универсал',
-    // Tabler: adjustments-horizontal — три горизонтальных слайдера
+    label:  'GLM',
+    // Zhipu AI — стилизованная Z
     svg: `<svg viewBox="0 0 24 24" fill="none" width="20" height="20"
-               stroke="currentColor" stroke-width="1.75"
+               stroke="currentColor" stroke-width="2.2"
                stroke-linecap="round" stroke-linejoin="round">
-            <line x1="4"  y1="6"  x2="20" y2="6"/>
-            <line x1="4"  y1="12" x2="20" y2="12"/>
-            <line x1="4"  y1="18" x2="20" y2="18"/>
-            <circle cx="9"  cy="6"  r="2" fill="var(--surface)" stroke="currentColor"/>
-            <circle cx="15" cy="12" r="2" fill="var(--surface)" stroke="currentColor"/>
-            <circle cx="9"  cy="18" r="2" fill="var(--surface)" stroke="currentColor"/>
+            <path d="M7 6 H17 L8 14 H17"/>
+            <path d="M12 14 V20"/>
           </svg>`,
     svgSm: `<svg viewBox="0 0 24 24" fill="none" width="15" height="15"
-               stroke="currentColor" stroke-width="2"
+               stroke="currentColor" stroke-width="2.4"
                stroke-linecap="round" stroke-linejoin="round">
-              <line x1="4"  y1="6"  x2="20" y2="6"/>
-              <line x1="4"  y1="12" x2="20" y2="12"/>
-              <line x1="4"  y1="18" x2="20" y2="18"/>
-              <circle cx="9"  cy="6"  r="2" fill="var(--surface)" stroke="currentColor"/>
-              <circle cx="15" cy="12" r="2" fill="var(--surface)" stroke="currentColor"/>
-              <circle cx="9"  cy="18" r="2" fill="var(--surface)" stroke="currentColor"/>
+              <path d="M7 6 H17 L8 14 H17"/>
+              <path d="M12 14 V20"/>
             </svg>`,
-    hint:   'Универсальная и более быстрая модель. Подходит для большинства задач.',
-    accent: '#10b981',
+    hint:   'Модель от Zhipu AI. Универсальная, показывает reasoning (размышления).',
+    accent: '#8b5cf6',
   },
   {
     id:     'gemini',
@@ -591,12 +675,32 @@ const MP_MODELS = [
                        C12 16.2 7.8 12 2.5 12
                        C7.8 12 12 7.8 12 2.5Z"/>
             </svg>`,
-    hint:   'Модель от Google. Хорошо справляется с длинными документами и разными типами данных.',
+    hint:   'Модель от Google. Показывает tool-calling.',
     accent: '#4285f4',
   },
 ];
 
 const MP_STORAGE_KEY = 'mp_selected_model';
+
+const MP_ID_TO_SETTING = {
+  coder:     'gpt',
+  designer:  'claude',
+  universal: 'glm',
+  gemini:    'gemini',
+  gpt:       'gpt',
+  claude:    'claude',
+  glm:       'glm',
+};
+
+const MP_SETTING_TO_ID = {
+  gpt:       'coder',
+  claude:    'designer',
+  glm:       'universal',
+  gemini:    'gemini',
+  coder:     'coder',
+  designer:  'designer',
+  universal: 'universal',
+};
 
 // Доступность провайдеров под моделями. Тянется с /api/providers/status
 // (проксирует agent_service). Бейдж в опции показывает, что модель может быть
@@ -619,6 +723,7 @@ class ModelPickerClass {
   /* ── Публичный API ──────────────────────────────────────────────────── */
 
   getModel() { return this._selected; }
+  getModels() { return MP_MODELS; }
 
   /* Тянет доступность провайдеров с бэка (с TTL-кешем и дедупом запросов).
      Возвращает объект providers ({id: {up, name, reason?}}) или null. */
@@ -700,12 +805,15 @@ class ModelPickerClass {
     if (footer.querySelector('.mp-trigger-btn')) return;
 
     const btn       = this._makeBtn();
-    const attachBtn = footer.querySelector(attachSel) ?? footer.querySelector('.attach-btn');
+    const attachBtn = footer.querySelector(attachSel);
+    const toolsBtn  = footer.querySelector('.tools-trigger-btn');
 
     if (attachBtn?.nextSibling) {
       footer.insertBefore(btn, attachBtn.nextSibling);
     } else if (attachBtn) {
       attachBtn.after(btn);
+    } else if (toolsBtn) {
+      footer.insertBefore(btn, toolsBtn);
     } else {
       footer.prepend(btn);
     }
@@ -819,8 +927,24 @@ class ModelPickerClass {
   }
 
   _select(modelId) {
-    this._selected = modelId;
-    localStorage.setItem(MP_STORAGE_KEY, modelId);
+    this._selected = MP_SETTING_TO_ID[modelId] || modelId;
+    localStorage.setItem(MP_STORAGE_KEY, this._selected);
+    this._syncAllBtns();
+    window.ToolsPanel?.saveUserSettings?.({
+      selected_model: this.getSettingModel(),
+      selected_tools: window.ToolsPanel?.getSelectedCategories?.() ?? [],
+    });
+  }
+
+  getSettingModel() {
+    return MP_ID_TO_SETTING[this._selected] || 'gpt';
+  }
+
+  applySettingModel(settingModel) {
+    const mapped = MP_SETTING_TO_ID[String(settingModel || '').trim().toLowerCase()];
+    if (!mapped) return;
+    this._selected = mapped;
+    localStorage.setItem(MP_STORAGE_KEY, mapped);
     this._syncAllBtns();
   }
 
@@ -857,4 +981,5 @@ class ModelPickerClass {
   }
 }
 
+window.__MP_MODELS = MP_MODELS;
 window.ModelPicker = new ModelPickerClass();

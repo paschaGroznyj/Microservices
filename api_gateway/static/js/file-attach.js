@@ -36,15 +36,39 @@ const FileAttach = (() => {
         xls:  'green', xlsx: 'green', csv: 'green',
         ppt:  'orange', pptx: 'orange',
         png:  'purple', jpg: 'purple', jpeg: 'purple',
-        gif:  'purple', webp: 'purple', svg: 'purple',
-        mp4:  'pink',  mov: 'pink', avi: 'pink',
+        gif:  'purple', webp: 'purple', svg: 'purple', bmp: 'purple', avif: 'purple',
+        mp4:  'purple', mov: 'purple', avi: 'purple', webm: 'purple', mkv: 'purple', m4v: 'purple', ogv: 'purple',
         zip:  'gray',  rar: 'gray', '7z': 'gray',
         json: 'yellow', xml: 'yellow',
         py:   'teal',  js: 'yellow', ts: 'blue', css: 'purple',
     };
 
+    const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif', 'ico']);
+    const VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v', 'ogv', 'avi', 'mkv']);
+
     function _getExt(filename) {
         return (filename.split('.').pop() || '').toLowerCase();
+    }
+
+    function _isImageFile(file) {
+        const ext = _getExt(file?.name || '');
+        const mime = (file?.type || '').toLowerCase();
+        return mime.startsWith('image/') || IMAGE_EXTS.has(ext);
+    }
+
+    function _isVideoFile(file) {
+        if (_isImageFile(file)) return false;
+        const ext = _getExt(file?.name || '');
+        const mime = (file?.type || '').toLowerCase();
+        return mime.startsWith('video/') || VIDEO_EXTS.has(ext);
+    }
+
+    function _getPreviewUrl(file) {
+        if (!file) return '';
+        if (!file._previewUrl) {
+            try { file._previewUrl = URL.createObjectURL(file); } catch (_) { file._previewUrl = ''; }
+        }
+        return file._previewUrl;
     }
 
     function _getLabel(filename) {
@@ -52,15 +76,20 @@ const FileAttach = (() => {
         return EXT_LABEL[ext] || ext.toUpperCase().slice(0, 4) || 'FILE';
     }
 
-    function _getColor(filename) {
-        const ext = _getExt(filename);
+    function _getColor(fileOrName) {
+        if (fileOrName && typeof fileOrName === 'object') {
+            if (_isImageFile(fileOrName) || _isVideoFile(fileOrName)) return 'purple';
+            const ext = _getExt(fileOrName.name || '');
+            return EXT_COLOR[ext] || 'gray';
+        }
+        const ext = _getExt(String(fileOrName || ''));
         return EXT_COLOR[ext] || 'gray';
     }
 
     function getFilesMeta() {
         return _files.map(f => ({
             name: f.name,
-            ext: _getExt(f.name),
+            ext:  _getExt(f.name),
         }));
     }
 
@@ -136,17 +165,47 @@ const FileAttach = (() => {
         _updateAttachBtn();
     }
 
-    /* ─── удалить файл по индексу ────────────────────────────── */
-    function _removeFile(idx) {
-        _files.splice(idx, 1);
-        _renderPreview();
-        _updateAttachBtn();
+    /* ─── удалить файл (по индексу или ссылке) ────────────────── */
+    function _removeFile(fileOrIdx) {
+        const file = typeof fileOrIdx === 'number' ? _files[fileOrIdx] : fileOrIdx;
+        if (!file || file._faRemoving) return;
+        const bar = _previewBar;
+        const el = bar ? Array.from(_barTrack(bar).children).find(c => c._faFile === file) : null;
+        file._faRemoving = true;
+        const finish = () => {
+            const i = _files.indexOf(file);
+            if (i !== -1) _files.splice(i, 1);
+            if (el) {
+                window.FileTiles?.stopAudioFor(el);
+                el.remove();
+            }
+            if (file._previewUrl) {
+                try { URL.revokeObjectURL(file._previewUrl); } catch (_) {}
+                file._previewUrl = '';
+            }
+            file._faRemoving = false;
+            _renderPreview();
+            _updateAttachBtn();
+        };
+        const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+        if (el && !reduce) {
+            window.FileTiles?.stopAudioFor(el);
+            el.classList.remove('fa-tile--enter');
+            el.classList.add('fa-tile--leave');
+            _syncBarVisible(bar);
+            setTimeout(finish, 200);
+        } else {
+            finish();
+        }
     }
 
     /* ─── обновить подсветку кнопки прикрепить ──────────────── */
     function _updateAttachBtn() {
-        if (!_attachBtn) return;
-        _attachBtn.classList.toggle('has-files', _files.length > 0);
+        if (_attachBtn) {
+            _attachBtn.classList.toggle('has-files', _files.length > 0);
+        }
+        try { window.__catchpmApp?._syncSendButtonState?.(); } catch (_) {}
+        try { window.GroupChat?._syncInputBtn?.(); } catch (_) {}
     }
 
     /* ─── создать/найти preview-bar внутри inputBox ─────────── */
@@ -159,62 +218,80 @@ const FileAttach = (() => {
             // вставляем ПЕРЕД контентедитабл-полем (первым дочерним)
             _inputBox.insertBefore(bar, _inputBox.firstChild);
         }
+        if (window.FileTiles) window.FileTiles.enhanceScroller(bar, { wheel: true });
         _previewBar = bar;
         return bar;
     }
 
-    /* ─── SVG-иконка файла ───────────────────────────────────── */
+    function _barTrack(bar) {
+        return window.FileTiles ? window.FileTiles.trackOf(bar) : bar;
+    }
+
+    function _syncBarVisible(bar) {
+        if (!bar) return;
+        const has = bar.querySelector('.fa-chip:not(.fa-tile--leave)') !== null;
+        // reflow перед показом, чтобы transition сработал и у только что созданной полосы
+        if (has && !bar.classList.contains('fa-preview-bar--visible')) void bar.offsetHeight;
+        bar.classList.toggle('fa-preview-bar--visible', has);
+    }
+
+    /* ─── квадратная плитка файла (FileTiles) ─────────────────── */
+    function _isAudioFile(file) {
+        if (_isImageFile(file) || _isVideoFile(file)) return false;
+        if (window.FileTiles) return window.FileTiles.kindOf(file?.name, file?.type) === 'audio';
+        return (file?.type || '').toLowerCase().startsWith('audio/');
+    }
+
     function _makeFileIcon(file, idx) {
-        const label = _getLabel(file.name);
-        const color = _getColor(file.name);
-
-        const wrapper = document.createElement('div');
-        wrapper.className = `fa-chip fa-chip--${color}`;
-        wrapper.title     = file.name;
-
-        // Иконка (кастомный svg)
-        wrapper.innerHTML = `
-<span class="fa-chip__icon" aria-hidden="true">
-  <svg viewBox="0 0 36 44" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path d="M4 0h20l12 12v28a4 4 0 0 1-4 4H4a4 4 0 0 1-4-4V4a4 4 0 0 1 4-4z"
-          class="fa-chip__bg"/>
-    <path d="M24 0l12 12H28a4 4 0 0 1-4-4V0z"
-          class="fa-chip__fold"/>
-    <text x="18" y="32" text-anchor="middle" class="fa-chip__text">${label}</text>
-  </svg>
-</span>
-<span class="fa-chip__name">${_escHtml(file.name)}</span>
-<button class="fa-chip__remove" data-idx="${idx}" type="button" aria-label="Удалить файл ${_escHtml(file.name)}">
-  <svg viewBox="0 0 14 14" fill="none">
-    <path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-  </svg>
-</button>`;
-
-        wrapper.querySelector('.fa-chip__remove').addEventListener('click', (e) => {
+        const isMedia = _isImageFile(file) || _isVideoFile(file) || _isAudioFile(file);
+        const blobUrl = _getPreviewUrl(file);
+        const holder = document.createElement('div');
+        if (window.FileTiles) {
+            holder.innerHTML = window.FileTiles.tileHtml(
+                { name: file.name, size: file.size, type: file.type, url: isMedia ? blobUrl : '', dlUrl: blobUrl },
+                { removable: true, idx, enter: !file._faShown },
+            );
+        } else {
+            holder.innerHTML = `<div class="fa-chip fa-chip--${_getColor(file)}" title="${_escHtml(file.name)}">`
+                + `<span class="fa-chip__name">${_escHtml(file.name)}</span>`
+                + `<button class="fa-chip__remove" type="button" aria-label="Удалить файл">×</button></div>`;
+        }
+        const el = holder.firstElementChild;
+        file._faShown = true;
+        el._faFile = file;
+        el.querySelector('.fa-chip__remove')?.addEventListener('click', (e) => {
             e.stopPropagation();
-            const i = Number(e.currentTarget.dataset.idx);
-            _removeFile(i);
+            _removeFile(file);
         });
-
-        return wrapper;
+        return el;
     }
 
     /* ─── отрисовать превью ──────────────────────────────────── */
+    // Существующие плитки переиспользуются: превью не перезагружается и не
+    // анимируется повторно, въезжают только новые файлы.
     function _renderPreview() {
         const bar = _ensurePreviewBar();
         if (!bar) return;
-
-        bar.innerHTML = '';
-
-        if (_files.length === 0) {
-            bar.classList.remove('fa-preview-bar--visible');
-            return;
-        }
-
-        bar.classList.add('fa-preview-bar--visible');
-        _files.forEach((f, idx) => {
-            bar.appendChild(_makeFileIcon(f, idx));
+        const track = _barTrack(bar);
+        const keep = new Set(_files);
+        track.querySelectorAll('.fa-chip:not(.input-chip)').forEach(el => {
+            if (!el._faFile || !keep.has(el._faFile)) el.remove();
         });
+        const firstInput = track.querySelector('.input-chip');
+        let created = false;
+        _files.forEach((f, idx) => {
+            let el = Array.from(track.children).find(c => c._faFile === f);
+            if (!el) {
+                el = _makeFileIcon(f, idx);
+                track.insertBefore(el, firstInput);
+                created = true;
+            }
+            el.dataset.idx = String(idx);
+        });
+        _syncBarVisible(bar);
+        if (created && track !== bar) {
+            requestAnimationFrame(() => track.scrollTo({ left: track.scrollWidth, behavior: 'smooth' }));
+        }
     }
 
     /* ─── именованные хендлеры (для снятия слушателей) ───────── */
@@ -415,13 +492,25 @@ const FileAttach = (() => {
     function clear() {
         _files = [];
         if (_previewBar) {
-            _previewBar.innerHTML = '';
-            _previewBar.classList.remove('fa-preview-bar--visible');
+            window.FileTiles?.stopAudioFor(_previewBar);
+            _previewBar.querySelectorAll('.fa-chip:not(.input-chip)').forEach(el => el.remove());
+            _syncBarVisible(_previewBar);
         }
         _updateAttachBtn();
     }
 
-    return { init, getFiles, upload, clear, getFilesMeta };
+    /**
+     * Метаданные + локальные blob-URL для оптимистичного рендера отправленного
+     * сообщения. На сервер не уходит (для тела запроса — getFilesMeta).
+     */
+    function getPreviewItems() {
+        return _files.map(f => {
+            const url = _getPreviewUrl(f);
+            return { name: f.name, ext: _getExt(f.name), size: f.size, type: f.type, url, dlUrl: url };
+        });
+    }
+
+    return { init, getFiles, upload, clear, getFilesMeta, getPreviewItems };
 
 })();
 

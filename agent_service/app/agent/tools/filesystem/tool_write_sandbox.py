@@ -64,6 +64,7 @@ def make_sandbox_write_tool(agent):
 
         Use to prepare a draft of the code or file to show to the user —
         they will decide whether to move it to the real project.
+        DO NOT use when working with the workspace
         """
         target = _valid_sandbox_path(path)
         if target is None:

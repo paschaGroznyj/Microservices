@@ -110,22 +110,26 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
 
     user_id = payload.get("user_id")
     chat_id = payload.get("chat_id")
-    text = payload.get("message")
+    text = payload.get("message", "")
     is_from_bot = payload.get("is_from_bot", False)
     type_agent = payload.get("type_agent")
     request_id = payload.get("request_id")
     tb_name = payload.get("tb_name")
     username = payload.get("username")
-    selected_tools = payload.get("selected_tools")
-    context_size = payload.get("context_size")
+    selected_tools = payload.get("selected_tools") or []
+    context_size = payload.get("context_size") or "medium"
     message_id = payload.get("message_id")
     has_files = payload.get("has_files", False)
-    agent_model = payload.get("agent_model", "coder")
-    gateway_target = payload.get("gateway_target", "main")
-    # Физический telegram chat id — адрес доставки ответа. chat_id (выше) для
-    # telegram теперь = session_id (ключ памяти), а push ответа идёт на tg_chat_id.
-    # Прокидываем его обратно в bot_message, чтобы endpoint_consumer знал, куда слать.
-    tg_chat_id = payload.get("tg_chat_id")
+    agent_model = payload.get("agent_model") or "coder"
+    gateway_target = payload.get("gateway_target") or "main"
+    # Физический chat id мессенджера — УНИВЕРСАЛЬНЫЙ адрес доставки ответа (TG и MAX).
+    # chat_id (выше) для мессенджеров = session_id (ключ памяти агента), а push ответа
+    # идёт на физический chat_id. Бот кладёт его как max_chat_id (MAX) или tg_chat_id (TG) —
+    # берём любой непустой. Прокидываем обратно в bot_message, чтобы consumer знал, куда слать.
+    deliver_chat_id = payload.get("max_chat_id") or payload.get("tg_chat_id")
+    client_tz_name = payload.get("timezone_name")
+    client_tz_offset = payload.get("tz_offset_minutes")
+    tg_chat_id = deliver_chat_id
     # Mobile-оркестратор: роутер в chats_service проставляет уровень обработки.
     #   agent_tier = "lite"  -> дешёвая модель (Haiku) отвечает сама (дефолт);
     #   agent_tier = "agent" -> полный агент с тулами (юзер явно позвал).
@@ -157,17 +161,16 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     # новый вход от сервиса, не ответ бота. Остальные bot/‑сообщения и user_id=-1 — отсекаем.
     if (is_from_bot or user_id == -1) and not loop_tick:
         return
-    # Для проактивной инициации текст в payload может быть пустым — генерим сами.
-    if (not text) and (not tg_initiated):
-        pass
-    if (not text and not tg_initiated) or chat_id is None:
-        logging.warning(f"Некорректное сообщение: {payload}")
-        return
+    # # Для проактивной инициации текст в payload может быть пустым — генерим сами.
+    # if (not text) and (not tg_initiated):
+    #     pass
+    # if (not text and not tg_initiated) or chat_id is None:
+    #     logging.warning(f"Некорректное сообщение: {payload}")
+    #     return
     print("ВНУТРИ АГЕНТА", payload)
-    # Маршрутизация: ouroboros → Ouroboros API, pm → HarnessAgent
 
-    if type_agent != "pm":
-        return
+    # if type_agent != "pm":
+    #     return
 
     # message = f"[CatchPM, ТабельНомер: 23423423, Пользователь: Иванов Иванон Иваныч, user_id=-1234]\n" + text
     is_telegram = (gateway_target == "telegram")
@@ -207,10 +210,30 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
         else:
             message = build_tg_prefix(username, chat_id, _chat_type) + text
     elif is_max:
-        # Источник MAX: простая шапка (без CatchPM/табельного, по аналогии с TG).
-        from agent.max.max_integration import build_max_prefix
-        _chat_type_max = "group" if str(chat_id).startswith("-") else "private"
-        message = build_max_prefix(username, chat_id, _chat_type_max) + text
+        from agent.max.max_integration import (
+            build_max_prefix, build_initiation_prompt,
+            build_sad_followup_prompt, build_custom_trigger_prompt,
+        )
+        _chat_type_max = "group" if str(deliver_chat_id or chat_id).startswith("-") else "private"
+        _preset_slots = {"breakfast", "lunch", "dinner", "morning"}
+        if tg_initiated:
+            if tg_slot == "reaction" and tg_custom_prompt:
+                message = tg_custom_prompt
+            elif tg_sad:
+                message = build_sad_followup_prompt(tg_target_username)
+            elif (tg_custom_prompt and tg_custom_prompt.strip()) or (tg_slot in _preset_slots):
+                message = build_custom_trigger_prompt(
+                    tg_custom_prompt or "", tg_target_username,
+                    chat_type=_chat_type_max, addressed=tg_addressed,
+                    preset_key=tg_slot,
+                )
+            else:
+                message = build_initiation_prompt(
+                    tg_slot or "poke", tg_target_username,
+                    chat_type=_chat_type_max, addressed=tg_addressed,
+                )
+        else:
+            message = build_max_prefix(username, deliver_chat_id or chat_id, _chat_type_max) + text
     elif loop_tick:
         # Самоцикл: служебный тик. Текст уже содержит установку (из consumer).
         # Даём спец-шапку вместо табельного (tb_name/username у сервиса пустые).
@@ -236,6 +259,12 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     if not is_telegram and not is_max:
         selected_skills = await db.get_selected_skills_for_user(int(user_id))
         if selected_skills:
+            try:
+                used_skill_ids = [int(sk["id"]) for sk in selected_skills if sk.get("id")]
+                if used_skill_ids:
+                    await db.increment_skills_uses(used_skill_ids)
+            except Exception as e:
+                logging.warning(f"Failed to increment skills uses_count: {e}")
             selected_chunks = []
             for idx, sk in enumerate(selected_skills, start=1):
                 tools = ", ".join(sk.get("tools") or []) or "не указаны"
@@ -310,10 +339,14 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                                                 agent_model=agent_model,
                                                 images=images,
                                                 gateway_target=gateway_target,
-                                                tg_chat_id=tg_chat_id)
+                                                tg_chat_id=tg_chat_id,
+                                                timezone_name=client_tz_name,
+                                                tz_offset_minutes=client_tz_offset)
                 response_text = response["message"]
                 is_lite = False  # дальше обрабатываем как полноценный ответ агента
             else:
+                from agent.core.agent_provider import get_real_model_name
+                response["agent_model"] = get_real_model_name("lite")
                 response_text = lite_raw
         else:
             response = await agent.process_query(user_input=message,
@@ -324,7 +357,9 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                                             agent_model=agent_model,
                                             images=images,
                                             gateway_target=gateway_target,
-                                            tg_chat_id=tg_chat_id)
+                                            tg_chat_id=tg_chat_id,
+                                            timezone_name=client_tz_name,
+                                            tz_offset_minutes=client_tz_offset)
             response_text = response["message"]
         # Mobile: ответ приходит СТРОГИМ JSON {"v","speech","actions","style",...}.
         # Парсер fallback-safe: при кривом JSON весь текст уходит в speech.
@@ -383,10 +418,21 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                     pass # Нужно вернуть сигнал об ошибке. Дефолтные ГС на мобильном клиенте
 
         attached_files = None
+        logging.info(f"[files_to_send] {files_to_send}")
         if files_to_send:
             attached_files = []
             for f in files_to_send:
                 if f.get("kind") == "image":
+                    # Картинка с диска (agent сохранил файл: path есть и файл существует)
+                    # — тоже заливаем в OBS по тому же детерминированному ключу, иначе
+                    # после TTL-чистки /web/file не сможет её восстановить. Картинки из
+                    # generate_image лежат в БД (path=None/нет файла) — их в OBS не грузим.
+                    _img_path = f.get("path")
+                    if _img_path and os.path.isfile(_img_path):
+                        try:
+                            await obs_file_storage.upload_user_file(_img_path, chat_id)
+                        except Exception as _obs_err:
+                            logging.error(f"OBS upload failed for {_img_path}: {_obs_err}")
                     entry = {
                         "name": f.get("name") or "image.jpg",
                         "path": f.get("path"),
@@ -511,6 +557,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             "tokens_usage": response.get("tokens_usage"),
             "gateway_target": gateway_target,
             "tg_chat_id": tg_chat_id,
+            "max_chat_id": deliver_chat_id,
             "auto_title": response.get("auto_title"),
             # Mobile device actions (белый список): едут на телефон через
             # endpoint_consumer.push_to_mobile -> Redis -> long-poll мобилки.
@@ -538,7 +585,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                 "type_agent": "pm",
                 "action": "stopped",
                 "gateway_target": gateway_target,
-                "tg_chat_id": tg_chat_id
+                "tg_chat_id": tg_chat_id,
+                "max_chat_id": deliver_chat_id
             }
             await prod.send_and_wait("chat-messages", value=stop_message)
         except Exception as send_err:
@@ -557,7 +605,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                 "type_agent": "pm",
                 "action": "error",
                 "gateway_target": gateway_target,
-                "tg_chat_id": tg_chat_id
+                "tg_chat_id": tg_chat_id,
+                "max_chat_id": deliver_chat_id
             }
             await prod.send_and_wait("chat-messages", value=err_message)
         except Exception as send_err:
@@ -565,33 +614,6 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     finally:
         if request_id:
             active_tasks.pop(request_id, None)
-
-
-async def _process_service_message(message_id: int, enriched_text: str):
-    """Обрабатывает сообщение сервиса в фоне, пишет ответ в service_chats."""
-    try:
-        await _db.update_service_status(message_id)
- 
-        result = await _agent.process_query(
-            user_input=enriched_text,
-            request_id=None,
-            user_id=None,           # нет пользователя — это сервис
-            chat_id=None,
-            database=_db,
-            source="service",
-        )
-        reply = result.get("message", "Агент не вернул ответ.")
-        status = "done"
- 
-    except Exception as e:
-        logging.error("Ошибка обработки service message id=%s: %s", message_id, e, exc_info=True)
-        reply  = f"Ошибка агента: {e}"
-        status = "error"
- 
-    async with _db.pool.acquire() as conn:
-        await conn.execute(_SQL_UPDATE_DONE, reply, status, message_id)
- 
-    logging.info("service_chats id=%s → status=%s | %.60s", message_id, status, reply)
 
 
 async def kafka_consumer():
@@ -691,7 +713,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 tg_router = APIRouter(prefix="/api/tg", tags=["telegram"])
-service_router = APIRouter(prefix="/service", tags=["service"])
 
 
 
@@ -719,16 +740,6 @@ class TgMessageResponse(BaseModel):
 
 class ParsingMessage(BaseModel):
     status: str
-
-class ServiceMessageRequest(BaseModel):
-    service_name: str           # "parsers_service"
-    service_port: Optional[int] = None   # 8003
-    message: str                # текст команды для агента
- 
- 
-class ServiceMessageResponse(BaseModel):
-    status: str                 # "accepted"
-    message_id: int             # ID записи в service_chats
 
 _agent = None
 _db    = None
@@ -908,52 +919,8 @@ async def tg_transcribe(req: TgTranscribeRequest) -> TgTranscribeResponse:
         return TgTranscribeResponse(error=str(e)[:300])
 
 
-@service_router.post("/message", response_model=ServiceMessageResponse, status_code=202)
-async def handle_service_message(req: ServiceMessageRequest):
-    """
-    Принимает команду от внешнего сервиса, сохраняет в service_chats,
-    запускает обработку агентом в фоне и сразу возвращает 202 Accepted.
- 
-    Пример тела от parsers_service:
-        {
-          "service_name": "parsers_service",
-          "service_port": 8003,
-          "message": "Я сервис парсинга на порту 8003, подготовил для тебя 42 новые статьи.
-                      Посмотри papers_metadata и отбери релевантные (is_relevant IS NULL).
-                      Для каждой проставь is_relevant=true/false и relevance_score."
-        }
-    """
-    if _agent is None:
-        raise HTTPException(status_code=503, detail="Agent not initialized")
- 
-    # 1. Записываем входящее сообщение в service_chats
-    row = await _db.add_service_message(req.service_name, req.service_port, req.message)
-    message_id = row["id"]
- 
-    log.info(
-        "service_chats: новое сообщение id=%s от %s:%s | %.80s",
-        message_id, req.service_name, req.service_port, req.message,
-    )
- 
-    # 2. Обогащаем текст для агента
-    enriched = (
-        f"[SERVICE | from={req.service_name} port={req.service_port} "
-        f"msg_id={message_id}]\n{req.message}"
-    )
- 
-    # 3. Fire-and-forget — сразу возвращаем 202
-    task = asyncio.create_task(_process_service_message(message_id, enriched))
- 
-    def _on_done(t: asyncio.Task):
-        if t.exception():
-            log.error("_process_service_message упал: %s", t.exception())
- 
-    task.add_done_callback(_on_done)
- 
-    return ServiceMessageResponse(status="accepted", message_id=message_id)
 
-
-routers = [tg_router, service_router, web_router]
+routers = [tg_router, web_router]
 
 for rout in routers:
     app.include_router(rout)
@@ -1029,8 +996,22 @@ async def _ping_provider(model_id: str, model_name: str, factory) -> dict:
 
 
 @app.get('/api/skills')
-async def api_list_skills(query: str = '', sort_by: str = 'new', tool: str | None = None, limit: int = 100):
-    skills = await db.list_skills(query=query, sort_by=sort_by, tool=tool, limit=limit)
+async def api_list_skills(
+    query: str = '',
+    sort_by: str = 'new',
+    filter_by: str = 'all',
+    user_id: int = 0,
+    tool: str | None = None,
+    limit: int = 100,
+):
+    skills = await db.list_skills(
+        query=query,
+        sort_by=sort_by,
+        tool=tool,
+        limit=limit,
+        filter_by=filter_by,
+        user_id=user_id,
+    )
     return {'skills': skills}
 
 
@@ -1054,6 +1035,22 @@ async def api_get_selected_skills(user_id: int):
         raise HTTPException(status_code=400, detail='user_id required')
     selected_ids = await db.get_selected_skill_ids(int(user_id))
     return {'selected_ids': selected_ids, 'count': len(selected_ids), 'max_selected': 5}
+
+
+
+@app.get('/api/skills/liked')
+async def api_get_liked_skills(user_id: int):
+    if int(user_id or 0) <= 0: raise HTTPException(status_code=400)
+    liked_ids = await db.get_liked_skill_ids(int(user_id))
+    return {'liked_ids': liked_ids, 'count': len(liked_ids)}
+
+
+@app.get('/api/skills/{skill_id}')
+async def api_get_skill(skill_id: int, user_id: int = 0):
+    row = await db.get_skill_by_id(skill_id, user_id=user_id)
+    if not row:
+        raise HTTPException(status_code=404, detail='Skill not found')
+    return {'skill': row}
 
 
 @app.post('/api/skills/{skill_id}/select')

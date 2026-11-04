@@ -1547,7 +1547,7 @@ class AgentDB:
                 """
                 INSERT INTO agent_skills (theme, body, published_by_user_id, published_by_name, tools, model_used)
                 VALUES ($1, $2, $3, $4, $5, $6)
-                RETURNING id, theme, body, published_by_user_id, published_by_name, tools, model_used, likes_count, created_at
+                RETURNING id, theme, body, published_by_user_id, published_by_name, tools, model_used, likes_count, COALESCE(uses_count, 0) AS uses_count, created_at
                 """,
                 theme.strip(), body.strip(), published_by_user_id, published_by_name, tools, model_used,
             )
@@ -1559,18 +1559,24 @@ class AgentDB:
         sort_by: str = "new",
         tool: str | None = None,
         limit: int = 100,
+        include_body: bool = False,
+        filter_by: str = "all",
+        user_id: int = 0,
     ) -> list[dict]:
         limit = max(1, min(int(limit), 200))
-        order_sql = "likes_count DESC, created_at DESC" if sort_by == "popular" else "created_at DESC"
+        uid = int(user_id or 0)
+        if sort_by == "popular":
+            order_sql = "COALESCE(agent_skills.uses_count, 0) DESC, agent_skills.likes_count DESC, agent_skills.created_at DESC"
+        elif sort_by in ("liked", "likes"):
+            order_sql = "agent_skills.likes_count DESC, COALESCE(agent_skills.uses_count, 0) DESC, agent_skills.created_at DESC"
+        else:
+            order_sql = "agent_skills.created_at DESC"
         where = ["agent_skills.is_deleted = FALSE"]
         args = []
         idx = 1
 
         q = (query or "").strip()
         if q:
-            # Полнотекстовый поиск по теме + телу скилла;
-            # plainto_tsquery безопасен к произвольному вводу (не кидает на спецсимволах).
-            # ILIKE-ветка — фолбэк на подстроки/частичные слова.
             where.append(
                 f"(to_tsvector('russian', coalesce(theme,'') || ' ' || coalesce(body,'')) "
                 f"@@ plainto_tsquery('russian', ${idx}) "
@@ -1585,26 +1591,41 @@ class AgentDB:
             args.append(tool.strip())
             idx += 1
 
+        liked_col = "FALSE AS liked_by_me"
+        if uid > 0:
+            uid_idx = idx
+            args.append(uid)
+            idx += 1
+            liked_col = f"EXISTS (SELECT 1 FROM agent_skill_likes sl WHERE sl.skill_id = agent_skills.id AND sl.user_id = ${uid_idx}) AS liked_by_me"
+            if filter_by == "liked":
+                where.append(f"EXISTS (SELECT 1 FROM agent_skill_likes sl WHERE sl.skill_id = agent_skills.id AND sl.user_id = ${uid_idx})")
+            elif filter_by == "selected":
+                where.append(f"EXISTS (SELECT 1 FROM user_selected_skills uss WHERE uss.skill_id = agent_skills.id AND uss.user_id = ${uid_idx})")
+        elif filter_by in ("liked", "selected"):
+            return []
+
         args.append(limit)
-        # Префиксуем колонки таблицей: JOIN добавляет users, во избежание неоднозначности.
         where_j = [w.replace('theme', 'agent_skills.theme').replace('body', 'agent_skills.body').replace('tools', 'agent_skills.tools') for w in where]
+        body_col = ", agent_skills.body" if include_body else ""
         sql = f"""
-            SELECT agent_skills.id, agent_skills.theme, agent_skills.body,
+            SELECT agent_skills.id, agent_skills.theme{body_col},
                    agent_skills.published_by_user_id,
-                   COALESCE(agent_skills.published_by_name, u.username) AS published_by_name,
                    agent_skills.tools, agent_skills.model_used,
-                   agent_skills.likes_count, agent_skills.created_at
+                   agent_skills.likes_count,
+                   COALESCE(agent_skills.uses_count, 0) AS uses_count,
+                   {liked_col},
+                   agent_skills.created_at
             FROM agent_skills
-            LEFT JOIN users u ON u.id = agent_skills.published_by_user_id
             WHERE {' AND '.join(where_j)}
-            ORDER BY {order_sql.replace('created_at', 'agent_skills.created_at').replace('likes_count', 'agent_skills.likes_count')}
+            ORDER BY {order_sql}
             LIMIT ${idx}
         """
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(sql, *args)
             return [dict(r) for r in rows]
 
-    async def get_skill_by_id(self, skill_id: int) -> dict | None:
+    async def get_skill_by_id(self, skill_id: int, user_id: int = 0) -> dict | None:
+        uid = int(user_id or 0)
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
@@ -1612,14 +1633,35 @@ class AgentDB:
                        agent_skills.published_by_user_id,
                        COALESCE(agent_skills.published_by_name, u.username) AS published_by_name,
                        agent_skills.tools, agent_skills.model_used,
-                       agent_skills.likes_count, agent_skills.created_at
+                       agent_skills.likes_count,
+                       COALESCE(agent_skills.uses_count, 0) AS uses_count,
+                       CASE WHEN $2::bigint > 0 THEN EXISTS (
+                           SELECT 1 FROM agent_skill_likes sl
+                           WHERE sl.skill_id = agent_skills.id AND sl.user_id = $2::bigint
+                       ) ELSE FALSE END AS liked_by_me,
+                       agent_skills.created_at, agent_skills.updated_at
                 FROM agent_skills
                 LEFT JOIN users u ON u.id = agent_skills.published_by_user_id
                 WHERE agent_skills.id = $1 AND agent_skills.is_deleted = FALSE
                 """,
                 skill_id,
+                uid,
             )
             return dict(row) if row else None
+
+    async def increment_skills_uses(self, skill_ids: list[int]) -> None:
+        ids = [int(x) for x in (skill_ids or []) if int(x or 0) > 0]
+        if not ids:
+            return
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE agent_skills
+                SET uses_count = COALESCE(uses_count, 0) + 1
+                WHERE id = ANY($1::bigint[])
+                """,
+                ids,
+            )
 
     async def update_skill(
         self,
@@ -1719,20 +1761,36 @@ class AgentDB:
                 )
                 return True
 
-    async def get_selected_skill_ids(self, user_id: int) -> list[int]:
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT ss.skill_id
-                FROM agent_skill_selected ss
-                JOIN agent_skills s ON s.id = ss.skill_id
-                WHERE ss.user_id = $1
-                  AND s.is_deleted = FALSE
-                ORDER BY ss.created_at ASC
-                """,
-                user_id,
-            )
-            return [int(r["skill_id"]) for r in rows]
+    async def _fetch_selected_skill_ids_conn(self, conn, user_id: int) -> list[int]:
+        await conn.execute(
+            """
+            DELETE FROM agent_skill_selected ss
+            WHERE ss.user_id = $1
+              AND NOT EXISTS (
+                  SELECT 1 FROM agent_skills s
+                  WHERE s.id = ss.skill_id AND s.is_deleted = FALSE
+              )
+            """,
+            user_id,
+        )
+        rows = await conn.fetch(
+            """
+            SELECT ss.skill_id
+            FROM agent_skill_selected ss
+            JOIN agent_skills s ON s.id = ss.skill_id
+            WHERE ss.user_id = $1
+              AND s.is_deleted = FALSE
+            ORDER BY ss.created_at ASC
+            """,
+            user_id,
+        )
+        return [int(r["skill_id"]) for r in rows]
+
+    async def get_selected_skill_ids(self, user_id: int, conn=None) -> list[int]:
+        if conn is not None:
+            return await self._fetch_selected_skill_ids_conn(conn, user_id)
+        async with self.pool.acquire() as c:
+            return await self._fetch_selected_skill_ids_conn(c, user_id)
 
     async def get_selected_skills_for_user(self, user_id: int) -> list[dict]:
         async with self.pool.acquire() as conn:
@@ -1783,7 +1841,7 @@ class AgentDB:
                         user_id,
                     )
                     if int(count_selected or 0) >= int(max_selected):
-                        selected_ids = await self.get_selected_skill_ids(user_id)
+                        selected_ids = await self.get_selected_skill_ids(user_id, conn=conn)
                         return {
                             "ok": False,
                             "reason": "limit",
@@ -1802,7 +1860,7 @@ class AgentDB:
                     )
                     selected = True
 
-                selected_ids = await self.get_selected_skill_ids(user_id)
+                selected_ids = await self.get_selected_skill_ids(user_id, conn=conn)
                 return {
                     "ok": True,
                     "skill_id": skill_id,
@@ -1811,6 +1869,22 @@ class AgentDB:
                     "count": len(selected_ids),
                     "max_selected": max_selected,
                 }
+
+    
+    async def get_liked_skill_ids(self, user_id: int) -> list[int]:
+        uid = int(user_id)
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT sl.skill_id
+                FROM agent_skill_likes sl
+                JOIN agent_skills s ON s.id = sl.skill_id
+                WHERE sl.user_id = $1
+                  AND s.is_deleted = FALSE
+                """,
+                uid,
+            )
+            return [int(r["skill_id"]) for r in rows]
 
     async def toggle_skill_like(self, skill_id: int, user_id: int) -> dict:
         async with self.pool.acquire() as conn:
@@ -1859,27 +1933,93 @@ class AgentDB:
         """Создать запись в telegram_triggers (та же БД, что у chats_service).
         days_of_week — список 1..7 (пн..вс) или None. trigger_date — date для once.
         Сканер chats_service подхватит запись автоматически (proactive_enabled должен быть TRUE)."""
+        chat_id = str(chat_id).strip()
+        try:
+            chat_type = "group" if int(chat_id) < 0 else "private"
+        except ValueError:
+            chat_type = "group"
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("""
+                    INSERT INTO telegram_chats (chat_id, chat_type, is_active, added_by_user_id)
+                    VALUES ($1, $2, TRUE, $3)
+                    ON CONFLICT (chat_id) DO UPDATE SET is_active = TRUE, updated_at = CURRENT_TIMESTAMP
+                """, chat_id, chat_type, added_by_user_id)
+                await conn.execute("""
+                    INSERT INTO telegram_chat_settings (chat_id, proactive_enabled)
+                    VALUES ($1, TRUE)
+                    ON CONFLICT (chat_id) DO UPDATE SET proactive_enabled = TRUE, updated_at = CURRENT_TIMESTAMP
+                """, chat_id)
+                row = await conn.fetchrow("""
+                    INSERT INTO telegram_triggers
+                        (chat_id, added_by_user_id, kind, title, time_msk,
+                         days_of_week, trigger_date, prompt, addressed)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                    ON CONFLICT (chat_id, kind, time_msk, COALESCE(title,''), COALESCE(trigger_date,'0001-01-01'::date))
+                        WHERE preset_key IS NULL
+                    DO UPDATE SET
+                        days_of_week  = EXCLUDED.days_of_week,
+                        prompt        = EXCLUDED.prompt,
+                        addressed     = EXCLUDED.addressed,
+                        is_active     = TRUE,
+                        last_fired_at = NULL,
+                        updated_at    = CURRENT_TIMESTAMP
+                    RETURNING id, chat_id, kind, title, time_msk,
+                              days_of_week, trigger_date, prompt, addressed,
+                              is_active, created_at
+                """, chat_id, added_by_user_id, kind, title, time_msk,
+                     days_of_week, trigger_date, prompt, addressed)
+        return dict(row)
+
+    async def register_editor_workspace(self, user_id, workspace_id: str,
+                                        chat_id=None, title=None) -> dict:
+        """Закрепить воркспейс песочницы за юзером в реестре editor_workspaces
+        (та же БД, что у chats_service). Читает редактор для дерева проекта."""
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow("""
-                INSERT INTO telegram_triggers
-                    (chat_id, added_by_user_id, kind, title, time_msk,
-                     days_of_week, trigger_date, prompt, addressed)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-                RETURNING id, chat_id, kind, title, time_msk,
-                          days_of_week, trigger_date, prompt, addressed,
-                          is_active, created_at
-            """, chat_id, added_by_user_id, kind, title, time_msk,
-                 days_of_week, trigger_date, prompt, addressed)
-        return dict(row)
+                INSERT INTO editor_workspaces (user_id, workspace_id, chat_id, title)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (user_id, workspace_id) DO UPDATE SET
+                    chat_id    = COALESCE(EXCLUDED.chat_id, editor_workspaces.chat_id),
+                    title      = COALESCE(EXCLUDED.title, editor_workspaces.title),
+                    is_active  = TRUE,
+                    updated_at = CURRENT_TIMESTAMP
+                RETURNING id, user_id, workspace_id, chat_id, title, is_active, created_at
+            """, int(user_id), str(workspace_id), chat_id, title)
+        return dict(row) if row else None
+
+    async def list_editor_workspaces(self, user_id, chat_id=None) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            if chat_id:
+                rows = await conn.fetch("""
+                    SELECT id, workspace_id, chat_id, title, created_at
+                    FROM editor_workspaces
+                    WHERE user_id = $1 AND is_active = TRUE AND chat_id = $2
+                    ORDER BY updated_at DESC
+                """, int(user_id), str(chat_id))
+            else:
+                rows = await conn.fetch("""
+                    SELECT id, workspace_id, chat_id, title, created_at
+                    FROM editor_workspaces
+                    WHERE user_id = $1 AND is_active = TRUE
+                    ORDER BY updated_at DESC
+                """, int(user_id))
+        return [dict(r) for r in rows]
 
     async def list_tg_triggers(self, chat_id: str) -> list[dict]:
         """Активные триггеры чата — чтобы агент мог посмотреть что уже стоит."""
         async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE telegram_triggers
+                SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP
+                WHERE chat_id = $1 AND kind = 'once' AND last_fired_at IS NOT NULL AND is_active = TRUE
+            """, chat_id)
             rows = await conn.fetch("""
                 SELECT id, kind, title, time_msk, days_of_week,
-                       trigger_date, prompt, addressed, is_active, last_fired_at
+                       trigger_date, prompt, preset_key, addressed, is_active, last_fired_at
                 FROM telegram_triggers
                 WHERE chat_id = $1 AND is_active = TRUE
+                  AND NOT (kind = 'once' AND last_fired_at IS NOT NULL)
                 ORDER BY kind, time_msk
             """, chat_id)
         return [dict(r) for r in rows]
@@ -1889,6 +2029,75 @@ class AgentDB:
         async with self.pool.acquire() as conn:
             res = await conn.execute("""
                 UPDATE telegram_triggers SET is_active = FALSE,
+                       updated_at = CURRENT_TIMESTAMP
+                WHERE id = $1 AND chat_id = $2
+            """, trigger_id, chat_id)
+        return res.endswith("1")
+
+    async def create_max_trigger(self, chat_id: str, added_by_user_id,
+                                 kind: str, time_msk: str,
+                                 title=None, days_of_week=None,
+                                 trigger_date=None, prompt=None,
+                                 addressed: bool = False) -> dict:
+        chat_id = str(chat_id).strip()
+        try:
+            chat_type = "group" if int(chat_id) < 0 else "private"
+        except ValueError:
+            chat_type = "group"
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("""
+                    INSERT INTO max_chats (chat_id, chat_type, is_active, added_by_user_id)
+                    VALUES ($1, $2, TRUE, $3)
+                    ON CONFLICT (chat_id) DO UPDATE SET is_active = TRUE, updated_at = CURRENT_TIMESTAMP
+                """, chat_id, chat_type, added_by_user_id)
+                await conn.execute("""
+                    INSERT INTO max_chat_settings (chat_id, proactive_enabled)
+                    VALUES ($1, TRUE)
+                    ON CONFLICT (chat_id) DO UPDATE SET proactive_enabled = TRUE, updated_at = CURRENT_TIMESTAMP
+                """, chat_id)
+                row = await conn.fetchrow("""
+                    INSERT INTO max_triggers
+                        (chat_id, added_by_user_id, kind, title, time_msk,
+                         days_of_week, trigger_date, prompt, addressed)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                    ON CONFLICT (chat_id, kind, time_msk, COALESCE(title,''), COALESCE(trigger_date,'0001-01-01'::date))
+                        WHERE preset_key IS NULL
+                    DO UPDATE SET
+                        days_of_week  = EXCLUDED.days_of_week,
+                        prompt        = EXCLUDED.prompt,
+                        addressed     = EXCLUDED.addressed,
+                        is_active     = TRUE,
+                        last_fired_at = NULL,
+                        updated_at    = CURRENT_TIMESTAMP
+                    RETURNING id, chat_id, kind, title, time_msk,
+                              days_of_week, trigger_date, prompt, addressed,
+                              is_active, created_at
+                """, chat_id, added_by_user_id, kind, title, time_msk,
+                     days_of_week, trigger_date, prompt, addressed)
+        return dict(row)
+
+    async def list_max_triggers(self, chat_id: str) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE max_triggers
+                SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP
+                WHERE chat_id = $1 AND kind = 'once' AND last_fired_at IS NOT NULL AND is_active = TRUE
+            """, chat_id)
+            rows = await conn.fetch("""
+                SELECT id, kind, title, time_msk, days_of_week,
+                       trigger_date, prompt, preset_key, addressed, is_active, last_fired_at
+                FROM max_triggers
+                WHERE chat_id = $1 AND is_active = TRUE
+                  AND NOT (kind = 'once' AND last_fired_at IS NOT NULL)
+                ORDER BY kind, time_msk
+            """, chat_id)
+        return [dict(r) for r in rows]
+
+    async def deactivate_max_trigger(self, trigger_id: int, chat_id: str) -> bool:
+        async with self.pool.acquire() as conn:
+            res = await conn.execute("""
+                UPDATE max_triggers SET is_active = FALSE,
                        updated_at = CURRENT_TIMESTAMP
                 WHERE id = $1 AND chat_id = $2
             """, trigger_id, chat_id)

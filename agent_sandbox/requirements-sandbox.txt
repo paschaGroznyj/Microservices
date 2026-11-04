@@ -22,3 +22,5 @@ beautifulsoup4
 apscheduler
 python-multipart
 gdown
+pytest
+pytest-mock

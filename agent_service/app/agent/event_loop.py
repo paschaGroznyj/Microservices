@@ -209,37 +209,6 @@ IMITATE_TOOL_STATUS_MODELS = {
     m.strip() for m in os.getenv("IMITATE_TOOL_STATUS_MODELS", "coder,gemini").split(",") if m.strip()
 }
 
-# Шаг размышлений уходит в UI (WS/SSE/Redis run_status/TG/MAX) уже обрезанным:
-# фронт всё равно показывает 2 строки, гонять полотно по эндпоинтам незачем.
-# Полный текст остаётся в loop_state["reasoning_trace"] (его читает супервизор).
-# 0 — не резать.
-REASONING_STEP_MAX_CHARS = int(os.getenv("REASONING_STEP_MAX_CHARS", "280"))
-
-
-def _clip_reasoning_step(text: str, max_chars: int | None = None) -> str:
-    """Обрезает шаг размышлений для UI по границе слова и добавляет «…».
-
-    Закрывает висящие `код` и **жирный**, чтобы markdown на фронте не поехал."""
-    limit = REASONING_STEP_MAX_CHARS if max_chars is None else max_chars
-    if not isinstance(text, str):
-        return text
-    text = text.strip()
-    if limit <= 0 or len(text) <= limit:
-        return text
-    cut = text[:limit]
-    # граница слова, но не дальше 40% от лимита назад
-    ws = max(cut.rfind(" "), cut.rfind("\n"))
-    if ws >= int(limit * 0.6):
-        cut = cut[:ws]
-    cut = cut.rstrip(" \t\n,;:.-—(")
-    if cut.count("```") % 2:
-        cut = cut[: cut.rfind("```")].rstrip()
-    if cut.replace("```", "").count("`") % 2:
-        cut += "`"
-    if cut.count("**") % 2:
-        cut += "**"
-    return cut + "…"
-
 def _truncate_text(text: str, max_chars: int = MAX_STDOUT_CHARS) -> str:
     """Обрезает текст, если он превышает лимит, добавляя плашку с указанием перерасхода."""
     if not isinstance(text, str) or len(text) <= max_chars:
@@ -2002,7 +1971,7 @@ class HarnessAgent:
                         # отправляем сразу готовым предложением и закрываем шаг рассуждений.
                         loop_state.setdefault("reasoning_trace", []).append(_step_thinking)
                         await self._send_chunk(
-                            _clip_reasoning_step(_step_thinking), request_id, msg_id=str(request_id), kind="live"
+                            _step_thinking, request_id, msg_id=str(request_id), kind="live"
                         )
                         stream_state["sent"] = True
                         await self._send_chunk(
@@ -2022,7 +1991,7 @@ class HarnessAgent:
                             _phrase = get_tools_status(_names)
                             if _phrase:
                                 await self._send_chunk(
-                                    _clip_reasoning_step(_phrase), request_id, msg_id=str(request_id), kind="live"
+                                    _phrase, request_id, msg_id=str(request_id), kind="live"
                                 )
                                 stream_state["sent"] = True
                         if stream_state["sent"]:
@@ -2034,7 +2003,7 @@ class HarnessAgent:
                         # а в final_response пойдёт уже очищенный response.content.
                         loop_state.setdefault("reasoning_trace", []).append(_thinking_text)
                         await self._send_chunk(
-                            _clip_reasoning_step(_thinking_text), request_id, msg_id=str(request_id), kind="live"
+                            _thinking_text, request_id, msg_id=str(request_id), kind="live"
                         )
                         await self._send_chunk(
                             "", request_id, msg_id=str(request_id), kind="reasoning_end"

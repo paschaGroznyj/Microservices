@@ -217,23 +217,37 @@
       const o = document.createElement("option");
       o.value = w.workspace_id;
       const baseLabel = w.title || w.workspace_id;
-      const ttlSuffix = w.is_permanent ? " · бессрочно" : (w.ttl_text ? ` · ${w.ttl_text}` : "");
-      o.textContent = `${baseLabel}${ttlSuffix}`;
+      o.textContent = baseLabel;
+      o.title = `${baseLabel} (${w.workspace_id})`;
       wsSelect.appendChild(o);
     }
     const wanted = URL_WS && list.some(w => w.workspace_id === URL_WS) ? URL_WS : null;
     currentWs = wanted || list[0].workspace_id;
     wsSelect.value = currentWs;
     syncUrlWs(currentWs);
+    syncWsTitle();
+    await activateWs();
+  }
+
+  function syncWsTitle() {
+    const o = wsSelect.selectedOptions && wsSelect.selectedOptions[0];
+    wsSelect.title = o ? (o.title || o.textContent) : "";
+  }
+
+  // Переключение области: дерево + TTL + live-подписка
+  async function activateWs() {
     await loadTree();
+    startTtl();
+    startWatch();
   }
 
   async function loadTree() {
     if (!currentWs) return;
     const data = await apiGet(`/api/editor/tree?workspace_id=${encodeURIComponent(currentWs)}`);
+    const scroll = treeEl.scrollTop;
     treeEl.innerHTML = "";
     renderTree(data.tree || [], treeEl);
-    startTtl();
+    treeEl.scrollTop = scroll;
   }
 
   // ── TTL области ──────────────────────────────────────
@@ -256,13 +270,15 @@
       const d = await apiGet(`/api/editor/ttl?workspace_id=${encodeURIComponent(currentWs)}`);
       ttlEl.hidden = false;
       if (d.immortal || d.remaining_seconds == null) {
-        ttlTextEl.textContent = "бессрочно";
+        ttlTextEl.textContent = "∞";
         ttlEl.classList.remove("warn", "crit");
-        ttlEl.title = "Область закреплена (git/keep) — иммунитет к TTL";
+        ttlEl.classList.add("immortal");
+        ttlEl.title = "Область закреплена (git / keep-маркер), TTL не действует";
         return;
       }
+      ttlEl.classList.remove("immortal");
       const rem = d.remaining_seconds;
-      ttlTextEl.textContent = `живёт ещё ${fmtTtl(rem)}`;
+      ttlTextEl.textContent = fmtTtl(rem);
       ttlEl.classList.toggle("crit", rem < 1800);
       ttlEl.classList.toggle("warn", rem >= 1800 && rem < 3600);
       ttlEl.title = `TTL области 10ч, обновляется при активности. Осталось ~${fmtTtl(rem)}`;
@@ -276,6 +292,170 @@
     refreshTtl();
     ttlTimer = setInterval(refreshTtl, 60000);
   }
+
+  // ── Live-синхронизация файлов (SSE: agent_sandbox → editor_gw → браузер) ──
+  const liveEl = $("ed-live");
+  const diskBanner = $("ed-disk-banner");
+  const diskText = $("ed-disk-text");
+  let es = null, esWs = null, esRetry = null, esFails = 0, esHadReady = false;
+  let treeTimer = null, ttlBump = null, fileRev = 0;
+
+  function setLive(state, title) {
+    if (!liveEl) return;
+    liveEl.dataset.state = state;
+    liveEl.title = title;
+  }
+  function flashLive() {
+    if (!liveEl) return;
+    liveEl.classList.add("flash");
+    setTimeout(() => liveEl.classList.remove("flash"), 400);
+  }
+  function stopWatch() {
+    if (esRetry) { clearTimeout(esRetry); esRetry = null; }
+    if (es) { es.close(); es = null; }
+    esWs = null;
+  }
+  function startWatch() {
+    stopWatch();
+    esFails = 0; esHadReady = false;
+    if (!currentWs || !window.EventSource) {
+      setLive("off", window.EventSource ? "Нет области" : "Браузер не поддерживает live-обновление");
+      return;
+    }
+    connectWatch(currentWs);
+  }
+  function connectWatch(ws) {
+    esWs = ws;
+    setLive("connecting", "Подключаюсь к live-обновлению…");
+    const src = new EventSource(`/api/editor/watch?workspace_id=${encodeURIComponent(ws)}`);
+    es = src;
+    src.addEventListener("ready", (ev) => {
+      if (src !== es) return;
+      let d = {}; try { d = JSON.parse(ev.data); } catch (_) {}
+      const reconnect = esHadReady || esFails > 0;
+      esFails = 0; esHadReady = true;
+      setLive("live", d.capped
+        ? "Live: файлов слишком много, отслеживается только часть"
+        : "Live: изменения файлов приходят автоматически");
+      // после обрыва могли пропустить события — пересинхронизируемся
+      if (reconnect) onFsChange({ tree_changed: true, modified: currentPath ? [currentPath] : [] });
+    });
+    src.addEventListener("change", (ev) => {
+      if (src !== es) return;
+      let d; try { d = JSON.parse(ev.data); } catch (_) { return; }
+      onFsChange(d);
+    });
+    src.addEventListener("gone", () => {
+      if (src !== es) return;
+      stopWatch();
+      setLive("off", "Область удалена в песочнице");
+    });
+    src.onerror = () => {
+      if (src !== es) return;
+      if (src.readyState === EventSource.CLOSED) {
+        // сервер ответил ошибкой (403/404/502) — переподключаемся сами с backoff
+        src.close(); es = null;
+        esFails++;
+        if (esFails > 8) { setLive("off", "Live-обновление недоступно. Нажмите, чтобы переподключиться"); return; }
+        const delay = Math.min(30000, 1000 * 2 ** (esFails - 1));
+        setLive("connecting", `Нет связи, повтор через ${Math.round(delay / 1000)} с`);
+        esRetry = setTimeout(() => { if (esWs === ws && currentWs === ws) connectWatch(ws); }, delay);
+      } else {
+        esFails++;
+        setLive("connecting", "Связь прервалась, переподключаюсь…");
+      }
+    };
+  }
+
+  function onFsChange(d) {
+    flashLive();
+    const touched = new Set([...(d.created || []), ...(d.modified || [])]);
+    if (d.tree_changed || d.truncated) {
+      clearTimeout(treeTimer);
+      treeTimer = setTimeout(() => loadTree().catch(() => {}), 250);
+    }
+    if (currentPath) {
+      if ((d.deleted || []).includes(currentPath)) showDiskBanner("deleted");
+      else if (touched.has(currentPath) || d.truncated) syncOpenFileFromDisk();
+    }
+    // активность агента продлевает TTL — обновим чип без ожидания минутного таймера
+    clearTimeout(ttlBump);
+    ttlBump = setTimeout(refreshTtl, 1500);
+  }
+
+  async function syncOpenFileFromDisk() {
+    const ws = currentWs, path = currentPath;
+    if (!ws || !path) return;
+    let data;
+    try {
+      data = await apiGet(`/api/editor/file?workspace_id=${encodeURIComponent(ws)}&path=${encodeURIComponent(path)}`);
+    } catch (_) { return; }
+    if (ws !== currentWs || path !== currentPath) return;
+    if (isBinary || data.is_binary) {
+      fileRev++;
+      if (previewOn) schedulePreview();
+      return;
+    }
+    const disk = data.content;
+    if (disk === currentContent) { hideDiskBanner(); return; } // в т.ч. эхо нашего сохранения
+    if (editor && editor.getValue() === disk) {                // правки совпали с диском
+      currentContent = disk; setDirty(false); hideDiskBanner(); return;
+    }
+    if (dirty) { pendingDisk = disk; showDiskBanner("modified"); return; }
+    applyDiskContent(disk);
+  }
+
+  let pendingDisk = null;
+  function applyDiskContent(text) {
+    currentContent = text;
+    if (editor) {
+      const view = editor.saveViewState();
+      editor.getModel().setValue(text);   // колбэк onDidChangeContent выставит dirty=false
+      if (view) editor.restoreViewState(view);
+    }
+    setDirty(false);
+    hideDiskBanner();
+    if (previewOn) schedulePreview();
+  }
+  function showDiskBanner(kind) {
+    if (!diskBanner) return;
+    diskBanner.dataset.kind = kind;
+    const name = (currentPath || "").split("/").pop();
+    if (kind === "deleted") {
+      diskText.textContent = `«${name}» удалён на диске. Сохранение создаст файл заново.`;
+      $("ed-disk-reload").hidden = true;
+      $("ed-disk-keep").textContent = "Понятно";
+    } else {
+      diskText.textContent = `«${name}» изменён на диске. У вас есть несохранённые правки: загрузить версию с диска (правки пропадут) или оставить свою?`;
+      $("ed-disk-reload").hidden = false;
+      $("ed-disk-keep").textContent = "Оставить мою версию";
+    }
+    diskBanner.hidden = false;
+  }
+  function hideDiskBanner() {
+    pendingDisk = null;
+    if (diskBanner) diskBanner.hidden = true;
+  }
+  $("ed-disk-reload")?.addEventListener("click", () => {
+    if (pendingDisk != null) applyDiskContent(pendingDisk);
+    else hideDiskBanner();
+  });
+  $("ed-disk-keep")?.addEventListener("click", () => {
+    // своя версия остаётся в редакторе; «Сохранить» перезапишет диск
+    if (diskBanner) diskBanner.hidden = true;
+  });
+  function manualResync() {
+    if (!currentWs) return;
+    loadTree().catch(() => {});
+    if (currentPath) syncOpenFileFromDisk();
+    startWatch();
+  }
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && diskBanner && !diskBanner.hidden) diskBanner.hidden = true;
+  });
+  liveEl?.addEventListener("click", manualResync);
+  liveEl?.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); manualResync(); } });
+  window.addEventListener("pagehide", stopWatch);
 
   const CHEV = '<svg class="ed-chev" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3l3 3-3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   const IC_DIR = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true"><path d="M2 4.5A1.2 1.2 0 0 1 3.2 3.3h2.6l1.3 1.4h5.7A1.2 1.2 0 0 1 14 5.9v5.9a1.2 1.2 0 0 1-1.2 1.2H3.2A1.2 1.2 0 0 1 2 11.8z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>';
@@ -394,6 +574,7 @@
   window.addEventListener("blur", closeTreeContextMenu);
   treeEl?.addEventListener("scroll", closeTreeContextMenu);
 
+  const openDirs = new Set();
   function renderTree(nodes, container) {
     for (const node of nodes) {
       const row = document.createElement("div");
@@ -410,13 +591,20 @@
         kids.style.display = "none";
         container.appendChild(kids);
         let built = false;
+        if (openDirs.has(node.path)) {
+          renderTree(node.children || [], kids); built = true;
+          kids.style.display = ""; row.classList.add("open");
+        }
         row.addEventListener("click", (e) => {
           e.stopPropagation();
           if (!built) { renderTree(node.children || [], kids); built = true; }
           kids.style.display = kids.style.display === "none" ? "" : "none";
-          row.classList.toggle("open", kids.style.display !== "none");
+          const isOpen = kids.style.display !== "none";
+          row.classList.toggle("open", isOpen);
+          if (isOpen) openDirs.add(node.path); else openDirs.delete(node.path);
         });
       } else {
+        if (node.path === currentPath) row.classList.add("sel");
         row.addEventListener("click", (e) => {
           e.stopPropagation();
           if (dirty && !confirm("Есть несохранённые изменения. Открыть другой файл?")) return;
@@ -444,6 +632,7 @@
       const data = await apiGet(
         `/api/editor/file?workspace_id=${encodeURIComponent(currentWs)}&path=${encodeURIComponent(path)}`);
       currentPath = path;
+      hideDiskBanner();
       isBinary = !!data.is_binary;
       currentContent = isBinary ? "// Бинарный файл — редактирование недоступно" : data.content;
       const lang = guessLang(path);
@@ -705,7 +894,7 @@
   }
   function currentText() { return editor && !isBinary ? editor.getValue() : currentContent; }
   function rawFileUrl() {
-    return `/api/editor/download?workspace_id=${encodeURIComponent(currentWs || "")}&path=${encodeURIComponent(currentPath || "")}`;
+    return `/api/editor/download?workspace_id=${encodeURIComponent(currentWs || "")}&path=${encodeURIComponent(currentPath || "")}&v=${fileRev}`;
   }
   function parseDelimited(text, delim, maxRows) {
     const rows = []; let row = [], cell = "", q = false;
@@ -820,11 +1009,13 @@
     currentWs = wsSelect.value || null;
     currentPath = null; isBinary = false; setDirty(false);
     filenameEl.textContent = "";
+    openDirs.clear();
+    hideDiskBanner();
     onFileOpened();
     syncUrlWs(currentWs);
-    await loadTree();
+    syncWsTitle();
+    await activateWs();
   });
-  $("ed-refresh").addEventListener("click", loadTree);
   saveBtn.addEventListener("click", saveFile);
   window.addEventListener("beforeunload", (e) => {
     if (dirty) { e.preventDefault(); e.returnValue = ""; }

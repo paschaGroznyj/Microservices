@@ -40,8 +40,8 @@ from pathlib import Path
 from typing import Optional
 from aiokafka import AIOKafkaProducer
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 import zipfile
@@ -1458,6 +1458,129 @@ async def editor_ttl_endpoint(workspace_id: str):
         "remaining_seconds": remaining,
         "immortal": immortal,
     }
+
+
+# ── Editor: live-обновление дерева/файлов (SSE) ──────────────────
+# Песочница сама следит за изменениями в workspace (поллинг снапшота mtime/size,
+# без inotify: не упираемся в max_user_watches на больших репо) и шлёт события
+# в SSE-поток. Gateway (editor_gw) проксирует поток браузеру после проверки владельца.
+
+EDITOR_WATCH_INTERVAL = float(os.environ.get("EDITOR_WATCH_INTERVAL", "1.5"))
+EDITOR_WATCH_MAX_ENTRIES = int(os.environ.get("EDITOR_WATCH_MAX_ENTRIES", "20000"))
+EDITOR_WATCH_HEARTBEAT = 20.0
+EDITOR_WATCH_MAX_PER_WS = 16
+EDITOR_WATCH_LIST_CAP = 200
+# Служебные файлы, которые меняются сами по себе и не должны дёргать UI
+EDITOR_WATCH_SKIP_FILES = {".last_active", ".created_at"}
+_editor_watchers: dict[str, int] = {}
+
+
+def _editor_snapshot(base: str) -> tuple[dict, bool]:
+    """{rel_path: (is_dir, mtime_ns, size)} + флаг усечения по лимиту записей."""
+    base_real = os.path.realpath(base)
+    snap: dict = {}
+    stack = [base_real]
+    while stack:
+        d = stack.pop()
+        try:
+            it = os.scandir(d)
+        except OSError:
+            continue
+        with it:
+            for e in it:
+                name = e.name
+                if name in EDITOR_SKIP_DIRS or name in EDITOR_WATCH_SKIP_FILES or ".tmp_editor_" in name:
+                    continue
+                try:
+                    is_dir = e.is_dir(follow_symlinks=False)
+                    st = e.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                rel = os.path.relpath(e.path, base_real)
+                snap[rel] = (is_dir, 0 if is_dir else st.st_mtime_ns, 0 if is_dir else st.st_size)
+                if len(snap) >= EDITOR_WATCH_MAX_ENTRIES:
+                    return snap, True
+                if is_dir:
+                    stack.append(e.path)
+    return snap, False
+
+
+def _editor_diff(old: dict, new: dict) -> dict | None:
+    created = [p for p in new.keys() - old.keys()]
+    deleted = [p for p in old.keys() - new.keys()]
+    modified, retyped = [], False
+    for p in new.keys() & old.keys():
+        o, n = old[p], new[p]
+        if o[0] != n[0]:
+            retyped = True
+            modified.append(p)
+        elif not n[0] and (o[1] != n[1] or o[2] != n[2]):
+            modified.append(p)
+    if not (created or deleted or modified):
+        return None
+    cap = EDITOR_WATCH_LIST_CAP
+    truncated = len(created) > cap or len(deleted) > cap or len(modified) > cap
+    return {
+        "created": sorted(created)[:cap],
+        "deleted": sorted(deleted)[:cap],
+        "modified": sorted(modified)[:cap],
+        "tree_changed": bool(created or deleted or retyped),
+        "truncated": truncated,
+    }
+
+
+def _sse(event: str, data: dict) -> bytes:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
+
+
+@app.get("/workspace/{workspace_id}/editor/watch")
+async def editor_watch_endpoint(workspace_id: str, request: Request):
+    ws_path = _get_workspace_path(workspace_id)
+    if ws_path is None:
+        raise HTTPException(status_code=404, detail="Workspace не найден")
+    if _editor_watchers.get(workspace_id, 0) >= EDITOR_WATCH_MAX_PER_WS:
+        raise HTTPException(status_code=429, detail="Слишком много подписок на workspace")
+
+    async def stream():
+        _editor_watchers[workspace_id] = _editor_watchers.get(workspace_id, 0) + 1
+        try:
+            prev, capped = await asyncio.to_thread(_editor_snapshot, ws_path)
+            yield b"retry: 3000\n\n"
+            yield _sse("ready", {"workspace_id": workspace_id, "entries": len(prev), "capped": capped})
+            last_sent = time.monotonic()
+            delay = EDITOR_WATCH_INTERVAL
+            while True:
+                await asyncio.sleep(delay)
+                if await request.is_disconnected():
+                    break
+                if not os.path.isdir(ws_path):
+                    yield _sse("gone", {"workspace_id": workspace_id})
+                    break
+                t0 = time.monotonic()
+                cur, capped = await asyncio.to_thread(_editor_snapshot, ws_path)
+                # Адаптивный интервал: на больших деревьях не жжём CPU сканом
+                delay = max(EDITOR_WATCH_INTERVAL, (time.monotonic() - t0) * 4)
+                diff = _editor_diff(prev, cur)
+                prev = cur
+                if diff:
+                    diff["capped"] = capped
+                    yield _sse("change", diff)
+                    last_sent = time.monotonic()
+                elif time.monotonic() - last_sent >= EDITOR_WATCH_HEARTBEAT:
+                    yield b": ping\n\n"
+                    last_sent = time.monotonic()
+        finally:
+            n = _editor_watchers.get(workspace_id, 1) - 1
+            if n > 0:
+                _editor_watchers[workspace_id] = n
+            else:
+                _editor_watchers.pop(workspace_id, None)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
 
 
 @app.get("/health")

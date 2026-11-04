@@ -10,14 +10,18 @@
   GET /api/editor/tree?workspace_id=  — дерево файлов конкретного воркспейса
   GET /api/editor/file?workspace_id=&path=  — содержимое файла
   PUT /api/editor/file?workspace_id=&path=  — сохранить файл (main gateway)
+  GET /api/editor/watch?workspace_id=  — SSE: live-изменения файлов (прокси из agent_sandbox)
 
 Подключается в app.py: editor_gw.bind(http_client, chats_url, sandbox_url, get_current_user, templates)
 """
 import logging
-from fastapi import APIRouter, Request, HTTPException
 import os
+import re
+
+import httpx
+from fastapi import APIRouter, Request, HTTPException
 from urllib.parse import quote
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -29,6 +33,19 @@ _chats_url = None
 _sandbox_url = None
 _get_current_user = None
 _templates = None
+# Отдельный клиент под долгие SSE-потоки, чтобы они не съедали пул общего http_client
+_stream_http: httpx.AsyncClient | None = None
+_WS_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _stream_client() -> httpx.AsyncClient:
+    global _stream_http
+    if _stream_http is None:
+        _stream_http = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=5.0, read=None, write=10.0, pool=5.0),
+            limits=httpx.Limits(max_connections=500, max_keepalive_connections=0),
+        )
+    return _stream_http
 
 
 def bind(http_client, chats_url, sandbox_url, get_current_user, templates):
@@ -105,6 +122,49 @@ async def api_ttl(request: Request, workspace_id: str):
     if r.status_code != 200:
         raise HTTPException(status_code=r.status_code, detail="Песочница: TTL недоступен")
     return r.json()
+
+
+@router.get("/api/editor/watch")
+async def api_watch(request: Request, workspace_id: str):
+    """SSE-прокси: песочница следит за файлами workspace, gateway только проверяет
+    владельца и пробрасывает поток браузеру без буферизации."""
+    user = await _require_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Не авторизован")
+    if not _WS_ID_RE.match(workspace_id or ""):
+        raise HTTPException(status_code=400, detail="Некорректный workspace_id")
+    await _assert_owns(user["user_id"], workspace_id)
+
+    client = _stream_client()
+    upstream_req = client.build_request(
+        "GET", f"{_sandbox_url}/workspace/{workspace_id}/editor/watch",
+        headers={"Accept": "text/event-stream"},
+    )
+    try:
+        upstream = await client.send(upstream_req, stream=True)
+    except httpx.HTTPError as e:
+        logger.warning(f"editor watch: песочница недоступна: {e}")
+        raise HTTPException(status_code=502, detail="Песочница недоступна")
+    if upstream.status_code != 200:
+        await upstream.aclose()
+        raise HTTPException(status_code=upstream.status_code, detail="Песочница: подписка недоступна")
+
+    async def relay():
+        try:
+            async for chunk in upstream.aiter_raw():
+                if await request.is_disconnected():
+                    break
+                yield chunk
+        except httpx.HTTPError as e:
+            logger.info(f"editor watch: поток оборван wid={workspace_id}: {e}")
+        finally:
+            await upstream.aclose()
+
+    return StreamingResponse(
+        relay(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
 
 
 @router.get("/api/editor/file")

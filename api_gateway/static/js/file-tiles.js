@@ -332,18 +332,13 @@
             note: document.getElementById('text-preview-note'),
         };
     }
-    // В файловом режиме кнопка «Скачать» живёт в шапке, чтобы не перекрывать таблицы и код.
-    function placeDlBtn(inHeader) {
+    // Кнопка «Скачать» всегда зафиксирована в шапке text-preview-header.
+    function placeDlBtn() {
         const a = document.getElementById('text-preview-dl');
         const head = document.querySelector('#text-preview-panel .text-preview-header');
-        const wrap = document.querySelector('#text-preview-panel .text-preview-wrap');
-        if (!a || !head || !wrap) return;
-        if (inHeader) {
-            const close = document.getElementById('text-preview-close');
-            if (a.parentElement !== head) head.insertBefore(a, close || null);
-        } else if (a.parentElement !== wrap) {
-            wrap.appendChild(a);
-        }
+        if (!a || !head) return;
+        const close = document.getElementById('text-preview-close');
+        if (a.parentElement !== head) head.insertBefore(a, close || null);
     }
     function setNote(text, isErr) {
         const { note } = pvEls();

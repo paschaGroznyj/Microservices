@@ -338,7 +338,7 @@
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, var(--cds-reasoning-ring, var(--border)));
 }
 
-/* Скачать вставленный текст: стеклянная кнопка как у image-lightbox__dl, в углу text-preview-body */
+/* Обёртка тела и кнопка «Скачать» в шапке text-preview-header */
 .text-preview-wrap {
   position: relative;
   flex: 1;
@@ -346,9 +346,14 @@
   display: flex;
   flex-direction: column;
 }
-.text-preview-wrap > .text-preview-body { padding-right: 52px; }
-#text-preview-dl.fa-card-dl-btn { top: 20px; right: 22px; }
-#text-preview-dl svg { width: 16px; height: 16px; }
+#text-preview-dl.fa-card-dl-btn {
+  position: static;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+#text-preview-dl svg { width: 14px; height: 14px; }
 
 @media (max-width: 900px) {
   .text-preview-panel {

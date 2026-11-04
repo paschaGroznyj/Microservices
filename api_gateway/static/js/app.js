@@ -5480,7 +5480,13 @@ class ChatApp {
 
         container.classList.add('rending');
 
-        const username = this.currentUser?.name?.split(' ')[0]
+        // name может прийти литералом "Unknown" (нет заголовка X-Authentik-Name),
+        // такое значение пропускаем и берём username.
+        const rawName = this.currentUser?.name?.trim();
+        const firstName = (rawName && rawName !== 'Unknown')
+            ? rawName.split(/\s+/)[0]
+            : '';
+        const username = firstName
                       || this.currentUser?.username
                       || 'друг';
 

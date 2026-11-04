@@ -341,7 +341,8 @@ async def get_current_user(request: Request):
         return {
             "username": username,
             "user_id": user_id,
-            "authenticated": True
+            "authenticated": True,
+            "source": "internal"
         }
     except JWTError as e:
         logger.warning(f"Ошибка декодирования токена: {e}")
@@ -1029,7 +1030,8 @@ async def get_current_user_info(request: Request):
         "username": user["username"],
         "user_id": user["user_id"],
         "authenticated": True,
-        "name": name
+        "name": name,
+        "source": user.get("source", "internal")
     }
 
     return Response(

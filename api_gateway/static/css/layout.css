@@ -892,6 +892,29 @@
 .text-preview-render .tp-table .tp-num { text-align: right; font-variant-numeric: tabular-nums; }
 .text-preview-render .tp-table tbody tr:hover td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
 
+/* Markdown-превью: горизонтальной прокрутки у всего тела нет.
+   Ячейки переносятся, а слишком широкая таблица скроллится сама по себе. */
+.text-preview-render--md { overflow-x: hidden; overflow-wrap: anywhere; }
+.text-preview-render--md table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.text-preview-render--md th,
+.text-preview-render--md td {
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: break-word;
+  vertical-align: top;
+  min-width: 56px;
+  max-width: 260px;
+  overflow: visible;
+  text-overflow: clip;
+}
+.text-preview-render--md th { position: static; }
+
 /* HTML в песочнице */
 .text-preview-render--frame { overflow: hidden; display: flex; }
 .text-preview-render .tp-frame { flex: 1; width: 100%; border: 0; border-radius: 10px; background: #fff; }

@@ -350,6 +350,7 @@ def _summarize_tool_call(tc: dict, result: Any) -> str | None:
 
 
 async def _invoke_with_retry(llm, messages, iteration: int, max_retries: int = 3):
+    messages = _sanitize_messages(messages)
     backoff = [2, 5, 10]
     last_error = None
     for attempt in range(max_retries):
@@ -367,22 +368,49 @@ async def _invoke_with_retry(llm, messages, iteration: int, max_retries: int = 3
 
 
 def _sanitize_messages(messages):
-    """Убирает human/tool сообщения с пустым content перед отправкой в LLM.
+    """Убирает human/tool сообщения с пустым content и гарантирует, что все
+    SystemMessage находятся строго в начале списка (не-подряд идущие
+    SystemMessage подмешиваются в конец первой системной директивы).
 
     Провайдер (cloud.ru) отбивает весь запрос с 400 "messages.N: user messages
     must have non-empty content", если у любого human/tool-сообщения content
-    пустой. AIMessage с tool_calls и пустым content — валиден (мы сами
-    гасим response.content при reasoning), его НЕ трогаем. SystemMessage тоже
-    оставляем всегда.
+    пустой. А ChatAnthropic выбрасывает ValueError("Received multiple
+    non-consecutive system messages."), если SystemMessage встречается после
+    HumanMessage/AIMessage/ToolMessage.
     """
     out = []
+    seen_non_system = False
+    stray_system_parts: list[str] = []
+
     for m in messages:
         mtype = getattr(m, "type", None)
+        is_sys = isinstance(m, SystemMessage) or mtype == "system"
+        if is_sys:
+            if not seen_non_system:
+                out.append(m)
+            else:
+                c = getattr(m, "content", None)
+                s = str(c or "").strip()
+                if s:
+                    stray_system_parts.append(s)
+            continue
+
         if mtype in ("human", "tool"):
             c = getattr(m, "content", None)
             if c is None or (isinstance(c, str) and not c.strip()):
                 continue
+
+        seen_non_system = True
         out.append(m)
+
+    if stray_system_parts:
+        extra_sys = "\n\n".join(stray_system_parts)
+        if out and (isinstance(out[0], SystemMessage) or getattr(out[0], "type", None) == "system"):
+            base_sys = str(getattr(out[0], "content", "") or "").rstrip()
+            out[0] = SystemMessage(content=f"{base_sys}\n\n{extra_sys}" if base_sys else extra_sys)
+        else:
+            out.insert(0, SystemMessage(content=extra_sys))
+
     return out
 
 def _merge_tool_chunks(chunk, calls: dict, idx_map: dict, state: dict) -> None:
@@ -1842,7 +1870,7 @@ class HarnessAgent:
                     # ── ФОНОВЫЙ reasoning-СУПЕРВИЗОР ЦЕЛИ ─────────────────────
                     # (а) ПОДХВАТ готового результата НЕБЛОКИРУЮЩЕ: если прошлый
                     # таск уже завершён и вернул директиву — мягко подмешиваем
-                    # её SystemMessage-ом. Основной цикл НИКОГДА не ждёт супервизора.
+                    # её в конец первой системной директивы. Основной цикл НИКОГДА не ждёт супервизора.
                     if supervisor_task is not None and supervisor_task.done():
                         try:
                             hint = supervisor_task.result()
@@ -1851,12 +1879,19 @@ class HarnessAgent:
                             logger.error(f"[supervisor] таск упал: {_se}")
                         supervisor_task = None
                         if hint:
-                            messages.append(SystemMessage(content=(
+                            sup_block = (
                                 "[ФОНОВЫЙ КОНТРОЛЁР ЦЕЛИ] Внешний наблюдатель за твоей "
                                 "работой заметил возможное отклонение от цели. "
                                 "Это ПОДСКАЗКА, не приказ — учти, если по делу, "
                                 "иначе продолжай свой план:\n" + hint
-                            )))
+                            )
+                            if messages and isinstance(messages[0], SystemMessage):
+                                base_sys = str(getattr(messages[0], "content", "") or "").rstrip()
+                                messages[0] = SystemMessage(
+                                    content=f"{base_sys}\n\n{sup_block}" if base_sys else sup_block
+                                )
+                            else:
+                                messages.insert(0, SystemMessage(content=sup_block))
                             logger.info(f"[supervisor] директива подмешана на шаге {iteration}")
 
                     # (б) ТРИГГЕР нового фонового прогона раз в N шагов,
@@ -1992,21 +2027,6 @@ class HarnessAgent:
                     )
                     logger.info(f"🦒Длина стека = {len(messages)}")
 
-                    if iter_in and iter_in >= TOKEN_SOFT_LIMIT:
-                        logger.info(
-                            f"[compactor] iter_in={iter_in} >= {TOKEN_SOFT_LIMIT}, "
-                            f"запускаю сжатие стека (итерация {iteration})"
-                        )
-                        try:
-                            messages, _meta = await compact_messages(
-                                self,
-                                messages,
-                                summarize_tool_call=_summarize_tool_call,
-                            )
-                        except Exception as _e:
-                            logger.error(f"[compactor] сбой сжатия, продолжаю без него: {_e}")
-                    # --------------------------------------------------------------
-
                     if not getattr(response, "tool_calls", None):
                         final_response = (_clean_content or "").strip()
 
@@ -2028,20 +2048,6 @@ class HarnessAgent:
                         ],
                         return_exceptions=True,
                     )
-
-                    if iter_in and iter_in >= TOKEN_SOFT_LIMIT:
-                        logger.info(
-                            f"[compactor] iter_in={iter_in} >= {TOKEN_SOFT_LIMIT}, "
-                            f"запускаю сжатие стека (итерация {iteration})"
-                        )
-                        try:
-                            messages, _meta = await compact_messages(
-                                self,
-                                messages,
-                                summarize_tool_call=_summarize_tool_call,
-                            )
-                        except Exception as _e:
-                            logger.error(f"[compactor] сбой сжатия, продолжаю без него: {_e}")
                     # logging.info(f"Результаты тулзов: {tool_results}")
 
                     for tc, tr in zip(tool_calls, tool_results):
@@ -2100,6 +2106,20 @@ class HarnessAgent:
                         if summary:
                             tool_trace.append(summary)
 
+                    if iter_in and iter_in >= TOKEN_SOFT_LIMIT:
+                        logger.info(
+                            f"[compactor] iter_in={iter_in} >= {TOKEN_SOFT_LIMIT}, "
+                            f"запускаю сжатие стека (итерация {iteration})"
+                        )
+                        try:
+                            messages, _meta = await compact_messages(
+                                self,
+                                messages,
+                                summarize_tool_call=_summarize_tool_call,
+                            )
+                        except Exception as _e:
+                            logger.error(f"[compactor] сбой сжатия, продолжаю без него: {_e}")
+
                     iteration += 1
 
                 else:
@@ -2108,7 +2128,7 @@ class HarnessAgent:
                     )))
 
                     try:
-                        result_response = await llm_with_tools.ainvoke(messages)
+                        result_response = await llm_with_tools.ainvoke(_sanitize_messages(messages))
                     
                         # Если упрямая модель всё равно вернула tool_calls вместо текста
                         if not result_response.content and getattr(result_response, "tool_calls", None):

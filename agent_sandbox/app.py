@@ -21,11 +21,16 @@ agent_sandbox/app.py  —  v3: Async Submit + Kafka + Persistent Workspace
   POST /workspace/{wid}/keep — закрепить workspace бессрочно (keep-маркер, иммунитет к TTL)
   DELETE /workspace/{wid}/keep — снять keep-маркер
   POST /workspace/cleanup — принудительная очистка просроченных
+  Live-редактор: workspace не сканируется. После /execute и /submit (если передан
+  changed_files), /edit, /upload, keep/unkeep, delete и TTL-очистки песочница
+  пушит событие в gateway (POST /internal/editor/notify).
   GET  /health            — healthcheck
 """
 
 import asyncio
 import base64
+import fcntl
+import hashlib
 import json
 import logging
 import os
@@ -73,6 +78,12 @@ WORKSPACE_CLEANUP_INTERVAL = 3600
 # workspace НЕ удаляется НИКОГДА, пока файл физически лежит (полный иммунитет к TTL).
 # Имя намеренно неочевидное и переопределяемо через env.
 WORKSPACE_KEEP_MARKER = os.environ.get("WORKSPACE_KEEP_MARKER", ".ws_hold")
+# Служебные метаданные изменений внутри самой области (кэш, не источник правды).
+WS_META_DIR = ".ws_meta"
+WS_META_EVENTS_MAX = 500           # кольцевой журнал событий
+WS_META_HASH_MAX_BYTES = 2 * 1024 * 1024  # sha1 только для файлов до 2 МБ
+# Служебные имена, которые не показываются в редакторе и не считаются изменениями
+WS_SERVICE_NAMES = {WS_META_DIR, ".ws_hold", ".last_active", ".created_at", ".tasks"}
 
 _raw_chats_port = os.getenv("PORT_CHATS_SERVICE", "8001")
 CHATS_SERVICE_URL = os.getenv(
@@ -144,6 +155,7 @@ class ExecuteRequest(BaseModel):
     stdin: str = ""
     workspace_id: str | None = None
     persist_script: bool = Field(True, description="Сохранять ли исполнённый Python-скрипт в workspace (output/.scripts/<run_id>.py) для переиспользования. Работает только при заданном workspace_id")
+    changed_files: str | list[str] = Field("", description="Что поменялось в workspace для live-редактора: '' — ничего (без уведомления), '*' — неизвестно что (полный ресинк), иначе пути через запятую или списком. Уведомление уходит только после завершения запуска")
 
 
 class ExecuteResponse(BaseModel):
@@ -167,6 +179,7 @@ class SubmitRequest(BaseModel):
     chat_id: str = Field(..., description="ID чата для нотификации")
     label: str = Field(default="", description="Человекочитаемое имя задачи")
     stdin: str = Field(default="")
+    changed_files: str | list[str] = Field("", description="Что поменялось в workspace для live-редактора: '' — ничего (без уведомления), '*' — неизвестно что (полный ресинк), иначе пути через запятую или списком. Уведомление уходит только после завершения запуска")
 
 
 class SubmitResponse(BaseModel):
@@ -256,6 +269,7 @@ def _list_workspace_files(workspace_id: str) -> list[dict]:
         return result
 
     for root, dirs, files in os.walk(ws_path):
+        dirs[:] = [d for d in dirs if d != WS_META_DIR]
         for fname in files:
             fpath = os.path.join(root, fname)
             rel_path = os.path.relpath(fpath, ws_path)
@@ -278,6 +292,12 @@ def _safe_join(base: str, *paths: str) -> str:
     if not (target == base_real or target.startswith(base_real + os.sep)):
         raise ValueError(f"Path traversal detected: {paths}")
     return target
+
+def _is_service_path(rel: str) -> bool:
+    """Путь внутри служебной папки/файла области (.ws_meta, .last_active, ...)."""
+    parts = [p for p in rel.replace("\\", "/").split("/") if p and p != "."]
+    return bool(parts) and parts[0] in WS_SERVICE_NAMES
+
 
 def _get_workspace_path(workspace_id: str) -> str | None:
     ws_path = os.path.join(WORKSPACES_DIR, workspace_id)
@@ -322,7 +342,7 @@ def _run_code_sync(code: str, timeout: int, run_dir: str, stdin: str = "", task_
     # чтобы Python-код видел не только output/, но и src/, assets/ и прочие папки
     # (убирает класс ошибок "файл есть в воркспейсе, но из кода не виден").
     # output/ уже смонтирован выше; служебные каталоги пропускаем.
-    _WS_MOUNT_SKIP = {".tasks", OUTPUT_DIR_NAME, ".git", ".ws_hold", "__pycache__"}
+    _WS_MOUNT_SKIP = {".tasks", OUTPUT_DIR_NAME, ".git", ".ws_hold", "__pycache__", WS_META_DIR}
     ws_root = Path(ws_path) if ws_path else base_run_dir
     try:
         for entry in ws_root.iterdir():
@@ -696,6 +716,7 @@ def _cleanup_expired_workspaces():
                 _notify_chats_workspace_ttl_sync(entry, is_active=False)
                 removed += 1
                 log.info("[workspace] TTL-удаление %s", entry)
+                _editor_notify_sync(entry, "gone", {})
         except (ValueError, OSError):
             pass
 
@@ -760,7 +781,12 @@ async def execute(req: ExecuteRequest):
     except OSError as e:
         log.warning(f"Не удалось удалить {run_dir}: {e}")
 
+    if req.workspace_id:
+        _touch_workspace(req.workspace_id)
     await asyncio.to_thread(_sync_workspaces_hold_sync, req.workspace_id)
+
+    if req.workspace_id and req.changed_files:
+        await _editor_notify_changed(req.workspace_id, req.changed_files, "shell" if req.is_shell else "python")
 
     return ExecuteResponse(
         ok=result.get("ok", False),
@@ -900,6 +926,8 @@ async def upload_to_workspace_endpoint(
 
     # Обновляем активность, чтобы TTL не убил workspace
     _touch_workspace(workspace_id)
+    _upl = ["*"] if any(w.get("unpacked") for w in written) else [w["path"] for w in written if w.get("path")]
+    await _editor_notify_changed(workspace_id, _upl, "upload")
 
     return {
         "ok": True,
@@ -1049,6 +1077,7 @@ async def edit_workspace_file_endpoint(workspace_id: str, req: WorkspaceEditRequ
         raise HTTPException(status_code=500, detail=f"Не удалось записать файл: {e}")
 
     _touch_workspace(workspace_id)
+    await _editor_notify_changed(workspace_id, [req.path], "edit", tree_hint=False)
 
     return {
         "ok": True,
@@ -1086,6 +1115,8 @@ async def _run_task_background(req: SubmitRequest):
     # Файлы в output/ НЕ удаляем — persistent workspace
     _touch_workspace(req.workspace_id)
     await asyncio.to_thread(_sync_workspaces_hold_sync, req.workspace_id)
+    if req.changed_files:
+        await _editor_notify_changed(req.workspace_id, req.changed_files, "task")
 
     # Готовим file list (без base64 — только метаданные для Kafka)
     file_list = []
@@ -1267,6 +1298,7 @@ async def delete_workspace_endpoint(workspace_id: str):
     for tid in to_remove:
         del _tasks[tid]
 
+    _editor_notify(workspace_id, "gone", {})
     return {"status": "deleted", "workspace_id": workspace_id}
 
 
@@ -1281,6 +1313,7 @@ async def keep_workspace_endpoint(workspace_id: str):
         f.write(str(time.time()))
     if await asyncio.to_thread(_notify_chats_workspace_ttl_sync, workspace_id, True, None, True):
         _synced_hold_state[workspace_id] = True
+    _editor_notify(workspace_id, "ttl", {"permanent": True})
     return {
         "status": "kept",
         "workspace_id": workspace_id,
@@ -1301,6 +1334,8 @@ async def unkeep_workspace_endpoint(workspace_id: str):
         default_ttl_h = max(1, int(WORKSPACE_TTL_SECONDS // 3600))
         if await asyncio.to_thread(_notify_chats_workspace_ttl_sync, workspace_id, False, default_ttl_h, True):
             _synced_hold_state[workspace_id] = False
+    if existed:
+        _editor_notify(workspace_id, "ttl", {"permanent": False})
     return {"status": "released" if existed else "no_marker", "workspace_id": workspace_id}
 
 
@@ -1318,7 +1353,7 @@ async def cleanup_workspaces_endpoint():
 # ── Editor (read-only) ───────────────────────────────────────
 # Дерево и чтение файлов воркспейса для веб-редактора (Monaco). Без записи, без исполнения.
 
-EDITOR_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", ".tasks", ".ws_hold"}
+EDITOR_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv"} | WS_SERVICE_NAMES
 EDITOR_MAX_READ_BYTES = 5 * 1024 * 1024
 
 
@@ -1332,7 +1367,7 @@ def _editor_build_tree(base: str) -> list:
         except OSError:
             return items
         for e in entries:
-            if e.name in EDITOR_SKIP_DIRS:
+            if e.name in EDITOR_SKIP_DIRS or ".tmp_editor_" in e.name:
                 continue
             rel = os.path.relpath(e.path, base_real)
             if e.is_dir(follow_symlinks=False):
@@ -1365,7 +1400,7 @@ async def editor_read_endpoint(workspace_id: str, path: str):
         target = _safe_join(ws_path, path)
     except ValueError:
         raise HTTPException(status_code=403, detail="Путь вне workspace")
-    if not os.path.isfile(target):
+    if _is_service_path(os.path.relpath(target, os.path.realpath(ws_path))) or not os.path.isfile(target):
         raise HTTPException(status_code=404, detail=f"Файл '{path}' не найден")
     size = os.path.getsize(target)
     if size > EDITOR_MAX_READ_BYTES:
@@ -1404,6 +1439,8 @@ async def editor_write_endpoint(workspace_id: str, body: EditorWriteRequest):
         target = _safe_join(ws_path, body.path)
     except ValueError:
         raise HTTPException(status_code=403, detail="Путь вне workspace")
+    if _is_service_path(os.path.relpath(target, os.path.realpath(ws_path))):
+        raise HTTPException(status_code=403, detail="Служебный путь")
     if os.path.isdir(target):
         raise HTTPException(status_code=400, detail="Путь указывает на директорию")
     data = body.content.encode("utf-8")
@@ -1424,7 +1461,11 @@ async def editor_write_endpoint(workspace_id: str, body: EditorWriteRequest):
         except Exception:
             pass
         raise HTTPException(status_code=500, detail=f"Ошибка записи: {e}")
-    return {"workspace_id": workspace_id, "path": body.path, "size": len(data), "ok": True}
+    rel = os.path.relpath(target, os.path.realpath(ws_path))
+    change = await asyncio.to_thread(_workspace_files_changed, workspace_id, [rel], "editor", False)
+    # gateway сам раздаст change подписчикам (не дублируем push из песочницы)
+    return {"workspace_id": workspace_id, "path": body.path, "size": len(data), "ok": True,
+            "change": change}
 
 
 @app.get("/workspace/{workspace_id}/editor/ttl")
@@ -1460,6 +1501,285 @@ async def editor_ttl_endpoint(workspace_id: str):
     }
 
 
+# ── Editor: live-обновление через push в gateway ─────────────────
+# Песочница НЕ сканирует workspace. Событие уходит в gateway только после того, как
+# отработал инструмент: /execute и /submit — если агент передал changed_files,
+# /edit и /upload — по известным путям, keep/unkeep — смена TTL, delete/TTL-очистка — gone.
+# Gateway (editor_gw) раздаёт событие открытым SSE-подпискам редактора.
+
+# Через запятую — несколько gateway (main + Sigma): у каждого свой in-memory хаб SSE.
+EDITOR_NOTIFY_URL = os.environ.get(
+    "EDITOR_NOTIFY_URL",
+    "http://api_gateway:7000/internal/editor/notify,http://api_gateway_sigma:7010/internal/editor/notify",
+)
+EDITOR_NOTIFY_URLS = [u.strip() for u in EDITOR_NOTIFY_URL.split(",") if u.strip()]
+EDITOR_NOTIFY_TOKEN = os.environ.get("EDITOR_NOTIFY_TOKEN", "")
+EDITOR_NOTIFY_TIMEOUT = 1.5
+EDITOR_NOTIFY_MAX_PATHS = 200
+_editor_notify_tasks: set = set()
+# Внутренний вызов в сеть compose — мимо HTTP(S)_PROXY из окружения
+_editor_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def _editor_parse_changed(ws_path: str, changed) -> tuple[list[str], bool] | None:
+    """'' / [] -> None (без уведомления); '*' -> ([], True) полный ресинк;
+    пути (относительные или абсолютные внутри workspace) -> (rel_paths, full)."""
+    if changed is None:
+        return None
+    if isinstance(changed, str):
+        raw = changed.strip()
+        if not raw:
+            return None
+        items = raw.replace("\n", ",").split(",")
+    else:
+        items = [str(x) for x in changed]
+    items = [x.strip() for x in items if x and x.strip()]
+    if not items:
+        return None
+    if "*" in items:
+        return [], True
+    base_real = os.path.realpath(ws_path)
+    rels: list[str] = []
+    full = False
+    for item in items:
+        try:
+            target = _safe_join(base_real, item)
+        except ValueError:
+            continue  # путь вне workspace — игнорируем
+        rel = os.path.relpath(target, base_real)
+        if rel == ".":
+            full = True
+            continue
+        if _is_service_path(rel) or ".tmp_editor_" in rel:
+            continue
+        if rel not in rels:
+            rels.append(rel)
+    if not rels and not full:
+        return None
+    return rels, full
+
+
+# ── .ws_meta: метаданные изменений внутри области ────────────────
+# index.json   — путь → {size, mtime, sha1?, seq}; обновляется ТОЛЬКО по путям,
+#                которые сообщил инструмент (без обхода папок).
+# events.jsonl — кольцевой журнал последних WS_META_EVENTS_MAX событий.
+# Код агента живёт в той же папке и может испортить .ws_meta, поэтому это кэш:
+# битый/пропавший индекс -> событие с truncated=True (полный ресинк редактора).
+
+def _ws_meta_paths(ws_path: str) -> tuple[str, str, str, str]:
+    d = os.path.join(ws_path, WS_META_DIR)
+    return d, os.path.join(d, "index.json"), os.path.join(d, "events.jsonl"), os.path.join(d, ".lock")
+
+
+def _ws_meta_git_exclude(ws_path: str) -> None:
+    """Если репозиторий склонирован в корень области — прячем .ws_meta от git."""
+    info = os.path.join(ws_path, ".git", "info")
+    if not os.path.isdir(os.path.join(ws_path, ".git")):
+        return
+    try:
+        os.makedirs(info, exist_ok=True)
+        ex = os.path.join(info, "exclude")
+        line = f"/{WS_META_DIR}/"
+        cur = open(ex, encoding="utf-8").read() if os.path.exists(ex) else ""
+        if line not in cur.splitlines():
+            with open(ex, "a", encoding="utf-8") as f:
+                f.write(("" if not cur or cur.endswith("\n") else "\n") + line + "\n")
+    except OSError:
+        pass
+
+
+def _ws_meta_atomic_write(path: str, text: str) -> None:
+    tmp = f"{path}.tmp{uuid.uuid4().hex[:6]}"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def _ws_meta_load_index(index_path: str) -> tuple[dict, bool]:
+    """-> (index, ok). Нет файла — пустой индекс, ok=True (новая область)."""
+    if not os.path.exists(index_path):
+        return {"seq": 0, "files": {}}, True
+    try:
+        data = json.load(open(index_path, encoding="utf-8"))
+        if not isinstance(data, dict) or not isinstance(data.get("files"), dict):
+            raise ValueError("bad index")
+        data["seq"] = int(data.get("seq", 0))
+        return data, True
+    except (OSError, ValueError, TypeError):
+        return {"seq": 0, "files": {}}, False
+
+
+def _ws_meta_append_event(events_path: str, event: dict) -> None:
+    with open(events_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(event, ensure_ascii=False) + "\n")
+    try:
+        with open(events_path, encoding="utf-8") as f:
+            lines = f.readlines()
+        if len(lines) > WS_META_EVENTS_MAX * 2:  # подрезаем редко, не на каждой записи
+            _ws_meta_atomic_write(events_path, "".join(lines[-WS_META_EVENTS_MAX:]))
+    except OSError:
+        pass
+
+
+def _ws_meta_stat(target: str) -> dict | None:
+    try:
+        st = os.stat(target)
+    except OSError:
+        return None
+    rec = {"size": st.st_size, "mtime": round(st.st_mtime, 6)}
+    if st.st_size <= WS_META_HASH_MAX_BYTES:
+        try:
+            h = hashlib.sha1()
+            with open(target, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 16), b""):
+                    h.update(chunk)
+            rec["sha1"] = h.hexdigest()
+        except OSError:
+            pass
+    return rec
+
+
+def _ws_meta_apply(ws_path: str, rels: list[str], full: bool, source: str) -> dict:
+    """Сравнивает пути с прошлым состоянием из index.json, обновляет индекс и журнал.
+    Возвращает payload события редактора: created/modified/deleted + seq."""
+    meta_dir, index_path, events_path, lock_path = _ws_meta_paths(ws_path)
+    fresh_dir = not os.path.isdir(meta_dir)
+    os.makedirs(meta_dir, exist_ok=True)
+    if fresh_dir:
+        _ws_meta_git_exclude(ws_path)
+
+    created, modified, deleted = [], [], []
+    tree_dirty = full
+    truncated = full or len(rels) > EDITOR_NOTIFY_MAX_PATHS
+
+    with open(lock_path, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)  # /submit в фоне + параллельный /execute
+        index, ok = _ws_meta_load_index(index_path)
+        if not ok:
+            truncated = True
+        files = index["files"]
+        seq = index["seq"] + 1
+
+        for rel in rels[:EDITOR_NOTIFY_MAX_PATHS]:
+            target = os.path.join(ws_path, rel)
+            prev = files.get(rel)
+            if os.path.isdir(target):
+                tree_dirty = truncated = True  # папка — точный список неизвестен
+                continue
+            cur = _ws_meta_stat(target) if os.path.exists(target) else None
+            if cur is None:
+                if prev is not None:
+                    files.pop(rel, None)
+                deleted.append(rel)  # даже без prev — редактор мог держать файл открытым
+                continue
+            cur["seq"] = seq
+            if prev is None:
+                created.append(rel)
+            elif prev.get("sha1") and cur.get("sha1"):
+                if prev["sha1"] != cur["sha1"]:
+                    modified.append(rel)
+                else:
+                    cur["seq"] = prev.get("seq", seq)  # касание без правки
+            elif (prev.get("size"), prev.get("mtime")) != (cur["size"], cur["mtime"]):
+                modified.append(rel)
+            else:
+                cur["seq"] = prev.get("seq", seq)
+            files[rel] = cur
+
+        changed = bool(created or modified or deleted or truncated)
+        if changed:
+            index["seq"] = seq
+            index["updated_at"] = time.time()
+            try:
+                _ws_meta_atomic_write(index_path, json.dumps(index, ensure_ascii=False))
+                _ws_meta_append_event(events_path, {
+                    "seq": seq, "ts": index["updated_at"], "source": source,
+                    "created": created, "modified": modified, "deleted": deleted,
+                    "truncated": truncated,
+                })
+            except OSError as e:
+                log.warning("[ws_meta] %s: запись не удалась: %s", ws_path, e)
+                truncated = True
+        else:
+            seq = index["seq"]
+
+    return {
+        "created": created,
+        "modified": modified,
+        "deleted": deleted,
+        "tree_changed": bool(tree_dirty or created or deleted),
+        "truncated": truncated,
+        "seq": seq,
+        "changed": changed,
+    }
+
+def _editor_notify_sync(workspace_id: str, event: str, data: dict) -> bool:
+    """Шлёт событие всем gateway из EDITOR_NOTIFY_URLS. True — доставлено хотя бы в один."""
+    if not EDITOR_NOTIFY_TOKEN or not EDITOR_NOTIFY_URLS:
+        return False
+    body = json.dumps({"workspace_id": workspace_id, "event": event, "data": data},
+                      ensure_ascii=False).encode("utf-8")
+    ok = False
+    for url in EDITOR_NOTIFY_URLS:
+        req = urllib.request.Request(
+            url, data=body, method="POST",
+            headers={"Content-Type": "application/json", "X-Editor-Token": EDITOR_NOTIFY_TOKEN},
+        )
+        try:
+            with _editor_opener.open(req, timeout=EDITOR_NOTIFY_TIMEOUT) as r:
+                ok = ok or (200 <= r.status < 300)
+        except Exception as e:
+            log.debug("[editor-notify] %s %s -> %s не доставлено: %s", event, workspace_id, url, e)
+    return ok
+
+
+def _editor_notify(workspace_id: str, event: str, data: dict) -> None:
+    """Fire-and-forget из async-кода: ответ инструмента не ждёт gateway."""
+    if not EDITOR_NOTIFY_TOKEN or not workspace_id:
+        return
+    t = asyncio.create_task(asyncio.to_thread(_editor_notify_sync, workspace_id, event, data))
+    _editor_notify_tasks.add(t)
+    t.add_done_callback(_editor_notify_tasks.discard)
+
+
+def _workspace_files_changed(workspace_id: str | None, changed, source: str,
+                             tree_hint: bool = True) -> dict | None:
+    """Точка входа после работы инструмента над файлами области:
+    1) продлевает TTL (любое изменение файла = снова 10 часов);
+    2) сравнивает пути с .ws_meta/index.json и пишет журнал.
+    Возвращает payload события для редактора или None, если менять нечего."""
+    if not workspace_id:
+        return None
+    ws_path = _get_workspace_path(workspace_id)
+    if ws_path is None:
+        return None
+    parsed = _editor_parse_changed(ws_path, changed)
+    if parsed is None:
+        return None
+    _touch_workspace(workspace_id)
+    rels, full = parsed
+    try:
+        data = _ws_meta_apply(ws_path, rels, full, source)
+    except Exception as e:  # кэш не должен ронять инструмент
+        log.warning("[ws_meta] %s: %s — полный ресинк", workspace_id, e)
+        data = {"created": [], "modified": [], "deleted": [], "tree_changed": True,
+                "truncated": True, "seq": None, "changed": True}
+    if not data.pop("changed"):
+        return None
+    if tree_hint and source != "editor":
+        data["tree_changed"] = data["tree_changed"] or bool(data["truncated"])
+    data["source"] = source
+    data["ttl_reset"] = True
+    return data
+
+
+async def _editor_notify_changed(workspace_id: str | None, changed, source: str,
+                                 tree_hint: bool = True) -> None:
+    """Метаданные пишутся всегда; push в gateway — только если задан EDITOR_NOTIFY_TOKEN."""
+    data = await asyncio.to_thread(_workspace_files_changed, workspace_id, changed, source, tree_hint)
+    if data:
+        _editor_notify(workspace_id, "change", data)
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "version": "v3"}
@@ -1477,6 +1797,8 @@ async def startup():
     asyncio.create_task(_workspace_cleanup_loop())
     asyncio.create_task(_workspace_hold_sync_loop())
     log.info("Sandbox v3 запущен. WORKDIR=%s KAFKA=%s", WORKDIR, KAFKA_BROKER)
+    if not EDITOR_NOTIFY_TOKEN:
+        log.warning("EDITOR_NOTIFY_TOKEN не задан: live-обновление веб-редактора выключено")
 
 
 @app.on_event("shutdown")

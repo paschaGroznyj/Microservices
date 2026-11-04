@@ -1,10 +1,11 @@
+{% set is_sigma = is_sigma | default(false) %}
 <!DOCTYPE html>
 <html lang="ru" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>AuGent</title>
-    <link rel="icon" id="app-favicon" type="image/png" href="/static/img/icon.png" />
+    <link rel="icon" id="app-favicon" type="image/png" href="{{ '/static/img/icon_sigma.png' if is_sigma else '/static/img/icon.png' }}" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -34,11 +35,11 @@
     <link rel="stylesheet" href="/static/css/presence.css">
     <link rel="stylesheet" href="/static/css/group-chat.css">
     <link rel="stylesheet" href="/static/css/palette.css">
-    <link rel="stylesheet" href="/static/css/tg-chats.css">
+    {% if not is_sigma %}<link rel="stylesheet" href="/static/css/tg-chats.css">{% endif %}
 
     <script src="/static/js/palette.js"></script>
 </head>
-<body data-auth-source="{{ user.source|default('') if user else '' }}">
+<body data-gateway="{{ 'sigma' if is_sigma else 'main' }}" data-auth-source="{{ user.source|default('') if user else '' }}">
 
 
 
@@ -52,8 +53,13 @@
 
             <div class="sidebar-header">
                 <a href="/" class="brand-link" title="AuGent">
+                    {% if is_sigma %}
+                    <img class="brand-icon brand-icon-img js-theme-icon" src="/static/img/sage_sigma_black.png" data-icon-light="/static/img/sage_sigma_black.png" data-icon-dark="/static/img/sage_sigma_white.png" alt="AuGent Sigma icon">
+                    <span class="brand-name">AuGent Sigma</span>
+                    {% else %}
                     <img class="brand-icon brand-icon-img js-theme-icon" src="/static/img/sage_black.png" data-icon-light="/static/img/sage_black.png" data-icon-dark="/static/img/sage_white.png" alt="AuGent icon">
                     <span class="brand-name">AuGent</span>
+                    {% endif %}
                 </a>
                 <button type="button" class="sidebar-collapse-btn" id="sidebar-collapse-btn" aria-label="Свернуть панель" aria-expanded="true" title="Свернуть панель">
                     <svg class="sidebar-collapse-icon" viewBox="0 0 20 20" width="18" height="18" fill="none" aria-hidden="true"><rect x="2.75" y="3.75" width="14.5" height="12.5" rx="2.25" stroke="currentColor" stroke-width="1.4"/><line x1="8" y1="3.75" x2="8" y2="16.25" stroke="currentColor" stroke-width="1.4"/></svg>
@@ -72,7 +78,7 @@
             <!-- NAV TABS -->
             <nav class="sb-nav">
                 <div class="nav-item active" data-tab="agent">
-                    <img class="nav-icon-img js-theme-icon" src="/static/img/icon_black.png" data-icon-light="/static/img/icon_black.png" data-icon-dark="/static/img/icon_white.png" alt="">
+                    {% if is_sigma %}<img class="nav-icon-img js-theme-icon" src="/static/img/icon_sigma_black.png" data-icon-light="/static/img/icon_sigma_black.png" data-icon-dark="/static/img/icon_sigma_white.png" alt="">{% else %}<img class="nav-icon-img js-theme-icon" src="/static/img/icon_black.png" data-icon-light="/static/img/icon_black.png" data-icon-dark="/static/img/icon_white.png" alt="">{% endif %}
                     Агент
                 </div>
 
@@ -245,13 +251,24 @@
                     <aside class="text-preview-panel" id="text-preview-panel" aria-hidden="true">
                         <div class="text-preview-header">
                             <span class="text-preview-title" id="text-preview-title">Просмотр текста</span>
+                            <div class="skill-detail__mode-switch text-preview-modes" id="text-preview-modes" role="group" aria-label="Режим просмотра" hidden>
+                                <button type="button" class="skill-detail__mode-btn glass-mode-btn is-active" data-body-mode="preview" title="Превью" aria-label="Превью" aria-pressed="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                                <button type="button" class="skill-detail__mode-btn glass-mode-btn" data-body-mode="raw" title="Исходник" aria-label="Исходник" aria-pressed="false"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                            </div>
+                            <a class="image-lightbox__dl fa-card-dl-btn" id="text-preview-dl" href="#" download="text.txt" title="Скачать" aria-label="Скачать как .txt">
+                                <svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                            </a>
                             <button class="text-preview-close" id="text-preview-close" type="button" title="Закрыть" aria-label="Закрыть">
                                 <svg viewBox="0 0 20 20" fill="none" width="18" height="18">
                                     <path d="M5 5l10 10M15 5L5 15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                                 </svg>
                             </button>
                         </div>
-                        <pre class="text-preview-body" id="text-preview-body" contenteditable="true" spellcheck="false" role="textbox" aria-multiline="true" aria-label="Редактируемый текст"></pre>
+                        <div class="text-preview-wrap">
+                            <pre class="text-preview-body" id="text-preview-body" contenteditable="true" spellcheck="false" role="textbox" aria-multiline="true" aria-label="Редактируемый текст"></pre>
+                            <div class="text-preview-body text-preview-render" id="text-preview-render" hidden></div>
+                            <div class="text-preview-note" id="text-preview-note" hidden></div>
+                        </div>
                     </aside>
                 </div>
 
@@ -367,11 +384,13 @@
                             <div class="chat-input-box" id="gc-input-box">
                                 <div class="chat-input-field gc-input" id="gc-input" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Написать в общий чат..."></div>
                                 <div class="chat-input-footer">
+{% if not is_sigma %}
                                     <button class="attach-btn" id="gc-attach-btn" title="Прикрепить файл" type="button">
                                         <svg viewBox="0 0 24 24" fill="none">
                                             <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
                                         </svg>
                                     </button>
+                                    {% endif %}
                                     <button class="send-btn" id="gc-send-btn" disabled aria-label="Отправить"><svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg></button>
                                 </div>
                             </div>
@@ -551,6 +570,7 @@
                 <div class="section-label">Цветовая схема</div>
                 <div id="palette-mount"></div>
             </div>
+{% if not is_sigma %}
             <div id="tg-chats-section" style="display:none">
                 <div class="section-label">Telegram-чаты</div>
                 <div class="tgc-panel" id="tgc-panel">
@@ -579,6 +599,7 @@
                     </div>
                 </div>
             </div>
+            {% endif %}
         </div>
         <div class="profile-footer">
             <button class="logout-btn" id="logout-btn">
@@ -770,24 +791,30 @@
 
 <!-- SCRIPTS -->
 <script src="/static/js/theme.js"></script>
+{% if is_sigma %}<script src="/static/js/modalWindow.js"></script>{% endif %}
 <script src="/static/js/mobile.js"></script>
 <script src="/static/js/mode_modal_info.js"></script>
 <script src="/static/js/profileModal.js"></script>
 <script src="/static/js/graph.js"></script>
 <script src="/static/js/animations.js"></script>
-<script src="/static/js/file-attach.js"></script>
+<script src="/static/js/reasoning-clamp.js"></script>
+<script src="/static/js/sidebar-ui.js"></script>
+<script src="/static/js/file-tiles.js"></script>
+{% if not is_sigma %}<script src="/static/js/file-attach.js"></script>{% endif %}
 <!-- <script src="/static/js/feedback_button.js"></script> -->
 <script type="module" src="/static/js/tools-panel.js"></script>
 <script src="/static/js/skills.js"></script>
 <script src="/static/js/generative-ui.js"></script>
-<script type="module" src="/static/js/app.js"></script>
+<script type="module" src="{{ '/static/js/app_sigma.js' if is_sigma else '/static/js/app.js' }}"></script>
 <script type="module" src="/static/js/chatSearchModal.js"></script>
 <script src="/static/js/presence.js"></script>
 <!-- Thanos-эффект удаления сообщений (вырезаемо: убрать 2 строки ниже) -->
 <script src="/static/js/groupChat.js"></script>
 <script src="/static/js/paletteUI.js"></script>
+{% if not is_sigma %}
 <script src="/static/js/tgChats.js"></script>
 <script src="/static/js/maxChats.js"></script>
+{% endif %}
 <script src="/static/js/whatsnew.js"></script>
 
 </body>

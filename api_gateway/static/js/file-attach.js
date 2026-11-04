@@ -165,11 +165,38 @@ const FileAttach = (() => {
         _updateAttachBtn();
     }
 
-    /* ─── удалить файл по индексу ────────────────────────────── */
-    function _removeFile(idx) {
-        _files.splice(idx, 1);
-        _renderPreview();
-        _updateAttachBtn();
+    /* ─── удалить файл (по индексу или ссылке) ────────────────── */
+    function _removeFile(fileOrIdx) {
+        const file = typeof fileOrIdx === 'number' ? _files[fileOrIdx] : fileOrIdx;
+        if (!file || file._faRemoving) return;
+        const bar = _previewBar;
+        const el = bar ? Array.from(_barTrack(bar).children).find(c => c._faFile === file) : null;
+        file._faRemoving = true;
+        const finish = () => {
+            const i = _files.indexOf(file);
+            if (i !== -1) _files.splice(i, 1);
+            if (el) {
+                window.FileTiles?.stopAudioFor(el);
+                el.remove();
+            }
+            if (file._previewUrl) {
+                try { URL.revokeObjectURL(file._previewUrl); } catch (_) {}
+                file._previewUrl = '';
+            }
+            file._faRemoving = false;
+            _renderPreview();
+            _updateAttachBtn();
+        };
+        const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+        if (el && !reduce) {
+            window.FileTiles?.stopAudioFor(el);
+            el.classList.remove('fa-tile--enter');
+            el.classList.add('fa-tile--leave');
+            _syncBarVisible(bar);
+            setTimeout(finish, 200);
+        } else {
+            finish();
+        }
     }
 
     /* ─── обновить подсветку кнопки прикрепить ──────────────── */
@@ -191,115 +218,80 @@ const FileAttach = (() => {
             // вставляем ПЕРЕД контентедитабл-полем (первым дочерним)
             _inputBox.insertBefore(bar, _inputBox.firstChild);
         }
+        if (window.FileTiles) window.FileTiles.enhanceScroller(bar, { wheel: true });
         _previewBar = bar;
         return bar;
     }
 
-    /* ─── SVG-иконка файла или превью медиа ──────────────────── */
+    function _barTrack(bar) {
+        return window.FileTiles ? window.FileTiles.trackOf(bar) : bar;
+    }
+
+    function _syncBarVisible(bar) {
+        if (!bar) return;
+        const has = bar.querySelector('.fa-chip:not(.fa-tile--leave)') !== null;
+        // reflow перед показом, чтобы transition сработал и у только что созданной полосы
+        if (has && !bar.classList.contains('fa-preview-bar--visible')) void bar.offsetHeight;
+        bar.classList.toggle('fa-preview-bar--visible', has);
+    }
+
+    /* ─── квадратная плитка файла (FileTiles) ─────────────────── */
+    function _isAudioFile(file) {
+        if (_isImageFile(file) || _isVideoFile(file)) return false;
+        if (window.FileTiles) return window.FileTiles.kindOf(file?.name, file?.type) === 'audio';
+        return (file?.type || '').toLowerCase().startsWith('audio/');
+    }
+
     function _makeFileIcon(file, idx) {
-        const label = _getLabel(file.name);
-        const color = _getColor(file);
-        const isImg = _isImageFile(file);
-        const isVid = _isVideoFile(file);
-        const previewUrl = (isImg || isVid) ? _getPreviewUrl(file) : '';
-
-        const wrapper = document.createElement('div');
-        wrapper.className = `fa-chip fa-chip--${color}`;
-        wrapper.title     = file.name;
-
-        const defaultIconHtml = `
-<span class="fa-chip__icon" aria-hidden="true">
-  <svg viewBox="0 0 36 44" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path d="M4 0h20l12 12v28a4 4 0 0 1-4 4H4a4 4 0 0 1-4-4V4a4 4 0 0 1 4-4z"
-          class="fa-chip__bg"/>
-    <path d="M24 0l12 12H28a4 4 0 0 1-4-4V0z"
-          class="fa-chip__fold"/>
-    <text x="18" y="32" text-anchor="middle" class="fa-chip__text">${label}</text>
-  </svg>
-</span>`;
-        let iconHtml = defaultIconHtml;
-
-        try {
-            if (previewUrl && isImg) {
-                iconHtml = `
-<span class="fa-chip__icon fa-chip__icon--thumb" aria-hidden="true">
-  <img class="fa-chip__thumb-img" src="${_escHtml(previewUrl)}" alt="">
-</span>`;
-            } else if (previewUrl && isVid) {
-                iconHtml = `
-<span class="fa-chip__icon fa-chip__icon--thumb" aria-hidden="true">
-  <video class="fa-chip__thumb-video" src="${_escHtml(previewUrl)}#t=0.001" preload="metadata" muted playsinline tabindex="-1"></video>
-</span>`;
-            }
-        } catch (_) {
-            iconHtml = defaultIconHtml;
+        const isMedia = _isImageFile(file) || _isVideoFile(file) || _isAudioFile(file);
+        const blobUrl = _getPreviewUrl(file);
+        const holder = document.createElement('div');
+        if (window.FileTiles) {
+            holder.innerHTML = window.FileTiles.tileHtml(
+                { name: file.name, size: file.size, type: file.type, url: isMedia ? blobUrl : '', dlUrl: blobUrl },
+                { removable: true, idx, enter: !file._faShown },
+            );
+        } else {
+            holder.innerHTML = `<div class="fa-chip fa-chip--${_getColor(file)}" title="${_escHtml(file.name)}">`
+                + `<span class="fa-chip__name">${_escHtml(file.name)}</span>`
+                + `<button class="fa-chip__remove" type="button" aria-label="Удалить файл">×</button></div>`;
         }
-
-        wrapper.innerHTML = `${iconHtml}
-<span class="fa-chip__name">${_escHtml(file.name)}</span>
-<button class="fa-chip__remove" data-idx="${idx}" type="button" aria-label="Удалить файл ${_escHtml(file.name)}">
-  <svg viewBox="0 0 14 14" fill="none">
-    <path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-  </svg>
-</button>`;
-
-        const imgEl = wrapper.querySelector('.fa-chip__thumb-img');
-        if (imgEl) {
-            imgEl.addEventListener('error', () => {
-                try {
-                    const iconSpan = wrapper.querySelector('.fa-chip__icon');
-                    if (iconSpan) iconSpan.outerHTML = defaultIconHtml;
-                } catch (_) {}
-            }, { once: true });
-        }
-        const vidEl = wrapper.querySelector('.fa-chip__thumb-video');
-        if (vidEl) {
-            vidEl.addEventListener('error', () => {
-                try {
-                    const iconSpan = wrapper.querySelector('.fa-chip__icon');
-                    if (iconSpan) iconSpan.outerHTML = defaultIconHtml;
-                } catch (_) {}
-            }, { once: true });
-        }
-        if (vidEl) {
-            vidEl.muted = true;
-            vidEl.playsInline = true;
-            vidEl.addEventListener('loadedmetadata', () => {
-                try {
-                    vidEl.currentTime = vidEl.duration && isFinite(vidEl.duration)
-                        ? Math.min(0.05, vidEl.duration * 0.05)
-                        : 0.001;
-                } catch (_) {}
-            }, { once: true });
-            vidEl.addEventListener('loadeddata', () => {
-                try { vidEl.pause(); } catch (_) {}
-            }, { once: true });
-            vidEl.addEventListener('seeked', () => {
-                try { vidEl.pause(); } catch (_) {}
-            }, { once: true });
-        }
-
-        wrapper.querySelector('.fa-chip__remove').addEventListener('click', (e) => {
+        const el = holder.firstElementChild;
+        file._faShown = true;
+        el._faFile = file;
+        el.querySelector('.fa-chip__remove')?.addEventListener('click', (e) => {
             e.stopPropagation();
-            const i = Number(e.currentTarget.dataset.idx);
-            _removeFile(i);
+            _removeFile(file);
         });
-
-        return wrapper;
+        return el;
     }
 
     /* ─── отрисовать превью ──────────────────────────────────── */
+    // Существующие плитки переиспользуются: превью не перезагружается и не
+    // анимируется повторно, въезжают только новые файлы.
     function _renderPreview() {
         const bar = _ensurePreviewBar();
         if (!bar) return;
-
-        bar.querySelectorAll('.fa-chip:not(.input-chip)').forEach(el => el.remove());
-
-        _files.forEach((f, idx) => {
-            bar.appendChild(_makeFileIcon(f, idx));
+        const track = _barTrack(bar);
+        const keep = new Set(_files);
+        track.querySelectorAll('.fa-chip:not(.input-chip)').forEach(el => {
+            if (!el._faFile || !keep.has(el._faFile)) el.remove();
         });
-
-        bar.classList.toggle('fa-preview-bar--visible', bar.querySelector('.fa-chip') !== null);
+        const firstInput = track.querySelector('.input-chip');
+        let created = false;
+        _files.forEach((f, idx) => {
+            let el = Array.from(track.children).find(c => c._faFile === f);
+            if (!el) {
+                el = _makeFileIcon(f, idx);
+                track.insertBefore(el, firstInput);
+                created = true;
+            }
+            el.dataset.idx = String(idx);
+        });
+        _syncBarVisible(bar);
+        if (created && track !== bar) {
+            requestAnimationFrame(() => track.scrollTo({ left: track.scrollWidth, behavior: 'smooth' }));
+        }
     }
 
     /* ─── именованные хендлеры (для снятия слушателей) ───────── */
@@ -500,15 +492,25 @@ const FileAttach = (() => {
     function clear() {
         _files = [];
         if (_previewBar) {
+            window.FileTiles?.stopAudioFor(_previewBar);
             _previewBar.querySelectorAll('.fa-chip:not(.input-chip)').forEach(el => el.remove());
-            if (!_previewBar.querySelector('.fa-chip')) {
-                _previewBar.classList.remove('fa-preview-bar--visible');
-            }
+            _syncBarVisible(_previewBar);
         }
         _updateAttachBtn();
     }
 
-    return { init, getFiles, upload, clear, getFilesMeta };
+    /**
+     * Метаданные + локальные blob-URL для оптимистичного рендера отправленного
+     * сообщения. На сервер не уходит (для тела запроса — getFilesMeta).
+     */
+    function getPreviewItems() {
+        return _files.map(f => {
+            const url = _getPreviewUrl(f);
+            return { name: f.name, ext: _getExt(f.name), size: f.size, type: f.type, url, dlUrl: url };
+        });
+    }
+
+    return { init, getFiles, upload, clear, getFilesMeta, getPreviewItems };
 
 })();
 

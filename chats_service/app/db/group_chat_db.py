@@ -130,7 +130,15 @@ class GroupChatDB:
                  client_msg_id, now_utc)
         return self._serialize(dict(row), room_uid)
 
-    async def get_messages(self, room_uid: str, limit: int = 50, offset: int = 0):
+    async def get_messages(self, room_uid: str, limit: int = 50, offset: int = 0,
+                           before_id: int | None = None):
+        """История комнаты, новые с конца.
+
+        before_id — курсор для подгрузки старых сообщений: отдаём limit штук
+        с id < before_id. Курсор не сдвигается, когда в комнату пишут новые
+        сообщения (offset при этом съезжает и даёт дубли). offset оставлен
+        для обратной совместимости и при before_id игнорируется.
+        """
         room = await self.get_room_by_uid(room_uid)
         if not room:
             return {"messages": [], "total_count": 0, "has_more": False}
@@ -141,14 +149,28 @@ class GroupChatDB:
                 SELECT COUNT(*) FROM group_messages
                 WHERE room_id = $1 AND is_deleted = FALSE
             """, room["id"])
-            rows = await conn.fetch("""
-                SELECT id, room_id, user_id, username, message_text, client_msg_id,
-                       is_deleted, is_pinned, edited_at, created_at
-                FROM group_messages
-                WHERE room_id = $1 AND is_deleted = FALSE
-                ORDER BY id DESC
-                LIMIT $2 OFFSET $3
-            """, room["id"], limit, offset)
+            if before_id:
+                # +1 строка, чтобы понять, есть ли ещё старее, без второго COUNT
+                rows = await conn.fetch("""
+                    SELECT id, room_id, user_id, username, message_text, client_msg_id,
+                           is_deleted, is_pinned, edited_at, created_at
+                    FROM group_messages
+                    WHERE room_id = $1 AND is_deleted = FALSE AND id < $2
+                    ORDER BY id DESC
+                    LIMIT $3
+                """, room["id"], int(before_id), limit + 1)
+                has_more = len(rows) > limit
+                rows = rows[:limit]
+            else:
+                rows = await conn.fetch("""
+                    SELECT id, room_id, user_id, username, message_text, client_msg_id,
+                           is_deleted, is_pinned, edited_at, created_at
+                    FROM group_messages
+                    WHERE room_id = $1 AND is_deleted = FALSE
+                    ORDER BY id DESC
+                    LIMIT $2 OFFSET $3
+                """, room["id"], limit, offset)
+                has_more = (offset + len(rows)) < int(total or 0)
         # возвращаем в хронологическом порядке (старые сверху)
         msgs = [self._serialize(dict(r), room_uid) for r in reversed(rows)]
         files_map = await self.get_files_for_messages([m["id"] for m in msgs])
@@ -157,7 +179,7 @@ class GroupChatDB:
         return {
             "messages": msgs,
             "total_count": int(total or 0),
-            "has_more": (offset + len(rows)) < int(total or 0),
+            "has_more": has_more,
         }
 
     async def get_pinned(self, room_uid: str):

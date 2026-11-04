@@ -35,7 +35,7 @@
 
 .presence-overlay {
   position: absolute; top: calc(100% + 8px); right: 0;
-  width: 260px; z-index: 60;
+  width: 260px; max-width: calc(100vw - 24px); z-index: 60;
   background: var(--surface, #fff);
   border: 1px solid var(--border-color, rgba(0,0,0,.1));
   border-radius: 12px;
@@ -98,6 +98,20 @@
 .presence-top .uname { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .presence-top .msgs { flex: 0 0 auto; font-size: 12px; color: var(--text-secondary, #888); font-variant-numeric: tabular-nums; }
 .presence-top .empty { color: var(--text-secondary, #999); font-size: 12.5px; }
+
+/* ── MOBILE: оверлей не помещается справа-вверху ──────────────
+   На узких экранах абсолютная панель шириной 260px уезжает за край
+   вьюпорта. Разворачиваем её в bottom-sheet: фикс к низу экрана,
+   на всю ширину, с safe-area под iOS-хоумбар. */
+@media (max-width: 600px) {
+  @keyframes presence-sheet {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .presence-overlay-now { font-size: 26px; }
+  .presence-overlay-sub { font-size: 12.5px; }
+  .presence-top li { font-size: 14px; padding: 2px 0; }
+}
 
 /* ── Плашка доступного обновления интерфейса (новый build_id) ── */
 .build-update-toast {

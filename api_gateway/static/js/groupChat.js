@@ -5,12 +5,17 @@
    (gateway <- /internal/group_message <- group-chat-consumer <- Kafka).
 ============================================================ */
 (function () {
+  // Пагинация истории общего чата: размер страницы и порог (px) от верха ленты.
+  const GC_PAGE = 40;
+  const GC_LOAD_EDGE = 400;
   const ROOM_UID = 'global';
+  const IS_SIGMA = () => document.body?.dataset?.gateway === 'sigma' || /(?:^|\.)cds\./i.test(location.hostname) || /sigma/i.test(location.hostname);
   const COLLAPSE_MAX = 240; // px — порог сворачивания длинных сообщений (как у user-message)
 
   const GroupChat = {
     app: null,
     ws: null,
+    es: null,
     opened: false,
     userId: null,
     username: null,
@@ -307,6 +312,10 @@
               try { this.ws.onclose = null; this.ws.close(); } catch (_) {}
               this.ws = null;
             }
+            if (this.es) {
+              try { this.es.close(); } catch (_) {}
+              this.es = null;
+            }
           }, 45000);
         } else if (document.visibilityState === 'visible') {
           clearTimeout(this._hiddenSuspendTimer);
@@ -321,14 +330,123 @@
     /* ---------- сеть ---------- */
     async _loadHistory() {
       if (window.__authSessionExpired) return;
+      this._bindHistoryScroll();
       try {
-        const res = await fetch(`/api/group/${ROOM_UID}/messages?limit=80`, { credentials: 'include', redirect: 'manual' });
+        const res = await fetch(`/api/group/${ROOM_UID}/messages?limit=${GC_PAGE}`, { credentials: 'include', redirect: 'manual' });
         if (window.__isAuthRedirectOrUnauthorized?.(res)) { window.__onAuthSessionExpired?.(); return; }
         if (!res.ok) return;
         const data = await res.json();
         this.messages = data.messages || [];
+        this._hasMoreHistory = !!data.has_more;
         this._renderAll();
+        this._maybeFillViewport();
       } catch (e) { console.warn('[group] history error', e); }
+    },
+
+    /* id самого старого серверного сообщения в ленте (курсор для before_id) */
+    _oldestId() {
+      let min = null;
+      for (const m of this.messages) {
+        if (m._optimistic) continue;
+        const id = Number(m.id);
+        if (Number.isFinite(id) && (min === null || id < min)) min = id;
+      }
+      return min;
+    },
+
+    /* Подгрузка предыдущей страницы. Позиция чтения сохраняется:
+       держим расстояние от низа ленты, поэтому вставка сверху не сдвигает
+       видимые сообщения. Возвращает true, если что-то догрузили. */
+    async _loadOlder() {
+      if (this._loadingOlder || !this._hasMoreHistory || window.__authSessionExpired) return false;
+      const before = this._oldestId();
+      if (before === null) { this._hasMoreHistory = false; return false; }
+      this._loadingOlder = true;
+      this._setHistoryLoader(true);
+      try {
+        const res = await fetch(`/api/group/${ROOM_UID}/messages?limit=${GC_PAGE}&before_id=${before}`, { credentials: 'include', redirect: 'manual' });
+        if (window.__isAuthRedirectOrUnauthorized?.(res)) { window.__onAuthSessionExpired?.(); return false; }
+        if (!res.ok) return false;
+        const data = await res.json();
+        const known = new Set(this.messages.map(m => String(m.id)));
+        const older = (data.messages || []).filter(m => !known.has(String(m.id)));
+        this._hasMoreHistory = !!data.has_more && older.length > 0;
+        if (older.length) {
+          this.messages = older.concat(this.messages);
+          this._renderAll({ keepFromBottom: true });
+        } else {
+          this._renderAll({ keepFromBottom: true });
+        }
+        return older.length > 0;
+      } catch (e) {
+        console.warn('[group] older history error', e);
+        return false;
+      } finally {
+        this._loadingOlder = false;
+        this._setHistoryLoader(false);
+      }
+    },
+
+    /* Если первая страница не заполнила ленту, скролла нет и событие scroll
+       не придёт: догружаем, пока не появится прокрутка или не кончится история. */
+    async _maybeFillViewport() {
+      const box = document.getElementById('gc-messages');
+      for (let i = 0; i < 5 && box && this._hasMoreHistory; i++) {
+        if (box.scrollHeight > box.clientHeight + GC_LOAD_EDGE) break;
+        if (!(await this._loadOlder())) break;
+      }
+    },
+
+    _bindHistoryScroll() {
+      const box = document.getElementById('gc-messages');
+      if (!box || box._gcHistoryBound) return;
+      box._gcHistoryBound = true;
+      box.addEventListener('scroll', () => {
+        // программный скролл к закрепу сам догружает нужные страницы
+        if (this._programmaticPinScroll) return;
+        if (box.scrollTop < GC_LOAD_EDGE) this._loadOlder();
+      }, { passive: true });
+    },
+
+    _setHistoryLoader(on) {
+      const el = document.querySelector('#gc-messages .gc-history-loader');
+      if (el) el.classList.toggle('is-loading', !!on);
+    },
+
+    /* Ленивая загрузка медиа: фон коллажа и превью-видео получают src,
+       только когда ячейка подходит к видимой области. Превью-видео вне
+       экрана ставится на паузу. */
+    _observeLazyMedia(box) {
+      if (!box) return;
+      const nodes = box.querySelectorAll('[data-bg], video[data-src]');
+      if (!nodes.length) return;
+      const apply = (el) => {
+        if (el.dataset.bg) {
+          el.style.backgroundImage = `url('${el.dataset.bg}')`;
+          el.removeAttribute('data-bg');
+        }
+        if (el.tagName === 'VIDEO' && el.dataset.src) {
+          el.src = el.dataset.src;
+          el.removeAttribute('data-src');
+          if (el.autoplay) { const pr = el.play(); if (pr && pr.catch) pr.catch(() => {}); }
+        }
+      };
+      if (typeof IntersectionObserver === 'undefined') { nodes.forEach(apply); return; }
+      if (this._lazyIo) this._lazyIo.disconnect();
+      this._lazyIo = new IntersectionObserver((entries) => {
+        for (const en of entries) {
+          const el = en.target;
+          if (en.isIntersecting) {
+            apply(el);
+            if (el.tagName === 'VIDEO' && el.classList.contains('gc-collage__thumb-video') && el.paused && el.src) {
+              const pr = el.play(); if (pr && pr.catch) pr.catch(() => {});
+            }
+          } else if (el.tagName === 'VIDEO' && el.classList.contains('gc-collage__thumb-video') && !el.paused) {
+            el.pause();
+          }
+        }
+      }, { root: box, rootMargin: '600px 0px' });
+      box.querySelectorAll('[data-bg], video[data-src], video.gc-collage__thumb-video').forEach(el => this._lazyIo.observe(el));
     },
 
     async _loadPinned() {
@@ -376,7 +494,7 @@
 
     async _probeAndReconnect() {
       if (window.__authSessionExpired || document.visibilityState === 'hidden') return;
-      if (this.ws && (this.ws.readyState === 0 || this.ws.readyState === 1)) return;
+      if (IS_SIGMA() ? (this.es && this.es.readyState !== 2) : (this.ws && (this.ws.readyState === 0 || this.ws.readyState === 1))) return;
       try {
         const r = await fetch('/api/presence/count', {
           credentials: 'same-origin',
@@ -399,6 +517,7 @@
     },
 
     _connectWs() {
+      if (IS_SIGMA()) return this._connectSse();
       if (window.__authSessionExpired || document.visibilityState === 'hidden') return;
       if (this.ws && (this.ws.readyState === 0 || this.ws.readyState === 1)) return;
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -415,6 +534,28 @@
       };
       this.ws.onclose = () => {
         this.ws = null;
+        this._scheduleReconnect();
+      };
+    },
+
+    _connectSse() {
+      if (window.__authSessionExpired || document.visibilityState === 'hidden') return;
+      if (this.es && this.es.readyState !== 2) return;
+      if (this.es) { try { this.es.close(); } catch (e) {} this.es = null; }
+      try {
+        this.es = new EventSource(`/api/group/${ROOM_UID}/stream`, { withCredentials: true });
+      } catch (e) { return; }
+      this.es.onopen = () => {
+        this._reconnectAttempts = 0;
+      };
+      this.es.addEventListener('group', (ev) => {
+        this._reconnectAttempts = 0;
+        let data; try { data = JSON.parse(ev.data); } catch { return; }
+        this._onEvent(data);
+      });
+      this.es.onerror = () => {
+        try { this.es.close(); } catch (e) {}
+        this.es = null;
         this._scheduleReconnect();
       };
     },
@@ -744,9 +885,11 @@
       }
     },
 
-    _renderAll() {
+    _renderAll(opts) {
       const box = document.getElementById('gc-messages');
       if (!box) return;
+      const keepFromBottom = !!(opts && opts.keepFromBottom);
+      const fromBottom = box.scrollHeight - box.scrollTop;
       // Полный ререндер через innerHTML сбрасывает scrollTop в 0 -> если
       // пользователь пролистал вверх (читает старое) и прилетело событие
       // (new_message/edit/pin/loadPinned), его кидало в начало ленты.
@@ -755,6 +898,9 @@
       const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
       let lastDateKey = '';
       const chunks = [];
+      if (this._hasMoreHistory) {
+        chunks.push(`<div class="gc-history-loader${this._loadingOlder ? ' is-loading' : ''}" aria-hidden="true"><span></span><span></span><span></span></div>`);
+      }
       for (const m of this.messages) {
         const di = this._dateInfo(m.created_at);
         if (di && di.key !== lastDateKey) {
@@ -769,8 +915,10 @@
       this._bindMsgActions(box);
       this._bindCollages(box);
       this._initCollapsibles(box);
+      this._observeLazyMedia(box);
       this._ignoreNextDateScroll = true;
-      if (nearBottom) box.scrollTop = box.scrollHeight;
+      if (keepFromBottom) box.scrollTop = box.scrollHeight - fromBottom;
+      else if (nearBottom) box.scrollTop = box.scrollHeight;
       else box.scrollTop = prevTop;
       requestAnimationFrame(() => { this._ignoreNextDateScroll = false; });
       this._syncScrollArrow(box);
@@ -908,7 +1056,7 @@
               // Видео в сетке 2x2/3x3 - просто превью (первый кадр) + кнопка Play поверх
               const dlUrl = url + (url.indexOf('/api/group/file/') === 0 ? '?download=1' : '');
               return `<div class="gc-collage__cell gc-collage__cell--video-thumb" role="button" tabindex="0" data-lb="1" data-img-idx="${i}" title="${name}">
-                <video class="gc-collage__thumb-video" src="${url}" preload="auto" autoplay playsinline webkit-playsinline muted></video>
+                <video class="gc-collage__thumb-video" data-src="${url}" preload="metadata" autoplay playsinline webkit-playsinline muted></video>
                 <span class="gc-collage__play"><svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
                 ${more}
               </div>`;
@@ -919,8 +1067,8 @@
               <svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </a>` : '';
             return `<div class="gc-collage__cell" role="button" tabindex="0" data-lb="1" data-img-idx="${i}">
-              <span class="gc-collage__bg" style="background-image:url('${url}')" aria-hidden="true"></span>
-              <img src="${url}" alt="${name}" loading="lazy">${more}
+              <span class="gc-collage__bg" data-bg="${url}" aria-hidden="true"></span>
+              <img src="${url}" alt="${name}" loading="lazy" decoding="async">${more}
               ${dlBtn}
             </div>`;
           }
@@ -1512,10 +1660,15 @@
       }, 1850);
     },
 
-    _scrollToMessage(id) {
+    async _scrollToMessage(id) {
       const box = document.getElementById('gc-messages');
       if (!box) return;
-      const row = box.querySelector(`.gc-row[data-id="${id}"]`);
+      let row = box.querySelector(`.gc-row[data-id="${id}"]`);
+      // Закреп старше загруженной истории: догружаем страницы, пока не найдём.
+      for (let i = 0; !row && this._hasMoreHistory && i < 50; i++) {
+        if (!(await this._loadOlder())) break;
+        row = box.querySelector(`.gc-row[data-id="${id}"]`);
+      }
       if (!row) return;
 
       this._cancelPinScrollAnim();

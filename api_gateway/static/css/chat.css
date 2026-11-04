@@ -208,13 +208,21 @@
   text-align: left;
   vertical-align: top;
   line-height: 1.5;
+  /* .agent-message наследует word-break: break-word, а он обнуляет
+     min-content ячейки: авто-раскладка сжимала колонку подписей до одной
+     буквы («M / o / n / a…»). Переносим только между словами; если слово
+     не влезает, таблица скроллится по x, а не рвёт его. */
+  word-break: normal;
+  overflow-wrap: break-word;
+  min-width: 4.5em;
 }
 
 .agent-message th {
   background: color-mix(in srgb, var(--accent) 8%, var(--surface));
   color: var(--text-primary);
   font-weight: 600;
-  white-space: nowrap;
+  /* nowrap у длинного заголовка забирал ширину у остальных колонок */
+  white-space: normal;
 }
 
 .agent-message tbody tr:nth-child(even) td {
@@ -3095,4 +3103,88 @@ pre {
 .search-jump-highlight {
   border-radius: 14px;
   animation: searchJumpPulse 2.3s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* reasoning-clamp */
+/* ── Обрезка шагов «Размышлений» до 2 строк + кнопка сворачивания ── */
+.reasoning-body .reasoning-step {
+  max-height: calc(19.5px * 2);
+  overflow: hidden;
+  position: relative;
+}
+.reasoning-body:has(.reasoning-step--clampable) {
+  gap: 10px;
+}
+.reasoning-body .reasoning-step.reasoning-step--clampable:not(.reasoning-step--open) {
+  /* Первая строка целиком, вторая гаснет к правому краю: видно, что текст обрезан. */
+  -webkit-mask-image: linear-gradient(#000, #000), linear-gradient(to right, #000 55%, transparent 96%);
+          mask-image: linear-gradient(#000, #000), linear-gradient(to right, #000 55%, transparent 96%);
+  -webkit-mask-size: 100% 19.5px, 100% 19.5px;
+          mask-size: 100% 19.5px, 100% 19.5px;
+  -webkit-mask-position: 0 0, 0 19.5px;
+          mask-position: 0 0, 0 19.5px;
+  -webkit-mask-repeat: no-repeat;
+          mask-repeat: no-repeat;
+}
+.reasoning-body .reasoning-step--clampable {
+  cursor: pointer;
+  margin: 0 -6px;
+  padding: 0 6px;
+  border-radius: 6px;
+  transition: background-color 0.15s ease;
+}
+.reasoning-body .reasoning-step--clampable:hover {
+  background-color: var(--cds-reasoning-ring);
+}
+.reasoning-body .reasoning-step--clampable:focus-visible {
+  outline: 1px solid var(--cds-reasoning-muted);
+  outline-offset: 2px;
+}
+.reasoning-body .reasoning-step--open {
+  max-height: none;
+}
+.reasoning-body .reasoning-collapse-btn {
+  display: none;
+}
+/* Кнопка «Свернуть»: зафиксирована в самом низу карточки .reasoning-body
+   по центру (JS возвращает её последним элементом при стриме) и не двигается
+   при прокрутке ленты; при скролле над полем ввода появляется только
+   круглая кнопка scroll-to-bottom. */
+.reasoning-body.reasoning-body--tall .reasoning-collapse-btn {
+  display: inline-flex;
+  align-self: center;
+  align-items: center;
+  gap: 4px;
+  margin: 4px 0 0;
+  padding: 3px 10px 3px 8px;
+  border: none;
+  border-radius: 999px;
+  background: var(--surface, var(--bg, #fff));
+  box-shadow: inset 0 0 0 1px var(--cds-reasoning-ring), 0 1px 4px rgba(0, 0, 0, 0.12);
+  color: var(--cds-reasoning-muted);
+  font-weight: 500;
+  font-family: var(--font-anthropic-sans, var(--font-sans));
+  font-size: 12px;
+  line-height: 16px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.reasoning-body.reasoning-body--tall .reasoning-collapse-btn:hover {
+  background: color-mix(in srgb, var(--cds-reasoning-ring) 60%, var(--surface, var(--bg, #fff)));
+  color: var(--text-primary, var(--cds-reasoning-text));
+}
+.reasoning-body.reasoning-body--tall .reasoning-collapse-btn:focus-visible {
+  outline: 1px solid var(--cds-reasoning-muted);
+  outline-offset: 2px;
+}
+.reasoning-body .reasoning-collapse-btn svg,
+.reasoning-body .reasoning-collapse-btn span {
+  position: relative;
+}
+.reasoning-body .reasoning-collapse-btn svg {
+  width: 12px;
+  height: 12px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .reasoning-body .reasoning-step--clampable { transition: none; }
 }

@@ -47,6 +47,7 @@ def make_submit_tools(agent):
         chat_id: str,
         label: str,
         timeout: int = DEFAULT_TIMEOUT,
+        changed_files: str = "",
     ) -> dict:
         """
         Sets the task for asynchronous execution in the sandbox.
@@ -70,6 +71,13 @@ def make_submit_tools(agent):
             chat_id: chat ID for sending a completion notification
             label: human‑readable task name (e.g., "AKRA", "NKR")
             timeout: timeout in seconds, max 1800 (default 1800)
+
+            changed_files: what the task changes inside the workspace (only with workspace_id),
+                  for the user's live web editor. "" (default) — nothing / don't notify;
+                  "*" — files changed but you don't know which (full refresh);
+                  otherwise comma-separated paths relative to the workspace root
+                  (e.g. "repo/app.py,repo/static/main.css"). The editor is notified
+                  only after the run finishes. Pass it whenever you write/delete files.
 
         Returns: task_id, status, workspace_id
 
@@ -95,6 +103,7 @@ def make_submit_tools(agent):
             "task_id": task_id,
             "chat_id": chat_id,
             "label": label,
+            "changed_files": changed_files or "",
         }
 
         try:

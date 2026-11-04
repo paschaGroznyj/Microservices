@@ -111,6 +111,20 @@ async def upload_web_files(
         raw = await f.read()
         ext = os.path.splitext(f.filename or "")[1].lower()
 
+        # Сохраняем на диск/OBS все файлы, включая картинки: по этому пути
+        # /api/chats/{chat}/files/{msg}/{name} отдаёт превью в истории.
+        safe_fname = os.path.basename(f.filename or "file") or "file"
+        safe_mid = os.path.basename(str(message_id or "msg")) or "msg"
+        try:
+            user_dir = os.path.join("/app/generated_files", safe_mid)
+            os.makedirs(user_dir, exist_ok=True)
+            user_fpath = os.path.join(user_dir, safe_fname)
+            with open(user_fpath, "wb") as _uf:
+                _uf.write(raw)
+            await obs_file_storage.upload_user_file(user_fpath, chat_id)
+        except Exception as _uerr:
+            logging.warning(f"[upload_files] не удалось сохранить файл на диск/OBS: {_uerr}")
+
         # Картинки не парсим в текст — кладём base64 отдельно, чтобы vision-тул
         # дёргал строку из pending_files, а контекст модели не засорялся.
         if ext in IMAGE_MIME:
@@ -151,17 +165,6 @@ async def upload_web_files(
             ".avi": "video/x-msvideo",
             ".mkv": "video/x-matroska",
         }
-        safe_fname = os.path.basename(f.filename or "file") or "file"
-        safe_mid = os.path.basename(str(message_id or "msg")) or "msg"
-        try:
-            user_dir = os.path.join("/app/generated_files", safe_mid)
-            os.makedirs(user_dir, exist_ok=True)
-            user_fpath = os.path.join(user_dir, safe_fname)
-            with open(user_fpath, "wb") as _uf:
-                _uf.write(raw)
-            await obs_file_storage.upload_user_file(user_fpath, chat_id)
-        except Exception as _uerr:
-            logging.warning(f"[upload_files] не удалось сохранить файл на диск/OBS: {_uerr}")
 
         # Не-image файл: тоже кладём бинарник в media_store (kind=file) — чтобы
         # его можно было залить в workspace через upload_to_workspace(media_ids=[...]).

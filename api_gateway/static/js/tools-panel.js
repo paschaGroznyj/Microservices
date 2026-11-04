@@ -263,8 +263,10 @@ class ToolsPanel {
       const attachBtn = chatFooter.querySelector(".attach-btn");
       if (attachBtn?.nextSibling) {
         chatFooter.insertBefore(btn, attachBtn.nextSibling);
+      } else if (attachBtn) {
+        attachBtn.after(btn);
       } else {
-        chatFooter.appendChild(btn);
+        chatFooter.prepend(btn);
       }
       // Синхронизируем badge сразу при вставке
       this._updateTriggerBadge(btn);
@@ -416,8 +418,9 @@ class ToolsPanel {
       toolsSection.appendChild(row);
     });
 
-    // ── Самоцикл агента (только админ) ─────────────
-    if (this._isAdmin) {
+    // ── Самоцикл агента (только админ, на main) ─────────────
+    const isSigma = document.body?.dataset?.gateway === 'sigma' || /(?:^|\.)cds\.|sigma/i.test(location.hostname);
+    if (this._isAdmin && !isSigma) {
       const loopRow = document.createElement("label");
       loopRow.className = "tp-row tp-row--admin";
       loopRow.innerHTML = `

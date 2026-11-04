@@ -144,7 +144,8 @@ async def _call_sandbox(
     timeout: int = 30, 
     stdin: str = "", 
     workspace_id: str | None = None,
-    persist_script: bool = True
+    persist_script: bool = True,
+    changed_files: str | list[str] = "",
 ) -> dict:
     try:
         payload = {
@@ -154,7 +155,8 @@ async def _call_sandbox(
             "timeout": timeout,
             "stdin": stdin,
             "workspace_id": workspace_id,
-            "persist_script": persist_script
+            "persist_script": persist_script,
+            "changed_files": changed_files or "",
         }
         
         async with httpx.AsyncClient(timeout=timeout + HTTP_TIMEOUT_BUFFER) as client:
@@ -336,7 +338,7 @@ def make_sandbox_execute_tool(agent):
 
     @tool
     async def execute_python_code(code: str, timeout: int = DEFAULT_TIMEOUT, reusable: bool = False,
-        workspace_id: str = None, persist_script: bool = True) -> dict:
+        workspace_id: str = None, persist_script: bool = True, changed_files: str = "") -> dict:
         """
         Executes Python code in an isolated sandbox (a separate container,         there is internet access, but no access to the project’s file system).
         Use it for calculations, data processing, generating graphs/files/presentations, parsing web pages, and checking code before showing it to the user.
@@ -529,6 +531,13 @@ So you can then spy on it/reuse it within the session.
         python-multipart
         gdown
 
+            changed_files: what this run changes inside the workspace (only with workspace_id),
+                  for the user's live web editor. "" (default) — nothing / don't notify;
+                  "*" — files changed but you don't know which (full refresh);
+                  otherwise comma-separated paths relative to the workspace root
+                  (e.g. "repo/app.py,repo/static/main.css"). The editor is notified
+                  only after the run finishes. Pass it whenever you write/delete files.
+
         Returns: stdout, stderr, exit_code, saved_files (paths to the created files).
 
         4. Playwright MCP via CDP (for JS-SPA without WAF):
@@ -567,12 +576,14 @@ So you can then spy on it/reuse it within the session.
             timeout=timeout, 
             workspace_id=workspace_id, 
             is_shell=False,
-            persist_script=persist_script
+            persist_script=persist_script,
+            changed_files=changed_files,
         )
         return await _process_sandbox_result(result, start, run_id, code_for_saving=code, reusable=reusable)
 
     @tool
-    async def execute_shell_commands(commands: str, timeout: int = DEFAULT_TIMEOUT, workspace_id: str = None) -> dict:
+    async def execute_shell_commands(commands: str, timeout: int = DEFAULT_TIMEOUT, workspace_id: str = None,
+                                     changed_files: str = "") -> dict:
         """
         Executes a system command in an isolated sandbox via bash.
         Suitable for running third‑party binaries (git, docker, curl, npx, etc.).
@@ -588,6 +599,13 @@ So you can then spy on it/reuse it within the session.
         The sandbox is isolated, so shell execution is safe here.
         (A list of args is still accepted for back-compat — it runs directly
         without a shell, so pipes/chaining in list mode are NOT interpreted.)
+
+            changed_files: what these commands changes inside the workspace (only with workspace_id),
+                  for the user's live web editor. "" (default) — nothing / don't notify;
+                  "*" — files changed but you don't know which (full refresh);
+                  otherwise comma-separated paths relative to the workspace root
+                  (e.g. "repo/app.py,repo/static/main.css"). The editor is notified
+                  only after the run finishes. Pass it whenever you write/delete files.
 
         Available features:
         - git clone / git pull / git push (internet access, tokens via env)
@@ -614,7 +632,8 @@ So you can then spy on it/reuse it within the session.
             commands=commands, 
             timeout=timeout, 
             workspace_id=workspace_id, 
-            is_shell=True
+            is_shell=True,
+            changed_files=changed_files,
         )
         return await _process_sandbox_result(result, start, run_id, code_for_saving=None, reusable=False)
 

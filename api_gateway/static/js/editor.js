@@ -334,9 +334,7 @@
       let d = {}; try { d = JSON.parse(ev.data); } catch (_) {}
       const reconnect = esHadReady || esFails > 0;
       esFails = 0; esHadReady = true;
-      setLive("live", d.capped
-        ? "Live: файлов слишком много, отслеживается только часть"
-        : "Live: изменения файлов приходят автоматически");
+      setLive("live", "Live: правки агента приходят автоматически. Нажмите, чтобы перечитать с диска");
       // после обрыва могли пропустить события — пересинхронизируемся
       if (reconnect) onFsChange({ tree_changed: true, modified: currentPath ? [currentPath] : [] });
     });
@@ -344,6 +342,11 @@
       if (src !== es) return;
       let d; try { d = JSON.parse(ev.data); } catch (_) { return; }
       onFsChange(d);
+    });
+    src.addEventListener("ttl", () => {
+      if (src !== es) return;
+      flashLive();
+      refreshTtl();
     });
     src.addEventListener("gone", () => {
       if (src !== es) return;

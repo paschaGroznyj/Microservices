@@ -10,15 +10,17 @@
   GET /api/editor/tree?workspace_id=  — дерево файлов конкретного воркспейса
   GET /api/editor/file?workspace_id=&path=  — содержимое файла
   PUT /api/editor/file?workspace_id=&path=  — сохранить файл (main gateway)
-  GET /api/editor/watch?workspace_id=  — SSE: live-изменения файлов (прокси из agent_sandbox)
+  GET /api/editor/watch?workspace_id=  — SSE: live-изменения файлов (события пушит agent_sandbox)
+  POST /internal/editor/notify         — приём событий от agent_sandbox (X-Editor-Token)
 
 Подключается в app.py: editor_gw.bind(http_client, chats_url, sandbox_url, get_current_user, templates)
 """
+import asyncio
+import hmac
+import json
 import logging
 import os
 import re
-
-import httpx
 from fastapi import APIRouter, Request, HTTPException
 from urllib.parse import quote
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
@@ -33,19 +35,7 @@ _chats_url = None
 _sandbox_url = None
 _get_current_user = None
 _templates = None
-# Отдельный клиент под долгие SSE-потоки, чтобы они не съедали пул общего http_client
-_stream_http: httpx.AsyncClient | None = None
 _WS_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-
-
-def _stream_client() -> httpx.AsyncClient:
-    global _stream_http
-    if _stream_http is None:
-        _stream_http = httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=5.0, read=None, write=10.0, pool=5.0),
-            limits=httpx.Limits(max_connections=500, max_keepalive_connections=0),
-        )
-    return _stream_http
 
 
 def bind(http_client, chats_url, sandbox_url, get_current_user, templates):
@@ -124,47 +114,123 @@ async def api_ttl(request: Request, workspace_id: str):
     return r.json()
 
 
+# ── Live-обновление: in-memory хаб подписок ──────────────────────
+# agent_sandbox сам ничего не сканирует: после работы инструмента он шлёт
+# POST /internal/editor/notify, хаб раздаёт событие SSE-подпискам этого workspace.
+# Gateway работает одним uvicorn-воркером, поэтому хаб в памяти процесса.
+EDITOR_NOTIFY_TOKEN = os.environ.get("EDITOR_NOTIFY_TOKEN", "")
+_WATCH_MAX_PER_WS = 16
+_WATCH_QUEUE = 64
+_WATCH_HEARTBEAT = 20.0
+_WATCH_EVENTS = {"change", "ttl", "gone"}
+_PATH_CAP = 200
+_watchers: dict[str, set[asyncio.Queue]] = {}
+
+
+def publish(workspace_id: str, event: str, data: dict) -> int:
+    """Кладёт событие во все очереди подписчиков workspace. Возвращает число подписчиков."""
+    subs = _watchers.get(workspace_id)
+    if not subs:
+        return 0
+    for q in list(subs):
+        try:
+            q.put_nowait((event, data))
+        except asyncio.QueueFull:
+            # клиент не успевает читать — схлопываем очередь в одно событие
+            while not q.empty():
+                q.get_nowait()
+            if event == "gone":
+                q.put_nowait(("gone", data))
+            else:
+                q.put_nowait(("change", {"created": [], "modified": [], "deleted": [],
+                                         "tree_changed": True, "truncated": True}))
+    return len(subs)
+
+
+def _sse(event: str, data: dict) -> bytes:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
+
+
 @router.get("/api/editor/watch")
 async def api_watch(request: Request, workspace_id: str):
-    """SSE-прокси: песочница следит за файлами workspace, gateway только проверяет
-    владельца и пробрасывает поток браузеру без буферизации."""
+    """SSE-подписка на изменения workspace. Файлы не сканируются: события приходят от песочницы."""
     user = await _require_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Не авторизован")
     if not _WS_ID_RE.match(workspace_id or ""):
         raise HTTPException(status_code=400, detail="Некорректный workspace_id")
     await _assert_owns(user["user_id"], workspace_id)
+    if len(_watchers.get(workspace_id, ())) >= _WATCH_MAX_PER_WS:
+        raise HTTPException(status_code=429, detail="Слишком много подписок на workspace")
 
-    client = _stream_client()
-    upstream_req = client.build_request(
-        "GET", f"{_sandbox_url}/workspace/{workspace_id}/editor/watch",
-        headers={"Accept": "text/event-stream"},
-    )
-    try:
-        upstream = await client.send(upstream_req, stream=True)
-    except httpx.HTTPError as e:
-        logger.warning(f"editor watch: песочница недоступна: {e}")
-        raise HTTPException(status_code=502, detail="Песочница недоступна")
-    if upstream.status_code != 200:
-        await upstream.aclose()
-        raise HTTPException(status_code=upstream.status_code, detail="Песочница: подписка недоступна")
-
-    async def relay():
+    async def stream():
+        q: asyncio.Queue = asyncio.Queue(maxsize=_WATCH_QUEUE)
+        _watchers.setdefault(workspace_id, set()).add(q)
         try:
-            async for chunk in upstream.aiter_raw():
-                if await request.is_disconnected():
+            yield b"retry: 3000\n\n"
+            yield _sse("ready", {"workspace_id": workspace_id})
+            while True:
+                try:
+                    event, data = await asyncio.wait_for(q.get(), timeout=_WATCH_HEARTBEAT)
+                except asyncio.TimeoutError:
+                    if await request.is_disconnected():
+                        break
+                    yield b": ping\n\n"
+                    continue
+                yield _sse(event, data)
+                if event == "gone":
                     break
-                yield chunk
-        except httpx.HTTPError as e:
-            logger.info(f"editor watch: поток оборван wid={workspace_id}: {e}")
         finally:
-            await upstream.aclose()
+            subs = _watchers.get(workspace_id)
+            if subs is not None:
+                subs.discard(q)
+                if not subs:
+                    _watchers.pop(workspace_id, None)
 
     return StreamingResponse(
-        relay(),
+        stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
     )
+
+
+def _clean_paths(v) -> list[str]:
+    if not isinstance(v, list):
+        return []
+    return [x[:1024] for x in v[:_PATH_CAP] if isinstance(x, str) and x]
+
+
+@router.post("/internal/editor/notify")
+async def internal_editor_notify(request: Request):
+    """Приём событий от agent_sandbox. Закрыт общим секретом EDITOR_NOTIFY_TOKEN."""
+    token = request.headers.get("x-editor-token", "")
+    if not EDITOR_NOTIFY_TOKEN or not hmac.compare_digest(token.encode(), EDITOR_NOTIFY_TOKEN.encode()):
+        raise HTTPException(status_code=403, detail="forbidden")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="bad json")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="bad body")
+    wid = body.get("workspace_id") or ""
+    event = body.get("event") or ""
+    raw = body.get("data") if isinstance(body.get("data"), dict) else {}
+    if not _WS_ID_RE.match(wid) or event not in _WATCH_EVENTS:
+        raise HTTPException(status_code=400, detail="bad event")
+    if event == "change":
+        data = {
+            "created": _clean_paths(raw.get("created")),
+            "modified": _clean_paths(raw.get("modified")),
+            "deleted": _clean_paths(raw.get("deleted")),
+            "tree_changed": bool(raw.get("tree_changed")),
+            "truncated": bool(raw.get("truncated")),
+            "source": str(raw.get("source") or "")[:32],
+        }
+    elif event == "ttl":
+        data = {"permanent": bool(raw.get("permanent"))}
+    else:
+        data = {}
+    return {"ok": True, "delivered": publish(wid, event, data)}
 
 
 @router.get("/api/editor/file")
@@ -203,6 +269,9 @@ async def api_file_save(request: Request, body: EditorSaveBody):
         except Exception:
             pass
         raise HTTPException(status_code=r.status_code, detail=detail)
+    # другие вкладки этого workspace подтянут сохранённый файл
+    publish(body.workspace_id, "change", {"created": [], "modified": [body.path], "deleted": [],
+                                       "tree_changed": False, "truncated": False, "source": "editor"})
     return r.json()
 
 

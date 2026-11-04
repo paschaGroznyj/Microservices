@@ -21,6 +21,9 @@ agent_sandbox/app.py  —  v3: Async Submit + Kafka + Persistent Workspace
   POST /workspace/{wid}/keep — закрепить workspace бессрочно (keep-маркер, иммунитет к TTL)
   DELETE /workspace/{wid}/keep — снять keep-маркер
   POST /workspace/cleanup — принудительная очистка просроченных
+  Live-редактор: workspace не сканируется. После /execute и /submit (если передан
+  changed_files), /edit, /upload, keep/unkeep, delete и TTL-очистки песочница
+  пушит событие в gateway (POST /internal/editor/notify).
   GET  /health            — healthcheck
 """
 
@@ -40,8 +43,8 @@ from pathlib import Path
 from typing import Optional
 from aiokafka import AIOKafkaProducer
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 import zipfile
@@ -144,6 +147,7 @@ class ExecuteRequest(BaseModel):
     stdin: str = ""
     workspace_id: str | None = None
     persist_script: bool = Field(True, description="Сохранять ли исполнённый Python-скрипт в workspace (output/.scripts/<run_id>.py) для переиспользования. Работает только при заданном workspace_id")
+    changed_files: str | list[str] = Field("", description="Что поменялось в workspace для live-редактора: '' — ничего (без уведомления), '*' — неизвестно что (полный ресинк), иначе пути через запятую или списком. Уведомление уходит только после завершения запуска")
 
 
 class ExecuteResponse(BaseModel):
@@ -167,6 +171,7 @@ class SubmitRequest(BaseModel):
     chat_id: str = Field(..., description="ID чата для нотификации")
     label: str = Field(default="", description="Человекочитаемое имя задачи")
     stdin: str = Field(default="")
+    changed_files: str | list[str] = Field("", description="Что поменялось в workspace для live-редактора: '' — ничего (без уведомления), '*' — неизвестно что (полный ресинк), иначе пути через запятую или списком. Уведомление уходит только после завершения запуска")
 
 
 class SubmitResponse(BaseModel):
@@ -696,6 +701,7 @@ def _cleanup_expired_workspaces():
                 _notify_chats_workspace_ttl_sync(entry, is_active=False)
                 removed += 1
                 log.info("[workspace] TTL-удаление %s", entry)
+                _editor_notify_sync(entry, "gone", {})
         except (ValueError, OSError):
             pass
 
@@ -761,6 +767,9 @@ async def execute(req: ExecuteRequest):
         log.warning(f"Не удалось удалить {run_dir}: {e}")
 
     await asyncio.to_thread(_sync_workspaces_hold_sync, req.workspace_id)
+
+    if req.workspace_id and req.changed_files:
+        _editor_notify_changed(req.workspace_id, req.changed_files, "shell" if req.is_shell else "python")
 
     return ExecuteResponse(
         ok=result.get("ok", False),
@@ -900,6 +909,8 @@ async def upload_to_workspace_endpoint(
 
     # Обновляем активность, чтобы TTL не убил workspace
     _touch_workspace(workspace_id)
+    _upl = ["*"] if any(w.get("unpacked") for w in written) else [w["path"] for w in written if w.get("path")]
+    _editor_notify_changed(workspace_id, _upl, "upload")
 
     return {
         "ok": True,
@@ -1049,6 +1060,7 @@ async def edit_workspace_file_endpoint(workspace_id: str, req: WorkspaceEditRequ
         raise HTTPException(status_code=500, detail=f"Не удалось записать файл: {e}")
 
     _touch_workspace(workspace_id)
+    _editor_notify_changed(workspace_id, [req.path], "edit", tree_hint=False)
 
     return {
         "ok": True,
@@ -1086,6 +1098,8 @@ async def _run_task_background(req: SubmitRequest):
     # Файлы в output/ НЕ удаляем — persistent workspace
     _touch_workspace(req.workspace_id)
     await asyncio.to_thread(_sync_workspaces_hold_sync, req.workspace_id)
+    if req.changed_files:
+        _editor_notify_changed(req.workspace_id, req.changed_files, "task")
 
     # Готовим file list (без base64 — только метаданные для Kafka)
     file_list = []
@@ -1267,6 +1281,7 @@ async def delete_workspace_endpoint(workspace_id: str):
     for tid in to_remove:
         del _tasks[tid]
 
+    _editor_notify(workspace_id, "gone", {})
     return {"status": "deleted", "workspace_id": workspace_id}
 
 
@@ -1281,6 +1296,7 @@ async def keep_workspace_endpoint(workspace_id: str):
         f.write(str(time.time()))
     if await asyncio.to_thread(_notify_chats_workspace_ttl_sync, workspace_id, True, None, True):
         _synced_hold_state[workspace_id] = True
+    _editor_notify(workspace_id, "ttl", {"permanent": True})
     return {
         "status": "kept",
         "workspace_id": workspace_id,
@@ -1301,6 +1317,8 @@ async def unkeep_workspace_endpoint(workspace_id: str):
         default_ttl_h = max(1, int(WORKSPACE_TTL_SECONDS // 3600))
         if await asyncio.to_thread(_notify_chats_workspace_ttl_sync, workspace_id, False, default_ttl_h, True):
             _synced_hold_state[workspace_id] = False
+    if existed:
+        _editor_notify(workspace_id, "ttl", {"permanent": False})
     return {"status": "released" if existed else "no_marker", "workspace_id": workspace_id}
 
 
@@ -1460,127 +1478,115 @@ async def editor_ttl_endpoint(workspace_id: str):
     }
 
 
-# ── Editor: live-обновление дерева/файлов (SSE) ──────────────────
-# Песочница сама следит за изменениями в workspace (поллинг снапшота mtime/size,
-# без inotify: не упираемся в max_user_watches на больших репо) и шлёт события
-# в SSE-поток. Gateway (editor_gw) проксирует поток браузеру после проверки владельца.
+# ── Editor: live-обновление через push в gateway ─────────────────
+# Песочница НЕ сканирует workspace. Событие уходит в gateway только после того, как
+# отработал инструмент: /execute и /submit — если агент передал changed_files,
+# /edit и /upload — по известным путям, keep/unkeep — смена TTL, delete/TTL-очистка — gone.
+# Gateway (editor_gw) раздаёт событие открытым SSE-подпискам редактора.
 
-EDITOR_WATCH_INTERVAL = float(os.environ.get("EDITOR_WATCH_INTERVAL", "1.5"))
-EDITOR_WATCH_MAX_ENTRIES = int(os.environ.get("EDITOR_WATCH_MAX_ENTRIES", "20000"))
-EDITOR_WATCH_HEARTBEAT = 20.0
-EDITOR_WATCH_MAX_PER_WS = 16
-EDITOR_WATCH_LIST_CAP = 200
-# Служебные файлы, которые меняются сами по себе и не должны дёргать UI
-EDITOR_WATCH_SKIP_FILES = {".last_active", ".created_at"}
-_editor_watchers: dict[str, int] = {}
-
-
-def _editor_snapshot(base: str) -> tuple[dict, bool]:
-    """{rel_path: (is_dir, mtime_ns, size)} + флаг усечения по лимиту записей."""
-    base_real = os.path.realpath(base)
-    snap: dict = {}
-    stack = [base_real]
-    while stack:
-        d = stack.pop()
-        try:
-            it = os.scandir(d)
-        except OSError:
-            continue
-        with it:
-            for e in it:
-                name = e.name
-                if name in EDITOR_SKIP_DIRS or name in EDITOR_WATCH_SKIP_FILES or ".tmp_editor_" in name:
-                    continue
-                try:
-                    is_dir = e.is_dir(follow_symlinks=False)
-                    st = e.stat(follow_symlinks=False)
-                except OSError:
-                    continue
-                rel = os.path.relpath(e.path, base_real)
-                snap[rel] = (is_dir, 0 if is_dir else st.st_mtime_ns, 0 if is_dir else st.st_size)
-                if len(snap) >= EDITOR_WATCH_MAX_ENTRIES:
-                    return snap, True
-                if is_dir:
-                    stack.append(e.path)
-    return snap, False
+EDITOR_NOTIFY_URL = os.environ.get("EDITOR_NOTIFY_URL", "http://api_gateway:7000/internal/editor/notify")
+EDITOR_NOTIFY_TOKEN = os.environ.get("EDITOR_NOTIFY_TOKEN", "")
+EDITOR_NOTIFY_TIMEOUT = 1.5
+EDITOR_NOTIFY_MAX_PATHS = 200
+_editor_notify_tasks: set = set()
+# Внутренний вызов в сеть compose — мимо HTTP(S)_PROXY из окружения
+_editor_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
-def _editor_diff(old: dict, new: dict) -> dict | None:
-    created = [p for p in new.keys() - old.keys()]
-    deleted = [p for p in old.keys() - new.keys()]
-    modified, retyped = [], False
-    for p in new.keys() & old.keys():
-        o, n = old[p], new[p]
-        if o[0] != n[0]:
-            retyped = True
-            modified.append(p)
-        elif not n[0] and (o[1] != n[1] or o[2] != n[2]):
-            modified.append(p)
-    if not (created or deleted or modified):
+def _editor_parse_changed(ws_path: str, changed) -> tuple[list[str], bool] | None:
+    """'' / [] -> None (без уведомления); '*' -> ([], True) полный ресинк;
+    пути (относительные или абсолютные внутри workspace) -> (rel_paths, full)."""
+    if changed is None:
         return None
-    cap = EDITOR_WATCH_LIST_CAP
-    truncated = len(created) > cap or len(deleted) > cap or len(modified) > cap
+    if isinstance(changed, str):
+        raw = changed.strip()
+        if not raw:
+            return None
+        items = raw.replace("\n", ",").split(",")
+    else:
+        items = [str(x) for x in changed]
+    items = [x.strip() for x in items if x and x.strip()]
+    if not items:
+        return None
+    if "*" in items:
+        return [], True
+    base_real = os.path.realpath(ws_path)
+    rels: list[str] = []
+    full = False
+    for item in items:
+        try:
+            target = _safe_join(base_real, item)
+        except ValueError:
+            continue  # путь вне workspace — игнорируем
+        rel = os.path.relpath(target, base_real)
+        if rel == ".":
+            full = True
+            continue
+        if rel not in rels:
+            rels.append(rel)
+    if not rels and not full:
+        return None
+    return rels, full
+
+
+def _editor_change_payload(ws_path: str, rels: list[str], full: bool, tree_hint: bool) -> dict:
+    modified, deleted = [], []
+    for rel in rels[:EDITOR_NOTIFY_MAX_PATHS]:
+        target = os.path.join(ws_path, rel)
+        if os.path.isdir(target):
+            full = True          # поменялась папка — точный список неизвестен
+        elif os.path.exists(target):
+            modified.append(rel)  # created/modified без снапшота не различить
+        else:
+            deleted.append(rel)
     return {
-        "created": sorted(created)[:cap],
-        "deleted": sorted(deleted)[:cap],
-        "modified": sorted(modified)[:cap],
-        "tree_changed": bool(created or deleted or retyped),
-        "truncated": truncated,
+        "created": [],
+        "modified": modified,
+        "deleted": deleted,
+        "tree_changed": bool(tree_hint or deleted or full),
+        "truncated": bool(full or len(rels) > EDITOR_NOTIFY_MAX_PATHS),
     }
 
 
-def _sse(event: str, data: dict) -> bytes:
-    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
+def _editor_notify_sync(workspace_id: str, event: str, data: dict) -> bool:
+    if not EDITOR_NOTIFY_TOKEN or not EDITOR_NOTIFY_URL:
+        return False
+    body = json.dumps({"workspace_id": workspace_id, "event": event, "data": data},
+                      ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        EDITOR_NOTIFY_URL, data=body, method="POST",
+        headers={"Content-Type": "application/json", "X-Editor-Token": EDITOR_NOTIFY_TOKEN},
+    )
+    try:
+        with _editor_opener.open(req, timeout=EDITOR_NOTIFY_TIMEOUT) as r:
+            return 200 <= r.status < 300
+    except Exception as e:
+        log.debug("[editor-notify] %s %s не доставлено: %s", event, workspace_id, e)
+        return False
 
 
-@app.get("/workspace/{workspace_id}/editor/watch")
-async def editor_watch_endpoint(workspace_id: str, request: Request):
+def _editor_notify(workspace_id: str, event: str, data: dict) -> None:
+    """Fire-and-forget из async-кода: ответ инструмента не ждёт gateway."""
+    if not EDITOR_NOTIFY_TOKEN or not workspace_id:
+        return
+    t = asyncio.create_task(asyncio.to_thread(_editor_notify_sync, workspace_id, event, data))
+    _editor_notify_tasks.add(t)
+    t.add_done_callback(_editor_notify_tasks.discard)
+
+
+def _editor_notify_changed(workspace_id: str | None, changed, source: str, tree_hint: bool = True) -> None:
+    if not workspace_id or not EDITOR_NOTIFY_TOKEN:
+        return
     ws_path = _get_workspace_path(workspace_id)
     if ws_path is None:
-        raise HTTPException(status_code=404, detail="Workspace не найден")
-    if _editor_watchers.get(workspace_id, 0) >= EDITOR_WATCH_MAX_PER_WS:
-        raise HTTPException(status_code=429, detail="Слишком много подписок на workspace")
-
-    async def stream():
-        _editor_watchers[workspace_id] = _editor_watchers.get(workspace_id, 0) + 1
-        try:
-            prev, capped = await asyncio.to_thread(_editor_snapshot, ws_path)
-            yield b"retry: 3000\n\n"
-            yield _sse("ready", {"workspace_id": workspace_id, "entries": len(prev), "capped": capped})
-            last_sent = time.monotonic()
-            delay = EDITOR_WATCH_INTERVAL
-            while True:
-                await asyncio.sleep(delay)
-                if await request.is_disconnected():
-                    break
-                if not os.path.isdir(ws_path):
-                    yield _sse("gone", {"workspace_id": workspace_id})
-                    break
-                t0 = time.monotonic()
-                cur, capped = await asyncio.to_thread(_editor_snapshot, ws_path)
-                # Адаптивный интервал: на больших деревьях не жжём CPU сканом
-                delay = max(EDITOR_WATCH_INTERVAL, (time.monotonic() - t0) * 4)
-                diff = _editor_diff(prev, cur)
-                prev = cur
-                if diff:
-                    diff["capped"] = capped
-                    yield _sse("change", diff)
-                    last_sent = time.monotonic()
-                elif time.monotonic() - last_sent >= EDITOR_WATCH_HEARTBEAT:
-                    yield b": ping\n\n"
-                    last_sent = time.monotonic()
-        finally:
-            n = _editor_watchers.get(workspace_id, 1) - 1
-            if n > 0:
-                _editor_watchers[workspace_id] = n
-            else:
-                _editor_watchers.pop(workspace_id, None)
-
-    return StreamingResponse(
-        stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
-    )
+        return
+    parsed = _editor_parse_changed(ws_path, changed)
+    if parsed is None:
+        return
+    rels, full = parsed
+    data = _editor_change_payload(ws_path, rels, full, tree_hint)
+    data["source"] = source
+    _editor_notify(workspace_id, "change", data)
 
 
 @app.get("/health")
@@ -1600,6 +1606,8 @@ async def startup():
     asyncio.create_task(_workspace_cleanup_loop())
     asyncio.create_task(_workspace_hold_sync_loop())
     log.info("Sandbox v3 запущен. WORKDIR=%s KAFKA=%s", WORKDIR, KAFKA_BROKER)
+    if not EDITOR_NOTIFY_TOKEN:
+        log.warning("EDITOR_NOTIFY_TOKEN не задан: live-обновление веб-редактора выключено")
 
 
 @app.on_event("shutdown")

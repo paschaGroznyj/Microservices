@@ -266,6 +266,7 @@ services:
       ALGORITHM: ${ALGORITHM}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       SANDBOX_SERVICE_URL: ${SANDBOX_SERVICE_URL:-http://agent_sandbox:8005}
+      EDITOR_NOTIFY_TOKEN: ${EDITOR_NOTIFY_TOKEN:-}
     volumes:
       - ./api_gateway:/app
     depends_on:
@@ -527,6 +528,8 @@ services:
       - GATEWAY_IP=${GATEWAY_IP}
       - CAPTION_API_PORT=${CAPTION_API_PORT}
       - PORT_CHATS_SERVICE=${PORT_CHATS_SERVICE:-8001}     
+      - EDITOR_NOTIFY_TOKEN=${EDITOR_NOTIFY_TOKEN:-}
+      - EDITOR_NOTIFY_URL=${EDITOR_NOTIFY_URL:-http://api_gateway:7000/internal/editor/notify}
     volumes:
       - ./agent_sandbox/fonts:/app/fonts:ro
       - ./agent_sandbox/dev_utils:/app/dev_utils:ro

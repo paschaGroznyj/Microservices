@@ -31,12 +31,17 @@ def test_key_builders():
 
 def test_mark_running_sets_key_with_ttl(redis_mock):
     run(run_status.mark_running("c1", "req-1", model="coder"))
-    redis_mock.set.assert_awaited_once()
-    args, kwargs = redis_mock.set.call_args
+    # два ключа: флаг генерации + начальное состояние рассуждений
+    assert redis_mock.set.await_count == 2
+    args, kwargs = redis_mock.set.await_args_list[0]
     assert args[0] == "agent:running:c1"
     payload = json.loads(args[1])
     assert payload["request_id"] == "req-1" and payload["model"] == "coder"
     assert kwargs["ex"] == run_status.RUN_TTL
+    r_args, r_kwargs = redis_mock.set.await_args_list[1]
+    assert r_args[0] == run_status._reasoning_key("c1")
+    assert json.loads(r_args[1])["completed"] is False
+    assert r_kwargs["ex"] == run_status.RUN_TTL
 
 
 def test_get_running_parses_json(redis_mock):
@@ -51,6 +56,7 @@ def test_get_running_none_when_empty(redis_mock):
 
 
 def test_clear_running_deletes_key(redis_mock):
+    redis_mock.get.return_value = None  # рассуждений нет
     run(run_status.clear_running("c1"))
     redis_mock.delete.assert_awaited_once_with("agent:running:c1")
 

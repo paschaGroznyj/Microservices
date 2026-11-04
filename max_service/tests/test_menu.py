@@ -28,7 +28,7 @@ def test_keyboard_wraps_rows_into_attachment():
 def test_summary_defaults_for_empty_settings():
     text = settings_summary({})
     assert "Имя: `по умолчанию`" in text
-    assert "Модель: `coder`" in text
+    assert "Модель: `GPT`" in text  # coder -> GPT
     assert "Триггер: `orchestrator`" in text
     assert "Инструменты: `нет (только базовые)`" in text
 
@@ -41,7 +41,7 @@ def test_summary_with_filled_settings():
         "selected_tools": ["internet", "content"],
     })
     assert "Имя: `Макс`" in text        
-    assert "Модель: `gemini`" in text
+    assert "Модель: `Gemini`" in text
     assert "Триггер: `mention`" in text
     assert "internet, content" in text
 
@@ -58,13 +58,13 @@ def buttons(attachments):
 
 def test_menu_model_marks_only_current():
     texts = [b["text"] for b in buttons(menu_model("gemini"))]
-    assert "✓ gemini" in texts
+    assert "✓ Gemini" in texts
     assert sum(t.startswith("✓") for t in texts) == 1
 
 
 def test_menu_model_none_falls_back_to_coder():
     texts = [b["text"] for b in buttons(menu_model(None))]
-    assert "✓ coder" in texts
+    assert "✓ GPT" in texts
 
 
 def test_menu_model_has_all_models_and_back_button():

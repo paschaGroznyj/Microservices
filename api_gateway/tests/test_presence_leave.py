@@ -1,5 +1,5 @@
-"""Тесты presence.leave — уникальная для sigma функция (beacon на закрытие вкладки).
-Остальной presence совпадает с api_gateway и покрыт там.
+"""Тесты presence.leave (beacon на закрытие вкладки).
+Модуль общий: Sigma монтирует api_gateway/presence.py через compose.
 """
 import asyncio
 import pytest

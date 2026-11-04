@@ -22,8 +22,8 @@ class FakeProducer:
 class FakeGroupDB:
     def __init__(self):
         self.calls = []
-    async def get_messages(self, room_uid, limit=50, offset=0):
-        self.calls.append(("get_messages", room_uid, limit, offset))
+    async def get_messages(self, room_uid, limit=50, offset=0, before_id=None):
+        self.calls.append(("get_messages", room_uid, limit, offset, before_id))
         return {"messages": [{"id": 1, "message_text": "hi"}],
                 "total_count": 1, "has_more": False}
     async def get_pinned(self, room_uid):
@@ -105,7 +105,21 @@ def test_messages_returns_history(client, fake_db):
     assert body["room_uid"] == "room1"
     assert body["total_count"] == 1
     assert body["has_more"] is False
-    assert ("get_messages", "room1", 10, 0) in db.calls
+    assert ("get_messages", "room1", 10, 0, None) in db.calls
+    assert body["before_id"] is None
+
+
+def test_messages_forwards_before_id_cursor(client, fake_db):
+    db, _ = fake_db
+    r = client.get("/group/room1/messages?limit=40&before_id=123")
+    assert r.status_code == 200
+    assert r.json()["before_id"] == 123
+    assert ("get_messages", "room1", 40, 0, 123) in db.calls
+
+
+def test_messages_echo_clamps_limit_and_offset(client, fake_db):
+    body = client.get("/group/room1/messages?limit=999&offset=-5").json()
+    assert body["limit"] == 200 and body["offset"] == 0
 
 
 def test_messages_503_when_db_not_ready(client):

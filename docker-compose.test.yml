@@ -1,0 +1,72 @@
+# Тесты микросервисов: каждый сервис в своём образе (стадия test его Dockerfile).
+# Сеть отключена: внешние зависимости в тестах замоканы.
+# Запуск всех: ./run_tests.sh   Один: docker compose -f docker-compose.test.yml run --rm chats_service_test
+name: microservices-tests
+
+services:
+  agent_sandbox_test:
+    build:
+      context: ./agent_sandbox
+      target: test
+    image: microservices-tests/agent_sandbox:test
+    network_mode: none
+    environment:
+      # как в prod compose: app.py передаёт их в env подпроцесса, None роняет run_code
+      - OPENBLAS_NUM_THREADS=8
+      - OMP_NUM_THREADS=8
+
+  agent_service_test:
+    build:
+      context: ./agent_service
+      target: test
+    image: microservices-tests/agent_service:test
+    network_mode: none
+
+  api_gateway_test:
+    build:
+      context: ./api_gateway
+      target: test
+    image: microservices-tests/api_gateway:test
+    network_mode: none
+
+  api_gateway_sigma_test:
+    build:
+      context: ./api_gateway_sigma
+      target: test
+    image: microservices-tests/api_gateway_sigma:test
+    network_mode: none
+
+  auth_service_test:
+    build:
+      context: ./auth_service
+      target: test
+    image: microservices-tests/auth_service:test
+    network_mode: none
+
+  chats_service_test:
+    build:
+      context: ./chats_service
+      target: test
+    image: microservices-tests/chats_service:test
+    network_mode: none
+
+  max_service_test:
+    build:
+      context: ./max_service
+      target: test
+    image: microservices-tests/max_service:test
+    network_mode: none
+
+  parsers_service_test:
+    build:
+      context: ./parsers_service
+      target: test
+    image: microservices-tests/parsers_service:test
+    network_mode: none
+
+  telegram_service_test:
+    build:
+      context: ./telegram_service
+      target: test
+    image: microservices-tests/telegram_service:test
+    network_mode: none

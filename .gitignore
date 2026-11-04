@@ -24,3 +24,4 @@ documents
 certs/
 
 agent_sandbox/youtube-captions
+.test-logs/

@@ -1,0 +1,5 @@
+# Только для тестов: ставится в стадию test Dockerfile, в prod-образ не попадает.
+pytest==9.2.0
+pytest-mock==3.17.0
+# starlette.testclient (TestClient) требует httpx
+httpx==0.28.1

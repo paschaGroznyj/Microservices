@@ -2423,6 +2423,7 @@ class ChatApp {
         panel.classList.add('open');
         panel.setAttribute('aria-hidden', 'false');
         body.scrollTop = 0;
+        window.FileTiles?.enterTextChipPreview?.(chipEl);
     }
 
     /* Закрывает правый сайдбар-превью. */
@@ -5913,10 +5914,21 @@ class ChatApp {
             this.closeTextPreview();
         }
         const container = this.getInputContainer() || document;
+        const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
         container.querySelectorAll(`.input-chip[data-chip-id="${chipId}"]`).forEach(el => {
             const bar = el.closest('.fa-preview-bar');
-            el.remove();
-            if (bar) this._syncInputPreviewBar(bar);
+            if (!reduce && el.classList.contains('fa-tile')) {
+                el.classList.remove('fa-tile--enter');
+                el.classList.add('fa-tile--leave');
+                if (bar) this._syncInputPreviewBar(bar);
+                setTimeout(() => {
+                    el.remove();
+                    if (bar) this._syncInputPreviewBar(bar);
+                }, 200);
+            } else {
+                el.remove();
+                if (bar) this._syncInputPreviewBar(bar);
+            }
         });
         const field = container.querySelector('#message-input') || document.getElementById('message-input');
         if (field) {

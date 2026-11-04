@@ -353,15 +353,17 @@
         note.classList.toggle('is-error', !!isErr);
     }
 
-    const FP = { token: 0, tile: null, type: null, text: '', loaded: false, truncated: false, totalSize: 0, name: '', modePref: {} };
+    const FP = { token: 0, tile: null, type: null, text: '', loaded: false, truncated: false, totalSize: 0, name: '', modePref: {}, textChip: null, textMode: 'raw' };
 
     function exitFilePreview(opts = {}) {
         const { panel, body, render, modes } = pvEls();
         if (FP.tile) FP.tile.classList.remove('is-preview-open');
         const wasFile = !!(panel && panel.classList.contains('text-preview-panel--file'));
+        const wasTextChip = !!FP.textChip;
         FP.token++;
         FP.tile = null; FP.type = null; FP.text = ''; FP.loaded = false;
-        if (!wasFile) return;
+        FP.textChip = null; FP.textMode = 'raw';
+        if (!wasFile && !wasTextChip) return;
         const tok = FP.token;
         const reset = () => {
             if (tok !== FP.token) return; // за это время открыли что-то новое
@@ -371,7 +373,7 @@
                 body.setAttribute('aria-label', 'Редактируемый текст');
                 body.hidden = false;
                 body.classList.remove('is-code');
-                if (opts.deferred) body.textContent = '';
+                if (opts.deferred && wasFile && !wasTextChip) body.textContent = '';
             }
             if (render) { render.hidden = true; render.innerHTML = ''; render.className = 'text-preview-body text-preview-render'; }
             placeDlBtn(false);
@@ -379,6 +381,60 @@
             setNote('');
         };
         if (opts.deferred) setTimeout(reset, 300); else reset();
+    }
+
+    function sniffTextContent(raw) {
+        const t = String(raw || '').trim();
+        if (!t) return 'md';
+        if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
+            try { JSON.parse(t); return 'json'; } catch (_) {}
+        }
+        if (/^<!doctype\s+html/i.test(t) || /^<html[\s>]/i.test(t)) return 'html';
+        return 'md';
+    }
+
+    function renderTextChipPreview() {
+        const { panel, body, render, title, modes } = pvEls();
+        if (!panel || !body || !render) return;
+        const mode = FP.textMode === 'preview' ? 'preview' : 'raw';
+        if (modes) {
+            modes.hidden = false;
+            modes.querySelectorAll('[data-body-mode]').forEach((b) => {
+                const on = b.dataset.bodyMode === mode;
+                b.classList.toggle('is-active', on);
+                b.setAttribute('aria-pressed', on ? 'true' : 'false');
+            });
+        }
+        if (mode === 'raw') {
+            panel.classList.remove('text-preview-panel--file');
+            render.hidden = true;
+            render.innerHTML = '';
+            render.className = 'text-preview-body text-preview-render';
+            body.hidden = false;
+            body.setAttribute('contenteditable', 'true');
+            placeDlBtn(false);
+            setNote('');
+            return;
+        }
+        const raw = String(body.innerText ?? body.textContent ?? '').replace(/\r\n/g, '\n');
+        const tType = sniffTextContent(raw);
+        const out = buildRendered(tType, raw, (title && title.textContent) || 'text.md');
+        panel.classList.add('text-preview-panel--file');
+        placeDlBtn(true);
+        body.hidden = true;
+        render.className = `text-preview-body text-preview-render text-preview-render--${out.cls}`;
+        render.hidden = false;
+        if (out.node) { render.innerHTML = ''; render.appendChild(out.node); } else render.innerHTML = out.html;
+        if (out.after) out.after(render);
+        setNote(out.note || '', !!out.err);
+        render.scrollTop = 0;
+    }
+
+    function enterTextChipPreview(chipEl) {
+        exitFilePreview();
+        FP.textChip = chipEl || true;
+        FP.textMode = 'raw';
+        renderTextChipPreview();
     }
 
     function pvSource(t) {
@@ -403,6 +459,7 @@
         if (FP.tile && FP.tile !== t) FP.tile.classList.remove('is-preview-open');
         const tok = ++FP.token;
         FP.tile = t; FP.type = type; FP.text = ''; FP.loaded = false;
+        FP.textChip = null; FP.textMode = 'raw';
         FP.truncated = false; FP.totalSize = 0; FP.name = t.dataset.name || 'файл';
         t.classList.add('is-preview-open');
 
@@ -612,12 +669,22 @@
     // Переключатель «Превью / Исходник» в шапке панели.
     document.addEventListener('click', (e) => {
         const btn = e.target && e.target.closest ? e.target.closest('#text-preview-modes [data-body-mode]') : null;
-        if (!btn || !FP.type) return;
-        e.preventDefault();
-        const next = btn.dataset.bodyMode === 'raw' ? 'raw' : 'preview';
-        if (curMode() === next) return;
-        FP.modePref[FP.type] = next;
-        renderFilePreview();
+        if (!btn) return;
+        if (FP.type) {
+            e.preventDefault();
+            const next = btn.dataset.bodyMode === 'raw' ? 'raw' : 'preview';
+            if (curMode() === next) return;
+            FP.modePref[FP.type] = next;
+            renderFilePreview();
+            return;
+        }
+        if (FP.textChip) {
+            e.preventDefault();
+            const next = btn.dataset.bodyMode === 'raw' ? 'raw' : 'preview';
+            if (FP.textMode === next) return;
+            FP.textMode = next;
+            renderTextChipPreview();
+        }
     });
 
     // Плитка без рендера в поле ввода: вместо скачивания коротко показываем «Нет превью».
@@ -735,6 +802,6 @@
     window.FileTiles = {
         tileHtml, groupHtml, enhanceScroller, trackOf, stopAudioFor, bindAudioTiles,
         kindOf, labelOf, fmtSize,
-        previewTypeOf, openFilePreview, exitFilePreview,
+        previewTypeOf, openFilePreview, exitFilePreview, enterTextChipPreview,
     };
 })();

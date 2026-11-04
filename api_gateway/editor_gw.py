@@ -269,10 +269,16 @@ async def api_file_save(request: Request, body: EditorSaveBody):
         except Exception:
             pass
         raise HTTPException(status_code=r.status_code, detail=detail)
-    # другие вкладки этого workspace подтянут сохранённый файл
-    publish(body.workspace_id, "change", {"created": [], "modified": [body.path], "deleted": [],
-                                       "tree_changed": False, "truncated": False, "source": "editor"})
-    return r.json()
+    res = r.json()
+    # другие вкладки этого workspace подтянут сохранённый файл; песочница уже сравнила
+    # с .ws_meta и вернула change (None — содержимое не изменилось)
+    change = res.pop("change", "legacy") if isinstance(res, dict) else "legacy"
+    if change == "legacy":  # старая песочница без .ws_meta
+        change = {"created": [], "modified": [body.path], "deleted": [],
+                  "tree_changed": False, "truncated": False, "source": "editor"}
+    if change:
+        publish(body.workspace_id, "change", change)
+    return res
 
 
 @router.get("/api/editor/download")

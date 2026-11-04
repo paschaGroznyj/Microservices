@@ -71,8 +71,6 @@ UNIVERSAL_TOOLS: set[str] = {
     # recurring/once по МСК; слушатель chats_service будит агента в нужное время.
     # Работает только в TG-чатах с proactive_enabled, но тула безопасна всегда.
     "manage_trigger",
-    # --- Закрепление воркспейса песочницы за юзером для веб-редактора /editor ---
-    "register_editor_workspace",
 }
 
 # Короткие описания инструментов (1 строка на тул) для ФОНОВОГО СУПЕРВИЗОРА.
@@ -115,7 +113,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "execute_shell_commands": "Выполняет системные команды в песочнице (git/docker/curl без shell).",
     # --- universal (доступны всегда) ---
     "analyze_image": "Анализирует изображение и отвечает на вопрос о нём (OCR, описание, данные с графика).",
-    "create_workspace": "Создаёт persistent workspace на фабрике для многошаговой работы с файлами.",
+    "create_workspace": "Создаёт persistent workspace на фабрике и сразу открывает его в веб-редакторе /editor (возвращает editor_url).",
     "list_workspace_files": "Показывает список файлов в workspace фабрики.",
     "download_workspace_file": "Скачивает файл из workspace в generated_files для отправки пользователю.",
     "upload_to_workspace": "Заливает файлы/сгенерированные картинки в workspace фабрики.",
@@ -128,7 +126,6 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "check_task_status": "Проверяет статус асинхронных задач в песочнице.",
     "send_email": "Отправляет письмо (текст + вложения до 20МБ) от имени агента.",
     "manage_trigger": "Ставит/снимает собственные Telegram-триггеры (recurring/once) по МСК — агент сам планирует отложенные само-запуски.",
-    "register_editor_workspace": "Закрепляет воркспейс песочницы за юзером, чтобы тот открыл его файлы в веб-редакторе /editor (read-only).",
     # --- рантайм-тулзы (аппендятся внутри цикла) ---
     "request_more_steps": "Запрашивает дополнительные шаги в текущем цикле, когда задача почти готова.",
     "call_subagent": "Делегирует подзадачу специализированному субагенту (изолированный LLM-цикл).",

@@ -54,15 +54,61 @@ def test_normalize_empty_sources(src):
 
 def test_cache_control_marks_static_and_last_tool_result_without_mutation():
     sys0 = SystemMessage(content="STATIC")
+    hm = HumanMessage("hi")
     tm = ToolMessage(content="res", tool_call_id="c1")
-    msgs = [sys0, SystemMessage(content="DYN"), HumanMessage("hi"),
+    msgs = [sys0, SystemMessage(content="DYN"), hm,
             AIMessage(content="", tool_calls=[{"name": "t", "args": {}, "id": "c1"}]), tm]
     out = apply_anthropic_cache_control(msgs)
     assert out[0].content == [{"type": "text", "text": "STATIC", "cache_control": CC}]
     assert out[1].content == "DYN"
+    assert out[2].content == [{"type": "text", "text": "hi", "cache_control": CC}]
     assert out[-1].content[0]["type"] == "tool_result"
     assert out[-1].content[0]["cache_control"] == CC
-    assert sys0.content == "STATIC" and tm.content == "res"   # исходники не тронуты
+    assert sys0.content == "STATIC" and hm.content == "hi" and tm.content == "res"   # исходники не тронуты
+
+
+def test_cache_control_sliding_window_across_iterations_caps_at_4():
+    msgs = [
+        SystemMessage(content="STATIC"),
+        SystemMessage(content="DYN"),
+        HumanMessage(content="user question"),
+    ]
+    # Шаг 0: статика + HumanMessage (2 точки)
+    c0 = apply_anthropic_cache_control(msgs)
+    assert sum("cache_control" in str(m.content) for m in c0) == 2
+
+    # Шаг 1: статика + HumanMessage (сохранена!) + конец шага 0 (3 точки)
+    msgs += [
+        AIMessage(content="", tool_calls=[{"name": "t", "args": {}, "id": "c1"}]),
+        ToolMessage(content="r1a", tool_call_id="c1"),
+        ToolMessage(content="r1b", tool_call_id="c2"),
+    ]
+    c1 = apply_anthropic_cache_control(msgs)
+    assert sum("cache_control" in str(m.content) for m in c1) == 3
+    assert c1[2].content == c0[2].content  # HumanMessage идентичен шагу 0
+    assert "cache_control" not in str(c1[4].content)  # промежуточный тул шага 0 без метки
+    assert c1[5].content[0]["cache_control"] == CC    # последний тул шага 0 с меткой
+
+    # Шаг 2: статика + HumanMessage + конец шага 0 (сохранена!) + конец шага 1 (4 точки)
+    msgs += [
+        AIMessage(content="", tool_calls=[{"name": "t", "args": {}, "id": "c3"}]),
+        ToolMessage(content="r2", tool_call_id="c3"),
+    ]
+    c2 = apply_anthropic_cache_control(msgs)
+    assert sum("cache_control" in str(m.content) for m in c2) == 4
+    assert c2[5].content == c1[5].content  # конец шага 0 сохранил метку для cache hit!
+    assert c2[7].content[0]["cache_control"] == CC
+
+    # Шаг 3: статика + HumanMessage + конец шага 1 (сохранена!) + конец шага 2 (ровно 4 точки)
+    msgs += [
+        AIMessage(content="", tool_calls=[{"name": "t", "args": {}, "id": "c4"}]),
+        ToolMessage(content="r3", tool_call_id="c4"),
+    ]
+    c3 = apply_anthropic_cache_control(msgs)
+    assert sum("cache_control" in str(m.content) for m in c3) == 4
+    assert "cache_control" not in str(c3[5].content)  # шаг 0 ушёл из окна
+    assert c3[7].content == c2[7].content             # конец шага 1 сохранил метку для cache hit!
+    assert c3[9].content[0]["cache_control"] == CC
 
 
 def test_cache_control_survives_langchain_anthropic_formatting():
@@ -121,7 +167,7 @@ def test_designer_gets_cache_control_coder_does_not(h):
     assert second_call[-1].content[0]["type"] == "tool_result"        # ToolMessage
     assert second_call[-1].content[0]["cache_control"] == CC
     marks = sum("cache_control" in str(m.content) for m in second_call)
-    assert marks == 2                                                 # лимит Anthropic — 4
+    assert marks == 3 and marks <= 4                                  # System[0] + HumanMessage + ToolMessage (лимит Anthropic — 4)
 
     h.models["coder"].script = ["ok"]
     h.run(model="coder")

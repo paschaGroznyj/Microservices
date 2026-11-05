@@ -107,32 +107,72 @@ def _with_cc(content: Any) -> list | None:
     return None
 
 
+def _mark_message_cc(msg: BaseMessage) -> BaseMessage:
+    if isinstance(msg, ToolMessage):
+        blocks = [{
+            "type": "tool_result",
+            "content": msg.content,
+            "tool_use_id": msg.tool_call_id,
+            "is_error": getattr(msg, "status", None) == "error",
+            "cache_control": EPHEMERAL,
+        }]
+        return msg.model_copy(update={"content": blocks})
+    blocks = _with_cc(msg.content)
+    if blocks:
+        return msg.model_copy(update={"content": blocks})
+    return msg
+
+
 def apply_anthropic_cache_control(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """Ставит до 4 точек cache_control (лимит Anthropic = 4):
+    1) out[0] — статический SystemMessage (якорь между запросами);
+    2) последний HumanMessage — якорь входного контекста текущего хода
+       (не снимается на шагах iter>=1, чтобы весь входной контекст с историей
+       читался из кеша на каждом шаге цикла);
+    3) конец предыдущего тул-шага (чтобы на шаге k попадать в кеш, записанный
+       на шаге k-1);
+    4) конец текущего тул-шага out[-1] (запись в кеш для следующего шага k+1).
+    """
     out = list(messages)
     if not out:
         return out
-    # 1) статический системный блок (первое сообщение)
-    first = out[0]
-    if isinstance(first, SystemMessage):
-        blocks = _with_cc(first.content)
-        if blocks:
-            out[0] = first.model_copy(update={"content": blocks})
-    # 2) последнее сообщение: кеш истории между шагами цикла
-    if len(out) > 1:
-        last = out[-1]
-        if isinstance(last, ToolMessage):
-            blocks = [{
-                "type": "tool_result",
-                "content": last.content,
-                "tool_use_id": last.tool_call_id,
-                "is_error": getattr(last, "status", None) == "error",
-                "cache_control": EPHEMERAL,
-            }]
-            out[-1] = last.model_copy(update={"content": blocks})
-        elif isinstance(last, HumanMessage):
-            blocks = _with_cc(last.content)
-            if blocks:
-                out[-1] = last.model_copy(update={"content": blocks})
+
+    targets: list[int] = []
+
+    # 1) Статический системный блок (первое сообщение)
+    if isinstance(out[0], SystemMessage):
+        targets.append(0)
+
+    # 2) Последний HumanMessage (граница входного контекста перед циклом тулов)
+    last_human_idx: int | None = None
+    for i in range(len(out) - 1, -1, -1):
+        if isinstance(out[i], HumanMessage):
+            last_human_idx = i
+            break
+    if last_human_idx is not None and last_human_idx not in targets:
+        targets.append(last_human_idx)
+
+    # 3-4) Рубежи тул-шагов после последнего HumanMessage (последний ToolMessage каждого шага)
+    search_start = (last_human_idx + 1) if last_human_idx is not None else 1
+    step_end_tools: list[int] = []
+    for i in range(search_start, len(out)):
+        if isinstance(out[i], ToolMessage):
+            is_end_of_step = (i == len(out) - 1) or not isinstance(out[i + 1], ToolMessage)
+            if is_end_of_step:
+                step_end_tools.append(i)
+
+    remaining_slots = max(0, 4 - len(targets))
+    for idx in step_end_tools[-remaining_slots:]:
+        if idx not in targets:
+            targets.append(idx)
+
+    # Если после HumanMessage ещё не было ToolMessage, но последнее сообщение — не в targets
+    if not step_end_tools and len(out) > 1 and (len(out) - 1) not in targets and len(targets) < 4:
+        if isinstance(out[-1], (HumanMessage, ToolMessage)):
+            targets.append(len(out) - 1)
+
+    for idx in targets[:4]:
+        out[idx] = _mark_message_cc(out[idx])
     return out
 
 

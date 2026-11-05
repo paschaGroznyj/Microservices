@@ -305,19 +305,15 @@ async def compact_messages(
         logger.warning("[compactor] пустой конспект, стек НЕ трогаю")
         return messages, {"compacted": False, "dropped": 0, "pairs": 0}
 
-    # Подмешиваем конспект в конец первой системной директивы (messages[0]),
+    # Подмешиваем конспект в конец ведущих системных директив,
     # чтобы не создавать не-подряд идущие SystemMessage после HumanMessage
     # (ChatAnthropic падает с ValueError: Received multiple non-consecutive system messages).
     compact_block = f"{COMPACT_MARKER}:\n{summary_text}"
     new_messages = [m for i, m in enumerate(messages) if i not in drop_set]
 
-    if new_messages and isinstance(new_messages[0], SystemMessage):
-        base_sys = str(getattr(new_messages[0], "content", "") or "").rstrip()
-        new_messages[0] = SystemMessage(
-            content=f"{base_sys}\n\n{compact_block}" if base_sys else compact_block
-        )
-    else:
-        new_messages.insert(0, SystemMessage(content=compact_block))
+    # В хвост ведущих системных блоков: статический [0] под кешем промпта не трогаем.
+    from .core.token_usage import append_to_system_tail
+    append_to_system_tail(new_messages, compact_block)
 
     # П.1 варианта C: после удаления старья добиваем тяжёлые tool-тела,
     # оставшиеся в свежих парах (кроме самой последней).

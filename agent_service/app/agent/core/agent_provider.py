@@ -214,6 +214,8 @@ def build_llm_from_spec(spec: ModelSpec):
         base_url=spec.base_url,
         api_key=CLOUD_LLM_ACCESS_KEY,
         max_tokens=spec.max_tokens,
+        # без stream_usage astream не присылает usage -> в логах [tokens] нули
+        stream_usage=True,
         model_kwargs=model_kwargs,
     )
 

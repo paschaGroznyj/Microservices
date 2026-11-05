@@ -53,6 +53,9 @@ from .tools.journal.tool_agent_journal import make_journal_tool
 from .judge import judge_final_answer
 from .supervisor import run_supervisor
 from .context_compactor import compact_messages, TOKEN_SOFT_LIMIT
+from .core.token_usage import (
+    normalize_usage, add_usage, apply_anthropic_cache_control, append_to_system_tail,
+)
 
 
 GATEWAY_URL = f"http://api_gateway:{PORT_GATEWAY_PORT}"
@@ -600,7 +603,8 @@ def _extract_thinking_and_clean_content(raw_content) -> tuple[str, str, str]:
     return thinking_text, reasoning_text, cleaned
 
 
-async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, error_info: dict | None = None):
+async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, error_info: dict | None = None,
+                           cache_control: bool = False):
     """Стриминговая версия _invoke_with_retry.
 
     Собирает ответ через llm.astream(), аккумулируя AIMessageChunk сложением (+=).
@@ -612,8 +616,13 @@ async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, err
     поэтому on_chunk для них не сработает.
 
     Стратегия отказоустойчивости: если astream упал — фолбэк на обычный ainvoke.
+
+    cache_control=True (ChatAnthropic + prompt_cache) — размечаем копию сообщений
+    точками кеша: статический системный блок и последнее сообщение.
     """
     messages = _sanitize_messages(messages)
+    if cache_control:
+        messages = apply_anthropic_cache_control(messages)
     backoff = [2, 5, 10]
     last_error = None
     for attempt in range(3):
@@ -1361,6 +1370,49 @@ class HarnessAgent:
             return ctx.get(key, default)
         return default
 
+    def track_tokens(
+        self,
+        source,
+        *,
+        tool: str | None = None,
+        model: str | None = None,
+        extra: dict | None = None,
+    ) -> dict:
+        """Единая точка учёта токенов.
+
+        source — AIMessage, ответ chat/completions (dict) или сам usage-словарь.
+        Возвращает нормализованный usage {input_tokens, output_tokens,
+        cache_read_tokens, cache_creation_tokens}. Если указан tool — копит расход
+        в request-local tool_usage[tool] (попадёт в tokens_usage["tools"]);
+        extra — доп. счётчики тула (например {"images": 1}).
+        """
+        usage = normalize_usage(source)
+        if not tool:
+            return usage
+        ctx = self._request_ctx.get()
+        bucket = None
+        if isinstance(ctx, dict):
+            bucket = ctx.setdefault("tool_usage", {}).setdefault(tool, {
+                "calls": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+                "cache_read_tokens": 0, "cache_creation_tokens": 0, "models": [],
+            })
+            bucket["calls"] += 1
+            add_usage(bucket, usage)
+            bucket["total_tokens"] = bucket["input_tokens"] + bucket["output_tokens"]
+            if model and model not in bucket["models"]:
+                bucket["models"].append(model)
+            for k, v in (extra or {}).items():
+                if isinstance(v, (int, float)):
+                    bucket[k] = bucket.get(k, 0) + v
+        logging.info(
+            f"[tokens] tool={tool} model={model or '-'} "
+            f"in={usage['input_tokens']} out={usage['output_tokens']} "
+            f"cached={usage['cache_read_tokens']}"
+            + (f" extra={extra}" if extra else "")
+            + (f" tool_total={bucket['total_tokens']}" if bucket else "")
+        )
+        return usage
+
     def _ctx_append_pending_image(self, item: dict) -> None:
         """Складывает сгенерированную картинку в request-local буфер."""
         ctx = self._request_ctx.get()
@@ -1582,6 +1634,8 @@ class HarnessAgent:
             # Защита от бесконечного polling check_task_status: >3 подряд блокируем
             "check_status_streak": 0,
             "last_tool_name": "",
+            # расход токенов тулами, у которых своя модель: {tool: {...}}
+            "tool_usage": {},
         })
 
         # Legacy-поля оставляем как fallback для старого кода,
@@ -1625,6 +1679,13 @@ class HarnessAgent:
             SUPERVISOR_MIN_ITER = 4  # не трогаем первые шаги (агент только разогнался)
             total_input_tokens  = 0
             total_output_tokens = 0
+            total_cache = {"cache_read_tokens": 0, "cache_creation_tokens": 0}
+            # Явные точки кеша нужны только ChatAnthropic; OpenAI-совместимые
+            # провайдеры кешируют стабильный префикс сами (X-Enable-Prompt-Cache).
+            use_cache_control = bool(
+                getattr(model_spec, "provider", "") == "anthropic"
+                and getattr(model_spec, "prompt_cache", False)
+            )
 
             preset = CONTEXT_PRESETS.get(context_size, CONTEXT_PRESETS["medium"])
             limit_mem = preset["limit_mem"]
@@ -1691,7 +1752,10 @@ class HarnessAgent:
                 role_block = get_role_max(user_id)
             else:
                 role_block = get_role(user_id)
-            system_content = SYSTEM_PROMPT.format(datetime=current_datetime, role_block=role_block)
+            system_content = SYSTEM_PROMPT.format(role_block=role_block)
+            # Динамика (дата, медиа-реестр) — отдельным SystemMessage ПОСЛЕ статики,
+            # чтобы префикс промпта был стабилен и попадал в кеш провайдера.
+            dynamic_parts: list[str] = [f"Current date and time: {current_datetime}"]
             _gw_target = (gateway_target or "main").strip().lower()
             if _gw_target in ("main", "sigma") and not is_telegram and not is_max:
                 system_content += "\n" + INTERACTIVE_POLL_GUIDANCE
@@ -1701,7 +1765,7 @@ class HarnessAgent:
                 from agent.media import media_store as _media_store
                 _media_block = await _media_store.build_media_prompt_block(chat_id)
                 if _media_block:
-                    system_content += _media_block
+                    dynamic_parts.append(_media_block.strip())
             except Exception as _e:
                 logging.warning(f"[media_store] prompt block fail: {_e}")
             # Telegram: подмешиваем HTML-инструкцию форматирования + per-chat промпт из БД.
@@ -1798,12 +1862,15 @@ class HarnessAgent:
             else:
                 rolling_summary_text = previous_summary_text
 
-            messages: List[BaseMessage] = []
+            # Порядок системных блоков — от стабильного к изменчивому:
+            # [0] статический промпт (точка кеша) -> журнал -> rolling summary ->
+            # саммари сессии -> ТЕКУЩИЙ КОНТЕКСТ (дата, медиа). Подмешивания по ходу
+            # цикла (супервизор, компактор) идут в хвост, а не в [0].
+            messages: List[BaseMessage] = [SystemMessage(content=system_content)]
             if journal_text is not None:
                 messages.append(SystemMessage(content=f"📜 БОРТОВОЙ ЖУРНАЛ (Память):\n{journal_text}"))
             elif use_journal and journal_text is None:
                 messages.append(SystemMessage(content=f"📜 БОРТОВОЙ ЖУРНАЛ (Память): ПУСТОЙ"))
-            messages.append(SystemMessage(content=system_content))
 
             if rolling_summary_text:
                 messages.append(
@@ -1821,6 +1888,8 @@ class HarnessAgent:
                         )
                     )
                 )
+
+            messages.append(SystemMessage(content="🕒 ТЕКУЩИЙ КОНТЕКСТ:\n" + "\n".join(dynamic_parts)))
 
             messages += [
                 *trimmed_history,
@@ -1865,13 +1934,8 @@ class HarnessAgent:
                                 "Это ПОДСКАЗКА, не приказ — учти, если по делу, "
                                 "иначе продолжай свой план:\n" + hint
                             )
-                            if messages and isinstance(messages[0], SystemMessage):
-                                base_sys = str(getattr(messages[0], "content", "") or "").rstrip()
-                                messages[0] = SystemMessage(
-                                    content=f"{base_sys}\n\n{sup_block}" if base_sys else sup_block
-                                )
-                            else:
-                                messages.insert(0, SystemMessage(content=sup_block))
+                            # В хвост системных блоков: статический [0] под кешем не трогаем.
+                            append_to_system_tail(messages, sup_block)
                             logger.info(f"[supervisor] директива подмешана на шаге {iteration}")
 
                     # (б) ТРИГГЕР нового фонового прогона раз в N шагов,
@@ -1901,7 +1965,7 @@ class HarnessAgent:
                     try:
                         response = await _astream_collect(
                             current_llm, messages, on_chunk=None, iteration=iteration,
-                            error_info=_llm_error
+                            error_info=_llm_error, cache_control=use_cache_control,
                         )
                     except Exception as _exc:
                         _llm_error["reason"] = f"{type(_exc).__name__}: {_exc}"
@@ -1995,15 +2059,21 @@ class HarnessAgent:
 
                     messages.append(response)          # ← единственный аппенд
 
-                    usage = getattr(response, "usage_metadata", None) or {}
-                    iter_in  = usage.get("input_tokens", 0)
-                    iter_out = usage.get("output_tokens", 0)
+                    usage = self.track_tokens(response)
+                    iter_in  = usage["input_tokens"]
+                    iter_out = usage["output_tokens"]
+                    iter_cr  = usage["cache_read_tokens"]
+                    iter_cw  = usage["cache_creation_tokens"]
                     total_input_tokens  += iter_in
                     total_output_tokens += iter_out
+                    total_cache["cache_read_tokens"] += iter_cr
+                    total_cache["cache_creation_tokens"] += iter_cw
+                    _hit = f"{iter_cr * 100 // iter_in}%" if iter_in else "-"
                     logging.info(
                         f"[tokens] iter={iteration} "
-                        f"in={iter_in} out={iter_out} "
-                        f"total_in={total_input_tokens} total_out={total_output_tokens}"
+                        f"in={iter_in} out={iter_out} cached={iter_cr} cache_write={iter_cw} hit={_hit} "
+                        f"total_in={total_input_tokens} total_out={total_output_tokens} "
+                        f"total_cached={total_cache['cache_read_tokens']}"
                     )
                     logger.info(f"🦒Длина стека = {len(messages)}")
 
@@ -2151,11 +2221,20 @@ class HarnessAgent:
                         )
                     )
 
+            # input/output/total — только основная модель (на них считается стоимость
+            # в chats_service). Кеш — подмножество input. Расход тулов (vision,
+            # генерация картинок) — отдельно в "tools", если они вызывались.
             tokens_usage = {
                     "input_tokens": total_input_tokens,
                     "output_tokens": total_output_tokens,
                     "total_tokens": total_input_tokens + total_output_tokens,
+                    "cache_read_tokens": total_cache["cache_read_tokens"],
+                    "cache_creation_tokens": total_cache["cache_creation_tokens"],
                 }
+            _tools_usage = self._ctx_get("tool_usage") or {}
+            if _tools_usage:
+                tokens_usage["tools"] = _tools_usage
+                logging.info(f"[tokens] tools={json.dumps(_tools_usage, ensure_ascii=False)}")
 
             # Автогенерация заголовка чата по первому обмену (логика в title_generator.py).
             # Fail-open: не первый ход / ошибка -> auto_title=None.

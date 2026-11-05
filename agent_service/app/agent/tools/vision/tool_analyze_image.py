@@ -349,6 +349,10 @@ def make_analyze_image_tool(agent, images: list[dict] | None = None,
             for _k, _model in vision_candidates:
                 try:
                     resp = await _model.ainvoke([msg])
+                    _track = getattr(agent, "track_tokens", None)
+                    if callable(_track):
+                        _track(resp, tool="analyze_image",
+                               model=getattr(_model, "model_name", None) or getattr(_model, "model", None) or _k)
                     content = resp.content if hasattr(resp, "content") else str(resp)
                     log.info("analyze_image: обработана картинка %s (vision-модель '%s')", label, _k)
                     return content

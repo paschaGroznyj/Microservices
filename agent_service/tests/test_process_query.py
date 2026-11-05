@@ -125,7 +125,8 @@ def test_plain_answer_contract(h):
     assert out["files_to_send"] == []
     assert out["tool_trace"] is None
     assert out["agent_model"] == MODEL_NAMES["coder"]
-    assert out["tokens_usage"] == {"input_tokens": 10, "output_tokens": 3, "total_tokens": 13}
+    assert out["tokens_usage"] == {"input_tokens": 10, "output_tokens": 3, "total_tokens": 13,
+                                   "cache_read_tokens": 0, "cache_creation_tokens": 0}
     assert out["auto_title"] is None
     assert h.models["coder"].methods == ["astream"]
 
@@ -151,7 +152,8 @@ def test_tool_step_then_answer(h):
     assert out["message"] == "Готово"
     assert out["used_tools"] == ["noop"] and out["action"] == "noop"
     assert calls[0].get("x") == 1
-    assert out["tokens_usage"] == {"input_tokens": 150, "output_tokens": 12, "total_tokens": 162}
+    assert out["tokens_usage"] == {"input_tokens": 150, "output_tokens": 12, "total_tokens": 162,
+                                   "cache_read_tokens": 0, "cache_creation_tokens": 0}
     second = h.models["coder"].calls[1]
     [tm] = tool_msgs(second)
     assert "42" in tm.content
@@ -494,9 +496,13 @@ def test_supervisor_hint_injected_into_system(h):
     h.models["coder"].script = [ai("", [("noop", {})])] * 7 + ["ok"]
     h.run()
     h.supervisor.assert_awaited_once()
-    first = h.models["coder"].calls[-1][0]
+    last_call = h.models["coder"].calls[-1]
+    first = last_call[0]
     assert isinstance(first, SystemMessage)
-    assert "ФОНОВЫЙ КОНТРОЛЁР ЦЕЛИ" in first.content and "держись цели" in first.content
+    # статический блок под кешем не меняется, подсказка уходит в хвост системных
+    assert "ФОНОВЫЙ КОНТРОЛЁР ЦЕЛИ" not in str(first.content)
+    assert first.content == h.models["coder"].calls[0][0].content
+    assert "держись цели" in system_text(last_call)
 
 
 def test_supervisor_crash_tolerated(h):

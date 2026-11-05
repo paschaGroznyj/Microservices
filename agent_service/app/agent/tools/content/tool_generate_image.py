@@ -564,6 +564,10 @@ def make_generate_image_tool(agent, images: list[dict] | None = None):
                         continue
                     data = resp.json()
                     choices = data.get("choices") or []
+                    _track = getattr(agent, "track_tokens", None)
+                    if callable(_track):
+                        _track(data, tool="generate_image", model=cfg["model"],
+                               extra={"images": 1 if _extract_image_data_uri((choices[0].get("message") or {}) if choices else {}) else 0})
                     if not choices:
                         errors.append(f"#{i}: пустой choices в ответе модели")
                         continue

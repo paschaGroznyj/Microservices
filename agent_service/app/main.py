@@ -958,7 +958,7 @@ async def health():
 
 
 # ── Доступность LLM-провайдеров ────────────────────────────────────
-from agent.core.agent_provider import get_provider_models_for_ping
+from agent.core.agent_provider import get_provider_models_for_ping, get_frontend_models_payload
 
 _PROVIDERS_TTL = 30.0  # сек — как часто реально перепроверяем провайдеров
 _providers_cache: dict = {"ts": 0.0, "data": None}
@@ -1117,6 +1117,13 @@ async def api_delete_skill(skill_id: int):
     if not deleted:
         raise HTTPException(status_code=404, detail='Skill not found')
     return {'ok': True, 'skill_id': skill_id}
+
+@app.get("/internal/models")
+@app.get("/api/models")
+async def internal_get_models():
+    """Возвращает список моделей для фронта (id, label, hint, accent, svg, svgSm) из models_config.yaml."""
+    return get_frontend_models_payload()
+
 
 @app.get("/internal/providers_status")
 async def internal_providers_status():

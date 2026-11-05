@@ -164,9 +164,14 @@ class ChatApp {
             return;
         }
 
-        // Передаём username в ToolsPanel для проверки прав и подтягиваем чаты + user_settings
+        window.addEventListener('agent:availability', () => {
+            this._syncSendButtonState();
+        });
+
+        // Передаём username в ToolsPanel, грузим каталог моделей из agent_service и подтягиваем чаты
         await Promise.all([
             window.ToolsPanel?.setUser(this.currentUser.username),
+            window.ModelPicker?.loadModels?.(),
             this.loadChats(),
         ]);
         const userSettings = await window.ToolsPanel?.loadUserSettings?.();
@@ -3444,6 +3449,15 @@ class ChatApp {
             return;
         }
 
+        if (!this.isAgentAvailable()) {
+            await window.ModelPicker?.loadModels?.(true);
+            if (!this.isAgentAvailable()) {
+                this.showToast('Сервис агента недоступен. Отправка запросов временно отключена.');
+                this._syncSendButtonState();
+                return;
+            }
+        }
+
         const attachedMeta = hasAttached ? (window.FileAttach?.getFilesMeta?.() || []) : [];
         const chatPreviewText = text || (attachedMeta[0]?.name ? `📎 ${attachedMeta[0].name}` : 'Файл');
 
@@ -4818,9 +4832,19 @@ class ChatApp {
         sendBtn.classList.remove('stop-mode');
         sendBtn.setAttribute('aria-label', 'Отправить');
         sendBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-        const canSend = this.getInputText().length > 0 || this.hasAttachedFiles();
+        const agentUp = this.isAgentAvailable();
+        const canSend = agentUp && (this.getInputText().length > 0 || this.hasAttachedFiles());
         sendBtn.disabled = !canSend;
         sendBtn.classList.toggle('active', canSend);
+        sendBtn.classList.toggle('agent-offline', !agentUp);
+        sendBtn.title = !agentUp ? 'Сервис агента недоступен' : '';
+    }
+
+    isAgentAvailable() {
+        if (!window.ModelPicker || typeof window.ModelPicker.isAgentAvailable !== 'function') {
+            return true;
+        }
+        return window.ModelPicker.isAgentAvailable();
     }
 
     hasAttachedFiles() {
@@ -4842,9 +4866,12 @@ class ChatApp {
             return;
         }
         sendBtn.classList.remove('stop-mode');
-        const canSend = this.getInputText().length > 0 || this.hasAttachedFiles();
+        const agentUp = this.isAgentAvailable();
+        const canSend = agentUp && (this.getInputText().length > 0 || this.hasAttachedFiles());
         sendBtn.classList.toggle('active', canSend);
+        sendBtn.classList.toggle('agent-offline', !agentUp);
         sendBtn.disabled = !canSend;
+        sendBtn.title = !agentUp ? 'Сервис агента недоступен' : '';
     }
 
     async stopCurrentRun() {
@@ -6335,9 +6362,12 @@ class ChatApp {
             }
             sendBtn.classList.remove('stop-mode');
             const len = this.getInputText().length;
-            const canSend = len > 0 || this.hasAttachedFiles();
+            const agentUp = this.isAgentAvailable();
+            const canSend = agentUp && (len > 0 || this.hasAttachedFiles());
             sendBtn.classList.toggle('active', canSend);
+            sendBtn.classList.toggle('agent-offline', !agentUp);
             sendBtn.disabled = !canSend;
+            sendBtn.title = !agentUp ? 'Сервис агента недоступен' : '';
         };
 
         field.addEventListener('input', onInput);
@@ -6482,6 +6512,10 @@ class ChatApp {
                     document.execCommand('insertLineBreak');
                     this._resetInputFormatting();
                     onInput();
+                    return;
+                }
+                if (!this.isAgentAvailable()) {
+                    this.showToast('Сервис агента недоступен. Отправка запросов временно отключена.');
                     return;
                 }
                 if (this._runState === "idle" && !sendBtn.disabled) this.sendMessage();

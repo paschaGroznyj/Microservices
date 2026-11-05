@@ -2046,6 +2046,44 @@ async def get_graph_nodes(request: Request):
         raise HTTPException(status_code=e.response.status_code, detail="Graph data error")
 
 
+@app.get("/api/models")
+async def get_agent_models(request: Request):
+    """Каталог моделей агента с описаниями и SVG (для ModelPicker) + проверка доступности agent_service.
+
+    Ходит напрямую в /internal/models сервиса agent_service.
+    Если agent_service упал или недоступен, возвращает agent_available=False,
+    чтобы фронтенд (app.js) заблокировал отправку запросов."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    agent_url = SERVICES['agent_service']['url']
+    try:
+        resp = await app.state.http_client.get(
+            f"{agent_url}/internal/models",
+            timeout=5.0,
+        )
+        if resp.status_code != 200:
+            return {"agent_available": False, "default_model": "coder", "models": []}
+        data = resp.json()
+        if not isinstance(data, dict):
+            return {"agent_available": False, "default_model": "coder", "models": []}
+        models = data.get("models")
+        if not isinstance(models, list) or not models:
+            return {
+                "agent_available": False,
+                "default_model": data.get("default_model") or "coder",
+                "models": [],
+            }
+        run_status.register_setting_models(models)
+        return {
+            "agent_available": bool(data.get("agent_available", True)),
+            "default_model": data.get("default_model") or models[0].get("id") or "coder",
+            "models": models,
+        }
+    except (httpx.RequestError, ValueError):
+        return {"agent_available": False, "default_model": "coder", "models": []}
+
+
 @app.get("/api/providers/status")
 async def get_providers_status(request: Request):
     """Доступность LLM-провайдеров под моделями тоггла (для ModelPicker).

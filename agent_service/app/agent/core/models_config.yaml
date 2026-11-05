@@ -1,6 +1,7 @@
 # Конфигурация LLM-моделей агента.
 # Чтобы добавить новую модель, достаточно описать её в секции `models` —
-# фабрики, алиасы, пинг провайдеров и настройки event_loop подтянутся автоматически.
+# фабрики, алиасы, пинг провайдеров, настройки event_loop и UI-пикер фронта
+# подтянутся автоматически.
 
 default_model: coder
 
@@ -14,6 +15,7 @@ models:
     model: "openai/gpt-5.4"
     provider: "openai"
     label: "GPT"
+    setting_key: "gpt"
     aliases:
       - "gpt"
     max_tokens: 16384
@@ -24,11 +26,29 @@ models:
     tool_name_integrity_guidance: true
     vision_target: "coder"
     legacy_builder: "get_llm_model_gpt"
+    hint: "Модель от OpenAI. Сильна в коде, инструментах и длинном контексте. Показывает tool-calling."
+    accent: "#10a37f"
+    svg: >-
+      <svg viewBox="0 0 24 24" fill="none" width="20" height="20"
+      stroke="currentColor" stroke-width="1.5"
+      stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 3.2 L18.6 7 V15 L12 18.8 L5.4 15 V7 Z"/>
+      <path d="M12 3.2 V11 L18.6 15"/>
+      <path d="M5.4 7 L12 11 L12 18.8"/>
+      </svg>
+    svg_sm: >-
+      <svg viewBox="0 0 24 24" fill="none" width="15" height="15"
+      stroke="currentColor" stroke-width="2"
+      stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 3.2 L18.6 7 V15 L12 18.8 L5.4 15 V7 Z"/>
+      <path d="M12 11 L18.6 7 M12 11 V18.8 M12 11 L5.4 7"/>
+      </svg>
 
   designer:
     model: "anthropic/claude-opus-5.5"
     provider: "anthropic"
     label: "Claude"
+    setting_key: "claude"
     aliases:
       - "claude"
       - "opus"
@@ -41,11 +61,30 @@ models:
     tool_name_integrity_guidance: false
     vision_target: "designer"
     legacy_builder: "get_llm_model_claude"
+    hint: "Модель от Anthropic. Сильна в коде, генерирует презентации и отчёты. Показывает reasoning (размышления)."
+    accent: "#d97757"
+    svg: >-
+      <svg viewBox="0 0 24 24" fill="none" width="20" height="20"
+      stroke="currentColor" stroke-width="2.2"
+      stroke-linecap="round" stroke-linejoin="round">
+      <line x1="12" y1="4.5" x2="12" y2="19.5"/>
+      <line x1="5.8" y1="8" x2="18.2" y2="16"/>
+      <line x1="18.2" y1="8" x2="5.8" y2="16"/>
+      </svg>
+    svg_sm: >-
+      <svg viewBox="0 0 24 24" fill="none" width="15" height="15"
+      stroke="currentColor" stroke-width="2.4"
+      stroke-linecap="round" stroke-linejoin="round">
+      <line x1="12" y1="4.5" x2="12" y2="19.5"/>
+      <line x1="5.8" y1="8" x2="18.2" y2="16"/>
+      <line x1="18.2" y1="8" x2="5.8" y2="16"/>
+      </svg>
 
   universal:
     model: "zai-org/GLM-5.2"
     provider: "openai"
     label: "GLM"
+    setting_key: "glm"
     aliases:
       - "glm"
     max_tokens: 16384
@@ -55,11 +94,28 @@ models:
     tool_name_integrity_guidance: true
     vision_target: "universal"
     legacy_builder: "get_llm_model_glm"
+    hint: "Модель от Zhipu AI. Универсальная, показывает reasoning (размышления)."
+    accent: "#8b5cf6"
+    svg: >-
+      <svg viewBox="0 0 24 24" fill="none" width="20" height="20"
+      stroke="currentColor" stroke-width="2.2"
+      stroke-linecap="round" stroke-linejoin="round">
+      <path d="M7 6 H17 L8 14 H17"/>
+      <path d="M12 14 V20"/>
+      </svg>
+    svg_sm: >-
+      <svg viewBox="0 0 24 24" fill="none" width="15" height="15"
+      stroke="currentColor" stroke-width="2.4"
+      stroke-linecap="round" stroke-linejoin="round">
+      <path d="M7 6 H17 L8 14 H17"/>
+      <path d="M12 14 V20"/>
+      </svg>
 
   gemini:
     model: "google/gemini-3.1-pro-preview"
     provider: "openai"
     label: "Gemini"
+    setting_key: "gemini"
     aliases:
       - "gemini"
     max_tokens: 16384
@@ -70,6 +126,26 @@ models:
     tool_name_integrity_guidance: true
     vision_target: "designer"
     legacy_builder: "get_llm_model_gemini"
+    hint: "Модель от Google. Показывает tool-calling."
+    accent: "#4285f4"
+    svg: >-
+      <svg viewBox="0 0 24 24" fill="none" width="20" height="20"
+      stroke="currentColor" stroke-width="1.75"
+      stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 2.5C12 7.8 16.2 12 21.5 12
+      C16.2 12 12 16.2 12 21.5
+      C12 16.2 7.8 12 2.5 12
+      C7.8 12 12 7.8 12 2.5Z"/>
+      </svg>
+    svg_sm: >-
+      <svg viewBox="0 0 24 24" fill="none" width="15" height="15"
+      stroke="currentColor" stroke-width="2"
+      stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 2.5C12 7.8 16.2 12 21.5 12
+      C16.2 12 12 16.2 12 21.5
+      C12 16.2 7.8 12 2.5 12
+      C7.8 12 12 7.8 12 2.5Z"/>
+      </svg>
 
 lite_models:
   primary:

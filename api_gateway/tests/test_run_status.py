@@ -16,6 +16,10 @@ def run(coro):
 @pytest.fixture()
 def redis_mock(mocker):
     rm = mocker.AsyncMock()
+    async def _empty_scan(*args, **kwargs):
+        if False:
+            yield b""
+    rm.scan_iter = mocker.MagicMock(side_effect=_empty_scan)
     mocker.patch.object(run_status, "_redis", rm)
     return rm
 
@@ -95,3 +99,17 @@ def test_redis_none_returns_safe_defaults(mocker):
 def test_get_running_swallows_redis_error(redis_mock):
     redis_mock.get.side_effect = RuntimeError("boom")
     assert run(run_status.get_running("c1")) is None
+
+
+def test_register_setting_models_extends_normalization():
+    assert run_status.normalize_setting_model("coder") == "gpt"
+    assert run_status.normalize_setting_model("designer") == "claude"
+    assert run_status.normalize_setting_model("universal") == "glm"
+    assert run_status.normalize_setting_model("gemini") == "gemini"
+
+    run_status.register_setting_models([
+        {"id": "deepseek", "setting_key": "ds", "aliases": ["r1", "deepseek-r1"]},
+    ])
+    assert run_status.normalize_setting_model("deepseek") == "ds"
+    assert run_status.normalize_setting_model("r1") == "ds"
+    assert run_status.normalize_setting_model("ds") == "ds"

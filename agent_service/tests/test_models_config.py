@@ -165,3 +165,32 @@ def test_tool_name_integrity_guidance_per_model(h):
     h.run(model="claude")
     designer_sys = system_text(h.models["designer"].calls[0])
     assert TOOL_NAME_INTEGRITY_GUIDANCE.strip()[:30] not in designer_sys
+
+
+def test_frontend_models_payload_has_descriptions_and_svg():
+    payload = ap.get_frontend_models_payload()
+    assert payload["agent_available"] is True
+    assert payload["default_model"] == "coder"
+    models = {m["id"]: m for m in payload["models"]}
+    assert set(models) == {"coder", "designer", "universal", "gemini"}
+
+    assert models["coder"]["label"] == "GPT"
+    assert models["coder"]["setting_key"] == "gpt"
+    assert "OpenAI" in models["coder"]["hint"]
+    assert models["coder"]["svg"].startswith("<svg")
+    assert models["coder"]["svgSm"].startswith("<svg")
+
+    assert models["designer"]["label"] == "Claude"
+    assert models["designer"]["setting_key"] == "claude"
+    assert "Anthropic" in models["designer"]["hint"]
+    assert models["designer"]["svg"].startswith("<svg")
+
+    assert models["universal"]["label"] == "GLM"
+    assert models["universal"]["setting_key"] == "glm"
+    assert "Zhipu" in models["universal"]["hint"]
+    assert models["universal"]["svg"].startswith("<svg")
+
+    assert models["gemini"]["label"] == "Gemini"
+    assert models["gemini"]["setting_key"] == "gemini"
+    assert "Google" in models["gemini"]["hint"]
+    assert models["gemini"]["svg"].startswith("<svg")

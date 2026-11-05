@@ -7,7 +7,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 import yaml
-from langchain_gigachat.embeddings import GigaChatEmbeddings
+try:
+    from langchain_gigachat.embeddings import GigaChatEmbeddings
+except ImportError:  # pragma: no cover
+    GigaChatEmbeddings = None  # type: ignore[assignment]
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 try:
@@ -37,6 +40,35 @@ class ModelSpec:
     base_url: str = "https://foundation-models.api.cloud.ru/v1"
     prompt_cache: bool = True
     legacy_builder: str | None = None
+    setting_key: str = ""
+    hint: str = ""
+    accent: str = "#10a37f"
+    svg: str = ""
+    svg_sm: str = ""
+
+    def to_frontend_dict(self) -> dict[str, Any]:
+        default_svg = (
+            '<svg viewBox="0 0 24 24" fill="none" width="20" height="20" '
+            'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+            '<circle cx="12" cy="12" r="8"/></svg>'
+        )
+        default_svg_sm = (
+            '<svg viewBox="0 0 24 24" fill="none" width="15" height="15" '
+            'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            '<circle cx="12" cy="12" r="8"/></svg>'
+        )
+        setting = self.setting_key or (self.aliases[0] if self.aliases else self.tag)
+        return {
+            "id": self.tag,
+            "model": self.model,
+            "label": self.label or self.tag,
+            "setting_key": setting,
+            "aliases": list(self.aliases),
+            "hint": self.hint,
+            "accent": self.accent or "#10a37f",
+            "svg": self.svg or default_svg,
+            "svgSm": self.svg_sm or self.svg or default_svg_sm,
+        }
 
 
 @dataclass
@@ -75,6 +107,11 @@ def _parse_model_spec(tag: str, raw: dict[str, Any], defaults: dict[str, Any]) -
         base_url=str(raw.get("base_url") or default_url).strip(),
         prompt_cache=bool(raw.get("prompt_cache", defaults.get("prompt_cache", True))),
         legacy_builder=str(raw["legacy_builder"]).strip() if raw.get("legacy_builder") else None,
+        setting_key=str(raw.get("setting_key") or (aliases[0] if aliases else tag)).strip(),
+        hint=str(raw.get("hint") or "").strip(),
+        accent=str(raw.get("accent") or "#10a37f").strip(),
+        svg=str(raw.get("svg") or "").strip(),
+        svg_sm=str(raw.get("svg_sm") or raw.get("svg") or "").strip(),
     )
 
 
@@ -352,6 +389,15 @@ def get_provider_models_for_ping() -> dict[str, tuple[str, Callable[[], Any]]]:
     return {
         tag: (spec.model, _MODEL_BUILDERS[tag])
         for tag, spec in _REGISTRY.models.items()
+    }
+
+
+def get_frontend_models_payload() -> dict[str, Any]:
+    """Полный каталог моделей для фронтенда (ModelPicker) с описаниями и SVG."""
+    return {
+        "agent_available": True,
+        "default_model": _REGISTRY.default_model,
+        "models": [spec.to_frontend_dict() for spec in _REGISTRY.models.values()],
     }
 
 

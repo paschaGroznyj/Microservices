@@ -495,3 +495,23 @@
     left: 12px !important;
   }
 }
+
+
+/* Состояние недоступности сервиса агента в пикере моделей */
+.mp-trigger-btn--offline {
+  opacity: 0.75;
+}
+
+.mp-panel-empty {
+  padding: 12px 10px;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--text-muted);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text-muted) 8%, transparent);
+}
+
+.mp-panel-empty[data-state="offline"] {
+  color: #dc2626;
+  background: color-mix(in srgb, #dc2626 10%, transparent);
+}

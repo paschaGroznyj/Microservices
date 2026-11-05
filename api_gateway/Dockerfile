@@ -29,7 +29,7 @@ USER appuser
 
 EXPOSE 7000
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7000", "--reload"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7000", "--timeout-graceful-shutdown", "60"]
 
 
 # ---- test: pytest и плагины только здесь, в prod-образ не попадают ----

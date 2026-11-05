@@ -1726,6 +1726,11 @@ class HarnessAgent:
             except Exception as _e:
                 logging.warning(f"[media_store] prompt block fail: {_e}")
             # Telegram: подмешиваем HTML-инструкцию форматирования + per-chat промпт из БД.
+
+            from .prompts.system_prompt import TOOL_NAME_INTEGRITY_GUIDANCE
+            if agent_model != "designer":
+                system_content += TOOL_NAME_INTEGRITY_GUIDANCE
+
             if is_telegram and _tg_settings:
                 try:
                     _tg_name = _tg_settings.get("agent_name")
@@ -1766,7 +1771,7 @@ class HarnessAgent:
             tools_by_name = {t.name: t for t in tools}
             # Имена реально доступных агенту тулов — для каталога фонового супервизора
             loop_state["tool_names"] = list(tools_by_name.keys())
-            llm_with_tools = llm.bind_tools(tools)
+            llm_with_tools = llm.bind_tools(tools, parallel_tool_calls=True)
             session_summary = await self.db.get_last_session_summary(chat_id)
 
             # Собираем историю из памяти

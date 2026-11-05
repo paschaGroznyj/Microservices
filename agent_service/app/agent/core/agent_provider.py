@@ -100,18 +100,14 @@ def get_llm_model_gpt():
         }
     )
 
-@lru_cache
+from langchain_anthropic import ChatAnthropic
 def get_llm_model_claude():
-    return ChatOpenAI(
-        model="anthropic/claude-opus-4.8",
-        base_url="https://foundation-models.api.cloud.ru/v1",
-        api_key=CLOUD_LLM_ACCESS_KEY,
-        max_tokens=16384,
-        model_kwargs={
-            "extra_headers": {
-                "X-Enable-Prompt-Cache": "true"
-            }
-        }
+    return ChatAnthropic(
+        model="anthropic/claude-opus-5.5",
+        anthropic_api_key=CLOUD_LLM_ACCESS_KEY,
+        anthropic_api_url="https://foundation-models.api.cloud.ru",
+        max_tokens_to_sample=64000,
+        thinking={"type": "adaptive", "display": "summarized"}
     )
 
 @lru_cache

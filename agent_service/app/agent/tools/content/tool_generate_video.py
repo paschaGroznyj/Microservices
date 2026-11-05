@@ -62,6 +62,9 @@ PROVIDERS = {
         "default_resolution": "480p",
         "default_duration": 5,
         "audio": False,  # heygen has no audio track knob here
+        "frames": {"first_frame"},
+        "refs": True,
+        "max_refs": None,
     },
     "google": {
         "model": "google/veo-3.1-fast",
@@ -72,6 +75,24 @@ PROVIDERS = {
         "default_resolution": "720p",
         "default_duration": 8,
         "audio": True,  # veo generates an audio track by default
+        "frames": {"first_frame", "last_frame"},
+        "refs": True,
+        "max_refs": 3,
+    },
+    # Veo 3.1 Lite: < 50% of veo-3.1-fast price per second, no 4K and no
+    # reference images (RouterAPI /models: supports_reference_images=false).
+    "google-lite": {
+        "model": "google/veo-3.1-lite",
+        "aspect": {"16:9", "9:16"},
+        "resolution": {"720p", "1080p"},
+        "duration": {4, 6, 8},
+        "default_aspect": "16:9",
+        "default_resolution": "720p",
+        "default_duration": 8,
+        "audio": True,
+        "frames": {"first_frame", "last_frame"},
+        "refs": False,
+        "max_refs": 0,
     },
     # Talking-head avatar: animates ONE face image to speak. Either synthesizes
     # speech from `prompt` using a catalog voice_id, OR lip-syncs to a provided
@@ -86,9 +107,22 @@ PROVIDERS = {
         "default_resolution": "720p",
         "default_duration": None,
         "audio": False,
+        "frames": set(),  # face goes into input_references, not frame_images
+        "refs": True,
+        "max_refs": 1,
     },
 }
 DEFAULT_PROVIDER = "heygen"
+# Spellings the LLM tends to use for the same backend.
+PROVIDER_ALIASES = {
+    "lite": "google-lite",
+    "veo-lite": "google-lite",
+    "veo-3.1-lite": "google-lite",
+    "google_lite": "google-lite",
+    "google/veo-3.1-lite": "google-lite",
+    "veo": "google",
+    "google/veo-3.1-fast": "google",
+}
 # Multilingual HeyGen catalog voice used when the caller doesn't pick one
 # (works for Russian). Override per call via avatar_voice_id.
 DEFAULT_AVATAR_VOICE_ID = "80441555167a467e967ab9487d844a30"
@@ -194,6 +228,31 @@ def _resolve_audio_to_data_uri(path_or_name: str) -> str | None:
     return f"data:{mime};base64,{_b64.b64encode(raw).decode('ascii')}"
 
 
+async def _resolve_frame(agent, images, chat_id, url=None, path=None,
+                         image_key=None, user_image_index=None,
+                         media_id=None) -> str | None:
+    """One frame image from the first source that is set (priority order:
+    url, path, image_key, user_image_index, media_id) -> URL/data URI or None."""
+    if url and str(url).strip():
+        return str(url).strip()
+    if path and str(path).strip():
+        return resolve_path_to_data_uri(str(path).strip())
+    if image_key and str(image_key).strip():
+        return await resolve_image_key_to_data_uri(agent, str(image_key).strip())
+    if user_image_index is not None and str(user_image_index).strip() != "":
+        try:
+            return resolve_user_image_to_data_uri(images, int(user_image_index))
+        except (TypeError, ValueError):
+            return None
+    if media_id and str(media_id).strip():
+        return await resolve_media_id_to_data_uri(agent, chat_id, str(media_id).strip())
+    return None
+
+
+def _any_source(*vals) -> bool:
+    return any(v is not None and str(v).strip() != "" for v in vals)
+
+
 def make_generate_video_tool(agent, images: list[dict] | None = None):
     """Factory: builds the admin-only generate_video langchain tool.
 
@@ -214,6 +273,11 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
         first_frame_image_key: str | None = None,
         first_frame_user_image_index: int | None = None,
         first_frame_media_id: str | None = None,
+        last_frame_image_url: str | None = None,
+        last_frame_path: str | None = None,
+        last_frame_image_key: str | None = None,
+        last_frame_user_image_index: int | None = None,
+        last_frame_media_id: str | None = None,
         reference_image_urls: list[str] | None = None,
         reference_image_keys: list[str] | None = None,
         reference_user_image_indexes: list[int] | None = None,
@@ -238,6 +302,11 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
                 "google" -> google/veo-3.1-fast; aspect 16:9|9:16, resolution
                     720p|1080p|4K, duration 4|6|8, generates an audio track by
                     default. Use google for cinematic prompts with sound.
+                    Supports first AND last frame, up to 3 reference images.
+                "google-lite" -> google/veo-3.1-lite; same as google but less
+                    than half the price, resolution 720p|1080p only (no 4K) and
+                    NO reference images. Supports first and last frame. Prefer
+                    it for drafts and cheap iterations.
                 "avatar" -> heygen/avatar-iv; a TALKING-HEAD avatar that animates
                     ONE face photo to speak. aspect 16:9|9:16|1:1|4:3|3:4,
                     resolution 720p|1080p. Length follows the speech (no duration
@@ -255,7 +324,8 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
                 unsupported value snaps to the nearest allowed one. If omitted,
                 the provider default is used.
             resolution: Output resolution. Allowed values depend on `provider`
-                (heygen 480p|768p, google 720p|1080p|4K). If omitted, the
+                (heygen 480p|768p, google 720p|1080p|4K, google-lite
+                720p|1080p). If omitted, the
                 provider default is used.
 
             First frame (image-to-video). Provide AT MOST ONE of these; they are
@@ -270,8 +340,17 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
               first_frame_media_id: a media_id from the per-chat MEDIA STORAGE
                 (cache of recent images in this chat).
 
+            Last frame (google / google-lite only): the clip ends on this image,
+            the model interpolates between first and last frame. Same five
+            sources and the same priority as first_frame_*:
+              last_frame_image_url, last_frame_path, last_frame_image_key,
+              last_frame_user_image_index, last_frame_media_id.
+            Give a first frame too and use duration=8 for interpolation.
+            Ignored (with a note in the result) for heygen and avatar.
+
             References (character / style / object). Each list is resolved and
-            all resolved images are sent together:
+            all resolved images are sent together (google: max 3, extra ones
+            are dropped; google-lite: not supported, dropped with a note):
               reference_image_urls: list of image URLs or data URIs.
               reference_image_keys: list of generated_images image_keys.
               reference_user_image_indexes: indexes of user-attached images.
@@ -300,6 +379,7 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
         api_key = cfg.get("api_key") or ""
         base_url = (cfg.get("base_url") or "").rstrip("/")
         prov_key = (provider or DEFAULT_PROVIDER).strip().lower()
+        prov_key = PROVIDER_ALIASES.get(prov_key, prov_key)
         if prov_key not in PROVIDERS:
             return (f"generate_video error: unknown provider {provider!r}. "
                     f"Choose one of: {', '.join(PROVIDERS)}.")
@@ -331,24 +411,29 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
                     # snap to the closest allowed duration for this provider
                     dur = min(prov["duration"], key=lambda d: (abs(d - dur), d))
 
-        # -- resolve first frame (at most one, priority order) ------------
-        first_frame_uri = None
-        if first_frame_image_url and str(first_frame_image_url).strip():
-            first_frame_uri = str(first_frame_image_url).strip()
-        elif first_frame_path and str(first_frame_path).strip():
-            first_frame_uri = resolve_path_to_data_uri(str(first_frame_path).strip())
-        elif first_frame_image_key and str(first_frame_image_key).strip():
-            first_frame_uri = await resolve_image_key_to_data_uri(
-                agent, str(first_frame_image_key).strip())
-        elif first_frame_user_image_index is not None:
-            try:
-                first_frame_uri = resolve_user_image_to_data_uri(
-                    images, int(first_frame_user_image_index))
-            except (TypeError, ValueError):
-                first_frame_uri = None
-        elif first_frame_media_id and str(first_frame_media_id).strip():
-            first_frame_uri = await resolve_media_id_to_data_uri(
-                agent, chat_id, str(first_frame_media_id).strip())
+        notes: list[str] = []
+
+        # -- resolve first / last frame (at most one source each) ---------
+        first_frame_uri = await _resolve_frame(
+            agent, images, chat_id, first_frame_image_url, first_frame_path,
+            first_frame_image_key, first_frame_user_image_index,
+            first_frame_media_id)
+        last_frame_uri = None
+        last_given = _any_source(
+            last_frame_image_url, last_frame_path, last_frame_image_key,
+            last_frame_user_image_index, last_frame_media_id)
+        if last_given:
+            if "last_frame" not in prov["frames"]:
+                notes.append(f"last frame ignored: {prov_key} supports only "
+                             f"the first frame")
+            else:
+                last_frame_uri = await _resolve_frame(
+                    agent, images, chat_id, last_frame_image_url,
+                    last_frame_path, last_frame_image_key,
+                    last_frame_user_image_index, last_frame_media_id)
+                if not last_frame_uri:
+                    notes.append("last frame source could not be resolved, "
+                                 "sent without it")
 
         # -- resolve references (all sources concatenated) ----------------
         reference_uris: list[str] = []
@@ -366,6 +451,16 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
             uri = await resolve_media_id_to_data_uri(agent, chat_id, mid)
             if uri:
                 reference_uris.append(uri)
+
+        if reference_uris and prov_key != "avatar":
+            if not prov["refs"]:
+                notes.append(f"{len(reference_uris)} reference image(s) dropped: "
+                             f"{model} does not accept references")
+                reference_uris = []
+            elif prov["max_refs"] and len(reference_uris) > prov["max_refs"]:
+                notes.append(f"references cut from {len(reference_uris)} to "
+                             f"{prov['max_refs']} (model limit)")
+                reference_uris = reference_uris[:prov["max_refs"]]
 
         data = {
             "model": model,
@@ -413,12 +508,21 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
                     data["seed"] = int(seed)
                 except (TypeError, ValueError):
                     pass
+            frames = []
             if first_frame_uri:
-                data["frame_images"] = [{
+                frames.append({
                     "type": "image_url",
                     "image_url": {"url": first_frame_uri},
                     "frame_type": "first_frame",
-                }]
+                })
+            if last_frame_uri:
+                frames.append({
+                    "type": "image_url",
+                    "image_url": {"url": last_frame_uri},
+                    "frame_type": "last_frame",
+                })
+            if frames:
+                data["frame_images"] = frames
             if reference_uris:
                 data["input_references"] = [
                     {"type": "image_url", "image_url": {"url": u}} for u in reference_uris
@@ -502,7 +606,13 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
             pass
 
         size_kb = os.path.getsize(fpath) // 1024
-        return (f"Video generated via {prov_key} ({model}): {dur}s, {ar}, {res}. "
-                f"Saved to {fpath} ({size_kb} KB). Send it with send_file_to_user.")
+        frames_info = ""
+        if first_frame_uri or last_frame_uri:
+            parts = [n for n, u in (("first", first_frame_uri), ("last", last_frame_uri)) if u]
+            frames_info = f" Frames: {'+'.join(parts)}."
+        notes_info = f" Notes: {'; '.join(notes)}." if notes else ""
+        return (f"Video generated via {prov_key} ({model}): {dur}s, {ar}, {res}."
+                f"{frames_info} Saved to {fpath} ({size_kb} KB). "
+                f"Send it with send_file_to_user.{notes_info}")
 
     return generate_video

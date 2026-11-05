@@ -80,7 +80,7 @@ const TOOL_CATEGORIES = [
   {
     id:          "content",
     label:       "Контент и файлы",
-    description: "Генерация PPTX, DOCX, Excel, PNG",
+    description: "Генерация PPTX, DOCX, Excel, PNG, расшифровка аудио и видео",
     adminOnly:   false
   },
   {

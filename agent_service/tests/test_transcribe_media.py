@@ -243,3 +243,89 @@ def test_bad_sources(env, tmp_path):
 def test_no_key(env, monkeypatch):
     monkeypatch.setattr(ap, "CLOUD_LLM_ACCESS_KEY", "")
     assert "CLOUD_LLM_ACCESS_KEY" in run(tm.make_transcribe_media_tool(Agent()), local_path="a.mp3")
+
+
+# ───────────────────────── категория, лимиты, instruction, логи ─────────────────────────
+
+def test_transcribe_is_content_not_universal():
+    from agent.core import settings
+    assert "transcribe_media" in settings.TOOLS_SETTINGS["content"]
+    assert "transcribe_media" not in settings.UNIVERSAL_TOOLS
+    assert "transcribe_media" in settings.TOOL_DESCRIPTIONS
+
+
+def test_instruction_goes_to_prompt():
+    ch = {"length": 30.0}
+    p = tm.build_prompt(ch, 1, 0, False, None, None, "отметь, где обсуждают сроки")
+    assert "отметь, где обсуждают сроки" in p and "формат строк" in p
+    assert "Дополнительное указание" not in tm.build_prompt(ch, 1, 0, False, None, None, "  ")
+
+
+@needs_ffmpeg
+def test_instruction_reaches_model(env):
+    root, requests, state = env
+    _gen(root / "a.mp3", 2)
+    state["handler"] = lambda b, n: ok("[00:00 - 00:01] Спикер 1: ок")
+    run(tm.make_transcribe_media_tool(Agent(), chat_id="c"), local_path="a.mp3",
+        instruction="Спикер 1 это Павел")
+    assert "Спикер 1 это Павел" in requests[0]["messages"][0]["content"][0]["text"]
+
+
+def test_oversized_upload_is_deleted(env, monkeypatch):
+    root, requests, _ = env
+    monkeypatch.setattr(tm, "DELETABLE_ROOTS", [os.path.realpath(root)])
+    monkeypatch.setattr(tm, "MAX_INPUT_BYTES", 1000)
+    up = root / "u1"
+    up.mkdir()
+    f = up / "big.mp4"
+    f.write_bytes(b"x" * 2500)
+    out = run(tm.make_transcribe_media_tool(Agent(), chat_id="c"), local_path=str(f))
+    assert "больше лимита" in out and "удалён" in out
+    assert "минимум на 3 части" in out and "-f segment" in out
+    assert not f.exists() and not up.exists()
+    assert requests == []
+
+
+def test_oversized_outside_uploads_is_kept(env, monkeypatch, tmp_path):
+    root, requests, _ = env
+    monkeypatch.setattr(tm, "DELETABLE_ROOTS", [str(tmp_path / "other")])
+    monkeypatch.setattr(tm, "MAX_INPUT_BYTES", 1000)
+    f = root / "big.mp3"
+    f.write_bytes(b"x" * 2500)
+    out = run(tm.make_transcribe_media_tool(Agent(), chat_id="c"), local_path=str(f))
+    assert "не удалялся" in out and f.exists()
+
+
+@needs_ffmpeg
+def test_too_long_is_deleted(env, monkeypatch, caplog):
+    root, requests, _ = env
+    monkeypatch.setattr(tm, "DELETABLE_ROOTS", [os.path.realpath(root)])
+    monkeypatch.setattr(tm, "MAX_DURATION_SEC", 2)
+    f = root / "long.mp3"
+    _gen(f, 5)
+    with caplog.at_level("INFO", logger=tm.log.name):
+        out = run(tm.make_transcribe_media_tool(Agent(), chat_id="c"), local_path="long.mp3")
+    assert "длительность" in out and "удалён" in out and not f.exists()
+    assert requests == []
+    assert any("больше лимита" in r.getMessage() for r in caplog.records)
+
+
+def test_discard_source_refuses_outside(tmp_path, monkeypatch):
+    monkeypatch.setattr(tm, "DELETABLE_ROOTS", [str(tmp_path / "gen")])
+    (tmp_path / "gen").mkdir()
+    f = tmp_path / "keep.mp3"
+    f.write_bytes(b"x")
+    assert tm.discard_source(str(f)) is False and f.exists()
+    assert tm.discard_source(str(tmp_path / "gen" / ".." / "keep.mp3")) is False and f.exists()
+
+
+@needs_ffmpeg
+def test_logging_of_run(env, caplog):
+    root, requests, state = env
+    _gen(root / "a.mp3", 2)
+    state["handler"] = lambda b, n: ok("[00:00 - 00:01] Спикер 1: ок")
+    with caplog.at_level("INFO", logger=tm.log.name):
+        run(tm.make_transcribe_media_tool(Agent(), chat_id="c"), local_path="a.mp3")
+    msgs = "\\n".join(r.getMessage() for r in caplog.records)
+    for part in ("старт local:a.mp3", "нарезан на 1 фрагм.", "фрагмент 1/1", "in=250 out=40", "готово local:a.mp3"):
+        assert part in msgs, part

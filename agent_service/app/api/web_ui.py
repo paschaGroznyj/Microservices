@@ -204,7 +204,8 @@ async def upload_web_files(
             _src = (f"source_media_id={_fmid}" if _fmid else
                     (f"local_path={user_fpath}" if user_fpath else None))
             _tag, _what = (("🎬[VIDEO]", "видео") if ext in VIDEO_MIME else ("🎧[AUDIO]", "аудио"))
-            _hint = (f" (для расшифровки с таймкодами вызови transcribe_media с {_src})"
+            _hint = (f" (для расшифровки с таймкодами вызови transcribe_media с {_src}; "
+                     "тул в категории «Контент и файлы», если его нет — попроси включить)"
                      if _src else "")
             parts.append(
                 f"\n\n{_tag} [Прикрепленное {_what}: {f.filename}, {_human_size(len(raw))}]"

@@ -27,6 +27,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import uuid
 
 import httpx
@@ -46,8 +47,19 @@ VIDEO_EXT = {".mp4", ".m4v", ".webm", ".mov", ".ogv", ".avi", ".mkv", ".3gp",
              ".flv", ".wmv", ".mpeg", ".mpg", ".ts"}
 MEDIA_EXT = AUDIO_EXT | VIDEO_EXT
 
-MAX_INPUT_BYTES = 500 * 1024 * 1024      # исходник
-MAX_DURATION_SEC = 4 * 3600              # 4 часа
+def _env_num(name: str, default: float) -> float:
+    try:
+        v = float(os.getenv(name, "") or default)
+        return v if v > 0 else default
+    except ValueError:
+        return default
+
+
+MAX_INPUT_BYTES = int(_env_num("TRANSCRIBE_MAX_INPUT_MB", 500) * 1024 * 1024)   # исходник
+MAX_DURATION_SEC = int(_env_num("TRANSCRIBE_MAX_DURATION_MIN", 240) * 60)       # 4 часа
+# Слишком большой исходник удаляем только из загрузок агента. /sandbox — черновики
+# Павла, их не трогаем.
+DELETABLE_ROOTS = [os.path.realpath("/app/generated_files")]
 AUDIO_CHUNK_SEC = 600                    # ~25 ток/с -> ~15k токенов на вход
 VIDEO_CHUNK_SEC = 300                    # ~66 ток/с с кадрами
 MIN_TAIL_SEC = 60                        # хвост короче — приклеиваем к прошлому
@@ -300,7 +312,7 @@ def prepare_chunks(src: str, workdir: str, visual: bool, info: dict,
 # ───────────────────────── промпт и запрос ─────────────────────────
 
 def build_prompt(chunk: dict, total: int, idx: int, visual: bool, language: str | None,
-                 context: str | None) -> str:
+                 context: str | None, instruction: str | None = None) -> str:
     lines = [
         "Сделай ТОЧНУЮ дословную расшифровку речи из этой записи.",
         f"Это фрагмент {idx + 1} из {total}, длительность {fmt_ts(chunk['length'])}. "
@@ -331,6 +343,9 @@ def build_prompt(chunk: dict, total: int, idx: int, visual: bool, language: str 
         lines.append("Пиши на языке оригинала, не переводи.")
     if context:
         lines += ["", f"Контекст и словарь терминов от пользователя: {context.strip()[:2000]}"]
+    if instruction and instruction.strip():
+        lines += ["", "Дополнительное указание (выполняй его, но формат строк с таймкодами "
+                  f"не меняй и речь не пропускай): {instruction.strip()[:2000]}"]
     return "\n".join(lines)
 
 
@@ -356,10 +371,13 @@ async def _post_with_retries(client: httpx.AsyncClient, url: str, payload: dict,
                 return r.json()
             last = f"HTTP {r.status_code}: {r.text[:300]}"
             if r.status_code not in (408, 409, 425, 429, 500, 502, 503, 504):
+                log.warning("transcribe_media: попытка %d/%d %s, без повтора", attempt + 1, RETRIES, last[:200])
                 break
         except (httpx.TransportError, ValueError) as e:
             last = f"{type(e).__name__}: {e}"
-        await asyncio.sleep(2 * (attempt + 1))
+        log.warning("transcribe_media: попытка %d/%d не удалась: %s", attempt + 1, RETRIES, (last or "")[:200])
+        if attempt + 1 < RETRIES:
+            await asyncio.sleep(2 * (attempt + 1))
     raise RuntimeError(last or "пустой ответ")
 
 
@@ -387,6 +405,52 @@ def resolve_local_media(path_or_name: str) -> str | None:
     return None
 
 
+def _mb(n: float) -> str:
+    return f"{n / (1024 * 1024):.1f} МБ"
+
+
+def discard_source(real: str) -> bool:
+    """Удаляет исходник, если он лежит в DELETABLE_ROOTS. Пустую папку загрузки тоже."""
+    real = os.path.realpath(real)
+    if not any(real.startswith(r + os.sep) for r in DELETABLE_ROOTS) or not os.path.isfile(real):
+        return False
+    try:
+        os.remove(real)
+    except OSError as e:
+        log.warning("transcribe_media: не удалось удалить %s: %s", real, e)
+        return False
+    parent = os.path.dirname(real)
+    if parent not in DELETABLE_ROOTS:
+        try:
+            os.rmdir(parent)          # только если пустая
+        except OSError:
+            pass
+    log.info("transcribe_media: удалён слишком большой исходник %s", real)
+    return True
+
+
+def too_big_message(name: str, reason: str, deleted: bool, size: int, duration: float) -> str:
+    """Текст для агента: что не так, что с файлом и как нарезать."""
+    parts = 2
+    if size > MAX_INPUT_BYTES:
+        parts = max(parts, -(-size // MAX_INPUT_BYTES))
+    if duration > MAX_DURATION_SEC:
+        parts = max(parts, -(-int(duration) // MAX_DURATION_SEC))
+    seg = int(duration / parts) if duration > 0 else MAX_DURATION_SEC // 2
+    seg = max(60, min(seg, MAX_DURATION_SEC))
+    ext = os.path.splitext(name)[1] or ".mp4"
+    fate = ("Файл удалён из области агента, чтобы не занимать диск." if deleted
+            else "Файл не удалялся (он лежит вне загрузок агента).")
+    return (f"«{name}» не расшифрован: {reason}. {fate}\n"
+            f"Сообщи пользователю, что файл слишком большой, и попроси нарезать его минимум на "
+            f"{parts} части (каждая до {_mb(MAX_INPUT_BYTES)} и до {fmt_ts(MAX_DURATION_SEC)}) "
+            f"и прислать по очереди. Команда для нарезки без перекодирования:\n"
+            f"ffmpeg -i \"{name}\" -c copy -map 0 -f segment -segment_time {seg} "
+            f"-reset_timestamps 1 part_%02d{ext}\n"
+            "Если важен только звук, можно сжать запись в mp3: "
+            f"ffmpeg -i \"{name}\" -vn -ac 1 -ar 16000 -b:a 48k audio.mp3")
+
+
 def _safe_stem(name: str) -> str:
     stem = os.path.splitext(os.path.basename(name or "media"))[0]
     stem = re.sub(r"[^\w\-.]+", "_", stem, flags=re.U).strip("._")
@@ -406,6 +470,7 @@ def make_transcribe_media_tool(agent, chat_id=None, output_root: str | None = No
         include_visual: bool = False,
         language: str | None = None,
         context: str | None = None,
+        instruction: str | None = None,
     ) -> str:
         """
         Exact verbatim transcription of AUDIO or VIDEO with timestamps and speakers
@@ -424,6 +489,13 @@ def make_transcribe_media_tool(agent, chat_id=None, output_root: str | None = No
             (scene changes, slides, text). Default False = speech only (cheaper).
         language — main language hint, e.g. "ru", "en". Optional.
         context — names, terms, glossary to spell correctly. Optional.
+        instruction — your own extra request to the transcription model, e.g.
+            "отметь, где обсуждают сроки" or "speaker 1 is Павел". The timestamped
+            line format stays fixed. Optional, up to 2000 chars.
+
+        Size limits: source up to TRANSCRIBE_MAX_INPUT_MB (500 MB by default) and
+        TRANSCRIBE_MAX_DURATION_MIN (240 min). A larger uploaded file is deleted from
+        the agent area and the answer explains how the user should split it.
 
         Long recordings are split automatically (audio 10 min, video 5 min chunks)
         and stitched back with absolute timestamps. The FULL transcript is saved to
@@ -441,6 +513,7 @@ def make_transcribe_media_tool(agent, chat_id=None, output_root: str | None = No
                     "или реестра медиа) либо local_path файла в /app/generated_files или /sandbox.")
 
         workdir = tempfile.mkdtemp(prefix="transcribe_")
+        t_start = time.monotonic()
         try:
             # ── 1. исходник в workdir ──
             if mid:
@@ -470,14 +543,29 @@ def make_transcribe_media_tool(agent, chat_id=None, output_root: str | None = No
                 src = real
                 label = f"local:{name}"
             size = os.path.getsize(src)
+            log.info("transcribe_media: старт %s, %s, include_visual=%s, language=%s, "
+                     "context=%d симв., instruction=%d симв.", label, _mb(size), include_visual,
+                     language, len(context or ""), len(instruction or ""))
             if size > MAX_INPUT_BYTES:
-                return f"«{name}»: {size // (1024 * 1024)} МБ, лимит {MAX_INPUT_BYTES // (1024 * 1024)} МБ."
+                deleted = discard_source(src) if not mid else False
+                log.warning("transcribe_media: %s %s больше лимита %s, удалён=%s",
+                            label, _mb(size), _mb(MAX_INPUT_BYTES), deleted)
+                return too_big_message(name, f"размер {_mb(size)} больше лимита {_mb(MAX_INPUT_BYTES)}",
+                                       deleted, size, 0.0)
 
             # ── 2. probe + нарезка ──
             try:
                 info = await asyncio.to_thread(probe, src)
             except Exception as e:
                 return f"«{name}» не читается как медиафайл: {e}"
+            log.info("transcribe_media: %s длительность %s, звук=%s, видео=%s", label,
+                     fmt_ts(info["duration"]), info["has_audio"], info["has_video"])
+            if info["duration"] > MAX_DURATION_SEC:
+                deleted = discard_source(src) if not mid else False
+                log.warning("transcribe_media: %s длительность %s больше лимита %s, удалён=%s",
+                            label, fmt_ts(info["duration"]), fmt_ts(MAX_DURATION_SEC), deleted)
+                return too_big_message(name, f"длительность {fmt_ts(info['duration'])} больше лимита "
+                                       f"{fmt_ts(MAX_DURATION_SEC)}", deleted, size, info["duration"])
             if not info["has_audio"] and not info["has_video"]:
                 return f"«{name}»: в файле нет ни звуковой, ни видеодорожки."
             warnings: list[str] = []
@@ -489,11 +577,14 @@ def make_transcribe_media_tool(agent, chat_id=None, output_root: str | None = No
                     return f"«{name}»: нечего расшифровывать."
                 visual = True
                 warnings.append("в файле нет звука — описаны только визуальные события")
+            t_cut = time.monotonic()
             try:
                 chunks = await asyncio.to_thread(prepare_chunks, src, workdir, visual, info)
             except Exception as e:
                 log.warning("transcribe_media: нарезка %s упала: %s", label, e)
                 return f"Не удалось подготовить «{name}»: {e}"
+            log.info("transcribe_media: %s нарезан на %d фрагм. (%s) за %.1f с, модель %s", label,
+                     len(chunks), "видео" if visual else "аудио", time.monotonic() - t_cut, cfg["model"])
 
             # ── 3. запросы по фрагментам ──
             url = cfg["base_url"].rstrip("/") + "/chat/completions"
@@ -505,7 +596,7 @@ def make_transcribe_media_tool(agent, chat_id=None, output_root: str | None = No
                 async with sem:
                     b64 = await asyncio.to_thread(
                         lambda: base64.b64encode(open(ch["path"], "rb").read()).decode("ascii"))
-                    prompt = build_prompt(ch, len(chunks), i, visual, language, context)
+                    prompt = build_prompt(ch, len(chunks), i, visual, language, context, instruction)
                     if ch["mode"] == "audio":
                         media = {"type": "input_audio", "input_audio": {"data": b64, "format": ch["fmt"]}}
                     else:
@@ -513,7 +604,18 @@ def make_transcribe_media_tool(agent, chat_id=None, output_root: str | None = No
                     payload = {"model": cfg["model"], "max_tokens": MAX_TOKENS,
                                "messages": [{"role": "user",
                                              "content": [{"type": "text", "text": prompt}, media]}]}
-                    data = await _post_with_retries(client, url, payload, headers)
+                    t0 = time.monotonic()
+                    try:
+                        data = await _post_with_retries(client, url, payload, headers)
+                    except Exception as e:
+                        log.warning("transcribe_media: %s фрагмент %d/%d (%s) упал за %.1f с: %s", label,
+                                    i + 1, len(chunks), fmt_ts(ch["offset"]), time.monotonic() - t0, e)
+                        raise
+                    u = data.get("usage") or {}
+                    log.info("transcribe_media: %s фрагмент %d/%d с %s, %s за %.1f с, in=%s out=%s finish=%s",
+                             label, i + 1, len(chunks), fmt_ts(ch["offset"]), _mb(len(b64)),
+                             time.monotonic() - t0, u.get("prompt_tokens"), u.get("completion_tokens"),
+                             ((data.get("choices") or [{}])[0] or {}).get("finish_reason"))
                     if callable(track):
                         track(data, tool="transcribe_media", model=cfg["model"],
                               extra={"media_seconds": round(ch["length"])})
@@ -581,7 +683,9 @@ def make_transcribe_media_tool(agent, chat_id=None, output_root: str | None = No
                 head.append("Предупреждения: " + "; ".join(warnings)[:1500])
             preview = txt if len(txt) <= PREVIEW_CHARS else (
                 txt[:PREVIEW_CHARS] + f"\n… (ещё {len(txt) - PREVIEW_CHARS} символов в файле .txt)")
-            log.info("transcribe_media: %s -> %d сегм., %d фрагм., %s", label, len(segments), len(chunks), out_dir)
+            log.info("transcribe_media: готово %s -> %d сегм., %d фрагм., ошибок %d, предупреждений %d, "
+                     "%.1f с, %s", label, len(segments), len(chunks), failed, len(warnings),
+                     time.monotonic() - t_start, out_dir)
             return "\n".join(head) + "\n\nРасшифровка:\n" + preview
         except Exception as e:
             log.error("transcribe_media failed: %s", e, exc_info=True)

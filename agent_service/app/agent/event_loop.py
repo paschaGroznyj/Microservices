@@ -35,10 +35,8 @@ from .core.agent_provider import (
     get_real_model_name,
     resolve_model_tag,
 )
-from .core.botocore_client import OBSWorker
 from .core.config import (
-    ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH,
-    METADATA_FILE, PORT_GATEWAY_PORT, PORT_GATEWAY_SIGMA_PORT, ADMINS_INFO,
+    PORT_GATEWAY_PORT, PORT_GATEWAY_SIGMA_PORT, ADMINS_INFO,
     PORT_PARSERS_SERVICE, get_role, ADMINS_BY_USER_ID,
     ADMINS_BY_TG_ID, get_role_tg, TG_BOT_PUSH_URL, MAX_BOT_PUSH_URL,
     ADMINS_BY_MAX_ID, get_role_max,
@@ -706,9 +704,6 @@ class HarnessAgent:
     def __init__(self, database=None):
         base_dir = Path(__file__).resolve().parent
         self.db = database
-        self.articles_path = base_dir / Path(STORAGE_PATH) / ARTICLES_FOLDER
-        self.name_meta_dir = base_dir / Path(STORAGE_PATH)
-        self.digest_path = base_dir / "digests"
         # Фоновая rolling-саммаризация: lock+task per chat_id (одна реплика)
         self._summary_locks = {}
         self._summary_tasks = {}
@@ -717,7 +712,6 @@ class HarnessAgent:
             agent_models=self.AGENT_MODELS,
             builder_overrides=globals(),
         )
-        self.obs_loader = OBSWorker()
         self.services = {"parsers": {"url": f"http://parsers_service:{PORT_PARSERS_SERVICE}",}}
         # Память: последние 10 сообщений (5 пар human/ai)
         self._memories: Dict[str, ConversationBufferWindowMemory] = {}
@@ -1007,8 +1001,6 @@ class HarnessAgent:
         # 14b. Универсальная отправка письма (текст + вложения, лимит 20МБ)
         from .tools.email.tool_send_email_universal import make_send_email_tool
         send_email = make_send_email_tool(agent)
-        # 15. Работа с удаленным репозиторием
-        from .tools.git.tool_to_connect_mcp import connect_mcp_git
         # 16. Публикация задачи в планировщик-песок
         from .tools.sandbox.tool_submit_task import make_submit_tools
         submit_task = make_submit_tools(agent)
@@ -1066,8 +1058,6 @@ class HarnessAgent:
             send_message_tool,
             work_with_email,
             send_email,
-            connect_mcp_git,
-            # knowledge_graph_tool
         ]
 
         all_tools = (

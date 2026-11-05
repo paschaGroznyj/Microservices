@@ -167,11 +167,6 @@ async def push_sse(username: str, data: dict):
         sse_queues[username] = asyncio.Queue()
     await sse_queues[username].put(data)
 
-@app.get("/some-route")
-async def some_route(request: Request):
-    logging.info(request.headers)
-    authentik_user = request.headers.get("X-Authentik-Username")
-    logger.info(authentik_user)
 
 # Другой коннектор для отправки релевантных статей на фронт
 user_connections: dict[str, WebSocket] = {}
@@ -1048,58 +1043,6 @@ pending_requests: dict[str, int] = {}
 class StopMessageRequest(BaseModel):
     request_id: str
 
-@app.post("/api/favorites")
-async def favorites(request: Request):
-    """Обработка звездочек избранного"""
-    user = await get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    data = await request.json()
-    parser_url = SERVICES['parsers']['url']
-    try:
-        response = await app.state.http_client.post(
-            f"{parser_url}/favorites",
-            json=data,
-            timeout=30.0
-        )
-        if response.status_code == 200:
-            return Response(
-                content=response.content,
-                status_code=200,
-                media_type="application/json"
-            )
-        else:
-            raise HTTPException(status_code=response.status_code, detail="Parser error")
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"Parsers service unreachable: {str(e)}")
-
-@app.post("/api/favorites/select")
-async def favorites_select(request: Request):
-    """Обработка звездочек избранного"""
-    user = await get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    username = {'username': user['username']}
-    parser_url = SERVICES['parsers']['url']
-    try:
-        response = await app.state.http_client.post(
-            f"{parser_url}/favorites/select",
-            json=username,
-            timeout=30.0
-        )
-        if response.status_code == 200:
-            return Response(
-                content=response.content,
-                status_code=200,
-                media_type="application/json"
-            )
-        else:
-            raise HTTPException(status_code=response.status_code, detail="Parser error")
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"Parsers service unreachable: {str(e)}")
-
 async def notify_user_error(username: str, error_type: str = "error_parser"):
     ws = user_connections.get(username)
     if ws:
@@ -1114,119 +1057,6 @@ async def notify_user_message(username: str, type_message: str, message: str, so
         await ws.send_json({"type": type_message, "message": message, "source": source, "title": title})
     else:
         logging.warning(f"Нет WS соединения для {username}")
-
-@app.post("/api/search")
-async def searching(request: Request):
-    """Направить в агента"""
-    user = await get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    data = await request.json()
-    post_body = {
-        "user_name": data['username'],
-        "query": data['query']
-    }
-    agent_url = SERVICES['agent_service']['url']
-    # Отправляем дефолтные словосочетания с фронта
-    try:
-        response = await app.state.http_client.post(
-            f"{agent_url}/api/search",
-            json=post_body,
-            timeout=60.0
-        )
-        """
-        С парсера
-        {   
-            'type': 'parser'
-            'request_id': request_id,
-            'user_name': user_name,
-            'user_query': user_query,
-            'count': len(saved_articles),
-            'articles': saved_articles,
-        }
-        С агента, если запрос не релевантный
-        {
-            'type': 'agent'
-            'message': text
-        }
-        
-        """
-        if response.status_code == 200:
-            result = response.json()
-            if result.get("type") == "agent":
-                await notify_user_message(data['username'], type_message=result.get("type"), message=result['message'])
-            # Агент вернул ошибку парсера внутри 200
-            if result.get("type") == "arxiv_error":
-                await notify_user_message(data['username'], type_message=result.get("type"), message=result['message'])
-            if result.get("type") == "error_parser":
-                await notify_user_error(data['username'])
-                raise HTTPException(status_code=502, detail="Parser internal error")
-            logging.info(result.get("type"))
-            if result.get("type") == "parser":
-                meta = result.get("meta", {})
-                logging.info(meta)
-                warnings_list = meta.get("warnings", [])
-
-                if warnings_list:
-                    for warning in warnings_list:
-                        warning_text = warning.get("message", "Неизвестная ошибка")
-                        source = warning.get("source", "Неизвестный источник")
-                        await notify_user_message(
-                            data['username'],
-                            type_message=result.get("type"),
-                            message=warning_text,
-                            source=source,
-                            title=warning.get("title")
-                        )
-                else:
-                    pass
-            return Response(
-                content=response.content,
-                status_code=200,
-                media_type="application/json"
-            )
-        else:
-            # Агент вернул не 200 — шлём WS и пробрасываем ошибку
-            await notify_user_error(data['username'])
-            raise HTTPException(status_code=response.status_code, detail="Agent error")
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"Agent service unreachable: {str(e)}")
-
-
-@app.post("/api/translate")
-async def translate(request: Request):
-    """Направить в агента"""
-    user = await get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    data = await request.json()
-    post_body = {
-        "username": user['username'],
-        "article_id": data['article_id']
-    }
-    logging.info(f"Это перевод для {post_body}")
-    agent_url = SERVICES['agent_service']['url']
-    # Отправляем дефолтные словосочетания с фронта
-    try:
-        response = await app.state.http_client.post(
-            f"{agent_url}/api/translate",
-            json=post_body,
-            timeout=30.0
-        )
-        if response.status_code == 200:
-            return Response(
-                content=response.content,
-                status_code=200,
-                media_type="application/json"
-            )
-        else:
-            # Агент вернул не 200 — шлём WS и пробрасываем ошибку
-            await notify_user_message(user['username'], type_message='translate', message="Не удалось перевести аннотацию")
-            raise HTTPException(status_code=response.status_code, detail="Agent error")
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"Agent service unreachable: {str(e)}")
 
 
 @app.post("/internal/sse-push")
@@ -1244,46 +1074,6 @@ async def internal_sse_push(request: Request):
 
     return {"ok": True}
 
-
-@app.post("/api/search/default")
-async def searching_default(request: Request):
-    """Направить сразу в парсер"""
-    user = await get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    data = await request.json()
-
-    post_body = {
-        "user_name": data['username'],
-        "query": "default",
-        "params": {
-            "keywords": [data['key_word']],
-            "limit": 10
-        },
-        "request_id": None,
-        "search_now": False
-    }
-
-    logging.info(f"ДЕФОЛТ ДАННЫЕ с вкладки ПОИСКА {data}")
-    parser_url = SERVICES['parsers']['url']
-    # Отправляем дефолтные словосочетания с фронта
-    try:
-        response = await app.state.http_client.post(
-            f"{parser_url}/search/articles",
-            json=post_body,
-            timeout=30.0
-        )
-        if response.status_code == 200:
-            return Response(
-                content=response.content,
-                status_code=200,
-                media_type="application/json"
-            )
-        else:
-            raise HTTPException(status_code=response.status_code, detail="Parser error")
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"Parsers service unreachable: {str(e)}")
 
 # ========== ПРОКСИ ДЛЯ ЧАТОВ ==========
 @app.get("/api/chats/workspaces")

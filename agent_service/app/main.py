@@ -8,7 +8,6 @@ import logging
 import base64
 import uuid
 import asyncio
-import websockets
 from urllib.parse import quote
 from httpx import AsyncClient
 from datetime import datetime, timezone

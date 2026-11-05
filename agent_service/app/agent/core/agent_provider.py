@@ -254,14 +254,6 @@ def reload_models_registry(config_path: str | Path | None = None) -> ModelsRegis
 _register_builders(_REGISTRY)
 
 
-@lru_cache
-def get_embedd_model():
-    return OpenAIEmbeddings(
-        model="BAAI/bge-m3",
-        api_key=CLOUD_LLM_ACCESS_KEY,
-        base_url="https://foundation-models.api.cloud.ru/v1",
-    )
-
 
 @lru_cache
 def get_llm_model():

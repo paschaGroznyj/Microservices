@@ -5,16 +5,11 @@ langchain_core==0.3.80
 langchain_openai>=0.3,<0.4
 langchain-anthropic>=0.3,<0.4
 PyYAML
-faiss-cpu==1.13.1
-scikit-learn
 fastapi
 uvicorn
 aiokafka
 python-dotenv==1.0.0
-watchdog==4.0.0
-apscheduler==3.10.4
 pydantic==2.8.0
-beautifulsoup4
 environs
 botocore==1.42.84
 aiobotocore==3.4.0
@@ -22,8 +17,6 @@ python-dotenv
 requests
 asyncpg
 PyPDF2
-cryptography
-websockets
 sqlparse
 python-docx
 python-multipart

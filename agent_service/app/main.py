@@ -958,21 +958,14 @@ async def health():
 
 
 # ── Доступность LLM-провайдеров ────────────────────────────────────
-from agent.core.agent_provider import (
-    get_llm_model_gpt, get_llm_model_claude, get_llm_model_gemini, get_llm_model_glm
-)
+from agent.core.agent_provider import get_provider_models_for_ping
 
 _PROVIDERS_TTL = 30.0  # сек — как часто реально перепроверяем провайдеров
 _providers_cache: dict = {"ts": 0.0, "data": None}
 _providers_lock = asyncio.Lock()
 
-# id модели в UI -> человекочитаемое имя + фабрика llm
-_PROVIDER_MODELS = {
-    "coder":     ("openai/gpt-5.4",           get_llm_model_gpt),
-    "designer":  ("anthropic/claude-opus-4.8",      get_llm_model_claude),
-    "universal": ("zai-org/GLM-5.2",  get_llm_model_glm),
-    "gemini": ("google/gemini-3.1-pro-preview",  get_llm_model_gemini),
-}
+# id модели в UI -> человекочитаемое имя + фабрика llm (собирается из models_config.yaml)
+_PROVIDER_MODELS = get_provider_models_for_ping()
 
 
 async def _ping_provider(model_id: str, model_name: str, factory) -> dict:

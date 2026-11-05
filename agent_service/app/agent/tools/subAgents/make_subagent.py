@@ -252,13 +252,19 @@ def make_subagent_tool(agent_instance, parent_tools=None):
             )
 
         # ── 3. Привязываем тулзы к LLM ───────────────────────────────────────
-        base_llm = (
-            getattr(agent, "llm", None)
-            or agent.AGENT_MODELS.get(agent._ctx_get("agent_model", getattr(agent, "current_agent_model", "universal")))
-            or agent.AGENT_MODELS.get("universal")
-            or agent.AGENT_MODELS.get("designer")
-            or agent.AGENT_MODELS.get("coder")
+        from ...core.agent_provider import get_vision_fallback_order, resolve_model_tag
+        cur_tag = resolve_model_tag(
+            agent._ctx_get("agent_model", getattr(agent, "current_agent_model", None)),
+            agent_models=agent.AGENT_MODELS,
         )
+        base_llm = getattr(agent, "llm", None) or agent.AGENT_MODELS.get(cur_tag)
+        if base_llm is None:
+            for _fb_tag in get_vision_fallback_order():
+                base_llm = agent.AGENT_MODELS.get(_fb_tag)
+                if base_llm is not None:
+                    break
+        if base_llm is None and agent.AGENT_MODELS:
+            base_llm = next(iter(agent.AGENT_MODELS.values()))
         llm_with_tools = base_llm.bind_tools(filtered)
 
 

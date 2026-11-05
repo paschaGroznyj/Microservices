@@ -17,10 +17,24 @@ from langchain.memory import ConversationBufferWindowMemory
 from langchain_core.messages import ToolMessage, trim_messages
 from langchain_core.messages.utils import count_tokens_approximately
 
-from .core.agent_provider import (get_llm_lite_model, get_llm_model,
-get_llm_model_gpt, get_llm_model_claude, get_llm_model_gemini,
-get_llm_lite_model_gpt_mini, get_llm_lite_model_gemini_flash,
-get_llm_model_glm, get_real_model_name)
+from .core.agent_provider import (
+    build_agent_models,
+    build_lite_models,
+    get_chars_per_token_map,
+    get_imitate_tool_status_models,
+    get_llm_lite_model,
+    get_llm_lite_model_gemini_flash,
+    get_llm_lite_model_gpt_mini,
+    get_llm_model,
+    get_llm_model_claude,
+    get_llm_model_gemini,
+    get_llm_model_glm,
+    get_llm_model_gpt,
+    get_model_labels,
+    get_model_spec,
+    get_real_model_name,
+    resolve_model_tag,
+)
 from .core.botocore_client import OBSWorker
 from .core.config import (
     ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH,
@@ -202,12 +216,14 @@ TRACE_SUMMARY_THRESHOLD = int(os.getenv("TRACE_SUMMARY_THRESHOLD", "20000"))
 MAX_TRACE_HARD_CHARS = int(os.getenv("MAX_TRACE_HARD_CHARS", "21000"))
 
 # Имитация reasoning для моделей, которые НЕ отдают свой reasoning в стрим
-# (coder/gpt, gemini). Вместо тишины на шаге с tool_calls льём в reasoning-блок
-# короткую фразу-описание тула из словаря tool_status_messages.
+# (определяется флагом imitate_tool_status в models_config.yaml либо env).
 IMITATE_TOOL_STATUS = os.getenv("IMITATE_TOOL_STATUS", "1").strip() not in ("0", "false", "False", "")
-IMITATE_TOOL_STATUS_MODELS = {
-    m.strip() for m in os.getenv("IMITATE_TOOL_STATUS_MODELS", "coder,gemini").split(",") if m.strip()
-}
+_IMITATE_MODELS_ENV = os.getenv("IMITATE_TOOL_STATUS_MODELS")
+IMITATE_TOOL_STATUS_MODELS = (
+    {m.strip() for m in _IMITATE_MODELS_ENV.split(",") if m.strip()}
+    if _IMITATE_MODELS_ENV is not None
+    else get_imitate_tool_status_models()
+)
 
 def _truncate_text(text: str, max_chars: int = MAX_STDOUT_CHARS) -> str:
     """Обрезает текст, если он превышает лимит, добавляя плашку с указанием перерасхода."""
@@ -696,20 +712,11 @@ class HarnessAgent:
         # Фоновая rolling-саммаризация: lock+task per chat_id (одна реплика)
         self._summary_locks = {}
         self._summary_tasks = {}
-        self.AGENT_MODELS = {'coder': get_llm_model_gpt(),
-                            'designer': get_llm_model_claude(),
-                            'universal': get_llm_model_glm(),
-                            'gemini': get_llm_model_gemini()
-                            }
-        self.llm_lite = get_llm_lite_model()
-        # Цепочка фолбэков для лайт-модели (суммаризация и прочие служебные
-        # вызовы, летящие с фронта): по умолчанию haiku, при отказе —
-        # gpt-5-mini, затем gemini-3-flash-preview.
-        self.llm_lite_fallbacks = [
-            get_llm_lite_model_gpt_mini(),
-            get_llm_lite_model_gemini_flash(),
-            get_llm_model_glm()
-        ]
+        self.AGENT_MODELS = build_agent_models(builder_overrides=globals())
+        self.llm_lite, self.llm_lite_fallbacks = build_lite_models(
+            agent_models=self.AGENT_MODELS,
+            builder_overrides=globals(),
+        )
         self.obs_loader = OBSWorker()
         self.services = {"parsers": {"url": f"http://parsers_service:{PORT_PARSERS_SERVICE}",}}
         # Память: последние 10 сообщений (5 пар human/ai)
@@ -1320,12 +1327,7 @@ class HarnessAgent:
 
         Использует готовый health-check эндпоинт того же процесса
         (кеш TTL 30с на его стороне). При любой ошибке — мягкий фолбэк."""
-        _labels = {
-            "coder": "GPT",
-            "designer": "Claude",
-            "universal": "GLM",
-            "gemini": "Gemini"
-        }
+        _labels = get_model_labels()
         try:
             client = await self._get_http_client()
             port = os.getenv("PORT_PM_AGENT") or "9001"
@@ -1608,21 +1610,8 @@ class HarnessAgent:
                 "medium": {"limit_mem": 12, "max_tokens": 15_000},
                 "large":  {"limit_mem": 14, "max_tokens": 30_000},
             }
-            _MODEL_ALIASES = {
-                "gpt": "coder",
-                "claude": "designer",
-                "glm": "universal",
-                "gemini": "gemini",
-            }
-            if agent_model in _MODEL_ALIASES:
-                agent_model = _MODEL_ALIASES[agent_model]
-            if agent_model not in self.AGENT_MODELS:
-                for _abs_k, _m_inst in self.AGENT_MODELS.items():
-                    if get_real_model_name(_m_inst) == agent_model:
-                        agent_model = _abs_k
-                        break
-                else:
-                    agent_model = 'coder'
+            agent_model = resolve_model_tag(agent_model, self.AGENT_MODELS)
+            model_spec = get_model_spec(agent_model, self.AGENT_MODELS)
             llm = self.AGENT_MODELS[agent_model]
             real_agent_model = get_real_model_name(llm)
             logging.info(f'Выбрана модель {agent_model} ({real_agent_model})')
@@ -1728,7 +1717,7 @@ class HarnessAgent:
             # Telegram: подмешиваем HTML-инструкцию форматирования + per-chat промпт из БД.
 
             from .prompts.system_prompt import TOOL_NAME_INTEGRITY_GUIDANCE
-            if agent_model != "designer":
+            if model_spec.tool_name_integrity_guidance:
                 system_content += TOOL_NAME_INTEGRITY_GUIDANCE
 
             if is_telegram and _tg_settings:
@@ -1847,10 +1836,10 @@ class HarnessAgent:
                 *trimmed_history,
                 HumanMessage(content=user_input),
             ]
-            RATIO = {"designer": 1.3, "coder": 4.0}   # символов на токен
+            RATIO = get_chars_per_token_map()   # символов на токен из models_config.yaml
 
             import json
-            def _tok(s): return len(s) // RATIO.get(agent_model, 2)   # для русского ~2 симв/токен, а не 4
+            def _tok(s): return len(s) // RATIO.get(agent_model, model_spec.chars_per_token)   # для русского ~2 симв/токен, а не 4
 
             for m in messages:
                 c = m.content if isinstance(m.content, str) else json.dumps(m.content, ensure_ascii=False)

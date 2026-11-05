@@ -135,7 +135,7 @@ SYSTEM_PROMPT = (
    {role_block}
    Tools for administrators: all tools for working with the database
    """
-   + TOOL_USE_ENFORCEMENT_GUIDANCE + TOOL_NAME_INTEGRITY_GUIDANCE + PARALLEL_TOOL_CALL_GUIDANCE +
+   + TOOL_USE_ENFORCEMENT_GUIDANCE + PARALLEL_TOOL_CALL_GUIDANCE +
    """
    # OPERATIONAL RULES
    1. ADMIN ACCESS: If non-admin users request administrative tools, gently explain that it is restricted and advise them to contact administrators. Full admin tools are reserved exclusively for administrators.

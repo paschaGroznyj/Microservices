@@ -237,22 +237,21 @@ def make_analyze_image_tool(agent, images: list[dict] | None = None,
     """
     images = images or []
 
-    # Выбор vision-модели по активной модели основного цикла.
-    # coder — свой gpt; universal — gemini; всё остальное — claude (designer).
-    VISION_BY_MODEL = {
-        "coder": "coder",
-        "universal": "universal",
-        "designer": "designer",
-    }
-    vision_key = VISION_BY_MODEL.get(agent_model or "", "designer")
-    vision_llm = agent.AGENT_MODELS.get(vision_key) or agent.AGENT_MODELS["designer"]
+    # Выбор vision-модели и цепочки фолбэков из реестра models_config.yaml.
+    from ...core.agent_provider import get_vision_fallback_order, get_vision_target
+    vision_key = get_vision_target(agent_model)
+    vision_llm = (
+        agent.AGENT_MODELS.get(vision_key)
+        or agent.AGENT_MODELS.get("designer")
+        or next(iter(agent.AGENT_MODELS.values()), None)
+    )
     log.info("analyze_image: agent_model=%s → vision-модель '%s'",
              agent_model, vision_key)
 
     # Цепочка vision-кандидатов: начинаем с выбранной модели, затем
     # остальные — чтобы пережить случай, когда конкретный бэкенд cloud.ru
     # временно/постоянно не принимает image_url (ModelArts.81001).
-    _vision_order = [vision_key, "universal", "designer", "coder"]
+    _vision_order = get_vision_fallback_order(vision_key)
     _seen: set = set()
     vision_candidates: list = []
     for _k in _vision_order:

@@ -1037,6 +1037,50 @@
 .fa-chip.fa-tile .fa-chip__remove:hover { background: var(--error, #ef4444); }
 @media (hover: none) { .fa-chip.fa-tile .fa-chip__remove { opacity: 1; } }
 
+/* Подложка под кнопками чипа текста: кнопки не спорят с первой строкой превью */
+.fa-chip.fa-tile.input-chip::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 40px;
+  z-index: 3;
+  background: linear-gradient(to bottom, var(--fa-bg, var(--surface2)) 45%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s;
+}
+.fa-chip.fa-tile.input-chip:hover::before,
+.fa-chip.fa-tile.input-chip:focus-within::before { opacity: 1; }
+@media (hover: none) { .fa-chip.fa-tile.input-chip::before { opacity: 1; } }
+
+/* Кнопка «Отправить файлом» на чипе вставленного текста (слева от крестика) */
+.fa-chip.fa-tile .fa-chip__tofile {
+  position: absolute;
+  top: 6px;
+  right: 32px;
+  z-index: 4;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: rgba(0, 0, 0, .55);
+  -webkit-backdrop-filter: blur(4px);
+          backdrop-filter: blur(4px);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .15s, background .15s;
+}
+.fa-chip.fa-tile .fa-chip__tofile svg { width: 12px; height: 12px; }
+.fa-chip.fa-tile:hover .fa-chip__tofile,
+.fa-chip.fa-tile:focus-within .fa-chip__tofile { opacity: 1; }
+.fa-chip.fa-tile .fa-chip__tofile:hover,
+.fa-chip.fa-tile .fa-chip__tofile:focus-visible { background: var(--accent, #2563eb); outline: none; }
+@media (hover: none) { .fa-chip.fa-tile .fa-chip__tofile { opacity: 1; } }
+
 .fa-chip.fa-tile.fa-tile--broken { cursor: default; }
 .fa-chip.fa-tile.fa-tile--broken .fa-tile__label { opacity: .45; }
 .fa-chip.fa-tile.fa-tile--broken .fa-tile__meta { color: var(--error, #ef4444); }

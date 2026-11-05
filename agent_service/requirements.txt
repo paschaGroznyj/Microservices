@@ -13,12 +13,9 @@ pydantic==2.8.0
 environs
 botocore==1.42.84
 aiobotocore==3.4.0
-python-dotenv
 requests
 asyncpg
-PyPDF2
 sqlparse
-python-docx
 python-multipart
 Pillow==10.3.0
 

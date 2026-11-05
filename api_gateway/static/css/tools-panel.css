@@ -315,10 +315,29 @@
   max-height: min(70vh, 480px);
   overflow-y: auto;
   overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   padding: 6px;
   animation: mp-appear .15s cubic-bezier(.22,.61,.36,1) both;
   transform-origin: bottom right;
 }
+
+/* Список длиннее панели инструментов — мягко гасим нижний край,
+   пока есть что докрутить (класс ставит ModelPicker._syncScrollFade). */
+.mp-panel::after {
+  content: "";
+  position: sticky;
+  bottom: -6px;               /* перекрываем нижний padding панели */
+  display: block;
+  height: 36px;
+  margin: -36px -6px -6px;    /* не добавляет высоты списку */
+  border-radius: 0 0 13px 13px;
+  background: linear-gradient(to bottom, transparent, var(--surface));
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .15s;
+}
+.mp-panel.mp-panel--more::after { opacity: 1; }
 
 .mp-panel--hiding {
   animation: mp-hide .13s ease forwards;

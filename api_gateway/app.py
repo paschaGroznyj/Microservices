@@ -33,6 +33,7 @@ import group_chat_gw
 import editor_gw
 import os
 import max_chats_gw
+import file_parsers
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1250,21 +1251,49 @@ async def upload_files(
     chat_id: str = Form(...),
     message_id: str = Form(...),
     files: list[UploadFile] = File(...),
+    force_file: list[str] = Form(default=[]),
 ):
+    """Приём вложений с фронта и решение «текстом в промпт или файлом».
+
+    Gateway сам режет размер (не больше 50 МБ на файл) и по file_parsers.classify
+    выставляет каждому файлу режим inline/file. В agent_service уходят байты
+    и список file_modes той же длины; агент ничего не парсит.
+    force_file — имена файлов, которые пользователь явно попросил отправить
+    файлом (кнопка «В файл» на чипе вставленного текста).
+    """
     user = await get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    # Форвардим multipart как есть, не читая целиком в память по одному файлу
+    forced = {str(n) for n in (force_file or []) if n}
+    limit_mb = file_parsers.MAX_UPLOAD_BYTES // (1024 * 1024)
     files_payload = []
+    file_modes: list[str] = []
     for f in files:
-        content = await f.read()
+        size = getattr(f, "size", None)
+        if size is not None and size > file_parsers.MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Файл «{f.filename}» больше {limit_mb} МБ",
+            )
+        # Читаем на байт больше лимита: если дочитали — файл слишком большой.
+        content = await f.read(file_parsers.MAX_UPLOAD_BYTES + 1)
+        if len(content) > file_parsers.MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Файл «{f.filename}» больше {limit_mb} МБ",
+            )
+        mode, _chars = file_parsers.classify(
+            f.filename or "", content, force_file=(f.filename in forced)
+        )
+        file_modes.append(mode)
         files_payload.append(("files", (f.filename, content, f.content_type)))
 
     data = {
         "chat_id": chat_id,
         "message_id": message_id,
         "user_id": str(user["user_id"]),
+        "file_modes": file_modes,
     }
 
     try:
@@ -1272,7 +1301,7 @@ async def upload_files(
             f"{SERVICES['agent_service']['url']}/web/upload_files",  # прямой урл сервиса агента
             data=data,
             files=files_payload,
-            timeout=30.0,
+            timeout=120.0,
         )
         return Response(
             content=response.content,

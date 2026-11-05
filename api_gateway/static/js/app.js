@@ -5994,6 +5994,25 @@ class ChatApp {
         });
     }
 
+    /* Превращает чип вставленного текста в прикреплённый .txt-файл.
+       Файл помечается forceFile: gateway не положит его текст в промпт даже
+       если он короче лимита, агент получит его как документ (media_id). */
+    convertInputChipToFile(chipId) {
+        const text = this._pendingChips?.get(chipId);
+        if (text == null || !window.FileAttach?.addFiles) return false;
+        const d = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        // Имя — по первой непустой строке текста, без запрещённых в именах символов.
+        const firstLine = (text.split('\n').find(l => l.trim()) || '').trim();
+        const base = firstLine.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40).trim()
+            || `text-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+        const name = `${base}.txt`;
+        const file = new File([text], name, { type: 'text/plain', lastModified: d.getTime() });
+        if (!window.FileAttach.addFiles([file], { forceFile: true })) return false;
+        this.removeInputChip(chipId);
+        return true;
+    }
+
     /* Вставляет свёрнутый длинный текст как чип в полосу .fa-preview-bar,
        а в поле ввода (#message-input) на текущую позицию каретки помещает
        невидимый якорь .input-chip-anchor, чтобы сохранялся точный порядок
@@ -6022,12 +6041,28 @@ class ChatApp {
             '<span class="fa-tile__media"><span class="fa-tile__snippet">' + this._chipSnippetHtml(rawText) + '</span></span>' +
             '<span class="fa-tile__cap"><span class="fa-chip__name">' + safeTitle + '</span>' +
             '<span class="fa-chip__meta">' + chars + ' симв · ' + lines + ' стр</span></span>' +
+            (window.FileAttach?.addFiles
+                ? '<button class="fa-chip__tofile" type="button"' +
+                  ' title="Отправить файлом: текст не попадёт в промпт модели, агент разберёт его как документ"' +
+                  ' aria-label="Отправить вставленный текст файлом">' +
+                  '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
+                  '<path d="M4 1.75h5.2L12.5 5v8.25a1 1 0 0 1-1 1h-7.5a1 1 0 0 1-1-1V2.75a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>' +
+                  '<path d="M9 1.9V5.2h3.3M5.6 8.4h4.8M5.6 11h3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>' +
+                  '</svg></button>'
+                : '') +
             '<button class="fa-chip__remove" type="button" title="Удалить" aria-label="Удалить вставленный текст">' +
             '<svg viewBox="0 0 14 14" fill="none">' +
             '<path d="M3 3l8 8M11 3L3 11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' +
             '</svg></button>';
 
         const removeBtn = chip.querySelector('.fa-chip__remove');
+        const toFileBtn = chip.querySelector('.fa-chip__tofile');
+        if (toFileBtn) {
+            toFileBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.convertInputChipToFile(chipId);
+            });
+        }
         if (removeBtn) {
             removeBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -6036,7 +6071,7 @@ class ChatApp {
         }
         chip.addEventListener('click', () => this.openTextPreview(chip));
         chip.addEventListener('keydown', (e) => {
-            if (e.target === removeBtn) return;
+            if (e.target === removeBtn || e.target === toFileBtn) return;
             if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
                 this.openTextPreview(chip);

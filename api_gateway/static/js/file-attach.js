@@ -5,6 +5,8 @@
  *   init(attachBtn, inputContainer)  — инициализация для конкретного инпута
  *   getFiles()                       — текущий массив File
  *   upload(chatId, msgId)            — POST /api/chats/upload_files
+ *   addFiles(files, {forceFile})     — добавить File[] программно (forceFile:
+ *                                      gateway не положит текст в промпт)
  *   clear()                          — сбросить все файлы и превью
  */
 
@@ -12,6 +14,7 @@ const FileAttach = (() => {
 
     /* ─── состояние ──────────────────────────────────────────── */
     let _files        = [];          // File[]
+    const _forceFile  = new WeakSet(); // File, которые юзер просил отправить файлом
     let _attachBtn    = null;        // <button id="attach-btn"> | <button id="start-attach-btn">
     let _inputBox     = null;        // .chat-input-box | .start-input-box
     let _previewBar   = null;        // .fa-preview-bar (создаём динамически)
@@ -113,7 +116,7 @@ const FileAttach = (() => {
     }
 
     /* ─── toast-уведомление ──────────────────────────────────── */
-    const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 МБ
+    const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 МБ, тот же лимит режет gateway
     const MAX_FILES = 10; // максимум файлов на одно сообщение
 
     function _showToast(message) {
@@ -152,9 +155,9 @@ const FileAttach = (() => {
             newFiles = newFiles.slice(0, _slots);
         }
         newFiles.forEach(f => {
-            // Проверка размера — не более 20 МБ
+            // Проверка размера — не более 50 МБ
             if (f.size > MAX_FILE_SIZE) {
-                _showToast(`Файл «${f.name}» превышает 20 МБ и не будет прикреплён.`);
+                _showToast(`Файл «${f.name}» превышает 50 МБ и не будет прикреплён.`);
                 return;
             }
             // дедупликация по имени + размеру
@@ -468,7 +471,10 @@ const FileAttach = (() => {
         const fd = new FormData();
         fd.append('chat_id',    String(chatId));
         fd.append('message_id', String(msgId));
-        _files.forEach(f => fd.append('files', f));
+        _files.forEach(f => {
+            fd.append('files', f);
+            if (_forceFile.has(f)) fd.append('force_file', f.name);
+        });
 
         try {
             const res = await fetch('/api/chats/upload_files', {
@@ -478,6 +484,11 @@ const FileAttach = (() => {
             });
             if (!res.ok) {
                 console.warn('FileAttach upload: server error', res.status);
+                if (res.status === 413) {
+                    let msg = 'Файл больше 50 МБ — не отправлен.';
+                    try { const j = await res.clone().json(); if (j?.detail) msg = j.detail; } catch (_) {}
+                    _showToast(msg);
+                }
             }
             return res;
         } catch (err) {
@@ -510,7 +521,19 @@ const FileAttach = (() => {
         });
     }
 
-    return { init, getFiles, upload, clear, getFilesMeta, getPreviewItems };
+    /**
+     * Добавить файлы программно (например, чип вставленного текста -> .txt).
+     * forceFile: gateway отправит их агенту файлом, даже если текст короткий.
+     */
+    function addFiles(files, opts = {}) {
+        const list = Array.from(files || []);
+        if (opts.forceFile) list.forEach(f => _forceFile.add(f));
+        const before = _files.length;
+        _addFiles(list);
+        return _files.length > before;
+    }
+
+    return { init, getFiles, upload, clear, getFilesMeta, getPreviewItems, addFiles };
 
 })();
 

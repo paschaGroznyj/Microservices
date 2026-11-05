@@ -307,10 +307,16 @@ class ToolsPanel {
     this._open ? this._close() : this._openPanel(triggerBtn);
   }
 
-  _openPanel(triggerBtn) {
-    this._close();
-    window.ModelPicker?._close?.();
+  _openPanel(triggerBtn, opts = {}) {
+    // measure: только собрать панель (без показа и побочных эффектов),
+    // чтобы ModelPicker мог взять её естественную высоту.
+    const measure = !!opts.measure;
+    if (!measure) {
+      this._close();
+      window.ModelPicker?._close?.();
+    }
     const panel = document.createElement("div");
+    const prevPanelEl = this._panelEl;
     panel.className = "tools-panel";
     // Маркер: панель открыта на стартовом экране (поле ввода по центру).
     // Нужен, чтобы на мобилке дать отступ сверху и скролл секциям.
@@ -461,6 +467,11 @@ class ToolsPanel {
     scrollBody.appendChild(toolsSection);
     panel.appendChild(scrollBody);
 
+    if (measure) {
+      this._panelEl = prevPanelEl;
+      return panel;
+    }
+
     document.body.appendChild(panel);
     this._positionPanel(panel, triggerBtn);
     this._open = true;
@@ -474,6 +485,21 @@ class ToolsPanel {
 
     this._escHandler = e => { if (e.key === "Escape") this._close(); };
     document.addEventListener("keydown", this._escHandler);
+  }
+
+  /* Естественная высота панели инструментов (без ограничения экраном).
+     ModelPicker ограничивает свой .mp-panel этой высотой. */
+  naturalHeight() {
+    try {
+      const panel = this._openPanel(null, { measure: true });
+      panel.style.cssText = "visibility:hidden;position:fixed;top:0;left:-9999px;max-height:none;animation:none;";
+      document.body.appendChild(panel);
+      const h = panel.scrollHeight;
+      panel.remove();
+      return h || 0;
+    } catch (_) {
+      return 0;
+    }
   }
 
   _positionPanel(panel, triggerBtn) {
@@ -1176,9 +1202,13 @@ class ModelPickerClass {
     const rect   = triggerBtn.getBoundingClientRect();
 
     panel.style.cssText = 'visibility:hidden;position:fixed;top:0;left:0;';
-    const naturalH = panel.scrollHeight;
+    const fullH    = panel.scrollHeight;
     const pw       = panel.offsetWidth;
     panel.style.cssText = '';
+    // Не выше панели инструментов: список моделей скроллится внутри,
+    // как .tp-scroll-body у ToolsPanel.
+    const refH     = window.ToolsPanel?.naturalHeight?.() || 0;
+    const naturalH = refH > 0 ? Math.min(fullH, refH) : fullH;
 
     const spaceAbove = rect.top - MARGIN;
     const spaceBelow = vh - rect.bottom - MARGIN;
@@ -1200,6 +1230,21 @@ class ModelPickerClass {
     panel.style.top       = `${top}px`;
     panel.style.left      = `${left}px`;
     panel.style.maxHeight = `${maxH}px`;
+    this._syncScrollFade(panel);
+  }
+
+  /* Затухание у нижнего края, пока список можно докрутить. */
+  _syncScrollFade(panel) {
+    if (!panel) return;
+    const update = () => {
+      const more = panel.scrollHeight - panel.clientHeight - panel.scrollTop > 2;
+      panel.classList.toggle('mp-panel--more', more);
+    };
+    if (!panel._mpFadeBound) {
+      panel.addEventListener('scroll', update, { passive: true });
+      panel._mpFadeBound = true;
+    }
+    update();
   }
 }
 

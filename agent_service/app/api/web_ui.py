@@ -112,6 +112,8 @@ async def upload_web_files(
     images: list[dict] = []          # картинки JPEG/PNG для vision-тула
     image_media_ids: list[str] = []  # media_id положенных в Redis media_store (пер-чат)
     IMAGE_MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
+    AUDIO_EXT = {".mp3", ".mpga", ".wav", ".wave", ".ogg", ".oga", ".opus", ".m4a",
+                 ".aac", ".flac", ".weba", ".caf", ".aif", ".aiff", ".amr", ".wma"}
 
     # Серверный предохранитель: не более 10 файлов на сообщение (дубль
     # фронтового лимита MAX_FILES — чтобы нельзя было обойти мимо UI).
@@ -190,14 +192,23 @@ async def upload_web_files(
         try:
             _fmid = await media_store.put_media(
                 chat_id, raw, f.filename,
-                VIDEO_MIME.get(ext, "application/octet-stream"), kind="file"
+                VIDEO_MIME.get(ext) or _WEB_FILE_MIME_MAP.get(ext.lstrip("."), "application/octet-stream"),
+                kind="file"
             )
         except Exception as _e:
             logging.warning(f"[media_store] put_media(file) пропущен: {_e}")
         _fmid_hint = (f" [media_id={_fmid}]" if _fmid else "")
-        if ext in VIDEO_MIME:
+        if ext in VIDEO_MIME or ext in AUDIO_EXT:
+            # Видео и аудио не парсим: расшифровка — тулом transcribe_media.
+            # Файлы > 5 МБ в media_store не попадают, тогда даём путь на диске.
+            _src = (f"source_media_id={_fmid}" if _fmid else
+                    (f"local_path={user_fpath}" if user_fpath else None))
+            _tag, _what = (("🎬[VIDEO]", "видео") if ext in VIDEO_MIME else ("🎧[AUDIO]", "аудио"))
+            _hint = (f" (для расшифровки с таймкодами вызови transcribe_media с {_src})"
+                     if _src else "")
             parts.append(
-                f"\n\n🎬[VIDEO] [Прикрепленное видео: {f.filename}]{_fmid_hint}"
+                f"\n\n{_tag} [Прикрепленное {_what}: {f.filename}, {_human_size(len(raw))}]"
+                f"{_fmid_hint}{_hint}"
             )
             continue
         if mode == "inline":

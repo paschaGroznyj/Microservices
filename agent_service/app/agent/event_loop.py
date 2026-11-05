@@ -258,6 +258,7 @@ STATEFUL_TOOLS = {
     "generate_image",
     "find_generated_image",
     "analyze_image",
+    "transcribe_media",
     "list_tree",
     "read_file",
     "grep_search",
@@ -314,6 +315,9 @@ def _summarize_tool_call(tc: dict, result: Any) -> str | None:
             f"analyze_image(prompt='{ai_prompt}', "
             f"image_index={args.get('image_index', 0)}) →\n{str(result)[:1200]}"
         )
+    if name == "transcribe_media":
+        src = args.get("source_media_id") or args.get("local_path")
+        return f"transcribe_media(source={src!r}, include_visual={args.get('include_visual', False)}) →\n{str(result)[:1500]}"
     if name == "call_subagent":
         return f"{name} ({args}). ОТВЕТ СУБАГЕНТА - {str(result)}"
     if name in ("list_tree", "read_file", "grep_search", "find_files", 
@@ -1029,6 +1033,10 @@ class HarnessAgent:
         # модель передаёт только промпт, base64 не идёт в контекст.
         from .tools.vision.tool_analyze_image import make_analyze_image_tool
         analyze_image = make_analyze_image_tool(agent, images, agent_model=agent_model, chat_id=chat_id)
+        # Расшифровка аудио/видео с таймкодами (gemini-3.1-pro). Источник —
+        # media_id из media_store или путь на диске; полный текст уходит в файлы.
+        from .tools.vision.tool_transcribe_media import make_transcribe_media_tool
+        transcribe_media = make_transcribe_media_tool(agent, chat_id=chat_id)
 
         # Тул генерации изображений (gemini-3.1-flash-image-preview).
         # Пресет качества из карточки #127. Сгенерированные файлы копятся
@@ -1055,6 +1063,7 @@ class HarnessAgent:
 
         base_tools = [
             analyze_image,
+            transcribe_media,
             generate_image,
             find_generated_image,
             generate_video,

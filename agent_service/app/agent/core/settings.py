@@ -48,6 +48,7 @@ ADMIN_ONLY_CATEGORIES = {"admin"}
 # изображений, которые не привязаны к конкретному режиму работы.
 UNIVERSAL_TOOLS: set[str] = {
     "analyze_image",
+    "transcribe_media",
     "manage_skills",
     "create_workspace",
     "list_workspace_files",
@@ -101,6 +102,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "execute_shell_commands": "Выполняет системные команды в песочнице (git/docker/curl без shell).",
     # --- universal (доступны всегда) ---
     "analyze_image": "Анализирует изображение и отвечает на вопрос о нём (OCR, описание, данные с графика).",
+    "transcribe_media": "Дословно расшифровывает аудио и видео с таймкодами и спикерами (gemini-3.1-pro), сохраняет .txt/.srt/.json.",
     "create_workspace": "Создаёт persistent workspace на фабрике и сразу открывает его в веб-редакторе /editor (возвращает editor_url).",
     "list_workspace_files": "Показывает список файлов в workspace фабрики.",
     "download_workspace_file": "Скачивает файл из workspace в generated_files для отправки пользователю.",

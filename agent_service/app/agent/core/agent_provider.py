@@ -461,6 +461,21 @@ def get_image_gen_config() -> dict:
     }
 
 
+# ── Расшифровка аудио/видео ────────────────────────────────────────
+# pro, а не flash: flash не слышит звук внутри видео и выдумывает речь
+# (проверено на шлюзе cloud.ru 05.11.2026). Переопределяется TRANSCRIBE_MODEL.
+TRANSCRIBE_MODEL = os.getenv("TRANSCRIBE_MODEL", "google/gemini-3.1-pro-preview")
+
+
+def get_transcribe_config() -> dict:
+    """Конфиг клиента расшифровки медиа (endpoint + ключ + модель)."""
+    return {
+        "model": TRANSCRIBE_MODEL,
+        "base_url": IMAGE_GEN_BASE_URL,
+        "api_key": CLOUD_LLM_ACCESS_KEY,
+    }
+
+
 # ══ RouterAPI (routerai.ru) — media generation (video/audio) ══
 ROUTER_VIDEO_MODEL = "heygen/heygen-video-1"
 ROUTER_AUDIO_MODEL = "google/gemini-3.8-flash-lite-tts"

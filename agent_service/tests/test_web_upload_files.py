@@ -74,3 +74,24 @@ def test_image_still_goes_to_vision(client):
     text = _post(c, [("p.png", b"\x89PNG fake")], ["file"])
     assert "[IMAGE #0: p.png]" in text
     assert web_ui.pending_files["m1"]["images"][0]["mime_type"] == "image/png"
+
+
+def test_audio_and_video_point_to_transcribe(client):
+    c, stored = client
+    text = _post(c, [("call.m4a", b"fake audio"), ("demo.mp4", b"fake video")], ["file", "file"])
+    assert "[AUDIO] [Прикрепленное аудио: call.m4a" in text
+    assert "[VIDEO] [Прикрепленное видео: demo.mp4" in text
+    assert "transcribe_media с source_media_id=mid1" in text
+    assert "transcribe_media с source_media_id=mid2" in text
+    assert "[DOCUMENT]" not in text
+
+
+def test_big_media_without_media_id_gets_local_path(client, monkeypatch):
+    c, _ = client
+
+    async def no_put(*a, **kw):
+        return None
+
+    monkeypatch.setattr(web_ui.media_store, "put_media", no_put)
+    text = _post(c, [("long.mp3", b"x" * 10)], ["file"])
+    assert "transcribe_media с local_path=/app/generated_files/m1/long.mp3" in text

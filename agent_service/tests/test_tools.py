@@ -28,7 +28,7 @@ def names(tools):
 
 def test_registry_names_unique_and_described(all_tools):
     n = names(all_tools)
-    assert len(n) == len(set(n)) == 38
+    assert len(n) == len(set(n)) == 39
     for t in all_tools:
         assert (t.description or "").strip(), t.name
 
@@ -178,7 +178,7 @@ def mock_net(monkeypatch, request):
 def _tool_names():
     import agent.core.config  # noqa: F401
     return [
-        "analyze_image", "generate_image", "find_generated_image", "generate_video", "generate_audio",
+        "analyze_image", "transcribe_media", "generate_image", "find_generated_image", "generate_video", "generate_audio",
         "generate_music", "get_db_schema", "execute_sql_query", "parse_web_page", "search_internet",
         "session_point", "manage_trigger", "send_file_to_user", "push_message_to_telegram",
         "work_with_email", "send_email", "manage_skills", "list_tree", "read_file",

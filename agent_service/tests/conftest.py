@@ -65,15 +65,17 @@ class ScriptedLLM:
         self.script = list(script)
         self.calls = []
         self.methods = []
+        self.call_kwargs = []
         self.bound_tools = None
 
     def bind_tools(self, tools, **kw):
         self.bound_tools = list(tools)
         return self
 
-    def _next(self, messages, method):
+    def _next(self, messages, method, kw=None):
         self.calls.append(list(messages))
         self.methods.append(method)
+        self.call_kwargs.append(dict(kw or {}))
         if not self.script:
             raise AssertionError(f"{self.model_name}: сценарий закончился")
         item = self.script.pop(0)
@@ -82,10 +84,10 @@ class ScriptedLLM:
         return ai(item) if isinstance(item, str) else item
 
     async def astream(self, messages, **kw):
-        yield self._next(messages, "astream")
+        yield self._next(messages, "astream", kw)
 
     async def ainvoke(self, messages, **kw):
-        return self._next(messages, "ainvoke")
+        return self._next(messages, "ainvoke", kw)
 
 
 MODEL_NAMES = {

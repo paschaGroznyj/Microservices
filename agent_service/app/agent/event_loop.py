@@ -20,6 +20,7 @@ from langchain_core.messages.utils import count_tokens_approximately
 from .core.agent_provider import (
     build_agent_models,
     build_lite_models,
+    build_openai_cache_headers,
     get_chars_per_token_map,
     get_imitate_tool_status_models,
     get_llm_lite_model,
@@ -604,7 +605,7 @@ def _extract_thinking_and_clean_content(raw_content) -> tuple[str, str, str]:
 
 
 async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, error_info: dict | None = None,
-                           cache_control: bool = False):
+                           cache_control: bool = False, extra_headers: dict[str, str] | None = None):
     """Стриминговая версия _invoke_with_retry.
 
     Собирает ответ через llm.astream(), аккумулируя AIMessageChunk сложением (+=).
@@ -619,16 +620,18 @@ async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, err
 
     cache_control=True (ChatAnthropic + prompt_cache) — размечаем копию сообщений
     точками кеша: статический системный блок и последнее сообщение.
+    extra_headers — заголовки (например X-Enable-Prompt-Cache и x-session-id для OpenAI).
     """
     messages = _sanitize_messages(messages)
     if cache_control:
         messages = apply_anthropic_cache_control(messages)
+    call_kwargs = {"extra_headers": extra_headers} if extra_headers else {}
     backoff = [2, 5, 10]
     last_error = None
     for attempt in range(3):
         try:
             aggregate = None
-            async for chunk in llm.astream(messages):
+            async for chunk in llm.astream(messages, **call_kwargs):
                 aggregate = chunk if aggregate is None else aggregate + chunk
 
                 # --- reasoning-канал (gpt → reasoning, gemini → reasoning_content) ---
@@ -658,7 +661,7 @@ async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, err
             if aggregate is not None:
                 # return _build_final(aggregate, calls)
                 return aggregate
-            return await llm.ainvoke(messages)
+            return await llm.ainvoke(messages, **call_kwargs)
         except Exception as e:
             last_error = e
             logging.warning(
@@ -670,7 +673,7 @@ async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, err
     # Все стриминговые попытки провалены — последний шанс через ainvoke без стрима
     logging.error(f"[iteration={iteration}] astream провален, фолбэк на ainvoke: {last_error}")
     try:
-        return await llm.ainvoke(messages)
+        return await llm.ainvoke(messages, **call_kwargs)
     except Exception as e:
         logging.error(f"[iteration={iteration}] ainvoke-фолбэк тоже упал: {e}")
         if error_info is not None:
@@ -1681,10 +1684,15 @@ class HarnessAgent:
             total_output_tokens = 0
             total_cache = {"cache_read_tokens": 0, "cache_creation_tokens": 0}
             # Явные точки кеша нужны только ChatAnthropic; OpenAI-совместимые
-            # провайдеры кешируют стабильный префикс сами (X-Enable-Prompt-Cache).
+            # провайдеры кешируют стабильный префикс сами (X-Enable-Prompt-Cache + x-session-id).
             use_cache_control = bool(
                 getattr(model_spec, "provider", "") == "anthropic"
                 and getattr(model_spec, "prompt_cache", False)
+            )
+            openai_cache_headers = (
+                build_openai_cache_headers(chat_id=chat_id, model_tag=agent_model)
+                if getattr(model_spec, "provider", "") == "openai" and getattr(model_spec, "prompt_cache", False)
+                else None
             )
 
             preset = CONTEXT_PRESETS.get(context_size, CONTEXT_PRESETS["medium"])
@@ -1966,6 +1974,7 @@ class HarnessAgent:
                         response = await _astream_collect(
                             current_llm, messages, on_chunk=None, iteration=iteration,
                             error_info=_llm_error, cache_control=use_cache_control,
+                            extra_headers=openai_cache_headers,
                         )
                     except Exception as _exc:
                         _llm_error["reason"] = f"{type(_exc).__name__}: {_exc}"

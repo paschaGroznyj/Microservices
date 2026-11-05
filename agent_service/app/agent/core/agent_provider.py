@@ -179,6 +179,16 @@ def get_models_registry() -> ModelsRegistry:
     return _REGISTRY
 
 
+def build_openai_cache_headers(chat_id: Any = None, model_tag: str = "") -> dict[str, str]:
+    """Формирует заголовки кеширования промпта и sticky-сессии для OpenAI-совместимых моделей."""
+    raw_chat = str(chat_id).strip() if chat_id is not None else ""
+    session_id = f"chat-{raw_chat}" if raw_chat else f"augent-{model_tag or 'default'}"
+    return {
+        "X-Enable-Prompt-Cache": "true",
+        "x-session-id": session_id,
+    }
+
+
 def build_llm_from_spec(spec: ModelSpec):
     """Создаёт экземпляр LLM (ChatOpenAI или ChatAnthropic) по декларативному ModelSpec."""
     if spec.provider == "anthropic":
@@ -197,7 +207,7 @@ def build_llm_from_spec(spec: ModelSpec):
 
     model_kwargs: dict[str, Any] = {}
     if spec.prompt_cache:
-        model_kwargs["extra_headers"] = {"X-Enable-Prompt-Cache": "true"}
+        model_kwargs["extra_headers"] = build_openai_cache_headers(model_tag=spec.tag)
 
     if spec.reasoning:
         extra_body: dict[str, Any] = {}

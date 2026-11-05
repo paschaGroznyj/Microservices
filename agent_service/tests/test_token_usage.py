@@ -170,8 +170,13 @@ def test_designer_gets_cache_control_coder_does_not(h):
     assert marks == 3 and marks <= 4                                  # System[0] + HumanMessage + ToolMessage (лимит Anthropic — 4)
 
     h.models["coder"].script = ["ok"]
-    h.run(model="coder")
+    h.run(model="coder", chat_id="425826")
     assert "cache_control" not in str(h.models["coder"].calls[0])
+    assert h.models["coder"].call_kwargs[0]["extra_headers"] == {
+        "X-Enable-Prompt-Cache": "true",
+        "x-session-id": "chat-425826",
+    }
+    assert "extra_headers" not in h.models["designer"].call_kwargs[0]
 
 
 def test_cached_tokens_summed_in_tokens_usage(h):

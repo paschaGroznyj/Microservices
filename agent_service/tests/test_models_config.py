@@ -82,7 +82,10 @@ def test_build_llm_from_spec_openai_and_anthropic(monkeypatch):
     assert gpt_inst.model_name == "openai/gpt-5.4"
     assert openai_calls[0]["max_tokens"] == 16384
     assert openai_calls[0]["model_kwargs"]["extra_body"] == {"reasoning_effort": "low"}
-    assert openai_calls[0]["model_kwargs"]["extra_headers"] == {"X-Enable-Prompt-Cache": "true"}
+    assert openai_calls[0]["model_kwargs"]["extra_headers"] == {
+        "X-Enable-Prompt-Cache": "true",
+        "x-session-id": "augent-coder",
+    }
 
     assert claude_inst.model == "anthropic/claude-opus-5.5"
     assert anthropic_calls[0]["max_tokens_to_sample"] == 64000

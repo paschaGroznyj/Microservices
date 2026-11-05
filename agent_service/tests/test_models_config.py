@@ -24,12 +24,20 @@ def _restore_default_registry():
 def test_default_yaml_registry_loaded():
     reg = ap.get_models_registry()
     assert reg.default_model == "coder"
-    assert set(reg.models) == {"coder", "designer", "universal", "gemini"}
+    assert set(reg.models) == {"coder", "designer", "universal", "gemini", "gigachat", "deepseek"}
     assert reg.aliases["gpt"] == "coder"
     assert reg.aliases["claude"] == "designer"
     assert reg.aliases["opus"] == "designer"
     assert reg.aliases["glm"] == "universal"
     assert reg.aliases["gemini"] == "gemini"
+    assert reg.aliases["gigachat"] == "gigachat"
+    assert reg.aliases["giga"] == "gigachat"
+    assert reg.aliases["deepseek"] == "deepseek"
+    assert reg.aliases["ds"] == "deepseek"
+    assert reg.models["gigachat"].model == "ai-sage/GigaChat3.5-432B-A28B-Reasoning"
+    assert reg.models["gigachat"].provider == "openai"
+    assert reg.models["deepseek"].model == "deepseek-ai/DeepSeek-V4.1-Flash"
+    assert reg.models["deepseek"].provider == "openai"
 
     coder = reg.models["coder"]
     assert coder.model == "openai/gpt-5.4"
@@ -172,7 +180,15 @@ def test_frontend_models_payload_has_descriptions_and_svg():
     assert payload["agent_available"] is True
     assert payload["default_model"] == "coder"
     models = {m["id"]: m for m in payload["models"]}
-    assert set(models) == {"coder", "designer", "universal", "gemini"}
+    assert set(models) == {"coder", "designer", "universal", "gemini", "gigachat", "deepseek"}
+    assert models["gigachat"]["label"] == "GigaChat"
+    assert models["gigachat"]["setting_key"] == "gigachat"
+    assert models["gigachat"]["svg"].startswith("<svg")
+    assert models["gigachat"]["svgSm"].startswith("<svg")
+    assert models["deepseek"]["label"] == "DeepSeek"
+    assert models["deepseek"]["setting_key"] == "deepseek"
+    assert models["deepseek"]["svg"].startswith("<svg")
+    assert models["deepseek"]["svgSm"].startswith("<svg")
 
     assert models["coder"]["label"] == "GPT"
     assert models["coder"]["setting_key"] == "gpt"

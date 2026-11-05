@@ -11,7 +11,7 @@ try:
     from langchain_gigachat.embeddings import GigaChatEmbeddings
 except ImportError:  # pragma: no cover
     GigaChatEmbeddings = None  # type: ignore[assignment]
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_openai import ChatOpenAI
 
 try:
     from langchain_anthropic import ChatAnthropic

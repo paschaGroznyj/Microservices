@@ -106,6 +106,10 @@ def test_register_setting_models_extends_normalization():
     assert run_status.normalize_setting_model("designer") == "claude"
     assert run_status.normalize_setting_model("universal") == "glm"
     assert run_status.normalize_setting_model("gemini") == "gemini"
+    assert run_status.normalize_setting_model("gigachat") == "gigachat"
+    assert run_status.normalize_setting_model("giga") == "gigachat"
+    assert run_status.normalize_setting_model("deepseek") == "deepseek"
+    assert run_status.normalize_setting_model("ds") == "deepseek"
 
     run_status.register_setting_models([
         {"id": "deepseek", "setting_key": "ds", "aliases": ["r1", "deepseek-r1"]},

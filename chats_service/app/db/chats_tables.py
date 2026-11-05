@@ -1300,6 +1300,10 @@ class DataBaseChats:
             "universal": "glm",
             "glm": "glm",
             "gemini": "gemini",
+            "gigachat": "gigachat",
+            "giga": "gigachat",
+            "deepseek": "deepseek",
+            "ds": "deepseek",
         }
         return mapping.get(raw, "gpt")
 

@@ -325,6 +325,10 @@ _SETTING_MODEL_MAP = {
     "universal": "glm",
     "glm": "glm",
     "gemini": "gemini",
+    "gigachat": "gigachat",
+    "giga": "gigachat",
+    "deepseek": "deepseek",
+    "ds": "deepseek",
 }
 
 

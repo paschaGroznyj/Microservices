@@ -31,13 +31,13 @@ def probe(agent_obj, monkeypatch, resp=None, exc=None):
     return asyncio.run(agent_obj._probe_providers_status()), client
 
 
-ALL = ("coder", "designer", "universal", "gemini")
+ALL = ("coder", "designer", "universal", "gemini", "gigachat", "deepseek")
 
 
 def test_all_up(agent_obj, monkeypatch):
     out, _ = probe(agent_obj, monkeypatch, Resp({"providers": {k: {"up": True} for k in ALL}}))
-    assert out.count("✅") == 4 and "❌" not in out
-    assert "Можно переключиться на: GPT, Claude, GLM, Gemini." in out
+    assert out.count("✅") == 6 and "❌" not in out
+    assert "Можно переключиться на: GPT, Claude, GLM, Gemini, GigaChat, DeepSeek." in out
 
 
 def test_partial(agent_obj, monkeypatch):
@@ -54,7 +54,7 @@ def test_missing_provider_counts_as_down(agent_obj, monkeypatch):
 
 def test_all_down(agent_obj, monkeypatch):
     out, _ = probe(agent_obj, monkeypatch, Resp({"providers": {k: {"up": False} for k in ALL}}))
-    assert out.count("❌") == 4
+    assert out.count("❌") == 6
     assert "недоступна ни одна модель" in out
 
 

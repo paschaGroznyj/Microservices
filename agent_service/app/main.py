@@ -18,6 +18,7 @@ from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from contextlib import asynccontextmanager
 from fastapi import (FastAPI, HTTPException, Request, Response, 
 APIRouter, Form, File, UploadFile)
+from fastapi.responses import StreamingResponse
 from agent.event_loop import HarnessAgent
 from langchain.schema import HumanMessage, SystemMessage
 from agent.core.config import (KAFKA_BROKER, PORT_PM_AGENT, 
@@ -961,6 +962,8 @@ from agent.core.agent_provider import get_provider_models_for_ping, get_frontend
 
 _PROVIDERS_TTL = 30.0  # сек — как часто реально перепроверяем провайдеров
 _providers_cache: dict = {"ts": 0.0, "data": None}
+_provider_item_cache: dict[str, dict] = {}
+_provider_in_flight: dict[str, asyncio.Task] = {}
 _providers_lock = asyncio.Lock()
 
 # id модели в UI -> человекочитаемое имя + фабрика llm (собирается из models_config.yaml)
@@ -983,6 +986,87 @@ async def _ping_provider(model_id: str, model_name: str, factory) -> dict:
         return {"id": model_id, "name": model_name, "up": False, "reason": "timeout"}
     except Exception as e:
         return {"id": model_id, "name": model_name, "up": False, "reason": str(e)[:120]}
+
+
+def _get_cached_provider_item(model_id: str, now: float | None = None) -> dict | None:
+    """Возвращает свежий кешированный статус конкретной модели или None."""
+    now = now if now is not None else time.time()
+    entry = _provider_item_cache.get(model_id)
+    if entry and (now - entry.get("ts", 0.0)) < _PROVIDERS_TTL:
+        return entry.get("item")
+    if (
+        isinstance(_providers_cache.get("data"), dict)
+        and (now - float(_providers_cache.get("ts") or 0.0)) < _PROVIDERS_TTL
+        and model_id in _providers_cache["data"]
+    ):
+        return _providers_cache["data"][model_id]
+    return None
+
+
+async def _check_single_provider(
+    model_id: str,
+    model_name: str,
+    factory,
+    *,
+    force: bool = False,
+) -> dict:
+    """Проверяет одну модель с пер-модельным TTL-кешем и дедупликацией in-flight задач."""
+    if not force:
+        cached = _get_cached_provider_item(model_id)
+        if cached is not None:
+            return cached
+
+    async with _providers_lock:
+        if not force:
+            cached = _get_cached_provider_item(model_id)
+            if cached is not None:
+                return cached
+        task = _provider_in_flight.get(model_id)
+        if task is None or task.done():
+            task = asyncio.create_task(_ping_provider(model_id, model_name, factory))
+            _provider_in_flight[model_id] = task
+
+    try:
+        res = await task
+    finally:
+        async with _providers_lock:
+            if _provider_in_flight.get(model_id) is task:
+                _provider_in_flight.pop(model_id, None)
+
+    ts = time.time()
+    _provider_item_cache[model_id] = {"ts": ts, "item": res}
+    if not isinstance(_providers_cache.get("data"), dict):
+        _providers_cache["data"] = {}
+    _providers_cache["data"][model_id] = res
+    _providers_cache["ts"] = ts
+    return res
+
+
+async def _stream_providers_status(force: bool = False):
+    """Асинхронно стримит (SSE) статус каждой модели по мере готовности (as_completed)."""
+    now = time.time()
+    pending_tasks: list[asyncio.Task] = []
+
+    for mid, (name, factory) in _PROVIDER_MODELS.items():
+        if not force:
+            cached = _get_cached_provider_item(mid, now=now)
+            if cached is not None:
+                payload = json.dumps(cached, ensure_ascii=False)
+                yield f"data: {payload}\n\n"
+                continue
+        pending_tasks.append(
+            asyncio.create_task(_check_single_provider(mid, name, factory, force=force))
+        )
+
+    for coro in asyncio.as_completed(pending_tasks):
+        try:
+            item = await coro
+        except Exception as e:
+            continue
+        payload = json.dumps(item, ensure_ascii=False)
+        yield f"data: {payload}\n\n"
+
+    yield f"event: done\ndata: {json.dumps({'done': True, 'cached_at': time.time()})}\n\n"
 
 
 
@@ -1124,30 +1208,56 @@ async def internal_get_models():
     return get_frontend_models_payload()
 
 
+@app.get("/internal/providers_status/stream")
+async def internal_providers_status_stream(force: bool = False):
+    """Асинхронный SSE-поток проверки доступности моделей по мере ответа каждой."""
+    return StreamingResponse(
+        _stream_providers_status(force=force),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.get("/internal/providers_status")
-async def internal_providers_status():
+async def internal_providers_status(
+    model: Optional[str] = None,
+    stream: bool = False,
+    force: bool = False,
+):
     """Доступность провайдеров под каждой моделью тоггла.
 
-    Отдаёт {"providers": {model_id: {up: bool, name, reason?}}, "cached_at": ts}.
-    Результат кешируется на _PROVIDERS_TTL сек (двойная проверка под локом,
-    чтобы параллельные polling-запросы не порождали пачку пингов)."""
-    now = time.time()
-    if _providers_cache["data"] and (now - _providers_cache["ts"]) < _PROVIDERS_TTL:
-        return {"providers": _providers_cache["data"], "cached_at": _providers_cache["ts"]}
+    - Если stream=True: возвращает SSE-поток (каждая модель летит по мере готовности).
+    - Если указан model=<id>: проверяет и возвращает только одну модель без ожидания остальных.
+    - По умолчанию: отдаёт {"providers": {model_id: {up: bool, name, reason?}}, "cached_at": ts}."""
+    if stream:
+        return await internal_providers_status_stream(force=force)
 
-    async with _providers_lock:
-        now = time.time()
-        if _providers_cache["data"] and (now - _providers_cache["ts"]) < _PROVIDERS_TTL:
+    if model:
+        mid = str(model).strip()
+        if mid not in _PROVIDER_MODELS:
+            raise HTTPException(status_code=404, detail=f"Unknown model: {mid}")
+        name, factory = _PROVIDER_MODELS[mid]
+        item = await _check_single_provider(mid, name, factory, force=force)
+        ts = _provider_item_cache.get(mid, {}).get("ts") or time.time()
+        return {"provider": item, "providers": {mid: item}, "cached_at": ts}
+
+    now = time.time()
+    if not force and _providers_cache["data"] and (now - _providers_cache["ts"]) < _PROVIDERS_TTL:
+        if all(mid in _providers_cache["data"] for mid in _PROVIDER_MODELS):
             return {"providers": _providers_cache["data"], "cached_at": _providers_cache["ts"]}
 
-        results = await asyncio.gather(*[
-            _ping_provider(mid, name, factory)
-            for mid, (name, factory) in _PROVIDER_MODELS.items()
-        ])
-        providers = {r["id"]: r for r in results}
-        _providers_cache["data"] = providers
-        _providers_cache["ts"] = time.time()
-        return {"providers": providers, "cached_at": _providers_cache["ts"]}
+    results = await asyncio.gather(*[
+        _check_single_provider(mid, name, factory, force=force)
+        for mid, (name, factory) in _PROVIDER_MODELS.items()
+    ])
+    providers = {r["id"]: r for r in results}
+    _providers_cache["data"] = providers
+    _providers_cache["ts"] = time.time()
+    return {"providers": providers, "cached_at": _providers_cache["ts"]}
 
 
 

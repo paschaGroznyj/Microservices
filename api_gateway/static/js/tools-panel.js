@@ -603,11 +603,12 @@ const MP_FALLBACK_ICON_SM = `<svg viewBox="0 0 24 24" fill="none" width="15" hei
   <path d="M12 11 L18.6 7 M12 11 V18.8 M12 11 L5.4 7"/>
 </svg>`;
 
-const MP_STORAGE_KEY        = 'mp_selected_model';
-const MP_MODELS_URL         = '/api/models';
-const MP_PROVIDERS_URL      = '/api/providers/status';
-const MP_PROVIDERS_TTL_MS   = 25000;
-const MP_RETRY_OFFLINE_MS   = 15000;
+const MP_STORAGE_KEY          = 'mp_selected_model';
+const MP_MODELS_URL           = '/api/models';
+const MP_PROVIDERS_URL        = '/api/providers/status';
+const MP_PROVIDERS_STREAM_URL = '/api/providers/status/stream';
+const MP_PROVIDERS_TTL_MS     = 25000;
+const MP_RETRY_OFFLINE_MS     = 15000;
 
 const MP_BASE_ID_TO_SETTING = {
   coder:     'gpt',
@@ -652,6 +653,7 @@ class ModelPickerClass {
     this._storedTrigger       = null;
     // Кеш доступности провайдеров: {providers: {id: {up, name, reason}}, ts}
     this._providers           = null;
+    this._providersItemTs     = {};
     this._providersTs         = 0;
     this._providersReq        = null;
   }
@@ -795,28 +797,134 @@ class ModelPickerClass {
     return this._modelsReq;
   }
 
-  /* Тянет доступность провайдеров с бэка (с TTL-кешем и дедупом запросов).
-     Возвращает объект providers ({id: {up, name, reason?}}) или null. */
+  /* Возвращает свежий закешированный статус конкретной модели или null. */
+  _getFreshProvider(modelId, now = Date.now()) {
+    if (!modelId || !this._providers || typeof this._providers !== 'object') return null;
+    const item = this._providers[modelId];
+    if (!item) return null;
+    const itemTs = this._providersItemTs?.[modelId] || this._providersTs || 0;
+    if ((now - itemTs) >= MP_PROVIDERS_TTL_MS) return null;
+    return item;
+  }
+
+  /* Применяет статус одной модели в кеш и мгновенно обновляет её .mp-status-label в открытой панели. */
+  _applySingleProvider(item) {
+    if (!item || !item.id) return;
+    if (!this._providers || typeof this._providers !== 'object') {
+      this._providers = {};
+    }
+    const now = Date.now();
+    this._providers[item.id] = item;
+    this._providersItemTs[item.id] = now;
+    this._providersTs = now;
+
+    if (this._panel) {
+      this._panel.querySelectorAll('.mp-option').forEach(opt => {
+        if (opt.dataset.model === item.id) {
+          this._applyProviderBadge(opt, item);
+        }
+      });
+    }
+    try {
+      window.dispatchEvent(new CustomEvent('model:provider_status', { detail: item }));
+    } catch (_) {}
+  }
+
+  /* Тянет доступность провайдеров с бэка асинхронным потоком (SSE) по мере готовности каждой модели,
+     не ожидая завершения всех сразу. Имеет фолбэк на JSON /api/providers/status. */
   async _fetchProviders(force = false) {
     const now = Date.now();
-    if (!force && this._providers && (now - this._providersTs) < MP_PROVIDERS_TTL_MS) {
-      return this._providers;
+    if (!force && this._models.length > 0 && this._providers) {
+      const allFresh = this._models.every(m => Boolean(this._getFreshProvider(m.id, now)));
+      if (allFresh) return this._providers;
     }
     if (this._providersReq) return this._providersReq;
 
     this._providersReq = (async () => {
+      const url = MP_PROVIDERS_STREAM_URL + (force ? '?force=1' : '');
       try {
-        const resp = await fetch(MP_PROVIDERS_URL, { credentials: 'same-origin' });
+        const resp = await fetch(url, {
+          credentials: 'same-origin',
+          headers: { 'Accept': 'text/event-stream, application/json' },
+        });
         if (!resp.ok) throw new Error('status ' + resp.status);
+
+        const ctype = (resp.headers?.get?.('content-type') || '').toLowerCase();
+        if (ctype.includes('text/event-stream') && resp.body?.getReader) {
+          const reader = resp.body.getReader();
+          const decoder = new TextDecoder('utf-8');
+          let buffer = '';
+          let gotAny = false;
+
+          const processLine = (line) => {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data:')) return;
+            const rawJson = trimmed.slice(5).trim();
+            if (!rawJson) return;
+            try {
+              const payload = JSON.parse(rawJson);
+              if (payload && payload.id && typeof payload.up === 'boolean') {
+                gotAny = true;
+                this._applySingleProvider(payload);
+              } else if (payload && payload.providers && typeof payload.providers === 'object') {
+                Object.values(payload.providers).forEach(p => {
+                  if (p && p.id) {
+                    gotAny = true;
+                    this._applySingleProvider(p);
+                  }
+                });
+              }
+            } catch (_) {}
+          };
+
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() ?? '';
+            for (const line of lines) {
+              processLine(line);
+            }
+          }
+          if (buffer.trim()) {
+            for (const line of buffer.split('\n')) {
+              processLine(line);
+            }
+          }
+          return gotAny ? this._providers : (this._providers ?? null);
+        }
+
+        // Фолбэк, если ответ пришёл обычным JSON
         const data = await resp.json();
-        this._providers   = data?.providers ?? null;
-        this._providersTs = Date.now();
+        if (data?.providers && typeof data.providers === 'object') {
+          Object.entries(data.providers).forEach(([k, v]) => {
+            if (v && typeof v === 'object') {
+              this._applySingleProvider({ id: v.id || k, ...v });
+            }
+          });
+          return this._providers;
+        }
         return this._providers;
       } catch (_) {
-        // сеть/агент недоступны — оставляем нейтральное состояние (null)
-        this._providers   = null;
-        this._providersTs = Date.now();
-        return null;
+        // Фолбэк на классический /api/providers/status
+        try {
+          const resp2 = await fetch(MP_PROVIDERS_URL + (force ? '?force=1' : ''), {
+            credentials: 'same-origin',
+          });
+          if (resp2.ok) {
+            const data2 = await resp2.json();
+            if (data2?.providers && typeof data2.providers === 'object') {
+              Object.entries(data2.providers).forEach(([k, v]) => {
+                if (v && typeof v === 'object') {
+                  this._applySingleProvider({ id: v.id || k, ...v });
+                }
+              });
+              return this._providers;
+            }
+          }
+        } catch (_e2) {}
+        return this._providers ?? null;
       } finally {
         this._providersReq = null;
       }
@@ -848,17 +956,18 @@ class ModelPickerClass {
     }
   }
 
-  /* Обновляет бейджи всех опций в открытой панели по кешу/фетчу. */
+  /* Обновляет бейджи всех опций в открытой панели: сразу рисует закешированные,
+     а остальные докрашивает асинхронно по мере прихода из SSE-потока. */
   async _refreshPanelBadges() {
     if (!this._panel) return;
     const opts = this._panel.querySelectorAll('.mp-option');
     if (!opts.length) return;
-    const paint = (providers) => {
-      opts.forEach(opt => this._applyProviderBadge(opt, providers?.[opt.dataset.model] ?? null));
-    };
-    paint(this._providers);
-    const providers = await this._fetchProviders();
-    if (this._panel) paint(providers);
+    const now = Date.now();
+    opts.forEach(opt => {
+      const cached = this._getFreshProvider(opt.dataset.model, now);
+      this._applyProviderBadge(opt, cached);
+    });
+    await this._fetchProviders();
   }
 
   inject(container) {

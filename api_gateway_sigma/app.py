@@ -2090,21 +2090,70 @@ async def get_agent_models(request: Request):
         return {"agent_available": False, "default_model": "coder", "models": []}
 
 
-@app.get("/api/providers/status")
-async def get_providers_status(request: Request):
-    """Доступность LLM-провайдеров под моделями тоггла (для ModelPicker).
-
-    Проксирует /internal/providers_status agent_service. При недоступности
-    самого агента отдаёт мягкий 200 с providers=null, чтобы фронт показал
-    нейтральное состояние, а не рушился."""
+@app.get("/api/providers/status/stream")
+async def get_providers_status_stream(request: Request, force: bool = False):
+    """SSE-поток доступности LLM-провайдеров: каждая модель летит по мере ответа."""
     user = await get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     agent_url = SERVICES['agent_service']['url']
+
+    async def _proxy_stream():
+        try:
+            async with app.state.http_client.stream(
+                "GET",
+                f"{agent_url}/internal/providers_status/stream",
+                params={"force": "1"} if force else None,
+                timeout=25.0,
+            ) as resp:
+                if resp.status_code != 200:
+                    yield 'event: error\ndata: {"providers": null}\n\n'
+                    return
+                async for chunk in resp.aiter_text():
+                    if chunk:
+                        yield chunk
+        except httpx.RequestError:
+            yield 'event: error\ndata: {"providers": null}\n\n'
+
+    return StreamingResponse(
+        _proxy_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/api/providers/status")
+async def get_providers_status(
+    request: Request,
+    model: Optional[str] = None,
+    stream: bool = False,
+    force: bool = False,
+):
+    """Доступность LLM-провайдеров под моделями тоггла (для ModelPicker).
+
+    Проксирует /internal/providers_status agent_service (включая одиночный ?model=<id>
+    и потоковый ?stream=1). При недоступности самого агента отдаёт мягкий 200 с
+    providers=null, чтобы фронт показал нейтральное состояние, а не рушился."""
+    if stream:
+        return await get_providers_status_stream(request, force=force)
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    agent_url = SERVICES['agent_service']['url']
+    params = {}
+    if model:
+        params["model"] = model
+    if force:
+        params["force"] = "1"
     try:
         resp = await app.state.http_client.get(
             f"{agent_url}/internal/providers_status",
-            timeout=15.0
+            params=params or None,
+            timeout=22.0,
         )
         return resp.json()
     except httpx.RequestError:

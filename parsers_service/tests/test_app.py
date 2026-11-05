@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from main import app
-from universal.page_parser import clear_page_cache
+from universal.page_parser import clear_page_cache, split_into_chunks
 
 client = TestClient(app)
 
@@ -42,8 +42,10 @@ def test_parse_page_success(mocker):
 
 def test_parse_page_chunks_and_cache(mocker):
     long_text = "[URL: https://long.example/doc]\n\n" + "\n\n".join(
-        f"Абзац номер {i}: " + ("слово " * 180) for i in range(30)
+        f"Абзац номер {i}: " + ("слово " * 180) for i in range(60)
     )
+    total = len(split_into_chunks(long_text))
+    assert total >= 3
     mock_parser = mocker.patch(
         "main.browser_parser",
         new=mocker.AsyncMock(return_value=long_text),
@@ -52,21 +54,22 @@ def test_parse_page_chunks_and_cache(mocker):
     r0 = client.post("/parse/page", json={"urls": ["https://long.example/doc"]})
     assert r0.status_code == 200
     text0 = r0.json()["text"]
-    assert "Фрагмент 0 из 3" in text0
+    assert f"Фрагмент 0 из {total}" in text0
     assert "chunk_indices=[1]" in text0
     assert "Абзац номер 0:" in text0
     assert mock_parser.call_count == 1
 
-    # Второй запрос за фрагментом 1 и 2 должен прийти из кэша без повторного вызова browser_parser
+    # Фрагменты 1 и последний — из кэша, без повторного вызова browser_parser
+    last = total - 1
     r1 = client.post(
         "/parse/page",
-        json={"urls": ["https://long.example/doc"], "chunk_indices": [1, 2]},
+        json={"urls": ["https://long.example/doc"], "chunk_indices": [1, last]},
     )
     assert r1.status_code == 200
     text1 = r1.json()["text"]
-    assert "Фрагмент 1 из 3" in text1
-    assert "Фрагмент 2 из 3" in text1
-    assert "Абзац номер 29:" in text1
+    assert f"Фрагмент 1 из {total}" in text1
+    assert f"Фрагмент {last} из {total}" in text1
+    assert "Абзац номер 59:" in text1
     assert mock_parser.call_count == 1
 
 

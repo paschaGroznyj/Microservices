@@ -103,6 +103,7 @@ async def _send_thinking(chat_id: int) -> None:
 def _parse_max_admin_ids() -> set:
     """user_id админов в MAX из ADMINS_INFO (поле max_id). Аналог _parse_tg_admin_ids."""
     raw = os.environ.get("ADMINS_INFO")
+    logging.info(raw)
     ids = set()
     if not raw:
         return ids
@@ -128,7 +129,7 @@ def _parse_max_admin_ids() -> set:
 
 
 MAX_ADMIN_IDS = _parse_max_admin_ids()
-
+logging.info(f"[admins_info] {MAX_ADMIN_IDS}")
 
 def _is_max_admin(uid) -> bool:
     try:

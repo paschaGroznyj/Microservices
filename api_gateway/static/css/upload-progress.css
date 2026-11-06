@@ -1,0 +1,124 @@
+/* Анимация загрузки вложений после «Отправить» (upload-progress.js). */
+.up-host--rel { position: relative; }
+.up-host { overflow: hidden; }
+
+.up-ov {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: inherit;
+  pointer-events: none;
+  color: #fff;
+  background: rgba(20, 16, 12, .46);
+  backdrop-filter: blur(1.5px);
+  -webkit-backdrop-filter: blur(1.5px);
+  animation: up-ov-in .18s ease-out both;
+  transition: opacity .25s ease, background-color .25s ease;
+}
+.up-ov--hide { opacity: 0; }
+@keyframes up-ov-in { from { opacity: 0; } to { opacity: 1; } }
+.up-ov--instant { animation: none; }
+.up-ov--instant .up-ov__bar, .up-ov--instant .up-ov__fill { transition: none; }
+
+/* плитка основного чата: подпись (.fa-tile__cap, z-index 1) остаётся над
+   оверлеем и не размывается; кольцо поднято над подписью */
+.fa-tile__media > .up-ov { z-index: 0; padding-bottom: 34px; }
+/* «Скачать» до окончания загрузки не нужен */
+.up-host .fa-card-dl-btn, .up-host .image-lightbox__dl { visibility: hidden; }
+
+/* бегущий блик, пока байты уходят */
+.up-ov::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 30%, rgba(255,255,255,.16) 50%, transparent 70%);
+  background-size: 250% 100%;
+  animation: up-shimmer 1.4s linear infinite;
+}
+.up-ov[data-phase="done"]::before,
+.up-ov[data-phase="error"]::before { animation: none; opacity: 0; }
+@keyframes up-shimmer { from { background-position: 125% 0; } to { background-position: -125% 0; } }
+
+/* тёмный диск под кольцом: процент читается и на светлом превью, и на сером документе */
+.up-ov__ring { position: relative; width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; background: rgba(0, 0, 0, .5); box-shadow: 0 1px 6px rgba(0, 0, 0, .25); }
+.up-ov__ring > svg:first-child { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+.up-ov__track { fill: none; stroke: rgba(255,255,255,.28); stroke-width: 3; }
+.up-ov__bar {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 3;
+  stroke-linecap: round;
+  transition: stroke-dashoffset .2s linear, stroke .2s ease;
+}
+.up-ov__pct {
+  position: relative;
+  font: 600 10px/1 Inter, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.02em;
+}
+.up-ov__label {
+  position: relative;
+  min-height: 12px;
+  font: 500 11px/1.1 Inter, system-ui, sans-serif;
+  text-shadow: 0 1px 2px rgba(0,0,0,.35);
+}
+.up-ov__label:empty { display: none; }
+.up-ov__icon { position: absolute; width: 20px; height: 20px; opacity: 0; transform: scale(.6); transition: opacity .2s ease, transform .2s ease; }
+
+/* обработка на сервере: кольцо крутится, процентов нет */
+.up-ov[data-phase="processing"] .up-ov__ring > svg:first-child { animation: up-spin .9s linear infinite; }
+.up-ov[data-phase="processing"] .up-ov__bar { stroke-dashoffset: 70 !important; }
+.up-ov[data-phase="processing"] .up-ov__pct { opacity: 0; }
+@keyframes up-spin { from { transform: rotate(-90deg); } to { transform: rotate(270deg); } }
+
+/* готово: галочка и плавное исчезновение */
+.up-ov[data-phase="done"] { background: rgba(20, 16, 12, .22); }
+.up-ov[data-phase="done"] .up-ov__pct { opacity: 0; }
+.up-ov[data-phase="done"] .up-ov__icon--ok { opacity: 1; transform: scale(1); }
+
+/* ошибка: красная подложка, «!», подпись */
+.up-ov[data-phase="error"] { background: color-mix(in srgb, var(--danger, #c0392b) 62%, transparent); }
+.up-ov[data-phase="error"] .up-ov__track { stroke: rgba(255,255,255,.4); }
+.up-ov[data-phase="error"] .up-ov__bar { stroke: transparent; }
+.up-ov[data-phase="error"] .up-ov__pct { opacity: 0; }
+.up-ov[data-phase="error"] .up-ov__icon--err { opacity: 1; transform: scale(1); }
+
+/* компактный вариант для строк-документов и аудио: полоса снизу, имя файла видно */
+.up-ov--compact {
+  inset: auto 0 0 0;
+  height: 4px;
+  background: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  overflow: visible;
+}
+.up-ov--compact::before { display: none; }
+.up-ov__line { position: absolute; inset: 0; background: color-mix(in srgb, var(--accent, #8b4513) 18%, transparent); overflow: hidden; }
+.up-ov__fill {
+  position: absolute; inset: 0 auto 0 0; width: 0;
+  background: var(--accent, #8b4513);
+  transition: width .2s linear;
+}
+.up-ov--compact[data-phase="processing"] .up-ov__fill {
+  width: 40% !important;
+  animation: up-indet 1s ease-in-out infinite;
+}
+@keyframes up-indet { from { left: -40%; } to { left: 100%; } }
+.up-ov--compact[data-phase="done"] .up-ov__fill { width: 100% !important; background: var(--accent2, #4a7c59); }
+.up-ov--compact[data-phase="error"] { background: none; }
+.up-ov--compact[data-phase="error"] .up-ov__fill { width: 100% !important; background: var(--danger, #c0392b); }
+.up-ov--compact .up-ov__icon--err {
+  position: absolute; right: 6px; bottom: 8px; width: 16px; height: 16px;
+  border-radius: 50%; background: var(--danger, #c0392b); color: #fff;
+}
+.up-ov--compact[data-phase="error"] .up-ov__icon--err { opacity: 1; transform: scale(1); }
+
+@media (prefers-reduced-motion: reduce) {
+  .up-ov, .up-ov::before, .up-ov__ring > svg:first-child, .up-ov__fill { animation: none !important; }
+  .up-ov__bar, .up-ov__fill { transition: none; }
+}

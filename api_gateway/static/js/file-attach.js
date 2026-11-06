@@ -4,7 +4,7 @@
  * Публичное API (window.FileAttach):
  *   init(attachBtn, inputContainer)  — инициализация для конкретного инпута
  *   getFiles()                       — текущий массив File
- *   upload(chatId, msgId)            — POST /api/chats/upload_files
+ *   upload(chatId, msgId, {files, onProgress, onSent}) — POST /api/chats/upload_files
  *   addFiles(files, {forceFile})     — добавить File[] программно (forceFile:
  *                                      gateway не положит текст в промпт)
  *   clear()                          — сбросить все файлы и превью
@@ -465,34 +465,39 @@ const FileAttach = (() => {
      * @param {string}        msgId
      * @returns {Promise<Response|null>}
      */
-    async function upload(chatId, msgId) {
-        if (!_files.length) return null;
+    async function upload(chatId, msgId, opts = {}) {
+        // opts.files — снимок вложений на момент «Отправить»: композер к этому
+        // времени уже очищен (см. app.js sendMessage), _files может быть пуст
+        // или содержать новые файлы следующего сообщения.
+        const files = Array.isArray(opts.files) ? opts.files : _files;
+        if (!files.length) return null;
 
         const fd = new FormData();
         fd.append('chat_id',    String(chatId));
         fd.append('message_id', String(msgId));
-        _files.forEach(f => {
+        files.forEach(f => {
             fd.append('files', f);
             if (_forceFile.has(f)) fd.append('force_file', f.name);
         });
 
+        const url = '/api/chats/upload_files';
         try {
-            const res = await fetch('/api/chats/upload_files', {
-                method:      'POST',
-                credentials: 'include',
-                body:        fd,
-            });
+            // XHR (UploadProgress.send) отдаёт прогресс отправки байтов, fetch — нет.
+            const res = window.UploadProgress
+                ? await window.UploadProgress.send(url, fd, { onProgress: opts.onProgress, onSent: opts.onSent })
+                : await fetch(url, { method: 'POST', credentials: 'include', body: fd });
             if (!res.ok) {
                 console.warn('FileAttach upload: server error', res.status);
-                if (res.status === 413) {
-                    let msg = 'Файл больше 50 МБ — не отправлен.';
-                    try { const j = await res.clone().json(); if (j?.detail) msg = j.detail; } catch (_) {}
-                    _showToast(msg);
-                }
+                let msg = res.status === 413
+                    ? 'Файл больше 50 МБ — не отправлен.'
+                    : `Файлы не загружены (ошибка ${res.status}).`;
+                try { const j = await res.clone().json(); if (typeof j?.detail === 'string' && j.detail) msg = j.detail; } catch (_) {}
+                _showToast(msg);
             }
             return res;
         } catch (err) {
             console.error('FileAttach upload error:', err);
+            _showToast('Файлы не загружены: нет связи с сервером.');
             return null;
         }
     }
@@ -533,7 +538,7 @@ const FileAttach = (() => {
         return _files.length > before;
     }
 
-    return { init, getFiles, upload, clear, getFilesMeta, getPreviewItems, addFiles };
+    return { init, getFiles, upload, clear, getFilesMeta, getPreviewItems, addFiles, showToast: _showToast };
 
 })();
 

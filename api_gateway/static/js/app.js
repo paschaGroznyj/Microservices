@@ -3519,6 +3519,10 @@ class ChatApp {
 
         const msgId = `msg-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
         const _optimisticFiles = isCustom ? [] : (window.FileAttach?.getPreviewItems?.() ?? window.FileAttach?.getFilesMeta() ?? []);
+        // Снимок вложений: композер очищается сразу после отправки, а файлы
+        // грузятся уже из сообщения в ленте (с анимацией прогресса).
+        const _filesSnap = isCustom ? [] : (window.FileAttach?.getFiles?.() ?? []);
+        const _filesMetaSnap = isCustom ? [] : (window.FileAttach?.getFilesMeta?.() ?? []);
         this.addMessage({ message: text, is_from_bot: false, id: msgId, created_at: new Date().toISOString(), files: _optimisticFiles });
         this._scrollToUserMessageAndReserve();
 
@@ -3536,6 +3540,13 @@ class ChatApp {
             this._clearInputDraft(this.currentChat);
         }
         sendBtn?.classList.remove('active');
+        let _upTracker = null;
+        if (_filesSnap.length) {
+            window.FileAttach?.clear();
+            this.getInputContainer()?.querySelector('#attach-btn')?.classList.remove('has-files');
+            _upTracker = window.UploadProgress?.track(() =>
+                this.getMessagesContainer()?.querySelector(`.user-message-wrapper[data-message-id="${msgId}"]`) || null) || null;
+        }
         const _curSt = this._ensureStream(this.currentChat);
         if (_curSt) {
             _curSt.runStartedAt = Date.now();
@@ -3556,9 +3567,15 @@ class ChatApp {
             // в 20с ожидания → images=[] → analyze/generate работали впустую).
             // Текстовые файлы лёгкие и успевали случайно — отсюда «git.txt
             // подгрузился, а картинка нет». Теперь порядок детерминирован.
-            const _hasFiles = !isCustom && ((window.FileAttach?.getFiles().length ?? 0) > 0);
+            const _hasFiles = _filesSnap.length > 0;
             if (_hasFiles) {
-                await window.FileAttach?.upload(this.currentChat, msgId);
+                const _upRes = await window.FileAttach?.upload(this.currentChat, msgId, {
+                    files:      _filesSnap,
+                    onProgress: (p) => _upTracker?.progress(p),
+                    onSent:     () => _upTracker?.sent(),
+                });
+                if (_upRes && _upRes.ok) _upTracker?.done();
+                else _upTracker?.fail(_upRes ? `Не загружено (ошибка ${_upRes.status})` : 'Не загружено: нет связи');
             }
 
             const resp = await fetch('/api/chats/send_message', {
@@ -3577,7 +3594,7 @@ class ChatApp {
                     loop:            window.ToolsPanel?.getLoopEnabled() ?? false,
                     loop_instruction: window.ToolsPanel?.getLoopEnabled() ? text : '',
                     has_files:      _hasFiles,
-                    files: isCustom ? [] : (window.FileAttach?.getFilesMeta() ?? []),
+                    files:          _filesMetaSnap,
                     timezone_name:  (Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow'),
                     tz_offset_minutes: new Date().getTimezoneOffset(),
                     ...(pollAnswer ? { poll_answer: pollAnswer } : {})
@@ -3605,12 +3622,9 @@ class ChatApp {
             } catch (_) {
                 this._activeRequestId = null;
             }
-            if (!isCustom) {
-                window.FileAttach?.clear();
-                this.getInputContainer()?.querySelector('#attach-btn')?.classList.remove('has-files');
-            }
         } catch (err) {
             console.error('sendMessage error:', err);
+            _upTracker?.fail('Не отправлено');
             this._runState = 'idle';
             this._setSendButtonMode('send');
             this._activeRequestId = null;

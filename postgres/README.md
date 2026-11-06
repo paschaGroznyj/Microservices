@@ -16,11 +16,11 @@
   - `02_group_chats.sql` — `group_rooms` (+ комната `global`), `group_messages`, `group_room_members`, `group_message_files`.
   - `03_messengers_tg_max.sql` — `telegram_chats`, `telegram_chat_settings`, `telegram_chat_members`, `telegram_start_log`, `telegram_triggers`, `max_chats`, `max_chat_settings`, `max_triggers`, `max_chat_members`.
 - `03_agent/`
-  - `01_journal_and_sessions.sql` — `agent_journal`, `agent_journal_audit`, `session_summaries`, `chat_rolling_summary`, `token_log`, `service_chats`.
+  - `01_journal_and_sessions.sql` — `agent_journal`, `session_summaries`, `chat_rolling_summary`.
   - `02_skills_and_code_library.sql` — `agent_skills`, `agent_skill_likes`, `agent_skill_selected`, `code_library`.
 - `04_knowledge/`
-  - `01_knowledge_graph.sql` — `knowledge`, `knowledge_vectors`, `knowledge_review`, `knowledge_log`, `entity_relations`, `wiki_pages`.
-  - `02_papers_and_articles.sql` — `articles`, `search_requests`, `request_articles`, `favorites`, `user_articles`, `article_reviews`, `article_embeddings`, `article_translations`, `papers_metadata`, `reviews`.
+  - `01_knowledge_graph.sql` — `knowledge`, `knowledge_review`, `knowledge_log`, `entity_relations`, `wiki_pages`.
+  - `02_papers_and_articles.sql` — `articles`, `search_requests`, `request_articles`, `favorites`, `article_embeddings`, `article_translations`.
 - `05_grants/`
   - `01_roles_and_permissions.sql` — роли `knowledge_manager` и `my_journal`, права на таблицы и последовательности.
 

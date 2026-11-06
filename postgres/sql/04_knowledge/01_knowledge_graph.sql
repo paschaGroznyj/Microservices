@@ -34,18 +34,7 @@ CREATE TRIGGER update_knowledge_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
--- 2. Векторная таблица знаний (размерность 1024)
-CREATE TABLE IF NOT EXISTS knowledge_vectors (
-    id           SERIAL PRIMARY KEY,
-    knowledge_id INTEGER UNIQUE NOT NULL REFERENCES knowledge(id) ON DELETE CASCADE,
-    embedding    vector(1024) NOT NULL,
-    created_at   TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_knowledge_vectors_embedding_hnsw
-    ON knowledge_vectors USING hnsw (embedding vector_cosine_ops);
-
--- 3. Инкубатор удаления знаний (knowledge_review)
+-- 2. Инкубатор удаления знаний (knowledge_review)
 CREATE TABLE IF NOT EXISTS knowledge_review (
     id           SERIAL PRIMARY KEY,
     knowledge_id INTEGER NOT NULL REFERENCES knowledge(id) ON DELETE CASCADE,
@@ -57,7 +46,7 @@ CREATE TABLE IF NOT EXISTS knowledge_review (
 CREATE INDEX IF NOT EXISTS idx_knowledge_review_knowledge_id
     ON knowledge_review(knowledge_id);
 
--- 4. Аудит изменений знаний (knowledge_log)
+-- 3. Аудит изменений знаний (knowledge_log)
 CREATE TABLE IF NOT EXISTS knowledge_log (
     id          SERIAL PRIMARY KEY,
     action      VARCHAR(30) NOT NULL,
@@ -99,7 +88,7 @@ CREATE TRIGGER trg_knowledge_audit
     AFTER INSERT OR UPDATE ON knowledge
     FOR EACH ROW EXECUTE FUNCTION log_knowledge_change();
 
--- 5. Граф связей сущностей (entity_relations)
+-- 4. Граф связей сущностей (entity_relations)
 CREATE TABLE IF NOT EXISTS entity_relations (
     id              SERIAL PRIMARY KEY,
     source_id       INTEGER NOT NULL REFERENCES knowledge(id) ON DELETE CASCADE,
@@ -116,7 +105,7 @@ CREATE INDEX IF NOT EXISTS entity_relations_source_idx ON entity_relations (sour
 CREATE INDEX IF NOT EXISTS entity_relations_target_idx ON entity_relations (target_id);
 CREATE INDEX IF NOT EXISTS entity_relations_type_idx ON entity_relations (relation_type);
 
--- 6. Слой синтеза знаний (wiki_pages)
+-- 5. Слой синтеза знаний (wiki_pages)
 CREATE TABLE IF NOT EXISTS wiki_pages (
     id           SERIAL PRIMARY KEY,
     title        TEXT NOT NULL,
@@ -142,7 +131,7 @@ CREATE TRIGGER update_wiki_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
--- 7. Комментарии для LLM-схемы
+-- 6. Комментарии для LLM-схемы
 COMMENT ON TABLE knowledge IS 'Основное хранилище текстовых знаний, заметок, регламентов и фактов, зафиксированных агентом или пользователем.';
 COMMENT ON COLUMN knowledge.id IS 'Уникальный идентификатор записи знаний.';
 COMMENT ON COLUMN knowledge.text_knowledge IS 'Смысловой текст знания (инструкция, факт, регламент). Служит источником для генерации эмбеддингов.';

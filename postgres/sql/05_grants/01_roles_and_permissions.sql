@@ -37,20 +37,11 @@ GRANT USAGE, SELECT ON SEQUENCE entity_relations_id_seq TO knowledge_manager;
 GRANT SELECT, INSERT, UPDATE ON wiki_pages TO knowledge_manager;
 GRANT USAGE, SELECT ON SEQUENCE wiki_pages_id_seq TO knowledge_manager;
 
-GRANT SELECT, INSERT, UPDATE ON papers_metadata TO knowledge_manager;
-GRANT USAGE, SELECT ON SEQUENCE papers_metadata_id_seq TO knowledge_manager;
-
-GRANT SELECT, INSERT, UPDATE ON reviews TO knowledge_manager;
-GRANT USAGE, SELECT ON SEQUENCE reviews_id_seq TO knowledge_manager;
-
 GRANT SELECT, INSERT, UPDATE ON code_library TO knowledge_manager;
 GRANT USAGE, SELECT ON SEQUENCE code_library_id_seq TO knowledge_manager;
 
 GRANT SELECT, INSERT, UPDATE ON session_summaries TO knowledge_manager;
 GRANT USAGE, SELECT ON SEQUENCE session_summaries_id_seq TO knowledge_manager;
-
-GRANT SELECT, INSERT, UPDATE ON service_chats TO knowledge_manager;
-GRANT USAGE, SELECT ON SEQUENCE service_chats_id_seq TO knowledge_manager;
 
 -- Права для роли my_journal (работа с бортовым журналом и базовыми таблицами)
 GRANT SELECT, INSERT, UPDATE, DELETE ON agent_journal TO my_journal;

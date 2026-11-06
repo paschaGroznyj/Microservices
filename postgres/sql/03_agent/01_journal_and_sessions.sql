@@ -76,32 +76,12 @@ COMMENT ON COLUMN agent_journal.created_at IS
 COMMENT ON COLUMN agent_journal.updated_at IS
 'Время последнего обновления записи (UTC). Обновляется при компрессии summary.';
 
--- 2. Аудит удалений из agent_journal
-CREATE TABLE IF NOT EXISTS agent_journal_audit (
-    audit_id    BIGSERIAL PRIMARY KEY,
-    deleted_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    deleted_by  TEXT NOT NULL DEFAULT CURRENT_USER,
-    original_id BIGINT NOT NULL,
-    row_data    JSONB NOT NULL
-);
-
-COMMENT ON TABLE agent_journal_audit IS
-'Архив удаленных записей из таблицы agent_journal (аудит)';
-
-CREATE OR REPLACE FUNCTION audit_agent_journal_delete()
-RETURNS TRIGGER AS $$
-BEGIN
-    INSERT INTO agent_journal_audit (original_id, deleted_by, row_data)
-    VALUES (OLD.id, CURRENT_USER, to_jsonb(OLD));
-    RETURN OLD;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
+-- 2. Аудит удалений из agent_journal убран: таблица agent_journal_audit
+-- больше не создаётся. На существующих базах снимаем триггер и функцию,
+-- чтобы DELETE из agent_journal не зависел от таблицы аудита.
+-- Сама таблица agent_journal_audit с данными не удаляется.
 DROP TRIGGER IF EXISTS trg_audit_agent_journal_delete ON agent_journal;
-CREATE TRIGGER trg_audit_agent_journal_delete
-    BEFORE DELETE ON agent_journal
-    FOR EACH ROW
-    EXECUTE FUNCTION audit_agent_journal_delete();
+DROP FUNCTION IF EXISTS audit_agent_journal_delete();
 
 -- 3. Саммари сессий и скользящее саммари чата
 CREATE TABLE IF NOT EXISTS session_summaries (
@@ -140,43 +120,3 @@ CREATE TABLE IF NOT EXISTS chat_rolling_summary (
     covered_up_to_id BIGINT NOT NULL DEFAULT 0,
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
--- 4. Логирование токенов
-CREATE TABLE IF NOT EXISTS token_log (
-    id            BIGSERIAL PRIMARY KEY,
-    chat_id       BIGINT,
-    user_id       BIGINT,
-    session_id    INTEGER,
-    input_tokens  INTEGER,
-    output_tokens INTEGER,
-    total_tokens  INTEGER,
-    iterations    INTEGER,
-    model         VARCHAR(128),
-    created_at    TIMESTAMPTZ DEFAULT NOW()
-);
-
--- 5. Межсервисные сообщения
-CREATE TABLE IF NOT EXISTS service_chats (
-    id           BIGSERIAL PRIMARY KEY,
-    service_name TEXT NOT NULL,
-    service_port INTEGER,
-    message_text TEXT NOT NULL,
-    reply_text   TEXT,
-    status       TEXT NOT NULL DEFAULT 'pending', -- pending | processing | done | error
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_service_chats_service ON service_chats (service_name, status);
-CREATE INDEX IF NOT EXISTS idx_service_chats_created ON service_chats (created_at DESC);
-
-COMMENT ON TABLE service_chats IS
-'Таблица межсервисных сообщений (аналог chats, где источником выступает сервис, а не пользователь)';
-COMMENT ON COLUMN service_chats.id IS 'Уникальный идентификатор сообщения (автоинкремент)';
-COMMENT ON COLUMN service_chats.service_name IS 'Название сервиса-отправителя (например, parsers_service, agent_service)';
-COMMENT ON COLUMN service_chats.service_port IS 'Порт сервиса-отправителя (например, 8003)';
-COMMENT ON COLUMN service_chats.message_text IS 'Тело входящего сообщения или команда от сервиса';
-COMMENT ON COLUMN service_chats.reply_text IS 'Ответ агента (заполняется асинхронно после обработки сообщения)';
-COMMENT ON COLUMN service_chats.status IS 'Текущий статус обработки: pending | processing | done | error';
-COMMENT ON COLUMN service_chats.created_at IS 'Дата и время создания записи';
-COMMENT ON COLUMN service_chats.updated_at IS 'Дата и время последнего обновления записи';

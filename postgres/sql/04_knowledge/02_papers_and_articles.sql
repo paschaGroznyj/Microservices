@@ -66,25 +66,6 @@ CREATE TABLE IF NOT EXISTS favorites (
 
 CREATE INDEX IF NOT EXISTS idx_favorites_user_id ON favorites(user_id);
 
-CREATE TABLE IF NOT EXISTS user_articles (
-    id         BIGSERIAL PRIMARY KEY,
-    user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    article_id BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    UNIQUE (user_id, article_id)
-);
-
-CREATE INDEX IF NOT EXISTS ix_user_articles_user_id ON user_articles(user_id);
-CREATE INDEX IF NOT EXISTS ix_user_articles_article_id ON user_articles(article_id);
-
-CREATE TABLE IF NOT EXISTS article_reviews (
-    id           BIGSERIAL PRIMARY KEY,
-    user_id      BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    article_id   BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
-    review_text  TEXT NOT NULL,
-    generated_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-
 -- 2. Эмбеддинги и переводы статей
 CREATE TABLE IF NOT EXISTS article_embeddings (
     id              BIGSERIAL PRIMARY KEY,
@@ -118,55 +99,3 @@ CREATE TABLE IF NOT EXISTS article_translations (
 CREATE INDEX IF NOT EXISTS ix_article_translations_user_id ON article_translations(user_id);
 CREATE INDEX IF NOT EXISTS ix_article_translations_article_id ON article_translations(article_id);
 CREATE INDEX IF NOT EXISTS ix_article_translations_request_id ON article_translations(request_id);
-
--- 3. Метаданные научных статей для агента (papers_metadata + reviews)
-CREATE TABLE IF NOT EXISTS papers_metadata (
-    external_id         TEXT PRIMARY KEY,
-    source              TEXT,
-    title               TEXT,
-    date_sub            DATE,
-    url_article         TEXT,
-    pdf_url             TEXT,
-    authors             JSONB,
-    tags                TEXT[],
-    abstract            TEXT,
-    file_article        TEXT,
-    category            TEXT,
-    relevance_score     DOUBLE PRECISION,
-    relevance_reasoning TEXT,
-    is_relevant         BOOLEAN,
-    pdf_downloaded      BOOLEAN,
-    processed_at        TIMESTAMP DEFAULT NOW(),
-    review              BOOLEAN,
-    text_review         TEXT,
-    review_flag         BOOLEAN NOT NULL DEFAULT FALSE,
-    id                  BIGSERIAL
-);
-
-CREATE TABLE IF NOT EXISTS reviews (
-    id          BIGSERIAL PRIMARY KEY,
-    external_id TEXT NOT NULL UNIQUE REFERENCES papers_metadata(external_id) ON DELETE CASCADE,
-    review_text TEXT NOT NULL,
-    category    TEXT,
-    source_file TEXT,
-    created_at  TIMESTAMP NOT NULL DEFAULT NOW()
-);
-
-COMMENT ON TABLE papers_metadata IS 'Таблица для хранения метаданных, аннотаций и аналитики научных статей.';
-COMMENT ON COLUMN papers_metadata.external_id IS 'PRIMARY KEY. Уникальный хэш или ID статьи (например: "3fa4ef01ef8c" или "arxiv_2510.01234").';
-COMMENT ON COLUMN papers_metadata.source IS 'Источник статьи (например: "yandex_disk", "arxiv", "web_parser").';
-COMMENT ON COLUMN papers_metadata.title IS 'Полное название статьи.';
-COMMENT ON COLUMN papers_metadata.date_sub IS 'Дата публикации в формате YYYY-MM-DD (если нет — NULL).';
-COMMENT ON COLUMN papers_metadata.url_article IS 'Прямая URL-ссылка на страницу статьи.';
-COMMENT ON COLUMN papers_metadata.pdf_url IS 'Ссылка на PDF-файл (если есть).';
-COMMENT ON COLUMN papers_metadata.authors IS 'JSONB. Авторы в формате JSON-массива строк! ПРИМЕР: ["Iris Beerepoot", "Xixi Lu"]. Не заэкранированная строка!';
-COMMENT ON COLUMN papers_metadata.tags IS 'TEXT[]. Массив тегов Postgres! ПРИМЕР: ARRAY[''Process Mining'', ''LLM'']. НЕ JSON!';
-COMMENT ON COLUMN papers_metadata.abstract IS 'Краткое содержание (аннотация) статьи на языке оригинала или русском.';
-COMMENT ON COLUMN papers_metadata.category IS 'Категория статьи (например: "Process Mining", "AI Agents", " Healthcare").';
-COMMENT ON COLUMN papers_metadata.file_article IS 'НЕ ЗАПОЛНЯТЬ! Относительный путь к файлу, заполняется сервисом загрузки.';
-COMMENT ON COLUMN papers_metadata.relevance_score IS 'FLOAT. Оценка полезности для проекта от 0.0 до 1.0.';
-COMMENT ON COLUMN papers_metadata.relevance_reasoning IS 'Краткое обоснование, почему статья релевантна или нерелевантна.';
-COMMENT ON COLUMN papers_metadata.is_relevant IS 'BOOLEAN. true если relevance_score >= 0.7, иначе false.';
-COMMENT ON COLUMN papers_metadata.text_review IS 'Сгенерированный агентский разбор/рецензия статьи.';
-COMMENT ON COLUMN papers_metadata.review_flag IS 'НЕ ЗАПОЛНЯТЬ! По умолчанию FALSE. Флаг отправки ревью пользователю.';
-COMMENT ON COLUMN papers_metadata.processed_at IS 'НЕ ЗАПОЛНЯТЬ! Автоматически подставляется NOW().';

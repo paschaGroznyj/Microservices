@@ -28,28 +28,7 @@ def _coerce_tags(val) -> list:
     return list(val)
 
 
-SCHEMA_PATH = Path(__file__).parent / "sql_scripts"
-
-def load_sql_schema(folder_path: Path) -> str:
-    """Считывает SQL скрипты из папки."""
-    if not folder_path.is_dir():
-        raise FileNotFoundError(f"Директория со скриптами не найдена: {folder_path.resolve()}")
-
-    sql_parts = []
-    sql_files = sorted(folder_path.glob("*.sql"))
-
-    if not sql_files:
-        raise FileNotFoundError(f"В папке {folder_path.resolve()} не найдено ни одного .sql файла")
-        return ''
-
-    for file_path in sql_files:
-        content = file_path.read_text(encoding="utf-8").strip()
-        if content:
-            sql_parts.append(f"-- File: {file_path.name}\n{content}")
-
-    # Объединяем скрипты через перевод строки
-    return "\n\n".join(sql_parts)
-
+# DDL-схема таблиц вынесена в корневой каталог postgres/sql/
 
 class AgentDB:
     def __init__(self):
@@ -119,66 +98,9 @@ class AgentDB:
         return "[" + ",".join(map(str, vector)) + "]"
 
     async def init_schema(self, conn: asyncpg.Connection):
-
-        FULL_sql = load_sql_schema(SCHEMA_PATH)
-
-        await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-
-        await conn.execute(FULL_sql)
-
-        await conn.execute("""
-            ALTER TABLE papers_metadata
-                ADD COLUMN IF NOT EXISTS review BOOLEAN,
-                ADD COLUMN IF NOT EXISTS text_review TEXT;
-        """)
-
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS ix_article_embeddings_article_id
-                ON article_embeddings(article_id);
-
-            CREATE INDEX IF NOT EXISTS ix_article_embeddings_model
-                ON article_embeddings(embedding_model);
-        """)
-
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS ix_article_embeddings_embedding_cosine
-                ON article_embeddings
-                USING hnsw (embedding vector_cosine_ops);
-        """)
-
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS article_translations (
-                id BIGSERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                article_id BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
-                request_id BIGINT NOT NULL REFERENCES search_requests(id) ON DELETE CASCADE,
-                translated_text TEXT NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                UNIQUE (user_id, article_id, request_id)
-            );
-        """)
-
-        await conn.execute("""
-            ALTER TABLE request_articles
-                ADD COLUMN IF NOT EXISTS is_relevant BOOLEAN,
-                ADD COLUMN IF NOT EXISTS processed_at TIMESTAMP DEFAULT NOW();
-        """)
-
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS ix_article_translations_user_id
-                ON article_translations(user_id);
-
-            CREATE INDEX IF NOT EXISTS ix_article_translations_article_id
-                ON article_translations(article_id);
-
-            CREATE INDEX IF NOT EXISTS ix_article_translations_request_id
-                ON article_translations(request_id);
-
-            CREATE INDEX IF NOT EXISTS ix_request_articles_is_relevant
-                ON request_articles(is_relevant);
-        """)
-
+        # Все таблицы, индексы, триггеры и расширения создаются контейнером postgres
+        # из скриптов postgres/sql/ при сборке/старте БД.
+        return
 
     async def deactivate_loop_task(self, chat_id: str) -> bool:
         """САМОЦИКЛ: погасить активную установку петли (стоп-кнопка).

@@ -26,7 +26,6 @@ from .core.agent_provider import (
     get_llm_lite_model,
     get_llm_lite_model_gemini_flash,
     get_llm_lite_model_gpt_mini,
-    get_llm_model,
     get_llm_model_claude,
     get_llm_model_gemini,
     get_llm_model_glm,

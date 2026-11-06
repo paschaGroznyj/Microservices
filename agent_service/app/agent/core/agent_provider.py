@@ -266,22 +266,6 @@ def reload_models_registry(config_path: str | Path | None = None) -> ModelsRegis
 _register_builders(_REGISTRY)
 
 
-
-@lru_cache
-def get_llm_model():
-    return ChatOpenAI(
-        model="anthropic/claude-opus-4.8",
-        base_url="https://foundation-models.api.cloud.ru/v1",
-        api_key=CLOUD_LLM_ACCESS_KEY,
-        max_tokens=16384,
-        model_kwargs={
-            "extra_headers": {
-                "X-Enable-Prompt-Cache": "true"
-            }
-        },
-    )
-
-
 def get_model_by_tag(tag: str):
     """Возвращает инстанс модели по уникальному тегу из YAML (или алиасу)."""
     resolved = resolve_model_tag(tag)

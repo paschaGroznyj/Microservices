@@ -65,15 +65,17 @@ class ScriptedLLM:
         self.script = list(script)
         self.calls = []
         self.methods = []
+        self.call_kwargs = []
         self.bound_tools = None
 
     def bind_tools(self, tools, **kw):
         self.bound_tools = list(tools)
         return self
 
-    def _next(self, messages, method):
+    def _next(self, messages, method, kw=None):
         self.calls.append(list(messages))
         self.methods.append(method)
+        self.call_kwargs.append(dict(kw or {}))
         if not self.script:
             raise AssertionError(f"{self.model_name}: сценарий закончился")
         item = self.script.pop(0)
@@ -82,10 +84,10 @@ class ScriptedLLM:
         return ai(item) if isinstance(item, str) else item
 
     async def astream(self, messages, **kw):
-        yield self._next(messages, "astream")
+        yield self._next(messages, "astream", kw)
 
     async def ainvoke(self, messages, **kw):
-        return self._next(messages, "ainvoke")
+        return self._next(messages, "ainvoke", kw)
 
 
 MODEL_NAMES = {
@@ -93,6 +95,8 @@ MODEL_NAMES = {
     "designer": "anthropic/claude-test",
     "universal": "zai/glm-test",
     "gemini": "google/gemini-test",
+    "gigachat": "ai-sage/gigachat-test",
+    "deepseek": "deepseek-ai/deepseek-test",
 }
 
 
@@ -100,10 +104,10 @@ def build_agent(monkeypatch, db=None):
     import agent.event_loop as el
     stub = ScriptedLLM("stub/lite")
     for fn in ("get_llm_model_gpt", "get_llm_model_claude", "get_llm_model_glm",
-               "get_llm_model_gemini", "get_llm_lite_model", "get_llm_lite_model_gpt_mini",
+               "get_llm_model_gemini", "get_llm_model_gigachat", "get_llm_model_deepseek",
+               "get_llm_lite_model", "get_llm_lite_model_gpt_mini",
                "get_llm_lite_model_gemini_flash"):
-        monkeypatch.setattr(el, fn, lambda: stub)
-    monkeypatch.setattr(el, "OBSWorker", MagicMock(name="OBSWorker"))
+        monkeypatch.setattr(el, fn, lambda: stub, raising=False)
     agent = el.HarnessAgent(database=db)
     agent.AGENT_MODELS = {k: ScriptedLLM(v) for k, v in MODEL_NAMES.items()}
     return agent

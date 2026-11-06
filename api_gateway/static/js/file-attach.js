@@ -4,7 +4,9 @@
  * Публичное API (window.FileAttach):
  *   init(attachBtn, inputContainer)  — инициализация для конкретного инпута
  *   getFiles()                       — текущий массив File
- *   upload(chatId, msgId)            — POST /api/chats/upload_files
+ *   upload(chatId, msgId, {files, onProgress, onSent}) — POST /api/chats/upload_files
+ *   addFiles(files, {forceFile})     — добавить File[] программно (forceFile:
+ *                                      gateway не положит текст в промпт)
  *   clear()                          — сбросить все файлы и превью
  */
 
@@ -12,6 +14,7 @@ const FileAttach = (() => {
 
     /* ─── состояние ──────────────────────────────────────────── */
     let _files        = [];          // File[]
+    const _forceFile  = new WeakSet(); // File, которые юзер просил отправить файлом
     let _attachBtn    = null;        // <button id="attach-btn"> | <button id="start-attach-btn">
     let _inputBox     = null;        // .chat-input-box | .start-input-box
     let _previewBar   = null;        // .fa-preview-bar (создаём динамически)
@@ -113,7 +116,7 @@ const FileAttach = (() => {
     }
 
     /* ─── toast-уведомление ──────────────────────────────────── */
-    const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 МБ
+    const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 МБ, тот же лимит режет gateway
     const MAX_FILES = 10; // максимум файлов на одно сообщение
 
     function _showToast(message) {
@@ -152,9 +155,9 @@ const FileAttach = (() => {
             newFiles = newFiles.slice(0, _slots);
         }
         newFiles.forEach(f => {
-            // Проверка размера — не более 20 МБ
+            // Проверка размера — не более 50 МБ
             if (f.size > MAX_FILE_SIZE) {
-                _showToast(`Файл «${f.name}» превышает 20 МБ и не будет прикреплён.`);
+                _showToast(`Файл «${f.name}» превышает 50 МБ и не будет прикреплён.`);
                 return;
             }
             // дедупликация по имени + размеру
@@ -462,26 +465,39 @@ const FileAttach = (() => {
      * @param {string}        msgId
      * @returns {Promise<Response|null>}
      */
-    async function upload(chatId, msgId) {
-        if (!_files.length) return null;
+    async function upload(chatId, msgId, opts = {}) {
+        // opts.files — снимок вложений на момент «Отправить»: композер к этому
+        // времени уже очищен (см. app.js sendMessage), _files может быть пуст
+        // или содержать новые файлы следующего сообщения.
+        const files = Array.isArray(opts.files) ? opts.files : _files;
+        if (!files.length) return null;
 
         const fd = new FormData();
         fd.append('chat_id',    String(chatId));
         fd.append('message_id', String(msgId));
-        _files.forEach(f => fd.append('files', f));
+        files.forEach(f => {
+            fd.append('files', f);
+            if (_forceFile.has(f)) fd.append('force_file', f.name);
+        });
 
+        const url = '/api/chats/upload_files';
         try {
-            const res = await fetch('/api/chats/upload_files', {
-                method:      'POST',
-                credentials: 'include',
-                body:        fd,
-            });
+            // XHR (UploadProgress.send) отдаёт прогресс отправки байтов, fetch — нет.
+            const res = window.UploadProgress
+                ? await window.UploadProgress.send(url, fd, { onProgress: opts.onProgress, onSent: opts.onSent })
+                : await fetch(url, { method: 'POST', credentials: 'include', body: fd });
             if (!res.ok) {
                 console.warn('FileAttach upload: server error', res.status);
+                let msg = res.status === 413
+                    ? 'Файл больше 50 МБ — не отправлен.'
+                    : `Файлы не загружены (ошибка ${res.status}).`;
+                try { const j = await res.clone().json(); if (typeof j?.detail === 'string' && j.detail) msg = j.detail; } catch (_) {}
+                _showToast(msg);
             }
             return res;
         } catch (err) {
             console.error('FileAttach upload error:', err);
+            _showToast('Файлы не загружены: нет связи с сервером.');
             return null;
         }
     }
@@ -510,7 +526,19 @@ const FileAttach = (() => {
         });
     }
 
-    return { init, getFiles, upload, clear, getFilesMeta, getPreviewItems };
+    /**
+     * Добавить файлы программно (например, чип вставленного текста -> .txt).
+     * forceFile: gateway отправит их агенту файлом, даже если текст короткий.
+     */
+    function addFiles(files, opts = {}) {
+        const list = Array.from(files || []);
+        if (opts.forceFile) list.forEach(f => _forceFile.add(f));
+        const before = _files.length;
+        _addFiles(list);
+        return _files.length > before;
+    }
+
+    return { init, getFiles, upload, clear, getFilesMeta, getPreviewItems, addFiles, showToast: _showToast };
 
 })();
 

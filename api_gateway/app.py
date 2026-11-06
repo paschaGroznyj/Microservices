@@ -2,7 +2,7 @@
 from fastapi import FastAPI, HTTPException, Request, Depends, Form, Cookie, Response, File, UploadFile
 from fastapi.websockets import WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from contextlib import asynccontextmanager
@@ -33,6 +33,7 @@ import group_chat_gw
 import editor_gw
 import os
 import max_chats_gw
+import file_parsers
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -167,11 +168,6 @@ async def push_sse(username: str, data: dict):
         sse_queues[username] = asyncio.Queue()
     await sse_queues[username].put(data)
 
-@app.get("/some-route")
-async def some_route(request: Request):
-    logging.info(request.headers)
-    authentik_user = request.headers.get("X-Authentik-Username")
-    logger.info(authentik_user)
 
 # Другой коннектор для отправки релевантных статей на фронт
 user_connections: dict[str, WebSocket] = {}
@@ -1048,58 +1044,6 @@ pending_requests: dict[str, int] = {}
 class StopMessageRequest(BaseModel):
     request_id: str
 
-@app.post("/api/favorites")
-async def favorites(request: Request):
-    """Обработка звездочек избранного"""
-    user = await get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    data = await request.json()
-    parser_url = SERVICES['parsers']['url']
-    try:
-        response = await app.state.http_client.post(
-            f"{parser_url}/favorites",
-            json=data,
-            timeout=30.0
-        )
-        if response.status_code == 200:
-            return Response(
-                content=response.content,
-                status_code=200,
-                media_type="application/json"
-            )
-        else:
-            raise HTTPException(status_code=response.status_code, detail="Parser error")
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"Parsers service unreachable: {str(e)}")
-
-@app.post("/api/favorites/select")
-async def favorites_select(request: Request):
-    """Обработка звездочек избранного"""
-    user = await get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    username = {'username': user['username']}
-    parser_url = SERVICES['parsers']['url']
-    try:
-        response = await app.state.http_client.post(
-            f"{parser_url}/favorites/select",
-            json=username,
-            timeout=30.0
-        )
-        if response.status_code == 200:
-            return Response(
-                content=response.content,
-                status_code=200,
-                media_type="application/json"
-            )
-        else:
-            raise HTTPException(status_code=response.status_code, detail="Parser error")
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"Parsers service unreachable: {str(e)}")
-
 async def notify_user_error(username: str, error_type: str = "error_parser"):
     ws = user_connections.get(username)
     if ws:
@@ -1114,119 +1058,6 @@ async def notify_user_message(username: str, type_message: str, message: str, so
         await ws.send_json({"type": type_message, "message": message, "source": source, "title": title})
     else:
         logging.warning(f"Нет WS соединения для {username}")
-
-@app.post("/api/search")
-async def searching(request: Request):
-    """Направить в агента"""
-    user = await get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    data = await request.json()
-    post_body = {
-        "user_name": data['username'],
-        "query": data['query']
-    }
-    agent_url = SERVICES['agent_service']['url']
-    # Отправляем дефолтные словосочетания с фронта
-    try:
-        response = await app.state.http_client.post(
-            f"{agent_url}/api/search",
-            json=post_body,
-            timeout=60.0
-        )
-        """
-        С парсера
-        {   
-            'type': 'parser'
-            'request_id': request_id,
-            'user_name': user_name,
-            'user_query': user_query,
-            'count': len(saved_articles),
-            'articles': saved_articles,
-        }
-        С агента, если запрос не релевантный
-        {
-            'type': 'agent'
-            'message': text
-        }
-        
-        """
-        if response.status_code == 200:
-            result = response.json()
-            if result.get("type") == "agent":
-                await notify_user_message(data['username'], type_message=result.get("type"), message=result['message'])
-            # Агент вернул ошибку парсера внутри 200
-            if result.get("type") == "arxiv_error":
-                await notify_user_message(data['username'], type_message=result.get("type"), message=result['message'])
-            if result.get("type") == "error_parser":
-                await notify_user_error(data['username'])
-                raise HTTPException(status_code=502, detail="Parser internal error")
-            logging.info(result.get("type"))
-            if result.get("type") == "parser":
-                meta = result.get("meta", {})
-                logging.info(meta)
-                warnings_list = meta.get("warnings", [])
-
-                if warnings_list:
-                    for warning in warnings_list:
-                        warning_text = warning.get("message", "Неизвестная ошибка")
-                        source = warning.get("source", "Неизвестный источник")
-                        await notify_user_message(
-                            data['username'],
-                            type_message=result.get("type"),
-                            message=warning_text,
-                            source=source,
-                            title=warning.get("title")
-                        )
-                else:
-                    pass
-            return Response(
-                content=response.content,
-                status_code=200,
-                media_type="application/json"
-            )
-        else:
-            # Агент вернул не 200 — шлём WS и пробрасываем ошибку
-            await notify_user_error(data['username'])
-            raise HTTPException(status_code=response.status_code, detail="Agent error")
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"Agent service unreachable: {str(e)}")
-
-
-@app.post("/api/translate")
-async def translate(request: Request):
-    """Направить в агента"""
-    user = await get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    data = await request.json()
-    post_body = {
-        "username": user['username'],
-        "article_id": data['article_id']
-    }
-    logging.info(f"Это перевод для {post_body}")
-    agent_url = SERVICES['agent_service']['url']
-    # Отправляем дефолтные словосочетания с фронта
-    try:
-        response = await app.state.http_client.post(
-            f"{agent_url}/api/translate",
-            json=post_body,
-            timeout=30.0
-        )
-        if response.status_code == 200:
-            return Response(
-                content=response.content,
-                status_code=200,
-                media_type="application/json"
-            )
-        else:
-            # Агент вернул не 200 — шлём WS и пробрасываем ошибку
-            await notify_user_message(user['username'], type_message='translate', message="Не удалось перевести аннотацию")
-            raise HTTPException(status_code=response.status_code, detail="Agent error")
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"Agent service unreachable: {str(e)}")
 
 
 @app.post("/internal/sse-push")
@@ -1244,46 +1075,6 @@ async def internal_sse_push(request: Request):
 
     return {"ok": True}
 
-
-@app.post("/api/search/default")
-async def searching_default(request: Request):
-    """Направить сразу в парсер"""
-    user = await get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    data = await request.json()
-
-    post_body = {
-        "user_name": data['username'],
-        "query": "default",
-        "params": {
-            "keywords": [data['key_word']],
-            "limit": 10
-        },
-        "request_id": None,
-        "search_now": False
-    }
-
-    logging.info(f"ДЕФОЛТ ДАННЫЕ с вкладки ПОИСКА {data}")
-    parser_url = SERVICES['parsers']['url']
-    # Отправляем дефолтные словосочетания с фронта
-    try:
-        response = await app.state.http_client.post(
-            f"{parser_url}/search/articles",
-            json=post_body,
-            timeout=30.0
-        )
-        if response.status_code == 200:
-            return Response(
-                content=response.content,
-                status_code=200,
-                media_type="application/json"
-            )
-        else:
-            raise HTTPException(status_code=response.status_code, detail="Parser error")
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"Parsers service unreachable: {str(e)}")
 
 # ========== ПРОКСИ ДЛЯ ЧАТОВ ==========
 @app.get("/api/chats/workspaces")
@@ -1460,21 +1251,49 @@ async def upload_files(
     chat_id: str = Form(...),
     message_id: str = Form(...),
     files: list[UploadFile] = File(...),
+    force_file: list[str] = Form(default=[]),
 ):
+    """Приём вложений с фронта и решение «текстом в промпт или файлом».
+
+    Gateway сам режет размер (не больше 50 МБ на файл) и по file_parsers.classify
+    выставляет каждому файлу режим inline/file. В agent_service уходят байты
+    и список file_modes той же длины; агент ничего не парсит.
+    force_file — имена файлов, которые пользователь явно попросил отправить
+    файлом (кнопка «В файл» на чипе вставленного текста).
+    """
     user = await get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    # Форвардим multipart как есть, не читая целиком в память по одному файлу
+    forced = {str(n) for n in (force_file or []) if n}
+    limit_mb = file_parsers.MAX_UPLOAD_BYTES // (1024 * 1024)
     files_payload = []
+    file_modes: list[str] = []
     for f in files:
-        content = await f.read()
+        size = getattr(f, "size", None)
+        if size is not None and size > file_parsers.MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Файл «{f.filename}» больше {limit_mb} МБ",
+            )
+        # Читаем на байт больше лимита: если дочитали — файл слишком большой.
+        content = await f.read(file_parsers.MAX_UPLOAD_BYTES + 1)
+        if len(content) > file_parsers.MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Файл «{f.filename}» больше {limit_mb} МБ",
+            )
+        mode, _chars = file_parsers.classify(
+            f.filename or "", content, force_file=(f.filename in forced)
+        )
+        file_modes.append(mode)
         files_payload.append(("files", (f.filename, content, f.content_type)))
 
     data = {
         "chat_id": chat_id,
         "message_id": message_id,
         "user_id": str(user["user_id"]),
+        "file_modes": file_modes,
     }
 
     try:
@@ -1482,7 +1301,7 @@ async def upload_files(
             f"{SERVICES['agent_service']['url']}/web/upload_files",  # прямой урл сервиса агента
             data=data,
             files=files_payload,
-            timeout=30.0,
+            timeout=120.0,
         )
         return Response(
             content=response.content,
@@ -2046,21 +1865,108 @@ async def get_graph_nodes(request: Request):
         raise HTTPException(status_code=e.response.status_code, detail="Graph data error")
 
 
-@app.get("/api/providers/status")
-async def get_providers_status(request: Request):
-    """Доступность LLM-провайдеров под моделями тоггла (для ModelPicker).
+@app.get("/api/models")
+async def get_agent_models(request: Request):
+    """Каталог моделей агента с описаниями и SVG (для ModelPicker) + проверка доступности agent_service.
 
-    Проксирует /internal/providers_status agent_service. При недоступности
-    самого агента отдаёт мягкий 200 с providers=null, чтобы фронт показал
-    нейтральное состояние, а не рушился."""
+    Ходит напрямую в /internal/models сервиса agent_service.
+    Если agent_service упал или недоступен, возвращает agent_available=False,
+    чтобы фронтенд (app.js) заблокировал отправку запросов."""
     user = await get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     agent_url = SERVICES['agent_service']['url']
     try:
         resp = await app.state.http_client.get(
+            f"{agent_url}/internal/models",
+            timeout=5.0,
+        )
+        if resp.status_code != 200:
+            return {"agent_available": False, "default_model": "coder", "models": []}
+        data = resp.json()
+        if not isinstance(data, dict):
+            return {"agent_available": False, "default_model": "coder", "models": []}
+        models = data.get("models")
+        if not isinstance(models, list) or not models:
+            return {
+                "agent_available": False,
+                "default_model": data.get("default_model") or "coder",
+                "models": [],
+            }
+        run_status.register_setting_models(models)
+        return {
+            "agent_available": bool(data.get("agent_available", True)),
+            "default_model": data.get("default_model") or models[0].get("id") or "coder",
+            "models": models,
+        }
+    except (httpx.RequestError, ValueError):
+        return {"agent_available": False, "default_model": "coder", "models": []}
+
+
+@app.get("/api/providers/status/stream")
+async def get_providers_status_stream(request: Request, force: bool = False):
+    """SSE-поток доступности LLM-провайдеров: каждая модель летит по мере ответа."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    agent_url = SERVICES['agent_service']['url']
+
+    async def _proxy_stream():
+        try:
+            async with app.state.http_client.stream(
+                "GET",
+                f"{agent_url}/internal/providers_status/stream",
+                params={"force": "1"} if force else None,
+                timeout=25.0,
+            ) as resp:
+                if resp.status_code != 200:
+                    yield 'event: error\ndata: {"providers": null}\n\n'
+                    return
+                async for chunk in resp.aiter_text():
+                    if chunk:
+                        yield chunk
+        except httpx.RequestError:
+            yield 'event: error\ndata: {"providers": null}\n\n'
+
+    return StreamingResponse(
+        _proxy_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/api/providers/status")
+async def get_providers_status(
+    request: Request,
+    model: Optional[str] = None,
+    stream: bool = False,
+    force: bool = False,
+):
+    """Доступность LLM-провайдеров под моделями тоггла (для ModelPicker).
+
+    Проксирует /internal/providers_status agent_service (включая одиночный ?model=<id>
+    и потоковый ?stream=1). При недоступности самого агента отдаёт мягкий 200 с
+    providers=null, чтобы фронт показал нейтральное состояние, а не рушился."""
+    if stream:
+        return await get_providers_status_stream(request, force=force)
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    agent_url = SERVICES['agent_service']['url']
+    params = {}
+    if model:
+        params["model"] = model
+    if force:
+        params["force"] = "1"
+    try:
+        resp = await app.state.http_client.get(
             f"{agent_url}/internal/providers_status",
-            timeout=15.0
+            params=params or None,
+            timeout=22.0,
         )
         return resp.json()
     except httpx.RequestError:

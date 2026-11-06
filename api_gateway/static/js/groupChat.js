@@ -626,18 +626,43 @@
         user_id: this.userId, username: this.username, message_text: text,
         is_pinned: false, edited_at: null, created_at: new Date().toISOString(),
         files: optimisticFiles,
+        // прогресс загрузки: живёт на оптимистичном сообщении, переживает
+        // ререндеры _renderAll и пропадает вместе с ним при эхе new_message
+        _upload: files.length && window.UploadProgress
+          ? window.UploadProgress.track(() => document.querySelector(`#gc-messages .gc-row[data-id="tmp-${clientId}"]`))
+          : null,
       });
+      const tracker = this.messages[this.messages.length - 1]._upload;
+      // вложения уехали в сообщение — композер свободен сразу
+      if (files.length) {
+        try { window.FileAttach?.clear?.(); } catch (e) {}
+        this._syncInputBtn();
+      }
       this._renderAll();
       // 1) заливаем файлы (если есть) в OBS через chats_service
       if (files.length) {
+        let ok = false;
         try {
           const fd = new FormData();
           fd.append('client_msg_id', clientId);
           files.forEach(f => fd.append('files', f));
-          await fetch(`/api/group/${ROOM_UID}/upload`, {
-            method: 'POST', credentials: 'include', body: fd,
-          });
+          const url = `/api/group/${ROOM_UID}/upload`;
+          const res = window.UploadProgress
+            ? await window.UploadProgress.send(url, fd, {
+                onProgress: (p) => tracker?.progress(p),
+                onSent: () => tracker?.sent(),
+              })
+            : await fetch(url, { method: 'POST', credentials: 'include', body: fd });
+          ok = !!(res && res.ok);
+          if (!ok) console.warn('[group] upload status', res && res.status);
         } catch (e) { console.warn('[group] upload error', e); }
+        if (ok) tracker?.done();
+        else {
+          tracker?.fail('Файл не загружен');
+          try { window.FileAttach?.showToast?.(files.length === 1
+            ? 'Файл не загрузился, сообщение отправлено без него.'
+            : 'Файлы не загрузились, сообщение отправлено без них.'); } catch (e) {}
+        }
       }
       // 2) отправляем сообщение (консюмер доклеит файлы по client_msg_id)
       try {
@@ -916,6 +941,11 @@
       this._bindCollages(box);
       this._initCollapsibles(box);
       this._observeLazyMedia(box);
+      // innerHTML снёс оверлеи загрузки — дорисовываем незавершённые
+      for (const m of this.messages) {
+        const ph = m._optimistic && m._upload ? m._upload.state.phase : '';
+        if (ph === 'upload' || ph === 'processing' || ph === 'error') m._upload.repaint();
+      }
       this._ignoreNextDateScroll = true;
       if (keepFromBottom) box.scrollTop = box.scrollHeight - fromBottom;
       else if (nearBottom) box.scrollTop = box.scrollHeight;
@@ -1824,8 +1854,9 @@
         if (!text && !hasFiles) return;
         input.innerHTML = '';
         syncBtn();
+        // композер (текст и вложения) _send чистит сам до начала загрузки;
+        // повторный clear() здесь стёр бы файлы, прикреплённые во время загрузки
         await this._send(text || '');
-        try { window.FileAttach?.clear?.(); } catch (e) {}
         syncBtn();
       };
       sendBtn?.addEventListener('click', doSend);

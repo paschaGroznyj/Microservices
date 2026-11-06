@@ -1990,6 +1990,7 @@
     }
     const container = $("ed-ai");
     try { window.ToolsPanel.setUser?.(""); } catch (_) {}
+    try { window.ModelPicker.loadModels?.(); } catch (_) {}
     try { window.ToolsPanel.inject(container); } catch (_) {}
     try { window.ModelPicker.inject(container); } catch (_) {}
   })();

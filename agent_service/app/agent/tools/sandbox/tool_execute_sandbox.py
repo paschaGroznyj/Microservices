@@ -1058,103 +1058,7 @@ So you can then spy on it/reuse it within the session.
             "remaining": result.get("remaining", 0),
         })
 
-    
-    @tool
-    async def presentation_design_skill():
-        """
-        Call this tool before generating or modifying PowerPoint presentations.
-
-        Returns design guidelines for:
-        - slide layouts
-        - typography
-        - spacing
-        - visual hierarchy
-        - color usage
-        - icon usage
-        - presentation QA
-
-        Use these instructions when planning slide structure and visual composition.
-
-         Visual elements:
-        - Every slide should contain at least one visual element.
-        - Prefer SVG icons over emojis.
-        - Search for SVG icons relevant to the slide topic.
-        - Prefer Tabler Icons.
-        - If not available, use Heroicons or Lucide.
-        - Keep one icon style across the whole deck.
-        - Do not mix outline and filled icons.
-
-        Search examples:
-        - "tabler icons database"
-        - "tabler icons process"
-        - "tabler icons workflow"
-        - "tabler icons analytics"
-
-        To find the required SVG icons, you should use the template search with search_code_library
-        params:
-         query="tabler icons", tags=["tabler"]
-        """
-        try:
-            with open(SKILLS_PATH / "pptx_maker.md", mode='r', encoding='utf-8') as f:
-                text = f.read()
-            return text
-        except Exception as e:
-            return "Не получилось открыть скилл, возможно он перемещен или удален"
         
-    @tool
-    async def html_design_skill():
-        """
-        Call before generating HTML pages in a modern style, with design, animation, and transitions.
-        ALWAYS use execute_python_code to search for text skills if the user requests a beautiful presentation
-        SKILLS ARE NOT LOCAL; you need to write a script using execute_python_code to retrieve them from the remote sandbox.
-        ## 1. How it works in the remote sandbox
-
-        ```
-        /app/
-        ├── skills-lock.json          # registry: version, list of skills, hashes
-        ├── .agents/skills/           # working directory for skills
-        │   ├── animate/SKILL.md
-        │   ├── animation-vocabulary/SKILL.md
-        │   ├── apple-design/SKILL.md
-        │   ├── emil-design-eng/SKILL.md
-        │   ├── find-animation-opportunities/SKILL.md
-        │   ├── improve-animations/SKILL.md
-        │   ├── pick-ui-library/SKILL.md
-        │   ├── prototype/SKILL.md
-        │   └── review-animations/SKILL.md
-        └── agent/skills/             # mirror (the same files)
-        ```
-
-        ### skills-lock.json
-
-        ---
-
-        ## 2. How to get the content of skills (for documentation)
-
-        ```python
-        import os
-
-        skill_bases = ["/app/.agents/skills", "/app/agent/skills"]
-        seen = set()
-
-        for base in skill_bases:
-            if not os.path.isdir(base):
-                continue
-            for skill_name in sorted(os.listdir(base)):
-                skill_path = os.path.join(base, skill_name, "SKILL.md")
-                key = skill_name
-                if key in seen:
-                    resume
-                seen.add(key)
-                if os.path.isfile(skill_path):
-                    with open(skill_path) as f:
-                        content = f.read()
-                    print(f"=== {skill_name} ===")
-                    print(content)
-                    print()
-        ```
-        """
-    
     @tool
     async def upload_to_workspace(
         workspace_id: str,
@@ -1403,7 +1307,5 @@ So you can then spy on it/reuse it within the session.
         delete_workspace,
         cleanup_workspaces,
         edit_and_run,
-        presentation_design_skill,
-        html_design_skill,
         upload_to_workspace,
     ]

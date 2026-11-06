@@ -118,9 +118,14 @@ class ChatApp {
             return;
         }
 
-        // Передаём username в ToolsPanel для проверки прав и подтягиваем чаты + user_settings
+        window.addEventListener('agent:availability', () => {
+            this._syncSendButtonState();
+        });
+
+        // Передаём username в ToolsPanel, грузим каталог моделей из agent_service и подтягиваем чаты
         await Promise.all([
             window.ToolsPanel?.setUser(this.currentUser.username),
+            window.ModelPicker?.loadModels?.(),
             this.loadChats(),
         ]);
         const userSettings = await window.ToolsPanel?.loadUserSettings?.();
@@ -308,6 +313,7 @@ class ChatApp {
             // После общего чата синглтон FileAttach держит контекст группы,
             // поэтому принудительно возвращаем его на инпут агента.
             this._rebindFileAttachToAgent();
+            this._syncBotPlaceholder();
         }
         if (tab === 'graph') {
             console.log('INIT GRAPH')
@@ -544,6 +550,8 @@ class ChatApp {
         this._runState = 'idle';
         this._activeRequestId = null;
         this._botAnswered = false;
+        this._loopWaiting = false;
+        if (this._reserveTimer) { clearTimeout(this._reserveTimer); this._reserveTimer = null; }
         this._setSendButtonMode('send');
 
         const msgContainer = this.getMessagesContainer();
@@ -911,6 +919,8 @@ class ChatApp {
         this._runState = 'idle';
         this._activeRequestId = null;
         this._botAnswered = false;
+        this._loopWaiting = false;
+        if (this._reserveTimer) { clearTimeout(this._reserveTimer); this._reserveTimer = null; }
         this._setSendButtonMode('send');
 
         const msgContainer = this.getMessagesContainer();
@@ -3478,6 +3488,15 @@ class ChatApp {
             return;
         }
 
+        if (!this.isAgentAvailable()) {
+            await window.ModelPicker?.loadModels?.(true);
+            if (!this.isAgentAvailable()) {
+                this.showToast('Сервис агента недоступен. Отправка запросов временно отключена.');
+                this._syncSendButtonState();
+                return;
+            }
+        }
+
         const attachedMeta = hasAttached ? (window.FileAttach?.getFilesMeta?.() || []) : [];
         const chatPreviewText = text || (attachedMeta[0]?.name ? `📎 ${attachedMeta[0].name}` : 'Файл');
 
@@ -3505,6 +3524,10 @@ class ChatApp {
 
         const msgId = `msg-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
         const _optimisticFiles = isCustom ? [] : (window.FileAttach?.getPreviewItems?.() ?? window.FileAttach?.getFilesMeta() ?? []);
+        // Снимок вложений: композер очищается сразу после отправки, а файлы
+        // грузятся уже из сообщения в ленте (с анимацией прогресса).
+        const _filesSnap = isCustom ? [] : (window.FileAttach?.getFiles?.() ?? []);
+        const _filesMetaSnap = isCustom ? [] : (window.FileAttach?.getFilesMeta?.() ?? []);
         this.addMessage({ message: text, is_from_bot: false, id: msgId, created_at: new Date().toISOString(), files: _optimisticFiles });
         this._scrollToUserMessageAndReserve();
 
@@ -3522,6 +3545,13 @@ class ChatApp {
             this._clearInputDraft(this.currentChat);
         }
         sendBtn?.classList.remove('active');
+        let _upTracker = null;
+        if (_filesSnap.length) {
+            window.FileAttach?.clear();
+            this.getInputContainer()?.querySelector('#attach-btn')?.classList.remove('has-files');
+            _upTracker = window.UploadProgress?.track(() =>
+                this.getMessagesContainer()?.querySelector(`.user-message-wrapper[data-message-id="${msgId}"]`) || null) || null;
+        }
         const _curSt = this._ensureStream(this.currentChat);
         if (_curSt) {
             _curSt.runStartedAt = Date.now();
@@ -3529,6 +3559,7 @@ class ChatApp {
         }
 
         this._runState = 'running';
+        this._loopWaiting = false;
         this._setSendButtonMode('stop');
         this._sendingInFlightChat = String(this.currentChat);
 
@@ -3542,9 +3573,15 @@ class ChatApp {
             // в 20с ожидания → images=[] → analyze/generate работали впустую).
             // Текстовые файлы лёгкие и успевали случайно — отсюда «git.txt
             // подгрузился, а картинка нет». Теперь порядок детерминирован.
-            const _hasFiles = !isCustom && ((window.FileAttach?.getFiles().length ?? 0) > 0);
+            const _hasFiles = _filesSnap.length > 0;
             if (_hasFiles) {
-                await window.FileAttach?.upload(this.currentChat, msgId);
+                const _upRes = await window.FileAttach?.upload(this.currentChat, msgId, {
+                    files:      _filesSnap,
+                    onProgress: (p) => _upTracker?.progress(p),
+                    onSent:     () => _upTracker?.sent(),
+                });
+                if (_upRes && _upRes.ok) _upTracker?.done();
+                else _upTracker?.fail(_upRes ? `Не загружено (ошибка ${_upRes.status})` : 'Не загружено: нет связи');
             }
 
             const resp = await fetch('/api/chats/send_message', {
@@ -3563,7 +3600,7 @@ class ChatApp {
                     loop:            window.ToolsPanel?.getLoopEnabled() ?? false,
                     loop_instruction: window.ToolsPanel?.getLoopEnabled() ? text : '',
                     has_files:      _hasFiles,
-                    files: isCustom ? [] : (window.FileAttach?.getFilesMeta() ?? []),
+                    files:          _filesMetaSnap,
                     timezone_name:  (Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow'),
                     tz_offset_minutes: new Date().getTimezoneOffset(),
                     ...(pollAnswer ? { poll_answer: pollAnswer } : {})
@@ -3591,12 +3628,9 @@ class ChatApp {
             } catch (_) {
                 this._activeRequestId = null;
             }
-            if (!isCustom) {
-                window.FileAttach?.clear();
-                this.getInputContainer()?.querySelector('#attach-btn')?.classList.remove('has-files');
-            }
         } catch (err) {
             console.error('sendMessage error:', err);
+            _upTracker?.fail('Не отправлено');
             this._runState = 'idle';
             this._setSendButtonMode('send');
             this._activeRequestId = null;
@@ -3622,8 +3656,14 @@ class ChatApp {
 
         const TOP_MARGIN = 16; // px от верхней границы chat-messages
 
-        // Ждём окончания fly-анимации (0.38s = 380ms) и скроллим
-        setTimeout(() => {
+        // Ждём окончания fly-анимации (0.38s = 380ms) и скроллим.
+        // Таймер привязан к чату: если за 400 мс переключили чат или ответ
+        // уже пришёл, волну не создаём.
+        const reserveChat = String(this.currentChat);
+        if (this._reserveTimer) clearTimeout(this._reserveTimer);
+        this._reserveTimer = setTimeout(() => {
+            this._reserveTimer = null;
+            if (String(this.currentChat) !== reserveChat || !lastWrapper.isConnected) return;
             const containerRect = msgContainer.getBoundingClientRect();
             const wrapperRect   = lastWrapper.getBoundingClientRect();
 
@@ -3634,8 +3674,8 @@ class ChatApp {
 
             msgContainer.scrollTo({ top: targetScrollTop, behavior: 'smooth' });
 
-            // Создаём placeholder под ответ бота
-            this._createBotPlaceholder(msgContainer);
+            // Волна под ответ бота — только если #send-btn горит «Стопом»
+            this._syncBotPlaceholder();
         }, 400); // чуть позже fly-анимации
     }
 
@@ -3646,6 +3686,7 @@ class ChatApp {
      */
     _createBotPlaceholder(msgContainer) {
         const st = this._resolveStream(this.currentChat);
+        if (!this._isRunIndicatorOn()) return;
         if (this._botAnswered && (st?.streamDone || st?.streamIsFinal)) return;
 
         this._removeBotPlaceholder();
@@ -3683,17 +3724,45 @@ class ChatApp {
         msgContainer.scrollTop = msgContainer.scrollHeight;
     }
 
-    /** Убирает placeholder — вызывается явно из WS-обработчика */
-    _removeBotPlaceholder() {
+    /** Убирает placeholder. target — конкретный узел (для отложенного удаления);
+     *  без него снимается текущий живой плейсхолдер. id снимаем сразу, чтобы
+     *  гаснущий узел не находился querySelector'ами нового хода или чата. */
+    _removeBotPlaceholder(target = null) {
         if (this._placeholderGuardTimer) {
             clearTimeout(this._placeholderGuardTimer);
             this._placeholderGuardTimer = null;
         }
-        this._stopPlaceholderGraph();
-        const ph = document.getElementById('agent-response-placeholder');
+        const ph = target || document.getElementById('agent-response-placeholder');
         if (!ph) return;
+        this._stopPlaceholderGraph(ph);
+        if (ph.id === 'agent-response-placeholder') ph.removeAttribute('id');
         ph.classList.add('placeholder-hide');
         setTimeout(() => ph.remove(), 300);
+    }
+
+    /** #send-btn горит в режиме «Стоп» (active + stop-mode): агент работает. */
+    _isRunIndicatorOn() {
+        const btn = this.getInputContainer()?.querySelector('#send-btn');
+        return !!(btn && btn.classList.contains('active') && btn.classList.contains('stop-mode'));
+    }
+
+    /** Единое правило: волна-плейсхолдер живёт ровно пока #send-btn в режиме
+     *  active + stop-mode. Вызывается из _setSendButtonMode/_syncSendButtonState
+     *  и при возврате на вкладку агента. */
+    _syncBotPlaceholder() {
+        const container = this.getMessagesContainer();
+        if (!container || !this.currentChat) return;
+        const live = container.querySelector('#agent-response-placeholder');
+        if (this._isRunIndicatorOn()) {
+            if (this._loopWaiting) return;   // самоцикл между тиками: стоп горит, волну не поднимаем
+            if (this._reserveTimer) return;  // сразу после отправки волну создаст таймер скролла
+            if (live && !live.dataset.finishing) return;
+            const st = this._resolveStream(this.currentChat);
+            if (st?.streamDone || st?.streamIsFinal) return;
+            this._createBotPlaceholder(container);
+            return;
+        }
+        if (live && !live.dataset.finishing) this._removeBotPlaceholder(live);
     }
 
     /* ══════════════════════════════════════════
@@ -4607,16 +4676,16 @@ class ChatApp {
             || '<div class="wave-indicator"><canvas class="placeholder-graph" aria-hidden="true"></canvas></div>';
     }
 
-    _stopPlaceholderGraph() {
-        window.ChatAnimations?.stopPlaceholderGraph?.();
+    _stopPlaceholderGraph(owner = null) {
+        window.ChatAnimations?.stopPlaceholderGraph?.(owner);
     }
 
     _initPlaceholderGraph(placeholder) {
         window.ChatAnimations?.initPlaceholderGraph?.(placeholder);
     }
 
-    _flattenWaveIndicator() {
-        window.ChatAnimations?.flattenWaveIndicator?.();
+    _flattenWaveIndicator(placeholder = null) {
+        window.ChatAnimations?.flattenWaveIndicator?.(placeholder);
     }
 
     _formatReasoningDuration(sec) {
@@ -5206,8 +5275,14 @@ class ChatApp {
         // Общий UI (плейсхолдер-волна, статусы, стоп-кнопка) — только для
         // активного чата. Для фонового финал тихо сложился в откреплённый узел.
         if (isActive) {
-            this._flattenWaveIndicator();
-            setTimeout(() => this._removeBotPlaceholder(), 500);
+            // Гасим конкретный узел: за 500 мс мог появиться плейсхолдер
+            // нового хода или другого чата, его отложенное удаление не трогает.
+            const _ph = this.getMessagesContainer()?.querySelector('#agent-response-placeholder') || null;
+            if (_ph) {
+                _ph.dataset.finishing = '1';
+                this._flattenWaveIndicator(_ph);
+                setTimeout(() => this._removeBotPlaceholder(_ph), 500);
+            }
             this._clearAllStatuses();
             this._onRunFinished(data.loop === true);
         }
@@ -5223,14 +5298,26 @@ class ChatApp {
             sendBtn.classList.add('active', 'stop-mode');
             sendBtn.setAttribute('aria-label', 'Остановить');
             sendBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+            this._syncBotPlaceholder();
             return;
         }
         sendBtn.classList.remove('stop-mode');
         sendBtn.setAttribute('aria-label', 'Отправить');
         sendBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-        const canSend = this.getInputText().length > 0 || this.hasAttachedFiles();
+        const agentUp = this.isAgentAvailable();
+        const canSend = agentUp && (this.getInputText().length > 0 || this.hasAttachedFiles());
         sendBtn.disabled = !canSend;
         sendBtn.classList.toggle('active', canSend);
+        sendBtn.classList.toggle('agent-offline', !agentUp);
+        sendBtn.title = !agentUp ? 'Сервис агента недоступен' : '';
+        this._syncBotPlaceholder();
+    }
+
+    isAgentAvailable() {
+        if (!window.ModelPicker || typeof window.ModelPicker.isAgentAvailable !== 'function') {
+            return true;
+        }
+        return window.ModelPicker.isAgentAvailable();
     }
 
     hasAttachedFiles() {
@@ -5249,12 +5336,17 @@ class ChatApp {
         if (this._runState !== 'idle') {
             sendBtn.disabled = false;
             sendBtn.classList.add('active', 'stop-mode');
+            this._syncBotPlaceholder();
             return;
         }
         sendBtn.classList.remove('stop-mode');
-        const canSend = this.getInputText().length > 0 || this.hasAttachedFiles();
+        const agentUp = this.isAgentAvailable();
+        const canSend = agentUp && (this.getInputText().length > 0 || this.hasAttachedFiles());
         sendBtn.classList.toggle('active', canSend);
+        sendBtn.classList.toggle('agent-offline', !agentUp);
         sendBtn.disabled = !canSend;
+        sendBtn.title = !agentUp ? 'Сервис агента недоступен' : '';
+        this._syncBotPlaceholder();
     }
 
     async stopCurrentRun() {
@@ -5281,10 +5373,12 @@ class ChatApp {
         if (keepRunning && this._runState === 'running') {
             // держим стоп-кнопку, request_id текущего тика больше не актуален
             // (следующий тик придёт со своим), но стоп гасим по chat_id — ок.
+            this._loopWaiting = true;
             this._setSendButtonMode('stop');
             return;
         }
         this._runState = 'idle';
+        this._loopWaiting = false;
         this._activeRequestId = null;
         this._setSendButtonMode('send');
     }
@@ -5605,6 +5699,9 @@ class ChatApp {
             this._syncScrollArrow();
         }
 
+        // Пересобранный инпут рождается с disabled-кнопкой: возвращаем режим
+        // «Стоп», если агент в работе, и синхронизируем волну.
+        this._setSendButtonMode(this._runState !== 'idle' ? 'stop' : 'send');
         setTimeout(() => container.classList.remove('rending'), 0);
     }
 
@@ -5967,6 +6064,25 @@ class ChatApp {
         });
     }
 
+    /* Превращает чип вставленного текста в прикреплённый .txt-файл.
+       Файл помечается forceFile: gateway не положит его текст в промпт даже
+       если он короче лимита, агент получит его как документ (media_id). */
+    convertInputChipToFile(chipId) {
+        const text = this._pendingChips?.get(chipId);
+        if (text == null || !window.FileAttach?.addFiles) return false;
+        const d = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        // Имя — по первой непустой строке текста, без запрещённых в именах символов.
+        const firstLine = (text.split('\n').find(l => l.trim()) || '').trim();
+        const base = firstLine.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40).trim()
+            || `text-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+        const name = `${base}.txt`;
+        const file = new File([text], name, { type: 'text/plain', lastModified: d.getTime() });
+        if (!window.FileAttach.addFiles([file], { forceFile: true })) return false;
+        this.removeInputChip(chipId);
+        return true;
+    }
+
     /* Вставляет свёрнутый длинный текст как чип в полосу .fa-preview-bar,
        а в поле ввода (#message-input) на текущую позицию каретки помещает
        невидимый якорь .input-chip-anchor, чтобы сохранялся точный порядок
@@ -5995,12 +6111,28 @@ class ChatApp {
             '<span class="fa-tile__media"><span class="fa-tile__snippet">' + this._chipSnippetHtml(rawText) + '</span></span>' +
             '<span class="fa-tile__cap"><span class="fa-chip__name">' + safeTitle + '</span>' +
             '<span class="fa-chip__meta">' + chars + ' симв · ' + lines + ' стр</span></span>' +
+            (window.FileAttach?.addFiles
+                ? '<button class="fa-chip__tofile" type="button"' +
+                  ' title="Отправить файлом: текст не попадёт в промпт модели, агент разберёт его как документ"' +
+                  ' aria-label="Отправить вставленный текст файлом">' +
+                  '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
+                  '<path d="M4 1.75h5.2L12.5 5v8.25a1 1 0 0 1-1 1h-7.5a1 1 0 0 1-1-1V2.75a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>' +
+                  '<path d="M9 1.9V5.2h3.3M5.6 8.4h4.8M5.6 11h3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>' +
+                  '</svg></button>'
+                : '') +
             '<button class="fa-chip__remove" type="button" title="Удалить" aria-label="Удалить вставленный текст">' +
             '<svg viewBox="0 0 14 14" fill="none">' +
             '<path d="M3 3l8 8M11 3L3 11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' +
             '</svg></button>';
 
         const removeBtn = chip.querySelector('.fa-chip__remove');
+        const toFileBtn = chip.querySelector('.fa-chip__tofile');
+        if (toFileBtn) {
+            toFileBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.convertInputChipToFile(chipId);
+            });
+        }
         if (removeBtn) {
             removeBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -6009,7 +6141,7 @@ class ChatApp {
         }
         chip.addEventListener('click', () => this.openTextPreview(chip));
         chip.addEventListener('keydown', (e) => {
-            if (e.target === removeBtn) return;
+            if (e.target === removeBtn || e.target === toFileBtn) return;
             if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
                 this.openTextPreview(chip);
@@ -6490,9 +6622,12 @@ class ChatApp {
                 return;
             }
             sendBtn.classList.remove('stop-mode');
-            const canSend = this.getInputText().length > 0 || this.hasAttachedFiles();
+            const agentUp = this.isAgentAvailable();
+            const canSend = agentUp && (this.getInputText().length > 0 || this.hasAttachedFiles());
             sendBtn.classList.toggle('active', canSend);
+            sendBtn.classList.toggle('agent-offline', !agentUp);
             sendBtn.disabled = !canSend;
+            sendBtn.title = !agentUp ? 'Сервис агента недоступен' : '';
         };
 
         field.addEventListener('input', onInput);
@@ -6607,6 +6742,10 @@ class ChatApp {
                     document.execCommand('insertLineBreak');
                     this._resetInputFormatting();
                     onInput();
+                    return;
+                }
+                if (!this.isAgentAvailable()) {
+                    this.showToast('Сервис агента недоступен. Отправка запросов временно отключена.');
                     return;
                 }
                 if (this._runState === "idle" && !sendBtn.disabled) this.sendMessage();

@@ -2052,21 +2052,108 @@ async def get_graph_nodes(request: Request):
         raise HTTPException(status_code=e.response.status_code, detail="Graph data error")
 
 
-@app.get("/api/providers/status")
-async def get_providers_status(request: Request):
-    """Доступность LLM-провайдеров под моделями тоггла (для ModelPicker).
+@app.get("/api/models")
+async def get_agent_models(request: Request):
+    """Каталог моделей агента с описаниями и SVG (для ModelPicker) + проверка доступности agent_service.
 
-    Проксирует /internal/providers_status agent_service. При недоступности
-    самого агента отдаёт мягкий 200 с providers=null, чтобы фронт показал
-    нейтральное состояние, а не рушился."""
+    Ходит напрямую в /internal/models сервиса agent_service.
+    Если agent_service упал или недоступен, возвращает agent_available=False,
+    чтобы фронтенд (app.js) заблокировал отправку запросов."""
     user = await get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     agent_url = SERVICES['agent_service']['url']
     try:
         resp = await app.state.http_client.get(
+            f"{agent_url}/internal/models",
+            timeout=5.0,
+        )
+        if resp.status_code != 200:
+            return {"agent_available": False, "default_model": "coder", "models": []}
+        data = resp.json()
+        if not isinstance(data, dict):
+            return {"agent_available": False, "default_model": "coder", "models": []}
+        models = data.get("models")
+        if not isinstance(models, list) or not models:
+            return {
+                "agent_available": False,
+                "default_model": data.get("default_model") or "coder",
+                "models": [],
+            }
+        run_status.register_setting_models(models)
+        return {
+            "agent_available": bool(data.get("agent_available", True)),
+            "default_model": data.get("default_model") or models[0].get("id") or "coder",
+            "models": models,
+        }
+    except (httpx.RequestError, ValueError):
+        return {"agent_available": False, "default_model": "coder", "models": []}
+
+
+@app.get("/api/providers/status/stream")
+async def get_providers_status_stream(request: Request, force: bool = False):
+    """SSE-поток доступности LLM-провайдеров: каждая модель летит по мере ответа."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    agent_url = SERVICES['agent_service']['url']
+
+    async def _proxy_stream():
+        try:
+            async with app.state.http_client.stream(
+                "GET",
+                f"{agent_url}/internal/providers_status/stream",
+                params={"force": "1"} if force else None,
+                timeout=25.0,
+            ) as resp:
+                if resp.status_code != 200:
+                    yield 'event: error\ndata: {"providers": null}\n\n'
+                    return
+                async for chunk in resp.aiter_text():
+                    if chunk:
+                        yield chunk
+        except httpx.RequestError:
+            yield 'event: error\ndata: {"providers": null}\n\n'
+
+    return StreamingResponse(
+        _proxy_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/api/providers/status")
+async def get_providers_status(
+    request: Request,
+    model: Optional[str] = None,
+    stream: bool = False,
+    force: bool = False,
+):
+    """Доступность LLM-провайдеров под моделями тоггла (для ModelPicker).
+
+    Проксирует /internal/providers_status agent_service (включая одиночный ?model=<id>
+    и потоковый ?stream=1). При недоступности самого агента отдаёт мягкий 200 с
+    providers=null, чтобы фронт показал нейтральное состояние, а не рушился."""
+    if stream:
+        return await get_providers_status_stream(request, force=force)
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    agent_url = SERVICES['agent_service']['url']
+    params = {}
+    if model:
+        params["model"] = model
+    if force:
+        params["force"] = "1"
+    try:
+        resp = await app.state.http_client.get(
             f"{agent_url}/internal/providers_status",
-            timeout=15.0
+            params=params or None,
+            timeout=22.0,
         )
         return resp.json()
     except httpx.RequestError:

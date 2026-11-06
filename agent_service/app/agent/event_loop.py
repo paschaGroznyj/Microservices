@@ -17,14 +17,26 @@ from langchain.memory import ConversationBufferWindowMemory
 from langchain_core.messages import ToolMessage, trim_messages
 from langchain_core.messages.utils import count_tokens_approximately
 
-from .core.agent_provider import (get_llm_lite_model, get_llm_model,
-get_llm_model_gpt, get_llm_model_claude, get_llm_model_gemini,
-get_llm_lite_model_gpt_mini, get_llm_lite_model_gemini_flash,
-get_llm_model_glm, get_real_model_name)
-from .core.botocore_client import OBSWorker
+from .core.agent_provider import (
+    build_agent_models,
+    build_lite_models,
+    build_openai_cache_headers,
+    get_chars_per_token_map,
+    get_imitate_tool_status_models,
+    get_llm_lite_model,
+    get_llm_lite_model_gemini_flash,
+    get_llm_lite_model_gpt_mini,
+    get_llm_model_claude,
+    get_llm_model_gemini,
+    get_llm_model_glm,
+    get_llm_model_gpt,
+    get_model_labels,
+    get_model_spec,
+    get_real_model_name,
+    resolve_model_tag,
+)
 from .core.config import (
-    ARTICLES_FOLDER, VECTOR_DB_PATH, STORAGE_PATH,
-    METADATA_FILE, PORT_GATEWAY_PORT, PORT_GATEWAY_SIGMA_PORT, ADMINS_INFO,
+    PORT_GATEWAY_PORT, PORT_GATEWAY_SIGMA_PORT, ADMINS_INFO,
     PORT_PARSERS_SERVICE, get_role, ADMINS_BY_USER_ID,
     ADMINS_BY_TG_ID, get_role_tg, TG_BOT_PUSH_URL, MAX_BOT_PUSH_URL,
     ADMINS_BY_MAX_ID, get_role_max,
@@ -41,6 +53,9 @@ from .tools.journal.tool_agent_journal import make_journal_tool
 from .judge import judge_final_answer
 from .supervisor import run_supervisor
 from .context_compactor import compact_messages, TOKEN_SOFT_LIMIT
+from .core.token_usage import (
+    normalize_usage, add_usage, apply_anthropic_cache_control, append_to_system_tail,
+)
 
 
 GATEWAY_URL = f"http://api_gateway:{PORT_GATEWAY_PORT}"
@@ -70,9 +85,8 @@ async def tool_get_schema(database) -> str:
         FROM information_schema.columns c
         WHERE c.table_schema = 'public'
         AND c.table_name IN (
-            'knowledge', 'knowledge_review',
-            'papers_metadata', 'users', 'chats', 
-            'reviews', 'agent_journal', 'session_summaries',
+            'knowledge', 'knowledge_review' , 'users', 'chats',
+            'agent_journal', 'session_summaries',
             'entity_relations', 'wiki_pages', 'knowledge_log'
         )
         ORDER BY c.table_name, c.ordinal_position;
@@ -202,12 +216,14 @@ TRACE_SUMMARY_THRESHOLD = int(os.getenv("TRACE_SUMMARY_THRESHOLD", "20000"))
 MAX_TRACE_HARD_CHARS = int(os.getenv("MAX_TRACE_HARD_CHARS", "21000"))
 
 # Имитация reasoning для моделей, которые НЕ отдают свой reasoning в стрим
-# (coder/gpt, gemini). Вместо тишины на шаге с tool_calls льём в reasoning-блок
-# короткую фразу-описание тула из словаря tool_status_messages.
+# (определяется флагом imitate_tool_status в models_config.yaml либо env).
 IMITATE_TOOL_STATUS = os.getenv("IMITATE_TOOL_STATUS", "1").strip() not in ("0", "false", "False", "")
-IMITATE_TOOL_STATUS_MODELS = {
-    m.strip() for m in os.getenv("IMITATE_TOOL_STATUS_MODELS", "coder,gemini").split(",") if m.strip()
-}
+_IMITATE_MODELS_ENV = os.getenv("IMITATE_TOOL_STATUS_MODELS")
+IMITATE_TOOL_STATUS_MODELS = (
+    {m.strip() for m in _IMITATE_MODELS_ENV.split(",") if m.strip()}
+    if _IMITATE_MODELS_ENV is not None
+    else get_imitate_tool_status_models()
+)
 
 def _truncate_text(text: str, max_chars: int = MAX_STDOUT_CHARS) -> str:
     """Обрезает текст, если он превышает лимит, добавляя плашку с указанием перерасхода."""
@@ -225,14 +241,6 @@ def _truncate_text(text: str, max_chars: int = MAX_STDOUT_CHARS) -> str:
 # Тулы, чьи вызовы стоит запоминать в истории диалога
 STATEFUL_TOOLS = {
     "execute_sql_query",
-    "download_text_articles",
-    "upload_articles",
-    "summarize_file",
-    "summarize_all_articles",
-    "summarize_new_articles",
-    "rebuild_categories",
-    "make_basket_reviews",
-    "digest_basket",
     # "send_digest_email",
     # "research_prompt",
     "search_internet",
@@ -240,6 +248,7 @@ STATEFUL_TOOLS = {
     "generate_image",
     "find_generated_image",
     "analyze_image",
+    "transcribe_media",
     "list_tree",
     "read_file",
     "grep_search",
@@ -296,6 +305,9 @@ def _summarize_tool_call(tc: dict, result: Any) -> str | None:
             f"analyze_image(prompt='{ai_prompt}', "
             f"image_index={args.get('image_index', 0)}) →\n{str(result)[:1200]}"
         )
+    if name == "transcribe_media":
+        src = args.get("source_media_id") or args.get("local_path")
+        return f"transcribe_media(source={src!r}, include_visual={args.get('include_visual', False)}) →\n{str(result)[:1500]}"
     if name == "call_subagent":
         return f"{name} ({args}). ОТВЕТ СУБАГЕНТА - {str(result)}"
     if name in ("list_tree", "read_file", "grep_search", "find_files", 
@@ -586,7 +598,8 @@ def _extract_thinking_and_clean_content(raw_content) -> tuple[str, str, str]:
     return thinking_text, reasoning_text, cleaned
 
 
-async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, error_info: dict | None = None):
+async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, error_info: dict | None = None,
+                           cache_control: bool = False, extra_headers: dict[str, str] | None = None):
     """Стриминговая версия _invoke_with_retry.
 
     Собирает ответ через llm.astream(), аккумулируя AIMessageChunk сложением (+=).
@@ -598,14 +611,21 @@ async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, err
     поэтому on_chunk для них не сработает.
 
     Стратегия отказоустойчивости: если astream упал — фолбэк на обычный ainvoke.
+
+    cache_control=True (ChatAnthropic + prompt_cache) — размечаем копию сообщений
+    точками кеша: статический системный блок и последнее сообщение.
+    extra_headers — заголовки (например X-Enable-Prompt-Cache и x-session-id для OpenAI).
     """
     messages = _sanitize_messages(messages)
+    if cache_control:
+        messages = apply_anthropic_cache_control(messages)
+    call_kwargs = {"extra_headers": extra_headers} if extra_headers else {}
     backoff = [2, 5, 10]
     last_error = None
     for attempt in range(3):
         try:
             aggregate = None
-            async for chunk in llm.astream(messages):
+            async for chunk in llm.astream(messages, **call_kwargs):
                 aggregate = chunk if aggregate is None else aggregate + chunk
 
                 # --- reasoning-канал (gpt → reasoning, gemini → reasoning_content) ---
@@ -635,7 +655,7 @@ async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, err
             if aggregate is not None:
                 # return _build_final(aggregate, calls)
                 return aggregate
-            return await llm.ainvoke(messages)
+            return await llm.ainvoke(messages, **call_kwargs)
         except Exception as e:
             last_error = e
             logging.warning(
@@ -647,7 +667,7 @@ async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, err
     # Все стриминговые попытки провалены — последний шанс через ainvoke без стрима
     logging.error(f"[iteration={iteration}] astream провален, фолбэк на ainvoke: {last_error}")
     try:
-        return await llm.ainvoke(messages)
+        return await llm.ainvoke(messages, **call_kwargs)
     except Exception as e:
         logging.error(f"[iteration={iteration}] ainvoke-фолбэк тоже упал: {e}")
         if error_info is not None:
@@ -690,27 +710,14 @@ class HarnessAgent:
     def __init__(self, database=None):
         base_dir = Path(__file__).resolve().parent
         self.db = database
-        self.articles_path = base_dir / Path(STORAGE_PATH) / ARTICLES_FOLDER
-        self.name_meta_dir = base_dir / Path(STORAGE_PATH)
-        self.digest_path = base_dir / "digests"
         # Фоновая rolling-саммаризация: lock+task per chat_id (одна реплика)
         self._summary_locks = {}
         self._summary_tasks = {}
-        self.AGENT_MODELS = {'coder': get_llm_model_gpt(),
-                            'designer': get_llm_model_claude(),
-                            'universal': get_llm_model_glm(),
-                            'gemini': get_llm_model_gemini()
-                            }
-        self.llm_lite = get_llm_lite_model()
-        # Цепочка фолбэков для лайт-модели (суммаризация и прочие служебные
-        # вызовы, летящие с фронта): по умолчанию haiku, при отказе —
-        # gpt-5-mini, затем gemini-3-flash-preview.
-        self.llm_lite_fallbacks = [
-            get_llm_lite_model_gpt_mini(),
-            get_llm_lite_model_gemini_flash(),
-            get_llm_model_glm()
-        ]
-        self.obs_loader = OBSWorker()
+        self.AGENT_MODELS = build_agent_models(builder_overrides=globals())
+        self.llm_lite, self.llm_lite_fallbacks = build_lite_models(
+            agent_models=self.AGENT_MODELS,
+            builder_overrides=globals(),
+        )
         self.services = {"parsers": {"url": f"http://parsers_service:{PORT_PARSERS_SERVICE}",}}
         # Память: последние 10 сообщений (5 пар human/ai)
         self._memories: Dict[str, ConversationBufferWindowMemory] = {}
@@ -1000,8 +1007,6 @@ class HarnessAgent:
         # 14b. Универсальная отправка письма (текст + вложения, лимит 20МБ)
         from .tools.email.tool_send_email_universal import make_send_email_tool
         send_email = make_send_email_tool(agent)
-        # 15. Работа с удаленным репозиторием
-        from .tools.git.tool_to_connect_mcp import connect_mcp_git
         # 16. Публикация задачи в планировщик-песок
         from .tools.sandbox.tool_submit_task import make_submit_tools
         submit_task = make_submit_tools(agent)
@@ -1018,6 +1023,10 @@ class HarnessAgent:
         # модель передаёт только промпт, base64 не идёт в контекст.
         from .tools.vision.tool_analyze_image import make_analyze_image_tool
         analyze_image = make_analyze_image_tool(agent, images, agent_model=agent_model, chat_id=chat_id)
+        # Расшифровка аудио/видео с таймкодами (gemini-3.1-pro). Источник —
+        # media_id из media_store или путь на диске; полный текст уходит в файлы.
+        from .tools.vision.tool_transcribe_media import make_transcribe_media_tool
+        transcribe_media = make_transcribe_media_tool(agent, chat_id=chat_id)
 
         # Тул генерации изображений (gemini-3.1-flash-image-preview).
         # Пресет качества из карточки #127. Сгенерированные файлы копятся
@@ -1044,6 +1053,7 @@ class HarnessAgent:
 
         base_tools = [
             analyze_image,
+            transcribe_media,
             generate_image,
             find_generated_image,
             generate_video,
@@ -1059,8 +1069,6 @@ class HarnessAgent:
             send_message_tool,
             work_with_email,
             send_email,
-            connect_mcp_git,
-            # knowledge_graph_tool
         ]
 
         all_tools = (
@@ -1320,12 +1328,7 @@ class HarnessAgent:
 
         Использует готовый health-check эндпоинт того же процесса
         (кеш TTL 30с на его стороне). При любой ошибке — мягкий фолбэк."""
-        _labels = {
-            "coder": "GPT",
-            "designer": "Claude",
-            "universal": "GLM",
-            "gemini": "Gemini"
-        }
+        _labels = get_model_labels()
         try:
             client = await self._get_http_client()
             port = os.getenv("PORT_PM_AGENT") or "9001"
@@ -1368,6 +1371,49 @@ class HarnessAgent:
         if isinstance(ctx, dict):
             return ctx.get(key, default)
         return default
+
+    def track_tokens(
+        self,
+        source,
+        *,
+        tool: str | None = None,
+        model: str | None = None,
+        extra: dict | None = None,
+    ) -> dict:
+        """Единая точка учёта токенов.
+
+        source — AIMessage, ответ chat/completions (dict) или сам usage-словарь.
+        Возвращает нормализованный usage {input_tokens, output_tokens,
+        cache_read_tokens, cache_creation_tokens}. Если указан tool — копит расход
+        в request-local tool_usage[tool] (попадёт в tokens_usage["tools"]);
+        extra — доп. счётчики тула (например {"images": 1}).
+        """
+        usage = normalize_usage(source)
+        if not tool:
+            return usage
+        ctx = self._request_ctx.get()
+        bucket = None
+        if isinstance(ctx, dict):
+            bucket = ctx.setdefault("tool_usage", {}).setdefault(tool, {
+                "calls": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+                "cache_read_tokens": 0, "cache_creation_tokens": 0, "models": [],
+            })
+            bucket["calls"] += 1
+            add_usage(bucket, usage)
+            bucket["total_tokens"] = bucket["input_tokens"] + bucket["output_tokens"]
+            if model and model not in bucket["models"]:
+                bucket["models"].append(model)
+            for k, v in (extra or {}).items():
+                if isinstance(v, (int, float)):
+                    bucket[k] = bucket.get(k, 0) + v
+        logging.info(
+            f"[tokens] tool={tool} model={model or '-'} "
+            f"in={usage['input_tokens']} out={usage['output_tokens']} "
+            f"cached={usage['cache_read_tokens']}"
+            + (f" extra={extra}" if extra else "")
+            + (f" tool_total={bucket['total_tokens']}" if bucket else "")
+        )
+        return usage
 
     def _ctx_append_pending_image(self, item: dict) -> None:
         """Складывает сгенерированную картинку в request-local буфер."""
@@ -1590,6 +1636,8 @@ class HarnessAgent:
             # Защита от бесконечного polling check_task_status: >3 подряд блокируем
             "check_status_streak": 0,
             "last_tool_name": "",
+            # расход токенов тулами, у которых своя модель: {tool: {...}}
+            "tool_usage": {},
         })
 
         # Legacy-поля оставляем как fallback для старого кода,
@@ -1608,21 +1656,8 @@ class HarnessAgent:
                 "medium": {"limit_mem": 12, "max_tokens": 15_000},
                 "large":  {"limit_mem": 14, "max_tokens": 30_000},
             }
-            _MODEL_ALIASES = {
-                "gpt": "coder",
-                "claude": "designer",
-                "glm": "universal",
-                "gemini": "gemini",
-            }
-            if agent_model in _MODEL_ALIASES:
-                agent_model = _MODEL_ALIASES[agent_model]
-            if agent_model not in self.AGENT_MODELS:
-                for _abs_k, _m_inst in self.AGENT_MODELS.items():
-                    if get_real_model_name(_m_inst) == agent_model:
-                        agent_model = _abs_k
-                        break
-                else:
-                    agent_model = 'coder'
+            agent_model = resolve_model_tag(agent_model, self.AGENT_MODELS)
+            model_spec = get_model_spec(agent_model, self.AGENT_MODELS)
             llm = self.AGENT_MODELS[agent_model]
             real_agent_model = get_real_model_name(llm)
             logging.info(f'Выбрана модель {agent_model} ({real_agent_model})')
@@ -1646,6 +1681,18 @@ class HarnessAgent:
             SUPERVISOR_MIN_ITER = 4  # не трогаем первые шаги (агент только разогнался)
             total_input_tokens  = 0
             total_output_tokens = 0
+            total_cache = {"cache_read_tokens": 0, "cache_creation_tokens": 0}
+            # Явные точки кеша нужны только ChatAnthropic; OpenAI-совместимые
+            # провайдеры кешируют стабильный префикс сами (X-Enable-Prompt-Cache + x-session-id).
+            use_cache_control = bool(
+                getattr(model_spec, "provider", "") == "anthropic"
+                and getattr(model_spec, "prompt_cache", False)
+            )
+            openai_cache_headers = (
+                build_openai_cache_headers(chat_id=chat_id, model_tag=agent_model)
+                if getattr(model_spec, "provider", "") == "openai" and getattr(model_spec, "prompt_cache", False)
+                else None
+            )
 
             preset = CONTEXT_PRESETS.get(context_size, CONTEXT_PRESETS["medium"])
             limit_mem = preset["limit_mem"]
@@ -1712,7 +1759,10 @@ class HarnessAgent:
                 role_block = get_role_max(user_id)
             else:
                 role_block = get_role(user_id)
-            system_content = SYSTEM_PROMPT.format(datetime=current_datetime, role_block=role_block)
+            system_content = SYSTEM_PROMPT.format(role_block=role_block)
+            # Динамика (дата, медиа-реестр) — отдельным SystemMessage ПОСЛЕ статики,
+            # чтобы префикс промпта был стабилен и попадал в кеш провайдера.
+            dynamic_parts: list[str] = [f"Current date and time: {current_datetime}"]
             _gw_target = (gateway_target or "main").strip().lower()
             if _gw_target in ("main", "sigma") and not is_telegram and not is_max:
                 system_content += "\n" + INTERACTIVE_POLL_GUIDANCE
@@ -1722,10 +1772,15 @@ class HarnessAgent:
                 from agent.media import media_store as _media_store
                 _media_block = await _media_store.build_media_prompt_block(chat_id)
                 if _media_block:
-                    system_content += _media_block
+                    dynamic_parts.append(_media_block.strip())
             except Exception as _e:
                 logging.warning(f"[media_store] prompt block fail: {_e}")
             # Telegram: подмешиваем HTML-инструкцию форматирования + per-chat промпт из БД.
+
+            from .prompts.system_prompt import TOOL_NAME_INTEGRITY_GUIDANCE
+            if model_spec.tool_name_integrity_guidance:
+                system_content += TOOL_NAME_INTEGRITY_GUIDANCE
+
             if is_telegram and _tg_settings:
                 try:
                     _tg_name = _tg_settings.get("agent_name")
@@ -1766,7 +1821,7 @@ class HarnessAgent:
             tools_by_name = {t.name: t for t in tools}
             # Имена реально доступных агенту тулов — для каталога фонового супервизора
             loop_state["tool_names"] = list(tools_by_name.keys())
-            llm_with_tools = llm.bind_tools(tools)
+            llm_with_tools = llm.bind_tools(tools, parallel_tool_calls=True)
             session_summary = await self.db.get_last_session_summary(chat_id)
 
             # Собираем историю из памяти
@@ -1814,12 +1869,15 @@ class HarnessAgent:
             else:
                 rolling_summary_text = previous_summary_text
 
-            messages: List[BaseMessage] = []
+            # Порядок системных блоков — от стабильного к изменчивому:
+            # [0] статический промпт (точка кеша) -> журнал -> rolling summary ->
+            # саммари сессии -> ТЕКУЩИЙ КОНТЕКСТ (дата, медиа). Подмешивания по ходу
+            # цикла (супервизор, компактор) идут в хвост, а не в [0].
+            messages: List[BaseMessage] = [SystemMessage(content=system_content)]
             if journal_text is not None:
                 messages.append(SystemMessage(content=f"📜 БОРТОВОЙ ЖУРНАЛ (Память):\n{journal_text}"))
             elif use_journal and journal_text is None:
                 messages.append(SystemMessage(content=f"📜 БОРТОВОЙ ЖУРНАЛ (Память): ПУСТОЙ"))
-            messages.append(SystemMessage(content=system_content))
 
             if rolling_summary_text:
                 messages.append(
@@ -1838,14 +1896,16 @@ class HarnessAgent:
                     )
                 )
 
+            messages.append(SystemMessage(content="🕒 ТЕКУЩИЙ КОНТЕКСТ:\n" + "\n".join(dynamic_parts)))
+
             messages += [
                 *trimmed_history,
                 HumanMessage(content=user_input),
             ]
-            RATIO = {"designer": 1.3, "coder": 4.0}   # символов на токен
+            RATIO = get_chars_per_token_map()   # символов на токен из models_config.yaml
 
             import json
-            def _tok(s): return len(s) // RATIO.get(agent_model, 2)   # для русского ~2 симв/токен, а не 4
+            def _tok(s): return len(s) // RATIO.get(agent_model, model_spec.chars_per_token)   # для русского ~2 симв/токен, а не 4
 
             for m in messages:
                 c = m.content if isinstance(m.content, str) else json.dumps(m.content, ensure_ascii=False)
@@ -1881,13 +1941,8 @@ class HarnessAgent:
                                 "Это ПОДСКАЗКА, не приказ — учти, если по делу, "
                                 "иначе продолжай свой план:\n" + hint
                             )
-                            if messages and isinstance(messages[0], SystemMessage):
-                                base_sys = str(getattr(messages[0], "content", "") or "").rstrip()
-                                messages[0] = SystemMessage(
-                                    content=f"{base_sys}\n\n{sup_block}" if base_sys else sup_block
-                                )
-                            else:
-                                messages.insert(0, SystemMessage(content=sup_block))
+                            # В хвост системных блоков: статический [0] под кешем не трогаем.
+                            append_to_system_tail(messages, sup_block)
                             logger.info(f"[supervisor] директива подмешана на шаге {iteration}")
 
                     # (б) ТРИГГЕР нового фонового прогона раз в N шагов,
@@ -1917,7 +1972,8 @@ class HarnessAgent:
                     try:
                         response = await _astream_collect(
                             current_llm, messages, on_chunk=None, iteration=iteration,
-                            error_info=_llm_error
+                            error_info=_llm_error, cache_control=use_cache_control,
+                            extra_headers=openai_cache_headers,
                         )
                     except Exception as _exc:
                         _llm_error["reason"] = f"{type(_exc).__name__}: {_exc}"
@@ -2011,15 +2067,21 @@ class HarnessAgent:
 
                     messages.append(response)          # ← единственный аппенд
 
-                    usage = getattr(response, "usage_metadata", None) or {}
-                    iter_in  = usage.get("input_tokens", 0)
-                    iter_out = usage.get("output_tokens", 0)
+                    usage = self.track_tokens(response)
+                    iter_in  = usage["input_tokens"]
+                    iter_out = usage["output_tokens"]
+                    iter_cr  = usage["cache_read_tokens"]
+                    iter_cw  = usage["cache_creation_tokens"]
                     total_input_tokens  += iter_in
                     total_output_tokens += iter_out
+                    total_cache["cache_read_tokens"] += iter_cr
+                    total_cache["cache_creation_tokens"] += iter_cw
+                    _hit = f"{iter_cr * 100 // iter_in}%" if iter_in else "-"
                     logging.info(
                         f"[tokens] iter={iteration} "
-                        f"in={iter_in} out={iter_out} "
-                        f"total_in={total_input_tokens} total_out={total_output_tokens}"
+                        f"in={iter_in} out={iter_out} cached={iter_cr} cache_write={iter_cw} hit={_hit} "
+                        f"total_in={total_input_tokens} total_out={total_output_tokens} "
+                        f"total_cached={total_cache['cache_read_tokens']}"
                     )
                     logger.info(f"🦒Длина стека = {len(messages)}")
 
@@ -2167,11 +2229,20 @@ class HarnessAgent:
                         )
                     )
 
+            # input/output/total — только основная модель (на них считается стоимость
+            # в chats_service). Кеш — подмножество input. Расход тулов (vision,
+            # генерация картинок) — отдельно в "tools", если они вызывались.
             tokens_usage = {
                     "input_tokens": total_input_tokens,
                     "output_tokens": total_output_tokens,
                     "total_tokens": total_input_tokens + total_output_tokens,
+                    "cache_read_tokens": total_cache["cache_read_tokens"],
+                    "cache_creation_tokens": total_cache["cache_creation_tokens"],
                 }
+            _tools_usage = self._ctx_get("tool_usage") or {}
+            if _tools_usage:
+                tokens_usage["tools"] = _tools_usage
+                logging.info(f"[tokens] tools={json.dumps(_tools_usage, ensure_ascii=False)}")
 
             # Автогенерация заголовка чата по первому обмену (логика в title_generator.py).
             # Fail-open: не первый ход / ошибка -> auto_title=None.

@@ -9,10 +9,11 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
         "search_code_library",
         "save_to_code_library",
         "send_file_to_user",
-        # "presentation_design_skill",
-        # "html_design_skill",
         "generate_image",
         "find_generated_image",
+        "transcribe_media",
+        "submit_task",
+        "check_task_status",
     ],
     "sessions": [
         # "session_point",
@@ -35,7 +36,6 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
         "find_files",
         # "push_message_to_telegram",
         # "work_with_email",
-        "connect_mcp_git",
         "execute_shell_commands",
         "execute_python_code",
     ],
@@ -50,9 +50,6 @@ ADMIN_ONLY_CATEGORIES = {"admin"}
 UNIVERSAL_TOOLS: set[str] = {
     "analyze_image",
     "manage_skills",
-    # --- Работа с файлами/workspace доступна ВСЕГДА ---
-    # Без них агент не может собрать и отдать пользователю файл/презу/медиа
-    # без прожатой кнопки параллелизма. execute_shell_commands ОСТАЁТСЯ только в admin.
     "create_workspace",
     "list_workspace_files",
     "download_workspace_file",
@@ -60,16 +57,9 @@ UNIVERSAL_TOOLS: set[str] = {
     "read_workspace_file",
     "edit_workspace_file",
     "send_file_to_user",
-    # --- Управление workspace + async-запуск (бывший parallelism) ---
     "delete_workspace",
     "cleanup_workspaces",
-    "submit_task",
-    "check_task_status",
-    # --- Универсальная отправка email (текст + вложения до 20МБ) ---
     "send_email",
-    # --- Планировщик собственных Telegram-триггеров (агент ставит сам) ---
-    # recurring/once по МСК; слушатель chats_service будит агента в нужное время.
-    # Работает только в TG-чатах с proactive_enabled, но тула безопасна всегда.
     "manage_trigger",
 }
 
@@ -90,6 +80,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "presentation_design_skill": "Генерирует дизайн/структуру презентации.",
     "html_design_skill": "Генерирует HTML-вёрстку/дизайн страницы.",
     "generate_image": "Генерирует изображение по текстовому описанию.",
+    "transcribe_media": "Дословно расшифровывает аудио и видео с таймкодами и спикерами (gemini-3.1-pro), сохраняет .txt/.srt/.json.",
     # --- media_gen (admin-only, RouterAPI) ---
     "generate_video": "Генерирует короткое видео по промпту (RouterAPI, админ, платно).",
     "generate_audio": "Синтезирует речь из текста (TTS, RouterAPI, админ, платно).",
@@ -109,7 +100,6 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "grep_search": "Ищет текст внутри файлов проекта (grep -rn).",
     "find_files": "Ищет файлы по маске имени (find -iname).",
     "work_with_email": "Работа с почтовым ящиком (чтение inbox, папки, счётчики).",
-    "connect_mcp_git": "Отдаёт инструкцию по работе с удалёнными Git-репозиториями.",
     "execute_shell_commands": "Выполняет системные команды в песочнице (git/docker/curl без shell).",
     # --- universal (доступны всегда) ---
     "analyze_image": "Анализирует изображение и отвечает на вопрос о нём (OCR, описание, данные с графика).",

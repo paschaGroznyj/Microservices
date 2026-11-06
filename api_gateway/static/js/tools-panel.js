@@ -80,7 +80,7 @@ const TOOL_CATEGORIES = [
   {
     id:          "content",
     label:       "Контент и файлы",
-    description: "Генерация PPTX, DOCX, Excel, PNG",
+    description: "Генерация PPTX, DOCX, Excel, PNG, расшифровка аудио и видео",
     adminOnly:   false
   },
   {
@@ -307,10 +307,16 @@ class ToolsPanel {
     this._open ? this._close() : this._openPanel(triggerBtn);
   }
 
-  _openPanel(triggerBtn) {
-    this._close();
-    window.ModelPicker?._close?.();
+  _openPanel(triggerBtn, opts = {}) {
+    // measure: только собрать панель (без показа и побочных эффектов),
+    // чтобы ModelPicker мог взять её естественную высоту.
+    const measure = !!opts.measure;
+    if (!measure) {
+      this._close();
+      window.ModelPicker?._close?.();
+    }
     const panel = document.createElement("div");
+    const prevPanelEl = this._panelEl;
     panel.className = "tools-panel";
     // Маркер: панель открыта на стартовом экране (поле ввода по центру).
     // Нужен, чтобы на мобилке дать отступ сверху и скролл секциям.
@@ -461,6 +467,11 @@ class ToolsPanel {
     scrollBody.appendChild(toolsSection);
     panel.appendChild(scrollBody);
 
+    if (measure) {
+      this._panelEl = prevPanelEl;
+      return panel;
+    }
+
     document.body.appendChild(panel);
     this._positionPanel(panel, triggerBtn);
     this._open = true;
@@ -474,6 +485,21 @@ class ToolsPanel {
 
     this._escHandler = e => { if (e.key === "Escape") this._close(); };
     document.addEventListener("keydown", this._escHandler);
+  }
+
+  /* Естественная высота панели инструментов (без ограничения экраном).
+     ModelPicker ограничивает свой .mp-panel этой высотой. */
+  naturalHeight() {
+    try {
+      const panel = this._openPanel(null, { measure: true });
+      panel.style.cssText = "visibility:hidden;position:fixed;top:0;left:-9999px;max-height:none;animation:none;";
+      document.body.appendChild(panel);
+      const h = panel.scrollHeight;
+      panel.remove();
+      return h || 0;
+    } catch (_) {
+      return 0;
+    }
   }
 
   _positionPanel(panel, triggerBtn) {
@@ -587,166 +613,344 @@ window.ToolsPanel = new ToolsPanel();
 window.__TP_ICONS = ICONS;
 export default window.ToolsPanel;
 /* ══════════════════════════════════════════════════════════════════════════
-   MODEL PICKER — выбор агента (GPT / Claude / GLM / Gemini)
+   MODEL PICKER — выбор модели агента (динамический каталог из /api/models)
    API:
-     ModelPicker.getModel()        → 'coder' | 'designer' | 'universal' | 'gemini'
-     ModelPicker.inject(container) → void
+     ModelPicker.loadModels(force)   → Promise<boolean> (true = agent_service доступен)
+     ModelPicker.isAgentAvailable()  → boolean
+     ModelPicker.getModel()          → tag модели ('coder' | 'designer' | ...)
+     ModelPicker.getModels()         → массив моделей из agent_service
+     ModelPicker.inject(container)   → void
    Выбор хранится в localStorage.
 ══════════════════════════════════════════════════════════════════════════ */
 
-const MP_MODELS = [
-  {
-    id:     'coder',
-    label:  'GPT',
-    // OpenAI — контур куба-узла
-    svg: `<svg viewBox="0 0 24 24" fill="none" width="20" height="20"
-               stroke="currentColor" stroke-width="1.5"
-               stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 3.2 L18.6 7 V15 L12 18.8 L5.4 15 V7 Z"/>
-            <path d="M12 3.2 V11 L18.6 15"/>
-            <path d="M5.4 7 L12 11 L12 18.8"/>
-          </svg>`,
-    svgSm: `<svg viewBox="0 0 24 24" fill="none" width="15" height="15"
-               stroke="currentColor" stroke-width="2"
-               stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 3.2 L18.6 7 V15 L12 18.8 L5.4 15 V7 Z"/>
-              <path d="M12 11 L18.6 7 M12 11 V18.8 M12 11 L5.4 7"/>
-            </svg>`,
-    hint:   'Модель от OpenAI. Сильна в коде, инструментах и длинном контексте. Показывает tool-calling.',
-    accent: '#10a37f',
-  },
-  {
-    id:     'designer',
-    label:  'Claude',
-    // Anthropic — искра-вспышка
-    svg: `<svg viewBox="0 0 24 24" fill="none" width="20" height="20"
-               stroke="currentColor" stroke-width="2.2"
-               stroke-linecap="round" stroke-linejoin="round">
-            <line x1="12" y1="4.5" x2="12" y2="19.5"/>
-            <line x1="5.8" y1="8" x2="18.2" y2="16"/>
-            <line x1="18.2" y1="8" x2="5.8" y2="16"/>
-          </svg>`,
-    svgSm: `<svg viewBox="0 0 24 24" fill="none" width="15" height="15"
-               stroke="currentColor" stroke-width="2.4"
-               stroke-linecap="round" stroke-linejoin="round">
-              <line x1="12" y1="4.5" x2="12" y2="19.5"/>
-              <line x1="5.8" y1="8" x2="18.2" y2="16"/>
-              <line x1="18.2" y1="8" x2="5.8" y2="16"/>
-            </svg>`,
-    hint:   'Модель от Anthropic. Сильна в коде, генерирует презентации и отчёты. Показывает reasoning (размышления).',
-    accent: '#d97757',
-  },
-  {
-    id:     'universal',
-    label:  'GLM',
-    // Zhipu AI — стилизованная Z
-    svg: `<svg viewBox="0 0 24 24" fill="none" width="20" height="20"
-               stroke="currentColor" stroke-width="2.2"
-               stroke-linecap="round" stroke-linejoin="round">
-            <path d="M7 6 H17 L8 14 H17"/>
-            <path d="M12 14 V20"/>
-          </svg>`,
-    svgSm: `<svg viewBox="0 0 24 24" fill="none" width="15" height="15"
-               stroke="currentColor" stroke-width="2.4"
-               stroke-linecap="round" stroke-linejoin="round">
-              <path d="M7 6 H17 L8 14 H17"/>
-              <path d="M12 14 V20"/>
-            </svg>`,
-    hint:   'Модель от Zhipu AI. Универсальная, показывает reasoning (размышления).',
-    accent: '#8b5cf6',
-  },
-  {
-    id:     'gemini',
-    label:  'Gemini',
-    // Gemini: четырёхконечная звезда с вогнутыми гранями
-    svg: `<svg viewBox="0 0 24 24" fill="none" width="20" height="20"
-               stroke="currentColor" stroke-width="1.75"
-               stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 2.5C12 7.8 16.2 12 21.5 12
-                     C16.2 12 12 16.2 12 21.5
-                     C12 16.2 7.8 12 2.5 12
-                     C7.8 12 12 7.8 12 2.5Z"/>
-          </svg>`,
-    svgSm: `<svg viewBox="0 0 24 24" fill="none" width="15" height="15"
-               stroke="currentColor" stroke-width="2"
-               stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 2.5C12 7.8 16.2 12 21.5 12
-                       C16.2 12 12 16.2 12 21.5
-                       C12 16.2 7.8 12 2.5 12
-                       C7.8 12 12 7.8 12 2.5Z"/>
-            </svg>`,
-    hint:   'Модель от Google. Показывает tool-calling.',
-    accent: '#4285f4',
-  },
-];
+const MP_FALLBACK_ICON_SM = `<svg viewBox="0 0 24 24" fill="none" width="15" height="15"
+  stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M12 3.2 L18.6 7 V15 L12 18.8 L5.4 15 V7 Z"/>
+  <path d="M12 11 L18.6 7 M12 11 V18.8 M12 11 L5.4 7"/>
+</svg>`;
 
-const MP_STORAGE_KEY = 'mp_selected_model';
+const MP_STORAGE_KEY          = 'mp_selected_model';
+const MP_MODELS_URL           = '/api/models';
+const MP_PROVIDERS_URL        = '/api/providers/status';
+const MP_PROVIDERS_STREAM_URL = '/api/providers/status/stream';
+const MP_PROVIDERS_TTL_MS     = 25000;
+const MP_RETRY_OFFLINE_MS     = 15000;
 
-const MP_ID_TO_SETTING = {
+const MP_BASE_ID_TO_SETTING = {
   coder:     'gpt',
   designer:  'claude',
   universal: 'glm',
   gemini:    'gemini',
+  gigachat:  'gigachat',
+  giga:      'gigachat',
+  deepseek:  'deepseek',
+  ds:        'deepseek',
   gpt:       'gpt',
   claude:    'claude',
   glm:       'glm',
 };
 
-const MP_SETTING_TO_ID = {
+const MP_BASE_SETTING_TO_ID = {
   gpt:       'coder',
   claude:    'designer',
   glm:       'universal',
   gemini:    'gemini',
+  gigachat:  'gigachat',
+  giga:      'gigachat',
+  deepseek:  'deepseek',
+  ds:        'deepseek',
   coder:     'coder',
   designer:  'designer',
   universal: 'universal',
 };
 
-// Доступность провайдеров под моделями. Тянется с /api/providers/status
-// (проксирует agent_service). Бейдж в опции показывает, что модель может быть
-// недоступна из-за ПРОВАЙДЕРА, а не из-за агента. Кешируем на клиенте, чтобы
-// повторные открытия панели не дёргали сеть — бэкенд и так кеширует на 30с.
-const MP_PROVIDERS_URL      = '/api/providers/status';
-const MP_PROVIDERS_TTL_MS   = 25000;
-
 class ModelPickerClass {
   constructor() {
-    this._selected      = localStorage.getItem(MP_STORAGE_KEY) ?? 'coder';
-    this._panel         = null;
-    this._storedTrigger = null;
+    this._selected            = localStorage.getItem(MP_STORAGE_KEY) ?? 'coder';
+    this._defaultModel        = 'coder';
+    this._models              = [];
+    this._idToSetting         = { ...MP_BASE_ID_TO_SETTING };
+    this._settingToId         = { ...MP_BASE_SETTING_TO_ID };
+    this._pendingSettingModel = null;
+    this._agentAvailable      = null; // null = ещё не проверено, true = доступен, false = упал
+    this._modelsReq           = null;
+    this._retryTimer          = null;
+    this._panel               = null;
+    this._storedTrigger       = null;
     // Кеш доступности провайдеров: {providers: {id: {up, name, reason}}, ts}
-    this._providers     = null;
-    this._providersTs   = 0;
-    this._providersReq  = null;   // in-flight промис, чтобы не слать дубли
+    this._providers           = null;
+    this._providersItemTs     = {};
+    this._providersTs         = 0;
+    this._providersReq        = null;
   }
 
   /* ── Публичный API ──────────────────────────────────────────────────── */
 
   getModel() { return this._selected; }
-  getModels() { return MP_MODELS; }
+  getModels() { return this._models; }
 
-  /* Тянет доступность провайдеров с бэка (с TTL-кешем и дедупом запросов).
-     Возвращает объект providers ({id: {up, name, reason?}}) или null. */
+  /**
+   * Доступен ли agent_service по результатам запроса /api/models.
+   * Если проверка вернула false — отправка сообщений в app.js блокируется.
+   */
+  isAgentAvailable() {
+    return this._agentAvailable === true;
+  }
+
+  _setAgentAvailable(avail) {
+    const next = Boolean(avail);
+    const prev = this._agentAvailable;
+    this._agentAvailable = next;
+    if (next) {
+      if (this._retryTimer) {
+        clearTimeout(this._retryTimer);
+        this._retryTimer = null;
+      }
+    } else {
+      this._scheduleOfflineRetry();
+    }
+    if (prev !== next) {
+      try {
+        window.dispatchEvent(new CustomEvent('agent:availability', {
+          detail: { available: next },
+        }));
+      } catch (_) {}
+    }
+  }
+
+  _scheduleOfflineRetry() {
+    if (this._retryTimer) return;
+    this._retryTimer = setTimeout(() => {
+      this._retryTimer = null;
+      if (this._agentAvailable === false) {
+        this.loadModels(true);
+      }
+    }, MP_RETRY_OFFLINE_MS);
+  }
+
+  _rebuildMappings(models) {
+    const idToSetting = { ...MP_BASE_ID_TO_SETTING };
+    const settingToId = { ...MP_BASE_SETTING_TO_ID };
+    for (const m of models) {
+      if (!m || !m.id) continue;
+      const id = String(m.id).trim();
+      const idLow = id.toLowerCase();
+      const skey = String(m.setting_key || (Array.isArray(m.aliases) && m.aliases[0]) || id).trim().toLowerCase();
+      idToSetting[id] = skey;
+      idToSetting[idLow] = skey;
+      idToSetting[skey] = skey;
+      settingToId[id] = id;
+      settingToId[idLow] = id;
+      settingToId[skey] = id;
+      if (Array.isArray(m.aliases)) {
+        for (const a of m.aliases) {
+          const al = String(a || '').trim().toLowerCase();
+          if (al) {
+            idToSetting[al] = skey;
+            settingToId[al] = id;
+          }
+        }
+      }
+      if (m.model) {
+        settingToId[String(m.model).trim()] = id;
+        settingToId[String(m.model).trim().toLowerCase()] = id;
+      }
+    }
+    this._idToSetting = idToSetting;
+    this._settingToId = settingToId;
+  }
+
+  /**
+   * Загружает каталог моделей и их SVG/описания напрямую через gateway -> agent_service.
+   * Одновременно проверяет живость agent_service.
+   */
+  async loadModels(force = false) {
+    if (!force && this._models.length > 0 && this._agentAvailable === true) {
+      return true;
+    }
+    if (this._modelsReq) return this._modelsReq;
+
+    this._modelsReq = (async () => {
+      try {
+        const resp = await fetch(MP_MODELS_URL, { credentials: 'same-origin' });
+        if (!resp.ok) throw new Error('status ' + resp.status);
+        const data = await resp.json();
+        const models = Array.isArray(data?.models) ? data.models : [];
+        const available = Boolean(data?.agent_available) && models.length > 0;
+        if (!available) {
+          this._setAgentAvailable(false);
+          this._syncAllBtns();
+          if (this._panel) this._renderPanelContent(this._panel);
+          return false;
+        }
+
+        this._models = models;
+        window.__MP_MODELS = models;
+        this._defaultModel = data.default_model || models[0]?.id || 'coder';
+        this._rebuildMappings(models);
+
+        if (this._pendingSettingModel) {
+          const pending = this._pendingSettingModel;
+          this._pendingSettingModel = null;
+          this.applySettingModel(pending);
+        }
+
+        const resolvedSel = this._settingToId[String(this._selected || '').trim().toLowerCase()] || this._selected;
+        if (models.some(x => x.id === resolvedSel)) {
+          this._selected = resolvedSel;
+        } else {
+          this._selected = this._defaultModel;
+        }
+        localStorage.setItem(MP_STORAGE_KEY, this._selected);
+
+        this._setAgentAvailable(true);
+        this._syncAllBtns();
+        if (this._panel) {
+          this._renderPanelContent(this._panel);
+          this._refreshPanelBadges();
+        }
+        return true;
+      } catch (_) {
+        this._setAgentAvailable(false);
+        this._syncAllBtns();
+        if (this._panel) this._renderPanelContent(this._panel);
+        return false;
+      } finally {
+        this._modelsReq = null;
+      }
+    })();
+
+    return this._modelsReq;
+  }
+
+  /* Возвращает свежий закешированный статус конкретной модели или null. */
+  _getFreshProvider(modelId, now = Date.now()) {
+    if (!modelId || !this._providers || typeof this._providers !== 'object') return null;
+    const item = this._providers[modelId];
+    if (!item) return null;
+    const itemTs = this._providersItemTs?.[modelId] || this._providersTs || 0;
+    if ((now - itemTs) >= MP_PROVIDERS_TTL_MS) return null;
+    return item;
+  }
+
+  /* Применяет статус одной модели в кеш и мгновенно обновляет её .mp-status-label в открытой панели. */
+  _applySingleProvider(item) {
+    if (!item || !item.id) return;
+    if (!this._providers || typeof this._providers !== 'object') {
+      this._providers = {};
+    }
+    const now = Date.now();
+    this._providers[item.id] = item;
+    this._providersItemTs[item.id] = now;
+    this._providersTs = now;
+
+    if (this._panel) {
+      this._panel.querySelectorAll('.mp-option').forEach(opt => {
+        if (opt.dataset.model === item.id) {
+          this._applyProviderBadge(opt, item);
+        }
+      });
+    }
+    try {
+      window.dispatchEvent(new CustomEvent('model:provider_status', { detail: item }));
+    } catch (_) {}
+  }
+
+  /* Тянет доступность провайдеров с бэка асинхронным потоком (SSE) по мере готовности каждой модели,
+     не ожидая завершения всех сразу. Имеет фолбэк на JSON /api/providers/status. */
   async _fetchProviders(force = false) {
     const now = Date.now();
-    if (!force && this._providers && (now - this._providersTs) < MP_PROVIDERS_TTL_MS) {
-      return this._providers;
+    if (!force && this._models.length > 0 && this._providers) {
+      const allFresh = this._models.every(m => Boolean(this._getFreshProvider(m.id, now)));
+      if (allFresh) return this._providers;
     }
     if (this._providersReq) return this._providersReq;
 
     this._providersReq = (async () => {
+      const url = MP_PROVIDERS_STREAM_URL + (force ? '?force=1' : '');
       try {
-        const resp = await fetch(MP_PROVIDERS_URL, { credentials: 'same-origin' });
+        const resp = await fetch(url, {
+          credentials: 'same-origin',
+          headers: { 'Accept': 'text/event-stream, application/json' },
+        });
         if (!resp.ok) throw new Error('status ' + resp.status);
+
+        const ctype = (resp.headers?.get?.('content-type') || '').toLowerCase();
+        if (ctype.includes('text/event-stream') && resp.body?.getReader) {
+          const reader = resp.body.getReader();
+          const decoder = new TextDecoder('utf-8');
+          let buffer = '';
+          let gotAny = false;
+
+          const processLine = (line) => {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data:')) return;
+            const rawJson = trimmed.slice(5).trim();
+            if (!rawJson) return;
+            try {
+              const payload = JSON.parse(rawJson);
+              if (payload && payload.id && typeof payload.up === 'boolean') {
+                gotAny = true;
+                this._applySingleProvider(payload);
+              } else if (payload && payload.providers && typeof payload.providers === 'object') {
+                Object.values(payload.providers).forEach(p => {
+                  if (p && p.id) {
+                    gotAny = true;
+                    this._applySingleProvider(p);
+                  }
+                });
+              }
+            } catch (_) {}
+          };
+
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() ?? '';
+            for (const line of lines) {
+              processLine(line);
+            }
+          }
+          if (buffer.trim()) {
+            for (const line of buffer.split('\n')) {
+              processLine(line);
+            }
+          }
+          return gotAny ? this._providers : (this._providers ?? null);
+        }
+
+        // Фолбэк, если ответ пришёл обычным JSON
         const data = await resp.json();
-        this._providers   = data?.providers ?? null;
-        this._providersTs = Date.now();
+        if (data?.providers && typeof data.providers === 'object') {
+          Object.entries(data.providers).forEach(([k, v]) => {
+            if (v && typeof v === 'object') {
+              this._applySingleProvider({ id: v.id || k, ...v });
+            }
+          });
+          return this._providers;
+        }
         return this._providers;
       } catch (_) {
-        // сеть/агент недоступны — оставляем нейтральное состояние (null)
-        this._providers   = null;
-        this._providersTs = Date.now();
-        return null;
+        // Фолбэк на классический /api/providers/status
+        try {
+          const resp2 = await fetch(MP_PROVIDERS_URL + (force ? '?force=1' : ''), {
+            credentials: 'same-origin',
+          });
+          if (resp2.ok) {
+            const data2 = await resp2.json();
+            if (data2?.providers && typeof data2.providers === 'object') {
+              Object.entries(data2.providers).forEach(([k, v]) => {
+                if (v && typeof v === 'object') {
+                  this._applySingleProvider({ id: v.id || k, ...v });
+                }
+              });
+              return this._providers;
+            }
+          }
+        } catch (_e2) {}
+        return this._providers ?? null;
       } finally {
         this._providersReq = null;
       }
@@ -758,11 +962,9 @@ class ModelPickerClass {
   _applyProviderBadge(optEl, prov) {
     const badge = optEl.querySelector('.mp-option-status');
     if (!badge) return;
-    const dot   = badge.querySelector('.mp-status-dot');
     const label = badge.querySelector('.mp-status-label');
 
     if (!prov) {
-      // нет данных (агент недоступен / ещё грузится) — нейтрально
       badge.dataset.state = 'unknown';
       if (label) label.textContent = 'Проверка…';
       badge.title = 'Проверка доступности провайдера';
@@ -780,22 +982,28 @@ class ModelPickerClass {
     }
   }
 
-  /* Обновляет бейджи всех опций в открытой панели по кешу/фетчу. */
+  /* Обновляет бейджи всех опций в открытой панели: сразу рисует закешированные,
+     а остальные докрашивает асинхронно по мере прихода из SSE-потока. */
   async _refreshPanelBadges() {
     if (!this._panel) return;
     const opts = this._panel.querySelectorAll('.mp-option');
-    // сперва — то, что уже есть в кеше (мгновенно), потом освежаем сетью
-    const paint = (providers) => {
-      opts.forEach(opt => this._applyProviderBadge(opt, providers?.[opt.dataset.model] ?? null));
-    };
-    paint(this._providers);
-    const providers = await this._fetchProviders();
-    if (this._panel) paint(providers);
+    if (!opts.length) return;
+    const now = Date.now();
+    opts.forEach(opt => {
+      const cached = this._getFreshProvider(opt.dataset.model, now);
+      this._applyProviderBadge(opt, cached);
+    });
+    await this._fetchProviders();
   }
 
   inject(container) {
+    if (!container) return;
     this._injectInto(container.querySelector('.chat-input-footer'),  '#attach-btn');
     this._injectInto(container.querySelector('.start-input-footer'), '#start-attach-btn');
+    this._injectInto(container.querySelector('.ed-ai-footer'),       null);
+    if (this._agentAvailable === null && !this._modelsReq) {
+      this.loadModels();
+    }
   }
 
   /* ── Внутренние ─────────────────────────────────────────────────────── */
@@ -805,7 +1013,7 @@ class ModelPickerClass {
     if (footer.querySelector('.mp-trigger-btn')) return;
 
     const btn       = this._makeBtn();
-    const attachBtn = footer.querySelector(attachSel);
+    const attachBtn = attachSel ? footer.querySelector(attachSel) : null;
     const toolsBtn  = footer.querySelector('.tools-trigger-btn');
 
     if (attachBtn?.nextSibling) {
@@ -831,12 +1039,20 @@ class ModelPickerClass {
   }
 
   _syncBtn(btn) {
-    const m = MP_MODELS.find(x => x.id === this._selected) ?? MP_MODELS[0];
-    // Только иконка — круглая кнопка как attach-btn, без текста
-    btn.innerHTML = m.svgSm;
-    btn.dataset.modelId = m.id;
-    btn.title = `Модель: ${m.label}`;
-    btn.style.setProperty('--mp-accent', m.accent);
+    const m = this._models.find(x => x.id === this._selected) ?? this._models[0] ?? null;
+    const offline = this._agentAvailable === false;
+    btn.classList.toggle('mp-trigger-btn--offline', offline);
+    if (m) {
+      btn.innerHTML = m.svgSm || m.svg || MP_FALLBACK_ICON_SM;
+      btn.dataset.modelId = m.id;
+      btn.title = offline ? 'Сервис агента недоступен' : `Модель: ${m.label}`;
+      btn.style.setProperty('--mp-accent', offline ? '#dc2626' : (m.accent || '#10a37f'));
+    } else {
+      btn.innerHTML = MP_FALLBACK_ICON_SM;
+      btn.dataset.modelId = this._selected;
+      btn.title = offline ? 'Сервис агента недоступен' : 'Выбор модели агента';
+      btn.style.setProperty('--mp-accent', offline ? '#dc2626' : '#10a37f');
+    }
   }
 
   _syncAllBtns() {
@@ -850,23 +1066,30 @@ class ModelPickerClass {
     this._open(triggerBtn);
   }
 
-  _open(triggerBtn) {
-    // Закрываем чужие оверлеи
-    window.ToolsPanel?._close?.();
-    document.querySelectorAll('.mp-panel').forEach(p => p.classList.add('mp-hiding'));
-    document.querySelectorAll('.chat-item-dropdown').forEach(d => d.remove());
+  _renderPanelContent(panel) {
+    if (!panel) return;
+    if (this._agentAvailable === false || this._models.length === 0) {
+      const msg = this._agentAvailable === false
+        ? 'Сервис агента недоступен. Отправка запросов временно заблокирована.'
+        : 'Загрузка списка моделей…';
+      panel.innerHTML = `
+        <div class="mp-panel-title">Выбор модели</div>
+        <div class="mp-panel-empty" data-state="${this._agentAvailable === false ? 'offline' : 'loading'}">
+          ${msg}
+        </div>
+      `;
+      return;
+    }
 
-    const panel = document.createElement('div');
-    panel.className = 'mp-panel';
     panel.innerHTML = `
       <div class="mp-panel-title">Выбор модели</div>
-      ${MP_MODELS.map(m => `
+      ${this._models.map(m => `
         <button class="mp-option${m.id === this._selected ? ' mp-option--active' : ''}"
-                data-model="${m.id}" style="--mp-accent:${m.accent}" type="button">
-          <span class="mp-option-icon">${m.svg}</span>
+                data-model="${m.id}" style="--mp-accent:${m.accent || '#10a37f'}" type="button">
+          <span class="mp-option-icon">${m.svg || m.svgSm || MP_FALLBACK_ICON_SM}</span>
           <span class="mp-option-info">
             <span class="mp-option-label">${m.label}</span>
-            <span class="mp-option-hint">${m.hint}</span>
+            <span class="mp-option-hint">${m.hint || ''}</span>
             <span class="mp-option-status" data-state="unknown">
               <span class="mp-status-dot"></span>
               <span class="mp-status-label">Проверка…</span>
@@ -889,14 +1112,32 @@ class ModelPickerClass {
         this._close();
       });
     });
+  }
+
+  _open(triggerBtn) {
+    // Закрываем чужие оверлеи
+    window.ToolsPanel?._close?.();
+    document.querySelectorAll('.mp-panel').forEach(p => p.classList.add('mp-hiding'));
+    document.querySelectorAll('.chat-item-dropdown').forEach(d => d.remove());
+
+    const panel = document.createElement('div');
+    panel.className = 'mp-panel';
+    this._renderPanelContent(panel);
 
     document.body.appendChild(panel);
     this._panel         = panel;
     this._storedTrigger = triggerBtn;
     triggerBtn.classList.add('active');
 
-    // Подтягиваем доступность провайдеров и раскрашиваем бейджи
-    this._refreshPanelBadges();
+    if (this._models.length === 0 || this._agentAvailable !== true) {
+      this.loadModels(true).then(() => {
+        if (this._panel === panel && this._storedTrigger) {
+          requestAnimationFrame(() => this._position(panel, this._storedTrigger));
+        }
+      });
+    } else {
+      this._refreshPanelBadges();
+    }
 
     requestAnimationFrame(() => this._position(panel, triggerBtn));
 
@@ -913,10 +1154,8 @@ class ModelPickerClass {
   _close() {
     if (!this._panel) return;
     const dying = this._panel;
-    // Сразу блокируем клики — панель не должна перекрывать UI во время анимации
     dying.style.pointerEvents = 'none';
     dying.classList.add('mp-panel--hiding');
-    // Страховка: если animationend не выстрелит — убиваем через таймаут
     const forceRemove = setTimeout(() => dying.remove(), 300);
     dying.addEventListener('animationend', () => { clearTimeout(forceRemove); dying.remove(); }, { once: true });
     this._panel = null;
@@ -927,7 +1166,8 @@ class ModelPickerClass {
   }
 
   _select(modelId) {
-    this._selected = MP_SETTING_TO_ID[modelId] || modelId;
+    const key = String(modelId || '').trim();
+    this._selected = this._settingToId[key.toLowerCase()] || key;
     localStorage.setItem(MP_STORAGE_KEY, this._selected);
     this._syncAllBtns();
     window.ToolsPanel?.saveUserSettings?.({
@@ -937,12 +1177,20 @@ class ModelPickerClass {
   }
 
   getSettingModel() {
-    return MP_ID_TO_SETTING[this._selected] || 'gpt';
+    return this._idToSetting[this._selected]
+        || this._idToSetting[String(this._selected || '').toLowerCase()]
+        || 'gpt';
   }
 
   applySettingModel(settingModel) {
-    const mapped = MP_SETTING_TO_ID[String(settingModel || '').trim().toLowerCase()];
-    if (!mapped) return;
+    const raw = String(settingModel || '').trim().toLowerCase();
+    if (!raw) return;
+    const mapped = this._settingToId[raw];
+    if (!mapped) {
+      // Если каталог моделей ещё не загружен — запомним и применим после loadModels()
+      this._pendingSettingModel = raw;
+      return;
+    }
     this._selected = mapped;
     localStorage.setItem(MP_STORAGE_KEY, mapped);
     this._syncAllBtns();
@@ -954,9 +1202,13 @@ class ModelPickerClass {
     const rect   = triggerBtn.getBoundingClientRect();
 
     panel.style.cssText = 'visibility:hidden;position:fixed;top:0;left:0;';
-    const naturalH = panel.scrollHeight;
+    const fullH    = panel.scrollHeight;
     const pw       = panel.offsetWidth;
     panel.style.cssText = '';
+    // Не выше панели инструментов: список моделей скроллится внутри,
+    // как .tp-scroll-body у ToolsPanel.
+    const refH     = window.ToolsPanel?.naturalHeight?.() || 0;
+    const naturalH = refH > 0 ? Math.min(fullH, refH) : fullH;
 
     const spaceAbove = rect.top - MARGIN;
     const spaceBelow = vh - rect.bottom - MARGIN;
@@ -978,8 +1230,23 @@ class ModelPickerClass {
     panel.style.top       = `${top}px`;
     panel.style.left      = `${left}px`;
     panel.style.maxHeight = `${maxH}px`;
+    this._syncScrollFade(panel);
+  }
+
+  /* Затухание у нижнего края, пока список можно докрутить. */
+  _syncScrollFade(panel) {
+    if (!panel) return;
+    const update = () => {
+      const more = panel.scrollHeight - panel.clientHeight - panel.scrollTop > 2;
+      panel.classList.toggle('mp-panel--more', more);
+    };
+    if (!panel._mpFadeBound) {
+      panel.addEventListener('scroll', update, { passive: true });
+      panel._mpFadeBound = true;
+    }
+    update();
   }
 }
 
-window.__MP_MODELS = MP_MODELS;
+window.__MP_MODELS = [];
 window.ModelPicker = new ModelPickerClass();

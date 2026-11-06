@@ -8,19 +8,14 @@ from typing import List, Dict, Any
 from pathlib import Path
 import random
 
-from .config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME, FERNET_KEY, AGENT_POOL_PASSWORD
+from .config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME, AGENT_POOL_PASSWORD
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 
-EMB_DIM = "1024"
 MAX_COUNT_JOURNAL = 9 # Максимальное 
-
-from cryptography.fernet import Fernet
-
-fernet = Fernet(FERNET_KEY)
 
 def _coerce_tags(val) -> list:
     if val is None:
@@ -33,28 +28,7 @@ def _coerce_tags(val) -> list:
     return list(val)
 
 
-SCHEMA_PATH = Path(__file__).parent / "sql_scripts"
-
-def load_sql_schema(folder_path: Path) -> str:
-    """Считывает SQL скрипты из папки."""
-    if not folder_path.is_dir():
-        raise FileNotFoundError(f"Директория со скриптами не найдена: {folder_path.resolve()}")
-
-    sql_parts = []
-    sql_files = sorted(folder_path.glob("*.sql"))
-
-    if not sql_files:
-        raise FileNotFoundError(f"В папке {folder_path.resolve()} не найдено ни одного .sql файла")
-        return ''
-
-    for file_path in sql_files:
-        content = file_path.read_text(encoding="utf-8").strip()
-        if content:
-            sql_parts.append(f"-- File: {file_path.name}\n{content}")
-
-    # Объединяем скрипты через перевод строки
-    return "\n\n".join(sql_parts)
-
+# DDL-схема таблиц вынесена в корневой каталог postgres/sql/
 
 class AgentDB:
     def __init__(self):
@@ -124,130 +98,9 @@ class AgentDB:
         return "[" + ",".join(map(str, vector)) + "]"
 
     async def init_schema(self, conn: asyncpg.Connection):
-
-        FULL_sql = load_sql_schema(SCHEMA_PATH)
-
-        await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-
-        await conn.execute(FULL_sql)
-
-        await conn.execute("""
-            ALTER TABLE papers_metadata
-                ADD COLUMN IF NOT EXISTS review BOOLEAN,
-                ADD COLUMN IF NOT EXISTS text_review TEXT;
-        """)
-
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS ix_article_embeddings_article_id
-                ON article_embeddings(article_id);
-
-            CREATE INDEX IF NOT EXISTS ix_article_embeddings_model
-                ON article_embeddings(embedding_model);
-        """)
-
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS ix_article_embeddings_embedding_cosine
-                ON article_embeddings
-                USING hnsw (embedding vector_cosine_ops);
-        """)
-
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS article_translations (
-                id BIGSERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                article_id BIGINT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
-                request_id BIGINT NOT NULL REFERENCES search_requests(id) ON DELETE CASCADE,
-                translated_text TEXT NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                UNIQUE (user_id, article_id, request_id)
-            );
-        """)
-
-        await conn.execute("""
-            ALTER TABLE request_articles
-                ADD COLUMN IF NOT EXISTS is_relevant BOOLEAN,
-                ADD COLUMN IF NOT EXISTS processed_at TIMESTAMP DEFAULT NOW();
-        """)
-
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS ix_article_translations_user_id
-                ON article_translations(user_id);
-
-            CREATE INDEX IF NOT EXISTS ix_article_translations_article_id
-                ON article_translations(article_id);
-
-            CREATE INDEX IF NOT EXISTS ix_article_translations_request_id
-                ON article_translations(request_id);
-
-            CREATE INDEX IF NOT EXISTS ix_request_articles_is_relevant
-                ON request_articles(is_relevant);
-        """)
-
-
-    # async def get_agent_journal(self, user_id: int | None = None) -> str:
-    #     async with self.pool.acquire() as conn:
-    #         rows = await conn.fetch("""
-    #             SELECT id, entry_type, content, context, created_at, updated_at
-    #         FROM (
-    #             -- personal identity конкретно этого пользователя
-    #             SELECT id, entry_type, content, context, created_at, updated_at,
-    #                    1 AS priority, updated_at AS sort_key
-    #             FROM agent_journal
-    #             WHERE entry_type = 'identity'
-    #               AND user_id = $1
-
-    #             UNION ALL
-
-    #             -- по 2 последних от каждого НЕ-identity типа для этого юзера
-    #             -- (или общих, если user_id IS NULL в записи)
-    #             SELECT id, entry_type, content, context, created_at, updated_at,
-    #                    2 AS priority, updated_at AS sort_key
-    #             FROM (
-    #                 SELECT id, entry_type, content, context, created_at, updated_at,
-    #                        ROW_NUMBER() OVER (
-    #                            PARTITION BY entry_type
-    #                            ORDER BY updated_at DESC
-    #                        ) AS rn
-    #                 FROM agent_journal
-    #                 WHERE id != 1
-    #                   AND entry_type != 'identity'
-    #                   AND (user_id = $1 OR user_id IS NULL)
-    #             ) ranked
-    #             WHERE rn <= 2
-    #         ) combined
-    #         GROUP BY id, entry_type, content, context,
-    #                 created_at, updated_at, priority, sort_key
-    #         ORDER BY priority ASC, sort_key DESC
-    #         LIMIT 15;
-    #         """, user_id)
-
-    #         count = await conn.fetchval(
-    #             "SELECT count(id) FROM agent_journal WHERE user_id = $1 OR user_id IS NULL;",
-    #             user_id,
-    #         )
-
-    #     if not rows:
-    #         return "Журнал агента пуст."
-
-    #     formatted_entries = []
-    #     head_str = ''
-    #     if count > MAX_COUNT_JOURNAL:
-    #         head_str = f"Записей в журнале уже больше порога = {MAX_COUNT_JOURNAL}. Пора бы делать summary и дроппать лишние строки\n\n"
-
-    #     for row in rows:
-    #         created_str = row["created_at"].strftime("%Y-%m-%d %H:%M:%S") if row["created_at"] else "—"
-    #         updated_str = row["updated_at"].strftime("%Y-%m-%d %H:%M:%S") if row["updated_at"] else "—"
-    #         context_data = row["context"]
-    #         ctx_str = json.dumps(context_data, ensure_ascii=False) if isinstance(context_data, dict) else (str(context_data) if context_data else "без контекста")
-    #         entry = (
-    #             f"• [{created_str}] [{updated_str}] ID: {row['id']} | Тип: [{row['entry_type']}]\n"
-    #             f"  Содержание: {row['content']}\n"
-    #             f"  Контекст: {ctx_str}"
-    #         )
-    #         formatted_entries.append(entry)
-
-    #     return head_str + "\n\n".join(formatted_entries)
+        # Все таблицы, индексы, триггеры и расширения создаются контейнером postgres
+        # из скриптов postgres/sql/ при сборке/старте БД.
+        return
 
     async def deactivate_loop_task(self, chat_id: str) -> bool:
         """САМОЦИКЛ: погасить активную установку петли (стоп-кнопка).
@@ -707,231 +560,6 @@ class AgentDB:
 
             return [dict(row) for row in rows]
 
-    async def get_unprocessed_request_articles(self, user_name: str, request_id: int) -> list[dict]:
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch("""
-                SELECT
-                    a.id AS article_id,
-                    a.external_id,
-                    a.title,
-                    a.abstract,
-                    sr.user_query
-                FROM request_articles ra
-                JOIN articles a ON a.id = ra.article_id
-                JOIN search_requests sr ON sr.id = ra.request_id
-                JOIN users ru ON ru.id = sr.user_id
-                WHERE sr.id = $1
-                  AND ru.username = $2
-                  AND ra.processed_at IS NULL
-                ORDER BY a.date_sub DESC NULLS LAST, a.id DESC
-            """, request_id, user_name)
-
-            return [dict(row) for row in rows]
-
-    def _decrypt_token(self, encrypted: str) -> str:
-        return fernet.decrypt(encrypted.encode()).decode()
-
-    async def insert_query(self, username: str, query: str) -> dict:
-        async with self.pool.acquire() as conn:
-            request_id =  await conn.fetchval("""
-                    INSERT INTO search_requests (user_id, user_query, status)
-                    SELECT id, $2, $3
-                    FROM users
-                    WHERE username = $1
-                    RETURNING id
-                """, username, query, 'pending')
-            search_requests = await conn.fetchval("""
-                                                  SELECT COUNT(s_r.id)
-                                                  FROM search_requests s_r
-                                                           JOIN users u ON u.id = s_r.user_id
-                                                  WHERE u.username = $1
-                                                    AND s_r.user_query != 'default'
-                                                  """, username)
-            token = await conn.fetchval(
-                    "SELECT scholar_token FROM users WHERE username = $1", username
-                )
-            if token:
-                token = await asyncio.to_thread(self._decrypt_token, token)
-            return {"request_id": request_id, "count_search": search_requests, "token": token}
-            
-
-    async def update_status(self, request_id: int, llm_answer: str):
-        async with self.pool.acquire() as conn:
-            await conn.execute("""
-            UPDATE search_requests 
-            SET status = 'rejected', 
-                error_message = $1 
-            WHERE id = $2
-        """, llm_answer, request_id)
-
-    async def get_article_translation(self, article_id: int):
-        async with self.pool.acquire() as conn:
-            return await conn.fetchrow("""
-                                       SELECT abstract, translate, title
-                                       FROM articles
-                                       WHERE id = $1
-                                       """, article_id)
-
-    async def save_translation(self, article_id: int, translated_text: str):
-        async with self.pool.acquire() as conn:
-            await conn.execute("""
-                               UPDATE articles
-                               SET translate = $1
-                               WHERE id = $2
-                               """, translated_text, article_id)
-
-    async def get_reviews(self, user_id: int):
-        async with self.pool.acquire() as conn:
-            return await conn.fetch("""
-            SELECT 
-                a.id AS article_id, 
-                a.pdf_url, 
-                a.title,
-                a.date_sub, 
-                a_r.review_text
-            FROM favorites f
-            JOIN articles a ON f.article_id = a.id
-            LEFT JOIN article_reviews a_r 
-                ON a_r.user_id = f.user_id AND a_r.article_id = f.article_id
-            WHERE f.user_id = $1
-        """, user_id)
-
-    async def save_review(self, user_id: int, article_id: int, review_text: str):
-        async with self.pool.acquire() as conn:
-            await conn.execute("""
-                INSERT INTO article_reviews (user_id, article_id, review_text)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (user_id, article_id) 
-                DO UPDATE SET 
-                    review_text = EXCLUDED.review_text,
-                    generated_at = NOW()
-            """, user_id, article_id, review_text)
-
-    # Работа с динамическим промптом
-    async def get_tags(self) -> list[str]:
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch("SELECT tag_name FROM tags ORDER BY generated_at DESC")
-            return [row["tag_name"] for row in rows]
-
-    async def insert_tags(self, tags: list[str]) -> None:
-        async with self.pool.acquire() as conn:
-            await conn.executemany("""
-                                   INSERT INTO tags (tag_name)
-                                   VALUES ($1)
-                                   ON CONFLICT (tag_name) DO NOTHING
-                                   """, [(tag,) for tag in tags])
-
-    # ── Ключевые слова ────────────────────────────────────────
-    async def get_keywords(self) -> list[str]:
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch("SELECT keyword FROM keywords ORDER BY generated_at DESC")
-            return [row["keyword"] for row in rows]
-
-    async def insert_keywords(self, keywords: list[str]) -> None:
-        async with self.pool.acquire() as conn:
-            await conn.executemany("""
-                                   INSERT INTO keywords (keyword)
-                                   VALUES ($1)
-                                   ON CONFLICT (keyword) DO NOTHING
-                                   """, [(kw,) for kw in keywords])
-
-    async def upsert_metadata(self, records: list[dict]) -> None:
-        """Принимает список записей (бывший JSON-массив) и кладёт в БД"""
-        async with self.pool.acquire() as conn:
-            await conn.executemany("""
-                INSERT INTO papers_metadata (
-                    external_id, source, title, date_sub, url_article,
-                    pdf_url, authors, tags, abstract, file_article,
-                    category, relevance_score, relevance_reasoning,
-                    is_relevant, pdf_downloaded
-                ) VALUES (
-                    $1, $2, $3, $4, $5,
-                    $6, $7, $8, $9, $10,
-                    $11, $12, $13, $14, $15
-                )
-                ON CONFLICT (external_id) DO UPDATE SET
-                    source              = EXCLUDED.source,
-                    title               = EXCLUDED.title,
-                    date_sub            = EXCLUDED.date_sub,
-                    url_article         = EXCLUDED.url_article,
-                    pdf_url             = EXCLUDED.pdf_url,
-                    authors             = EXCLUDED.authors,
-                    tags                = EXCLUDED.tags,
-                    abstract            = EXCLUDED.abstract,
-                    file_article        = EXCLUDED.file_article,
-                    category            = EXCLUDED.category,
-                    relevance_score     = EXCLUDED.relevance_score,
-                    relevance_reasoning = EXCLUDED.relevance_reasoning,
-                    is_relevant         = EXCLUDED.is_relevant,
-                    pdf_downloaded      = EXCLUDED.pdf_downloaded
-            """, [
-                (
-                    r["external_id"],
-                    r.get("source"),
-                    r.get("title"),
-                    date.fromisoformat(r["date_sub"]) if r.get("date_sub") else None,  # <-- fix         # asyncpg сам разберёт строку "2025-10-01" как DATE
-                    r.get("url_article"),
-                    r.get("pdf_url"),
-                    json.dumps(r.get("authors", {})),  # JSONB
-                    _coerce_tags(r.get("tags")),                  # TEXT[]
-                    r.get("abstract"),
-                    r.get("file_article"),
-                    r.get("category"),
-                    r.get("relevance_score"),
-                    r.get("relevance_reasoning"),
-                    r.get("is_relevant"),
-                    r.get("pdf_downloaded"),
-                )
-                for r in records
-            ])
-
-    async def get_metadata_as_json(self) -> list[dict]:
-        """Возвращает все строки в виде списка словарей — замена старого download_metadata"""
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch("""
-                SELECT
-                    external_id, source, title,
-                    date_sub::text AS date_sub,
-                    url_article, pdf_url,
-                    authors, tags, abstract,
-                    file_article, category,
-                    relevance_score, relevance_reasoning,
-                    is_relevant, pdf_downloaded
-                FROM papers_metadata
-            """)
-        return [dict(r) for r in rows]
-    
-    async def get_metadata_as_json_with_pdf(self) -> list[dict]:
-        """Возвращает все строки в виде списка словарей — замена старого download_metadata"""
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch("""
-                SELECT
-                    external_id, source, title,
-                    date_sub::text AS date_sub,
-                    url_article, pdf_url,
-                    authors, tags, abstract,
-                    file_article, category,
-                    relevance_score, relevance_reasoning,
-                    is_relevant, pdf_downloaded
-                FROM papers_metadata WHERE pdf_downloaded = True
-            """)
-        return [dict(r) for r in rows]
-    
-    async def update_pdf_downloaded_status(
-        self, external_id: str, downloaded: bool = True
-    ) -> None:
-        """Обновляет флаг pdf_downloaded для конкретной статьи по ее external_id"""
-        async with self.pool.acquire() as conn:
-            await conn.execute(
-                """
-                UPDATE papers_metadata
-                SET pdf_downloaded = $1
-                WHERE external_id = $2
-            """,
-                downloaded,
-                external_id,
-            )
-
     async def get_chat_history(self, chat_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         """
         Получить последние N сообщений из чата для восстановления контекста.
@@ -975,25 +603,6 @@ class AgentDB:
             logging.error(f"Ошибка при работе с пользователем {username}: {e}")
             raise
 
-    async def add_message(self, user_id: int, message: str, chat_id: str, is_from_bot: bool, action: str = None):
-        """Добавить сообщение пользователя из ТГ"""
-        if user_id is None or chat_id is None:
-            logging.warning("Пропущено сообщение: отсутствует user_id или chat_id")
-            return None
-        
-        # Генерируем точное время создания со значением UTC
-        now_utc = datetime.now(timezone.utc)
-        
-        try:
-            async with self.pool.acquire() as conn:
-               await conn.fetchval("""
-                    INSERT INTO chats (user_id, chat_id, message_text, is_from_bot, tool_name, created_at)
-                    VALUES ($1, $2, $3, $4, $5, $6);
-                """,
-                user_id, chat_id, message, is_from_bot, action, now_utc)
-        except asyncpg.UniqueViolationError:
-            logging.error(f"Сообщение не может быть добавлено")
-
     async def get_bot_message_text(self, message_id: str):
         """Текст ответа бота по message_id (только is_from_bot)."""
         try:
@@ -1001,7 +610,7 @@ class AgentDB:
                 return await conn.fetchval(
                     """
                     SELECT message_text FROM chats
-                    WHERE message_id = $1 AND is_from_bot = TRUE
+                    WHEREget_bot_message_text message_id = $1 AND is_from_bot = TRUE
                     ORDER BY created_at DESC LIMIT 1
                     """,
                     message_id,
@@ -1029,48 +638,6 @@ class AgentDB:
         except Exception as e:
             logging.warning(f"append_reaction fail: {e}")
 
-# ============================== ОБЩЕНИЕ МЕЖДУ СЕРВИСАМИ ==============================
-
-    async def add_service_message(service_name, service_port, message):
-        _SQL_INSERT = """
-            INSERT INTO service_chats (service_name, service_port, message_text, status)
-            VALUES ($1, $2, $3, 'pending')
-            RETURNING id
-        """
-        try:
-            async with self.pool.acquire() as conn:
-                row = await conn.fetchrow(
-                    _SQL_INSERT,
-                    service_name,
-                    service_port,
-                    message,
-                )
-                return row
-        except asyncpg.UniqueViolationError:
-            logging.error(f"Сообщение не может быть добавлено")
-    
-    async def update_service_status(message_id):
-        _SQL_UPDATE_STATUS = """
-            UPDATE service_chats SET status = $1, updated_at = NOW() WHERE id = $2
-        """
-        try:
-            async with self.pool.acquire() as conn:
-                await conn.execute(_SQL_UPDATE_STATUS, "processing", message_id)
-        except asyncpg.UniqueViolationError:
-            logging.error(f"Сообщение не может быть добавлено")
-
-        
-    async def update_service_message(reply, status, message_id):
-        _SQL_UPDATE_DONE = """
-            UPDATE service_chats
-            SET reply_text = $1, status = $2, updated_at = NOW()
-            WHERE id = $3
-        """
-        try:
-            async with self.pool.acquire() as conn:
-                await conn.execute(_SQL_UPDATE_DONE, reply, status, message_id)
-        except asyncpg.UniqueViolationError:
-            logging.error(f"Сообщение не может быть добавлено")
 
 # ==================== РАБОТА С СЕССИЯМИ ==========================
 
@@ -1214,25 +781,6 @@ class AgentDB:
         except Exception as e:
             logging.error("get_last_session_summary failed: %s", e)
             return None
-
-    # async def add_tokens(self, user_id: int, message: str, chat_id: int, is_from_bot: bool, action: str = None):
-    #     """Добавить сообщение пользователя из ТГ"""
-    #     if user_id is None or chat_id is None:
-    #         logging.warning("Пропущено сообщение: отсутствует user_id или chat_id")
-    #         return None
-        
-    #     # Генерируем точное время создания со значением UTC
-    #     now_utc = datetime.now(timezone.utc)
-        
-    #     try:
-    #         async with self.pool.acquire() as conn:
-    #            await conn.fetchval("""
-    #                 INSERT INTO chats (user_id, chat_id, message_text, is_from_bot, tool_name, created_at)
-    #                 VALUES ($1, $2, $3, $4, $5, $6);
-    #             """,
-    #             user_id, chat_id, message, is_from_bot, action, now_utc)
-    #     except asyncpg.UniqueViolationError:
-    #         logging.error(f"Сообщение не может быть добавлено")
 
     # ── code_library: сохранение ──────────────────────────────────
 

@@ -7,7 +7,6 @@ from urllib.parse import quote
 from agent.core.db import AgentDB
 from agent.media import media_store
 from agent.core import obs_file_storage
-from agent.core.file_parsers import parse_file
 from fastapi.responses import StreamingResponse
 
 from schemas.common import StopMessagePayload
@@ -85,17 +84,36 @@ def _content_disposition(filename: str, disposition: str = "attachment") -> str:
     )
 
 
+def _human_size(n: int) -> str:
+    if n < 1024:
+        return f"{n} Б"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} КБ"
+    return f"{n / (1024 * 1024):.1f} МБ"
+
+
 @web_router.post("/web/upload_files")
 async def upload_web_files(
     chat_id: str = Form(...),
     message_id: str = Form(...),
     user_id: str = Form(...),
     files: list[UploadFile] = File(...),
+    file_modes: list[str] = Form(default=[]),
 ):
+    """Раскладывает вложения сообщения. Ничего не парсит.
+
+    file_modes[i] выставляет gateway (api_gateway/file_parsers.classify):
+      "inline" — короткий текстовый файл, кладём его текст в промпт;
+      "file"   — всё остальное: бинарник в media_store (Redis) + диск/OBS,
+                 в промпт идёт только маркер с media_id.
+    Если режима нет (TG/MAX-боты шлют файлы напрямую), файл считается "file".
+    """
     parts = []
     images: list[dict] = []          # картинки JPEG/PNG для vision-тула
     image_media_ids: list[str] = []  # media_id положенных в Redis media_store (пер-чат)
     IMAGE_MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
+    AUDIO_EXT = {".mp3", ".mpga", ".wav", ".wave", ".ogg", ".oga", ".opus", ".m4a",
+                 ".aac", ".flac", ".weba", ".caf", ".aif", ".aiff", ".amr", ".wma"}
 
     # Серверный предохранитель: не более 10 файлов на сообщение (дубль
     # фронтового лимита MAX_FILES — чтобы нельзя было обойти мимо UI).
@@ -107,9 +125,11 @@ async def upload_web_files(
         )
         files = files[:MAX_FILES]
 
-    for f in files:
+    for f_idx, f in enumerate(files):
         raw = await f.read()
         ext = os.path.splitext(f.filename or "")[1].lower()
+        mode = file_modes[f_idx] if f_idx < len(file_modes) else "file"
+        user_fpath = None
 
         # Сохраняем на диск/OBS все файлы, включая картинки: по этому пути
         # /api/chats/{chat}/files/{msg}/{name} отдаёт превью в истории.
@@ -172,22 +192,44 @@ async def upload_web_files(
         try:
             _fmid = await media_store.put_media(
                 chat_id, raw, f.filename,
-                VIDEO_MIME.get(ext, "application/octet-stream"), kind="file"
+                VIDEO_MIME.get(ext) or _WEB_FILE_MIME_MAP.get(ext.lstrip("."), "application/octet-stream"),
+                kind="file"
             )
         except Exception as _e:
             logging.warning(f"[media_store] put_media(file) пропущен: {_e}")
         _fmid_hint = (f" [media_id={_fmid}]" if _fmid else "")
-        if ext in VIDEO_MIME:
+        if ext in VIDEO_MIME or ext in AUDIO_EXT:
+            # Видео и аудио не парсим: расшифровка — тулом transcribe_media.
+            # Файлы > 5 МБ в media_store не попадают, тогда даём путь на диске.
+            _src = (f"source_media_id={_fmid}" if _fmid else
+                    (f"local_path={user_fpath}" if user_fpath else None))
+            _tag, _what = (("🎬[VIDEO]", "видео") if ext in VIDEO_MIME else ("🎧[AUDIO]", "аудио"))
+            _hint = (f" (для расшифровки с таймкодами вызови transcribe_media с {_src}; "
+                     "тул в категории «Контент и файлы», если его нет — попроси включить)"
+                     if _src else "")
             parts.append(
-                f"\n\n🎬[VIDEO] [Прикрепленное видео: {f.filename}]{_fmid_hint}"
+                f"\n\n{_tag} [Прикрепленное {_what}: {f.filename}, {_human_size(len(raw))}]"
+                f"{_fmid_hint}{_hint}"
             )
             continue
-        try:
-            extracted_text = await asyncio.to_thread(parse_file, f.filename, raw)
-            parts.append(f"\n\n📎[FILE] [Прикрепленный файл: {f.filename}]{_fmid_hint}\nСодержимое файла:\n```\n{extracted_text}\n```")
-        except Exception as e:
-            logging.error("Ошибка парсинга файла %s: %s", f.filename, e)
-            parts.append(f"\n\n[Не удалось прочитать прикрепленный файл {f.filename}: {e}]")
+        if mode == "inline":
+            # gateway уже проверил: это UTF-8 текст не длиннее лимита.
+            inline_text = raw.decode("utf-8-sig", errors="replace")
+            parts.append(
+                f"\n\n📎[FILE] [Прикрепленный файл: {f.filename}]{_fmid_hint}"
+                f"\nСодержимое файла:\n```\n{inline_text}\n```"
+            )
+            continue
+        # Документ не кладём в контекст: только маркер, анализ — внутри
+        # workspace (upload_to_workspace по media_id или путь на диске).
+        where = (f"media_id={_fmid}" if _fmid else
+                 (f"path={user_fpath}" if user_fpath else "не сохранён"))
+        parts.append(
+            f"\n\n📄[DOCUMENT] [Прикрепленный файл: {f.filename}, {_human_size(len(raw))}] "
+            f"({where}). Содержимое НЕ включено в контекст. Чтобы прочитать или "
+            f"проанализировать файл, залей его в workspace через "
+            f"upload_to_workspace(media_ids=[...]) или local_path и разбери кодом."
+        )
 
     combined_text = "".join(parts)
     entry = pending_files.setdefault(

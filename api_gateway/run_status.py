@@ -325,7 +325,30 @@ _SETTING_MODEL_MAP = {
     "universal": "glm",
     "glm": "glm",
     "gemini": "gemini",
+    "gigachat": "gigachat",
+    "giga": "gigachat",
+    "deepseek": "deepseek",
+    "ds": "deepseek",
 }
+
+
+def register_setting_models(models: list[dict] | None) -> None:
+    """Динамически пополняет карту моделей и алиасов из каталога agent_service."""
+    if not isinstance(models, list):
+        return
+    for item in models:
+        if not isinstance(item, dict):
+            continue
+        mid = str(item.get("id") or "").strip().lower()
+        skey = str(item.get("setting_key") or mid).strip().lower()
+        if not mid or not skey:
+            continue
+        _SETTING_MODEL_MAP[mid] = skey
+        _SETTING_MODEL_MAP[skey] = skey
+        for alias in item.get("aliases") or []:
+            al = str(alias or "").strip().lower()
+            if al:
+                _SETTING_MODEL_MAP[al] = skey
 
 
 def normalize_setting_model(model: str | None) -> str:

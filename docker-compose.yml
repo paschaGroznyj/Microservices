@@ -114,10 +114,7 @@ services:
       TG_BOT_PUSH_URL: http://172.18.0.1:8010/push_message # docker network inspect pascha_microservices | grep Gateway
       MAX_BOT_PUSH_URL: http://172.18.0.1:8011/push_message
       TG_INLINE_B64_MAX: "700000"  # > порог = file_url вместо base64 в Kafka
-      # sudo ufw allow from 172.18.0.0/16 to any port 8010 proto tcp
 
-    # extra_hosts:
-    #   - "host.docker.internal:host-gateway"
     volumes:
       - ./agent_service:/app
       - ./agent_service/sandbox:/sandbox:rw
@@ -153,8 +150,6 @@ services:
         TG_SAD_WAIT_HI:      "600"     # окно ожидания ответа (грусть), сек, high
         TG_POKE_DAILY_TTL:   "86400"   # суточный throttle адресных poke на чат
         TG_DEBUG_TOKEN:      ${TG_DEBUG_TOKEN:-}  # если пусто — /tg/debug/trigger ОТКЛЮЧЁН (404)
-        # Тот же источник, что и у agent_service: tg_id админов берётся из ADMINS_INFO
-        # (поле tg_id). Нужен, чтобы в /start-меню показывать админские категории тулов.
         ADMINS_INFO:         ${ADMINS_INFO}
       restart: unless-stopped
 
@@ -183,18 +178,6 @@ services:
         - ./certs/russian_trusted_root.pem:/etc/ssl/certs/russian_trusted_root.pem:ro
         
       restart: unless-stopped
-
-  # token_service:
-  #   build: ./token_service
-  #   container_name: token_service
-  #   ports:
-  #     - "9004:9004"
-  #   environment:
-  #     INTERNAL_TOKEN_API_URL: ${INTERNAL_TOKEN_API_URL}
-  #     PORT_TOKEN_GENERATE_SERVICE: ${PORT_TOKEN_GENERATE_SERVICE}
-  #     TOKEN_TTL: ${TOKEN_TTL}
-  #     IAM_API_KEY: ${IAM_API_KEY}
-  #   restart: unless-stopped
 
   parsers_service:
    build: ./parsers_service
@@ -337,7 +320,10 @@ services:
       - catchPM
   
   postgres:
-    image: pgvector/pgvector:pg15
+    build:
+      context: ./postgres
+      args:
+        SQL_SCHEMA_DIR: /opt/postgres-schema/sql
     container_name: postgres
     restart: unless-stopped
 
@@ -345,6 +331,7 @@ services:
       POSTGRES_DB: ${DB_NAME}
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
+      AGENT_POOL_PASSWORD: ${AGENT_POOL_PASSWORD}
       POSTGRES_INITDB_ARGS: "--data-checksums"
 
       # Настройки PostgreSQL для производительности и автоочистки
@@ -370,7 +357,7 @@ services:
 
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./postgres/sql:/opt/postgres-schema/sql:ro
       - ./backups:/backups
       - wal_archive:/var/lib/postgresql/wal_archive
 
@@ -571,8 +558,6 @@ volumes:
   dind_data:
   wal_archive:
   redis_data:
-#  parser_data:
-#  parser_logs:
 
 networks:
   catchPM:

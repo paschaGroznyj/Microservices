@@ -315,10 +315,29 @@
   max-height: min(70vh, 480px);
   overflow-y: auto;
   overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   padding: 6px;
   animation: mp-appear .15s cubic-bezier(.22,.61,.36,1) both;
   transform-origin: bottom right;
 }
+
+/* Список длиннее панели инструментов — мягко гасим нижний край,
+   пока есть что докрутить (класс ставит ModelPicker._syncScrollFade). */
+.mp-panel::after {
+  content: "";
+  position: sticky;
+  bottom: -6px;               /* перекрываем нижний padding панели */
+  display: block;
+  height: 36px;
+  margin: -36px -6px -6px;    /* не добавляет высоты списку */
+  border-radius: 0 0 13px 13px;
+  background: linear-gradient(to bottom, transparent, var(--surface));
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .15s;
+}
+.mp-panel.mp-panel--more::after { opacity: 1; }
 
 .mp-panel--hiding {
   animation: mp-hide .13s ease forwards;
@@ -494,4 +513,24 @@
     width: calc(100vw - 24px);
     left: 12px !important;
   }
+}
+
+
+/* Состояние недоступности сервиса агента в пикере моделей */
+.mp-trigger-btn--offline {
+  opacity: 0.75;
+}
+
+.mp-panel-empty {
+  padding: 12px 10px;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--text-muted);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text-muted) 8%, transparent);
+}
+
+.mp-panel-empty[data-state="offline"] {
+  color: #dc2626;
+  background: color-mix(in srgb, #dc2626 10%, transparent);
 }

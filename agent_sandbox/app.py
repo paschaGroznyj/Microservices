@@ -58,9 +58,11 @@ app = FastAPI(title="Agent Code Sandbox v3")
 
 # ── Конфиг ─────────────────────────────────────────────────────────
 MAX_CODE_SIZE = 500_000
+# Аварийный потолок stdout/stderr, чтобы гигантский вывод не шёл по HTTP целиком.
+# Аккуратная обрезка для модели делается в agent_service (common/tool_output.py).
+MAX_OUTPUT_SIZE = 50_000
 DEFAULT_TIMEOUT = 120
 MAX_TIMEOUT = 3600
-MAX_OUTPUT_SIZE = 20_000
 WORKDIR = "/tmp/exec"
 WORKSPACES_DIR = "/tmp/exec/workspaces"
 MAX_MEMORY_MB = 8192
@@ -220,12 +222,6 @@ def _limit_resources():
         os.write(2, f"[sandbox] resource limit warning: {e}\n".encode())
 
 
-def _truncate(text: str) -> tuple[str, bool]:
-    if len(text) > MAX_OUTPUT_SIZE:
-        return text[:MAX_OUTPUT_SIZE] + "\n...(truncated)...", True
-    return text, False
-
-
 def _collect_output_files(output_dir: str) -> tuple[list[OutputFile], list[str]]:
     files = []
     warnings = []
@@ -304,6 +300,17 @@ def _get_workspace_path(workspace_id: str) -> str | None:
     if os.path.isdir(ws_path):
         return ws_path
     return None
+
+
+def _truncate(text: str, limit: int | None = None) -> tuple[str, bool]:
+    """Обрезка по символам: начало 30% + конец 70% (в конце traceback и итоги)."""
+    limit = MAX_OUTPUT_SIZE if limit is None else limit
+    if not text or len(text) <= limit:
+        return text, False
+    head = int(limit * 0.3)
+    tail = limit - head
+    skipped = len(text) - head - tail
+    return (text[:head] + f"\n… [песочница: пропущено {skipped} симв] …\n" + text[-tail:]), True
 
 
 def _run_code_sync(code: str, timeout: int, run_dir: str, stdin: str = "", task_id: str = None,
@@ -412,8 +419,11 @@ def _run_code_sync(code: str, timeout: int, run_dir: str, stdin: str = "", task_
         )
         duration_ms = int((time.monotonic() - start) * 1000)
 
-        stdout, out_trunc = _truncate(proc.stdout)
-        stderr, err_trunc = _truncate(proc.stderr)
+        # Здесь только аварийный потолок MAX_OUTPUT_SIZE (начало + конец);
+        # обрезка для модели делается в agent_service (common/tool_output.py).
+        stdout, t_out = _truncate(proc.stdout or "")
+        stderr, t_err = _truncate(proc.stderr or "")
+        truncated = t_out or t_err
 
         missing_module_hint = None
         if proc.returncode != 0 and "ModuleNotFoundError" in stderr:
@@ -431,7 +441,7 @@ def _run_code_sync(code: str, timeout: int, run_dir: str, stdin: str = "", task_
             "stdout": stdout,
             "stderr": stderr,
             "exit_code": proc.returncode,
-            "truncated": out_trunc or err_trunc,
+            "truncated": truncated,
             "duration_ms": duration_ms,
             "files": files,
             "error": missing_module_hint,
@@ -532,8 +542,11 @@ def _run_commands_sync(commands: str | list[str], timeout: int, run_dir: str, st
         )
         duration_ms = int((time.monotonic() - start) * 1000)
 
-        stdout, out_trunc = _truncate(proc.stdout)
-        stderr, err_trunc = _truncate(proc.stderr)
+        # Здесь только аварийный потолок MAX_OUTPUT_SIZE (начало + конец);
+        # обрезка для модели делается в agent_service (common/tool_output.py).
+        stdout, t_out = _truncate(proc.stdout or "")
+        stderr, t_err = _truncate(proc.stderr or "")
+        truncated = t_out or t_err
 
         files, warnings = _collect_output_files(str(workspace_output))
         if warnings:
@@ -544,7 +557,7 @@ def _run_commands_sync(commands: str | list[str], timeout: int, run_dir: str, st
             "stdout": stdout,
             "stderr": stderr,
             "exit_code": proc.returncode,
-            "truncated": out_trunc or err_trunc,
+            "truncated": truncated,
             "duration_ms": duration_ms,
             "files": files,
             "error": None,

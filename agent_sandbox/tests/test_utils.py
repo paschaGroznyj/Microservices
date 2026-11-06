@@ -6,18 +6,15 @@ import pytest
 
 
 def test_truncate_short_text_untouched(appmod):
-    text = "hello"
-    out, trunc = appmod._truncate(text)
-    assert out == "hello"
-    assert trunc is False
+    assert appmod._truncate("hello") == ("hello", False)
 
 
-def test_truncate_long_text_is_cut(appmod, monkeypatch):
-    monkeypatch.setattr(appmod, "MAX_OUTPUT_SIZE", 10)
-    out, trunc = appmod._truncate("x" * 50)
+def test_truncate_keeps_head_and_tail(appmod):
+    text = "H" * 100 + "x" * 1000 + "T" * 100
+    out, trunc = appmod._truncate(text, limit=200)
     assert trunc is True
-    assert out.endswith("...(truncated)...")
-    assert out.startswith("x" * 10)
+    assert out.startswith("H" * 60) and out.endswith("T" * 100)
+    assert "пропущено 1000 симв" in out
 
 
 def test_safe_join_ok(appmod, tmp_path):

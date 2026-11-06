@@ -313,6 +313,7 @@ class ChatApp {
             // После общего чата синглтон FileAttach держит контекст группы,
             // поэтому принудительно возвращаем его на инпут агента.
             this._rebindFileAttachToAgent();
+            this._syncBotPlaceholder();
         }
         if (tab === 'graph') {
             console.log('INIT GRAPH')
@@ -549,6 +550,8 @@ class ChatApp {
         this._runState = 'idle';
         this._activeRequestId = null;
         this._botAnswered = false;
+        this._loopWaiting = false;
+        if (this._reserveTimer) { clearTimeout(this._reserveTimer); this._reserveTimer = null; }
         this._setSendButtonMode('send');
 
         const msgContainer = this.getMessagesContainer();
@@ -916,6 +919,8 @@ class ChatApp {
         this._runState = 'idle';
         this._activeRequestId = null;
         this._botAnswered = false;
+        this._loopWaiting = false;
+        if (this._reserveTimer) { clearTimeout(this._reserveTimer); this._reserveTimer = null; }
         this._setSendButtonMode('send');
 
         const msgContainer = this.getMessagesContainer();
@@ -3554,6 +3559,7 @@ class ChatApp {
         }
 
         this._runState = 'running';
+        this._loopWaiting = false;
         this._setSendButtonMode('stop');
         this._sendingInFlightChat = String(this.currentChat);
 
@@ -3650,8 +3656,14 @@ class ChatApp {
 
         const TOP_MARGIN = 16; // px от верхней границы chat-messages
 
-        // Ждём окончания fly-анимации (0.38s = 380ms) и скроллим
-        setTimeout(() => {
+        // Ждём окончания fly-анимации (0.38s = 380ms) и скроллим.
+        // Таймер привязан к чату: если за 400 мс переключили чат или ответ
+        // уже пришёл, волну не создаём.
+        const reserveChat = String(this.currentChat);
+        if (this._reserveTimer) clearTimeout(this._reserveTimer);
+        this._reserveTimer = setTimeout(() => {
+            this._reserveTimer = null;
+            if (String(this.currentChat) !== reserveChat || !lastWrapper.isConnected) return;
             const containerRect = msgContainer.getBoundingClientRect();
             const wrapperRect   = lastWrapper.getBoundingClientRect();
 
@@ -3662,8 +3674,8 @@ class ChatApp {
 
             msgContainer.scrollTo({ top: targetScrollTop, behavior: 'smooth' });
 
-            // Создаём placeholder под ответ бота
-            this._createBotPlaceholder(msgContainer);
+            // Волна под ответ бота — только если #send-btn горит «Стопом»
+            this._syncBotPlaceholder();
         }, 400); // чуть позже fly-анимации
     }
 
@@ -3674,6 +3686,7 @@ class ChatApp {
      */
     _createBotPlaceholder(msgContainer) {
         const st = this._resolveStream(this.currentChat);
+        if (!this._isRunIndicatorOn()) return;
         if (this._botAnswered && (st?.streamDone || st?.streamIsFinal)) return;
 
         this._removeBotPlaceholder();
@@ -3711,17 +3724,45 @@ class ChatApp {
         msgContainer.scrollTop = msgContainer.scrollHeight;
     }
 
-    /** Убирает placeholder — вызывается явно из WS-обработчика */
-    _removeBotPlaceholder() {
+    /** Убирает placeholder. target — конкретный узел (для отложенного удаления);
+     *  без него снимается текущий живой плейсхолдер. id снимаем сразу, чтобы
+     *  гаснущий узел не находился querySelector'ами нового хода или чата. */
+    _removeBotPlaceholder(target = null) {
         if (this._placeholderGuardTimer) {
             clearTimeout(this._placeholderGuardTimer);
             this._placeholderGuardTimer = null;
         }
-        this._stopPlaceholderGraph();
-        const ph = document.getElementById('agent-response-placeholder');
+        const ph = target || document.getElementById('agent-response-placeholder');
         if (!ph) return;
+        this._stopPlaceholderGraph(ph);
+        if (ph.id === 'agent-response-placeholder') ph.removeAttribute('id');
         ph.classList.add('placeholder-hide');
         setTimeout(() => ph.remove(), 300);
+    }
+
+    /** #send-btn горит в режиме «Стоп» (active + stop-mode): агент работает. */
+    _isRunIndicatorOn() {
+        const btn = this.getInputContainer()?.querySelector('#send-btn');
+        return !!(btn && btn.classList.contains('active') && btn.classList.contains('stop-mode'));
+    }
+
+    /** Единое правило: волна-плейсхолдер живёт ровно пока #send-btn в режиме
+     *  active + stop-mode. Вызывается из _setSendButtonMode/_syncSendButtonState
+     *  и при возврате на вкладку агента. */
+    _syncBotPlaceholder() {
+        const container = this.getMessagesContainer();
+        if (!container || !this.currentChat) return;
+        const live = container.querySelector('#agent-response-placeholder');
+        if (this._isRunIndicatorOn()) {
+            if (this._loopWaiting) return;   // самоцикл между тиками: стоп горит, волну не поднимаем
+            if (this._reserveTimer) return;  // сразу после отправки волну создаст таймер скролла
+            if (live && !live.dataset.finishing) return;
+            const st = this._resolveStream(this.currentChat);
+            if (st?.streamDone || st?.streamIsFinal) return;
+            this._createBotPlaceholder(container);
+            return;
+        }
+        if (live && !live.dataset.finishing) this._removeBotPlaceholder(live);
     }
 
     /* ══════════════════════════════════════════
@@ -4635,16 +4676,16 @@ class ChatApp {
             || '<div class="wave-indicator"><canvas class="placeholder-graph" aria-hidden="true"></canvas></div>';
     }
 
-    _stopPlaceholderGraph() {
-        window.ChatAnimations?.stopPlaceholderGraph?.();
+    _stopPlaceholderGraph(owner = null) {
+        window.ChatAnimations?.stopPlaceholderGraph?.(owner);
     }
 
     _initPlaceholderGraph(placeholder) {
         window.ChatAnimations?.initPlaceholderGraph?.(placeholder);
     }
 
-    _flattenWaveIndicator() {
-        window.ChatAnimations?.flattenWaveIndicator?.();
+    _flattenWaveIndicator(placeholder = null) {
+        window.ChatAnimations?.flattenWaveIndicator?.(placeholder);
     }
 
     _formatReasoningDuration(sec) {
@@ -5234,8 +5275,14 @@ class ChatApp {
         // Общий UI (плейсхолдер-волна, статусы, стоп-кнопка) — только для
         // активного чата. Для фонового финал тихо сложился в откреплённый узел.
         if (isActive) {
-            this._flattenWaveIndicator();
-            setTimeout(() => this._removeBotPlaceholder(), 500);
+            // Гасим конкретный узел: за 500 мс мог появиться плейсхолдер
+            // нового хода или другого чата, его отложенное удаление не трогает.
+            const _ph = this.getMessagesContainer()?.querySelector('#agent-response-placeholder') || null;
+            if (_ph) {
+                _ph.dataset.finishing = '1';
+                this._flattenWaveIndicator(_ph);
+                setTimeout(() => this._removeBotPlaceholder(_ph), 500);
+            }
             this._clearAllStatuses();
             this._onRunFinished(data.loop === true);
         }
@@ -5251,6 +5298,7 @@ class ChatApp {
             sendBtn.classList.add('active', 'stop-mode');
             sendBtn.setAttribute('aria-label', 'Остановить');
             sendBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+            this._syncBotPlaceholder();
             return;
         }
         sendBtn.classList.remove('stop-mode');
@@ -5262,6 +5310,7 @@ class ChatApp {
         sendBtn.classList.toggle('active', canSend);
         sendBtn.classList.toggle('agent-offline', !agentUp);
         sendBtn.title = !agentUp ? 'Сервис агента недоступен' : '';
+        this._syncBotPlaceholder();
     }
 
     isAgentAvailable() {
@@ -5287,6 +5336,7 @@ class ChatApp {
         if (this._runState !== 'idle') {
             sendBtn.disabled = false;
             sendBtn.classList.add('active', 'stop-mode');
+            this._syncBotPlaceholder();
             return;
         }
         sendBtn.classList.remove('stop-mode');
@@ -5296,6 +5346,7 @@ class ChatApp {
         sendBtn.classList.toggle('agent-offline', !agentUp);
         sendBtn.disabled = !canSend;
         sendBtn.title = !agentUp ? 'Сервис агента недоступен' : '';
+        this._syncBotPlaceholder();
     }
 
     async stopCurrentRun() {
@@ -5322,10 +5373,12 @@ class ChatApp {
         if (keepRunning && this._runState === 'running') {
             // держим стоп-кнопку, request_id текущего тика больше не актуален
             // (следующий тик придёт со своим), но стоп гасим по chat_id — ок.
+            this._loopWaiting = true;
             this._setSendButtonMode('stop');
             return;
         }
         this._runState = 'idle';
+        this._loopWaiting = false;
         this._activeRequestId = null;
         this._setSendButtonMode('send');
     }
@@ -5646,6 +5699,9 @@ class ChatApp {
             this._syncScrollArrow();
         }
 
+        // Пересобранный инпут рождается с disabled-кнопкой: возвращаем режим
+        // «Стоп», если агент в работе, и синхронизируем волну.
+        this._setSendButtonMode(this._runState !== 'idle' ? 'stop' : 'send');
         setTimeout(() => container.classList.remove('rending'), 0);
     }
 

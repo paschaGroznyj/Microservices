@@ -9,6 +9,7 @@
   const ChatAnimations = {
     _placeholderRAF: null,
     _placeholderCleanup: null,
+    _placeholderOwner: null,
     _startGraphRAF: null,
     _startGraphCleanup: null,
     _navGraphRAF: null,
@@ -40,7 +41,11 @@
            + '</div>';
     },
 
-    stopPlaceholderGraph() {
+    // owner — узел плейсхолдера, который просит остановку. Если анимацию уже
+    // перехватил новый плейсхолдер (другой чат/ход), чужой стоп игнорируется.
+    stopPlaceholderGraph(owner = null) {
+      if (owner && this._placeholderOwner && owner !== this._placeholderOwner) return;
+      this._placeholderOwner = null;
       if (this._placeholderRAF) {
         cancelAnimationFrame(this._placeholderRAF);
         this._placeholderRAF = null;
@@ -55,6 +60,7 @@
       this.stopPlaceholderGraph();
       const cv = placeholder?.querySelector('.placeholder-graph');
       if (!cv) return;
+      this._placeholderOwner = placeholder;
 
       const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       const W = 116, H = 28, L = 40;
@@ -93,7 +99,7 @@
       const vk = reduce ? 0.55 : 1;
       const frame = () => {
         if (!placeholder.isConnected) {
-          this.stopPlaceholderGraph();
+          this.stopPlaceholderGraph(placeholder);
           return;
         }
         if ((frames & 63) === 0) {
@@ -157,8 +163,9 @@
       this._placeholderRAF = requestAnimationFrame(frame);
     },
 
-    flattenWaveIndicator() {
-      const ind = document.querySelector('#agent-response-placeholder .wave-indicator');
+    flattenWaveIndicator(placeholder = null) {
+      const root = placeholder || document.getElementById('agent-response-placeholder');
+      const ind = root?.querySelector('.wave-indicator');
       if (!ind) return;
       ind.classList.add('wave-flatten');
     },

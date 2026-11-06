@@ -5,7 +5,7 @@ Shared helpers to resolve image "sources" into base64 data-URIs, reused by
 both generate_image and generate_video so the two tools accept images from the
 same set of origins:
 
-  - local disk paths / file names (whitelisted roots: /sandbox, /app/generated_files)
+  - local disk paths / file names (whitelisted root: /app/generated_files)
   - image_key from the generated_images DB table
   - index of an image the user attached in the current request (from closure)
   - media_id from the per-chat media_store (Redis cache of recent images)

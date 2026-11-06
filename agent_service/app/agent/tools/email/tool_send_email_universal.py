@@ -9,7 +9,7 @@ work_with_email (докстринг-инструкция под mailcow env в �
 
   • текст письма формирует сам агент (body);
   • список получателей (to);
-  • произвольные вложения из /app/generated_files и /sandbox;
+  • произвольные вложения из /app/generated_files;
   • файлы прикрепляются КАК ЕСТЬ (без зипования), MIME по расширению;
   • жёсткий лимит 20 МБ на КАЖДЫЙ файл и 20 МБ суммарно.
 
@@ -32,7 +32,7 @@ from langchain.tools import tool
 logger = logging.getLogger(__name__)
 
 # Разрешённые корни для вложений — те же, что у send_file_to_user
-ALLOWED_ATTACH_ROOTS = ["/app/generated_files", "/sandbox"]
+ALLOWED_ATTACH_ROOTS = ["/app/generated_files"]
 
 MAX_FILE_SIZE = 20 * 1024 * 1024        # 20 МБ на один файл
 MAX_TOTAL_SIZE = 20 * 1024 * 1024       # 20 МБ суммарно на письмо
@@ -41,9 +41,9 @@ MAX_TOTAL_SIZE = 20 * 1024 * 1024       # 20 МБ суммарно на пись
 def _valid_attach_path(path: str) -> Optional[str]:
     """Возвращает абсолютный путь, если он внутри разрешённых корней и
     существует как файл; иначе None."""
-    abs_path = os.path.abspath(path)
+    abs_path = os.path.realpath(path)
     inside = any(
-        abs_path == r or abs_path.startswith(r + os.sep)
+        abs_path.startswith(os.path.realpath(r) + os.sep)
         for r in ALLOWED_ATTACH_ROOTS
     )
     if not inside:
@@ -76,7 +76,7 @@ def make_send_email_tool(agent=None):
             body: email text (plain text, you write it yourself).
             attachment_paths: a list of paths to the attachment files. The files should
                 lie strictly inside /app/generated_files (results
-                execute_python_code / downloaded from workspace) or /sandbox
+                execute_python_code / downloaded from workspace)
                 (drafts). They are attached as is. Limitation: each file
                 no more than 20 MB And the total size of all attachments is no more
                 20 MB. If None— it is an email without attachments.

@@ -17,18 +17,18 @@ from langchain.tools import tool
 
 log = logging.getLogger(__name__)
 
-# Файл может лежать либо в /app/generated_files (результаты execute_python_code),
-# либо в /sandbox (черновики write_sandbox_file) — разрешаем оба
-ALLOWED_SEND_ROOTS = ["/app/generated_files", "/sandbox"]
+# Файлы для отправки лежат в /app/generated_files. /sandbox не разрешён:
+# это общая служебная папка всех чатов (архив скриптов, библиотека кода).
+ALLOWED_SEND_ROOTS = ["/app/generated_files"]
 
 MAX_SEND_FILE_SIZE = 20 * 1024 * 1024
 
 
 def _valid_send_path(path: str) -> str | None:
-    abs_path = os.path.abspath(path)
-    if not any(abs_path.startswith(r + os.sep) or abs_path == r for r in ALLOWED_SEND_ROOTS):
+    real = os.path.realpath(path)
+    if not any(real.startswith(os.path.realpath(r) + os.sep) for r in ALLOWED_SEND_ROOTS):
         return None
-    return abs_path
+    return real
 
 
 # Находит пути вида: /tmp/exec/workspaces/<workspace_id>/<filepath>
@@ -207,8 +207,7 @@ def make_send_file_tool(agent):
 
         Arguments:
             paths: list of full paths to the files to send in one batch, for example
-                ["/app/generated_files/{run_id}/chart.png", "/tmp/exec/workspaces/{workspace_id}/output/report.pdf"]
-                or ["/sandbox/draft.py"].
+                ["/app/generated_files/{run_id}/chart.png", "/tmp/exec/workspaces/{workspace_id}/output/report.pdf"].
             image_keys: list of UUIDs of pictures created by generate_image to send in one batch.
             path: (optional, backward-compatible) single file path. Prefer `paths` when sending multiple files.
             image_key: (optional, backward-compatible) single UUID of a generated image. Prefer `image_keys` for multiple images.

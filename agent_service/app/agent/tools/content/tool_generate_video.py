@@ -188,12 +188,17 @@ def _coerce_int_list(val):
 # Local audio file (produced by generate_audio / generate_music) -> data URI.
 # Whitelisted roots only; used to feed an avatar lip-sync track without a public
 # URL. Mirrors the image path resolver but for audio mime types.
-_AUDIO_ROOTS = ("/app/generated_files", "/sandbox")
+_AUDIO_ROOTS = ("/app/generated_files",)
 _AUDIO_MIME = {
     ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg",
     ".oga": "audio/ogg", ".opus": "audio/ogg", ".m4a": "audio/mp4",
     ".aac": "audio/aac", ".flac": "audio/flac",
 }
+
+
+def _in_audio_roots(path: str) -> bool:
+    real = os.path.realpath(path)
+    return any(real.startswith(os.path.realpath(r) + os.sep) for r in _AUDIO_ROOTS)
 
 
 def _resolve_audio_to_data_uri(path_or_name: str) -> str | None:
@@ -204,7 +209,7 @@ def _resolve_audio_to_data_uri(path_or_name: str) -> str | None:
         return None
     candidate = None
     if os.path.isabs(p):
-        if any(os.path.abspath(p).startswith(r) for r in _AUDIO_ROOTS) and os.path.isfile(p):
+        if _in_audio_roots(p) and os.path.isfile(p):
             candidate = p
     else:
         for root in _AUDIO_ROOTS:
@@ -214,7 +219,7 @@ def _resolve_audio_to_data_uri(path_or_name: str) -> str | None:
                     break
             if candidate:
                 break
-    if not candidate or not os.path.isfile(candidate):
+    if not candidate or not os.path.isfile(candidate) or not _in_audio_roots(candidate):
         return None
     ext = os.path.splitext(candidate)[1].lower()
     mime = _AUDIO_MIME.get(ext, "audio/mpeg")
@@ -332,7 +337,7 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
             tried in this priority order:
               first_frame_image_url: a public image URL or a data URI.
               first_frame_path: a local path OR file name inside the allowed
-                roots (/sandbox, /app/generated_files).
+                root (/app/generated_files).
               first_frame_image_key: an image_key of a previously GENERATED
                 image (generated_images table).
               first_frame_user_image_index: index of an image the USER attached
@@ -368,7 +373,7 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
               avatar_audio_url: public URL of an audio track to lip-sync to.
               avatar_audio_path: local path/name of an audio file (e.g. one
                 produced by generate_audio or generate_music, in
-                /app/generated_files or /sandbox) to lip-sync to. Resolved to a
+                /app/generated_files) to lip-sync to. Resolved to a
                 data URI automatically. Use this to chain voice/music -> avatar.
               Provide EITHER avatar_voice_id OR one of the audio args.
 

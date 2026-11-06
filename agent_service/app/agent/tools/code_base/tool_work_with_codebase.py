@@ -1,7 +1,10 @@
 
 import json
 import logging
+import os
 from langchain_core.tools import tool
+
+from agent.core import sandbox_scripts_cleaner as _ssc
 
 def make_work_codebase_tool(agent):
     @tool
@@ -18,7 +21,7 @@ def make_work_codebase_tool(agent):
         code_type   (str, required) — parser|scraper|excel|pptx|digest|generator|util|migration|core
         tags        (list[str])       — search tags
         author      (str)             — agent|human|human:pasha (default: "agent")
-        path        (str, required) — full path /sandbox/reusable/{uuid}.py
+        path        (str, required) — full path /sandbox/reusable/{uuid}.py — saved_script_path from execute_python_code(reusable=True); the file is deleted after 30 min unless saved here
         run_id      (str, optional) — UUID from execute_python_code
 
         Returns: a message with the ID of the created record.
@@ -32,6 +35,20 @@ def make_work_codebase_tool(agent):
         missing = [f for f in required if not data.get(f)]
         if missing:
             return f"Отсутствуют обязательные поля: {missing}"
+
+        # Долго живут только скрипты из reusable/, записанные в code_library.
+        # Остальные пути (executed_scripts, generated_files) чистятся по TTL,
+        # запись в библиотеке на них быстро стала бы битой.
+        reusable_root = os.path.realpath(str(_ssc.REUSABLE_DIR))
+        real_path = os.path.realpath(str(data["path"]))
+        if not real_path.startswith(reusable_root + os.sep) or not os.path.isfile(real_path):
+            return (
+                f"path={data['path']!r} не подходит: нужен существующий файл в "
+                f"{_ssc.REUSABLE_DIR}/. Запусти скрипт через execute_python_code(reusable=True) "
+                f"и передай saved_script_path из ответа. Без записи в библиотеку файл "
+                f"удаляется через 30 минут."
+            )
+        data["path"] = real_path
 
         try:
             record_id = await agent.db.save_to_code_library(

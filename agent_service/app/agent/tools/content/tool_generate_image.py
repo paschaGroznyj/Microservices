@@ -53,7 +53,6 @@ GENERATED_ROOT = "/app/generated_files"
 # в agent_service/app.py и ALLOWED_IMAGE_ROOTS в tool_analyze_image.
 ALLOWED_SOURCE_ROOTS = [
     os.path.realpath("/app/generated_files"),
-    os.path.realpath("/sandbox"),
 ]
 
 
@@ -67,7 +66,7 @@ def _is_within_source_roots(real_path: str) -> bool:
 def _resolve_source_path(path_or_name: str) -> str | None:
     """Резолвит source-картинку строго внутри whitelist-корней.
 
-    Принимает как полный путь (внутри /sandbox|/app/generated_files), так и
+    Принимает как полный путь (внутри /app/generated_files), так и
     просто имя файла — тогда ищет по basename рекурсивно. basename берётся
     принудительно, чтобы нельзя было протащить обход директорий.
     """
@@ -240,7 +239,7 @@ def _read_image_as_data_uri(path: str) -> str | None:
     data-URL или None при ошибке.
 
     Путь/имя резолвится через _resolve_source_path: разрешены только файлы
-    внутри /sandbox и /app/generated_files (можно указать полный путь или
+    внутри /app/generated_files (можно указать полный путь или
     просто имя файла — тогда ищется по basename рекурсивно). Так закрыт
     path-traversal — чужой путь вернёт None.
     """
@@ -392,7 +391,7 @@ def make_generate_image_tool(agent, images: list[dict] | None = None):
           n — how many images to generate (1-10, 1 by default).
           source_images — a list of paths OR image file names for
                           image-to-image, read from disk STRICTLY from
-                          Allowed folders: /sandbox and /app/generated_files.
+                          Allowed folder: /app/generated_files.
                           You can specify the full path within them or just the file name
                           (searched recursively by name). Paths outside these
                           folders are ignored (directory traversal protection).

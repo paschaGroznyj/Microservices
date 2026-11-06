@@ -29,6 +29,7 @@ from agent.mobile.action_parser import parse_mobile_response
 from agent.tools.content.tool_generate_audio import audio_generator
 from agent.core.db import AgentDB
 from agent.core import obs_file_storage
+from agent.core import sandbox_scripts_cleaner
 from api.web_ui import web_router, pending_files, set_db as _set_web_ui_db, set_active_tasks as _set_web_ui_tasks
 
 
@@ -687,6 +688,9 @@ async def lifespan(app: FastAPI):
     # Клинер эфемерных файлов generated_files (TTL 30 мин):
     # чистит и свежесозданные файлы, и скачанные из OBS. Источник истины — OBS.
     obs_cleaner_task = asyncio.create_task(obs_file_storage.start_generated_files_cleaner())
+    # Архив скриптов /sandbox (TTL 30 мин), кроме записанных в code_library.
+    scripts_cleaner_task = asyncio.create_task(
+        sandbox_scripts_cleaner.start_scripts_cleaner(db.list_code_library_paths))
     agent = HarnessAgent(database=db)
     connect_service_routers(agent, db)
 
@@ -704,6 +708,8 @@ async def lifespan(app: FastAPI):
 
     obs_cleaner_task.cancel()
     await asyncio.gather(obs_cleaner_task, return_exceptions=True)
+    scripts_cleaner_task.cancel()
+    await asyncio.gather(scripts_cleaner_task, return_exceptions=True)
 
 
     await shutdown()

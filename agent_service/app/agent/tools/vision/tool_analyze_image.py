@@ -34,7 +34,6 @@ log = logging.getLogger(__name__)
 # защита от path-traversal (../../etc/passwd и т.п.).
 ALLOWED_IMAGE_ROOTS = [
     os.path.realpath("/app/generated_files"),
-    os.path.realpath("/sandbox"),
 ]
 
 # Поддерживаемые расширения картинок для чтения с диска.
@@ -165,7 +164,7 @@ def _local_image_as_data_uri(path_or_name: str) -> tuple[str | None, str | None]
     if not real:
         return None, (
             f"Файл «{path_or_name}» не найден в разрешённых папках "
-            f"(/sandbox, /app/generated_files) или путь недопустим. "
+            f"(/app/generated_files) или путь недопустим. "
             f"Если картинка собрана/сгенерирована в workspace (output/...) — она ещё не "
             f"в локальной ФС агента: сначала скачай её через download_workspace_file "
             f"(он положит файл в /app/generated_files и вернёт path), затем передай этот path в local_path."
@@ -288,13 +287,13 @@ def make_analyze_image_tool(agent, images: list[dict] | None = None,
              they will be analyzed one at a time in a single response.
 
           2. local_path is the path OR name of the image file on the server disk. It reads
-             STRICTLY from the allowed folders: /sandbox and /app/generated_files
+             STRICTLY from the allowed folder /app/generated_files
              (you can specify the full path inside them or just the file name — then
              searched by name recursively). It will be useful for the pictures that I made.
              another tool (screenshot, rendered graph, saved asset).
              IMPORTANT: files collected in the factory workspace (output/... inside
              execute_python_code), are NOT directly visible to this tool — it only reads
-             /app/generated_files and /sandbox. First, download the image using
+             /app/generated_files. First, download the image using
              download_workspace_file (it will place it in /app/generated_files and return
              path), and only then pass this path to local_path. The format
              (JPEG/PNG/...) is automatically determined by the byte signature.
@@ -430,7 +429,7 @@ def make_analyze_image_tool(agent, images: list[dict] | None = None,
                 results.append(f"[image_key={k}]\n{out}")
             return "\n\n".join(results)
 
-        # ── Источник 2: локальный путь/имя в /sandbox|/app/generated_files ─
+        # ── Источник 2: локальный путь/имя в /app/generated_files ─
         if local_path and str(local_path).strip():
             data_uri, err = _local_image_as_data_uri(str(local_path))
             if err:
@@ -441,7 +440,7 @@ def make_analyze_image_tool(agent, images: list[dict] | None = None,
         if not images:
             return ("К текущему сообщению не приложено ни одного изображения, "
                     "и не указан ни local_path, ни source_image_keys. "
-                    "Передай local_path (файл в /sandbox или /app/generated_files), "
+                    "Передай local_path (файл в /app/generated_files), "
                     "source_image_keys (сгенерированные картинки) или попроси "
                     "пользователя загрузить картинку.")
 

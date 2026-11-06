@@ -35,10 +35,9 @@ SANDBOX_URL = os.environ.get("SANDBOX_SERVICE_URL", "http://agent_sandbox:8005")
 SAVE_DIR = Path("/app/generated_files")
 SKILLS_PATH = Path("/app/app/agent/SKILLS")
 
-ALLOWED_UPLOAD_ROOTS = (
-    "/sandbox",
-    "/app/generated_files"
-)
+# Только подпапки generated_files: корень целиком (выгрузки всех чатов) и
+# /sandbox (общий архив скриптов) заливать в workspace нельзя.
+ALLOWED_UPLOAD_ROOTS = ("/app/generated_files",)
 
 MAX_LOCAL_UPLOAD_SIZE = 100 * 1024 * 1024  # 100 MB (совпадает с лимитом фабрики)
 
@@ -57,7 +56,10 @@ def _ensure_save_dir() -> None:
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
 
 def _save_script(code: str, run_id: str, ok: bool, reusable: bool = False) -> str | None:
-    """Сохраняет исходный код в /sandbox ВСЕГДА — и при успехе, и при ошибке.
+    """Сохраняет исходный код в /sandbox — и при успехе, и при ошибке.
+
+    executed_scripts/ и reusable/ чистит core/sandbox_scripts_cleaner: файлы старше
+    30 мин удаляются, если их путь не записан в code_library.
 
     При ошибке кладёт в executed_scripts/failed/. Это служебный архив (общий для всех чатов):
     агенту путь не подсказываем — для обычной роли он недоступен."""
@@ -282,7 +284,7 @@ async def _call_sandbox_endpoint(method: str, path: str, **kwargs) -> dict:
 def _is_under_allowed_root(path: str) -> bool:
     real = os.path.realpath(path)
     return any(
-        real == os.path.realpath(root) or real.startswith(os.path.realpath(root) + os.sep)
+        real.startswith(os.path.realpath(root) + os.sep)
         for root in ALLOWED_UPLOAD_ROOTS
     )
 
@@ -365,7 +367,7 @@ def make_sandbox_execute_tool(agent):
             code: Python code to execute. Write print() statements during execution —
                   all output will be returned to stdout. Traceback on error — to stderr.
             timeout: execution timeout in seconds, maximum 30 (default 10).
-            reusable: True — saves code to /sandbox/reusable/ for reuse
+            reusable: True — saves code to /sandbox/reusable/ (kept only after save_to_code_library, otherwise deleted in 30 min) for reuse
                       in future tasks (use for generic functions/templates,
                       not for one‑off scripts). Default is False.
             workspace_id: workspace ID (transmit only during the final aggregation of the results of parallel tasks)
@@ -1098,7 +1100,7 @@ So you can then spy on it/reuse it within the session.
         Two sources, can be combined (at least one is required):
 
             local_path is the path to a LOCAL file or folder in the file system.
-                         the agent. The following roots are allowed: /sandbox, /app/generated_files.
+                         the agent. Allowed: files and subfolders inside /app/generated_files (not the root itself).
                          the file → is filled in as it is; the folder → is packed in zip and
                          unpacked at the factory (the structure is preserved).
 

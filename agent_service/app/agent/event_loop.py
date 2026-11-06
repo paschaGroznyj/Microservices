@@ -86,9 +86,8 @@ async def tool_get_schema(database) -> str:
         FROM information_schema.columns c
         WHERE c.table_schema = 'public'
         AND c.table_name IN (
-            'knowledge', 'knowledge_review',
-            'papers_metadata', 'users', 'chats', 
-            'reviews', 'agent_journal', 'session_summaries',
+            'knowledge', 'knowledge_review' , 'users', 'chats',
+            'agent_journal', 'session_summaries',
             'entity_relations', 'wiki_pages', 'knowledge_log'
         )
         ORDER BY c.table_name, c.ordinal_position;
@@ -243,14 +242,6 @@ def _truncate_text(text: str, max_chars: int = MAX_STDOUT_CHARS) -> str:
 # Тулы, чьи вызовы стоит запоминать в истории диалога
 STATEFUL_TOOLS = {
     "execute_sql_query",
-    "download_text_articles",
-    "upload_articles",
-    "summarize_file",
-    "summarize_all_articles",
-    "summarize_new_articles",
-    "rebuild_categories",
-    "make_basket_reviews",
-    "digest_basket",
     # "send_digest_email",
     # "research_prompt",
     "search_internet",

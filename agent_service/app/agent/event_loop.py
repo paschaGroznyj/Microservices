@@ -269,6 +269,32 @@ STATEFUL_TOOLS = {
     "edit_workspace_file",
 }
 
+def _coerce_tool_result(result: Any) -> dict | None:
+    """Приводит результат тула к dict.
+
+    _invoke_tool отдаёт результат строкой (str(dict)), а компактор передаёт
+    content ToolMessage, который может быть уже обрезан. Возвращает None,
+    если строку разобрать нельзя.
+    """
+    if isinstance(result, dict):
+        return result
+    if isinstance(result, BaseException):
+        return {"ok": False, "error": f"{type(result).__name__}: {result}"}
+    if isinstance(result, str):
+        s = result.strip()
+        if not s.startswith("{"):
+            return None
+        try:
+            v = ast.literal_eval(s)
+        except (ValueError, SyntaxError, MemoryError, RecursionError):
+            try:
+                v = json.loads(s)
+            except (json.JSONDecodeError, TypeError):
+                return None
+        return v if isinstance(v, dict) else None
+    return None
+
+
 def _summarize_tool_call(tc: dict, result: Any) -> str | None:
     name = tc["name"]
     if name not in STATEFUL_TOOLS:
@@ -315,28 +341,36 @@ def _summarize_tool_call(tc: dict, result: Any) -> str | None:
                 "work_with_agent_journal", "read_workspace_file", "edit_workspace_file"):
         return f"{name}({args}) → {str(result)[:1000]}"
     if name == "execute_python_code":
-        result_dict = result if isinstance(result, dict) else {}
-        ok = result_dict.get("ok", False)
+        result_dict = _coerce_tool_result(result)
+        if result_dict is None:
+            # Результат не разобрать (например, обрезан в ToolMessage) —
+            # не помечаем как ошибку, отдаём начало как есть.
+            return f"execute_python_code() [результат не разобран] {str(result)[:500]}"
+        ok = bool(result_dict.get("ok", False))
+        script_path = result_dict.get("saved_script_path") or result_dict.get("saved_script_in_workspace")
+        script_note = f", скрипт: {script_path}" if script_path else ""
 
         if ok:
             # Успех — код уже лежит в saved_script_path, дублировать не нужно.
             # В трейс идёт только компактная сводка результата.
-            saved_files = result_dict.get("saved_files", [])
-            files_note = f", файлы: {[f['filename'] for f in saved_files]}" if saved_files else ""
-            script_path = result_dict.get("saved_script_path")
-            script_note = f", скрипт: {script_path}" if script_path else ""
+            saved_files = result_dict.get("saved_files") or []
+            names = [f.get("filename") for f in saved_files if isinstance(f, dict)]
+            files_note = f", файлы: {names}" if names else ""
             return f"execute_python_code() [успех]{files_note}{script_note}"
-        else:
-            # Ошибка — код НЕ сохраняется в executed_scripts (see main.py логика),
-            # значит единственный способ его увидеть в будущем — сохранить в trace,
-            # иначе агент забудет, что именно он написал и почему упало.
-            code = result_dict.get("code", args.get("code", ""))
-            error = result_dict.get("error") or result_dict.get("stderr", "")[:300]
-            return (
-                f"execute_python_code() [ОШИБКА]\n"
-                f"код:\n{code[:800]}\n"
-                f"ошибка: {error}"
-            )
+
+        # Ошибка — код в трейс, чтобы агент помнил, что написал и почему упало.
+        code = result_dict.get("code") or args.get("code", "")
+        stderr = str(result_dict.get("stderr") or "")
+        error = str(result_dict.get("error") or "").strip() or stderr.strip()[-300:]
+        if not error:
+            rc = result_dict.get("exit_code")
+            error = f"exit_code={rc}" if rc is not None else "причина не передана"
+        line_note = f", строка {result_dict['error_line']}" if result_dict.get("error_line") else ""
+        return (
+            f"execute_python_code() [ОШИБКА]{script_note}{line_note}\n"
+            f"код:\n{str(code)[:800]}\n"
+            f"ошибка: {error}"
+        )
     # if name == "request_more_steps":
     #     return f"{name} ШАГ-БУСТ → {str(result)}"
     if name == "execute_shell_commands":
@@ -344,11 +378,12 @@ def _summarize_tool_call(tc: dict, result: Any) -> str | None:
         _cmd_s = str(_cmds)
         if len(_cmd_s) > 400:
             _cmd_s = _cmd_s[:400] + f"…[+{len(_cmd_s) - 400} симв]"
-        if isinstance(result, dict):
-            _ok = result.get("ok")
-            _out = str(result.get("stdout", ""))
-            _err = str(result.get("stderr", ""))
-            _rc = result.get("exit_code")
+        _rd = _coerce_tool_result(result)
+        if _rd is not None:
+            _ok = _rd.get("ok")
+            _out = str(_rd.get("stdout", ""))
+            _err = str(_rd.get("stderr", ""))
+            _rc = _rd.get("exit_code")
             _res_s = f"ok={_ok} rc={_rc} stdout={_out[:800]}"
             if _err.strip():
                 _res_s += f" stderr={_err[:300]}"

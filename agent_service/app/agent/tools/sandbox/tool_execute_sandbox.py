@@ -59,8 +59,8 @@ def _ensure_save_dir() -> None:
 def _save_script(code: str, run_id: str, ok: bool, reusable: bool = False) -> str | None:
     """Сохраняет исходный код в /sandbox ВСЕГДА — и при успехе, и при ошибке.
 
-    При ошибке кладёт в executed_scripts/failed/ — чтобы агент мог перечитать и точечно починить через edit_sandbox_file,
-    а не переписывать весь скрипт заново."""
+    При ошибке кладёт в executed_scripts/failed/. Это служебный архив (общий для всех чатов):
+    агенту путь не подсказываем — для обычной роли он недоступен."""
     try:
         from agent.tools.filesystem.tool_write_sandbox import SANDBOX_ROOT
         if reusable:
@@ -184,7 +184,8 @@ async def _process_sandbox_result(
     start_time: float, 
     run_id: str, 
     code_for_saving: str | None, 
-    reusable: bool
+    reusable: bool,
+    workspace_id: str | None = None,
 ) -> dict:
     duration_ms = int((time.monotonic() - start_time) * 1000)
 
@@ -216,6 +217,8 @@ async def _process_sandbox_result(
     # read_workspace_file / list_workspace_files и переиспользовать.
     if result.get("saved_script"):
         response["saved_script_in_workspace"] = result["saved_script"]
+        if workspace_id:
+            response["workspace_id"] = workspace_id
 
     # Сохраняем скрипт ВСЕГДА (и при ok, и при ошибке)
     if code_for_saving:
@@ -230,14 +233,7 @@ async def _process_sandbox_result(
             response["error_line"] = err_line
         if err_ctx:
             response["error_context"] = err_ctx
-        loc = response.get("saved_script_path") or response.get("saved_script_in_workspace")
-        if loc:
-            response["hint"] = (
-                f"Скрипт целиком дошёл до sandbox ({response['code_bytes']} байт) и сохранён в {loc}. "
-                "Ошибка синтаксическая, НЕ транспортная — код НЕ обрезался. "
-                "Перечитай скрипт вокруг error_line и исправь ТОЧЕЧНО через edit_sandbox_file. "
-                "НЕ переписывай весь скрипт заново."
-            )
+        response["hint"] = _failure_hint(response, workspace_id)
 
     if result.get("error"):
         response["error"] = result["error"]
@@ -245,6 +241,26 @@ async def _process_sandbox_result(
         response["warnings"] = save_warnings
 
     return response
+
+def _failure_hint(response: dict, workspace_id: str | None) -> str:
+    """Подсказка после упавшего скрипта — только через тулы, доступные любой роли."""
+    head = (f"Скрипт целиком дошёл до sandbox ({response.get('code_bytes', 0)} байт), "
+            "код не обрезался — ошибка в самом коде. ")
+    where = (f"Строки вокруг ошибки — в error_context (строка {response['error_line']}). "
+             if response.get("error_context") else "")
+    ws_script = response.get("saved_script_in_workspace")
+    if workspace_id and ws_script:
+        return (head + where +
+                f"Скрипт лежит в workspace {workspace_id}: {ws_script}. "
+                "Нужно больше контекста — read_workspace_file; правь точечно через "
+                "edit_workspace_file, затем снова вызови execute_python_code с исправленным кодом. "
+                "Не переписывай скрипт с нуля.")
+    return (head + where +
+            "Исправь только проблемное место и вызови execute_python_code снова с полным кодом. "
+            "Не переписывай логику с нуля. Если скрипт большой и правок будет несколько, "
+            "работай через create_workspace: тогда скрипт сохранится в output/.scripts/ "
+            "и его можно править через edit_workspace_file.")
+
 
 async def _call_sandbox_endpoint(method: str, path: str, **kwargs) -> dict:
     """Универсальный HTTP-клиент для workspace-эндпоинтов."""
@@ -389,9 +405,11 @@ So you can then spy on it/reuse it within the session.
 
         Do not print binary data using print().
 
-        ── Successful scripts are saved automatically ───────────────────
-        When ok=True, the code is saved in /sandbox/executed_scripts/{run_id}.py —
-        it is available via read_file for reuse. Failed attempts are not saved.
+        ── Reusing and fixing scripts ───────────────────
+        With workspace_id the script is kept in output/.scripts/<run_id>.py
+        (read_workspace_file / edit_workspace_file). On error the response has
+        error_line and error_context (lines around the failure) — fix only that place.
+        For a script worth reusing later, use save_to_code_library.
 
         ── Ready‑made libraries in dev_utils (use them, don’t write from scratch) ─
 
@@ -581,7 +599,8 @@ So you can then spy on it/reuse it within the session.
             persist_script=persist_script,
             changed_files=changed_files,
         )
-        return await _process_sandbox_result(result, start, run_id, code_for_saving=code, reusable=reusable)
+        return await _process_sandbox_result(result, start, run_id, code_for_saving=code, reusable=reusable,
+                                             workspace_id=workspace_id)
 
     @tool
     async def execute_shell_commands(commands: str, timeout: int = DEFAULT_TIMEOUT, workspace_id: str = None,
@@ -658,7 +677,7 @@ So you can then spy on it/reuse it within the session.
 
         need_context=True — the agent needs to review the code before running:
           • The tool reads the path from the database and returns the file text to the agent
-          • The agent makes точечные edits via edit_sandbox_file
+          • The agent makes точечные edits to source_code in its own reply
           • The agent itself calls execute_python_code with the corrected code
           • use_count is NOT updated here — the agent will update it after a successful run
 
@@ -734,8 +753,8 @@ So you can then spy on it/reuse it within the session.
                 "source_code": source_code,
                 # Подсказка агенту что делать дальше
                 "next_step": (
-                    "Прочитай source_code, внеси правки через edit_sandbox_file, "
-                    "затем вызови execute_python_code с исправленным кодом. "
+                    "Прочитай source_code, внеси точечные правки и вызови "
+                    "execute_python_code с исправленным кодом целиком. "
                     "После успешного запуска вызови touch_code_library(library_id) "
                     "для обновления use_count."
                 ),

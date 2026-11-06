@@ -323,11 +323,21 @@ def _summarize_tool_call(tc: dict, result: Any) -> str | None:
             # не помечаем как ошибку, отдаём начало как есть.
             return f"execute_python_code() [результат не разобран] {clip_text(str(result), 500)}"
         ok = bool(result_dict.get("ok", False))
-        script_path = result_dict.get("saved_script_path") or result_dict.get("saved_script_in_workspace")
-        script_note = f", скрипт: {script_path}" if script_path else ""
+        # В трейс — только путь, который агент может открыть любой ролью:
+        # скрипт внутри workspace. Архив /sandbox/executed_scripts общий и
+        # доступен лишь админским тулам, его не показываем.
+        ws_script = result_dict.get("saved_script_in_workspace")
+        ws_id = result_dict.get("workspace_id") or args.get("workspace_id")
+        if ws_script and ws_id:
+            script_note = f", скрипт: workspace {ws_id} → {ws_script}"
+        elif ws_script:
+            script_note = f", скрипт в workspace: {ws_script}"
+        else:
+            script_note = ""
 
         if ok:
-            # Успех — код уже лежит в saved_script_path, дублировать не нужно.
+            # Успех — код в трейс не дублируем (он есть в вызове и, если задан
+            # workspace, в output/.scripts).
             # В трейс идёт только компактная сводка результата.
             saved_files = result_dict.get("saved_files") or []
             names = [f.get("filename") for f in saved_files if isinstance(f, dict)]
@@ -343,9 +353,16 @@ def _summarize_tool_call(tc: dict, result: Any) -> str | None:
             rc = result_dict.get("exit_code")
             error = f"exit_code={rc}" if rc is not None else "причина не передана"
         line_note = f", строка {result_dict['error_line']}" if result_dict.get("error_line") else ""
+        code_s = str(code)
+        err_ctx = str(result_dict.get("error_context") or "")
+        if err_ctx and len(code_s) > 800:
+            # Длинный скрипт: начало (импорты/константы) + строки вокруг ошибки.
+            code_block = f"{clip_text(code_s, 400, head_ratio=1)}\n…\nвокруг ошибки:\n{clip_text(err_ctx, 1200)}"
+        else:
+            code_block = clip_text(code_s, 1200)
         return (
             f"execute_python_code() [ОШИБКА]{script_note}{line_note}\n"
-            f"код:\n{str(code)[:800]}\n"
+            f"код:\n{code_block}\n"
             f"ошибка: {error}"
         )
     # if name == "request_more_steps":

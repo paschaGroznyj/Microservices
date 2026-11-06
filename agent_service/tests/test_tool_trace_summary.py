@@ -32,7 +32,8 @@ FAIL_RESULT = {
 def test_python_success_marked_success(result):
     s = el._summarize_tool_call(tc(code="print(1)"), result)
     assert s.startswith("execute_python_code() [успех]")
-    assert "report.xlsx" in s and "/sandbox/executed_scripts/abc.py" in s
+    assert "report.xlsx" in s
+    assert "/sandbox/executed_scripts" not in s  # архив только для админа — не подсказываем
     assert "ОШИБКА" not in s
 
 
@@ -41,8 +42,26 @@ def test_python_failure_has_real_error(result):
     s = el._summarize_tool_call(tc(code="1/0"), result)
     assert "[ОШИБКА]" in s
     assert "ZeroDivisionError: division by zero" in s
-    assert "строка 3" in s and "failed/abc.py" in s
+    assert "строка 3" in s
+    assert "/sandbox/executed_scripts" not in s
     assert "код:\n1/0" in s
+
+
+def test_python_success_workspace_script_in_trace():
+    r = dict(OK_RESULT, saved_script_in_workspace="output/.scripts/abc.py", workspace_id="ws1")
+    s = el._summarize_tool_call(tc(code="print(1)", workspace_id="ws1"), str(r))
+    assert "workspace ws1 → output/.scripts/abc.py" in s
+    assert "/sandbox/executed_scripts" not in s
+
+
+def test_python_failure_long_code_shows_error_context():
+    code = "import os\n" + "\n".join(f"x{i} = {i}" for i in range(300)) + "\nboom()\n"
+    ctx = ">>>  302 | boom()"
+    r = dict(FAIL_RESULT, error_line=302, error_context=ctx)
+    s = el._summarize_tool_call(tc(code=code), r)
+    assert "import os" in s                 # начало скрипта
+    assert "вокруг ошибки:" in s and ctx in s
+    assert len(s) < 2500
 
 
 def test_python_failure_without_stderr_not_empty():

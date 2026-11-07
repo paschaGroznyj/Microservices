@@ -24,9 +24,14 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     started_at    TIMESTAMPTZ,
     finished_at   TIMESTAMPTZ,
-    triggered_at  TIMESTAMPTZ,                    -- когда разбудили агента (защита от повтора)
+    triggered_at  TIMESTAMPTZ,                    -- когда разбудили агента (ставится после отправки)
+    owner         JSONB NOT NULL DEFAULT '{}'::jsonb, -- gateway_target, модель, тулы: побудка после рестарта
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS agent_tasks_chat_idx    ON agent_tasks (chat_id, created_at);
 CREATE INDEX IF NOT EXISTS agent_tasks_message_idx ON agent_tasks (chat_id, message_id);
 CREATE INDEX IF NOT EXISTS agent_tasks_request_idx ON agent_tasks (request_id);
+CREATE INDEX IF NOT EXISTS agent_tasks_untriggered_idx ON agent_tasks (chat_id, finished_at)
+    WHERE triggered_at IS NULL AND notify_agent;
+-- Существующая база: ALTER TABLE agent_tasks ADD COLUMN IF NOT EXISTS owner JSONB NOT NULL DEFAULT '{}'::jsonb;
+-- (chats-consumer делает это сам при старте, TasksDB.ensure_schema).

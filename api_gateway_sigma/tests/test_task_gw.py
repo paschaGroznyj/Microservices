@@ -40,3 +40,21 @@ def test_trigger_registers_marks_and_sends_status():
     assert reg == {"r1": "c1"} and run == [("c1", "r1")]
     assert pushed[0]["type"] == "agent_status" and "Парсинг" in pushed[0]["status"]
     assert all(e.get("type") != "bot_message" for e in pushed)
+
+
+def test_trigger_batch_status_and_task_ids():
+    pushed = []
+    c = client(push=lambda cid, ev: pushed.append(ev), register=lambda rid, cid: None,
+               mark_running=lambda cid, rid: None)
+    r = c.post("/internal/task_trigger", json={"chat_id": "c1", "request_id": "r1", "task_id": "t1",
+                                               "label": "A", "task_ids": ["t1", "t2"], "labels": ["A", "B"]})
+    assert r.status_code == 200
+    assert pushed[0]["task_ids"] == ["t1", "t2"] and pushed[0]["task_id"] == "t1"
+    assert "задач: 2" in pushed[0]["status"]
+
+
+def test_trigger_old_body_still_works():
+    pushed = []
+    c = client(push=lambda cid, ev: pushed.append(ev))
+    r = c.post("/internal/task_trigger", json={"chat_id": "c1", "request_id": "r1", "task_id": "t1"})
+    assert r.status_code == 200 and pushed[0]["task_ids"] == ["t1"]

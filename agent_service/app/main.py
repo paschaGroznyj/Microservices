@@ -10,7 +10,7 @@ import uuid
 import asyncio
 from task_trigger import (
     TASK_TRIGGER_USER_ID, is_task_trigger, owner_user_id as task_owner_user_id,
-    build_message as build_task_trigger_message,
+    build_message as build_task_trigger_message, payload_tasks as task_trigger_tasks,
 )
 from urllib.parse import quote
 from httpx import AsyncClient
@@ -590,6 +590,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             "request_id": request_id,
             "task_trigger": task_trigger,
             "task_id": (payload.get("task") or {}).get("task_id") if task_trigger else None,
+            "task_ids": [t.get("task_id") for t in task_trigger_tasks(payload)] if task_trigger else None,
         }
 
         await prod.send_and_wait("chat-messages", value=bot_message)

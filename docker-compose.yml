@@ -437,7 +437,8 @@ services:
       KAFKA_BROKER: ${KAFKA_BROKER}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       TASK_AUTOTRIGGER: ${TASK_AUTOTRIGGER:-1}
-      TASK_TRIGGER_WAIT_S: ${TASK_TRIGGER_WAIT_S:-900}
+      TASK_TRIGGER_MAX_AGE_S: ${TASK_TRIGGER_MAX_AGE_S:-3600}
+      TASK_BATCH_WAIT_S: ${TASK_BATCH_WAIT_S:-600}
       TG_BOT_PUSH_URL: "http://host.docker.internal:8010/push_message"
       MAX_BOT_PUSH_URL: "http://host.docker.internal:8011/push_message"
       # САМОЦИКЛ: реентри-POST в /send_message того же chats_service (docker-сеть)

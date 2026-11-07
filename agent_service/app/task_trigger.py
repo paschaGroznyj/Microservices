@@ -26,9 +26,19 @@ def is_task_trigger(payload: dict) -> bool:
         and not payload.get("is_from_bot")
 
 
+def payload_tasks(payload: dict) -> list:
+    """Все задачи побудки: tasks (пачка) или одиночная task (старый формат)."""
+    tasks = payload.get("tasks")
+    if isinstance(tasks, list) and tasks:
+        return [t for t in tasks if isinstance(t, dict)]
+    t = payload.get("task")
+    return [t] if isinstance(t, dict) else []
+
+
 def owner_user_id(payload: dict):
     """Чьими правами работает агент: владелец задачи. Без него вход отбрасывается."""
-    task = payload.get("task") or {}
+    tasks = payload_tasks(payload)
+    task = tasks[0] if tasks else {}
     uid = payload.get("owner_user_id") or (task.get("owner") or {}).get("user_id")
     try:
         return int(uid)
@@ -41,16 +51,9 @@ def _fmt_ms(ms) -> str:
     return f"{s // 60} мин {s % 60} с" if s >= 60 else f"{s} с"
 
 
-def build_message(payload: dict) -> str:
-    t = payload.get("task") or {}
+def _task_lines(t: dict) -> list:
     status = t.get("status") or "?"
     lines = [
-        f"[TASK TRIGGER — служебное сообщение планировщика, chat_id: {payload.get('chat_id')}]",
-        "Это не сообщение пользователя. Фоновая задача, которую ты поставил через submit_task, "
-        f"{STATUS_RU.get(status, status)}. Разбери результат и коротко сообщи пользователю итог: "
-        "что получилось, где файлы, что делать дальше. При ошибке найди причину и предложи "
-        "исправление или перезапуск. Карточка задачи уже показана в чате, не пересказывай её поля.",
-        "",
         f"task_id: {t.get('task_id')}",
         f"Название: {t.get('label')}",
         f"Тип: {t.get('kind')}",
@@ -71,4 +74,34 @@ def build_message(payload: dict) -> str:
         lines += ["", "stderr (хвост):", t["stderr_tail"]]
     if t.get("stdout_tail"):
         lines += ["", "stdout (хвост):", t["stdout_tail"]]
+    return lines
+
+
+def build_message(payload: dict) -> str:
+    tasks = payload_tasks(payload)
+    head = f"[TASK TRIGGER — служебное сообщение планировщика, chat_id: {payload.get('chat_id')}]"
+    tail = ("Карточки задач уже показаны в чате, не пересказывай их поля. Задачи из этого "
+            "сообщения повторно не ставь: они уже выполнены.")
+    if len(tasks) <= 1:
+        t = tasks[0] if tasks else {}
+        status = t.get("status") or "?"
+        lines = [
+            head,
+            "Это не сообщение пользователя. Фоновая задача, которую ты поставил через submit_task, "
+            f"{STATUS_RU.get(status, status)}. Разбери результат и коротко сообщи пользователю итог: "
+            "что получилось, где файлы, что делать дальше. При ошибке найди причину и предложи "
+            "исправление или перезапуск. " + tail,
+            "",
+        ] + _task_lines(t)
+        return "\n".join(lines)
+    ok = sum(1 for t in tasks if t.get("status") == "completed")
+    lines = [
+        head,
+        f"Это не сообщение пользователя. Завершились фоновые задачи, которые ты поставил через "
+        f"submit_task: {len(tasks)} (успешно {ok}, с ошибкой {len(tasks) - ok}). Разбери результаты "
+        "вместе и одним ответом сообщи пользователю итог по каждой: что получилось, где файлы, что "
+        "делать дальше. При ошибке найди причину и предложи исправление или перезапуск. " + tail,
+    ]
+    for n, t in enumerate(tasks, 1):
+        lines += ["", f"── Задача {n} из {len(tasks)} ──"] + _task_lines(t)
     return "\n".join(lines)

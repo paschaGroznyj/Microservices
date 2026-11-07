@@ -36,3 +36,30 @@ def test_build_message_contains_result():
     for part in ("task_id: t1", "завершилась с ошибкой", "1 мин 15 с", "ValueError: boom",
                  "r.csv", "Запись — failed", "w1"):
         assert part in m, part
+
+
+def test_batch_message_lists_all_tasks():
+    p = _payload()
+    t2 = dict(p["task"], task_id="t2", label="Монтаж", status="completed", exit_code=0, error=None)
+    p["tasks"] = [p["task"], t2]
+    m = tt.build_message(p)
+    assert m.startswith("[TASK TRIGGER")
+    assert "Завершились фоновые задачи" in m and "успешно 1, с ошибкой 1" in m
+    for part in ("Задача 1 из 2", "Задача 2 из 2", "task_id: t1", "task_id: t2", "Монтаж"):
+        assert part in m, part
+    assert [t["task_id"] for t in tt.payload_tasks(p)] == ["t1", "t2"]
+
+
+def test_payload_tasks_falls_back_to_single_task():
+    assert [t["task_id"] for t in tt.payload_tasks(_payload())] == ["t1"]
+    assert tt.payload_tasks({"tasks": [], "task": None}) == []
+
+
+def test_owner_from_first_task_of_batch():
+    p = _payload(owner_user_id=None, task=None)
+    p["tasks"] = [{"task_id": "t1", "owner": {"user_id": 58}}]
+    assert tt.owner_user_id(p) == 58
+
+
+def test_single_message_forbids_resubmit():
+    assert "повторно не ставь" in tt.build_message(_payload())

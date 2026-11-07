@@ -9,7 +9,8 @@ task_gw.py — задачник в гейтвее: события фоновых
 
 Вызывает chats_service (app/task_consumer.py):
   POST /internal/task_event    {"chat_id", "task"}                          -> событие task_update
-  POST /internal/task_trigger  {"chat_id", "request_id", "task_id", "label"} -> агент проверяет задачу
+  POST /internal/task_trigger  {"chat_id", "request_id", "task_id", "label", "task_ids", "labels"}
+                               -> агент проверяет задачи (пачкой)
 task_update, в отличие от bot_message, не снимает флаг «агент в работе».
 Хуки могут быть синхронными или async.
 """
@@ -49,6 +50,8 @@ class TaskTriggerIn(BaseModel):
     request_id: str
     task_id: str | None = None
     label: str | None = None
+    task_ids: list[str] | None = None   # пачка: все задачи одной побудки
+    labels: list[str | None] | None = None
 
 
 def task_update_event(chat_id: str, task: dict) -> dict:
@@ -72,10 +75,15 @@ async def task_trigger(body: TaskTriggerIn):
     _require_bound()
     await _call("register", body.request_id, body.chat_id)
     await _call("mark_running", body.chat_id, body.request_id)
-    status = f"Проверяю результат задачи «{body.label}»" if body.label else "Проверяю результат задачи"
+    ids = body.task_ids or ([body.task_id] if body.task_id else [])
+    if len(ids) > 1:
+        status = f"Проверяю результаты задач: {len(ids)}"
+    else:
+        status = f"Проверяю результат задачи «{body.label}»" if body.label else "Проверяю результат задачи"
     await _call("push", body.chat_id, {
         "type": "agent_status", "status": status, "task_trigger": True,
-        "task_id": body.task_id, "request_id": body.request_id,
+        "task_id": body.task_id or (ids[0] if ids else None), "task_ids": ids,
+        "request_id": body.request_id,
     })
-    log.info(f"[task_gw] триггер агента chat={body.chat_id} task={body.task_id} req={body.request_id}")
+    log.info(f"[task_gw] триггер агента chat={body.chat_id} tasks={ids} req={body.request_id}")
     return {"ok": True}

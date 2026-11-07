@@ -8,6 +8,10 @@ import logging
 import base64
 import uuid
 import asyncio
+from task_trigger import (
+    TASK_TRIGGER_USER_ID, is_task_trigger, owner_user_id as task_owner_user_id,
+    build_message as build_task_trigger_message,
+)
 from urllib.parse import quote
 from httpx import AsyncClient
 from datetime import datetime, timezone
@@ -156,6 +160,18 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     loop_tick = bool(payload.get("loop_tick", False))
     loop_instruction = payload.get("loop_instruction")
 
+    # ЗАДАЧНИК: служебный вход после фоновой задачи (task_trigger.py).
+    # Приходит от chats_service с user_id=-2; права и память — от владельца задачи.
+    task_trigger = is_task_trigger(payload)
+    if user_id == TASK_TRIGGER_USER_ID and not task_trigger:
+        return
+    if task_trigger:
+        _owner_uid = task_owner_user_id(payload)
+        if _owner_uid is None:
+            logging.warning(f"[task-trigger] нет владельца задачи, вход отброшен chat={chat_id}")
+            return
+        user_id = _owner_uid
+
 
     # Служебный тик петли (loop_tick, user_id=-100) ДОЛЖЕН пройти гейт: это
     # новый вход от сервиса, не ответ бота. Остальные bot/‑сообщения и user_id=-1 — отсекаем.
@@ -234,6 +250,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                 )
         else:
             message = build_max_prefix(username, deliver_chat_id or chat_id, _chat_type_max) + text
+    elif task_trigger:
+        message = build_task_trigger_message(payload)
     elif loop_tick:
         # Самоцикл: служебный тик. Текст уже содержит установку (из consumer).
         # Даём спец-шапку вместо табельного (tb_name/username у сервиса пустые).
@@ -567,6 +585,11 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             # логирования сделал реентри (новый тик) — только для web (gateway main).
             "loop": loop_flag,
             "loop_instruction": loop_instruction,
+            # ЗАДАЧНИК: request_id связывает ответ с карточками задач (agent_tasks),
+            # task_trigger/task_id — ответ на служебный вход после задачи.
+            "request_id": request_id,
+            "task_trigger": task_trigger,
+            "task_id": (payload.get("task") or {}).get("task_id") if task_trigger else None,
         }
 
         await prod.send_and_wait("chat-messages", value=bot_message)
@@ -680,11 +703,9 @@ async def lifespan(app: FastAPI):
     _set_web_ui_db(db)
     _set_web_ui_tasks(active_tasks)   # web_ui.stop_message видит тот же словарь задач
 
-    from agent.consumers.task_events_consumer import start_task_events_consumer
 
 
     kafka_task = asyncio.create_task(kafka_consumer())
-    task_events_task = asyncio.create_task(start_task_events_consumer())
     # Клинер эфемерных файлов generated_files (TTL 30 мин):
     # чистит и свежесозданные файлы, и скачанные из OBS. Источник истины — OBS.
     obs_cleaner_task = asyncio.create_task(obs_file_storage.start_generated_files_cleaner())
@@ -703,8 +724,6 @@ async def lifespan(app: FastAPI):
     kafka_task.cancel()
     await asyncio.gather(kafka_task, return_exceptions=True)
     
-    task_events_task.cancel()
-    await asyncio.gather(task_events_task, return_exceptions=True)
 
     obs_cleaner_task.cancel()
     await asyncio.gather(obs_cleaner_task, return_exceptions=True)

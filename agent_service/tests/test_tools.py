@@ -28,7 +28,7 @@ def names(tools):
 
 def test_registry_names_unique_and_described(all_tools):
     n = names(all_tools)
-    assert len(n) == len(set(n)) == 39
+    assert len(n) == len(set(n)) == 40
     for t in all_tools:
         assert (t.description or "").strip(), t.name
 
@@ -186,7 +186,7 @@ def _tool_names():
         "execute_shell_commands", "create_workspace", "list_workspace_files", "download_workspace_file",
         "delete_workspace", "cleanup_workspaces", "edit_and_run",
         "upload_to_workspace", "save_to_code_library", "search_code_library",
-        "submit_task", "check_task_status", "read_workspace_file", "edit_workspace_file",
+        "submit_task", "check_task_status", "cancel_task", "read_workspace_file", "edit_workspace_file",
     ]
 
 

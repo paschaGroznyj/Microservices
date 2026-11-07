@@ -258,7 +258,7 @@ STATEFUL_TOOLS = {
     "send_file_to_user",
     "work_with_agent_journal",
     # "request_more_steps",
-    "submit_task", "check_task_status",
+    "submit_task", "check_task_status", "cancel_task",
     "create_workspace", "list_workspace_files", "download_workspace_file",
     "delete_workspace", "cleanup_workspaces",
     "call_subagent", "execute_shell_commands",
@@ -1659,6 +1659,9 @@ class HarnessAgent:
             "user_id": user_id,
             "message_id": None,
             "agent_model": agent_model,
+            # владелец запроса для submit_task: по нему chats_service будит агента после задачи
+            "selected_tools": list(selected_tools or []),
+            "context_size": context_size,
             "pending_generated_images": [],
             # request-local буфер живого reasoning для Telegram (изоляция параллельных чатов)
             "tg_reasoning_buf": [],

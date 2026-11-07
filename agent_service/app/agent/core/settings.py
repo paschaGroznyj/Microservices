@@ -14,6 +14,7 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
         "transcribe_media",
         "submit_task",
         "check_task_status",
+        "cancel_task",
     ],
     "sessions": [
         # "session_point",
@@ -114,6 +115,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "cleanup_workspaces": "Очищает просроченные workspace (при лимите).",
     "submit_task": "Ставит долгую задачу на асинхронное исполнение в песочнице (не блокирует).",
     "check_task_status": "Проверяет статус асинхронных задач в песочнице.",
+    "cancel_task": "Отменяет фоновую задачу песочницы по просьбе пользователя.",
     "send_email": "Отправляет письмо (текст + вложения до 20МБ) от имени агента.",
     "manage_trigger": "Ставит/снимает собственные Telegram-триггеры (recurring/once) по МСК — агент сам планирует отложенные само-запуски.",
     # --- рантайм-тулзы (аппендятся внутри цикла) ---

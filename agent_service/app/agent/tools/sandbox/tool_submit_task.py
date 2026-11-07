@@ -1,24 +1,14 @@
 """
-tool_submit_task.py
-══════════════════════════════════════════════════════════════════════
-Тулы для асинхронного планировщика задач.
+tool_submit_task.py — фоновые задачи песочницы.
 
-Добавляет 2 новые тулы к существующему набору:
-  • submit_task — асинхронный запуск кода в sandbox (не блокирует)
-  • check_task_status — проверка статуса задач
+  • submit_task       — запуск кода в фоне (POST /submit), сразу возвращает task_id
+  • check_task_status — снимок задачи или список задач workspace
+  • cancel_task       — отмена по просьбе пользователя
 
-После завершения задачи sandbox шлёт Kafka event → task_events_consumer
-→ уведомление в чат.
-
-Регистрация в langchain_agent.py:
-    from .tools.sandbox.tool_submit_task import make_submit_tools
-    submit_tools = make_submit_tools(agent)
-    tools += submit_tools
-
-Возвращает список: [submit_task, check_task_status]
+Ход задачи песочница шлёт в Kafka task-events, его читает chats_service:
+пишет в agent_tasks, рисует карточку в чате и после завершения сам будит
+агента служебным сообщением (task_trigger.py рядом с main.py).
 """
-
-import json
 import logging
 import os
 import uuid
@@ -31,209 +21,177 @@ log = logging.getLogger(__name__)
 SANDBOX_URL = os.environ.get("SANDBOX_SERVICE_URL", "http://agent_sandbox:8005")
 DEFAULT_TIMEOUT = 120
 MAX_TIMEOUT = 1800
+TASK_KINDS = ("script", "media")
+MAX_STAGES = 12
+
+
+def _owner(ctx: dict) -> dict:
+    """Кто поставил задачу: по этим полям chats_service будит агента после неё."""
+    owner_uid = ctx.get("owner_user_id") or ctx.get("user_id")
+    return {
+        "user_id": owner_uid,
+        "agent_model": ctx.get("agent_model"),
+        "selected_tools": list(ctx.get("selected_tools") or []),
+        "context_size": ctx.get("context_size") or "medium",
+        "gateway_target": ctx.get("gateway_target") or "main",
+        "request_id": ctx.get("request_id"),
+    }
+
+
+def _norm_stages(stages) -> list[str]:
+    if isinstance(stages, str):
+        stages = [s for s in stages.replace(";", "\n").splitlines()]
+    out = []
+    for s in stages or []:
+        s = str(s).strip()
+        if s and s not in out:
+            out.append(s[:80])
+    return out[:MAX_STAGES]
+
+
+def _http_error(e: Exception) -> dict:
+    if isinstance(e, httpx.HTTPStatusError):
+        return {"ok": False, "error": f"HTTP {e.response.status_code}: {e.response.text[:300]}"}
+    return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
 def make_submit_tools(agent):
-    """Фабрика тул для асинхронного планировщика."""
-
-    # ══════════════════════════════════════════════════════════════
-    # 1. SUBMIT_TASK
-    # ══════════════════════════════════════════════════════════════
+    def _ctx() -> dict:
+        try:
+            return dict(agent._request_ctx.get() or {})
+        except Exception:
+            return {}
 
     @tool
     async def submit_task(
         code: str,
         workspace_id: str,
-        chat_id: str,
         label: str,
+        kind: str = "script",
+        stages: list[str] | None = None,
         timeout: int = DEFAULT_TIMEOUT,
+        notify_agent: bool = True,
         changed_files: str = "",
+        chat_id: str = "",
     ) -> dict:
         """
-        Sets the task for asynchronous execution in the sandbox.
-        IF it DOESN'T BLOCK it, it returns the task_id immediately.
+        Runs Python code as a BACKGROUND task in the sandbox and returns task_id at once.
+        Use it for work longer than ~30 s (parsing, scraping, batch media, big files).
+        The user sees a live task card in the chat (stages, progress, elapsed time, result).
+        When the task ends you are woken up AUTOMATICALLY with a service message
+        (status, error, stdout/stderr tail, files) — do NOT poll check_task_status.
+        While the task runs you may keep talking to the user; if they ask to stop it,
+        call cancel_task(task_id).
 
-        After completion, the sandbox will automatically send a notification to the chat.
-        via Kafka. No need for polling — you will receive a message when the task is completed.
-        She'll be ready.
+        PROGRESS PROTOCOL (required): the script must print marker lines to stdout
+        with flush=True. They drive the card and are removed from the final stdout:
+            print("##STAGE Download pages", flush=True)        # a stage begins
+            print("##PROGRESS 40 page 4/10", flush=True)       # percent 0-100 + short text
+        - Pass the same stage titles in `stages` so the card shows the plan up front.
+        - Emit ##STAGE at the start of every stage, ##PROGRESS inside long loops
+          (at most every few seconds). A stage that is never started is shown as skipped.
+        - Elapsed time is always shown, even if the script prints no markers.
 
-        Use it for long-term tasks (parsing, data collection, large data processing
-        files) that take more than 30 seconds. While the task is running
-        — You can communicate with the user.
+        Files: the code runs in the persistent workspace; save results to output/.
+        They stay available to execute_python_code / download_workspace_file
+        with the same workspace_id.
 
-        Files are saved in the persistent workspace (output/) and are available
-        for subsequent calls to execute_python_code with the same workspace_id.
-
-        Arguments:
-            code: Python code to execute. Write print() — the output will be returned
-                  in the notification (first 500 characters).
-            workspace_id: workspace ID (create via create_workspace)
-            chat_id: chat ID for sending a completion notification
-            label: human‑readable task name (e.g., "AKRA", "NKR")
-            timeout: timeout in seconds, max 1800 (default 1800)
-
-            changed_files: what the task changes inside the workspace (only with workspace_id),
-                  for the user's live web editor. "" (default) — nothing / don't notify;
-                  "*" — files changed but you don't know which (full refresh);
-                  otherwise comma-separated paths relative to the workspace root
-                  (e.g. "repo/app.py,repo/static/main.css"). The editor is notified
-                  only after the run finishes. Pass it whenever you write/delete files.
-
-        Returns: task_id, status, workspace_id
-
-        Example scenario:
-            1. create_workspace() → workspace_id="abc123"
-            2. submit_task(code_acra, "abc123", chat_id, "AKRA") → task_id=1
-            3. submit_task(code_nkr, "abc123", chat_id, "НКР") → task_id=2
-            4. submit_task(code_expert, "abc123", chat_id, "RA Expert") → task_id=3
-            5. [You wait for notifications, communicate with the user]
-            6. [You receive: "All 3 tasks are completed"]
-            7. execute_python_code(workspace_id="abc123", code="# merge → xlsx")
-            8. download_workspace_file("abc123", "output/result.xlsx")
-            9. delete_workspace("abc123")
+        Args:
+            code: full Python script (plain .py, no top-level await).
+            workspace_id: workspace from create_workspace.
+            label: short human title of the task for the card, in the user's language.
+            kind: "script" — code, scraping, data processing (console-style card);
+                  "media" — rendering/processing images, audio, video (media-style card).
+            stages: planned stage titles in order, 2-6 items, e.g.
+                    ["Сбор ссылок", "Парсинг страниц", "Сохранение CSV"].
+            timeout: seconds, 1-1800 (default 120).
+            notify_agent: wake you up after the task ends (default True).
+            changed_files: files the task will change, for the user's live editor
+                           ("*" if unknown).
+            chat_id: not needed, taken from the current chat.
         """
-        task_id = str(uuid.uuid4())
-
-        timeout = min(max(timeout, 1), MAX_TIMEOUT)
-
-        payload = {
+        ctx = _ctx()
+        cid = str(ctx.get("chat_id") or chat_id or "")
+        if not cid:
+            return {"ok": False, "error": "Не удалось определить chat_id текущего чата"}
+        k = kind if kind in TASK_KINDS else "script"
+        task_id = uuid.uuid4().hex
+        body = {
             "code": code,
-            "timeout": timeout,
+            "timeout": max(1, min(int(timeout or DEFAULT_TIMEOUT), MAX_TIMEOUT)),
             "workspace_id": workspace_id,
             "task_id": task_id,
-            "chat_id": chat_id,
-            "label": label,
+            "chat_id": cid,
+            "label": (label or "Задача").strip()[:200],
+            "kind": k,
+            "stages": _norm_stages(stages),
+            "notify_agent": bool(notify_agent),
+            "owner": _owner(ctx),
             "changed_files": changed_files or "",
         }
-
         try:
             async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(f"{SANDBOX_URL}/submit", json=payload)
+                resp = await client.post(f"{SANDBOX_URL}/submit", json=body)
                 resp.raise_for_status()
-                result = resp.json()
-
-            log.info(
-                "[submit_task] task=%s workspace=%s label='%s' → %s",
-                task_id, workspace_id, label, result.get("status"),
-            )
-
-            return str({
-                "ok": True,
-                "task_id": task_id,
-                "status": result.get("status", "pending"),
-                "workspace_id": workspace_id,
-                "label": label,
-                "message": (
-                    f"Задача '{label}' поставлена на исполнение. "
-                    f"Уведомление придёт в чат {chat_id} после завершения. "
-                    f"Пока можешь продолжить диалог — я не блокируюсь."
-                ),
-            })
-
-        except httpx.HTTPStatusError as e:
-            return str({
-                "ok": False,
-                "error": f"Sandbox /submit error {e.response.status_code}: "
-                         f"{e.response.text[:300]}",
-            })
-        except httpx.ConnectError:
-            return str({
-                "ok": False,
-                "error": "Sandbox-сервис недоступен. Проверь что agent_sandbox запущен.",
-            })
+                data = resp.json()
         except Exception as e:
-            log.exception("[submit_task] Неожиданная ошибка")
-            return str({"ok": False, "error": f"{type(e).__name__}: {e}"})
-
-    # ══════════════════════════════════════════════════════════════
-    # 2. CHECK_TASK_STATUS
-    # ═══════════════════з═══════════════════════════════════════════
+            log.error("[submit_task] %s", e)
+            return _http_error(e)
+        log.info("[submit_task] task=%s ws=%s kind=%s chat=%s", task_id, workspace_id, k, cid)
+        return {
+            "ok": True,
+            "task_id": task_id,
+            "status": data.get("status", "pending"),
+            "workspace_id": workspace_id,
+            "kind": k,
+            "stages": body["stages"],
+            "message": (
+                f"Задача «{body['label']}» поставлена, карточка с ходом выполнения уже в чате. "
+                + ("После завершения ты получишь служебное сообщение с результатом, опрашивать статус не нужно."
+                   if body["notify_agent"] else "Автоуведомление выключено, статус: check_task_status.")
+            ),
+        }
 
     @tool
-    async def check_task_status(
-        workspace_id: str = "",
-        task_id: str = "",
-    ) -> dict:
+    async def check_task_status(task_id: str = "", workspace_id: str = "") -> dict:
         """
-        Checks the status of tasks in the sandbox.
-
-        You can check:
-          • A specific task — pass the task_id
-          • All tasks in the workspace — pass the workspace_id
-
-        Statuses: pending → running → completed | failed
-
-        Arguments:
-            workspace_id: workspace ID (to check all tasks in it)
-            task_id: ID of a specific task (if you need to view details)
-
-        Returns:
-            For workspace: a list of tasks with statuses, the all_done flag
-            For task_id: the full result (stdout, stderr, files, duration)
-
-        FORBIDDEN:
-            Checking the task status in the event_loop loop > 5 times in a row
-            (The task may take a long time to complete).
-
-        IMPORTANT (return to chat):
-            If the task is still pending/running — DO NOT run checks in a loop.
-            sandbox itself will send a notification to the chat via Kafka upon completion.
-            After 1-2 checks with the pending/running status, RETURN to the CHAT.:
-            inform the user that the task is being completed, and continue.
-            communication — you will return to the result when the notification arrives.
-
-        Use it when the user asks "what's up with the tasks?"
-        or before the final build of the result.
+        Snapshot of one background task (task_id) or the list of tasks of a workspace.
+        Not needed for waiting: you are woken up automatically when a task ends.
+        Use it only when the user asks how the task is going.
         """
         try:
-            if task_id:
-                # Запрос по конкретной задаче
-                async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(timeout=30) as client:
+                if task_id:
                     resp = await client.get(f"{SANDBOX_URL}/status/{task_id}")
                     resp.raise_for_status()
-                    result = resp.json()
-
-                return str({
-                    "ok": True,
-                    "task_id": task_id,
-                    "status": result.get("status"),
-                    "label": result.get("label"),
-                    "workspace_id": result.get("workspace_id"),
-                    "duration_ms": result.get("duration_ms"),
-                    "error": result.get("error"),
-                    "files": result.get("files", []),
-                    "stdout": result.get("stdout", ""),
-                    "stderr": result.get("stderr", ""),
-                })
-
-            elif workspace_id:
-                # Запрос всех задач workspace
-                async with httpx.AsyncClient(timeout=30) as client:
+                    r = resp.json()
+                    return {
+                        "ok": True, "task_id": task_id,
+                        **{k: r.get(k) for k in (
+                            "status", "label", "kind", "workspace_id", "elapsed_ms", "progress",
+                            "stages", "exit_code", "error", "files", "stdout_tail", "stderr_tail")},
+                    }
+                if workspace_id:
                     resp = await client.get(f"{SANDBOX_URL}/workspace/{workspace_id}/tasks")
                     resp.raise_for_status()
-                    result = resp.json()
-
-                return str({
-                    "ok": True,
-                    "workspace_id": workspace_id,
-                    "tasks": result.get("tasks", []),
-                    "total": result.get("total", 0),
-                    "completed": result.get("completed", 0),
-                    "all_done": result.get("all_done", False),
-                })
-
-            else:
-                return str({
-                    "ok": False,
-                    "error": "Нужно указать workspace_id или task_id",
-                })
-
-        except httpx.HTTPStatusError as e:
-            return str({
-                "ok": False,
-                "error": f"HTTP {e.response.status_code}: {e.response.text[:200]}",
-            })
+                    return {"ok": True, "workspace_id": workspace_id, **resp.json()}
         except Exception as e:
-            return str({"ok": False, "error": f"{type(e).__name__}: {e}"})
+            return _http_error(e)
+        return {"ok": False, "error": "Нужно указать task_id или workspace_id"}
 
-    return [submit_task, check_task_status]
+    @tool
+    async def cancel_task(task_id: str) -> dict:
+        """
+        Cancels a running background task (SIGTERM, then SIGKILL after 5 s).
+        Call it only when the user asks to stop the task. The card switches to
+        "cancelled"; you will not be woken up for a cancelled task.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(f"{SANDBOX_URL}/tasks/{task_id}/cancel")
+                resp.raise_for_status()
+                return {"ok": True, **resp.json()}
+        except Exception as e:
+            return _http_error(e)
+
+    return [submit_task, check_task_status, cancel_task]

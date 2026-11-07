@@ -2039,7 +2039,7 @@ class ChatApp {
             }
             this._removeBotPlaceholder();
         }
-        // Задачник: карточки задач из истории (message.tasks) — группой сразу под ответом.
+        // Задачник: карточки задач из истории (message.tasks) — внутри ответа, над текстом.
         if (isBot && Array.isArray(message.tasks) && message.tasks.length && window.TaskCards) {
             queueMicrotask(() => { if (messageEl.isConnected) window.TaskCards.mount(messageEl, message.tasks); });
         }
@@ -4563,6 +4563,7 @@ class ChatApp {
                     body.appendChild(step);
                 });
                 targetBotEl.insertBefore(wrap, targetBotEl.firstElementChild);
+                window.TaskCards?.place?.(targetBotEl);
             }
         }
     }
@@ -4611,6 +4612,7 @@ class ChatApp {
             }
         }
         st.reasoningWrapEl = wrap;
+        window.TaskCards?.place?.(st.pendingBotEl);   // задачи — сразу после рассуждений
         this._startReasoningTimer(chatId);
         return wrap.querySelector('.reasoning-body');
     }

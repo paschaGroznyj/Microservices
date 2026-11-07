@@ -2029,7 +2029,7 @@ class ChatApp {
             }
             this._removeBotPlaceholder();
         }
-        // Задачник: карточки задач из истории (message.tasks) — группой сразу под ответом.
+        // Задачник: карточки задач из истории (message.tasks) — внутри ответа, над текстом.
         if (isBot && Array.isArray(message.tasks) && message.tasks.length && window.TaskCards) {
             queueMicrotask(() => { if (messageEl.isConnected) window.TaskCards.mount(messageEl, message.tasks); });
         }
@@ -4285,8 +4285,8 @@ class ChatApp {
             }
 
             // Автогенерированный заголовок чата — обновляем строку чата в сайдбаре в реалтайме.
-            // Задачник: событие фоновой задачи. Пока ответа нет — карточка после рассуждений,
-            // финал ответа переносит её под .agent-message (TaskCards.settle ниже).
+            // Задачник: событие фоновой задачи. Карточка — внутри ответа своего хода,
+            // после .reasoning-block (если есть), над текстом ответа.
             if (msg.type === 'task_update') {
                 if (isActive && window.TaskCards) {
                     window.TaskCards.upsert(this.getMessagesContainer(), msg.task, { pendingEl: st?.pendingBotEl });
@@ -4331,8 +4331,8 @@ class ChatApp {
                 return;
             }
 
-            // Задачник: финал ответа — live-карточки задач переезжают из-под рассуждений под ответ,
-            // в то же место, где они окажутся после F5. Таймер: дать финализации пузыря отработать.
+            // Задачник: финал ответа — карточки хода (включая временную группу без ответа)
+            // собираются в ответ на то же место, что и после F5. Таймер: дать финализации пузыря отработать.
             if (msg.is_from_bot && msg.message && !msg.chunk && isActive && window.TaskCards) {
                 const _tcBox = this.getMessagesContainer();
                 setTimeout(() => window.TaskCards.settle(_tcBox, msg), 60);
@@ -5044,6 +5044,7 @@ class ChatApp {
                     body.appendChild(step);
                 });
                 targetBotEl.insertBefore(wrap, targetBotEl.firstElementChild);
+                window.TaskCards?.place?.(targetBotEl);
             }
         }
     }
@@ -5095,6 +5096,7 @@ class ChatApp {
             }
         }
         st.reasoningWrapEl = wrap;
+        window.TaskCards?.place?.(st.pendingBotEl);   // задачи — сразу после рассуждений
         this._startReasoningTimer(chatId);
         return wrap.querySelector('.reasoning-body');
     }

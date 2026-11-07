@@ -1,12 +1,16 @@
 /* task-cards.js — карточки фоновых задач (submit_task).
  * Два стиля: kind=script — консольное окно, kind=media — светлая карточка в тонах темы.
- * Расположение:
- *   live, пока ответа нет  — внутри ответа агента, сразу после .reasoning-block;
- *   после ответа и после F5 — отдельной группой .task-cards сразу после .agent-message.
+ * Расположение: внутри .agent-message своего хода, сразу после .reasoning-block
+ *   (если его нет — первой в ответе), над текстом. Так и во время стриминга, и после F5.
+ *   Если ответа в ленте ещё нет — временная группа .task-cards--orphan в колонке ленты,
+ *   при следующем событии или финале ответа карточки переезжают в ответ.
  * API (window.TaskCards):
  *   upsert(container, task, {pendingEl})  событие task_update (WS main / опрос sigma)
  *   mount(messageEl, tasks)               история: message.tasks из get_chat_messages
- *   settle(container, botMsg)             финал ответа: live-карточки переезжают под ответ
+ *   settle(container, botMsg)             финал ответа: собрать карточки хода в ответ
+ *   place(messageEl)                      вернуть группу на место после вставки .reasoning-block
+ * Сворачивание: клик или Enter/Space по .tc-head. Из истории (mount) карточки приходят свёрнутыми,
+ *   живые (upsert) — развёрнутыми; выбор пользователя хранится по task_id и переживает перерисовку.
  */
 (function () {
     'use strict';
@@ -16,6 +20,7 @@
         completed: 'готово', failed: 'ошибка', cancelled: 'отменена',
     };
     const seen = new Map(); // task_id -> {task, at}: снимок и момент получения (для тикающего таймера)
+    const collapsed = new Map(); // task_id -> true/false: свёрнута ли карточка
     let ticker = null;
 
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
@@ -48,7 +53,8 @@
     function render(card, t, at) {
         const kind = t.kind === 'media' ? 'media' : 'script';
         const st = t.status || 'pending';
-        card.className = `task-card task-card--${kind} is-${st}`;
+        const isCol = collapsed.get(t.task_id) === true;
+        card.className = `task-card task-card--${kind} is-${st}${isCol ? ' is-collapsed' : ''}`;
         card.dataset.taskId = t.task_id;
         if (t.message_id) card.dataset.messageId = t.message_id;
 
@@ -96,14 +102,17 @@
         }
 
         card.innerHTML =
-            `<div class="tc-head">${head}<span class="tc-title" title="${esc(t.label)}">${esc(t.label || 'Задача')}</span>`
+            `<div class="tc-head" role="button" tabindex="0" aria-expanded="${isCol ? 'false' : 'true'}" title="Свернуть / развернуть">`
+            + `${head}<span class="tc-title" title="${esc(t.label)}">${esc(t.label || 'Задача')}</span>`
             + `${pctTxt}<span class="tc-status">${STATUS_RU[st] || esc(st)}</span>`
-            + `<span class="tc-time">${fmt(elapsed(t, at))}</span></div>`
+            + `<span class="tc-time">${fmt(elapsed(t, at))}</span>`
+            + '<span class="tc-chev" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none"><path d="M3.5 6L8 10.5L12.5 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>'
             + bar
-            + (kind === 'media' && !FINAL.has(st) ? '<div class="tc-shimmer"></div>' : '')
+            + '<div class="tc-body">'
             + (stages ? `<ol class="tc-stages">${stages}</ol>` : '')
             + (log ? `<pre class="tc-log">${log}</pre>` : '')
-            + foot;
+            + foot
+            + '</div>';
     }
 
     function tick() {
@@ -116,12 +125,47 @@
     }
     function ensureTicker() { if (!ticker) ticker = setInterval(tick, 1000); }
 
-    function groupAfter(anchor) {
-        const next = anchor.nextElementSibling;
-        if (next && next.classList.contains('task-cards')) return next;
-        const g = document.createElement('div');
-        g.className = 'task-cards';
-        anchor.after(g);
+    const AGENT = '.agent-message';
+    function byMessageId(root, mid) {
+        if (!root || !mid) return null;
+        const s = sel(String(mid));
+        return root.querySelector(`${AGENT}[data-message-id="${s}"], ${AGENT}[data-id="${s}"]`);
+    }
+    // Ответ, который ещё стримится: последний .agent-message ленты без панели действий.
+    function pendingMessage(root) {
+        if (!root) return null;
+        const list = root.querySelectorAll(`:scope > ${AGENT}`);
+        const last = list[list.length - 1];
+        return last && !last.querySelector(':scope > .message-actions') ? last : null;
+    }
+    // Группа карточек внутри ответа: сразу после .reasoning-block, если он есть, иначе первой.
+    function place(msgEl) {
+        if (!msgEl) return null;
+        const g = msgEl.querySelector(':scope > .task-cards');
+        if (!g) return null;
+        const rb = msgEl.querySelector(':scope > .reasoning-block');
+        if (rb) { if (rb.nextElementSibling !== g) rb.after(g); }
+        else if (msgEl.firstElementChild !== g) msgEl.prepend(g);
+        return g;
+    }
+    function slotIn(msgEl) {
+        let g = msgEl.querySelector(':scope > .task-cards');
+        if (!g) {
+            g = document.createElement('div');
+            g.className = 'task-cards';
+            msgEl.prepend(g);
+        }
+        place(msgEl);
+        return g;
+    }
+    // Ответа в ленте нет (событие пришло между запусками) — временная группа в колонке ленты.
+    function orphanSlot(container) {
+        let g = container.querySelector(':scope > .task-cards--orphan');
+        if (!g) {
+            g = document.createElement('div');
+            g.className = 'task-cards task-cards--orphan';
+            container.appendChild(g);
+        }
         return g;
     }
     function findCard(root, id) { return root.querySelector(`.task-card[data-task-id="${sel(id)}"]`); }
@@ -137,26 +181,19 @@
     function upsert(container, task, opts = {}) {
         if (!container || !task || !task.task_id) return null;
         const at = remember(task);
+        if (!collapsed.has(task.task_id)) collapsed.set(task.task_id, false);
         let card = findCard(container, task.task_id);
-        if (!card) {
-            let anchor = null;
-            if (task.message_id) {
-                const msgEl = container.querySelector(`.agent-message[data-message-id="${sel(task.message_id)}"]`);
-                if (msgEl) anchor = msgEl;
-            }
-            if (!anchor) {
-                anchor = (opts.pendingEl && opts.pendingEl.querySelector('.reasoning-block'))
-                    || container.querySelector('.agent-message:not([data-id]) .reasoning-block');
-            }
-            card = document.createElement('div');
-            if (anchor) {
-                groupAfter(anchor).appendChild(card);
-            } else {
-                const g = document.createElement('div');
-                g.className = 'task-cards';
-                container.appendChild(g);
-                g.appendChild(card);
-            }
+        const host = card && card.closest(AGENT);
+        if (host) {
+            place(host);
+        } else {
+            const target = byMessageId(container, task.message_id)
+                || (opts.pendingEl && opts.pendingEl.isConnected ? opts.pendingEl : null)
+                || pendingMessage(container);
+            if (!card) card = document.createElement('div');
+            if (target) slotIn(target).appendChild(card);
+            else if (!card.parentElement) orphanSlot(container).appendChild(card);
+            dropEmptyGroups(container);
         }
         render(card, task, at);
         if (task.status === 'running') ensureTicker();
@@ -166,11 +203,12 @@
     function mount(messageEl, tasks) {
         if (!messageEl || !Array.isArray(tasks) || !tasks.length) return;
         const root = messageEl.parentElement || document;
-        const g = groupAfter(messageEl);
+        const g = slotIn(messageEl);
         tasks.forEach((t) => {
             if (!t || !t.task_id) return;
+            if (!collapsed.has(t.task_id)) collapsed.set(t.task_id, true);
             const prev = seen.get(t.task_id);
-            const fresh = !prev || (prev.task.seq || 0) <= (t.seq || 0) || prev.task.seq == null;
+            const fresh = !prev || prev.task.seq == null || (prev.task.seq || 0) <= (t.seq || 0);
             const snap = fresh ? t : prev.task;
             const at = fresh ? remember(t) : prev.at;
             const card = findCard(root, t.task_id) || document.createElement('div');
@@ -181,16 +219,17 @@
         dropEmptyGroups(root);
     }
 
+    // Финал ответа: карточки этого хода собираются в ответ (после рассуждений, над текстом).
     function settle(container, msg) {
         if (!container) return;
-        const mid = msg && msg.message_id;
-        const target = (mid && container.querySelector(`.agent-message[data-message-id="${sel(mid)}"]`))
-            || [...container.querySelectorAll('.agent-message')].pop();
+        const target = byMessageId(container, msg && msg.message_id)
+            || [...container.querySelectorAll(`:scope > ${AGENT}`)].pop();
         if (!target) return;
         const ids = new Set((msg && msg.task_ids) || []);
         target.querySelectorAll('.task-card').forEach((c) => ids.add(c.dataset.taskId));
+        container.querySelectorAll(':scope > .task-cards--orphan .task-card').forEach((c) => ids.add(c.dataset.taskId));
         if (!ids.size) return;
-        const g = groupAfter(target);
+        const g = slotIn(target);
         ids.forEach((id) => {
             let card = findCard(container, id);
             const s = seen.get(id);
@@ -200,5 +239,28 @@
         dropEmptyGroups(container);
     }
 
-    window.TaskCards = { upsert, mount, settle, _render: render };
+    function toggle(card) {
+        const id = card.dataset.taskId;
+        const isCol = !card.classList.contains('is-collapsed');
+        collapsed.set(id, isCol);
+        card.classList.toggle('is-collapsed', isCol);
+        const h = card.querySelector(':scope > .tc-head');
+        if (h) h.setAttribute('aria-expanded', isCol ? 'false' : 'true');
+    }
+    document.addEventListener('click', (e) => {
+        const h = e.target.closest && e.target.closest('.task-card > .tc-head');
+        if (!h) return;
+        const sel = window.getSelection && window.getSelection();
+        if (sel && !sel.isCollapsed && h.contains(sel.anchorNode)) return; // выделяли текст, не клик
+        toggle(h.parentElement);
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        const h = e.target.closest && e.target.closest('.task-card > .tc-head');
+        if (!h || e.target !== h) return;
+        e.preventDefault();
+        toggle(h.parentElement);
+    });
+
+    window.TaskCards = { upsert, mount, settle, place, toggle, _render: render };
 })();

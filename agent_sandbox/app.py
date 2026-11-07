@@ -154,14 +154,40 @@ def _limit_resources():
         os.write(2, f"[sandbox] resource limit warning: {e}\n".encode())
 
 
-def _collect_output_files(output_dir: str) -> tuple[list[OutputFile], list[str]]:
+def _snapshot_output(output_dir: str) -> dict[str, tuple[int, int]]:
+    """Снимок файлов в корне output/: имя -> (mtime_ns, size). Подпапки не учитываются."""
+    snap = {}
+    try:
+        with os.scandir(output_dir) as it:
+            for e in it:
+                if e.is_file(follow_symlinks=False):
+                    st = e.stat(follow_symlinks=False)
+                    snap[e.name] = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        pass
+    return snap
+
+
+def _collect_output_files(output_dir: str, before: dict | None = None) -> tuple[list[OutputFile], list[str]]:
+    """Файлы из корня output/ в base64.
+
+    before=None (запуск без workspace): весь output/, по имени.
+    before=снимок до запуска (workspace): только созданные или изменённые
+    за этот вызов, самые новые первыми. Старые файлы workspace не трогаем,
+    их можно взять через download_workspace_file.
+    """
     files = []
     warnings = []
 
     if not os.path.isdir(output_dir):
         return files, warnings
 
-    entries = sorted(os.listdir(output_dir))
+    if before is None:
+        entries = sorted(os.listdir(output_dir))
+    else:
+        after = _snapshot_output(output_dir)
+        changed = [n for n, sig in after.items() if before.get(n) != sig]
+        entries = sorted(changed, key=lambda n: after[n][0], reverse=True)
     if len(entries) > MAX_FILES_RETURNED:
         warnings.append(f"В output/ найдено {len(entries)} файлов, возвращаю первые {MAX_FILES_RETURNED}")
         entries = entries[:MAX_FILES_RETURNED]
@@ -384,6 +410,7 @@ def _run_code_sync(code: str, timeout: int, run_dir: str, stdin: str = "", task_
         except OSError as e:
             log.warning("[persist_script] не удалось сохранить скрипт в workspace: %s", e)
 
+    out_before = _snapshot_output(str(workspace_output)) if ws_path else None
     start = time.monotonic()
     try:
         proc = _exec_process(
@@ -428,7 +455,7 @@ def _run_code_sync(code: str, timeout: int, run_dir: str, stdin: str = "", task_
                 "Доступные зависимости фиксированы администратором в requirements-sandbox.txt."
             )
 
-        files, warnings = _collect_output_files(str(workspace_output))
+        files, warnings = _collect_output_files(str(workspace_output), out_before)
         if warnings:
             stderr = (stderr + "\n[sandbox warnings] " + "; ".join(warnings)).strip()
 
@@ -505,6 +532,7 @@ def _run_commands_sync(commands: str | list[str], timeout: int, run_dir: str, st
             except OSError:
                 pass
 
+    out_before = _snapshot_output(str(workspace_output)) if ws_path else None
     start = time.monotonic()
     try:
         proc = subprocess.run(
@@ -544,7 +572,7 @@ def _run_commands_sync(commands: str | list[str], timeout: int, run_dir: str, st
         stderr, t_err = _truncate(proc.stderr or "")
         truncated = t_out or t_err
 
-        files, warnings = _collect_output_files(str(workspace_output))
+        files, warnings = _collect_output_files(str(workspace_output), out_before)
         if warnings:
             stderr = (stderr + "\n[sandbox warnings] " + "; ".join(warnings)).strip()
 

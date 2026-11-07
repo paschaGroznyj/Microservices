@@ -417,6 +417,8 @@ So you can then spy on it/reuse it within the session.
             it is no longer AVAILABLE in the next call. Do the whole chain
             (data → build → conversion → QA-render) in ONE call.
           • With workspace_id: files in output/ survive calls (live for 10 hours).
+            saved_files then lists ONLY files this call created or changed
+            (newest first); older output/ files — via download_workspace_file.
             To transfer a file between calls, work with a single workspace_id
             or upload it via upload_to_workspace and read it from there.
 
@@ -579,7 +581,8 @@ So you can then spy on it/reuse it within the session.
                   (e.g. "repo/app.py,repo/static/main.css"). The editor is notified
                   only after the run finishes. Pass it whenever you write/delete files.
 
-        Returns: stdout, stderr, exit_code, saved_files (paths to the created files).
+        Returns: stdout, stderr, exit_code, saved_files (paths to output/ files;
+        with workspace_id only those created or changed by this call).
 
         4. Playwright MCP via CDP (for JS-SPA without WAF):
         Direct launch `npx @playwright/mcp --browser chromium` does NOT work —
@@ -794,25 +797,10 @@ So you can then spy on it/reuse it within the session.
         duration_ms = int((time.monotonic() - start) * 1000)
 
         # ── 4. Сохраняем output-файлы (если есть) ────────────
-        saved_files = []
-        warnings    = []
-        raw_files   = result.get("files", [])
-
-        if raw_files:
-            import base64
-            run_id     = uuid.uuid4().hex
-            save_dir   = Path("/app/generated_files") / run_id
-            save_dir.mkdir(parents=True, exist_ok=True)
-
-            for f in raw_files[:5]:  # не больше 5 файлов
-                try:
-                    raw  = base64.b64decode(f.get("content_base64", ""))
-                    name = Path(f.get("filename", "unnamed")).name  # защита от path traversal
-                    fpath = save_dir / name
-                    fpath.write_bytes(raw)
-                    saved_files.append({"filename": name, "path": str(fpath), "size_bytes": len(raw)})
-                except Exception as e:
-                    warnings.append(f"Не удалось сохранить {f.get('filename', '?')}: {e}")
+        raw_files = result.get("files", [])
+        saved_files, warnings = (
+            _save_output_files(raw_files, uuid.uuid4().hex) if raw_files else ([], [])
+        )
 
         # ── 5. touch: use_count++ + last_used_at ──────────────
         if result.get("ok"):

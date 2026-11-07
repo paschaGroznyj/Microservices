@@ -53,6 +53,19 @@ def _valid_attach_path(path: str) -> Optional[str]:
     return abs_path
 
 
+def _attach_error(raw) -> str:
+    """Текст для модели, почему вложение не принято."""
+    real = os.path.realpath(str(raw))
+    inside = any(real.startswith(os.path.realpath(r) + os.sep) for r in ALLOWED_ATTACH_ROOTS)
+    if not inside:
+        return (f"Ошибка: вложение '{raw}' лежит вне разрешённой папки "
+                f"({', '.join(ALLOWED_ATTACH_ROOTS)}). Файлы из workspace "
+                f"сначала скачай через download_workspace_file и передай "
+                f"его path. Ничего не отправлено.")
+    return (f"Ошибка: вложение '{raw}' не найдено. Возьми path из "
+            f"saved_files или download_workspace_file. Ничего не отправлено.")
+
+
 def make_send_email_tool(agent=None):
 
     from ...core.config import SMTP_HOST, SMTP_PORT, SMTP_LOGIN, SMTP_PASSWORD
@@ -105,9 +118,7 @@ def make_send_email_tool(agent=None):
         for raw in (attachment_paths or []):
             ap = _valid_attach_path(raw)
             if ap is None:
-                return (f"Ошибка: вложение '{raw}' недоступно — файл не найден "
-                        f"или лежит вне разрешённых папок "
-                        f"({', '.join(ALLOWED_ATTACH_ROOTS)}). Ничего не отправлено.")
+                return _attach_error(raw)
             size = os.path.getsize(ap)
             if size > MAX_FILE_SIZE:
                 return (f"Ошибка: файл '{os.path.basename(ap)}' весит "

@@ -50,3 +50,12 @@ def test_docstrings_do_not_suggest_admin_tools():
     assert "via edit_sandbox_file" not in src
     assert "через edit_sandbox_file" not in src
     assert "available via read_file" not in src
+
+
+def test_saved_script_path_only_for_reusable():
+    plain = run({"ok": True, "stdout": "1", "stderr": "", "exit_code": 0})
+    assert "saved_script_path" not in plain
+    reus = asyncio.run(sb._process_sandbox_result(
+        {"ok": True, "stdout": "1", "stderr": "", "exit_code": 0},
+        time.monotonic(), "rid", CODE, True))
+    assert reus["saved_script_path"].endswith("rid.py")

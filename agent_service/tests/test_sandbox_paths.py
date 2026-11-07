@@ -71,3 +71,35 @@ def test_upload_roots(tree):
     assert not sb._is_under_allowed_root(str(tree["tmp"] / "sandbox"))
     assert not sb._is_under_allowed_root(str(tree["tmp"] / "gen_evil"))
     assert not sb._is_under_allowed_root(str(tree["link"]))
+
+
+ADMIN_ONLY = ("list_tree", "read_file", "edit_sandbox_file", "write_sandbox_file")
+
+
+def test_upload_error_texts(tree):
+    root = sb._upload_path_error(str(tree["gen"]))
+    assert "целиком" in root and "подпапку" in root
+    sbx = sb._upload_path_error("/sandbox/executed_scripts")
+    assert "служебная" in sbx and "/sandbox" in sbx
+    other = sb._upload_path_error(str(tree["tmp"] / "gen_evil"))
+    assert "недоступен" in other
+    for msg in (root, sbx, other):
+        assert "разрешённых корней" not in msg
+        assert not any(a in msg for a in ADMIN_ONLY)
+
+
+def test_send_file_error_texts(tree):
+    import asyncio
+    _, denied = asyncio.run(sf._resolve_single_path(str(tree["secret"])))
+    assert "недоступен" in denied and "не найден" not in denied
+    _, missing = asyncio.run(sf._resolve_single_path(str(tree["gen"] / "run1" / "nope.png")))
+    assert "не найден" in missing
+    for msg in (denied, missing):
+        assert not any(a in msg for a in ADMIN_ONLY)
+
+
+def test_email_attach_error_texts(tree):
+    denied = em._attach_error(str(tree["secret"]))
+    assert "вне разрешённой папки" in denied and "download_workspace_file" in denied
+    missing = em._attach_error(str(tree["gen"] / "run1" / "nope.png"))
+    assert "не найдено" in missing and "вне" not in missing

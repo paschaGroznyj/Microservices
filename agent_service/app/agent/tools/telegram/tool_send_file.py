@@ -161,7 +161,17 @@ async def _resolve_single_path(raw_path: str) -> tuple[dict | None, str | None]:
             else:
                 return None, f"Файл не найден локально и не удалось скачать из workspace '{ws_id}': {rel_path}"
         else:
-            return None, f"Файл не найден локально по пути '{raw_path}'. Проверь путь через list_tree."
+            if target is None:
+                return None, (
+                    f"Путь '{raw_path}' недоступен для отправки. Отправлять можно файлы из "
+                    f"/app/generated_files (path из saved_files) или из workspace: "
+                    f"/tmp/exec/workspaces/<workspace_id>/output/<file>."
+                )
+            return None, (
+                f"Файл '{raw_path}' не найден. Возьми path из saved_files последнего "
+                f"execute_python_code или download_workspace_file; для файлов в workspace "
+                f"проверь имя через list_workspace_files."
+            )
 
     try:
         size = os.path.getsize(target)

@@ -226,7 +226,10 @@ async def _process_sandbox_result(
     if code_for_saving:
         saved_script_path = _save_script(code_for_saving, run_id, result.get("ok", False), reusable)
         logging.info(f"Сохраненный скрипт: {saved_script_path}")
-        response["saved_script_path"] = saved_script_path
+        # Модели путь в /sandbox нужен только для save_to_code_library
+        # (reusable=True). Архив executed_scripts ей не открыть, путь только в лог.
+        if reusable and saved_script_path:
+            response["saved_script_path"] = saved_script_path
 
     if not result.get("ok") and code_for_saving:
         err_line, err_ctx = _extract_error_context(response.get("stderr", ""), code_for_saving)
@@ -287,6 +290,22 @@ def _is_under_allowed_root(path: str) -> bool:
         real.startswith(os.path.realpath(root) + os.sep)
         for root in ALLOWED_UPLOAD_ROOTS
     )
+
+
+def _upload_path_error(path: str) -> str:
+    """Текст для модели, почему local_path не принят."""
+    real = os.path.realpath(path)
+    roots = [os.path.realpath(r) for r in ALLOWED_UPLOAD_ROOTS]
+    if real in roots:
+        return (f"Папку {path} целиком загружать нельзя: в ней файлы всех чатов. "
+                f"Укажи конкретный файл или подпапку выгрузки, например "
+                f"{roots[0]}/<id>/file.png — это path из saved_files.")
+    if real == "/sandbox" or real.startswith("/sandbox" + os.sep):
+        return (f"Путь {path} в /sandbox недоступен: это служебная папка агента. "
+                f"Загружать можно только файлы из {roots[0]}/<id>/ (path из saved_files). "
+                f"Свой код передай в execute_python_code через параметр code.")
+    return (f"Путь {path} недоступен. Загружать можно только файлы и подпапки "
+            f"внутри {roots[0]}/<id>/ — это path из saved_files.")
 
 
 def _zip_directory(dir_path: str) -> tuple[bytes, str]:
@@ -1185,11 +1204,7 @@ So you can then spy on it/reuse it within the session.
         # 1) Локальный файл/папка
         if local_path:
             if not _is_under_allowed_root(local_path):
-                return str({
-                    "ok": False,
-                    "error": f"Путь {local_path} вне разрешённых корней "
-                             f"{ALLOWED_UPLOAD_ROOTS}",
-                })
+                return str({"ok": False, "error": _upload_path_error(local_path)})
             if not os.path.exists(local_path):
                 return str({"ok": False, "error": f"Путь не найден: {local_path}"})
             is_dir = os.path.isdir(local_path)

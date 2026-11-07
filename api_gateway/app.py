@@ -2262,3 +2262,19 @@ async def status_page(request: Request):
 #         port=int(PORT_GATEWAY_PORT),
 #         reload=True
 #     )
+
+
+# ── ЗАДАЧНИК (task_gw.py): карточки фоновых задач по WS и служебный вход агента ──
+import task_gw as _task_gw
+
+
+def _task_register(request_id, chat_id):
+    pending_requests[request_id] = chat_id
+
+
+async def _task_mark_running(chat_id, request_id):
+    await run_status.mark_running(chat_id, request_id)
+
+
+_task_gw.bind(push=broadcast, register=_task_register, mark_running=_task_mark_running)
+app.include_router(_task_gw.router)

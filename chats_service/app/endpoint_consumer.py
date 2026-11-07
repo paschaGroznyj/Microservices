@@ -5,6 +5,7 @@ import asyncio
 from kafka import KafkaConsumer
 from app.db.chats_tables import DataBaseChats
 from app.core.config import KAFKA_BROKER
+from app.db.tasks_db import TasksDB
 from typing import List
 import os
 import base64
@@ -135,6 +136,11 @@ class DBConsumer:
             input_format = payload.get("input_format") or "text"
             poll_answer = payload.get("poll_answer")
 
+            # ЗАДАЧНИК: служебный вход от task_consumer (user_id=-2) в историю не пишем.
+            # В чате остаются карточка задачи (agent_tasks) и ответ агента.
+            if not is_from_bot and (payload.get("task_trigger") or user_id == -2):
+                return
+
             model_type = None
             tokens_usage = None
             if is_from_bot:
@@ -172,6 +178,14 @@ class DBConsumer:
                 except Exception as pa_err:
                     logger.error(f"Ошибка сохранения poll_answer chat={chat_id}: {pa_err}")
             logger.info(f"Сообщение сохранено в БД: chat={chat_id}, user={user_id}")
+            # ЗАДАЧНИК: ответ агента сохранён — карточки задач его запроса привязываем к нему
+            # (после F5 они рисуются под этим сообщением, live фронт переносит их по task_ids).
+            linked_task_ids = []
+            if is_from_bot and payload.get("request_id") and message_id:
+                try:
+                    linked_task_ids = await TasksDB(self.db.pool).link_request(payload["request_id"], message_id)
+                except Exception as e:
+                    logger.error(f"[tasks] link_request chat={chat_id}: {e}")
             elapsed = time.perf_counter() - start
             # logging.info(f"Message Service. Время чтобы вытащить из кафки и положить в БД = {elapsed:.4f}s")
             # Если сообщение от бота, отправляем обратно в основной сервис для WebSocket
@@ -201,6 +215,8 @@ class DBConsumer:
                 ws_payload = dict(payload)
                 ws_payload["files"] = _sanitize_files_for_ws(attached_files) # Адаптивно, чтобы и для файлов пользователя
                 ws_payload["gateway_target"] = gateway_target
+                if linked_task_ids:
+                    ws_payload["task_ids"] = linked_task_ids
 
                 # Автогенерированный заголовок чата (agent_service кладёт auto_title
                 # в payload только на первом обмене). Пишем в СУБД и пушим
@@ -629,6 +645,10 @@ class DBConsumer:
 async def main():
     consumer = DBConsumer()
     await consumer.init()
+
+    # Задачник: свой Kafka-консьюмер task-events в отдельном потоке того же контейнера.
+    from app.task_consumer import start_in_thread
+    start_in_thread()
 
     try:
         await consumer.consume()

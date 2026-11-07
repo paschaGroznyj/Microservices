@@ -1239,6 +1239,7 @@ async def poll_chat_status(chat_id: str, request: Request):
 
     await presence.touch("sigma", user["username"])
     state = status_store.get_chat_state(chat_id)
+    state = {**state, "tasks": sigma_chat_tasks(chat_id)}  # задачник: карточки для опроса
     return JSONResponse(content=state)
 
 
@@ -2617,3 +2618,39 @@ async def status_page(request: Request):
         "timestamp": datetime.now()
     })
 
+
+# ── ЗАДАЧНИК (task_gw.py): у sigma нет WS, карточки отдаются в GET /api/chats/{id}/status ──
+import task_gw as _task_gw
+
+_SIGMA_TASKS_MAX = 20
+_sigma_tasks: dict[str, dict] = {}
+
+
+def _sigma_task_push(chat_id, event):
+    if event.get("type") != "task_update":
+        return  # agent_status sigma берёт из status_store
+    t = event.get("task") or {}
+    d = _sigma_tasks.setdefault(str(chat_id), {})
+    d.pop(t.get("task_id"), None)
+    d[t.get("task_id")] = t
+    while len(d) > _SIGMA_TASKS_MAX:
+        d.pop(next(iter(d)))
+
+
+def sigma_chat_tasks(chat_id) -> list:
+    return list(_sigma_tasks.get(str(chat_id), {}).values())
+
+
+def _sigma_task_register(request_id, chat_id):
+    pr = globals().get("pending_requests")
+    if isinstance(pr, dict):
+        pr[request_id] = chat_id
+
+
+async def _sigma_task_mark_running(chat_id, request_id):
+    status_store.mark_running(chat_id, request_id)
+    await run_status.mark_running(chat_id, request_id)
+
+
+_task_gw.bind(push=_sigma_task_push, register=_sigma_task_register, mark_running=_sigma_task_mark_running)
+app.include_router(_task_gw.router)

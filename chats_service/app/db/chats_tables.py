@@ -777,7 +777,19 @@ class DataBaseChats:
                                   AND (p.bot_message_id = c.message_id OR p.bot_message_id = c.id::text)
                             ),
                             '[]'::json
-                        ) AS poll_answers
+                        ) AS poll_answers,
+                        -- задачник: карточки задач, привязанные к ответу агента (tasks_db.TASKS_JSON_SQL)
+                        COALESCE((
+                            SELECT json_agg(json_build_object(
+                                'task_id', t.task_id, 'label', t.label, 'kind', t.kind, 'status', t.status,
+                                'stages', t.stages, 'progress', t.progress, 'elapsed_ms', t.elapsed_ms,
+                                'exit_code', t.exit_code, 'error', t.error, 'stderr_tail', t.stderr_tail,
+                                'stdout_tail', t.stdout_tail, 'files', t.files, 'workspace_id', t.workspace_id,
+                                'created_at', t.created_at, 'finished_at', t.finished_at
+                            ) ORDER BY t.created_at)
+                            FROM agent_tasks t
+                            WHERE t.chat_id = c.chat_id AND t.message_id = c.message_id
+                        ), '[]'::json) AS tasks
                     FROM chats c
                     LEFT JOIN users u ON c.user_id = u.id
                     WHERE c.chat_id = $1 
@@ -875,6 +887,9 @@ class DataBaseChats:
                     poll_answers = row["poll_answers"]
                     if isinstance(poll_answers, str):
                         poll_answers = json.loads(poll_answers)
+                    tasks = row["tasks"]
+                    if isinstance(tasks, str):
+                        tasks = json.loads(tasks)
 
                     messages.append({
                         "id": row["id"],
@@ -887,6 +902,7 @@ class DataBaseChats:
                         "reaction": row["reaction"],
                         "files": files or [],
                         "poll_answers": poll_answers or [],
+                        "tasks": tasks or [],
                     })
 
                 if mode in ("around", "before", "after"):

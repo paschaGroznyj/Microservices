@@ -77,8 +77,13 @@ from typing import Any
 from langchain.tools import tool
 from langchain.schema import HumanMessage, SystemMessage, AIMessage
 from langchain_core.messages import ToolMessage
+from agent.common.tool_output import clip_text, fit_result
 
 from agent.tool_status_messages import get_tool_status, get_tools_status
+
+# Раньше результат тула уходил субагенту целиком; песочница больше не режет
+# stdout, поэтому ставим верхний предел (с запасом, чтобы не урезать поиск).
+SUBAGENT_MAX_TOOL_MSG_CHARS = 20_000
 
 logger = logging.getLogger(__name__)
 
@@ -350,12 +355,13 @@ def make_subagent_tool(agent_instance, parent_tools=None):
 
                 if isinstance(raw, Exception):
                     content = json.dumps({"error": str(raw)}, ensure_ascii=False)
-                elif isinstance(raw, str):
-                    content = raw
                 elif isinstance(raw, dict):
-                    content = json.dumps(raw, ensure_ascii=False, default=str)
+                    content = fit_result(
+                        raw, SUBAGENT_MAX_TOOL_MSG_CHARS,
+                        serialize=lambda v: json.dumps(v, ensure_ascii=False, default=str),
+                    )
                 else:
-                    content = str(raw)
+                    content = clip_text(str(raw), SUBAGENT_MAX_TOOL_MSG_CHARS)
 
                 messages.append(ToolMessage(content=content, tool_call_id=t_id))
 

@@ -35,10 +35,9 @@ SANDBOX_URL = os.environ.get("SANDBOX_SERVICE_URL", "http://agent_sandbox:8005")
 SAVE_DIR = Path("/app/generated_files")
 SKILLS_PATH = Path("/app/app/agent/SKILLS")
 
-ALLOWED_UPLOAD_ROOTS = (
-    "/sandbox",
-    "/app/generated_files"
-)
+# Только подпапки generated_files: корень целиком (выгрузки всех чатов) и
+# /sandbox (общий архив скриптов) заливать в workspace нельзя.
+ALLOWED_UPLOAD_ROOTS = ("/app/generated_files",)
 
 MAX_LOCAL_UPLOAD_SIZE = 100 * 1024 * 1024  # 100 MB (совпадает с лимитом фабрики)
 
@@ -57,10 +56,13 @@ def _ensure_save_dir() -> None:
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
 
 def _save_script(code: str, run_id: str, ok: bool, reusable: bool = False) -> str | None:
-    """Сохраняет исходный код в /sandbox ВСЕГДА — и при успехе, и при ошибке.
+    """Сохраняет исходный код в /sandbox — и при успехе, и при ошибке.
 
-    При ошибке кладёт в executed_scripts/failed/ — чтобы агент мог перечитать и точечно починить через edit_sandbox_file,
-    а не переписывать весь скрипт заново."""
+    executed_scripts/ и reusable/ чистит core/sandbox_scripts_cleaner: файлы старше
+    30 мин удаляются, если их путь не записан в code_library.
+
+    При ошибке кладёт в executed_scripts/failed/. Это служебный архив (общий для всех чатов):
+    агенту путь не подсказываем — для обычной роли он недоступен."""
     try:
         from agent.tools.filesystem.tool_write_sandbox import SANDBOX_ROOT
         if reusable:
@@ -184,7 +186,8 @@ async def _process_sandbox_result(
     start_time: float, 
     run_id: str, 
     code_for_saving: str | None, 
-    reusable: bool
+    reusable: bool,
+    workspace_id: str | None = None,
 ) -> dict:
     duration_ms = int((time.monotonic() - start_time) * 1000)
 
@@ -216,12 +219,17 @@ async def _process_sandbox_result(
     # read_workspace_file / list_workspace_files и переиспользовать.
     if result.get("saved_script"):
         response["saved_script_in_workspace"] = result["saved_script"]
+        if workspace_id:
+            response["workspace_id"] = workspace_id
 
     # Сохраняем скрипт ВСЕГДА (и при ok, и при ошибке)
     if code_for_saving:
         saved_script_path = _save_script(code_for_saving, run_id, result.get("ok", False), reusable)
         logging.info(f"Сохраненный скрипт: {saved_script_path}")
-        response["saved_script_path"] = saved_script_path
+        # Модели путь в /sandbox нужен только для save_to_code_library
+        # (reusable=True). Архив executed_scripts ей не открыть, путь только в лог.
+        if reusable and saved_script_path:
+            response["saved_script_path"] = saved_script_path
 
     if not result.get("ok") and code_for_saving:
         err_line, err_ctx = _extract_error_context(response.get("stderr", ""), code_for_saving)
@@ -230,14 +238,7 @@ async def _process_sandbox_result(
             response["error_line"] = err_line
         if err_ctx:
             response["error_context"] = err_ctx
-        loc = response.get("saved_script_path") or response.get("saved_script_in_workspace")
-        if loc:
-            response["hint"] = (
-                f"Скрипт целиком дошёл до sandbox ({response['code_bytes']} байт) и сохранён в {loc}. "
-                "Ошибка синтаксическая, НЕ транспортная — код НЕ обрезался. "
-                "Перечитай скрипт вокруг error_line и исправь ТОЧЕЧНО через edit_sandbox_file. "
-                "НЕ переписывай весь скрипт заново."
-            )
+        response["hint"] = _failure_hint(response, workspace_id)
 
     if result.get("error"):
         response["error"] = result["error"]
@@ -245,6 +246,26 @@ async def _process_sandbox_result(
         response["warnings"] = save_warnings
 
     return response
+
+def _failure_hint(response: dict, workspace_id: str | None) -> str:
+    """Подсказка после упавшего скрипта — только через тулы, доступные любой роли."""
+    head = (f"Скрипт целиком дошёл до sandbox ({response.get('code_bytes', 0)} байт), "
+            "код не обрезался — ошибка в самом коде. ")
+    where = (f"Строки вокруг ошибки — в error_context (строка {response['error_line']}). "
+             if response.get("error_context") else "")
+    ws_script = response.get("saved_script_in_workspace")
+    if workspace_id and ws_script:
+        return (head + where +
+                f"Скрипт лежит в workspace {workspace_id}: {ws_script}. "
+                "Нужно больше контекста — read_workspace_file; правь точечно через "
+                "edit_workspace_file, затем снова вызови execute_python_code с исправленным кодом. "
+                "Не переписывай скрипт с нуля.")
+    return (head + where +
+            "Исправь только проблемное место и вызови execute_python_code снова с полным кодом. "
+            "Не переписывай логику с нуля. Если скрипт большой и правок будет несколько, "
+            "работай через create_workspace: тогда скрипт сохранится в output/.scripts/ "
+            "и его можно править через edit_workspace_file.")
+
 
 async def _call_sandbox_endpoint(method: str, path: str, **kwargs) -> dict:
     """Универсальный HTTP-клиент для workspace-эндпоинтов."""
@@ -266,9 +287,25 @@ async def _call_sandbox_endpoint(method: str, path: str, **kwargs) -> dict:
 def _is_under_allowed_root(path: str) -> bool:
     real = os.path.realpath(path)
     return any(
-        real == os.path.realpath(root) or real.startswith(os.path.realpath(root) + os.sep)
+        real.startswith(os.path.realpath(root) + os.sep)
         for root in ALLOWED_UPLOAD_ROOTS
     )
+
+
+def _upload_path_error(path: str) -> str:
+    """Текст для модели, почему local_path не принят."""
+    real = os.path.realpath(path)
+    roots = [os.path.realpath(r) for r in ALLOWED_UPLOAD_ROOTS]
+    if real in roots:
+        return (f"Папку {path} целиком загружать нельзя: в ней файлы всех чатов. "
+                f"Укажи конкретный файл или подпапку выгрузки, например "
+                f"{roots[0]}/<id>/file.png — это path из saved_files.")
+    if real == "/sandbox" or real.startswith("/sandbox" + os.sep):
+        return (f"Путь {path} в /sandbox недоступен: это служебная папка агента. "
+                f"Загружать можно только файлы из {roots[0]}/<id>/ (path из saved_files). "
+                f"Свой код передай в execute_python_code через параметр code.")
+    return (f"Путь {path} недоступен. Загружать можно только файлы и подпапки "
+            f"внутри {roots[0]}/<id>/ — это path из saved_files.")
 
 
 def _zip_directory(dir_path: str) -> tuple[bytes, str]:
@@ -349,7 +386,7 @@ def make_sandbox_execute_tool(agent):
             code: Python code to execute. Write print() statements during execution —
                   all output will be returned to stdout. Traceback on error — to stderr.
             timeout: execution timeout in seconds, maximum 30 (default 10).
-            reusable: True — saves code to /sandbox/reusable/ for reuse
+            reusable: True — saves code to /sandbox/reusable/ (kept only after save_to_code_library, otherwise deleted in 30 min) for reuse
                       in future tasks (use for generic functions/templates,
                       not for one‑off scripts). Default is False.
             workspace_id: workspace ID (transmit only during the final aggregation of the results of parallel tasks)
@@ -389,9 +426,11 @@ So you can then spy on it/reuse it within the session.
 
         Do not print binary data using print().
 
-        ── Successful scripts are saved automatically ───────────────────
-        When ok=True, the code is saved in /sandbox/executed_scripts/{run_id}.py —
-        it is available via read_file for reuse. Failed attempts are not saved.
+        ── Reusing and fixing scripts ───────────────────
+        With workspace_id the script is kept in output/.scripts/<run_id>.py
+        (read_workspace_file / edit_workspace_file). On error the response has
+        error_line and error_context (lines around the failure) — fix only that place.
+        For a script worth reusing later, use save_to_code_library.
 
         ── Ready‑made libraries in dev_utils (use them, don’t write from scratch) ─
 
@@ -581,7 +620,8 @@ So you can then spy on it/reuse it within the session.
             persist_script=persist_script,
             changed_files=changed_files,
         )
-        return await _process_sandbox_result(result, start, run_id, code_for_saving=code, reusable=reusable)
+        return await _process_sandbox_result(result, start, run_id, code_for_saving=code, reusable=reusable,
+                                             workspace_id=workspace_id)
 
     @tool
     async def execute_shell_commands(commands: str, timeout: int = DEFAULT_TIMEOUT, workspace_id: str = None,
@@ -658,7 +698,7 @@ So you can then spy on it/reuse it within the session.
 
         need_context=True — the agent needs to review the code before running:
           • The tool reads the path from the database and returns the file text to the agent
-          • The agent makes точечные edits via edit_sandbox_file
+          • The agent makes точечные edits to source_code in its own reply
           • The agent itself calls execute_python_code with the corrected code
           • use_count is NOT updated here — the agent will update it after a successful run
 
@@ -734,8 +774,8 @@ So you can then spy on it/reuse it within the session.
                 "source_code": source_code,
                 # Подсказка агенту что делать дальше
                 "next_step": (
-                    "Прочитай source_code, внеси правки через edit_sandbox_file, "
-                    "затем вызови execute_python_code с исправленным кодом. "
+                    "Прочитай source_code, внеси точечные правки и вызови "
+                    "execute_python_code с исправленным кодом целиком. "
                     "После успешного запуска вызови touch_code_library(library_id) "
                     "для обновления use_count."
                 ),
@@ -1079,7 +1119,7 @@ So you can then spy on it/reuse it within the session.
         Two sources, can be combined (at least one is required):
 
             local_path is the path to a LOCAL file or folder in the file system.
-                         the agent. The following roots are allowed: /sandbox, /app/generated_files.
+                         the agent. Allowed: files and subfolders inside /app/generated_files (not the root itself).
                          the file → is filled in as it is; the folder → is packed in zip and
                          unpacked at the factory (the structure is preserved).
 
@@ -1164,11 +1204,7 @@ So you can then spy on it/reuse it within the session.
         # 1) Локальный файл/папка
         if local_path:
             if not _is_under_allowed_root(local_path):
-                return str({
-                    "ok": False,
-                    "error": f"Путь {local_path} вне разрешённых корней "
-                             f"{ALLOWED_UPLOAD_ROOTS}",
-                })
+                return str({"ok": False, "error": _upload_path_error(local_path)})
             if not os.path.exists(local_path):
                 return str({"ok": False, "error": f"Путь не найден: {local_path}"})
             is_dir = os.path.isdir(local_path)

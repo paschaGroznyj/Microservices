@@ -37,7 +37,6 @@ log = logging.getLogger(__name__)
 
 ALLOWED_MEDIA_ROOTS = [
     os.path.realpath("/app/generated_files"),
-    os.path.realpath("/sandbox"),
 ]
 OUTPUT_ROOT = "/app/generated_files"
 
@@ -481,7 +480,7 @@ def make_transcribe_media_tool(agent, chat_id=None, output_root: str | None = No
         Source (exactly one):
           - source_media_id — media_id of the file from the chat MEDIA STORAGE
             (shown in the attachment marker or in the media registry);
-          - local_path — path or file name inside /app/generated_files or /sandbox
+          - local_path — path or file name inside /app/generated_files
             (large uploads > 5 MB have only a path, not a media_id). Files from a
             factory workspace must be downloaded first via download_workspace_file.
 
@@ -510,7 +509,7 @@ def make_transcribe_media_tool(agent, chat_id=None, output_root: str | None = No
         lp = (local_path or "").strip()
         if not mid and not lp:
             return ("Не указан источник: передай source_media_id (из маркера [VIDEO]/[AUDIO] "
-                    "или реестра медиа) либо local_path файла в /app/generated_files или /sandbox.")
+                    "или реестра медиа) либо local_path файла в /app/generated_files.")
 
         workdir = tempfile.mkdtemp(prefix="transcribe_")
         t_start = time.monotonic()
@@ -535,7 +534,7 @@ def make_transcribe_media_tool(agent, chat_id=None, output_root: str | None = No
             else:
                 real = resolve_local_media(lp)
                 if not real:
-                    return (f"Файл «{lp}» не найден в /app/generated_files или /sandbox (или путь "
+                    return (f"Файл «{lp}» не найден в /app/generated_files (или путь "
                             "недопустим). Файл из workspace сначала скачай через download_workspace_file.")
                 name = os.path.basename(real)
                 if os.path.splitext(name)[1].lower() not in MEDIA_EXT:

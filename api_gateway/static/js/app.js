@@ -2029,6 +2029,10 @@ class ChatApp {
             }
             this._removeBotPlaceholder();
         }
+        // Задачник: карточки задач из истории (message.tasks) — группой сразу под ответом.
+        if (isBot && Array.isArray(message.tasks) && message.tasks.length && window.TaskCards) {
+            queueMicrotask(() => { if (messageEl.isConnected) window.TaskCards.mount(messageEl, message.tasks); });
+        }
 
         const actions = this.createMessageActions(message.id, rawContent, isBot, {
             messageId: message.message_id || message.id || '',
@@ -4267,6 +4271,8 @@ class ChatApp {
             const msg = JSON.parse(event.data);
 
             if (msg.type === 'agent_status') {
+                // Задачник: агент разбужен результатом задачи — блокируем отправку, как при обычном запросе.
+                if (msg.task_trigger && isActive) this._setSendButtonMode?.('stop');
                 // Статус-строку и скелетон рисуем только для АКТИВНОГО чата.
                 if (!isActive) return;
                 this.updateStatus(msg.status);
@@ -4279,6 +4285,15 @@ class ChatApp {
             }
 
             // Автогенерированный заголовок чата — обновляем строку чата в сайдбаре в реалтайме.
+            // Задачник: событие фоновой задачи. Пока ответа нет — карточка после рассуждений,
+            // финал ответа переносит её под .agent-message (TaskCards.settle ниже).
+            if (msg.type === 'task_update') {
+                if (isActive && window.TaskCards) {
+                    window.TaskCards.upsert(this.getMessagesContainer(), msg.task, { pendingEl: st?.pendingBotEl });
+                }
+                return;
+            }
+
             if (msg.type === 'title_update') {
                 const cid = msg.chat_id != null ? String(msg.chat_id) : null;
                 const t = (msg.auto_title || '').trim();
@@ -4314,6 +4329,13 @@ class ChatApp {
                 if (dup) return;
                 this.addMessage(msg, true, false);
                 return;
+            }
+
+            // Задачник: финал ответа — live-карточки задач переезжают из-под рассуждений под ответ,
+            // в то же место, где они окажутся после F5. Таймер: дать финализации пузыря отработать.
+            if (msg.is_from_bot && msg.message && !msg.chunk && isActive && window.TaskCards) {
+                const _tcBox = this.getMessagesContainer();
+                setTimeout(() => window.TaskCards.settle(_tcBox, msg), 60);
             }
 
             // Финал стриминга: если уже был живой стриминг (_pendingBotEl),

@@ -2039,6 +2039,10 @@ class ChatApp {
             }
             this._removeBotPlaceholder();
         }
+        // Задачник: карточки задач из истории (message.tasks) — группой сразу под ответом.
+        if (isBot && Array.isArray(message.tasks) && message.tasks.length && window.TaskCards) {
+            queueMicrotask(() => { if (messageEl.isConnected) window.TaskCards.mount(messageEl, message.tasks); });
+        }
 
         const actions = this.createMessageActions(message.id, rawContent, isBot, {
             messageId: message.message_id || message.id || '',
@@ -5193,6 +5197,11 @@ class ChatApp {
                 failCount = 0;
 
                 const state = await resp.json();
+                // Задачник: у sigma нет WS — карточки задач приходят в ответе опроса статуса.
+                if (Array.isArray(state?.tasks) && window.TaskCards) {
+                    const _tcBox = this.getMessagesContainer?.();
+                    state.tasks.forEach(t => window.TaskCards.upsert(_tcBox, t, {}));
+                }
                 if (state?.status === 'done' || state?.status === 'idle') {
                     // Сообщение уже сохранено в БД chats-consumer'ом —
                     // перечитываем историю чата и завершаем run.

@@ -115,6 +115,26 @@ def _maybe_compress(raw: bytes, mime: str) -> tuple[bytes, str]:
         return raw, mime
 
 
+def _content_text(content) -> str:
+    """Текст ответа vision-модели без блоков рассуждений.
+
+    Claude с включённым thinking отдаёт content списком блоков
+    [{"type": "thinking", ...}, {"type": "text", "text": ...}]. Берём только
+    text-блоки, иначе в результат тула уходит repr списка вместе с thinking.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text") or "")
+        return "\n".join(p for p in parts if p).strip()
+    return "" if content is None else str(content)
+
+
 def _is_within_allowed_roots(real_path: str) -> bool:
     """True, если real_path лежит внутри одного из whitelist-корней."""
     for root in ALLOWED_IMAGE_ROOTS:
@@ -352,7 +372,7 @@ def make_analyze_image_tool(agent, images: list[dict] | None = None,
                     if callable(_track):
                         _track(resp, tool="analyze_image",
                                model=getattr(_model, "model_name", None) or getattr(_model, "model", None) or _k)
-                    content = resp.content if hasattr(resp, "content") else str(resp)
+                    content = _content_text(resp.content if hasattr(resp, "content") else resp)
                     log.info("analyze_image: обработана картинка %s (vision-модель '%s')", label, _k)
                     return content
                 except Exception as e:

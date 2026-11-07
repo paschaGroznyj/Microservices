@@ -115,6 +115,8 @@ SERVICES = {
 BASE_DIR = Path(__file__).resolve().parent
 # Статика и шаблоны
 app.middleware("http")(cache_bust.cache_bust_middleware)
+# Monaco из образа — до /static (см. cache_bust.mount_vendor_monaco).
+cache_bust.mount_vendor_monaco(app)
 app.mount("/static", cache_bust.CacheBustStaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = cache_bust.CacheBustTemplates(directory=BASE_DIR / "templates")
 

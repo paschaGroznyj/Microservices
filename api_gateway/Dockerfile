@@ -1,3 +1,11 @@
+# ---- monaco: редактор /editor качается из npm при сборке (fetch_monaco.py), в git не хранится ----
+FROM python:3.10-slim AS monaco
+ARG MONACO_VERSION=0.52.2
+ARG MONACO_SHA512=GEQWEZmfkOGLdd3XK8ryrfWz3AIP8YymVXiPHEdewrUq7mh0qrKrfHLNCXcbB6sTnMLnOZ3ztSiKcciFUkIJwQ==
+ARG NPM_REGISTRY=https://registry.npmjs.org
+COPY fetch_monaco.py /tmp/fetch_monaco.py
+RUN python /tmp/fetch_monaco.py /opt/vendor/monaco
+
 FROM python:3.10-slim AS runtime
 
 WORKDIR /app
@@ -24,6 +32,7 @@ RUN uv pip install --no-cache -r requirements.txt
 
 # Копируем исходный код сразу с нужными правами
 COPY --chown=appuser:appuser . .
+COPY --from=monaco /opt/vendor/monaco /opt/vendor/monaco
 
 USER appuser
 

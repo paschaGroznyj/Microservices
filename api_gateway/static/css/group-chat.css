@@ -919,3 +919,47 @@
 }
 .gc-msg__reacts .gc-react--mine,
 .gc-msg__reacts--mine .gc-react--mine { background: var(--accent); color: #fff; box-shadow: none; }
+
+/* ── Галочки прочтения (только свои сообщения, правее времени) ── */
+.gc-ticks {
+  display: inline-flex;
+  align-items: center;
+  margin-left: -1px;
+  line-height: 0;
+}
+.gc-ticks svg { display: block; }
+.gc-ticks--wait svg { width: 11px; height: 11px; }
+/* ✓✓ ярче ✓: прочитанное видно сразу, как в Telegram */
+.gc-meta > .gc-ticks--read { opacity: 1; }
+.gc-msg--other .gc-ticks--read { color: var(--accent); }
+
+/* «Прочитали N» в меню и список прочитавших */
+.gc-ctx-sep { height: 1px; margin: 3px 6px; background: var(--border); }
+.gc-ctx-item:disabled { cursor: default; color: var(--text-muted); }
+.gc-ctx-item:disabled:hover { background: transparent; }
+.gc-ctx-readers span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+.gc-readers { min-width: 220px; max-width: 280px; }
+.gc-readers__list { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.gc-readers__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: .85rem;
+  color: var(--text-primary);
+}
+.gc-readers__ava {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font-size: .75rem;
+  font-weight: 600;
+}
+.gc-readers__name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

@@ -9,6 +9,9 @@
   GET  /api/group/{room_uid}/messages  — выгрузка истории
   GET  /api/group/{room_uid}/pinned    — закреплённые
   POST /api/group/message/delete|edit|pin
+  POST /api/group/reactions             — пачка реакций -> reactions_bus
+  POST /api/group/{room_uid}/read       — отметка прочтения -> reads_bus
+  GET  /api/group/message/{id}/readers  — кто прочитал (только автору)
   POST /internal/group_message         — приём событий от консюмера -> broadcast по WS
 
 Подключается в app.py: group_chat_gw.bind(http_client, chats_url, get_current_user, admin_check)
@@ -21,6 +24,7 @@ from fastapi.websockets import WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
 import reactions_bus
+import reads_bus
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +117,8 @@ async def api_group_messages(room_uid: str, request: Request, limit: int = 50, o
         raise HTTPException(status_code=401, detail="Not authenticated")
     resp = await _http.get(
         f"{_chats_url}/group/{room_uid}/messages",
-        params={k: v for k, v in {"limit": limit, "offset": offset, "before_id": before_id}.items() if v is not None},
+        params={k: v for k, v in {"limit": limit, "offset": offset, "before_id": before_id,
+                                  "viewer_id": user.get("user_id")}.items() if v is not None},
     )
     return resp.json()
 
@@ -261,6 +266,36 @@ async def api_group_reactions(body: ReactionsBody, request: Request):
     items = [i.model_dump() for i in body.items]
     via = await reactions_bus.enqueue(int(user["user_id"]), items)
     return {"ok": True, "queued": len(items), "via": via}
+
+
+class ReadBody(BaseModel):
+    last_read_id: int = Field(gt=0)
+
+
+@router.post("/api/group/{room_uid}/read")
+async def api_group_read(room_uid: str, body: ReadBody, request: Request):
+    """Новый максимум прочитанного (фронт шлёт не чаще 1 раза в секунду)
+    -> Redis zset (ZADD GT) -> дебаунсер reads_bus -> chats_service."""
+    user = await _get_current_user(request)
+    if not user or user.get("user_id") is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not reads_bus.valid_room(room_uid):
+        raise HTTPException(status_code=400, detail="bad room")
+    via = await reads_bus.enqueue(room_uid, int(user["user_id"]), user.get("username") or "",
+                                  body.last_read_id)
+    return {"ok": True, "via": via}
+
+
+@router.get("/api/group/message/{message_id}/readers")
+async def api_group_readers(message_id: int, request: Request):
+    user = await _get_current_user(request)
+    if not user or user.get("user_id") is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    resp = await _http.get(f"{_chats_url}/group/message/{message_id}/readers",
+                           params={"viewer_id": int(user["user_id"])})
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail="readers unavailable")
+    return resp.json()
 
 
 @router.post("/internal/group_message")

@@ -74,7 +74,8 @@ def test_group_messages_forwards_pagination(bind_gw, mocker):
     r = client.get("/api/group/room1/messages?limit=10&offset=5")
     assert r.status_code == 200
     _, kwargs = http_mock.get.call_args
-    assert kwargs["params"] == {"limit": 10, "offset": 5}
+    # viewer_id: chats_service отдаёт галочки и свою отметку прочтения
+    assert kwargs["params"] == {"limit": 10, "offset": 5, "viewer_id": 56}
 
 
 # ---------- delete: флаг is_admin ----------

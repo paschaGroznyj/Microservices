@@ -38,6 +38,36 @@ def _thumbhash(v) -> str | None:
     return v if isinstance(v, str) and _THUMBHASH_RE.match(v) else None
 
 GLOBAL_ROOM_UID = "global"
+READ_SCOPE = "group"
+MAX_READERS = 200
+
+_CHAT_READS_DDL = """
+    CREATE TABLE IF NOT EXISTS chat_reads (
+        scope        TEXT        NOT NULL,
+        chat_id      BIGINT      NOT NULL,
+        user_id      BIGINT      NOT NULL,
+        username     TEXT,
+        last_read_id BIGINT      NOT NULL,
+        updated_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (scope, chat_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS ix_chat_reads_chat_last ON chat_reads(scope, chat_id, last_read_id);
+"""
+
+# UPSERT пачки: отметка только растёт, RETURNING отдаёт реально сдвинутые
+_READS_UPSERT = """
+    INSERT INTO chat_reads AS r (scope, chat_id, user_id, username, last_read_id)
+    SELECT $1, t.chat_id, t.user_id, NULLIF(t.username, ''), t.last_read_id
+    FROM unnest($2::bigint[], $3::bigint[], $4::text[], $5::bigint[])
+         AS t(chat_id, user_id, username, last_read_id)
+    ON CONFLICT (scope, chat_id, user_id) DO UPDATE
+    SET last_read_id = GREATEST(r.last_read_id, EXCLUDED.last_read_id),
+        username     = COALESCE(EXCLUDED.username, r.username),
+        updated_at   = CURRENT_TIMESTAMP
+    WHERE EXCLUDED.last_read_id > r.last_read_id
+       OR (EXCLUDED.username IS NOT NULL AND EXCLUDED.username IS DISTINCT FROM r.username)
+    RETURNING r.chat_id, r.user_id, r.last_read_id
+"""
 
 
 class GroupChatDB:
@@ -52,6 +82,8 @@ class GroupChatDB:
             # реакции {"user_id": "emoji"}
             await conn.execute(
                 "ALTER TABLE group_messages ADD COLUMN IF NOT EXISTS reactions JSONB NOT NULL DEFAULT '{}'::jsonb")
+            # отметки прочтения (универсальная таблица, см. 05_chat_reads.sql)
+            await conn.execute(_CHAT_READS_DDL)
             # метаданные медиа для лоадера: размеры кадра и ThumbHash (base64)
             for col, typ in (("width", "INTEGER"), ("height", "INTEGER"), ("thumbhash", "TEXT")):
                 await conn.execute(
@@ -280,6 +312,100 @@ class GroupChatDB:
                 """, touched)
         return [{"room_uid": r["room_uid"], "message_id": r["id"],
                  "reactions": summarize(r["reactions"])} for r in rows]
+
+    # ── Прочтение ──────────────────────────────────────────
+
+    async def mark_reads(self, ops: list) -> list:
+        """ops: [{room_uid, user_id, username, last_read_id}] от шины reads_bus.
+        Отметка клампится к последнему id комнаты (фронт не задерёт её вперёд)
+        и только растёт. Возвращает [{room_uid, user_id, last_read_id}] по
+        отметкам, которые реально сдвинулись, для события read."""
+        best: dict = {}
+        for op in ops or []:
+            try:
+                room_uid = str(op["room_uid"])
+                uid, rid = int(op["user_id"]), int(op["last_read_id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if rid <= 0 or not room_uid:
+                continue
+            name = (op.get("username") or "")[:128]
+            prev = best.get((room_uid, uid))
+            if prev is None or rid > prev[0]:
+                best[(room_uid, uid)] = (rid, name or (prev[1] if prev else ""))
+        if not best:
+            return []
+        uids_by_room = {}
+        async with self.pool.acquire() as conn:
+            rooms = await conn.fetch("""
+                SELECT r.id, r.room_uid,
+                       (SELECT MAX(m.id) FROM group_messages m WHERE m.room_id = r.id) AS last_id
+                FROM group_rooms r
+                WHERE r.room_uid = ANY($1::text[]) AND r.is_deleted = FALSE
+            """, sorted({k[0] for k in best}))
+            room_by_uid = {r["room_uid"]: (r["id"], r["last_id"] or 0) for r in rooms}
+            chat_ids, user_ids, names, read_ids = [], [], [], []
+            for (room_uid, uid), (rid, name) in best.items():
+                room = room_by_uid.get(room_uid)
+                if not room or room[1] <= 0:
+                    continue
+                chat_ids.append(room[0]); user_ids.append(uid)
+                names.append(name); read_ids.append(min(rid, room[1]))
+                uids_by_room[room[0]] = room_uid
+            if not chat_ids:
+                return []
+            rows = await conn.fetch(_READS_UPSERT, READ_SCOPE, chat_ids, user_ids, names, read_ids)
+        return [{"room_uid": uids_by_room[r["chat_id"]], "user_id": r["user_id"],
+                 "last_read_id": r["last_read_id"]} for r in rows]
+
+    async def read_state(self, room_uid: str, viewer_id: int) -> dict:
+        """Для ответа истории:
+          read_upto       — MAX отметки других пользователей: мои сообщения с
+                            id <= read_upto получают две галочки;
+          my_last_read_id — своя отметка; нет записи -> последний id комнаты
+                            (первый вход открывается внизу, без 164 непрочитанных);
+          has_mark        — есть ли своя запись. Без неё фронт не считает
+                            my_last_read_id отправленным и шлёт первую отметку
+                            по видимым сообщениям, иначе первый вход не пишет ничего."""
+        room = await self.get_room_by_uid(room_uid)
+        if not room:
+            return {"read_upto": 0, "my_last_read_id": 0, "has_mark": False}
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT
+                  (SELECT COALESCE(MAX(last_read_id), 0) FROM chat_reads
+                    WHERE scope = $1 AND chat_id = $2 AND user_id <> $3) AS read_upto,
+                  COALESCE(
+                    (SELECT last_read_id FROM chat_reads
+                      WHERE scope = $1 AND chat_id = $2 AND user_id = $3),
+                    (SELECT COALESCE(MAX(id), 0) FROM group_messages WHERE room_id = $2)
+                  ) AS my_last_read_id,
+                  EXISTS(SELECT 1 FROM chat_reads
+                          WHERE scope = $1 AND chat_id = $2 AND user_id = $3) AS has_mark
+            """, READ_SCOPE, room["id"], int(viewer_id))
+        return {"read_upto": int(row["read_upto"] or 0),
+                "my_last_read_id": int(row["my_last_read_id"] or 0),
+                "has_mark": bool(row["has_mark"])}
+
+    async def get_readers(self, message_id: int, viewer_id: int):
+        """Кто прочитал сообщение. Только автор сообщения (как в TG).
+        None — нет сообщения, False — чужое сообщение."""
+        async with self.pool.acquire() as conn:
+            msg = await conn.fetchrow("""
+                SELECT id, room_id, user_id FROM group_messages
+                WHERE id = $1 AND is_deleted = FALSE
+            """, int(message_id))
+            if not msg:
+                return None
+            if int(msg["user_id"]) != int(viewer_id):
+                return False
+            rows = await conn.fetch("""
+                SELECT user_id, username, updated_at FROM chat_reads
+                WHERE scope = $1 AND chat_id = $2 AND last_read_id >= $3 AND user_id <> $4
+                ORDER BY updated_at DESC
+                LIMIT $5
+            """, READ_SCOPE, msg["room_id"], msg["id"], msg["user_id"], MAX_READERS)
+        return [{"user_id": r["user_id"], "username": r["username"]} for r in rows]
 
     # ── Файлы (вложения) ───────────────────────────────────────
 

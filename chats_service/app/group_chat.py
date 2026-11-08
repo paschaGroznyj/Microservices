@@ -98,6 +98,17 @@ class ReactionBatch(BaseModel):
     ops: list[ReactionOp]
 
 
+class ReadOp(BaseModel):
+    room_uid: str
+    user_id: int
+    username: str = ""
+    last_read_id: int
+
+
+class ReadBatch(BaseModel):
+    ops: list[ReadOp]
+
+
 def _send_or_503(topic, key, value):
     """send + ожидание ack. flush() ошибку доставки не поднимает: без get()
     ответ 200 мог уйти, хотя сообщение в Kafka не легло."""
@@ -137,14 +148,17 @@ async def group_send(payload: GroupSendPayload):
 
 @router.get("/{room_uid}/messages")
 async def group_messages(room_uid: str, limit: int = 50, offset: int = 0,
-                         before_id: int | None = None):
+                         before_id: int | None = None, viewer_id: int | None = None):
     if group_db is None:
         raise HTTPException(status_code=503, detail="db not ready")
     try:
         result = await group_db.get_messages(room_uid, limit=limit, offset=offset,
                                              before_id=before_id)
+        # галочки и своя отметка: только если гейтвей передал, кто смотрит
+        reads = await group_db.read_state(room_uid, viewer_id) if viewer_id else None
         return {
             "room_uid": room_uid,
+            "reads": reads,
             "messages": result["messages"],
             "total_count": result["total_count"],
             "has_more": result["has_more"],
@@ -430,3 +444,38 @@ async def group_reactions_apply(batch: ReactionBatch):
 async def _room_id_of(message_id: int):
     async with group_db.pool.acquire() as conn:
         return await conn.fetchval("SELECT room_id FROM group_messages WHERE id = $1", message_id)
+
+
+# ── Прочтение (галочки) ───────────────────────────────────
+
+@router.post("/reads/apply")
+async def group_reads_apply(batch: ReadBatch):
+    """Пачка отметок прочтения от шины гейтвея (api_gateway/reads_bus.py).
+    Один UPSERT, отметка только растёт. Сдвинутые отметки уходят событием
+    read в комнату: у отправителя появляются две галочки."""
+    if group_db is None:
+        raise HTTPException(status_code=503, detail="db not ready")
+    if len(batch.ops) > 5000:
+        raise HTTPException(status_code=413, detail="слишком большая пачка")
+    moved = await group_db.mark_reads(
+        [op.model_dump() if hasattr(op, "model_dump") else op.dict() for op in batch.ops])
+    by_room: dict = {}
+    for row in moved:
+        by_room.setdefault(row["room_uid"], []).append(
+            {"user_id": row["user_id"], "last_read_id": row["last_read_id"]})
+    for room_uid, items in by_room.items():
+        _broadcast_event(room_uid, {"event": "read", "items": items})
+    return {"ok": True, "moved": len(moved)}
+
+
+@router.get("/message/{message_id}/readers")
+async def group_readers(message_id: int, viewer_id: int):
+    """Кто прочитал сообщение. Видит только автор (как в Telegram)."""
+    if group_db is None:
+        raise HTTPException(status_code=503, detail="db not ready")
+    readers = await group_db.get_readers(message_id, viewer_id)
+    if readers is None:
+        raise HTTPException(status_code=404, detail="сообщение не найдено")
+    if readers is False:
+        raise HTTPException(status_code=403, detail="только для автора сообщения")
+    return {"message_id": message_id, "count": len(readers), "readers": readers}

@@ -365,6 +365,8 @@
         if (window.__isAuthRedirectOrUnauthorized?.(res)) { window.__onAuthSessionExpired?.(); return; }
         if (!res.ok) return;
         const data = await res.json();
+        // отметки прочтения до рендера: галочки сразу верные
+        window.GroupInteraction?.onHistory(data);
         this.messages = data.messages || [];
         this._hasMoreHistory = !!data.has_more;
         this._renderAll();
@@ -592,6 +594,7 @@
     _onEvent(data) {
       const ev = data.event;
       if (ev === 'new_message' && data.message) {
+        window.GroupInteraction?.onNewMessage(data.message);
         this._upsertMessage(data.message);
       } else if (ev === 'edit_message' && data.message) {
         this._upsertMessage(data.message);
@@ -604,6 +607,8 @@
       } else if (ev === 'reactions') {
         // точечно патчим .gc-meta, без _renderAll (не перезапускаем лоадеры медиа)
         window.GroupInteraction?.onEvent(data);
+      } else if (ev === 'read') {
+        window.GroupInteraction?.onRead(data);
       }
     },
 
@@ -1026,7 +1031,7 @@
       const reacts = (!m._optimistic && window.GroupInteraction) ? window.GroupInteraction.chipsHtml(m) : '';
       // медиа без подписи: реакции под облаком, снаружи, как в Telegram
       const mediaOnly = hasImages && !hasCaption && !audioOnly;
-      const metaHtml = `<div class="gc-meta">${mediaOnly ? '' : reacts}${pin}${edited}<span class="gc-time">${this._fmtTime(m.created_at)}</span></div>`;
+      const metaHtml = `<div class="gc-meta">${mediaOnly ? '' : reacts}${pin}${edited}<span class="gc-time">${this._fmtTime(m.created_at)}</span>${window.GroupInteraction ? window.GroupInteraction.ticksHtml(m) : ''}</div>`;
       const reactsRow = mediaOnly
         ? `<div class="gc-msg__reacts ${mine ? 'gc-msg__reacts--mine' : 'gc-msg__reacts--other'}">${reacts}</div>`
         : '';
@@ -1858,6 +1863,7 @@
         });
       });
       window.GroupInteraction?.bindChips(box);
+      window.GroupInteraction?.observe(box);
     },
 
     _closeCtxMenu() {

@@ -11,6 +11,7 @@ Kafka-консюмер ОБЩЕГО / группового чата.
   edit_message  -> уже в БД (сделал endpoint), просто broadcast
   delete_message-> broadcast
   pin_message   -> broadcast
+  reactions, read -> broadcast (в БД уже записал эндпоинт)
 """
 import json
 import logging
@@ -85,10 +86,21 @@ class GroupDBConsumer:
                         logger.error(f"[group-chat] bind files error: {fe}")
                         files = []
                     saved["files"] = files
+                    # отправитель прочитал всё до своего сообщения (как в TG).
+                    # Событие read не шлём: клиенты сдвигают отметку автора
+                    # сами по new_message. Сбой отметки не валит доставку.
+                    try:
+                        await self.group_db.mark_reads([{
+                            "room_uid": room_uid, "user_id": saved["user_id"],
+                            "username": saved.get("username") or "",
+                            "last_read_id": saved["id"],
+                        }])
+                    except Exception as re_:
+                        logger.error(f"[group-chat] mark read error: {re_}")
                     await self._broadcast(room_uid, {
                         "event": "new_message", "message": saved,
                     }, gateway_target)
-            elif event in ("edit_message", "delete_message", "pin_message", "reactions"):
+            elif event in ("edit_message", "delete_message", "pin_message", "reactions", "read"):
                 # Фичи уже применены в БД эндпоинтом, консюмер только транслирует
                 await self._broadcast(room_uid, payload, gateway_target)
             else:

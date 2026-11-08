@@ -1460,8 +1460,8 @@
                 if (pr && typeof pr.catch === 'function') pr.catch(() => {});
               }
             };
-            if (vidThumb.readyState >= 1) doneVid();
-            else vidThumb.addEventListener('loadedmetadata', doneVid, { once: true });
+            if (vidThumb.readyState >= 2) doneVid();
+            else vidThumb.addEventListener('loadeddata', doneVid, { once: true });
           }
         });
         
@@ -1469,8 +1469,15 @@
         col.querySelectorAll('.gc-collage__cell--video-single .gc-video').forEach(vid => {
           const wrap = vid.closest('.gc-collage__cell--video-single');
           if (window.MediaRing && wrap) window.MediaRing.bindVideo(vid, wrap.querySelector('.gc-collage__loader'), vid.getAttribute('data-size'));
+          // кольцо гаснет по первому кадру, размеры ячейки — по метаданным
+          const markLoaded = () => wrap.classList.add('is-loaded');
+          if (vid.readyState >= 2) markLoaded();
+          else {
+            vid.addEventListener('loadeddata', markLoaded, { once: true });
+            vid.addEventListener('error', markLoaded, { once: true });
+            vid.addEventListener('loadedmetadata', () => setTimeout(markLoaded, 4000), { once: true });
+          }
           const doneVid = () => {
-            wrap.classList.add('is-loaded');
             const vw = vid.videoWidth || 0, vh = vid.videoHeight || 0;
             if (vw > 0 && vh > 0) {
               const MAX_W = 420; const MAX_H = 420; const MIN_W = 300; const MIN_H = 180;

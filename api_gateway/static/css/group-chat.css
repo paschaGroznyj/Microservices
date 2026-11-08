@@ -451,19 +451,8 @@
   pointer-events: none;
 }
 .gc-collage__cell.is-loaded .gc-collage__loader { display: none; }
-/* у видео тёмная подложка: акцент высветлен в любой теме */
-.gc-collage__cell--video-thumb .gc-collage__loader,
-.gc-collage__cell--video-single .gc-collage__loader { background: transparent; }
-.gc-collage__cell--video-thumb .fa-ring,
-.gc-collage__cell--video-single .fa-ring {
-  --ring-track: rgba(255, 255, 255, 0.14);
-  --ring-arc: color-mix(in srgb, var(--accent, #cc785c) 70%, #fff);
-  --ring-icon: color-mix(in srgb, var(--accent, #cc785c) 55%, rgba(255, 255, 255, 0.7));
-  --ring-cut: #000;
-}
+/* видео грузится на той же подложке surface2, что и картинки */
 .gc-collage__cell--video-thumb:not(.is-loaded) .gc-collage__play { opacity: 0; }
-.gc-collage__cell--video-thumb .fa-ring-size,
-.gc-collage__cell--video-single .fa-ring-size { color: rgba(255, 255, 255, 0.65); }
 .gc-collage__cell img {
   position: relative;
   z-index: 1;

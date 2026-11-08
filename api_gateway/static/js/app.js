@@ -2502,7 +2502,6 @@ class ChatApp {
         if (!videoEl) return;
         const card = videoEl.closest('.fa-video-card');
         if (!card) return;
-        card.classList.remove('fa-image-card--loading');
         const vw = videoEl.videoWidth || 0;
         const vh = videoEl.videoHeight || 0;
         if (vw > 0 && vh > 0) {
@@ -2985,6 +2984,11 @@ class ChatApp {
             } else {
                 video.addEventListener('loadedmetadata', onMeta, { once: true });
             }
+            // лоадер снимаем по первому кадру (loadeddata), как у картинки по load:
+            // на loadedmetadata кадра ещё нет и вместо кольца видна пустая подложка
+            const onFrame = () => card.classList.remove('fa-image-card--loading');
+            if (video.readyState >= 2) onFrame();
+            else video.addEventListener('loadeddata', onFrame, { once: true });
             video.addEventListener('error', () => {
                 card.classList.remove('fa-image-card--loading');
             }, { once: true });
@@ -3050,9 +3054,8 @@ class ChatApp {
                     if (window.MediaRing) window.MediaRing.bindVideo(video, skel, item.file && item.file.size);
 
                     const onLoaded = () => cell.classList.remove('fa-collage__cell--loading');
-                    if (video.readyState >= 1) onLoaded();
+                    if (video.readyState >= 2) onLoaded();
                     else {
-                        video.addEventListener('loadedmetadata', onLoaded, { once: true });
                         video.addEventListener('loadeddata', onLoaded, { once: true });
                         video.addEventListener('error', onLoaded, { once: true });
                     }

@@ -3202,6 +3202,38 @@ pre {
 /* ошибка: специфичность выше, чем у правила «скрыть скелетон после загрузки» */
 .fa-image-card.fa-image-card--error .fa-image-card__skeleton.fa-media-loader { display: flex; }
 .fa-image-card--gen .fa-media-loader .fa-ring { --ring-size: 56px; }
+/* Прогресс: размер известен → дуга заполняется от 12 часов (--ring-fill 0..1 из MediaRing) */
+.fa-ring.fa-ring--det,
+.fa-ring.fa-ring--det .fa-ring__icon,
+.fa-ring.fa-ring--det .fa-ring__pulse { animation: none; }
+.fa-ring.fa-ring--det .fa-ring__arc {
+  animation: none;
+  transform: rotate(-90deg);
+  stroke-dasharray: calc(125.664px * var(--ring-fill, 0)) 125.664px;
+  stroke-dashoffset: 0;
+  transition: stroke-dasharray 0.2s linear;
+}
+/* подпись «0,8 / 2,0 МБ» под кольцом */
+.fa-ring-size {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(50% + var(--ring-label-offset, 30px));
+  text-align: center;
+  font-family: var(--font-anthropic-sans, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif);
+  font-size: 11px;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--text-primary, #1a1612) 55%, transparent);
+  pointer-events: none;
+}
+.fa-ring-size:empty { display: none; }
+.fa-image-card--gen .fa-ring-size { --ring-label-offset: 36px; }
+.fa-video-card .fa-ring-size,
+.fa-collage__cell--video .fa-ring-size { color: rgba(255, 255, 255, 0.65); }
+.image-lightbox__loader .fa-ring-size { --ring-label-offset: 42px; font-size: 12px; color: rgba(255, 255, 255, 0.6); }
+
 /* Ошибка: кольцо серое и стоит */
 .fa-image-card--error .fa-ring,
 .fa-image-card--error .fa-ring * { animation: none; }
@@ -3254,6 +3286,11 @@ pre {
 .is-error > .image-lightbox__loader .fa-ring__arc { stroke: rgba(255, 255, 255, 0.25); stroke-dasharray: none; }
 .is-error > .image-lightbox__loader .fa-ring__glyph { fill: rgba(255, 255, 255, 0.35); }
 .is-error > .image-lightbox__loader .image-lightbox__loader-text { display: block; }
+/* ошибка поверх прогресса: дуга целиком серая, подписи размера нет */
+.fa-image-card--error .fa-ring.fa-ring--det .fa-ring__arc,
+.is-error > .image-lightbox__loader .fa-ring.fa-ring--det .fa-ring__arc { stroke-dasharray: none; transform: none; transition: none; }
+.fa-image-card--error .fa-ring-size,
+.is-error > .image-lightbox__loader .fa-ring-size { display: none; }
 /* .gc-lightbox в селекторе: group-chat.css грузится позже и задаёт только transform */
 .image-lightbox__media-container > .image-lightbox__img,
 .image-lightbox__media-container > .image-lightbox__video,
@@ -3269,6 +3306,7 @@ pre {
 @media (prefers-reduced-motion: reduce) {
   .fa-ring, .fa-ring__icon { animation-duration: 3s; }
   .fa-ring__arc, .fa-ring__pulse { animation: none; }
+  .fa-ring.fa-ring--det .fa-ring__arc { transition: none; }
   .image-lightbox__media-container > .image-lightbox__img,
   .gc-lightbox .image-lightbox__media-container > .image-lightbox__img { transition: none; }
 }

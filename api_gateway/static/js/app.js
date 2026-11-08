@@ -2859,14 +2859,13 @@ class ChatApp {
             img.className = 'fa-image-card__img';
             img.alt = safeName;
             img.loading = 'lazy';
-            img.src = url;
             card.classList.add('fa-image-card--loading');
             let triedFallback = false;
             const applyCardAspect = () => {
                 card.classList.remove('fa-image-card--loading');
                 card.classList.remove('fa-image-card--error');
                 const activeSrc = img.currentSrc || img.src || url;
-                item.url = activeSrc;
+                if (!/^blob:/.test(activeSrc)) item.url = activeSrc;
                 if (img.naturalWidth > 0 && img.naturalHeight > 0) {
                     const MAX_W = 420;
                     const MAX_H = 420;
@@ -2944,6 +2943,8 @@ class ChatApp {
             card.appendChild(bg);
             card.appendChild(skel);
             card.appendChild(img);
+            if (window.MediaRing) window.MediaRing.loadImage(img, url, skel, { total: item.file && item.file.size });
+            else img.src = url;
             card.appendChild(overlay);
             if (!allItems || allItems.length <= 1) { card.appendChild(dlBtn); }
             return card;
@@ -2975,6 +2976,8 @@ class ChatApp {
             video.appendChild(source);
 
             this._bindVideoPreviewLoop(video, 5);
+
+            if (window.MediaRing) window.MediaRing.bindVideo(video, skel, item.file && item.file.size);
 
             const onMeta = () => this._applyVideoCardAspect(video);
             if (video.readyState >= 1 && video.videoWidth > 0) {
@@ -3044,6 +3047,8 @@ class ChatApp {
 
                     this._bindVideoPreviewLoop(video, 5);
 
+                    if (window.MediaRing) window.MediaRing.bindVideo(video, skel, item.file && item.file.size);
+
                     const onLoaded = () => cell.classList.remove('fa-collage__cell--loading');
                     if (video.readyState >= 1) onLoaded();
                     else {
@@ -3071,12 +3076,13 @@ class ChatApp {
                     img.className = 'fa-collage__img';
                     img.alt = this.escapeHtml(item.name || 'image');
                     img.loading = 'lazy';
-                    img.src = item.url;
+                    if (window.MediaRing) window.MediaRing.loadImage(img, item.url, skel, { total: item.file && item.file.size });
+                    else img.src = item.url;
                     let triedFallback = false;
                     const onImgLoad = () => {
                         cell.classList.remove('fa-collage__cell--loading');
                         const activeSrc = img.currentSrc || img.src || item.url;
-                        item.url = activeSrc;
+                        if (!/^blob:/.test(activeSrc)) item.url = activeSrc;
                         if (activeSrc && activeSrc !== '#') {
                             bg.style.backgroundImage = `url("${activeSrc.replace(/"/g, '\"')}")`;
                             if (item._dlBtn) item._dlBtn.href = item.dlUrl || activeSrc;
@@ -3958,6 +3964,7 @@ class ChatApp {
                 video.addEventListener('loadeddata', markReady, { once: true });
                 video.addEventListener('error', markError, { once: true });
                 mediaContainer.appendChild(video);
+                if (window.MediaRing) window.MediaRing.bindVideo(video, loader, it.file && it.file.size);
             } else {
                 const img = document.createElement('img');
                 img.className = 'image-lightbox__img';
@@ -3986,26 +3993,30 @@ class ChatApp {
                     dlEl.setAttribute('download', dlName);
                 };
 
-                if (it.imageKey) {
-                    img.src = it.url;
+                const MR = window.MediaRing;
+                const hit = MR && MR.cached(it.url);
+                if (hit) {
+                    // уже загружена карточкой/коллажем — без повторного запроса
+                    img.src = hit;
+                    applyKey(MR.keyOf(it.url));
+                } else if (MR) {
+                    MR.fetchProgress(it.url, {
+                        total: it.file && it.file.size,
+                        onProgress: (l, t) => { if (myToken === renderToken) MR.setProgress(loader, l, t); },
+                    }).then(({ blob, imageKey: key }) => {
+                        const objUrl = URL.createObjectURL(blob);
+                        MR.track(it.url, objUrl, blob.size, key);   // кеш владеет blob, отзовёт при вытеснении
+                        if (myToken !== renderToken) return;
+                        img.src = objUrl;
+                        dlEl.setAttribute('href', objUrl);
+                        applyKey(key);
+                    }).catch(() => {
+                        if (myToken !== renderToken) return;
+                        MR.reset(loader);
+                        img.src = it.url;
+                    });
                 } else {
-                    fetch(it.url, { credentials: 'same-origin' })
-                        .then((resp) => {
-                            const key = resp.headers.get('X-Image-Key');
-                            return resp.blob().then((blob) => ({ key, blob }));
-                        })
-                        .then(({ key, blob }) => {
-                            if (myToken !== renderToken) return;
-                            const objUrl = URL.createObjectURL(blob);
-                            img.src = objUrl;
-                            dlEl.setAttribute('href', objUrl);
-                            applyKey(key);
-                            overlay._objUrl = objUrl;
-                        })
-                        .catch(() => {
-                            if (myToken !== renderToken) return;
-                            img.src = it.url;
-                        });
+                    img.src = it.url;
                 }
                 
 

@@ -462,6 +462,8 @@
   --ring-cut: #000;
 }
 .gc-collage__cell--video-thumb:not(.is-loaded) .gc-collage__play { opacity: 0; }
+.gc-collage__cell--video-thumb .fa-ring-size,
+.gc-collage__cell--video-single .fa-ring-size { color: rgba(255, 255, 255, 0.65); }
 .gc-collage__cell img {
   position: relative;
   z-index: 1;

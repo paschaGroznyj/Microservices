@@ -1071,6 +1071,7 @@
           const url = this._esc(this._fileUrl(f));
           const isVid = !f.is_image && this._isVideo(f);
           const name = this._esc(f.file_name || (isVid ? 'video.mp4' : 'image'));
+          const sz = Number(f.size_bytes || f.file_size || f.size) || 0;
           const more = (n > 4 && i === 3) ? `<span class="gc-collage__more">+${n - 4}</span>` : '';
           
           if (isVid) {
@@ -1081,7 +1082,7 @@
               return `<div class="gc-collage__cell gc-collage__cell--video-single" data-img-idx="0">
                 <span class="gc-collage__bg" aria-hidden="true"></span>
                 <span class="gc-collage__loader" aria-hidden="true">${GroupChat._ringHtml(true)}</span>
-                <video class="gc-video" controls preload="metadata" playsinline webkit-playsinline src="${url}">
+                <video class="gc-video" data-size="${sz}" controls preload="metadata" playsinline webkit-playsinline src="${url}">
                   <source src="${url}" type="${vmime}">
                 </video>
                 <a class="image-lightbox__dl fa-card-dl-btn" href="${dlUrl}" download="${name}" title="Скачать" onclick="event.stopPropagation()">
@@ -1093,7 +1094,7 @@
               const dlUrl = url + (url.indexOf('/api/group/file/') === 0 ? '?download=1' : '');
               return `<div class="gc-collage__cell gc-collage__cell--video-thumb" role="button" tabindex="0" data-lb="1" data-img-idx="${i}" title="${name}">
                 <span class="gc-collage__loader" aria-hidden="true">${GroupChat._ringHtml(true)}</span>
-                <video class="gc-collage__thumb-video" data-src="${url}" preload="metadata" autoplay playsinline webkit-playsinline muted></video>
+                <video class="gc-collage__thumb-video" data-size="${sz}" data-src="${url}" preload="metadata" autoplay playsinline webkit-playsinline muted></video>
                 <span class="gc-collage__play"><svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
                 ${more}
               </div>`;
@@ -1106,7 +1107,7 @@
             return `<div class="gc-collage__cell" role="button" tabindex="0" data-lb="1" data-img-idx="${i}">
               <span class="gc-collage__bg" data-bg="${url}" aria-hidden="true"></span>
               <span class="gc-collage__loader" aria-hidden="true">${GroupChat._ringHtml(false)}</span>
-              <img src="${url}" alt="${name}" loading="lazy" decoding="async">${more}
+              <img data-ring-src="${url}" data-size="${sz}" alt="${name}" decoding="async">${more}
               ${dlBtn}
             </div>`;
           }
@@ -1118,7 +1119,8 @@
             url: this._fileUrl(f),
             name: f.file_name || (f.is_image ? 'image' : 'video'),
             isVideo: (!f.is_image && this._isVideo(f)),
-            mime: this._videoMime(f)
+            mime: this._videoMime(f),
+            size: Number(f.size_bytes || f.file_size || f.size) || 0
           };
         });
         
@@ -1243,14 +1245,16 @@
           vid.addEventListener('error', markError, { once: true });
           vid.src = it.url;
           container.appendChild(vid);
+          if (window.MediaRing) window.MediaRing.bindVideo(vid, loader, it.size);
           currentMedia = vid;
         } else {
           const img = document.createElement('img');
           img.className = 'image-lightbox__img';
           img.addEventListener('load', markReady, { once: true });
           img.addEventListener('error', markError, { once: true });
-          img.src = it.url;
           container.appendChild(img);
+          if (window.MediaRing) window.MediaRing.loadImage(img, it.url, loader, { total: it.size, lazy: false });
+          else img.src = it.url;
           currentMedia = img;
           if (img.complete && img.naturalWidth > 0) markReady();
           
@@ -1426,7 +1430,16 @@
             };
             if (img.complete && img.naturalWidth > 0) done();
             else { img.addEventListener('load', done, { once: true }); img.addEventListener('error', done, { once: true }); }
+            // загрузка с прогрессом на кольце (src задаётся только здесь)
+            const rsrc = img.getAttribute('data-ring-src');
+            if (rsrc) {
+              img.removeAttribute('data-ring-src');
+              const ldr = cell.querySelector('.gc-collage__loader');
+              if (window.MediaRing) window.MediaRing.loadImage(img, rsrc, ldr, { total: img.getAttribute('data-size'), lazy: true });
+              else img.src = rsrc;
+            }
           } else if (vidThumb) {
+            if (window.MediaRing) window.MediaRing.bindVideo(vidThumb, cell.querySelector('.gc-collage__loader'), vidThumb.getAttribute('data-size'));
             vidThumb.muted = true;
             vidThumb.defaultMuted = true;
             vidThumb.autoplay = true;
@@ -1455,6 +1468,7 @@
         // Для одиночного видео прямо в чате
         col.querySelectorAll('.gc-collage__cell--video-single .gc-video').forEach(vid => {
           const wrap = vid.closest('.gc-collage__cell--video-single');
+          if (window.MediaRing && wrap) window.MediaRing.bindVideo(vid, wrap.querySelector('.gc-collage__loader'), vid.getAttribute('data-size'));
           const doneVid = () => {
             wrap.classList.add('is-loaded');
             const vw = vid.videoWidth || 0, vh = vid.videoHeight || 0;

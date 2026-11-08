@@ -70,6 +70,8 @@ def _sanitize_files_for_ws(attached_files: list[dict] | None) -> list[dict] | No
             # kind пробрасываем на фронт: "image" — рисуем превью, иначе файл-чип.
             "kind": f.get("kind"),
             "image_key": f.get("image_key"),
+            # размер в байтах (может быть None) — фронт показывает, сколько ждать
+            "size": f.get("size"),
         }
         for f in attached_files
     ]

@@ -61,8 +61,12 @@ CREATE TABLE IF NOT EXISTS chat_files (
     file_path  TEXT,
     file_kind  TEXT,
     image_key  TEXT,
+    file_size  BIGINT,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Размер файла в байтах (для индикатора загрузки на фронте); для старых баз.
+ALTER TABLE chat_files ADD COLUMN IF NOT EXISTS file_size BIGINT;
 
 CREATE INDEX IF NOT EXISTS ix_chat_files_message_id ON chat_files(message_id);
 CREATE INDEX IF NOT EXISTS ix_chat_files_chat_id ON chat_files(chat_id);

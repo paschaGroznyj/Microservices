@@ -475,6 +475,14 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                         "kind": f.get("kind"),
                     }
 
+                # Размер для фронта (chat_files.file_size): сколько байт ждать.
+                _p = entry.get("path")
+                if _p and os.path.isfile(_p):
+                    try:
+                        entry["size"] = os.path.getsize(_p)
+                    except OSError:
+                        pass
+
                 # Для Telegram host-бот изолирован от ФС агента (разные контейнеры),
                 # поэтому os.path.exists(path) на его стороне вернёт False и файл
                 # молча не отправится. Дочитываем байты ЗДЕСЬ и кладём base64 в
@@ -531,6 +539,27 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                         logging.error(f"[telegram] не удалось прочитать файл в base64: {_b64_err}")
 
                 attached_files.append(entry)
+
+        # Картинки generate_image лежат в generated_images без файла на диске:
+        # размер для chat_files.file_size берём из БД.
+        if attached_files:
+            _need = [f.get("image_key") for f in attached_files
+                     if f.get("image_key") and f.get("size") is None]
+            if _need:
+                try:
+                    async with db.pool.acquire() as conn:
+                        _rows = await conn.fetch(
+                            "SELECT image_key::text AS k, octet_length(image_data) AS n "
+                            "FROM generated_images WHERE image_key::text = ANY($1::text[])",
+                            [str(k) for k in _need],
+                        )
+                    _sizes = {r["k"]: r["n"] for r in _rows}
+                    for f in attached_files:
+                        k = f.get("image_key")
+                        if f.get("size") is None and k and str(k) in _sizes:
+                            f["size"] = _sizes[str(k)]
+                except Exception as size_err:
+                    logging.warning(f"generated_images: размер картинок не получен: {size_err}")
 
         message_id = f"msg-{int(time.time() * 1000)}-{str(uuid.uuid4())[:8]}"
 

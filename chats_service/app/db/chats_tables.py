@@ -11,6 +11,21 @@ logging.basicConfig(
 )
 
 
+def _file_size(f: dict) -> int | None:
+    """Размер вложения в байтах из метаданных (size / file_size / size_bytes)."""
+    for k in ("size", "file_size", "size_bytes"):
+        v = f.get(k)
+        if v is None or isinstance(v, bool):
+            continue
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            continue
+        if n >= 0:
+            return n
+    return None
+
+
 class DataBaseChats:
     async def init_db_pool(self):
         """Инициализация пула подключений к базе данных."""
@@ -50,8 +65,13 @@ class DataBaseChats:
     @staticmethod
     async def __init_db(conn):
         # DDL-схема таблиц чатов, файлов, опросов и воркспейсов
-        # централизована в postgres/sql/02_chats/01_chats_core.sql
-        return
+        # централизована в postgres/sql/02_chats/01_chats_core.sql.
+        # Здесь только идемпотентные миграции для уже созданных баз
+        # (init-скрипты postgres выполняются лишь на пустом томе).
+        try:
+            await conn.execute("ALTER TABLE chat_files ADD COLUMN IF NOT EXISTS file_size BIGINT")
+        except Exception as e:
+            logging.warning(f"chat_files.file_size: миграция не выполнена: {e}")
 
     async def save_poll_answer(
         self,
@@ -287,13 +307,14 @@ class DataBaseChats:
                     if attached_files:
                         source = "agent" if is_from_bot else "user"
                         await conn.executemany("""
-                            INSERT INTO chat_files (message_id, chat_id, user_id, file_name, file_ext, source, file_path, file_kind, image_key)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
+                            INSERT INTO chat_files (message_id, chat_id, user_id, file_name, file_ext, source, file_path, file_kind, image_key, file_size)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
                         """, [
                             (
                                 message_id, chat_id, user_id,
                                 f["name"], f["name"].rsplit(".", 1)[-1].lower() if "." in f["name"] else None,
                                 source, f.get("path"), f.get("kind"), f.get("image_key"),
+                                _file_size(f),
                             )
                             for f in attached_files
                         ])
@@ -750,7 +771,8 @@ class DataBaseChats:
                             (
                                 SELECT json_agg(
                                     json_build_object('name', f.file_name, 'ext', f.file_ext,
-                                    'source', f.source, 'kind', f.file_kind, 'image_key', f.image_key)
+                                    'source', f.source, 'kind', f.file_kind, 'image_key', f.image_key,
+                                    'size', f.file_size)
                                     ORDER BY f.id ASC
                                 )
                                 FROM chat_files f

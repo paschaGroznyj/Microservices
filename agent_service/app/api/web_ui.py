@@ -51,25 +51,6 @@ def _is_within_allowed_roots(real_path: str) -> bool:
     return False
 
 
-def _resolve_in_whitelist(file_name: str) -> str | None:
-    """Ищет файл по basename в whitelist-корнях (рекурсивно).
-
-    Возвращает абсолютный путь первого совпадения внутри разрешённых
-    корней либо None. basename берётся принудительно, чтобы в имени
-    нельзя было протащить разделители пути / обход директорий.
-    """
-    import glob as _glob
-
-    safe_name = os.path.basename((file_name or "").strip())
-    if not safe_name:
-        return None
-    for root in ALLOWED_FILES_ROOTS:
-        for cand in _glob.glob(os.path.join(root, "**", safe_name), recursive=True):
-            real = os.path.realpath(cand)
-            if _is_within_allowed_roots(real) and os.path.isfile(real):
-                return real
-    return None
-
 def _content_disposition(filename: str, disposition: str = "attachment") -> str:
     """
     Собрать корректный заголовок Content-Disposition для имён с не-ASCII
@@ -309,6 +290,117 @@ def _parse_web_byte_range(range_header: str, total_size: int, max_chunk: int = _
         return None
 
 
+def _chats_service_url() -> str:
+    return os.getenv("CHATS_SERVICE_URL") or f"http://chats_service:{os.getenv('PORT_CHATS_SERVICE', '8001')}"
+
+
+async def _resolve_chat_file_path(chat_id, message_id, file_name) -> str | None:
+    """Точный file_path вложения из chat_files (chats_service /internal/resolve_file)."""
+    if not (chat_id and message_id and file_name):
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            rf = await client.get(
+                f"{_chats_service_url()}/internal/resolve_file",
+                params={"chat_id": chat_id, "message_id": message_id, "file_name": file_name},
+            )
+        if rf.status_code == 200:
+            return (rf.json() or {}).get("path") or None
+    except Exception as e:
+        logging.warning(f"resolve_file chat={chat_id} msg={message_id} {file_name}: {e}")
+    return None
+
+
+async def _serve_file(
+    real_path: str,
+    request: Request,
+    chat_id: str | None,
+    download: int = 0,
+    cache_control: str = "public, max-age=3600",
+    source_header: str = "X-File-Source",
+):
+    """Отдаёт файл чата: сначала OBS (источник истины), потом локальный диск.
+
+    OBS первым, только если ключ уникален (generated_files/{run_id}/...): локальная
+    копия по тому же пути может оказаться другим файлом. Для /sandbox и корня
+    generated_files ключ общий на все запросы чата, там первым идёт диск.
+    Поддерживает HTTP Range (206) для обоих источников.
+    """
+    filename = os.path.basename(real_path)
+    ext = os.path.splitext(filename)[1].lower().lstrip(".")
+    media_type = _WEB_FILE_MIME_MAP.get(ext, "application/octet-stream")
+    is_inline_media = media_type.startswith(("video/", "audio/", "image/"))
+    disposition = "attachment" if (download or not is_inline_media) else "inline"
+
+    source, obs_key, file_size = None, None, None
+    if chat_id is not None and obs_file_storage.has_unique_obs_key(real_path):
+        obs_key = obs_file_storage.build_obs_key(real_path, chat_id)
+        file_size = await obs_file_storage.stat_object(obs_key)
+        if file_size is not None:
+            source = "obs"
+    if source is None and os.path.isfile(real_path):
+        source, file_size = "disk", os.path.getsize(real_path)
+    if source is None and obs_key is None and chat_id is not None:
+        # Неуникальный ключ и локальной копии нет: последний шанс — OBS.
+        obs_key = obs_file_storage.build_obs_key(real_path, chat_id)
+        file_size = await obs_file_storage.stat_object(obs_key)
+        if file_size is not None:
+            source = "obs"
+    if source is None:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    def _disk_iter(start: int, length: int):
+        with open(real_path, "rb") as f:
+            f.seek(start)
+            remaining = length
+            while remaining > 0:
+                chunk = f.read(min(256 * 1024, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+
+    def _body(start: int = 0, end: int | None = None):
+        if source == "obs":
+            return obs_file_storage.iter_object(obs_key, start, end)
+        last = file_size - 1 if end is None else end
+        return _disk_iter(start, last - start + 1)
+
+    base_headers = {
+        "Content-Disposition": _content_disposition(filename, disposition),
+        "Accept-Ranges": "bytes",
+        "Cache-Control": cache_control,
+        source_header: source,
+        "Access-Control-Expose-Headers": f"{source_header}, X-Image-Key",
+    }
+
+    range_hdr = request.headers.get("range")
+    if range_hdr and not download and file_size > 0:
+        parsed = _parse_web_byte_range(range_hdr, file_size)
+        if parsed is None:
+            return Response(
+                status_code=416,
+                headers={**base_headers, "Content-Range": f"bytes */{file_size}"},
+            )
+        start, end = parsed
+        return StreamingResponse(
+            _body(start, end),
+            status_code=206,
+            media_type=media_type,
+            headers={
+                **base_headers,
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Content-Length": str(end - start + 1),
+            },
+        )
+
+    return StreamingResponse(
+        _body(),
+        media_type=media_type,
+        headers={**base_headers, "Content-Length": str(file_size)},
+    )
+
+
 @web_router.get("/web/file")
 async def get_generated_file(
     path: str,
@@ -322,230 +414,97 @@ async def get_generated_file(
     if not _is_within_allowed_roots(real_path):
         raise HTTPException(status_code=403, detail="Forbidden path")
 
-    # Файлы на хосте эфемерны (живут 30 мин, чистятся клинером).
-    # Если файл уже вычищен — тянем его обратно из OBS (источник истины)
-    # по детерминированному ключу catchpm/{chat_id}/{run_id}__{basename}.
-    if not os.path.isfile(real_path):
-        restored = False
-        if chat_id is not None:
-            try:
-                obs_key = obs_file_storage.build_obs_key(real_path, chat_id)
-                local = await obs_file_storage.download_to_local(obs_key, real_path)
-                restored = bool(local) and os.path.isfile(real_path)
-            except Exception as _obs_err:
-                logging.error(f"OBS restore failed for {real_path}: {_obs_err}")
-        if not restored:
-            raise HTTPException(status_code=404, detail="File not found")
-
-    filename = os.path.basename(real_path)
-    ext = os.path.splitext(filename)[1].lower().lstrip(".")
-    media_type = _WEB_FILE_MIME_MAP.get(ext, "application/octet-stream")
-    is_inline_media = media_type.startswith(("video/", "audio/", "image/"))
-    disposition = "attachment" if (download or not is_inline_media) else "inline"
-    file_size = os.path.getsize(real_path)
-    base_headers = {
-        "Content-Disposition": _content_disposition(filename, disposition),
-        "Accept-Ranges": "bytes",
-        "Cache-Control": "public, max-age=3600",
-    }
-
-    range_hdr = request.headers.get("range")
-    if range_hdr and not download and file_size > 0:
-        parsed = _parse_web_byte_range(range_hdr, file_size)
-        if parsed is None:
-            return Response(
-                status_code=416,
-                headers={**base_headers, "Content-Range": f"bytes */{file_size}"},
-            )
-        start, end = parsed
-        length = end - start + 1
-
-        def iter_range():
-            with open(real_path, "rb") as f:
-                f.seek(start)
-                remaining = length
-                while remaining > 0:
-                    chunk = f.read(min(256 * 1024, remaining))
-                    if not chunk:
-                        break
-                    remaining -= len(chunk)
-                    yield chunk
-
-        return StreamingResponse(
-            iter_range(),
-            status_code=206,
-            media_type=media_type,
-            headers={
-                **base_headers,
-                "Content-Range": f"bytes {start}-{end}/{file_size}",
-                "Content-Length": str(length),
-            },
-        )
-
-    def iterfile():
-        with open(real_path, "rb") as f:
-            yield from iter(lambda: f.read(1024 * 1024), b"")
-
-    return StreamingResponse(
-        iterfile(),
-        media_type=media_type,
-        headers={**base_headers, "Content-Length": str(file_size)},
-    )
+    # Файлы на хосте эфемерны (30 мин) и при повторе имени в другом запросе
+    # могут оказаться чужими, поэтому источник истины — OBS по ключу
+    # catchpm/{chat_id}/{run_id}__{basename}, диск — запасной вариант.
+    return await _serve_file(real_path, request, chat_id, download)
 
 
 @web_router.get("/web/db_image")
 async def get_db_image(
+    request: Request,
     message_id: str | None = None,
     file_name: str | None = None,
     image_id: int | None = None,
     image_key: str | None = None,
     chat_id: str | None = None,
 ):
-    """Отдаёт бинарник картинки НАПРЯМУЮ из таблицы generated_images (BYTEA).
+    """Картинка для превью в чате.
 
-    Источник истины — БД, а НЕ диск. Эфемерный файл в generated_files живёт
-    ~30 мин и чистится по TTL, поэтому превью в чате обязано браться отсюда,
-    иначе после уборки в галерее будет пусто (404 от /web/file).
+    Порядок поиска:
+      1. generated_images по image_key или image_id (точные ключи);
+      2. точный file_path вложения из chat_files (chat_id + message_id + file_name)
+         → OBS по уникальному ключу, потом диск (_serve_file);
+      3. generated_images по message_id — последняя картинка сообщения
+         (старые записи без image_key).
+    Поиска по одному имени файла по всему диску нет: при повторе имени
+    (slide-1.png) в другом запросе он отдавал чужую картинку.
 
-    Поиск строки (file_name в WHERE НЕ участвует — он всегда generated_0.jpg
-    и для картинок бесполезен ни как якорь, ни как уникальное имя):
-      - image_key (точный, приоритетный), либо
-      - image_id (точный), либо
-      - message_id — последняя по времени (created_at DESC), что и нужно фронту:
-        одно сообщение бота = одна актуальная картинка.
-
-    Уникальный ключ image_key возвращаем в заголовке X-Image-Key — фронт из него
-    строит уникальное имя файла для скачивания (не завися от WS-пейлоада, куда
-    image_key может не доехать). Разрешение фронт снимает сам (naturalWidth).
+    image_key возвращается в X-Image-Key — фронт строит из него имя файла.
     """
     logging.info(
         f"/web/db_image: message_id={message_id}, image_id={image_id}, "
-        f"image_key={image_key} (file_name={file_name} — игнорируется для картинок)"
+        f"image_key={image_key}, file_name={file_name}"
     )
     pool = getattr(db, "pool", None)
     if pool is None:
         raise HTTPException(status_code=503, detail="DB pool not ready")
 
+    async def _fetch(sql: str, *args):
+        try:
+            async with pool.acquire() as conn:
+                return await conn.fetchrow(sql, *args)
+        except Exception as e:
+            logging.error(f"/web/db_image: ошибка запроса: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="DB query failed")
+
+    def _db_response(row):
+        raw = bytes(row["image_data"])
+        img_key = str(row["image_key"]) if row["image_key"] else ""
+        return Response(
+            content=raw,
+            media_type=row["mime_type"] or "image/png",
+            headers={
+                "Content-Disposition": _content_disposition(row["file_name"] or "image.png", "inline"),
+                "Cache-Control": "public, max-age=86400",
+                "X-Image-Key": img_key,
+                "X-Image-Source": "db",
+                "Access-Control-Expose-Headers": "X-Image-Key, X-Image-Source",
+            },
+        )
+
+    _cols = "SELECT file_name, mime_type, image_data, image_key FROM generated_images "
     row = None
-    try:
-        async with pool.acquire() as conn:
-            if image_key:
-                row = await conn.fetchrow(
-                    "SELECT file_name, mime_type, image_data, image_key "
-                    "FROM generated_images WHERE image_key::text = $1 LIMIT 1",
-                    str(image_key).strip(),
-                )
-            elif image_id is not None:
-                row = await conn.fetchrow(
-                    "SELECT file_name, mime_type, image_data, image_key "
-                    "FROM generated_images WHERE id = $1",
-                    image_id,
-                )
-            elif message_id:
-                # Точное совпадение по message_id; если картинок несколько —
-                # берём последнюю по времени генерации.
-                row = await conn.fetchrow(
-                    "SELECT file_name, mime_type, image_data, image_key "
-                    "FROM generated_images "
-                    "WHERE message_id = $1 "
-                    "ORDER BY created_at DESC, id DESC LIMIT 1",
-                    message_id,
-                )
-    except Exception as e:
-        logging.error(f"/web/db_image: ошибка запроса: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="DB query failed")
+    if image_key:
+        row = await _fetch(_cols + "WHERE image_key::text = $1 LIMIT 1", str(image_key).strip())
+    elif image_id is not None:
+        row = await _fetch(_cols + "WHERE id = $1", image_id)
+    if row and row["image_data"]:
+        return _db_response(row)
 
-    if not row or not row["image_data"]:
-        disk_path = _resolve_in_whitelist(file_name)
-        if disk_path:
-            logging.info(f"/web/db_image: not in DB, disk fallback -> {disk_path}")
-            ext = os.path.splitext(disk_path)[1].lower().lstrip(".")
-            mime_map = {
-                "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
-                "webp": "image/webp", "gif": "image/gif",
-            }
-            disk_mime = mime_map.get(ext, "application/octet-stream")
-            disk_name = os.path.basename(disk_path)
-
-            def iterfile():
-                with open(disk_path, "rb") as f:
-                    yield from iter(lambda: f.read(1024 * 1024), b"")
-
-            return StreamingResponse(
-                iterfile(),
-                media_type=disk_mime,
-                headers={
-                    "Content-Disposition": _content_disposition(disk_name, "inline"),
-                    "Cache-Control": "public, max-age=86400",
-                    "X-Image-Source": "disk",
-                    "Access-Control-Expose-Headers": "X-Image-Key, X-Image-Source",
-                },
-            )
-        # Последний рубеж: файла нет ни в generated_images, ни по basename на
-        # диске (эфемерный том мог быть вычищен, либо имя в chat_files отличается
-        # от имени файла на диске). Источник истины для вложений чата — OBS.
-        # Резолвим реальный file_path через chats_service и восстанавливаем
-        # бинарник из OBS по детерминированному ключу — ровно как делает /web/file.
-        if chat_id and message_id and file_name:
+    real_fp = await _resolve_chat_file_path(chat_id, message_id, file_name)
+    if real_fp:
+        real_fp = os.path.realpath(real_fp)
+        if _is_within_allowed_roots(real_fp):
             try:
-                chats_url = os.getenv("CHATS_SERVICE_URL") or f"http://chats_service:{os.getenv('PORT_CHATS_SERVICE', '8001')}"
-                async with httpx.AsyncClient(timeout=15) as client:
-                    rf = await client.get(
-                        f"{chats_url}/internal/resolve_file",
-                        params={"chat_id": chat_id, "message_id": message_id,
-                                "file_name": file_name},
-                    )
-                if rf.status_code == 200:
-                    real_fp = (rf.json() or {}).get("path")
-                    if real_fp:
-                        obs_key = obs_file_storage.build_obs_key(real_fp, chat_id)
-                        local = await obs_file_storage.download_to_local(obs_key, real_fp)
-                        if local and os.path.isfile(local):
-                            logging.info(
-                                f"/web/db_image: OBS restore -> {local} (key={obs_key})"
-                            )
-                            ext = os.path.splitext(local)[1].lower().lstrip(".")
-                            mime_map = {
-                                "png": "image/png", "jpg": "image/jpeg",
-                                "jpeg": "image/jpeg", "webp": "image/webp",
-                                "gif": "image/gif",
-                            }
-                            obs_mime = mime_map.get(ext, "application/octet-stream")
-                            obs_name = os.path.basename(local)
+                return await _serve_file(
+                    real_fp, request, chat_id,
+                    cache_control="public, max-age=86400",
+                    source_header="X-Image-Source",
+                )
+            except HTTPException as e:
+                if e.status_code != 404:
+                    raise
 
-                            def iterfile_obs():
-                                with open(local, "rb") as f:
-                                    yield from iter(lambda: f.read(1024 * 1024), b"")
+    if not image_key and image_id is None and message_id:
+        row = await _fetch(
+            _cols + "WHERE message_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1",
+            message_id,
+        )
+        if row and row["image_data"]:
+            return _db_response(row)
 
-                            return StreamingResponse(
-                                iterfile_obs(),
-                                media_type=obs_mime,
-                                headers={
-                                    "Content-Disposition": _content_disposition(obs_name, "inline"),
-                                    "Cache-Control": "public, max-age=86400",
-                                    "X-Image-Source": "obs",
-                                    "Access-Control-Expose-Headers": "X-Image-Key, X-Image-Source",
-                                },
-                            )
-            except Exception as _obs_err:
-                logging.error(f"/web/db_image: OBS restore failed: {_obs_err}")
-
-        raise HTTPException(status_code=404, detail="Image not found in DB, disk or OBS")
-
-    raw = bytes(row["image_data"])
-    mime = row["mime_type"] or "image/png"
-    fname = row["file_name"] or "image.png"
-    img_key = str(row["image_key"]) if row["image_key"] else ""
-    return Response(
-        content=raw,
-        media_type=mime,
-        headers={
-            "Content-Disposition": _content_disposition(fname, "inline"),
-            "Cache-Control": "public, max-age=86400",
-            "X-Image-Key": img_key,
-            "Access-Control-Expose-Headers": "X-Image-Key",
-        },
-    )
+    raise HTTPException(status_code=404, detail="Image not found in DB, disk or OBS")
 
 @web_router.post("/internal/stop_message")
 async def internal_stop_message(payload: StopMessagePayload):

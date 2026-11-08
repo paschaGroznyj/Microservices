@@ -8,6 +8,7 @@
   // Пагинация истории общего чата: размер страницы и порог (px) от верха ленты.
   const GC_PAGE = 40;
   const GC_LOAD_EDGE = 400;
+  const GC_STICK_EDGE = 120;   // ближе к низу, чем столько px — лента «прилипает»
   const ROOM_UID = 'global';
   const IS_SIGMA = () => document.body?.dataset?.gateway === 'sigma' || /(?:^|\.)cds\./i.test(location.hostname) || /sigma/i.test(location.hostname);
   const COLLAPSE_MAX = 240; // px — порог сворачивания длинных сообщений (как у user-message)
@@ -369,6 +370,7 @@
         window.GroupInteraction?.onHistory(data);
         this.messages = data.messages || [];
         this._hasMoreHistory = !!data.has_more;
+        this._stick = true;   // вход в чат — всегда низ ленты
         this._renderAll();
         this._maybeFillViewport();
       } catch (e) { console.warn('[group] history error', e); }
@@ -432,11 +434,52 @@
       const box = document.getElementById('gc-messages');
       if (!box || box._gcHistoryBound) return;
       box._gcHistoryBound = true;
+      this._lastScrollTop = box.scrollTop;
       box.addEventListener('scroll', () => {
+        // «прилипание» к низу: у низа — включаем, ушли вверх рукой — выключаем.
+        // Рост контента снизу (догрузка медиа) scrollTop не уменьшает,
+        // поэтому stick он не сбрасывает.
+        const top = box.scrollTop;
+        const dist = box.scrollHeight - top - box.clientHeight;
+        if (dist <= GC_STICK_EDGE) this._stick = true;
+        else if (top < this._lastScrollTop - 2 && !this._autoPinning) this._stick = false;
+        this._lastScrollTop = top;
         // программный скролл к закрепу сам догружает нужные страницы
         if (this._programmaticPinScroll) return;
         if (box.scrollTop < GC_LOAD_EDGE) this._loadOlder();
       }, { passive: true });
+      this._bindStickObserver(box);
+    },
+
+    /* Медиа догружаются после рендера и меняют высоту строк. Если лента
+       «прилипла» к низу, после каждого изменения размеров возвращаем её
+       вниз, чтобы последнее сообщение не уезжало под поле ввода. */
+    _bindStickObserver(box) {
+      if (!box || typeof ResizeObserver === 'undefined' || this._stickRo) return;
+      this._stickRo = new ResizeObserver(() => {
+        if (this._stick && !this._programmaticPinScroll) this._pinBottom(box);
+      });
+      this._stickRo.observe(box);
+    },
+
+    _observeRows(box) {
+      if (!this._stickRo || !box) return;
+      this._stickRo.disconnect();
+      this._stickRo.observe(box);
+      box.querySelectorAll(':scope > .gc-row').forEach(r => this._stickRo.observe(r));
+    },
+
+    _pinBottom(box) {
+      box = box || document.getElementById('gc-messages');
+      if (!box) return;
+      const target = box.scrollHeight - box.clientHeight;
+      if (Math.abs(box.scrollTop - target) <= 1) return;
+      this._autoPinning = true;
+      this._ignoreNextDateScroll = true;
+      box.scrollTop = box.scrollHeight;
+      this._lastScrollTop = box.scrollTop;
+      requestAnimationFrame(() => { this._autoPinning = false; this._ignoreNextDateScroll = false; });
+      this._syncScrollArrow(box);
     },
 
     _setHistoryLoader(on) {
@@ -675,6 +718,7 @@
         try { window.FileAttach?.clear?.(); } catch (e) {}
         this._syncInputBtn();
       }
+      this._stick = true;   // своё сообщение — всегда прокручиваем к низу
       this._renderAll();
       // 1) заливаем файлы (если есть) в OBS через chats_service
       if (files.length) {
@@ -963,7 +1007,9 @@
       // (new_message/edit/pin/loadPinned), его кидало в начало ленты.
       // Запоминаем позицию и держим её, если пользователь НЕ у низа.
       const prevTop = box.scrollTop;
-      const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
+      const nearBottom = this._stick !== undefined
+        ? !!this._stick
+        : box.scrollHeight - box.scrollTop - box.clientHeight < GC_STICK_EDGE;
       let lastDateKey = '';
       const chunks = [];
       if (this._hasMoreHistory) {
@@ -990,10 +1036,13 @@
         if (ph === 'upload' || ph === 'processing' || ph === 'error') m._upload.repaint();
       }
       this._ignoreNextDateScroll = true;
+      this._autoPinning = true;
       if (keepFromBottom) box.scrollTop = box.scrollHeight - fromBottom;
       else if (nearBottom) box.scrollTop = box.scrollHeight;
       else box.scrollTop = prevTop;
-      requestAnimationFrame(() => { this._ignoreNextDateScroll = false; });
+      this._lastScrollTop = box.scrollTop;
+      this._observeRows(box);
+      requestAnimationFrame(() => { this._ignoreNextDateScroll = false; this._autoPinning = false; });
       this._syncScrollArrow(box);
       this._syncFloatingDate(box, false);
     },
@@ -1637,6 +1686,7 @@
         btn.addEventListener('click', () => {
           const box = document.getElementById('gc-messages');
           if (box) {
+            this._stick = true;
             box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' });
           }
           btn.classList.remove('visible');
@@ -1811,6 +1861,7 @@
       const initialTarget = this._computePinTargetTop(box, row);
       const dist = Math.abs(startTop - initialTarget);
 
+      this._stick = false;   // переход к закрепу — не тянем обратно вниз
       this._programmaticPinScroll = true;
       this._lastPinJumpTarget = initialTarget;
 

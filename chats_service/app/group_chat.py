@@ -48,6 +48,9 @@ _IMAGE_MIME_PREFIX = "image/"
 
 router = APIRouter(prefix="/group", tags=["group-chat"])
 
+# сообщений контекста над первым непрочитанным в первой странице истории
+UNREAD_CONTEXT = 20
+
 # выставляются из app.py при startup
 group_db = None       # GroupChatDB
 producer = None       # KafkaProducer (общий с основным app)
@@ -152,10 +155,15 @@ async def group_messages(room_uid: str, limit: int = 50, offset: int = 0,
     if group_db is None:
         raise HTTPException(status_code=503, detail="db not ready")
     try:
+        # галочки, своя отметка и непрочитанные: только если гейтвей передал, кто смотрит
+        reads = await group_db.read_state(room_uid, viewer_id) if viewer_id else None
+        # первая страница при входе: берём столько, чтобы в неё попало первое
+        # непрочитанное + немного контекста над ним (не больше 200)
+        tail = int((reads or {}).get("tail") or 0)
+        if not before_id and not offset and tail:
+            limit = max(limit, min(tail + UNREAD_CONTEXT, 200))
         result = await group_db.get_messages(room_uid, limit=limit, offset=offset,
                                              before_id=before_id)
-        # галочки и своя отметка: только если гейтвей передал, кто смотрит
-        reads = await group_db.read_state(room_uid, viewer_id) if viewer_id else None
         return {
             "room_uid": room_uid,
             "reads": reads,
@@ -169,6 +177,18 @@ async def group_messages(room_uid: str, limit: int = 50, offset: int = 0,
     except Exception as e:
         logger.error(f"[group-chat] messages error: {e}")
         raise HTTPException(status_code=500, detail="не удалось загрузить сообщения")
+
+
+@router.get("/{room_uid}/unread")
+async def group_unread(room_uid: str, viewer_id: int):
+    """Счётчик для плашки «Общий чат» при загрузке страницы, без истории."""
+    if group_db is None:
+        raise HTTPException(status_code=503, detail="db not ready")
+    try:
+        return {"room_uid": room_uid, "reads": await group_db.read_state(room_uid, viewer_id)}
+    except Exception as e:
+        logger.error(f"[group-chat] unread error: {e}")
+        raise HTTPException(status_code=500, detail="не удалось получить непрочитанные")
 
 
 @router.get("/{room_uid}/pinned")

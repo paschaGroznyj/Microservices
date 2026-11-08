@@ -1048,6 +1048,15 @@
   margin-left: auto;
   flex-shrink: 0;
 }
+/* число непрочитанных в «Общем чате»: стиль .nav-badge, как у «Скиллы 0/5» */
+.nav-item[data-tab="group"] .gc-nav-count {
+  position: relative;
+  z-index: 2;
+  flex-shrink: 0;
+}
+.nav-item[data-tab="group"] .gc-nav-count[hidden] { display: none; }
+/* при числе точка-уведомление не нужна */
+.nav-item[data-tab="group"].gc-has-count .gc-nav-dot { display: none; }
 .nav-item[data-tab="group"] .gc-nav-dot[hidden] {
   display: none !important;
 }

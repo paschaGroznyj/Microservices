@@ -963,3 +963,39 @@
   font-weight: 600;
 }
 .gc-readers__name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── непрочитанные: разделитель в ленте и счётчик на кнопке «вниз» ── */
+.gc-unread-sep {
+  align-self: stretch;
+  display: flex;
+  justify-content: center;
+  margin: 10px 0 6px;
+  padding: 4px 0;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 500;
+  pointer-events: none;
+  user-select: none;
+}
+#gc-scroll-to-bottom-btn .gc-arrow-count {
+  position: absolute;
+  top: -7px;
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+#gc-scroll-to-bottom-btn .gc-arrow-count[hidden] { display: none; }

@@ -62,6 +62,12 @@
     _sidebarObserverBound: false,
     _audioCtx: null,
     _lastSoundAt: 0,
+    // непрочитанные: база с сервера + то, что видно в ленте
+    _unreadBase: null,     // {unread, mark, last} из reads
+    _unreadCount: 0,
+    _unreadSepId: null,    // id сообщения, над которым разделитель «Непрочитанные»
+    _unreadAnchor: false,  // держим разделитель на месте, пока догружаются медиа
+    _connectedOnce: false,
 
     _isGroupTabActive() {
       const navEl = document.querySelector('.nav-item[data-tab="group"]');
@@ -96,6 +102,13 @@
               n.replaceWith(lbl);
             }
           });
+        }
+        if (!navEl.querySelector('.gc-nav-count')) {
+          const cnt = document.createElement('span');
+          cnt.className = 'nav-badge gc-nav-count';
+          cnt.hidden = true;
+          const dotEl = navEl.querySelector('.gc-nav-dot');
+          if (dotEl) navEl.insertBefore(cnt, dotEl); else navEl.appendChild(cnt);
         }
         let dot = navEl.querySelector('.gc-nav-dot');
         if (!dot) {
@@ -306,6 +319,7 @@
       this._initAudioUnlock();
       this._bindVisibilityLifecycle();
       this._connectWs();
+      this._loadUnread();
     },
 
     open(app) {
@@ -361,6 +375,9 @@
     async _loadHistory() {
       if (window.__authSessionExpired) return;
       this._bindHistoryScroll();
+      // до того как лента встанет на место, видимые строки прочтением не считаем
+      window.GroupInteraction?.holdRead(true);
+      let opened = false;
       try {
         const res = await fetch(`/api/group/${ROOM_UID}/messages?limit=${GC_PAGE}`, { credentials: 'include', redirect: 'manual' });
         if (window.__isAuthRedirectOrUnauthorized?.(res)) { window.__onAuthSessionExpired?.(); return; }
@@ -370,10 +387,190 @@
         window.GroupInteraction?.onHistory(data);
         this.messages = data.messages || [];
         this._hasMoreHistory = !!data.has_more;
-        this._stick = true;   // вход в чат — всегда низ ленты
-        this._renderAll();
-        this._maybeFillViewport();
+        this._unreadSepId = null;
+        this._unreadAnchor = false;
+        if (data.reads) this._setUnreadBase(data.reads);
+        const target = this._firstUnreadTarget(data.reads);
+        if (target) {
+          opened = true;
+          await this._openAtUnread(target);
+        } else {
+          this._stick = true;   // всё прочитано — низ ленты
+          this._renderAll();
+          this._maybeFillViewport();
+        }
       } catch (e) { console.warn('[group] history error', e); }
+      finally {
+        if (!opened) this._releaseReadHold();
+        this._recountUnread();
+      }
+    },
+
+    /* ---------- непрочитанные ---------- */
+
+    _onConnected() {
+      // первое подключение уже покрыто init/_loadHistory; после обрыва — догоняем
+      if (this._connectedOnce) this._loadUnread();
+      this._connectedOnce = true;
+    },
+
+    async _loadUnread() {
+      if (window.__authSessionExpired) return;
+      try {
+        const res = await fetch(`/api/group/${ROOM_UID}/unread`, { credentials: 'include', redirect: 'manual' });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data?.reads) return;
+        window.GroupInteraction?.onHistory(data);
+        this._setUnreadBase(data.reads);
+      } catch (e) { /* счётчик не критичен */ }
+    },
+
+    /* r: {unread, my_last_read_id, last_id}. Ответ, снятый раньше уже
+       известного, не затирает свежую базу (last_id только растёт). */
+    _setUnreadBase(r) {
+      const last = Number(r?.last_id) || 0;
+      if (this._unreadBase && last < this._unreadBase.last) return;
+      this._unreadBase = {
+        unread: Math.max(0, Number(r?.unread) || 0),
+        mark: Number(r?.my_last_read_id) || 0,
+        last,
+      };
+      this._recountUnread();
+    },
+
+    /* Счётчик = непрочитанные в ленте + непрочитанные старше ленты.
+       Свои сообщения не считаем. В ленте всё точно; то, что старше,
+       берём из базы сервера за вычетом уже загруженного. */
+    _recountUnread() {
+      const gi = window.GroupInteraction;
+      const myRead = Number(gi?.myRead) || 0;
+      const base = this._unreadBase;
+      const me = String(this.userId);
+      const mark = Math.max(base?.mark || 0, myRead);
+      let loaded = 0, loadedBase = 0, oldest = null;
+      for (const m of this.messages) {
+        const id = Number(m.id);
+        if (m._optimistic || !Number.isFinite(id) || id <= 0) continue;
+        if (oldest === null || id < oldest) oldest = id;
+        if (String(m.user_id) === me) continue;
+        if (base && id > base.mark && id <= base.last) loadedBase++;
+        if (id > mark) loaded++;
+      }
+      let outside = 0;
+      if (base) {
+        const rest = Math.max(0, base.unread - loadedBase);
+        // что-то загруженное прочитано -> всё, что старше ленты, тоже прочитано
+        const allOlderRead = oldest !== null ? myRead >= oldest : myRead >= base.last;
+        outside = allOlderRead ? 0 : rest;
+      }
+      const n = loaded + outside;
+      if (n === this._unreadCount && this._unreadRendered) return;
+      this._unreadCount = n;
+      this._unreadRendered = true;
+      this._renderUnreadBadge();
+      this._syncScrollArrow();
+    },
+
+    _renderUnreadBadge() {
+      const navEl = this._ensureNavElements();
+      const n = this._unreadCount;
+      const txt = n > 99 ? '99+' : String(n);
+      const cnt = navEl?.querySelector('.gc-nav-count');
+      if (cnt) {
+        cnt.hidden = n <= 0;
+        cnt.textContent = n > 0 ? txt : '';
+        navEl.classList.toggle('gc-has-count', n > 0);
+      }
+      const arrowCnt = document.querySelector('#gc-scroll-to-bottom-btn .gc-arrow-count');
+      if (arrowCnt) {
+        arrowCnt.hidden = n <= 0;
+        arrowCnt.textContent = n > 0 ? txt : '';
+      }
+    },
+
+    /* Первое непрочитанное. Локальная отметка может быть свежее серверной
+       (дебаунс ещё не ушёл), поэтому ищем по max из двух. Если сервер
+       говорит, что первое непрочитанное старше ленты, — догружаем до него. */
+    _firstUnreadTarget(r) {
+      if (!r || r.has_mark === false) return null;
+      const me = String(this.userId);
+      const mark = Math.max(Number(r.my_last_read_id) || 0, Number(window.GroupInteraction?.myRead) || 0);
+      const srv = Number(r.first_unread_id) || 0;
+      const oldest = this._oldestId();
+      if (srv && srv > mark && oldest !== null && srv < oldest) return srv;
+      for (const m of this.messages) {
+        const id = Number(m.id);
+        if (m._optimistic || !Number.isFinite(id)) continue;
+        if (id > mark && String(m.user_id) !== me) return id;
+      }
+      return null;
+    },
+
+    async _openAtUnread(target) {
+      const box = document.getElementById('gc-messages');
+      if (!box) { this._releaseReadHold(); return; }
+      this._stick = false;
+      this._unreadAnchor = true;
+      this._unreadSepId = target;
+      this._renderAll();
+      // первое непрочитанное старше страницы: догружаем, как к закрепу
+      for (let i = 0; !this._findUnreadRow(box) && this._hasMoreHistory && i < 10; i++) {
+        while (this._loadingOlder) await new Promise(r => setTimeout(r, 50));
+        if (!(await this._loadOlder())) break;
+      }
+      // сообщение могли удалить: разделитель над следующим загруженным
+      if (!this._findUnreadRow(box)) {
+        const me = String(this.userId);
+        const next = this.messages.find(m => !m._optimistic && Number(m.id) > target && String(m.user_id) !== me);
+        this._unreadSepId = next ? Number(next.id) : null;
+        this._renderAll();
+      }
+      if (!this._unreadSepId) {
+        this._unreadAnchor = false;
+        this._stick = true;
+        this._pinBottom(box);
+      } else {
+        this._scrollToUnreadSep(box);
+      }
+      this._releaseReadHold();
+    },
+
+    _findUnreadRow(box) {
+      return this._unreadSepId != null
+        ? box.querySelector(`.gc-row[data-id="${this._unreadSepId}"]`) : null;
+    },
+
+    /* Разделитель — у верхнего края ленты (под плашкой закрепа).
+       Если непрочитанных мало, scrollTop упирается в низ: это и есть низ ленты. */
+    _scrollToUnreadSep(box) {
+      box = box || document.getElementById('gc-messages');
+      const sep = box?.querySelector('.gc-unread-sep');
+      if (!sep) return;
+      const boxRect = box.getBoundingClientRect();
+      const pinBar = document.getElementById('gc-pinned');
+      const inset = (pinBar && !pinBar.hidden)
+        ? Math.max(0, pinBar.getBoundingClientRect().bottom - boxRect.top) + 8 : 8;
+      const top = (sep.getBoundingClientRect().top - boxRect.top) + box.scrollTop - inset;
+      const max = Math.max(0, box.scrollHeight - box.clientHeight);
+      const target = Math.max(0, Math.min(max, Math.round(top)));
+      if (Math.abs(box.scrollTop - target) > 1) {
+        this._autoPinning = true;
+        this._ignoreNextDateScroll = true;
+        box.scrollTop = target;
+        this._lastScrollTop = box.scrollTop;
+        requestAnimationFrame(() => { this._autoPinning = false; this._ignoreNextDateScroll = false; });
+      }
+      this._syncScrollArrow(box);
+      this._syncFloatingDate?.(box, false);
+    },
+
+    /* IntersectionObserver отдаёт видимость асинхронно: ждём два кадра,
+       чтобы прочтение считалось по строкам на новом месте, а не по старым. */
+    _releaseReadHold() {
+      const gi = window.GroupInteraction;
+      if (!gi?.holdRead) return;
+      requestAnimationFrame(() => requestAnimationFrame(() => gi.holdRead(false)));
     },
 
     /* id самого старого серверного сообщения в ленте (курсор для before_id) */
@@ -449,6 +646,9 @@
         if (box.scrollTop < GC_LOAD_EDGE) this._loadOlder();
       }, { passive: true });
       this._bindStickObserver(box);
+      const release = () => { this._unreadAnchor = false; };
+      ['wheel', 'touchstart', 'mousedown', 'keydown'].forEach(ev =>
+        box.addEventListener(ev, release, { passive: true }));
     },
 
     /* Медиа догружаются после рендера и меняют высоту строк. Если лента
@@ -457,7 +657,9 @@
     _bindStickObserver(box) {
       if (!box || typeof ResizeObserver === 'undefined' || this._stickRo) return;
       this._stickRo = new ResizeObserver(() => {
-        if (this._stick && !this._programmaticPinScroll) this._pinBottom(box);
+        if (this._programmaticPinScroll) return;
+        if (this._unreadAnchor) this._scrollToUnreadSep(box);
+        else if (this._stick) this._pinBottom(box);
       });
       this._stickRo.observe(box);
     },
@@ -600,6 +802,7 @@
       } catch (e) { return; }
       this.ws.onopen = () => {
         this._reconnectAttempts = 0;
+        this._onConnected();
       };
       this.ws.onmessage = (ev) => {
         this._reconnectAttempts = 0;
@@ -621,6 +824,7 @@
       } catch (e) { return; }
       this.es.onopen = () => {
         this._reconnectAttempts = 0;
+        this._onConnected();
       };
       this.es.addEventListener('group', (ev) => {
         this._reconnectAttempts = 0;
@@ -675,6 +879,7 @@
         }
       }
       if (this.opened) this._renderAll();
+      this._recountUnread();
     },
 
     // Удаление сообщения (отыгрывается у всех на приём события delete_message).
@@ -682,6 +887,7 @@
       this.messages = this.messages.filter(m => m.id !== messageId);
       this._renderAll();
       this._loadPinned();
+      this._recountUnread();
     },
 
     async _send(text) {
@@ -719,6 +925,8 @@
         this._syncInputBtn();
       }
       this._stick = true;   // своё сообщение — всегда прокручиваем к низу
+      this._unreadAnchor = false;
+      this._unreadSepId = null;
       this._renderAll();
       // 1) заливаем файлы (если есть) в OBS через chats_service
       if (files.length) {
@@ -1022,6 +1230,9 @@
           chunks.push(
             `<div class="gc-date-sep" data-date-key="${di.key}" data-date-label="${this._esc(di.label)}"><span class="gc-date-pill">${this._esc(di.label)}</span></div>`
           );
+        }
+        if (this._unreadSepId != null && Number(m.id) === Number(this._unreadSepId)) {
+          chunks.push('<div class="gc-unread-sep"><span>Непрочитанные сообщения</span></div>');
         }
         chunks.push(this._msgHtml(m, di));
       }
@@ -1682,10 +1893,12 @@
             <path d="M12 5v14M18 13l-6 6-6-6"
                   stroke="currentColor" stroke-width="2"
                   stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>`;
+          </svg>
+          <span class="gc-arrow-count" hidden></span>`;
         btn.addEventListener('click', () => {
           const box = document.getElementById('gc-messages');
           if (box) {
+            this._unreadAnchor = false;
             this._stick = true;
             box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' });
           }
@@ -1700,12 +1913,19 @@
       box = box || document.getElementById('gc-messages');
       const btn = this._ensureScrollArrowBtn();
       if (!btn) return;
+      const arrowCnt = btn.querySelector('.gc-arrow-count');
+      if (arrowCnt) {
+        const n = this._unreadCount || 0;
+        arrowCnt.hidden = n <= 0;
+        arrowCnt.textContent = n > 0 ? (n > 99 ? '99+' : String(n)) : '';
+      }
       if (!box) {
         btn.classList.remove('visible');
         return;
       }
       const distFromBottom = box.scrollHeight - box.scrollTop - box.clientHeight;
-      if (distFromBottom > 500) {
+      // с непрочитанными ниже кадра кнопка нужна и на небольшом расстоянии
+      if (distFromBottom > 500 || (this._unreadCount > 0 && distFromBottom > GC_STICK_EDGE)) {
         btn.classList.add('visible');
       } else {
         btn.classList.remove('visible');
@@ -1862,6 +2082,7 @@
       const dist = Math.abs(startTop - initialTarget);
 
       this._stick = false;   // переход к закрепу — не тянем обратно вниз
+      this._unreadAnchor = false;
       this._programmaticPinScroll = true;
       this._lastPinJumpTarget = initialTarget;
 

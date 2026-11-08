@@ -62,3 +62,17 @@ def test_delete_route_not_shadowed_by_read(env):
     http.post.return_value = MagicMock(status_code=200, json=MagicMock(return_value={"ok": True}))
     r = client.post("/api/group/message/delete", json={"message_id": 1})
     assert r.status_code == 200 and calls == []
+
+
+def test_unread_passes_viewer_and_status(env):
+    client, http, state, _ = env
+    http.get.return_value.json.return_value = {"room_uid": "global", "reads": {"unread": 3}}
+    r = client.get("/api/group/global/unread")
+    assert r.status_code == 200 and r.json()["reads"]["unread"] == 3
+    args, kwargs = http.get.await_args
+    assert args[0] == "http://chats/group/global/unread"
+    assert kwargs["params"] == {"viewer_id": 56}
+    http.get.return_value.status_code = 500
+    assert client.get("/api/group/global/unread").status_code == 500
+    state["user"] = {"username": "no-id"}
+    assert client.get("/api/group/global/unread").status_code == 401

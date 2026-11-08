@@ -2496,6 +2496,19 @@ async def group_messages(room_uid: str, request: Request, limit: int = 50, offse
     return resp.json()
 
 
+@app.get("/api/group/{room_uid}/unread")
+async def group_unread(room_uid: str, request: Request):
+    user = await get_current_user(request)
+    if not user or user.get("user_id") is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    resp = await app.state.http_client.get(
+        f"{SERVICES['chats']['url']}/group/{room_uid}/unread",
+        params={"viewer_id": int(user["user_id"])})
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail="unread unavailable")
+    return resp.json()
+
+
 @app.get("/api/group/{room_uid}/pinned")
 async def group_pinned(room_uid: str, request: Request):
     user = await get_current_user(request)

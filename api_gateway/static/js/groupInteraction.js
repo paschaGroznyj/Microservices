@@ -63,6 +63,7 @@
     readUpto: 0,        // MAX отметки других: мои id <= readUpto -> ✓✓
     myRead: 0,          // своя отметка (что я уже прочитал)
     _readSent: 0,       // последнее, что ушло на сервер
+    _hold: false,       // вход в чат: не засчитываем прочтение, пока лента не встала на место
     _readTimer: null,
     _readIo: null,
     _visible: new Set(),
@@ -209,7 +210,13 @@
     /* new_message от другого: автор прочитал всё до своего сообщения */
     onNewMessage(msg) {
       const id = Number(msg?.id);
-      if (!Number.isFinite(id) || !msg || String(msg.user_id) === String(this._uid())) return;
+      if (!Number.isFinite(id) || !msg) return;
+      if (String(msg.user_id) === String(this._uid())) {
+        // своё (в т.ч. из другой вкладки): консюмер уже сдвинул мою отметку до него
+        this.myRead = Math.max(this.myRead, id);
+        this._readSent = Math.max(this._readSent, id);
+        return;
+      }
       if (id > this.readUpto) { this.readUpto = id; this.patchTicks(); }
     },
 
@@ -223,6 +230,7 @@
           // своя другая вкладка
           this.myRead = Math.max(this.myRead, v);
           this._readSent = Math.max(this._readSent, v);
+          this._gc()?._recountUnread?.();
         } else if (v > this.readUpto) {
           this.readUpto = v; changed = true;
         }
@@ -260,11 +268,17 @@
       });
     },
 
+    holdRead(on) {
+      this._hold = !!on;
+      if (!this._hold) this._checkRead();
+    },
+
     _checkRead() {
-      if (!this._canRead() || !this._visible.size) return;
+      if (this._hold || !this._canRead() || !this._visible.size) return;
       const max = Math.max(...this._visible);
       if (max <= this.myRead) return;
       this.myRead = max;
+      this._gc()?._recountUnread?.();
       if (!this._readTimer) this._readTimer = setTimeout(() => this._sendRead(), READ_DEBOUNCE_MS);
     },
 

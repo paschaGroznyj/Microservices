@@ -138,7 +138,8 @@ def test_read_state_has_mark(has_mark):
     class C:
         async def fetchrow(self, sql, *a):
             seen["sql"], seen["args"] = sql, a
-            return {"read_upto": 175, "my_last_read_id": 179, "has_mark": has_mark}
+            return {"read_upto": 175, "my_last_read_id": 179, "has_mark": has_mark,
+                    "unread": 0, "first_unread_id": None, "last_id": 179, "tail": 0}
     class P:
         def acquire(self):
             class A:
@@ -149,7 +150,8 @@ def test_read_state_has_mark(has_mark):
     async def room(uid): return {"id": 1}
     db.get_room_by_uid = room
     out = asyncio.run(db.read_state("global", 213919))
-    assert out == {"read_upto": 175, "my_last_read_id": 179, "has_mark": has_mark}
+    assert out == {"read_upto": 175, "my_last_read_id": 179, "has_mark": has_mark,
+                   "unread": 0, "first_unread_id": None, "last_id": 179, "tail": 0}
     assert "EXISTS" in seen["sql"] and seen["args"] == ("group", 1, 213919)
 
 
@@ -204,3 +206,57 @@ def test_consumer_relays_read_event():
     c._broadcast = bc
     asyncio.run(c.process({"event": "read", "room_uid": "global", "items": []}))
     assert sent[0]["event"] == "read"
+
+
+# ── непрочитанные: /unread и размер первой страницы истории ──
+
+class UnreadDB(FakeDB):
+    def __init__(self, tail):
+        super().__init__()
+        self.tail = tail
+        self.limits = []
+    async def read_state(self, room_uid, viewer_id):
+        return {"read_upto": 0, "my_last_read_id": 100, "has_mark": True,
+                "unread": self.tail, "first_unread_id": 101 if self.tail else None,
+                "last_id": 100 + self.tail, "tail": self.tail}
+    async def get_messages(self, room_uid, limit=50, offset=0, before_id=None):
+        self.limits.append((limit, before_id))
+        return {"messages": [], "total_count": 0, "has_more": False}
+
+
+def _client(db):
+    app = FastAPI()
+    app.include_router(group_chat.router)
+    group_chat.bind(db, FakeProducer())
+    return TestClient(app)
+
+
+@pytest.mark.parametrize("tail,before,expected", [
+    (0, None, 40),       # всё прочитано — обычная страница
+    (5, None, 40),       # мало непрочитанных — влезают в обычную
+    (60, None, 80),      # 60 + 20 контекста
+    (500, None, 200),    # потолок
+    (60, 30, 40),        # подгрузка старых — размер не трогаем
+])
+def test_history_first_page_covers_first_unread(tail, before, expected):
+    db = UnreadDB(tail)
+    try:
+        params = {"viewer_id": 56, "limit": 40}
+        if before:
+            params["before_id"] = before
+        r = _client(db).get("/group/global/messages", params=params)
+        assert r.status_code == 200
+        assert db.limits == [(expected, before)]
+    finally:
+        group_chat.bind(None, None)
+
+
+def test_unread_endpoint():
+    db = UnreadDB(7)
+    try:
+        r = _client(db).get("/group/global/unread", params={"viewer_id": 56}).json()
+        assert r["room_uid"] == "global"
+        assert r["reads"]["unread"] == 7 and r["reads"]["first_unread_id"] == 101
+        assert _client(db).get("/group/global/unread").status_code == 422
+    finally:
+        group_chat.bind(None, None)

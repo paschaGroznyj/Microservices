@@ -12,6 +12,7 @@
   POST /api/group/reactions             — пачка реакций -> reactions_bus
   POST /api/group/{room_uid}/read       — отметка прочтения -> reads_bus
   GET  /api/group/message/{id}/readers  — кто прочитал (только автору)
+  GET  /api/group/{room_uid}/unread     — счётчик непрочитанных для плашки в сайдбаре
   POST /internal/group_message         — приём событий от консюмера -> broadcast по WS
 
 Подключается в app.py: group_chat_gw.bind(http_client, chats_url, get_current_user, admin_check)
@@ -120,6 +121,18 @@ async def api_group_messages(room_uid: str, request: Request, limit: int = 50, o
         params={k: v for k, v in {"limit": limit, "offset": offset, "before_id": before_id,
                                   "viewer_id": user.get("user_id")}.items() if v is not None},
     )
+    return resp.json()
+
+
+@router.get("/api/group/{room_uid}/unread")
+async def api_group_unread(room_uid: str, request: Request):
+    user = await _get_current_user(request)
+    if not user or user.get("user_id") is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    resp = await _http.get(f"{_chats_url}/group/{room_uid}/unread",
+                           params={"viewer_id": int(user["user_id"])})
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail="unread unavailable")
     return resp.json()
 
 

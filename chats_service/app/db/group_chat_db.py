@@ -359,33 +359,67 @@ class GroupChatDB:
                  "last_read_id": r["last_read_id"]} for r in rows]
 
     async def read_state(self, room_uid: str, viewer_id: int) -> dict:
-        """Для ответа истории:
+        """Для ответа истории и счётчика непрочитанных:
           read_upto       — MAX отметки других пользователей: мои сообщения с
                             id <= read_upto получают две галочки;
           my_last_read_id — своя отметка; нет записи -> последний id комнаты
                             (первый вход открывается внизу, без 164 непрочитанных);
           has_mark        — есть ли своя запись. Без неё фронт не считает
                             my_last_read_id отправленным и шлёт первую отметку
-                            по видимым сообщениям, иначе первый вход не пишет ничего."""
+                            по видимым сообщениям, иначе первый вход не пишет ничего;
+          unread          — чужие неудалённые сообщения с id > my_last_read_id;
+          first_unread_id — первое из них (там фронт ставит разделитель);
+          last_id         — последний id комнаты на момент ответа;
+          tail            — сколько неудалённых сообщений (любых) с id >= first_unread_id:
+                            по нему история сразу отдаёт страницу, где есть разделитель."""
+        empty = {"read_upto": 0, "my_last_read_id": 0, "has_mark": False,
+                 "unread": 0, "first_unread_id": None, "last_id": 0, "tail": 0}
         room = await self.get_room_by_uid(room_uid)
         if not room:
-            return {"read_upto": 0, "my_last_read_id": 0, "has_mark": False}
+            return empty
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow("""
+                WITH me AS (
+                  SELECT last_read_id FROM chat_reads
+                   WHERE scope = $1 AND chat_id = $2 AND user_id = $3
+                ), last AS (
+                  SELECT COALESCE(MAX(id), 0) AS id FROM group_messages WHERE room_id = $2
+                ), mark AS (
+                  SELECT COALESCE((SELECT last_read_id FROM me), (SELECT id FROM last)) AS id
+                ), unread AS (
+                  SELECT COUNT(*) AS n, MIN(id) AS first_id FROM group_messages
+                   WHERE room_id = $2 AND is_deleted = FALSE AND user_id <> $3
+                     AND id > (SELECT id FROM mark)
+                )
                 SELECT
                   (SELECT COALESCE(MAX(last_read_id), 0) FROM chat_reads
                     WHERE scope = $1 AND chat_id = $2 AND user_id <> $3) AS read_upto,
-                  COALESCE(
-                    (SELECT last_read_id FROM chat_reads
-                      WHERE scope = $1 AND chat_id = $2 AND user_id = $3),
-                    (SELECT COALESCE(MAX(id), 0) FROM group_messages WHERE room_id = $2)
-                  ) AS my_last_read_id,
-                  EXISTS(SELECT 1 FROM chat_reads
-                          WHERE scope = $1 AND chat_id = $2 AND user_id = $3) AS has_mark
+                  (SELECT id FROM mark) AS my_last_read_id,
+                  EXISTS(SELECT 1 FROM me) AS has_mark,
+                  (SELECT id FROM last) AS last_id,
+                  (SELECT n FROM unread) AS unread,
+                  (SELECT first_id FROM unread) AS first_unread_id,
+                  (SELECT COUNT(*) FROM group_messages
+                    WHERE room_id = $2 AND is_deleted = FALSE
+                      AND id >= (SELECT first_id FROM unread)) AS tail
             """, READ_SCOPE, room["id"], int(viewer_id))
-        return {"read_upto": int(row["read_upto"] or 0),
-                "my_last_read_id": int(row["my_last_read_id"] or 0),
-                "has_mark": bool(row["has_mark"])}
+        def num(k):
+            try:
+                return int(row[k] or 0)
+            except (KeyError, TypeError, ValueError):
+                return 0
+        first = None
+        try:
+            first = row["first_unread_id"]
+        except (KeyError, TypeError):
+            pass
+        return {"read_upto": num("read_upto"),
+                "my_last_read_id": num("my_last_read_id"),
+                "has_mark": bool(row["has_mark"]),
+                "unread": num("unread"),
+                "first_unread_id": int(first) if first else None,
+                "last_id": num("last_id"),
+                "tail": num("tail")}
 
     async def get_readers(self, message_id: int, viewer_id: int):
         """Кто прочитал сообщение. Только автор сообщения (как в TG).

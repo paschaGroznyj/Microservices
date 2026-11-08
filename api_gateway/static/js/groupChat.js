@@ -1024,16 +1024,18 @@
             ? (hasCaption ? ' gc-msg--has-images gc-msg--with-caption' : ' gc-msg--has-images gc-msg--media-only')
             : '');
       const reacts = (!m._optimistic && window.GroupInteraction) ? window.GroupInteraction.chipsHtml(m) : '';
-      // медиа без подписи: реакции отдельной полосой под медиа, не поверх кадра
+      // медиа без подписи: реакции под облаком, снаружи, как в Telegram
       const mediaOnly = hasImages && !hasCaption && !audioOnly;
       const metaHtml = `<div class="gc-meta">${mediaOnly ? '' : reacts}${pin}${edited}<span class="gc-time">${this._fmtTime(m.created_at)}</span></div>`;
-      const reactsRow = mediaOnly ? `<div class="gc-msg__reacts">${reacts}</div>` : '';
+      const reactsRow = mediaOnly
+        ? `<div class="gc-msg__reacts ${mine ? 'gc-msg__reacts--mine' : 'gc-msg__reacts--other'}">${reacts}</div>`
+        : '';
       const innerHtml = audioOnly
         ? `${audiosHtml}${metaHtml}`
         : (hasImages
             ? (hasCaption
                 ? `${mediaTop}<div class="gc-msg__caption">${mediaParts.docs}${textBlock}${metaHtml}</div>`
-                : `<div class="gc-msg__media">${mediaTop}${metaHtml}</div>${reactsRow}`)
+                : `<div class="gc-msg__media">${mediaTop}${metaHtml}</div>`)
             : `${mediaParts.docs}${textBlock}${metaHtml}`);
       const topAudios = (!audioOnly && hasAudios) ? audiosHtml : '';
       return `<div class="gc-row ${mine ? 'gc-row--mine' : ''}" data-id="${m.id}" data-mine="${mine ? 1 : 0}" data-pinned="${m.is_pinned ? 1 : 0}" data-can-del="${canDel ? 1 : 0}" data-can-edit="${canEdit ? 1 : 0}" data-can-pin="${canPin ? 1 : 0}">
@@ -1042,6 +1044,7 @@
         <div class="${cls}${bubbleMod}">
           ${innerHtml}
         </div>
+        ${reactsRow}
       </div>`;
     },
 

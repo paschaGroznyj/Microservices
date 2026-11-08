@@ -340,6 +340,8 @@
   padding: 0;
   border: none;
   overflow: hidden;
+  /* без подписи хвоста нет: все 4 угла скруглены (с подписью остаётся угол облачка) */
+  border-radius: 14px;
 }
 .gc-msg--audio-only {
   padding: 0;
@@ -893,12 +895,27 @@
 .gc-msg--mine .gc-react--mine { background: var(--msg-user-text); color: var(--msg-user-bg); }
 .gc-msg--media-only .gc-meta > :not(.gc-reacts),
 .gc-msg--audio-only .gc-meta > :not(.gc-reacts) { opacity: 1; }
-/* медиа без подписи: реакции полосой под медиа, на фоне облачка */
-/* время лежит в углу медиа, а не в углу облачка с полосой реакций */
+/* медиа без подписи: реакции под облаком, снаружи, как в Telegram */
 .gc-msg__media { position: relative; width: 100%; }
 .gc-msg__reacts {
   display: flex;
-  padding: 6px 10px 8px;
+  max-width: 75%;
+  margin-top: 6px;
 }
 .gc-msg__reacts:empty { display: none; }
-.gc-msg__reacts .gc-reacts { padding-right: 0; }
+.gc-msg__reacts .gc-reacts { margin-right: 0; padding-right: 0; }
+.gc-msg__reacts--mine .gc-reacts { justify-content: flex-end; }
+/* плашки повторяют облачко своей стороны: цвет и острый угол у хвоста */
+.gc-msg__reacts--mine .gc-react {
+  border-radius: 12px 12px 3px 12px;
+  background: var(--msg-user-bg);
+  color: var(--msg-user-text);
+}
+.gc-msg__reacts--other .gc-react {
+  border-radius: 12px 12px 12px 3px;
+  background: var(--surface2);
+  color: var(--text-primary);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.gc-msg__reacts .gc-react--mine,
+.gc-msg__reacts--mine .gc-react--mine { background: var(--accent); color: #fff; box-shadow: none; }

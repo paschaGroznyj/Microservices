@@ -49,11 +49,6 @@
 
     _gc() { return window.GroupChat; },
     _uid() { return this._gc()?.userId; },
-    readOnly() {
-      // в Sigma нет эндпоинта реакций: только показываем
-      return document.body?.dataset?.gateway === 'sigma'
-        || /(?:^|\.)cds\./i.test(location.hostname) || /sigma/i.test(location.hostname);
-    },
     canReact(m) {
       return !!m && !m._optimistic && Number.isFinite(Number(m.id)) && Number(m.id) > 0;
     },
@@ -69,9 +64,8 @@
       const list = (m?.reactions || []).filter(r => r && r.count > 0 && ALLOWED.has(r.emoji));
       if (!list.length) return '';
       const mine = this.myEmoji(m);
-      const ro = this.readOnly() ? ' disabled' : '';
       return `<span class="gc-reacts">${list.map(r =>
-        `<button type="button" class="gc-react${r.emoji === mine ? ' gc-react--mine' : ''}" data-emoji="${r.emoji}"${ro}>` +
+        `<button type="button" class="gc-react${r.emoji === mine ? ' gc-react--mine' : ''}" data-emoji="${r.emoji}">` +
         `<span class="gc-react__e">${r.emoji}</span>${r.count > 1 ? `<span class="gc-react__n">${r.count}</span>` : ''}</button>`
       ).join('')}</span>`;
     },
@@ -91,7 +85,6 @@
     },
 
     bindChips(root) {
-      if (this.readOnly()) return;
       root.querySelectorAll('.gc-react').forEach(btn => {
         btn.onclick = (e) => {
           e.stopPropagation();
@@ -119,7 +112,7 @@
     },
 
     toggle(messageId, emoji) {
-      if (this.readOnly() || !ALLOWED.has(emoji)) return;
+      if (!ALLOWED.has(emoji)) return;
       const m = this._gc()?.messages?.find(x => x.id === messageId);
       if (!this.canReact(m)) return;
       const next = this.myEmoji(m) === emoji ? '' : emoji;
@@ -220,7 +213,7 @@
 
     /* opts: {id, message, canEdit, canPin, canDel, pinned, onAction(act), onClose()} */
     openMenu(e, opts) {
-      const react = !this.readOnly() && this.canReact(opts.message);
+      const react = this.canReact(opts.message);
       const itemsHtml = this._itemsHtml(opts);
       if (!react && !itemsHtml) return null;
       const mine = react ? this.myEmoji(opts.message) : '';

@@ -697,13 +697,19 @@
         }
       }
       // 2) отправляем сообщение (консюмер доклеит файлы по client_msg_id)
-      try {
-        await fetch(`/api/group/${ROOM_UID}/send`, {
-          method: 'POST', credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: text, client_msg_id: clientId }),
-        });
-      } catch (e) { console.warn('[group] send error', e); }
+      // повтор с тем же client_msg_id: консюмер не вставит дубль
+      for (let attempt = 0; attempt < 4; attempt++) {
+        try {
+          const r = await fetch(`/api/group/${ROOM_UID}/send`, {
+            method: 'POST', credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: text, client_msg_id: clientId }),
+          });
+          if (r.ok || r.status < 500) break;
+          console.warn('[group] send status', r.status);
+        } catch (e) { console.warn('[group] send error', e); }
+        await new Promise(res => setTimeout(res, 1000 * 2 ** attempt));
+      }
     },
 
     async _delete(id) {
@@ -1018,13 +1024,16 @@
             ? (hasCaption ? ' gc-msg--has-images gc-msg--with-caption' : ' gc-msg--has-images gc-msg--media-only')
             : '');
       const reacts = (!m._optimistic && window.GroupInteraction) ? window.GroupInteraction.chipsHtml(m) : '';
-      const metaHtml = `<div class="gc-meta">${reacts}${pin}${edited}<span class="gc-time">${this._fmtTime(m.created_at)}</span></div>`;
+      // медиа без подписи: реакции отдельной полосой под медиа, не поверх кадра
+      const mediaOnly = hasImages && !hasCaption && !audioOnly;
+      const metaHtml = `<div class="gc-meta">${mediaOnly ? '' : reacts}${pin}${edited}<span class="gc-time">${this._fmtTime(m.created_at)}</span></div>`;
+      const reactsRow = mediaOnly ? `<div class="gc-msg__reacts">${reacts}</div>` : '';
       const innerHtml = audioOnly
         ? `${audiosHtml}${metaHtml}`
         : (hasImages
             ? (hasCaption
                 ? `${mediaTop}<div class="gc-msg__caption">${mediaParts.docs}${textBlock}${metaHtml}</div>`
-                : `${mediaTop}${metaHtml}`)
+                : `<div class="gc-msg__media">${mediaTop}${metaHtml}</div>${reactsRow}`)
             : `${mediaParts.docs}${textBlock}${metaHtml}`);
       const topAudios = (!audioOnly && hasAudios) ? audiosHtml : '';
       return `<div class="gc-row ${mine ? 'gc-row--mine' : ''}" data-id="${m.id}" data-mine="${mine ? 1 : 0}" data-pinned="${m.is_pinned ? 1 : 0}" data-can-del="${canDel ? 1 : 0}" data-can-edit="${canEdit ? 1 : 0}" data-can-pin="${canPin ? 1 : 0}">
@@ -1112,7 +1121,6 @@
                 <span class="gc-collage__bg" aria-hidden="true"></span>
                 <span class="gc-collage__loader" aria-hidden="true">${GroupChat._ringHtml(true)}</span>
                 <video class="gc-video" data-size="${sz}" controls preload="metadata" playsinline webkit-playsinline src="${url}">
-                  <source src="${url}" type="${vmime}">
                 </video>
                 <a class="image-lightbox__dl fa-card-dl-btn" href="${dlUrl}" download="${name}" title="Скачать" onclick="event.stopPropagation()">
                   <svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>

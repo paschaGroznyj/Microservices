@@ -95,6 +95,19 @@ class GroupChatDB:
             return None
         now_utc = datetime.now(timezone.utc)
         async with self.pool.acquire() as conn:
+            if client_msg_id:
+                # повторная доставка из Kafka (рестарт консюмера, ретрай) не
+                # плодит дубль. Консюмер один на группу, гонки нет.
+                dup = await conn.fetchrow("""
+                    SELECT id, room_id, user_id, username, message_text, client_msg_id,
+                           is_deleted, is_pinned, edited_at, created_at, reactions
+                    FROM group_messages
+                    WHERE room_id = $1 AND client_msg_id = $2
+                    ORDER BY id LIMIT 1
+                """, room["id"], client_msg_id)
+                if dup:
+                    logger.info(f"[group-chat] дубль client_msg_id={client_msg_id} -> id={dup['id']}")
+                    return None if dup["is_deleted"] else self._serialize(dict(dup), room_uid)
             row = await conn.fetchrow("""
                 INSERT INTO group_messages
                     (room_id, user_id, username, message_text, client_msg_id, created_at)

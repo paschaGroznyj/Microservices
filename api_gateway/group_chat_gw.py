@@ -99,6 +99,9 @@ async def api_group_send(room_uid: str, body: GroupSendBody, request: Request):
         "gateway_target": "main",
     }
     resp = await _http.post(f"{_chats_url}/group/send", json=payload)
+    if resp.status_code >= 400:
+        # фронт по 5xx повторит отправку с тем же client_msg_id
+        raise HTTPException(status_code=resp.status_code, detail="group send failed")
     return resp.json()
 
 

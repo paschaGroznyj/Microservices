@@ -98,6 +98,16 @@ class ReactionBatch(BaseModel):
     ops: list[ReactionOp]
 
 
+def _send_or_503(topic, key, value):
+    """send + ожидание ack. flush() ошибку доставки не поднимает: без get()
+    ответ 200 мог уйти, хотя сообщение в Kafka не легло."""
+    try:
+        producer.send(topic, key=key, value=value).get(timeout=15)
+    except Exception as e:
+        logger.error(f"[group-chat] kafka send failed: {e!r}")
+        raise HTTPException(status_code=503, detail="kafka unavailable")
+
+
 # ── Отправка (только в Kafka) ───────────────────────────────
 
 @router.post("/send")
@@ -117,8 +127,7 @@ async def group_send(payload: GroupSendPayload):
         "ts": time.time(),
     }
     start = time.perf_counter()
-    producer.send(GROUP_TOPIC, key=payload.room_uid, value=msg)
-    producer.flush()
+    _send_or_503(GROUP_TOPIC, key=payload.room_uid, value=msg)
     logger.info(f"[group-chat] send -> kafka room={payload.room_uid} "
                 f"user={payload.user_id} ({time.perf_counter()-start:.4f}s)")
     return {"status": "ok", "client_msg_id": msg["client_msg_id"]}
@@ -354,8 +363,11 @@ def _broadcast_event(room_uid: str, event: dict, gateway_target: str = "both"):
     payload = dict(event)
     payload["room_uid"] = room_uid
     payload["gateway_target"] = gateway_target
-    producer.send(GROUP_TOPIC, key=room_uid, value=payload)
-    producer.flush()
+    try:
+        _send_or_503(GROUP_TOPIC, key=room_uid, value=payload)
+    except HTTPException:
+        # изменение уже в БД, клиенту не отдаём 503: увидят по F5
+        pass
 
 
 @router.post("/message/delete")

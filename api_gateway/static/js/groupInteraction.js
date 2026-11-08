@@ -81,11 +81,12 @@
       const m = gc?.messages?.find(x => x.id === messageId);
       const row = document.querySelector(`#gc-messages .gc-row[data-id="${messageId}"]`);
       if (!m || !row) return;
-      const meta = row.querySelector('.gc-meta');
-      if (!meta) return;
-      meta.querySelector('.gc-reacts')?.remove();
+      // у медиа без подписи реакции в своей полосе под медиа
+      const host = row.querySelector('.gc-msg__reacts') || row.querySelector('.gc-meta');
+      if (!host) return;
+      host.querySelector('.gc-reacts')?.remove();
       const html = this.chipsHtml(m);
-      if (html) meta.insertAdjacentHTML('afterbegin', html);
+      if (html) host.insertAdjacentHTML('afterbegin', html);
       this.bindChips(row);
     },
 

@@ -9,12 +9,18 @@ from fastapi.testclient import TestClient
 from app import group_chat
 
 
+class _Ack:
+    def get(self, timeout=None):
+        return None
+
+
 class FakeProducer:
     def __init__(self):
         self.sent = []
         self.flushed = 0
     def send(self, topic, key=None, value=None):
         self.sent.append({"topic": topic, "key": key, "value": value})
+        return _Ack()
     def flush(self):
         self.flushed += 1
 
@@ -71,7 +77,7 @@ def test_send_puts_message_to_kafka(client, fake_db):
     assert sent["topic"] == group_chat.GROUP_TOPIC
     assert sent["value"]["event"] == "new_message"
     assert sent["value"]["message"] == "hello"
-    assert prod.flushed == 1
+    # ack ждём через future.get(), отдельный flush() не нужен
 
 
 def test_send_keeps_client_msg_id(client, fake_db):

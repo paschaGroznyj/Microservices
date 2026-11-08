@@ -891,8 +891,14 @@
   color: var(--msg-user-text);
 }
 .gc-msg--mine .gc-react--mine { background: var(--msg-user-text); color: var(--msg-user-bg); }
-/* на медиа без подписи плашка лежит поверх картинки */
 .gc-msg--media-only .gc-meta > :not(.gc-reacts),
 .gc-msg--audio-only .gc-meta > :not(.gc-reacts) { opacity: 1; }
-.gc-msg--media-only .gc-react { background: rgba(255,255,255,.18); color: #fff; }
-.gc-msg--media-only .gc-react--mine { background: #fff; color: #111; }
+/* медиа без подписи: реакции полосой под медиа, на фоне облачка */
+/* время лежит в углу медиа, а не в углу облачка с полосой реакций */
+.gc-msg__media { position: relative; width: 100%; }
+.gc-msg__reacts {
+  display: flex;
+  padding: 6px 10px 8px;
+}
+.gc-msg__reacts:empty { display: none; }
+.gc-msg__reacts .gc-reacts { padding-right: 0; }

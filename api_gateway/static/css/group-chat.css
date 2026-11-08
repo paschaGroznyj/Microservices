@@ -439,24 +439,29 @@
 .gc-collage__cell.is-loaded.gc-collage__cell--glass .gc-collage__bg {
   opacity: 1;
 }
-/* шиммер загрузки: бегущий блик поверх фона, гаснет когда img загрузился */
-.gc-collage__cell::before {
-  content: "";
+/* лоадер «Кольцо» (стили .fa-ring в chat.css), гаснет когда медиа загрузилось */
+.gc-collage__loader {
   position: absolute;
   inset: 0;
-  background: linear-gradient(
-    100deg,
-    transparent 20%,
-    color-mix(in srgb, var(--text-muted) 22%, transparent) 50%,
-    transparent 80%
-  );
-  background-size: 220% 100%;
-  animation: gcShimmer 1.25s ease-in-out infinite;
-  pointer-events: none;
   z-index: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface2, #f3f1ee);
+  pointer-events: none;
 }
-/* когда картинка догрузилась (JS ставит класс) — блик убираем */
-.gc-collage__cell.is-loaded::before { display: none; }
+.gc-collage__cell.is-loaded .gc-collage__loader { display: none; }
+/* у видео тёмная подложка: акцент высветлен в любой теме */
+.gc-collage__cell--video-thumb .gc-collage__loader,
+.gc-collage__cell--video-single .gc-collage__loader { background: transparent; }
+.gc-collage__cell--video-thumb .fa-ring,
+.gc-collage__cell--video-single .fa-ring {
+  --ring-track: rgba(255, 255, 255, 0.14);
+  --ring-arc: color-mix(in srgb, var(--accent, #cc785c) 70%, #fff);
+  --ring-icon: color-mix(in srgb, var(--accent, #cc785c) 55%, rgba(255, 255, 255, 0.7));
+  --ring-cut: #000;
+}
+.gc-collage__cell--video-thumb:not(.is-loaded) .gc-collage__play { opacity: 0; }
 .gc-collage__cell img {
   position: relative;
   z-index: 1;
@@ -469,10 +474,6 @@
 }
 .gc-collage__cell.is-loaded img { opacity: 1; }
 .gc-collage__cell:hover img { filter: brightness(0.95); }
-@keyframes gcShimmer {
-  0%   { background-position: 140% 0; }
-  100% { background-position: -40% 0; }
-}
 
 .gc-collage__more {
   position: absolute;

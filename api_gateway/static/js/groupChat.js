@@ -13,6 +13,11 @@
   const COLLAPSE_MAX = 240; // px — порог сворачивания длинных сообщений (как у user-message)
 
   const GroupChat = {
+    // Единый лоадер медиа «Кольцо» (media-ring.js, стили .fa-ring в chat.css).
+    _ringHtml(isVideo = false) {
+      return window.MediaRing ? window.MediaRing.html(isVideo) : '';
+    },
+
     app: null,
     ws: null,
     es: null,
@@ -1075,6 +1080,7 @@
               const dlUrl = url + (url.indexOf('/api/group/file/') === 0 ? '?download=1' : '');
               return `<div class="gc-collage__cell gc-collage__cell--video-single" data-img-idx="0">
                 <span class="gc-collage__bg" aria-hidden="true"></span>
+                <span class="gc-collage__loader" aria-hidden="true">${GroupChat._ringHtml(true)}</span>
                 <video class="gc-video" controls preload="metadata" playsinline webkit-playsinline src="${url}">
                   <source src="${url}" type="${vmime}">
                 </video>
@@ -1086,6 +1092,7 @@
               // Видео в сетке 2x2/3x3 - просто превью (первый кадр) + кнопка Play поверх
               const dlUrl = url + (url.indexOf('/api/group/file/') === 0 ? '?download=1' : '');
               return `<div class="gc-collage__cell gc-collage__cell--video-thumb" role="button" tabindex="0" data-lb="1" data-img-idx="${i}" title="${name}">
+                <span class="gc-collage__loader" aria-hidden="true">${GroupChat._ringHtml(true)}</span>
                 <video class="gc-collage__thumb-video" data-src="${url}" preload="metadata" autoplay playsinline webkit-playsinline muted></video>
                 <span class="gc-collage__play"><svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
                 ${more}
@@ -1098,6 +1105,7 @@
             </a>` : '';
             return `<div class="gc-collage__cell" role="button" tabindex="0" data-lb="1" data-img-idx="${i}">
               <span class="gc-collage__bg" data-bg="${url}" aria-hidden="true"></span>
+              <span class="gc-collage__loader" aria-hidden="true">${GroupChat._ringHtml(false)}</span>
               <img src="${url}" alt="${name}" loading="lazy" decoding="async">${more}
               ${dlBtn}
             </div>`;
@@ -1182,6 +1190,7 @@
 
       let scale = 1, panX = 0, panY = 0;
       let currentMedia = null;
+      let renderSeq = 0;
       
       const applyTransform = () => {
         if (!currentMedia || currentMedia.tagName === 'VIDEO') return;
@@ -1203,6 +1212,25 @@
         
         container.innerHTML = '';
         resetZoom();
+
+        // Лоадер «Кольцо»: is-loading → is-ready / is-error; события старого медиа игнорируются
+        const token = ++renderSeq;
+        container.classList.remove('is-ready', 'is-error');
+        container.classList.add('is-loading');
+        const loader = document.createElement('div');
+        loader.className = 'image-lightbox__loader';
+        loader.innerHTML = GroupChat._ringHtml(!!it.isVideo) + '<span class="image-lightbox__loader-text">Не удалось загрузить</span>';
+        container.appendChild(loader);
+        const markReady = () => {
+          if (token !== renderSeq) return;
+          container.classList.remove('is-loading', 'is-error');
+          container.classList.add('is-ready');
+        };
+        const markError = () => {
+          if (token !== renderSeq) return;
+          container.classList.remove('is-loading', 'is-ready');
+          container.classList.add('is-error');
+        };
         
         if (it.isVideo) {
           const vid = document.createElement('video');
@@ -1210,15 +1238,21 @@
           vid.controls = true;
           vid.autoplay = true;
           vid.playsInline = true;
+          vid.addEventListener('loadedmetadata', markReady, { once: true });
+          vid.addEventListener('loadeddata', markReady, { once: true });
+          vid.addEventListener('error', markError, { once: true });
           vid.src = it.url;
           container.appendChild(vid);
           currentMedia = vid;
         } else {
           const img = document.createElement('img');
           img.className = 'image-lightbox__img';
+          img.addEventListener('load', markReady, { once: true });
+          img.addEventListener('error', markError, { once: true });
           img.src = it.url;
           container.appendChild(img);
           currentMedia = img;
+          if (img.complete && img.naturalWidth > 0) markReady();
           
           let dragging = false, lastX, lastY;
           let touchStartDist = 0, touchStartScale = 1;

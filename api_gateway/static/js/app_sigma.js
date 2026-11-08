@@ -2904,8 +2904,8 @@ class ChatApp {
             item._dlBtn = dlBtn;
 
             const skel = document.createElement('div');
-            skel.className = 'fa-image-card__skeleton';
-            skel.innerHTML = '<div class="fa-pixel-grid"></div>';
+            skel.className = 'fa-image-card__skeleton fa-media-loader';
+            skel.innerHTML = window.MediaRing?.html(false) || '';
 
             card.appendChild(bg);
             card.appendChild(skel);
@@ -2929,8 +2929,8 @@ class ChatApp {
             bg.setAttribute('aria-hidden', 'true');
 
             const skel = document.createElement('div');
-            skel.className = 'fa-image-card__skeleton';
-            skel.innerHTML = '<div class="fa-pixel-grid"></div>';
+            skel.className = 'fa-image-card__skeleton fa-media-loader';
+            skel.innerHTML = window.MediaRing?.html(true) || '';
 
             const video = document.createElement('video');
             video.className = 'fa-video-card__video';
@@ -2995,8 +2995,8 @@ class ChatApp {
                 cell.title = item.name || '';
 
                 const skel = document.createElement('div');
-                skel.className = 'fa-image-card__skeleton';
-                skel.innerHTML = '<div class="fa-pixel-grid"></div>';
+                skel.className = 'fa-image-card__skeleton fa-media-loader';
+                skel.innerHTML = window.MediaRing?.html(item.isVideo) || '';
                 cell.appendChild(skel);
 
                 if (item.isVideo) {
@@ -3669,7 +3669,7 @@ class ChatApp {
        ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ: скелетон + лайтбокс
     ══════════════════════════════════════════ */
 
-    /** Показывает пиксельный скелетон генерации картинки в ленте.
+    /** Показывает скелетон генерации картинки в ленте (лоадер «Кольцо» + подпись).
      *  Живёт, пока тул generate_image работает; снимается, когда пришли
      *  реальные файлы (в _renderBotFiles) или ответ финализирован. */
     _showImageGenSkeleton() {
@@ -3682,10 +3682,7 @@ class ChatApp {
         skel.className = 'fa-image-gen-skeleton';
         skel.innerHTML = `
 <div class="fa-image-card fa-image-card--gen">
-  <div class="fa-image-card__skeleton">
-    <div class="fa-pixel-grid"></div>
-    <div class="fa-gen-scan"></div>
-  </div>
+  <div class="fa-image-card__skeleton fa-media-loader">${window.MediaRing?.html(false) || ''}</div>
   <div class="fa-gen-caption">
     <span class="fa-gen-dot"></span>
     <span class="fa-gen-caption__text">Генерация изображения…</span>

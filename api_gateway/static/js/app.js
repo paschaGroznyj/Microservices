@@ -2938,8 +2938,8 @@ class ChatApp {
             item._dlBtn = dlBtn;
 
             const skel = document.createElement('div');
-            skel.className = 'fa-image-card__skeleton';
-            skel.innerHTML = '<div class="fa-pixel-grid"></div>';
+            skel.className = 'fa-image-card__skeleton fa-media-loader';
+            skel.innerHTML = this._mediaRingHtml(false);
 
             card.appendChild(bg);
             card.appendChild(skel);
@@ -2963,8 +2963,8 @@ class ChatApp {
             bg.setAttribute('aria-hidden', 'true');
 
             const skel = document.createElement('div');
-            skel.className = 'fa-image-card__skeleton';
-            skel.innerHTML = '<div class="fa-pixel-grid"></div>';
+            skel.className = 'fa-image-card__skeleton fa-media-loader';
+            skel.innerHTML = this._mediaRingHtml(true);
 
             const video = document.createElement('video');
             video.className = 'fa-video-card__video';
@@ -3029,8 +3029,8 @@ class ChatApp {
                 cell.title = item.name || '';
 
                 const skel = document.createElement('div');
-                skel.className = 'fa-image-card__skeleton';
-                skel.innerHTML = '<div class="fa-pixel-grid"></div>';
+                skel.className = 'fa-image-card__skeleton fa-media-loader';
+                skel.innerHTML = this._mediaRingHtml(item.isVideo);
                 cell.appendChild(skel);
 
                 if (item.isVideo) {
@@ -3774,7 +3774,7 @@ class ChatApp {
        ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ: скелетон + лайтбокс
     ══════════════════════════════════════════ */
 
-    /** Показывает пиксельный скелетон генерации картинки в ленте.
+    /** Показывает скелетон генерации картинки в ленте (лоадер «Кольцо» + подпись).
      *  Живёт, пока тул generate_image работает; снимается, когда пришли
      *  реальные файлы (в _renderBotFiles) или ответ финализирован. */
     _showImageGenSkeleton() {
@@ -3787,10 +3787,7 @@ class ChatApp {
         skel.className = 'fa-image-gen-skeleton';
         skel.innerHTML = `
 <div class="fa-image-card fa-image-card--gen">
-  <div class="fa-image-card__skeleton">
-    <div class="fa-pixel-grid"></div>
-    <div class="fa-gen-scan"></div>
-  </div>
+  <div class="fa-image-card__skeleton fa-media-loader">${this._mediaRingHtml(false)}</div>
   <div class="fa-gen-caption">
     <span class="fa-gen-dot"></span>
     <span class="fa-gen-caption__text">Генерация изображения…</span>
@@ -3816,6 +3813,11 @@ class ChatApp {
             name: name || 'image',
             imageKey: imageKey || null,
         }], 0);
+    }
+
+    // Единый лоадер медиа «Кольцо» (media-ring.js, стили .fa-ring в chat.css).
+    _mediaRingHtml(isVideo = false) {
+        return window.MediaRing ? window.MediaRing.html(isVideo) : '';
     }
 
     _openMediaLightbox(items, startIdx = 0) {
@@ -3906,6 +3908,25 @@ class ChatApp {
             dlEl.setAttribute('href', href0);
             dlEl.setAttribute('download', dlName0);
 
+            mediaContainer.classList.remove('is-ready', 'is-error');
+            mediaContainer.classList.add('is-loading');
+            const loader = document.createElement('div');
+            loader.className = 'image-lightbox__loader';
+            loader.setAttribute('role', 'status');
+            loader.setAttribute('aria-label', 'Загрузка');
+            loader.innerHTML = this._mediaRingHtml(isVid) + '<span class="image-lightbox__loader-text">Не удалось загрузить</span>';
+            mediaContainer.appendChild(loader);
+            const markReady = () => {
+                if (myToken !== renderToken) return;
+                mediaContainer.classList.remove('is-loading', 'is-error');
+                mediaContainer.classList.add('is-ready');
+            };
+            const markError = () => {
+                if (myToken !== renderToken) return;
+                mediaContainer.classList.remove('is-loading');
+                mediaContainer.classList.add('is-error');
+            };
+
             if (isVid) {
                 const video = document.createElement('video');
                 video.className = 'image-lightbox__video';
@@ -3933,11 +3954,17 @@ class ChatApp {
                     if (myToken !== renderToken) return;
                     dimEl.textContent = '';
                 });
+                video.addEventListener('loadedmetadata', markReady, { once: true });
+                video.addEventListener('loadeddata', markReady, { once: true });
+                video.addEventListener('error', markError, { once: true });
                 mediaContainer.appendChild(video);
             } else {
                 const img = document.createElement('img');
                 img.className = 'image-lightbox__img';
                 img.alt = this.escapeHtml(dlName0);
+                img.addEventListener('load', () => { if (img.naturalWidth > 0) markReady(); });
+                // при fetch-фоллбэке src меняется; ошибку считаем финальной только для прямого url
+                img.addEventListener('error', markError);
                 img.addEventListener('load', () => {
                     if (myToken !== renderToken) return;
                     if (img.naturalWidth && img.naturalHeight) {
@@ -4277,9 +4304,10 @@ class ChatApp {
                 // Статус-строку и скелетон рисуем только для АКТИВНОГО чата.
                 if (!isActive) return;
                 this.updateStatus(msg.status);
-                // Скелетон генерации: показываем, когда статус — про рисование.
+                // Скелетон генерации: только на статусы тула generate_image
+                // (tool_status_messages.py), а не на любое слово «картинка».
                 const status = (msg.status || '').toLowerCase();
-                if (/генерир|рису|картин|композиц|детал.*свет/.test(status)) {
+                if (/^(генерирую изображение|рисую картинку|прорабатываю детали и свет|собираю композицию)/.test(status)) {
                     this._showImageGenSkeleton();
                 }
                 return;

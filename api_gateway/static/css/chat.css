@@ -1990,9 +1990,10 @@ pre {
 .fa-image-card--error .fa-image-card__skeleton::after {
   content: 'не удалось загрузить';
   position: absolute;
-  inset: 0;
+  left: 0;
+  right: 0;
+  bottom: 14%;
   display: flex;
-  align-items: center;
   justify-content: center;
   font-size: 0.78em;
   color: var(--text-muted, #8a8a92);
@@ -2029,26 +2030,6 @@ pre {
 .fa-image-card--loading .fa-image-card__skeleton { display: block; }
 .fa-image-card:not(.fa-image-card--loading):not(.fa-image-card--gen) .fa-image-card__skeleton { display: none; }
 
-/* Пиксельная сетка-shimmer */
-.fa-pixel-grid {
-  position: absolute;
-  inset: 0;
-  background-color: var(--surface2, #1a1a1f);
-  background-image:
-    linear-gradient(rgba(255,255,255,0.045) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255,255,255,0.045) 1px, transparent 1px),
-    linear-gradient(115deg,
-      rgba(255,255,255,0) 30%,
-      rgba(120,150,255,0.18) 48%,
-      rgba(180,140,255,0.22) 52%,
-      rgba(255,255,255,0) 70%);
-  background-size: 14px 14px, 14px 14px, 220% 220%;
-  animation: faPixelShimmer 1.5s linear infinite;
-}
-@keyframes faPixelShimmer {
-  0%   { background-position: 0 0, 0 0, 100% 0; }
-  100% { background-position: 0 0, 0 0, -100% 0; }
-}
 
 /* ── Отдельный скелетон-плейсхолдер генерации (в ленте) ── */
 .fa-image-gen-skeleton {
@@ -2066,25 +2047,6 @@ pre {
 .fa-image-card--gen:hover {
   transform: none;
   box-shadow: 0 2px 10px rgba(0,0,0,0.25);
-}
-
-/* Сканирующая линия поверх пиксель-сетки */
-.fa-gen-scan {
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 30%;
-  top: -30%;
-  background: linear-gradient(180deg,
-    rgba(140,170,255,0) 0%,
-    rgba(140,170,255,0.35) 50%,
-    rgba(140,170,255,0) 100%);
-  filter: blur(2px);
-  animation: faGenScan 1.8s ease-in-out infinite;
-}
-@keyframes faGenScan {
-  0%   { top: -30%; }
-  100% { top: 100%; }
 }
 
 /* Подпись под скелетоном генерации */
@@ -2106,8 +2068,8 @@ pre {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #8caaff;
-  box-shadow: 0 0 6px #8caaff;
+  background: var(--accent, #8b4513);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent, #8b4513) 60%, transparent);
   animation: faGenDot 1s ease-in-out infinite;
 }
 @keyframes faGenDot {
@@ -3187,4 +3149,126 @@ pre {
 }
 @media (prefers-reduced-motion: reduce) {
   .reasoning-body .reasoning-step--clampable { transition: none; }
+}
+
+/* ══════════ Лоадер медиа «Кольцо» (лайтбокс + коллаж, личный и общий чат) ══════════ */
+.fa-ring {
+  --ring-size: 44px;
+  /* дуга и иконка от --accent (цвет интерфейса из палитры профиля), трек нейтральный */
+  --ring-track: color-mix(in srgb, var(--text-primary, #1a1612) 10%, transparent);
+  --ring-arc: var(--accent, #8b4513);
+  --ring-icon: color-mix(in srgb, var(--accent, #8b4513) 60%, transparent);
+  --ring-cut: var(--surface2, #f3f1ee);
+  width: var(--ring-size);
+  height: var(--ring-size);
+  display: block;
+  animation: faRingSpin 1.4s linear infinite;
+}
+.fa-ring__track,
+.fa-ring__arc { fill: none; stroke-width: 4; }
+.fa-ring__track { stroke: var(--ring-track); }
+.fa-ring__arc {
+  stroke: var(--ring-arc);
+  stroke-linecap: round;
+  stroke-dasharray: 20 126;
+  transform-origin: 24px 24px;
+  animation: faRingDash 1.4s ease-in-out infinite;
+}
+.fa-ring__icon { animation: faRingCounter 1.4s linear infinite; transform-box: view-box; }
+.fa-ring__pulse { animation: faRingPulse 1.4s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+.fa-ring__glyph { fill: var(--ring-icon); }
+.fa-ring__cut { fill: var(--ring-cut); }
+
+@keyframes faRingSpin { to { transform: rotate(360deg); } }
+/* иконка не крутится вместе с кольцом */
+@keyframes faRingCounter { from { transform: translate(24px, 24px) rotate(0deg); } to { transform: translate(24px, 24px) rotate(-360deg); } }
+@keyframes faRingDash {
+  0%   { stroke-dasharray: 18 126; stroke-dashoffset: 0; }
+  50%  { stroke-dasharray: 80 126; stroke-dashoffset: -22; }
+  100% { stroke-dasharray: 18 126; stroke-dashoffset: -125; }
+}
+@keyframes faRingPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.08); } }
+
+/* Единая подложка лоадера: одиночная картинка/видео, коллаж, скелетон генерации
+   (личный чат и Sigma). Кольцо по центру, фон surface2 текущей темы. */
+.fa-media-loader {
+  align-items: center;
+  justify-content: center;
+  background: var(--surface2, #f3f1ee);
+}
+.fa-image-card--loading .fa-media-loader,
+.fa-image-card--gen .fa-media-loader,
+.fa-collage__cell--loading .fa-media-loader { display: flex; }
+/* ошибка: специфичность выше, чем у правила «скрыть скелетон после загрузки» */
+.fa-image-card.fa-image-card--error .fa-image-card__skeleton.fa-media-loader { display: flex; }
+.fa-image-card--gen .fa-media-loader .fa-ring { --ring-size: 56px; }
+/* Ошибка: кольцо серое и стоит */
+.fa-image-card--error .fa-ring,
+.fa-image-card--error .fa-ring * { animation: none; }
+.fa-image-card--error .fa-ring__arc {
+  stroke: color-mix(in srgb, var(--text-primary, #1a1612) 25%, transparent);
+  stroke-dasharray: none;
+}
+.fa-image-card--error .fa-ring__glyph { fill: color-mix(in srgb, var(--text-primary, #1a1612) 30%, transparent); }
+
+/* Лайтбокс: фон всегда тёмный, цвета фиксированные */
+.image-lightbox__media-container { position: relative; }
+.image-lightbox__media-container.is-loading,
+.image-lightbox__media-container.is-error {
+  min-width: min(360px, 80vw);
+  min-height: min(240px, 50vh);
+}
+.image-lightbox__loader {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  pointer-events: none;
+}
+/* Тёмные подложки (лайтбокс, видео): акцент высветлен, чтобы не терялся */
+.fa-video-card .fa-media-loader,
+.fa-collage__cell--video .fa-media-loader { background: #0a0e17; }
+.fa-video-card .fa-ring,
+.fa-collage__cell--video .fa-ring,
+.image-lightbox__loader .fa-ring {
+  --ring-track: rgba(255, 255, 255, 0.12);
+  --ring-arc: color-mix(in srgb, var(--accent, #cc785c) 70%, #fff);
+  --ring-icon: color-mix(in srgb, var(--accent, #cc785c) 55%, rgba(255, 255, 255, 0.7));
+  --ring-cut: #0a0e17;
+}
+.image-lightbox__loader .fa-ring {
+  --ring-size: 64px;
+  --ring-track: rgba(255, 255, 255, 0.12);
+  --ring-arc: color-mix(in srgb, var(--accent, #cc785c) 70%, #fff);
+  --ring-icon: color-mix(in srgb, var(--accent, #cc785c) 55%, rgba(255, 255, 255, 0.7));
+  --ring-cut: #1a1a1a;
+}
+.image-lightbox__loader-text { display: none; color: rgba(255, 255, 255, 0.6); font-size: 0.9em; }
+.is-loading > .image-lightbox__loader,
+.is-error > .image-lightbox__loader { display: flex; }
+.is-error > .image-lightbox__loader .fa-ring,
+.is-error > .image-lightbox__loader .fa-ring * { animation: none; }
+.is-error > .image-lightbox__loader .fa-ring__arc { stroke: rgba(255, 255, 255, 0.25); stroke-dasharray: none; }
+.is-error > .image-lightbox__loader .fa-ring__glyph { fill: rgba(255, 255, 255, 0.35); }
+.is-error > .image-lightbox__loader .image-lightbox__loader-text { display: block; }
+/* .gc-lightbox в селекторе: group-chat.css грузится позже и задаёт только transform */
+.image-lightbox__media-container > .image-lightbox__img,
+.image-lightbox__media-container > .image-lightbox__video,
+.gc-lightbox .image-lightbox__media-container > .image-lightbox__img,
+.gc-lightbox .image-lightbox__media-container > .image-lightbox__video {
+  transition: opacity 0.25s ease, transform 0.08s ease-out;
+}
+.image-lightbox__media-container.is-loading > .image-lightbox__img,
+.image-lightbox__media-container.is-loading > .image-lightbox__video { opacity: 0; }
+.image-lightbox__media-container.is-error > .image-lightbox__img,
+.image-lightbox__media-container.is-error > .image-lightbox__video { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .fa-ring, .fa-ring__icon { animation-duration: 3s; }
+  .fa-ring__arc, .fa-ring__pulse { animation: none; }
+  .image-lightbox__media-container > .image-lightbox__img,
+  .gc-lightbox .image-lightbox__media-container > .image-lightbox__img { transition: none; }
 }

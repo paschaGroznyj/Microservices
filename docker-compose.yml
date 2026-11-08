@@ -286,6 +286,7 @@ services:
       - ./api_gateway/presence.py:/app/presence.py
       - ./api_gateway/run_status.py:/app/run_status.py
       - ./api_gateway/editor_gw.py:/app/editor_gw.py
+      - ./api_gateway/reactions_bus.py:/app/reactions_bus.py
     depends_on:
       broker:
         condition: service_healthy

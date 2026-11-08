@@ -30,6 +30,7 @@ import presence
 import run_status
 import cache_bust
 import group_chat_gw
+import reactions_bus
 import editor_gw
 import os
 import max_chats_gw
@@ -61,6 +62,10 @@ async def lifespan(app: FastAPI):
         admin_usernames=ADMIN_USERNAMES,
     )
 
+    # Реакции общего чата: Redis-шина с дебаунсом 1 с
+    reactions_bus.bind(app.state.http_client, SERVICES['chats']['url'])
+    reactions_bus.start()
+
     editor_gw.bind(
         http_client=app.state.http_client,
         chats_url=SERVICES['chats']['url'],
@@ -80,6 +85,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down API Gateway...")
+    await reactions_bus.stop()
     await app.state.http_client.aclose()
 app = FastAPI(title="API Gateway", lifespan=lifespan, docs_url=None)
 app.include_router(group_chat_gw.router)

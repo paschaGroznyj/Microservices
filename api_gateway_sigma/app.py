@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import quote
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 import time
 
@@ -32,6 +32,7 @@ import editor_gw
 import os as _os_env
 import run_status
 import cache_bust
+import reactions_bus
 
 import re
 
@@ -91,10 +92,16 @@ async def lifespan(app: FastAPI):
         chat_transport="sse",
     )
 
+    # Дебаунсер реакций общего чата: Redis-хеш общий с main gateway,
+    # пачку забирает тот воркер, кто первым сделал RENAME.
+    reactions_bus.bind(app.state.http_client, SERVICES['chats']['url'])
+    reactions_bus.start()
+
     yield
 
     # Shutdown
     logger.info("Shutting down API Gateway SIGMA...")
+    await reactions_bus.stop()
     await app.state.http_client.aclose()
 app = FastAPI(title="API Gateway SIGMA", lifespan=lifespan)
 app.include_router(editor_gw.router)
@@ -2568,6 +2575,27 @@ async def group_pin(body: GroupPinBody, request: Request):
         json={"message_id": body.message_id, "is_pinned": body.is_pinned},
     )
     return resp.json()
+
+
+class ReactionItem(BaseModel):
+    message_id: int = Field(gt=0)
+    emoji: str = Field(default="", max_length=16)
+
+
+class ReactionsBody(BaseModel):
+    items: list[ReactionItem] = Field(max_length=100)
+
+
+@app.post("/api/group/reactions")
+async def group_reactions(body: ReactionsBody, request: Request):
+    """Пачка реакций с фронта -> Redis -> reactions_bus -> chats_service.
+    Тот же контракт, что в api_gateway/group_chat_gw.py."""
+    user = await get_current_user(request)
+    if not user or not user.get("user_id"):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    items = [i.model_dump() for i in body.items]
+    via = await reactions_bus.enqueue(int(user["user_id"]), items)
+    return {"ok": True, "queued": len(items), "via": via}
 
 
 @app.post("/internal/group_message")

@@ -88,6 +88,16 @@ class GroupPinAction(BaseModel):
     is_pinned: bool
 
 
+class ReactionOp(BaseModel):
+    message_id: int
+    user_id: int
+    emoji: str = ""
+
+
+class ReactionBatch(BaseModel):
+    ops: list[ReactionOp]
+
+
 # ── Отправка (только в Kafka) ───────────────────────────────
 
 @router.post("/send")
@@ -383,6 +393,26 @@ async def group_pin(action: GroupPinAction):
         raise HTTPException(status_code=404, detail="сообщение не найдено")
     _broadcast_event(row["room_uid"], {"event": "pin_message", "message": row})
     return {"ok": True, "message": row}
+
+
+@router.post("/reactions/apply")
+async def group_reactions_apply(batch: ReactionBatch):
+    """Пачка реакций от дебаунсера гейтвея (api_gateway/reactions_bus.py).
+    Пишем в БД одной транзакцией, итог по каждому сообщению транслируем
+    событием reactions в его комнату."""
+    if group_db is None:
+        raise HTTPException(status_code=503, detail="db not ready")
+    if len(batch.ops) > 2000:
+        raise HTTPException(status_code=413, detail="слишком большая пачка")
+    changed = await group_db.apply_reactions(
+        [op.model_dump() if hasattr(op, "model_dump") else op.dict() for op in batch.ops])
+    by_room: dict = {}
+    for row in changed:
+        by_room.setdefault(row["room_uid"], []).append(
+            {"message_id": row["message_id"], "reactions": row["reactions"]})
+    for room_uid, items in by_room.items():
+        _broadcast_event(room_uid, {"event": "reactions", "items": items})
+    return {"ok": True, "applied": len(changed)}
 
 
 async def _room_id_of(message_id: int):

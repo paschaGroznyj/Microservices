@@ -83,7 +83,7 @@ class GroupDBConsumer:
                     await self._broadcast(room_uid, {
                         "event": "new_message", "message": saved,
                     }, gateway_target)
-            elif event in ("edit_message", "delete_message", "pin_message"):
+            elif event in ("edit_message", "delete_message", "pin_message", "reactions"):
                 # Фичи уже применены в БД эндпоинтом, консюмер только транслирует
                 await self._broadcast(room_uid, payload, gateway_target)
             else:

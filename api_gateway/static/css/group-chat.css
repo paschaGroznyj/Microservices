@@ -118,21 +118,20 @@
   justify-content: flex-end;
   margin-top: 4px;
   font-size: .7rem;
-  opacity: .6;
 }
+/* приглушаем только время/флаги, плашки реакций остаются яркими */
+.gc-meta > :not(.gc-reacts) { opacity: .6; }
 .gc-msg--mine .gc-meta { color: var(--msg-user-text); }
 .gc-msg--other .gc-meta { color: var(--text-muted); }
 .gc-edited { font-style: italic; }
 
 /* Контекстное меню (ПКМ по сообщению) */
 .gc-ctx-menu {
-  position: fixed;
-  z-index: 1000;
   min-width: 150px;
   padding: 5px;
   background: var(--surface, #fff);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 14px;
   box-shadow: var(--shadow-md, 0 6px 24px rgba(0,0,0,.18));
   display: flex;
   flex-direction: column;
@@ -794,3 +793,106 @@
 .gc-history-loader span:nth-child(3) { animation-delay: .3s; }
 @keyframes gcHistDot { 0%, 100% { opacity: .25; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-2px); } }
 @media (prefers-reduced-motion: reduce) { .gc-history-loader span { animation: none; opacity: .6; } }
+
+/* ── Реакции (groupInteraction.js) ─────────────────────────── */
+.gc-ctx-pop {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.gc-ctx-item .gc-ico { flex: none; opacity: .85; }
+.gc-ctx-menu { align-self: stretch; }
+
+/* быстрая панель: радиус как у облачка */
+.gc-rbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-md, 0 6px 24px rgba(0,0,0,.18));
+}
+.gc-rbar__btn, .gc-rgrid__btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  line-height: 1;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  transition: transform .12s ease, background var(--transition);
+}
+.gc-rbar__btn { width: 36px; height: 36px; font-size: 22px; }
+.gc-rbar__btn:hover, .gc-rgrid__btn:hover { background: var(--sidebar-hover, rgba(0,0,0,.06)); transform: scale(1.15); }
+.gc-rbar__btn.is-mine, .gc-rgrid__btn.is-mine { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.gc-rbar__more {
+  display: flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; margin-left: 2px;
+  border: none; border-radius: 50%;
+  background: var(--surface2);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.gc-rbar__more:hover { color: var(--text-primary); }
+
+/* полный набор: 8×8 заполняет квадрат */
+.gc-ctx-pop--grid { gap: 0; }
+.gc-rgrid {
+  display: grid;
+  grid-template-columns: repeat(8, 40px);
+  grid-auto-rows: 40px;
+  gap: 2px;
+  padding: 8px;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-md, 0 6px 24px rgba(0,0,0,.18));
+}
+.gc-rgrid__btn { width: 40px; height: 40px; font-size: 26px; }
+
+/* плашки под сообщением, радиусы повторяют облачко */
+.gc-meta { flex-wrap: wrap; }
+.gc-reacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-right: auto;
+  padding-right: 6px;
+}
+.gc-react {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 12px 12px 12px 3px;
+  font-size: .75rem;
+  font-weight: 600;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  transition: transform .12s ease;
+}
+.gc-react:active { transform: scale(.92); }
+.gc-react[disabled] { cursor: default; }
+.gc-react__e { font-size: 15px; line-height: 1; font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif; }
+.gc-react--mine { background: var(--accent); color: #fff; }
+.gc-msg--mine .gc-react {
+  border-radius: 12px 12px 3px 12px;
+  background: color-mix(in srgb, var(--msg-user-text) 14%, transparent);
+  color: var(--msg-user-text);
+}
+.gc-msg--mine .gc-react--mine { background: var(--msg-user-text); color: var(--msg-user-bg); }
+/* на медиа без подписи плашка лежит поверх картинки */
+.gc-msg--media-only .gc-meta > :not(.gc-reacts),
+.gc-msg--audio-only .gc-meta > :not(.gc-reacts) { opacity: 1; }
+.gc-msg--media-only .gc-react { background: rgba(255,255,255,.18); color: #fff; }
+.gc-msg--media-only .gc-react--mine { background: #fff; color: #111; }

@@ -601,6 +601,9 @@
       } else if (ev === 'pin_message' && data.message) {
         this._upsertMessage(data.message);
         this._loadPinned();
+      } else if (ev === 'reactions') {
+        // точечно патчим .gc-meta, без _renderAll (не перезапускаем лоадеры медиа)
+        window.GroupInteraction?.onEvent(data);
       }
     },
 
@@ -1014,7 +1017,8 @@
         : (hasImages
             ? (hasCaption ? ' gc-msg--has-images gc-msg--with-caption' : ' gc-msg--has-images gc-msg--media-only')
             : '');
-      const metaHtml = `<div class="gc-meta">${pin}${edited}<span class="gc-time">${this._fmtTime(m.created_at)}</span></div>`;
+      const reacts = (!m._optimistic && window.GroupInteraction) ? window.GroupInteraction.chipsHtml(m) : '';
+      const metaHtml = `<div class="gc-meta">${reacts}${pin}${edited}<span class="gc-time">${this._fmtTime(m.created_at)}</span></div>`;
       const innerHtml = audioOnly
         ? `${audiosHtml}${metaHtml}`
         : (hasImages
@@ -1842,6 +1846,7 @@
           };
         });
       });
+      window.GroupInteraction?.bindChips(box);
     },
 
     _closeCtxMenu() {
@@ -1853,38 +1858,27 @@
 
     _showCtxMenu(e, row) {
       this._closeCtxMenu();
-      const id = Number(row.dataset.id);
-      const canDel = row.dataset.canDel === '1';
-      const canEdit = row.dataset.canEdit === '1';
-      const canPin = row.dataset.canPin === '1';
+      const GI = window.GroupInteraction;
+      if (!GI) return;
+      const rawId = row.dataset.id;
+      const id = Number(rawId);
       const pinned = row.dataset.pinned === '1';
-      if (!canDel && !canPin && !canEdit) return;
-      const menu = document.createElement('div');
-      menu.className = 'gc-ctx-menu';
-      menu.id = 'gc-ctx-menu';
-      const items = [];
-      if (canEdit) items.push(`<button class="gc-ctx-item" data-act="edit">Изменить</button>`);
-      if (canPin) items.push(`<button class="gc-ctx-item" data-act="pin">${pinned ? 'Открепить' : 'Закрепить в шапке'}</button>`);
-      if (canDel) items.push(`<button class="gc-ctx-item gc-ctx-item--danger" data-act="del">Удалить</button>`);
-      menu.innerHTML = items.join('');
-      document.body.appendChild(menu);
-      const mw = menu.offsetWidth, mh = menu.offsetHeight;
-      let x = e.clientX, y = e.clientY;
-      if (x + mw > window.innerWidth - 8) x = window.innerWidth - mw - 8;
-      if (y + mh > window.innerHeight - 8) y = window.innerHeight - mh - 8;
-      menu.style.left = x + 'px';
-      menu.style.top = y + 'px';
-      menu.querySelectorAll('.gc-ctx-item').forEach(btn => {
-        btn.onclick = () => {
-          const act = btn.dataset.act;
+      const message = this.messages.find(m => String(m.id) === rawId);
+      const menu = GI.openMenu(e, {
+        id, message, pinned,
+        canDel: row.dataset.canDel === '1',
+        canEdit: row.dataset.canEdit === '1',
+        canPin: row.dataset.canPin === '1',
+        onAction: (act) => {
           if (act === 'del') this._delete(id);
           else if (act === 'pin') this._pin(id, !pinned);
           else if (act === 'edit') this._startEdit(id);
-          this._closeCtxMenu();
-        };
+        },
+        onClose: () => this._closeCtxMenu(),
       });
+      if (!menu) return;
       this._ctxCloseHandler = (ev) => {
-        if (!menu.contains(ev.target)) this._closeCtxMenu();
+        if (!menu.isConnected || !menu.contains(ev.target)) this._closeCtxMenu();
       };
       setTimeout(() => {
         document.addEventListener('click', this._ctxCloseHandler, true);

@@ -1,0 +1,259 @@
+/* ════════════════════════════════════════════════════════════
+   Реакции и контекстное меню общего чата (как в Telegram).
+
+   ПКМ по сообщению: панель быстрых реакций + пункты с SVG-иконками.
+   Шеврон раскрывает квадрат 8×8 со всеми реакциями (без поиска).
+   Выбранная реакция попадает в .gc-meta плашкой.
+
+   Одна реакция на пользователя: выбор другой заменяет, повтор снимает.
+   Клики копятся 1 с и уходят пачкой в POST /api/group/reactions,
+   дальше Redis-шина гейтвея (reactions_bus.py) и событие reactions.
+   Набор эмодзи совпадает с chats_service/app/core/reactions.py.
+   ════════════════════════════════════════════════════════════ */
+(function () {
+  'use strict';
+
+  const REACTIONS = [
+    '❤️', '🔥', '😁', '👎', '👍', '💯', '😢', '😨',
+    '👌', '😱', '🤯', '🤩', '🤡', '🤔', '🥺', '🤝',
+    '🥰', '👏', '🤬', '🎉', '🤮', '💩', '🙏', '🕊️',
+    '🥱', '🥴', '😍', '🐳', '❤️‍🔥', '🌚', '🌭', '🤣',
+    '⚡', '🍌', '🏆', '💔', '🤨', '😐', '🍓', '🍾',
+    '💋', '🖕', '😈', '😴', '😭', '🤓', '👻', '👨‍💻',
+    '👀', '🎃', '🙈', '😇', '✍️', '🤗', '🫡', '🎅',
+    '🎄', '☃️', '💅', '🤪', '🗿', '🆒', '💘', '🦄',
+  ];
+  const QUICK = REACTIONS.slice(0, 7);
+  const ALLOWED = new Set(REACTIONS);
+  const DEBOUNCE_MS = 1000;
+  const MAX_WAIT_MS = 3000;
+  // своя реакция, ещё не подтверждённая сервером, сильнее события
+  const OVERRIDE_TTL_MS = 10000;
+
+  const ICONS = {
+    edit: '<path d="M4 20h4L18.5 9.5a2.83 2.83 0 0 0-4-4L4 16v4Z"/><path d="m13.5 6.5 4 4"/>',
+    pin: '<path d="M9 4h6l-1 6 3 3v2H7v-2l3-3-1-6Z"/><path d="M12 15v5"/>',
+    unpin: '<path d="M9 4h6l-1 6 3 3v2H7v-2l3-3-1-6Z"/><path d="M12 15v5"/><path d="M4 4l16 16"/>',
+    del: '<path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/><path d="M9 7V4h6v3"/>',
+    chevron: '<path d="m6 9 6 6 6-6"/>',
+  };
+  const svg = (name, size = 18) =>
+    `<svg class="gc-ico" viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
+
+  const GI = {
+    REACTIONS, QUICK,
+    _queue: new Map(),      // message_id -> emoji ('' = снять)
+    _override: new Map(),   // message_id -> {emoji, ts}
+    _timer: null,
+    _firstAt: 0,
+
+    _gc() { return window.GroupChat; },
+    _uid() { return this._gc()?.userId; },
+    readOnly() {
+      // в Sigma нет эндпоинта реакций: только показываем
+      return document.body?.dataset?.gateway === 'sigma'
+        || /(?:^|\.)cds\./i.test(location.hostname) || /sigma/i.test(location.hostname);
+    },
+    canReact(m) {
+      return !!m && !m._optimistic && Number.isFinite(Number(m.id)) && Number(m.id) > 0;
+    },
+
+    myEmoji(m) {
+      const uid = String(this._uid());
+      const r = (m?.reactions || []).find(x => (x.user_ids || []).some(u => String(u) === uid));
+      return r ? r.emoji : '';
+    },
+
+    /* ── рендер плашек ── */
+    chipsHtml(m) {
+      const list = (m?.reactions || []).filter(r => r && r.count > 0 && ALLOWED.has(r.emoji));
+      if (!list.length) return '';
+      const mine = this.myEmoji(m);
+      const ro = this.readOnly() ? ' disabled' : '';
+      return `<span class="gc-reacts">${list.map(r =>
+        `<button type="button" class="gc-react${r.emoji === mine ? ' gc-react--mine' : ''}" data-emoji="${r.emoji}"${ro}>` +
+        `<span class="gc-react__e">${r.emoji}</span>${r.count > 1 ? `<span class="gc-react__n">${r.count}</span>` : ''}</button>`
+      ).join('')}</span>`;
+    },
+
+    patchRow(messageId) {
+      const gc = this._gc();
+      const m = gc?.messages?.find(x => x.id === messageId);
+      const row = document.querySelector(`#gc-messages .gc-row[data-id="${messageId}"]`);
+      if (!m || !row) return;
+      const meta = row.querySelector('.gc-meta');
+      if (!meta) return;
+      meta.querySelector('.gc-reacts')?.remove();
+      const html = this.chipsHtml(m);
+      if (html) meta.insertAdjacentHTML('afterbegin', html);
+      this.bindChips(row);
+    },
+
+    bindChips(root) {
+      if (this.readOnly()) return;
+      root.querySelectorAll('.gc-react').forEach(btn => {
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          const row = btn.closest('.gc-row');
+          const id = Number(row?.dataset.id);
+          if (id) this.toggle(id, btn.dataset.emoji);
+        };
+      });
+    },
+
+    /* ── локальное применение ── */
+    _applyLocal(m, emoji) {
+      const uid = this._uid();
+      const us = String(uid);
+      const list = (m.reactions || []).map(r => ({
+        ...r, user_ids: (r.user_ids || []).filter(u => String(u) !== us),
+      }));
+      if (emoji) {
+        let r = list.find(x => x.emoji === emoji);
+        if (!r) { r = { emoji, count: 0, user_ids: [] }; list.push(r); }
+        r.user_ids.push(uid);
+      }
+      list.forEach(r => { r.count = r.user_ids.length; });
+      m.reactions = list.filter(r => r.count > 0);
+    },
+
+    toggle(messageId, emoji) {
+      if (this.readOnly() || !ALLOWED.has(emoji)) return;
+      const m = this._gc()?.messages?.find(x => x.id === messageId);
+      if (!this.canReact(m)) return;
+      const next = this.myEmoji(m) === emoji ? '' : emoji;
+      this._applyLocal(m, next);
+      this._override.set(messageId, { emoji: next, ts: Date.now() });
+      this._queue.set(messageId, next);
+      this.patchRow(messageId);
+      this._schedule();
+    },
+
+    /* ── событие reactions от сервера ── */
+    onEvent(data) {
+      const gc = this._gc();
+      if (!gc) return;
+      for (const it of data.items || []) {
+        const id = Number(it.message_id);
+        const m = gc.messages?.find(x => x.id === id);
+        if (!m) continue;
+        m.reactions = Array.isArray(it.reactions) ? it.reactions : [];
+        const ov = this._override.get(id);
+        if (ov) {
+          const fresh = Date.now() - ov.ts < OVERRIDE_TTL_MS;
+          if (this.myEmoji(m) === ov.emoji || !fresh) this._override.delete(id);
+          else this._applyLocal(m, ov.emoji);   // сервер ещё не видел последний клик
+        }
+        this.patchRow(id);
+      }
+    },
+
+    /* ── отправка пачкой ── */
+    _schedule() {
+      const now = Date.now();
+      if (!this._timer) this._firstAt = now;
+      clearTimeout(this._timer);
+      const wait = Math.min(DEBOUNCE_MS, Math.max(0, this._firstAt + MAX_WAIT_MS - now));
+      this._timer = setTimeout(() => this.flush(), wait);
+    },
+
+    _take() {
+      const items = [...this._queue].map(([message_id, emoji]) => ({ message_id, emoji }));
+      this._queue.clear();
+      clearTimeout(this._timer);
+      this._timer = null;
+      return items;
+    },
+
+    async flush() {
+      const items = this._take();
+      if (!items.length) return;
+      try {
+        const r = await fetch('/api/group/reactions', {
+          method: 'POST', credentials: 'include', keepalive: true,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items }),
+        });
+        if (r.status >= 500) throw new Error('HTTP ' + r.status);
+      } catch (e) {
+        // сеть или 5xx: вернуть в очередь, не затирая более свежие клики
+        for (const it of items) if (!this._queue.has(it.message_id)) this._queue.set(it.message_id, it.emoji);
+        setTimeout(() => this._schedule(), 2000);
+      }
+    },
+
+    flushBeacon() {
+      const items = this._take();
+      if (!items.length || !navigator.sendBeacon) return;
+      navigator.sendBeacon('/api/group/reactions',
+        new Blob([JSON.stringify({ items })], { type: 'application/json' }));
+    },
+
+    /* ── контекстное меню ── */
+    _itemsHtml(opts) {
+      const out = [];
+      if (opts.canEdit) out.push(`<button class="gc-ctx-item" data-act="edit">${svg('edit')}<span>Изменить</span></button>`);
+      if (opts.canPin) out.push(`<button class="gc-ctx-item" data-act="pin">${svg(opts.pinned ? 'unpin' : 'pin')}<span>${opts.pinned ? 'Открепить' : 'Закрепить в шапке'}</span></button>`);
+      if (opts.canDel) out.push(`<button class="gc-ctx-item gc-ctx-item--danger" data-act="del">${svg('del')}<span>Удалить</span></button>`);
+      return out.join('');
+    },
+
+    _barHtml(mine) {
+      const btns = QUICK.map(e =>
+        `<button type="button" class="gc-rbar__btn${e === mine ? ' is-mine' : ''}" data-emoji="${e}">${e}</button>`).join('');
+      return `<div class="gc-rbar">${btns}<button type="button" class="gc-rbar__more" aria-label="Все реакции">${svg('chevron', 18)}</button></div>`;
+    },
+
+    _gridHtml(mine) {
+      return `<div class="gc-rgrid">${REACTIONS.map(e =>
+        `<button type="button" class="gc-rgrid__btn${e === mine ? ' is-mine' : ''}" data-emoji="${e}">${e}</button>`).join('')}</div>`;
+    },
+
+    _place(pop, x, y) {
+      const w = pop.offsetWidth, h = pop.offsetHeight;
+      x = Math.max(8, Math.min(x, window.innerWidth - w - 8));
+      y = Math.max(8, Math.min(y, window.innerHeight - h - 8));
+      pop.style.left = x + 'px';
+      pop.style.top = y + 'px';
+    },
+
+    /* opts: {id, message, canEdit, canPin, canDel, pinned, onAction(act), onClose()} */
+    openMenu(e, opts) {
+      const react = !this.readOnly() && this.canReact(opts.message);
+      const itemsHtml = this._itemsHtml(opts);
+      if (!react && !itemsHtml) return null;
+      const mine = react ? this.myEmoji(opts.message) : '';
+      const pop = document.createElement('div');
+      pop.id = 'gc-ctx-menu';
+      pop.className = 'gc-ctx-pop';
+      pop.innerHTML = (react ? this._barHtml(mine) : '')
+        + (itemsHtml ? `<div class="gc-ctx-menu">${itemsHtml}</div>` : '');
+      document.body.appendChild(pop);
+      const x0 = e.clientX, y0 = e.clientY;
+      this._place(pop, x0, y0);
+
+      pop.querySelectorAll('.gc-ctx-item').forEach(btn => {
+        btn.onclick = () => { opts.onAction(btn.dataset.act); opts.onClose(); };
+      });
+      const pick = (btn) => { this.toggle(opts.id, btn.dataset.emoji); opts.onClose(); };
+      pop.querySelectorAll('.gc-rbar__btn').forEach(btn => { btn.onclick = () => pick(btn); });
+      const more = pop.querySelector('.gc-rbar__more');
+      if (more) more.onclick = (ev) => {
+        ev.stopPropagation();
+        // как в Telegram: квадрат со всеми реакциями вместо панели и пунктов
+        pop.classList.add('gc-ctx-pop--grid');
+        pop.innerHTML = this._gridHtml(mine);
+        pop.querySelectorAll('.gc-rgrid__btn').forEach(btn => { btn.onclick = () => pick(btn); });
+        this._place(pop, x0, y0);
+      };
+      return pop;
+    },
+  };
+
+  window.addEventListener('pagehide', () => GI.flushBeacon());
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') GI.flushBeacon();
+  });
+
+  window.GroupInteraction = GI;
+})();

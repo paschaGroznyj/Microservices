@@ -18,7 +18,9 @@ import logging
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from fastapi.websockets import WebSocket, WebSocketDisconnect
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+import reactions_bus
 
 logger = logging.getLogger(__name__)
 
@@ -235,6 +237,27 @@ async def api_group_pin(body: GroupPinBody, request: Request):
         "message_id": body.message_id, "is_pinned": body.is_pinned,
     })
     return resp.json()
+
+
+class ReactionItem(BaseModel):
+    message_id: int = Field(gt=0)
+    emoji: str = Field(default="", max_length=16)
+
+
+class ReactionsBody(BaseModel):
+    items: list[ReactionItem] = Field(max_length=100)
+
+
+@router.post("/api/group/reactions")
+async def api_group_reactions(body: ReactionsBody, request: Request):
+    """Пачка реакций с фронта (дебаунс 1 с там) -> Redis -> дебаунсер
+    reactions_bus -> chats_service. Набор эмодзи проверяет chats_service."""
+    user = await _get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    items = [i.model_dump() for i in body.items]
+    via = await reactions_bus.enqueue(int(user["user_id"]), items)
+    return {"ok": True, "queued": len(items), "via": via}
 
 
 @router.post("/internal/group_message")

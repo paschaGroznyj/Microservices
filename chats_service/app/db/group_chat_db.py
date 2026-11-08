@@ -11,9 +11,12 @@
   group_room_members — участники (для global не используется)
 Сообщения никогда не удаляются физически — только is_deleted=TRUE (как в chats).
 """
+import json
 import logging
 import re
 from datetime import datetime, timezone
+
+from app.core.reactions import normalize_emoji, summarize
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +49,9 @@ class GroupChatDB:
         """Таблицы группового чата создаются в postgres/sql/02_chats/02_group_chats.sql.
         Гарантируем наличие дефолтной комнаты 'global'."""
         async with self.pool.acquire() as conn:
+            # реакции {"user_id": "emoji"}
+            await conn.execute(
+                "ALTER TABLE group_messages ADD COLUMN IF NOT EXISTS reactions JSONB NOT NULL DEFAULT '{}'::jsonb")
             # метаданные медиа для лоадера: размеры кадра и ThumbHash (base64)
             for col, typ in (("width", "INTEGER"), ("height", "INTEGER"), ("thumbhash", "TEXT")):
                 await conn.execute(
@@ -94,7 +100,7 @@ class GroupChatDB:
                     (room_id, user_id, username, message_text, client_msg_id, created_at)
                 VALUES ($1, $2, $3, $4, $5, $6)
                 RETURNING id, room_id, user_id, username, message_text, client_msg_id,
-                          is_deleted, is_pinned, edited_at, created_at
+                          is_deleted, is_pinned, edited_at, created_at, reactions
             """, room["id"], user_id, username, (message_text or "")[:20000],
                  client_msg_id, now_utc)
         return self._serialize(dict(row), room_uid)
@@ -122,7 +128,7 @@ class GroupChatDB:
                 # +1 строка, чтобы понять, есть ли ещё старее, без второго COUNT
                 rows = await conn.fetch("""
                     SELECT id, room_id, user_id, username, message_text, client_msg_id,
-                           is_deleted, is_pinned, edited_at, created_at
+                           is_deleted, is_pinned, edited_at, created_at, reactions
                     FROM group_messages
                     WHERE room_id = $1 AND is_deleted = FALSE AND id < $2
                     ORDER BY id DESC
@@ -133,7 +139,7 @@ class GroupChatDB:
             else:
                 rows = await conn.fetch("""
                     SELECT id, room_id, user_id, username, message_text, client_msg_id,
-                           is_deleted, is_pinned, edited_at, created_at
+                           is_deleted, is_pinned, edited_at, created_at, reactions
                     FROM group_messages
                     WHERE room_id = $1 AND is_deleted = FALSE
                     ORDER BY id DESC
@@ -158,7 +164,7 @@ class GroupChatDB:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("""
                 SELECT id, room_id, user_id, username, message_text, client_msg_id,
-                       is_deleted, is_pinned, edited_at, created_at
+                       is_deleted, is_pinned, edited_at, created_at, reactions
                 FROM group_messages
                 WHERE room_id = $1 AND is_pinned = TRUE AND is_deleted = FALSE
                 ORDER BY id DESC
@@ -192,7 +198,7 @@ class GroupChatDB:
                 SET message_text = $3, edited_at = $4
                 WHERE id = $1 AND user_id = $2 AND is_deleted = FALSE
                 RETURNING id, room_id, user_id, username, message_text, client_msg_id,
-                          is_deleted, is_pinned, edited_at, created_at
+                          is_deleted, is_pinned, edited_at, created_at, reactions
             """, message_id, user_id, new_text[:20000], now_utc)
         if not row:
             return None
@@ -209,7 +215,7 @@ class GroupChatDB:
                 UPDATE group_messages SET is_pinned = $2
                 WHERE id = $1 AND is_deleted = FALSE
                 RETURNING id, room_id, user_id, username, message_text, client_msg_id,
-                          is_deleted, is_pinned, edited_at, created_at
+                          is_deleted, is_pinned, edited_at, created_at, reactions
             """, message_id, is_pinned)
         if not row:
             return None
@@ -218,6 +224,49 @@ class GroupChatDB:
         files_map = await self.get_files_for_messages([msg["id"]])
         msg["files"] = files_map.get(msg["id"], [])
         return msg
+
+    # ── Реакции ────────────────────────────────────────────
+
+    async def apply_reactions(self, ops: list) -> list:
+        """ops: [{message_id, user_id, emoji}], emoji '' снимает реакцию.
+        Одна транзакция на пачку. Возвращает [{room_uid, message_id, reactions}]
+        по изменённым сообщениям (удалённые пропускаются)."""
+        # последняя операция пользователя по сообщению побеждает
+        last: dict = {}
+        for op in ops or []:
+            try:
+                mid, uid = int(op["message_id"]), int(op["user_id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            emoji = normalize_emoji(op.get("emoji"))
+            if emoji is None or mid <= 0:
+                continue
+            last[(mid, uid)] = emoji
+        if not last:
+            return []
+        touched = sorted({mid for mid, _ in last})
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                for (mid, uid), emoji in last.items():
+                    if emoji:
+                        await conn.execute("""
+                            UPDATE group_messages
+                            SET reactions = COALESCE(reactions, '{}'::jsonb) || $2::jsonb
+                            WHERE id = $1 AND is_deleted = FALSE
+                        """, mid, json.dumps({str(uid): emoji}))
+                    else:
+                        await conn.execute("""
+                            UPDATE group_messages
+                            SET reactions = COALESCE(reactions, '{}'::jsonb) - $2::text
+                            WHERE id = $1 AND is_deleted = FALSE
+                        """, mid, str(uid))
+                rows = await conn.fetch("""
+                    SELECT m.id, r.room_uid, m.reactions
+                    FROM group_messages m JOIN group_rooms r ON r.id = m.room_id
+                    WHERE m.id = ANY($1::bigint[]) AND m.is_deleted = FALSE
+                """, touched)
+        return [{"room_uid": r["room_uid"], "message_id": r["id"],
+                 "reactions": summarize(r["reactions"])} for r in rows]
 
     # ── Файлы (вложения) ───────────────────────────────────────
 
@@ -325,4 +374,5 @@ class GroupChatDB:
             "is_deleted": row.get("is_deleted", False),
             "edited_at": edited.isoformat() if edited else None,
             "created_at": created.isoformat() if created else None,
+            "reactions": summarize(row.get("reactions")),
         }

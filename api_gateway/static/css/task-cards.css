@@ -95,3 +95,9 @@
 .task-card.is-collapsed .tc-body { display: none; }
 .task-card--script.is-collapsed .tc-head { border-bottom-color: transparent; }
 @media (prefers-reduced-motion: reduce) { .tc-chev { transition: none; } }
+
+/* Переезд группы под ответ после стрима (task-cards.js glide): 0.5 с группа полупрозрачная и чуть размыта,
+   фон карточек не меняем, чтобы консольная script-карточка не мигала светлым. */
+.task-cards.is-gliding { pointer-events: none; will-change: transform, opacity, filter; }
+.task-cards.is-gliding .task-card { border-color: color-mix(in srgb, var(--accent, #8b4513) 30%, var(--border, #e0dbd4));
+  box-shadow: 0 8px 24px rgba(0,0,0,.10); }

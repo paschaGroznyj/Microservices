@@ -147,11 +147,35 @@
         const g = msgEl.querySelector(':scope > .task-cards');
         if (!g) return null;
         const acts = msgEl.querySelector(':scope > .message-actions');
-        if (acts) { if (acts.previousElementSibling !== g) acts.before(g); return g; }
+        if (acts) {
+            if (acts.previousElementSibling !== g) {
+                // живой ход (upsert): плавный «стеклянный» переезд под ответ; история/F5 — без анимации
+                const from = g.dataset.live === '1' && g.offsetHeight ? g.getBoundingClientRect() : null;
+                acts.before(g);
+                if (from) glide(g, from);
+            }
+            return g;
+        }
         const rb = msgEl.querySelector(':scope > .reasoning-block');
         if (rb) { if (rb.nextElementSibling !== g) rb.after(g); }
         else if (msgEl.firstElementChild !== g) msgEl.prepend(g);
         return g;
+    }
+    // FLIP: старт из прежней позиции, полупрозрачно и размыто, за 0.5 с сверху вниз на новое место.
+    function glide(g, from) {
+        if (!g.animate || (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches)) return;
+        const to = g.getBoundingClientRect();
+        const dy = from.top - to.top;
+        if (Math.abs(dy) < 2) return;
+        g.getAnimations?.().forEach((a) => a.cancel());
+        g.classList.add('is-gliding');
+        const a = g.animate([
+            { transform: `translateY(${dy}px)`, opacity: 0.55, filter: 'blur(0.6px)' },
+            { transform: `translateY(${dy * 0.35}px)`, opacity: 0.6, filter: 'blur(0.4px)', offset: 0.45 },
+            { transform: 'translateY(0)', opacity: 1, filter: 'blur(0)' },
+        ], { duration: 500, easing: 'cubic-bezier(.22,.7,.2,1)' });
+        const done = () => g.classList.remove('is-gliding');
+        a.onfinish = done; a.oncancel = done;
     }
     function slotIn(msgEl) {
         let g = msgEl.querySelector(':scope > .task-cards');
@@ -196,7 +220,7 @@
                 || (opts.pendingEl && opts.pendingEl.isConnected ? opts.pendingEl : null)
                 || pendingMessage(container);
             if (!card) card = document.createElement('div');
-            if (target) slotIn(target).appendChild(card);
+            if (target) { const lg = slotIn(target); lg.dataset.live = '1'; lg.appendChild(card); }
             else if (!card.parentElement) orphanSlot(container).appendChild(card);
             dropEmptyGroups(container);
         }

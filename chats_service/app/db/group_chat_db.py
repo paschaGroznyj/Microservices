@@ -12,9 +12,27 @@
 Сообщения никогда не удаляются физически — только is_deleted=TRUE (как в chats).
 """
 import logging
+import re
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
+
+_THUMBHASH_RE = re.compile(r"^[A-Za-z0-9+/]{8,64}={0,2}$")
+
+
+def _pixels(v) -> int | None:
+    """width/height: целое 1..65535, иначе None."""
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None
+    return n if 0 < n <= 65535 else None
+
+
+def _thumbhash(v) -> str | None:
+    return v if isinstance(v, str) and _THUMBHASH_RE.match(v) else None
 
 GLOBAL_ROOM_UID = "global"
 
@@ -28,6 +46,10 @@ class GroupChatDB:
         """Таблицы группового чата создаются в postgres/sql/02_chats/02_group_chats.sql.
         Гарантируем наличие дефолтной комнаты 'global'."""
         async with self.pool.acquire() as conn:
+            # метаданные медиа для лоадера: размеры кадра и ThumbHash (base64)
+            for col, typ in (("width", "INTEGER"), ("height", "INTEGER"), ("thumbhash", "TEXT")):
+                await conn.execute(
+                    f"ALTER TABLE group_message_files ADD COLUMN IF NOT EXISTS {col} {typ}")
             await conn.execute("""
                 INSERT INTO group_rooms (room_uid, room_type, title, created_by)
                 VALUES ($1, 'global', 'Общий чат', NULL)
@@ -201,7 +223,8 @@ class GroupChatDB:
 
     async def add_file(self, room_uid: str, client_msg_id: str, obs_key: str,
                        file_name: str, mime_type: str, size_bytes: int,
-                       is_image: bool):
+                       is_image: bool, width: int | None = None,
+                       height: int | None = None, thumbhash: str | None = None):
         """Регистрирует загруженный файл. message_id пока NULL — доклеим
         по client_msg_id, когда консюмер вставит сообщение."""
         room = await self.get_room_by_uid(room_uid)
@@ -211,11 +234,13 @@ class GroupChatDB:
             row = await conn.fetchrow("""
                 INSERT INTO group_message_files
                     (message_id, room_id, client_msg_id, obs_key, file_name,
-                     mime_type, size_bytes, is_image)
-                VALUES (NULL, $1, $2, $3, $4, $5, $6, $7)
-                RETURNING id, obs_key, file_name, mime_type, size_bytes, is_image
+                     mime_type, size_bytes, is_image, width, height, thumbhash)
+                VALUES (NULL, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                RETURNING id, obs_key, file_name, mime_type, size_bytes, is_image,
+                          width, height, thumbhash
             """, room["id"], client_msg_id, obs_key, file_name,
-                 mime_type, size_bytes, is_image)
+                 mime_type, size_bytes, is_image,
+                 _pixels(width), _pixels(height), _thumbhash(thumbhash))
         return dict(row) if row else None
 
     async def bind_files_to_message(self, message_id: int, client_msg_id: str):
@@ -230,7 +255,8 @@ class GroupChatDB:
                 WHERE client_msg_id = $2 AND message_id IS NULL
             """, message_id, client_msg_id)
             rows = await conn.fetch("""
-                SELECT id, obs_key, file_name, mime_type, size_bytes, is_image
+                SELECT id, obs_key, file_name, mime_type, size_bytes, is_image,
+                       width, height, thumbhash
                 FROM group_message_files
                 WHERE message_id = $1
                 ORDER BY id ASC
@@ -244,7 +270,7 @@ class GroupChatDB:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("""
                 SELECT id, message_id, obs_key, file_name, mime_type,
-                       size_bytes, is_image
+                       size_bytes, is_image, width, height, thumbhash
                 FROM group_message_files
                 WHERE message_id = ANY($1::bigint[])
                 ORDER BY id ASC
@@ -258,7 +284,8 @@ class GroupChatDB:
     async def get_file_by_id(self, file_id: int):
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow("""
-                SELECT id, obs_key, file_name, mime_type, size_bytes, is_image
+                SELECT id, obs_key, file_name, mime_type, size_bytes, is_image,
+                       width, height, thumbhash
                 FROM group_message_files WHERE id = $1
             """, file_id)
         return dict(row) if row else None
@@ -272,6 +299,9 @@ class GroupChatDB:
             "mime_type": row.get("mime_type"),
             "size_bytes": row.get("size_bytes"),
             "is_image": row.get("is_image", False),
+            "width": _pixels(row.get("width")),
+            "height": _pixels(row.get("height")),
+            "thumbhash": _thumbhash(row.get("thumbhash")),
         }
 
     # ── helpers ────────────────────────────────────────────────

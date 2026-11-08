@@ -11,6 +11,7 @@
 Фичи (delete/edit/pin) идут синхронно в БД (они редкие и требуют ответа),
 но результат тоже транслируется в комнату через ту же Kafka-шину (event-типы).
 """
+import asyncio
 import io
 import json
 import logging
@@ -24,6 +25,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.core import obs_file_storage
+from app.core.thumbhash import media_meta_from_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -183,10 +185,19 @@ async def group_upload(
         if not stored:
             raise HTTPException(status_code=502,
                                 detail=f"не удалось сохранить {up.filename}")
+        # размеры кадра и ThumbHash для лоадера; ошибка разбора не ломает загрузку
+        try:
+            meta = await asyncio.to_thread(
+                media_meta_from_bytes, body, mime, up.filename or "")
+        except Exception as e:
+            logger.info(f"[group-chat] media meta {up.filename}: {e}")
+            meta = {}
         rec = await group_db.add_file(
             room_uid=room_uid, client_msg_id=client_msg_id, obs_key=obs_key,
             file_name=up.filename or "file", mime_type=mime,
-            size_bytes=len(body), is_image=is_image)
+            size_bytes=len(body), is_image=is_image,
+            width=meta.get("width"), height=meta.get("height"),
+            thumbhash=meta.get("thumbhash"))
         if rec:
             saved.append(rec)
     return {"ok": True, "files": saved}

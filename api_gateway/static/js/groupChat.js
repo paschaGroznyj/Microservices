@@ -18,6 +18,30 @@
       return window.MediaRing ? window.MediaRing.html(isVideo) : '';
     },
 
+    /* group_message_files.width/height/thumbhash → data-атрибуты ячейки коллажа */
+    _mediaMetaAttrs(f) {
+      const px = (v) => { const n = Number(v); return Number.isInteger(n) && n > 0 && n <= 65535 ? n : 0; };
+      const w = px(f && f.width), h = px(f && f.height);
+      const th = (f && typeof f.thumbhash === 'string' && /^[A-Za-z0-9+/]{8,64}={0,2}$/.test(f.thumbhash)) ? f.thumbhash : '';
+      return (w && h ? ` data-w="${w}" data-h="${h}"` : '') + (th ? ` data-th="${th}"` : '');
+    },
+
+    /* Размер одиночной ячейки до загрузки — та же формула, что после load/loadedmetadata */
+    _presizeCell(cell, minH) {
+      const w = Number(cell.getAttribute('data-w')) || 0, h = Number(cell.getAttribute('data-h')) || 0;
+      if (!(w > 0) || !(h > 0)) return;
+      const MAX_W = 420, MAX_H = 420, MIN_W = 300;
+      const r = w / h;
+      let bw = MAX_W, bh = Math.round(MAX_W / r);
+      if (r < MAX_W / MAX_H) { bh = MAX_H; bw = Math.round(MAX_H * r); }
+      const boxW = Math.min(MAX_W, Math.max(MIN_W, bw));
+      const boxH = Math.min(MAX_H, Math.max(minH, bh));
+      const msgEl = cell.closest('.gc-msg--has-images');
+      if (msgEl) msgEl.style.setProperty('--gc-media-w', boxW + 'px');
+      cell.style.setProperty('--gc-cell-ar', `${boxW} / ${boxH}`);
+      if (boxW > bw + 2 || boxH > bh + 2) cell.classList.add('gc-collage__cell--glass');
+    },
+
     app: null,
     ws: null,
     es: null,
@@ -1073,13 +1097,14 @@
           const name = this._esc(f.file_name || (isVid ? 'video.mp4' : 'image'));
           const sz = Number(f.size_bytes || f.file_size || f.size) || 0;
           const more = (n > 4 && i === 3) ? `<span class="gc-collage__more">+${n - 4}</span>` : '';
+          const meta = this._mediaMetaAttrs(f);
           
           if (isVid) {
             const vmime = this._esc(this._videoMime(f));
             if (n === 1) {
               // Одиночное видео рендерится сразу с контролами в размер
               const dlUrl = url + (url.indexOf('/api/group/file/') === 0 ? '?download=1' : '');
-              return `<div class="gc-collage__cell gc-collage__cell--video-single" data-img-idx="0">
+              return `<div class="gc-collage__cell gc-collage__cell--video-single" data-img-idx="0"${meta}>
                 <span class="gc-collage__bg" aria-hidden="true"></span>
                 <span class="gc-collage__loader" aria-hidden="true">${GroupChat._ringHtml(true)}</span>
                 <video class="gc-video" data-size="${sz}" controls preload="metadata" playsinline webkit-playsinline src="${url}">
@@ -1092,7 +1117,7 @@
             } else {
               // Видео в сетке 2x2/3x3 - просто превью (первый кадр) + кнопка Play поверх
               const dlUrl = url + (url.indexOf('/api/group/file/') === 0 ? '?download=1' : '');
-              return `<div class="gc-collage__cell gc-collage__cell--video-thumb" role="button" tabindex="0" data-lb="1" data-img-idx="${i}" title="${name}">
+              return `<div class="gc-collage__cell gc-collage__cell--video-thumb" role="button" tabindex="0" data-lb="1" data-img-idx="${i}" title="${name}"${meta}>
                 <span class="gc-collage__loader" aria-hidden="true">${GroupChat._ringHtml(true)}</span>
                 <video class="gc-collage__thumb-video" data-size="${sz}" data-src="${url}" preload="metadata" autoplay playsinline webkit-playsinline muted></video>
                 <span class="gc-collage__play"><svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
@@ -1104,7 +1129,7 @@
             const dlBtn = (n === 1) ? `<a class="image-lightbox__dl fa-card-dl-btn" href="${dlUrl}" download="${name}" title="Скачать" onclick="event.stopPropagation()">
               <svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </a>` : '';
-            return `<div class="gc-collage__cell" role="button" tabindex="0" data-lb="1" data-img-idx="${i}">
+            return `<div class="gc-collage__cell" role="button" tabindex="0" data-lb="1" data-img-idx="${i}"${meta}>
               <span class="gc-collage__bg" data-bg="${url}" aria-hidden="true"></span>
               <span class="gc-collage__loader" aria-hidden="true">${GroupChat._ringHtml(false)}</span>
               <img data-ring-src="${url}" data-size="${sz}" alt="${name}" decoding="async">${more}
@@ -1401,6 +1426,11 @@
         if (!itemsAttr) return;
         const items = JSON.parse(itemsAttr);
         const isOne = col.classList.contains('gc-collage--one');
+        col.querySelectorAll('.gc-collage__cell').forEach((cell) => {
+          const th = cell.getAttribute('data-th');
+          if (th && window.MediaRing) window.MediaRing.placeholder(cell.querySelector('.gc-collage__loader'), th);
+          if (isOne) this._presizeCell(cell, cell.classList.contains('gc-collage__cell--video-single') ? 180 : 110);
+        });
         
         col.querySelectorAll('[data-lb]').forEach((cell) => {
           cell.onclick = (e) => {

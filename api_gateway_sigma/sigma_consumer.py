@@ -36,6 +36,9 @@ def _sanitize_files(attached_files):
             "kind": f.get("kind"),
             "image_key": f.get("image_key"),
             "size": f.get("size"),
+            "thumbhash": f.get("thumbhash"),
+            "width": f.get("width"),
+            "height": f.get("height"),
         })
     return out
 

@@ -35,6 +35,7 @@ from agent.tools.content.tool_generate_audio import audio_generator
 from agent.core.db import AgentDB
 from agent.core import obs_file_storage
 from agent.core import sandbox_scripts_cleaner
+from agent.media.thumbhash import media_meta_for_file, image_meta
 from api.web_ui import web_router, pending_files, set_db as _set_web_ui_db, set_active_tasks as _set_web_ui_tasks
 
 
@@ -482,6 +483,15 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                         entry["size"] = os.path.getsize(_p)
                     except OSError:
                         pass
+                    # Размытая заглушка (chat_files.thumbhash) и размер в пикселях
+                    # (width/height) для картинок и видео: фронт сразу ставит
+                    # карточке нужные пропорции и рисует заглушку под кольцом.
+                    if entry.get("kind") in ("image", "video") or not entry.get("kind"):
+                        try:
+                            _meta = await asyncio.to_thread(media_meta_for_file, _p, entry.get("kind"))
+                            entry.update(_meta)
+                        except Exception as _th_err:
+                            logging.info(f"thumbhash: {_p}: {_th_err}")
 
                 # Для Telegram host-бот изолирован от ФС агента (разные контейнеры),
                 # поэтому os.path.exists(path) на его стороне вернёт False и файл
@@ -541,25 +551,32 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                 attached_files.append(entry)
 
         # Картинки generate_image лежат в generated_images без файла на диске:
-        # размер для chat_files.file_size берём из БД.
+        # размер (chat_files.file_size), thumbhash и width/height считаем по байтам из БД.
         if attached_files:
             _need = [f.get("image_key") for f in attached_files
-                     if f.get("image_key") and f.get("size") is None]
+                     if f.get("image_key") and (f.get("size") is None or not f.get("thumbhash") or not f.get("width"))]
             if _need:
                 try:
                     async with db.pool.acquire() as conn:
                         _rows = await conn.fetch(
-                            "SELECT image_key::text AS k, octet_length(image_data) AS n "
+                            "SELECT image_key::text AS k, octet_length(image_data) AS n, image_data AS d "
                             "FROM generated_images WHERE image_key::text = ANY($1::text[])",
                             [str(k) for k in _need],
                         )
-                    _sizes = {r["k"]: r["n"] for r in _rows}
+                    _by_key = {r["k"]: r for r in _rows}
                     for f in attached_files:
                         k = f.get("image_key")
-                        if f.get("size") is None and k and str(k) in _sizes:
-                            f["size"] = _sizes[str(k)]
+                        r = _by_key.get(str(k)) if k else None
+                        if not r:
+                            continue
+                        if f.get("size") is None:
+                            f["size"] = r["n"]
+                        if (not f.get("thumbhash") or not f.get("width")) and r["d"]:
+                            _meta = await asyncio.to_thread(image_meta, bytes(r["d"]))
+                            for _k, _v in _meta.items():
+                                f.setdefault(_k, _v)
                 except Exception as size_err:
-                    logging.warning(f"generated_images: размер картинок не получен: {size_err}")
+                    logging.warning(f"generated_images: размер/thumbhash картинок не получен: {size_err}")
 
         message_id = f"msg-{int(time.time() * 1000)}-{str(uuid.uuid4())[:8]}"
 

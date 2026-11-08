@@ -72,6 +72,10 @@ def _sanitize_files_for_ws(attached_files: list[dict] | None) -> list[dict] | No
             "image_key": f.get("image_key"),
             # размер в байтах (может быть None) — фронт показывает, сколько ждать
             "size": f.get("size"),
+            # base64 ThumbHash: размытый фон под кольцом загрузки
+            "thumbhash": f.get("thumbhash"),
+            "width": f.get("width"),
+            "height": f.get("height"),
         }
         for f in attached_files
     ]

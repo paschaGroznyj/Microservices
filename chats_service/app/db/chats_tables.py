@@ -1,3 +1,4 @@
+import re
 import asyncio
 import asyncpg
 from app.core.config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME, LOOP_SERVICE_USER_ID
@@ -9,6 +10,17 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
+
+
+_THUMBHASH_RE = re.compile(r"^[A-Za-z0-9+/]{8,64}={0,2}$")
+
+
+def _thumbhash(f: dict) -> str | None:
+    """ThumbHash (base64, ~25–35 байт) из метаданных; мусор и длинные строки → None."""
+    v = f.get("thumbhash")
+    if isinstance(v, str) and _THUMBHASH_RE.match(v):
+        return v
+    return None
 
 
 def _file_size(f: dict) -> int | None:
@@ -24,6 +36,18 @@ def _file_size(f: dict) -> int | None:
         if n >= 0:
             return n
     return None
+
+
+def _pixels(f: dict, key: str) -> int | None:
+    """width/height в пикселях: целое 1..65535, иначе None."""
+    v = f.get(key)
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None
+    return n if 0 < n <= 65535 else None
 
 
 class DataBaseChats:
@@ -72,6 +96,15 @@ class DataBaseChats:
             await conn.execute("ALTER TABLE chat_files ADD COLUMN IF NOT EXISTS file_size BIGINT")
         except Exception as e:
             logging.warning(f"chat_files.file_size: миграция не выполнена: {e}")
+        try:
+            await conn.execute("ALTER TABLE chat_files ADD COLUMN IF NOT EXISTS thumbhash TEXT")
+        except Exception as e:
+            logging.warning(f"chat_files.thumbhash: миграция не выполнена: {e}")
+        try:
+            await conn.execute("ALTER TABLE chat_files ADD COLUMN IF NOT EXISTS width INTEGER")
+            await conn.execute("ALTER TABLE chat_files ADD COLUMN IF NOT EXISTS height INTEGER")
+        except Exception as e:
+            logging.warning(f"chat_files.width/height: миграция не выполнена: {e}")
 
     async def save_poll_answer(
         self,
@@ -307,14 +340,14 @@ class DataBaseChats:
                     if attached_files:
                         source = "agent" if is_from_bot else "user"
                         await conn.executemany("""
-                            INSERT INTO chat_files (message_id, chat_id, user_id, file_name, file_ext, source, file_path, file_kind, image_key, file_size)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
+                            INSERT INTO chat_files (message_id, chat_id, user_id, file_name, file_ext, source, file_path, file_kind, image_key, file_size, thumbhash, width, height)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);
                         """, [
                             (
                                 message_id, chat_id, user_id,
                                 f["name"], f["name"].rsplit(".", 1)[-1].lower() if "." in f["name"] else None,
                                 source, f.get("path"), f.get("kind"), f.get("image_key"),
-                                _file_size(f),
+                                _file_size(f), _thumbhash(f), _pixels(f, "width"), _pixels(f, "height"),
                             )
                             for f in attached_files
                         ])
@@ -772,7 +805,8 @@ class DataBaseChats:
                                 SELECT json_agg(
                                     json_build_object('name', f.file_name, 'ext', f.file_ext,
                                     'source', f.source, 'kind', f.file_kind, 'image_key', f.image_key,
-                                    'size', f.file_size)
+                                    'size', f.file_size, 'thumbhash', f.thumbhash,
+                                    'width', f.width, 'height', f.height)
                                     ORDER BY f.id ASC
                                 )
                                 FROM chat_files f

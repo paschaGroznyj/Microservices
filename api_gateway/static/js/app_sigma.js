@@ -2508,6 +2508,22 @@ class ChatApp {
         }, { once: true });
     }
 
+    /** Пропорции карточки до загрузки по file.width/height (chat_files):
+     *  та же формула, что после load / loadedmetadata, поэтому лента не прыгает. */
+    _presizeMediaCard(card, file, minH) {
+        const w = Number(file && file.width), h = Number(file && file.height);
+        if (!card || !(w > 0) || !(h > 0)) return;
+        const MAX_W = 420, MAX_H = 420, MIN_W = 300;
+        const r = w / h;
+        let mw, mh;
+        if (r >= MAX_W / MAX_H) { mw = MAX_W; mh = Math.round(MAX_W / r); }
+        else { mh = MAX_H; mw = Math.round(MAX_H * r); }
+        const boxW = Math.min(MAX_W, Math.max(MIN_W, mw));
+        const boxH = Math.min(MAX_H, Math.max(minH, mh));
+        card.style.setProperty('--fa-card-w', boxW + 'px');
+        card.style.setProperty('--fa-card-ar', `${boxW} / ${boxH}`);
+    }
+
     _applyVideoCardAspect(videoEl) {
         if (!videoEl) return;
         const card = videoEl.closest('.fa-video-card');
@@ -2826,6 +2842,7 @@ class ChatApp {
             img.loading = 'lazy';
             img.src = url;
             card.classList.add('fa-image-card--loading');
+            this._presizeMediaCard(card, item.file, 110);
             let triedFallback = false;
             const applyCardAspect = () => {
                 card.classList.remove('fa-image-card--loading');
@@ -2922,6 +2939,7 @@ class ChatApp {
             const card = document.createElement('div');
             card.className = 'fa-image-card fa-video-card fa-image-card--loading';
             card.title = name;
+            this._presizeMediaCard(card, item.file, 180);
 
             const bg = document.createElement('span');
             bg.className = 'fa-image-card__bg';

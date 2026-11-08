@@ -2498,6 +2498,22 @@ class ChatApp {
         }, { once: true });
     }
 
+    /** Пропорции карточки до загрузки по file.width/height (chat_files):
+     *  та же формула, что после load / loadedmetadata, поэтому лента не прыгает. */
+    _presizeMediaCard(card, file, minH) {
+        const w = Number(file && file.width), h = Number(file && file.height);
+        if (!card || !(w > 0) || !(h > 0)) return;
+        const MAX_W = 420, MAX_H = 420, MIN_W = 300;
+        const r = w / h;
+        let mw, mh;
+        if (r >= MAX_W / MAX_H) { mw = MAX_W; mh = Math.round(MAX_W / r); }
+        else { mh = MAX_H; mw = Math.round(MAX_H * r); }
+        const boxW = Math.min(MAX_W, Math.max(MIN_W, mw));
+        const boxH = Math.min(MAX_H, Math.max(minH, mh));
+        card.style.setProperty('--fa-card-w', boxW + 'px');
+        card.style.setProperty('--fa-card-ar', `${boxW} / ${boxH}`);
+    }
+
     _applyVideoCardAspect(videoEl) {
         if (!videoEl) return;
         const card = videoEl.closest('.fa-video-card');
@@ -2859,6 +2875,7 @@ class ChatApp {
             img.alt = safeName;
             img.loading = 'lazy';
             card.classList.add('fa-image-card--loading');
+            this._presizeMediaCard(card, item.file, 110);
             let triedFallback = false;
             const applyCardAspect = () => {
                 card.classList.remove('fa-image-card--loading');
@@ -2942,7 +2959,7 @@ class ChatApp {
             card.appendChild(bg);
             card.appendChild(skel);
             card.appendChild(img);
-            if (window.MediaRing) window.MediaRing.loadImage(img, url, skel, { total: item.file && item.file.size });
+            if (window.MediaRing) window.MediaRing.loadImage(img, url, skel, { total: item.file && item.file.size, hash: item.file && item.file.thumbhash });
             else img.src = url;
             card.appendChild(overlay);
             if (!allItems || allItems.length <= 1) { card.appendChild(dlBtn); }
@@ -2957,6 +2974,7 @@ class ChatApp {
             const card = document.createElement('div');
             card.className = 'fa-image-card fa-video-card fa-image-card--loading';
             card.title = name;
+            this._presizeMediaCard(card, item.file, 180);
 
             const bg = document.createElement('span');
             bg.className = 'fa-image-card__bg';
@@ -2976,7 +2994,7 @@ class ChatApp {
 
             this._bindVideoPreviewLoop(video, 5);
 
-            if (window.MediaRing) window.MediaRing.bindVideo(video, skel, item.file && item.file.size);
+            if (window.MediaRing) window.MediaRing.bindVideo(video, skel, item.file && item.file.size, item.file && item.file.thumbhash);
 
             const onMeta = () => this._applyVideoCardAspect(video);
             if (video.readyState >= 1 && video.videoWidth > 0) {
@@ -3051,7 +3069,7 @@ class ChatApp {
 
                     this._bindVideoPreviewLoop(video, 5);
 
-                    if (window.MediaRing) window.MediaRing.bindVideo(video, skel, item.file && item.file.size);
+                    if (window.MediaRing) window.MediaRing.bindVideo(video, skel, item.file && item.file.size, item.file && item.file.thumbhash);
 
                     const onLoaded = () => cell.classList.remove('fa-collage__cell--loading');
                     if (video.readyState >= 2) onLoaded();
@@ -3079,7 +3097,7 @@ class ChatApp {
                     img.className = 'fa-collage__img';
                     img.alt = this.escapeHtml(item.name || 'image');
                     img.loading = 'lazy';
-                    if (window.MediaRing) window.MediaRing.loadImage(img, item.url, skel, { total: item.file && item.file.size });
+                    if (window.MediaRing) window.MediaRing.loadImage(img, item.url, skel, { total: item.file && item.file.size, hash: item.file && item.file.thumbhash });
                     else img.src = item.url;
                     let triedFallback = false;
                     const onImgLoad = () => {

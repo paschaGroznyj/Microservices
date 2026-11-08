@@ -451,6 +451,9 @@
   pointer-events: none;
 }
 .gc-collage__cell.is-loaded .gc-collage__loader { display: none; }
+.gc-collage__loader { overflow: hidden; }
+/* ThumbHash общего чата: --th-bg и класс ставит MediaRing.placeholder; стиль .fa-media-loader--th из chat.css */
+.gc-collage__loader.fa-media-loader--th > .fa-ring { position: relative; }
 /* видео грузится на той же подложке surface2, что и картинки */
 .gc-collage__cell--video-thumb:not(.is-loaded) .gc-collage__play { opacity: 0; }
 .gc-collage__cell img {

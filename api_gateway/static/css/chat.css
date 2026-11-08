@@ -3156,14 +3156,13 @@ pre {
 
 /* ══════════ Лоадер медиа «Кольцо» (лайтбокс + коллаж, личный и общий чат) ══════════ */
 .fa-ring {
-  --ring-size: 44px;
   /* дуга и иконка от --accent (цвет интерфейса из палитры профиля), трек нейтральный */
   --ring-track: color-mix(in srgb, var(--text-primary, #1a1612) 10%, transparent);
   --ring-arc: var(--accent, #8b4513);
   --ring-icon: color-mix(in srgb, var(--accent, #8b4513) 60%, transparent);
   --ring-cut: var(--surface2, #f3f1ee);
-  width: var(--ring-size);
-  height: var(--ring-size);
+  width: var(--ring-size, 44px);
+  height: var(--ring-size, 44px);
   display: block;
   animation: faRingSpin 1.4s linear infinite;
 }
@@ -3178,10 +3177,32 @@ pre {
   animation: faRingDash 1.4s ease-in-out infinite;
 }
 .fa-ring__icon { animation: faRingCounter 1.4s linear infinite; transform-box: view-box; }
-.fa-ring__pulse { animation: faRingPulse 1.4s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+.fa-ring__pulse { transform-box: fill-box; transform-origin: center; }  /* без пульсации */
 .fa-ring__glyph { fill: var(--ring-icon); }
 .fa-ring__cut { fill: var(--ring-cut); }
 
+
+/* Подложка как в Telegram: тёмный полупрозрачный диск, белая дуга без трека, белая иконка.
+   Одинаково в светлой и тёмной теме, читается на любой заглушке ThumbHash.
+   Диск = фон самого SVG + padding, поэтому вращение его не меняет. */
+.fa-media-loader .fa-ring,
+.gc-collage__loader .fa-ring {
+  --ring-track: transparent;
+  --ring-arc: #fff;
+  --ring-icon: #fff;
+  --ring-cut: rgba(0, 0, 0, 0.5);
+  box-sizing: content-box;
+  padding: 2px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+}
+.fa-media-loader, .gc-collage__loader { --ring-size: 52px; }  /* диск 56px, дуга у края (~78% радиуса) */
+.fa-media-loader .fa-ring__track, .fa-media-loader .fa-ring__arc,
+.gc-collage__loader .fa-ring__track, .gc-collage__loader .fa-ring__arc { stroke-width: 3.5; }
+/* иконка крупнее: ~40% диска, как крестик в Telegram */
+.fa-media-loader .fa-ring__pulse,
+.gc-collage__loader .fa-ring__pulse { scale: 1.35; }
+/* ошибка: дуга и иконка полупрозрачные белые на том же диске */
 @keyframes faRingSpin { to { transform: rotate(360deg); } }
 /* иконка не крутится вместе с кольцом */
 @keyframes faRingCounter { from { transform: translate(24px, 24px) rotate(0deg); } to { transform: translate(24px, 24px) rotate(-360deg); } }
@@ -3190,7 +3211,6 @@ pre {
   50%  { stroke-dasharray: 80 126; stroke-dashoffset: -22; }
   100% { stroke-dasharray: 18 126; stroke-dashoffset: -125; }
 }
-@keyframes faRingPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.08); } }
 
 /* Единая подложка лоадера: одиночная картинка/видео, коллаж, скелетон генерации
    (личный чат и Sigma). Кольцо по центру, фон surface2 текущей темы. */
@@ -3204,11 +3224,25 @@ pre {
 .fa-collage__cell--loading .fa-media-loader { display: flex; }
 /* ошибка: специфичность выше, чем у правила «скрыть скелетон после загрузки» */
 .fa-image-card.fa-image-card--error .fa-image-card__skeleton.fa-media-loader { display: flex; }
-.fa-image-card--gen .fa-media-loader .fa-ring { --ring-size: 56px; }
+.fa-image-card--gen .fa-media-loader { --ring-size: 56px; }
+
+/* ThumbHash: размытая заглушка исходника вместо surface2 (MediaRing.placeholder).
+   Картинка 32 px растянута и размыта, кольцо и подпись поверх с тенью для контраста. */
+.fa-media-loader.fa-media-loader--th { overflow: hidden; }
+.fa-media-loader--th > .fa-ring { position: relative; }  /* кольцо поверх ::before, подпись остаётся absolute */
+.fa-media-loader--th::before {
+  content: "";
+  position: absolute;
+  inset: -16px;
+  background: var(--th-bg) center / cover no-repeat;
+  filter: blur(12px) saturate(1.15);
+  pointer-events: none;
+}
+/* ошибка: заглушку убираем, остаётся серое кольцо на surface2 */
+.fa-image-card--error .fa-media-loader--th::before { display: none; }
 /* Прогресс: размер известен → дуга заполняется от 12 часов (--ring-fill 0..1 из MediaRing) */
 .fa-ring.fa-ring--det,
-.fa-ring.fa-ring--det .fa-ring__icon,
-.fa-ring.fa-ring--det .fa-ring__pulse { animation: none; }
+.fa-ring.fa-ring--det .fa-ring__icon { animation: none; }
 .fa-ring.fa-ring--det .fa-ring__arc {
   animation: none;
   transform: rotate(-90deg);
@@ -3216,24 +3250,45 @@ pre {
   stroke-dashoffset: 0;
   transition: stroke-dasharray 0.2s linear;
 }
-/* подпись «0,8 / 2,0 МБ» под кольцом */
+/* подпись «0,8 / 2,0 МБ»: плашка в левом верхнем углу карточки.
+   Радиус 6px = радиус карточки 14px минус отступ 8px, углы концентричны. */
 .fa-ring-size {
   position: absolute;
-  left: 0;
-  right: 0;
-  top: calc(50% + var(--ring-label-offset, 30px));
+  z-index: 1;
+  top: 8px;
+  left: 8px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.60);
+  backdrop-filter: blur(6px) saturate(115%);
+  -webkit-backdrop-filter: blur(6px) saturate(115%);
   text-align: center;
   font-family: var(--font-anthropic-sans, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif);
   font-size: 11px;
   line-height: 1.2;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  color: color-mix(in srgb, var(--text-primary, #1a1612) 55%, transparent);
+  color: color-mix(in srgb, var(--text-primary, #1a1612) 88%, transparent);
   pointer-events: none;
 }
+[data-theme="dark"] .fa-ring-size,
+.image-lightbox__loader .fa-ring-size {
+  background: rgba(15, 23, 37, 0.56);
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.30), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.88);
+}
 .fa-ring-size:empty { display: none; }
-.fa-image-card--gen .fa-ring-size { --ring-label-offset: 36px; }
-.image-lightbox__loader .fa-ring-size { --ring-label-offset: 42px; font-size: 12px; color: rgba(255, 255, 255, 0.6); }
+.image-lightbox__loader .fa-ring-size {
+  /* в лайтбоксе нет рамки карточки: подпись под кольцом */
+  top: calc(50% + var(--ring-size, 64px) / 2 + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  border-radius: 8px;
+  font-size: 12px;
+}
 
 /* Ошибка: кольцо серое и стоит */
 .fa-image-card--error .fa-ring,
@@ -3243,6 +3298,8 @@ pre {
   stroke-dasharray: none;
 }
 .fa-image-card--error .fa-ring__glyph { fill: color-mix(in srgb, var(--text-primary, #1a1612) 30%, transparent); }
+.fa-image-card--error .fa-media-loader .fa-ring__arc { stroke: rgba(255, 255, 255, 0.35); }
+.fa-image-card--error .fa-media-loader .fa-ring__glyph { fill: rgba(255, 255, 255, 0.45); }
 
 /* Лайтбокс: фон всегда тёмный, цвета фиксированные */
 .image-lightbox__media-container { position: relative; }
@@ -3263,14 +3320,8 @@ pre {
 }
 /* Тёмная подложка лайтбокса: акцент высветлен, чтобы не терялся.
    Видео в ленте грузится на той же подложке surface2, что и картинки. */
+.image-lightbox__loader { --ring-size: 64px; }
 .image-lightbox__loader .fa-ring {
-  --ring-track: rgba(255, 255, 255, 0.12);
-  --ring-arc: color-mix(in srgb, var(--accent, #cc785c) 70%, #fff);
-  --ring-icon: color-mix(in srgb, var(--accent, #cc785c) 55%, rgba(255, 255, 255, 0.7));
-  --ring-cut: #0a0e17;
-}
-.image-lightbox__loader .fa-ring {
-  --ring-size: 64px;
   --ring-track: rgba(255, 255, 255, 0.12);
   --ring-arc: color-mix(in srgb, var(--accent, #cc785c) 70%, #fff);
   --ring-icon: color-mix(in srgb, var(--accent, #cc785c) 55%, rgba(255, 255, 255, 0.7));
@@ -3303,7 +3354,7 @@ pre {
 
 @media (prefers-reduced-motion: reduce) {
   .fa-ring, .fa-ring__icon { animation-duration: 3s; }
-  .fa-ring__arc, .fa-ring__pulse { animation: none; }
+  .fa-ring__arc { animation: none; }
   .fa-ring.fa-ring--det .fa-ring__arc { transition: none; }
   .image-lightbox__media-container > .image-lightbox__img,
   .gc-lightbox .image-lightbox__media-container > .image-lightbox__img { transition: none; }

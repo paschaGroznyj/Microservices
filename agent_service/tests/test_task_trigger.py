@@ -63,3 +63,11 @@ def test_owner_from_first_task_of_batch():
 
 def test_single_message_forbids_resubmit():
     assert "повторно не ставь" in tt.build_message(_payload())
+
+
+def test_manual_block_lists_tasks_and_forbids_resubmit():
+    t = _payload()["task"]
+    out = tt.build_manual_block([t, {**t, "task_id": "t2", "status": "completed"}, "мусор"])
+    assert "фоновых задач: 2" in out and "Задача 2 из 2" in out
+    assert "task_id: t1" in out and "task_id: t2" in out and "повторно не ставь" in out
+    assert tt.build_manual_block([]) == "" and tt.build_manual_block(None) == ""

@@ -17,8 +17,11 @@ task_consumer.py — задачник в контейнере chats-consumer (о
 
 Автотриггер: env TASK_AUTOTRIGGER (1 по умолчанию). На лету без рестарта:
   redis-cli SET tasks:autotrigger 0   — выключить;  SET ... 1 — включить;  DEL — снова по env.
-Отменённые задачи агента не будят: отмену просил сам пользователь. Задачи, завершённые при
-выключенном автотриггере, получают notify_agent=false и потом не всплывают.
+Отменённые задачи агента не будят: отмену просил сам пользователь.
+Ручной режим (автотриггер выключен): задача в task_update приходит с awaiting_user=true, фронт
+печатает в поле ввода подсказку «задачи выполнены», и задачи уходят агенту с сообщением
+пользователя (send_message task_ids -> TasksDB.claim_for_user -> manual_tasks). Если включить
+автотриггер обратно, sweep подберёт неотправленные задачи моложе TASK_TRIGGER_MAX_AGE_S.
 """
 import asyncio
 import json
@@ -185,16 +188,17 @@ class TaskConsumer:
         if mid is False:  # устаревшее событие (seq не новее сохранённого)
             return res
         res["stored"] = True
+        finished = ev.get("status") in FINISHED and gateway_of(ev) in GATEWAY_URLS
+        enabled = autotrigger_enabled(self.redis) if finished else True
+        task = public_task(ev, mid)
+        # Ручной режим: агент сам не проснётся — фронт подскажет пользователю отправить результат.
+        task["awaiting_user"] = bool(finished and not enabled and should_trigger(ev, True))
         res["pushed"] = self._post(gateway_of(ev), "/internal/task_event",
-                                   {"chat_id": str(ev["chat_id"]), "task": public_task(ev, mid)})
-        if ev.get("status") in FINISHED and gateway_of(ev) in GATEWAY_URLS:
-            enabled = autotrigger_enabled(self.redis)
-            if enabled:
-                # и отмена тоже: она могла быть последней в пачке, которую ждут готовые задачи
-                self.pending.add(str(ev["chat_id"]))
-                res["trigger"] = should_trigger(ev, True)
-            elif should_trigger(ev, True):
-                await self.tasks.disable_notify(ev["task_id"])
+                                   {"chat_id": str(ev["chat_id"]), "task": task})
+        if finished and enabled:
+            # и отмена тоже: она могла быть последней в пачке, которую ждут готовые задачи
+            self.pending.add(str(ev["chat_id"]))
+            res["trigger"] = should_trigger(ev, True)
         return res
 
     def _post(self, gateway: str, path: str, body: dict) -> bool:

@@ -1,7 +1,9 @@
 /* task-cards.js — карточки фоновых задач (submit_task).
  * Два стиля: kind=script — консольное окно, kind=media — светлая карточка в тонах темы.
- * Расположение: внутри .agent-message своего хода, сразу после .reasoning-block
- *   (если его нет — первой в ответе), над текстом. Так и во время стриминга, и после F5.
+ * Расположение: внутри .agent-message своего хода.
+ *   Пока ответ стримится (нет .message-actions) — сразу после .reasoning-block (если его нет — первой).
+ *   Ответ дописан (.message-actions есть) — под последним блоком ответа, прямо над .message-actions.
+ *   После F5 так же: у ответа из истории .message-actions уже есть.
  *   Если ответа в ленте ещё нет — временная группа .task-cards--orphan в колонке ленты,
  *   при следующем событии или финале ответа карточки переезжают в ответ.
  * API (window.TaskCards):
@@ -138,11 +140,14 @@
         const last = list[list.length - 1];
         return last && !last.querySelector(':scope > .message-actions') ? last : null;
     }
-    // Группа карточек внутри ответа: сразу после .reasoning-block, если он есть, иначе первой.
+    // Группа карточек внутри ответа: ответ дописан — над .message-actions;
+    // стримится — сразу после .reasoning-block, если он есть, иначе первой.
     function place(msgEl) {
         if (!msgEl) return null;
         const g = msgEl.querySelector(':scope > .task-cards');
         if (!g) return null;
+        const acts = msgEl.querySelector(':scope > .message-actions');
+        if (acts) { if (acts.previousElementSibling !== g) acts.before(g); return g; }
         const rb = msgEl.querySelector(':scope > .reasoning-block');
         if (rb) { if (rb.nextElementSibling !== g) rb.after(g); }
         else if (msgEl.firstElementChild !== g) msgEl.prepend(g);
@@ -219,7 +224,7 @@
         dropEmptyGroups(root);
     }
 
-    // Финал ответа: карточки этого хода собираются в ответ (после рассуждений, над текстом).
+    // Финал ответа: карточки этого хода собираются в ответ (под текстом, над .message-actions).
     function settle(container, msg) {
         if (!container) return;
         const target = byMessageId(container, msg && msg.message_id)

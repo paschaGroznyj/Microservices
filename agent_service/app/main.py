@@ -11,6 +11,7 @@ import asyncio
 from task_trigger import (
     TASK_TRIGGER_USER_ID, is_task_trigger, owner_user_id as task_owner_user_id,
     build_message as build_task_trigger_message, payload_tasks as task_trigger_tasks,
+    build_manual_block as build_manual_tasks_block,
 )
 from urllib.parse import quote
 from httpx import AsyncClient
@@ -264,6 +265,9 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
         )
     else:
         message = f"[CatchPM, ТабельНомер: {tb_name}, Пользователь: {username}, chat_id: {chat_id}, user_id: {user_id}]\n" + text
+    # Задачник, ручной триггер: результаты задач приложены к сообщению пользователя.
+    if payload.get("manual_tasks") and not task_trigger:
+        message += build_manual_tasks_block(payload.get("manual_tasks"))
 
     if is_mobile:
         from agent.mobile.mobile_settings import (build_agent_instruction, LIMIT_VOICE_TEXT,

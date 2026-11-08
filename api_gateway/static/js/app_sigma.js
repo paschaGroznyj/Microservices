@@ -3528,6 +3528,7 @@ class ChatApp {
                     chat_id:        this.currentChat,
                     message:        text,
                     message_id:     msgId,
+                    task_ids:       window.TaskHint?.consume(this.currentChat, text),   // ручной триггер задачника
                     type_agent:     'pm',
                     agent_model:    window.ModelPicker?.getModel() ?? 'coder',
                     selected_tools: window.ToolsPanel?.getSelectedCategories() ?? [],
@@ -5203,6 +5204,7 @@ class ChatApp {
                 if (Array.isArray(state?.tasks) && window.TaskCards) {
                     const _tcBox = this.getMessagesContainer?.();
                     state.tasks.forEach(t => window.TaskCards.upsert(_tcBox, t, {}));
+                    state.tasks.forEach(t => window.TaskHint?.note(this, chatId, t));
                 }
                 if (state?.status === 'done' || state?.status === 'idle') {
                     // Сообщение уже сохранено в БД chats-consumer'ом —
@@ -5571,6 +5573,7 @@ class ChatApp {
             });
             el.appendChild(actions);
         }
+        window.TaskCards?.place?.(el);   // ответ дописан — карточки задач над .message-actions
 
         // Убираем placeholder и статусы через методы (с clearTimeout гарда)
         this._removeBotPlaceholder();
@@ -7168,6 +7171,7 @@ class ChatApp {
 
 /* ── Точка входа ──────────────────────────── */
 const app = window.__catchpmApp || new ChatApp();
+window.TaskHint?.watchSigma?.(app);   // задачник: SSE задач чата, когда агент не работает
 if (!window.__catchpmApp) {
     app.init();
 }

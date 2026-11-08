@@ -3597,6 +3597,7 @@ class ChatApp {
                     chat_id:        this.currentChat,
                     message:        text,
                     message_id:     msgId,
+                    task_ids:       window.TaskHint?.consume(this.currentChat, text),   // ручной триггер задачника
                     type_agent:     'pm',
                     agent_model:    window.ModelPicker?.getModel() ?? 'coder',
                     selected_tools: window.ToolsPanel?.getSelectedCategories() ?? [],
@@ -4291,6 +4292,7 @@ class ChatApp {
                 if (isActive && window.TaskCards) {
                     window.TaskCards.upsert(this.getMessagesContainer(), msg.task, { pendingEl: st?.pendingBotEl });
                 }
+                window.TaskHint?.note(this, msg.chat_id, msg.task);   // ручной триггер: подсказка в поле ввода
                 return;
             }
 
@@ -5794,6 +5796,7 @@ class ChatApp {
             });
             el.appendChild(actions);
         }
+        window.TaskCards?.place?.(el);   // ответ дописан — карточки задач над .message-actions
 
         // Убираем placeholder и статусы через методы (с clearTimeout гарда)
         this._removeBotPlaceholder();

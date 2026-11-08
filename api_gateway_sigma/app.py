@@ -2628,15 +2628,25 @@ _SIGMA_TASKS_MAX = 20
 _sigma_tasks: dict[str, dict] = {}
 
 
+_sigma_task_seq = 0                                   # сквозной курсор событий всех чатов
+_sigma_task_waiters: dict[str, asyncio.Event] = {}     # chat_id -> будильник SSE-стрима
+
+
 def _sigma_task_push(chat_id, event):
+    global _sigma_task_seq
     if event.get("type") != "task_update":
         return  # agent_status sigma берёт из status_store
-    t = event.get("task") or {}
+    t = dict(event.get("task") or {})
+    _sigma_task_seq += 1
+    t["_seq"] = _sigma_task_seq
     d = _sigma_tasks.setdefault(str(chat_id), {})
     d.pop(t.get("task_id"), None)
     d[t.get("task_id")] = t
     while len(d) > _SIGMA_TASKS_MAX:
         d.pop(next(iter(d)))
+    w = _sigma_task_waiters.get(str(chat_id))
+    if w is not None:
+        w.set()
 
 
 def sigma_chat_tasks(chat_id) -> list:
@@ -2656,3 +2666,37 @@ async def _sigma_task_mark_running(chat_id, request_id):
 
 _task_gw.bind(push=_sigma_task_push, register=_sigma_task_register, mark_running=_sigma_task_mark_running)
 app.include_router(_task_gw.router)
+
+
+@app.get("/api/chats/{chat_id}/tasks/stream")
+async def stream_chat_tasks(chat_id: str, request: Request, after: int | None = None):
+    """SSE событий задач чата (у sigma нет WS): карточки и ручной триггер, когда агент не работает.
+
+    Без after — первое событие {"hello": true, "cursor": N}: фронт запоминает N как базу и при
+    открытии другого чата передаёт after, чтобы получить задачи, завершившиеся, пока чат был закрыт.
+      event: tasks  data: {"cursor": N, "tasks": [...]}   :heartbeat — keep-alive
+    """
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    async def event_gen():
+        cur = after
+        if cur is None:
+            cur = _sigma_task_seq
+            yield _sse_pack("tasks", {"hello": True, "cursor": cur, "tasks": []})
+        started = time.time()
+        while time.time() - started < 600 and not await request.is_disconnected():
+            w = _sigma_task_waiters.setdefault(str(chat_id), asyncio.Event())
+            w.clear()   # до проверки: push между проверкой и ожиданием не потеряется
+            fresh = [t for t in sigma_chat_tasks(chat_id) if (t.get("_seq") or 0) > cur]
+            if fresh:
+                cur = max(t["_seq"] for t in fresh)
+                yield _sse_pack("tasks", {"cursor": cur, "tasks": fresh})
+                continue
+            try:
+                await asyncio.wait_for(w.wait(), timeout=20)
+            except asyncio.TimeoutError:
+                yield ": heartbeat\n\n"
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream", headers=_SSE_HEADERS)

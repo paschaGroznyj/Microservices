@@ -227,13 +227,37 @@ def test_redis_flag_overrides_env(monkeypatch):
     assert tc.autotrigger_enabled(FakeRedis(flag=None)) is False
 
 
-def test_disabled_autotrigger_does_not_resurface_later():
+def _pushed_tasks(posts):
+    return [p[1]["task"] for p in posts if p[0].endswith("/internal/task_event")]
+
+
+def test_disabled_autotrigger_marks_awaiting_user_and_does_not_wake():
+    c, posts = make(redis=FakeRedis(flag="0"))
+    run(c.handle_event(done()))
+    assert c.pending == set() and triggers(c) == []
+    assert c.tasks.rows["t1"]["notify_agent"] is True and c.tasks.rows["t1"]["triggered_at"] is None
+    assert _pushed_tasks(posts)[-1]["awaiting_user"] is True
+
+
+def test_awaiting_user_only_for_finished_notify_tasks():
+    c, posts = make(redis=FakeRedis(flag="0"))
+    run(c.handle_event(ev(seq=1)))                                   # progress
+    run(c.handle_event(done(task_id="t2", status="cancelled")))      # отмена
+    assert [t["awaiting_user"] for t in _pushed_tasks(posts)] == [False, False]
+
+
+def test_enabled_autotrigger_no_awaiting_user():
+    c, posts = make()
+    run(c.handle_event(done()))
+    assert _pushed_tasks(posts)[-1]["awaiting_user"] is False and c.pending == {"c1"}
+
+
+def test_manual_mode_then_enabled_sweep_picks_unsent():
     c, _ = make(redis=FakeRedis(flag="0"))
     run(c.handle_event(done()))
-    assert c.pending == set() and c.tasks.rows["t1"]["notify_agent"] is False
     c.redis.flag = "1"
     run(c.sweep())
-    assert c.pending == set()
+    assert c.pending == {"c1"}
 
 
 def test_busy_agent_waits_until_flag_released():

@@ -191,6 +191,20 @@ class TasksDB:
                 "WHERE request_id=$1 AND message_id IS NULL RETURNING task_id", request_id, message_id)
         return [r["task_id"] for r in rows]
 
+    async def claim_for_user(self, chat_id: str, user_id, task_ids) -> list:
+        """Ручной триггер: пользователь отправил подсказку «задачи выполнены».
+        Атомарно отмечаем triggered_at и возвращаем строки (только свои задачи этого чата,
+        готовые и ещё не отданные агенту) — повторная отправка вернёт пусто."""
+        if not task_ids:
+            return []
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "UPDATE agent_tasks SET triggered_at=now(), updated_at=now() "
+                "WHERE task_id = ANY($1::text[]) AND chat_id=$2 AND user_id=$3 "
+                "AND triggered_at IS NULL AND status = ANY($4::text[]) RETURNING *",
+                [str(t) for t in task_ids], str(chat_id), int(user_id), list(NOTIFY))
+        return [dict(r) for r in rows]
+
     async def disable_notify_many(self, task_ids) -> None:
         if not task_ids:
             return

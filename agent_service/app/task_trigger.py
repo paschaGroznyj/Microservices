@@ -35,6 +35,23 @@ def payload_tasks(payload: dict) -> list:
     return [t] if isinstance(t, dict) else []
 
 
+def build_manual_block(tasks) -> str:
+    """Ручной триггер: результаты задач, которые пользователь отправил своим сообщением."""
+    tasks = [t for t in (tasks or []) if isinstance(t, dict)]
+    if not tasks:
+        return ""
+    lines = [
+        "", "",
+        f"[ЗАДАЧНИК — пользователь отправил на разбор результаты фоновых задач: {len(tasks)}]",
+        "Ты ставил эти задачи через submit_task. Разбери результаты и сообщи итог по каждой: что "
+        "получилось, где файлы, что делать дальше. При ошибке найди причину и предложи исправление "
+        "или перезапуск. Задачи из этого блока повторно не ставь.",
+    ]
+    for n, t in enumerate(tasks, 1):
+        lines += ["", f"── Задача {n} из {len(tasks)} ──"] + _task_lines(t)
+    return "\n".join(lines)
+
+
 def owner_user_id(payload: dict):
     """Чьими правами работает агент: владелец задачи. Без него вход отбрасывается."""
     tasks = payload_tasks(payload)

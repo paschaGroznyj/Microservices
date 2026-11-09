@@ -816,3 +816,30 @@
     display: none !important;
   }
 }
+
+/* ── Ленивая догрузка текста обновления ─────────────────────────────── */
+.wn-update-body--loading { min-height: 96px; }
+.wn-skel { display: flex; flex-direction: column; gap: 10px; padding-top: 2px; }
+.wn-skel-line {
+  display: block;
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--text-muted, #9e9890) 14%, transparent) 0%,
+    color-mix(in srgb, var(--text-muted, #9e9890) 26%, transparent) 50%,
+    color-mix(in srgb, var(--text-muted, #9e9890) 14%, transparent) 100%);
+  background-size: 200% 100%;
+  animation: wnSkelShimmer 1.2s ease-in-out infinite;
+}
+[data-theme="dark"] .wn-skel-line {
+  background: linear-gradient(90deg,
+    rgba(255,255,255,0.07) 0%, rgba(255,255,255,0.14) 50%, rgba(255,255,255,0.07) 100%);
+  background-size: 200% 100%;
+}
+@keyframes wnSkelShimmer {
+  0%   { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+@media (prefers-reduced-motion: reduce) { .wn-skel-line { animation: none; } }
+.wn-load-error { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.wn-load-error p { margin: 0; color: var(--text-muted, #9e9890); }

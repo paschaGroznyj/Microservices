@@ -400,29 +400,44 @@ class DataBaseUser:
     # ─────────────────────────────────────────────────────────────────────────
     # What's New (обновления) + Onboarding (демо-модалка)
     # ─────────────────────────────────────────────────────────────────────────
-    async def get_pending_whatsnew(self, user_id: int) -> dict:
+    # Сколько свежих обновлений отдаём сразу с текстом в lazy-режиме:
+    # текущее (последнее) + одно «заготовленное» для кнопки «назад».
+    WHATSNEW_EAGER_BODIES = 2
+
+    async def get_pending_whatsnew(self, user_id: int, lazy: bool = False) -> dict:
         """
         Что показать юзеру при входе:
           - demo: показать ли онбординг-демо (True, если нет отметки demo_seen);
           - updates: список published-обновлений, которые юзер ещё не закрыл
                      (по возрастанию created_at — показываем от старых к новым).
+
+        lazy=True: body отдаётся только у WHATSNEW_EAGER_BODIES самых свежих,
+        у остальных body=NULL и has_body=False — фронт догружает их по одному
+        через get_app_update_body(), когда юзер листает назад.
+        """
+        eager = self.WHATSNEW_EAGER_BODIES if lazy else None
+        # $1 — user_id (NULL = MOCK без фильтра просмотренных), $2 — лимит тел (NULL = все).
+        sql = """
+            SELECT id, version, title, created_at,
+                   CASE WHEN $2::int IS NULL OR rn <= $2::int THEN body END AS body,
+                   ($2::int IS NULL OR rn <= $2::int) AS has_body
+            FROM (
+                SELECT au.id, au.version, au.title, au.body, au.created_at,
+                       ROW_NUMBER() OVER (ORDER BY au.created_at DESC, au.id DESC) AS rn
+                FROM app_updates au
+                WHERE au.is_published = TRUE
+                  AND ($1::int IS NULL OR NOT EXISTS (
+                      SELECT 1 FROM user_seen_updates su
+                      WHERE su.update_id = au.id AND su.user_id = $1::int
+                  ))
+            ) t
+            ORDER BY created_at ASC, id ASC
         """
         async with self.pool.acquire() as conn:
             # --- MOCK для тестового юзера 56: всегда демо + все published-обновления ---
             if user_id == 56:
-                rows = await conn.fetch("""
-                    SELECT au.id, au.version, au.title, au.body, au.created_at
-                    FROM app_updates au
-                    WHERE au.is_published = TRUE
-                    ORDER BY au.created_at ASC, au.id ASC
-                """)
-                updates = []
-                for r in rows:
-                    item = dict(r)
-                    if item.get("created_at"):
-                        item["created_at"] = item["created_at"].isoformat()
-                    updates.append(item)
-                return {"demo": True, "updates": updates}
+                rows = await conn.fetch(sql, None, eager)
+                return {"demo": True, "updates": self._whatsnew_rows(rows)}
             # --- конец MOCK ---
             demo_seen = await conn.fetchval("""
                 SELECT demo_seen FROM user_onboarding WHERE user_id = $1
@@ -430,25 +445,27 @@ class DataBaseUser:
             # Нет строки -> демо ещё не видел -> показываем.
             demo = not bool(demo_seen)
 
-            rows = await conn.fetch("""
-                SELECT au.id, au.version, au.title, au.body, au.created_at
-                FROM app_updates au
-                WHERE au.is_published = TRUE
-                  AND NOT EXISTS (
-                      SELECT 1 FROM user_seen_updates su
-                      WHERE su.update_id = au.id AND su.user_id = $1
-                  )
-                ORDER BY au.created_at ASC, au.id ASC
-            """, user_id)
+            rows = await conn.fetch(sql, user_id, eager)
+            return {"demo": demo, "updates": self._whatsnew_rows(rows)}
 
-            updates = []
-            for r in rows:
-                item = dict(r)
-                if item.get("created_at"):
-                    item["created_at"] = item["created_at"].isoformat()
-                updates.append(item)
+    @staticmethod
+    def _whatsnew_rows(rows) -> list[dict]:
+        updates = []
+        for r in rows:
+            item = dict(r)
+            if item.get("created_at"):
+                item["created_at"] = item["created_at"].isoformat()
+            updates.append(item)
+        return updates
 
-            return {"demo": demo, "updates": updates}
+    async def get_app_update_body(self, update_id: int) -> dict | None:
+        """Текст одного published-обновления (ленивая догрузка в модалке What's New)."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT id, body FROM app_updates
+                WHERE id = $1 AND is_published = TRUE
+            """, int(update_id))
+            return dict(row) if row else None
 
     async def mark_demo_seen(self, user_id: int) -> bool:
         """Отметить, что юзер закрыл онбординг-демо (идемпотентно)."""

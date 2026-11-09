@@ -7,6 +7,10 @@
  *      По завершении POST /api/whatsnew/demo/seen.
  *   3. Далее — непросмотренные обновления по одному.
  *      На каждое закрытие POST /api/whatsnew/updates/seen {update_id}.
+ *      Тексты грузятся лениво по схеме 1+1: с pending приходят тексты текущего
+ *      (последнего) и предыдущего обновления. Когда юзер уходит назад, сразу
+ *      догружаем следующее «назад» (GET /api/whatsnew/updates/{id}/body),
+ *      чтобы тап по «‹» всегда открывал уже готовый текст.
  *
  * Разметку инжектит скрипт (chat.html не раздуваем).
  * Стиль — общие переменные темы (whatsnew.css).
@@ -24,7 +28,10 @@
   "use strict";
 
   const API = {
-    pending:    "/api/whatsnew/pending",
+    // lazy=1: текст приходит только у последнего и предпоследнего обновления,
+    // остальные догружаются по одному при листании назад (updateBody).
+    pending:    "/api/whatsnew/pending?lazy=1",
+    updateBody: (id) => "/api/whatsnew/updates/" + encodeURIComponent(id) + "/body",
     demoSeen:   "/api/whatsnew/demo/seen",
     updateSeen: "/api/whatsnew/updates/seen",
   };
@@ -716,6 +723,72 @@
         let prevIdx = idx;
         const seen = new Set();           // чтобы не слать seen повторно
 
+        // Ленивые тексты: id -> body. has_body === false — текст не пришёл с pending.
+        // Старый ответ без has_body считаем полным (обратная совместимость).
+        const bodies = new Map();
+        const inflight = new Map();       // id -> Promise, без дублей запросов
+        list.forEach((u) => {
+          if (u && u.has_body !== false) bodies.set(u.id, u.body || "");
+        });
+
+        function loadBody(i) {
+          const u = list[i];
+          if (!u) return Promise.resolve("");
+          if (bodies.has(u.id)) return Promise.resolve(bodies.get(u.id));
+          if (inflight.has(u.id)) return inflight.get(u.id);
+          const pr = apiGet(API.updateBody(u.id))
+            .then((d) => {
+              const b = (d && typeof d.body === "string") ? d.body : "";
+              bodies.set(u.id, b);
+              return b;
+            })
+            .finally(() => { inflight.delete(u.id); });
+          inflight.set(u.id, pr);
+          return pr;
+        }
+
+        // Готовим одно обновление «назад» от текущего.
+        function prefetchBefore(i) {
+          if (i - 1 >= 0) loadBody(i - 1).catch(() => { /* догрузим при тапе */ });
+        }
+
+        function paintBody(md) {
+          const htmlBody = wnRenderMarkdown(md || "");
+          bodyEl.classList.remove("wn-update-body--loading");
+          bodyEl.innerHTML = (window.DOMPurify ? window.DOMPurify.sanitize(htmlBody) : htmlBody);
+          syncThemeIcons(scroll);
+        }
+
+        function paintSkeleton() {
+          bodyEl.classList.add("wn-update-body--loading");
+          bodyEl.innerHTML =
+            '<div class="wn-skel" aria-hidden="true">' +
+              '<span class="wn-skel-line" style="width:92%"></span>' +
+              '<span class="wn-skel-line" style="width:78%"></span>' +
+              '<span class="wn-skel-line" style="width:85%"></span>' +
+              '<span class="wn-skel-line" style="width:60%"></span>' +
+            '</div>';
+        }
+
+        function paintError(u) {
+          bodyEl.classList.remove("wn-update-body--loading");
+          bodyEl.innerHTML = "";
+          const retry = h("button", { class: "wn-btn wn-btn-secondary wn-retry", type: "button" }, ["Повторить"]);
+          retry.addEventListener("click", () => fillBody(u));
+          bodyEl.appendChild(h("div", { class: "wn-load-error" }, [
+            h("p", {}, ["Не удалось загрузить описание обновления."]),
+            retry,
+          ]));
+        }
+
+        function fillBody(u) {
+          if (bodies.has(u.id)) { paintBody(bodies.get(u.id)); return; }
+          paintSkeleton();
+          loadBody(list.indexOf(u))
+            .then((b) => { if (list[idx] === u) paintBody(b); })
+            .catch(() => { if (list[idx] === u) paintError(u); });
+        }
+
         const closeBtn = h("button", { class: "wn-close", type: "button", "aria-label": "Закрыть" }, []);
         closeBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" ' +
           'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -826,8 +899,7 @@
           dateEl.style.display = dateStr ? "" : "none";
 
           titleEl.textContent = u.title || "Что нового";
-          const htmlBody = wnRenderMarkdown(u.body || "");
-          bodyEl.innerHTML = (window.DOMPurify ? window.DOMPurify.sanitize(htmlBody) : htmlBody);
+          fillBody(u);
 
           if (dir) {
             const animCls = dir < 0 ? "wn-scroll--anim-prev" : "wn-scroll--anim-next";
@@ -873,6 +945,7 @@
           markSeen(idx);
           scroll.scrollTop = 0;
           syncThemeIcons(scroll);
+          prefetchBefore(idx);
         }
 
         function done() {

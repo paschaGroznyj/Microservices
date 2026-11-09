@@ -882,7 +882,27 @@ async def whatsnew_pending(request: Request):
     try:
         response = await app.state.http_client.post(
             f"{auth_url}/whatsnew/pending",
-            json={"user_id": user["user_id"]},
+            json={"user_id": user["user_id"],
+                  "lazy": request.query_params.get("lazy") in ("1", "true")},
+            timeout=10.0
+        )
+        return JSONResponse(content=response.json(), status_code=response.status_code)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Auth service dead: {str(e)}")
+
+
+@app.get("/api/whatsnew/updates/{update_id}/body")
+async def whatsnew_update_body(update_id: int, request: Request):
+    """Ленивая догрузка текста одного обновления (модалка What's New)."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    auth_url = SERVICES['auth']['url']
+    try:
+        response = await app.state.http_client.post(
+            f"{auth_url}/whatsnew/updates/body",
+            json={"user_id": user["user_id"], "update_id": update_id},
             timeout=10.0
         )
         return JSONResponse(content=response.json(), status_code=response.status_code)

@@ -79,3 +79,26 @@ def test_whatsnew_pending_returns_db_result(client, fake_db):
 def test_whatsnew_update_seen_requires_both_ids(client):
     r = client.post("/whatsnew/updates/seen", json={"user_id": 56})
     assert r.status_code == 400
+
+
+def test_whatsnew_pending_passes_lazy_flag(client, fake_db):
+    fake_db.get_pending_whatsnew.return_value = {"demo": False, "updates": []}
+    client.post("/whatsnew/pending", json={"user_id": 7, "lazy": True})
+    fake_db.get_pending_whatsnew.assert_awaited_with(user_id=7, lazy=True)
+    client.post("/whatsnew/pending", json={"user_id": 7})
+    fake_db.get_pending_whatsnew.assert_awaited_with(user_id=7, lazy=False)
+
+
+def test_whatsnew_update_body_ok(client, fake_db):
+    fake_db.get_app_update_body.return_value = {"id": 9, "body": "## v1.0.1"}
+    r = client.post("/whatsnew/updates/body", json={"user_id": 7, "update_id": 9})
+    assert r.status_code == 200 and r.json() == {"id": 9, "body": "## v1.0.1"}
+    fake_db.get_app_update_body.assert_awaited_with(9)
+
+
+def test_whatsnew_update_body_validation_and_404(client, fake_db):
+    assert client.post("/whatsnew/updates/body", json={"update_id": 9}).status_code == 400
+    assert client.post("/whatsnew/updates/body", json={"user_id": 7}).status_code == 400
+    assert client.post("/whatsnew/updates/body", json={"user_id": 7, "update_id": "x"}).status_code == 400
+    fake_db.get_app_update_body.return_value = None
+    assert client.post("/whatsnew/updates/body", json={"user_id": 7, "update_id": 999}).status_code == 404

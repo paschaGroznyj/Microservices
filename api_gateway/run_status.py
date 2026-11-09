@@ -143,6 +143,49 @@ async def count_active_requests() -> int:
         return 0
 
 
+NOTICE_KEY = "sys:notice"
+NOTICE_TEXT_MAX = 20000
+
+
+async def get_system_notice() -> dict | None:
+    """Системное уведомление для всех вкладок (пишет restart.sh на хосте).
+
+    Хеш sys:notice: id, phase (maintenance|done), text (markdown), services, ts.
+    Нет ключа, не тот тип или Redis недоступен -> None.
+    """
+    if _redis is None:
+        return None
+    try:
+        raw = await _redis.hgetall(NOTICE_KEY)
+    except Exception as e:
+        logger.debug("run_status.get_system_notice failed: %s", e)
+        return None
+    if not raw:
+        return None
+    d = {
+        (k.decode() if isinstance(k, bytes) else str(k)):
+        (v.decode("utf-8", "replace") if isinstance(v, bytes) else str(v))
+        for k, v in raw.items()
+    }
+    nid = d.get("id", "").strip()
+    if not nid:
+        return None
+    phase = d.get("phase", "maintenance").strip()
+    if phase not in ("maintenance", "done"):
+        phase = "maintenance"
+    try:
+        ts = int(float(d.get("ts") or 0))
+    except ValueError:
+        ts = 0
+    return {
+        "id": nid[:64],
+        "phase": phase,
+        "text": d.get("text", "")[:NOTICE_TEXT_MAX],
+        "services": [x for x in d.get("services", "").split() if x][:20],
+        "ts": ts,
+    }
+
+
 async def append_reasoning_chunk(
     chat_id,
     chunk: str,

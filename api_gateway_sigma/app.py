@@ -559,7 +559,8 @@ async def presence_leave(request: Request):
 
 @app.get("/api/presence/count")
 async def presence_count(request: Request, ping: int = 0):
-    """Лёгкий публичный счётчик онлайн (суммарно main+sigma) + живые запросы к агенту. Redis-only."""
+    """Лёгкий публичный счётчик онлайн (суммарно main+sigma) + живые запросы к агенту
+    + системное уведомление sys:notice (restart.sh). Redis-only."""
     if ping:
         user = await get_current_user(request)
         if user:
@@ -567,8 +568,9 @@ async def presence_count(request: Request, ping: int = 0):
     m = await presence.count_online("main")
     sg = await presence.count_online("sigma")
     active_req = await run_status.count_active_requests()
+    notice = await run_status.get_system_notice()
     return {"online": m + sg, "main": m, "sigma": sg, "active_requests": active_req,
-        "build_id": cache_bust.get_build_id(), "build_id": cache_bust.get_build_id()}
+        "build_id": cache_bust.get_build_id(), "notice": notice}
 
 
 @app.get("/api/presence/overlay")

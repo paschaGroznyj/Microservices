@@ -34,6 +34,7 @@
     <link rel="stylesheet" href="/static/css/claude-ui.css">
     <link rel="stylesheet" href="/static/css/generative-ui.css">
     <link rel="stylesheet" href="/static/css/presence.css">
+    <link rel="stylesheet" href="/static/css/system-notice.css">
     <link rel="stylesheet" href="/static/css/group-chat.css">
     <link rel="stylesheet" href="/static/css/palette.css">
     {% if not is_sigma %}<link rel="stylesheet" href="/static/css/tg-chats.css">{% endif %}
@@ -747,6 +748,7 @@
 <script src="/static/js/task-hint.js"></script>
 <script type="module" src="{{ '/static/js/app_sigma.js' if is_sigma else '/static/js/app.js' }}"></script>
 <script type="module" src="/static/js/chatSearchModal.js"></script>
+<script src="/static/js/system-notice.js"></script>
 <script src="/static/js/presence.js"></script>
 <!-- Thanos-эффект удаления сообщений (вырезаемо: убрать 2 строки ниже) -->
 <script src="/static/js/groupInteraction.js"></script>

@@ -1774,50 +1774,6 @@ async def find_chat_by_type(type_agent: str, request: Request):
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Chats service unreachable: {str(e)}")
 
-# GET /api/feedback — история
-@app.get("/api/feedback")
-async def get_feedbacks(request: Request):
-    user = await get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    try:
-        response = await app.state.http_client.get(
-            f"{SERVICES['auth']['url']}/feedback"
-        )
-        logging.info(response.json())
-        return Response(
-            content=response.content,
-            status_code=response.status_code,
-            media_type="application/json"
-        )
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"Auth service unreachable: {str(e)}")
-
-
-# POST /api/feedback — новый отзыв
-@app.post("/api/feedback")
-async def post_feedback(request: Request):
-    user = await get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    user = await get_current_user(request)
-    data = await request.json()
-    data["user_id"] = user["user_id"]
-    data["username"] = user["username"]
-    auth_url = SERVICES['auth']['url']
-    try:
-        response = await app.state.http_client.post(
-            f"{auth_url}/feedback",
-            json=data,
-            timeout=30.0
-        )
-        if response.status_code == 200:
-            return {"ok": True}
-    except httpx.RequestError as e:
-        return {"ok": False}
-
 @app.get("/api/graph")
 async def get_graph_nodes(request: Request):
     user = await get_current_user(request)

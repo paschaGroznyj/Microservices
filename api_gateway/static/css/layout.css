@@ -111,7 +111,6 @@
 }
 
 /* ── ICON BUTTONS ─────────────────────────────── */
-.feedback-trigger,
 .info-btn,
 .mobile-menu-toggle {
   width: 28px;
@@ -128,14 +127,12 @@
   transition: background var(--transition), color var(--transition);
 }
 
-.feedback-trigger svg,
 .info-btn svg,
 .mobile-menu-toggle svg {
   width: 18px;
   height: 18px;
 }
 
-.feedback-trigger:hover,
 .mobile-menu-toggle:hover {
   background: var(--surface2);
   color: var(--accent);

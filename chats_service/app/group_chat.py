@@ -11,6 +11,7 @@
 Фичи (delete/edit/pin) идут синхронно в БД (они редкие и требуют ответа),
 но результат тоже транслируется в комнату через ту же Kafka-шину (event-типы).
 """
+import asyncio
 import io
 import json
 import logging
@@ -24,6 +25,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.core import obs_file_storage
+from app.core.thumbhash import media_meta_from_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,9 @@ MAX_GROUP_FILES = 10
 _IMAGE_MIME_PREFIX = "image/"
 
 router = APIRouter(prefix="/group", tags=["group-chat"])
+
+# сообщений контекста над первым непрочитанным в первой странице истории
+UNREAD_CONTEXT = 20
 
 # выставляются из app.py при startup
 group_db = None       # GroupChatDB
@@ -86,6 +91,37 @@ class GroupPinAction(BaseModel):
     is_pinned: bool
 
 
+class ReactionOp(BaseModel):
+    message_id: int
+    user_id: int
+    emoji: str = ""
+
+
+class ReactionBatch(BaseModel):
+    ops: list[ReactionOp]
+
+
+class ReadOp(BaseModel):
+    room_uid: str
+    user_id: int
+    username: str = ""
+    last_read_id: int
+
+
+class ReadBatch(BaseModel):
+    ops: list[ReadOp]
+
+
+def _send_or_503(topic, key, value):
+    """send + ожидание ack. flush() ошибку доставки не поднимает: без get()
+    ответ 200 мог уйти, хотя сообщение в Kafka не легло."""
+    try:
+        producer.send(topic, key=key, value=value).get(timeout=15)
+    except Exception as e:
+        logger.error(f"[group-chat] kafka send failed: {e!r}")
+        raise HTTPException(status_code=503, detail="kafka unavailable")
+
+
 # ── Отправка (только в Kafka) ───────────────────────────────
 
 @router.post("/send")
@@ -105,8 +141,7 @@ async def group_send(payload: GroupSendPayload):
         "ts": time.time(),
     }
     start = time.perf_counter()
-    producer.send(GROUP_TOPIC, key=payload.room_uid, value=msg)
-    producer.flush()
+    _send_or_503(GROUP_TOPIC, key=payload.room_uid, value=msg)
     logger.info(f"[group-chat] send -> kafka room={payload.room_uid} "
                 f"user={payload.user_id} ({time.perf_counter()-start:.4f}s)")
     return {"status": "ok", "client_msg_id": msg["client_msg_id"]}
@@ -116,14 +151,22 @@ async def group_send(payload: GroupSendPayload):
 
 @router.get("/{room_uid}/messages")
 async def group_messages(room_uid: str, limit: int = 50, offset: int = 0,
-                         before_id: int | None = None):
+                         before_id: int | None = None, viewer_id: int | None = None):
     if group_db is None:
         raise HTTPException(status_code=503, detail="db not ready")
     try:
+        # галочки, своя отметка и непрочитанные: только если гейтвей передал, кто смотрит
+        reads = await group_db.read_state(room_uid, viewer_id) if viewer_id else None
+        # первая страница при входе: берём столько, чтобы в неё попало первое
+        # непрочитанное + немного контекста над ним (не больше 200)
+        tail = int((reads or {}).get("tail") or 0)
+        if not before_id and not offset and tail:
+            limit = max(limit, min(tail + UNREAD_CONTEXT, 200))
         result = await group_db.get_messages(room_uid, limit=limit, offset=offset,
                                              before_id=before_id)
         return {
             "room_uid": room_uid,
+            "reads": reads,
             "messages": result["messages"],
             "total_count": result["total_count"],
             "has_more": result["has_more"],
@@ -134,6 +177,18 @@ async def group_messages(room_uid: str, limit: int = 50, offset: int = 0,
     except Exception as e:
         logger.error(f"[group-chat] messages error: {e}")
         raise HTTPException(status_code=500, detail="не удалось загрузить сообщения")
+
+
+@router.get("/{room_uid}/unread")
+async def group_unread(room_uid: str, viewer_id: int):
+    """Счётчик для плашки «Общий чат» при загрузке страницы, без истории."""
+    if group_db is None:
+        raise HTTPException(status_code=503, detail="db not ready")
+    try:
+        return {"room_uid": room_uid, "reads": await group_db.read_state(room_uid, viewer_id)}
+    except Exception as e:
+        logger.error(f"[group-chat] unread error: {e}")
+        raise HTTPException(status_code=500, detail="не удалось получить непрочитанные")
 
 
 @router.get("/{room_uid}/pinned")
@@ -183,10 +238,19 @@ async def group_upload(
         if not stored:
             raise HTTPException(status_code=502,
                                 detail=f"не удалось сохранить {up.filename}")
+        # размеры кадра и ThumbHash для лоадера; ошибка разбора не ломает загрузку
+        try:
+            meta = await asyncio.to_thread(
+                media_meta_from_bytes, body, mime, up.filename or "")
+        except Exception as e:
+            logger.info(f"[group-chat] media meta {up.filename}: {e}")
+            meta = {}
         rec = await group_db.add_file(
             room_uid=room_uid, client_msg_id=client_msg_id, obs_key=obs_key,
             file_name=up.filename or "file", mime_type=mime,
-            size_bytes=len(body), is_image=is_image)
+            size_bytes=len(body), is_image=is_image,
+            width=meta.get("width"), height=meta.get("height"),
+            thumbhash=meta.get("thumbhash"))
         if rec:
             saved.append(rec)
     return {"ok": True, "files": saved}
@@ -333,8 +397,11 @@ def _broadcast_event(room_uid: str, event: dict, gateway_target: str = "both"):
     payload = dict(event)
     payload["room_uid"] = room_uid
     payload["gateway_target"] = gateway_target
-    producer.send(GROUP_TOPIC, key=room_uid, value=payload)
-    producer.flush()
+    try:
+        _send_or_503(GROUP_TOPIC, key=room_uid, value=payload)
+    except HTTPException:
+        # изменение уже в БД, клиенту не отдаём 503: увидят по F5
+        pass
 
 
 @router.post("/message/delete")
@@ -374,6 +441,61 @@ async def group_pin(action: GroupPinAction):
     return {"ok": True, "message": row}
 
 
+@router.post("/reactions/apply")
+async def group_reactions_apply(batch: ReactionBatch):
+    """Пачка реакций от дебаунсера гейтвея (api_gateway/reactions_bus.py).
+    Пишем в БД одной транзакцией, итог по каждому сообщению транслируем
+    событием reactions в его комнату."""
+    if group_db is None:
+        raise HTTPException(status_code=503, detail="db not ready")
+    if len(batch.ops) > 2000:
+        raise HTTPException(status_code=413, detail="слишком большая пачка")
+    changed = await group_db.apply_reactions(
+        [op.model_dump() if hasattr(op, "model_dump") else op.dict() for op in batch.ops])
+    by_room: dict = {}
+    for row in changed:
+        by_room.setdefault(row["room_uid"], []).append(
+            {"message_id": row["message_id"], "reactions": row["reactions"]})
+    for room_uid, items in by_room.items():
+        _broadcast_event(room_uid, {"event": "reactions", "items": items})
+    return {"ok": True, "applied": len(changed)}
+
+
 async def _room_id_of(message_id: int):
     async with group_db.pool.acquire() as conn:
         return await conn.fetchval("SELECT room_id FROM group_messages WHERE id = $1", message_id)
+
+
+# ── Прочтение (галочки) ───────────────────────────────────
+
+@router.post("/reads/apply")
+async def group_reads_apply(batch: ReadBatch):
+    """Пачка отметок прочтения от шины гейтвея (api_gateway/reads_bus.py).
+    Один UPSERT, отметка только растёт. Сдвинутые отметки уходят событием
+    read в комнату: у отправителя появляются две галочки."""
+    if group_db is None:
+        raise HTTPException(status_code=503, detail="db not ready")
+    if len(batch.ops) > 5000:
+        raise HTTPException(status_code=413, detail="слишком большая пачка")
+    moved = await group_db.mark_reads(
+        [op.model_dump() if hasattr(op, "model_dump") else op.dict() for op in batch.ops])
+    by_room: dict = {}
+    for row in moved:
+        by_room.setdefault(row["room_uid"], []).append(
+            {"user_id": row["user_id"], "last_read_id": row["last_read_id"]})
+    for room_uid, items in by_room.items():
+        _broadcast_event(room_uid, {"event": "read", "items": items})
+    return {"ok": True, "moved": len(moved)}
+
+
+@router.get("/message/{message_id}/readers")
+async def group_readers(message_id: int, viewer_id: int):
+    """Кто прочитал сообщение. Видит только автор (как в Telegram)."""
+    if group_db is None:
+        raise HTTPException(status_code=503, detail="db not ready")
+    readers = await group_db.get_readers(message_id, viewer_id)
+    if readers is None:
+        raise HTTPException(status_code=404, detail="сообщение не найдено")
+    if readers is False:
+        raise HTTPException(status_code=403, detail="только для автора сообщения")
+    return {"message_id": message_id, "count": len(readers), "readers": readers}

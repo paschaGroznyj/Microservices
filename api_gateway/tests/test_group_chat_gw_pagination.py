@@ -28,7 +28,7 @@ def test_before_id_is_forwarded(client_http):
     assert client.get("/api/group/global/messages?limit=40&before_id=777").status_code == 200
     args, kwargs = http.get.await_args
     assert args[0] == "http://chats/group/global/messages"
-    assert kwargs["params"] == {"limit": 40, "offset": 0, "before_id": 777}
+    assert kwargs["params"] == {"limit": 40, "offset": 0, "before_id": 777, "viewer_id": 56}
 
 
 def test_no_before_id_means_no_param(client_http):

@@ -53,6 +53,7 @@ from .tools.journal.tool_agent_journal import make_journal_tool
 from .judge import judge_final_answer
 from .supervisor import run_supervisor
 from .context_compactor import compact_messages, TOKEN_SOFT_LIMIT
+from .common.tool_output import clip_text, coerce_tool_result, tool_content
 from .core.token_usage import (
     normalize_usage, add_usage, apply_anthropic_cache_control, append_to_system_tail,
 )
@@ -211,6 +212,12 @@ async def tool_execute_sql_query(database, sql: str, max_rows: int = 10, sql_que
 # ================================================================
 MAX_STDOUT_CHARS = 2000  # Настройте максимальную длину (например, 2000 символов)
 MAX_TOOL_MSG_CHARS = int(os.getenv("MAX_TOOL_MSG_CHARS", "8000"))
+# Лимиты отдельных полей результата до общего лимита ToolMessage.
+TOOL_FIELD_LIMITS = {
+    "execute_python_code": {"stdout": 3000, "stderr": 1000},
+    "edit_and_run": {"stdout": 3000, "stderr": 1000},
+    "execute_shell_commands": {"stdout": 3000, "stderr": 1000},
+}
 MAX_TRACE_FROM_DB_CHARS = int(os.getenv("MAX_TRACE_FROM_DB_CHARS", "2500"))
 TRACE_SUMMARY_THRESHOLD = int(os.getenv("TRACE_SUMMARY_THRESHOLD", "20000"))
 MAX_TRACE_HARD_CHARS = int(os.getenv("MAX_TRACE_HARD_CHARS", "21000"))
@@ -226,16 +233,8 @@ IMITATE_TOOL_STATUS_MODELS = (
 )
 
 def _truncate_text(text: str, max_chars: int = MAX_STDOUT_CHARS) -> str:
-    """Обрезает текст, если он превышает лимит, добавляя плашку с указанием перерасхода."""
-    if not isinstance(text, str) or len(text) <= max_chars:
-        return text
-    
-    truncated_count = len(text) - max_chars
-    # Берем начало и конец вывода для сохранения контекста (лог/ошибка часто в конце)
-    head_len = max_chars // 2
-    tail_len = max_chars // 2
-    
-    return f"{text[:head_len]}\n\n... [вывод обрезан, пропущено {truncated_count} символов] ...\n\n{text[-tail_len:]}"
+    """Обрезка текста: общая clip_text (начало и конец, перевес к концу)."""
+    return clip_text(text, max_chars)
 
 
 # Тулы, чьи вызовы стоит запоминать в истории диалога
@@ -259,7 +258,7 @@ STATEFUL_TOOLS = {
     "send_file_to_user",
     "work_with_agent_journal",
     # "request_more_steps",
-    "submit_task", "check_task_status",
+    "submit_task", "check_task_status", "cancel_task",
     "create_workspace", "list_workspace_files", "download_workspace_file",
     "delete_workspace", "cleanup_workspaces",
     "call_subagent", "execute_shell_commands",
@@ -268,6 +267,9 @@ STATEFUL_TOOLS = {
     "read_workspace_file",
     "edit_workspace_file",
 }
+
+_coerce_tool_result = coerce_tool_result
+
 
 def _summarize_tool_call(tc: dict, result: Any) -> str | None:
     name = tc["name"]
@@ -315,28 +317,54 @@ def _summarize_tool_call(tc: dict, result: Any) -> str | None:
                 "work_with_agent_journal", "read_workspace_file", "edit_workspace_file"):
         return f"{name}({args}) → {str(result)[:1000]}"
     if name == "execute_python_code":
-        result_dict = result if isinstance(result, dict) else {}
-        ok = result_dict.get("ok", False)
+        result_dict = _coerce_tool_result(result)
+        if result_dict is None:
+            # Результат не разобрать (например, обрезан в ToolMessage) —
+            # не помечаем как ошибку, отдаём начало как есть.
+            return f"execute_python_code() [результат не разобран] {clip_text(str(result), 500)}"
+        ok = bool(result_dict.get("ok", False))
+        # В трейс — только путь, который агент может открыть любой ролью:
+        # скрипт внутри workspace. Архив /sandbox/executed_scripts общий и
+        # доступен лишь админским тулам, его не показываем.
+        ws_script = result_dict.get("saved_script_in_workspace")
+        ws_id = result_dict.get("workspace_id") or args.get("workspace_id")
+        if ws_script and ws_id:
+            script_note = f", скрипт: workspace {ws_id} → {ws_script}"
+        elif ws_script:
+            script_note = f", скрипт в workspace: {ws_script}"
+        else:
+            script_note = ""
 
         if ok:
-            # Успех — код уже лежит в saved_script_path, дублировать не нужно.
+            # Успех — код в трейс не дублируем (он есть в вызове и, если задан
+            # workspace, в output/.scripts).
             # В трейс идёт только компактная сводка результата.
-            saved_files = result_dict.get("saved_files", [])
-            files_note = f", файлы: {[f['filename'] for f in saved_files]}" if saved_files else ""
-            script_path = result_dict.get("saved_script_path")
-            script_note = f", скрипт: {script_path}" if script_path else ""
+            saved_files = result_dict.get("saved_files") or []
+            names = [f.get("filename") for f in saved_files if isinstance(f, dict)]
+            files_note = f", файлы: {names}" if names else ""
             return f"execute_python_code() [успех]{files_note}{script_note}"
+
+        # Ошибка — код в трейс, чтобы агент помнил, что написал и почему упало.
+        code = result_dict.get("code") or args.get("code", "")
+        stderr = str(result_dict.get("stderr") or "")
+        error = (clip_text(str(result_dict.get("error") or "").strip(), 300, head_ratio=0)
+                 or clip_text(stderr.strip(), 300, head_ratio=0))
+        if not error:
+            rc = result_dict.get("exit_code")
+            error = f"exit_code={rc}" if rc is not None else "причина не передана"
+        line_note = f", строка {result_dict['error_line']}" if result_dict.get("error_line") else ""
+        code_s = str(code)
+        err_ctx = str(result_dict.get("error_context") or "")
+        if err_ctx and len(code_s) > 800:
+            # Длинный скрипт: начало (импорты/константы) + строки вокруг ошибки.
+            code_block = f"{clip_text(code_s, 400, head_ratio=1)}\n…\nвокруг ошибки:\n{clip_text(err_ctx, 1200)}"
         else:
-            # Ошибка — код НЕ сохраняется в executed_scripts (see main.py логика),
-            # значит единственный способ его увидеть в будущем — сохранить в trace,
-            # иначе агент забудет, что именно он написал и почему упало.
-            code = result_dict.get("code", args.get("code", ""))
-            error = result_dict.get("error") or result_dict.get("stderr", "")[:300]
-            return (
-                f"execute_python_code() [ОШИБКА]\n"
-                f"код:\n{code[:800]}\n"
-                f"ошибка: {error}"
-            )
+            code_block = clip_text(code_s, 1200)
+        return (
+            f"execute_python_code() [ОШИБКА]{script_note}{line_note}\n"
+            f"код:\n{code_block}\n"
+            f"ошибка: {error}"
+        )
     # if name == "request_more_steps":
     #     return f"{name} ШАГ-БУСТ → {str(result)}"
     if name == "execute_shell_commands":
@@ -344,16 +372,17 @@ def _summarize_tool_call(tc: dict, result: Any) -> str | None:
         _cmd_s = str(_cmds)
         if len(_cmd_s) > 400:
             _cmd_s = _cmd_s[:400] + f"…[+{len(_cmd_s) - 400} симв]"
-        if isinstance(result, dict):
-            _ok = result.get("ok")
-            _out = str(result.get("stdout", ""))
-            _err = str(result.get("stderr", ""))
-            _rc = result.get("exit_code")
-            _res_s = f"ok={_ok} rc={_rc} stdout={_out[:800]}"
+        _rd = _coerce_tool_result(result)
+        if _rd is not None:
+            _ok = _rd.get("ok")
+            _out = str(_rd.get("stdout", ""))
+            _err = str(_rd.get("stderr", ""))
+            _rc = _rd.get("exit_code")
+            _res_s = f"ok={_ok} rc={_rc} stdout={clip_text(_out, 800)}"
             if _err.strip():
-                _res_s += f" stderr={_err[:300]}"
+                _res_s += f" stderr={clip_text(_err, 300, head_ratio=0)}"
         else:
-            _res_s = str(result)[:800]
+            _res_s = clip_text(str(result), 800)
         return f"execute_shell_commands({_cmd_s}) → {_res_s}"
     _args_s = str(args)
     if len(_args_s) > 500:
@@ -1630,6 +1659,9 @@ class HarnessAgent:
             "user_id": user_id,
             "message_id": None,
             "agent_model": agent_model,
+            # владелец запроса для submit_task: по нему chats_service будит агента после задачи
+            "selected_tools": list(selected_tools or []),
+            "context_size": context_size,
             "pending_generated_images": [],
             # request-local буфер живого reasoning для Telegram (изоляция параллельных чатов)
             "tg_reasoning_buf": [],
@@ -2142,21 +2174,17 @@ class HarnessAgent:
                                         seen_paths.add(f["path"])
                                         files_to_send.append(f)
 
-                        if tool_name == "execute_python_code" and isinstance(result_dict, dict):
-                            if "stdout" in result_dict:
-                                result_dict["stdout"] = _truncate_text(result_dict["stdout"], max_chars=3000)
-                            if "stderr" in result_dict:
-                                result_dict["stderr"] = _truncate_text(result_dict["stderr"], max_chars=1000)
-
-                        content_for_message = str(result_dict)
-
-                        # Формируем ToolMessage на основе обрезанных данных
+                        # Сначала урезаем поля, потом сериализуем: строку после
+                        # str() не режем, иначе dict перестаёт разбираться.
                         if isinstance(tr, Exception):
-                            content = f"Ошибка инструмента: {tr}"
+                            content = tool_content(tr, MAX_TOOL_MSG_CHARS)
+                        elif isinstance(result_dict, dict) and "raw" not in result_dict:
+                            content = tool_content(
+                                result_dict, MAX_TOOL_MSG_CHARS,
+                                field_limits=TOOL_FIELD_LIMITS.get(tool_name),
+                            )
                         else:
-                            content = content_for_message
-
-                        content = _truncate_text(content, max_chars=MAX_TOOL_MSG_CHARS)
+                            content = tool_content(tr, MAX_TOOL_MSG_CHARS)
 
                         messages.append(ToolMessage(content=content, tool_call_id=tc["id"]))
 

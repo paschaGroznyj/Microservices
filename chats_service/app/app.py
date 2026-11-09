@@ -166,6 +166,8 @@ class ChatMessage(BaseModel):
     # loop_tick=True — служебный тик петли от consumer (user_id=-100), проходит гейт агента.
     loop_tick: bool = False
     poll_answer: dict | None = None
+    # Ручной триггер задачника: задачи из подсказки «задачи выполнены» (фронт, task-hint.js)
+    task_ids: list[str] | None = None
     timezone_name: str | None = None
     tz_offset_minutes: int | None = None
     
@@ -571,6 +573,17 @@ async def send_message(chat: ChatMessage):
         "timezone_name": chat.timezone_name,
         "tz_offset_minutes": chat.tz_offset_minutes,
     }
+    # Ручной триггер задачника: пользователь отправил подсказку «задачи выполнены» —
+    # забираем результаты (triggered_at) и прикладываем их агенту.
+    if chat.task_ids and chat.user_id is not None:
+        try:
+            from app.db.tasks_db import TasksDB
+            from app.task_consumer import row_task
+            claimed = await TasksDB(db.pool).claim_for_user(chat.chat_id, chat.user_id, chat.task_ids[:20])
+            if claimed:
+                message["manual_tasks"] = [row_task(r) for r in claimed]
+        except Exception as e:
+            logging.error(f"[tasks] ручной триггер: задачи не забраны chat={chat.chat_id}: {e}")
     start = time.perf_counter()
     # отправка в Kafka
     producer.send("chat-messages", key=chat.user_id, value=message)

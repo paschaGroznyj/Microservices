@@ -1058,6 +1058,12 @@ class AgentDB:
 
         logging.info("code_library: touch id=%s", library_id)
 
+    async def list_code_library_paths(self) -> set[str]:
+        """Пути всех скриптов из code_library (их не трогает sandbox_scripts_cleaner)."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT path FROM code_library WHERE path IS NOT NULL")
+        return {r["path"] for r in rows}
+
     # Суммаризация сообщений, которые были отброшены фильтром на токены
     async def get_rolling_summary(self, chat_id: str) -> str | None:
         row = await self.pool.fetchrow(

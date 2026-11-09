@@ -56,9 +56,18 @@ CREATE TABLE IF NOT EXISTS group_message_files (
     mime_type     TEXT,
     size_bytes    BIGINT,
     is_image      BOOLEAN NOT NULL DEFAULT FALSE,
+    width         INTEGER,   -- кадр с учётом поворота, для размера карточки до загрузки
+    height        INTEGER,
+    thumbhash     TEXT,      -- ThumbHash base64, размытая заглушка под кольцом
     created_at    TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+ALTER TABLE group_message_files ADD COLUMN IF NOT EXISTS width INTEGER;
+ALTER TABLE group_message_files ADD COLUMN IF NOT EXISTS height INTEGER;
+ALTER TABLE group_message_files ADD COLUMN IF NOT EXISTS thumbhash TEXT;
 
 CREATE INDEX IF NOT EXISTS ix_group_files_msg ON group_message_files(message_id);
 CREATE INDEX IF NOT EXISTS ix_group_files_client ON group_message_files(client_msg_id);
 CREATE INDEX IF NOT EXISTS ix_group_files_room ON group_message_files(room_id);
+
+-- Реакции: {"user_id": "emoji"}, одна на пользователя
+ALTER TABLE group_messages ADD COLUMN IF NOT EXISTS reactions JSONB NOT NULL DEFAULT '{}'::jsonb;

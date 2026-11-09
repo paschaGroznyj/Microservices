@@ -44,6 +44,8 @@ import logging
 from langchain.schema import SystemMessage, HumanMessage
 from langchain_core.messages import ToolMessage
 
+from .common.tool_output import clip_text, coerce_tool_result, fit_result
+
 logger = logging.getLogger(__name__)
 
 # --- дефолты (перекрываются аргументами вызова) ----------------------------
@@ -104,14 +106,14 @@ def _extract_facts_from_pairs(messages, drop_indices, summarize_tool_call):
         if mtype == "tool":
             # ToolMessage: попробуем найти его tool_call в предыдущих AIMessage
             # (fallback, если summarize не сработал на этапе AIMessage)
-            content = str(getattr(m, "content", ""))[:800]
+            content = clip_text(str(getattr(m, "content", "")), 800)
             lines.append(f"[tool_result]: {content}")
             continue
 
         # AIMessage (возможно с tool_calls)
         content = getattr(m, "content", "")
         if content:
-            lines.append(f"[reasoning]: {str(content)[:800]}")
+            lines.append(f"[reasoning]: {clip_text(str(content), 800)}")
 
         tool_calls = getattr(m, "tool_calls", None) or []
         for tc in tool_calls:
@@ -129,7 +131,7 @@ def _extract_facts_from_pairs(messages, drop_indices, summarize_tool_call):
             else:
                 lines.append(
                     f"[tool]: {tc.get('name')}({str(tc.get('args'))}) "
-                    f"-> {str(result)}"
+                    f"-> {clip_text(str(result), 1500)}"
                 )
     return "\n".join(lines)
 
@@ -237,14 +239,12 @@ def _truncate_heavy_tool_messages(messages, *, max_chars=MAX_TOOL_MSG_CHARS, kee
         if not isinstance(content, str) or len(content) <= max_chars:
             continue
         orig = len(content)
-        head = max_chars // 2
-        tail = max_chars - head
-        cut = orig - max_chars
-        m.content = (
-            content[:head]
-            + f"\n\n... [tool-результат усечён компактором, пропущено {cut} симв] ...\n\n"
-            + content[-tail:]
-        )
+        rd = coerce_tool_result(content)
+        new = fit_result(rd, max_chars) if rd is not None else clip_text(content, max_chars)
+        if len(new) >= orig:
+            continue
+        m.content = new
+        cut = orig - len(new)
         n_trunc += 1
         saved += cut
     return messages, n_trunc, saved

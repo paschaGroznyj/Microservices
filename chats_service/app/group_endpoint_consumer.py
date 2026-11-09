@@ -11,10 +11,12 @@ Kafka-консюмер ОБЩЕГО / группового чата.
   edit_message  -> уже в БД (сделал endpoint), просто broadcast
   delete_message-> broadcast
   pin_message   -> broadcast
+  reactions, read -> broadcast (в БД уже записал эндпоинт)
 """
 import json
 import logging
 import asyncio
+import signal
 import time
 
 from kafka import KafkaConsumer
@@ -50,8 +52,12 @@ class GroupDBConsumer:
             bootstrap_servers=[KAFKA_BROKER],
             group_id="group-db-consumer-group",
             value_deserializer=lambda m: json.loads(m.decode("utf-8")),
-            auto_offset_reset="latest",
-            enable_auto_commit=True,
+            # earliest: если у группы нет offset (новая группа, сброс брокера),
+            # читаем топик с начала, а не теряем то, что пришло до входа.
+            # Повтор безопасен: add_message дедуплицирует по client_msg_id.
+            auto_offset_reset="earliest",
+            # offset сдвигаем руками только после успешной обработки
+            enable_auto_commit=False,
         )
         logger.info("[group-chat] консюмер инициализирован")
 
@@ -80,16 +86,29 @@ class GroupDBConsumer:
                         logger.error(f"[group-chat] bind files error: {fe}")
                         files = []
                     saved["files"] = files
+                    # отправитель прочитал всё до своего сообщения (как в TG).
+                    # Событие read не шлём: клиенты сдвигают отметку автора
+                    # сами по new_message. Сбой отметки не валит доставку.
+                    try:
+                        await self.group_db.mark_reads([{
+                            "room_uid": room_uid, "user_id": saved["user_id"],
+                            "username": saved.get("username") or "",
+                            "last_read_id": saved["id"],
+                        }])
+                    except Exception as re_:
+                        logger.error(f"[group-chat] mark read error: {re_}")
                     await self._broadcast(room_uid, {
                         "event": "new_message", "message": saved,
                     }, gateway_target)
-            elif event in ("edit_message", "delete_message", "pin_message"):
+            elif event in ("edit_message", "delete_message", "pin_message", "reactions", "read"):
                 # Фичи уже применены в БД эндпоинтом, консюмер только транслирует
                 await self._broadcast(room_uid, payload, gateway_target)
             else:
                 logger.warning(f"[group-chat] неизвестный event: {event}")
-        except Exception as e:
-            logger.error(f"[group-chat] process error: {e}")
+        except Exception:
+            logger.exception(f"[group-chat] process error event={event} "
+                             f"client_msg_id={payload.get('client_msg_id')}")
+            raise
 
     async def _broadcast(self, room_uid: str, event: dict, gateway_target: str):
         """Шлёт событие на гейтвеи. gateway_target: main | sigma | both."""
@@ -113,10 +132,31 @@ class GroupDBConsumer:
     async def consume(self):
         logger.info("[group-chat] GroupDBConsumer запущен")
         for kafka_message in self.consumer:
+            await self._handle_with_retry(kafka_message.value)
+            # коммит после обработки: упавший процесс перечитает сообщение
             try:
-                await self.process(kafka_message.value)
+                self.consumer.commit()
             except Exception as e:
-                logger.error(f"[group-chat] Kafka error: {e}")
+                logger.error(f"[group-chat] commit error: {e}")
+
+    MAX_ATTEMPTS = 5
+
+    async def _handle_with_retry(self, payload):
+        """Повторяет обработку с паузой 1, 2, 4, 8 с. Битое сообщение после
+        MAX_ATTEMPTS пропускаем с полным payload в логе, чтобы не встать навсегда."""
+        if not isinstance(payload, dict):
+            logger.error(f"[group-chat] пропущено не-JSON сообщение: {payload!r}"[:500])
+            return False
+        for attempt in range(1, self.MAX_ATTEMPTS + 1):
+            try:
+                await self.process(payload)
+                return True
+            except Exception:
+                if attempt == self.MAX_ATTEMPTS:
+                    logger.error(f"[group-chat] DROPPED после {attempt} попыток: "
+                                 f"{json.dumps(payload, ensure_ascii=False)[:2000]}")
+                    return False
+                await asyncio.sleep(2 ** (attempt - 1))
 
     async def close(self):
         if self.consumer:
@@ -125,7 +165,15 @@ class GroupDBConsumer:
             await self.db_chats.pool.close()
 
 
+def _raise_interrupt(signum, frame):
+    # docker stop шлёт SIGTERM. Без обработчика процесс убивается через 10 с
+    # SIGKILL, close() не вызывается, брокер ждёт таймаут сессии (~40 с)
+    # прежде чем отдать партиции новому участнику.
+    raise KeyboardInterrupt
+
+
 async def main():
+    signal.signal(signal.SIGTERM, _raise_interrupt)
     consumer = GroupDBConsumer()
     await consumer.init()
     try:

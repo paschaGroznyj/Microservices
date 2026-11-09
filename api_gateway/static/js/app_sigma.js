@@ -2039,6 +2039,10 @@ class ChatApp {
             }
             this._removeBotPlaceholder();
         }
+        // Задачник: карточки задач из истории (message.tasks) — внутри ответа, над текстом.
+        if (isBot && Array.isArray(message.tasks) && message.tasks.length && window.TaskCards) {
+            queueMicrotask(() => { if (messageEl.isConnected) window.TaskCards.mount(messageEl, message.tasks); });
+        }
 
         const actions = this.createMessageActions(message.id, rawContent, isBot, {
             messageId: message.message_id || message.id || '',
@@ -2504,11 +2508,26 @@ class ChatApp {
         }, { once: true });
     }
 
+    /** Пропорции карточки до загрузки по file.width/height (chat_files):
+     *  та же формула, что после load / loadedmetadata, поэтому лента не прыгает. */
+    _presizeMediaCard(card, file, minH) {
+        const w = Number(file && file.width), h = Number(file && file.height);
+        if (!card || !(w > 0) || !(h > 0)) return;
+        const MAX_W = 420, MAX_H = 420, MIN_W = 300;
+        const r = w / h;
+        let mw, mh;
+        if (r >= MAX_W / MAX_H) { mw = MAX_W; mh = Math.round(MAX_W / r); }
+        else { mh = MAX_H; mw = Math.round(MAX_H * r); }
+        const boxW = Math.min(MAX_W, Math.max(MIN_W, mw));
+        const boxH = Math.min(MAX_H, Math.max(minH, mh));
+        card.style.setProperty('--fa-card-w', boxW + 'px');
+        card.style.setProperty('--fa-card-ar', `${boxW} / ${boxH}`);
+    }
+
     _applyVideoCardAspect(videoEl) {
         if (!videoEl) return;
         const card = videoEl.closest('.fa-video-card');
         if (!card) return;
-        card.classList.remove('fa-image-card--loading');
         const vw = videoEl.videoWidth || 0;
         const vh = videoEl.videoHeight || 0;
         if (vw > 0 && vh > 0) {
@@ -2823,6 +2842,7 @@ class ChatApp {
             img.loading = 'lazy';
             img.src = url;
             card.classList.add('fa-image-card--loading');
+            this._presizeMediaCard(card, item.file, 110);
             let triedFallback = false;
             const applyCardAspect = () => {
                 card.classList.remove('fa-image-card--loading');
@@ -2900,8 +2920,8 @@ class ChatApp {
             item._dlBtn = dlBtn;
 
             const skel = document.createElement('div');
-            skel.className = 'fa-image-card__skeleton';
-            skel.innerHTML = '<div class="fa-pixel-grid"></div>';
+            skel.className = 'fa-image-card__skeleton fa-media-loader';
+            skel.innerHTML = window.MediaRing?.html(false) || '';
 
             card.appendChild(bg);
             card.appendChild(skel);
@@ -2919,14 +2939,15 @@ class ChatApp {
             const card = document.createElement('div');
             card.className = 'fa-image-card fa-video-card fa-image-card--loading';
             card.title = name;
+            this._presizeMediaCard(card, item.file, 180);
 
             const bg = document.createElement('span');
             bg.className = 'fa-image-card__bg';
             bg.setAttribute('aria-hidden', 'true');
 
             const skel = document.createElement('div');
-            skel.className = 'fa-image-card__skeleton';
-            skel.innerHTML = '<div class="fa-pixel-grid"></div>';
+            skel.className = 'fa-image-card__skeleton fa-media-loader';
+            skel.innerHTML = window.MediaRing?.html(true) || '';
 
             const video = document.createElement('video');
             video.className = 'fa-video-card__video';
@@ -2944,6 +2965,11 @@ class ChatApp {
             } else {
                 video.addEventListener('loadedmetadata', onMeta, { once: true });
             }
+            // лоадер снимаем по первому кадру (loadeddata), как у картинки по load:
+            // на loadedmetadata кадра ещё нет и вместо кольца видна пустая подложка
+            const onFrame = () => card.classList.remove('fa-image-card--loading');
+            if (video.readyState >= 2) onFrame();
+            else video.addEventListener('loadeddata', onFrame, { once: true });
             video.addEventListener('error', () => {
                 card.classList.remove('fa-image-card--loading');
             }, { once: true });
@@ -2991,8 +3017,8 @@ class ChatApp {
                 cell.title = item.name || '';
 
                 const skel = document.createElement('div');
-                skel.className = 'fa-image-card__skeleton';
-                skel.innerHTML = '<div class="fa-pixel-grid"></div>';
+                skel.className = 'fa-image-card__skeleton fa-media-loader';
+                skel.innerHTML = window.MediaRing?.html(item.isVideo) || '';
                 cell.appendChild(skel);
 
                 if (item.isVideo) {
@@ -3007,9 +3033,8 @@ class ChatApp {
                     this._bindVideoPreviewLoop(video, 5);
 
                     const onLoaded = () => cell.classList.remove('fa-collage__cell--loading');
-                    if (video.readyState >= 1) onLoaded();
+                    if (video.readyState >= 2) onLoaded();
                     else {
-                        video.addEventListener('loadedmetadata', onLoaded, { once: true });
                         video.addEventListener('loadeddata', onLoaded, { once: true });
                         video.addEventListener('error', onLoaded, { once: true });
                     }
@@ -3524,6 +3549,7 @@ class ChatApp {
                     chat_id:        this.currentChat,
                     message:        text,
                     message_id:     msgId,
+                    task_ids:       window.TaskHint?.consume(this.currentChat, text),   // ручной триггер задачника
                     type_agent:     'pm',
                     agent_model:    window.ModelPicker?.getModel() ?? 'coder',
                     selected_tools: window.ToolsPanel?.getSelectedCategories() ?? [],
@@ -3664,7 +3690,7 @@ class ChatApp {
        ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ: скелетон + лайтбокс
     ══════════════════════════════════════════ */
 
-    /** Показывает пиксельный скелетон генерации картинки в ленте.
+    /** Показывает скелетон генерации картинки в ленте (лоадер «Кольцо» + подпись).
      *  Живёт, пока тул generate_image работает; снимается, когда пришли
      *  реальные файлы (в _renderBotFiles) или ответ финализирован. */
     _showImageGenSkeleton() {
@@ -3677,10 +3703,7 @@ class ChatApp {
         skel.className = 'fa-image-gen-skeleton';
         skel.innerHTML = `
 <div class="fa-image-card fa-image-card--gen">
-  <div class="fa-image-card__skeleton">
-    <div class="fa-pixel-grid"></div>
-    <div class="fa-gen-scan"></div>
-  </div>
+  <div class="fa-image-card__skeleton fa-media-loader">${window.MediaRing?.html(false) || ''}</div>
   <div class="fa-gen-caption">
     <span class="fa-gen-dot"></span>
     <span class="fa-gen-caption__text">Генерация изображения…</span>
@@ -4559,6 +4582,7 @@ class ChatApp {
                     body.appendChild(step);
                 });
                 targetBotEl.insertBefore(wrap, targetBotEl.firstElementChild);
+                window.TaskCards?.place?.(targetBotEl);
             }
         }
     }
@@ -4607,6 +4631,7 @@ class ChatApp {
             }
         }
         st.reasoningWrapEl = wrap;
+        window.TaskCards?.place?.(st.pendingBotEl);   // задачи — сразу после рассуждений
         this._startReasoningTimer(chatId);
         return wrap.querySelector('.reasoning-body');
     }
@@ -5193,6 +5218,12 @@ class ChatApp {
                 failCount = 0;
 
                 const state = await resp.json();
+                // Задачник: у sigma нет WS — карточки задач приходят в ответе опроса статуса.
+                if (Array.isArray(state?.tasks) && window.TaskCards) {
+                    const _tcBox = this.getMessagesContainer?.();
+                    state.tasks.forEach(t => window.TaskCards.upsert(_tcBox, t, {}));
+                    state.tasks.forEach(t => window.TaskHint?.note(this, chatId, t));
+                }
                 if (state?.status === 'done' || state?.status === 'idle') {
                     // Сообщение уже сохранено в БД chats-consumer'ом —
                     // перечитываем историю чата и завершаем run.
@@ -5560,6 +5591,7 @@ class ChatApp {
             });
             el.appendChild(actions);
         }
+        window.TaskCards?.place?.(el);   // ответ дописан — карточки задач над .message-actions
 
         // Убираем placeholder и статусы через методы (с clearTimeout гарда)
         this._removeBotPlaceholder();
@@ -7157,6 +7189,7 @@ class ChatApp {
 
 /* ── Точка входа ──────────────────────────── */
 const app = window.__catchpmApp || new ChatApp();
+window.TaskHint?.watchSigma?.(app);   // задачник: SSE задач чата, когда агент не работает
 if (!window.__catchpmApp) {
     app.init();
 }

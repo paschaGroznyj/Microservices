@@ -145,6 +145,50 @@ def build_obs_key_from_name(chat_id: int | str, run_id: str, name: str) -> str:
     return f"{OBS_FILES_PREFIX}/{chat_id}/{run_id}__{os.path.basename(name)}"
 
 
+def has_unique_obs_key(local_path: str) -> bool:
+    """True, если ключ OBS для пути уникален (файл лежит в generated_files/{run_id}/).
+
+    Для /sandbox и файлов в корне generated_files run_id общий ("sandbox"/"root"),
+    одно и то же имя в разных запросах даёт один ключ — такой ключ OBS не
+    может отличить вчерашний файл от сегодняшнего.
+    """
+    run_id, _ = _run_id_and_name(local_path)
+    return run_id not in ("sandbox", "root")
+
+
+async def stat_object(obs_key: str) -> Optional[int]:
+    """Размер объекта в OBS (HEAD) либо None, если объекта нет или OBS недоступен."""
+    try:
+        async with AioSession().create_client(**_obs_params()) as client:
+            resp = await client.head_object(Bucket=_bucket(), Key=obs_key)
+        return int(resp.get("ContentLength") or 0)
+    except Exception as e:
+        log.info("[obs] head %s: %s", obs_key, e)
+        return None
+
+
+async def iter_object(obs_key: str, start: int = 0, end: Optional[int] = None,
+                      chunk_size: int = 256 * 1024):
+    """Стримит объект из OBS кусками (для StreamingResponse), с Range при start/end."""
+    kwargs = dict(Bucket=_bucket(), Key=obs_key)
+    if start or end is not None:
+        kwargs["Range"] = f"bytes={start}-" + ("" if end is None else str(end))
+    async with AioSession().create_client(**_obs_params()) as client:
+        resp = await client.get_object(**kwargs)
+        body = resp["Body"]
+        try:
+            while True:
+                chunk = await body.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            try:
+                body.close()
+            except Exception:
+                pass
+
+
 async def upload_user_file(local_path: str, chat_id: int | str) -> Optional[str]:
     """
     Заливает локальный файл в OBS под детерминированным ключом.

@@ -8,11 +8,41 @@
   // Пагинация истории общего чата: размер страницы и порог (px) от верха ленты.
   const GC_PAGE = 40;
   const GC_LOAD_EDGE = 400;
+  const GC_STICK_EDGE = 120;   // ближе к низу, чем столько px — лента «прилипает»
   const ROOM_UID = 'global';
   const IS_SIGMA = () => document.body?.dataset?.gateway === 'sigma' || /(?:^|\.)cds\./i.test(location.hostname) || /sigma/i.test(location.hostname);
   const COLLAPSE_MAX = 240; // px — порог сворачивания длинных сообщений (как у user-message)
 
   const GroupChat = {
+    // Единый лоадер медиа «Кольцо» (media-ring.js, стили .fa-ring в chat.css).
+    _ringHtml(isVideo = false) {
+      return window.MediaRing ? window.MediaRing.html(isVideo) : '';
+    },
+
+    /* group_message_files.width/height/thumbhash → data-атрибуты ячейки коллажа */
+    _mediaMetaAttrs(f) {
+      const px = (v) => { const n = Number(v); return Number.isInteger(n) && n > 0 && n <= 65535 ? n : 0; };
+      const w = px(f && f.width), h = px(f && f.height);
+      const th = (f && typeof f.thumbhash === 'string' && /^[A-Za-z0-9+/]{8,64}={0,2}$/.test(f.thumbhash)) ? f.thumbhash : '';
+      return (w && h ? ` data-w="${w}" data-h="${h}"` : '') + (th ? ` data-th="${th}"` : '');
+    },
+
+    /* Размер одиночной ячейки до загрузки — та же формула, что после load/loadedmetadata */
+    _presizeCell(cell, minH) {
+      const w = Number(cell.getAttribute('data-w')) || 0, h = Number(cell.getAttribute('data-h')) || 0;
+      if (!(w > 0) || !(h > 0)) return;
+      const MAX_W = 420, MAX_H = 420, MIN_W = 300;
+      const r = w / h;
+      let bw = MAX_W, bh = Math.round(MAX_W / r);
+      if (r < MAX_W / MAX_H) { bh = MAX_H; bw = Math.round(MAX_H * r); }
+      const boxW = Math.min(MAX_W, Math.max(MIN_W, bw));
+      const boxH = Math.min(MAX_H, Math.max(minH, bh));
+      const msgEl = cell.closest('.gc-msg--has-images');
+      if (msgEl) msgEl.style.setProperty('--gc-media-w', boxW + 'px');
+      cell.style.setProperty('--gc-cell-ar', `${boxW} / ${boxH}`);
+      if (boxW > bw + 2 || boxH > bh + 2) cell.classList.add('gc-collage__cell--glass');
+    },
+
     app: null,
     ws: null,
     es: null,
@@ -32,6 +62,12 @@
     _sidebarObserverBound: false,
     _audioCtx: null,
     _lastSoundAt: 0,
+    // непрочитанные: база с сервера + то, что видно в ленте
+    _unreadBase: null,     // {unread, mark, last} из reads
+    _unreadCount: 0,
+    _unreadSepId: null,    // id сообщения, над которым разделитель «Непрочитанные»
+    _unreadAnchor: false,  // держим разделитель на месте, пока догружаются медиа
+    _connectedOnce: false,
 
     _isGroupTabActive() {
       const navEl = document.querySelector('.nav-item[data-tab="group"]');
@@ -66,6 +102,13 @@
               n.replaceWith(lbl);
             }
           });
+        }
+        if (!navEl.querySelector('.gc-nav-count')) {
+          const cnt = document.createElement('span');
+          cnt.className = 'nav-badge gc-nav-count';
+          cnt.hidden = true;
+          const dotEl = navEl.querySelector('.gc-nav-dot');
+          if (dotEl) navEl.insertBefore(cnt, dotEl); else navEl.appendChild(cnt);
         }
         let dot = navEl.querySelector('.gc-nav-dot');
         if (!dot) {
@@ -276,6 +319,7 @@
       this._initAudioUnlock();
       this._bindVisibilityLifecycle();
       this._connectWs();
+      this._loadUnread();
     },
 
     open(app) {
@@ -331,16 +375,202 @@
     async _loadHistory() {
       if (window.__authSessionExpired) return;
       this._bindHistoryScroll();
+      // до того как лента встанет на место, видимые строки прочтением не считаем
+      window.GroupInteraction?.holdRead(true);
+      let opened = false;
       try {
         const res = await fetch(`/api/group/${ROOM_UID}/messages?limit=${GC_PAGE}`, { credentials: 'include', redirect: 'manual' });
         if (window.__isAuthRedirectOrUnauthorized?.(res)) { window.__onAuthSessionExpired?.(); return; }
         if (!res.ok) return;
         const data = await res.json();
+        // отметки прочтения до рендера: галочки сразу верные
+        window.GroupInteraction?.onHistory(data);
         this.messages = data.messages || [];
         this._hasMoreHistory = !!data.has_more;
-        this._renderAll();
-        this._maybeFillViewport();
+        this._unreadSepId = null;
+        this._unreadAnchor = false;
+        if (data.reads) this._setUnreadBase(data.reads);
+        const target = this._firstUnreadTarget(data.reads);
+        if (target) {
+          opened = true;
+          await this._openAtUnread(target);
+        } else {
+          this._stick = true;   // всё прочитано — низ ленты
+          this._renderAll();
+          this._maybeFillViewport();
+        }
       } catch (e) { console.warn('[group] history error', e); }
+      finally {
+        if (!opened) this._releaseReadHold();
+        this._recountUnread();
+      }
+    },
+
+    /* ---------- непрочитанные ---------- */
+
+    _onConnected() {
+      // первое подключение уже покрыто init/_loadHistory; после обрыва — догоняем
+      if (this._connectedOnce) this._loadUnread();
+      this._connectedOnce = true;
+    },
+
+    async _loadUnread() {
+      if (window.__authSessionExpired) return;
+      try {
+        const res = await fetch(`/api/group/${ROOM_UID}/unread`, { credentials: 'include', redirect: 'manual' });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data?.reads) return;
+        window.GroupInteraction?.onHistory(data);
+        this._setUnreadBase(data.reads);
+      } catch (e) { /* счётчик не критичен */ }
+    },
+
+    /* r: {unread, my_last_read_id, last_id}. Ответ, снятый раньше уже
+       известного, не затирает свежую базу (last_id только растёт). */
+    _setUnreadBase(r) {
+      const last = Number(r?.last_id) || 0;
+      if (this._unreadBase && last < this._unreadBase.last) return;
+      this._unreadBase = {
+        unread: Math.max(0, Number(r?.unread) || 0),
+        mark: Number(r?.my_last_read_id) || 0,
+        last,
+      };
+      this._recountUnread();
+    },
+
+    /* Счётчик = непрочитанные в ленте + непрочитанные старше ленты.
+       Свои сообщения не считаем. В ленте всё точно; то, что старше,
+       берём из базы сервера за вычетом уже загруженного. */
+    _recountUnread() {
+      const gi = window.GroupInteraction;
+      const myRead = Number(gi?.myRead) || 0;
+      const base = this._unreadBase;
+      const me = String(this.userId);
+      const mark = Math.max(base?.mark || 0, myRead);
+      let loaded = 0, loadedBase = 0, oldest = null;
+      for (const m of this.messages) {
+        const id = Number(m.id);
+        if (m._optimistic || !Number.isFinite(id) || id <= 0) continue;
+        if (oldest === null || id < oldest) oldest = id;
+        if (String(m.user_id) === me) continue;
+        if (base && id > base.mark && id <= base.last) loadedBase++;
+        if (id > mark) loaded++;
+      }
+      let outside = 0;
+      if (base) {
+        const rest = Math.max(0, base.unread - loadedBase);
+        // что-то загруженное прочитано -> всё, что старше ленты, тоже прочитано
+        const allOlderRead = oldest !== null ? myRead >= oldest : myRead >= base.last;
+        outside = allOlderRead ? 0 : rest;
+      }
+      const n = loaded + outside;
+      if (n === this._unreadCount && this._unreadRendered) return;
+      this._unreadCount = n;
+      this._unreadRendered = true;
+      this._renderUnreadBadge();
+      this._syncScrollArrow();
+    },
+
+    _renderUnreadBadge() {
+      const navEl = this._ensureNavElements();
+      const n = this._unreadCount;
+      const txt = n > 99 ? '99+' : String(n);
+      const cnt = navEl?.querySelector('.gc-nav-count');
+      if (cnt) {
+        cnt.hidden = n <= 0;
+        cnt.textContent = n > 0 ? txt : '';
+        navEl.classList.toggle('gc-has-count', n > 0);
+      }
+      const arrowCnt = document.querySelector('#gc-scroll-to-bottom-btn .gc-arrow-count');
+      if (arrowCnt) {
+        arrowCnt.hidden = n <= 0;
+        arrowCnt.textContent = n > 0 ? txt : '';
+      }
+    },
+
+    /* Первое непрочитанное. Локальная отметка может быть свежее серверной
+       (дебаунс ещё не ушёл), поэтому ищем по max из двух. Если сервер
+       говорит, что первое непрочитанное старше ленты, — догружаем до него. */
+    _firstUnreadTarget(r) {
+      if (!r || r.has_mark === false) return null;
+      const me = String(this.userId);
+      const mark = Math.max(Number(r.my_last_read_id) || 0, Number(window.GroupInteraction?.myRead) || 0);
+      const srv = Number(r.first_unread_id) || 0;
+      const oldest = this._oldestId();
+      if (srv && srv > mark && oldest !== null && srv < oldest) return srv;
+      for (const m of this.messages) {
+        const id = Number(m.id);
+        if (m._optimistic || !Number.isFinite(id)) continue;
+        if (id > mark && String(m.user_id) !== me) return id;
+      }
+      return null;
+    },
+
+    async _openAtUnread(target) {
+      const box = document.getElementById('gc-messages');
+      if (!box) { this._releaseReadHold(); return; }
+      this._stick = false;
+      this._unreadAnchor = true;
+      this._unreadSepId = target;
+      this._renderAll();
+      // первое непрочитанное старше страницы: догружаем, как к закрепу
+      for (let i = 0; !this._findUnreadRow(box) && this._hasMoreHistory && i < 10; i++) {
+        while (this._loadingOlder) await new Promise(r => setTimeout(r, 50));
+        if (!(await this._loadOlder())) break;
+      }
+      // сообщение могли удалить: разделитель над следующим загруженным
+      if (!this._findUnreadRow(box)) {
+        const me = String(this.userId);
+        const next = this.messages.find(m => !m._optimistic && Number(m.id) > target && String(m.user_id) !== me);
+        this._unreadSepId = next ? Number(next.id) : null;
+        this._renderAll();
+      }
+      if (!this._unreadSepId) {
+        this._unreadAnchor = false;
+        this._stick = true;
+        this._pinBottom(box);
+      } else {
+        this._scrollToUnreadSep(box);
+      }
+      this._releaseReadHold();
+    },
+
+    _findUnreadRow(box) {
+      return this._unreadSepId != null
+        ? box.querySelector(`.gc-row[data-id="${this._unreadSepId}"]`) : null;
+    },
+
+    /* Разделитель — у верхнего края ленты (под плашкой закрепа).
+       Если непрочитанных мало, scrollTop упирается в низ: это и есть низ ленты. */
+    _scrollToUnreadSep(box) {
+      box = box || document.getElementById('gc-messages');
+      const sep = box?.querySelector('.gc-unread-sep');
+      if (!sep) return;
+      const boxRect = box.getBoundingClientRect();
+      const pinBar = document.getElementById('gc-pinned');
+      const inset = (pinBar && !pinBar.hidden)
+        ? Math.max(0, pinBar.getBoundingClientRect().bottom - boxRect.top) + 8 : 8;
+      const top = (sep.getBoundingClientRect().top - boxRect.top) + box.scrollTop - inset;
+      const max = Math.max(0, box.scrollHeight - box.clientHeight);
+      const target = Math.max(0, Math.min(max, Math.round(top)));
+      if (Math.abs(box.scrollTop - target) > 1) {
+        this._autoPinning = true;
+        this._ignoreNextDateScroll = true;
+        box.scrollTop = target;
+        this._lastScrollTop = box.scrollTop;
+        requestAnimationFrame(() => { this._autoPinning = false; this._ignoreNextDateScroll = false; });
+      }
+      this._syncScrollArrow(box);
+      this._syncFloatingDate?.(box, false);
+    },
+
+    /* IntersectionObserver отдаёт видимость асинхронно: ждём два кадра,
+       чтобы прочтение считалось по строкам на новом месте, а не по старым. */
+    _releaseReadHold() {
+      const gi = window.GroupInteraction;
+      if (!gi?.holdRead) return;
+      requestAnimationFrame(() => requestAnimationFrame(() => gi.holdRead(false)));
     },
 
     /* id самого старого серверного сообщения в ленте (курсор для before_id) */
@@ -401,11 +631,57 @@
       const box = document.getElementById('gc-messages');
       if (!box || box._gcHistoryBound) return;
       box._gcHistoryBound = true;
+      this._lastScrollTop = box.scrollTop;
       box.addEventListener('scroll', () => {
+        // «прилипание» к низу: у низа — включаем, ушли вверх рукой — выключаем.
+        // Рост контента снизу (догрузка медиа) scrollTop не уменьшает,
+        // поэтому stick он не сбрасывает.
+        const top = box.scrollTop;
+        const dist = box.scrollHeight - top - box.clientHeight;
+        if (dist <= GC_STICK_EDGE) this._stick = true;
+        else if (top < this._lastScrollTop - 2 && !this._autoPinning) this._stick = false;
+        this._lastScrollTop = top;
         // программный скролл к закрепу сам догружает нужные страницы
         if (this._programmaticPinScroll) return;
         if (box.scrollTop < GC_LOAD_EDGE) this._loadOlder();
       }, { passive: true });
+      this._bindStickObserver(box);
+      const release = () => { this._unreadAnchor = false; };
+      ['wheel', 'touchstart', 'mousedown', 'keydown'].forEach(ev =>
+        box.addEventListener(ev, release, { passive: true }));
+    },
+
+    /* Медиа догружаются после рендера и меняют высоту строк. Если лента
+       «прилипла» к низу, после каждого изменения размеров возвращаем её
+       вниз, чтобы последнее сообщение не уезжало под поле ввода. */
+    _bindStickObserver(box) {
+      if (!box || typeof ResizeObserver === 'undefined' || this._stickRo) return;
+      this._stickRo = new ResizeObserver(() => {
+        if (this._programmaticPinScroll) return;
+        if (this._unreadAnchor) this._scrollToUnreadSep(box);
+        else if (this._stick) this._pinBottom(box);
+      });
+      this._stickRo.observe(box);
+    },
+
+    _observeRows(box) {
+      if (!this._stickRo || !box) return;
+      this._stickRo.disconnect();
+      this._stickRo.observe(box);
+      box.querySelectorAll(':scope > .gc-row').forEach(r => this._stickRo.observe(r));
+    },
+
+    _pinBottom(box) {
+      box = box || document.getElementById('gc-messages');
+      if (!box) return;
+      const target = box.scrollHeight - box.clientHeight;
+      if (Math.abs(box.scrollTop - target) <= 1) return;
+      this._autoPinning = true;
+      this._ignoreNextDateScroll = true;
+      box.scrollTop = box.scrollHeight;
+      this._lastScrollTop = box.scrollTop;
+      requestAnimationFrame(() => { this._autoPinning = false; this._ignoreNextDateScroll = false; });
+      this._syncScrollArrow(box);
     },
 
     _setHistoryLoader(on) {
@@ -526,6 +802,7 @@
       } catch (e) { return; }
       this.ws.onopen = () => {
         this._reconnectAttempts = 0;
+        this._onConnected();
       };
       this.ws.onmessage = (ev) => {
         this._reconnectAttempts = 0;
@@ -547,6 +824,7 @@
       } catch (e) { return; }
       this.es.onopen = () => {
         this._reconnectAttempts = 0;
+        this._onConnected();
       };
       this.es.addEventListener('group', (ev) => {
         this._reconnectAttempts = 0;
@@ -563,6 +841,7 @@
     _onEvent(data) {
       const ev = data.event;
       if (ev === 'new_message' && data.message) {
+        window.GroupInteraction?.onNewMessage(data.message);
         this._upsertMessage(data.message);
       } else if (ev === 'edit_message' && data.message) {
         this._upsertMessage(data.message);
@@ -572,6 +851,11 @@
       } else if (ev === 'pin_message' && data.message) {
         this._upsertMessage(data.message);
         this._loadPinned();
+      } else if (ev === 'reactions') {
+        // точечно патчим .gc-meta, без _renderAll (не перезапускаем лоадеры медиа)
+        window.GroupInteraction?.onEvent(data);
+      } else if (ev === 'read') {
+        window.GroupInteraction?.onRead(data);
       }
     },
 
@@ -595,6 +879,7 @@
         }
       }
       if (this.opened) this._renderAll();
+      this._recountUnread();
     },
 
     // Удаление сообщения (отыгрывается у всех на приём события delete_message).
@@ -602,6 +887,7 @@
       this.messages = this.messages.filter(m => m.id !== messageId);
       this._renderAll();
       this._loadPinned();
+      this._recountUnread();
     },
 
     async _send(text) {
@@ -638,6 +924,9 @@
         try { window.FileAttach?.clear?.(); } catch (e) {}
         this._syncInputBtn();
       }
+      this._stick = true;   // своё сообщение — всегда прокручиваем к низу
+      this._unreadAnchor = false;
+      this._unreadSepId = null;
       this._renderAll();
       // 1) заливаем файлы (если есть) в OBS через chats_service
       if (files.length) {
@@ -665,13 +954,19 @@
         }
       }
       // 2) отправляем сообщение (консюмер доклеит файлы по client_msg_id)
-      try {
-        await fetch(`/api/group/${ROOM_UID}/send`, {
-          method: 'POST', credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: text, client_msg_id: clientId }),
-        });
-      } catch (e) { console.warn('[group] send error', e); }
+      // повтор с тем же client_msg_id: консюмер не вставит дубль
+      for (let attempt = 0; attempt < 4; attempt++) {
+        try {
+          const r = await fetch(`/api/group/${ROOM_UID}/send`, {
+            method: 'POST', credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: text, client_msg_id: clientId }),
+          });
+          if (r.ok || r.status < 500) break;
+          console.warn('[group] send status', r.status);
+        } catch (e) { console.warn('[group] send error', e); }
+        await new Promise(res => setTimeout(res, 1000 * 2 ** attempt));
+      }
     },
 
     async _delete(id) {
@@ -920,7 +1215,9 @@
       // (new_message/edit/pin/loadPinned), его кидало в начало ленты.
       // Запоминаем позицию и держим её, если пользователь НЕ у низа.
       const prevTop = box.scrollTop;
-      const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
+      const nearBottom = this._stick !== undefined
+        ? !!this._stick
+        : box.scrollHeight - box.scrollTop - box.clientHeight < GC_STICK_EDGE;
       let lastDateKey = '';
       const chunks = [];
       if (this._hasMoreHistory) {
@@ -933,6 +1230,9 @@
           chunks.push(
             `<div class="gc-date-sep" data-date-key="${di.key}" data-date-label="${this._esc(di.label)}"><span class="gc-date-pill">${this._esc(di.label)}</span></div>`
           );
+        }
+        if (this._unreadSepId != null && Number(m.id) === Number(this._unreadSepId)) {
+          chunks.push('<div class="gc-unread-sep"><span>Непрочитанные сообщения</span></div>');
         }
         chunks.push(this._msgHtml(m, di));
       }
@@ -947,10 +1247,13 @@
         if (ph === 'upload' || ph === 'processing' || ph === 'error') m._upload.repaint();
       }
       this._ignoreNextDateScroll = true;
+      this._autoPinning = true;
       if (keepFromBottom) box.scrollTop = box.scrollHeight - fromBottom;
       else if (nearBottom) box.scrollTop = box.scrollHeight;
       else box.scrollTop = prevTop;
-      requestAnimationFrame(() => { this._ignoreNextDateScroll = false; });
+      this._lastScrollTop = box.scrollTop;
+      this._observeRows(box);
+      requestAnimationFrame(() => { this._ignoreNextDateScroll = false; this._autoPinning = false; });
       this._syncScrollArrow(box);
       this._syncFloatingDate(box, false);
     },
@@ -985,13 +1288,19 @@
         : (hasImages
             ? (hasCaption ? ' gc-msg--has-images gc-msg--with-caption' : ' gc-msg--has-images gc-msg--media-only')
             : '');
-      const metaHtml = `<div class="gc-meta">${pin}${edited}<span class="gc-time">${this._fmtTime(m.created_at)}</span></div>`;
+      const reacts = (!m._optimistic && window.GroupInteraction) ? window.GroupInteraction.chipsHtml(m) : '';
+      // медиа без подписи: реакции под облаком, снаружи, как в Telegram
+      const mediaOnly = hasImages && !hasCaption && !audioOnly;
+      const metaHtml = `<div class="gc-meta">${mediaOnly ? '' : reacts}${pin}${edited}<span class="gc-time">${this._fmtTime(m.created_at)}</span>${window.GroupInteraction ? window.GroupInteraction.ticksHtml(m) : ''}</div>`;
+      const reactsRow = mediaOnly
+        ? `<div class="gc-msg__reacts ${mine ? 'gc-msg__reacts--mine' : 'gc-msg__reacts--other'}">${reacts}</div>`
+        : '';
       const innerHtml = audioOnly
         ? `${audiosHtml}${metaHtml}`
         : (hasImages
             ? (hasCaption
                 ? `${mediaTop}<div class="gc-msg__caption">${mediaParts.docs}${textBlock}${metaHtml}</div>`
-                : `${mediaTop}${metaHtml}`)
+                : `<div class="gc-msg__media">${mediaTop}${metaHtml}</div>`)
             : `${mediaParts.docs}${textBlock}${metaHtml}`);
       const topAudios = (!audioOnly && hasAudios) ? audiosHtml : '';
       return `<div class="gc-row ${mine ? 'gc-row--mine' : ''}" data-id="${m.id}" data-mine="${mine ? 1 : 0}" data-pinned="${m.is_pinned ? 1 : 0}" data-can-del="${canDel ? 1 : 0}" data-can-edit="${canEdit ? 1 : 0}" data-can-pin="${canPin ? 1 : 0}">
@@ -1000,6 +1309,7 @@
         <div class="${cls}${bubbleMod}">
           ${innerHtml}
         </div>
+        ${reactsRow}
       </div>`;
     },
 
@@ -1066,17 +1376,19 @@
           const url = this._esc(this._fileUrl(f));
           const isVid = !f.is_image && this._isVideo(f);
           const name = this._esc(f.file_name || (isVid ? 'video.mp4' : 'image'));
+          const sz = Number(f.size_bytes || f.file_size || f.size) || 0;
           const more = (n > 4 && i === 3) ? `<span class="gc-collage__more">+${n - 4}</span>` : '';
+          const meta = this._mediaMetaAttrs(f);
           
           if (isVid) {
             const vmime = this._esc(this._videoMime(f));
             if (n === 1) {
               // Одиночное видео рендерится сразу с контролами в размер
               const dlUrl = url + (url.indexOf('/api/group/file/') === 0 ? '?download=1' : '');
-              return `<div class="gc-collage__cell gc-collage__cell--video-single" data-img-idx="0">
+              return `<div class="gc-collage__cell gc-collage__cell--video-single" data-img-idx="0"${meta}>
                 <span class="gc-collage__bg" aria-hidden="true"></span>
-                <video class="gc-video" controls preload="metadata" playsinline webkit-playsinline src="${url}">
-                  <source src="${url}" type="${vmime}">
+                <span class="gc-collage__loader" aria-hidden="true">${GroupChat._ringHtml(true)}</span>
+                <video class="gc-video" data-size="${sz}" controls preload="metadata" playsinline webkit-playsinline src="${url}">
                 </video>
                 <a class="image-lightbox__dl fa-card-dl-btn" href="${dlUrl}" download="${name}" title="Скачать" onclick="event.stopPropagation()">
                   <svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -1085,8 +1397,9 @@
             } else {
               // Видео в сетке 2x2/3x3 - просто превью (первый кадр) + кнопка Play поверх
               const dlUrl = url + (url.indexOf('/api/group/file/') === 0 ? '?download=1' : '');
-              return `<div class="gc-collage__cell gc-collage__cell--video-thumb" role="button" tabindex="0" data-lb="1" data-img-idx="${i}" title="${name}">
-                <video class="gc-collage__thumb-video" data-src="${url}" preload="metadata" autoplay playsinline webkit-playsinline muted></video>
+              return `<div class="gc-collage__cell gc-collage__cell--video-thumb" role="button" tabindex="0" data-lb="1" data-img-idx="${i}" title="${name}"${meta}>
+                <span class="gc-collage__loader" aria-hidden="true">${GroupChat._ringHtml(true)}</span>
+                <video class="gc-collage__thumb-video" data-size="${sz}" data-src="${url}" preload="metadata" autoplay playsinline webkit-playsinline muted></video>
                 <span class="gc-collage__play"><svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
                 ${more}
               </div>`;
@@ -1096,9 +1409,10 @@
             const dlBtn = (n === 1) ? `<a class="image-lightbox__dl fa-card-dl-btn" href="${dlUrl}" download="${name}" title="Скачать" onclick="event.stopPropagation()">
               <svg viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </a>` : '';
-            return `<div class="gc-collage__cell" role="button" tabindex="0" data-lb="1" data-img-idx="${i}">
+            return `<div class="gc-collage__cell" role="button" tabindex="0" data-lb="1" data-img-idx="${i}"${meta}>
               <span class="gc-collage__bg" data-bg="${url}" aria-hidden="true"></span>
-              <img src="${url}" alt="${name}" loading="lazy" decoding="async">${more}
+              <span class="gc-collage__loader" aria-hidden="true">${GroupChat._ringHtml(false)}</span>
+              <img data-ring-src="${url}" data-size="${sz}" alt="${name}" decoding="async">${more}
               ${dlBtn}
             </div>`;
           }
@@ -1110,7 +1424,8 @@
             url: this._fileUrl(f),
             name: f.file_name || (f.is_image ? 'image' : 'video'),
             isVideo: (!f.is_image && this._isVideo(f)),
-            mime: this._videoMime(f)
+            mime: this._videoMime(f),
+            size: Number(f.size_bytes || f.file_size || f.size) || 0
           };
         });
         
@@ -1182,6 +1497,7 @@
 
       let scale = 1, panX = 0, panY = 0;
       let currentMedia = null;
+      let renderSeq = 0;
       
       const applyTransform = () => {
         if (!currentMedia || currentMedia.tagName === 'VIDEO') return;
@@ -1203,6 +1519,25 @@
         
         container.innerHTML = '';
         resetZoom();
+
+        // Лоадер «Кольцо»: is-loading → is-ready / is-error; события старого медиа игнорируются
+        const token = ++renderSeq;
+        container.classList.remove('is-ready', 'is-error');
+        container.classList.add('is-loading');
+        const loader = document.createElement('div');
+        loader.className = 'image-lightbox__loader';
+        loader.innerHTML = GroupChat._ringHtml(!!it.isVideo) + '<span class="image-lightbox__loader-text">Не удалось загрузить</span>';
+        container.appendChild(loader);
+        const markReady = () => {
+          if (token !== renderSeq) return;
+          container.classList.remove('is-loading', 'is-error');
+          container.classList.add('is-ready');
+        };
+        const markError = () => {
+          if (token !== renderSeq) return;
+          container.classList.remove('is-loading', 'is-ready');
+          container.classList.add('is-error');
+        };
         
         if (it.isVideo) {
           const vid = document.createElement('video');
@@ -1210,15 +1545,23 @@
           vid.controls = true;
           vid.autoplay = true;
           vid.playsInline = true;
+          vid.addEventListener('loadedmetadata', markReady, { once: true });
+          vid.addEventListener('loadeddata', markReady, { once: true });
+          vid.addEventListener('error', markError, { once: true });
           vid.src = it.url;
           container.appendChild(vid);
+          if (window.MediaRing) window.MediaRing.bindVideo(vid, loader, it.size);
           currentMedia = vid;
         } else {
           const img = document.createElement('img');
           img.className = 'image-lightbox__img';
-          img.src = it.url;
+          img.addEventListener('load', markReady, { once: true });
+          img.addEventListener('error', markError, { once: true });
           container.appendChild(img);
+          if (window.MediaRing) window.MediaRing.loadImage(img, it.url, loader, { total: it.size, lazy: false });
+          else img.src = it.url;
           currentMedia = img;
+          if (img.complete && img.naturalWidth > 0) markReady();
           
           let dragging = false, lastX, lastY;
           let touchStartDist = 0, touchStartScale = 1;
@@ -1363,6 +1706,11 @@
         if (!itemsAttr) return;
         const items = JSON.parse(itemsAttr);
         const isOne = col.classList.contains('gc-collage--one');
+        col.querySelectorAll('.gc-collage__cell').forEach((cell) => {
+          const th = cell.getAttribute('data-th');
+          if (th && window.MediaRing) window.MediaRing.placeholder(cell.querySelector('.gc-collage__loader'), th);
+          if (isOne) this._presizeCell(cell, cell.classList.contains('gc-collage__cell--video-single') ? 180 : 110);
+        });
         
         col.querySelectorAll('[data-lb]').forEach((cell) => {
           cell.onclick = (e) => {
@@ -1392,7 +1740,16 @@
             };
             if (img.complete && img.naturalWidth > 0) done();
             else { img.addEventListener('load', done, { once: true }); img.addEventListener('error', done, { once: true }); }
+            // загрузка с прогрессом на кольце (src задаётся только здесь)
+            const rsrc = img.getAttribute('data-ring-src');
+            if (rsrc) {
+              img.removeAttribute('data-ring-src');
+              const ldr = cell.querySelector('.gc-collage__loader');
+              if (window.MediaRing) window.MediaRing.loadImage(img, rsrc, ldr, { total: img.getAttribute('data-size'), lazy: true });
+              else img.src = rsrc;
+            }
           } else if (vidThumb) {
+            if (window.MediaRing) window.MediaRing.bindVideo(vidThumb, cell.querySelector('.gc-collage__loader'), vidThumb.getAttribute('data-size'));
             vidThumb.muted = true;
             vidThumb.defaultMuted = true;
             vidThumb.autoplay = true;
@@ -1413,16 +1770,24 @@
                 if (pr && typeof pr.catch === 'function') pr.catch(() => {});
               }
             };
-            if (vidThumb.readyState >= 1) doneVid();
-            else vidThumb.addEventListener('loadedmetadata', doneVid, { once: true });
+            if (vidThumb.readyState >= 2) doneVid();
+            else vidThumb.addEventListener('loadeddata', doneVid, { once: true });
           }
         });
         
         // Для одиночного видео прямо в чате
         col.querySelectorAll('.gc-collage__cell--video-single .gc-video').forEach(vid => {
           const wrap = vid.closest('.gc-collage__cell--video-single');
+          if (window.MediaRing && wrap) window.MediaRing.bindVideo(vid, wrap.querySelector('.gc-collage__loader'), vid.getAttribute('data-size'));
+          // кольцо гаснет по первому кадру, размеры ячейки — по метаданным
+          const markLoaded = () => wrap.classList.add('is-loaded');
+          if (vid.readyState >= 2) markLoaded();
+          else {
+            vid.addEventListener('loadeddata', markLoaded, { once: true });
+            vid.addEventListener('error', markLoaded, { once: true });
+            vid.addEventListener('loadedmetadata', () => setTimeout(markLoaded, 4000), { once: true });
+          }
           const doneVid = () => {
-            wrap.classList.add('is-loaded');
             const vw = vid.videoWidth || 0, vh = vid.videoHeight || 0;
             if (vw > 0 && vh > 0) {
               const MAX_W = 420; const MAX_H = 420; const MIN_W = 300; const MIN_H = 180;
@@ -1528,10 +1893,13 @@
             <path d="M12 5v14M18 13l-6 6-6-6"
                   stroke="currentColor" stroke-width="2"
                   stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>`;
+          </svg>
+          <span class="gc-arrow-count" hidden></span>`;
         btn.addEventListener('click', () => {
           const box = document.getElementById('gc-messages');
           if (box) {
+            this._unreadAnchor = false;
+            this._stick = true;
             box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' });
           }
           btn.classList.remove('visible');
@@ -1545,12 +1913,19 @@
       box = box || document.getElementById('gc-messages');
       const btn = this._ensureScrollArrowBtn();
       if (!btn) return;
+      const arrowCnt = btn.querySelector('.gc-arrow-count');
+      if (arrowCnt) {
+        const n = this._unreadCount || 0;
+        arrowCnt.hidden = n <= 0;
+        arrowCnt.textContent = n > 0 ? (n > 99 ? '99+' : String(n)) : '';
+      }
       if (!box) {
         btn.classList.remove('visible');
         return;
       }
       const distFromBottom = box.scrollHeight - box.scrollTop - box.clientHeight;
-      if (distFromBottom > 500) {
+      // с непрочитанными ниже кадра кнопка нужна и на небольшом расстоянии
+      if (distFromBottom > 500 || (this._unreadCount > 0 && distFromBottom > GC_STICK_EDGE)) {
         btn.classList.add('visible');
       } else {
         btn.classList.remove('visible');
@@ -1706,6 +2081,8 @@
       const initialTarget = this._computePinTargetTop(box, row);
       const dist = Math.abs(startTop - initialTarget);
 
+      this._stick = false;   // переход к закрепу — не тянем обратно вниз
+      this._unreadAnchor = false;
       this._programmaticPinScroll = true;
       this._lastPinJumpTarget = initialTarget;
 
@@ -1757,6 +2134,8 @@
           };
         });
       });
+      window.GroupInteraction?.bindChips(box);
+      window.GroupInteraction?.observe(box);
     },
 
     _closeCtxMenu() {
@@ -1768,38 +2147,27 @@
 
     _showCtxMenu(e, row) {
       this._closeCtxMenu();
-      const id = Number(row.dataset.id);
-      const canDel = row.dataset.canDel === '1';
-      const canEdit = row.dataset.canEdit === '1';
-      const canPin = row.dataset.canPin === '1';
+      const GI = window.GroupInteraction;
+      if (!GI) return;
+      const rawId = row.dataset.id;
+      const id = Number(rawId);
       const pinned = row.dataset.pinned === '1';
-      if (!canDel && !canPin && !canEdit) return;
-      const menu = document.createElement('div');
-      menu.className = 'gc-ctx-menu';
-      menu.id = 'gc-ctx-menu';
-      const items = [];
-      if (canEdit) items.push(`<button class="gc-ctx-item" data-act="edit">Изменить</button>`);
-      if (canPin) items.push(`<button class="gc-ctx-item" data-act="pin">${pinned ? 'Открепить' : 'Закрепить в шапке'}</button>`);
-      if (canDel) items.push(`<button class="gc-ctx-item gc-ctx-item--danger" data-act="del">Удалить</button>`);
-      menu.innerHTML = items.join('');
-      document.body.appendChild(menu);
-      const mw = menu.offsetWidth, mh = menu.offsetHeight;
-      let x = e.clientX, y = e.clientY;
-      if (x + mw > window.innerWidth - 8) x = window.innerWidth - mw - 8;
-      if (y + mh > window.innerHeight - 8) y = window.innerHeight - mh - 8;
-      menu.style.left = x + 'px';
-      menu.style.top = y + 'px';
-      menu.querySelectorAll('.gc-ctx-item').forEach(btn => {
-        btn.onclick = () => {
-          const act = btn.dataset.act;
+      const message = this.messages.find(m => String(m.id) === rawId);
+      const menu = GI.openMenu(e, {
+        id, message, pinned,
+        canDel: row.dataset.canDel === '1',
+        canEdit: row.dataset.canEdit === '1',
+        canPin: row.dataset.canPin === '1',
+        onAction: (act) => {
           if (act === 'del') this._delete(id);
           else if (act === 'pin') this._pin(id, !pinned);
           else if (act === 'edit') this._startEdit(id);
-          this._closeCtxMenu();
-        };
+        },
+        onClose: () => this._closeCtxMenu(),
       });
+      if (!menu) return;
       this._ctxCloseHandler = (ev) => {
-        if (!menu.contains(ev.target)) this._closeCtxMenu();
+        if (!menu.isConnected || !menu.contains(ev.target)) this._closeCtxMenu();
       };
       setTimeout(() => {
         document.addEventListener('click', this._ctxCloseHandler, true);

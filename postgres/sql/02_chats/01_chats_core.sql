@@ -61,8 +61,20 @@ CREATE TABLE IF NOT EXISTS chat_files (
     file_path  TEXT,
     file_kind  TEXT,
     image_key  TEXT,
+    file_size  BIGINT,
+    thumbhash  TEXT,
+    width      INTEGER,
+    height     INTEGER,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Размер файла в байтах (для индикатора загрузки на фронте); для старых баз.
+ALTER TABLE chat_files ADD COLUMN IF NOT EXISTS file_size BIGINT;
+-- ThumbHash (base64) — размытая заглушка картинки/видео до загрузки оригинала.
+ALTER TABLE chat_files ADD COLUMN IF NOT EXISTS thumbhash TEXT;
+-- Размер картинки / кадра видео в пикселях: фронт сразу резервирует место под карточку.
+ALTER TABLE chat_files ADD COLUMN IF NOT EXISTS width INTEGER;
+ALTER TABLE chat_files ADD COLUMN IF NOT EXISTS height INTEGER;
 
 CREATE INDEX IF NOT EXISTS ix_chat_files_message_id ON chat_files(message_id);
 CREATE INDEX IF NOT EXISTS ix_chat_files_chat_id ON chat_files(chat_id);

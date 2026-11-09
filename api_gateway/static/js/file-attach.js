@@ -93,6 +93,7 @@ const FileAttach = (() => {
         return _files.map(f => ({
             name: f.name,
             ext:  _getExt(f.name),
+            size: (typeof f.size === 'number' && f.size >= 0) ? f.size : null,
         }));
     }
 

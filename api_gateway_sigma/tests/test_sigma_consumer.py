@@ -18,7 +18,8 @@ def test_sanitize_strips_path_keeps_public_fields():
              "kind": "doc", "image_key": "k1"}]
     out = _sanitize_files(files)
     assert out == [{"name": "report.PDF", "ext": "pdf",
-                   "kind": "doc", "image_key": "k1"}]
+                   "kind": "doc", "image_key": "k1", "size": None, "thumbhash": None,
+                   "width": None, "height": None}]
     assert "path" not in out[0]
 
 
@@ -71,7 +72,8 @@ def test_handle_bot_message_marks_done(consumer):
     assert chat_id == 7
     assert msg["is_from_bot"] is True
     assert msg["message"] == "готово"
-    assert msg["files"] == [{"name": "a.png", "ext": "png", "kind": "img", "image_key": "k"}]
+    assert msg["files"] == [{"name": "a.png", "ext": "png", "kind": "img", "image_key": "k", "size": None, "thumbhash": None,
+                             "width": None, "height": None}]
 
 
 def test_handle_swallows_bad_payload(consumer):

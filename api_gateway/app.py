@@ -30,6 +30,8 @@ import presence
 import run_status
 import cache_bust
 import group_chat_gw
+import reactions_bus
+import reads_bus
 import editor_gw
 import os
 import max_chats_gw
@@ -61,6 +63,12 @@ async def lifespan(app: FastAPI):
         admin_usernames=ADMIN_USERNAMES,
     )
 
+    # Реакции общего чата: Redis-шина с дебаунсом 1 с
+    reactions_bus.bind(app.state.http_client, SERVICES['chats']['url'])
+    reactions_bus.start()
+    reads_bus.bind(app.state.http_client, SERVICES['chats']['url'])
+    reads_bus.start()
+
     editor_gw.bind(
         http_client=app.state.http_client,
         chats_url=SERVICES['chats']['url'],
@@ -80,6 +88,8 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down API Gateway...")
+    await reactions_bus.stop()
+    await reads_bus.stop()
     await app.state.http_client.aclose()
 app = FastAPI(title="API Gateway", lifespan=lifespan, docs_url=None)
 app.include_router(group_chat_gw.router)
@@ -115,6 +125,8 @@ SERVICES = {
 BASE_DIR = Path(__file__).resolve().parent
 # Статика и шаблоны
 app.middleware("http")(cache_bust.cache_bust_middleware)
+# Monaco из образа — до /static (см. cache_bust.mount_vendor_monaco).
+cache_bust.mount_vendor_monaco(app)
 app.mount("/static", cache_bust.CacheBustStaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = cache_bust.CacheBustTemplates(directory=BASE_DIR / "templates")
 
@@ -2262,3 +2274,19 @@ async def status_page(request: Request):
 #         port=int(PORT_GATEWAY_PORT),
 #         reload=True
 #     )
+
+
+# ── ЗАДАЧНИК (task_gw.py): карточки фоновых задач по WS и служебный вход агента ──
+import task_gw as _task_gw
+
+
+def _task_register(request_id, chat_id):
+    pending_requests[request_id] = chat_id
+
+
+async def _task_mark_running(chat_id, request_id):
+    await run_status.mark_running(chat_id, request_id)
+
+
+_task_gw.bind(push=broadcast, register=_task_register, mark_running=_task_mark_running)
+app.include_router(_task_gw.router)

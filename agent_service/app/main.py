@@ -8,6 +8,11 @@ import logging
 import base64
 import uuid
 import asyncio
+from task_trigger import (
+    TASK_TRIGGER_USER_ID, is_task_trigger, owner_user_id as task_owner_user_id,
+    build_message as build_task_trigger_message, payload_tasks as task_trigger_tasks,
+    build_manual_block as build_manual_tasks_block,
+)
 from urllib.parse import quote
 from httpx import AsyncClient
 from datetime import datetime, timezone
@@ -29,6 +34,8 @@ from agent.mobile.action_parser import parse_mobile_response
 from agent.tools.content.tool_generate_audio import audio_generator
 from agent.core.db import AgentDB
 from agent.core import obs_file_storage
+from agent.core import sandbox_scripts_cleaner
+from agent.media.thumbhash import media_meta_for_file, image_meta
 from api.web_ui import web_router, pending_files, set_db as _set_web_ui_db, set_active_tasks as _set_web_ui_tasks
 
 
@@ -155,6 +162,18 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     loop_tick = bool(payload.get("loop_tick", False))
     loop_instruction = payload.get("loop_instruction")
 
+    # ЗАДАЧНИК: служебный вход после фоновой задачи (task_trigger.py).
+    # Приходит от chats_service с user_id=-2; права и память — от владельца задачи.
+    task_trigger = is_task_trigger(payload)
+    if user_id == TASK_TRIGGER_USER_ID and not task_trigger:
+        return
+    if task_trigger:
+        _owner_uid = task_owner_user_id(payload)
+        if _owner_uid is None:
+            logging.warning(f"[task-trigger] нет владельца задачи, вход отброшен chat={chat_id}")
+            return
+        user_id = _owner_uid
+
 
     # Служебный тик петли (loop_tick, user_id=-100) ДОЛЖЕН пройти гейт: это
     # новый вход от сервиса, не ответ бота. Остальные bot/‑сообщения и user_id=-1 — отсекаем.
@@ -233,6 +252,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                 )
         else:
             message = build_max_prefix(username, deliver_chat_id or chat_id, _chat_type_max) + text
+    elif task_trigger:
+        message = build_task_trigger_message(payload)
     elif loop_tick:
         # Самоцикл: служебный тик. Текст уже содержит установку (из consumer).
         # Даём спец-шапку вместо табельного (tb_name/username у сервиса пустые).
@@ -245,6 +266,9 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
         )
     else:
         message = f"[CatchPM, ТабельНомер: {tb_name}, Пользователь: {username}, chat_id: {chat_id}, user_id: {user_id}]\n" + text
+    # Задачник, ручной триггер: результаты задач приложены к сообщению пользователя.
+    if payload.get("manual_tasks") and not task_trigger:
+        message += build_manual_tasks_block(payload.get("manual_tasks"))
 
     if is_mobile:
         from agent.mobile.mobile_settings import (build_agent_instruction, LIMIT_VOICE_TEXT,
@@ -452,6 +476,23 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                         "kind": f.get("kind"),
                     }
 
+                # Размер для фронта (chat_files.file_size): сколько байт ждать.
+                _p = entry.get("path")
+                if _p and os.path.isfile(_p):
+                    try:
+                        entry["size"] = os.path.getsize(_p)
+                    except OSError:
+                        pass
+                    # Размытая заглушка (chat_files.thumbhash) и размер в пикселях
+                    # (width/height) для картинок и видео: фронт сразу ставит
+                    # карточке нужные пропорции и рисует заглушку под кольцом.
+                    if entry.get("kind") in ("image", "video") or not entry.get("kind"):
+                        try:
+                            _meta = await asyncio.to_thread(media_meta_for_file, _p, entry.get("kind"))
+                            entry.update(_meta)
+                        except Exception as _th_err:
+                            logging.info(f"thumbhash: {_p}: {_th_err}")
+
                 # Для Telegram host-бот изолирован от ФС агента (разные контейнеры),
                 # поэтому os.path.exists(path) на его стороне вернёт False и файл
                 # молча не отправится. Дочитываем байты ЗДЕСЬ и кладём base64 в
@@ -508,6 +549,34 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                         logging.error(f"[telegram] не удалось прочитать файл в base64: {_b64_err}")
 
                 attached_files.append(entry)
+
+        # Картинки generate_image лежат в generated_images без файла на диске:
+        # размер (chat_files.file_size), thumbhash и width/height считаем по байтам из БД.
+        if attached_files:
+            _need = [f.get("image_key") for f in attached_files
+                     if f.get("image_key") and (f.get("size") is None or not f.get("thumbhash") or not f.get("width"))]
+            if _need:
+                try:
+                    async with db.pool.acquire() as conn:
+                        _rows = await conn.fetch(
+                            "SELECT image_key::text AS k, octet_length(image_data) AS n, image_data AS d "
+                            "FROM generated_images WHERE image_key::text = ANY($1::text[])",
+                            [str(k) for k in _need],
+                        )
+                    _by_key = {r["k"]: r for r in _rows}
+                    for f in attached_files:
+                        k = f.get("image_key")
+                        r = _by_key.get(str(k)) if k else None
+                        if not r:
+                            continue
+                        if f.get("size") is None:
+                            f["size"] = r["n"]
+                        if (not f.get("thumbhash") or not f.get("width")) and r["d"]:
+                            _meta = await asyncio.to_thread(image_meta, bytes(r["d"]))
+                            for _k, _v in _meta.items():
+                                f.setdefault(_k, _v)
+                except Exception as size_err:
+                    logging.warning(f"generated_images: размер/thumbhash картинок не получен: {size_err}")
 
         message_id = f"msg-{int(time.time() * 1000)}-{str(uuid.uuid4())[:8]}"
 
@@ -566,6 +635,12 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             # логирования сделал реентри (новый тик) — только для web (gateway main).
             "loop": loop_flag,
             "loop_instruction": loop_instruction,
+            # ЗАДАЧНИК: request_id связывает ответ с карточками задач (agent_tasks),
+            # task_trigger/task_id — ответ на служебный вход после задачи.
+            "request_id": request_id,
+            "task_trigger": task_trigger,
+            "task_id": (payload.get("task") or {}).get("task_id") if task_trigger else None,
+            "task_ids": [t.get("task_id") for t in task_trigger_tasks(payload)] if task_trigger else None,
         }
 
         await prod.send_and_wait("chat-messages", value=bot_message)
@@ -679,14 +754,15 @@ async def lifespan(app: FastAPI):
     _set_web_ui_db(db)
     _set_web_ui_tasks(active_tasks)   # web_ui.stop_message видит тот же словарь задач
 
-    from agent.consumers.task_events_consumer import start_task_events_consumer
 
 
     kafka_task = asyncio.create_task(kafka_consumer())
-    task_events_task = asyncio.create_task(start_task_events_consumer())
     # Клинер эфемерных файлов generated_files (TTL 30 мин):
     # чистит и свежесозданные файлы, и скачанные из OBS. Источник истины — OBS.
     obs_cleaner_task = asyncio.create_task(obs_file_storage.start_generated_files_cleaner())
+    # Архив скриптов /sandbox (TTL 30 мин), кроме записанных в code_library.
+    scripts_cleaner_task = asyncio.create_task(
+        sandbox_scripts_cleaner.start_scripts_cleaner(db.list_code_library_paths))
     agent = HarnessAgent(database=db)
     connect_service_routers(agent, db)
 
@@ -699,11 +775,11 @@ async def lifespan(app: FastAPI):
     kafka_task.cancel()
     await asyncio.gather(kafka_task, return_exceptions=True)
     
-    task_events_task.cancel()
-    await asyncio.gather(task_events_task, return_exceptions=True)
 
     obs_cleaner_task.cancel()
     await asyncio.gather(obs_cleaner_task, return_exceptions=True)
+    scripts_cleaner_task.cancel()
+    await asyncio.gather(scripts_cleaner_task, return_exceptions=True)
 
 
     await shutdown()

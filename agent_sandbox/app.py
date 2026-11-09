@@ -11,9 +11,8 @@ agent_sandbox/app.py  —  v3: Async Submit + Kafka + Persistent Workspace
 
 Эндпоинты:
   POST /execute           — синхронный (как раньше), изолированный run_dir
-  POST /submit            — асинхронный, persistent workspace, Kafka-нотификация
-  GET  /status/{task_id}  — статус задачи
-  GET  /workspace/{wid}/tasks — все задачи workspace
+  POST /submit, GET /status/{task_id}, GET /workspace/{wid}/tasks,
+  POST /tasks/{task_id}/cancel — фоновые задачи, см. sandbox_tasks.py
   POST /workspace/create  — создать workspace
   GET  /workspace/{wid}/files — список файлов
   GET  /workspace/{wid}/file/{path} — скачать файл
@@ -43,7 +42,10 @@ import urllib.request
 import uuid
 from pathlib import Path
 from typing import Optional
-from aiokafka import AIOKafkaProducer
+import signal
+import threading
+
+import sandbox_tasks
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
@@ -58,9 +60,11 @@ app = FastAPI(title="Agent Code Sandbox v3")
 
 # ── Конфиг ─────────────────────────────────────────────────────────
 MAX_CODE_SIZE = 500_000
+# Аварийный потолок stdout/stderr, чтобы гигантский вывод не шёл по HTTP целиком.
+# Аккуратная обрезка для модели делается в agent_service (common/tool_output.py).
+MAX_OUTPUT_SIZE = 50_000
 DEFAULT_TIMEOUT = 120
 MAX_TIMEOUT = 3600
-MAX_OUTPUT_SIZE = 20_000
 WORKDIR = "/tmp/exec"
 WORKSPACES_DIR = "/tmp/exec/workspaces"
 MAX_MEMORY_MB = 8192
@@ -94,51 +98,12 @@ CHATS_SERVICE_URL = os.getenv(
 _synced_hold_state: dict[str, bool] = {}
 
 KAFKA_BROKER = os.getenv("KAFKA_BROKER")
-KAFKA_TASK_EVENTS_TOPIC = "task-events"
 
 # Лимиты приёма (defense in depth)
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024      # 100 MB на один файл
 MAX_UPLOAD_FILES = 50                     # не больше 50 файлов за раз
 
 MAX_FILE_SIZE_FOR_EDIT = 200_000
-# ── Хранилище задач (in-memory) ────────────────────────────────────
-# task_id → {status, result, error, workspace_id, chat_id, label, ...}
-_tasks: dict[str, dict] = {}
-
-
-# ── Kafka Producer ─────────────────────────────────────────────────
-
-_kafka_producer = None
-
-async def get_kafka_producer():
-    global _kafka_producer
-    if _kafka_producer is None:
-        try:
-            _kafka_producer = AIOKafkaProducer(
-                bootstrap_servers=[KAFKA_BROKER],
-                value_serializer=lambda m: json.dumps(m).encode("utf-8"),
-            )
-            await _kafka_producer.start()
-            log.info("Kafka producer запущен, broker=%s", KAFKA_BROKER)
-        except Exception as e:
-            log.error("Не удалось запустить Kafka producer: %s", e)
-            _kafka_producer = None
-    return _kafka_producer
-
-
-async def send_task_event(event: dict):
-    """Отправляет событие завершения задачи в Kafka."""
-    try:
-        prod = await get_kafka_producer()
-        if prod is not None:
-            await prod.send_and_wait(KAFKA_TASK_EVENTS_TOPIC, value=event)
-            log.info("Kafka event отправлен: task=%s status=%s", event.get("task_id"), event.get("status"))
-        else:
-            log.warning("Kafka producer недоступен, событие не отправлено: %s", event)
-    except Exception as e:
-        log.error("Ошибка отправки Kafka event: %s", e)
-
-
 # ── Модели ─────────────────────────────────────────────────────────
 
 class OutputFile(BaseModel):
@@ -171,37 +136,6 @@ class ExecuteResponse(BaseModel):
     saved_script: str | None = None
 
 
-class SubmitRequest(BaseModel):
-    code: str = Field(..., description="Python код для исполнения")
-    timeout: int = Field(default=DEFAULT_TIMEOUT, ge=1, le=MAX_TIMEOUT)
-    workspace_id: str = Field(..., description="ID persistent workspace")
-    task_id: str = Field(..., description="Уникальный ID задачи (генерирует агент)")
-    chat_id: str = Field(..., description="ID чата для нотификации")
-    label: str = Field(default="", description="Человекочитаемое имя задачи")
-    stdin: str = Field(default="")
-    changed_files: str | list[str] = Field("", description="Что поменялось в workspace для live-редактора: '' — ничего (без уведомления), '*' — неизвестно что (полный ресинк), иначе пути через запятую или списком. Уведомление уходит только после завершения запуска")
-
-
-class SubmitResponse(BaseModel):
-    task_id: str
-    status: str = "pending"
-    workspace_id: str
-    message: str = "Задача поставлена в очередь"
-
-
-class TaskStatusResponse(BaseModel):
-    task_id: str
-    status: str  # pending | running | completed | failed
-    label: str = ""
-    workspace_id: str = ""
-    duration_ms: int = 0
-    stdout: str = ""
-    stderr: str = ""
-    error: str | None = None
-    files: list[dict] = Field(default_factory=list)  # [{filename, size_bytes}]
-    started_at: float | None = None
-    completed_at: float | None = None
-
 class WorkspaceEditRequest(BaseModel):
     path: str = Field(..., description="Относительный путь к файлу внутри workspace")
     old_str: str = Field(..., description="Точный фрагмент для замены (ровно 1 вхождение)")
@@ -220,20 +154,40 @@ def _limit_resources():
         os.write(2, f"[sandbox] resource limit warning: {e}\n".encode())
 
 
-def _truncate(text: str) -> tuple[str, bool]:
-    if len(text) > MAX_OUTPUT_SIZE:
-        return text[:MAX_OUTPUT_SIZE] + "\n...(truncated)...", True
-    return text, False
+def _snapshot_output(output_dir: str) -> dict[str, tuple[int, int]]:
+    """Снимок файлов в корне output/: имя -> (mtime_ns, size). Подпапки не учитываются."""
+    snap = {}
+    try:
+        with os.scandir(output_dir) as it:
+            for e in it:
+                if e.is_file(follow_symlinks=False):
+                    st = e.stat(follow_symlinks=False)
+                    snap[e.name] = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        pass
+    return snap
 
 
-def _collect_output_files(output_dir: str) -> tuple[list[OutputFile], list[str]]:
+def _collect_output_files(output_dir: str, before: dict | None = None) -> tuple[list[OutputFile], list[str]]:
+    """Файлы из корня output/ в base64.
+
+    before=None (запуск без workspace): весь output/, по имени.
+    before=снимок до запуска (workspace): только созданные или изменённые
+    за этот вызов, самые новые первыми. Старые файлы workspace не трогаем,
+    их можно взять через download_workspace_file.
+    """
     files = []
     warnings = []
 
     if not os.path.isdir(output_dir):
         return files, warnings
 
-    entries = sorted(os.listdir(output_dir))
+    if before is None:
+        entries = sorted(os.listdir(output_dir))
+    else:
+        after = _snapshot_output(output_dir)
+        changed = [n for n, sig in after.items() if before.get(n) != sig]
+        entries = sorted(changed, key=lambda n: after[n][0], reverse=True)
     if len(entries) > MAX_FILES_RETURNED:
         warnings.append(f"В output/ найдено {len(entries)} файлов, возвращаю первые {MAX_FILES_RETURNED}")
         entries = entries[:MAX_FILES_RETURNED]
@@ -306,8 +260,83 @@ def _get_workspace_path(workspace_id: str) -> str | None:
     return None
 
 
+def _truncate(text: str, limit: int | None = None) -> tuple[str, bool]:
+    """Обрезка по символам: начало 30% + конец 70% (в конце traceback и итоги)."""
+    limit = MAX_OUTPUT_SIZE if limit is None else limit
+    if not text or len(text) <= limit:
+        return text, False
+    head = int(limit * 0.3)
+    tail = limit - head
+    skipped = len(text) - head - tail
+    return (text[:head] + f"\n… [песочница: пропущено {skipped} симв] …\n" + text[-tail:]), True
+
+
+def _exec_process(args, *, stdin: str, timeout: int, cwd: str, env: dict,
+                  on_line=None, on_start=None) -> subprocess.CompletedProcess:
+    """Запуск процесса в своей группе (start_new_session) с лимитами ресурсов.
+
+    Без on_line — обычный subprocess.run (как /execute). С on_line — Popen:
+    stdout читается построчно в отдельном потоке и каждая строка уходит в
+    on_line (протокол ##STAGE/##PROGRESS фоновых задач). on_start(proc)
+    получает процесс сразу после старта (для отмены). Таймаут убивает всю группу.
+    """
+    if on_line is None and on_start is None:
+        return subprocess.run(
+            args, input=stdin, capture_output=True, text=True, timeout=timeout,
+            cwd=cwd, preexec_fn=_limit_resources, env=env,
+        )
+    proc = subprocess.Popen(
+        args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, bufsize=1, cwd=cwd, env=env,
+        preexec_fn=_limit_resources, start_new_session=True,
+    )
+    if on_start is not None:
+        on_start(proc)
+    out_chunks: list[str] = []
+    err_chunks: list[str] = []
+
+    def _pump_out():
+        for line in proc.stdout:
+            out_chunks.append(line)
+            if on_line is not None:
+                try:
+                    on_line(line)
+                except Exception:
+                    pass
+
+    def _pump_err():
+        for line in proc.stderr:
+            err_chunks.append(line)
+
+    readers = [threading.Thread(target=_pump_out, daemon=True),
+               threading.Thread(target=_pump_err, daemon=True)]
+    for t in readers:
+        t.start()
+    try:
+        if stdin:
+            proc.stdin.write(stdin)
+        proc.stdin.close()
+    except (BrokenPipeError, OSError):
+        pass
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except Exception:
+            proc.kill()
+        proc.wait()
+        for t in readers:
+            t.join(timeout=2)
+        raise
+    for t in readers:
+        t.join(timeout=5)
+    return subprocess.CompletedProcess(args, proc.returncode, "".join(out_chunks), "".join(err_chunks))
+
+
 def _run_code_sync(code: str, timeout: int, run_dir: str, stdin: str = "", task_id: str = None,
-    ws_path: str = None, persist_script: bool = False, run_id: str = None) -> dict:
+    ws_path: str = None, persist_script: bool = False, run_id: str = None,
+    on_line=None, on_start=None) -> dict:
     """
     Синхронный запуск кода в subprocess.
     Используется и в /execute, и в /submit (через run_in_executor).
@@ -381,20 +410,21 @@ def _run_code_sync(code: str, timeout: int, run_dir: str, stdin: str = "", task_
         except OSError as e:
             log.warning("[persist_script] не удалось сохранить скрипт в workspace: %s", e)
 
+    out_before = _snapshot_output(str(workspace_output)) if ws_path else None
     start = time.monotonic()
     try:
-        proc = subprocess.run(
+        proc = _exec_process(
             ["python3", "script.py"],
-            input=stdin,
-            capture_output=True,
-            text=True,
+            stdin=stdin,
             timeout=timeout,
             cwd=str(cwd),
-            preexec_fn=_limit_resources,
+            on_line=on_line,
+            on_start=on_start,
             env={
                 "PATH": "/usr/local/bin:/usr/bin:/bin",
                 "PLAYWRIGHT_BROWSERS_PATH": "/opt/playwright-browsers",
                 "MPLCONFIGDIR": "/tmp",
+                "PYTHONUNBUFFERED": "1",
                 "OPENBLAS_NUM_THREADS": os.getenv("OPENBLAS_NUM_THREADS"),
                 "OMP_NUM_THREADS": os.getenv("OMP_NUM_THREADS"),
                 "HOME": "/tmp",
@@ -412,8 +442,11 @@ def _run_code_sync(code: str, timeout: int, run_dir: str, stdin: str = "", task_
         )
         duration_ms = int((time.monotonic() - start) * 1000)
 
-        stdout, out_trunc = _truncate(proc.stdout)
-        stderr, err_trunc = _truncate(proc.stderr)
+        # Здесь только аварийный потолок MAX_OUTPUT_SIZE (начало + конец);
+        # обрезка для модели делается в agent_service (common/tool_output.py).
+        stdout, t_out = _truncate(proc.stdout or "")
+        stderr, t_err = _truncate(proc.stderr or "")
+        truncated = t_out or t_err
 
         missing_module_hint = None
         if proc.returncode != 0 and "ModuleNotFoundError" in stderr:
@@ -422,7 +455,7 @@ def _run_code_sync(code: str, timeout: int, run_dir: str, stdin: str = "", task_
                 "Доступные зависимости фиксированы администратором в requirements-sandbox.txt."
             )
 
-        files, warnings = _collect_output_files(str(workspace_output))
+        files, warnings = _collect_output_files(str(workspace_output), out_before)
         if warnings:
             stderr = (stderr + "\n[sandbox warnings] " + "; ".join(warnings)).strip()
 
@@ -431,7 +464,7 @@ def _run_code_sync(code: str, timeout: int, run_dir: str, stdin: str = "", task_
             "stdout": stdout,
             "stderr": stderr,
             "exit_code": proc.returncode,
-            "truncated": out_trunc or err_trunc,
+            "truncated": truncated,
             "duration_ms": duration_ms,
             "files": files,
             "error": missing_module_hint,
@@ -499,6 +532,7 @@ def _run_commands_sync(commands: str | list[str], timeout: int, run_dir: str, st
             except OSError:
                 pass
 
+    out_before = _snapshot_output(str(workspace_output)) if ws_path else None
     start = time.monotonic()
     try:
         proc = subprocess.run(
@@ -532,10 +566,13 @@ def _run_commands_sync(commands: str | list[str], timeout: int, run_dir: str, st
         )
         duration_ms = int((time.monotonic() - start) * 1000)
 
-        stdout, out_trunc = _truncate(proc.stdout)
-        stderr, err_trunc = _truncate(proc.stderr)
+        # Здесь только аварийный потолок MAX_OUTPUT_SIZE (начало + конец);
+        # обрезка для модели делается в agent_service (common/tool_output.py).
+        stdout, t_out = _truncate(proc.stdout or "")
+        stderr, t_err = _truncate(proc.stderr or "")
+        truncated = t_out or t_err
 
-        files, warnings = _collect_output_files(str(workspace_output))
+        files, warnings = _collect_output_files(str(workspace_output), out_before)
         if warnings:
             stderr = (stderr + "\n[sandbox warnings] " + "; ".join(warnings)).strip()
 
@@ -544,7 +581,7 @@ def _run_commands_sync(commands: str | list[str], timeout: int, run_dir: str, st
             "stdout": stdout,
             "stderr": stderr,
             "exit_code": proc.returncode,
-            "truncated": out_trunc or err_trunc,
+            "truncated": truncated,
             "duration_ms": duration_ms,
             "files": files,
             "error": None,
@@ -802,51 +839,6 @@ async def execute(req: ExecuteRequest):
     )
 
 
-# ── /submit (асинхронный, persistent workspace, Kafka) ─────────────
-
-@app.post("/submit", response_model=SubmitResponse)
-async def submit_task(req: SubmitRequest):
-    """
-    Асинхронный запуск кода.
-    Не блокирует — сразу возвращает task_id.
-    После завершения шлёт Kafka event в topic "task-events".
-    Файлы сохраняются в persistent workspace (НЕ удаляются).
-    """
-    if len(req.code.encode("utf-8")) > MAX_CODE_SIZE:
-        raise HTTPException(status_code=413, detail=f"Code exceeds {MAX_CODE_SIZE} bytes")
-
-    # Проверяем workspace
-    ws_path = _get_workspace_path(req.workspace_id)
-    if ws_path is None:
-        raise HTTPException(status_code=404, detail=f"Workspace {req.workspace_id} не найден")
-
-    # Регистрируем задачу
-    _tasks[req.task_id] = {
-        "status": "pending",
-        "label": req.label,
-        "workspace_id": req.workspace_id,
-        "chat_id": req.chat_id,
-        "started_at": None,
-        "completed_at": None,
-        "result": None,
-    }
-
-    # Запускаем в фоне
-    asyncio.create_task(_run_task_background(req))
-
-    log.info(
-        "[submit] task=%s workspace=%s label='%s' chat_id=%s",
-        req.task_id, req.workspace_id, req.label, req.chat_id,
-    )
-
-    return SubmitResponse(
-        task_id=req.task_id,
-        status="pending",
-        workspace_id=req.workspace_id,
-        message=f"Задача '{req.label}' поставлена в очередь",
-    )
-
-
 @app.post("/workspace/{workspace_id}/upload")
 async def upload_to_workspace_endpoint(
     workspace_id: str,
@@ -1091,122 +1083,6 @@ async def edit_workspace_file_endpoint(workspace_id: str, req: WorkspaceEditRequ
 
 
 
-async def _run_task_background(req: SubmitRequest):
-    """Фоновое исполнение задачи с Kafka-нотификацией."""
-
-    _tasks[req.task_id]["status"] = "running"
-    _tasks[req.task_id]["started_at"] = time.time()
-
-    ws_path = _get_workspace_path(req.workspace_id)
-    run_dir = ws_path  # код выполняется прямо в workspace — файлы в output/ сохраняются
-
-    # Обновляем активность workspace
-    _touch_workspace(req.workspace_id)
-
-    # Запуск в executor (не блокирует event loop)
-    result = await asyncio.to_thread(
-        _run_code_sync, req.code, req.timeout, run_dir, req.stdin, req.task_id,
-        ws_path, True, req.task_id,
-    )
-
-    _tasks[req.task_id]["completed_at"] = time.time()
-    _tasks[req.task_id]["result"] = result
-
-    # Файлы в output/ НЕ удаляем — persistent workspace
-    _touch_workspace(req.workspace_id)
-    await asyncio.to_thread(_sync_workspaces_hold_sync, req.workspace_id)
-    if req.changed_files:
-        await _editor_notify_changed(req.workspace_id, req.changed_files, "task")
-
-    # Готовим file list (без base64 — только метаданные для Kafka)
-    file_list = []
-    if result.get("files"):
-        file_list = [
-            {"filename": f.filename, "size_bytes": f.size_bytes}
-            for f in result["files"]
-        ]
-
-    status = "completed" if result.get("ok") else "failed"
-
-    _tasks[req.task_id]["status"] = status
-
-    # Kafka event
-    event = {
-        "task_id": req.task_id,
-        "chat_id": req.chat_id,
-        "workspace_id": req.workspace_id,
-        "label": req.label,
-        "status": status,
-        "ok": result.get("ok", False),
-        "duration_ms": result.get("duration_ms", 0),
-        "error": result.get("error"),
-        "files": file_list,
-        "stdout_preview": result.get("stdout", "")[:500],  # первые 500 символов
-    }
-
-    await send_task_event(event)
-
-    log.info(
-        "[submit] task=%s completed ok=%s duration=%dms files=%d",
-        req.task_id, result.get("ok"), result.get("duration_ms", 0), len(file_list),
-    )
-
-
-# ── /status/{task_id} ──────────────────────────────────────────────
-
-@app.get("/status/{task_id}", response_model=TaskStatusResponse)
-async def get_task_status(task_id: str):
-    task = _tasks.get(task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail=f"Задача {task_id} не найдена")
-
-    result = task.get("result") or {}
-    file_list = []
-    if result.get("files"):
-        file_list = [
-            {"filename": f.filename, "size_bytes": f.size_bytes}
-            for f in result["files"]
-        ]
-
-    return TaskStatusResponse(
-        task_id=task_id,
-        status=task["status"],
-        label=task.get("label", ""),
-        workspace_id=task.get("workspace_id", ""),
-        duration_ms=result.get("duration_ms", 0),
-        stdout=result.get("stdout", ""),
-        stderr=result.get("stderr", ""),
-        error=result.get("error"),
-        files=file_list,
-        started_at=task.get("started_at"),
-        completed_at=task.get("completed_at"),
-    )
-
-
-# ── /workspace/{wid}/tasks — все задачи workspace ──────────────────
-
-@app.get("/workspace/{workspace_id}/tasks")
-async def get_workspace_tasks(workspace_id: str):
-    tasks_in_ws = [
-        {
-            "task_id": tid,
-            "status": t["status"],
-            "label": t.get("label", ""),
-            "started_at": t.get("started_at"),
-            "completed_at": t.get("completed_at"),
-        }
-        for tid, t in _tasks.items()
-        if t.get("workspace_id") == workspace_id
-    ]
-    return {
-        "workspace_id": workspace_id,
-        "tasks": tasks_in_ws,
-        "total": len(tasks_in_ws),
-        "completed": sum(1 for t in tasks_in_ws if t["status"] in ("completed", "failed")),
-        "all_done": all(t["status"] in ("completed", "failed") for t in tasks_in_ws) if tasks_in_ws else False,
-    }
-
-
 # ── Workspace CRUD endpoints ───────────────────────────────────────
 
 @app.post("/workspace/create")
@@ -1293,10 +1169,7 @@ async def delete_workspace_endpoint(workspace_id: str):
     _synced_hold_state.pop(workspace_id, None)
     await asyncio.to_thread(_notify_chats_workspace_ttl_sync, workspace_id, None, None, False)
 
-    # Чистим задачи этого workspace
-    to_remove = [tid for tid, t in _tasks.items() if t.get("workspace_id") == workspace_id]
-    for tid in to_remove:
-        del _tasks[tid]
+    sandbox_tasks.forget_workspace(workspace_id)
 
     _editor_notify(workspace_id, "gone", {})
     return {"status": "deleted", "workspace_id": workspace_id}
@@ -1780,6 +1653,24 @@ async def _editor_notify_changed(workspace_id: str | None, changed, source: str,
     if data:
         _editor_notify(workspace_id, "change", data)
 
+# ── Фоновые задачи (sandbox_tasks.py) ─────────────────────────────
+
+async def _task_after_run(workspace_id: str, changed_files) -> None:
+    _touch_workspace(workspace_id)
+    await asyncio.to_thread(_sync_workspaces_hold_sync, workspace_id)
+    if changed_files:
+        await _editor_notify_changed(workspace_id, changed_files, "task")
+
+
+sandbox_tasks.bind(
+    get_workspace_path=_get_workspace_path,
+    touch_workspace=_touch_workspace,
+    run_code=_run_code_sync,
+    after_run=_task_after_run,
+)
+app.include_router(sandbox_tasks.router)
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "version": "v3"}
@@ -1792,7 +1683,7 @@ async def startup():
     os.makedirs(WORKDIR, exist_ok=True)
     os.makedirs(WORKSPACES_DIR, exist_ok=True)
     # Kafka producer (ленивый — запустится при первом /submit)
-    asyncio.create_task(get_kafka_producer())
+    asyncio.create_task(sandbox_tasks.start_producer())
     # Фоновая очистка workspace и синхронизация .ws_hold
     asyncio.create_task(_workspace_cleanup_loop())
     asyncio.create_task(_workspace_hold_sync_loop())
@@ -1803,7 +1694,5 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown():
-    global _kafka_producer
-    if _kafka_producer:
-        await _kafka_producer.stop()
+    await sandbox_tasks.shutdown()
     log.info("Sandbox v3 остановлен")

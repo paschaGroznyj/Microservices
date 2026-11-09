@@ -25,3 +25,6 @@ certs/
 
 agent_sandbox/youtube-captions
 .test-logs/
+
+# monaco-editor качается при сборке образа гейтвея (fetch_monaco.py)
+api_gateway/static/js/vendor/monaco/

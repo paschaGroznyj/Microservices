@@ -1,0 +1,103 @@
+/* Карточки фоновых задач (task-cards.js). script — консоль, media — тона темы. */
+.task-cards { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 12px; width: 100%; box-sizing: border-box; }
+/* Внутри ответа карточки занимают ширину текста ответа. Временная группа без ответа — та же колонка, что .agent-message. */
+.task-cards--orphan { box-sizing: content-box; max-width: 720px; margin: 8px auto 12px; padding: 0 24px; }
+@media (max-width: 768px) { .task-cards--orphan { padding: 0 14px; } }
+.task-card { border: 1px solid var(--border, #e0dbd4); border-radius: 10px; overflow: hidden; font-size: 13px; line-height: 1.45;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+.tc-head { display: flex; align-items: center; gap: 10px; padding: 8px 12px; min-width: 0; }
+.tc-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.tc-status { font-size: 11px; letter-spacing: .05em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.tc-time, .tc-pct { font-variant-numeric: tabular-nums; opacity: .75; white-space: nowrap; }
+.tc-bar { height: 2px; overflow: hidden; }
+.tc-bar span { display: block; height: 100%; transition: width .4s ease; }
+.tc-bar.is-indeterminate span { width: 30%; animation: tc-slide 1.4s ease-in-out infinite; }
+.task-card:not(.is-running):not(.is-pending) .tc-bar.is-indeterminate span { animation: none; width: 100%; }
+.tc-stages { list-style: none; margin: 0; padding: 8px 12px 2px; display: flex; flex-direction: column; gap: 2px; }
+.tc-stages li { display: flex; gap: 8px; opacity: .55; }
+.tc-stages li b { width: 12px; flex: none; text-align: center; font-weight: 600; }
+.tc-stages li.is-done { opacity: .9; }
+.tc-stages li.is-running, .tc-stages li.is-failed { opacity: 1; }
+.tc-stages li.is-skipped span { text-decoration: line-through; }
+.tc-log { margin: 0; padding: 8px 12px 10px; max-height: 168px; overflow: auto; white-space: pre-wrap; word-break: break-word; font: inherit; font-size: 12px; }
+.tc-foot { padding: 6px 12px 8px; font-size: 11.5px; opacity: .7; }
+
+/* ── script: консольное окно ── */
+.task-card--script { background: #16140f; color: #e8e3d8; border-color: #2b2720; }
+.task-card--script .tc-head { background: #1f1c16; border-bottom: 1px solid #2b2720; }
+.tc-dots { display: inline-flex; gap: 5px; flex: none; }
+.tc-dots i { width: 9px; height: 9px; border-radius: 50%; background: #3a352c; }
+.task-card--script.is-running .tc-dots i:nth-child(1) { background: #e0a84a; }
+.task-card--script.is-completed .tc-dots i:nth-child(3) { background: #7cc48b; }
+.task-card--script.is-failed .tc-dots i:nth-child(1) { background: #ff7a6a; }
+.task-card--script .tc-status { background: rgba(255,255,255,.06); color: #a59f93; }
+.task-card--script.is-running .tc-status { color: #e0a84a; }
+.task-card--script.is-completed .tc-status { color: #7cc48b; }
+.task-card--script.is-failed .tc-status { color: #ff8a7a; }
+.task-card--script .tc-bar { background: rgba(255,255,255,.05); }
+.task-card--script .tc-bar span { background: #e0a84a; }
+.task-card--script.is-completed .tc-bar span { background: #7cc48b; }
+.task-card--script.is-failed .tc-bar span { background: #ff7a6a; }
+.task-card--script .tc-stages li.is-done b { color: #7cc48b; }
+.task-card--script .tc-stages li.is-running { color: #e0a84a; }
+.task-card--script .tc-stages li.is-failed { color: #ff8a7a; }
+.task-card--script .tc-log { color: #bdb6a8; }
+.task-card--script .tc-prompt { color: #7cc48b; }
+.task-card--script .tc-err { color: #ff8a7a; }
+.task-card--script .tc-foot { border-top: 1px solid rgba(255,255,255,.06); }
+
+/* ── media: светлая карточка в тонах темы ── */
+.task-card--media { background: var(--surface, #fff); color: var(--text-primary, #1a1612); border-radius: 14px; }
+.task-card--media .tc-head { padding: 10px 14px; }
+.tc-ico { width: 28px; height: 28px; flex: none; border-radius: 8px; display: grid; place-items: center; color: #fff; font-size: 14px;
+  background: linear-gradient(135deg, var(--accent-muted, #c17f3a), var(--accent, #8b4513)); }
+.task-card--media.is-failed .tc-ico { background: #b3261e; }
+.task-card--media.is-completed .tc-ico { background: linear-gradient(135deg, var(--accent2, #4a7c59), var(--accent2-hover, #3d6849)); }
+.task-card--media .tc-status { background: var(--surface2, #f3f1ee); color: var(--text-secondary, #6b6258); }
+.task-card--media.is-running .tc-status { color: var(--accent, #8b4513); }
+.task-card--media.is-completed .tc-status { color: var(--accent2, #4a7c59); }
+.task-card--media.is-failed .tc-status { color: #b3261e; }
+.task-card--media .tc-bar { background: var(--surface2, #f3f1ee); }
+.task-card--media .tc-bar span { background: linear-gradient(90deg, var(--accent-muted, #c17f3a), var(--accent, #8b4513)); }
+.task-card--media.is-completed .tc-bar span { background: var(--accent2, #4a7c59); }
+.task-card--media.is-failed .tc-bar span { background: #b3261e; }
+.task-card--media .tc-stages { padding: 8px 14px 2px; }
+.task-card--media .tc-stages li.is-done b { color: var(--accent2, #4a7c59); }
+.task-card--media .tc-stages li.is-running { color: var(--accent, #8b4513); }
+.task-card--media .tc-stages li.is-failed, .task-card--media .tc-err { color: #b3261e; }
+.task-card--media .tc-log { padding: 6px 14px 10px; color: var(--text-secondary, #6b6258); font-family: inherit; }
+.tc-files { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 14px 12px; }
+.tc-files span { font-size: 11.5px; padding: 2px 8px; border-radius: 6px; background: var(--surface2, #f3f1ee); }
+
+@keyframes tc-slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+@media (prefers-reduced-motion: reduce) { .tc-bar.is-indeterminate span { animation: none; } }
+
+/* Сброс глобальных стилей чата: pre { padding-top:36px !important } под шапку кода,
+   .agent-message pre/ol/li — карточка живёт и внутри ответа агента. */
+.task-card pre.tc-log { padding: 8px 12px 10px !important; margin: 0 !important; border: 0 !important;
+  border-radius: 0 !important; background: transparent !important; overflow-x: hidden; font-family: inherit; }
+.task-card--media pre.tc-log { padding: 6px 14px 10px !important; }
+.task-card ol.tc-stages { margin: 0 !important; padding-left: 12px !important; }
+.task-card--media ol.tc-stages { padding-left: 14px !important; }
+.task-card .tc-stages li { margin: 0 !important; }
+.task-card--media .tc-foot { color: var(--text-secondary, #6b6258); }
+.tc-status { line-height: 1.5; }
+.task-card--script .tc-dots i { background: #4a443a; }
+.task-card--script .tc-foot { border-top-color: rgba(255,255,255,.1); }
+
+/* Сворачивание по .tc-head: свёрнутая карточка — шапка + полоса прогресса. */
+.task-card .tc-head { cursor: pointer; user-select: none; }
+.task-card .tc-head:focus-visible { outline: 2px solid var(--accent, #8b4513); outline-offset: -2px; }
+.tc-chev { flex: none; width: 16px; height: 16px; display: grid; place-items: center; opacity: .6; transition: transform .2s ease; }
+.tc-chev svg { width: 14px; height: 14px; }
+.task-card.is-collapsed .tc-chev { transform: rotate(-90deg); }
+.task-card .tc-head:hover .tc-chev { opacity: 1; }
+.task-card.is-collapsed .tc-body { display: none; }
+.task-card--script.is-collapsed .tc-head { border-bottom-color: transparent; }
+@media (prefers-reduced-motion: reduce) { .tc-chev { transition: none; } }
+
+/* Переезд группы под ответ после стрима (task-cards.js glide): 0.5 с группа полупрозрачная и чуть размыта,
+   фон карточек не меняем, чтобы консольная script-карточка не мигала светлым. */
+.task-cards.is-gliding { pointer-events: none; will-change: transform, opacity, filter; }
+.task-cards.is-gliding .task-card { border-color: color-mix(in srgb, var(--accent, #8b4513) 30%, var(--border, #e0dbd4));
+  box-shadow: 0 8px 24px rgba(0,0,0,.10); }

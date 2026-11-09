@@ -160,3 +160,21 @@ async def cache_bust_middleware(request: Request, call_next):
         resp.headers["Pragma"] = "no-cache"
         resp.headers["Expires"] = "0"
     return resp
+
+
+def mount_vendor_monaco(app, directory=None) -> bool:
+    """Monaco для /editor из образа (Dockerfile, стадия monaco -> /opt/vendor/monaco).
+
+    Исходники гейтвеев примонтированы томом в /app (docker-compose), поэтому файлы,
+    положенные в /app/static при сборке, том бы перекрыл. Отдаём их отдельным
+    маунтом; вызывать ДО app.mount("/static", ...), иначе /static перехватит путь.
+    """
+    import logging
+    import os
+    from pathlib import Path
+    d = Path(directory or os.getenv("MONACO_DIR", "/opt/vendor/monaco"))
+    if not (d / "vs" / "loader.js").is_file():
+        logging.getLogger(__name__).warning(f"[monaco] {d} не найден, редактор /editor возьмёт файлы из /static, если они там есть")
+        return False
+    app.mount("/static/js/vendor/monaco", CacheBustStaticFiles(directory=d), name="monaco")
+    return True

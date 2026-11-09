@@ -286,6 +286,8 @@ services:
       - ./api_gateway/presence.py:/app/presence.py
       - ./api_gateway/run_status.py:/app/run_status.py
       - ./api_gateway/editor_gw.py:/app/editor_gw.py
+      - ./api_gateway/reactions_bus.py:/app/reactions_bus.py
+      - ./api_gateway/reads_bus.py:/app/reads_bus.py
     depends_on:
       broker:
         condition: service_healthy
@@ -436,6 +438,9 @@ services:
       DB_NAME: ${DB_NAME}
       KAFKA_BROKER: ${KAFKA_BROKER}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      TASK_AUTOTRIGGER: ${TASK_AUTOTRIGGER:-1}
+      TASK_TRIGGER_MAX_AGE_S: ${TASK_TRIGGER_MAX_AGE_S:-3600}
+      TASK_BATCH_WAIT_S: ${TASK_BATCH_WAIT_S:-600}
       TG_BOT_PUSH_URL: "http://host.docker.internal:8010/push_message"
       MAX_BOT_PUSH_URL: "http://host.docker.internal:8011/push_message"
       # САМОЦИКЛ: реентри-POST в /send_message того же chats_service (docker-сеть)

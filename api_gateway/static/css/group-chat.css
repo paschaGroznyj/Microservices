@@ -118,21 +118,20 @@
   justify-content: flex-end;
   margin-top: 4px;
   font-size: .7rem;
-  opacity: .6;
 }
+/* приглушаем только время/флаги, плашки реакций остаются яркими */
+.gc-meta > :not(.gc-reacts) { opacity: .6; }
 .gc-msg--mine .gc-meta { color: var(--msg-user-text); }
 .gc-msg--other .gc-meta { color: var(--text-muted); }
 .gc-edited { font-style: italic; }
 
 /* Контекстное меню (ПКМ по сообщению) */
 .gc-ctx-menu {
-  position: fixed;
-  z-index: 1000;
   min-width: 150px;
   padding: 5px;
   background: var(--surface, #fff);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 14px;
   box-shadow: var(--shadow-md, 0 6px 24px rgba(0,0,0,.18));
   display: flex;
   flex-direction: column;
@@ -341,6 +340,8 @@
   padding: 0;
   border: none;
   overflow: hidden;
+  /* без подписи хвоста нет: все 4 угла скруглены (с подписью остаётся угол облачка) */
+  border-radius: 14px;
 }
 .gc-msg--audio-only {
   padding: 0;
@@ -439,24 +440,23 @@
 .gc-collage__cell.is-loaded.gc-collage__cell--glass .gc-collage__bg {
   opacity: 1;
 }
-/* шиммер загрузки: бегущий блик поверх фона, гаснет когда img загрузился */
-.gc-collage__cell::before {
-  content: "";
+/* лоадер «Кольцо» (стили .fa-ring в chat.css), гаснет когда медиа загрузилось */
+.gc-collage__loader {
   position: absolute;
   inset: 0;
-  background: linear-gradient(
-    100deg,
-    transparent 20%,
-    color-mix(in srgb, var(--text-muted) 22%, transparent) 50%,
-    transparent 80%
-  );
-  background-size: 220% 100%;
-  animation: gcShimmer 1.25s ease-in-out infinite;
-  pointer-events: none;
   z-index: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface2, #f3f1ee);
+  pointer-events: none;
 }
-/* когда картинка догрузилась (JS ставит класс) — блик убираем */
-.gc-collage__cell.is-loaded::before { display: none; }
+.gc-collage__cell.is-loaded .gc-collage__loader { display: none; }
+.gc-collage__loader { overflow: hidden; }
+/* ThumbHash общего чата: --th-bg и класс ставит MediaRing.placeholder; стиль .fa-media-loader--th из chat.css */
+.gc-collage__loader.fa-media-loader--th > .fa-ring { position: relative; }
+/* видео грузится на той же подложке surface2, что и картинки */
+.gc-collage__cell--video-thumb:not(.is-loaded) .gc-collage__play { opacity: 0; }
 .gc-collage__cell img {
   position: relative;
   z-index: 1;
@@ -469,10 +469,6 @@
 }
 .gc-collage__cell.is-loaded img { opacity: 1; }
 .gc-collage__cell:hover img { filter: brightness(0.95); }
-@keyframes gcShimmer {
-  0%   { background-position: 140% 0; }
-  100% { background-position: -40% 0; }
-}
 
 .gc-collage__more {
   position: absolute;
@@ -799,3 +795,207 @@
 .gc-history-loader span:nth-child(3) { animation-delay: .3s; }
 @keyframes gcHistDot { 0%, 100% { opacity: .25; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-2px); } }
 @media (prefers-reduced-motion: reduce) { .gc-history-loader span { animation: none; opacity: .6; } }
+
+/* ── Реакции (groupInteraction.js) ─────────────────────────── */
+.gc-ctx-pop {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.gc-ctx-item .gc-ico { flex: none; opacity: .85; }
+.gc-ctx-menu { align-self: stretch; }
+
+/* быстрая панель: радиус как у облачка */
+.gc-rbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-md, 0 6px 24px rgba(0,0,0,.18));
+}
+.gc-rbar__btn, .gc-rgrid__btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  line-height: 1;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  transition: transform .12s ease, background var(--transition);
+}
+.gc-rbar__btn { width: 36px; height: 36px; font-size: 22px; }
+.gc-rbar__btn:hover, .gc-rgrid__btn:hover { background: var(--sidebar-hover, rgba(0,0,0,.06)); transform: scale(1.15); }
+.gc-rbar__btn.is-mine, .gc-rgrid__btn.is-mine { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.gc-rbar__more {
+  display: flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; margin-left: 2px;
+  border: none; border-radius: 50%;
+  background: var(--surface2);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.gc-rbar__more:hover { color: var(--text-primary); }
+
+/* полный набор: 8×8 заполняет квадрат */
+.gc-ctx-pop--grid { gap: 0; }
+.gc-rgrid {
+  display: grid;
+  grid-template-columns: repeat(8, 40px);
+  grid-auto-rows: 40px;
+  gap: 2px;
+  padding: 8px;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-md, 0 6px 24px rgba(0,0,0,.18));
+}
+.gc-rgrid__btn { width: 40px; height: 40px; font-size: 26px; }
+
+/* плашки под сообщением, радиусы повторяют облачко */
+.gc-meta { flex-wrap: wrap; }
+.gc-reacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-right: auto;
+  padding-right: 6px;
+}
+.gc-react {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 12px 12px 12px 3px;
+  font-size: .75rem;
+  font-weight: 600;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  transition: transform .12s ease;
+}
+.gc-react:active { transform: scale(.92); }
+.gc-react[disabled] { cursor: default; }
+.gc-react__e { font-size: 15px; line-height: 1; font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif; }
+.gc-react--mine { background: var(--accent); color: #fff; }
+.gc-msg--mine .gc-react {
+  border-radius: 12px 12px 3px 12px;
+  background: color-mix(in srgb, var(--msg-user-text) 14%, transparent);
+  color: var(--msg-user-text);
+}
+.gc-msg--mine .gc-react--mine { background: var(--msg-user-text); color: var(--msg-user-bg); }
+.gc-msg--media-only .gc-meta > :not(.gc-reacts),
+.gc-msg--audio-only .gc-meta > :not(.gc-reacts) { opacity: 1; }
+/* медиа без подписи: реакции под облаком, снаружи, как в Telegram */
+.gc-msg__media { position: relative; width: 100%; }
+.gc-msg__reacts {
+  display: flex;
+  max-width: 75%;
+  margin-top: 6px;
+}
+.gc-msg__reacts:empty { display: none; }
+.gc-msg__reacts .gc-reacts { margin-right: 0; padding-right: 0; }
+.gc-msg__reacts--mine .gc-reacts { justify-content: flex-end; }
+/* плашки повторяют облачко своей стороны: цвет и острый угол у хвоста */
+.gc-msg__reacts--mine .gc-react {
+  border-radius: 12px 12px 3px 12px;
+  background: var(--msg-user-bg);
+  color: var(--msg-user-text);
+}
+.gc-msg__reacts--other .gc-react {
+  border-radius: 12px 12px 12px 3px;
+  background: var(--surface2);
+  color: var(--text-primary);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.gc-msg__reacts .gc-react--mine,
+.gc-msg__reacts--mine .gc-react--mine { background: var(--accent); color: #fff; box-shadow: none; }
+
+/* ── Галочки прочтения (только свои сообщения, правее времени) ── */
+.gc-ticks {
+  display: inline-flex;
+  align-items: center;
+  margin-left: -1px;
+  line-height: 0;
+}
+.gc-ticks svg { display: block; }
+.gc-ticks--wait svg { width: 11px; height: 11px; }
+/* ✓✓ ярче ✓: прочитанное видно сразу, как в Telegram */
+.gc-meta > .gc-ticks--read { opacity: 1; }
+.gc-msg--other .gc-ticks--read { color: var(--accent); }
+
+/* «Прочитали N» в меню и список прочитавших */
+.gc-ctx-sep { height: 1px; margin: 3px 6px; background: var(--border); }
+.gc-ctx-item:disabled { cursor: default; color: var(--text-muted); }
+.gc-ctx-item:disabled:hover { background: transparent; }
+.gc-ctx-readers span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+.gc-readers { min-width: 220px; max-width: 280px; }
+.gc-readers__list { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.gc-readers__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: .85rem;
+  color: var(--text-primary);
+}
+.gc-readers__ava {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font-size: .75rem;
+  font-weight: 600;
+}
+.gc-readers__name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── непрочитанные: разделитель в ленте и счётчик на кнопке «вниз» ── */
+.gc-unread-sep {
+  align-self: stretch;
+  display: flex;
+  justify-content: center;
+  margin: 10px 0 6px;
+  padding: 4px 0;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 500;
+  pointer-events: none;
+  user-select: none;
+}
+#gc-scroll-to-bottom-btn .gc-arrow-count {
+  position: absolute;
+  top: -7px;
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+#gc-scroll-to-bottom-btn .gc-arrow-count[hidden] { display: none; }

@@ -2029,6 +2029,10 @@ class ChatApp {
             }
             this._removeBotPlaceholder();
         }
+        // Задачник: карточки задач из истории (message.tasks) — внутри ответа, над текстом.
+        if (isBot && Array.isArray(message.tasks) && message.tasks.length && window.TaskCards) {
+            queueMicrotask(() => { if (messageEl.isConnected) window.TaskCards.mount(messageEl, message.tasks); });
+        }
 
         const actions = this.createMessageActions(message.id, rawContent, isBot, {
             messageId: message.message_id || message.id || '',
@@ -2494,11 +2498,26 @@ class ChatApp {
         }, { once: true });
     }
 
+    /** Пропорции карточки до загрузки по file.width/height (chat_files):
+     *  та же формула, что после load / loadedmetadata, поэтому лента не прыгает. */
+    _presizeMediaCard(card, file, minH) {
+        const w = Number(file && file.width), h = Number(file && file.height);
+        if (!card || !(w > 0) || !(h > 0)) return;
+        const MAX_W = 420, MAX_H = 420, MIN_W = 300;
+        const r = w / h;
+        let mw, mh;
+        if (r >= MAX_W / MAX_H) { mw = MAX_W; mh = Math.round(MAX_W / r); }
+        else { mh = MAX_H; mw = Math.round(MAX_H * r); }
+        const boxW = Math.min(MAX_W, Math.max(MIN_W, mw));
+        const boxH = Math.min(MAX_H, Math.max(minH, mh));
+        card.style.setProperty('--fa-card-w', boxW + 'px');
+        card.style.setProperty('--fa-card-ar', `${boxW} / ${boxH}`);
+    }
+
     _applyVideoCardAspect(videoEl) {
         if (!videoEl) return;
         const card = videoEl.closest('.fa-video-card');
         if (!card) return;
-        card.classList.remove('fa-image-card--loading');
         const vw = videoEl.videoWidth || 0;
         const vh = videoEl.videoHeight || 0;
         if (vw > 0 && vh > 0) {
@@ -2855,14 +2874,14 @@ class ChatApp {
             img.className = 'fa-image-card__img';
             img.alt = safeName;
             img.loading = 'lazy';
-            img.src = url;
             card.classList.add('fa-image-card--loading');
+            this._presizeMediaCard(card, item.file, 110);
             let triedFallback = false;
             const applyCardAspect = () => {
                 card.classList.remove('fa-image-card--loading');
                 card.classList.remove('fa-image-card--error');
                 const activeSrc = img.currentSrc || img.src || url;
-                item.url = activeSrc;
+                if (!/^blob:/.test(activeSrc)) item.url = activeSrc;
                 if (img.naturalWidth > 0 && img.naturalHeight > 0) {
                     const MAX_W = 420;
                     const MAX_H = 420;
@@ -2934,12 +2953,14 @@ class ChatApp {
             item._dlBtn = dlBtn;
 
             const skel = document.createElement('div');
-            skel.className = 'fa-image-card__skeleton';
-            skel.innerHTML = '<div class="fa-pixel-grid"></div>';
+            skel.className = 'fa-image-card__skeleton fa-media-loader';
+            skel.innerHTML = this._mediaRingHtml(false);
 
             card.appendChild(bg);
             card.appendChild(skel);
             card.appendChild(img);
+            if (window.MediaRing) window.MediaRing.loadImage(img, url, skel, { total: item.file && item.file.size, hash: item.file && item.file.thumbhash });
+            else img.src = url;
             card.appendChild(overlay);
             if (!allItems || allItems.length <= 1) { card.appendChild(dlBtn); }
             return card;
@@ -2953,14 +2974,15 @@ class ChatApp {
             const card = document.createElement('div');
             card.className = 'fa-image-card fa-video-card fa-image-card--loading';
             card.title = name;
+            this._presizeMediaCard(card, item.file, 180);
 
             const bg = document.createElement('span');
             bg.className = 'fa-image-card__bg';
             bg.setAttribute('aria-hidden', 'true');
 
             const skel = document.createElement('div');
-            skel.className = 'fa-image-card__skeleton';
-            skel.innerHTML = '<div class="fa-pixel-grid"></div>';
+            skel.className = 'fa-image-card__skeleton fa-media-loader';
+            skel.innerHTML = this._mediaRingHtml(true);
 
             const video = document.createElement('video');
             video.className = 'fa-video-card__video';
@@ -2972,12 +2994,19 @@ class ChatApp {
 
             this._bindVideoPreviewLoop(video, 5);
 
+            if (window.MediaRing) window.MediaRing.bindVideo(video, skel, item.file && item.file.size, item.file && item.file.thumbhash);
+
             const onMeta = () => this._applyVideoCardAspect(video);
             if (video.readyState >= 1 && video.videoWidth > 0) {
                 onMeta();
             } else {
                 video.addEventListener('loadedmetadata', onMeta, { once: true });
             }
+            // лоадер снимаем по первому кадру (loadeddata), как у картинки по load:
+            // на loadedmetadata кадра ещё нет и вместо кольца видна пустая подложка
+            const onFrame = () => card.classList.remove('fa-image-card--loading');
+            if (video.readyState >= 2) onFrame();
+            else video.addEventListener('loadeddata', onFrame, { once: true });
             video.addEventListener('error', () => {
                 card.classList.remove('fa-image-card--loading');
             }, { once: true });
@@ -3025,8 +3054,8 @@ class ChatApp {
                 cell.title = item.name || '';
 
                 const skel = document.createElement('div');
-                skel.className = 'fa-image-card__skeleton';
-                skel.innerHTML = '<div class="fa-pixel-grid"></div>';
+                skel.className = 'fa-image-card__skeleton fa-media-loader';
+                skel.innerHTML = this._mediaRingHtml(item.isVideo);
                 cell.appendChild(skel);
 
                 if (item.isVideo) {
@@ -3040,10 +3069,11 @@ class ChatApp {
 
                     this._bindVideoPreviewLoop(video, 5);
 
+                    if (window.MediaRing) window.MediaRing.bindVideo(video, skel, item.file && item.file.size, item.file && item.file.thumbhash);
+
                     const onLoaded = () => cell.classList.remove('fa-collage__cell--loading');
-                    if (video.readyState >= 1) onLoaded();
+                    if (video.readyState >= 2) onLoaded();
                     else {
-                        video.addEventListener('loadedmetadata', onLoaded, { once: true });
                         video.addEventListener('loadeddata', onLoaded, { once: true });
                         video.addEventListener('error', onLoaded, { once: true });
                     }
@@ -3067,12 +3097,13 @@ class ChatApp {
                     img.className = 'fa-collage__img';
                     img.alt = this.escapeHtml(item.name || 'image');
                     img.loading = 'lazy';
-                    img.src = item.url;
+                    if (window.MediaRing) window.MediaRing.loadImage(img, item.url, skel, { total: item.file && item.file.size, hash: item.file && item.file.thumbhash });
+                    else img.src = item.url;
                     let triedFallback = false;
                     const onImgLoad = () => {
                         cell.classList.remove('fa-collage__cell--loading');
                         const activeSrc = img.currentSrc || img.src || item.url;
-                        item.url = activeSrc;
+                        if (!/^blob:/.test(activeSrc)) item.url = activeSrc;
                         if (activeSrc && activeSrc !== '#') {
                             bg.style.backgroundImage = `url("${activeSrc.replace(/"/g, '\"')}")`;
                             if (item._dlBtn) item._dlBtn.href = item.dlUrl || activeSrc;
@@ -3593,6 +3624,7 @@ class ChatApp {
                     chat_id:        this.currentChat,
                     message:        text,
                     message_id:     msgId,
+                    task_ids:       window.TaskHint?.consume(this.currentChat, text),   // ручной триггер задачника
                     type_agent:     'pm',
                     agent_model:    window.ModelPicker?.getModel() ?? 'coder',
                     selected_tools: window.ToolsPanel?.getSelectedCategories() ?? [],
@@ -3769,7 +3801,7 @@ class ChatApp {
        ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ: скелетон + лайтбокс
     ══════════════════════════════════════════ */
 
-    /** Показывает пиксельный скелетон генерации картинки в ленте.
+    /** Показывает скелетон генерации картинки в ленте (лоадер «Кольцо» + подпись).
      *  Живёт, пока тул generate_image работает; снимается, когда пришли
      *  реальные файлы (в _renderBotFiles) или ответ финализирован. */
     _showImageGenSkeleton() {
@@ -3782,10 +3814,7 @@ class ChatApp {
         skel.className = 'fa-image-gen-skeleton';
         skel.innerHTML = `
 <div class="fa-image-card fa-image-card--gen">
-  <div class="fa-image-card__skeleton">
-    <div class="fa-pixel-grid"></div>
-    <div class="fa-gen-scan"></div>
-  </div>
+  <div class="fa-image-card__skeleton fa-media-loader">${this._mediaRingHtml(false)}</div>
   <div class="fa-gen-caption">
     <span class="fa-gen-dot"></span>
     <span class="fa-gen-caption__text">Генерация изображения…</span>
@@ -3811,6 +3840,11 @@ class ChatApp {
             name: name || 'image',
             imageKey: imageKey || null,
         }], 0);
+    }
+
+    // Единый лоадер медиа «Кольцо» (media-ring.js, стили .fa-ring в chat.css).
+    _mediaRingHtml(isVideo = false) {
+        return window.MediaRing ? window.MediaRing.html(isVideo) : '';
     }
 
     _openMediaLightbox(items, startIdx = 0) {
@@ -3901,6 +3935,25 @@ class ChatApp {
             dlEl.setAttribute('href', href0);
             dlEl.setAttribute('download', dlName0);
 
+            mediaContainer.classList.remove('is-ready', 'is-error');
+            mediaContainer.classList.add('is-loading');
+            const loader = document.createElement('div');
+            loader.className = 'image-lightbox__loader';
+            loader.setAttribute('role', 'status');
+            loader.setAttribute('aria-label', 'Загрузка');
+            loader.innerHTML = this._mediaRingHtml(isVid) + '<span class="image-lightbox__loader-text">Не удалось загрузить</span>';
+            mediaContainer.appendChild(loader);
+            const markReady = () => {
+                if (myToken !== renderToken) return;
+                mediaContainer.classList.remove('is-loading', 'is-error');
+                mediaContainer.classList.add('is-ready');
+            };
+            const markError = () => {
+                if (myToken !== renderToken) return;
+                mediaContainer.classList.remove('is-loading');
+                mediaContainer.classList.add('is-error');
+            };
+
             if (isVid) {
                 const video = document.createElement('video');
                 video.className = 'image-lightbox__video';
@@ -3928,11 +3981,18 @@ class ChatApp {
                     if (myToken !== renderToken) return;
                     dimEl.textContent = '';
                 });
+                video.addEventListener('loadedmetadata', markReady, { once: true });
+                video.addEventListener('loadeddata', markReady, { once: true });
+                video.addEventListener('error', markError, { once: true });
                 mediaContainer.appendChild(video);
+                if (window.MediaRing) window.MediaRing.bindVideo(video, loader, it.file && it.file.size);
             } else {
                 const img = document.createElement('img');
                 img.className = 'image-lightbox__img';
                 img.alt = this.escapeHtml(dlName0);
+                img.addEventListener('load', () => { if (img.naturalWidth > 0) markReady(); });
+                // при fetch-фоллбэке src меняется; ошибку считаем финальной только для прямого url
+                img.addEventListener('error', markError);
                 img.addEventListener('load', () => {
                     if (myToken !== renderToken) return;
                     if (img.naturalWidth && img.naturalHeight) {
@@ -3954,26 +4014,30 @@ class ChatApp {
                     dlEl.setAttribute('download', dlName);
                 };
 
-                if (it.imageKey) {
-                    img.src = it.url;
+                const MR = window.MediaRing;
+                const hit = MR && MR.cached(it.url);
+                if (hit) {
+                    // уже загружена карточкой/коллажем — без повторного запроса
+                    img.src = hit;
+                    applyKey(MR.keyOf(it.url));
+                } else if (MR) {
+                    MR.fetchProgress(it.url, {
+                        total: it.file && it.file.size,
+                        onProgress: (l, t) => { if (myToken === renderToken) MR.setProgress(loader, l, t); },
+                    }).then(({ blob, imageKey: key }) => {
+                        const objUrl = URL.createObjectURL(blob);
+                        MR.track(it.url, objUrl, blob.size, key);   // кеш владеет blob, отзовёт при вытеснении
+                        if (myToken !== renderToken) return;
+                        img.src = objUrl;
+                        dlEl.setAttribute('href', objUrl);
+                        applyKey(key);
+                    }).catch(() => {
+                        if (myToken !== renderToken) return;
+                        MR.reset(loader);
+                        img.src = it.url;
+                    });
                 } else {
-                    fetch(it.url, { credentials: 'same-origin' })
-                        .then((resp) => {
-                            const key = resp.headers.get('X-Image-Key');
-                            return resp.blob().then((blob) => ({ key, blob }));
-                        })
-                        .then(({ key, blob }) => {
-                            if (myToken !== renderToken) return;
-                            const objUrl = URL.createObjectURL(blob);
-                            img.src = objUrl;
-                            dlEl.setAttribute('href', objUrl);
-                            applyKey(key);
-                            overlay._objUrl = objUrl;
-                        })
-                        .catch(() => {
-                            if (myToken !== renderToken) return;
-                            img.src = it.url;
-                        });
+                    img.src = it.url;
                 }
                 
 
@@ -4267,18 +4331,31 @@ class ChatApp {
             const msg = JSON.parse(event.data);
 
             if (msg.type === 'agent_status') {
+                // Задачник: агент разбужен результатом задачи — блокируем отправку, как при обычном запросе.
+                if (msg.task_trigger && isActive) this._setSendButtonMode?.('stop');
                 // Статус-строку и скелетон рисуем только для АКТИВНОГО чата.
                 if (!isActive) return;
                 this.updateStatus(msg.status);
-                // Скелетон генерации: показываем, когда статус — про рисование.
+                // Скелетон генерации: только на статусы тула generate_image
+                // (tool_status_messages.py), а не на любое слово «картинка».
                 const status = (msg.status || '').toLowerCase();
-                if (/генерир|рису|картин|композиц|детал.*свет/.test(status)) {
+                if (/^(генерирую изображение|рисую картинку|прорабатываю детали и свет|собираю композицию)/.test(status)) {
                     this._showImageGenSkeleton();
                 }
                 return;
             }
 
             // Автогенерированный заголовок чата — обновляем строку чата в сайдбаре в реалтайме.
+            // Задачник: событие фоновой задачи. Карточка — внутри ответа своего хода,
+            // после .reasoning-block (если есть), над текстом ответа.
+            if (msg.type === 'task_update') {
+                if (isActive && window.TaskCards) {
+                    window.TaskCards.upsert(this.getMessagesContainer(), msg.task, { pendingEl: st?.pendingBotEl });
+                }
+                window.TaskHint?.note(this, msg.chat_id, msg.task);   // ручной триггер: подсказка в поле ввода
+                return;
+            }
+
             if (msg.type === 'title_update') {
                 const cid = msg.chat_id != null ? String(msg.chat_id) : null;
                 const t = (msg.auto_title || '').trim();
@@ -4314,6 +4391,13 @@ class ChatApp {
                 if (dup) return;
                 this.addMessage(msg, true, false);
                 return;
+            }
+
+            // Задачник: финал ответа — карточки хода (включая временную группу без ответа)
+            // собираются в ответ на то же место, что и после F5. Таймер: дать финализации пузыря отработать.
+            if (msg.is_from_bot && msg.message && !msg.chunk && isActive && window.TaskCards) {
+                const _tcBox = this.getMessagesContainer();
+                setTimeout(() => window.TaskCards.settle(_tcBox, msg), 60);
             }
 
             // Финал стриминга: если уже был живой стриминг (_pendingBotEl),
@@ -5022,6 +5106,7 @@ class ChatApp {
                     body.appendChild(step);
                 });
                 targetBotEl.insertBefore(wrap, targetBotEl.firstElementChild);
+                window.TaskCards?.place?.(targetBotEl);
             }
         }
     }
@@ -5073,6 +5158,7 @@ class ChatApp {
             }
         }
         st.reasoningWrapEl = wrap;
+        window.TaskCards?.place?.(st.pendingBotEl);   // задачи — сразу после рассуждений
         this._startReasoningTimer(chatId);
         return wrap.querySelector('.reasoning-body');
     }
@@ -5770,6 +5856,7 @@ class ChatApp {
             });
             el.appendChild(actions);
         }
+        window.TaskCards?.place?.(el);   // ответ дописан — карточки задач над .message-actions
 
         // Убираем placeholder и статусы через методы (с clearTimeout гарда)
         this._removeBotPlaceholder();

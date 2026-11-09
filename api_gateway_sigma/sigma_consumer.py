@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 def _sanitize_files(attached_files):
-    """Оставляем фронту только name/ext/kind/image_key (без служебного path)."""
+    """Оставляем фронту только name/ext/kind/image_key/size (без служебного path)."""
     if not attached_files:
         return None
     out = []
@@ -35,6 +35,10 @@ def _sanitize_files(attached_files):
             "ext": name.rsplit(".", 1)[-1].lower() if name and "." in name else None,
             "kind": f.get("kind"),
             "image_key": f.get("image_key"),
+            "size": f.get("size"),
+            "thumbhash": f.get("thumbhash"),
+            "width": f.get("width"),
+            "height": f.get("height"),
         })
     return out
 

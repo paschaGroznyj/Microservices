@@ -120,38 +120,23 @@ async def mark_running(
 
 
 async def count_active_requests() -> int:
-    """Считает количество активных запросов пользователей к агенту по ключам Redis agent*."""
+    """Считает чаты с активным запросом к агенту: есть agent:running или agent:loop.
+
+    agent:reasoning:* не учитывается: ключ рассуждений может пережить флаг
+    running (агент упал, флаги сняли напрямую), и счётчик залипал до RUN_TTL.
+    """
     if _redis is None:
         return 0
     try:
         active_chats: set[str] = set()
-        reasoning_candidates: list[tuple[str, str]] = []
-        async for key in _redis.scan_iter(match="agent*"):
-            k = str(key)
-            if k.startswith("agent:running:"):
-                cid = k[len("agent:running:"):]
-                if cid:
-                    active_chats.add(cid)
-            elif k.startswith("agent:loop:"):
-                cid = k[len("agent:loop:"):]
-                if cid:
-                    active_chats.add(cid)
-            elif k.startswith("agent:reasoning:"):
-                cid = k[len("agent:reasoning:"):]
-                if cid:
-                    reasoning_candidates.append((cid, k))
-        for cid, rkey in reasoning_candidates:
-            if cid in active_chats:
-                continue
-            raw = await _redis.get(rkey)
-            if not raw:
-                continue
-            try:
-                st = json.loads(raw)
-                if not st.get("completed") and not st.get("is_final"):
-                    active_chats.add(cid)
-            except Exception:
-                pass
+        async for key in _redis.scan_iter(match="agent:*"):
+            k = key.decode() if isinstance(key, bytes) else str(key)
+            for prefix in ("agent:running:", "agent:loop:"):
+                if k.startswith(prefix):
+                    cid = k[len(prefix):]
+                    if cid:
+                        active_chats.add(cid)
+                    break
         return len(active_chats)
     except Exception as e:
         logger.debug("run_status.count_active_requests failed: %s", e)

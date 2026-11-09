@@ -117,3 +117,33 @@ def test_register_setting_models_extends_normalization():
     assert run_status.normalize_setting_model("deepseek") == "ds"
     assert run_status.normalize_setting_model("r1") == "ds"
     assert run_status.normalize_setting_model("ds") == "ds"
+
+
+# ---------- count_active_requests ----------
+
+def _scan_keys(mocker, rm, keys):
+    async def _scan(*args, **kwargs):
+        for k in keys:
+            yield k
+    rm.scan_iter = mocker.MagicMock(side_effect=_scan)
+
+
+def test_count_active_running_and_loop(mocker, redis_mock):
+    _scan_keys(mocker, redis_mock, [
+        "agent:running:c1", "agent:loop:c1",   # один чат, два флага
+        b"agent:loop:c2",                        # bytes-ключ
+        "agent:reasoning:c3",                    # без флага — не считается
+    ])
+    assert run(run_status.count_active_requests()) == 2
+
+
+def test_count_ignores_hanging_reasoning(mocker, redis_mock):
+    _scan_keys(mocker, redis_mock, ["agent:reasoning:c9"])
+    redis_mock.get.return_value = json.dumps({"completed": False, "is_final": False})
+    assert run(run_status.count_active_requests()) == 0
+    redis_mock.get.assert_not_awaited()
+
+
+def test_count_swallows_scan_error(mocker, redis_mock):
+    redis_mock.scan_iter = mocker.MagicMock(side_effect=RuntimeError("down"))
+    assert run(run_status.count_active_requests()) == 0

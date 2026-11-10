@@ -15,22 +15,6 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE INDEX IF NOT EXISTS ix_users_username ON users(username);
 
--- Обратная связь пользователей
-CREATE TABLE IF NOT EXISTS feedbacks (
-    id                SERIAL PRIMARY KEY,
-    user_id           INTEGER NOT NULL,
-    hash_username     VARCHAR(50),
-    original_category VARCHAR(50),
-    llm_category      VARCHAR(50),
-    style             VARCHAR(50),
-    original_text     TEXT NOT NULL,
-    llm_text          TEXT,
-    created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS ix_feedbacks_user_id ON feedbacks(user_id);
-CREATE INDEX IF NOT EXISTS ix_feedbacks_created_at ON feedbacks(created_at DESC);
-
 -- Каталог обновлений приложения (What's New)
 CREATE TABLE IF NOT EXISTS app_updates (
     id           SERIAL PRIMARY KEY,

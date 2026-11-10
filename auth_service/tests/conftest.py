@@ -44,9 +44,8 @@ class _FakeDB:
         self.set_scholar_token = AsyncMock()
         self.get_user_preferences = AsyncMock()
         self.upsert_user_preferences = AsyncMock()
-        self.save_feedback = AsyncMock()
-        self.get_feedbacks = AsyncMock()
         self.get_pending_whatsnew = AsyncMock()
+        self.get_app_update_body = AsyncMock()
         self.mark_demo_seen = AsyncMock()
         self.mark_update_seen = AsyncMock()
 

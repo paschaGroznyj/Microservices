@@ -284,8 +284,26 @@ async def whatsnew_pending(request: Request):
     #     return {"demo": True, "updates": []}
     if user_id is None:
         raise HTTPException(status_code=400, detail="user_id обязателен")
-    result = await db.get_pending_whatsnew(user_id=int(user_id))
+    lazy = bool(data.get("lazy"))
+    result = await db.get_pending_whatsnew(user_id=int(user_id), lazy=lazy)
     return result
+
+
+@app.post("/whatsnew/updates/body")
+async def whatsnew_update_body(request: Request):
+    """Текст одного обновления для ленивой догрузки (только published)."""
+    data = await request.json()
+    update_id = data.get("update_id")
+    if data.get("user_id") is None or update_id is None:
+        raise HTTPException(status_code=400, detail="user_id и update_id обязательны")
+    try:
+        update_id = int(update_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="update_id должен быть числом")
+    row = await db.get_app_update_body(update_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Обновление не найдено")
+    return row
 
 
 @app.post("/whatsnew/demo/seen")

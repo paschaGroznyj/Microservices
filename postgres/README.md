@@ -10,7 +10,7 @@
 - `00_init/`
   - `01_extensions_and_functions.sql` — расширения `vector`, `pg_trgm`, `pgcrypto`, функция `update_updated_at_column()`.
 - `01_auth/`
-  - `01_users_and_profile.sql` — `users`, `feedbacks`, `app_updates`, `user_seen_updates`, `user_onboarding`, `user_preferences`.
+  - `01_users_and_profile.sql` — `users`, `app_updates`, `user_seen_updates`, `user_onboarding`, `user_preferences`.
 - `02_chats/`
   - `01_chats_core.sql` — `chats`, `chat_types_agent`, `chat_sidebar_meta`, `chat_files`, `generated_images`, `agent_loop_tasks`, `model_tariffs`, `chat_poll_answers`, `editor_workspaces`, `user_settings`.
   - `02_group_chats.sql` — `group_rooms` (+ комната `global`), `group_messages`, `group_room_members`, `group_message_files`.

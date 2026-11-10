@@ -117,3 +117,67 @@ def test_register_setting_models_extends_normalization():
     assert run_status.normalize_setting_model("deepseek") == "ds"
     assert run_status.normalize_setting_model("r1") == "ds"
     assert run_status.normalize_setting_model("ds") == "ds"
+
+
+# ---------- count_active_requests ----------
+
+def _scan_keys(mocker, rm, keys):
+    async def _scan(*args, **kwargs):
+        for k in keys:
+            yield k
+    rm.scan_iter = mocker.MagicMock(side_effect=_scan)
+
+
+def test_count_active_running_and_loop(mocker, redis_mock):
+    _scan_keys(mocker, redis_mock, [
+        "agent:running:c1", "agent:loop:c1",   # один чат, два флага
+        b"agent:loop:c2",                        # bytes-ключ
+        "agent:reasoning:c3",                    # без флага — не считается
+    ])
+    assert run(run_status.count_active_requests()) == 2
+
+
+def test_count_ignores_hanging_reasoning(mocker, redis_mock):
+    _scan_keys(mocker, redis_mock, ["agent:reasoning:c9"])
+    redis_mock.get.return_value = json.dumps({"completed": False, "is_final": False})
+    assert run(run_status.count_active_requests()) == 0
+    redis_mock.get.assert_not_awaited()
+
+
+def test_count_swallows_scan_error(mocker, redis_mock):
+    redis_mock.scan_iter = mocker.MagicMock(side_effect=RuntimeError("down"))
+    assert run(run_status.count_active_requests()) == 0
+
+
+# ---------- get_system_notice (restart.sh → sys:notice) ----------
+
+def test_system_notice_none_when_missing(redis_mock):
+    redis_mock.hgetall.return_value = {}
+    assert run(run_status.get_system_notice()) is None
+    redis_mock.hgetall.assert_awaited_once_with("sys:notice")
+
+
+def test_system_notice_parsed(redis_mock):
+    redis_mock.hgetall.return_value = {
+        b"id": b"r-1", b"phase": b"maintenance",
+        "text": "## Работы\n- **агент**".encode(),
+        b"services": b"agent_service chats_service", b"ts": b"1700000000",
+    }
+    n = run(run_status.get_system_notice())
+    assert n == {
+        "id": "r-1", "phase": "maintenance", "text": "## Работы\n- **агент**",
+        "services": ["agent_service", "chats_service"], "ts": 1700000000,
+    }
+
+
+def test_system_notice_unknown_phase_and_no_id(redis_mock):
+    redis_mock.hgetall.return_value = {"id": "r-2", "phase": "weird", "ts": "x"}
+    n = run(run_status.get_system_notice())
+    assert n["phase"] == "maintenance" and n["ts"] == 0 and n["services"] == []
+    redis_mock.hgetall.return_value = {"phase": "done", "text": "t"}
+    assert run(run_status.get_system_notice()) is None
+
+
+def test_system_notice_redis_error(redis_mock):
+    redis_mock.hgetall.side_effect = Exception("WRONGTYPE")
+    assert run(run_status.get_system_notice()) is None

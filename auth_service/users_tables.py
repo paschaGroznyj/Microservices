@@ -14,26 +14,6 @@ logging.basicConfig(
 
 BCRYPT_ROUNDS=10
 
-import hashlib
-import base64
-
-SECRET_SALT = b"top-secret"
-
-
-def get_short_id(username: str) -> str:
-    clean_name = username.strip().lower()
-
-    # Генерируем хэш размером всего 12 байт (этого за глаза для уникальности)
-    hasher = hashlib.blake2b(clean_name.encode('utf-8'), key=SECRET_SALT, digest_size=12)
-
-    # Кодируем в base64, чтобы превратить байты в читаемый текст
-    encoded = base64.b64encode(hasher.digest()).decode('utf-8')
-
-    # Заменяем символы '/' и '+', которые могут сломать URL или верстку, и убираем знаки '='
-    safe_encoded = encoded.replace('/', '_').replace('+', '-').rstrip('=')
-
-    return safe_encoded  # Выдаст ровно 16 красивых символов (например: "vK9_xM2Lp8Q1a-Z9")
-
 
 class DataBaseUser:
     async def init_db_pool(self):
@@ -72,7 +52,7 @@ class DataBaseUser:
 
     @staticmethod
     async def __init_db(conn):
-        # DDL-схема таблиц (users, feedbacks, app_updates, user_seen_updates,
+        # DDL-схема таблиц (users, app_updates, user_seen_updates,
         # user_onboarding, user_preferences) вынесена в postgres/sql/01_auth/
         await conn.execute("SET TIME ZONE '+4'")
 
@@ -400,29 +380,44 @@ class DataBaseUser:
     # ─────────────────────────────────────────────────────────────────────────
     # What's New (обновления) + Onboarding (демо-модалка)
     # ─────────────────────────────────────────────────────────────────────────
-    async def get_pending_whatsnew(self, user_id: int) -> dict:
+    # Сколько свежих обновлений отдаём сразу с текстом в lazy-режиме:
+    # текущее (последнее) + одно «заготовленное» для кнопки «назад».
+    WHATSNEW_EAGER_BODIES = 2
+
+    async def get_pending_whatsnew(self, user_id: int, lazy: bool = False) -> dict:
         """
         Что показать юзеру при входе:
           - demo: показать ли онбординг-демо (True, если нет отметки demo_seen);
           - updates: список published-обновлений, которые юзер ещё не закрыл
                      (по возрастанию created_at — показываем от старых к новым).
+
+        lazy=True: body отдаётся только у WHATSNEW_EAGER_BODIES самых свежих,
+        у остальных body=NULL и has_body=False — фронт догружает их по одному
+        через get_app_update_body(), когда юзер листает назад.
+        """
+        eager = self.WHATSNEW_EAGER_BODIES if lazy else None
+        # $1 — user_id (NULL = MOCK без фильтра просмотренных), $2 — лимит тел (NULL = все).
+        sql = """
+            SELECT id, version, title, created_at,
+                   CASE WHEN $2::int IS NULL OR rn <= $2::int THEN body END AS body,
+                   ($2::int IS NULL OR rn <= $2::int) AS has_body
+            FROM (
+                SELECT au.id, au.version, au.title, au.body, au.created_at,
+                       ROW_NUMBER() OVER (ORDER BY au.created_at DESC, au.id DESC) AS rn
+                FROM app_updates au
+                WHERE au.is_published = TRUE
+                  AND ($1::int IS NULL OR NOT EXISTS (
+                      SELECT 1 FROM user_seen_updates su
+                      WHERE su.update_id = au.id AND su.user_id = $1::int
+                  ))
+            ) t
+            ORDER BY created_at ASC, id ASC
         """
         async with self.pool.acquire() as conn:
             # --- MOCK для тестового юзера 56: всегда демо + все published-обновления ---
             if user_id == 56:
-                rows = await conn.fetch("""
-                    SELECT au.id, au.version, au.title, au.body, au.created_at
-                    FROM app_updates au
-                    WHERE au.is_published = TRUE
-                    ORDER BY au.created_at ASC, au.id ASC
-                """)
-                updates = []
-                for r in rows:
-                    item = dict(r)
-                    if item.get("created_at"):
-                        item["created_at"] = item["created_at"].isoformat()
-                    updates.append(item)
-                return {"demo": True, "updates": updates}
+                rows = await conn.fetch(sql, None, eager)
+                return {"demo": True, "updates": self._whatsnew_rows(rows)}
             # --- конец MOCK ---
             demo_seen = await conn.fetchval("""
                 SELECT demo_seen FROM user_onboarding WHERE user_id = $1
@@ -430,25 +425,27 @@ class DataBaseUser:
             # Нет строки -> демо ещё не видел -> показываем.
             demo = not bool(demo_seen)
 
-            rows = await conn.fetch("""
-                SELECT au.id, au.version, au.title, au.body, au.created_at
-                FROM app_updates au
-                WHERE au.is_published = TRUE
-                  AND NOT EXISTS (
-                      SELECT 1 FROM user_seen_updates su
-                      WHERE su.update_id = au.id AND su.user_id = $1
-                  )
-                ORDER BY au.created_at ASC, au.id ASC
-            """, user_id)
+            rows = await conn.fetch(sql, user_id, eager)
+            return {"demo": demo, "updates": self._whatsnew_rows(rows)}
 
-            updates = []
-            for r in rows:
-                item = dict(r)
-                if item.get("created_at"):
-                    item["created_at"] = item["created_at"].isoformat()
-                updates.append(item)
+    @staticmethod
+    def _whatsnew_rows(rows) -> list[dict]:
+        updates = []
+        for r in rows:
+            item = dict(r)
+            if item.get("created_at"):
+                item["created_at"] = item["created_at"].isoformat()
+            updates.append(item)
+        return updates
 
-            return {"demo": demo, "updates": updates}
+    async def get_app_update_body(self, update_id: int) -> dict | None:
+        """Текст одного published-обновления (ленивая догрузка в модалке What's New)."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT id, body FROM app_updates
+                WHERE id = $1 AND is_published = TRUE
+            """, int(update_id))
+            return dict(row) if row else None
 
     async def mark_demo_seen(self, user_id: int) -> bool:
         """Отметить, что юзер закрыл онбординг-демо (идемпотентно)."""
@@ -495,69 +492,3 @@ class DataBaseUser:
         """Достаём users.id по username (для эндпоинтов, где есть только sub из JWT)."""
         async with self.pool.acquire() as conn:
             return await conn.fetchval("SELECT id FROM users WHERE username = $1", username)
-
-    async def save_feedback(self, user_id: int, username: str, style: str,
-                            original_text: str, original_category: str,
-                            llm_text: str = None, llm_category: str = None):
-        hash_username = get_short_id(username)
-        """Сохраняет отзыв в таблицу feedbacks"""
-        async with self.pool.acquire() as conn:
-            query = """
-                    INSERT INTO feedbacks (user_id, \
-                                           hash_username, \
-                                           style, \
-                                           original_category, \
-                                           original_text, \
-                                           llm_text, \
-                                           llm_category)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
-                    RETURNING id, created_at, hash_username as author; \
-                    """
-
-            row = await conn.fetchrow(
-                query,
-                user_id,
-                hash_username,
-                style,  # Стиль (pirate, formal...)
-                original_category,  # Категория от пользователя (bug, idea...)
-                original_text,  # Текст пользователя
-                llm_text,  # Текст от LLM
-                llm_category  # Категория от LLM (может отличаться от original)
-            )
-            return row
-
-    async def get_feedbacks(self, limit: int = 50):
-        """Получает список последних отзывов"""
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch("""
-                    SELECT f.id,
-                           f.user_id,
-                           f.hash_username  AS author,
-                           u.username,
-                           f.original_category,
-                           f.llm_category,
-                           f.style,
-                           f.original_text,
-                           f.llm_text,
-                           f.created_at,
-                           -- Если есть llm_text, берем его, иначе original_text
-                           COALESCE(f.llm_text, f.original_text)         AS text,
-                           -- Если есть llm_category, берем её, иначе original_category 
-                           COALESCE(f.llm_category, f.original_category) AS category
-                    FROM feedbacks f
-                    JOIN users u ON f.user_id = u.id
-                    ORDER BY f.created_at
-                    LIMIT $1;
-                    """, limit)
-            count_reports = await conn.fetchval("""SELECT COUNT(id) FROM feedbacks""")
-
-            # Преобразуем Record в dict и форматируем дату
-            result = []
-            for row in rows:
-                item = dict(row)
-                # Форматируем дату в ISO формат для JSON
-                if item.get('created_at'):
-                    item['created_at'] = item['created_at'].isoformat()
-                result.append(item)
-
-            return {"count_reports": count_reports, "result": result}

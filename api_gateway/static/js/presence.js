@@ -1,6 +1,7 @@
 // presence.js — онлайн-счётчик (авто-обновление) + оверлей по клику + детектор нового билда и протухшей SSO-сессии.
 (function () {
   const COUNT_INTERVAL = 15000; // мс
+  const NOTICE_INTERVAL = 5000; // мс, пока активно системное уведомление (restart.sh)
   const AUTH_RELOAD_COOLDOWN_MS = 90000;
   const AUTH_RELOAD_KEY = 'catchpm:last_auth_reload_ts';
 
@@ -178,6 +179,19 @@
     }
   }
 
+  // Системное уведомление: модалка + ускоренный опрос, пока идут работы.
+  let pollMs = COUNT_INTERVAL;
+  function setPollInterval(ms) {
+    if (ms === pollMs) return;
+    pollMs = ms;
+    if (presenceTimer) clearInterval(presenceTimer);
+    presenceTimer = setInterval(refreshCount, pollMs);
+  }
+  function handleNotice(n) {
+    try { if (window.SystemNotice) window.SystemNotice.update(n || null); } catch (_) {}
+    setPollInterval(n && n.phase === 'maintenance' ? NOTICE_INTERVAL : COUNT_INTERVAL);
+  }
+
   async function refreshCount() {
     if (window.__authSessionExpired) return;
     if (document.visibilityState === 'hidden') return;
@@ -195,6 +209,7 @@
       const hdrBuild = r.headers.get('x-build-id');
       const d = await r.json();
       checkBuildId(d.build_id || hdrBuild);
+      handleNotice(d.notice);
       if (btn && countEl) {
         const n = Number(d.online || 0);
         countEl.textContent = n;
@@ -297,5 +312,5 @@
   window.addEventListener('focus', () => onWakeOrVisible());
 
   refreshCount();
-  presenceTimer = setInterval(refreshCount, COUNT_INTERVAL);
+  presenceTimer = setInterval(refreshCount, pollMs);
 })();

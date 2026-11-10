@@ -559,7 +559,8 @@ async def presence_leave(request: Request):
 
 @app.get("/api/presence/count")
 async def presence_count(request: Request, ping: int = 0):
-    """Лёгкий публичный счётчик онлайн (суммарно main+sigma) + живые запросы к агенту. Redis-only."""
+    """Лёгкий публичный счётчик онлайн (суммарно main+sigma) + живые запросы к агенту
+    + системное уведомление sys:notice (restart.sh). Redis-only."""
     if ping:
         user = await get_current_user(request)
         if user:
@@ -567,8 +568,9 @@ async def presence_count(request: Request, ping: int = 0):
     m = await presence.count_online("main")
     sg = await presence.count_online("sigma")
     active_req = await run_status.count_active_requests()
+    notice = await run_status.get_system_notice()
     return {"online": m + sg, "main": m, "sigma": sg, "active_requests": active_req,
-        "build_id": cache_bust.get_build_id(), "build_id": cache_bust.get_build_id()}
+        "build_id": cache_bust.get_build_id(), "notice": notice}
 
 
 @app.get("/api/presence/overlay")
@@ -1997,57 +1999,6 @@ async def find_chat_by_type(type_agent: str, request: Request):
         )
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Chats service unreachable: {str(e)}")
-
-# GET /api/feedback — история
-@app.get("/api/feedback")
-async def get_feedbacks(request: Request):
-    user = await get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    try:
-        response = await app.state.http_client.get(
-            f"{SERVICES['auth']['url']}/feedback"
-        )
-        logging.info(response.json())
-        return Response(
-            content=response.content,
-            status_code=response.status_code,
-            media_type="application/json"
-        )
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"Auth service unreachable: {str(e)}")
-
-
-# POST /api/feedback — новый отзыв
-@app.post("/api/feedback")
-async def post_feedback(request: Request):
-    user = await get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    user = await get_current_user(request)
-    data = await request.json()
-    data["user_id"] = user["user_id"]
-    data["username"] = user["username"]
-    auth_url = SERVICES['auth']['url']
-    try:
-        response = await app.state.http_client.post(
-            f"{auth_url}/feedback",
-            json=data,
-            timeout=30.0
-        )
-        if response.status_code == 200:
-            body = response.json()
-            # SIGMA: рассылку нового отзыва по WS заменяем на broadcast-событие
-            # в store — все онлайн-клиенты заберут его через GET /api/chats/user_events.
-            status_store.broadcast_user_event({
-                "type": "feedback_new",
-                "feedback": body
-            })
-            return {"ok": True}
-    except httpx.RequestError as e:
-        return {"ok": False}
 
 @app.get("/api/graph")
 async def get_graph_nodes(request: Request):

@@ -181,21 +181,6 @@ async def push_sse(username: str, data: dict):
     await sse_queues[username].put(data)
 
 
-# Другой коннектор для отправки релевантных статей на фронт
-user_connections: dict[str, WebSocket] = {}
-
-@app.websocket("/ws/user/{username}")
-async def websocket_user(websocket: WebSocket, username: str):
-    await websocket.accept()
-    user_connections[username] = websocket
-    await presence.touch("main", username)
-    try:
-        while True:
-            await websocket.receive_text()
-            await presence.touch("main", username)
-    except WebSocketDisconnect:
-        user_connections.pop(username, None)
-
 connections: dict[int, list[WebSocket]] = {}
 @app.websocket("/ws/chat/{chat_id}")
 async def websocket_chat(websocket: WebSocket, chat_id: str):
@@ -570,7 +555,8 @@ async def presence_leave(request: Request):
 
 @app.get("/api/presence/count")
 async def presence_count(request: Request, ping: int = 0):
-    """Лёгкий публичный счётчик онлайн (суммарно main+sigma) + живые запросы к агенту. Redis-only."""
+    """Лёгкий публичный счётчик онлайн (суммарно main+sigma) + живые запросы к агенту
+    + системное уведомление sys:notice (restart.sh). Redis-only."""
     if ping:
         user = await get_current_user(request)
         if user:
@@ -578,8 +564,9 @@ async def presence_count(request: Request, ping: int = 0):
     m = await presence.count_online("main")
     sg = await presence.count_online("sigma")
     active_req = await run_status.count_active_requests()
+    notice = await run_status.get_system_notice()
     return {"online": m + sg, "main": m, "sigma": sg, "active_requests": active_req,
-        "build_id": cache_bust.get_build_id(), "build_id": cache_bust.get_build_id()}
+        "build_id": cache_bust.get_build_id(), "notice": notice}
 
 
 @app.get("/api/presence/overlay")
@@ -882,7 +869,27 @@ async def whatsnew_pending(request: Request):
     try:
         response = await app.state.http_client.post(
             f"{auth_url}/whatsnew/pending",
-            json={"user_id": user["user_id"]},
+            json={"user_id": user["user_id"],
+                  "lazy": request.query_params.get("lazy") in ("1", "true")},
+            timeout=10.0
+        )
+        return JSONResponse(content=response.json(), status_code=response.status_code)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Auth service dead: {str(e)}")
+
+
+@app.get("/api/whatsnew/updates/{update_id}/body")
+async def whatsnew_update_body(update_id: int, request: Request):
+    """Ленивая догрузка текста одного обновления (модалка What's New)."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    auth_url = SERVICES['auth']['url']
+    try:
+        response = await app.state.http_client.post(
+            f"{auth_url}/whatsnew/updates/body",
+            json={"user_id": user["user_id"], "update_id": update_id},
             timeout=10.0
         )
         return JSONResponse(content=response.json(), status_code=response.status_code)
@@ -1055,37 +1062,6 @@ pending_requests: dict[str, int] = {}
 
 class StopMessageRequest(BaseModel):
     request_id: str
-
-async def notify_user_error(username: str, error_type: str = "error_parser"):
-    ws = user_connections.get(username)
-    if ws:
-        await ws.send_json({"type": error_type})
-    else:
-        logging.warning(f"Нет WS соединения для {username}")
-
-async def notify_user_message(username: str, type_message: str, message: str, source: str = None, title: str = None):
-    ws = user_connections.get(username)
-    if ws:
-        logging.info(f"Отправили по вебсокету сообщения: {type_message}, {message}")
-        await ws.send_json({"type": type_message, "message": message, "source": source, "title": title})
-    else:
-        logging.warning(f"Нет WS соединения для {username}")
-
-
-@app.post("/internal/sse-push")
-async def internal_sse_push(request: Request):
-    """Агент сообщает что эмбеддинги готовы"""
-    data = await request.json()
-    username = data["username"]
-    logging.info(f"ОТВЕТ АГЕНТА ПО ЭМБЕДДИНГАМ: {data}")
-    ws = user_connections.get(username)
-    logging.info(user_connections)
-    if ws:
-        await ws.send_json(data["data"])
-    else:
-        logging.warning(f"Нет WS соединения для {username}")
-
-    return {"ok": True}
 
 
 # ========== ПРОКСИ ДЛЯ ЧАТОВ ==========
@@ -1799,65 +1775,6 @@ async def find_chat_by_type(type_agent: str, request: Request):
         )
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Chats service unreachable: {str(e)}")
-
-# GET /api/feedback — история
-@app.get("/api/feedback")
-async def get_feedbacks(request: Request):
-    user = await get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    try:
-        response = await app.state.http_client.get(
-            f"{SERVICES['auth']['url']}/feedback"
-        )
-        logging.info(response.json())
-        return Response(
-            content=response.content,
-            status_code=response.status_code,
-            media_type="application/json"
-        )
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"Auth service unreachable: {str(e)}")
-
-
-# POST /api/feedback — новый отзыв
-@app.post("/api/feedback")
-async def post_feedback(request: Request):
-    user = await get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    user = await get_current_user(request)
-    data = await request.json()
-    data["user_id"] = user["user_id"]
-    data["username"] = user["username"]
-    auth_url = SERVICES['auth']['url']
-    try:
-        response = await app.state.http_client.post(
-            f"{auth_url}/feedback",
-            json=data,
-            timeout=30.0
-        )
-        if response.status_code == 200:
-            body = response.json()
-            for ws in user_connections.values():
-                if ws:
-                    # Формируем правильную обертку для фронтенда
-                    ws_payload = {
-                        "type": "feedback_new",
-                        "feedback": body
-                    }
-                    try:
-                        await ws.send_json(ws_payload)
-                    except Exception as e:
-                        logging.error(f"WS send error: {e}")
-                        # Если ошибка отправки, возможно сокет мертв, удаляем его
-                        user_connections.pop(user["username"], None)
-
-            return {"ok": True}
-    except httpx.RequestError as e:
-        return {"ok": False}
 
 @app.get("/api/graph")
 async def get_graph_nodes(request: Request):

@@ -1,7 +1,7 @@
 /* FlowMap: путь запроса (прототип для встраивания). API: window.FlowViz */
 (() => {
 'use strict';
-const MODAL_HTML = "<div class=\"fm-back\" id=\"fmBack\">\n  <div class=\"fm-dlg\" role=\"dialog\" aria-label=\"Путь запроса\">\n    <div class=\"fm-head\">\n      <div class=\"fm-title\">ПУТЬ ЗАПРОСА</div>\n      <div class=\"fm-seg\" id=\"fmLayout\"><button data-l=\"flat\" class=\"is-on\">Плоская</button><button data-l=\"iso\">Изометрия</button><button data-l=\"both\">Рядом</button></div>\n      <div class=\"fm-seg\" id=\"fmMode\"><button data-m=\"watch\" class=\"is-on\">Наблюдать</button><button data-m=\"control\">Управлять</button></div>\n      <div class=\"fm-seg\"><button id=\"fmFit\">Весь путь</button></div>\n      <button class=\"fm-x\" id=\"fmClose\" aria-label=\"Закрыть\">×</button>\n    </div>\n    <div class=\"fm-body\">\n      <div class=\"fm-panel\" id=\"pFlat\"><canvas id=\"cvFlat\"></canvas><div class=\"fm-ptag\">ПЛОСКАЯ</div><div class=\"fm-card\"></div></div>\n      <div class=\"fm-panel\" id=\"pIso\"><canvas id=\"cvIso\"></canvas><div class=\"fm-ptag\">ИЗОМЕТРИЯ</div><div class=\"fm-card\"></div></div>\n    </div>\n    <div class=\"fm-foot\">\n      <div class=\"fm-status\"><span id=\"fmStatus\">Ожидаю запрос</span><span id=\"fmTotal\"></span></div>\n      <div class=\"fm-tl\"><div class=\"fm-tl__row fm-tl__row--base\" id=\"tlBase\"></div><div class=\"fm-tl__row fm-tl__row--tools\" id=\"tlTools\"></div></div>\n    </div>\n  </div>\n</div>";
+const MODAL_HTML = "<div class=\"fm-back\" id=\"fmBack\">\n  <div class=\"fm-dlg\" role=\"dialog\" aria-label=\"Путь запроса\">\n    <div class=\"fm-head\">\n      <div class=\"fm-title\">ПУТЬ ЗАПРОСА</div>\n      <div class=\"fm-seg\" id=\"fmLayout\"><button data-l=\"flat\" class=\"is-on\">Плоская</button><button data-l=\"iso\">Изометрия</button><button data-l=\"both\">Оба режима</button></div>\n      <div class=\"fm-seg\" id=\"fmMode\"><button data-m=\"watch\" class=\"is-on\">Наблюдать</button><button data-m=\"control\">Управлять</button></div>\n      <div class=\"fm-seg\"><button id=\"fmFit\">Весь путь</button></div>\n      <button class=\"fm-x\" id=\"fmClose\" aria-label=\"Закрыть\">×</button>\n    </div>\n    <div class=\"fm-body\">\n      <div class=\"fm-panel\" id=\"pFlat\"><canvas id=\"cvFlat\"></canvas><div class=\"fm-ptag\">ПЛОСКАЯ</div><div class=\"fm-card\"></div></div>\n      <div class=\"fm-panel\" id=\"pIso\"><canvas id=\"cvIso\"></canvas><div class=\"fm-ptag\">ИЗОМЕТРИЯ</div><div class=\"fm-card\"></div></div>\n    </div>\n    <div class=\"fm-foot\">\n      <div class=\"fm-status\"><span id=\"fmStatus\">Ожидаю запрос</span><span id=\"fmTotal\"></span></div>\n      <div class=\"fm-tl\"><div class=\"fm-tl__row fm-tl__row--base\" id=\"tlBase\"></div><div class=\"fm-tl__row fm-tl__row--tools\" id=\"tlTools\"></div></div>\n    </div>\n  </div>\n</div>";
 const $ = s => document.querySelector(s);
 mountDom();
 const RM = matchMedia('(prefers-reduced-motion: reduce)');
@@ -94,17 +94,24 @@ const S = {
   active:false, phase:'idle', t0:0, tEnd:0, d:0, dir:1, allow:0, trail:[], pkz:0,
   calls:new Map(), discovered:new Set(), phases:[], toolLog:[], fx:[], pulses:[],
   lit:new Float32Array(EDGES.length), hl:{}, st:{}, others:0, ghosts:[], status:'Ожидаю запрос', lastInside:null, chat:null, rid:null,
-  wsSeen:false, wsId:'', wsIds:new Set(), stepSeq:0,
+  wsSeen:false, wsId:'', wsIds:new Set(), stepSeq:0, thinkT0:null, tailThinkMs:0,
 };
 for (const n of [...NODES, ...SLOT_LIST]) { S.hl[n.id] = 0; S.st[n.id] = {visits:0, ms:0, calls:[]}; }
 const now = () => performance.now();
-const fmtS = ms => (ms / 1000).toFixed(1).replace('.', ',') + ' с';
+const fmtS = ms => {
+  const s = Math.max(0, ms) / 1000;
+  if (s >= 60) {
+    const tot = Math.floor(s), m = Math.floor(tot / 60), r = tot % 60;
+    return `${m} мин ${r} с`;
+  }
+  return s.toFixed(1).replace('.', ',') + ' с';
+};
 function setStatus(t) { S.status = t; }
 // Смена чата: текущий путь гасим без анимации. Раскрытая панель и открытая модалка остаются.
 function reset() {
   S.active = false; S.phase = 'idle'; S.t0 = 0; S.tEnd = 0; S.d = 0; S.dir = 1; S.allow = 0; S.trail = [];
   S.calls.clear(); S.phases = []; S.toolLog = []; S.fx = []; S.pulses = []; S.lit.fill(0); S.chat = null; S.rid = null;
-  S.wsSeen = false; S.wsId = ''; S.wsIds.clear(); S.stepSeq = 0;
+  S.wsSeen = false; S.wsId = ''; S.wsIds.clear(); S.stepSeq = 0; S.thinkT0 = null; S.tailThinkMs = 0;
   setStatus('Ожидаю запрос'); clearTimeout(miniHideT); MINI.on = HOST.expanded;
   layoutHost(); renderTimeline(true); kick();
 }
@@ -123,7 +130,7 @@ function emit(type, d = {}) {
     case 'send':
       S.chat = d.chat != null ? String(d.chat) : null; S.rid = null;
       S.active = true; S.phase = 'send'; S.t0 = t; S.tEnd = 0; S.d = 0; S.dir = 1; S.allow = D[1]; S.trail = [];
-      S.calls.clear(); S.phases = []; S.toolLog = []; S.fx = []; S.pulses = []; S.lit.fill(0); S.lastInside = null; S.stepSeq = 0;
+      S.calls.clear(); S.phases = []; S.toolLog = []; S.fx = []; S.pulses = []; S.lit.fill(0); S.lastInside = null; S.stepSeq = 0; S.thinkT0 = null; S.tailThinkMs = 0;
       openPhase('gw', 'Шлюз', t); setStatus('Отправляю…'); showMini(true); break;
     case 'gateway':
       if (!S.active) break;
@@ -137,7 +144,7 @@ function emit(type, d = {}) {
       S.phase = 'accepted'; S.allow = Math.max(S.allow, D[5]); setStatus('Агент принял запрос'); break;
     case 'agent_start':
       if (!S.active || S.phase === 'answer' || S.phase === 'done') break;
-      S.phase = 'agent'; S.allow = DMAX; openPhase('agent', 'Агент', t); setStatus('Агент думает'); break;
+      S.phase = 'agent'; S.allow = DMAX; S.thinkT0 = t; S.tailThinkMs = 0; openPhase('agent', 'Агент', t); setStatus('Агент думает'); break;
     case 'tool_start': {
       if (!S.active) break;
       if (S.phase !== 'agent' && S.phase !== 'answer') { S.phase = 'agent'; S.allow = DMAX; openPhase('agent', 'Агент', t); }
@@ -157,7 +164,9 @@ function emit(type, d = {}) {
         S.pulses.push({a:'sandbox', b:'workspace', t, dur:680});
       }
       // gap_ms — сколько агент думал перед этим шагом (считает бэк по request_id).
-      const gap = isNewStep && Number.isFinite(+d.gap_ms) && d.gap_ms !== null ? +d.gap_ms : null;
+      const fbGap = isNewStep && S.thinkT0 != null ? Math.max(0, t - S.thinkT0) : null;
+      const gap = isNewStep ? (Number.isFinite(+d.gap_ms) && d.gap_ms !== null ? +d.gap_ms : fbGap) : null;
+      if (isNewStep) { S.thinkT0 = null; S.tailThinkMs = 0; }
       S.toolLog.push({key, slot, label, ws, step, t0:t, t1:0, ms:null, ok:true, gap, gapShown:gap});
       S.discovered.add(slot); S.hl[slot] = 1; setStatus(label); break;
     }
@@ -178,7 +187,9 @@ function emit(type, d = {}) {
       const st = S.st[c.slot]; st.calls.unshift({label:c.label, ms, ok}); st.calls.length = Math.min(st.calls.length, 5); st.visits++;
       if (ws) { const wst = S.st.workspace; wst.calls.unshift({label:c.label + (S.wsId ? ` (${S.wsId})` : ''), ms, ok}); wst.calls.length = Math.min(wst.calls.length, 5); wst.visits++; wst.ms += ms; }
       S.fx.push({kind: ok ? 'ok' : 'err', slot:c.slot, t, dur: ok ? 700 : 2600});
-      const left = [...S.calls.values()]; setStatus(left.length ? left[left.length-1].label : 'Агент думает'); break;
+      const left = [...S.calls.values()];
+      if (!left.length && S.phase === 'agent') S.thinkT0 = t;
+      setStatus(left.length ? left[left.length-1].label : 'Агент думает'); break;
     }
     case 'db_saved':
       // chats_service записал сообщение в БД: импульс CHATS → DB.
@@ -190,11 +201,13 @@ function emit(type, d = {}) {
       S.hl.obs = 1; S.hl.agent = Math.max(S.hl.agent, .6); S.pulses.push({a:'agent', b:'obs', t, dur:720, err:d.ok === false}); break;
     case 'answer':
       if (!S.active || S.phase === 'answer' || S.phase === 'done') break;
+      if (S.thinkT0 != null) { S.tailThinkMs = Math.max(0, t - S.thinkT0); S.thinkT0 = null; }
       S.phase = 'answer'; S.dir = -1; S.allow = 0;
       for (const [k] of S.calls) { const log = S.toolLog.find(l => l.key === k && !l.t1); if (log) log.t1 = t; }
       S.calls.clear(); openPhase('answer', 'Ответ', t); setStatus('Пишу ответ'); break;
     case 'done': {
       if (!S.active || S.phase === 'done') break;
+      if (S.thinkT0 != null) { S.tailThinkMs = Math.max(0, t - S.thinkT0); S.thinkT0 = null; }
       for (const [k] of S.calls) { const log = S.toolLog.find(l => l.key === k && !l.t1); if (log) { log.t1 = t; log.ok = d.ok !== false; } }
       S.calls.clear();
       const p = S.phases[S.phases.length - 1]; if (p && !p.t1) p.t1 = t;
@@ -536,8 +549,7 @@ function drawMini() {
   let txt = S.status;
   if (calls.length) { const cl = calls[calls.length - 1]; txt = SLOTS[cl.slot].name + ' · ' + fmtS(now() - cl.t0) + (calls.length > 1 ? ` · +${calls.length - 1}` : ''); }
   else if (S.phase === 'done' && S.tEnd) txt = 'Готово · ' + fmtS(S.tEnd - S.t0);
-  c.fillStyle = rgba(calls.length ? C.accent : C.text, calls.length ? 1 : 0.8); c.fillText(fitTxt(c, txt, Math.max(80, W - 64)), 10, 11);
-  c.font = `500 13px ${MONO}`; c.textAlign = 'right'; c.fillStyle = rgba(C.sec); c.fillText('⤢', W - 38, 12);
+  c.fillStyle = rgba(calls.length ? C.accent : C.text, calls.length ? 1 : 0.8); c.fillText(fitTxt(c, txt, Math.max(80, W - 42)), 10, 11);
   try { c.letterSpacing = '0px'; } catch (_) {}
 }
 let miniHideT = 0;
@@ -603,7 +615,7 @@ function drawRail() {
   const ls = v => { try { c.letterSpacing = v; } catch (_) {} };
   c.textBaseline = 'middle'; c.textAlign = 'left';
   c.font = `600 10px ${MONO}`; ls('1px'); c.fillStyle = rgba(C.label); c.fillText('ПУТЬ ЗАПРОСА', 12, 17);
-  ls('0px'); c.font = `500 12px ${MONO}`; c.fillStyle = rgba(C.text, .7); c.textAlign = 'right'; c.fillText('⤢', W - 36, 17); c.textAlign = 'left';
+  ls('0px');
   c.strokeStyle = rgba(C.border); c.lineWidth = 1; c.beginPath(); c.moveTo(12, 30.5); c.lineTo(W - 12, 30.5); c.stroke();
   // ось
   c.strokeStyle = rgba(C.stroke); c.lineWidth = 1.2; c.beginPath(); c.moveTo(X, YS[0]); c.lineTo(X, YS[6]); c.stroke();
@@ -686,13 +698,12 @@ function renderTimeline(force) {
       const w = pcts[i], l = acc; acc += w;
       const dur = durs[i], segPx = W * w / 100;
       const lbl = (segPx < 88 && p.label === 'Очередь') ? 'Очер.' : p.label;
-      const ds = segPx < 88 ? fmtS(dur).replace(' с', 'с') : fmtS(dur);
+      const ds = segPx < 88 ? fmtS(dur).replace(' мин ', 'м ').replace(' с', 'с') : fmtS(dur);
       const full = `${lbl} ${ds}`;
       return `<div class="fm-seg-b" data-k="${p.k}" style="left:${l.toFixed(2)}%;width:${w.toFixed(2)}%" title="${p.label} · ${fmtS(dur)}">${full}</div>`;
     }).join('');
   } else base.innerHTML = '';
   // 2) Полоса инструментов (fm-tl__row--tools): читаемая ширина каждого сегмента в px + горизонтальный скролл.
-  if (!S.toolLog.length) { tools.innerHTML = ''; tools.style.height = '18px'; return; }
   // Группируем параллельные вызовы одного шага в колонки по l.step, внутри колонки — по дорожкам (lane)
   const groups = [];
   for (const l of S.toolLog) {
@@ -711,7 +722,7 @@ function renderTimeline(force) {
   for (const g of groups) {
     if (g.gap > 0) {
       const gTxt = `думает ${fmtS(g.gap)}`;
-      const gw = Math.max(Math.ceil(gTxt.length * cw + 16), Math.round(22 * Math.pow(g.gap / 1000, 0.35)));
+      const gw = Math.max(Math.ceil(gTxt.length * cw + 16), 88 + Math.round(18 * Math.pow(g.gap / 1000, 0.45)));
       segs.push({cls:'fm-seg-g', k:'think', x:xCursor, w:gw, lane:0, txt:gTxt, title:`думает · ${fmtS(g.gap)}`, extra:''});
       xCursor += gw + GAP_PX;
     }
@@ -722,7 +733,7 @@ function renderTimeline(force) {
       const name = (l.ok ? '' : '✕ ') + SLOTS[l.slot].name + wsTag;
       it.txt = `${name} ${fmtS(it.dur)}`;
       it.title = `${l.label}${l.ws ? ' · ' + l.ws : ''} · ${fmtS(it.dur)}`;
-      it.minW = Math.max(Math.ceil(it.txt.length * cw + 18), Math.round(30 * Math.pow(it.dur / 1000, 0.38)));
+      it.minW = Math.max(Math.ceil(it.txt.length * cw + 18), 80 + Math.round(18 * Math.pow(it.dur / 1000, 0.42)));
       colW = Math.max(colW, it.minW);
     }
     for (const it of g.items) {
@@ -731,17 +742,30 @@ function renderTimeline(force) {
     }
     xCursor += colW + GAP_PX;
   }
+  // Живой или финальный сегмент размышления агента (чтобы пока агент думает, справа не было пустого пространства)
+  const isLiveThink = S.phase === 'agent' && S.calls.size === 0 && S.thinkT0 != null;
+  const tailThink = isLiveThink ? Math.max(100, end - S.thinkT0) : (S.tailThinkMs >= 100 && S.toolLog.length ? S.tailThinkMs : 0);
+  if (tailThink > 0) {
+    const gTxt = `думает ${fmtS(tailThink)}`;
+    const gw = Math.max(Math.ceil(gTxt.length * cw + 16), 88 + Math.round(18 * Math.pow(tailThink / 1000, 0.45)));
+    segs.push({cls:'fm-seg-g', k:'think', x:xCursor, w:gw, lane:0, txt:gTxt, title:`думает · ${fmtS(tailThink)}`, extra:isLiveThink ? ' is-run' : '', isTail:true});
+    xCursor += gw + GAP_PX;
+  }
+  if (!segs.length) { tools.innerHTML = ''; tools.style.display = 'none'; return; }
+  tools.style.display = '';
   const rawTrackW = Math.max(1, xCursor - GAP_PX);
   const scale = rawTrackW < W ? W / rawTrackW : 1;
   const trackW = Math.max(W, Math.round(rawTrackW * scale));
   const trackH = maxLanes * 19 - 2;
-  tools.style.height = (trackH + 6) + 'px';
+  tools.style.height = (trackH + 4) + 'px';
+  const maxX = Math.max(...segs.map(s => s.x));
   const html = segs.map(s => {
-    const sx = Math.round(s.x * scale), sw = Math.max(36, Math.round(s.w * scale));
+    const sx = Math.round(s.x * scale);
+    const sw = (rawTrackW <= W && s.x === maxX) ? Math.max(36, trackW - sx) : Math.max(36, Math.round(s.w * scale));
     return `<div class="${s.cls}${s.extra}" data-k="${s.k}" style="left:${sx}px;width:${sw}px;top:${s.lane * 19}px" title="${s.title}">${s.txt}</div>`;
   }).join('');
   tools.innerHTML = `<div class="fm-tl__track" style="width:${trackW}px;height:${trackH}px">${html}</div>`;
-  if (S.calls.size && trackW > W) tools.scrollLeft = tools.scrollWidth;
+  if ((S.calls.size || isLiveThink) && trackW > W) tools.scrollLeft = tools.scrollWidth;
 }
 function showCard(R, n, x, y) {
   for (const c of document.querySelectorAll('.fm-card')) c.classList.remove('is-on');
@@ -881,7 +905,7 @@ window.FlowViz = {emit, reset, demo, open:openModal, close:closeModal, expand, c
 function mountDom() {
   if (document.getElementById('fmBack')) return;
   const host = document.getElementById('view-agent') || document.body;
-  host.insertAdjacentHTML('beforeend', '<div class="fm-rail" id="fmRail" role="button" tabindex="0" aria-label="Открыть карту запроса" title="Открыть карту запроса"><canvas id="fmRailCv"></canvas><button class="fm-rail__x" type="button" aria-label="Свернуть путь запроса" title="Свернуть">×</button></div>');
-  document.body.insertAdjacentHTML('beforeend', '<div class="fm-mini" id="fmMini" role="button" tabindex="0" aria-label="Открыть карту запроса" title="Открыть карту запроса"><canvas id="fmMiniCv"></canvas><button class="fm-mini__x" type="button" aria-label="Скрыть путь запроса" title="Скрыть">×</button></div><div id="fvHud"></div>' + MODAL_HTML);
+  host.insertAdjacentHTML('beforeend', '<div class="fm-rail" id="fmRail" role="button" tabindex="0"><canvas id="fmRailCv"></canvas><button class="fm-rail__x" type="button" aria-label="Свернуть путь запроса" title="Свернуть">×</button></div>');
+  document.body.insertAdjacentHTML('beforeend', '<div class="fm-mini" id="fmMini" role="button" tabindex="0"><canvas id="fmMiniCv"></canvas><button class="fm-mini__x" type="button" aria-label="Скрыть путь запроса" title="Скрыть">×</button></div><div id="fvHud"></div>' + MODAL_HTML);
 }
 })();

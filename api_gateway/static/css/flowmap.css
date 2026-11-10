@@ -34,7 +34,7 @@
 .fm-foot{border-top:1px solid var(--border);padding:8px 14px 14px}
 .fm-status{font:500 12px var(--font-mono);color:var(--text-secondary);margin-bottom:6px;display:flex;justify-content:space-between}
 .fm-tl{position:relative;display:flex;flex-direction:column;gap:4px}
-.fm-tl__row{position:relative;width:100%;min-height:17px}
+.fm-tl__row{position:relative;width:100%}
 .fm-tl__row--base{height:17px;overflow:hidden}
 .fm-tl__row--tools{overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;padding-bottom:3px}
 .fm-tl__row--tools::-webkit-scrollbar{height:5px}
@@ -48,6 +48,7 @@
 .fm-seg-t.is-err{background:var(--danger)}
 .fm-seg-t.is-run{background:var(--accent-hover)}
 .fm-seg-g{color:var(--text-secondary);background:color-mix(in srgb,var(--surface3) 70%,transparent) repeating-linear-gradient(135deg,transparent 0 5px,color-mix(in srgb,var(--text-muted) 30%,transparent) 5px 7px);border:1px solid color-mix(in srgb,var(--text-muted) 35%,var(--border))}
+.fm-seg-g.is-run{color:var(--text-primary);border-color:color-mix(in srgb,var(--accent) 48%,var(--border));background:color-mix(in srgb,var(--accent) 10%,var(--surface3)) repeating-linear-gradient(135deg,transparent 0 5px,color-mix(in srgb,var(--accent) 26%,transparent) 5px 7px)}
 @media (max-width:700px){.fm-dlg{width:100vw;height:100vh;border-radius:0}.fm-mini{width:calc(100% - 24px)}}
 
 /* ── Вертикальная панель в правом поле #view-agent ── */

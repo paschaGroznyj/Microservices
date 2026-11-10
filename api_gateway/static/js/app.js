@@ -1,4 +1,10 @@
 // CatchPM — Chat SPA
+
+// FlowMap: путь запроса (flowmap.js). Отключить: localStorage.setItem('fm:off','1').
+const _fm = (type, d) => {
+    try { if (localStorage.getItem('fm:off') === '1') return; window.FlowViz?.emit(type, d || {}); } catch (_) {}
+};
+
 class ChatApp {
     constructor() {
         this.currentUser   = null;
@@ -538,6 +544,7 @@ class ChatApp {
         if (String(this._noToolsWarnChatId ?? '') !== String(chatId)) {
             this._resetNoToolsWarn(chatId);
         }
+        if (String(this.currentChat ?? '') !== String(chatId ?? '')) window.FlowViz?.reset?.();
         this.currentChat = chatId;
         this.subagentStates = {};
         if (!opts?.skipSaveSettings && chatId != null) {
@@ -3559,6 +3566,7 @@ class ChatApp {
         // грузятся уже из сообщения в ленте (с анимацией прогресса).
         const _filesSnap = isCustom ? [] : (window.FileAttach?.getFiles?.() ?? []);
         const _filesMetaSnap = isCustom ? [] : (window.FileAttach?.getFilesMeta?.() ?? []);
+        _fm('send', { chat: this.currentChat });
         this.addMessage({ message: text, is_from_bot: false, id: msgId, created_at: new Date().toISOString(), files: _optimisticFiles });
         this._scrollToUserMessageAndReserve();
 
@@ -3654,6 +3662,7 @@ class ChatApp {
             try {
                 const j = await resp.clone().json();
                 this._activeRequestId = j?.request_id || null;
+                if (j?.request_id) _fm('gateway', { chat: this.currentChat, request_id: j.request_id });
                 if (j?.active_requests !== undefined) {
                     this._updateActiveRequestsUI(this.currentChat, j.active_requests);
                 }
@@ -3751,6 +3760,7 @@ class ChatApp {
         }
 
         this._initPlaceholderGraph(placeholder);
+        if (localStorage.getItem('fm:off') !== '1') window.FlowViz?.bindPlaceholder(placeholder);
         requestAnimationFrame(() => placeholder.classList.add('bg-ready'));
 
         msgContainer.scrollTop = msgContainer.scrollHeight;
@@ -4330,6 +4340,13 @@ class ChatApp {
             const isActive = String(this.currentChat) === key;
             const msg = JSON.parse(event.data);
 
+            // FlowMap: служебные события пути запроса (accepted / agent_start / tool_*).
+            // Ловим до ветки chunk — у них нет текста, пузырь ответа не нужен.
+            if (msg.type === 'flow') {
+                if (isActive) _fm(msg.ev, { ...msg, chat: key, id: msg.call_id || undefined });
+                return;
+            }
+
             if (msg.type === 'agent_status') {
                 // Задачник: агент разбужен результатом задачи — блокируем отправку, как при обычном запросе.
                 if (msg.task_trigger && isActive) this._setSendButtonMode?.('stop');
@@ -4395,6 +4412,7 @@ class ChatApp {
 
             // Задачник: финал ответа — карточки хода (включая временную группу без ответа)
             // собираются в ответ на то же место, что и после F5. Таймер: дать финализации пузыря отработать.
+            if (msg.is_from_bot && msg.message && !msg.chunk) _fm('done', { chat: key });
             if (msg.is_from_bot && msg.message && !msg.chunk && isActive && window.TaskCards) {
                 const _tcBox = this.getMessagesContainer();
                 setTimeout(() => window.TaskCards.settle(_tcBox, msg), 60);
@@ -4428,6 +4446,7 @@ class ChatApp {
                 return;
             }
             if (msg.kind === 'final_commit') {
+                _fm('answer', { chat: key });
                 this._promoteLiveToFinal(key);
                 st.streamIsFinal = true;
                 return;
@@ -5438,6 +5457,7 @@ class ChatApp {
     async stopCurrentRun() {
         if (this._runState !== 'running') return;
         this._runState = 'stopping';
+        _fm('done', { chat: this.currentChat, ok: false });
         try {
             await fetch('/api/chats/stop_message', {
                 method: 'POST',

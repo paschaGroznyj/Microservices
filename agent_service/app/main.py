@@ -187,6 +187,10 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     #     return
     print("ВНУТРИ АГЕНТА", payload)
 
+    # FlowMap: агент взял запрос из Kafka в работу. Фоном, чтобы не задерживать ответ.
+    if agent is not None and request_id and not loop_tick:
+        asyncio.create_task(agent._send_flow(request_id, "accepted", target=gateway_target))
+
     # if type_agent != "pm":
     #     return
 

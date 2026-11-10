@@ -1417,6 +1417,13 @@ async def stream_chat_status(chat_id: str, request: Request):
                 except Exception:
                     continue
                 kind = frame.get("kind") or "live"
+                if kind == "flow":
+                    # FlowMap: служебное событие пути запроса, мимо reasoning-state.
+                    out.append(_sse_pack("flow", {
+                        "request_id": frame.get("request_id"),
+                        **(frame.get("flow") or {}),
+                    }))
+                    continue
                 active_requests = await run_status.append_reasoning_chunk(
                     chat_id, frame.get("chunk", ""), kind, frame.get("id")
                 )

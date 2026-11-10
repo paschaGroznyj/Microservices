@@ -1,4 +1,10 @@
 // CatchPM — Chat SPA
+
+// FlowMap: путь запроса (flowmap.js). Отключить: localStorage.setItem('fm:off','1').
+const _fm = (type, d) => {
+    try { if (localStorage.getItem('fm:off') === '1') return; window.FlowViz?.emit(type, d || {}); } catch (_) {}
+};
+
 class ChatApp {
     constructor() {
         this.currentUser   = null;
@@ -573,6 +579,7 @@ class ChatApp {
         if (String(this._noToolsWarnChatId ?? '') !== String(chatId)) {
             this._resetNoToolsWarn(chatId);
         }
+        if (String(this.currentChat ?? '') !== String(chatId ?? '')) window.FlowViz?.reset?.();
         this.currentChat = chatId;
         this.subagentStates = {};
         if (!opts?.skipSaveSettings && chatId != null) {
@@ -3509,6 +3516,7 @@ class ChatApp {
         this._hardResetStreamState(this.currentChat);
 
         const msgId = `msg-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+        _fm('send', { chat: this.currentChat });
         this.addMessage({ message: text, is_from_bot: false, id: msgId, created_at: new Date().toISOString(), files: [] });
         this._scrollToUserMessageAndReserve();
 
@@ -3577,6 +3585,7 @@ class ChatApp {
             try {
                 const j = await resp.clone().json();
                 this._activeRequestId = j?.request_id || null;
+                if (j?.request_id) _fm('gateway', { chat: this.currentChat, request_id: j.request_id });
                 if (j?.active_requests !== undefined) {
                     this._updateActiveRequestsUI(this.currentChat, j.active_requests);
                 }
@@ -3668,6 +3677,7 @@ class ChatApp {
         }
 
         this._initPlaceholderGraph(placeholder);
+        if (localStorage.getItem('fm:off') !== '1') window.FlowViz?.bindPlaceholder(placeholder);
         requestAnimationFrame(() => placeholder.classList.add('bg-ready'));
 
         msgContainer.scrollTop = msgContainer.scrollHeight;
@@ -4902,6 +4912,7 @@ class ChatApp {
     async stopCurrentRun() {
         if (this._runState !== 'running') return;
         this._runState = 'stopping';
+        _fm('done', { chat: this.currentChat, ok: false });
         try {
             if (this._activeRequestId) {
                 await fetch('/api/chats/stop_message', {
@@ -5116,12 +5127,18 @@ class ChatApp {
         };
 
         es.addEventListener('live', onLive);
+        // FlowMap: служебные события пути запроса (accepted / agent_start / tool_*).
+        es.addEventListener('flow', (ev) => {
+            let f; try { f = JSON.parse(ev.data); } catch (_) { return; }
+            if (this._isActiveChat(key)) _fm(f.ev, { ...f, chat: key, id: f.call_id || undefined });
+        });
         es.addEventListener('reasoning_end', () => {
             // Текущий живой блок был размышлением перед вызовом тулзы —
             // сливаем его в общий свёрток «Размышления».
             this._commitReasoningBlock(key);
         });
         es.addEventListener('final_commit', () => {
+            _fm('answer', { chat: key });
             // Живой блок оказался финальным ответом — повышаем его стиль.
             // Реальная финализация (файлы, actions) придёт с 'done' из Kafka.
             this._promoteLiveToFinal(key);
@@ -5130,6 +5147,7 @@ class ChatApp {
 
         const onDone = async (ev) => {
             es.close();
+            _fm('done', { chat: key });
             if (this._sources[key] === es) delete this._sources[key];
             // Автогенерированный заголовок чата приходит в message финала —
             // обновляем строку чата в сайдбаре в реалтайме (на первом обмене).

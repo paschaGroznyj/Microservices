@@ -161,8 +161,10 @@ class BotStream(BaseModel):
     id: str | None = None
     # Тип чанка: "live" — живой текст (печатается в текущем блоке),
     # "reasoning_end" — маркер сворачивания живого блока в reasoning,
-    # "final" / "final_commit" — фиксация финального ответа.
+    # "final" / "final_commit" — фиксация финального ответа,
+    # "flow" — служебное событие пути запроса для FlowMap (поле flow, chunk пустой).
     kind: str = "final"
+    flow: dict | None = None
 
 app.add_middleware(
     CORSMiddleware,
@@ -229,6 +231,16 @@ async def bot_stream(payload: BotStream):
     if not chat_id:
         logger.warning(f"[stream] Неизвестный request_id: {payload.request_id}")
         raise HTTPException(status_code=404, detail="request_id not found")
+
+    # FlowMap: отдельный тип сообщения, без chunk (фронт не создаёт пузырь)
+    # и мимо reasoning-state (лишний Redis на каждый тул не нужен).
+    if payload.kind == "flow":
+        await broadcast(chat_id, {
+            "type": "flow",
+            "request_id": payload.request_id,
+            **(payload.flow or {}),
+        })
+        return {"ok": True}
 
     active_requests = await run_status.append_reasoning_chunk(
         chat_id, payload.chunk, payload.kind, payload.id

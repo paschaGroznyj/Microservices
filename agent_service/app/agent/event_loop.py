@@ -1554,6 +1554,33 @@ class HarnessAgent:
         except Exception as e:
             logger.debug(f"Не удалось отправить чанк стриминга: {e}")
 
+    async def _send_flow(self, request_id: str, ev: str, target: str | None = None, **data) -> None:
+        """Служебное событие пути запроса для FlowMap на фронте (kind="flow").
+
+        ev: accepted | agent_start | tool_start | tool_end. Текста нет, поэтому
+        гейтвей не пишет его в reasoning-state и не создаёт пузырь ответа.
+        Только веб-клиенты (main WS / sigma SSE); Telegram, MAX и mobile — мимо.
+        Ошибки глушим: визуализация не должна ронять ответ."""
+        if not request_id or not ev:
+            return
+        if target is None:
+            target = self._ctx_get("gateway_target", None) or getattr(self, "_gateway_target", "main") or "main"
+        target = str(target).lower()
+        if target not in ("main", "sigma"):
+            return
+        flow = {"ev": ev}
+        flow.update({k: v for k, v in data.items() if v is not None})
+        payload = {"request_id": request_id, "chunk": "", "id": None, "kind": "flow", "flow": flow}
+        try:
+            if target == "sigma":
+                await self._publish_sigma_stream(request_id, payload)
+                return
+            client = await self._get_http_client()
+            url = GATEWAY_SIGMA_URL if target == "sigma" else GATEWAY_URL
+            await client.post(f"{url}/internal/bot_stream", json=payload, timeout=2)
+        except Exception as e:
+            logger.debug(f"[flow] не удалось отправить {ev}: {e}")
+
     async def _tg_edit_reasoning(self, chat_id, text: str) -> None:
         """Трансляция reasoning-блока в Telegram: редактирует плашку "Думаю..."
         целым блоком (последний блок размышлений, обрезка до 500 символов).
@@ -1681,6 +1708,7 @@ class HarnessAgent:
         self.current_message_id = None  # message_id генерится позже, в app.py; необязателен
         # Буфер живого reasoning для Telegram теперь в request-local ctx ("tg_reasoning_buf")
         cleaned_user_input = user_input
+        await self._send_flow(request_id, "agent_start")
         try:
             # ── Настройки контекста ────────────────────────────────────────
             CONTEXT_PRESETS = {
@@ -2368,6 +2396,8 @@ class HarnessAgent:
         logger.info(f"[tool] ▶ {name}({fmt})")
 
         import time
+        call_id = tool_call.get("id") or None
+        await self._send_flow(request_id, "tool_start", name=name, call_id=call_id)
         t0 = time.monotonic()
         try:
             result     = await tool_fn.ainvoke(args)
@@ -2380,11 +2410,13 @@ class HarnessAgent:
                 preview += f"…[+{len(result_str)-MAX_RESULT_LEN}]"
 
             logger.info(f"[tool] ✅ {name} → {elapsed_ms}ms | {preview}")
+            await self._send_flow(request_id, "tool_end", name=name, call_id=call_id, ok=True, ms=elapsed_ms)
             return result_str
 
         except Exception as e:
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             logger.error(f"[tool] ❌ {name} → {elapsed_ms}ms | {e}")
+            await self._send_flow(request_id, "tool_end", name=name, call_id=call_id, ok=False, ms=elapsed_ms)
             return f"Ошибка при выполнении {name}: {e}"
 
  

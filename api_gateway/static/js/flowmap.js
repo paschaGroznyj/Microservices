@@ -1,7 +1,7 @@
 /* FlowMap: путь запроса (прототип для встраивания). API: window.FlowViz */
 (() => {
 'use strict';
-const MODAL_HTML = "<div class=\"fm-back\" id=\"fmBack\">\n  <div class=\"fm-dlg\" role=\"dialog\" aria-label=\"Путь запроса\">\n    <div class=\"fm-head\">\n      <div class=\"fm-title\">ПУТЬ ЗАПРОСА</div>\n      <div class=\"fm-seg\" id=\"fmLayout\"><button data-l=\"flat\" class=\"is-on\">Плоская</button><button data-l=\"iso\">Изометрия</button><button data-l=\"both\">Оба режима</button></div>\n      <div class=\"fm-seg\" id=\"fmMode\"><button data-m=\"watch\" class=\"is-on\">Наблюдать</button><button data-m=\"control\">Управлять</button></div>\n      <div class=\"fm-seg\"><button id=\"fmFit\">Весь путь</button></div>\n      <button class=\"fm-x\" id=\"fmClose\" aria-label=\"Закрыть\">×</button>\n    </div>\n    <div class=\"fm-body\">\n      <div class=\"fm-panel\" id=\"pFlat\"><canvas id=\"cvFlat\"></canvas><div class=\"fm-ptag\">ПЛОСКАЯ</div><div class=\"fm-card\"></div></div>\n      <div class=\"fm-panel\" id=\"pIso\"><canvas id=\"cvIso\"></canvas><div class=\"fm-ptag\">ИЗОМЕТРИЯ</div><div class=\"fm-card\"></div></div>\n    </div>\n    <div class=\"fm-foot\">\n      <div class=\"fm-status\"><span id=\"fmStatus\">Ожидаю запрос</span><span id=\"fmTotal\"></span></div>\n      <div class=\"fm-tl\"><div class=\"fm-tl__row fm-tl__row--base\" id=\"tlBase\"></div><div class=\"fm-tl__row fm-tl__row--tools\" id=\"tlTools\"></div></div>\n    </div>\n  </div>\n</div>";
+const MODAL_HTML = "<div class=\"fm-back\" id=\"fmBack\">\n  <div class=\"fm-dlg\" role=\"dialog\" aria-label=\"Путь запроса\">\n    <div class=\"fm-head\">\n      <div class=\"fm-title\">ПУТЬ ЗАПРОСА</div>\n      <div class=\"fm-seg\" id=\"fmLayout\"><button data-l=\"flat\" class=\"is-on\">Плоская</button><button data-l=\"iso\">Изометрия</button><button data-l=\"both\">Оба режима</button></div>\n      <div class=\"fm-seg\" id=\"fmMode\"><button data-m=\"watch\" class=\"is-on\">Наблюдать</button><button data-m=\"control\">Управлять</button></div>\n      <div class=\"fm-seg\" id=\"fmFitSeg\"><button id=\"fmFit\">Весь путь</button></div>\n      <button class=\"fm-x\" id=\"fmClose\" aria-label=\"Закрыть\">×</button>\n    </div>\n    <div class=\"fm-body\">\n      <div class=\"fm-panel\" id=\"pFlat\"><canvas id=\"cvFlat\"></canvas><div class=\"fm-ptag\">ПЛОСКАЯ</div><div class=\"fm-card\"></div></div>\n      <div class=\"fm-panel\" id=\"pIso\"><canvas id=\"cvIso\"></canvas><div class=\"fm-ptag\">ИЗОМЕТРИЯ</div><div class=\"fm-card\"></div></div>\n    </div>\n    <div class=\"fm-foot\">\n      <div class=\"fm-status\"><span id=\"fmStatus\">Ожидаю запрос</span><span id=\"fmTotal\"></span></div>\n      <div class=\"fm-tl\"><div class=\"fm-tl__row fm-tl__row--base\" id=\"tlBase\"></div><div class=\"fm-tl__row fm-tl__row--tools\" id=\"tlTools\"></div></div>\n    </div>\n  </div>\n</div>";
 const $ = s => document.querySelector(s);
 mountDom();
 const RM = matchMedia('(prefers-reduced-motion: reduce)');
@@ -18,8 +18,8 @@ const NODES = [
   {id:'obs',      kind:'square',  x:760, y:318, w:30, h:14, label:'OBS',      name:'Хранилище', tech:'OBS',            desc:'Файлы из чата и ответов агента.'},
   {id:'searxng',  kind:'circle',  x:800, y:-4,  r:12, h:10, lp:'w', label:'SEARXNG',  name:'Поиск',     tech:'searxng',        desc:'Внешний поисковик для запросов в интернет.', ext:true},
   {id:'parsers',  kind:'circle',  x:690, y:52, r:12, h:10, lp:'w', label:'PARSERS',  name:'Парсер',    tech:'parsers_service', desc:'Скачивает и разбирает страницы по ссылке.', ext:true},
-  {id:'sandbox_c',kind:'circle',  x:1130,y:96,  r:13, h:10, lp:'top', label:'SANDBOX', name:'Песочница', tech:'agent_sandbox',  desc:'Контейнер, где выполняется код.', ext:true},
-  {id:'workspace',kind:'folder',  x:1148,y:236, w:64, fh:42, r:32, h:14, lp:'bottom', label:'WORKSPACE', name:'Рабочая область', tech:'workspace', desc:'Директория в песочнице, где агент собирает и правит файлы.', wsNode:true},
+  {id:'sandbox_c',kind:'circle',  x:1290,y:40,   r:13, h:10, lp:'e', label:'SANDBOX', name:'Песочница', tech:'agent_sandbox',  desc:'Контейнер, где выполняется код.', ext:true},
+  {id:'workspace',kind:'folder',  x:1290,y:-90, w:88, fh:54, r:44, h:16, lp:'ws', label:'WORKSPACE', name:'Рабочая область', tech:'workspace', desc:'Директория в песочнице, где агент собирает и правит файлы.', wsNode:true},
 ];
 const N = Object.fromEntries(NODES.map(n => [n.id, n]));
 const SLOT_DEF = [
@@ -42,7 +42,7 @@ const EXT_IDS = new Set(['searxng', 'parsers', 'sandbox_c']);
 const EXT_EDGES = [['web','searxng'], ['web','parsers'], ['sandbox','sandbox_c']];
 const WB = (() => {
   let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
-  for (const n of NODES) { const hw = (n.len ? n.len / 2 : n.w ? n.w / 2 : n.r); x0 = Math.min(x0, n.x - hw - 36); x1 = Math.max(x1, n.x + hw + 44); y0 = Math.min(y0, n.y - 50); y1 = Math.max(y1, n.y + 62); }
+  for (const n of NODES) { const hw = (n.len ? n.len / 2 : n.w ? n.w / 2 : n.r); x0 = Math.min(x0, n.x - hw - 36); x1 = Math.max(x1, n.x + hw + 44); y0 = Math.min(y0, n.y - (n.wsNode ? 84 : 50)); y1 = Math.max(y1, n.y + (n.wsNode ? 52 : 62)); }
   for (const sl of SLOT_LIST) { const dx = Math.cos(sl.ang), dy = Math.sin(sl.ang); const lx = sl.x + dx * 40, ly = sl.y + dy * 40; x0 = Math.min(x0, lx - (dx < -0.35 ? 100 : 50)); x1 = Math.max(x1, lx + (dx > 0.35 ? 135 : 55)); y0 = Math.min(y0, ly - (dy < -0.5 ? 52 : 22)); y1 = Math.max(y1, ly + (dy > 0.5 ? 52 : 22)); }
   return {x0, y0, x1, y1};
 })();
@@ -94,7 +94,7 @@ const S = {
   active:false, phase:'idle', t0:0, tEnd:0, d:0, dir:1, allow:0, trail:[], pkz:0,
   calls:new Map(), discovered:new Set(), phases:[], toolLog:[], fx:[], pulses:[],
   lit:new Float32Array(EDGES.length), hl:{}, st:{}, others:0, ghosts:[], status:'Ожидаю запрос', lastInside:null, chat:null, rid:null,
-  wsSeen:false, wsId:'', wsIds:new Set(), stepSeq:0, thinkT0:null, tailThinkMs:0,
+  wsSeen:false, wsId:'', wsIds:new Set(), stepSeq:0, thinkT0:null, tailThinkMs:0, thinkBuf:'', thinkDone:'', tailText:'',
 };
 for (const n of [...NODES, ...SLOT_LIST]) { S.hl[n.id] = 0; S.st[n.id] = {visits:0, ms:0, calls:[]}; }
 const now = () => performance.now();
@@ -111,7 +111,7 @@ function setStatus(t) { S.status = t; }
 function reset() {
   S.active = false; S.phase = 'idle'; S.t0 = 0; S.tEnd = 0; S.d = 0; S.dir = 1; S.allow = 0; S.trail = [];
   S.calls.clear(); S.phases = []; S.toolLog = []; S.fx = []; S.pulses = []; S.lit.fill(0); S.chat = null; S.rid = null;
-  S.wsSeen = false; S.wsId = ''; S.wsIds.clear(); S.stepSeq = 0; S.thinkT0 = null; S.tailThinkMs = 0;
+  S.wsSeen = false; S.wsId = ''; S.wsIds.clear(); S.stepSeq = 0; S.thinkT0 = null; S.tailThinkMs = 0; S.thinkBuf = ''; S.thinkDone = ''; S.tailText = ''; closeThink();
   setStatus('Ожидаю запрос'); clearTimeout(miniHideT); MINI.on = HOST.expanded;
   layoutHost(); renderTimeline(true); kick();
 }
@@ -130,7 +130,7 @@ function emit(type, d = {}) {
     case 'send':
       S.chat = d.chat != null ? String(d.chat) : null; S.rid = null;
       S.active = true; S.phase = 'send'; S.t0 = t; S.tEnd = 0; S.d = 0; S.dir = 1; S.allow = D[1]; S.trail = [];
-      S.calls.clear(); S.phases = []; S.toolLog = []; S.fx = []; S.pulses = []; S.lit.fill(0); S.lastInside = null; S.stepSeq = 0; S.thinkT0 = null; S.tailThinkMs = 0;
+      S.calls.clear(); S.phases = []; S.toolLog = []; S.fx = []; S.pulses = []; S.lit.fill(0); S.lastInside = null; S.stepSeq = 0; S.thinkT0 = null; S.tailThinkMs = 0; S.thinkBuf = ''; S.thinkDone = ''; S.tailText = ''; TL.follow = true; closeThink();
       openPhase('gw', 'Шлюз', t); setStatus('Отправляю…'); showMini(true); break;
     case 'gateway':
       if (!S.active) break;
@@ -161,13 +161,15 @@ function emit(type, d = {}) {
       if (ws) {
         S.wsSeen = true; S.hl.workspace = 1;
         if (ws !== 'workspace') { S.wsId = String(ws); S.wsIds.add(S.wsId); }
-        S.pulses.push({a:'sandbox', b:'workspace', t, dur:680});
+        S.pulses.push({a:'sandbox_c', b:'workspace', t, dur:680});
       }
       // gap_ms — сколько агент думал перед этим шагом (считает бэк по request_id).
       const fbGap = isNewStep && S.thinkT0 != null ? Math.max(0, t - S.thinkT0) : null;
       const gap = isNewStep ? (Number.isFinite(+d.gap_ms) && d.gap_ms !== null ? +d.gap_ms : fbGap) : null;
-      if (isNewStep) { S.thinkT0 = null; S.tailThinkMs = 0; }
-      S.toolLog.push({key, slot, label, ws, step, t0:t, t1:0, ms:null, ok:true, gap, gapShown:gap});
+      // Текст «Размышлений» этого интервала привязываем к шагу: по тапу на блок «думает» он откроется оверлеем.
+      const thinkText = isNewStep ? [S.thinkDone, S.thinkBuf.trim()].filter(Boolean).join('\n\n') : '';
+      if (isNewStep) { S.thinkT0 = null; S.tailThinkMs = 0; S.thinkBuf = ''; S.thinkDone = ''; }
+      S.toolLog.push({key, slot, label, ws, step, t0:t, t1:0, ms:null, ok:true, gap, gapShown:gap, thinkText});
       S.discovered.add(slot); S.hl[slot] = 1; setStatus(label); break;
     }
     case 'tool_end': {
@@ -185,12 +187,23 @@ function emit(type, d = {}) {
       const log = [...S.toolLog].reverse().find(l => l.key === key && !l.t1);
       if (log) { log.t1 = log.t0 + ms; log.ms = ms; log.ok = ok; if (ws) log.ws = ws; }
       const st = S.st[c.slot]; st.calls.unshift({label:c.label, ms, ok}); st.calls.length = Math.min(st.calls.length, 5); st.visits++;
-      if (ws) { const wst = S.st.workspace; wst.calls.unshift({label:c.label + (S.wsId ? ` (${S.wsId})` : ''), ms, ok}); wst.calls.length = Math.min(wst.calls.length, 5); wst.visits++; wst.ms += ms; }
+      if (ws) { const wst = S.st.workspace; wst.calls.unshift({label:c.label, ms, ok}); wst.calls.length = Math.min(wst.calls.length, 5); wst.visits++; wst.ms += ms; }
       S.fx.push({kind: ok ? 'ok' : 'err', slot:c.slot, t, dur: ok ? 700 : 2600});
       const left = [...S.calls.values()];
       if (!left.length && S.phase === 'agent') S.thinkT0 = t;
       setStatus(left.length ? left[left.length-1].label : 'Агент думает'); break;
     }
+    case 'think_text':
+      // Живой чанк (тот же текст, что уходит в блок «Размышления»). Пока не пришёл reasoning_end,
+      // это может оказаться и финальным ответом — поэтому держим отдельно от подтверждённого thinkDone.
+      if (!S.active || S.phase === 'answer' || S.phase === 'done' || !d.text) return;
+      S.thinkBuf = (S.thinkBuf + String(d.text)).slice(-THINK_MAX);
+      if (TH.key === 'tail') fillThink(); return;
+    case 'think_end':
+      // reasoning_end: живой блок был размышлением перед тулом — подтверждаем текст.
+      if (!S.active || !S.thinkBuf) return;
+      S.thinkDone = (S.thinkDone ? S.thinkDone + '\n\n' : '') + S.thinkBuf.trim(); S.thinkBuf = '';
+      if (TH.key === 'tail') fillThink(); return;
     case 'db_saved':
       // chats_service записал сообщение в БД: импульс CHATS → DB.
       if (!S.active) break;
@@ -202,12 +215,14 @@ function emit(type, d = {}) {
     case 'answer':
       if (!S.active || S.phase === 'answer' || S.phase === 'done') break;
       if (S.thinkT0 != null) { S.tailThinkMs = Math.max(0, t - S.thinkT0); S.thinkT0 = null; }
+      S.tailText = S.thinkDone; S.thinkDone = ''; S.thinkBuf = '';
       S.phase = 'answer'; S.dir = -1; S.allow = 0;
       for (const [k] of S.calls) { const log = S.toolLog.find(l => l.key === k && !l.t1); if (log) log.t1 = t; }
       S.calls.clear(); openPhase('answer', 'Ответ', t); setStatus('Пишу ответ'); break;
     case 'done': {
       if (!S.active || S.phase === 'done') break;
       if (S.thinkT0 != null) { S.tailThinkMs = Math.max(0, t - S.thinkT0); S.thinkT0 = null; }
+      if (S.thinkDone) { S.tailText = S.thinkDone; S.thinkDone = ''; } S.thinkBuf = '';
       for (const [k] of S.calls) { const log = S.toolLog.find(l => l.key === k && !l.t1); if (log) { log.t1 = t; log.ok = d.ok !== false; } }
       S.calls.clear();
       const p = S.phases[S.phases.length - 1]; if (p && !p.t1) p.t1 = t;
@@ -237,21 +252,24 @@ class MapR {
     if (!this.inited) { this.inited = true; this.toFit(true); }
     this.clamp();
   }
-  minS() { return Math.min(this.W / (this.bb.x1 - this.bb.x0), this.H / (this.bb.y1 - this.bb.y0)); }
+  // Экранный запас [слева, справа, сверху, снизу] под подписи фиксированного размера:
+  // на узком экране мир ужат в 4–5 раз, а подписи нет, поэтому справа (веер тулов) и сверху (WORKSPACE) нужен запас.
+  pad() { return this.W < 560 ? [18, 78, 34, 12] : [10, 14, 10, 10]; }
+  minS() { const [l, r, t, b] = this.pad(); return Math.min(Math.max(40, this.W - l - r) / (this.bb.x1 - this.bb.x0), Math.max(40, this.H - t - b) / (this.bb.y1 - this.bb.y0)); }
   clamp() {
     const c = this.cam, b = this.bb; c.s = Math.max(this.minS(), Math.min(MAXS, c.s));
-    const hw = this.W / 2 / c.s, hh = this.H / 2 / c.s;
-    c.cx = (b.x1 - b.x0) <= 2 * hw ? (b.x0 + b.x1) / 2 : Math.max(b.x0 + hw, Math.min(b.x1 - hw, c.cx));
-    c.cy = (b.y1 - b.y0) <= 2 * hh ? (b.y0 + b.y1) / 2 : Math.max(b.y0 + hh, Math.min(b.y1 - hh, c.cy));
+    const [l, r, t, bt] = this.pad(), wl = (this.W / 2 - l) / c.s, wr = (this.W / 2 - r) / c.s, ht = (this.H / 2 - t) / c.s, hb = (this.H / 2 - bt) / c.s;
+    c.cx = (b.x1 - b.x0) <= wl + wr ? (b.x0 + b.x1) / 2 - (l - r) / 2 / c.s : Math.max(b.x0 + wl, Math.min(b.x1 - wr, c.cx));
+    c.cy = (b.y1 - b.y0) <= ht + hb ? (b.y0 + b.y1) / 2 - (t - bt) / 2 / c.s : Math.max(b.y0 + ht, Math.min(b.y1 - hb, c.cy));
   }
-  toFit(nowSet) { const t = {cx:(this.bb.x0 + this.bb.x1) / 2, cy:(this.bb.y0 + this.bb.y1) / 2, s:this.minS()}; if (nowSet) Object.assign(this.cam, t); return t; }
+  toFit(nowSet) { const s = this.minS(), [l, r, tp, bt] = this.pad(); const t = {cx:(this.bb.x0 + this.bb.x1) / 2 - (l - r) / 2 / s, cy:(this.bb.y0 + this.bb.y1) / 2 - (tp - bt) / 2 / s, s}; if (nowSet) Object.assign(this.cam, t); return t; }
   target() {
     if (VIEW.fit || !S.active) return this.toFit(false);
     const fs = this.minS();
     const calls = [...S.calls.values()];
     if (calls.length && S.phase === 'agent') {
       const pts = [this.P(N.consumer.x, N.agent.y, 0), ...SLOT_LIST.map(sl => this.P(sl.x + Math.cos(sl.ang) * 60, sl.y + Math.sin(sl.ang) * 40, 0))];
-      if (S.wsSeen) pts.push(this.P(N.workspace.x + 36, N.workspace.y + 30, 0));
+      if (S.wsSeen) { pts.push(this.P(N.workspace.x + 64, N.workspace.y - 66, 0)); pts.push(this.P(N.workspace.x - 64, N.workspace.y - 66, 0)); }
       const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
       const w = Math.max(...xs) - Math.min(...xs) + 120, h = Math.max(...ys) - Math.min(...ys) + 60;
       return {cx:(Math.max(...xs) + Math.min(...xs)) / 2, cy:(Math.max(...ys) + Math.min(...ys)) / 2, s:Math.max(fs, Math.min(MAXS, this.W / w, this.H / h, fs * 1.9))};
@@ -367,16 +385,14 @@ class MapR {
     if (S.wsSeen) {
       const W0 = N.workspace, SB = SLOTS.sandbox, SC = N.sandbox_c;
       if (!iso) {
-        const zPts = [[W0.x - 48, W0.y - 34], [W0.x + 48, W0.y - 34], [W0.x + 48, W0.y + 46], [W0.x - 48, W0.y + 46]];
+        const zPts = [[W0.x - 62, W0.y - 42], [W0.x + 62, W0.y - 42], [W0.x + 62, W0.y + 40], [W0.x - 62, W0.y + 40]];
         this.prism(zPts, 0, rgba(C.accent, wsRun ? 0.07 : 0.025), rgba(wsRun ? C.accent : C.stroke, wsRun ? 0.65 : 0.38), 1.1 * px, [4 * px, 4 * px]);
       }
-      line([SB.x, SB.y], [W0.x, W0.y], rgba(C.stroke, 0.85), 1.2 * px, [4 * px, 3 * px]);
       line([SC.x, SC.y], [W0.x, W0.y], rgba(C.stroke, 0.7), 1.1 * px, [3 * px, 4 * px]);
       if (wsRun) {
-        line([SB.x, SB.y], [W0.x, W0.y], rgba(C.accent, 0.95), 2.1 * px, [6 * px, 5 * px], RM.matches ? 0 : -t * 0.045 * px);
         line([SC.x, SC.y], [W0.x, W0.y], rgba(C.accent, 0.75), 1.7 * px, [5 * px, 5 * px], RM.matches ? 0 : -t * 0.04 * px);
       } else if (S.hl.workspace > 0.02) {
-        line([SB.x, SB.y], [W0.x, W0.y], rgba(C.accent, Math.min(1, S.hl.workspace)), 1.9 * px, [5 * px, 5 * px]);
+        line([SC.x, SC.y], [W0.x, W0.y], rgba(C.accent, Math.min(1, S.hl.workspace)), 1.9 * px, [5 * px, 5 * px]);
       }
     }
     const busy = S.active && (S.phase === 'agent' || S.phase === 'answer');
@@ -401,11 +417,11 @@ class MapR {
         const seamA = pt(x0, y0 + 6, z), seamB = pt(x1, y0 + 6, z);
         ctx.strokeStyle = stroke; ctx.lineWidth = px; ctx.beginPath(); ctx.moveTo(seamA[0], seamA[1]); ctx.lineTo(seamB[0], seamB[1]); ctx.stroke();
         // Дерево директории в разрезе: ствол и 3 ветки файлов с анимацией обхода
-        const tx = n.x - 18, ty0 = n.y - 9, ty2 = n.y + 13;
+        const tx = n.x - 26, ty0 = n.y - 12, ty2 = n.y + 18;
         const stA = pt(tx, ty0, z), stB = pt(tx, ty2, z);
         ctx.strokeStyle = rgba(wsRun ? C.accent : C.stroke, 0.9); ctx.lineWidth = 1.3 * px;
         ctx.beginPath(); ctx.moveTo(stA[0], stA[1]); ctx.lineTo(stB[0], stB[1]); ctx.stroke();
-        const branches = [[-6, 12], [3, 20], [12, 10]];
+        const branches = [[-7, 18], [5, 30], [17, 14]];
         const actBr = wsRun && !RM.matches ? Math.floor(t / 220) % 3 : -1;
         branches.forEach(([dy, len], bi) => {
           const bA = pt(tx, n.y + dy, z), bB = pt(tx + len, n.y + dy, z);
@@ -476,6 +492,20 @@ class MapR {
       if (lp === 'left' || lp === 'w') {
         const [x, y] = this.scr(n.x, n.y, iso ? n.h : 0), rr = (n.r + (lp === 'w' ? 4 : 26)) * s + 6;
         ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.fillText(n.label, x - rr, y);
+      } else if (lp === 'e') {
+        const [x, y] = this.scr(n.x, n.y, iso ? n.h : 0);
+        ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText(n.label, x + n.r * s + 7, y);
+      } else if (lp === 'ws') {
+        const [x, y] = this.scr(n.x, n.y - 42, iso ? n.h : 0);
+        ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+        let yy = y - 5;
+        if (S.wsId) {
+          ctx.font = `500 9.5px ${MONO}`; try { ctx.letterSpacing = '0px'; } catch (_) {}
+          ctx.fillStyle = rgba(wsRun ? C.accent : C.sec, 0.92); ctx.fillText(S.wsId, x, yy); yy -= 13;
+          ctx.font = `600 10px ${MONO}`; try { ctx.letterSpacing = '1px'; } catch (_) {}
+          ctx.fillStyle = rgba(isAct ? C.accent : C.label);
+        }
+        ctx.fillText(n.label, x, yy);
       } else if (lp === 'top') {
         const [x, y] = this.scr(n.x, n.y, iso ? n.h : 0);
         ctx.textAlign = 'center'; ctx.textBaseline = 'bottom'; ctx.fillText(n.label, x, y - ry(n) - (iso ? 5 : 8));
@@ -717,23 +747,23 @@ function renderTimeline(force) {
       groups.push({step:l.step || 0, gap, items:[{l, lane:0, dur}]});
     }
   }
-  const cw = 6.8, GAP_PX = 4, segs = [];
+  const cw = 6.8, GAP_PX = 0, segs = [];
   let xCursor = 0, maxLanes = 1;
   for (const g of groups) {
     if (g.gap > 0) {
       const gTxt = `думает ${fmtS(g.gap)}`;
-      const gw = Math.max(Math.ceil(gTxt.length * cw + 16), 88 + Math.round(18 * Math.pow(g.gap / 1000, 0.45)));
-      segs.push({cls:'fm-seg-g', k:'think', x:xCursor, w:gw, lane:0, txt:gTxt, title:`думает · ${fmtS(g.gap)}`, extra:''});
+      const gw = thinkW(gTxt, g.gap);
+      segs.push({cls:'fm-seg-g', k:'think', x:xCursor, w:gw, lane:0, txt:gTxt, title:`думает · ${fmtS(g.gap)} · размышления`, extra:'', think:{key:'s' + g.step, ms:g.gap, text:g.items[0].l.thinkText || ''}});
       xCursor += gw + GAP_PX;
     }
     maxLanes = Math.max(maxLanes, g.items.length);
-    let colW = 80;
+    let colW = 64;
     for (const it of g.items) {
       const l = it.l, wsTag = l.ws ? (l.ws !== 'workspace' ? ` [${String(l.ws).slice(0, 6)}]` : ' [ws]') : '';
       const name = (l.ok ? '' : '✕ ') + SLOTS[l.slot].name + wsTag;
       it.txt = `${name} ${fmtS(it.dur)}`;
       it.title = `${l.label}${l.ws ? ' · ' + l.ws : ''} · ${fmtS(it.dur)}`;
-      it.minW = Math.max(Math.ceil(it.txt.length * cw + 18), 80 + Math.round(18 * Math.pow(it.dur / 1000, 0.42)));
+      it.minW = Math.max(Math.ceil(it.txt.length * cw + 14), 64 + Math.round(14 * Math.pow(it.dur / 1000, 0.42)));
       colW = Math.max(colW, it.minW);
     }
     for (const it of g.items) {
@@ -747,11 +777,11 @@ function renderTimeline(force) {
   const tailThink = isLiveThink ? Math.max(100, end - S.thinkT0) : (S.tailThinkMs >= 100 && S.toolLog.length ? S.tailThinkMs : 0);
   if (tailThink > 0) {
     const gTxt = `думает ${fmtS(tailThink)}`;
-    const gw = Math.max(Math.ceil(gTxt.length * cw + 16), 88 + Math.round(18 * Math.pow(tailThink / 1000, 0.45)));
-    segs.push({cls:'fm-seg-g', k:'think', x:xCursor, w:gw, lane:0, txt:gTxt, title:`думает · ${fmtS(tailThink)}`, extra:isLiveThink ? ' is-run' : '', isTail:true});
+    const gw = thinkW(gTxt, tailThink);
+    segs.push({cls:'fm-seg-g', k:'think', x:xCursor, w:gw, lane:0, txt:gTxt, title:`думает · ${fmtS(tailThink)} · размышления`, extra:isLiveThink ? ' is-run' : '', isTail:true, think:{key:'tail', ms:tailThink, text:null}});
     xCursor += gw + GAP_PX;
   }
-  if (!segs.length) { tools.innerHTML = ''; tools.style.display = 'none'; return; }
+  if (!segs.length) { tools.innerHTML = ''; TL.track = null; tools.style.display = 'none'; closeThink(); return; }
   tools.style.display = '';
   const rawTrackW = Math.max(1, xCursor - GAP_PX);
   const scale = rawTrackW < W ? W / rawTrackW : 1;
@@ -759,13 +789,106 @@ function renderTimeline(force) {
   const trackH = maxLanes * 19 - 2;
   tools.style.height = (trackH + 4) + 'px';
   const maxX = Math.max(...segs.map(s => s.x));
-  const html = segs.map(s => {
+  TL.segs = segs;
+  const html = segs.map((s, i) => {
     const sx = Math.round(s.x * scale);
     const sw = (rawTrackW <= W && s.x === maxX) ? Math.max(36, trackW - sx) : Math.max(36, Math.round(s.w * scale));
-    return `<div class="${s.cls}${s.extra}" data-k="${s.k}" style="left:${sx}px;width:${sw}px;top:${s.lane * 19}px" title="${s.title}">${s.txt}</div>`;
+    const tap = s.think ? ` data-i="${i}" role="button" tabindex="0" aria-haspopup="dialog"` + (TH.key === s.think.key ? ' aria-expanded="true"' : '') : '';
+    const sel = s.think && TH.key === s.think.key ? ' is-sel' : '';
+    return `<div class="${s.cls}${s.extra}${sel}" data-k="${s.k}"${tap} style="left:${sx}px;width:${sw}px;top:${s.lane * 19}px" title="${s.title}">${s.txt}</div>`;
   }).join('');
-  tools.innerHTML = `<div class="fm-tl__track" style="width:${trackW}px;height:${trackH}px">${html}</div>`;
-  if ((S.calls.size || isLiveThink) && trackW > W) tools.scrollLeft = tools.scrollWidth;
+  // Скролл не сбрасываем: track — постоянный узел, ширину ставим ДО замены детей,
+  // иначе на миг scrollWidth == clientWidth и браузер обнуляет scrollLeft.
+  let track = TL.track && TL.track.parentNode === tools ? TL.track : null;
+  if (!track) { tools.innerHTML = '<div class="fm-tl__track"></div>'; track = TL.track = tools.firstChild; }
+  const keep = tools.scrollLeft;
+  track.style.width = trackW + 'px'; track.style.height = trackH + 'px';
+  track.innerHTML = html;
+  const maxL = Math.max(0, tools.scrollWidth - tools.clientWidth);
+  // Автопрокрутка к живому краю — только пока пользователь сам не увёл полосу влево.
+  if (TL.follow && (S.calls.size || isLiveThink)) setScroll(tools, maxL);
+  else if (tools.scrollLeft !== Math.min(keep, maxL)) setScroll(tools, Math.min(keep, maxL));
+  if (TH.key) {
+    const i = segs.findIndex(s => s.think && s.think.key === TH.key);
+    if (i < 0) closeThink(); else { TH.from = track.querySelector(`[data-i="${i}"]`); if (TH.key === 'tail') fillThink(); }
+  }
+}
+// ── Скролл полосы инструментов + оверлей «Размышления» по тапу на блок «думает» ──
+const THINK_MAX = 20000;
+const TL = {track:null, segs:[], follow:true, set:-1};
+// followY: оверлей едет за живым текстом, пока пользователь у нижнего края (как TL.follow по X).
+const TH = {key:null, el:null, followY:true};
+function thinkW(txt, ms) { return Math.max(Math.ceil(txt.length * 6.8 + 12), 60 + Math.round(10 * Math.pow(ms / 1000, 0.45))); }
+function setScroll(el, x) { el.scrollLeft = x; TL.set = el.scrollLeft; }
+function thinkTextFor(key) {
+  if (key === 'tail') return [S.thinkDone, S.thinkBuf.trim(), S.tailText].filter(Boolean).join('\n\n');
+  const seg = TL.segs.find(s => s.think && s.think.key === key);
+  return seg ? seg.think.text : '';
+}
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function mdHtml(t) {
+  try { if (window.marked && window.DOMPurify) return window.DOMPurify.sanitize(window.marked.parse(t, {breaks:true})); } catch (_) {}
+  return '<p>' + esc(t).replace(/\n{2,}/g, '</p><p>').replace(/\n/g, '<br>') + '</p>';
+}
+function fillThink() {
+  const el = TH.el; if (!el || !TH.key) return;
+  const seg = TL.segs.find(s => s.think && s.think.key === TH.key);
+  const ms = seg ? seg.think.ms : 0, live = TH.key === 'tail' && S.phase === 'agent' && !S.calls.size;
+  el.querySelector('.fm-think__t').innerHTML = `Размышления · ${fmtS(ms)}${live ? '<span class="fm-think__live">идёт</span>' : ''}`;
+  const txt = thinkTextFor(TH.key), body = el.querySelector('.fm-think__b');
+  if (body.dataset.src === txt) return;
+  const keep = body.scrollTop;
+  body.dataset.src = txt;
+  body.innerHTML = txt ? mdHtml(txt) : '<p class="fm-think__empty">Текст размышлений для этого шага не пришёл: модель сразу вызвала инструмент.</p>';
+  // Автоскролл по Y: пока у нижнего края — держимся за концом текста; увёл вверх — позиция не прыгает.
+  if (TH.followY) thinkToEnd(body); else body.scrollTop = keep;
+}
+function thinkToEnd(body) { body.scrollTop = body.scrollHeight; TH.setY = body.scrollTop; }
+function openThink(segEl) {
+  const s = TL.segs[+segEl.dataset.i]; if (!s || !s.think) return;
+  if (TH.key === s.think.key) { closeThink(); return; }
+  const foot = $('.fm-foot');
+  if (!TH.el) {
+    TH.el = document.createElement('div'); TH.el.className = 'fm-think'; TH.el.setAttribute('role', 'dialog'); TH.el.setAttribute('aria-label', 'Размышления');
+    TH.el.innerHTML = '<div class="fm-think__h"><span class="fm-think__t"></span><button class="fm-think__x" aria-label="Закрыть">×</button></div><div class="fm-think__b"></div>';
+    TH.el.querySelector('.fm-think__x').addEventListener('click', e => { e.stopPropagation(); closeThink(true); });
+    TH.el.addEventListener('pointerdown', e => e.stopPropagation());
+    const b = TH.el.querySelector('.fm-think__b');
+    // Ручная прокрутка отличается от нашей по значению scrollTop: своё смещение (TH.setY) follow не сбрасывает.
+    b.addEventListener('scroll', () => {
+      if (b.scrollTop === TH.setY) return;
+      TH.followY = b.scrollTop + b.clientHeight >= b.scrollHeight - 16;
+    }, {passive:true});
+    foot.appendChild(TH.el);
+  }
+  TH.key = s.think.key; TH.from = segEl;
+  // Живой блок открываем на конце текста и едем за ним; завершённый — с начала.
+  TH.followY = TH.key === 'tail'; TH.setY = -1;
+  const body = TH.el.querySelector('.fm-think__b'); body.dataset.src = '\u0000'; body.scrollTop = 0;
+  fillThink(); placeThink(segEl); if (TH.followY) thinkToEnd(body);
+  TH.el.classList.add('is-on');
+  for (const x of document.querySelectorAll('.fm-seg-g[data-i]')) { const on = x === segEl; x.classList.toggle('is-sel', on); on ? x.setAttribute('aria-expanded', 'true') : x.removeAttribute('aria-expanded'); }
+}
+function placeThink(segEl) {
+  const foot = $('.fm-foot'), fr = foot.getBoundingClientRect(), sr = segEl.getBoundingClientRect();
+  const tr = $('#tlTools').getBoundingClientRect(), pl = tr.left - fr.left, pr = fr.right - tr.right;
+  const w = Math.min(520, tr.width);
+  // Стрелка — в центр видимой части выбранного блока.
+  const vl = Math.max(sr.left, tr.left), vr = Math.min(sr.right, tr.right);
+  const cx = (vl + vr) / 2 - fr.left;
+  const left = Math.max(pl, Math.min(fr.width - pr - w, cx - w / 2));
+  TH.el.style.width = w + 'px'; TH.el.style.left = left + 'px';
+  // Оверлей над строкой статуса: этапы, статус и полоса тулов остаются видны, стрелка — над выбранным блоком.
+  const stt = $('.fm-status').getBoundingClientRect();
+  TH.el.style.bottom = Math.round(fr.bottom - stt.top + 14) + 'px';
+  TH.el.classList.toggle('no-arrow', vr - vl < 8);
+  TH.el.style.setProperty('--fm-think-arrow', Math.max(14, Math.min(w - 14, cx - left)) + 'px');
+}
+function closeThink(focus) {
+  const from = TH.from; TH.key = null; TH.from = null;
+  if (TH.el) TH.el.classList.remove('is-on');
+  for (const x of document.querySelectorAll('.fm-seg-g.is-sel')) { x.classList.remove('is-sel'); x.removeAttribute('aria-expanded'); }
+  if (focus && from && from.isConnected) from.focus({preventScroll:true});
 }
 function showCard(R, n, x, y) {
   for (const c of document.querySelectorAll('.fm-card')) c.classList.remove('is-on');
@@ -791,7 +914,7 @@ const RENDERERS = [];
 const rFlat = new MapR($('#cvFlat'), false), rIso = new MapR($('#cvIso'), true);
 RENDERERS.push(rFlat, rIso);
 function setLayout(l) {
-  VIEW.layout = l;
+  VIEW.layout = l; document.querySelector('.fm-dlg')?.setAttribute('data-layout', l);
   document.querySelectorAll('#fmLayout button').forEach(b => b.classList.toggle('is-on', b.dataset.l === l));
   $('#pFlat').style.display = l === 'iso' ? 'none' : ''; $('#pIso').style.display = l === 'flat' ? 'none' : '';
   for (const R of RENDERERS) { R.inited = false; R.resize(); } kick();
@@ -803,7 +926,7 @@ function setMode(m) {
 }
 function syncFit() { $('#fmFit').classList.toggle('is-on', VIEW.fit); }
 function openModal() { VIEW.open = true; $('#fmBack').classList.add('is-open'); setLayout(VIEW.layout); renderTimeline(true); kick(); }
-function closeModal() { const wasOpen = VIEW.open; VIEW.open = false; if (wasOpen && MINI.on) setTimeout(() => { const el = HOST.orient === 'v' ? RAIL.el : MINI.el; if (el && el.isConnected) el.focus({preventScroll:true}); }, 0); $('#fmBack').classList.remove('is-open'); for (const c of document.querySelectorAll('.fm-card')) c.classList.remove('is-on'); for (const R of RENDERERS) R.visible = false; }
+function closeModal() { closeThink(); const wasOpen = VIEW.open; VIEW.open = false; if (wasOpen && MINI.on) setTimeout(() => { const el = HOST.orient === 'v' ? RAIL.el : MINI.el; if (el && el.isConnected) el.focus({preventScroll:true}); }, 0); $('#fmBack').classList.remove('is-open'); for (const c of document.querySelectorAll('.fm-card')) c.classList.remove('is-on'); for (const R of RENDERERS) R.visible = false; }
 const STATS = {renders:0, ms:0, msAvg:0, msMax:0, fps:0, frames:0, fpsT:0};
 let raf = 0, slowT = 0, lastT = 0, lastDraw = 0;
 function kick() { if (!raf) raf = requestAnimationFrame(frame); }
@@ -889,7 +1012,22 @@ $('#fmRail').onclick = e => { if (e.target.closest('.fm-rail__x')) collapse(); e
 for (const el of [$('#fmMini'), $('#fmRail')]) el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (e.target.closest('.fm-rail__x,.fm-mini__x')) collapse(); else openModal(); } });
 $('#fmClose').onclick = closeModal;
 $('#fmBack').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
-document.addEventListener('keydown', e => { if (e.key === 'Escape' && VIEW.open) { const c = document.querySelector('.fm-card.is-on'); if (c) c.classList.remove('is-on'); else closeModal(); } });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && VIEW.open) { const c = document.querySelector('.fm-card.is-on'); if (TH.key) closeThink(true); else if (c) c.classList.remove('is-on'); else closeModal(); } });
+{
+  const tools = $('#tlTools');
+  // Ручной скролл: пользователь увёл полосу от правого края — перестаём автоскроллить, вернул к краю — снова следим.
+  tools.addEventListener('scroll', () => {
+    // Своё программное смещение отличаем по значению, а не по времени.
+    if (Math.abs(tools.scrollLeft - TL.set) < 2) return;
+    TL.set = -1;
+    TL.follow = tools.scrollLeft >= tools.scrollWidth - tools.clientWidth - 24;
+    if (TH.key && TH.from && TH.from.isConnected) placeThink(TH.from);
+  }, {passive:true});
+  tools.addEventListener('click', e => { const s = e.target.closest('.fm-seg-g[data-i]'); if (s) { e.stopPropagation(); openThink(s); } });
+  tools.addEventListener('keydown', e => { const s = e.target.closest('.fm-seg-g[data-i]'); if (s && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openThink(s); } });
+  // Тап мимо оверлея закрывает его (но не модалку).
+  $('#fmBack').addEventListener('pointerdown', e => { if (TH.key && !e.target.closest('.fm-think,.fm-seg-g[data-i]')) closeThink(); });
+}
 document.querySelectorAll('#fmLayout button').forEach(b => b.onclick = () => setLayout(b.dataset.l));
 document.querySelectorAll('#fmMode button').forEach(b => b.onclick = () => setMode(b.dataset.m));
 $('#fmFit').onclick = () => { VIEW.fit = !VIEW.fit; syncFit(); if (VIEW.fit) for (const R of RENDERERS) R.manual = false; kick(); };
@@ -900,7 +1038,7 @@ const roHost = new ResizeObserver(() => { if (MINI.on) layoutHost(); }); { const
 addEventListener('resize', () => { if (MINI.on) layoutHost(); });
 { const mic = document.querySelector('#view-agent .message-input-container'); if (mic) new MutationObserver(() => { if (MINI.on) layoutHost(); }).observe(mic, {childList:true}); }
 readTheme();
-window.FlowViz = {emit, reset, demo, open:openModal, close:closeModal, expand, collapse, bindPlaceholder, host:HOST, layoutHost, setLayout, setMode, setOthers:n => { S.others = n; kick(); }, state:S, view:VIEW, stats:STATS, renderers:{flat:rFlat, iso:rIso}, SLOTS};
+window.FlowViz = {emit, reset, demo, open:openModal, close:closeModal, expand, collapse, bindPlaceholder, host:HOST, layoutHost, setLayout, setMode, setOthers:n => { S.others = n; kick(); }, state:S, view:VIEW, stats:STATS, renderers:{flat:rFlat, iso:rIso}, SLOTS, tl:TL};
 
 function mountDom() {
   if (document.getElementById('fmBack')) return;

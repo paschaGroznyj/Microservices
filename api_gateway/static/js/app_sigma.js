@@ -5122,6 +5122,8 @@ class ChatApp {
 
             st.streamBuffer += chunk;
             if (!st.streamIsFinal) {
+                // FlowMap: текст размышлений для оверлея по тапу на блок «думает».
+                if (isActive) _fm('think_text', { chat: key, text: chunk });
                 this._setReasoningHeaderLabel(key, (st.streamShown || '') + (st.streamBuffer || ''), false);
             }
         };
@@ -5133,6 +5135,7 @@ class ChatApp {
             if (this._isActiveChat(key)) _fm(f.ev, { ...f, chat: key, id: f.call_id || undefined });
         });
         es.addEventListener('reasoning_end', () => {
+            if (this._isActiveChat(key)) _fm('think_end', { chat: key });
             // Текущий живой блок был размышлением перед вызовом тулзы —
             // сливаем его в общий свёрток «Размышления».
             this._commitReasoningBlock(key);

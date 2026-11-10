@@ -4442,6 +4442,7 @@ class ChatApp {
 
             // ── Управляющие маркеры стриминга (kind без нового текста) ──
             if (msg.kind === 'reasoning_end') {
+                if (isActive) _fm('think_end', { chat: key });
                 this._commitReasoningBlock(key);
                 return;
             }
@@ -4496,6 +4497,8 @@ class ChatApp {
 
                 st.streamBuffer += msg.chunk;
                 if (!st.streamIsFinal) {
+                    // FlowMap: текст размышлений для оверлея по тапу на блок «думает».
+                    if (isActive && msg.chunk) _fm('think_text', { chat: key, text: msg.chunk });
                     this._setReasoningHeaderLabel(key, (st.streamShown || '') + (st.streamBuffer || ''), false);
                 }
 

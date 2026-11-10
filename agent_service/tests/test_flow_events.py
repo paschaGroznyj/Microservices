@@ -172,3 +172,27 @@ def test_gap_ms_none_without_agent_start(agent, monkeypatch):
     run(agent._invoke_tool({"t": FakeTool("t", result="ok")}, {"name": "t", "args": {}, "id": "a"}, "rX"))
     assert _flows(sent)[0][1]["gap_ms"] is None
     assert "rX" in agent._flow_last   # точка выставлена по tool_end, следующий шаг получит gap
+
+
+def test_workspace_flow_fields_from_args_and_result(agent, monkeypatch):
+    """Тулы с workspace_id в args или create_workspace передают поле ws в flow."""
+    set_target(agent, "main")
+    sent = AsyncMock()
+    monkeypatch.setattr(agent, "_send_flow", sent)
+    tools = {
+        "create_workspace": FakeTool("create_workspace", result={"workspace_id": "d976e0e002fd"}),
+        "execute_python_code": FakeTool("execute_python_code", result="done"),
+        "read_workspace_file": FakeTool("read_workspace_file", result="txt"),
+    }
+    run(agent._invoke_tool(tools, {"name": "create_workspace", "args": {}, "id": "w1"}, "r1"))
+    run(agent._invoke_tool(tools, {"name": "execute_python_code", "args": {"code": "1", "workspace_id": "d976e0e002fd"}, "id": "w2"}, "r1"))
+    run(agent._invoke_tool(tools, {"name": "read_workspace_file", "args": {"workspace_id": "abc12345", "path": "a.py"}, "id": "w3"}, "r1"))
+    evs = _flows(sent)
+    # create_workspace: на старте ws="workspace", на финише ws="d976e0e002fd" из result
+    assert evs[0] == ("tool_start", {**evs[0][1], "slot": "sandbox", "ws": "workspace"})
+    assert evs[1] == ("tool_end", {**evs[1][1], "slot": "sandbox", "ws": "d976e0e002fd"})
+    # execute_python_code с workspace_id: и ext="sandbox_c", и ws="d976e0e002fd"
+    assert evs[2][1]["ws"] == "d976e0e002fd" and evs[2][1]["ext"] == "sandbox_c"
+    assert evs[4][1]["ws"] == "abc12345"
+    assert all("name" not in kw for _, kw in evs)
+

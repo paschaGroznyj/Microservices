@@ -18,17 +18,18 @@ const NODES = [
   {id:'obs',      kind:'square',  x:760, y:318, w:30, h:14, label:'OBS',      name:'Хранилище', tech:'OBS',            desc:'Файлы из чата и ответов агента.'},
   {id:'searxng',  kind:'circle',  x:800, y:-4,  r:12, h:10, lp:'w', label:'SEARXNG',  name:'Поиск',     tech:'searxng',        desc:'Внешний поисковик для запросов в интернет.', ext:true},
   {id:'parsers',  kind:'circle',  x:690, y:52, r:12, h:10, lp:'w', label:'PARSERS',  name:'Парсер',    tech:'parsers_service', desc:'Скачивает и разбирает страницы по ссылке.', ext:true},
-  {id:'sandbox_c',kind:'circle',  x:1130,y:100, r:13, h:10, lp:'top', label:'SANDBOX', name:'Песочница', tech:'agent_sandbox',  desc:'Контейнер, где выполняется код.', ext:true},
+  {id:'sandbox_c',kind:'circle',  x:1130,y:96,  r:13, h:10, lp:'top', label:'SANDBOX', name:'Песочница', tech:'agent_sandbox',  desc:'Контейнер, где выполняется код.', ext:true},
+  {id:'workspace',kind:'folder',  x:1148,y:236, w:64, fh:42, r:32, h:14, lp:'bottom', label:'WORKSPACE', name:'Рабочая область', tech:'workspace', desc:'Директория в песочнице, где агент собирает и правит файлы.', wsNode:true},
 ];
 const N = Object.fromEntries(NODES.map(n => [n.id, n]));
 const SLOT_DEF = [
-  ['web','ВЕБ','Веб','Поиск и чтение страниц','internet · parse_url'],
-  ['sandbox','ПЕСОЧНИЦА','Песочница','Код и команды','execute'],
-  ['media','МЕДИА','Медиа','Картинки, видео, звук','media'],
-  ['kb','БАЗА ЗНАНИЙ','База знаний','Знания и память агента','storage'],
-  ['tasks','ЗАДАЧИ','Задачи','Фоновые задачи','tasks'],
-  ['mail','ПОЧТА','Почта','Файлы и письма','delivery'],
-  ['other','ПРОЧЕЕ','Прочее','Остальные инструменты','other'],
+  ['web','ВЕБ','Веб','Поиск и чтение страниц','веб-поиск'],
+  ['sandbox','ПЕСОЧНИЦА','Песочница','Код и команды','песочница'],
+  ['media','МЕДИА','Медиа','Картинки, видео, звук','медиа'],
+  ['kb','БАЗА ЗНАНИЙ','База знаний','Знания и память агента','память'],
+  ['tasks','ЗАДАЧИ','Задачи','Фоновые задачи','фоновые задачи'],
+  ['mail','ПОЧТА','Почта','Файлы и письма','файлы и почта'],
+  ['other','ПРОЧЕЕ','Прочее','Остальные инструменты','инструменты'],
 ];
 const SLOTS = {}, SLOT_LIST = [];
 SLOT_DEF.forEach(([id, label, name, desc, tech], i) => {
@@ -36,12 +37,12 @@ SLOT_DEF.forEach(([id, label, name, desc, tech], i) => {
   const s = {id, kind:'diamond', x:N.agent.x + Math.cos(a) * R, y:N.agent.y + Math.sin(a) * R, r:13, h:10, label, name, desc, tech, ang:a, tool:true};
   SLOTS[id] = s; SLOT_LIST.push(s);
 });
-// Имена тулов на фронт не приходят: агент шлёт slot / label / ext (agent_service/app/agent/flow_tools.py).
+// Имена тулов на фронт не приходят: агент шлёт slot / label / ext / ws (agent_service/app/agent/flow_tools.py).
 const EXT_IDS = new Set(['searxng', 'parsers', 'sandbox_c']);
-const EXT_EDGES = [['web','searxng','internet'], ['web','parsers','parse_url'], ['sandbox','sandbox_c','execute']];
+const EXT_EDGES = [['web','searxng'], ['web','parsers'], ['sandbox','sandbox_c']];
 const WB = (() => {
   let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
-  for (const n of NODES) { const hw = (n.len ? n.len / 2 : n.r || n.w / 2); x0 = Math.min(x0, n.x - hw - 30); x1 = Math.max(x1, n.x + hw + 30); y0 = Math.min(y0, n.y - 50); y1 = Math.max(y1, n.y + 50); }
+  for (const n of NODES) { const hw = (n.len ? n.len / 2 : n.w ? n.w / 2 : n.r); x0 = Math.min(x0, n.x - hw - 36); x1 = Math.max(x1, n.x + hw + 44); y0 = Math.min(y0, n.y - 50); y1 = Math.max(y1, n.y + 62); }
   for (const sl of SLOT_LIST) { const dx = Math.cos(sl.ang), dy = Math.sin(sl.ang); const lx = sl.x + dx * 40, ly = sl.y + dy * 40; x0 = Math.min(x0, lx - (dx < -0.35 ? 100 : 50)); x1 = Math.max(x1, lx + (dx > 0.35 ? 135 : 55)); y0 = Math.min(y0, ly - (dy < -0.5 ? 52 : 22)); y1 = Math.max(y1, ly + (dy > 0.5 ? 52 : 22)); }
   return {x0, y0, x1, y1};
 })();
@@ -59,9 +60,13 @@ const EDGES = [['user','gateway',0],['gateway','chats',1],['chats',[435,232],2],
 function circlePts(x, y, r, n = 24) { const p = []; for (let i = 0; i < n; i++) { const a = i / n * Math.PI * 2; p.push([x + Math.cos(a) * r, y + Math.sin(a) * r]); } return p; }
 function capsulePts(x, y, len, r) { const p = [], hl = len / 2 - r; for (let i = 0; i <= 10; i++) { const a = -Math.PI/2 + i / 10 * Math.PI; p.push([x + hl + Math.cos(a) * r, y + Math.sin(a) * r]); } for (let i = 0; i <= 10; i++) { const a = Math.PI/2 + i / 10 * Math.PI; p.push([x - hl + Math.cos(a) * r, y + Math.sin(a) * r]); } return p; }
 const sqPts = (x, y, w) => [[x-w/2,y-w/2],[x+w/2,y-w/2],[x+w/2,y+w/2],[x-w/2,y+w/2]];
+const folderPts = (x, y, w, h) => {
+  const x0 = x - w / 2, x1 = x + w / 2, y0 = y - h / 2, y1 = y + h / 2;
+  return [[x0, y0 + 6], [x0 + 4, y0], [x0 + 24, y0], [x0 + 29, y0 + 6], [x1, y0 + 6], [x1, y1], [x0, y1]];
+};
 const diaPts = (x, y, s) => [[x,y-s],[x+s,y],[x,y+s],[x-s,y]];
 for (const n of [...NODES, ...SLOT_LIST]) {
-  n.pts = n.kind === 'capsule' ? capsulePts(n.x, n.y, n.len, n.r) : n.kind === 'square' ? sqPts(n.x, n.y, n.w) : n.kind === 'diamond' ? diaPts(n.x, n.y, n.r) : circlePts(n.x, n.y, n.r);
+  n.pts = n.kind === 'capsule' ? capsulePts(n.x, n.y, n.len, n.r) : n.kind === 'folder' ? folderPts(n.x, n.y, n.w, n.fh) : n.kind === 'square' ? sqPts(n.x, n.y, n.w) : n.kind === 'diamond' ? diaPts(n.x, n.y, n.r) : circlePts(n.x, n.y, n.r);
   if (n.kind === 'ring') n.inner = circlePts(n.x, n.y, n.r * 0.6);
   n.ptsIso = n.pts;
   if (!n.r) n.r = n.w / 2;
@@ -89,6 +94,7 @@ const S = {
   active:false, phase:'idle', t0:0, tEnd:0, d:0, dir:1, allow:0, trail:[], pkz:0,
   calls:new Map(), discovered:new Set(), phases:[], toolLog:[], fx:[], pulses:[],
   lit:new Float32Array(EDGES.length), hl:{}, st:{}, others:0, ghosts:[], status:'Ожидаю запрос', lastInside:null, chat:null, rid:null,
+  wsSeen:false, wsId:'', wsIds:new Set(), stepSeq:0,
 };
 for (const n of [...NODES, ...SLOT_LIST]) { S.hl[n.id] = 0; S.st[n.id] = {visits:0, ms:0, calls:[]}; }
 const now = () => performance.now();
@@ -98,6 +104,7 @@ function setStatus(t) { S.status = t; }
 function reset() {
   S.active = false; S.phase = 'idle'; S.t0 = 0; S.tEnd = 0; S.d = 0; S.dir = 1; S.allow = 0; S.trail = [];
   S.calls.clear(); S.phases = []; S.toolLog = []; S.fx = []; S.pulses = []; S.lit.fill(0); S.chat = null; S.rid = null;
+  S.wsSeen = false; S.wsId = ''; S.wsIds.clear(); S.stepSeq = 0;
   setStatus('Ожидаю запрос'); clearTimeout(miniHideT); MINI.on = HOST.expanded;
   layoutHost(); renderTimeline(true); kick();
 }
@@ -116,7 +123,7 @@ function emit(type, d = {}) {
     case 'send':
       S.chat = d.chat != null ? String(d.chat) : null; S.rid = null;
       S.active = true; S.phase = 'send'; S.t0 = t; S.tEnd = 0; S.d = 0; S.dir = 1; S.allow = D[1]; S.trail = [];
-      S.calls.clear(); S.phases = []; S.toolLog = []; S.fx = []; S.pulses = []; S.lit.fill(0); S.lastInside = null;
+      S.calls.clear(); S.phases = []; S.toolLog = []; S.fx = []; S.pulses = []; S.lit.fill(0); S.lastInside = null; S.stepSeq = 0;
       openPhase('gw', 'Шлюз', t); setStatus('Отправляю…'); showMini(true); break;
     case 'gateway':
       if (!S.active) break;
@@ -136,25 +143,40 @@ function emit(type, d = {}) {
       if (S.phase !== 'agent' && S.phase !== 'answer') { S.phase = 'agent'; S.allow = DMAX; openPhase('agent', 'Агент', t); }
       const slot = SLOTS[d.slot] ? d.slot : 'other', label = d.label || 'Инструмент';
       const ext = EXT_IDS.has(d.ext) ? d.ext : null;
+      const ws = d.ws || d.workspace_id || null;
       const key = d.id || ('t' + t);
-      S.calls.set(key, {slot, label, ext, t0:t}); if (ext) S.hl[ext] = 1;
+      // Если активных вызовов нет — это новый последовательный шаг по горизонтали;
+      // если уже есть активные вызовы — это параллельный вызов в том же шаге (на новой дорожке).
+      const isNewStep = S.calls.size === 0;
+      if (isNewStep) S.stepSeq++;
+      const step = S.stepSeq;
+      S.calls.set(key, {slot, label, ext, ws, t0:t, step}); if (ext) S.hl[ext] = 1;
+      if (ws) {
+        S.wsSeen = true; S.hl.workspace = 1;
+        if (ws !== 'workspace') { S.wsId = String(ws); S.wsIds.add(S.wsId); }
+        S.pulses.push({a:'sandbox', b:'workspace', t, dur:680});
+      }
       // gap_ms — сколько агент думал перед этим шагом (считает бэк по request_id).
-      // У параллельных тулов один шаг — gap рисуем один раз.
-      const prev = S.toolLog[S.toolLog.length - 1];
-      const gap = Number.isFinite(+d.gap_ms) && d.gap_ms !== null && !(prev && prev.gap === +d.gap_ms && t - prev.t0 < 1500) ? +d.gap_ms : null;
-      S.toolLog.push({key, slot, label, t0:t, t1:0, ok:true, gap, gapShown:gap});
+      const gap = isNewStep && Number.isFinite(+d.gap_ms) && d.gap_ms !== null ? +d.gap_ms : null;
+      S.toolLog.push({key, slot, label, ws, step, t0:t, t1:0, ms:null, ok:true, gap, gapShown:gap});
       S.discovered.add(slot); S.hl[slot] = 1; setStatus(label); break;
     }
     case 'tool_end': {
       const key = d.id; const c = key != null ? S.calls.get(key) : null; if (!c) break;
       S.calls.delete(key);
       const ok = d.ok !== false;
+      const ws = d.ws || d.workspace_id || c.ws || null;
+      if (ws) {
+        S.wsSeen = true; S.hl.workspace = 1;
+        if (ws !== 'workspace') { S.wsId = String(ws); S.wsIds.add(S.wsId); }
+      }
       // Длительность берём с бэка (ms, monotonic вокруг ainvoke): кадры до фронта
       // могут прийти пачкой, и разница времени прихода даст ложные 0,1 с.
       const ms = Number.isFinite(+d.ms) && d.ms !== null ? +d.ms : t - c.t0;
       const log = [...S.toolLog].reverse().find(l => l.key === key && !l.t1);
-      if (log) { log.t1 = t; log.t0 = Math.max(S.t0, Math.min(log.t0, t - ms)); log.ms = ms; log.ok = ok; }
+      if (log) { log.t1 = log.t0 + ms; log.ms = ms; log.ok = ok; if (ws) log.ws = ws; }
       const st = S.st[c.slot]; st.calls.unshift({label:c.label, ms, ok}); st.calls.length = Math.min(st.calls.length, 5); st.visits++;
+      if (ws) { const wst = S.st.workspace; wst.calls.unshift({label:c.label + (S.wsId ? ` (${S.wsId})` : ''), ms, ok}); wst.calls.length = Math.min(wst.calls.length, 5); wst.visits++; wst.ms += ms; }
       S.fx.push({kind: ok ? 'ok' : 'err', slot:c.slot, t, dur: ok ? 700 : 2600});
       const left = [...S.calls.values()]; setStatus(left.length ? left[left.length-1].label : 'Агент думает'); break;
     }
@@ -216,6 +238,7 @@ class MapR {
     const calls = [...S.calls.values()];
     if (calls.length && S.phase === 'agent') {
       const pts = [this.P(N.consumer.x, N.agent.y, 0), ...SLOT_LIST.map(sl => this.P(sl.x + Math.cos(sl.ang) * 60, sl.y + Math.sin(sl.ang) * 40, 0))];
+      if (S.wsSeen) pts.push(this.P(N.workspace.x + 36, N.workspace.y + 30, 0));
       const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
       const w = Math.max(...xs) - Math.min(...xs) + 120, h = Math.max(...ys) - Math.min(...ys) + 60;
       return {cx:(Math.max(...xs) + Math.min(...xs)) / 2, cy:(Math.max(...ys) + Math.min(...ys)) / 2, s:Math.max(fs, Math.min(MAXS, this.W / w, this.H / h, fs * 1.9))};
@@ -263,6 +286,7 @@ class MapR {
   hit(mx, my) {
     let best = null, bd = 1e9;
     for (const n of [...NODES, ...SLOT_LIST]) {
+      if (n.wsNode && !S.wsSeen) continue;
       const [x, y] = this.scr(n.x, n.y, this.iso ? n.h : 0);
       const rr = Math.max(16, n.r * this.cam.s * 1.15) + (n.kind === 'capsule' ? n.len / 2 * this.cam.s : 0);
       const dd = Math.hypot(mx - x, my - y);
@@ -320,11 +344,27 @@ class MapR {
     line([N.agent.x, N.agent.y], [N.obs.x, N.obs.y], rgba(C.stroke, 0.95), 1.3 * px, [4 * px, 3 * px]);
     if (S.hl.obs > 0.02) line([N.agent.x, N.agent.y], [N.obs.x, N.obs.y], rgba(C.accent, Math.min(1, S.hl.obs)), 2.2 * px);
     const extRun = new Set([...S.calls.values()].map(c => c.ext).filter(Boolean));
+    const wsRun = [...S.calls.values()].some(c => c.ws);
     for (const [a, b] of EXT_EDGES) {
       const A = SLOTS[a], B = N[b];
       line([A.x, A.y], [B.x, B.y], rgba(C.stroke, 0.8), 1.1 * px, [3 * px, 3 * px]);
       if (extRun.has(b)) line([A.x, A.y], [B.x, B.y], rgba(C.accent, 0.9), 2 * px, [6 * px, 6 * px], RM.matches ? 0 : -t * 0.04 * px);
       else if (S.hl[b] > 0.02) line([A.x, A.y], [B.x, B.y], rgba(C.accent, Math.min(1, S.hl[b])), 1.8 * px, [6 * px, 6 * px]);
+    }
+    if (S.wsSeen) {
+      const W0 = N.workspace, SB = SLOTS.sandbox, SC = N.sandbox_c;
+      if (!iso) {
+        const zPts = [[W0.x - 48, W0.y - 34], [W0.x + 48, W0.y - 34], [W0.x + 48, W0.y + 46], [W0.x - 48, W0.y + 46]];
+        this.prism(zPts, 0, rgba(C.accent, wsRun ? 0.07 : 0.025), rgba(wsRun ? C.accent : C.stroke, wsRun ? 0.65 : 0.38), 1.1 * px, [4 * px, 4 * px]);
+      }
+      line([SB.x, SB.y], [W0.x, W0.y], rgba(C.stroke, 0.85), 1.2 * px, [4 * px, 3 * px]);
+      line([SC.x, SC.y], [W0.x, W0.y], rgba(C.stroke, 0.7), 1.1 * px, [3 * px, 4 * px]);
+      if (wsRun) {
+        line([SB.x, SB.y], [W0.x, W0.y], rgba(C.accent, 0.95), 2.1 * px, [6 * px, 5 * px], RM.matches ? 0 : -t * 0.045 * px);
+        line([SC.x, SC.y], [W0.x, W0.y], rgba(C.accent, 0.75), 1.7 * px, [5 * px, 5 * px], RM.matches ? 0 : -t * 0.04 * px);
+      } else if (S.hl.workspace > 0.02) {
+        line([SB.x, SB.y], [W0.x, W0.y], rgba(C.accent, Math.min(1, S.hl.workspace)), 1.9 * px, [5 * px, 5 * px]);
+      }
     }
     const busy = S.active && (S.phase === 'agent' || S.phase === 'answer');
     const runSlots = new Set([...S.calls.values()].map(c => c.slot));
@@ -335,13 +375,34 @@ class MapR {
     }
     const all = [...NODES, ...SLOT_LIST];
     if (iso) all.sort((a, b) => (a.y + a.r) - (b.y + b.r));
-    if (iso) { ctx.fillStyle = rgba([0,0,0], DARK ? 0.35 : 0.07); for (const n of all) { if (n.tool && !S.discovered.has(n.id)) continue; const sh = new Path2D(); n.ptsIso.forEach((p, i) => { const q = pt(p[0] + 5, p[1] + 5, 0); i ? sh.lineTo(q[0], q[1]) : sh.moveTo(q[0], q[1]); }); ctx.fill(sh); } }
+    if (iso) { ctx.fillStyle = rgba([0,0,0], DARK ? 0.35 : 0.07); for (const n of all) { if ((n.tool && !S.discovered.has(n.id)) || (n.wsNode && !S.wsSeen)) continue; const sh = new Path2D(); n.ptsIso.forEach((p, i) => { const q = pt(p[0] + 5, p[1] + 5, 0); i ? sh.lineTo(q[0], q[1]) : sh.moveTo(q[0], q[1]); }); ctx.fill(sh); } }
     for (const n of all) {
-      const hl = Math.min(1, S.hl[n.id] || 0) + (this.hover === n ? 0.35 : 0);
+      if (n.wsNode && !S.wsSeen) continue;
+      const hl = Math.min(1, S.hl[n.id] || 0) + (this.hover === n ? 0.35 : 0) + (n.wsNode && wsRun ? 0.7 : 0);
       const NP = iso ? n.ptsIso : n.pts;
       if (n.tool && !S.discovered.has(n.id)) { this.prism(NP, 0, null, rgba(mix(C.muted, C.text, DARK ? 0.25 : 0.12), this.hover === n ? 1 : 0.85), 1.1 * px, [3 * px, 3 * px]); continue; }
       const stroke = hl > 0.02 ? rgba(mix(C.stroke, C.accent, Math.min(1, hl))) : rgba(C.stroke);
-      this.prism(NP, n.h, rgba(C.surface), stroke, (1.2 + hl * 1.2) * px);
+      this.prism(NP, n.h, rgba(n.wsNode && wsRun ? mix(C.surface, C.accent, 0.12) : C.surface), stroke, (1.2 + Math.min(1, hl) * 1.2) * px);
+      if (n.kind === 'folder') {
+        const z = iso ? n.h : 0, x0 = n.x - n.w / 2, x1 = n.x + n.w / 2, y0 = n.y - n.fh / 2;
+        const seamA = pt(x0, y0 + 6, z), seamB = pt(x1, y0 + 6, z);
+        ctx.strokeStyle = stroke; ctx.lineWidth = px; ctx.beginPath(); ctx.moveTo(seamA[0], seamA[1]); ctx.lineTo(seamB[0], seamB[1]); ctx.stroke();
+        // Дерево директории в разрезе: ствол и 3 ветки файлов с анимацией обхода
+        const tx = n.x - 18, ty0 = n.y - 9, ty2 = n.y + 13;
+        const stA = pt(tx, ty0, z), stB = pt(tx, ty2, z);
+        ctx.strokeStyle = rgba(wsRun ? C.accent : C.stroke, 0.9); ctx.lineWidth = 1.3 * px;
+        ctx.beginPath(); ctx.moveTo(stA[0], stA[1]); ctx.lineTo(stB[0], stB[1]); ctx.stroke();
+        const branches = [[-6, 12], [3, 20], [12, 10]];
+        const actBr = wsRun && !RM.matches ? Math.floor(t / 220) % 3 : -1;
+        branches.forEach(([dy, len], bi) => {
+          const bA = pt(tx, n.y + dy, z), bB = pt(tx + len, n.y + dy, z);
+          const onB = wsRun && (actBr === bi || actBr < 0);
+          ctx.strokeStyle = rgba(onB ? C.accent : C.stroke, onB ? 1 : 0.85); ctx.lineWidth = (onB ? 1.8 : 1.2) * px;
+          ctx.beginPath(); ctx.moveTo(bA[0], bA[1]); ctx.lineTo(bB[0], bB[1]); ctx.stroke();
+          ctx.fillStyle = rgba(onB ? C.accent : C.stroke, onB ? 1 : 0.85);
+          ctx.beginPath(); ctx.arc(bB[0], bB[1], (onB ? 2.6 : 1.9) * px, 0, 6.3); ctx.fill();
+        });
+      }
       if (n.kind === 'ring') this.prism(n.inner, n.h, rgba(mix(C.surface, C.accent, busy ? 0.16 : 0.05)), rgba(busy ? C.accent : C.stroke, busy ? 0.9 : 0.8), 1.2 * px);
       if (n.kind === 'capsule' && S.active && S.phase === 'queue') {
         ctx.strokeStyle = rgba(C.accent, 0.45); ctx.lineWidth = 1.2 * px; ctx.setLineDash([3 * px, 5 * px]); ctx.lineDashOffset = RM.matches ? 0 : -t * 0.02 * px;
@@ -370,7 +431,7 @@ class MapR {
     }
     for (const p of S.pulses) {
       const k = (t - p.t) / p.dur; if (k < 0 || k > 1) continue;
-      const A = N[p.a || 'chats'], B = N[p.b || 'db'];
+      const A = N[p.a || 'chats'] || SLOTS[p.a] || N.chats, B = N[p.b || 'db'] || SLOTS[p.b] || N.db;
       const kk = k < 0.5 ? k * 2 : 2 - k * 2, x = A.x + (B.x - A.x) * kk, y = A.y + (B.y - A.y) * kk;
       const q = pt(x, y, iso ? 8 : 0); ctx.fillStyle = rgba(p.err ? C.danger : C.accent, 0.85); ctx.beginPath(); ctx.arc(q[0], q[1], 3 * px, 0, 6.3); ctx.fill();
     }
@@ -393,9 +454,11 @@ class MapR {
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.font = `600 10px ${MONO}`; ctx.textBaseline = 'top';
     try { ctx.letterSpacing = '1px'; } catch (_) {}
-    const ry = n => (iso ? n.r * OY : n.r) * s;
+    const ry = n => (iso ? (n.fh ? n.fh / 2 : n.r) * OY : (n.fh ? n.fh / 2 : n.r)) * s;
     for (const n of NODES) {
-      ctx.fillStyle = rgba(S.hl[n.id] > 0.3 ? C.accent : C.label);
+      if (n.wsNode && !S.wsSeen) continue;
+      const isAct = S.hl[n.id] > 0.3 || (n.wsNode && wsRun);
+      ctx.fillStyle = rgba(isAct ? C.accent : C.label);
       const lp = n.lp || 'bottom';
       if (lp === 'left' || lp === 'w') {
         const [x, y] = this.scr(n.x, n.y, iso ? n.h : 0), rr = (n.r + (lp === 'w' ? 4 : 26)) * s + 6;
@@ -405,23 +468,15 @@ class MapR {
         ctx.textAlign = 'center'; ctx.textBaseline = 'bottom'; ctx.fillText(n.label, x, y - ry(n) - (iso ? 5 : 8));
       } else {
         const [x, y] = this.scr(n.x, n.y, 0);
-        ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillText(n.label, x, y + ry(n) + (iso ? 6 : 8));
+        const ly = y + ry(n) + (iso ? 6 : 8);
+        ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillText(n.label, x, ly);
+        if (n.wsNode && S.wsId) {
+          ctx.font = `500 9.5px ${MONO}`; try { ctx.letterSpacing = '0px'; } catch (_) {}
+          ctx.fillStyle = rgba(wsRun ? C.accent : C.sec, 0.92);
+          ctx.fillText(S.wsId, x, ly + 13);
+          ctx.font = `600 10px ${MONO}`; try { ctx.letterSpacing = '1px'; } catch (_) {}
+        }
       }
-    }
-    {
-      // Обозначения каналов на рёбрах: http / internet / parse_url / execute.
-      ctx.font = `600 10px ${MONO}`; try { ctx.letterSpacing = '0px'; } catch (_) {}
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      const tag = (a, b, txt, on, k = 0.5) => {
-        const [x1, y1] = this.scr(a.x, a.y, 0), [x2, y2] = this.scr(b.x, b.y, 0);
-        const mx = x1 + (x2 - x1) * k, my = y1 + (y2 - y1) * k, w = ctx.measureText(txt).width + 8;
-        ctx.fillStyle = rgba(C.bg, 0.94); ctx.fillRect(mx - w / 2, my - 7, w, 14);
-        ctx.fillStyle = rgba(on ? C.accent : C.label); ctx.fillText(txt, mx, my);
-      };
-      const runExt = new Set([...S.calls.values()].map(c => c.ext).filter(Boolean));
-      tag(N.agent, N.obs, 'http', S.hl.obs > 0.3, 0.55);
-      for (const [a, b, txt] of EXT_EDGES) tag(SLOTS[a], N[b], txt, runExt.has(b) || S.hl[b] > 0.3, 0.55);
-      ctx.font = `600 10px ${MONO}`; try { ctx.letterSpacing = '1px'; } catch (_) {}
     }
     for (const sl of SLOT_LIST) {
       const disc = S.discovered.has(sl.id);
@@ -450,7 +505,7 @@ function drawMini() {
   const cv = MINI.cv, r = cv.getBoundingClientRect(); if (!r.width) return;
   const dpr = Math.min(2, devicePixelRatio || 1);
   if (cv.width !== Math.round(r.width * dpr)) { cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr); }
-  const W = r.width, kx = (W - 60) / 260, X = v => 18 + v * kx;
+  const W = r.width, span = Math.max(180, W - 78), kx = span / 260, X = v => 18 + v * kx;
   const MX = {user:X(0), gateway:X(46), chats:X(92), kA:X(130), kB:X(184), consumer:X(218), agent:X(260)};
   const xs = [MX.user, MX.gateway, MX.chats, MX.kA, MX.kB, MX.consumer, MX.agent];
   const c = MINI.ctx, Y = 30; c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, W, r.height);
@@ -481,8 +536,8 @@ function drawMini() {
   let txt = S.status;
   if (calls.length) { const cl = calls[calls.length - 1]; txt = SLOTS[cl.slot].name + ' · ' + fmtS(now() - cl.t0) + (calls.length > 1 ? ` · +${calls.length - 1}` : ''); }
   else if (S.phase === 'done' && S.tEnd) txt = 'Готово · ' + fmtS(S.tEnd - S.t0);
-  c.fillStyle = rgba(calls.length ? C.accent : C.text, calls.length ? 1 : 0.8); c.fillText(txt, 10, 11);
-  c.font = `500 13px ${MONO}`; c.textAlign = 'right'; c.fillStyle = rgba(C.sec); c.fillText('⤢', W - 9, 12);
+  c.fillStyle = rgba(calls.length ? C.accent : C.text, calls.length ? 1 : 0.8); c.fillText(fitTxt(c, txt, Math.max(80, W - 64)), 10, 11);
+  c.font = `500 13px ${MONO}`; c.textAlign = 'right'; c.fillStyle = rgba(C.sec); c.fillText('⤢', W - 38, 12);
   try { c.letterSpacing = '0px'; } catch (_) {}
 }
 let miniHideT = 0;
@@ -609,30 +664,96 @@ function renderTimeline(force) {
   if (!S.t0) { base.innerHTML = ''; tools.innerHTML = ''; $('#fmTotal').textContent = ''; return; }
   const end = S.tEnd || t, total = Math.max(1, end - S.t0), W = base.clientWidth || 600;
   $('#fmTotal').textContent = fmtS(total);
-  const seg = (cls, k, label, t0, t1, extra = '', lane = 0) => {
-    const l = (t0 - S.t0) / total * 100, w = Math.max(0.4, ((t1 || end) - t0) / total * 100), pxw = w / 100 * W;
-    const full = `${label} ${fmtS((t1 || end) - t0)}`, cw = 6.6; const dur = (label.startsWith('✕') ? '✕ ' : '') + fmtS((t1 || end) - t0); const txt = pxw > full.length * cw + 12 ? full : pxw > dur.length * cw + 12 ? dur : pxw > label.length * cw + 12 ? label : '';
-    return `<div class="${cls}${extra}" data-k="${k}" style="left:${l}%;width:${w}%;top:${lane * 19}px" title="${label} · ${fmtS((t1 || end) - t0)}">${txt}</div>`;
-  };
-  base.innerHTML = S.phases.map(p => seg('fm-seg-b', p.k, p.label, p.t0, p.t1)).join('');
-  // Параллельные тулы — по под-дорожкам (жадно: первая дорожка, где прошлый сегмент уже кончился).
-  const ends = [], lanes = new Map();
-  for (const l of [...S.toolLog].sort((a, b) => a.t0 - b.t0)) {
-    const e = l.t1 || end; let i = ends.findIndex(x => x <= l.t0 + 1); if (i < 0) { i = ends.length; ends.push(0); }
-    ends[i] = e; lanes.set(l, i);
+  // 1) Базовая полоса (fm-tl__row--base): нелинейное масштабирование с гарантированным минимумом,
+  // чтобы при ответе агента в 600 с короткие этапы (Шлюз, Очередь, Ответ) оставались читаемыми.
+  if (S.phases.length) {
+    const durs = S.phases.map(p => Math.max(1, (p.t1 || end) - p.t0));
+    const raw = durs.map(d => Math.pow(Math.max(80, d), 0.25));
+    const minP = S.phases.length > 1 ? Math.min(24, Math.floor((W < 480 ? 72 : 68) / S.phases.length)) : 100;
+    const pcts = new Array(S.phases.length).fill(0);
+    let rem = 100, free = S.phases.map((_, i) => i);
+    while (free.length) {
+      const rSum = free.reduce((a, i) => a + raw[i], 0) || 1;
+      let clamped = false;
+      for (const i of [...free]) {
+        const sh = rem * raw[i] / rSum;
+        if (sh < minP) { pcts[i] = minP; rem -= minP; free = free.filter(x => x !== i); clamped = true; }
+      }
+      if (!clamped) { for (const i of free) pcts[i] = rem * raw[i] / rSum; break; }
+    }
+    let acc = 0;
+    base.innerHTML = S.phases.map((p, i) => {
+      const w = pcts[i], l = acc; acc += w;
+      const dur = durs[i], segPx = W * w / 100;
+      const lbl = (segPx < 88 && p.label === 'Очередь') ? 'Очер.' : p.label;
+      const ds = segPx < 88 ? fmtS(dur).replace(' с', 'с') : fmtS(dur);
+      const full = `${lbl} ${ds}`;
+      return `<div class="fm-seg-b" data-k="${p.k}" style="left:${l.toFixed(2)}%;width:${w.toFixed(2)}%" title="${p.label} · ${fmtS(dur)}">${full}</div>`;
+    }).join('');
+  } else base.innerHTML = '';
+  // 2) Полоса инструментов (fm-tl__row--tools): читаемая ширина каждого сегмента в px + горизонтальный скролл.
+  if (!S.toolLog.length) { tools.innerHTML = ''; tools.style.height = '18px'; return; }
+  // Группируем параллельные вызовы одного шага в колонки по l.step, внутри колонки — по дорожкам (lane)
+  const groups = [];
+  for (const l of S.toolLog) {
+    const dur = l.ms != null ? Math.max(1, l.ms) : Math.max(1, (l.t1 || end) - l.t0);
+    const g = groups[groups.length - 1];
+    if (g && g.step === (l.step || 0) && l.step) {
+      const lane = g.items.length;
+      g.items.push({l, lane, dur});
+    } else {
+      const gap = l.gap > 0 ? l.gap : 0;
+      groups.push({step:l.step || 0, gap, items:[{l, lane:0, dur}]});
+    }
   }
-  const nL = Math.max(1, ends.length);
-  tools.style.height = (nL * 19 - 3) + 'px'; tools.parentElement.style.height = (19 + nL * 19 - 3) + 'px';
-  const gaps = S.toolLog.filter(l => l.gap > 0).map(l => seg('fm-seg-g', 'think', 'думает', Math.max(S.t0, l.t0 - l.gap), l.t0));
-  tools.innerHTML = gaps.join('') + S.toolLog.map(l => seg('fm-seg-t', l.slot, (l.ok ? '' : '✕ ') + SLOTS[l.slot].name, l.t0, l.t1,
-    (!l.t1 ? ' is-run' : '') + (!l.ok ? ' is-err' : ''), lanes.get(l) || 0)).join('');
+  const cw = 6.8, GAP_PX = 4, segs = [];
+  let xCursor = 0, maxLanes = 1;
+  for (const g of groups) {
+    if (g.gap > 0) {
+      const gTxt = `думает ${fmtS(g.gap)}`;
+      const gw = Math.max(Math.ceil(gTxt.length * cw + 16), Math.round(22 * Math.pow(g.gap / 1000, 0.35)));
+      segs.push({cls:'fm-seg-g', k:'think', x:xCursor, w:gw, lane:0, txt:gTxt, title:`думает · ${fmtS(g.gap)}`, extra:''});
+      xCursor += gw + GAP_PX;
+    }
+    maxLanes = Math.max(maxLanes, g.items.length);
+    let colW = 80;
+    for (const it of g.items) {
+      const l = it.l, wsTag = l.ws ? (l.ws !== 'workspace' ? ` [${String(l.ws).slice(0, 6)}]` : ' [ws]') : '';
+      const name = (l.ok ? '' : '✕ ') + SLOTS[l.slot].name + wsTag;
+      it.txt = `${name} ${fmtS(it.dur)}`;
+      it.title = `${l.label}${l.ws ? ' · ' + l.ws : ''} · ${fmtS(it.dur)}`;
+      it.minW = Math.max(Math.ceil(it.txt.length * cw + 18), Math.round(30 * Math.pow(it.dur / 1000, 0.38)));
+      colW = Math.max(colW, it.minW);
+    }
+    for (const it of g.items) {
+      const l = it.l, extra = (!l.t1 ? ' is-run' : '') + (!l.ok ? ' is-err' : '');
+      segs.push({cls:'fm-seg-t', k:l.slot, x:xCursor, w:colW, lane:it.lane, txt:it.txt, title:it.title, extra});
+    }
+    xCursor += colW + GAP_PX;
+  }
+  const rawTrackW = Math.max(1, xCursor - GAP_PX);
+  const scale = rawTrackW < W ? W / rawTrackW : 1;
+  const trackW = Math.max(W, Math.round(rawTrackW * scale));
+  const trackH = maxLanes * 19 - 2;
+  tools.style.height = (trackH + 6) + 'px';
+  const html = segs.map(s => {
+    const sx = Math.round(s.x * scale), sw = Math.max(36, Math.round(s.w * scale));
+    return `<div class="${s.cls}${s.extra}" data-k="${s.k}" style="left:${sx}px;width:${sw}px;top:${s.lane * 19}px" title="${s.title}">${s.txt}</div>`;
+  }).join('');
+  tools.innerHTML = `<div class="fm-tl__track" style="width:${trackW}px;height:${trackH}px">${html}</div>`;
+  if (S.calls.size && trackW > W) tools.scrollLeft = tools.scrollWidth;
 }
 function showCard(R, n, x, y) {
   for (const c of document.querySelectorAll('.fm-card')) c.classList.remove('is-on');
   if (!n) return;
   const card = R.cv.parentElement.querySelector('.fm-card'), st = S.st[n.id];
-  let html = `<h4>${n.name}</h4><code>${n.tech}</code><p>${n.desc}</p>`;
-  if (n.tool) {
+  const tech = n.wsNode ? (S.wsId ? `workspace · ${S.wsId}` : 'workspace') : n.tech;
+  let html = `<h4>${n.name}</h4><code>${tech}</code><p>${n.desc}</p>`;
+  if (n.wsNode) {
+    const ids = [...S.wsIds];
+    if (ids.length > 1) html += `<p>Области: ${ids.join(', ')}</p>`;
+    html += `<ul>${st.calls.map(c => `<li><span>${c.label}</span><span class="${c.ok ? '' : 'err'}">${c.ok ? '' : 'ошибка · '}${fmtS(c.ms)}</span></li>`).join('') || '<li><span>работа с файлами…</span><span></span></li>'}</ul>`;
+  } else if (n.tool) {
     if (!S.discovered.has(n.id)) html += `<p>Агент ещё не заходил сюда в этой сессии.</p>`;
     else html += `<ul>${st.calls.map(c => `<li><span>${c.label}</span><span class="${c.ok ? '' : 'err'}">${c.ok ? '' : 'ошибка · '}${fmtS(c.ms)}</span></li>`).join('') || '<li><span>выполняется…</span><span></span></li>'}</ul>`;
   } else html += `<ul><li><span>пакет был здесь</span><span>${st.visits} раз</span></li><li><span>всего времени</span><span>${fmtS(st.ms)}</span></li></ul>`;
@@ -725,7 +846,8 @@ let demoT = [];
 function demo(name) {
   demoT.forEach(clearTimeout); demoT = [];
   const at = (ms, type, d) => demoT.push(setTimeout(() => emit(type, d), ms));
-  const T = {web:{slot:'web', label:'Ищу в интернете', ext:'searxng'}, code:{slot:'sandbox', label:'Запускаю код', ext:'sandbox_c'},
+  const T = {web:{slot:'web', label:'Ищу в интернете', ext:'searxng'}, code:{slot:'sandbox', label:'Запускаю код', ext:'sandbox_c', ws:'d976e0e002fd'},
+    wsf:{slot:'sandbox', label:'Правлю файл', ws:'d976e0e002fd'},
     img:{slot:'media', label:'Рисую картинку'}, kb:{slot:'kb', label:'Смотрю в базе знаний'}, mem:{slot:'kb', label:'Листаю журнал'},
     task:{slot:'tasks', label:'Ставлю фоновую задачу'}, file:{slot:'mail', label:'Отправляю файл'}};
   const tool = (t0, t1, id, k, ok = true, gap = null) => { at(t0, 'tool_start', {...T[k], id, gap_ms:gap}); at(t1, 'tool_end', {...T[k], id, ok, ms:t1 - t0}); };
@@ -734,12 +856,13 @@ function demo(name) {
   if (name === 'tools') { tool(2000, 4300, 'd1', 'web', true, 700); tool(4700, 7600, 'd2', 'code', true, 400); tool(7900, 10300, 'd3', 'img', true, 300); at(10700, 'answer'); at(12000, 'done'); }
   if (name === 'burst') {
     tool(1900, 5200, 'a', 'web', true, 600); tool(2050, 3600, 'b', 'kb', true, 600); tool(2200, 4300, 'c', 'mem', true, 600);
-    tool(5500, 6600, 'd4', 'task', true, 300); tool(6800, 7700, 'd5', 'file', true, 200); at(8100, 'answer'); at(9300, 'done');
+    tool(5500, 6600, 'd4', 'wsf', true, 300); tool(6800, 7700, 'd5', 'file', true, 200); at(8100, 'answer'); at(9300, 'done');
   }
   if (name === 'error') { tool(2000, 4200, 'e1', 'code', false, 700); tool(4600, 6900, 'e2', 'code', true, 400); at(7300, 'answer'); at(8500, 'done'); }
 }
-$('#fmMini').onclick = expand; $('#fmRail').onclick = e => { if (e.target.closest('.fm-rail__x')) collapse(); else openModal(); };
-for (const el of [$('#fmMini'), $('#fmRail')]) el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (e.target.closest('.fm-rail__x')) collapse(); else openModal(); } });
+$('#fmMini').onclick = e => { if (e.target.closest('.fm-mini__x')) { e.stopPropagation(); collapse(); } else expand(); };
+$('#fmRail').onclick = e => { if (e.target.closest('.fm-rail__x')) collapse(); else openModal(); };
+for (const el of [$('#fmMini'), $('#fmRail')]) el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (e.target.closest('.fm-rail__x,.fm-mini__x')) collapse(); else openModal(); } });
 $('#fmClose').onclick = closeModal;
 $('#fmBack').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && VIEW.open) { const c = document.querySelector('.fm-card.is-on'); if (c) c.classList.remove('is-on'); else closeModal(); } });
@@ -759,6 +882,6 @@ function mountDom() {
   if (document.getElementById('fmBack')) return;
   const host = document.getElementById('view-agent') || document.body;
   host.insertAdjacentHTML('beforeend', '<div class="fm-rail" id="fmRail" role="button" tabindex="0" aria-label="Открыть карту запроса" title="Открыть карту запроса"><canvas id="fmRailCv"></canvas><button class="fm-rail__x" type="button" aria-label="Свернуть путь запроса" title="Свернуть">×</button></div>');
-  document.body.insertAdjacentHTML('beforeend', '<div class="fm-mini" id="fmMini" role="button" tabindex="0" aria-label="Открыть карту запроса" title="Открыть карту запроса"><canvas id="fmMiniCv"></canvas></div><div id="fvHud"></div>' + MODAL_HTML);
+  document.body.insertAdjacentHTML('beforeend', '<div class="fm-mini" id="fmMini" role="button" tabindex="0" aria-label="Открыть карту запроса" title="Открыть карту запроса"><canvas id="fmMiniCv"></canvas><button class="fm-mini__x" type="button" aria-label="Скрыть путь запроса" title="Скрыть">×</button></div><div id="fvHud"></div>' + MODAL_HTML);
 }
 })();

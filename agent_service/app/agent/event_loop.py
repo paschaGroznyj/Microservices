@@ -2408,7 +2408,7 @@ class HarnessAgent:
         # Параллельные тулы одного шага получают одинаковый gap: точку обновляем только на tool_end.
         last = self._flow_last.get(request_id) if request_id else None
         gap_ms = int((t0 - last) * 1000) if last is not None else None
-        flow_tool = tool_flow_fields(name)  # имя тула на фронт не отдаём
+        flow_tool = tool_flow_fields(name, args)  # имя тула на фронт не отдаём
         await self._send_flow(request_id, "tool_start", call_id=call_id, gap_ms=gap_ms, **flow_tool)
         t0 = time.monotonic()
         try:
@@ -2424,7 +2424,8 @@ class HarnessAgent:
             logger.info(f"[tool] ✅ {name} → {elapsed_ms}ms | {preview}")
             if request_id:
                 self._flow_last[request_id] = time.monotonic()
-            await self._send_flow(request_id, "tool_end", call_id=call_id, ok=True, ms=elapsed_ms, **flow_tool)
+            flow_end = tool_flow_fields(name, args, result)
+            await self._send_flow(request_id, "tool_end", call_id=call_id, ok=True, ms=elapsed_ms, **flow_end)
             return result_str
 
         except Exception as e:

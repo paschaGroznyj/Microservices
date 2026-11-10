@@ -53,14 +53,48 @@ TOOL_FLOW: dict[str, tuple] = {
 
 FLOW_SLOTS = {"web", "sandbox", "media", "kb", "tasks", "mail", "other"}
 FLOW_EXT = {"searxng", "parsers", "sandbox_c"}
+WORKSPACE_TOOLS = {
+    "create_workspace",
+    "list_workspace_files",
+    "read_workspace_file",
+    "edit_workspace_file",
+    "upload_to_workspace",
+    "download_workspace_file",
+    "delete_workspace",
+    "cleanup_workspaces",
+}
 
 
-def tool_flow_fields(name: str) -> dict:
-    """{'slot', 'label'[, 'ext']} для события tool_start/tool_end. Без имени тула."""
+def _extract_ws(args: dict | None, result: object = None) -> str | None:
+    if isinstance(args, dict):
+        wid = args.get("workspace_id")
+        if isinstance(wid, str) and wid.strip():
+            return wid.strip()[:24]
+    if isinstance(result, dict):
+        wid = result.get("workspace_id")
+        if isinstance(wid, str) and wid.strip():
+            return wid.strip()[:24]
+    elif isinstance(result, str) and "workspace_id" in result:
+        import re
+        m = re.search(r'["\']workspace_id["\']\s*:\s*["\']([A-Za-z0-9_-]{4,24})["\']', result)
+        if m:
+            return m.group(1)
+    return None
+
+
+def tool_flow_fields(name: str, args: dict | None = None, result: object = None) -> dict:
+    """{'slot', 'label'[, 'ext', 'ws']} для события tool_start/tool_end. Без имени тула."""
     spec = TOOL_FLOW.get(name or "")
     if not spec:
-        return {"slot": "other", "label": "Инструмент"}
-    out = {"slot": spec[0], "label": spec[1]}
-    if len(spec) > 2:
-        out["ext"] = spec[2]
+        out = {"slot": "other", "label": "Инструмент"}
+    else:
+        out = {"slot": spec[0], "label": spec[1]}
+        if len(spec) > 2:
+            out["ext"] = spec[2]
+    ws = _extract_ws(args, result)
+    if ws:
+        out["ws"] = ws
+    elif (name or "") in WORKSPACE_TOOLS:
+        out["ws"] = "workspace"
     return out
+

@@ -7,6 +7,7 @@ import re
 import ast
 import httpx
 import hashlib
+import time
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List, Optional
@@ -35,6 +36,7 @@ from .core.agent_provider import (
     get_real_model_name,
     resolve_model_tag,
 )
+from .flow_tools import tool_flow_fields
 from .core.config import (
     PORT_GATEWAY_PORT, PORT_GATEWAY_SIGMA_PORT, ADMINS_INFO,
     PORT_PARSERS_SERVICE, get_role, ADMINS_BY_USER_ID,
@@ -765,6 +767,9 @@ class HarnessAgent:
         self._request_ctx: contextvars.ContextVar = contextvars.ContextVar(
             "agent_request_ctx", default=None
         )
+        # FlowMap: время последнего "конца шага" по request_id (agent_start / tool_end),
+        # monotonic. Из него считаем gap_ms — сколько агент думал перед вызовом тула.
+        self._flow_last: dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # Память per-user с загрузкой из БД через AgentDB
@@ -1708,6 +1713,8 @@ class HarnessAgent:
         self.current_message_id = None  # message_id генерится позже, в app.py; необязателен
         # Буфер живого reasoning для Telegram теперь в request-local ctx ("tg_reasoning_buf")
         cleaned_user_input = user_input
+        if request_id:
+            self._flow_last[request_id] = time.monotonic()
         await self._send_flow(request_id, "agent_start")
         try:
             # ── Настройки контекста ────────────────────────────────────────
@@ -2340,6 +2347,7 @@ class HarnessAgent:
         finally:
             # Очищаем request-local контекст текущего хода.
             self._request_ctx.reset(ctx_token)
+            self._flow_last.pop(request_id, None)
 
 
     async def _invoke_tool(self, tools_by_name: dict, tool_call: dict, request_id: str) -> str:
@@ -2395,9 +2403,13 @@ class HarnessAgent:
         fmt = _fmt_args(name, args)
         logger.info(f"[tool] ▶ {name}({fmt})")
 
-        import time
         call_id = tool_call.get("id") or None
-        await self._send_flow(request_id, "tool_start", name=name, call_id=call_id)
+        t0 = time.monotonic()
+        # Параллельные тулы одного шага получают одинаковый gap: точку обновляем только на tool_end.
+        last = self._flow_last.get(request_id) if request_id else None
+        gap_ms = int((t0 - last) * 1000) if last is not None else None
+        flow_tool = tool_flow_fields(name)  # имя тула на фронт не отдаём
+        await self._send_flow(request_id, "tool_start", call_id=call_id, gap_ms=gap_ms, **flow_tool)
         t0 = time.monotonic()
         try:
             result     = await tool_fn.ainvoke(args)
@@ -2410,13 +2422,17 @@ class HarnessAgent:
                 preview += f"…[+{len(result_str)-MAX_RESULT_LEN}]"
 
             logger.info(f"[tool] ✅ {name} → {elapsed_ms}ms | {preview}")
-            await self._send_flow(request_id, "tool_end", name=name, call_id=call_id, ok=True, ms=elapsed_ms)
+            if request_id:
+                self._flow_last[request_id] = time.monotonic()
+            await self._send_flow(request_id, "tool_end", call_id=call_id, ok=True, ms=elapsed_ms, **flow_tool)
             return result_str
 
         except Exception as e:
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             logger.error(f"[tool] ❌ {name} → {elapsed_ms}ms | {e}")
-            await self._send_flow(request_id, "tool_end", name=name, call_id=call_id, ok=False, ms=elapsed_ms)
+            if request_id:
+                self._flow_last[request_id] = time.monotonic()
+            await self._send_flow(request_id, "tool_end", call_id=call_id, ok=False, ms=elapsed_ms, **flow_tool)
             return f"Ошибка при выполнении {name}: {e}"
 
  

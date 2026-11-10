@@ -95,7 +95,7 @@ def test_invoke_tool_emits_start_and_end(agent, monkeypatch):
     out = run(agent._invoke_tool({"t": FakeTool("t", result="ok")}, {"name": "t", "args": {}, "id": "call_7"}, "r1"))
     assert out == "ok"
     evs = [(c.args[1], c.kwargs) for c in sent.await_args_list]
-    assert evs[0] == ("tool_start", {"name": "t", "call_id": "call_7"})
+    assert evs[0] == ("tool_start", {"call_id": "call_7", "gap_ms": None, "slot": "other", "label": "Инструмент"})
     assert evs[1][0] == "tool_end"
     assert evs[1][1]["ok"] is True and evs[1][1]["call_id"] == "call_7"
     assert isinstance(evs[1][1]["ms"], int)
@@ -122,3 +122,53 @@ def test_flow_payload_json_serializable(agent):
     set_target(agent, "sigma")
     run(agent._send_flow("r1", "tool_end", name="x", call_id="c", ok=False, ms=12))
     json.dumps(agent._pub.await_args.args[1])
+
+
+def _flows(sent):
+    return [(c.args[1], c.kwargs) for c in sent.await_args_list]
+
+
+def test_tool_name_never_sent(agent, monkeypatch):
+    """Имя тула (в т.ч. админских) на фронт не уходит — только slot/label/ext."""
+    set_target(agent, "main")
+    sent = AsyncMock()
+    monkeypatch.setattr(agent, "_send_flow", sent)
+    for nm in ("execute_sql_query", "work_with_agent_journal", "search_internet"):
+        run(agent._invoke_tool({nm: FakeTool(nm, result="ok")}, {"name": nm, "args": {}, "id": "c%d" % len(nm)}, "r1"))
+    blob = json.dumps([kw for _, kw in _flows(sent)], ensure_ascii=False)
+    for nm in ("execute_sql_query", "work_with_agent_journal", "search_internet"):
+        assert nm not in blob
+    assert all("name" not in kw for _, kw in _flows(sent))
+    starts = [kw for ev, kw in _flows(sent) if ev == "tool_start"]
+    assert starts[0]["slot"] == "kb" and starts[1]["slot"] == "kb"
+    assert starts[2] == {**starts[2], "slot": "web", "ext": "searxng"}
+
+
+def test_gap_ms_between_steps(agent, monkeypatch):
+    """gap_ms = время от agent_start / прошлого tool_end до tool_start по request_id."""
+    import types
+    import agent.event_loop as el
+    # monotonic в _invoke_tool: t0 (gap), t0 (старт тула), конец тула, точка tool_end.
+    clock = iter([103.5, 104.0, 110.0, 110.0])
+    # подменяем модуль time только внутри event_loop: asyncio пользуется настоящим.
+    monkeypatch.setattr(el, "time", types.SimpleNamespace(monotonic=lambda: next(clock)))
+    sent = AsyncMock()
+    monkeypatch.setattr(agent, "_send_flow", sent)
+    agent._flow_last["r1"] = 100.0           # agent_start
+    t = {"t": FakeTool("t", result="ok")}
+    # шаг 1: t0=103.5 (gap 3500), второй monotonic -> 104.0 старт, конец 110.0, точка 110.0
+    run(agent._invoke_tool(t, {"name": "t", "args": {}, "id": "a"}, "r1"))
+    starts = [kw for ev, kw in _flows(sent) if ev == "tool_start"]
+    ends = [kw for ev, kw in _flows(sent) if ev == "tool_end"]
+    assert starts[0]["gap_ms"] == 3500
+    assert ends[0]["ms"] == 6000
+    assert agent._flow_last["r1"] == 110.0
+
+
+def test_gap_ms_none_without_agent_start(agent, monkeypatch):
+    sent = AsyncMock()
+    monkeypatch.setattr(agent, "_send_flow", sent)
+    agent._flow_last.clear()
+    run(agent._invoke_tool({"t": FakeTool("t", result="ok")}, {"name": "t", "args": {}, "id": "a"}, "rX"))
+    assert _flows(sent)[0][1]["gap_ms"] is None
+    assert "rX" in agent._flow_last   # точка выставлена по tool_end, следующий шаг получит gap

@@ -31,17 +31,18 @@
 .fm-card ul{margin:6px 0 0;padding:0;list-style:none;font:11px var(--font-mono);color:var(--text-secondary)}
 .fm-card li{display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-top:1px dashed var(--border)}
 .fm-card li .err{color:var(--danger)}
-.fm-foot{border-top:1px solid var(--border);padding:8px 14px 10px}
+.fm-foot{border-top:1px solid var(--border);padding:8px 14px 16px}
 .fm-status{font:500 12px var(--font-mono);color:var(--text-secondary);margin-bottom:6px;display:flex;justify-content:space-between}
-.fm-tl{position:relative;height:36px}
+.fm-tl{position:relative;height:35px;transition:height .15s}
 .fm-tl__row{position:absolute;left:0;right:0;height:16px}
 .fm-tl__row--base{top:0}.fm-tl__row--tools{top:19px}
 .fm-seg-b,.fm-seg-t{position:absolute;top:0;height:16px;border-radius:4px;font:500 10.5px/16px var(--font-mono);padding:0 5px;white-space:nowrap;overflow:hidden;text-overflow:clip}
 .fm-seg-b{background:var(--surface3);color:var(--text-secondary);border:1px solid var(--border)}
 .fm-seg-b[data-k="agent"]{background:color-mix(in srgb,var(--accent) 12%,var(--surface));color:var(--text-primary);border-color:color-mix(in srgb,var(--accent) 35%,var(--border))}
-.fm-seg-t{background:var(--accent);color:var(--text-on-accent);box-shadow:inset -1px 0 0 var(--bg)}
+.fm-seg-t{background:var(--accent);color:var(--text-on-accent);box-shadow:inset -2px 0 0 var(--surface),inset 2px 0 0 var(--surface)}
 .fm-seg-t.is-err{background:var(--danger)}
 .fm-seg-t.is-run{background:var(--accent-hover)}
+.fm-seg-g{position:absolute;top:0;height:16px;border-radius:4px;font:500 10.5px/16px var(--font-mono);padding:0 5px;white-space:nowrap;overflow:hidden;text-overflow:clip;color:var(--text-secondary);background:color-mix(in srgb,var(--surface3) 70%,transparent) repeating-linear-gradient(135deg,transparent 0 5px,color-mix(in srgb,var(--text-muted) 30%,transparent) 5px 7px);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--text-muted) 35%,var(--border))}
 @media (max-width:700px){.fm-dlg{width:100vw;height:100vh;border-radius:0}.fm-mini{width:calc(100% - 32px)}}
 
 /* ── Вертикальная панель в правом поле #view-agent ── */

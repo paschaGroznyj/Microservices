@@ -22,13 +22,13 @@ const NODES = [
 ];
 const N = Object.fromEntries(NODES.map(n => [n.id, n]));
 const SLOT_DEF = [
-  ['web','ВЕБ','Веб','Поиск и чтение страниц','search_internet, parse_web_page'],
-  ['sandbox','ПЕСОЧНИЦА','Песочница','Код и команды','execute_python_code, execute_shell_commands'],
-  ['media','МЕДИА','Медиа','Картинки, видео, звук','generate_image, analyze_image, generate_video'],
-  ['kb','БАЗА ЗНАНИЙ','База знаний','SQL и журнал агента','execute_sql_query, work_with_agent_journal'],
-  ['tasks','ЗАДАЧИ','Задачи','Фоновые задачи','submit_task'],
-  ['mail','ПОЧТА','Почта','Файлы и письма','send_file_to_user, send_email'],
-  ['other','ПРОЧЕЕ','Прочее','Остальные инструменты','—'],
+  ['web','ВЕБ','Веб','Поиск и чтение страниц','internet · parse_url'],
+  ['sandbox','ПЕСОЧНИЦА','Песочница','Код и команды','execute'],
+  ['media','МЕДИА','Медиа','Картинки, видео, звук','media'],
+  ['kb','БАЗА ЗНАНИЙ','База знаний','Знания и память агента','storage'],
+  ['tasks','ЗАДАЧИ','Задачи','Фоновые задачи','tasks'],
+  ['mail','ПОЧТА','Почта','Файлы и письма','delivery'],
+  ['other','ПРОЧЕЕ','Прочее','Остальные инструменты','other'],
 ];
 const SLOTS = {}, SLOT_LIST = [];
 SLOT_DEF.forEach(([id, label, name, desc, tech], i) => {
@@ -36,24 +36,8 @@ SLOT_DEF.forEach(([id, label, name, desc, tech], i) => {
   const s = {id, kind:'diamond', x:N.agent.x + Math.cos(a) * R, y:N.agent.y + Math.sin(a) * R, r:13, h:10, label, name, desc, tech, ang:a, tool:true};
   SLOTS[id] = s; SLOT_LIST.push(s);
 });
-const TOOLS = {
-  search_internet:['web','Ищу в интернете'], parse_web_page:['web','Читаю страницу'],
-  execute_python_code:['sandbox','Запускаю код'], execute_shell_commands:['sandbox','Выполняю команды'], edit_and_run:['sandbox','Правлю и запускаю'],
-  create_workspace:['sandbox','Готовлю рабочую папку'], list_workspace_files:['sandbox','Смотрю файлы'], read_workspace_file:['sandbox','Читаю файл'],
-  edit_workspace_file:['sandbox','Правлю файл'], upload_to_workspace:['sandbox','Загружаю файлы'], download_workspace_file:['sandbox','Забираю файл'],
-  delete_workspace:['sandbox','Убираю рабочую папку'], cleanup_workspaces:['sandbox','Чищу рабочие папки'], write_sandbox_file:['sandbox','Пишу файл'],
-  edit_sandbox_file:['sandbox','Правлю файл'], read_file:['sandbox','Читаю код'], list_tree:['sandbox','Смотрю структуру'], grep_search:['sandbox','Ищу в коде'],
-  find_files:['sandbox','Ищу файлы'], save_to_code_library:['sandbox','Сохраняю скрипт'], search_code_library:['sandbox','Ищу скрипт'], connect_mcp_git:['sandbox','Работаю с git'],
-  generate_image:['media','Рисую картинку'], analyze_image:['media','Рассматриваю картинку'], generate_video:['media','Рендерю видео'], transcribe_media:['media','Расшифровываю запись'],
-  generate_audio:['media','Озвучиваю'], generate_music:['media','Пишу музыку'], find_generated_image:['media','Ищу картинку'],
-  execute_sql_query:['kb','Смотрю в базе знаний'], get_db_schema:['kb','Смотрю схему базы'], work_with_agent_journal:['kb','Листаю журнал'],
-  manage_skills:['kb','Смотрю скиллы'], session_point:['kb','Отмечаю точку сессии'],
-  submit_task:['tasks','Ставлю фоновую задачу'], check_task_status:['tasks','Проверяю задачу'], cancel_task:['tasks','Отменяю задачу'], manage_trigger:['tasks','Ставлю напоминание'],
-  send_file_to_user:['mail','Отправляю файл'], send_email:['mail','Пишу письмо'],
-  call_subagent:['other','Зову помощника'], request_more_steps:['other','Прошу ещё шагов'],
-};
-const EXT = {search_internet:['searxng','internet'], parse_web_page:['parsers','parse_url'],
-  execute_python_code:['sandbox_c','execute'], execute_shell_commands:['sandbox_c','execute'], edit_and_run:['sandbox_c','execute']};
+// Имена тулов на фронт не приходят: агент шлёт slot / label / ext (agent_service/app/agent/flow_tools.py).
+const EXT_IDS = new Set(['searxng', 'parsers', 'sandbox_c']);
 const EXT_EDGES = [['web','searxng','internet'], ['web','parsers','parse_url'], ['sandbox','sandbox_c','execute']];
 const WB = (() => {
   let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
@@ -150,19 +134,27 @@ function emit(type, d = {}) {
     case 'tool_start': {
       if (!S.active) break;
       if (S.phase !== 'agent' && S.phase !== 'answer') { S.phase = 'agent'; S.allow = DMAX; openPhase('agent', 'Агент', t); }
-      const [slot, label] = TOOLS[d.name] || ['other', 'Инструмент'];
-      const ext = EXT[d.name] ? EXT[d.name][0] : null;
-      const key = d.id || d.name || ('t' + t);
+      const slot = SLOTS[d.slot] ? d.slot : 'other', label = d.label || 'Инструмент';
+      const ext = EXT_IDS.has(d.ext) ? d.ext : null;
+      const key = d.id || ('t' + t);
       S.calls.set(key, {slot, label, ext, t0:t}); if (ext) S.hl[ext] = 1;
-      S.toolLog.push({key, slot, label, t0:t, t1:0, ok:true});
+      // gap_ms — сколько агент думал перед этим шагом (считает бэк по request_id).
+      // У параллельных тулов один шаг — gap рисуем один раз.
+      const prev = S.toolLog[S.toolLog.length - 1];
+      const gap = Number.isFinite(+d.gap_ms) && d.gap_ms !== null && !(prev && prev.gap === +d.gap_ms && t - prev.t0 < 1500) ? +d.gap_ms : null;
+      S.toolLog.push({key, slot, label, t0:t, t1:0, ok:true, gap, gapShown:gap});
       S.discovered.add(slot); S.hl[slot] = 1; setStatus(label); break;
     }
     case 'tool_end': {
-      const key = d.id || d.name; const c = S.calls.get(key); if (!c) break;
+      const key = d.id; const c = key != null ? S.calls.get(key) : null; if (!c) break;
       S.calls.delete(key);
       const ok = d.ok !== false;
-      const log = [...S.toolLog].reverse().find(l => l.key === key && !l.t1); if (log) { log.t1 = t; log.ok = ok; }
-      const st = S.st[c.slot]; st.calls.unshift({label:c.label, ms:t - c.t0, ok}); st.calls.length = Math.min(st.calls.length, 5); st.visits++;
+      // Длительность берём с бэка (ms, monotonic вокруг ainvoke): кадры до фронта
+      // могут прийти пачкой, и разница времени прихода даст ложные 0,1 с.
+      const ms = Number.isFinite(+d.ms) && d.ms !== null ? +d.ms : t - c.t0;
+      const log = [...S.toolLog].reverse().find(l => l.key === key && !l.t1);
+      if (log) { log.t1 = t; log.t0 = Math.max(S.t0, Math.min(log.t0, t - ms)); log.ms = ms; log.ok = ok; }
+      const st = S.st[c.slot]; st.calls.unshift({label:c.label, ms, ok}); st.calls.length = Math.min(st.calls.length, 5); st.visits++;
       S.fx.push({kind: ok ? 'ok' : 'err', slot:c.slot, t, dur: ok ? 700 : 2600});
       const left = [...S.calls.values()]; setStatus(left.length ? left[left.length-1].label : 'Агент думает'); break;
     }
@@ -617,13 +609,23 @@ function renderTimeline(force) {
   if (!S.t0) { base.innerHTML = ''; tools.innerHTML = ''; $('#fmTotal').textContent = ''; return; }
   const end = S.tEnd || t, total = Math.max(1, end - S.t0), W = base.clientWidth || 600;
   $('#fmTotal').textContent = fmtS(total);
-  const seg = (cls, k, label, t0, t1, extra = '') => {
+  const seg = (cls, k, label, t0, t1, extra = '', lane = 0) => {
     const l = (t0 - S.t0) / total * 100, w = Math.max(0.4, ((t1 || end) - t0) / total * 100), pxw = w / 100 * W;
-    const full = `${label} ${fmtS((t1 || end) - t0)}`, cw = 6.6; const txt = pxw > full.length * cw + 12 ? full : pxw > label.length * cw + 12 ? label : '';
-    return `<div class="${cls}${extra}" data-k="${k}" style="left:${l}%;width:${w}%" title="${label} · ${fmtS((t1 || end) - t0)}">${txt}</div>`;
+    const full = `${label} ${fmtS((t1 || end) - t0)}`, cw = 6.6; const dur = (label.startsWith('✕') ? '✕ ' : '') + fmtS((t1 || end) - t0); const txt = pxw > full.length * cw + 12 ? full : pxw > dur.length * cw + 12 ? dur : pxw > label.length * cw + 12 ? label : '';
+    return `<div class="${cls}${extra}" data-k="${k}" style="left:${l}%;width:${w}%;top:${lane * 19}px" title="${label} · ${fmtS((t1 || end) - t0)}">${txt}</div>`;
   };
   base.innerHTML = S.phases.map(p => seg('fm-seg-b', p.k, p.label, p.t0, p.t1)).join('');
-  tools.innerHTML = S.toolLog.map(l => seg('fm-seg-t', l.slot, SLOTS[l.slot].name, l.t0, l.t1, (!l.t1 ? ' is-run' : '') + (!l.ok ? ' is-err' : ''))).join('');
+  // Параллельные тулы — по под-дорожкам (жадно: первая дорожка, где прошлый сегмент уже кончился).
+  const ends = [], lanes = new Map();
+  for (const l of [...S.toolLog].sort((a, b) => a.t0 - b.t0)) {
+    const e = l.t1 || end; let i = ends.findIndex(x => x <= l.t0 + 1); if (i < 0) { i = ends.length; ends.push(0); }
+    ends[i] = e; lanes.set(l, i);
+  }
+  const nL = Math.max(1, ends.length);
+  tools.style.height = (nL * 19 - 3) + 'px'; tools.parentElement.style.height = (19 + nL * 19 - 3) + 'px';
+  const gaps = S.toolLog.filter(l => l.gap > 0).map(l => seg('fm-seg-g', 'think', 'думает', Math.max(S.t0, l.t0 - l.gap), l.t0));
+  tools.innerHTML = gaps.join('') + S.toolLog.map(l => seg('fm-seg-t', l.slot, (l.ok ? '' : '✕ ') + SLOTS[l.slot].name, l.t0, l.t1,
+    (!l.t1 ? ' is-run' : '') + (!l.ok ? ' is-err' : ''), lanes.get(l) || 0)).join('');
 }
 function showCard(R, n, x, y) {
   for (const c of document.querySelectorAll('.fm-card')) c.classList.remove('is-on');
@@ -723,26 +725,18 @@ let demoT = [];
 function demo(name) {
   demoT.forEach(clearTimeout); demoT = [];
   const at = (ms, type, d) => demoT.push(setTimeout(() => emit(type, d), ms));
+  const T = {web:{slot:'web', label:'Ищу в интернете', ext:'searxng'}, code:{slot:'sandbox', label:'Запускаю код', ext:'sandbox_c'},
+    img:{slot:'media', label:'Рисую картинку'}, kb:{slot:'kb', label:'Смотрю в базе знаний'}, mem:{slot:'kb', label:'Листаю журнал'},
+    task:{slot:'tasks', label:'Ставлю фоновую задачу'}, file:{slot:'mail', label:'Отправляю файл'}};
+  const tool = (t0, t1, id, k, ok = true, gap = null) => { at(t0, 'tool_start', {...T[k], id, gap_ms:gap}); at(t1, 'tool_end', {...T[k], id, ok, ms:t1 - t0}); };
   at(0, 'send'); at(160, 'gateway'); at(1300, 'agent_start');
   if (name === 'simple') { at(3600, 'answer'); at(4600, 'done'); }
-  if (name === 'tools') {
-    at(2000, 'tool_start', {name:'search_internet'}); at(4300, 'tool_end', {name:'search_internet'});
-    at(4700, 'tool_start', {name:'execute_python_code'}); at(7600, 'tool_end', {name:'execute_python_code'});
-    at(7900, 'tool_start', {name:'generate_image'}); at(10300, 'tool_end', {name:'generate_image'});
-    at(10700, 'answer'); at(12000, 'done');
-  }
+  if (name === 'tools') { tool(2000, 4300, 'd1', 'web', true, 700); tool(4700, 7600, 'd2', 'code', true, 400); tool(7900, 10300, 'd3', 'img', true, 300); at(10700, 'answer'); at(12000, 'done'); }
   if (name === 'burst') {
-    at(1900, 'tool_start', {id:'a', name:'search_internet'}); at(2050, 'tool_start', {id:'b', name:'execute_sql_query'}); at(2200, 'tool_start', {id:'c', name:'work_with_agent_journal'});
-    at(3600, 'tool_end', {id:'b'}); at(4300, 'tool_end', {id:'c'}); at(5200, 'tool_end', {id:'a'});
-    at(5500, 'tool_start', {name:'submit_task'}); at(6600, 'tool_end', {name:'submit_task'});
-    at(6800, 'tool_start', {name:'send_file_to_user'}); at(7700, 'tool_end', {name:'send_file_to_user'});
-    at(8100, 'answer'); at(9300, 'done');
+    tool(1900, 5200, 'a', 'web', true, 600); tool(2050, 3600, 'b', 'kb', true, 600); tool(2200, 4300, 'c', 'mem', true, 600);
+    tool(5500, 6600, 'd4', 'task', true, 300); tool(6800, 7700, 'd5', 'file', true, 200); at(8100, 'answer'); at(9300, 'done');
   }
-  if (name === 'error') {
-    at(2000, 'tool_start', {name:'execute_python_code'}); at(4200, 'tool_end', {name:'execute_python_code', ok:false});
-    at(4600, 'tool_start', {name:'execute_python_code'}); at(6900, 'tool_end', {name:'execute_python_code'});
-    at(7300, 'answer'); at(8500, 'done');
-  }
+  if (name === 'error') { tool(2000, 4200, 'e1', 'code', false, 700); tool(4600, 6900, 'e2', 'code', true, 400); at(7300, 'answer'); at(8500, 'done'); }
 }
 $('#fmMini').onclick = expand; $('#fmRail').onclick = e => { if (e.target.closest('.fm-rail__x')) collapse(); else openModal(); };
 for (const el of [$('#fmMini'), $('#fmRail')]) el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (e.target.closest('.fm-rail__x')) collapse(); else openModal(); } });
@@ -759,7 +753,7 @@ const roHost = new ResizeObserver(() => { if (MINI.on) layoutHost(); }); { const
 addEventListener('resize', () => { if (MINI.on) layoutHost(); });
 { const mic = document.querySelector('#view-agent .message-input-container'); if (mic) new MutationObserver(() => { if (MINI.on) layoutHost(); }).observe(mic, {childList:true}); }
 readTheme();
-window.FlowViz = {emit, reset, demo, open:openModal, close:closeModal, expand, collapse, bindPlaceholder, host:HOST, layoutHost, setLayout, setMode, setOthers:n => { S.others = n; kick(); }, state:S, view:VIEW, stats:STATS, renderers:{flat:rFlat, iso:rIso}, TOOLS, SLOTS};
+window.FlowViz = {emit, reset, demo, open:openModal, close:closeModal, expand, collapse, bindPlaceholder, host:HOST, layoutHost, setLayout, setMode, setOthers:n => { S.others = n; kick(); }, state:S, view:VIEW, stats:STATS, renderers:{flat:rFlat, iso:rIso}, SLOTS};
 
 function mountDom() {
   if (document.getElementById('fmBack')) return;

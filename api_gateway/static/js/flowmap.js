@@ -1,7 +1,7 @@
 /* FlowMap: путь запроса (прототип для встраивания). API: window.FlowViz */
 (() => {
 'use strict';
-const MODAL_HTML = "<div class=\"fm-back\" id=\"fmBack\">\n  <div class=\"fm-dlg\" role=\"dialog\" aria-label=\"Путь запроса\">\n    <div class=\"fm-head\">\n      <div class=\"fm-title\">ПУТЬ ЗАПРОСА</div>\n      <div class=\"fm-seg\" id=\"fmLayout\"><button data-l=\"flat\" class=\"is-on\">Плоская</button><button data-l=\"iso\">Изометрия</button><button data-l=\"both\">Оба режима</button></div>\n      <div class=\"fm-seg\" id=\"fmMode\"><button data-m=\"watch\" class=\"is-on\">Наблюдать</button><button data-m=\"control\">Управлять</button></div>\n      <div class=\"fm-seg\" id=\"fmFitSeg\"><button id=\"fmFit\">Весь путь</button></div>\n      <button class=\"fm-x\" id=\"fmClose\" aria-label=\"Закрыть\">×</button>\n    </div>\n    <div class=\"fm-body\">\n      <div class=\"fm-panel\" id=\"pFlat\"><canvas id=\"cvFlat\"></canvas><div class=\"fm-ptag\">ПЛОСКАЯ</div><div class=\"fm-card\"></div></div>\n      <div class=\"fm-panel\" id=\"pIso\"><canvas id=\"cvIso\"></canvas><div class=\"fm-ptag\">ИЗОМЕТРИЯ</div><div class=\"fm-card\"></div></div>\n    </div>\n    <div class=\"fm-foot\">\n      <div class=\"fm-status\"><span id=\"fmStatus\">Ожидаю запрос</span><span id=\"fmTotal\"></span></div>\n      <div class=\"fm-tl\"><div class=\"fm-tl__row fm-tl__row--base\" id=\"tlBase\"></div><div class=\"fm-tl__row fm-tl__row--tools\" id=\"tlTools\"></div></div>\n    </div>\n  </div>\n</div>";
+const MODAL_HTML = "<div class=\"fm-back\" id=\"fmBack\">\n  <div class=\"fm-dlg\" role=\"dialog\" aria-label=\"Путь запроса\">\n    <div class=\"fm-head\">\n      <div class=\"fm-title\">ПУТЬ ЗАПРОСА</div>\n      <div class=\"fm-seg\" id=\"fmLayout\"><button data-l=\"flat\" class=\"is-on\">Плоская</button><button data-l=\"iso\">Изометрия</button><button data-l=\"both\">Оба режима</button></div>\n      <div class=\"fm-seg\" id=\"fmMode\"><button data-m=\"watch\" class=\"is-on\">Наблюдать</button><button data-m=\"control\">Управлять</button></div>\n      <div class=\"fm-seg\" id=\"fmFitSeg\"><button id=\"fmFit\">Весь путь</button></div>\n      <button class=\"fm-x\" id=\"fmClose\" aria-label=\"Закрыть\">×</button>\n    </div>\n    <div class=\"fm-body\">\n      <div class=\"fm-panel\" id=\"pFlat\"><canvas id=\"cvFlat\"></canvas><div class=\"fm-ptag\">ПЛОСКАЯ</div><div class=\"fm-card\"></div></div>\n      <div class=\"fm-panel\" id=\"pIso\"><canvas id=\"cvIso\"></canvas><div class=\"fm-ptag\">ИЗОМЕТРИЯ</div><div class=\"fm-card\"></div></div>\n    </div>\n    <div class=\"fm-foot\">\n      <div class=\"fm-status\"><span id=\"fmStatus\">Ожидаю запрос</span><span id=\"fmTotal\"></span></div>\n      <div class=\"fm-tl\"><div class=\"fm-tl__row fm-tl__row--tools\" id=\"tlTools\"></div></div>\n    </div>\n  </div>\n</div>";
 const $ = s => document.querySelector(s);
 mountDom();
 const RM = matchMedia('(prefers-reduced-motion: reduce)');
@@ -95,9 +95,14 @@ const S = {
   calls:new Map(), discovered:new Set(), phases:[], toolLog:[], fx:[], pulses:[],
   lit:new Float32Array(EDGES.length), hl:{}, st:{}, others:0, ghosts:[], status:'Ожидаю запрос', lastInside:null, chat:null, rid:null,
   wsSeen:false, wsId:'', wsIds:new Set(), stepSeq:0, thinkT0:null, tailThinkMs:0, thinkBuf:'', thinkDone:'', tailText:'',
+  err:{},
 };
 for (const n of [...NODES, ...SLOT_LIST]) { S.hl[n.id] = 0; S.st[n.id] = {visits:0, ms:0, calls:[]}; }
-const now = () => performance.now();
+// errOn(id): 0 — ошибок нет, 1 — была ошибка, потом успех, 2 — последний вызов упал.
+const errOn = id => { const e = S.err[id]; return !e || !e.n ? 0 : e.last ? 2 : 1; };
+// T_OVR: при восстановлении хронологии из Redis события проигрываются в своём (прошлом) времени.
+let T_OVR = null;
+const now = () => T_OVR != null ? T_OVR : performance.now();
 const fmtS = ms => {
   const s = Math.max(0, ms) / 1000;
   if (s >= 60) {
@@ -109,9 +114,10 @@ const fmtS = ms => {
 function setStatus(t) { S.status = t; }
 // Смена чата: текущий путь гасим без анимации. Раскрытая панель и открытая модалка остаются.
 function reset() {
+  RS.gen++;
   S.active = false; S.phase = 'idle'; S.t0 = 0; S.tEnd = 0; S.d = 0; S.dir = 1; S.allow = 0; S.trail = [];
   S.calls.clear(); S.phases = []; S.toolLog = []; S.fx = []; S.pulses = []; S.lit.fill(0); S.chat = null; S.rid = null;
-  S.wsSeen = false; S.wsId = ''; S.wsIds.clear(); S.stepSeq = 0; S.thinkT0 = null; S.tailThinkMs = 0; S.thinkBuf = ''; S.thinkDone = ''; S.tailText = ''; closeThink();
+  S.wsSeen = false; S.wsId = ''; S.wsIds.clear(); S.stepSeq = 0; S.thinkT0 = null; S.tailThinkMs = 0; S.thinkBuf = ''; S.thinkDone = ''; S.tailText = ''; S.err = {}; closeThink();
   setStatus('Ожидаю запрос'); clearTimeout(miniHideT); MINI.on = HOST.expanded;
   layoutHost(); renderTimeline(true); kick();
 }
@@ -130,7 +136,7 @@ function emit(type, d = {}) {
     case 'send':
       S.chat = d.chat != null ? String(d.chat) : null; S.rid = null;
       S.active = true; S.phase = 'send'; S.t0 = t; S.tEnd = 0; S.d = 0; S.dir = 1; S.allow = D[1]; S.trail = [];
-      S.calls.clear(); S.phases = []; S.toolLog = []; S.fx = []; S.pulses = []; S.lit.fill(0); S.lastInside = null; S.stepSeq = 0; S.thinkT0 = null; S.tailThinkMs = 0; S.thinkBuf = ''; S.thinkDone = ''; S.tailText = ''; TL.follow = true; closeThink();
+      S.calls.clear(); S.phases = []; S.toolLog = []; S.fx = []; S.pulses = []; S.lit.fill(0); S.lastInside = null; S.stepSeq = 0; S.thinkT0 = null; S.tailThinkMs = 0; S.thinkBuf = ''; S.thinkDone = ''; S.tailText = ''; S.err = {}; TL.follow = true; closeThink();
       openPhase('gw', 'Шлюз', t); setStatus('Отправляю…'); showMini(true); break;
     case 'gateway':
       if (!S.active) break;
@@ -144,6 +150,7 @@ function emit(type, d = {}) {
       S.phase = 'accepted'; S.allow = Math.max(S.allow, D[5]); setStatus('Агент принял запрос'); break;
     case 'agent_start':
       if (!S.active || S.phase === 'answer' || S.phase === 'done') break;
+      if (S.phase === 'agent') break;   // дубль (восстановление + живой кадр)
       S.phase = 'agent'; S.allow = DMAX; S.thinkT0 = t; S.tailThinkMs = 0; openPhase('agent', 'Агент', t); setStatus('Агент думает'); break;
     case 'tool_start': {
       if (!S.active) break;
@@ -152,6 +159,7 @@ function emit(type, d = {}) {
       const ext = EXT_IDS.has(d.ext) ? d.ext : null;
       const ws = d.ws || d.workspace_id || null;
       const key = d.id || ('t' + t);
+      if (d.id && S.toolLog.some(l => l.key === d.id)) break;   // дубль после восстановления
       // Если активных вызовов нет — это новый последовательный шаг по горизонтали;
       // если уже есть активные вызовы — это параллельный вызов в том же шаге (на новой дорожке).
       const isNewStep = S.calls.size === 0;
@@ -189,6 +197,11 @@ function emit(type, d = {}) {
       const st = S.st[c.slot]; st.calls.unshift({label:c.label, ms, ok}); st.calls.length = Math.min(st.calls.length, 5); st.visits++;
       if (ws) { const wst = S.st.workspace; wst.calls.unshift({label:c.label, ms, ok}); wst.calls.length = Math.min(wst.calls.length, 5); wst.visits++; wst.ms += ms; }
       S.fx.push({kind: ok ? 'ok' : 'err', slot:c.slot, t, dur: ok ? 700 : 2600});
+      // Ошибка тула остаётся на карте до конца запроса: ромб, ребро от агента, внешний контейнер/workspace.
+      for (const id of [c.slot, c.ext, ws ? 'workspace' : null]) {
+        if (!id) continue; const e = S.err[id] || (S.err[id] = {n:0, last:false});
+        if (!ok) e.n++; e.last = !ok;
+      }
       const left = [...S.calls.values()];
       if (!left.length && S.phase === 'agent') S.thinkT0 = t;
       setStatus(left.length ? left[left.length-1].label : 'Агент думает'); break;
@@ -380,6 +393,7 @@ class MapR {
       const A = SLOTS[a], B = N[b];
       line([A.x, A.y], [B.x, B.y], rgba(C.stroke, 0.8), 1.1 * px, [3 * px, 3 * px]);
       if (extRun.has(b)) line([A.x, A.y], [B.x, B.y], rgba(C.accent, 0.9), 2 * px, [6 * px, 6 * px], RM.matches ? 0 : -t * 0.04 * px);
+      else if (errOn(b) === 2) line([A.x, A.y], [B.x, B.y], rgba(C.danger, 0.85), 1.9 * px, [6 * px, 4 * px]);
       else if (S.hl[b] > 0.02) line([A.x, A.y], [B.x, B.y], rgba(C.accent, Math.min(1, S.hl[b])), 1.8 * px, [6 * px, 6 * px]);
     }
     if (S.wsSeen) {
@@ -401,6 +415,7 @@ class MapR {
       const disc = S.discovered.has(sl.id);
       line([N.agent.x, N.agent.y], [sl.x, sl.y], rgba(C.stroke, disc ? 0.6 : 0.4), px, [2 * px, 5 * px]);
       if (runSlots.has(sl.id)) line([N.agent.x, N.agent.y], [sl.x, sl.y], rgba(C.accent, 0.9), 2 * px, [6 * px, 6 * px], RM.matches ? 0 : -t * 0.04 * px);
+      else if (errOn(sl.id) === 2) line([N.agent.x, N.agent.y], [sl.x, sl.y], rgba(C.danger, 0.8), 1.8 * px, [6 * px, 4 * px]);
     }
     const all = [...NODES, ...SLOT_LIST];
     if (iso) all.sort((a, b) => (a.y + a.r) - (b.y + b.r));
@@ -410,8 +425,11 @@ class MapR {
       const hl = Math.min(1, S.hl[n.id] || 0) + (this.hover === n ? 0.35 : 0) + (n.wsNode && wsRun ? 0.7 : 0);
       const NP = iso ? n.ptsIso : n.pts;
       if (n.tool && !S.discovered.has(n.id)) { this.prism(NP, 0, null, rgba(mix(C.muted, C.text, DARK ? 0.25 : 0.12), this.hover === n ? 1 : 0.85), 1.1 * px, [3 * px, 3 * px]); continue; }
-      const stroke = hl > 0.02 ? rgba(mix(C.stroke, C.accent, Math.min(1, hl))) : rgba(C.stroke);
-      this.prism(NP, n.h, rgba(n.wsNode && wsRun ? mix(C.surface, C.accent, 0.12) : C.surface), stroke, (1.2 + Math.min(1, hl) * 1.2) * px);
+      const eo = errOn(n.id), nRun = n.tool ? runSlots.has(n.id) : n.wsNode ? wsRun : extRun.has(n.id);
+      const isErr = eo === 2 && !nRun;
+      const stroke = isErr ? rgba(C.danger) : hl > 0.02 ? rgba(mix(C.stroke, C.accent, Math.min(1, hl))) : rgba(C.stroke);
+      const fillC = isErr ? mix(C.surface, C.danger, DARK ? 0.22 : 0.12) : n.wsNode && wsRun ? mix(C.surface, C.accent, 0.12) : C.surface;
+      this.prism(NP, n.h, rgba(fillC), stroke, (isErr ? 2 : 1.2 + Math.min(1, hl) * 1.2) * px);
       if (n.kind === 'folder') {
         const z = iso ? n.h : 0, x0 = n.x - n.w / 2, x1 = n.x + n.w / 2, y0 = n.y - n.fh / 2;
         const seamA = pt(x0, y0 + 6, z), seamB = pt(x1, y0 + 6, z);
@@ -437,6 +455,23 @@ class MapR {
         ctx.strokeStyle = rgba(C.accent, 0.45); ctx.lineWidth = 1.2 * px; ctx.setLineDash([3 * px, 5 * px]); ctx.lineDashOffset = RM.matches ? 0 : -t * 0.02 * px;
         const a = pt(n.x - n.len / 2 + 14, n.y, n.h), b = pt(n.x + n.len / 2 - 14, n.y, n.h); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); ctx.setLineDash([]);
       }
+    }
+    // Бейдж ошибки: красный кружок с ✕ и счётчиком в правом верхнем углу узла.
+    for (const n of all) {
+      const eo0 = errOn(n.id); if (!eo0 || (n.wsNode && !S.wsSeen)) continue;
+      // Пока тул снова работает, ошибка прошлой попытки — бледным бейджем, без перекраски узла.
+      const nRun = n.tool ? runSlots.has(n.id) : n.wsNode ? wsRun : extRun.has(n.id), eo = nRun ? 1 : eo0;
+      // Бейдж снаружи контура (и снаружи кольца работающего тула), по диагонали от подписи.
+      const r = 6.5 * px, gap = r + 3 * px, side = n.lp === 'e' ? -1 : 1;
+      let q;
+      // Подписи слотов и внешних контейнеров стоят сверху/сбоку — бейдж ставим снизу-справа, чтобы не лезть в текст.
+      if (n.wsNode) q = pt(n.x + 62 + 9, n.y + 40 + 9, iso ? n.h : 0);
+      else { const R0 = (n.tool && nRun ? 22 + 2.6 * px : n.kind === 'diamond' ? n.r * 0.75 : n.r) + gap * (n.kind === 'diamond' && !nRun ? 0.9 : 1); q = pt(n.x + side * R0 * 0.72, n.y + R0 * 0.72, iso ? n.h : 0); }
+      ctx.fillStyle = rgba(eo === 2 ? C.danger : mix(C.surface, C.danger, 0.5)); ctx.strokeStyle = rgba(C.surface); ctx.lineWidth = 1.6 * px;
+      ctx.beginPath(); ctx.arc(q[0], q[1], r, 0, 6.3); ctx.fill(); ctx.stroke();
+      const e = S.err[n.id];
+      if (e.n > 1) { ctx.fillStyle = rgba(C.surface); ctx.font = `700 ${9 * px}px ${MONO}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(e.n), q[0], q[1] + 0.5 * px); }
+      else { const k = 2.8 * px; ctx.strokeStyle = rgba(C.surface); ctx.lineWidth = 1.7 * px; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(q[0] - k, q[1] - k); ctx.lineTo(q[0] + k, q[1] + k); ctx.moveTo(q[0] + k, q[1] - k); ctx.lineTo(q[0] - k, q[1] + k); ctx.stroke(); ctx.lineCap = 'butt'; }
     }
     if (busy) {
       const a = N.agent; ctx.strokeStyle = rgba(C.accent, 0.55); ctx.lineWidth = 1.3 * px; ctx.setLineDash([5 * px, 7 * px]); ctx.lineDashOffset = RM.matches ? 0 : -t * 0.012 * px;
@@ -487,7 +522,8 @@ class MapR {
     for (const n of NODES) {
       if (n.wsNode && !S.wsSeen) continue;
       const isAct = S.hl[n.id] > 0.3 || (n.wsNode && wsRun);
-      ctx.fillStyle = rgba(isAct ? C.accent : C.label);
+      const nErr = errOn(n.id) === 2 && !(n.wsNode ? wsRun : extRun.has(n.id));
+      ctx.fillStyle = rgba(nErr ? C.danger : isAct ? C.accent : C.label);
       const lp = n.lp || 'bottom';
       if (lp === 'left' || lp === 'w') {
         const [x, y] = this.scr(n.x, n.y, iso ? n.h : 0), rr = (n.r + (lp === 'w' ? 4 : 26)) * s + 6;
@@ -529,8 +565,18 @@ class MapR {
       ctx.textAlign = dx > 0.35 ? 'left' : dx < -0.35 ? 'right' : 'center';
       ctx.textBaseline = dy < -0.5 ? 'bottom' : dy > 0.5 ? 'top' : 'middle';
       const run = [...S.calls.values()].filter(c => c.slot === sl.id);
-      ctx.fillStyle = rgba(run.length ? C.accent : C.label, disc ? 1 : 0.55);
+      const se = errOn(sl.id);
+      ctx.fillStyle = rgba(run.length ? C.accent : se === 2 ? C.danger : C.label, disc ? 1 : 0.55);
       ctx.fillText(sl.label, lx, ly);
+      // На мобилке (≤768) строку ОШИБКА не рисуем: хватает красного ромба и бейджа ✕.
+      if (!run.length && se && innerWidth > 768) {
+        // Вторая строка у подписи слота, со стороны узла не залезает: время последнего вызова + ОШИБКА.
+        const e = S.err[sl.id], last = (S.st[sl.id].calls[0] || {}).ms;
+        ctx.font = `500 10px ${MONO}`; ctx.fillStyle = rgba(C.danger, se === 2 ? 1 : 0.7);
+        const tx = (se === 2 ? 'ОШИБКА' : 'БЫЛА ОШИБКА') + (e.n > 1 ? ` ×${e.n}` : '') + (se === 2 && last != null ? ` · ${fmtS(last)}` : '');
+        ctx.fillText(tx, lx, ctx.textBaseline === 'bottom' ? ly - 13 : ly + 13);
+        ctx.font = `600 10px ${MONO}`;
+      }
       if (run.length) {
         const ms = now() - Math.min(...run.map(c => c.t0));
         ctx.font = `500 10px ${MONO}`; ctx.fillStyle = rgba(C.accent, 0.9);
@@ -568,7 +614,7 @@ function drawMini() {
   for (const sl of SLOT_LIST) {
     const x = MX.agent + Math.cos(sl.ang) * 19, y = Y + Math.sin(sl.ang) * 11;
     c.beginPath(); c.moveTo(x, y - 2.6); c.lineTo(x + 2.6, y); c.lineTo(x, y + 2.6); c.lineTo(x - 2.6, y); c.closePath();
-    c.fillStyle = runSlots.has(sl.id) ? rgba(C.accent) : S.discovered.has(sl.id) ? rgba(C.stroke) : rgba(C.muted, .35); c.fill();
+    c.fillStyle = runSlots.has(sl.id) ? rgba(C.accent) : errOn(sl.id) === 2 ? rgba(C.danger) : S.discovered.has(sl.id) ? rgba(C.stroke) : rgba(C.muted, .35); c.fill();
   }
   if (S.active) {
     const [, , i, k] = routeAt(S.d), x = xs[i] + (xs[Math.min(i + 1, 6)] - xs[i]) * k;
@@ -701,39 +747,12 @@ function drawRail() {
 let tlLast = 0;
 function renderTimeline(force) {
   const t = now(); if (!force && t - tlLast < 200) return; tlLast = t;
-  const base = $('#tlBase'), tools = $('#tlTools');
+  const tools = $('#tlTools');
   $('#fmStatus').textContent = S.status + (S.calls.size ? ' · ' + fmtS(t - Math.min(...[...S.calls.values()].map(c => c.t0))) : '');
-  if (!S.t0) { base.innerHTML = ''; tools.innerHTML = ''; $('#fmTotal').textContent = ''; return; }
-  const end = S.tEnd || t, total = Math.max(1, end - S.t0), W = base.clientWidth || 600;
+  if (!S.t0) { tools.innerHTML = ''; $('#fmTotal').textContent = ''; return; }
+  const end = S.tEnd || t, total = Math.max(1, end - S.t0), W = tools.clientWidth || 600;
   $('#fmTotal').textContent = fmtS(total);
-  // 1) Базовая полоса (fm-tl__row--base): нелинейное масштабирование с гарантированным минимумом,
-  // чтобы при ответе агента в 600 с короткие этапы (Шлюз, Очередь, Ответ) оставались читаемыми.
-  if (S.phases.length) {
-    const durs = S.phases.map(p => Math.max(1, (p.t1 || end) - p.t0));
-    const raw = durs.map(d => Math.pow(Math.max(80, d), 0.25));
-    const minP = S.phases.length > 1 ? Math.min(24, Math.floor((W < 480 ? 72 : 68) / S.phases.length)) : 100;
-    const pcts = new Array(S.phases.length).fill(0);
-    let rem = 100, free = S.phases.map((_, i) => i);
-    while (free.length) {
-      const rSum = free.reduce((a, i) => a + raw[i], 0) || 1;
-      let clamped = false;
-      for (const i of [...free]) {
-        const sh = rem * raw[i] / rSum;
-        if (sh < minP) { pcts[i] = minP; rem -= minP; free = free.filter(x => x !== i); clamped = true; }
-      }
-      if (!clamped) { for (const i of free) pcts[i] = rem * raw[i] / rSum; break; }
-    }
-    let acc = 0;
-    base.innerHTML = S.phases.map((p, i) => {
-      const w = pcts[i], l = acc; acc += w;
-      const dur = durs[i], segPx = W * w / 100;
-      const lbl = (segPx < 88 && p.label === 'Очередь') ? 'Очер.' : p.label;
-      const ds = segPx < 88 ? fmtS(dur).replace(' мин ', 'м ').replace(' с', 'с') : fmtS(dur);
-      const full = `${lbl} ${ds}`;
-      return `<div class="fm-seg-b" data-k="${p.k}" style="left:${l.toFixed(2)}%;width:${w.toFixed(2)}%" title="${p.label} · ${fmtS(dur)}">${full}</div>`;
-    }).join('');
-  } else base.innerHTML = '';
-  // 2) Полоса инструментов (fm-tl__row--tools): читаемая ширина каждого сегмента в px + горизонтальный скролл.
+  // Полоса инструментов (fm-tl__row--tools): читаемая ширина каждого сегмента в px + горизонтальный скролл.
   // Группируем параллельные вызовы одного шага в колонки по l.step, внутри колонки — по дорожкам (lane)
   const groups = [];
   for (const l of S.toolLog) {
@@ -787,7 +806,8 @@ function renderTimeline(force) {
   const scale = rawTrackW < W ? W / rawTrackW : 1;
   const trackW = Math.max(W, Math.round(rawTrackW * scale));
   const trackH = maxLanes * 19 - 2;
-  tools.style.height = (trackH + 4) + 'px';
+  // Высота авто: контент + свой отступ + полоса прокрутки (классический скроллбар не ложится поверх блоков).
+  tools.style.height = '';
   const maxX = Math.max(...segs.map(s => s.x));
   TL.segs = segs;
   const html = segs.map((s, i) => {
@@ -1038,7 +1058,67 @@ const roHost = new ResizeObserver(() => { if (MINI.on) layoutHost(); }); { const
 addEventListener('resize', () => { if (MINI.on) layoutHost(); });
 { const mic = document.querySelector('#view-agent .message-input-container'); if (mic) new MutationObserver(() => { if (MINI.on) layoutHost(); }).observe(mic, {childList:true}); }
 readTheme();
-window.FlowViz = {emit, reset, demo, open:openModal, close:closeModal, expand, collapse, bindPlaceholder, host:HOST, layoutHost, setLayout, setMode, setOthers:n => { S.others = n; kick(); }, state:S, view:VIEW, stats:STATS, renderers:{flat:rFlat, iso:rIso}, SLOTS, tl:TL};
+// ── Восстановление хронологии после F5 / смены чата: Redis flow:{chat_id} + agent:reasoning ──
+// Сервер отдаёт события с ts (мс epoch) и своё now: переводим в performance.now() по разнице
+// с серверным now, поэтому расхождение часов клиента не влияет на длительности.
+const RS = {gen:0, busy:false};
+async function restore(chatId) {
+  if (chatId == null) return false;
+  if (S.active && !S.rid) return false;                                   // отправка в полёте
+  const gen = RS.gen;
+  let j;
+  try {
+    const r = await fetch(`/api/chats/${encodeURIComponent(chatId)}/flow`, {credentials:'include', redirect:'manual'});
+    if (!r.ok) return false;
+    j = await r.json();
+  } catch (_) { return false; }
+  if (gen !== RS.gen) return false;                                        // за время запроса сменили чат
+  return replay(chatId, j);
+}
+function replay(chatId, j) {
+  const all = (j && Array.isArray(j.events)) ? j.events : [];
+  let rid = null;
+  for (let i = all.length - 1; i >= 0 && !rid; i--) if (all[i].rid) rid = all[i].rid;
+  const evs = all.filter(e => !rid || !e.rid || e.rid === rid).sort((a, b) => (a.ts || 0) - (b.ts || 0));
+  if (!evs.length) return false;
+  if (S.rid && S.rid === rid && String(S.chat) === String(chatId)) return false;   // уже ведём этот запрос вживую
+  const rs = j.reasoning && (!j.reasoning.request_id || !rid || j.reasoning.request_id === rid) ? j.reasoning : {};
+  const steps = Array.isArray(rs.steps) ? rs.steps : [];
+  const base = performance.now() - (+j.now || Date.now());
+  const at = e => Math.min(performance.now(), base + (+e.ts || +j.now || Date.now()));
+  const thOpen = TH.key;
+  RS.busy = true;
+  try {
+    const chat = String(chatId);
+    if (evs[0].ev !== 'send') { T_OVR = at(evs[0]); emit('send', {chat}); T_OVR = null; }
+    let si = 0;
+    for (const e of evs) {
+      const d = {chat, request_id: rid || undefined};
+      for (const k of ['slot', 'label', 'ext', 'ws', 'ok', 'ms', 'gap_ms', 'role']) if (e[k] != null) d[k] = e[k];
+      if (e.call_id) d.id = e.call_id;
+      T_OVR = at(e);
+      if (e.ev === 'send') emit('send', {chat});
+      else if (e.ev === 'think_end') { const txt = steps[si++]; if (txt) emit('think_text', {chat, text:txt}); emit('think_end', {chat}); }
+      else emit(e.ev, d);
+      T_OVR = null;
+    }
+    // Живой блок, который ещё не закрыт reasoning_end.
+    if (S.active && S.phase === 'agent' && rs.live_text) emit('think_text', {chat, text:rs.live_text});
+  } finally { T_OVR = null; RS.busy = false; }
+  // Пакет сразу на месте: без пролёта по уже пройденному пути.
+  if (S.active) {
+    if (S.phase === 'done') { S.d = 0; S.active = false; S.hl.user = 1; }
+    else { S.d = S.allow; S.trail = []; }
+    // Пройденный путь: одной вспышкой подсвечиваем рёбра и узлы маршрута до текущей точки пакета.
+    const upto = S.active ? S.d : DMAX;
+    for (let dd = 0; dd <= upto; dd += 6) { const seg = routeAt(dd)[2], ei = EDGES.findIndex(e => e[2] === seg); if (ei >= 0) S.lit[ei] = 1; }
+    for (let i = 0; i < D.length; i++) if (D[i] <= upto + 0.01) S.hl[ROUTE[i][2]] = 1;
+  }
+  if (thOpen && TL.segs.some(x => x.think && x.think.key === thOpen)) {} else if (thOpen) closeThink();
+  renderTimeline(true); kick();
+  return true;
+}
+window.FlowViz = {emit, reset, restore, replay, demo, open:openModal, close:closeModal, expand, collapse, bindPlaceholder, host:HOST, layoutHost, setLayout, setMode, setOthers:n => { S.others = n; kick(); }, state:S, view:VIEW, stats:STATS, renderers:{flat:rFlat, iso:rIso}, SLOTS, tl:TL};
 
 function mountDom() {
   if (document.getElementById('fmBack')) return;

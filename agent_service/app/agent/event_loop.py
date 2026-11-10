@@ -66,6 +66,9 @@ GATEWAY_SIGMA_URL = f"http://api_gateway_sigma:{PORT_GATEWAY_SIGMA_PORT}"
 
 # Redis-канал для стриминга чанков на sigma-гейтвей (у sigma нет WS, стрим льётся через pub/sub).
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+# FlowMap: хронология пути запроса flow:{chat_id} (см. api_gateway/run_status.flow_push)
+FLOW_TTL = int(os.getenv("FLOW_TTL", os.getenv("AGENT_RUN_TTL", "3600")))
+FLOW_MAX = int(os.getenv("FLOW_MAX", "600"))
 
 logger = logging.getLogger(__name__)
 
@@ -1542,6 +1545,20 @@ class HarnessAgent:
                 return
             return
 
+        # FlowMap: границы шагов размышлений в хронологию flow:{chat_id}. think_end пишем,
+        # только если с прошлой границы ушёл живой текст: ровно тогда гейтвей добавляет шаг
+        # в agent:reasoning.steps, и i-й think_end ↔ steps[i] после F5.
+        ctx = self._request_ctx.get()
+        if target in ("main", "sigma") and isinstance(ctx, dict):
+            if kind == "live" and chunk and chunk.strip():
+                ctx["flow_live"] = True
+            elif kind == "reasoning_end" and ctx.get("flow_live"):
+                ctx["flow_live"] = False
+                await self._flow_store(ctx.get("chat_id"), request_id, {"ev": "think_end"})
+            elif kind == "final_commit":
+                ctx["flow_live"] = False
+                await self._flow_store(ctx.get("chat_id"), request_id, {"ev": "answer"})
+
         # SIGMA: у гейтвея нет WebSocket — льём чанки через Redis pub/sub,
         # sigma-гейтвей подписан на stream:{request_id} и релеит в SSE.
         if target == "sigma":
@@ -1559,7 +1576,28 @@ class HarnessAgent:
         except Exception as e:
             logger.debug(f"Не удалось отправить чанк стриминга: {e}")
 
-    async def _send_flow(self, request_id: str, ev: str, target: str | None = None, **data) -> None:
+    async def _flow_store(self, chat_id, request_id: str, flow: dict) -> None:
+        """FlowMap: дописать событие в Redis LIST flow:{chat_id} (хронология для F5/смены чата).
+
+        Формат тот же, что пишет гейтвей (run_status.flow_push): {ev, rid, ts(ms epoch), ...flow}.
+        Пишем ДО отправки во фронт, чтобы восстановление не теряло событие. Ошибки глушим."""
+        if chat_id is None or not flow.get("ev"):
+            return
+        r = await self._get_redis()
+        if r is None:
+            return
+        rec = {"ev": flow["ev"], "ts": int(time.time() * 1000), "rid": request_id}
+        rec.update({k: v for k, v in flow.items() if k != "ev" and v is not None})
+        key = f"flow:{chat_id}"
+        try:
+            n = await r.rpush(key, json.dumps(rec, ensure_ascii=False))
+            if isinstance(n, int) and n > FLOW_MAX:
+                await r.ltrim(key, -FLOW_MAX, -1)
+            await r.expire(key, FLOW_TTL)
+        except Exception as e:
+            logger.debug(f"[flow] redis не записал {flow.get('ev')}: {e}")
+
+    async def _send_flow(self, request_id: str, ev: str, target: str | None = None, chat_id=None, **data) -> None:
         """Служебное событие пути запроса для FlowMap на фронте (kind="flow").
 
         ev: accepted | agent_start | tool_start | tool_end. Текста нет, поэтому
@@ -1575,6 +1613,9 @@ class HarnessAgent:
             return
         flow = {"ev": ev}
         flow.update({k: v for k, v in data.items() if v is not None})
+        if chat_id is None:
+            chat_id = self._ctx_get("chat_id", None)
+        await self._flow_store(chat_id, request_id, flow)
         payload = {"request_id": request_id, "chunk": "", "id": None, "kind": "flow", "flow": flow}
         try:
             if target == "sigma":

@@ -1196,7 +1196,7 @@ async def stop_message(request: Request):
     # Стоп: снимаем Redis-флаг работы (chat_id знаем по pending_requests).
     stop_chat_id = pending_requests.get(request_id) or data.get("chat_id")
     if stop_chat_id is not None:
-        await run_status.clear_running(stop_chat_id)
+        await run_status.clear_running(stop_chat_id, ok=False)
         # Гасим и флаг самоцикла — петля останавливается по стоп-кнопке.
         await run_status.clear_loop(stop_chat_id)
 
@@ -1244,6 +1244,28 @@ async def chat_run_status(chat_id: str, request: Request):
         })
     return JSONResponse(content={"running": True, "loop_active": loop_active, **info})
 
+
+@app.get("/api/chats/{chat_id}/flow")
+async def chat_flow(chat_id: str, request: Request):
+    """FlowMap: хронология пути последнего запроса (после F5 / переключения чата).
+
+    events — из Redis flow:{chat_id} (ts в мс epoch), now — серверное время для пересчёта
+    в таймлайн браузера без учёта расхождения часов клиента. Тексты размышлений — из
+    agent:reasoning:{chat_id} (steps по порядку событий think_end, live_text — текущий живой блок)."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    events = await run_status.get_flow(chat_id)
+    r = await run_status.get_reasoning_state(chat_id) or {}
+    return JSONResponse(content={
+        "now": int(time.time() * 1000),
+        "events": events,
+        "reasoning": {
+            "request_id": r.get("request_id"),
+            "steps": r.get("steps") or [],
+            "live_text": r.get("live_text") or "",
+        },
+    })
 
 @app.post("/api/chats/upload_files")
 async def upload_files(

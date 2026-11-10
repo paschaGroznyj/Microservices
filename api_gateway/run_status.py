@@ -34,6 +34,57 @@ def _loop_key(chat_id) -> str:
     return f"agent:loop:{chat_id}"
 
 
+# ── FlowMap: хронология пути запроса (Redis LIST flow:{chat_id}) ──────────────
+# Каждый элемент — JSON {ev, rid, ts(ms epoch), ...поля flow: slot/label/ext/ws/call_id/ok/ms/gap_ms/role}.
+# Пишет источник события (гейтвей: send/gateway/done, агент: accepted/agent_start/tool_*/think_end/answer/obs,
+# chats-consumer: db_saved), чтобы хронология не зависела от того, подписан ли сейчас SSE/WS.
+# Тексты размышлений сюда не дублируются — они в agent:reasoning:{chat_id}.steps.
+FLOW_TTL = int(os.getenv("FLOW_TTL", str(RUN_TTL)))
+FLOW_MAX = int(os.getenv("FLOW_MAX", "600"))
+
+
+def _flow_key(chat_id) -> str:
+    return f"flow:{chat_id}"
+
+
+async def flow_push(chat_id, ev: str, request_id: str | None = None, **data) -> None:
+    """Дописать событие пути запроса. Ошибки глушим: визуализация не должна ронять запрос."""
+    if _redis is None or chat_id is None or not ev:
+        return
+    rec = {"ev": ev, "ts": int(time.time() * 1000)}
+    if request_id:
+        rec["rid"] = request_id
+    rec.update({k: v for k, v in data.items() if v is not None})
+    key = _flow_key(chat_id)
+    try:
+        n = await _redis.rpush(key, json.dumps(rec, ensure_ascii=False))
+        if isinstance(n, int) and n > FLOW_MAX:
+            await _redis.ltrim(key, -FLOW_MAX, -1)
+        await _redis.expire(key, FLOW_TTL)
+    except Exception as e:
+        logger.debug("run_status.flow_push failed: %s", e)
+
+
+async def get_flow(chat_id) -> list[dict]:
+    """Хронология последнего запроса чата (битые элементы пропускаем)."""
+    if _redis is None or chat_id is None:
+        return []
+    try:
+        raw = await _redis.lrange(_flow_key(chat_id), 0, -1)
+    except Exception as e:
+        logger.debug("run_status.get_flow failed: %s", e)
+        return []
+    out = []
+    for item in raw or []:
+        try:
+            d = json.loads(item.decode() if isinstance(item, bytes) else item)
+        except Exception:
+            continue
+        if isinstance(d, dict) and d.get("ev"):
+            out.append(d)
+    return out
+
+
 async def _compute_elapsed_from_ttl(chat_id, fallback_started_at: float | None = None) -> tuple[int, int | None]:
     """Считает прошедшее время (в секундах) через механизм TTL ключа в Redis."""
     if _redis is None or chat_id is None:
@@ -115,8 +166,12 @@ async def mark_running(
             "user_message_id": user_message_id,
         })
         await _redis.set(_reasoning_key(chat_id), reasoning_init, ex=RUN_TTL)
+        # Новый запрос — новая хронология FlowMap: старую сносим, отмечаем отправку и шлюз.
+        await _redis.delete(_flow_key(chat_id))
     except Exception as e:
         logger.debug("run_status.mark_running failed: %s", e)
+    await flow_push(chat_id, "send", request_id)
+    await flow_push(chat_id, "gateway", request_id)
 
 
 async def count_active_requests() -> int:
@@ -254,10 +309,21 @@ async def get_reasoning_state(chat_id) -> dict | None:
         return None
 
 
-async def clear_running(chat_id) -> None:
-    """Снять флаг активной генерации и зафиксировать итоговое время рассуждений по TTL."""
+async def clear_running(chat_id, ok: bool = True) -> None:
+    """Снять флаг активной генерации и зафиксировать итоговое время рассуждений по TTL.
+
+    ok=False — остановлено пользователем (стоп-кнопка): в хронологию FlowMap уходит done с ok=false."""
     if _redis is None or chat_id is None:
         return
+    rid = None
+    try:
+        raw_run = await _redis.get(_key(chat_id))
+        if raw_run:
+            rid = (json.loads(raw_run) or {}).get("request_id")
+    except Exception:
+        rid = None
+    if rid:
+        await flow_push(chat_id, "done", rid, ok=None if ok else False)
     try:
         raw_r = await _redis.get(_reasoning_key(chat_id))
         if raw_r:

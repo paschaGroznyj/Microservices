@@ -1214,7 +1214,7 @@ async def stop_message(request: Request):
     # Стоп: снимаем Redis-флаг работы (chat_id знаем по pending_requests).
     stop_chat_id = pending_requests.get(request_id) or data.get("chat_id")
     if stop_chat_id is not None:
-        await run_status.clear_running(stop_chat_id)
+        await run_status.clear_running(stop_chat_id, ok=False)
 
     try:
         response = await app.state.http_client.post(
@@ -1293,6 +1293,28 @@ async def chat_run_status(chat_id: str, request: Request):
         return JSONResponse(content={"running": False, "reasoning": last_reasoning, "active_requests": active_requests})
     return JSONResponse(content={"running": True, **info})
 
+
+@app.get("/api/chats/{chat_id}/flow")
+async def chat_flow(chat_id: str, request: Request):
+    """FlowMap: хронология пути последнего запроса (после F5 / переключения чата).
+
+    events — из Redis flow:{chat_id} (ts в мс epoch), now — серверное время для пересчёта
+    в таймлайн браузера без учёта расхождения часов клиента. Тексты размышлений — из
+    agent:reasoning:{chat_id} (steps по порядку событий think_end, live_text — текущий живой блок)."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    events = await run_status.get_flow(chat_id)
+    r = await run_status.get_reasoning_state(chat_id) or {}
+    return JSONResponse(content={
+        "now": int(time.time() * 1000),
+        "events": events,
+        "reasoning": {
+            "request_id": r.get("request_id"),
+            "steps": r.get("steps") or [],
+            "live_text": r.get("live_text") or "",
+        },
+    })
 
 # ── SSE: push вместо polling ─────────────────────────────────────────────
 # Заголовки, критичные для корректного SSE через прокси:

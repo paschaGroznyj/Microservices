@@ -196,3 +196,67 @@ def test_workspace_flow_fields_from_args_and_result(agent, monkeypatch):
     assert evs[4][1]["ws"] == "abc12345"
     assert all("name" not in kw for _, kw in evs)
 
+
+
+# ── FlowMap: хронология в Redis flow:{chat_id} (восстановление после F5) ──────
+def _redis_list(agent):
+    r = MagicMock(name="redis")
+    r.rpush = AsyncMock(return_value=1)
+    r.ltrim = AsyncMock()
+    r.expire = AsyncMock()
+    agent._redis = r
+    return r
+
+
+def _pushed(r):
+    return [(c.args[0], json.loads(c.args[1])) for c in r.rpush.await_args_list]
+
+
+def test_flow_store_writes_chronology(agent):
+    r = _redis_list(agent)
+    agent._request_ctx.set({"request_id": "r1", "gateway_target": "main", "chat_id": 42})
+    run(agent._send_flow("r1", "tool_start", call_id="c1", slot="web", label="Ищу", gap_ms=900))
+    (key, rec), = _pushed(r)
+    assert key == "flow:42"
+    assert rec["ev"] == "tool_start" and rec["rid"] == "r1" and rec["call_id"] == "c1"
+    assert rec["slot"] == "web" and rec["gap_ms"] == 900 and isinstance(rec["ts"], int)
+    r.expire.assert_awaited()
+    # кадр во фронт ушёл после записи
+    agent._http.post.assert_awaited_once()
+
+
+def test_flow_store_explicit_chat_id_and_no_web_target(agent):
+    r = _redis_list(agent)
+    run(agent._send_flow("r1", "accepted", target="main", chat_id=7))
+    assert _pushed(r)[0][0] == "flow:7"
+    r.rpush.reset_mock()
+    run(agent._send_flow("r1", "accepted", target="telegram", chat_id=7))
+    r.rpush.assert_not_awaited()
+
+
+def test_flow_store_trims_list(agent, monkeypatch):
+    import agent.event_loop as el
+    monkeypatch.setattr(el, "FLOW_MAX", 3)
+    r = _redis_list(agent)
+    r.rpush.return_value = 5
+    run(agent._send_flow("r1", "agent_start", target="main", chat_id=1))
+    r.ltrim.assert_awaited_once_with("flow:1", -3, -1)
+
+
+def test_reasoning_boundaries_go_to_chronology(agent):
+    """think_end пишется только если до reasoning_end был живой текст (i-й think_end ↔ steps[i]); final_commit → answer."""
+    r = _redis_list(agent)
+    agent._request_ctx.set({"request_id": "r1", "gateway_target": "main", "chat_id": 5})
+    run(agent._send_chunk("", "r1", kind="reasoning_end"))          # пустой шаг — не пишем
+    run(agent._send_chunk("думаю", "r1", kind="live"))
+    run(agent._send_chunk("", "r1", kind="reasoning_end"))
+    run(agent._send_chunk("ответ", "r1", kind="live"))
+    run(agent._send_chunk("", "r1", kind="final_commit"))
+    assert [rec["ev"] for _, rec in _pushed(r)] == ["think_end", "answer"]
+
+
+def test_flow_store_redis_error_is_swallowed(agent):
+    r = _redis_list(agent)
+    r.rpush.side_effect = RuntimeError("down")
+    run(agent._send_flow("r1", "agent_start", target="main", chat_id=1))
+    agent._http.post.assert_awaited_once()

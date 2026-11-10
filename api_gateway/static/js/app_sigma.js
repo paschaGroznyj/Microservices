@@ -715,6 +715,10 @@ class ChatApp {
 
         if (String(this.currentChat) !== String(chatId)) return;
 
+        // FlowMap: хронология пути запроса из Redis flow:{chat_id} (пройденный путь, длительности,
+        // размышления по шагам) — после F5 и переключения диалогов.
+        if (localStorage.getItem('fm:off') !== '1') window.FlowViz?.restore?.(chatId)?.catch?.(() => {});
+
         const container = this.getMessagesContainer();
         const st = this._ensureStream(chatId);
 

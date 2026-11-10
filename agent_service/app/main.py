@@ -189,7 +189,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
 
     # FlowMap: агент взял запрос из Kafka в работу. Фоном, чтобы не задерживать ответ.
     if agent is not None and request_id and not loop_tick:
-        asyncio.create_task(agent._send_flow(request_id, "accepted", target=gateway_target))
+        asyncio.create_task(agent._send_flow(request_id, "accepted", target=gateway_target, chat_id=chat_id))
 
     # if type_agent != "pm":
     #     return
@@ -450,7 +450,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
         def _flow_obs(obs_key):
             # FlowMap: файл ответа ушёл в OBS по HTTP. Фоном, ответ не ждёт.
             if agent is not None and request_id:
-                asyncio.create_task(agent._send_flow(request_id, "obs", target=gateway_target, ok=bool(obs_key)))
+                asyncio.create_task(agent._send_flow(request_id, "obs", target=gateway_target, chat_id=chat_id, ok=bool(obs_key)))
         if files_to_send:
             attached_files = []
             for f in files_to_send:

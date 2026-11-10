@@ -50,3 +50,13 @@ def test_skip_non_web(consumer, mocker, payload):
 def test_errors_are_swallowed(consumer, mocker):
     mocker.patch("app.endpoint_consumer.requests.post", side_effect=OSError("down"))
     asyncio.run(consumer._send_flow({"request_id": "r1"}, "db_saved"))  # не падает
+
+
+def test_db_saved_goes_to_chronology(consumer, mocker):
+    mocker.patch("app.endpoint_consumer.requests.post")
+    consumer.redis.rpush.return_value = 1
+    asyncio.run(consumer._send_flow({"request_id": "r1", "gateway_target": "main", "chat_id": 9}, "db_saved", role="bot"))
+    key, raw = consumer.redis.rpush.await_args.args
+    rec = json.loads(raw)
+    assert key == "flow:9" and rec["ev"] == "db_saved" and rec["rid"] == "r1" and rec["role"] == "bot"
+    consumer.redis.expire.assert_awaited()

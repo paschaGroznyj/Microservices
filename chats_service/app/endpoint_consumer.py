@@ -20,6 +20,9 @@ TG_BOT_PUSH_URL = os.getenv("TG_BOT_PUSH_URL", "http://172.28.0.1:8010/push_mess
 MAX_BOT_PUSH_URL = os.getenv("MAX_BOT_PUSH_URL", "http://172.28.0.1:8011/push_message")
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+# FlowMap: хронология пути запроса flow:{chat_id} (см. api_gateway/run_status.flow_push)
+FLOW_TTL = int(os.getenv("FLOW_TTL", os.getenv("AGENT_RUN_TTL", "3600")))
+FLOW_MAX = int(os.getenv("FLOW_MAX", "600"))
 MOBILE_REPLY_KEY = "mobile:reply:{chat_id}"
 MOBILE_REPLY_TTL = 300  # сек
 
@@ -125,6 +128,22 @@ class DBConsumer:
             max_partition_fetch_bytes=10485760
         )
 
+    async def _flow_store(self, chat_id, request_id: str, flow: dict) -> None:
+        """FlowMap: событие в хронологию Redis flow:{chat_id} (восстановление после F5).
+        Формат как у гейтвея (run_status.flow_push) и агента. Ошибки глушим."""
+        if chat_id is None or self.redis is None:
+            return
+        rec = {"ev": flow.get("ev"), "ts": int(time.time() * 1000), "rid": request_id}
+        rec.update({k: v for k, v in flow.items() if k != "ev" and v is not None})
+        key = f"flow:{chat_id}"
+        try:
+            n = await self.redis.rpush(key, json.dumps(rec, ensure_ascii=False))
+            if isinstance(n, int) and n > FLOW_MAX:
+                await self.redis.ltrim(key, -FLOW_MAX, -1)
+            await self.redis.expire(key, FLOW_TTL)
+        except Exception as e:
+            logger.debug(f"[flow] redis не записал {flow.get('ev')}: {e}")
+
     async def _send_flow(self, payload: dict, ev: str, **data) -> None:
         """Служебное событие FlowMap (kind="flow") в веб-клиент, по аналогии с агентом.
 
@@ -138,6 +157,7 @@ class DBConsumer:
             return
         flow = {"ev": ev}
         flow.update({k: v for k, v in data.items() if v is not None})
+        await self._flow_store(payload.get("chat_id"), request_id, flow)
         frame = {"request_id": request_id, "chunk": "", "id": None, "kind": "flow", "flow": flow}
         try:
             if target == "sigma":

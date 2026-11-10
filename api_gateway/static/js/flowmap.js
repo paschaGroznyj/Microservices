@@ -15,6 +15,10 @@ const NODES = [
   {id:'kafka',    kind:'capsule', x:520, y:232, len:170, r:16, h:10, label:'KAFKA', name:'Очередь', tech:'Kafka',     desc:'Запрос ждёт, пока агент его заберёт.'},
   {id:'consumer', kind:'circle',  x:715, y:180, r:20, h:16, lp:'top', label:'CONSUMER', name:'Разборщик', tech:'Kafka consumer', desc:'Забирает запрос из очереди и будит агента.'},
   {id:'agent',    kind:'ring',    x:880, y:210, r:34, h:34, lp:'left', label:'AGENT',    name:'Агент',     tech:'agent_service',  desc:'Думает и вызывает инструменты.'},
+  {id:'obs',      kind:'square',  x:760, y:318, w:30, h:14, label:'OBS',      name:'Хранилище', tech:'OBS',            desc:'Файлы из чата и ответов агента.'},
+  {id:'searxng',  kind:'circle',  x:800, y:-4,  r:12, h:10, lp:'w', label:'SEARXNG',  name:'Поиск',     tech:'searxng',        desc:'Внешний поисковик для запросов в интернет.', ext:true},
+  {id:'parsers',  kind:'circle',  x:690, y:52, r:12, h:10, lp:'w', label:'PARSERS',  name:'Парсер',    tech:'parsers_service', desc:'Скачивает и разбирает страницы по ссылке.', ext:true},
+  {id:'sandbox_c',kind:'circle',  x:1130,y:100, r:13, h:10, lp:'top', label:'SANDBOX', name:'Песочница', tech:'agent_sandbox',  desc:'Контейнер, где выполняется код.', ext:true},
 ];
 const N = Object.fromEntries(NODES.map(n => [n.id, n]));
 const SLOT_DEF = [
@@ -48,6 +52,9 @@ const TOOLS = {
   send_file_to_user:['mail','Отправляю файл'], send_email:['mail','Пишу письмо'],
   call_subagent:['other','Зову помощника'], request_more_steps:['other','Прошу ещё шагов'],
 };
+const EXT = {search_internet:['searxng','internet'], parse_web_page:['parsers','parse_url'],
+  execute_python_code:['sandbox_c','execute'], execute_shell_commands:['sandbox_c','execute'], edit_and_run:['sandbox_c','execute']};
+const EXT_EDGES = [['web','searxng','internet'], ['web','parsers','parse_url'], ['sandbox','sandbox_c','execute']];
 const WB = (() => {
   let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
   for (const n of NODES) { const hw = (n.len ? n.len / 2 : n.r || n.w / 2); x0 = Math.min(x0, n.x - hw - 30); x1 = Math.max(x1, n.x + hw + 30); y0 = Math.min(y0, n.y - 50); y1 = Math.max(y1, n.y + 50); }
@@ -103,13 +110,12 @@ for (const n of [...NODES, ...SLOT_LIST]) { S.hl[n.id] = 0; S.st[n.id] = {visits
 const now = () => performance.now();
 const fmtS = ms => (ms / 1000).toFixed(1).replace('.', ',') + ' с';
 function setStatus(t) { S.status = t; }
-// Смена чата: текущий путь больше не про этот экран — гасим без анимации, раскрытие (HOST.expanded) помним.
+// Смена чата: текущий путь гасим без анимации. Раскрытая панель и открытая модалка остаются.
 function reset() {
   S.active = false; S.phase = 'idle'; S.t0 = 0; S.tEnd = 0; S.d = 0; S.dir = 1; S.allow = 0; S.trail = [];
   S.calls.clear(); S.phases = []; S.toolLog = []; S.fx = []; S.pulses = []; S.lit.fill(0); S.chat = null; S.rid = null;
-  setStatus('Ожидаю запрос'); clearTimeout(miniHideT); MINI.on = false;
-  if (VIEW.open) closeModal();
-  layoutHost(); renderTimeline(true);
+  setStatus('Ожидаю запрос'); clearTimeout(miniHideT); MINI.on = HOST.expanded;
+  layoutHost(); renderTimeline(true); kick();
 }
 function openPhase(k, label, t) { const p = S.phases[S.phases.length - 1]; if (p && !p.t1) p.t1 = t; S.phases.push({k, label, t0:t, t1:0}); }
 // Событие относится к текущему запросу? chat/request_id сверяем, если они известны с обеих сторон.
@@ -144,9 +150,10 @@ function emit(type, d = {}) {
     case 'tool_start': {
       if (!S.active) break;
       if (S.phase !== 'agent' && S.phase !== 'answer') { S.phase = 'agent'; S.allow = DMAX; openPhase('agent', 'Агент', t); }
-      const [slot, label] = TOOLS[d.name] || ['other', d.label || d.name || 'Инструмент'];
+      const [slot, label] = TOOLS[d.name] || ['other', 'Инструмент'];
+      const ext = EXT[d.name] ? EXT[d.name][0] : null;
       const key = d.id || d.name || ('t' + t);
-      S.calls.set(key, {slot, label, name:d.name, t0:t});
+      S.calls.set(key, {slot, label, ext, t0:t}); if (ext) S.hl[ext] = 1;
       S.toolLog.push({key, slot, label, t0:t, t1:0, ok:true});
       S.discovered.add(slot); S.hl[slot] = 1; setStatus(label); break;
     }
@@ -159,6 +166,14 @@ function emit(type, d = {}) {
       S.fx.push({kind: ok ? 'ok' : 'err', slot:c.slot, t, dur: ok ? 700 : 2600});
       const left = [...S.calls.values()]; setStatus(left.length ? left[left.length-1].label : 'Агент думает'); break;
     }
+    case 'db_saved':
+      // chats_service записал сообщение в БД: импульс CHATS → DB.
+      if (!S.active) break;
+      S.hl.chats = 1; S.hl.db = 1; S.pulses.push({a:'chats', b:'db', t, dur:620}); break;
+    case 'obs':
+      // Агент залил файл ответа в OBS по HTTP.
+      if (!S.active) break;
+      S.hl.obs = 1; S.hl.agent = Math.max(S.hl.agent, .6); S.pulses.push({a:'agent', b:'obs', t, dur:720, err:d.ok === false}); break;
     case 'answer':
       if (!S.active || S.phase === 'answer' || S.phase === 'done') break;
       S.phase = 'answer'; S.dir = -1; S.allow = 0;
@@ -309,6 +324,16 @@ class MapR {
       if (S.lit[i] > 0.01) line(xy(a), xy(b), rgba(C.accent, S.lit[i]), 2.6 * px);
     });
     line([N.chats.x, N.chats.y], [N.db.x, N.db.y], rgba(C.stroke, 0.8), 1.2 * px, [4 * px, 4 * px]);
+    if (S.hl.db > 0.02) line([N.chats.x, N.chats.y], [N.db.x, N.db.y], rgba(C.accent, Math.min(1, S.hl.db)), 2.2 * px);
+    line([N.agent.x, N.agent.y], [N.obs.x, N.obs.y], rgba(C.stroke, 0.95), 1.3 * px, [4 * px, 3 * px]);
+    if (S.hl.obs > 0.02) line([N.agent.x, N.agent.y], [N.obs.x, N.obs.y], rgba(C.accent, Math.min(1, S.hl.obs)), 2.2 * px);
+    const extRun = new Set([...S.calls.values()].map(c => c.ext).filter(Boolean));
+    for (const [a, b] of EXT_EDGES) {
+      const A = SLOTS[a], B = N[b];
+      line([A.x, A.y], [B.x, B.y], rgba(C.stroke, 0.8), 1.1 * px, [3 * px, 3 * px]);
+      if (extRun.has(b)) line([A.x, A.y], [B.x, B.y], rgba(C.accent, 0.9), 2 * px, [6 * px, 6 * px], RM.matches ? 0 : -t * 0.04 * px);
+      else if (S.hl[b] > 0.02) line([A.x, A.y], [B.x, B.y], rgba(C.accent, Math.min(1, S.hl[b])), 1.8 * px, [6 * px, 6 * px]);
+    }
     const busy = S.active && (S.phase === 'agent' || S.phase === 'answer');
     const runSlots = new Set([...S.calls.values()].map(c => c.slot));
     for (const sl of SLOT_LIST) {
@@ -353,8 +378,9 @@ class MapR {
     }
     for (const p of S.pulses) {
       const k = (t - p.t) / p.dur; if (k < 0 || k > 1) continue;
-      const kk = k < 0.5 ? k * 2 : 2 - k * 2, x = N.chats.x + (N.db.x - N.chats.x) * kk, y = N.chats.y + (N.db.y - N.chats.y) * kk;
-      const q = pt(x, y, iso ? 8 : 0); ctx.fillStyle = rgba(C.accent, 0.85); ctx.beginPath(); ctx.arc(q[0], q[1], 3 * px, 0, 6.3); ctx.fill();
+      const A = N[p.a || 'chats'], B = N[p.b || 'db'];
+      const kk = k < 0.5 ? k * 2 : 2 - k * 2, x = A.x + (B.x - A.x) * kk, y = A.y + (B.y - A.y) * kk;
+      const q = pt(x, y, iso ? 8 : 0); ctx.fillStyle = rgba(p.err ? C.danger : C.accent, 0.85); ctx.beginPath(); ctx.arc(q[0], q[1], 3 * px, 0, 6.3); ctx.fill();
     }
     for (const g of S.ghosts) { const [x, y] = routeAt(g.d), q = pt(x, y, iso ? 10 : 0); ctx.fillStyle = rgba(C.sec, 0.4); ctx.beginPath(); ctx.arc(q[0], q[1], 3 * px, 0, 6.3); ctx.fill(); }
     if (S.active) {
@@ -379,8 +405,8 @@ class MapR {
     for (const n of NODES) {
       ctx.fillStyle = rgba(S.hl[n.id] > 0.3 ? C.accent : C.label);
       const lp = n.lp || 'bottom';
-      if (lp === 'left') {
-        const [x, y] = this.scr(n.x, n.y, iso ? n.h : 0), rr = (n.r + 26) * s + 6;
+      if (lp === 'left' || lp === 'w') {
+        const [x, y] = this.scr(n.x, n.y, iso ? n.h : 0), rr = (n.r + (lp === 'w' ? 4 : 26)) * s + 6;
         ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.fillText(n.label, x - rr, y);
       } else if (lp === 'top') {
         const [x, y] = this.scr(n.x, n.y, iso ? n.h : 0);
@@ -389,6 +415,21 @@ class MapR {
         const [x, y] = this.scr(n.x, n.y, 0);
         ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillText(n.label, x, y + ry(n) + (iso ? 6 : 8));
       }
+    }
+    {
+      // Обозначения каналов на рёбрах: http / internet / parse_url / execute.
+      ctx.font = `600 10px ${MONO}`; try { ctx.letterSpacing = '0px'; } catch (_) {}
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const tag = (a, b, txt, on, k = 0.5) => {
+        const [x1, y1] = this.scr(a.x, a.y, 0), [x2, y2] = this.scr(b.x, b.y, 0);
+        const mx = x1 + (x2 - x1) * k, my = y1 + (y2 - y1) * k, w = ctx.measureText(txt).width + 8;
+        ctx.fillStyle = rgba(C.bg, 0.94); ctx.fillRect(mx - w / 2, my - 7, w, 14);
+        ctx.fillStyle = rgba(on ? C.accent : C.label); ctx.fillText(txt, mx, my);
+      };
+      const runExt = new Set([...S.calls.values()].map(c => c.ext).filter(Boolean));
+      tag(N.agent, N.obs, 'http', S.hl.obs > 0.3, 0.55);
+      for (const [a, b, txt] of EXT_EDGES) tag(SLOTS[a], N[b], txt, runExt.has(b) || S.hl[b] > 0.3, 0.55);
+      ctx.font = `600 10px ${MONO}`; try { ctx.letterSpacing = '1px'; } catch (_) {}
     }
     for (const sl of SLOT_LIST) {
       const disc = S.discovered.has(sl.id);
@@ -411,7 +452,7 @@ class MapR {
     try { ctx.letterSpacing = '0px'; } catch (_) {}
   }
 }
-const MINI = {cv:$('#fmMiniCv'), on:false};
+const MINI = {el:$('#fmMini'), cv:$('#fmMiniCv'), on:false};
 MINI.ctx = MINI.cv.getContext('2d');
 function drawMini() {
   const cv = MINI.cv, r = cv.getBoundingClientRect(); if (!r.width) return;
@@ -457,11 +498,15 @@ let miniHideT = 0;
 // ── Хост мини-вида: вертикальная панель в правом поле #view-agent или горизонтальная полоса над вводом ──
 const RAIL_H = 456, RAIL_TOP = 82, COL = 720;
 const HOST = {orient:'v', expanded:false, gutter:0};
-const RAIL = {cv:$('#fmRailCv')}; RAIL.ctx = RAIL.cv.getContext('2d');
+const RAIL = {el:$('#fmRail'), cv:$('#fmRailCv')}; RAIL.ctx = RAIL.cv.getContext('2d');
 let SANS = '';
 function layoutHost() {
   const v = document.getElementById('view-agent');
-  const rail = $('#fmRail'), mini = $('#fmMini');
+  // Узлы держим по ссылке: renderMessageInput пересоздаёт композер через innerHTML,
+  // и полоса, жившая в .chat-input-area, выпадает из DOM вместе с ним.
+  const rail = RAIL.el, mini = MINI.el;
+  if (!rail || !mini) return;
+  if (v && !rail.isConnected) v.appendChild(rail);
   let vert = false;
   if (v && v.offsetParent !== null) {
     const r = v.getBoundingClientRect();
@@ -611,7 +656,7 @@ function setMode(m) {
 }
 function syncFit() { $('#fmFit').classList.toggle('is-on', VIEW.fit); }
 function openModal() { VIEW.open = true; $('#fmBack').classList.add('is-open'); setLayout(VIEW.layout); renderTimeline(true); kick(); }
-function closeModal() { const wasOpen = VIEW.open; VIEW.open = false; if (wasOpen && MINI.on) setTimeout(() => (HOST.orient === 'v' ? $('#fmRail') : $('#fmMini'))?.focus({preventScroll:true}), 0); $('#fmBack').classList.remove('is-open'); for (const c of document.querySelectorAll('.fm-card')) c.classList.remove('is-on'); for (const R of RENDERERS) R.visible = false; }
+function closeModal() { const wasOpen = VIEW.open; VIEW.open = false; if (wasOpen && MINI.on) setTimeout(() => { const el = HOST.orient === 'v' ? RAIL.el : MINI.el; if (el && el.isConnected) el.focus({preventScroll:true}); }, 0); $('#fmBack').classList.remove('is-open'); for (const c of document.querySelectorAll('.fm-card')) c.classList.remove('is-on'); for (const R of RENDERERS) R.visible = false; }
 const STATS = {renders:0, ms:0, msAvg:0, msMax:0, fps:0, frames:0, fpsT:0};
 let raf = 0, slowT = 0, lastT = 0, lastDraw = 0;
 function kick() { if (!raf) raf = requestAnimationFrame(frame); }
@@ -641,8 +686,9 @@ function update(dt, t) {
     S.lastInside = inside;
     if (inside === 'agent' && S.phase === 'agent') S.hl.agent = Math.max(S.hl.agent, 0.6);
     if (!RM.matches) { S.trail.push([x, y, S.pkz]); if (S.trail.length > 14) S.trail.shift(); if (!moving) S.trail.shift(); }
-    if (S.phase === 'done' && S.d <= 0.01) { S.active = false; S.hl.user = 1; renderTimeline(true); miniHideT = setTimeout(() => showMini(false), 2600); }
+    if (S.phase === 'done' && S.d <= 0.01) { S.active = false; S.hl.user = 1; renderTimeline(true); }
   }
+  for (const cl of S.calls.values()) if (cl.ext) S.hl[cl.ext] = 1;
   const k = Math.pow(0.08, dt / 1000);
   for (const id in S.hl) if (S.hl[id] > 0.001) { if (!(id === 'agent' && S.phase === 'agent')) S.hl[id] *= k; moving = true; } else S.hl[id] = 0;
   for (let i = 0; i < S.lit.length; i++) if (S.lit[i] > 0.01) { S.lit[i] *= k; moving = true; } else S.lit[i] = 0;
@@ -711,6 +757,7 @@ const ro = new ResizeObserver(() => { if (VIEW.open) for (const R of RENDERERS) 
 ro.observe($('#pFlat')); ro.observe($('#pIso'));
 const roHost = new ResizeObserver(() => { if (MINI.on) layoutHost(); }); { const v = document.getElementById('view-agent'); if (v) roHost.observe(v); }
 addEventListener('resize', () => { if (MINI.on) layoutHost(); });
+{ const mic = document.querySelector('#view-agent .message-input-container'); if (mic) new MutationObserver(() => { if (MINI.on) layoutHost(); }).observe(mic, {childList:true}); }
 readTheme();
 window.FlowViz = {emit, reset, demo, open:openModal, close:closeModal, expand, collapse, bindPlaceholder, host:HOST, layoutHost, setLayout, setMode, setOthers:n => { S.others = n; kick(); }, state:S, view:VIEW, stats:STATS, renderers:{flat:rFlat, iso:rIso}, TOOLS, SLOTS};
 

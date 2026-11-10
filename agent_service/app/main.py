@@ -446,6 +446,11 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
 
         attached_files = None
         logging.info(f"[files_to_send] {files_to_send}")
+
+        def _flow_obs(obs_key):
+            # FlowMap: файл ответа ушёл в OBS по HTTP. Фоном, ответ не ждёт.
+            if agent is not None and request_id:
+                asyncio.create_task(agent._send_flow(request_id, "obs", target=gateway_target, ok=bool(obs_key)))
         if files_to_send:
             attached_files = []
             for f in files_to_send:
@@ -457,7 +462,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                     _img_path = f.get("path")
                     if _img_path and os.path.isfile(_img_path):
                         try:
-                            await obs_file_storage.upload_user_file(_img_path, chat_id)
+                            _obs_key = await obs_file_storage.upload_user_file(_img_path, chat_id)
+                            _flow_obs(_obs_key)
                         except Exception as _obs_err:
                             logging.error(f"OBS upload failed for {_img_path}: {_obs_err}")
                     entry = {
@@ -471,7 +477,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                     # Ключ детерминирован от (chat_id + local_path), поэтому
                     # /web/file сможет восстановить тот же ключ без маппинга в БД.
                     try:
-                        await obs_file_storage.upload_user_file(f["path"], chat_id)
+                        _obs_key = await obs_file_storage.upload_user_file(f["path"], chat_id)
+                        _flow_obs(_obs_key)
                     except Exception as _obs_err:
                         logging.error(f"OBS upload failed for {f.get('path')}: {_obs_err}")
                     entry = {

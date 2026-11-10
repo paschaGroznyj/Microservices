@@ -125,6 +125,30 @@ class DBConsumer:
             max_partition_fetch_bytes=10485760
         )
 
+    async def _send_flow(self, payload: dict, ev: str, **data) -> None:
+        """Служебное событие FlowMap (kind="flow") в веб-клиент, по аналогии с агентом.
+
+        Только main (HTTP /internal/bot_stream, гейтвей резолвит чат по request_id)
+        и sigma (Redis pub/sub stream:{request_id}). Без request_id и для
+        Telegram/MAX/mobile ничего не шлём. Ошибки глушим: карта не должна
+        мешать сохранению и доставке сообщения."""
+        request_id = payload.get("request_id")
+        target = (payload.get("gateway_target") or "main").lower()
+        if not request_id or target not in self.gateway_urls:
+            return
+        flow = {"ev": ev}
+        flow.update({k: v for k, v in data.items() if v is not None})
+        frame = {"request_id": request_id, "chunk": "", "id": None, "kind": "flow", "flow": flow}
+        try:
+            if target == "sigma":
+                if self.redis is not None:
+                    await self.redis.publish(f"stream:{request_id}", json.dumps(frame, ensure_ascii=False))
+                return
+            url = f"{self.gateway_urls[target]}/internal/bot_stream"
+            await asyncio.to_thread(requests.post, url, json=frame, timeout=1)
+        except Exception as e:
+            logger.debug(f"[flow] {ev} не отправлен: {e}")
+
     async def process_message(self, payload):
         try:
             start = time.perf_counter()
@@ -184,6 +208,8 @@ class DBConsumer:
                 except Exception as pa_err:
                     logger.error(f"Ошибка сохранения poll_answer chat={chat_id}: {pa_err}")
             logger.info(f"Сообщение сохранено в БД: chat={chat_id}, user={user_id}")
+            # FlowMap: подсветить запись в БД (до доставки ответа, чтобы успеть раньше done).
+            await self._send_flow(payload, "db_saved", role="bot" if is_from_bot else "user")
             # ЗАДАЧНИК: ответ агента сохранён — карточки задач его запроса привязываем к нему
             # (после F5 они рисуются под этим сообщением, live фронт переносит их по task_ids).
             linked_task_ids = []

@@ -2197,10 +2197,18 @@ class HarnessAgent:
                         final_response = (_clean_content or "").strip()
 
                         # Финальный шаг: фиксируем живой блок как финальный ответ.
-                        if stream_state["sent"] and final_response:
-                            await self._send_chunk(
-                                "", request_id, msg_id=str(request_id), kind="final_commit"
-                            )
+                        # Если модель стримила мысли, но финальный ответ пустой (пойдёт на ретрай
+                        # empty_response), закрываем блок размышлений через reasoning_end, чтобы
+                        # мысли не потерялись и не остались висеть в live_text.
+                        if stream_state["sent"]:
+                            if final_response:
+                                await self._send_chunk(
+                                    "", request_id, msg_id=str(request_id), kind="final_commit"
+                                )
+                            else:
+                                await self._send_chunk(
+                                    "", request_id, msg_id=str(request_id), kind="reasoning_end"
+                                )
                         break
 
                     # Выполняем все запрошенные инструменты параллельно
@@ -2332,6 +2340,10 @@ class HarnessAgent:
                             )
                         )
                     )
+            if not (final_response or "").strip():
+                await self._send_chunk(
+                    "", request_id, msg_id=str(request_id), kind="final_commit"
+                )
 
             # input/output/total — только основная модель (на них считается стоимость
             # в chats_service). Кеш — подмножество input. Расход тулов (vision,

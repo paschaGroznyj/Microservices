@@ -210,7 +210,8 @@ async def receive_bot_message(bot_msg: BotMessage):
     logging.info(f"[sigma] bot_message chat_id={bot_msg.chat_id}")
     status_store.mark_done(bot_msg.chat_id, bot_msg.message)
     # Финал пришёл — снимаем Redis-флаг «агент в работе» (общий для гейтвеев).
-    await run_status.clear_running(bot_msg.chat_id)
+    msg_dict = bot_msg.message if isinstance(bot_msg.message, dict) else {}
+    await run_status.clear_running(bot_msg.chat_id, request_id=msg_dict.get("request_id"))
     return {"ok": True}
 
 
@@ -1306,8 +1307,10 @@ async def chat_flow(chat_id: str, request: Request):
         raise HTTPException(status_code=401, detail="Not authenticated")
     events = await run_status.get_flow(chat_id)
     r = await run_status.get_reasoning_state(chat_id) or {}
+    running = await run_status.get_running(chat_id) is not None
     return JSONResponse(content={
         "now": int(time.time() * 1000),
+        "running": running,
         "events": events,
         "reasoning": {
             "request_id": r.get("request_id"),

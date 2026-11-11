@@ -196,14 +196,25 @@ async def websocket_chat(websocket: WebSocket, chat_id: str):
     try:
         while True:
             await websocket.receive_text()
-    except WebSocketDisconnect:
-        connections[chat_id].remove(websocket)
+    except Exception:
+        pass
+    finally:
+        if websocket in connections.get(chat_id, []):
+            connections[chat_id].remove(websocket)
 
 # Функция для отправки события в WebSocket
 async def broadcast(chat_id: str, message: dict):
-    for ws in connections.get(chat_id, []):
+    dead = []
+    for ws in list(connections.get(chat_id, [])):
         logging.info(f"Подключение {ws}, сообщение {message}")
-        await ws.send_json(message)
+        try:
+            await ws.send_json(message)
+        except Exception as e:
+            logger.debug(f"WS send failed for chat_id={chat_id}: {e}")
+            dead.append(ws)
+    for ws in dead:
+        if ws in connections.get(chat_id, []):
+            connections[chat_id].remove(ws)
 
 @app.post("/internal/bot_status")
 async def bot_status(payload: BotStatus):
@@ -262,11 +273,13 @@ async def receive_bot_message(bot_msg: BotMessage):
     logging.info(f"Получено сообщение от бота для chat_id={bot_msg.chat_id}: {bot_msg.message}")
     start = time.perf_counter()
 
+    # Финал пришёл — снимаем Redis-флаг «агент в работе» ДО рассылки в WS,
+    # чтобы сбой сокета не оставил висящий флаг в Redis.
+    msg_dict = bot_msg.message if isinstance(bot_msg.message, dict) else {}
+    await run_status.clear_running(bot_msg.chat_id, request_id=msg_dict.get("request_id"))
+
     # Отправляем сообщение через WebSocket всем клиентам в чате
     await broadcast(bot_msg.chat_id, bot_msg.message)
-
-    # Финал пришёл — снимаем Redis-флаг «агент в работе».
-    await run_status.clear_running(bot_msg.chat_id)
 
     # Автогенерированный заголовок чата: отдельное событие title_update,
     # чтобы фронт обновил строку чата в сайдбаре без перезапроса списка.
@@ -1257,8 +1270,10 @@ async def chat_flow(chat_id: str, request: Request):
         raise HTTPException(status_code=401, detail="Not authenticated")
     events = await run_status.get_flow(chat_id)
     r = await run_status.get_reasoning_state(chat_id) or {}
+    running = await run_status.get_running(chat_id) is not None
     return JSONResponse(content={
         "now": int(time.time() * 1000),
+        "running": running,
         "events": events,
         "reasoning": {
             "request_id": r.get("request_id"),

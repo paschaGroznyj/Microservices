@@ -717,7 +717,7 @@ class ChatApp {
 
         // FlowMap: хронология пути запроса из Redis flow:{chat_id} (пройденный путь, длительности,
         // размышления по шагам) — после F5 и переключения диалогов.
-        if (localStorage.getItem('fm:off') !== '1') window.FlowViz?.restore?.(chatId)?.catch?.(() => {});
+        if (localStorage.getItem('fm:off') !== '1') window.FlowViz?.restore?.(chatId, serverStatus !== null ? { running } : undefined)?.catch?.(() => {});
 
         const container = this.getMessagesContainer();
         const st = this._ensureStream(chatId);
@@ -5250,6 +5250,7 @@ class ChatApp {
                     state.tasks.forEach(t => window.TaskHint?.note(this, chatId, t));
                 }
                 if (state?.status === 'done' || state?.status === 'idle') {
+                    _fm('done', { chat: String(chatId) });
                     // Сообщение уже сохранено в БД chats-consumer'ом —
                     // перечитываем историю чата и завершаем run.
                     await this._handleRunDone(chatId);

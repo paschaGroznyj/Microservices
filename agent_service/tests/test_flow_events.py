@@ -260,3 +260,17 @@ def test_flow_store_redis_error_is_swallowed(agent):
     r.rpush.side_effect = RuntimeError("down")
     run(agent._send_flow("r1", "agent_start", target="main", chat_id=1))
     agent._http.post.assert_awaited_once()
+
+
+def test_empty_response_sends_final_commit(agent, mocker):
+    """При пустом финальном ответе (в том числе после ретраев) отправляется final_commit с answer в flow."""
+    r = _redis_list(agent)
+    agent._request_ctx.set({"request_id": "r1", "gateway_target": "main", "chat_id": 9})
+    from langchain_core.messages import HumanMessage
+    # Возвращаем пустую строку как final_response
+    mocker.patch.object(agent, "agent_event_loop", return_value=("", []))
+    mocker.patch("agent.event_loop.MAX_EMPTY_RESPONSE_RETRIES", 0)  # без ретраев для скорости
+    mocker.patch("agent.event_loop.is_first_turn", return_value=False)
+    run(agent.process_query("r1", 9, "test", [HumanMessage(content="test")]))
+    evs = [rec["ev"] for _, rec in _pushed(r)]
+    assert "answer" in evs

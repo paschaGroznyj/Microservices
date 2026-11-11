@@ -284,6 +284,20 @@ class DBConsumer:
 
                 await self.send_to_main_service(chat_id, ws_payload, gateway_url)
 
+                # Страховка: если гейтвей не успел снять agent:running:{chat_id}
+                # (например, ошибка сокета или пустой ответ), снимаем флаг и закрываем flow здесь.
+                if not payload.get("loop") and self.redis is not None and chat_id is not None:
+                    try:
+                        await self.redis.delete(f"agent:running:{chat_id}")
+                        rid = payload.get("request_id")
+                        if rid:
+                            tail = await self.redis.lrange(f"flow:{chat_id}", -1, -1)
+                            last = json.loads(tail[0].decode() if isinstance(tail[0], bytes) else tail[0]) if tail else {}
+                            if not (isinstance(last, dict) and last.get("ev") == "done" and last.get("rid") == rid):
+                                await self._flow_store(chat_id, rid, {"ev": "done"})
+                    except Exception as _re:
+                        logger.debug(f"[flow] clear running fallback failed: {_re}")
+
                 # САМОЦИКЛ: после логирования ответа агента — пробуем реентри (новый тик).
                 # Только для web (gateway main): telegram/mobile выше сделали return.
                 if payload.get("loop"):

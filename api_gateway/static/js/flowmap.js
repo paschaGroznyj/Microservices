@@ -1,7 +1,7 @@
 /* FlowMap: путь запроса (прототип для встраивания). API: window.FlowViz */
 (() => {
 'use strict';
-const MODAL_HTML = "<div class=\"fm-back\" id=\"fmBack\">\n  <div class=\"fm-dlg\" role=\"dialog\" aria-label=\"Путь запроса\">\n    <div class=\"fm-head\">\n      <div class=\"fm-title\">ПУТЬ ЗАПРОСА</div>\n      <div class=\"fm-seg\" id=\"fmLayout\"><button data-l=\"flat\" class=\"is-on\">Плоская</button><button data-l=\"iso\">Изометрия</button><button data-l=\"both\">Оба режима</button></div>\n      <div class=\"fm-seg\" id=\"fmMode\"><button data-m=\"watch\" class=\"is-on\">Наблюдать</button><button data-m=\"control\">Управлять</button></div>\n      <div class=\"fm-seg\" id=\"fmFitSeg\"><button id=\"fmFit\">Весь путь</button></div>\n      <button class=\"fm-x\" id=\"fmClose\" aria-label=\"Закрыть\">×</button>\n    </div>\n    <div class=\"fm-body\">\n      <div class=\"fm-panel\" id=\"pFlat\"><canvas id=\"cvFlat\"></canvas><div class=\"fm-ptag\">ПЛОСКАЯ</div><div class=\"fm-card\"></div></div>\n      <div class=\"fm-panel\" id=\"pIso\"><canvas id=\"cvIso\"></canvas><div class=\"fm-ptag\">ИЗОМЕТРИЯ</div><div class=\"fm-card\"></div></div>\n    </div>\n    <div class=\"fm-foot\">\n      <div class=\"fm-status\"><span id=\"fmStatus\">Ожидаю запрос</span><span id=\"fmTotal\"></span></div>\n      <div class=\"fm-tl\"><div class=\"fm-tl__row fm-tl__row--tools\" id=\"tlTools\"></div></div>\n    </div>\n  </div>\n</div>";
+const MODAL_HTML = "<div class=\"fm-back\" id=\"fmBack\">\n  <div class=\"fm-dlg\" role=\"dialog\" aria-label=\"Путь запроса\">\n    <div class=\"fm-head\">\n      <div class=\"fm-title\">ПУТЬ ЗАПРОСА</div>\n      <div class=\"fm-seg\" id=\"fmLayout\"><button data-l=\"flat\" class=\"is-on\" title=\"2D: плоская карта\" aria-label=\"2D\">2D</button><button data-l=\"iso\" title=\"2.5D: изометрия\" aria-label=\"2.5D\">2.5D</button><button data-l=\"both\" title=\"2D и 2.5D рядом\" aria-label=\"2D и 2.5D\">2D&amp;2.5D</button></div>\n      <div class=\"fm-seg\" id=\"fmMode\"><button data-m=\"watch\" class=\"is-on fm-ib\" title=\"Наблюдать\" aria-label=\"Наблюдать\"><svg class=\"fm-ic\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z\"/><circle cx=\"12\" cy=\"12\" r=\"3\"/></svg></button><button data-m=\"control\" class=\"fm-ib\" title=\"Управлять\" aria-label=\"Управлять\"><svg class=\"fm-ic\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M8 13V6.5a1.5 1.5 0 0 1 3 0V12\"/><path d=\"M11 11V5a1.5 1.5 0 0 1 3 0v6\"/><path d=\"M14 11V6.5a1.5 1.5 0 0 1 3 0V13\"/><path d=\"M17 9.5a1.5 1.5 0 0 1 3 0V14a7 7 0 0 1-7 7h-1a6 6 0 0 1-5-2.7L4.3 14.6a1.6 1.6 0 0 1 2.6-1.8L8 14\"/></svg></button></div>\n      <div class=\"fm-seg\" id=\"fmFitSeg\"><button id=\"fmFit\" class=\"fm-ib\" title=\"Весь путь\" aria-label=\"Весь путь\"><svg class=\"fm-ic\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M15 5h4v4\"/><path d=\"M9 19H5v-4\"/><path d=\"M19 5 5 19\"/></svg></button></div>\n      <button class=\"fm-x\" id=\"fmClose\" aria-label=\"Закрыть\">×</button>\n    </div>\n    <div class=\"fm-body\">\n      <div class=\"fm-panel\" id=\"pFlat\"><canvas id=\"cvFlat\"></canvas><div class=\"fm-ptag\">2D</div><div class=\"fm-card\"></div></div>\n      <div class=\"fm-panel\" id=\"pIso\"><canvas id=\"cvIso\"></canvas><div class=\"fm-ptag\">2.5D</div><div class=\"fm-card\"></div></div>\n    </div>\n    <div class=\"fm-foot\">\n      <div class=\"fm-status\"><span id=\"fmStatus\">Ожидаю запрос</span><span id=\"fmTotal\"></span></div>\n      <div class=\"fm-tl\"><div class=\"fm-tl__row fm-tl__row--tools\" id=\"tlTools\"></div></div>\n    </div>\n  </div>\n</div>";
 const $ = s => document.querySelector(s);
 mountDom();
 const RM = matchMedia('(prefers-reduced-motion: reduce)');
@@ -1062,7 +1062,7 @@ readTheme();
 // Сервер отдаёт события с ts (мс epoch) и своё now: переводим в performance.now() по разнице
 // с серверным now, поэтому расхождение часов клиента не влияет на длительности.
 const RS = {gen:0, busy:false};
-async function restore(chatId) {
+async function restore(chatId, opts) {
   if (chatId == null) return false;
   if (S.active && !S.rid) return false;                                   // отправка в полёте
   const gen = RS.gen;
@@ -1073,9 +1073,9 @@ async function restore(chatId) {
     j = await r.json();
   } catch (_) { return false; }
   if (gen !== RS.gen) return false;                                        // за время запроса сменили чат
-  return replay(chatId, j);
+  return replay(chatId, j, opts);
 }
-function replay(chatId, j) {
+function replay(chatId, j, opts) {
   const all = (j && Array.isArray(j.events)) ? j.events : [];
   let rid = null;
   for (let i = all.length - 1; i >= 0 && !rid; i--) if (all[i].rid) rid = all[i].rid;
@@ -1104,6 +1104,14 @@ function replay(chatId, j) {
     }
     // Живой блок, который ещё не закрыт reasoning_end.
     if (S.active && S.phase === 'agent' && rs.live_text) emit('think_text', {chat, text:rs.live_text});
+    // Если в Redis флаг agent:running уже снят (running === false), а хронология оборвалась
+    // без события done (например, пустой ответ или рестарт), завершаем путь на последнем событии.
+    const isRunning = (opts && typeof opts.running === 'boolean') ? opts.running : (j && typeof j.running === 'boolean' ? j.running : null);
+    if (isRunning === false && S.active && S.phase !== 'done') {
+      T_OVR = at(evs[evs.length - 1]);
+      emit('done', {chat, request_id: rid || undefined});
+      T_OVR = null;
+    }
   } finally { T_OVR = null; RS.busy = false; }
   // Пакет сразу на месте: без пролёта по уже пройденному пути.
   if (S.active) {

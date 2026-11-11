@@ -309,29 +309,42 @@ async def get_reasoning_state(chat_id) -> dict | None:
         return None
 
 
-async def clear_running(chat_id, ok: bool = True) -> None:
+async def clear_running(chat_id, ok: bool = True, request_id: str | None = None) -> None:
     """Снять флаг активной генерации и зафиксировать итоговое время рассуждений по TTL.
 
     ok=False — остановлено пользователем (стоп-кнопка): в хронологию FlowMap уходит done с ok=false."""
     if _redis is None or chat_id is None:
         return
-    rid = None
+    rid = request_id
+    raw_r = None
     try:
         raw_run = await _redis.get(_key(chat_id))
-        if raw_run:
+        if raw_run and not rid:
             rid = (json.loads(raw_run) or {}).get("request_id")
     except Exception:
-        rid = None
-    if rid:
-        await flow_push(chat_id, "done", rid, ok=None if ok else False)
+        pass
     try:
         raw_r = await _redis.get(_reasoning_key(chat_id))
+        if raw_r and not rid:
+            rid = (json.loads(raw_r) or {}).get("request_id")
+    except Exception:
+        raw_r = None
+    if rid:
+        try:
+            tail = await _redis.lrange(_flow_key(chat_id), -1, -1)
+            last = json.loads(tail[0].decode() if isinstance(tail[0], bytes) else tail[0]) if tail else {}
+        except Exception:
+            last = {}
+        if not (isinstance(last, dict) and last.get("ev") == "done" and last.get("rid") == rid):
+            await flow_push(chat_id, "done", rid, ok=None if ok else False)
+    try:
         if raw_r:
             state = json.loads(raw_r)
             elapsed_sec, _ = await _compute_elapsed_from_ttl(chat_id, state.get("started_at"))
             if state.get("duration_sec") is None:
                 state["duration_sec"] = elapsed_sec
             state["completed"] = True
+            state["is_final"] = True
             state["live_text"] = ""
             state.pop("user_message", None)
             state.pop("user_message_id", None)

@@ -101,6 +101,13 @@ class SigmaConsumer:
                 "agent_model": payload.get("agent_model"),
             }
             self._store.mark_done(chat_id, message)
+            try:
+                import run_status
+                coro = run_status.clear_running(chat_id, request_id=payload.get("request_id"))
+                if asyncio.iscoroutine(coro):
+                    asyncio.get_running_loop().create_task(coro)
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f"[sigma-consumer] не удалось обработать сообщение: {e}")
 

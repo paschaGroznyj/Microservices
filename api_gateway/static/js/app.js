@@ -693,7 +693,7 @@ class ChatApp {
 
         // FlowMap: хронология пути запроса из Redis flow:{chat_id} (пройденный путь, длительности,
         // размышления по шагам) — после F5 и переключения диалогов.
-        if (localStorage.getItem('fm:off') !== '1') window.FlowViz?.restore?.(chatId)?.catch?.(() => {});
+        if (localStorage.getItem('fm:off') !== '1') window.FlowViz?.restore?.(chatId, serverStatus !== null ? { running } : undefined)?.catch?.(() => {});
 
         const container = this.getMessagesContainer();
         const st = this._ensureStream(chatId);
@@ -4416,8 +4416,9 @@ class ChatApp {
 
             // Задачник: финал ответа — карточки хода (включая временную группу без ответа)
             // собираются в ответ на то же место, что и после F5. Таймер: дать финализации пузыря отработать.
-            if (msg.is_from_bot && msg.message && !msg.chunk) _fm('done', { chat: key });
-            if (msg.is_from_bot && msg.message && !msg.chunk && isActive && window.TaskCards) {
+            const isFinalBotMsg = msg.is_from_bot && msg.chunk === undefined && !msg.kind && (msg.done || msg.message !== undefined);
+            if (isFinalBotMsg) _fm('done', { chat: key });
+            if (isFinalBotMsg && isActive && window.TaskCards) {
                 const _tcBox = this.getMessagesContainer();
                 setTimeout(() => window.TaskCards.settle(_tcBox, msg), 60);
             }

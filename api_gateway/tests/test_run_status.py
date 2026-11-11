@@ -215,6 +215,27 @@ def test_clear_running_pushes_done(redis_mock):
     assert rec["ev"] == "done" and rec["rid"] == "r1" and rec["ok"] is False
 
 
+def test_clear_running_with_explicit_request_id_and_dedupe(redis_mock):
+    redis_mock.rpush.return_value = 1
+    async def get(k):
+        if k == "agent:reasoning:c1":
+            return json.dumps({"request_id": "r2", "started_at": 100.0, "is_final": False, "completed": False})
+        return None
+    redis_mock.get.side_effect = get
+    redis_mock.lrange.return_value = []
+    run(run_status.clear_running("c1", request_id="r2"))
+    rec = json.loads(redis_mock.rpush.await_args.args[1])
+    assert rec["ev"] == "done" and rec["rid"] == "r2"
+    saved_state = json.loads(redis_mock.set.await_args.args[1])
+    assert saved_state["completed"] is True and saved_state["is_final"] is True
+
+    # Повторный вызов, когда в хвосте flow:c1 уже лежит done для того же rid, не дублирует запись
+    redis_mock.rpush.reset_mock()
+    redis_mock.lrange.return_value = [json.dumps({"ev": "done", "rid": "r2"})]
+    run(run_status.clear_running("c1", request_id="r2"))
+    redis_mock.rpush.assert_not_awaited()
+
+
 def test_flow_push_trims(redis_mock, mocker):
     mocker.patch.object(run_status, "FLOW_MAX", 2)
     redis_mock.rpush.return_value = 9

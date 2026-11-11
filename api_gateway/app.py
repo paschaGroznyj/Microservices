@@ -1146,11 +1146,13 @@ async def send_message(request: Request):
     data["user_id"] = user["user_id"]
     data["tb_name"] = request.headers.get("X-Authentik-Username")
     data["username"] = request.headers.get("X-Authentik-Name").encode('latin-1').decode('utf-8')
-    data["type_agent"] = data.get("type_agent", "pm")
+    # Режим запроса: agent (полный агент с тулами) | model (MauDel — модель без тулов)
+    data["type_query"] = "model" if str(data.pop("type_query", "agent")).lower() == "model" else "agent"
+    data.pop("type_agent", None)
     data["request_id"] = request_id
     data["gateway_target"] = "main"
     data["timezone_name"] = (data.get("timezone_name") or request.headers.get("X-Timezone") or "Europe/Moscow").strip()
-    logger.info(f"Что летит при отправке сообщений {data['chat_id']}, {data['message']}")
+    logger.info(f"Что летит при отправке сообщений {data['chat_id']}, type_query={data['type_query']}, {data['message']}")
 
     message = {
         "user_id": data["user_id"],
@@ -1167,7 +1169,7 @@ async def send_message(request: Request):
     await run_status.mark_running(
         data["chat_id"],
         request_id,
-        data.get("type_agent"),
+        data.get("type_query"),
         user_message=data.get("message"),
         user_message_id=data.get("message_id"),
     )

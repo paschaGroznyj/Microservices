@@ -127,7 +127,7 @@ def build_trigger_payload(rows: list, request_id: str, chat_id: str, owner: dict
     return {
         "user_id": TASK_TRIGGER_USER_ID, "tb_name": "", "username": TASK_TRIGGER_USERNAME,
         "chat_id": str(chat_id), "message": f"[task_trigger] {labels}",
-        "type_agent": "pm", "is_from_bot": False, "request_id": request_id,
+        "type_query": "agent", "is_from_bot": False, "request_id": request_id,
         "selected_tools": owner.get("selected_tools") or [],
         "context_size": owner.get("context_size") or "medium",
         "message_id": f"task-{first}" if len(tasks) == 1 else f"tasks-{request_id}",

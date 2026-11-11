@@ -3568,7 +3568,7 @@ class ChatApp {
         const _optimisticFiles = isCustom ? [] : (window.FileAttach?.getPreviewItems?.() ?? window.FileAttach?.getFilesMeta() ?? []);
         // Снимок вложений: композер очищается сразу после отправки, а файлы
         // грузятся уже из сообщения в ленте (с анимацией прогресса).
-        const _filesSnap = isCustom ? [] : (window.FileAttach?.getFiles?.() ?? []);
+        const _filesSnap = (isCustom || window.QueryMode?.isModel()) ? [] : (window.FileAttach?.getFiles?.() ?? []);
         const _filesMetaSnap = isCustom ? [] : (window.FileAttach?.getFilesMeta?.() ?? []);
         _fm('send', { chat: this.currentChat });
         this.addMessage({ message: text, is_from_bot: false, id: msgId, created_at: new Date().toISOString(), files: _optimisticFiles });
@@ -3637,7 +3637,7 @@ class ChatApp {
                     message:        text,
                     message_id:     msgId,
                     task_ids:       window.TaskHint?.consume(this.currentChat, text),   // ручной триггер задачника
-                    type_agent:     'pm',
+                    type_query:     window.QueryMode?.get() ?? 'agent',   // agent | model (MauDel без тулов)
                     agent_model:    window.ModelPicker?.getModel() ?? 'coder',
                     selected_tools: window.ToolsPanel?.getSelectedCategories() ?? [],
                     context_size:   window.ToolsPanel?.getContextSize()   ?? 'medium',
@@ -5801,6 +5801,7 @@ class ChatApp {
         // Инжектируем кнопку тулов и пикер модели в футер инпута
         window.ToolsPanel?.inject(container);
         window.ModelPicker?.inject(container);
+        window.QueryMode?.inject(container);
 
         // Посимвольная анимация start-header
         // Запоминаем для какого чата отрендерили

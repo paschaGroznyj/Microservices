@@ -262,7 +262,6 @@ class DBConsumer:
                 return
 
             if is_from_bot:
-                type_agent = payload.get("type_agent", "pm")
                 gateway_url = self.gateway_urls[gateway_target]
                 ws_payload = dict(payload)
                 ws_payload["files"] = _sanitize_files_for_ws(attached_files) # Адаптивно, чтобы и для файлов пользователя
@@ -378,7 +377,7 @@ class DBConsumer:
             "tb_name": None,
             "message": task["instruction"] + STOP_LOOP_INSTRUCTION,
             "chat_id": chat_id,
-            "type_agent": payload.get("type_agent", "pm"),
+            "type_query": "agent",
             "request_id": f"loop-{ms}-{uuid.uuid4().hex[:8]}",
             "message_id": f"msg-{ms}-{uuid.uuid4().hex[:8]}",
             "selected_tools": payload.get("selected_tools") or [],
@@ -454,7 +453,7 @@ class DBConsumer:
             "tb_name": None,
             "message": instruction,
             "chat_id": chat_id,
-            "type_agent": payload.get("type_agent", "pm"),
+            "type_query": "agent",
             "request_id": f"loopstop-{ms}-{uuid.uuid4().hex[:8]}",
             "message_id": f"msg-{ms}-{uuid.uuid4().hex[:8]}",
             "selected_tools": payload.get("selected_tools") or [],

@@ -3562,7 +3562,7 @@ class ChatApp {
                     message:        text,
                     message_id:     msgId,
                     task_ids:       window.TaskHint?.consume(this.currentChat, text),   // ручной триггер задачника
-                    type_agent:     'pm',
+                    type_query:     window.QueryMode?.get() ?? 'agent',   // agent | model (MauDel без тулов)
                     agent_model:    window.ModelPicker?.getModel() ?? 'coder',
                     selected_tools: window.ToolsPanel?.getSelectedCategories() ?? [],
                     context_size:   window.ToolsPanel?.getContextSize()   ?? 'medium',
@@ -5537,6 +5537,7 @@ class ChatApp {
         // Инжектируем кнопку тулов и пикер модели в футер инпута
         window.ToolsPanel?.inject(container);
         window.ModelPicker?.inject(container);
+        window.QueryMode?.inject(container);
 
         // Посимвольная анимация start-header
         // Запоминаем для какого чата отрендерили

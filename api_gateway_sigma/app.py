@@ -1162,11 +1162,13 @@ async def send_message(request: Request):
             data["username"] = raw_auth_name
     else:
         data["username"] = user["username"]
-    data["type_agent"] = data.get("type_agent", "pm") # О Великий gateway
+    # Режим запроса: agent (полный агент с тулами) | model (MauDel — модель без тулов)
+    data["type_query"] = "model" if str(data.pop("type_query", "agent")).lower() == "model" else "agent"
+    data.pop("type_agent", None)
     data["request_id"] = request_id
     data["gateway_target"] = "sigma"
     data["timezone_name"] = (data.get("timezone_name") or request.headers.get("X-Timezone") or "Europe/Moscow").strip()
-    logger.info(f"Что летит при отправке сообщений {data['chat_id']}, {data['message']}")
+    logger.info(f"Что летит при отправке сообщений {data['chat_id']}, type_query={data['type_query']}, {data['message']}")
 
     # SIGMA: WS-эхо убрано. Помечаем в store, что для этого чата ожидается
     # ответ бота (status=running). Фронт сразу оптимистично отрисует своё
@@ -1177,7 +1179,7 @@ async def send_message(request: Request):
     await run_status.mark_running(
         data["chat_id"],
         request_id,
-        data.get("type_agent"),
+        data.get("type_query"),
         user_message=data.get("message"),
         user_message_id=data.get("message_id"),
     )

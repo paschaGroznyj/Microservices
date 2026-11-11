@@ -646,12 +646,30 @@ function layoutHost() {
   if (v && v.offsetParent !== null) {
     const r = v.getBoundingClientRect();
     const gutter = (r.width - COL) / 2; HOST.gutter = gutter;
+    
+    // ВЕРТИКАЛЬНАЯ ПАНЕЛЬ включается если экран десктопный и есть хоть какое-то правое поле.
+    // Высота инпута (inTop) больше НЕ влияет на ориентацию, так как panel и input не пересекаются по горизонтали!
+    vert = innerWidth > 768 && gutter >= 148;
+    
+    if (vert) {
+      const w = Math.round(Math.min(184, gutter - 28));
+      rail.style.width = w + 'px';
+      rail.style.left = Math.round(r.width / 2 + COL / 2 + Math.max(12, (gutter - w) / 2 - 4)) + 'px';
+      rail.style.top = Math.max(56, Math.min(RAIL_TOP, r.height - RAIL_H - 12)) + 'px';
+    }
+    
     const inp = v.querySelector('.chat-input-area');
-    const inTop = inp ? inp.getBoundingClientRect().top - r.top : r.height - 120;
-    vert = innerWidth > 768 && gutter >= 184 && inTop >= RAIL_TOP + RAIL_H + 12;
-    if (vert) { const w = Math.round(Math.min(184, gutter - 28)); rail.style.width = w + 'px'; rail.style.left = Math.round(r.width / 2 + COL / 2 + Math.max(12, (gutter - w) / 2 - 4)) + 'px'; }
     if (!vert && inp && mini.parentNode !== inp) inp.appendChild(mini);
-    if (!vert && inp) { const bx = inp.querySelector('.chat-input-box')?.getBoundingClientRect(), ia = inp.getBoundingClientRect(); if (bx) { mini.style.setProperty('--fm-in-l', Math.round(bx.left - ia.left) + 'px'); mini.style.setProperty('--fm-in-r', Math.round(ia.right - bx.right) + 'px'); } }
+    if (!vert && inp) { 
+      const bx = inp.querySelector('.chat-input-box')?.getBoundingClientRect(), ia = inp.getBoundingClientRect(); 
+      if (bx) { 
+        mini.style.setProperty('--fm-in-l', Math.round(bx.left - ia.left) + 'px'); 
+        mini.style.setProperty('--fm-in-r', Math.round(ia.right - bx.right) + 'px'); 
+      } 
+    }
+  } else {
+    // Если #view-agent скрыт (переключили вкладку), сохраняем десктопный вид, чтобы не мелькала плашка
+    vert = innerWidth > 768;
   }
   HOST.orient = vert ? 'v' : 'h';
   rail.classList.toggle('is-on', MINI.on && vert);
@@ -803,34 +821,68 @@ function renderTimeline(force) {
   if (!segs.length) { tools.innerHTML = ''; TL.track = null; tools.style.display = 'none'; closeThink(); return; }
   tools.style.display = '';
   const rawTrackW = Math.max(1, xCursor - GAP_PX);
-  const scale = rawTrackW < W ? W / rawTrackW : 1;
-  const trackW = Math.max(W, Math.round(rawTrackW * scale));
+  const trackW = Math.max(W, Math.round(rawTrackW));
   const trackH = maxLanes * 19 - 2;
   // Высота авто: контент + свой отступ + полоса прокрутки (классический скроллбар не ложится поверх блоков).
   tools.style.height = '';
   const maxX = Math.max(...segs.map(s => s.x));
   TL.segs = segs;
-  const html = segs.map((s, i) => {
-    const sx = Math.round(s.x * scale);
-    const sw = (rawTrackW <= W && s.x === maxX) ? Math.max(36, trackW - sx) : Math.max(36, Math.round(s.w * scale));
-    const tap = s.think ? ` data-i="${i}" role="button" tabindex="0" aria-haspopup="dialog"` + (TH.key === s.think.key ? ' aria-expanded="true"' : '') : '';
-    const sel = s.think && TH.key === s.think.key ? ' is-sel' : '';
-    return `<div class="${s.cls}${s.extra}${sel}" data-k="${s.k}"${tap} style="left:${sx}px;width:${sw}px;top:${s.lane * 19}px" title="${s.title}">${s.txt}</div>`;
-  }).join('');
-  // Скролл не сбрасываем: track — постоянный узел, ширину ставим ДО замены детей,
-  // иначе на миг scrollWidth == clientWidth и браузер обнуляет scrollLeft.
+
   let track = TL.track && TL.track.parentNode === tools ? TL.track : null;
   if (!track) { tools.innerHTML = '<div class="fm-tl__track"></div>'; track = TL.track = tools.firstChild; }
   const keep = tools.scrollLeft;
-  track.style.width = trackW + 'px'; track.style.height = trackH + 'px';
-  track.innerHTML = html;
+  
+  if (track.style.width !== trackW + 'px') track.style.width = trackW + 'px';
+  if (track.style.height !== trackH + 'px') track.style.height = trackH + 'px';
+
+  // Синхронизация DOM без innerHTML (чтобы не сбрасывать :hover, focus и mousedown)
+  const children = track.children;
+  for (let i = 0; i < segs.length; i++) {
+    const s = segs[i];
+    let el = children[i];
+    if (!el) { el = document.createElement('div'); track.appendChild(el); }
+    
+    const sx = Math.round(s.x);
+    const sw = (rawTrackW <= W && s.x === maxX) ? Math.max(36, trackW - sx) : Math.max(36, Math.round(s.w));
+    const sel = s.think && TH.key === s.think.key ? ' is-sel' : '';
+    const cls = s.cls + s.extra + sel;
+    
+    if (el.className !== cls) el.className = cls;
+    if (el.dataset.k !== s.k) el.dataset.k = s.k;
+    
+    if (s.think) {
+      if (el.dataset.i !== String(i)) el.dataset.i = i;
+      if (el.getAttribute('role') !== 'button') el.setAttribute('role', 'button');
+      if (el.getAttribute('tabindex') !== '0') el.setAttribute('tabindex', '0');
+      if (el.getAttribute('aria-haspopup') !== 'dialog') el.setAttribute('aria-haspopup', 'dialog');
+      if (sel) { if (el.getAttribute('aria-expanded') !== 'true') el.setAttribute('aria-expanded', 'true'); }
+      else { if (el.hasAttribute('aria-expanded')) el.removeAttribute('aria-expanded'); }
+    } else {
+      if (el.hasAttribute('data-i')) el.removeAttribute('data-i');
+      if (el.hasAttribute('role')) el.removeAttribute('role');
+      if (el.hasAttribute('tabindex')) el.removeAttribute('tabindex');
+      if (el.hasAttribute('aria-haspopup')) el.removeAttribute('aria-haspopup');
+      if (el.hasAttribute('aria-expanded')) el.removeAttribute('aria-expanded');
+    }
+    
+    const l = sx + 'px', w = sw + 'px', top = (s.lane * 19) + 'px';
+    if (el.style.left !== l) el.style.left = l;
+    if (el.style.width !== w) el.style.width = w;
+    if (el.style.top !== top) el.style.top = top;
+    
+    if (el.title !== s.title) el.title = s.title;
+    if (el.textContent !== s.txt) el.textContent = s.txt;
+  }
+  while (children.length > segs.length) track.removeChild(children[children.length - 1]);
+
   const maxL = Math.max(0, tools.scrollWidth - tools.clientWidth);
   // Автопрокрутка к живому краю — только пока пользователь сам не увёл полосу влево.
   if (TL.follow && (S.calls.size || isLiveThink)) setScroll(tools, maxL);
   else if (tools.scrollLeft !== Math.min(keep, maxL)) setScroll(tools, Math.min(keep, maxL));
   if (TH.key) {
     const i = segs.findIndex(s => s.think && s.think.key === TH.key);
-    if (i < 0) closeThink(); else { TH.from = track.querySelector(`[data-i="${i}"]`); if (TH.key === 'tail') fillThink(); }
+    if (i < 0) closeThink();
+    else { TH.from = children[i]; if (TH.key === 'tail') fillThink(); if (TH.from) placeThink(TH.from); }
   }
 }
 // ── Скролл полосы инструментов + оверлей «Размышления» по тапу на блок «думает» ──
@@ -1043,7 +1095,22 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape' && VIEW.open)
     TL.follow = tools.scrollLeft >= tools.scrollWidth - tools.clientWidth - 24;
     if (TH.key && TH.from && TH.from.isConnected) placeThink(TH.from);
   }, {passive:true});
-  tools.addEventListener('click', e => { const s = e.target.closest('.fm-seg-g[data-i]'); if (s) { e.stopPropagation(); openThink(s); } });
+  let pdHandled = false;
+  tools.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'touch' || (e.button != null && e.button !== 0)) return;
+    const s = e.target.closest('.fm-seg-g[data-i]');
+    if (!s) return;
+    pdHandled = true;
+    e.stopPropagation();
+    openThink(s);
+  });
+  tools.addEventListener('click', e => {
+    const s = e.target.closest('.fm-seg-g[data-i]');
+    if (!s) return;
+    e.stopPropagation();
+    if (pdHandled) { pdHandled = false; return; }
+    openThink(s);
+  });
   tools.addEventListener('keydown', e => { const s = e.target.closest('.fm-seg-g[data-i]'); if (s && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openThink(s); } });
   // Тап мимо оверлея закрывает его (но не модалку).
   $('#fmBack').addEventListener('pointerdown', e => { if (TH.key && !e.target.closest('.fm-think,.fm-seg-g[data-i]')) closeThink(); });

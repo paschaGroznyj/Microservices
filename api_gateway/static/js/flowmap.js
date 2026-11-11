@@ -122,6 +122,12 @@ function reset() {
   layoutHost(); renderTimeline(true); kick();
 }
 function openPhase(k, label, t) { const p = S.phases[S.phases.length - 1]; if (p && !p.t1) p.t1 = t; S.phases.push({k, label, t0:t, t1:0}); }
+function reachAgent() {
+  if (S.d >= DMAX) return;
+  for (let dd = S.d; dd <= DMAX; dd += 6) { const seg = routeAt(dd)[2], ei = EDGES.findIndex(e => e[2] === seg); if (ei >= 0) S.lit[ei] = 1; }
+  for (let i = 0; i < D.length; i++) if (D[i] >= S.d - 0.01) { const id = ROUTE[i][2]; S.hl[id] = 1; if (!S.st[id].visits) S.st[id].visits = 1; }
+  S.d = DMAX; S.lastInside = 'agent';
+}
 // Событие относится к текущему запросу? chat/request_id сверяем, если они известны с обеих сторон.
 function foreign(type, d) {
   if (type === 'send') return false;
@@ -145,7 +151,7 @@ function emit(type, d = {}) {
       S.phase = 'queue'; S.allow = Math.max(S.allow, D[4]); openPhase('queue', 'Очередь', t); setStatus('В очереди'); break;
     case 'accepted':
       // Агент забрал запрос из Kafka: пакет доходит до Consumer.
-      if (!S.active || S.phase === 'agent' || S.phase === 'answer' || S.phase === 'done') break;
+      if (!S.active || S.phase === 'accepted' || S.phase === 'agent' || S.phase === 'answer' || S.phase === 'done') break;
       if (S.phase === 'send') openPhase('queue', 'Очередь', t);
       S.phase = 'accepted'; S.allow = Math.max(S.allow, D[5]); setStatus('Агент принял запрос'); break;
     case 'agent_start':
@@ -210,11 +216,13 @@ function emit(type, d = {}) {
       // Живой чанк (тот же текст, что уходит в блок «Размышления»). Пока не пришёл reasoning_end,
       // это может оказаться и финальным ответом — поэтому держим отдельно от подтверждённого thinkDone.
       if (!S.active || S.phase === 'answer' || S.phase === 'done' || !d.text) return;
+      if (S.phase !== 'agent') { S.phase = 'agent'; S.allow = DMAX; if (S.thinkT0 == null) S.thinkT0 = t; openPhase('agent', 'Агент', t); setStatus('Агент думает'); renderTimeline(true); kick(); }
       S.thinkBuf = (S.thinkBuf + String(d.text)).slice(-THINK_MAX);
       if (TH.key === 'tail') fillThink(); return;
     case 'think_end':
       // reasoning_end: живой блок был размышлением перед тулом — подтверждаем текст.
       if (!S.active || !S.thinkBuf) return;
+      if (S.phase !== 'agent' && S.phase !== 'answer' && S.phase !== 'done') { S.phase = 'agent'; S.allow = DMAX; if (S.thinkT0 == null) S.thinkT0 = t; openPhase('agent', 'Агент', t); setStatus('Агент думает'); }
       S.thinkDone = (S.thinkDone ? S.thinkDone + '\n\n' : '') + S.thinkBuf.trim(); S.thinkBuf = '';
       if (TH.key === 'tail') fillThink(); return;
     case 'db_saved':
@@ -227,6 +235,7 @@ function emit(type, d = {}) {
       S.hl.obs = 1; S.hl.agent = Math.max(S.hl.agent, .6); S.pulses.push({a:'agent', b:'obs', t, dur:720, err:d.ok === false}); break;
     case 'answer':
       if (!S.active || S.phase === 'answer' || S.phase === 'done') break;
+      if (!RS.busy) reachAgent();
       if (S.thinkT0 != null) { S.tailThinkMs = Math.max(0, t - S.thinkT0); S.thinkT0 = null; }
       S.tailText = S.thinkDone; S.thinkDone = ''; S.thinkBuf = '';
       S.phase = 'answer'; S.dir = -1; S.allow = 0;
@@ -234,6 +243,7 @@ function emit(type, d = {}) {
       S.calls.clear(); openPhase('answer', 'Ответ', t); setStatus('Пишу ответ'); break;
     case 'done': {
       if (!S.active || S.phase === 'done') break;
+      if (!RS.busy && d.ok !== false && S.phase !== 'answer') reachAgent();
       if (S.thinkT0 != null) { S.tailThinkMs = Math.max(0, t - S.thinkT0); S.thinkT0 = null; }
       if (S.thinkDone) { S.tailText = S.thinkDone; S.thinkDone = ''; } S.thinkBuf = '';
       for (const [k] of S.calls) { const log = S.toolLog.find(l => l.key === k && !l.t1); if (log) { log.t1 = t; log.ok = d.ok !== false; } }

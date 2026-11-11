@@ -184,6 +184,9 @@ class DBConsumer:
             tool_trace = payload.get("tool_trace")
             gateway_target = (payload.get("gateway_target") or "main").lower()
             input_format = payload.get("input_format") or "text"
+            # agent | model: у запроса — что выбрал пользователь, у ответа — чем реально отвечали
+            # (agent_service принудительно ставит agent для TG/MAX/loop/задачника).
+            type_query = "model" if str(payload.get("type_query") or "").lower() == "model" else "agent"
             poll_answer = payload.get("poll_answer")
 
             # ЗАДАЧНИК: служебный вход от task_consumer (user_id=-2) в историю не пишем.
@@ -212,6 +215,7 @@ class DBConsumer:
                 tokens_usage=tokens_usage,
                 gateway_target=gateway_target,
                 input_format=input_format,
+                type_query=type_query,
             )
             if not is_from_bot and isinstance(poll_answer, dict):
                 try:

@@ -44,11 +44,31 @@ MODEL_SYSTEM_PROMPT = DEFAULT_AGENT_IDENTITY + "\n\n" + MAUDEL_IDENTITY + "\n" +
 EMPTY_USAGE = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_creation_tokens": 0}
 
 
+MODEL_EMPTY_RETRIES = 2
+MODEL_EMPTY_FALLBACK = (
+    "Модель вернула пустой ответ. Повторите запрос или переключитесь на режим «Агент»."
+)
+
+
 def _text_of(response) -> str:
-    raw = getattr(response, "content", "") if response is not None else ""
+    """Текст ответа без thinking/reasoning — тем же парсером, что и у агента."""
+    if response is None:
+        return ""
+    from .event_loop import _extract_thinking_and_clean_content  # ленивый импорт
+    _, _, cleaned = _extract_thinking_and_clean_content(getattr(response, "content", ""))
+    return (cleaned or "").strip()
+
+
+def _shape_of(response) -> str:
+    """Короткая диагностика пустого ответа: типы блоков и stop_reason."""
+    raw = getattr(response, "content", None)
     if isinstance(raw, list):
-        raw = "".join(b.get("text", "") for b in raw if isinstance(b, dict) and b.get("type") == "text")
-    return (raw or "").strip()
+        kinds = [b.get("type", "?") if isinstance(b, dict) else type(b).__name__ for b in raw]
+    else:
+        kinds = [f"str[{len(raw or '')}]"]
+    meta = getattr(response, "response_metadata", {}) or {}
+    stop = meta.get("stop_reason") or meta.get("finish_reason")
+    return f"blocks={kinds} stop={stop}"
 
 
 class LLModel:
@@ -127,15 +147,26 @@ class LLModel:
                 if kind == "answer" and text:
                     await agent._send_chunk(text, request_id, msg_id=str(request_id), kind="live")
 
-            try:
-                response = await _astream_collect(llm, messages, on_chunk=on_chunk, error_info={})
-            except Exception as e:
-                logger.error(f"[model] вызов модели упал: {type(e).__name__}: {e}")
-                response = None
+            response, final = None, ""
+            for attempt in range(MODEL_EMPTY_RETRIES + 1):
+                try:
+                    response = await _astream_collect(llm, messages, on_chunk=on_chunk, error_info={})
+                except Exception as e:
+                    logger.error(f"[model] вызов модели упал: {type(e).__name__}: {e}")
+                    response = None
+                    break
+                final = _text_of(response)
+                if final:
+                    break
+                logger.warning(
+                    f"[model][empty_response] chat={chat_id} попытка {attempt + 1}/{MODEL_EMPTY_RETRIES + 1} "
+                    f"{_shape_of(response)}"
+                )
 
-            final = _text_of(response)
             if response is None:
                 final = "⚠️ Модель сейчас недоступна. Попробуйте повторить запрос через пару минут."
+            elif not final:
+                final = MODEL_EMPTY_FALLBACK
             await agent._send_chunk("", request_id, msg_id=str(request_id), kind="final_commit")
 
             usage = agent.track_tokens(response) if response is not None else dict(EMPTY_USAGE)

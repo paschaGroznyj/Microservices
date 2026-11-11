@@ -105,6 +105,11 @@ class DataBaseChats:
             await conn.execute("ALTER TABLE chat_files ADD COLUMN IF NOT EXISTS height INTEGER")
         except Exception as e:
             logging.warning(f"chat_files.width/height: миграция не выполнена: {e}")
+        try:
+            # Режим запроса: agent (полный агент) | model (MauDel без тулов).
+            await conn.execute("ALTER TABLE chats ADD COLUMN IF NOT EXISTS type_query TEXT DEFAULT 'agent'")
+        except Exception as e:
+            logging.warning(f"chats.type_query: миграция не выполнена: {e}")
 
     async def save_poll_answer(
         self,
@@ -316,6 +321,7 @@ class DataBaseChats:
         tokens_usage: dict | None = None,
         gateway_target: str | None = None,
         input_format: str | None = None,
+        type_query: str | None = None,
     ):
         if user_id is None or chat_id is None:
             logging.warning("Пропущено сообщение: отсутствует user_id или chat_id")
@@ -330,12 +336,13 @@ class DataBaseChats:
                     await conn.execute("""
                         INSERT INTO chats (
                             user_id, chat_id, message_text, is_from_bot,
-                            tool_name, selected_tools, context_size, message_id, created_at, tool_trace, model_type, tokens_usage, gateway_target, input_format
+                            tool_name, selected_tools, context_size, message_id, created_at, tool_trace, model_type, tokens_usage, gateway_target, input_format, type_query
                         )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14);
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15);
                     """,
                     user_id, chat_id, message, is_from_bot,
-                    action, selected_tools, context_size, message_id, now_utc, tool_trace, model_type, tokens_usage_json, gateway_target, (input_format or 'text'))
+                    action, selected_tools, context_size, message_id, now_utc, tool_trace, model_type, tokens_usage_json, gateway_target, (input_format or 'text'),
+                    ('model' if str(type_query or '').lower() == 'model' else 'agent'))
 
                     if attached_files:
                         source = "agent" if is_from_bot else "user"

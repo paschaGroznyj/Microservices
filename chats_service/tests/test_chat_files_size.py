@@ -122,3 +122,14 @@ def test_add_message_writes_width_height():
 def test_ws_payload_has_width_height():
     out = _sanitize_files_for_ws([{"name": "a.mp4", "path": "/x/a.mp4", "kind": "video", "width": 1080, "height": 1920}])
     assert out[0]["width"] == 1080 and out[0]["height"] == 1920
+
+
+def test_add_message_writes_type_query():
+    for given, saved in (("model", "model"), ("agent", "agent"), (None, "agent"), ("pm", "agent")):
+        db = DataBaseChats()
+        db.pool = _Pool()
+        asyncio.run(db.add_message(user_id=56, message="hi", chat_id="c1", is_from_bot=False,
+                                   message_id="m1", type_query=given))
+        kind, sql, args = next(e for e in db.pool.log if "INSERT INTO chats" in e[1])
+        assert "type_query" in sql and "$15" in sql
+        assert args[-1] == saved

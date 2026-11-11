@@ -81,3 +81,29 @@ def test_model_down(setup, fast_sleep):
     res = run(nl.LLModel(a).process_query("x", "r1", 56, "c1", "coder"))
     assert res["success"] is False and "недоступна" in res["message"]
     assert a._send_chunk.await_args_list[-1].kwargs["kind"] == "final_commit"
+
+
+def test_empty_then_text_retries(setup):
+    nl, a, _ = setup
+    llm = ScriptedLLM("openai/gpt-test", ["", "второй раз"])
+    a.AGENT_MODELS["coder"] = llm
+    res = run(nl.LLModel(a).process_query("x", "r1", 56, "c1", "coder"))
+    assert res["message"] == "второй раз"
+    assert len(llm.calls) == 2
+
+
+def test_empty_always_gives_fallback(setup):
+    nl, a, _ = setup
+    llm = ScriptedLLM("openai/gpt-test", ["", "", ""])
+    a.AGENT_MODELS["coder"] = llm
+    res = run(nl.LLModel(a).process_query("x", "r1", 56, "c1", "coder"))
+    assert res["message"] == nl.MODEL_EMPTY_FALLBACK
+    assert len(llm.calls) == nl.MODEL_EMPTY_RETRIES + 1
+
+
+def test_text_of_thinking_only_is_empty():
+    import agent.not_loop as nl
+    msg = AIMessage(content=[{"type": "thinking", "thinking": "думаю"}])
+    assert nl._text_of(msg) == ""
+    msg2 = AIMessage(content=[{"type": "thinking", "thinking": "t"}, {"type": "text", "text": "ок"}])
+    assert nl._text_of(msg2) == "ок"

@@ -3111,6 +3111,12 @@ pre {
 .reasoning-body .reasoning-collapse-btn {
   display: none;
 }
+/* Пустая карточка размышлений (только кнопка «Свернуть» или вовсе ничего)
+   не показывается при раскрытии. Класс ставит reasoning-clamp.js. */
+.reasoning-block .reasoning-body.reasoning-body--empty,
+.reasoning-block:not(.reasoning-collapsed) .reasoning-body.reasoning-body--empty {
+  display: none;
+}
 /* Кнопка «Свернуть»: зафиксирована в самом низу карточки .reasoning-body
    по центру (JS возвращает её последним элементом при стриме) и не двигается
    при прокрутке ленты; при скролле над полем ввода появляется только

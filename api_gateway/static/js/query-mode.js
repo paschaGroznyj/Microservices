@@ -23,7 +23,7 @@
   };
   const MODES = {
     agent: { label: 'Агент',  desc: 'Инструменты, файлы, поиск, код' },
-    model: { label: 'Модель', desc: 'Без инструментов — быстрее и дешевле' },
+    model: { label: 'Модель', desc: 'Без инструментов, быстрее и дешевле' },
   };
   const LOCK_SEL = '.tools-trigger-btn, #attach-btn, #start-attach-btn';
 
@@ -92,7 +92,7 @@
     document.querySelectorAll('.input-footer-note, .start-footer-note').forEach((n) => {
       if (!n.hasAttribute('data-qm-note')) n.setAttribute('data-qm-note', n.textContent);
       n.textContent = mode === 'model'
-        ? 'MauDel отвечает без инструментов — для поиска, файлов и кода переключитесь на «Агент»'
+        ? 'Модель отвечает без инструментов — для поиска, файлов и кода переключитесь на «Агент»'
         : n.getAttribute('data-qm-note');
     });
   }
@@ -128,6 +128,21 @@
     if (e.key === 'Escape') { e.stopPropagation(); const o = menuOwner; _closeMenu(); o?.focus(); }
   }
 
+  // Бегущая строка для описаний, которые не влезают в пункт меню:
+  // сдвиг = переполнение, скорость ~30 px/с, пауза по краям (в keyframes).
+  function _marquee(root) {
+    root.querySelectorAll('.qm-marq').forEach((box) => {
+      const inner = box.querySelector('.qm-marq__in');
+      if (!inner) return;
+      const over = Math.ceil(inner.scrollWidth - box.clientWidth);
+      box.classList.toggle('is-run', over > 2);
+      if (over > 2) {
+        box.style.setProperty('--qm-shift', `-${over + 4}px`);
+        box.style.setProperty('--qm-dur', `${Math.max(4, (over + 4) / 30 + 2.4).toFixed(1)}s`);
+      }
+    });
+  }
+
   function _openMenu(pill) {
     if (menu) { const same = menuOwner === pill; _closeMenu(); if (same) return; }
     menu = document.createElement('div');
@@ -136,7 +151,7 @@
     menu.innerHTML = Object.entries(MODES).map(([k, m]) => `
       <button type="button" role="menuitemradio" aria-checked="${k === mode}" class="qm-item${k === mode ? ' is-on' : ''}" data-mode="${k}">
         <span class="qm-item__ic">${_icon(k, 'qm-img')}</span>
-        <span class="qm-item__txt"><b>${m.label}</b><small>${m.desc}</small></span>
+        <span class="qm-item__txt"><b>${m.label}</b><small class="qm-marq"><span class="qm-marq__in">${m.desc}</span></small></span>
         <span class="qm-item__ok">${k === mode ? ICONS.check : ''}</span>
       </button>`).join('');
     menu.addEventListener('click', (e) => {
@@ -147,15 +162,22 @@
     menuOwner = pill;
     pill.setAttribute('aria-expanded', 'true');
     const r = pill.getBoundingClientRect();
-    const mw = menu.offsetWidth, mh = menu.offsetHeight;
-    const left = Math.max(12, Math.min(r.right - mw, window.innerWidth - mw - 12));
-    // Меню целиком над полем ввода, не наезжая на его рамку.
+    // Меню целиком над полем ввода и не выходит за его левый/правый край.
     const box = pill.closest('.chat-input-box, .start-input-box');
-    const anchorTop = box ? box.getBoundingClientRect().top : r.top;
+    const br = box ? box.getBoundingClientRect() : null;
+    const minL = br ? br.left : 12;
+    const maxR = br ? br.right : window.innerWidth - 12;
+    // Узкий экран: меню во всю ширину поля ввода, края совпадают.
+    if (br && window.innerWidth <= 768) menu.style.width = `${br.width}px`;
+    else if (br && menu.offsetWidth > br.width) menu.style.width = `${br.width}px`;
+    const mw = menu.offsetWidth, mh = menu.offsetHeight;
+    const left = Math.max(minL, Math.min(r.right - mw, maxR - mw));
+    const anchorTop = br ? br.top : r.top;
     const top = anchorTop - mh - 8 >= 8 ? anchorTop - mh - 8 : r.bottom + 8;
     menu.style.left = `${left}px`;
     menu.style.top = `${top}px`;
     menu.querySelector('.qm-item.is-on')?.focus({ preventScroll: true });
+    _marquee(menu);
     document.addEventListener('pointerdown', _outside, true);
     document.addEventListener('keydown', _esc, true);
   }

@@ -54,8 +54,27 @@
         return btn;
     }
 
+    // Пусто, если кроме кнопки «Свернуть» нет ни элементов, ни текста.
+    function isEmpty(body) {
+        var nodes = body.childNodes;
+        for (var i = 0; i < nodes.length; i++) {
+            var n = nodes[i];
+            if (n.nodeType === 1) {
+                if (!n.classList.contains('reasoning-collapse-btn')) return false;
+            } else if (n.nodeType === 3 && n.nodeValue.trim()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     function refresh(body) {
         if (!body.isConnected) return;
+        // Пустую карточку не показываем: класс ставим до проверки видимости,
+        // иначе свёрнутый блок раскрылся бы пустой рамкой с одной кнопкой.
+        var empty = isEmpty(body);
+        body.classList.toggle('reasoning-body--empty', empty);
+        if (empty) return;
         // Свёрнутый блок имеет display:none, мерить нечего.
         if (!body.offsetParent && getComputedStyle(body).display === 'none') return;
         body.querySelectorAll(STEP).forEach(function (step) {

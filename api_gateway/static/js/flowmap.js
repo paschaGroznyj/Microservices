@@ -137,7 +137,7 @@ function emit(type, d = {}) {
       S.chat = d.chat != null ? String(d.chat) : null; S.rid = null;
       S.active = true; S.phase = 'send'; S.t0 = t; S.tEnd = 0; S.d = 0; S.dir = 1; S.allow = D[1]; S.trail = [];
       S.calls.clear(); S.phases = []; S.toolLog = []; S.fx = []; S.pulses = []; S.lit.fill(0); S.lastInside = null; S.stepSeq = 0; S.thinkT0 = null; S.tailThinkMs = 0; S.thinkBuf = ''; S.thinkDone = ''; S.tailText = ''; S.err = {}; TL.follow = true; closeThink();
-      openPhase('gw', 'Шлюз', t); setStatus('Отправляю…'); showMini(true); break;
+      openPhase('gw', 'Шлюз', t); setStatus('Отправляю…'); showMini(true); if (!RS.busy) pulseTapHint(); break;
     case 'gateway':
       if (!S.active) break;
       if (d.request_id) S.rid = d.request_id;
@@ -677,21 +677,38 @@ function layoutHost() {
   document.querySelectorAll('.wave-indicator.fm-tap').forEach(w => { w.classList.toggle('is-linked', MINI.on); w.setAttribute('aria-expanded', MINI.on ? 'true' : 'false'); });
   kick();
 }
+let tapHintT = 0;
+function pulseTapHint() {
+  clearTimeout(tapHintT);
+  document.querySelectorAll('.wave-indicator.fm-tap').forEach(w => {
+    w.classList.remove('is-hint');
+    void w.offsetWidth;
+    w.classList.add('is-hint');
+  });
+  tapHintT = setTimeout(() => {
+    document.querySelectorAll('.wave-indicator.fm-tap.is-hint').forEach(w => w.classList.remove('is-hint'));
+  }, 3600);
+}
 function showMini(on) { clearTimeout(miniHideT); MINI.on = !!on && HOST.expanded; layoutHost(); }
 function expand() {
+  clearTimeout(tapHintT);
+  document.querySelectorAll('.wave-indicator.fm-tap.is-hint').forEach(w => w.classList.remove('is-hint'));
   if (HOST.expanded && MINI.on) { openModal(); return; }
   HOST.expanded = true; MINI.on = true; layoutHost();
 }
 function collapse() { HOST.expanded = false; MINI.on = false; layoutHost(); }
 // Плейсхолдер animations.js: ступень 0 → тап раскрывает панель, повторный тап — модалку.
 function bindPlaceholder(ph) {
-  const w = ph && ph.querySelector('.wave-indicator'); if (!w || w.classList.contains('fm-tap')) return;
-  w.classList.add('fm-tap'); w.setAttribute('role', 'button'); w.tabIndex = 0;
-  w.setAttribute('aria-label', 'Показать путь запроса'); w.title = 'Показать путь запроса';
-  const go = e => { e.preventDefault(); e.stopPropagation(); expand(); };
-  w.addEventListener('click', go);
-  w.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') go(e); });
+  const w = ph && ph.querySelector('.wave-indicator'); if (!w) return;
+  if (!w.classList.contains('fm-tap')) {
+    w.classList.add('fm-tap'); w.setAttribute('role', 'button'); w.tabIndex = 0;
+    w.setAttribute('aria-label', 'Показать путь запроса'); w.title = 'Показать путь запроса';
+    const go = e => { e.preventDefault(); e.stopPropagation(); expand(); };
+    w.addEventListener('click', go);
+    w.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') go(e); });
+  }
   w.classList.toggle('is-linked', MINI.on); w.setAttribute('aria-expanded', MINI.on ? 'true' : 'false');
+  pulseTapHint();
 }
 function fitTxt(c, t, w) { if (c.measureText(t).width <= w) return t; while (t.length > 1 && c.measureText(t + '…').width > w) t = t.slice(0, -1); return t + '…'; }
 const RAIL_NODES = [['user', 'ВЫ'], ['gateway', 'GATEWAY'], ['chats', 'CHATS'], ['kafka', 'KAFKA'], ['consumer', 'CONSUMER'], ['agent', 'AGENT']];

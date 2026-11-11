@@ -82,9 +82,11 @@
 .chat-input-area>.fm-mini{left:var(--fm-in-l,0px);right:var(--fm-in-r,0px);bottom:calc(100% + 8px);width:auto;max-width:none;z-index:5}
 .fm-mini:focus-visible{border-color:var(--accent-muted);outline:none}
 /* ── Плейсхолдер ожидания как точка входа ── */
-.agent-placeholder .wave-indicator.fm-tap{pointer-events:auto;cursor:pointer;border-radius:8px;margin-left:-6px;padding:0 6px;box-sizing:content-box;transition:background .2s,box-shadow .2s}
-.agent-placeholder .wave-indicator.fm-tap:hover,.agent-placeholder .wave-indicator.fm-tap:focus-visible{background:color-mix(in srgb,var(--accent) 7%,transparent);box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 28%,transparent);outline:none}
+.agent-placeholder .wave-indicator.fm-tap{pointer-events:auto;cursor:pointer;border-radius:8px;margin-left:-6px;padding:2px 6px;box-sizing:content-box;transition:background .22s,box-shadow .22s}
+.agent-placeholder .wave-indicator.fm-tap.is-hint{background:color-mix(in srgb,var(--accent) 9%,transparent);box-shadow:0 0 0 1.5px color-mix(in srgb,var(--accent) 56%,transparent),0 0 12px color-mix(in srgb,var(--accent) 22%,transparent);animation:fmTapHint 3.6s ease-in-out forwards}
+.agent-placeholder .wave-indicator.fm-tap:hover,.agent-placeholder .wave-indicator.fm-tap:focus-visible{background:color-mix(in srgb,var(--accent) 10%,transparent);box-shadow:0 0 0 1.5px color-mix(in srgb,var(--accent) 48%,transparent),0 0 10px color-mix(in srgb,var(--accent) 16%,transparent);animation:none;outline:none}
 .agent-placeholder .wave-indicator.fm-tap.is-linked{box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 34%,transparent)}
+@keyframes fmTapHint{0%{background:color-mix(in srgb,var(--accent) 4%,transparent);box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 22%,transparent),0 0 0 0 transparent}18%,56%{background:color-mix(in srgb,var(--accent) 11%,transparent);box-shadow:0 0 0 1.5px color-mix(in srgb,var(--accent) 64%,transparent),0 0 14px 2px color-mix(in srgb,var(--accent) 24%,transparent)}38%{background:color-mix(in srgb,var(--accent) 6%,transparent);box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 36%,transparent),0 0 6px 0 color-mix(in srgb,var(--accent) 12%,transparent)}82%{background:color-mix(in srgb,var(--accent) 8%,transparent);box-shadow:0 0 0 1.25px color-mix(in srgb,var(--accent) 46%,transparent),0 0 10px 1px color-mix(in srgb,var(--accent) 16%,transparent)}100%{background:transparent;box-shadow:0 0 0 1px transparent,0 0 0 0 transparent}}
 @media (max-width:768px){.fm-rail{display:none}.chat-input-area>.fm-mini{left:var(--fm-in-l,0px);right:var(--fm-in-r,0px);width:auto;max-width:none;border-radius:var(--radius-lg)}.fm-mini__x{width:30px;height:30px;line-height:30px;font-size:18px;right:4px}}
 
 /* ── Блоки «думает»: вплотную к тулам, тап открывает оверлей «Размышления» ── */
@@ -108,5 +110,5 @@
 .fm-think__empty{color:var(--text-muted)}
 @keyframes fmThinkIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 @media (max-width:700px){.fm-think{max-height:52dvh}.fm-think__x{width:34px;height:34px;line-height:34px;font-size:18px}}
-@media (prefers-reduced-motion:reduce){.fm-think.is-on,.fm-think__live::before{animation:none}}
+@media (prefers-reduced-motion:reduce){.fm-think.is-on,.fm-think__live::before,.agent-placeholder .wave-indicator.fm-tap.is-hint{animation:none}}
 .fm-think.no-arrow::after{display:none}

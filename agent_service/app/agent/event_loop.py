@@ -441,9 +441,14 @@ def _sanitize_messages(messages):
                     stray_system_parts.append(s)
             continue
 
-        if mtype in ("human", "tool"):
+        if mtype in ("human", "tool", "ai"):
             c = getattr(m, "content", None)
-            if c is None or (isinstance(c, str) and not c.strip()):
+            is_empty = (
+                c is None
+                or (isinstance(c, str) and not c.strip())
+                or (isinstance(c, list) and len(c) == 0)
+            )
+            if is_empty and not getattr(m, "tool_calls", None):
                 continue
 
         seen_non_system = True
@@ -2106,15 +2111,24 @@ class HarnessAgent:
                             final_response = "Ошибка внутри цикла агента. Но агент запомнил шаги, попробуйте вернуться к запросу"
                         break
 
+                    _raw_content = getattr(response, "content", None)
+                    has_native_thinking = isinstance(_raw_content, list) and any(
+                        isinstance(b, dict) and b.get("type") in ("thinking", "redacted_thinking")
+                        for b in _raw_content
+                    )
                     _thinking_text, _reasoning_text, _clean_content = _extract_thinking_and_clean_content(
-                        getattr(response, "content", None)
+                        _raw_content
                     )
                     # logging.info(response)
                     if _reasoning_text:
                         loop_state.setdefault("internal_reasoning_trace", []).append(_reasoning_text)
                     # На шаге с tool_calls оставляем внутреннее рассуждение в стеке контекста модели,
                     # а на финальном шаге (без тегов) отдаём чистый финальный ответ в response.content.
-                    if (getattr(response, "tool_calls", None) or not (_clean_content or "").strip()) and (_thinking_text or _reasoning_text):
+                    # Если модель вернула нативные thinking-блоки Anthropic (с signature), сохраняем
+                    # список блоков нетронутым, чтобы не ломать цепочку thinking+tool_use в истории.
+                    if has_native_thinking:
+                        pass
+                    elif (getattr(response, "tool_calls", None) or not (_clean_content or "").strip()) and (_thinking_text or _reasoning_text):
                         _ctx_parts = []
                         if _thinking_text:
                             _ctx_parts.append(f"<thinking>{_thinking_text}</thinking>")
@@ -2173,7 +2187,14 @@ class HarnessAgent:
                             "", request_id, msg_id=str(request_id), kind="reasoning_end"
                         )
 
-                    messages.append(response)          # ← единственный аппенд
+                    if (
+                        _has_tool_calls
+                        or (_clean_content or "").strip()
+                        or has_native_thinking
+                        or _thinking_text
+                        or _reasoning_text
+                    ):
+                        messages.append(response)          # ← единственный аппенд
 
                     usage = self.track_tokens(response)
                     iter_in  = usage["input_tokens"]

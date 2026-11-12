@@ -450,6 +450,110 @@
 }
 
 /* ══════════════════════════════════════════════
+   ПЕЙДЖЕР ФАЙЛОВ АГЕНТА (> 3 чипов): блоки по 3,
+   листаются по горизонтали внутри ширины ответа
+══════════════════════════════════════════════ */
+.fa-pager {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fa-pager__track {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  transition: height .2s ease;
+}
+.fa-pager__track::-webkit-scrollbar { display: none; }
+.fa-pager__page {
+  flex: 0 0 100%;
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+}
+.fa-pager__page > .fa-chip {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.fa-pager__foot {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 0;
+  font-family: var(--font-anthropic-sans, system-ui, sans-serif);
+}
+.fa-pager__nav--prev { margin-left: -6px; }
+.fa-pager__nav {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background .15s, color .15s, opacity .15s;
+}
+.fa-pager__nav svg { width: 16px; height: 16px; }
+.fa-pager__nav:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+.fa-pager__nav:disabled { opacity: .4; cursor: default; }
+.fa-pager__dots { display: flex; align-items: center; gap: 0; }
+.fa-pager__dot {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.fa-pager__dot::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--text-secondary);
+  opacity: .55;
+  transition: width .2s ease, opacity .2s, background .2s;
+}
+.fa-pager__dot.is-on::before { width: 14px; opacity: 1; background: var(--accent); }
+.fa-pager__count {
+  margin-left: auto;
+  padding-right: 2px;
+  font-size: .75rem;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+@media (hover: none), (max-width: 768px) {
+  .fa-pager__nav { width: 36px; height: 36px; }
+  .fa-pager__nav--prev { margin-left: -10px; }
+  .fa-pager__dot { width: 20px; height: 28px; }
+}
+
+/* ══════════════════════════════════════════════
    АДАПТИВ
 ══════════════════════════════════════════════ */
 @media (max-width: 768px) {

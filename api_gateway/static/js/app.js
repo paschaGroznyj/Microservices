@@ -3194,31 +3194,13 @@ class ChatApp {
             wrap.appendChild(gallery);
         }
 
-        const VISIBLE_LIMIT = 3;
-        const visible = otherFiles.slice(0, VISIBLE_LIMIT);
-        const hidden  = otherFiles.slice(VISIBLE_LIMIT);
-
-        visible.forEach(f => wrap.appendChild(makeChip(f)));
-
-        if (hidden.length > 0) {
-            const hiddenWrap = document.createElement('div');
-            hiddenWrap.className = 'fa-chips-hidden';
-            hiddenWrap.style.display = 'none';
-            hidden.forEach(f => hiddenWrap.appendChild(makeChip(f)));
-            wrap.appendChild(hiddenWrap);
-
-            const count   = hidden.length;
-            const suffix  = count === 1 ? '' : count < 5 ? 'а' : 'ов';
-            const toggle  = document.createElement('button');
-            toggle.className   = 'fa-chips-toggle';
-            toggle.type        = 'button';
-            toggle.textContent = `+${count} файл${suffix}`;
-            toggle.addEventListener('click', () => {
-                const isOpen = hiddenWrap.style.display !== 'none';
-                hiddenWrap.style.display = isOpen ? 'none' : 'flex';
-                toggle.textContent = isOpen ? `+${count} файл${suffix}` : 'Скрыть';
-            });
-            wrap.appendChild(toggle);
+        // > 3 файлов: страницы по 3 чипа, листаются по горизонтали (как fa-tiles__track).
+        const PAGE_SIZE = 3;
+        const chips = otherFiles.map(f => makeChip(f));
+        if (chips.length > PAGE_SIZE && window.FileTiles?.pager) {
+            wrap.appendChild(window.FileTiles.pager(chips, PAGE_SIZE));
+        } else {
+            chips.forEach(c => wrap.appendChild(c));
         }
 
         return wrap;

@@ -10,7 +10,7 @@ from typing import List
 import os
 import base64
 import uuid
-import requests  # Для отправки сообщений обратно в основной сервис
+import httpx  # Для отправки сообщений обратно в основной сервис
 import time
 
 # Обратный путь для Telegram: ответ агента (gateway_target=="telegram") шлём
@@ -165,7 +165,8 @@ class DBConsumer:
                     await self.redis.publish(f"stream:{request_id}", json.dumps(frame, ensure_ascii=False))
                 return
             url = f"{self.gateway_urls[target]}/internal/bot_stream"
-            await asyncio.to_thread(requests.post, url, json=frame, timeout=1)
+            async with httpx.AsyncClient(timeout=1.0) as client:
+                await client.post(url, json=frame)
         except Exception as e:
             logger.debug(f"[flow] {ev} не отправлен: {e}")
 
@@ -339,11 +340,8 @@ class DBConsumer:
         budget_ok = True
         budget_data = {}
         try:
-            loop = asyncio.get_event_loop()
-            resp = await loop.run_in_executor(
-                None,
-                lambda: requests.get(f"{CHATS_SELF_URL}/budget/check/{chat_id}", timeout=10),
-            )
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"{CHATS_SELF_URL}/budget/check/{chat_id}")
             if resp.status_code == 200:
                 budget_data = resp.json()
                 budget_ok = bool(budget_data.get("allowed", True))
@@ -398,10 +396,8 @@ class DBConsumer:
         }
         url = f"{CHATS_SELF_URL}/send_message"
         try:
-            # requests синхронный — уводим в пул, чтобы не блокировать event-loop консьюмера.
-            def _post():
-                return requests.post(url, json=tick_payload, timeout=10)
-            resp = await asyncio.to_thread(_post)
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(url, json=tick_payload)
             logger.info(f"[self-loop] реентри chat={chat_id} -> {url} HTTP {resp.status_code}")
         except Exception as e:
             logger.error(f"[self-loop] реентри не удался chat={chat_id}: {e}")
@@ -472,9 +468,8 @@ class DBConsumer:
         }
         url = f"{CHATS_SELF_URL}/send_message"
         try:
-            def _post():
-                return requests.post(url, json=tick_payload, timeout=10)
-            resp = await asyncio.to_thread(_post)
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(url, json=tick_payload)
             logger.info(f"[self-loop] финальный тик (причина остановки) chat={chat_id} -> HTTP {resp.status_code}")
         except Exception as e:
             logger.error(f"[self-loop] финальный тик не удался chat={chat_id}: {e}")
@@ -520,9 +515,8 @@ class DBConsumer:
                         if pull_url.startswith("/"):
                             pull_url = AGENT_SERVICE_URL.rstrip("/") + pull_url
                         try:
-                            resp = await asyncio.to_thread(
-                                requests.get, pull_url, timeout=120
-                            )
+                            async with httpx.AsyncClient(timeout=120.0) as client:
+                                resp = await client.get(pull_url)
                             if resp.status_code == 200:
                                 raw = resp.content
                                 if len(raw) <= MAX_TG:
@@ -643,7 +637,8 @@ class DBConsumer:
                 # agent message_id — для связки TG-реакций с записью в БД
                 "agent_message_id": message_id,
             }
-            response = requests.post(TG_BOT_PUSH_URL, json=payload, timeout=30)
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(TG_BOT_PUSH_URL, json=payload)
             logger.info(f"Ответ агента отправлен в Telegram: {response.status_code}")
             elapsed = time.perf_counter() - start
             logging.info(f"Message Service. Время отправки ответа в Telegram = {elapsed:.4f}s")
@@ -669,7 +664,8 @@ class DBConsumer:
                 "agent_message_id": message_id,
                 "parse_mode": "markdown",
             }
-            response = requests.post(MAX_BOT_PUSH_URL, json=payload, timeout=60)
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(MAX_BOT_PUSH_URL, json=payload)
             logger.info(f"Ответ агента отправлен в MAX: {response.status_code}")
             elapsed = time.perf_counter() - start
             logging.info(f"Message Service. Время отправки ответа в MAX = {elapsed:.4f}s")
@@ -681,13 +677,14 @@ class DBConsumer:
         try:
             start = time.perf_counter()
             # Внутренний endpoint в основном сервисе для получения сообщений от бота
-            response = requests.post(
-                f"{gateway_url}/internal/bot_message",
-                json={
-                    "chat_id": chat_id,
-                    "message": message, # Сообщение из кафки, сам текст, флаг на бота, ссылки
-                }
-            )
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    f"{gateway_url}/internal/bot_message",
+                    json={
+                        "chat_id": chat_id,
+                        "message": message, # Сообщение из кафки, сам текст, флаг на бота, ссылки
+                    },
+                )
             logger.info(f"Сообщение бота отправлено в основной сервис: {response.status_code}")
             elapsed = time.perf_counter() - start
             logging.info(f"Message Service. Время чтобы, отправить сообщение в основной модуль сервиса = {elapsed:.4f}s")

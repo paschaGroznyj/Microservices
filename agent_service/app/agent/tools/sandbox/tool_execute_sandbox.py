@@ -421,6 +421,14 @@ So you can then spy on it/reuse it within the session.
             (newest first); older output/ files — via download_workspace_file.
             To transfer a file between calls, work with a single workspace_id
             or upload it via upload_to_workspace and read it from there.
+          • With workspace_id the script runs in a temporary folder that holds
+            symlinks to every top-level entry of the workspace. Writing INSIDE an
+            existing folder (open("repo/app.py", "w")) goes to the real workspace.
+            A NEW file or folder at the workspace root (open("notes.py", "w"),
+            os.makedirs("new_dir")) stays in the temporary folder and is LOST
+            after the call, with exit_code 0 and no error. To create it, use an
+            absolute path /tmp/exec/workspaces/<workspace_id>/..., or
+            upload_to_workspace / execute_shell_commands with workspace_id.
 
         For analyze_image to see the image created in the sandbox: first,
         download_workspace_file (it places the file in /app/generated_files and returns

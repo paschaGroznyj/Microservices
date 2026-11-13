@@ -1887,7 +1887,8 @@ class ChatApp {
                     !node.classList.contains('message-actions') &&
                     !node.classList.contains('reasoning-live') &&
                     !node.classList.contains('live-block') &&
-                    !node.classList.contains('reasoning-block')) {
+                    !node.classList.contains('reasoning-block') &&
+                    !node.classList.contains('wsd')) {
                     node.remove();
                 }
             }

@@ -1,4 +1,4 @@
-/* ws-diff.js — карточка «Изменённые файлы» под ответом агента (diff теневых git-снимков workspace).
+/* ws-diff.js — карточка «Изменённые файлы» над текстом ответа агента (diff теневых git-снимков workspace).
  * Один файл для main gateway (WebSocket) и sigma (SSE): отличается только transport в WsDiff.init. */
 (function(){
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -122,7 +122,8 @@ const cards=new Map(); // request_id -> {items:Map(ws->diff), message_id, live, 
 let transport='ws';
 const sel=s=>(window.CSS&&CSS.escape?CSS.escape(s):String(s).replace(/"/g,'\\"'));
 const hhmm=t=>{if(!t)return '';const d=new Date(t*1000);return d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',second:'2-digit'});};
-function openEditor(ws,path){if(!ws)return;window.open('/editor?ws='+encodeURIComponent(ws)+(path?'&path='+encodeURIComponent(path):''),'_blank','noopener');}
+// /editor читает именно workspace_id (см. editor.js URL_WS); с ?ws= он открывал первую область из списка
+function openEditor(ws,path){if(!ws)return;window.open('/editor?workspace_id='+encodeURIComponent(ws)+(path?'&path='+encodeURIComponent(path):''),'_blank','noopener');}
 function parsePatch(p){const hs=[];let h=null;
  for(const ln of String(p||'').split('\n')){
   if(ln.startsWith('@@')){const m=/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@ ?(.*)$/.exec(ln);if(!m)continue;
@@ -135,13 +136,13 @@ function normFile(f,ws){const st=String(f.status||'M')[0];
   omitted:!!f.patch_omitted,size:[f.size_before??null,f.size_after??null],hunks:(f.binary||f.secret)?[]:parsePatch(f.patch)};}
 function host(c){const root=document.querySelector(ROOT);if(!root)return null;
  if(c.el&&c.el.isConnected&&c.el.parentElement&&c.el.parentElement.matches(AG))return c.el.parentElement;
+ if(c.host&&c.host.isConnected)return c.host;
  if(c.message_id){const s=sel(String(c.message_id));const el=root.querySelector(AG+'[data-message-id="'+s+'"],'+AG+'[data-id="'+s+'"]');if(el)return el;}
  if(!c.live)return null;const list=root.querySelectorAll(':scope > '+AG);const last=list[list.length-1];
  return last&&!last.querySelector(':scope > .message-actions')?last:null;}
-function place(h,el){const acts=h.querySelector(':scope > .message-actions');
- const after=h.querySelector(':scope > .task-cards')||h.querySelector(':scope > .reasoning-block');
- if(after){if(after.nextSibling!==el)after.after(el);}else if(acts){if(acts.previousSibling!==el)acts.before(el);}
- else if(h.firstChild!==el)h.prepend(el);}
+/* Карточка всегда над текстом ответа: сразу после «Размышлений», а без них (история после F5) — первым блоком. */
+function place(h,el){let a=null;for(const n of h.children)if(n!==el&&n.matches('.reasoning-block,.reasoning-live'))a=n;
+ if(a){if(a.nextElementSibling!==el)a.after(el);}else if(h.firstElementChild!==el)h.prepend(el);}
 function paintCard(rid){const c=cards.get(rid);if(!c)return;const h=host(c);if(!h)return;
  if(!c.message_id&&h.dataset.messageId)c.message_id=h.dataset.messageId;
  if(c.live&&h.querySelector(':scope > .message-actions'))c.live=false;
@@ -156,7 +157,7 @@ function paintCard(rid){const c=cards.get(rid);if(!c)return;const h=host(c);if(!
  el.dataset.requestId=rid;
  render(el,files,{collapsed,open,live:c.live?'агент работает':null,meta:{ws:c.items.size>1?ws+' +'+(c.items.size-1):ws,rid:String(rid).slice(0,8),base:hhmm(base),end:hhmm(end)}});
  if(c.items.size>1)el.querySelector('.wsd-foot b').textContent=[...c.items.keys()].join(', ');
- place(h,el);watch(h,rid);}
+ c.host=h;place(h,el);watch(h,rid);}
 const watched=new WeakSet();
 function watch(h,rid){if(watched.has(h))return;watched.add(h);
  new MutationObserver(()=>{const c=cards.get(rid);if(!c||!c.el)return;

@@ -1018,6 +1018,7 @@ class ChatApp {
 
         this.renderMessages(msgs);
         this._initHistoryScrollLoader();
+        window.WsDiff?.init({ transport: 'sse' }).restore(chatId);
         return true;
     }
 
@@ -5115,6 +5116,8 @@ class ChatApp {
         };
 
         es.addEventListener('live', onLive);
+        // «Изменённые файлы»: тот же ws-diff.js, transport 'sse'.
+        window.WsDiff?.init({ transport: 'sse' }).listen(es);
         // FlowMap: служебные события пути запроса (accepted / agent_start / tool_*).
         es.addEventListener('flow', (ev) => {
             let f; try { f = JSON.parse(ev.data); } catch (_) { return; }

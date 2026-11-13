@@ -144,9 +144,10 @@ def test_db_apply_empty_no_query():
 
 
 def test_consumer_passes_reactions(mocker):
+    from unittest.mock import AsyncMock
     c = GroupDBConsumer()
     c.group_db = object()
-    post = mocker.patch("app.group_endpoint_consumer.requests.post")
+    post = mocker.patch("app.group_endpoint_consumer.httpx.AsyncClient.post", new_callable=AsyncMock)
     asyncio.run(c.process({"event": "reactions", "room_uid": "global", "items": []}))
     assert post.call_count == 2
     assert post.call_args.kwargs["json"]["event"] == "reactions"

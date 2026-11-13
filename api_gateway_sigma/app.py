@@ -210,7 +210,8 @@ async def receive_bot_message(bot_msg: BotMessage):
     logging.info(f"[sigma] bot_message chat_id={bot_msg.chat_id}")
     status_store.mark_done(bot_msg.chat_id, bot_msg.message)
     # Финал пришёл — снимаем Redis-флаг «агент в работе» (общий для гейтвеев).
-    await run_status.clear_running(bot_msg.chat_id)
+    msg_dict = bot_msg.message if isinstance(bot_msg.message, dict) else {}
+    await run_status.clear_running(bot_msg.chat_id, request_id=msg_dict.get("request_id"))
     return {"ok": True}
 
 
@@ -1161,11 +1162,13 @@ async def send_message(request: Request):
             data["username"] = raw_auth_name
     else:
         data["username"] = user["username"]
-    data["type_agent"] = data.get("type_agent", "pm") # О Великий gateway
+    # Режим запроса: agent (полный агент с тулами) | model (MauDel — модель без тулов)
+    data["type_query"] = "model" if str(data.pop("type_query", "agent")).lower() == "model" else "agent"
+    data.pop("type_agent", None)
     data["request_id"] = request_id
     data["gateway_target"] = "sigma"
     data["timezone_name"] = (data.get("timezone_name") or request.headers.get("X-Timezone") or "Europe/Moscow").strip()
-    logger.info(f"Что летит при отправке сообщений {data['chat_id']}, {data['message']}")
+    logger.info(f"Что летит при отправке сообщений {data['chat_id']}, type_query={data['type_query']}, {data['message']}")
 
     # SIGMA: WS-эхо убрано. Помечаем в store, что для этого чата ожидается
     # ответ бота (status=running). Фронт сразу оптимистично отрисует своё
@@ -1176,7 +1179,7 @@ async def send_message(request: Request):
     await run_status.mark_running(
         data["chat_id"],
         request_id,
-        data.get("type_agent"),
+        data.get("type_query"),
         user_message=data.get("message"),
         user_message_id=data.get("message_id"),
     )
@@ -1214,7 +1217,7 @@ async def stop_message(request: Request):
     # Стоп: снимаем Redis-флаг работы (chat_id знаем по pending_requests).
     stop_chat_id = pending_requests.get(request_id) or data.get("chat_id")
     if stop_chat_id is not None:
-        await run_status.clear_running(stop_chat_id)
+        await run_status.clear_running(stop_chat_id, ok=False)
 
     try:
         response = await app.state.http_client.post(
@@ -1294,6 +1297,30 @@ async def chat_run_status(chat_id: str, request: Request):
     return JSONResponse(content={"running": True, **info})
 
 
+@app.get("/api/chats/{chat_id}/flow")
+async def chat_flow(chat_id: str, request: Request):
+    """FlowMap: хронология пути последнего запроса (после F5 / переключения чата).
+
+    events — из Redis flow:{chat_id} (ts в мс epoch), now — серверное время для пересчёта
+    в таймлайн браузера без учёта расхождения часов клиента. Тексты размышлений — из
+    agent:reasoning:{chat_id} (steps по порядку событий think_end, live_text — текущий живой блок)."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    events = await run_status.get_flow(chat_id)
+    r = await run_status.get_reasoning_state(chat_id) or {}
+    running = await run_status.get_running(chat_id) is not None
+    return JSONResponse(content={
+        "now": int(time.time() * 1000),
+        "running": running,
+        "events": events,
+        "reasoning": {
+            "request_id": r.get("request_id"),
+            "steps": r.get("steps") or [],
+            "live_text": r.get("live_text") or "",
+        },
+    })
+
 # ── SSE: push вместо polling ─────────────────────────────────────────────
 # Заголовки, критичные для корректного SSE через прокси:
 #   Cache-Control: no-cache      — не кэшировать поток
@@ -1369,9 +1396,53 @@ async def stream_chat_status(chat_id: str, request: Request):
 
     async def event_gen():
         started = time.time()
+        seen_flow = set()
+
+        def _flow_key(flow_obj: dict) -> tuple | None:
+            ev = flow_obj.get("ev")
+            if ev in ("accepted", "agent_start", "answer"):
+                return (ev, None, None)
+            if ev == "db_saved":
+                return ("db_saved", None, flow_obj.get("role") or "user")
+            if ev in ("tool_start", "tool_end") and flow_obj.get("call_id"):
+                return (ev, str(flow_obj.get("call_id")), None)
+            return None
+
+        async def _replay_stored_flow(target_rid: str | None):
+            """Дослать события FlowMap из Redis LIST flow:{chat_id}, которые успели
+            уйти в stream:{request_id} ДО того, как браузер открыл EventSource и
+            подписался на Redis Pub/Sub (db_saved, accepted, agent_start и др.)."""
+            out = []
+            try:
+                recs = await run_status.get_flow(chat_id)
+            except Exception as e:
+                logger.warning(f"[sigma-sse] replay flow:{chat_id} не удался: {e}")
+                recs = []
+            for rec in recs or []:
+                if not isinstance(rec, dict):
+                    continue
+                ev = rec.get("ev")
+                rid = rec.get("rid")
+                if not ev or ev in ("send", "gateway", "think_end", "done"):
+                    continue
+                if target_rid and rid and rid != target_rid:
+                    continue
+                fk = _flow_key(rec)
+                if fk is not None:
+                    if fk in seen_flow:
+                        continue
+                    seen_flow.add(fk)
+                out.append(_sse_pack("flow", {
+                    "request_id": rid or target_rid,
+                    **{k: v for k, v in rec.items() if k not in ("rid", "ts")},
+                }))
+            return out
+
         # Первичное состояние: если ответ уже готов/протух — отдаём сразу.
         state = status_store.get_chat_state(chat_id)
         if state.get("status") == "done":
+            for frame in await _replay_stored_flow(state.get("request_id")):
+                yield frame
             yield _sse_pack("done", state)
             return
         if state.get("status") == "idle":
@@ -1397,6 +1468,11 @@ async def stream_chat_status(chat_id: str, request: Request):
                 logger.debug(f"[sigma-sse] subscribe {request_id} не удался: {e}")
                 pubsub = None
 
+        # Досылаем события FlowMap (db_saved, accepted, agent_start и др.), которые
+        # были опубликованы в Redis до момента открытия EventSource браузером.
+        for frame in await _replay_stored_flow(request_id):
+            yield frame
+
         async def _drain_chunks():
             """Слить все накопившиеся чанки из pubsub без блокировки.
             Каждый фрейм агента {chunk,id,kind} -> SSE-событие того же kind."""
@@ -1417,6 +1493,19 @@ async def stream_chat_status(chat_id: str, request: Request):
                 except Exception:
                     continue
                 kind = frame.get("kind") or "live"
+                if kind == "flow":
+                    # FlowMap: служебное событие пути запроса, мимо reasoning-state.
+                    fl = frame.get("flow") or {}
+                    fk = _flow_key(fl)
+                    if fk is not None:
+                        if fk in seen_flow:
+                            continue
+                        seen_flow.add(fk)
+                    out.append(_sse_pack("flow", {
+                        "request_id": frame.get("request_id"),
+                        **fl,
+                    }))
+                    continue
                 active_requests = await run_status.append_reasoning_chunk(
                     chat_id, frame.get("chunk", ""), kind, frame.get("id")
                 )

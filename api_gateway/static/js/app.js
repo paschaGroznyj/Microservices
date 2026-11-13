@@ -1,4 +1,10 @@
 // CatchPM — Chat SPA
+
+// FlowMap: путь запроса (flowmap.js). Отключить: localStorage.setItem('fm:off','1').
+const _fm = (type, d) => {
+    try { if (localStorage.getItem('fm:off') === '1') return; window.FlowViz?.emit(type, d || {}); } catch (_) {}
+};
+
 class ChatApp {
     constructor() {
         this.currentUser   = null;
@@ -538,6 +544,7 @@ class ChatApp {
         if (String(this._noToolsWarnChatId ?? '') !== String(chatId)) {
             this._resetNoToolsWarn(chatId);
         }
+        if (String(this.currentChat ?? '') !== String(chatId ?? '')) window.FlowViz?.reset?.();
         this.currentChat = chatId;
         this.subagentStates = {};
         if (!opts?.skipSaveSettings && chatId != null) {
@@ -683,6 +690,10 @@ class ChatApp {
         } catch (_) { /* сеть недоступна — доверяем savedState */ }
 
         if (String(this.currentChat) !== String(chatId)) return;
+
+        // FlowMap: хронология пути запроса из Redis flow:{chat_id} (пройденный путь, длительности,
+        // размышления по шагам) — после F5 и переключения диалогов.
+        if (localStorage.getItem('fm:off') !== '1') window.FlowViz?.restore?.(chatId, serverStatus !== null ? { running } : undefined)?.catch?.(() => {});
 
         const container = this.getMessagesContainer();
         const st = this._ensureStream(chatId);
@@ -3183,31 +3194,13 @@ class ChatApp {
             wrap.appendChild(gallery);
         }
 
-        const VISIBLE_LIMIT = 3;
-        const visible = otherFiles.slice(0, VISIBLE_LIMIT);
-        const hidden  = otherFiles.slice(VISIBLE_LIMIT);
-
-        visible.forEach(f => wrap.appendChild(makeChip(f)));
-
-        if (hidden.length > 0) {
-            const hiddenWrap = document.createElement('div');
-            hiddenWrap.className = 'fa-chips-hidden';
-            hiddenWrap.style.display = 'none';
-            hidden.forEach(f => hiddenWrap.appendChild(makeChip(f)));
-            wrap.appendChild(hiddenWrap);
-
-            const count   = hidden.length;
-            const suffix  = count === 1 ? '' : count < 5 ? 'а' : 'ов';
-            const toggle  = document.createElement('button');
-            toggle.className   = 'fa-chips-toggle';
-            toggle.type        = 'button';
-            toggle.textContent = `+${count} файл${suffix}`;
-            toggle.addEventListener('click', () => {
-                const isOpen = hiddenWrap.style.display !== 'none';
-                hiddenWrap.style.display = isOpen ? 'none' : 'flex';
-                toggle.textContent = isOpen ? `+${count} файл${suffix}` : 'Скрыть';
-            });
-            wrap.appendChild(toggle);
+        // > 3 файлов: страницы по 3 чипа, листаются по горизонтали (как fa-tiles__track).
+        const PAGE_SIZE = 3;
+        const chips = otherFiles.map(f => makeChip(f));
+        if (chips.length > PAGE_SIZE && window.FileTiles?.pager) {
+            wrap.appendChild(window.FileTiles.pager(chips, PAGE_SIZE));
+        } else {
+            chips.forEach(c => wrap.appendChild(c));
         }
 
         return wrap;
@@ -3557,8 +3550,9 @@ class ChatApp {
         const _optimisticFiles = isCustom ? [] : (window.FileAttach?.getPreviewItems?.() ?? window.FileAttach?.getFilesMeta() ?? []);
         // Снимок вложений: композер очищается сразу после отправки, а файлы
         // грузятся уже из сообщения в ленте (с анимацией прогресса).
-        const _filesSnap = isCustom ? [] : (window.FileAttach?.getFiles?.() ?? []);
+        const _filesSnap = (isCustom || window.QueryMode?.isModel()) ? [] : (window.FileAttach?.getFiles?.() ?? []);
         const _filesMetaSnap = isCustom ? [] : (window.FileAttach?.getFilesMeta?.() ?? []);
+        _fm('send', { chat: this.currentChat });
         this.addMessage({ message: text, is_from_bot: false, id: msgId, created_at: new Date().toISOString(), files: _optimisticFiles });
         this._scrollToUserMessageAndReserve();
 
@@ -3625,7 +3619,7 @@ class ChatApp {
                     message:        text,
                     message_id:     msgId,
                     task_ids:       window.TaskHint?.consume(this.currentChat, text),   // ручной триггер задачника
-                    type_agent:     'pm',
+                    type_query:     window.QueryMode?.get() ?? 'agent',   // agent | model (MauDel без тулов)
                     agent_model:    window.ModelPicker?.getModel() ?? 'coder',
                     selected_tools: window.ToolsPanel?.getSelectedCategories() ?? [],
                     context_size:   window.ToolsPanel?.getContextSize()   ?? 'medium',
@@ -3654,6 +3648,7 @@ class ChatApp {
             try {
                 const j = await resp.clone().json();
                 this._activeRequestId = j?.request_id || null;
+                if (j?.request_id) _fm('gateway', { chat: this.currentChat, request_id: j.request_id });
                 if (j?.active_requests !== undefined) {
                     this._updateActiveRequestsUI(this.currentChat, j.active_requests);
                 }
@@ -3751,6 +3746,7 @@ class ChatApp {
         }
 
         this._initPlaceholderGraph(placeholder);
+        if (localStorage.getItem('fm:off') !== '1') window.FlowViz?.bindPlaceholder(placeholder);
         requestAnimationFrame(() => placeholder.classList.add('bg-ready'));
 
         msgContainer.scrollTop = msgContainer.scrollHeight;
@@ -4330,6 +4326,13 @@ class ChatApp {
             const isActive = String(this.currentChat) === key;
             const msg = JSON.parse(event.data);
 
+            // FlowMap: служебные события пути запроса (accepted / agent_start / tool_*).
+            // Ловим до ветки chunk — у них нет текста, пузырь ответа не нужен.
+            if (msg.type === 'flow') {
+                if (isActive) _fm(msg.ev, { ...msg, chat: key, id: msg.call_id || undefined });
+                return;
+            }
+
             if (msg.type === 'agent_status') {
                 // Задачник: агент разбужен результатом задачи — блокируем отправку, как при обычном запросе.
                 if (msg.task_trigger && isActive) this._setSendButtonMode?.('stop');
@@ -4395,7 +4398,9 @@ class ChatApp {
 
             // Задачник: финал ответа — карточки хода (включая временную группу без ответа)
             // собираются в ответ на то же место, что и после F5. Таймер: дать финализации пузыря отработать.
-            if (msg.is_from_bot && msg.message && !msg.chunk && isActive && window.TaskCards) {
+            const isFinalBotMsg = msg.is_from_bot && msg.chunk === undefined && !msg.kind && (msg.done || msg.message !== undefined);
+            if (isFinalBotMsg) _fm('done', { chat: key });
+            if (isFinalBotMsg && isActive && window.TaskCards) {
                 const _tcBox = this.getMessagesContainer();
                 setTimeout(() => window.TaskCards.settle(_tcBox, msg), 60);
             }
@@ -4424,10 +4429,12 @@ class ChatApp {
 
             // ── Управляющие маркеры стриминга (kind без нового текста) ──
             if (msg.kind === 'reasoning_end') {
+                if (isActive) _fm('think_end', { chat: key });
                 this._commitReasoningBlock(key);
                 return;
             }
             if (msg.kind === 'final_commit') {
+                _fm('answer', { chat: key });
                 this._promoteLiveToFinal(key);
                 st.streamIsFinal = true;
                 return;
@@ -4477,6 +4484,8 @@ class ChatApp {
 
                 st.streamBuffer += msg.chunk;
                 if (!st.streamIsFinal) {
+                    // FlowMap: текст размышлений для оверлея по тапу на блок «думает».
+                    if (isActive && msg.chunk) _fm('think_text', { chat: key, text: msg.chunk });
                     this._setReasoningHeaderLabel(key, (st.streamShown || '') + (st.streamBuffer || ''), false);
                 }
 
@@ -5438,6 +5447,7 @@ class ChatApp {
     async stopCurrentRun() {
         if (this._runState !== 'running') return;
         this._runState = 'stopping';
+        _fm('done', { chat: this.currentChat, ok: false });
         try {
             await fetch('/api/chats/stop_message', {
                 method: 'POST',
@@ -5773,6 +5783,7 @@ class ChatApp {
         // Инжектируем кнопку тулов и пикер модели в футер инпута
         window.ToolsPanel?.inject(container);
         window.ModelPicker?.inject(container);
+        window.QueryMode?.inject(container);
 
         // Посимвольная анимация start-header
         // Запоминаем для какого чата отрендерили

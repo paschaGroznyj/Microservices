@@ -1,4 +1,10 @@
 // CatchPM — Chat SPA
+
+// FlowMap: путь запроса (flowmap.js). Отключить: localStorage.setItem('fm:off','1').
+const _fm = (type, d) => {
+    try { if (localStorage.getItem('fm:off') === '1') return; window.FlowViz?.emit(type, d || {}); } catch (_) {}
+};
+
 class ChatApp {
     constructor() {
         this.currentUser   = null;
@@ -573,6 +579,7 @@ class ChatApp {
         if (String(this._noToolsWarnChatId ?? '') !== String(chatId)) {
             this._resetNoToolsWarn(chatId);
         }
+        if (String(this.currentChat ?? '') !== String(chatId ?? '')) window.FlowViz?.reset?.();
         this.currentChat = chatId;
         this.subagentStates = {};
         if (!opts?.skipSaveSettings && chatId != null) {
@@ -707,6 +714,10 @@ class ChatApp {
         } catch (_) { /* сеть недоступна — доверяем savedState */ }
 
         if (String(this.currentChat) !== String(chatId)) return;
+
+        // FlowMap: хронология пути запроса из Redis flow:{chat_id} (пройденный путь, длительности,
+        // размышления по шагам) — после F5 и переключения диалогов.
+        if (localStorage.getItem('fm:off') !== '1') window.FlowViz?.restore?.(chatId, serverStatus !== null ? { running } : undefined)?.catch?.(() => {});
 
         const container = this.getMessagesContainer();
         const st = this._ensureStream(chatId);
@@ -3143,31 +3154,13 @@ class ChatApp {
             wrap.appendChild(gallery);
         }
 
-        const VISIBLE_LIMIT = 3;
-        const visible = otherFiles.slice(0, VISIBLE_LIMIT);
-        const hidden  = otherFiles.slice(VISIBLE_LIMIT);
-
-        visible.forEach(f => wrap.appendChild(makeChip(f)));
-
-        if (hidden.length > 0) {
-            const hiddenWrap = document.createElement('div');
-            hiddenWrap.className = 'fa-chips-hidden';
-            hiddenWrap.style.display = 'none';
-            hidden.forEach(f => hiddenWrap.appendChild(makeChip(f)));
-            wrap.appendChild(hiddenWrap);
-
-            const count   = hidden.length;
-            const suffix  = count === 1 ? '' : count < 5 ? 'а' : 'ов';
-            const toggle  = document.createElement('button');
-            toggle.className   = 'fa-chips-toggle';
-            toggle.type        = 'button';
-            toggle.textContent = `+${count} файл${suffix}`;
-            toggle.addEventListener('click', () => {
-                const isOpen = hiddenWrap.style.display !== 'none';
-                hiddenWrap.style.display = isOpen ? 'none' : 'flex';
-                toggle.textContent = isOpen ? `+${count} файл${suffix}` : 'Скрыть';
-            });
-            wrap.appendChild(toggle);
+        // > 3 файлов: страницы по 3 чипа, листаются по горизонтали (как fa-tiles__track).
+        const PAGE_SIZE = 3;
+        const chips = otherFiles.map(f => makeChip(f));
+        if (chips.length > PAGE_SIZE && window.FileTiles?.pager) {
+            wrap.appendChild(window.FileTiles.pager(chips, PAGE_SIZE));
+        } else {
+            chips.forEach(c => wrap.appendChild(c));
         }
 
         return wrap;
@@ -3509,6 +3502,7 @@ class ChatApp {
         this._hardResetStreamState(this.currentChat);
 
         const msgId = `msg-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+        _fm('send', { chat: this.currentChat });
         this.addMessage({ message: text, is_from_bot: false, id: msgId, created_at: new Date().toISOString(), files: [] });
         this._scrollToUserMessageAndReserve();
 
@@ -3550,7 +3544,7 @@ class ChatApp {
                     message:        text,
                     message_id:     msgId,
                     task_ids:       window.TaskHint?.consume(this.currentChat, text),   // ручной триггер задачника
-                    type_agent:     'pm',
+                    type_query:     window.QueryMode?.get() ?? 'agent',   // agent | model (MauDel без тулов)
                     agent_model:    window.ModelPicker?.getModel() ?? 'coder',
                     selected_tools: window.ToolsPanel?.getSelectedCategories() ?? [],
                     context_size:   window.ToolsPanel?.getContextSize()   ?? 'medium',
@@ -3577,6 +3571,7 @@ class ChatApp {
             try {
                 const j = await resp.clone().json();
                 this._activeRequestId = j?.request_id || null;
+                if (j?.request_id) _fm('gateway', { chat: this.currentChat, request_id: j.request_id });
                 if (j?.active_requests !== undefined) {
                     this._updateActiveRequestsUI(this.currentChat, j.active_requests);
                 }
@@ -3668,6 +3663,7 @@ class ChatApp {
         }
 
         this._initPlaceholderGraph(placeholder);
+        if (localStorage.getItem('fm:off') !== '1') window.FlowViz?.bindPlaceholder(placeholder);
         requestAnimationFrame(() => placeholder.classList.add('bg-ready'));
 
         msgContainer.scrollTop = msgContainer.scrollHeight;
@@ -4902,6 +4898,7 @@ class ChatApp {
     async stopCurrentRun() {
         if (this._runState !== 'running') return;
         this._runState = 'stopping';
+        _fm('done', { chat: this.currentChat, ok: false });
         try {
             if (this._activeRequestId) {
                 await fetch('/api/chats/stop_message', {
@@ -5111,17 +5108,26 @@ class ChatApp {
 
             st.streamBuffer += chunk;
             if (!st.streamIsFinal) {
+                // FlowMap: текст размышлений для оверлея по тапу на блок «думает».
+                if (isActive) _fm('think_text', { chat: key, text: chunk });
                 this._setReasoningHeaderLabel(key, (st.streamShown || '') + (st.streamBuffer || ''), false);
             }
         };
 
         es.addEventListener('live', onLive);
+        // FlowMap: служебные события пути запроса (accepted / agent_start / tool_*).
+        es.addEventListener('flow', (ev) => {
+            let f; try { f = JSON.parse(ev.data); } catch (_) { return; }
+            if (this._isActiveChat(key)) _fm(f.ev, { ...f, chat: key, id: f.call_id || undefined });
+        });
         es.addEventListener('reasoning_end', () => {
+            if (this._isActiveChat(key)) _fm('think_end', { chat: key });
             // Текущий живой блок был размышлением перед вызовом тулзы —
             // сливаем его в общий свёрток «Размышления».
             this._commitReasoningBlock(key);
         });
         es.addEventListener('final_commit', () => {
+            _fm('answer', { chat: key });
             // Живой блок оказался финальным ответом — повышаем его стиль.
             // Реальная финализация (файлы, actions) придёт с 'done' из Kafka.
             this._promoteLiveToFinal(key);
@@ -5130,6 +5136,7 @@ class ChatApp {
 
         const onDone = async (ev) => {
             es.close();
+            _fm('done', { chat: key });
             if (this._sources[key] === es) delete this._sources[key];
             // Автогенерированный заголовок чата приходит в message финала —
             // обновляем строку чата в сайдбаре в реалтайме (на первом обмене).
@@ -5225,6 +5232,7 @@ class ChatApp {
                     state.tasks.forEach(t => window.TaskHint?.note(this, chatId, t));
                 }
                 if (state?.status === 'done' || state?.status === 'idle') {
+                    _fm('done', { chat: String(chatId) });
                     // Сообщение уже сохранено в БД chats-consumer'ом —
                     // перечитываем историю чата и завершаем run.
                     await this._handleRunDone(chatId);
@@ -5511,6 +5519,7 @@ class ChatApp {
         // Инжектируем кнопку тулов и пикер модели в футер инпута
         window.ToolsPanel?.inject(container);
         window.ModelPicker?.inject(container);
+        window.QueryMode?.inject(container);
 
         // Посимвольная анимация start-header
         // Запоминаем для какого чата отрендерили

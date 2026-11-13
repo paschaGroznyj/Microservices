@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS chats (
     reactions      JSONB DEFAULT '[]'::jsonb,
     reaction       TEXT DEFAULT NULL,
     input_format   TEXT DEFAULT 'text',
+    type_query     TEXT DEFAULT 'agent',  -- agent | model (MauDel без тулов)
     created_at     TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 

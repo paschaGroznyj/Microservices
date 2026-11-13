@@ -132,7 +132,7 @@ class ChatMessage(BaseModel):
     tb_name: str | None = None
     message: str
     chat_id: str
-    type_agent: str
+    type_query: str = "agent"   # agent | model (MauDel без тулов)
     request_id: str
     selected_tools: list = []
     context_size: str = "medium"
@@ -544,7 +544,7 @@ async def send_message(chat: ChatMessage):
         "username": chat.username,
         "chat_id": chat.chat_id,
         "message": chat.message,
-        "type_agent": chat.type_agent,
+        "type_query": chat.type_query,
         "is_from_bot": False,
         "request_id": chat.request_id,
         "selected_tools": chat.selected_tools,

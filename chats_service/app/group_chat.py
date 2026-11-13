@@ -335,6 +335,7 @@ async def group_file(file_id: int, request: Request, download: int = 0):
     if not rec or not rec.get("obs_key"):
         raise HTTPException(status_code=404, detail="файл не найден")
     fname = rec.get("file_name") or "file"
+    logger.info(f"[file_name] {fname}")
     mime = _guess_media_mime(fname, rec.get("mime_type"))
     disposition = "attachment" if download else "inline"
     base_headers = {

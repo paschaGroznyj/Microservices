@@ -28,3 +28,12 @@ agent_sandbox/youtube-captions
 
 # monaco-editor качается при сборке образа гейтвея (fetch_monaco.py)
 api_gateway/static/js/vendor/monaco/
+
+# Auto-created mountpoints for gateway_sigma
+api_gateway_sigma/cache_bust.py
+api_gateway_sigma/config.py
+api_gateway_sigma/editor_gw.py
+api_gateway_sigma/presence.py
+api_gateway_sigma/reactions_bus.py
+api_gateway_sigma/reads_bus.py
+api_gateway_sigma/run_status.py

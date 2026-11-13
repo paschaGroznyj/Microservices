@@ -103,7 +103,7 @@ KAFKA_BROKER = os.getenv("KAFKA_BROKER")
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024      # 100 MB на один файл
 MAX_UPLOAD_FILES = 50                     # не больше 50 файлов за раз
 
-MAX_FILE_SIZE_FOR_EDIT = 200_000
+MAX_FILE_SIZE_FOR_EDIT = 2_000_000
 # ── Модели ─────────────────────────────────────────────────────────
 
 class OutputFile(BaseModel):

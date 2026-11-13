@@ -10,7 +10,7 @@ from typing import List
 import os
 import base64
 import uuid
-import requests  # Для отправки сообщений обратно в основной сервис
+import httpx  # Для отправки сообщений обратно в основной сервис
 import time
 
 # Обратный путь для Telegram: ответ агента (gateway_target=="telegram") шлём
@@ -20,6 +20,9 @@ TG_BOT_PUSH_URL = os.getenv("TG_BOT_PUSH_URL", "http://172.28.0.1:8010/push_mess
 MAX_BOT_PUSH_URL = os.getenv("MAX_BOT_PUSH_URL", "http://172.28.0.1:8011/push_message")
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+# FlowMap: хронология пути запроса flow:{chat_id} (см. api_gateway/run_status.flow_push)
+FLOW_TTL = int(os.getenv("FLOW_TTL", os.getenv("AGENT_RUN_TTL", "3600")))
+FLOW_MAX = int(os.getenv("FLOW_MAX", "600"))
 MOBILE_REPLY_KEY = "mobile:reply:{chat_id}"
 MOBILE_REPLY_TTL = 300  # сек
 
@@ -125,6 +128,48 @@ class DBConsumer:
             max_partition_fetch_bytes=10485760
         )
 
+    async def _flow_store(self, chat_id, request_id: str, flow: dict) -> None:
+        """FlowMap: событие в хронологию Redis flow:{chat_id} (восстановление после F5).
+        Формат как у гейтвея (run_status.flow_push) и агента. Ошибки глушим."""
+        if chat_id is None or self.redis is None:
+            return
+        rec = {"ev": flow.get("ev"), "ts": int(time.time() * 1000), "rid": request_id}
+        rec.update({k: v for k, v in flow.items() if k != "ev" and v is not None})
+        key = f"flow:{chat_id}"
+        try:
+            n = await self.redis.rpush(key, json.dumps(rec, ensure_ascii=False))
+            if isinstance(n, int) and n > FLOW_MAX:
+                await self.redis.ltrim(key, -FLOW_MAX, -1)
+            await self.redis.expire(key, FLOW_TTL)
+        except Exception as e:
+            logger.debug(f"[flow] redis не записал {flow.get('ev')}: {e}")
+
+    async def _send_flow(self, payload: dict, ev: str, **data) -> None:
+        """Служебное событие FlowMap (kind="flow") в веб-клиент, по аналогии с агентом.
+
+        Только main (HTTP /internal/bot_stream, гейтвей резолвит чат по request_id)
+        и sigma (Redis pub/sub stream:{request_id}). Без request_id и для
+        Telegram/MAX/mobile ничего не шлём. Ошибки глушим: карта не должна
+        мешать сохранению и доставке сообщения."""
+        request_id = payload.get("request_id")
+        target = (payload.get("gateway_target") or "main").lower()
+        if not request_id or target not in self.gateway_urls:
+            return
+        flow = {"ev": ev}
+        flow.update({k: v for k, v in data.items() if v is not None})
+        await self._flow_store(payload.get("chat_id"), request_id, flow)
+        frame = {"request_id": request_id, "chunk": "", "id": None, "kind": "flow", "flow": flow}
+        try:
+            if target == "sigma":
+                if self.redis is not None:
+                    await self.redis.publish(f"stream:{request_id}", json.dumps(frame, ensure_ascii=False))
+                return
+            url = f"{self.gateway_urls[target]}/internal/bot_stream"
+            async with httpx.AsyncClient(timeout=1.0) as client:
+                await client.post(url, json=frame)
+        except Exception as e:
+            logger.debug(f"[flow] {ev} не отправлен: {e}")
+
     async def process_message(self, payload):
         try:
             start = time.perf_counter()
@@ -140,6 +185,9 @@ class DBConsumer:
             tool_trace = payload.get("tool_trace")
             gateway_target = (payload.get("gateway_target") or "main").lower()
             input_format = payload.get("input_format") or "text"
+            # agent | model: у запроса — что выбрал пользователь, у ответа — чем реально отвечали
+            # (agent_service принудительно ставит agent для TG/MAX/loop/задачника).
+            type_query = "model" if str(payload.get("type_query") or "").lower() == "model" else "agent"
             poll_answer = payload.get("poll_answer")
 
             # ЗАДАЧНИК: служебный вход от task_consumer (user_id=-2) в историю не пишем.
@@ -168,6 +216,7 @@ class DBConsumer:
                 tokens_usage=tokens_usage,
                 gateway_target=gateway_target,
                 input_format=input_format,
+                type_query=type_query,
             )
             if not is_from_bot and isinstance(poll_answer, dict):
                 try:
@@ -184,6 +233,8 @@ class DBConsumer:
                 except Exception as pa_err:
                     logger.error(f"Ошибка сохранения poll_answer chat={chat_id}: {pa_err}")
             logger.info(f"Сообщение сохранено в БД: chat={chat_id}, user={user_id}")
+            # FlowMap: подсветить запись в БД (до доставки ответа, чтобы успеть раньше done).
+            await self._send_flow(payload, "db_saved", role="bot" if is_from_bot else "user")
             # ЗАДАЧНИК: ответ агента сохранён — карточки задач его запроса привязываем к нему
             # (после F5 они рисуются под этим сообщением, live фронт переносит их по task_ids).
             linked_task_ids = []
@@ -216,7 +267,6 @@ class DBConsumer:
                 return
 
             if is_from_bot:
-                type_agent = payload.get("type_agent", "pm")
                 gateway_url = self.gateway_urls[gateway_target]
                 ws_payload = dict(payload)
                 ws_payload["files"] = _sanitize_files_for_ws(attached_files) # Адаптивно, чтобы и для файлов пользователя
@@ -237,6 +287,20 @@ class DBConsumer:
                         logger.error(f"Не удалось сохранить auto_title chat={chat_id}: {e}")
 
                 await self.send_to_main_service(chat_id, ws_payload, gateway_url)
+
+                # Страховка: если гейтвей не успел снять agent:running:{chat_id}
+                # (например, ошибка сокета или пустой ответ), снимаем флаг и закрываем flow здесь.
+                if not payload.get("loop") and self.redis is not None and chat_id is not None:
+                    try:
+                        await self.redis.delete(f"agent:running:{chat_id}")
+                        rid = payload.get("request_id")
+                        if rid:
+                            tail = await self.redis.lrange(f"flow:{chat_id}", -1, -1)
+                            last = json.loads(tail[0].decode() if isinstance(tail[0], bytes) else tail[0]) if tail else {}
+                            if not (isinstance(last, dict) and last.get("ev") == "done" and last.get("rid") == rid):
+                                await self._flow_store(chat_id, rid, {"ev": "done"})
+                    except Exception as _re:
+                        logger.debug(f"[flow] clear running fallback failed: {_re}")
 
                 # САМОЦИКЛ: после логирования ответа агента — пробуем реентри (новый тик).
                 # Только для web (gateway main): telegram/mobile выше сделали return.
@@ -276,11 +340,8 @@ class DBConsumer:
         budget_ok = True
         budget_data = {}
         try:
-            loop = asyncio.get_event_loop()
-            resp = await loop.run_in_executor(
-                None,
-                lambda: requests.get(f"{CHATS_SELF_URL}/budget/check/{chat_id}", timeout=10),
-            )
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"{CHATS_SELF_URL}/budget/check/{chat_id}")
             if resp.status_code == 200:
                 budget_data = resp.json()
                 budget_ok = bool(budget_data.get("allowed", True))
@@ -318,7 +379,7 @@ class DBConsumer:
             "tb_name": None,
             "message": task["instruction"] + STOP_LOOP_INSTRUCTION,
             "chat_id": chat_id,
-            "type_agent": payload.get("type_agent", "pm"),
+            "type_query": "agent",
             "request_id": f"loop-{ms}-{uuid.uuid4().hex[:8]}",
             "message_id": f"msg-{ms}-{uuid.uuid4().hex[:8]}",
             "selected_tools": payload.get("selected_tools") or [],
@@ -335,10 +396,8 @@ class DBConsumer:
         }
         url = f"{CHATS_SELF_URL}/send_message"
         try:
-            # requests синхронный — уводим в пул, чтобы не блокировать event-loop консьюмера.
-            def _post():
-                return requests.post(url, json=tick_payload, timeout=10)
-            resp = await asyncio.to_thread(_post)
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(url, json=tick_payload)
             logger.info(f"[self-loop] реентри chat={chat_id} -> {url} HTTP {resp.status_code}")
         except Exception as e:
             logger.error(f"[self-loop] реентри не удался chat={chat_id}: {e}")
@@ -394,7 +453,7 @@ class DBConsumer:
             "tb_name": None,
             "message": instruction,
             "chat_id": chat_id,
-            "type_agent": payload.get("type_agent", "pm"),
+            "type_query": "agent",
             "request_id": f"loopstop-{ms}-{uuid.uuid4().hex[:8]}",
             "message_id": f"msg-{ms}-{uuid.uuid4().hex[:8]}",
             "selected_tools": payload.get("selected_tools") or [],
@@ -409,9 +468,8 @@ class DBConsumer:
         }
         url = f"{CHATS_SELF_URL}/send_message"
         try:
-            def _post():
-                return requests.post(url, json=tick_payload, timeout=10)
-            resp = await asyncio.to_thread(_post)
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(url, json=tick_payload)
             logger.info(f"[self-loop] финальный тик (причина остановки) chat={chat_id} -> HTTP {resp.status_code}")
         except Exception as e:
             logger.error(f"[self-loop] финальный тик не удался chat={chat_id}: {e}")
@@ -457,9 +515,8 @@ class DBConsumer:
                         if pull_url.startswith("/"):
                             pull_url = AGENT_SERVICE_URL.rstrip("/") + pull_url
                         try:
-                            resp = await asyncio.to_thread(
-                                requests.get, pull_url, timeout=120
-                            )
+                            async with httpx.AsyncClient(timeout=120.0) as client:
+                                resp = await client.get(pull_url)
                             if resp.status_code == 200:
                                 raw = resp.content
                                 if len(raw) <= MAX_TG:
@@ -580,7 +637,8 @@ class DBConsumer:
                 # agent message_id — для связки TG-реакций с записью в БД
                 "agent_message_id": message_id,
             }
-            response = requests.post(TG_BOT_PUSH_URL, json=payload, timeout=30)
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(TG_BOT_PUSH_URL, json=payload)
             logger.info(f"Ответ агента отправлен в Telegram: {response.status_code}")
             elapsed = time.perf_counter() - start
             logging.info(f"Message Service. Время отправки ответа в Telegram = {elapsed:.4f}s")
@@ -606,7 +664,8 @@ class DBConsumer:
                 "agent_message_id": message_id,
                 "parse_mode": "markdown",
             }
-            response = requests.post(MAX_BOT_PUSH_URL, json=payload, timeout=60)
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(MAX_BOT_PUSH_URL, json=payload)
             logger.info(f"Ответ агента отправлен в MAX: {response.status_code}")
             elapsed = time.perf_counter() - start
             logging.info(f"Message Service. Время отправки ответа в MAX = {elapsed:.4f}s")
@@ -618,13 +677,14 @@ class DBConsumer:
         try:
             start = time.perf_counter()
             # Внутренний endpoint в основном сервисе для получения сообщений от бота
-            response = requests.post(
-                f"{gateway_url}/internal/bot_message",
-                json={
-                    "chat_id": chat_id,
-                    "message": message, # Сообщение из кафки, сам текст, флаг на бота, ссылки
-                }
-            )
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    f"{gateway_url}/internal/bot_message",
+                    json={
+                        "chat_id": chat_id,
+                        "message": message, # Сообщение из кафки, сам текст, флаг на бота, ссылки
+                    },
+                )
             logger.info(f"Сообщение бота отправлено в основной сервис: {response.status_code}")
             elapsed = time.perf_counter() - start
             logging.info(f"Message Service. Время чтобы, отправить сообщение в основной модуль сервиса = {elapsed:.4f}s")

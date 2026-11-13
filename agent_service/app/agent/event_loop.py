@@ -7,6 +7,7 @@ import re
 import ast
 import httpx
 import hashlib
+import time
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List, Optional
@@ -35,6 +36,7 @@ from .core.agent_provider import (
     get_real_model_name,
     resolve_model_tag,
 )
+from .flow_tools import tool_flow_fields
 from .core.config import (
     PORT_GATEWAY_PORT, PORT_GATEWAY_SIGMA_PORT, ADMINS_INFO,
     PORT_PARSERS_SERVICE, get_role, ADMINS_BY_USER_ID,
@@ -64,6 +66,9 @@ GATEWAY_SIGMA_URL = f"http://api_gateway_sigma:{PORT_GATEWAY_SIGMA_PORT}"
 
 # Redis-канал для стриминга чанков на sigma-гейтвей (у sigma нет WS, стрим льётся через pub/sub).
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+# FlowMap: хронология пути запроса flow:{chat_id} (см. api_gateway/run_status.flow_push)
+FLOW_TTL = int(os.getenv("FLOW_TTL", os.getenv("AGENT_RUN_TTL", "3600")))
+FLOW_MAX = int(os.getenv("FLOW_MAX", "600"))
 
 logger = logging.getLogger(__name__)
 
@@ -323,9 +328,6 @@ def _summarize_tool_call(tc: dict, result: Any) -> str | None:
             # не помечаем как ошибку, отдаём начало как есть.
             return f"execute_python_code() [результат не разобран] {clip_text(str(result), 500)}"
         ok = bool(result_dict.get("ok", False))
-        # В трейс — только путь, который агент может открыть любой ролью:
-        # скрипт внутри workspace. Архив /sandbox/executed_scripts общий и
-        # доступен лишь админским тулам, его не показываем.
         ws_script = result_dict.get("saved_script_in_workspace")
         ws_id = result_dict.get("workspace_id") or args.get("workspace_id")
         if ws_script and ws_id:
@@ -436,9 +438,14 @@ def _sanitize_messages(messages):
                     stray_system_parts.append(s)
             continue
 
-        if mtype in ("human", "tool"):
+        if mtype in ("human", "tool", "ai"):
             c = getattr(m, "content", None)
-            if c is None or (isinstance(c, str) and not c.strip()):
+            is_empty = (
+                c is None
+                or (isinstance(c, str) and not c.strip())
+                or (isinstance(c, list) and len(c) == 0)
+            )
+            if is_empty and not getattr(m, "tool_calls", None):
                 continue
 
         seen_non_system = True
@@ -765,6 +772,9 @@ class HarnessAgent:
         self._request_ctx: contextvars.ContextVar = contextvars.ContextVar(
             "agent_request_ctx", default=None
         )
+        # FlowMap: время последнего "конца шага" по request_id (agent_start / tool_end),
+        # monotonic. Из него считаем gap_ms — сколько агент думал перед вызовом тула.
+        self._flow_last: dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # Память per-user с загрузкой из БД через AgentDB
@@ -1537,6 +1547,20 @@ class HarnessAgent:
                 return
             return
 
+        # FlowMap: границы шагов размышлений в хронологию flow:{chat_id}. think_end пишем,
+        # только если с прошлой границы ушёл живой текст: ровно тогда гейтвей добавляет шаг
+        # в agent:reasoning.steps, и i-й think_end ↔ steps[i] после F5.
+        ctx = self._request_ctx.get()
+        if target in ("main", "sigma") and isinstance(ctx, dict):
+            if kind == "live" and chunk and chunk.strip():
+                ctx["flow_live"] = True
+            elif kind == "reasoning_end" and ctx.get("flow_live"):
+                ctx["flow_live"] = False
+                await self._flow_store(ctx.get("chat_id"), request_id, {"ev": "think_end"})
+            elif kind == "final_commit":
+                ctx["flow_live"] = False
+                await self._flow_store(ctx.get("chat_id"), request_id, {"ev": "answer"})
+
         # SIGMA: у гейтвея нет WebSocket — льём чанки через Redis pub/sub,
         # sigma-гейтвей подписан на stream:{request_id} и релеит в SSE.
         if target == "sigma":
@@ -1553,6 +1577,57 @@ class HarnessAgent:
             )
         except Exception as e:
             logger.debug(f"Не удалось отправить чанк стриминга: {e}")
+
+    async def _flow_store(self, chat_id, request_id: str, flow: dict) -> None:
+        """FlowMap: дописать событие в Redis LIST flow:{chat_id} (хронология для F5/смены чата).
+
+        Формат тот же, что пишет гейтвей (run_status.flow_push): {ev, rid, ts(ms epoch), ...flow}.
+        Пишем ДО отправки во фронт, чтобы восстановление не теряло событие. Ошибки глушим."""
+        if chat_id is None or not flow.get("ev"):
+            return
+        r = await self._get_redis()
+        if r is None:
+            return
+        rec = {"ev": flow["ev"], "ts": int(time.time() * 1000), "rid": request_id}
+        rec.update({k: v for k, v in flow.items() if k != "ev" and v is not None})
+        key = f"flow:{chat_id}"
+        try:
+            n = await r.rpush(key, json.dumps(rec, ensure_ascii=False))
+            if isinstance(n, int) and n > FLOW_MAX:
+                await r.ltrim(key, -FLOW_MAX, -1)
+            await r.expire(key, FLOW_TTL)
+        except Exception as e:
+            logger.debug(f"[flow] redis не записал {flow.get('ev')}: {e}")
+
+    async def _send_flow(self, request_id: str, ev: str, target: str | None = None, chat_id=None, **data) -> None:
+        """Служебное событие пути запроса для FlowMap на фронте (kind="flow").
+
+        ev: accepted | agent_start | tool_start | tool_end. Текста нет, поэтому
+        гейтвей не пишет его в reasoning-state и не создаёт пузырь ответа.
+        Только веб-клиенты (main WS / sigma SSE); Telegram, MAX и mobile — мимо.
+        Ошибки глушим: визуализация не должна ронять ответ."""
+        if not request_id or not ev:
+            return
+        if target is None:
+            target = self._ctx_get("gateway_target", None) or getattr(self, "_gateway_target", "main") or "main"
+        target = str(target).lower()
+        if target not in ("main", "sigma"):
+            return
+        flow = {"ev": ev}
+        flow.update({k: v for k, v in data.items() if v is not None})
+        if chat_id is None:
+            chat_id = self._ctx_get("chat_id", None)
+        await self._flow_store(chat_id, request_id, flow)
+        payload = {"request_id": request_id, "chunk": "", "id": None, "kind": "flow", "flow": flow}
+        try:
+            if target == "sigma":
+                await self._publish_sigma_stream(request_id, payload)
+                return
+            client = await self._get_http_client()
+            url = GATEWAY_SIGMA_URL if target == "sigma" else GATEWAY_URL
+            await client.post(f"{url}/internal/bot_stream", json=payload, timeout=2)
+        except Exception as e:
+            logger.debug(f"[flow] не удалось отправить {ev}: {e}")
 
     async def _tg_edit_reasoning(self, chat_id, text: str) -> None:
         """Трансляция reasoning-блока в Telegram: редактирует плашку "Думаю..."
@@ -1681,6 +1756,9 @@ class HarnessAgent:
         self.current_message_id = None  # message_id генерится позже, в app.py; необязателен
         # Буфер живого reasoning для Telegram теперь в request-local ctx ("tg_reasoning_buf")
         cleaned_user_input = user_input
+        if request_id:
+            self._flow_last[request_id] = time.monotonic()
+        await self._send_flow(request_id, "agent_start")
         try:
             # ── Настройки контекста ────────────────────────────────────────
             CONTEXT_PRESETS = {
@@ -1939,9 +2017,9 @@ class HarnessAgent:
             import json
             def _tok(s): return len(s) // RATIO.get(agent_model, model_spec.chars_per_token)   # для русского ~2 симв/токен, а не 4
 
-            for m in messages:
-                c = m.content if isinstance(m.content, str) else json.dumps(m.content, ensure_ascii=False)
-                logger.info(f"[budget] {m.__class__.__name__:15} chars={len(c):6} ~tok={_tok(c):6} | {c[:60]!r}")
+            # for m in messages:
+            #     c = m.content if isinstance(m.content, str) else json.dumps(m.content, ensure_ascii=False)
+            #     logger.info(f"[budget] {m.__class__.__name__:15} chars={len(c):6} ~tok={_tok(c):6} | {c[:60]!r}")
 
             schemas = json.dumps([t.args_schema.schema() if t.args_schema else {} for t in tools], ensure_ascii=False)
             descr   = sum(len(t.description or "") for t in tools)
@@ -2030,15 +2108,23 @@ class HarnessAgent:
                             final_response = "Ошибка внутри цикла агента. Но агент запомнил шаги, попробуйте вернуться к запросу"
                         break
 
-                    _thinking_text, _reasoning_text, _clean_content = _extract_thinking_and_clean_content(
-                        getattr(response, "content", None)
+                    _raw_content = getattr(response, "content", None)
+                    has_native_thinking = isinstance(_raw_content, list) and any(
+                        isinstance(b, dict) and b.get("type") in ("thinking", "redacted_thinking")
+                        for b in _raw_content
                     )
-                    # logging.info(response)
+                    _thinking_text, _reasoning_text, _clean_content = _extract_thinking_and_clean_content(
+                        _raw_content
+                    )
                     if _reasoning_text:
                         loop_state.setdefault("internal_reasoning_trace", []).append(_reasoning_text)
                     # На шаге с tool_calls оставляем внутреннее рассуждение в стеке контекста модели,
                     # а на финальном шаге (без тегов) отдаём чистый финальный ответ в response.content.
-                    if (getattr(response, "tool_calls", None) or not (_clean_content or "").strip()) and (_thinking_text or _reasoning_text):
+                    # Если модель вернула нативные thinking-блоки Anthropic (с signature), сохраняем
+                    # список блоков нетронутым, чтобы не ломать цепочку thinking+tool_use в истории.
+                    if has_native_thinking:
+                        pass
+                    elif (getattr(response, "tool_calls", None) or not (_clean_content or "").strip()) and (_thinking_text or _reasoning_text):
                         _ctx_parts = []
                         if _thinking_text:
                             _ctx_parts.append(f"<thinking>{_thinking_text}</thinking>")
@@ -2097,7 +2183,14 @@ class HarnessAgent:
                             "", request_id, msg_id=str(request_id), kind="reasoning_end"
                         )
 
-                    messages.append(response)          # ← единственный аппенд
+                    if (
+                        _has_tool_calls
+                        or (_clean_content or "").strip()
+                        or has_native_thinking
+                        or _thinking_text
+                        or _reasoning_text
+                    ):
+                        messages.append(response)          # ← единственный аппенд
 
                     usage = self.track_tokens(response)
                     iter_in  = usage["input_tokens"]
@@ -2121,10 +2214,18 @@ class HarnessAgent:
                         final_response = (_clean_content or "").strip()
 
                         # Финальный шаг: фиксируем живой блок как финальный ответ.
-                        if stream_state["sent"] and final_response:
-                            await self._send_chunk(
-                                "", request_id, msg_id=str(request_id), kind="final_commit"
-                            )
+                        # Если модель стримила мысли, но финальный ответ пустой (пойдёт на ретрай
+                        # empty_response), закрываем блок размышлений через reasoning_end, чтобы
+                        # мысли не потерялись и не остались висеть в live_text.
+                        if stream_state["sent"]:
+                            if final_response:
+                                await self._send_chunk(
+                                    "", request_id, msg_id=str(request_id), kind="final_commit"
+                                )
+                            else:
+                                await self._send_chunk(
+                                    "", request_id, msg_id=str(request_id), kind="reasoning_end"
+                                )
                         break
 
                     # Выполняем все запрошенные инструменты параллельно
@@ -2256,6 +2357,10 @@ class HarnessAgent:
                             )
                         )
                     )
+            if not (final_response or "").strip():
+                await self._send_chunk(
+                    "", request_id, msg_id=str(request_id), kind="final_commit"
+                )
 
             # input/output/total — только основная модель (на них считается стоимость
             # в chats_service). Кеш — подмножество input. Расход тулов (vision,
@@ -2312,6 +2417,7 @@ class HarnessAgent:
         finally:
             # Очищаем request-local контекст текущего хода.
             self._request_ctx.reset(ctx_token)
+            self._flow_last.pop(request_id, None)
 
 
     async def _invoke_tool(self, tools_by_name: dict, tool_call: dict, request_id: str) -> str:
@@ -2367,7 +2473,13 @@ class HarnessAgent:
         fmt = _fmt_args(name, args)
         logger.info(f"[tool] ▶ {name}({fmt})")
 
-        import time
+        call_id = tool_call.get("id") or None
+        t0 = time.monotonic()
+        # Параллельные тулы одного шага получают одинаковый gap: точку обновляем только на tool_end.
+        last = self._flow_last.get(request_id) if request_id else None
+        gap_ms = int((t0 - last) * 1000) if last is not None else None
+        flow_tool = tool_flow_fields(name, args)  # имя тула на фронт не отдаём
+        await self._send_flow(request_id, "tool_start", call_id=call_id, gap_ms=gap_ms, **flow_tool)
         t0 = time.monotonic()
         try:
             result     = await tool_fn.ainvoke(args)
@@ -2380,11 +2492,18 @@ class HarnessAgent:
                 preview += f"…[+{len(result_str)-MAX_RESULT_LEN}]"
 
             logger.info(f"[tool] ✅ {name} → {elapsed_ms}ms | {preview}")
+            if request_id:
+                self._flow_last[request_id] = time.monotonic()
+            flow_end = tool_flow_fields(name, args, result)
+            await self._send_flow(request_id, "tool_end", call_id=call_id, ok=True, ms=elapsed_ms, **flow_end)
             return result_str
 
         except Exception as e:
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             logger.error(f"[tool] ❌ {name} → {elapsed_ms}ms | {e}")
+            if request_id:
+                self._flow_last[request_id] = time.monotonic()
+            await self._send_flow(request_id, "tool_end", call_id=call_id, ok=False, ms=elapsed_ms, **flow_tool)
             return f"Ошибка при выполнении {name}: {e}"
 
  

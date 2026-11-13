@@ -185,6 +185,78 @@
         return track;
     }
 
+    /* ── Пейджер чипов агента: блоки по N, горизонтальный scroll-snap ── */
+    function pager(chips, size = 3) {
+        const root = document.createElement('div');
+        root.className = 'fa-pager';
+        const track = document.createElement('div');
+        track.className = 'fa-pager__track';
+        const pages = [];
+        for (let i = 0; i < chips.length; i += size) {
+            const page = document.createElement('div');
+            page.className = 'fa-pager__page';
+            chips.slice(i, i + size).forEach((c) => page.appendChild(c));
+            track.appendChild(page);
+            pages.push(page);
+        }
+        root.appendChild(track);
+
+        const total = chips.length;
+        const foot = document.createElement('div');
+        foot.className = 'fa-pager__foot';
+        const mkNav = (dir) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = `fa-pager__nav fa-pager__nav--${dir}`;
+            b.setAttribute('aria-label', dir === 'prev' ? 'Предыдущие файлы' : 'Следующие файлы');
+            b.innerHTML = dir === 'prev' ? IC.left : IC.right;
+            b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); go(cur + (dir === 'prev' ? -1 : 1)); });
+            return b;
+        };
+        const prev = mkNav('prev');
+        const next = mkNav('next');
+        const dots = document.createElement('div');
+        dots.className = 'fa-pager__dots';
+        const dotEls = pages.map((_, i) => {
+            const d = document.createElement('button');
+            d.type = 'button';
+            d.className = 'fa-pager__dot';
+            d.setAttribute('aria-label', `Страница ${i + 1}`);
+            d.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); go(i); });
+            dots.appendChild(d);
+            return d;
+        });
+        const count = document.createElement('span');
+        count.className = 'fa-pager__count';
+        foot.append(prev, dots, next, count);
+        root.appendChild(foot);
+
+        let cur = 0;
+        const sync = () => {
+            const w = track.clientWidth || 1;
+            cur = Math.max(0, Math.min(pages.length - 1, Math.round(track.scrollLeft / w)));
+            dotEls.forEach((d, i) => d.classList.toggle('is-on', i === cur));
+            prev.disabled = cur === 0;
+            next.disabled = cur === pages.length - 1;
+            const from = cur * size + 1;
+            const to = Math.min(total, from + size - 1);
+            count.textContent = `${from}–${to} из ${total}`;
+            // Высота трека = высота текущей страницы (последняя может быть короче).
+            track.style.height = pages[cur].offsetHeight ? pages[cur].offsetHeight + 'px' : '';
+        };
+        const go = (i) => {
+            i = Math.max(0, Math.min(pages.length - 1, i));
+            track.scrollTo({ left: i * track.clientWidth, behavior: 'smooth' });
+        };
+        let raf = 0;
+        track.addEventListener('scroll', () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(sync); }, { passive: true });
+        try { new ResizeObserver(() => sync()).observe(track); } catch (_) {}
+        pages.forEach((p) => { try { new ResizeObserver(() => sync()).observe(p); } catch (_) {} });
+        requestAnimationFrame(sync);
+        sync();
+        return root;
+    }
+
     /* ── Аудио внутри плитки: тот же матричный визуализатор, что у fa-audio-viz ── */
     function bindAudioTile(t) {
         if (!t) return null;
@@ -795,6 +867,7 @@
     }, true);
 
     window.FileTiles = {
+        pager,
         tileHtml, groupHtml, enhanceScroller, trackOf, stopAudioFor, bindAudioTiles,
         kindOf, labelOf, fmtSize,
         previewTypeOf, openFilePreview, exitFilePreview, enterTextChipPreview,

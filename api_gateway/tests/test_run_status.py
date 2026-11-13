@@ -181,3 +181,63 @@ def test_system_notice_unknown_phase_and_no_id(redis_mock):
 def test_system_notice_redis_error(redis_mock):
     redis_mock.hgetall.side_effect = Exception("WRONGTYPE")
     assert run(run_status.get_system_notice()) is None
+
+
+# ---------- FlowMap: хронология flow:{chat_id} ----------
+
+def test_flow_push_and_get(redis_mock):
+    redis_mock.rpush.return_value = 1
+    run(run_status.flow_push("c1", "send", "r1", ok=None))
+    key, raw = redis_mock.rpush.await_args.args
+    assert key == "flow:c1"
+    rec = json.loads(raw)
+    assert rec["ev"] == "send" and rec["rid"] == "r1" and "ok" not in rec
+    redis_mock.expire.assert_awaited_with("flow:c1", run_status.FLOW_TTL)
+    redis_mock.lrange.return_value = [raw, "битый json", json.dumps({"x": 1})]
+    assert run(run_status.get_flow("c1")) == [rec]
+
+
+def test_mark_running_resets_flow(redis_mock):
+    redis_mock.rpush.return_value = 1
+    run(run_status.mark_running("c1", "r1"))
+    redis_mock.delete.assert_any_await("flow:c1")
+    evs = [json.loads(c.args[1])["ev"] for c in redis_mock.rpush.await_args_list]
+    assert evs == ["send", "gateway"]
+
+
+def test_clear_running_pushes_done(redis_mock):
+    redis_mock.rpush.return_value = 1
+    async def get(k):
+        return json.dumps({"request_id": "r1"}) if k == "agent:running:c1" else None
+    redis_mock.get.side_effect = get
+    run(run_status.clear_running("c1", ok=False))
+    rec = json.loads(redis_mock.rpush.await_args.args[1])
+    assert rec["ev"] == "done" and rec["rid"] == "r1" and rec["ok"] is False
+
+
+def test_clear_running_with_explicit_request_id_and_dedupe(redis_mock):
+    redis_mock.rpush.return_value = 1
+    async def get(k):
+        if k == "agent:reasoning:c1":
+            return json.dumps({"request_id": "r2", "started_at": 100.0, "is_final": False, "completed": False})
+        return None
+    redis_mock.get.side_effect = get
+    redis_mock.lrange.return_value = []
+    run(run_status.clear_running("c1", request_id="r2"))
+    rec = json.loads(redis_mock.rpush.await_args.args[1])
+    assert rec["ev"] == "done" and rec["rid"] == "r2"
+    saved_state = json.loads(redis_mock.set.await_args.args[1])
+    assert saved_state["completed"] is True and saved_state["is_final"] is True
+
+    # Повторный вызов, когда в хвосте flow:c1 уже лежит done для того же rid, не дублирует запись
+    redis_mock.rpush.reset_mock()
+    redis_mock.lrange.return_value = [json.dumps({"ev": "done", "rid": "r2"})]
+    run(run_status.clear_running("c1", request_id="r2"))
+    redis_mock.rpush.assert_not_awaited()
+
+
+def test_flow_push_trims(redis_mock, mocker):
+    mocker.patch.object(run_status, "FLOW_MAX", 2)
+    redis_mock.rpush.return_value = 9
+    run(run_status.flow_push("c1", "tool_end", "r1"))
+    redis_mock.ltrim.assert_awaited_once_with("flow:c1", -2, -1)

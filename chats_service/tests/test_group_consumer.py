@@ -1,7 +1,8 @@
 """Тесты GroupDBConsumer.process / _broadcast.
-Мокаем group_db (БД) и requests (HTTP на гейтвеи). Kafka не задействован.
+Мокаем group_db (БД) и httpx (HTTP на гейтвеи). Kafka не задействован.
 """
 import asyncio
+from unittest.mock import AsyncMock
 import pytest
 
 from app.group_endpoint_consumer import GroupDBConsumer
@@ -29,7 +30,7 @@ def consumer():
 
 
 def test_broadcast_posts_to_both_gateways(consumer, mocker):
-    post = mocker.patch("app.group_endpoint_consumer.requests.post")
+    post = mocker.patch("app.group_endpoint_consumer.httpx.AsyncClient.post", new_callable=AsyncMock)
     asyncio.run(consumer._broadcast("global", {"event": "x"}, "main"))
     assert post.call_count == 2  # main + sigma всегда
     urls = [c.args[0] for c in post.call_args_list]
@@ -38,7 +39,7 @@ def test_broadcast_posts_to_both_gateways(consumer, mocker):
 
 
 def test_process_new_message_inserts_and_broadcasts(consumer, mocker):
-    post = mocker.patch("app.group_endpoint_consumer.requests.post")
+    post = mocker.patch("app.group_endpoint_consumer.httpx.AsyncClient.post", new_callable=AsyncMock)
     asyncio.run(consumer.process({
         "event": "new_message", "room_uid": "global",
         "user_id": 1, "username": "u", "message": "hi",
@@ -51,7 +52,7 @@ def test_process_new_message_inserts_and_broadcasts(consumer, mocker):
 
 
 def test_process_edit_only_broadcasts(consumer, mocker):
-    post = mocker.patch("app.group_endpoint_consumer.requests.post")
+    post = mocker.patch("app.group_endpoint_consumer.httpx.AsyncClient.post", new_callable=AsyncMock)
     asyncio.run(consumer.process({
         "event": "edit_message", "room_uid": "global",
         "gateway_target": "both", "message_id": 5,
@@ -61,7 +62,7 @@ def test_process_edit_only_broadcasts(consumer, mocker):
 
 
 def test_process_unknown_event_noop(consumer, mocker):
-    post = mocker.patch("app.group_endpoint_consumer.requests.post")
+    post = mocker.patch("app.group_endpoint_consumer.httpx.AsyncClient.post", new_callable=AsyncMock)
     asyncio.run(consumer.process({
         "event": "wat", "room_uid": "global",
     }))

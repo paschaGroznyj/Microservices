@@ -25,6 +25,7 @@ from fastapi import (FastAPI, HTTPException, Request, Response,
 APIRouter, Form, File, UploadFile)
 from fastapi.responses import StreamingResponse
 from agent.event_loop import HarnessAgent
+from agent.not_loop import LLModel
 from langchain.schema import HumanMessage, SystemMessage
 from agent.core.config import (KAFKA_BROKER, PORT_PM_AGENT, 
 PORT_PARSERS_SERVICE, PORT_GATEWAY_PORT,
@@ -71,6 +72,7 @@ producer: AIOKafkaProducer | None = None
 consumer: AIOKafkaConsumer | None = None
 consumer_alive = False
 agent: HarnessAgent | None = None
+llmodel: LLModel | None = None  # режим type_query="model": модель без тулов
 active_tasks: dict[str, asyncio.Task] = {}
 
 FILE_WAIT_TIMEOUT = 20.0  # сек, сколько kafka-хендлер готов ждать файлы
@@ -118,7 +120,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     chat_id = payload.get("chat_id")
     text = payload.get("message", "")
     is_from_bot = payload.get("is_from_bot", False)
-    type_agent = payload.get("type_agent")
+    # type_query: "agent" (полный агент с тулами) | "model" (MauDel — языковая модель без тулов).
+    type_query = "model" if str(payload.get("type_query") or "agent").lower() == "model" else "agent"
     request_id = payload.get("request_id")
     tb_name = payload.get("tb_name")
     username = payload.get("username")
@@ -187,13 +190,19 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     #     return
     print("ВНУТРИ АГЕНТА", payload)
 
-    # if type_agent != "pm":
-    #     return
+    # FlowMap: агент взял запрос из Kafka в работу. Фоном, чтобы не задерживать ответ.
+    if agent is not None and request_id and not loop_tick:
+        asyncio.create_task(agent._send_flow(request_id, "accepted", target=gateway_target, chat_id=chat_id))
 
     # message = f"[CatchPM, ТабельНомер: 23423423, Пользователь: Иванов Иванон Иваныч, user_id=-1234]\n" + text
     is_telegram = (gateway_target == "telegram")
     is_max = (gateway_target == "max")
     is_mobile = (gateway_target == "mobile") # Если это мобильный клиент
+    # Режим «Модель» — только для живых запросов из веба (CatchPM/Sigma).
+    # Мессенджеры, mobile, самоцикл и задачник всегда идут через агента.
+    if type_query == "model" and (gateway_target not in ("main", "sigma") or loop_tick or task_trigger):
+        type_query = "agent"
+    logging.info(f"[type_query] chat={chat_id} request={request_id} type_query={type_query} model={agent_model}")
     if is_telegram:
         # Источник Telegram: своя шапка (без CatchPM/табельного).
         from agent.telegram.tg_integration import (
@@ -279,7 +288,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
         # полную инструкцию с характером; lite соберёт свою в run_lite.
         message = build_agent_instruction(get_persona_prompt(mobile_persona)) + text
     # Скиллы юзера — только для CatchPM (в Telegram/MAX user_id — id мессенджера, не наш users).
-    if not is_telegram and not is_max:
+    if not is_telegram and not is_max and type_query == "agent":
         selected_skills = await db.get_selected_skills_for_user(int(user_id))
         if selected_skills:
             try:
@@ -371,6 +380,14 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                 from agent.core.agent_provider import get_real_model_name
                 response["agent_model"] = get_real_model_name("lite")
                 response_text = lite_raw
+        elif type_query == "model":
+            response = await llmodel.process_query(user_input=message,
+                                            request_id=request_id, user_id=user_id,
+                                            chat_id=chat_id, agent_model=agent_model,
+                                            context_size=context_size,
+                                            gateway_target=gateway_target,
+                                            timezone_name=client_tz_name)
+            response_text = response["message"]
         else:
             response = await agent.process_query(user_input=message,
                                             request_id=request_id, user_id=user_id,
@@ -442,6 +459,11 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
 
         attached_files = None
         logging.info(f"[files_to_send] {files_to_send}")
+
+        def _flow_obs(obs_key):
+            # FlowMap: файл ответа ушёл в OBS по HTTP. Фоном, ответ не ждёт.
+            if agent is not None and request_id:
+                asyncio.create_task(agent._send_flow(request_id, "obs", target=gateway_target, chat_id=chat_id, ok=bool(obs_key)))
         if files_to_send:
             attached_files = []
             for f in files_to_send:
@@ -453,7 +475,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                     _img_path = f.get("path")
                     if _img_path and os.path.isfile(_img_path):
                         try:
-                            await obs_file_storage.upload_user_file(_img_path, chat_id)
+                            _obs_key = await obs_file_storage.upload_user_file(_img_path, chat_id)
+                            _flow_obs(_obs_key)
                         except Exception as _obs_err:
                             logging.error(f"OBS upload failed for {_img_path}: {_obs_err}")
                     entry = {
@@ -467,7 +490,8 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                     # Ключ детерминирован от (chat_id + local_path), поэтому
                     # /web/file сможет восстановить тот же ключ без маппинга в БД.
                     try:
-                        await obs_file_storage.upload_user_file(f["path"], chat_id)
+                        _obs_key = await obs_file_storage.upload_user_file(f["path"], chat_id)
+                        _flow_obs(_obs_key)
                     except Exception as _obs_err:
                         logging.error(f"OBS upload failed for {f.get('path')}: {_obs_err}")
                     entry = {
@@ -616,7 +640,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             "message": response_text.strip(),
             "message_id": message_id,
             "is_from_bot": True,
-            "type_agent": "pm",
+            "type_query": type_query,
             "selected_tools": selected_tools,
             "action": response.get('action'),
             "attached_files": attached_files,
@@ -656,7 +680,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                 "message": "Остановлено пользователем…",
                 "message_id": f"msg-stop-{int(time.time() * 1000)}",
                 "is_from_bot": True,
-                "type_agent": "pm",
+                "type_query": type_query,
                 "action": "stopped",
                 "gateway_target": gateway_target,
                 "tg_chat_id": tg_chat_id,
@@ -676,7 +700,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                 "message": "Произошла внутренняя ошибка при обработке запроса агентом. Попробуйте еще раз.",
                 "message_id": f"msg-err-{int(time.time() * 1000)}",
                 "is_from_bot": True,
-                "type_agent": "pm",
+                "type_query": type_query,
                 "action": "error",
                 "gateway_target": gateway_target,
                 "tg_chat_id": tg_chat_id,
@@ -745,7 +769,7 @@ async def kafka_moment():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global agent, digest_scheduler
+    global agent, llmodel, digest_scheduler
 
     await db.init_db_pool()
     await db.init_agent_admin_pool() 
@@ -764,6 +788,7 @@ async def lifespan(app: FastAPI):
     scripts_cleaner_task = asyncio.create_task(
         sandbox_scripts_cleaner.start_scripts_cleaner(db.list_code_library_paths))
     agent = HarnessAgent(database=db)
+    llmodel = LLModel(agent)
     connect_service_routers(agent, db)
 
     yield

@@ -566,3 +566,26 @@ def test_short_tool_trace_kept_raw(h):
     h.models["coder"].script = [ai("", [("a", {}), ("b", {})]), "ok"]
     assert h.run()["tool_trace"] == "a:done; b:done"
     h.summarize_trace.assert_not_awaited()
+
+
+def test_empty_ai_message_dropped_by_sanitizer(h):
+    from langchain_core.messages import AIMessage, ToolMessage
+    msgs = [AIMessage(content=""), AIMessage(content=[]), AIMessage(content="ok")]
+    out = el._sanitize_messages(msgs)
+    assert len(out) == 1
+    assert out[0].content == "ok"
+
+
+def test_native_thinking_kept_intact(h):
+    from langchain_core.messages import AIMessage
+    h.add_tool("noop")
+    # имитируем ответ с нативным thinking-блоком
+    content = [{"type": "thinking", "thinking": "надо подумать", "signature": "sig123"}, {"type": "tool_use", "id": "t1", "name": "noop"}]
+    h.models["coder"].script = [ai(content, [("noop", {})]), "финал"]
+    out = h.run()
+    assert out["message"] == "финал"
+    # проверяем, что в истории остался список, а не строка "<thinking>надо подумать</thinking>"
+    sent = h.models["coder"].calls[1]
+    ai_msg = [m for m in sent if isinstance(m, AIMessage)][-1]
+    assert isinstance(ai_msg.content, list)
+    assert ai_msg.content[0]["signature"] == "sig123"

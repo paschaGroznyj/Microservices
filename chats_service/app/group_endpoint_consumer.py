@@ -20,7 +20,7 @@ import signal
 import time
 
 from kafka import KafkaConsumer
-import requests
+import httpx
 
 from app.db.chats_tables import DataBaseChats
 from app.db.group_chat_db import GroupChatDB
@@ -122,12 +122,13 @@ class GroupDBConsumer:
         else:
             targets = ["main", "sigma"]
         body = {"room_uid": room_uid, **event}
-        for tgt in targets:
-            url = self.gateway_urls[tgt]
-            try:
-                requests.post(f"{url}/internal/group_message", json=body, timeout=5)
-            except Exception as e:
-                logger.error(f"[group-chat] broadcast -> {tgt} error: {e}")
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            for tgt in targets:
+                url = self.gateway_urls[tgt]
+                try:
+                    await client.post(f"{url}/internal/group_message", json=body)
+                except Exception as e:
+                    logger.error(f"[group-chat] broadcast -> {tgt} error: {e}")
 
     async def consume(self):
         logger.info("[group-chat] GroupDBConsumer запущен")

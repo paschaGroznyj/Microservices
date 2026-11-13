@@ -161,8 +161,10 @@ class BotStream(BaseModel):
     id: str | None = None
     # Тип чанка: "live" — живой текст (печатается в текущем блоке),
     # "reasoning_end" — маркер сворачивания живого блока в reasoning,
-    # "final" / "final_commit" — фиксация финального ответа.
+    # "final" / "final_commit" — фиксация финального ответа,
+    # "flow" — служебное событие пути запроса для FlowMap (поле flow, chunk пустой).
     kind: str = "final"
+    flow: dict | None = None
 
 app.add_middleware(
     CORSMiddleware,
@@ -194,14 +196,25 @@ async def websocket_chat(websocket: WebSocket, chat_id: str):
     try:
         while True:
             await websocket.receive_text()
-    except WebSocketDisconnect:
-        connections[chat_id].remove(websocket)
+    except Exception:
+        pass
+    finally:
+        if websocket in connections.get(chat_id, []):
+            connections[chat_id].remove(websocket)
 
 # Функция для отправки события в WebSocket
 async def broadcast(chat_id: str, message: dict):
-    for ws in connections.get(chat_id, []):
+    dead = []
+    for ws in list(connections.get(chat_id, [])):
         logging.info(f"Подключение {ws}, сообщение {message}")
-        await ws.send_json(message)
+        try:
+            await ws.send_json(message)
+        except Exception as e:
+            logger.debug(f"WS send failed for chat_id={chat_id}: {e}")
+            dead.append(ws)
+    for ws in dead:
+        if ws in connections.get(chat_id, []):
+            connections[chat_id].remove(ws)
 
 @app.post("/internal/bot_status")
 async def bot_status(payload: BotStatus):
@@ -230,6 +243,16 @@ async def bot_stream(payload: BotStream):
         logger.warning(f"[stream] Неизвестный request_id: {payload.request_id}")
         raise HTTPException(status_code=404, detail="request_id not found")
 
+    # FlowMap: отдельный тип сообщения, без chunk (фронт не создаёт пузырь)
+    # и мимо reasoning-state (лишний Redis на каждый тул не нужен).
+    if payload.kind == "flow":
+        await broadcast(chat_id, {
+            "type": "flow",
+            "request_id": payload.request_id,
+            **(payload.flow or {}),
+        })
+        return {"ok": True}
+
     active_requests = await run_status.append_reasoning_chunk(
         chat_id, payload.chunk, payload.kind, payload.id
     )
@@ -250,11 +273,13 @@ async def receive_bot_message(bot_msg: BotMessage):
     logging.info(f"Получено сообщение от бота для chat_id={bot_msg.chat_id}: {bot_msg.message}")
     start = time.perf_counter()
 
+    # Финал пришёл — снимаем Redis-флаг «агент в работе» ДО рассылки в WS,
+    # чтобы сбой сокета не оставил висящий флаг в Redis.
+    msg_dict = bot_msg.message if isinstance(bot_msg.message, dict) else {}
+    await run_status.clear_running(bot_msg.chat_id, request_id=msg_dict.get("request_id"))
+
     # Отправляем сообщение через WebSocket всем клиентам в чате
     await broadcast(bot_msg.chat_id, bot_msg.message)
-
-    # Финал пришёл — снимаем Redis-флаг «агент в работе».
-    await run_status.clear_running(bot_msg.chat_id)
 
     # Автогенерированный заголовок чата: отдельное событие title_update,
     # чтобы фронт обновил строку чата в сайдбаре без перезапроса списка.
@@ -1121,11 +1146,13 @@ async def send_message(request: Request):
     data["user_id"] = user["user_id"]
     data["tb_name"] = request.headers.get("X-Authentik-Username")
     data["username"] = request.headers.get("X-Authentik-Name").encode('latin-1').decode('utf-8')
-    data["type_agent"] = data.get("type_agent", "pm")
+    # Режим запроса: agent (полный агент с тулами) | model (MauDel — модель без тулов)
+    data["type_query"] = "model" if str(data.pop("type_query", "agent")).lower() == "model" else "agent"
+    data.pop("type_agent", None)
     data["request_id"] = request_id
     data["gateway_target"] = "main"
     data["timezone_name"] = (data.get("timezone_name") or request.headers.get("X-Timezone") or "Europe/Moscow").strip()
-    logger.info(f"Что летит при отправке сообщений {data['chat_id']}, {data['message']}")
+    logger.info(f"Что летит при отправке сообщений {data['chat_id']}, type_query={data['type_query']}, {data['message']}")
 
     message = {
         "user_id": data["user_id"],
@@ -1142,7 +1169,7 @@ async def send_message(request: Request):
     await run_status.mark_running(
         data["chat_id"],
         request_id,
-        data.get("type_agent"),
+        data.get("type_query"),
         user_message=data.get("message"),
         user_message_id=data.get("message_id"),
     )
@@ -1184,7 +1211,7 @@ async def stop_message(request: Request):
     # Стоп: снимаем Redis-флаг работы (chat_id знаем по pending_requests).
     stop_chat_id = pending_requests.get(request_id) or data.get("chat_id")
     if stop_chat_id is not None:
-        await run_status.clear_running(stop_chat_id)
+        await run_status.clear_running(stop_chat_id, ok=False)
         # Гасим и флаг самоцикла — петля останавливается по стоп-кнопке.
         await run_status.clear_loop(stop_chat_id)
 
@@ -1232,6 +1259,30 @@ async def chat_run_status(chat_id: str, request: Request):
         })
     return JSONResponse(content={"running": True, "loop_active": loop_active, **info})
 
+
+@app.get("/api/chats/{chat_id}/flow")
+async def chat_flow(chat_id: str, request: Request):
+    """FlowMap: хронология пути последнего запроса (после F5 / переключения чата).
+
+    events — из Redis flow:{chat_id} (ts в мс epoch), now — серверное время для пересчёта
+    в таймлайн браузера без учёта расхождения часов клиента. Тексты размышлений — из
+    agent:reasoning:{chat_id} (steps по порядку событий think_end, live_text — текущий живой блок)."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    events = await run_status.get_flow(chat_id)
+    r = await run_status.get_reasoning_state(chat_id) or {}
+    running = await run_status.get_running(chat_id) is not None
+    return JSONResponse(content={
+        "now": int(time.time() * 1000),
+        "running": running,
+        "events": events,
+        "reasoning": {
+            "request_id": r.get("request_id"),
+            "steps": r.get("steps") or [],
+            "live_text": r.get("live_text") or "",
+        },
+    })
 
 @app.post("/api/chats/upload_files")
 async def upload_files(

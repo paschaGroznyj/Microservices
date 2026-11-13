@@ -12,3 +12,4 @@ redis
 aiobotocore
 Pillow
 python-multipart
+httpx

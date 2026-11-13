@@ -30,15 +30,6 @@ def test_list_workspace_files_walks_tree(appmod, ws_root):
     assert any(n.endswith("r.txt") for n in names)
 
 
-def test_has_git_detects_root_and_subdir(appmod, ws_root):
-    wid = appmod._create_workspace_dir()
-    ws = ws_root / wid
-    assert appmod._has_git(str(ws)) is False
-    (ws / "repo").mkdir()
-    (ws / "repo" / ".git").mkdir()
-    assert appmod._has_git(str(ws)) is True
-
-
 def test_has_keep_hold(appmod, ws_root):
     wid = appmod._create_workspace_dir()
     ws = ws_root / wid
@@ -65,17 +56,17 @@ def test_cleanup_keeps_fresh(appmod, ws_root, monkeypatch):
     assert (ws_root / wid).exists()
 
 
-def test_cleanup_skips_git_and_keep(appmod, ws_root, monkeypatch):
+def test_cleanup_keeps_only_hold(appmod, ws_root, monkeypatch):
     monkeypatch.setattr(appmod, "WORKSPACE_TTL_SECONDS", 1)
-    # git workspace, expired -> skipped
+    # .git больше не держит область: просроченная — удаляется
     wg = appmod._create_workspace_dir()
-    (ws_root / wg / ".git").mkdir()
+    (ws_root / wg / "repo" / ".git").mkdir(parents=True)
     (ws_root / wg / ".last_active").write_text(str(time.time() - 9999))
     # keep-hold workspace, expired -> skipped
     wk = appmod._create_workspace_dir()
     (ws_root / wk / appmod.WORKSPACE_KEEP_MARKER).write_text("")
     (ws_root / wk / ".last_active").write_text(str(time.time() - 9999))
     removed = appmod._cleanup_expired_workspaces()
-    assert removed == 0
-    assert (ws_root / wg).exists()
+    assert removed == 1
+    assert not (ws_root / wg).exists()
     assert (ws_root / wk).exists()

@@ -20,6 +20,12 @@ agent_sandbox/app.py  —  v3: Async Submit + Kafka + Persistent Workspace
   POST /workspace/{wid}/keep — закрепить workspace бессрочно (keep-маркер, иммунитет к TTL)
   DELETE /workspace/{wid}/keep — снять keep-маркер
   POST /workspace/cleanup — принудительная очистка просроченных
+  Теневые git-снимки (ws_diff.py) для карточки «Изменённые файлы»:
+  POST /workspace/{wid}/diff/snap — снимок до/после тула (первый в request_id = base)
+  GET  /workspace/{wid}/diff?request_id= — итог запроса (base → последний снимок)
+  GET  /diff/chat/{chat_id} — все непустые diff чата (восстановление после F5)
+  POST /diff/attach — привязать request_id к message_id ответа
+  Срок жизни области определяет только .ws_hold; .git больше не держит область.
   Live-редактор: workspace не сканируется. После /execute и /submit (если передан
   changed_files), /edit, /upload, keep/unkeep, delete и TTL-очистки песочница
   пушит событие в gateway (POST /internal/editor/notify).
@@ -46,6 +52,7 @@ import signal
 import threading
 
 import sandbox_tasks
+import ws_diff
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
@@ -134,6 +141,17 @@ class ExecuteResponse(BaseModel):
     files: list[OutputFile] = Field(default_factory=list)
     run_id: str | None = None
     saved_script: str | None = None
+
+
+class DiffSnapRequest(BaseModel):
+    request_id: str = Field(..., min_length=1, max_length=200)
+    chat_id: str | None = Field(None, max_length=200)
+    message_id: str | None = Field(None, max_length=200)
+
+
+class DiffAttachRequest(BaseModel):
+    request_id: str = Field(..., min_length=1, max_length=200)
+    message_id: str = Field(..., min_length=1, max_length=200)
 
 
 class WorkspaceEditRequest(BaseModel):
@@ -635,17 +653,6 @@ def _touch_workspace(workspace_id: str):
         with open(os.path.join(ws_path, ".last_active"), "w") as f:
             f.write(str(time.time()))
 
-def _has_git(ws_path: str) -> bool:
-    # .git в корне
-    if os.path.exists(os.path.join(ws_path, ".git")):
-        return True
-    # .git в подпапках первого уровня (git clone создаёт подпапку repo/.git)
-    for entry in os.listdir(ws_path):
-        sub = os.path.join(ws_path, entry)
-        if os.path.isdir(sub) and os.path.exists(os.path.join(sub, ".git")):
-            return True
-    return False
-
 def _has_keep_hold(ws_path: str) -> bool:
     """Секретный маркер-файл держит workspace живым бессрочно, пока файл физически лежит.
     Наличие маркера = полный иммунитет к TTL-удалению (без проверки возраста)."""
@@ -726,10 +733,6 @@ def _cleanup_expired_workspaces():
     for entry in os.listdir(WORKSPACES_DIR):
         ws_path = os.path.join(WORKSPACES_DIR, entry)
         if not os.path.isdir(ws_path):
-            continue
-
-        if _has_git(ws_path):
-            log.debug("[workspace] Пропущен %s (содержит .git)", entry)
             continue
 
         if _has_keep_hold(ws_path):
@@ -1098,11 +1101,101 @@ async def create_workspace():
             raise HTTPException(status_code=429, detail=f"Достигнут лимит workspace ({WORKSPACE_MAX_COUNT})")
 
     workspace_id = _create_workspace_dir()
+    ws_path = os.path.join(WORKSPACES_DIR, workspace_id)
+    # Теневой git для карточки «Изменённые файлы»: .ws_meta/shadow/root.git.
+    # Ошибка снимков не должна мешать созданию области.
+    try:
+        await asyncio.to_thread(ws_diff.init_workspace, ws_path)
+    except Exception as e:
+        log.warning("[ws_diff] init %s: %s", workspace_id, e)
     return {
         "workspace_id": workspace_id,
         "created_at": time.time(),
         "path": os.path.join(WORKSPACES_DIR, workspace_id),
     }
+
+
+# ── Изменённые файлы (теневые git-снимки, ws_diff.py) ──────────────
+
+DIFF_CHAT_LIMIT = 30
+
+
+def _iter_workspaces():
+    if not os.path.isdir(WORKSPACES_DIR):
+        return
+    for wid in os.listdir(WORKSPACES_DIR):
+        ws_path = os.path.join(WORKSPACES_DIR, wid)
+        if os.path.isdir(ws_path) and os.path.isfile(ws_diff._state_path(ws_path)):
+            yield wid, ws_path
+
+
+@app.post("/workspace/{workspace_id}/diff/snap")
+async def diff_snap_endpoint(workspace_id: str, req: DiffSnapRequest):
+    ws_path = _get_workspace_path(workspace_id)
+    if ws_path is None:
+        raise HTTPException(status_code=404, detail="Workspace не найден")
+    try:
+        data = await asyncio.to_thread(ws_diff.snap, ws_path, req.request_id, req.chat_id, req.message_id)
+    except Exception as e:
+        log.warning("[ws_diff] snap %s: %s", workspace_id, e)
+        raise HTTPException(status_code=500, detail=f"snapshot failed: {e}")
+    data["workspace_id"] = workspace_id
+    return data
+
+
+@app.get("/workspace/{workspace_id}/diff")
+async def diff_get_endpoint(workspace_id: str, request_id: str):
+    ws_path = _get_workspace_path(workspace_id)
+    if ws_path is None:
+        raise HTTPException(status_code=404, detail="Workspace не найден")
+    data = await asyncio.to_thread(ws_diff.get_request_diff, ws_path, request_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Снимков для request_id нет")
+    data["workspace_id"] = workspace_id
+    return data
+
+
+def _diff_for_chat_sync(chat_id: str, limit: int) -> list[dict]:
+    found = []
+    for wid, ws_path in _iter_workspaces():
+        for rid, meta in ws_diff.requests_for_chat(ws_path, chat_id):
+            found.append((meta.get("updated") or 0, wid, ws_path, rid))
+    found.sort(reverse=True)
+    items = []
+    for _, wid, ws_path, rid in found[:limit]:
+        try:
+            d = ws_diff.get_request_diff(ws_path, rid)
+        except Exception as e:
+            log.debug("[ws_diff] diff %s/%s: %s", wid, rid, e)
+            continue
+        if d and d.get("files_count"):
+            d["workspace_id"] = wid
+            items.append(d)
+    items.sort(key=lambda d: d.get("updated") or 0)
+    return items
+
+
+@app.get("/diff/chat/{chat_id}")
+async def diff_chat_endpoint(chat_id: str, limit: int = DIFF_CHAT_LIMIT):
+    """Все непустые diff чата: один запрос агента может трогать несколько областей —
+    тогда приходит несколько записей с одним request_id (фронт склеивает)."""
+    limit = max(1, min(int(limit or DIFF_CHAT_LIMIT), 100))
+    items = await asyncio.to_thread(_diff_for_chat_sync, str(chat_id), limit)
+    return {"chat_id": chat_id, "items": items}
+
+
+def _diff_attach_sync(request_id: str, message_id: str) -> list[str]:
+    hit = []
+    for wid, ws_path in _iter_workspaces():
+        if ws_diff.has_request(ws_path, request_id) and ws_diff.attach_message(ws_path, request_id, message_id):
+            hit.append(wid)
+    return hit
+
+
+@app.post("/diff/attach")
+async def diff_attach_endpoint(req: DiffAttachRequest):
+    hit = await asyncio.to_thread(_diff_attach_sync, req.request_id, req.message_id)
+    return {"ok": True, "workspaces": hit}
 
 
 @app.get("/workspace/{workspace_id}/files")
@@ -1348,7 +1441,7 @@ async def editor_ttl_endpoint(workspace_id: str):
         raise HTTPException(status_code=404, detail="Workspace не найден")
 
     now = time.time()
-    immortal = _has_git(ws_path) or _has_keep_hold(ws_path)
+    immortal = _has_keep_hold(ws_path)
 
     last_active_file = os.path.join(ws_path, ".last_active")
     created_file = os.path.join(ws_path, ".created_at")

@@ -660,7 +660,8 @@ So you can then spy on it/reuse it within the session.
 
         If you plan to work with files within the session, create a workspace
         via create_workspace (files inside the area live for 10 hours).
-        If you init a git repo inside /tmp/exec/workspaces/<id>, it won't be swept by the timer.
+        A git repo inside the workspace does NOT keep it alive: only the .ws_hold
+        marker does (see create_workspace). Do not run git init just to keep files.
 
         Docker specifics:
         - The daemon is accessible via unix:///var/run/docker.sock
@@ -868,6 +869,15 @@ So you can then spy on it/reuse it within the session.
         To keep the workspace permanently, create the file
         `/tmp/exec/workspaces/<wid>/.ws_hold` at the workspace root (not inside
         output/ or repo/). Do it only if the user plans to continue working.
+        This marker is the ONLY thing that keeps a workspace alive; a cloned
+        repo or a .git folder does not.
+
+        CHANGED FILES: the sandbox tracks every file you create, edit or delete
+        in the workspace (shadow git snapshots in .ws_meta/shadow, not visible
+        in the editor and not touching your repos). The user sees them live as
+        a "Changed files" diff card under your answer, so you do not need to
+        paste diffs into the reply. Never touch .ws_meta/: it is service data.
+        Your own `git status/commit/push` inside cloned repos works as usual.
 
         Returns: workspace_id, created_at, path, editor_url
         """

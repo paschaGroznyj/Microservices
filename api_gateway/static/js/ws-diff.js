@@ -68,25 +68,25 @@ function render(root,files,opt){opt=opt||{};let mode='unified';
  const A=files.reduce((s,f)=>s+f.add,0),Dd=files.reduce((s,f)=>s+f.del,0);
  root.className='wsd'+(opt.collapsed?' is-collapsed':'');root.dataset.cds='TurnChanges';root.dataset.state=opt.live?'live':'done';
  const head='<div class="wsd-head" role="button" tabindex="0" aria-expanded="'+!opt.collapsed+'">'+I.diff+'<span class="wsd-title">Изменённые файлы</span>'
-  +'<span class="wsd-count">'+plural(files.length,'файл','файла','файлов')+(opt.live?'<span class="wsd-hide-m"> · в работе</span>':'')+'</span>'+(opt.live?'<span class="wsd-live" title="'+esc(opt.live)+'"></span>':'')
+  +'<span class="wsd-count">'+files.length+'<span class="wsd-cw">'+plural(files.length,'файл','файла','файлов').slice(String(files.length).length)+'</span>'+(opt.live?'<span class="wsd-hide-m"> · в работе</span>':'')+'</span>'+(opt.live?'<span class="wsd-live" title="'+esc(opt.live)+'"></span>':'')
   +'<span class="wsd-sp"></span>'+stat(A,Dd)+bar(A,Dd)+I.caret+'</div>';
  const m=opt.meta||{},tools='<div class="wsd-tools"><span class="wsd-seg" role="tablist"><button class="on" data-m="unified">Unified</button><button data-m="split">Split</button></span>'
   +'<button class="wsd-btn wsd-tg" data-act="wrap" title="Перенос строк">'+I.wrap+'<span class="wsd-hide-m">Перенос</span></button><span class="wsd-sp"></span>'
   +'<button class="wsd-btn" data-act="fold" title="Свернуть все">'+I.fold+'<span class="wsd-hide-m">Свернуть</span></button>'
   +'<button class="wsd-btn" data-act="patch" title="Скопировать patch">'+I.copy+'<span>Patch</span></button>'
   +'<button class="wsd-btn wsd-hide-m" data-act="editor">'+I.ext+'<span>В редакторе</span></button></div>';
- root.innerHTML=head+'<div class="wsd-body">'+tools+'<div class="wsd-files"></div><div class="wsd-foot">workspace <b>'+esc(m.ws||'')+'</b> · request <b>'+esc(m.rid||'')+'</b> · baseline '+(m.base||'—')+(opt.live?'':' \u2192 '+(m.end||'—'))+'</div></div>';
+ root.innerHTML=head+'<div class="wsd-body">'+tools+'<div class="wsd-files"></div><div class="wsd-foot"><span>workspace <b>'+esc(m.ws||'')+'</b></span><span>request <b>'+esc(m.rid||'')+'</b></span><span>baseline '+(m.base||'—')+(opt.live?'':' \u2192 '+(m.end||'—'))+'</span></div></div>';
  const body=root.querySelector('.wsd-body'),list=root.querySelector('.wsd-files');
- files.forEach((f,i)=>{const p=f.path.lastIndexOf('/'),dir=p>=0?f.path.slice(0,p+1):'',name=f.path.slice(p+1);
-  const el=document.createElement('div');el.className='wsd-file is-'+f.status+((opt.open?opt.open.has(f.path):(f.open!==false&&!f.collapsed&&(i<2||f.secret||f.binary)))?' is-open':'');el.dataset.path=f.path;if(f.ws)el.dataset.ws=f.ws;if(f.rel)el.dataset.rel=f.rel;
+ let txt=0;files.forEach((f,i)=>{const p=f.path.lastIndexOf('/'),dir=p>=0?f.path.slice(0,p+1):'',name=f.path.slice(p+1);
+  const el=document.createElement('div');el.className='wsd-file is-'+f.status+((opt.open?opt.open.has(f.path):(f.open!==false&&!f.collapsed&&!f.binary&&!f.secret&&!f.omitted&&(txt++)<2))?' is-open':'');el.dataset.path=f.path;if(f.ws)el.dataset.ws=f.ws;if(f.rel)el.dataset.rel=f.rel;
   el.innerHTML='<div class="wsd-fhead">'+I.caret+'<span class="wsd-badge '+f.status+'" title="'+({M:'изменён',A:'добавлен',D:'удалён'})[f.status]+'">'+f.status+'</span>'
-   +'<span class="wsd-path" title="'+esc(f.path)+'"><span class="wsd-dir"><span>'+esc(dir)+'</span></span><span class="wsd-name">'+esc(name)+'</span></span>'
+   +'<span class="wsd-path" title="'+esc(f.path)+'"><span class="wsd-pin"><span class="wsd-dir"><span>'+esc(dir)+'</span></span><span class="wsd-name">'+esc(name)+'</span></span></span>'
    +(f.secret?'<span class="wsd-tag">скрыт</span>':f.binary?'<span class="wsd-tag">бинарный</span>':'')
    +(f.binary?'':stat(f.add,f.del)+'<span class="wsd-hide-m">'+bar(f.add,f.del)+'</span>')
    +(f.status!=='D'?'<button class="wsd-open" title="Открыть в редакторе">'+I.ext+'</button>':'<span class="wsd-open"></span>')+'</div><div class="wsd-code"></div>';
   list.appendChild(el);});
  let paint=()=>body.querySelectorAll('.wsd-file').forEach((el,i)=>{const f=files[i],c=el.querySelector('.wsd-code');
-   if(!el.classList.contains('is-open')){c.innerHTML='';c._m=null;return;}if(c._m===mode)return;c._m=mode;
+   if(!el.classList.contains('is-open')){c.innerHTML='';c._m=null;el.querySelector('.wsd-more')?.remove();return;}if(c._m===mode)return;c._m=mode;
    const n=note(f);if(n){c.innerHTML=n;return;}c.innerHTML='';c.appendChild(mode==='split'?split(f):unified(f));clip(el,f);});
  list.querySelectorAll('.wsd-code').forEach(c=>{const e=document.createElement('div');e.className='wsd-edge';const fb=document.createElement('div');fb.className='wsd-fade';c.parentElement.append(e,fb);c.addEventListener('scroll',()=>edge(c),{passive:true});});
  
@@ -102,7 +102,14 @@ function render(root,files,opt){opt=opt||{};let mode='unified';
   if(ab.dataset.act==='editor')openEditor(m.ws);});
  const mq=matchMedia('(max-width:640px)');const fit=()=>{if(mq.matches&&mode==='split'){mode='unified';root.querySelectorAll('.wsd-seg button').forEach(b=>b.classList.toggle('on',b.dataset.m==='unified'));paint();}};
  mq.addEventListener('change',fit);root._setMode=m2=>{mode=m2;root.querySelectorAll('.wsd-seg button').forEach(b=>b.classList.toggle('on',b.dataset.m===m2));paint();};
- const _p=paint;paint=()=>{_p();edges();};if(mq.matches){root.classList.add('is-wrap');root.querySelector('[data-act=wrap]').classList.add('on');}paint();return root;}
+ const _p=paint;paint=()=>{_p();edges();};if(window.ResizeObserver)new ResizeObserver(()=>marq(root)).observe(root);document.fonts?.ready.then(()=>marq(root));if(mq.matches){root.classList.add('is-wrap');root.querySelector('[data-act=wrap]').classList.add('on');}paint();return root;}
+// Бегущая строка для пути, который не влезает в строку файла (как описания в меню Агент/Модель):
+// пока влезает имя, каталог режется слева многоточием; не влезает имя — путь едет туда-обратно, первым кадром показан конец (имя файла).
+// В шапке, если «N файлов» не влезает, остаётся только число.
+function marq(root){const c=root.querySelector('.wsd-count');if(c&&c.clientWidth){c.classList.remove('is-tight');if(c.scrollWidth>c.clientWidth+1)c.classList.add('is-tight');}
+ root.querySelectorAll('.wsd-path').forEach(p=>{p.classList.remove('is-run');const w=p.clientWidth;if(!w)return;
+ if(p.querySelector('.wsd-name').scrollWidth-w<=1)return;p.classList.add('is-run');const over=Math.ceil(p.firstElementChild.scrollWidth-w);
+ p.style.setProperty('--wsd-shift',-(over+1)+'px');p.style.setProperty('--wsd-dur',Math.max(4,(over+1)/30+2.4).toFixed(1)+'s');});}
 function clip(el,f){const c=el.querySelector('.wsd-code');el.querySelector('.wsd-more')?.remove();c.classList.toggle('is-full',!!el._full);
  const lim=parseFloat(getComputedStyle(c).getPropertyValue('--wsd-maxh'))||420;if(c.scrollHeight<=lim+2){edge(c);return;}
  const n=f.hunks.reduce((s,h)=>s+h.lines.length,0),b=document.createElement('button');b.className='wsd-more';
@@ -150,9 +157,11 @@ function paintCard(rid){const c=cards.get(rid);if(!c)return;const h=host(c);if(!
  for(const [w,d] of c.items){ws=ws||w;(d.files||[]).forEach(f=>files.push(normFile(f,w)));
   if(d.base_at&&(base==null||d.base_at<base))base=d.base_at;if(d.updated&&(end==null||d.updated>end))end=d.updated;}
  if(!files.length)return;
- let el=c.el;const prev=el&&el.isConnected?el:null;
- const open=prev?new Set([...prev.querySelectorAll('.wsd-file.is-open')].map(x=>x.dataset.path)):null;
- const collapsed=prev?prev.classList.contains('is-collapsed'):!c.live?false:true;
+ // состояние берём с уже отрисованной карточки (даже если её временно вынули из DOM);
+ // восстановленная после F5 — свёрнута целиком, и файлы внутри тоже
+ let el=c.el;const prev=el&&el.firstElementChild?el:null;
+ const open=prev?new Set([...prev.querySelectorAll('.wsd-file.is-open')].map(x=>x.dataset.path)):c.restored?new Set():null;
+ const collapsed=prev?prev.classList.contains('is-collapsed'):(c.live||!!c.restored);
  if(!el){el=document.createElement('div');c.el=el;}
  el.dataset.requestId=rid;
  render(el,files,{collapsed,open,live:c.live?'агент работает':null,meta:{ws:c.items.size>1?ws+' +'+(c.items.size-1):ws,rid:String(rid).slice(0,8),base:hhmm(base),end:hhmm(end)}});
@@ -165,14 +174,14 @@ function watch(h,rid){if(watched.has(h))return;watched.add(h);
   if(c.el.isConnected&&c.el.parentElement===h)place(h,c.el);else if(!c.el.isConnected)paintCard(rid);}).observe(h,{childList:true});}
 function apply(ev,opts){if(!ev||!ev.request_id)return;const rid=String(ev.request_id);opts=opts||{};
  let c=cards.get(rid);if(!c){c={items:new Map(),message_id:null,live:!opts.done,el:null};cards.set(rid,c);}
- if(ev.message_id)c.message_id=String(ev.message_id);if(opts.done)c.live=false;
+ if(ev.message_id)c.message_id=String(ev.message_id);if(opts.done)c.live=false;if(opts.restored)c.restored=true;
  c.items.set(ev.workspace_id||'',ev);paintCard(rid);}
 function reset(){cards.forEach(c=>c.el&&c.el.remove());cards.clear();}
 async function restore(chatId){reset();if(chatId==null)return;
  let r;try{r=await fetch('/api/chats/'+encodeURIComponent(chatId)+'/ws_diff',{credentials:'include'});}catch(_){return;}
  if(!r.ok)return;let data;try{data=await r.json();}catch(_){return;}
  const running=data.running_request_id||null;
- (data.items||[]).forEach(d=>apply(d,{done:String(d.request_id)!==String(running)}));}
+ (data.items||[]).forEach(d=>apply(d,{done:String(d.request_id)!==String(running),restored:true}));}
 /* transport: 'ws' — app.js отдаёт разобранные сообщения в WsDiff.handle(msg);
    'sse' — app_sigma.js отдаёт EventSource в WsDiff.listen(es), событие ws_diff. */
 function init(o){transport=(o&&o.transport)||'ws';return api;}

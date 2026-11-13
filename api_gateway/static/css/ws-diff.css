@@ -23,6 +23,7 @@
 .wsd-ico{width:16px;height:16px;flex:none;color:var(--wsd-muted)}
 .wsd-title{font-weight:500;white-space:nowrap}
 .wsd-count{color:var(--wsd-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.wsd-count.is-tight .wsd-cw{display:none}
 .wsd-sp{flex:1 1 auto;min-width:4px}
 .wsd-stat{font-family:var(--wsd-mono);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap;display:inline-flex;gap:6px}
 .wsd .a{color:var(--wsd-add-fg)} .wsd .d{color:var(--wsd-del-fg)} .wsd .z{color:var(--wsd-ln)}
@@ -50,12 +51,26 @@
 .wsd-badge{width:16px;height:16px;border-radius:4px;display:grid;place-items:center;font-size:10.5px;font-weight:600;flex:none;line-height:1;
   background:color-mix(in srgb,currentColor 15%,transparent)}
 .wsd-badge.M{color:var(--wsd-mod-fg)} .wsd-badge.A{color:var(--wsd-add-fg)} .wsd-badge.D{color:var(--wsd-del-fg)}
-.wsd-path{display:flex;min-width:0;flex:1 1 auto;white-space:nowrap}
+.wsd-path{display:block;min-width:0;flex:1 1 0;white-space:nowrap;overflow:hidden}
+.wsd-pin{display:flex;min-width:0;max-width:100%}
 .wsd-dir{color:var(--wsd-muted);overflow:hidden;text-overflow:ellipsis;min-width:0;flex:0 1 auto;direction:rtl;text-align:left}
 .wsd-dir>span{direction:ltr;unicode-bidi:isolate}
 .wsd-name{flex:none;font-weight:500}
+.wsd-path.is-run{-webkit-mask-image:linear-gradient(90deg,transparent,#000 var(--wsd-fl),#000 calc(100% - var(--wsd-fr)),transparent);
+  mask-image:linear-gradient(90deg,transparent,#000 var(--wsd-fl),#000 calc(100% - var(--wsd-fr)),transparent);animation:wsdFade var(--wsd-dur,6s) ease-in-out infinite}
+.wsd-path.is-run .wsd-pin{display:inline-flex;max-width:none;will-change:transform;animation:wsdMarq var(--wsd-dur,6s) ease-in-out infinite}
+.wsd-path.is-run .wsd-dir{flex:none;direction:ltr;overflow:visible}
+.wsd-fhead:hover .wsd-path.is-run .wsd-pin,.wsd-fhead:hover .wsd-path.is-run{animation-play-state:paused}
+@keyframes wsdMarq{0%,22%{transform:translateX(var(--wsd-shift,0))}65%,82%{transform:translateX(0)}100%{transform:translateX(var(--wsd-shift,0))}}
+/* затухание со стороны, где путь срезан: в начале цикла виден конец (срез слева), в середине — начало (срез справа) */
+@property --wsd-fl{syntax:'<length>';inherits:false;initial-value:14px}
+@property --wsd-fr{syntax:'<length>';inherits:false;initial-value:0px}
+@keyframes wsdFade{0%,22%{--wsd-fl:14px;--wsd-fr:0px}65%,82%{--wsd-fl:0px;--wsd-fr:14px}100%{--wsd-fl:14px;--wsd-fr:0px}}
+@media (prefers-reduced-motion:reduce){.wsd-path.is-run .wsd-pin,.wsd-path.is-run{animation:none}.wsd-path.is-run .wsd-pin{transform:translateX(var(--wsd-shift,0))}}
+.wsd-foot{display:flex;flex-wrap:wrap;column-gap:12px}
+.wsd-foot>span{white-space:nowrap}
 .wsd-file.is-D .wsd-name{color:var(--wsd-del-fg)}
-.wsd-tag{font-family:var(--font-anthropic-sans,var(--font-sans));font-size:11px;line-height:16px;color:var(--wsd-text);background:var(--wsd-ring);border-radius:4px;padding:0 6px;margin-left:4px;white-space:nowrap;flex:none}
+.wsd-tag{font-family:var(--font-anthropic-sans,var(--font-sans));font-size:11px;line-height:16px;color:var(--wsd-text);background:var(--wsd-ring);border-radius:4px;padding:0 6px;margin-left:2px;white-space:nowrap;flex:none}
 .wsd-open{width:22px;height:22px;border-radius:5px;display:grid;place-items:center;color:var(--wsd-muted);flex:none}
 .wsd-open:hover{background:var(--wsd-ring);color:var(--wsd-text)}
 .wsd-open svg{width:13px;height:13px}
@@ -128,6 +143,7 @@
   background:linear-gradient(transparent,var(--wsd-code-bg))}
 .wsd-fade.on{opacity:1}
 .wsd-file:not(.is-open) .wsd-fade{display:none}
+.wsd-file:not(.is-open)>.wsd-more{display:none}
 /* заголовок текущего ханка прилипает к верху прокрутки: следующий ложится поверх предыдущего */
 .wsd .wsd-t tbody tr.h{position:sticky;top:0;z-index:2}
 .wsd .wsd-t tbody tr.h td.cd{background:linear-gradient(var(--wsd-hunk-bg),var(--wsd-hunk-bg)),var(--wsd-code-bg);box-shadow:inset 0 -1px 0 var(--wsd-ring)}
@@ -151,6 +167,5 @@
 }
 
 .wsd .wsd-t tbody tr.h .gap{white-space:nowrap}
-.wsd-path{flex:1 1 0}
 
 .agent-message > .wsd{margin:10px 0 6px;max-width:100%;}

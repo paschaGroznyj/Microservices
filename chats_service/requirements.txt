@@ -11,4 +11,5 @@ wsproto
 redis
 aiobotocore
 Pillow
-python-multipart\nhttpx
+python-multipart
+httpx

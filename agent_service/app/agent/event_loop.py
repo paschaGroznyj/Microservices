@@ -70,6 +70,9 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 FLOW_TTL = int(os.getenv("FLOW_TTL", os.getenv("AGENT_RUN_TTL", "3600")))
 FLOW_MAX = int(os.getenv("FLOW_MAX", "600"))
 
+WS_SANDBOX_URL = os.environ.get("SANDBOX_SERVICE_URL", "http://agent_sandbox:8005")
+_WS_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
 logger = logging.getLogger(__name__)
 
 
@@ -1629,6 +1632,38 @@ class HarnessAgent:
         except Exception as e:
             logger.debug(f"[flow] не удалось отправить {ev}: {e}")
 
+    async def _ws_snap(self, workspace_id: str, request_id: str) -> dict | None:
+        """Теневой git-снимок workspace (agent_sandbox ws_diff). Первый снимок запроса — base.
+        Ошибки глушим: карточка изменений не должна ронять тул."""
+        try:
+            client = await self._get_http_client()
+            r = await client.post(
+                f"{WS_SANDBOX_URL}/workspace/{workspace_id}/diff/snap",
+                json={"request_id": request_id, "chat_id": str(self._ctx_get("chat_id", "") or "") or None},
+                timeout=20,
+            )
+            if r.status_code != 200:
+                return None
+            return r.json()
+        except Exception as e:
+            logger.debug(f"[ws_diff] snap {workspace_id}: {e}")
+            return None
+
+    async def _send_ws_diff(self, request_id: str, diff: dict) -> None:
+        """Итог изменений запроса в workspace → веб-клиент (main WS / sigma SSE), kind=ws_diff."""
+        target = str(self._ctx_get("gateway_target", None) or getattr(self, "_gateway_target", "main") or "main").lower()
+        if target not in ("main", "sigma"):
+            return
+        payload = {"request_id": request_id, "chunk": "", "id": None, "kind": "ws_diff", "diff": diff}
+        try:
+            if target == "sigma":
+                await self._publish_sigma_stream(request_id, payload)
+                return
+            client = await self._get_http_client()
+            await client.post(f"{GATEWAY_URL}/internal/bot_stream", json=payload, timeout=5)
+        except Exception as e:
+            logger.debug(f"[ws_diff] не удалось отправить: {e}")
+
     async def _tg_edit_reasoning(self, chat_id, text: str) -> None:
         """Трансляция reasoning-блока в Telegram: редактирует плашку "Думаю..."
         целым блоком (последний блок размышлений, обрезка до 500 символов).
@@ -2480,9 +2515,18 @@ class HarnessAgent:
         gap_ms = int((t0 - last) * 1000) if last is not None else None
         flow_tool = tool_flow_fields(name, args)  # имя тула на фронт не отдаём
         await self._send_flow(request_id, "tool_start", call_id=call_id, gap_ms=gap_ms, **flow_tool)
+        ws_id = args.get("workspace_id") if isinstance(args, dict) else None
+        ws_id = str(ws_id) if ws_id and _WS_ID_RE.match(str(ws_id)) else None
+        if ws_id and request_id:
+            await self._ws_snap(ws_id, request_id)  # baseline/prev до тула
         t0 = time.monotonic()
         try:
             result     = await tool_fn.ainvoke(args)
+            if ws_id and request_id:
+                snap = await self._ws_snap(ws_id, request_id)
+                if snap and (snap.get("files_count") or (snap.get("step") or {}).get("files_count")):
+                    snap.pop("step", None)
+                    await self._send_ws_diff(request_id, snap)
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             result_str = str(result)
 

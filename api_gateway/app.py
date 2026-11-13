@@ -165,6 +165,8 @@ class BotStream(BaseModel):
     # "flow" — служебное событие пути запроса для FlowMap (поле flow, chunk пустой).
     kind: str = "final"
     flow: dict | None = None
+    # "ws_diff" — итог изменений workspace за запрос (ws_diff.py), фронт: ws-diff.js.
+    diff: dict | None = None
 
 app.add_middleware(
     CORSMiddleware,
@@ -245,6 +247,14 @@ async def bot_stream(payload: BotStream):
 
     # FlowMap: отдельный тип сообщения, без chunk (фронт не создаёт пузырь)
     # и мимо reasoning-state (лишний Redis на каждый тул не нужен).
+    if payload.kind == "ws_diff":
+        await broadcast(chat_id, {
+            **(payload.diff or {}),
+            "type": "ws_diff",
+            "request_id": payload.request_id,
+        })
+        return {"ok": True}
+
     if payload.kind == "flow":
         await broadcast(chat_id, {
             "type": "flow",
@@ -1259,6 +1269,29 @@ async def chat_run_status(chat_id: str, request: Request):
         })
     return JSONResponse(content={"running": True, "loop_active": loop_active, **info})
 
+
+WS_SANDBOX_URL = os.environ.get("SANDBOX_SERVICE_URL", "http://agent_sandbox:8005")
+
+
+@app.get("/api/chats/{chat_id}/ws_diff")
+async def chat_ws_diff(chat_id: str, request: Request):
+    """«Изменённые файлы»: diff теневых git-снимков всех workspace чата (восстановление после F5).
+    Проксирует agent_sandbox GET /diff/chat/{chat_id}; running_request_id — запрос, который
+    ещё идёт (его карточка остаётся «в работе»)."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    items = []
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(f"{WS_SANDBOX_URL}/diff/chat/{quote(str(chat_id), safe='')}")
+        if r.status_code == 200:
+            items = (r.json() or {}).get("items") or []
+    except Exception as e:
+        logger.warning(f"[ws_diff] sandbox недоступен: {e}")
+    running = await run_status.get_running(chat_id)
+    rid = running.get("request_id") if isinstance(running, dict) else None
+    return JSONResponse(content={"chat_id": chat_id, "running_request_id": rid, "items": items})
 
 @app.get("/api/chats/{chat_id}/flow")
 async def chat_flow(chat_id: str, request: Request):

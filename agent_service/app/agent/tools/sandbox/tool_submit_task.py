@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 
 SANDBOX_URL = os.environ.get("SANDBOX_SERVICE_URL", "http://agent_sandbox:8005")
 DEFAULT_TIMEOUT = 120
-MAX_TIMEOUT = 1800
+MAX_TIMEOUT = 3600
 TASK_KINDS = ("script", "media")
 MAX_STAGES = 12
 
@@ -104,7 +104,7 @@ def make_submit_tools(agent):
                   "media" — rendering/processing images, audio, video (media-style card).
             stages: planned stage titles in order, 2-6 items, e.g.
                     ["Сбор ссылок", "Парсинг страниц", "Сохранение CSV"].
-            timeout: seconds, 1-1800 (default 120).
+            timeout: seconds, 1-3600 (default 120).
             notify_agent: wake you up after the task ends (default True).
             changed_files: files the task will change, for the user's live editor
                            ("*" if unknown).

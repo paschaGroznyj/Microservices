@@ -328,9 +328,6 @@ def _summarize_tool_call(tc: dict, result: Any) -> str | None:
             # не помечаем как ошибку, отдаём начало как есть.
             return f"execute_python_code() [результат не разобран] {clip_text(str(result), 500)}"
         ok = bool(result_dict.get("ok", False))
-        # В трейс — только путь, который агент может открыть любой ролью:
-        # скрипт внутри workspace. Архив /sandbox/executed_scripts общий и
-        # доступен лишь админским тулам, его не показываем.
         ws_script = result_dict.get("saved_script_in_workspace")
         ws_id = result_dict.get("workspace_id") or args.get("workspace_id")
         if ws_script and ws_id:
@@ -2020,9 +2017,9 @@ class HarnessAgent:
             import json
             def _tok(s): return len(s) // RATIO.get(agent_model, model_spec.chars_per_token)   # для русского ~2 симв/токен, а не 4
 
-            for m in messages:
-                c = m.content if isinstance(m.content, str) else json.dumps(m.content, ensure_ascii=False)
-                logger.info(f"[budget] {m.__class__.__name__:15} chars={len(c):6} ~tok={_tok(c):6} | {c[:60]!r}")
+            # for m in messages:
+            #     c = m.content if isinstance(m.content, str) else json.dumps(m.content, ensure_ascii=False)
+            #     logger.info(f"[budget] {m.__class__.__name__:15} chars={len(c):6} ~tok={_tok(c):6} | {c[:60]!r}")
 
             schemas = json.dumps([t.args_schema.schema() if t.args_schema else {} for t in tools], ensure_ascii=False)
             descr   = sum(len(t.description or "") for t in tools)
@@ -2119,7 +2116,6 @@ class HarnessAgent:
                     _thinking_text, _reasoning_text, _clean_content = _extract_thinking_and_clean_content(
                         _raw_content
                     )
-                    # logging.info(response)
                     if _reasoning_text:
                         loop_state.setdefault("internal_reasoning_trace", []).append(_reasoning_text)
                     # На шаге с tool_calls оставляем внутреннее рассуждение в стеке контекста модели,

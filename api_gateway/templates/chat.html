@@ -41,6 +41,7 @@
     <link rel="stylesheet" href="/static/css/group-chat.css">
     <link rel="stylesheet" href="/static/css/palette.css">
     {% if not is_sigma %}<link rel="stylesheet" href="/static/css/tg-chats.css">{% endif %}
+    {% if not is_sigma %}<link rel="stylesheet" href="/static/css/push.css">{% endif %}
 
     <script src="/static/js/palette.js"></script>
 </head>
@@ -512,6 +513,10 @@
                 <div id="palette-mount"></div>
             </div>
 {% if not is_sigma %}
+            <div id="notify-section">
+                <div class="section-label">Уведомления</div>
+                <div id="notify-mount"></div>
+            </div>
             <div id="tg-chats-section" style="display:none">
                 <div class="section-label">Telegram-чаты</div>
                 <div class="tgc-panel" id="tgc-panel">
@@ -756,6 +761,7 @@
 <script type="module" src="/static/js/chatSearchModal.js"></script>
 <script src="/static/js/system-notice.js"></script>
 <script src="/static/js/presence.js"></script>
+{% if not is_sigma %}<script src="/static/js/push.js"></script>{% endif %}
 <!-- Thanos-эффект удаления сообщений (вырезаемо: убрать 2 строки ниже) -->
 <script src="/static/js/groupInteraction.js"></script>
 <script src="/static/js/groupChat.js"></script>

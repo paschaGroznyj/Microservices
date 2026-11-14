@@ -6,6 +6,8 @@ from kafka import KafkaConsumer
 from app.db.chats_tables import DataBaseChats
 from app.core.config import KAFKA_BROKER
 from app.db.tasks_db import TasksDB
+from app.db.push_db import PushDB
+from app import push_sender
 from typing import List
 import os
 import base64
@@ -88,6 +90,8 @@ class DBConsumer:
         self.db = DataBaseChats()
         self.consumer = None
         self.redis = None  # redis.asyncio.Redis — обратный путь мобилки
+        self.push = push_sender.PushSender()  # Web Push об ответе агента (поток webpush)
+        self._vapid = None
         self.agents = {
             "pm": {
                 "name": "Agent PM",
@@ -287,6 +291,7 @@ class DBConsumer:
                         logger.error(f"Не удалось сохранить auto_title chat={chat_id}: {e}")
 
                 await self.send_to_main_service(chat_id, ws_payload, gateway_url)
+                await self._maybe_push(payload)
 
                 # Страховка: если гейтвей не успел снять agent:running:{chat_id}
                 # (например, ошибка сокета или пустой ответ), снимаем флаг и закрываем flow здесь.
@@ -309,6 +314,21 @@ class DBConsumer:
 
         except Exception as e:
             logger.error(f"Ошибка обработки сообщения: {e}")
+
+    async def _get_vapid(self):
+        if self._vapid is None:
+            self._vapid = await push_sender.load_vapid(self.redis)
+        return self._vapid
+
+    async def _maybe_push(self, payload):
+        """Web Push владельцу чата, если вкладка с чатом не на экране. Ошибки не роняют доставку."""
+        try:
+            n = await push_sender.notify_bot_reply(
+                payload, PushDB(self.db.pool), self.redis, self.push, self._get_vapid)
+            if n:
+                logger.info(f"[push] chat={payload.get('chat_id')}: в очереди {n} уведомл.")
+        except Exception as e:
+            logger.warning(f"[push] chat={payload.get('chat_id')}: {e}")
 
     async def _maybe_reenter_loop(self, payload):
         """САМОЦИКЛ: решает, продолжать ли петлю, и дёргает новый тик.

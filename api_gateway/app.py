@@ -33,6 +33,7 @@ import group_chat_gw
 import reactions_bus
 import reads_bus
 import editor_gw
+import push_gw
 import os
 import max_chats_gw
 import file_parsers
@@ -84,6 +85,16 @@ async def lifespan(app: FastAPI):
         get_current_user=get_current_user,
     )
 
+    # Web Push: /sw.js, /api/push/* (подписки, VAPID, «вкладка на экране»)
+    push_gw.bind(
+        http_client=app.state.http_client,
+        chats_url=SERVICES['chats']['url'],
+        get_current_user=get_current_user,
+        get_redis=lambda: run_status._redis,
+        static_dir=BASE_DIR / "static",
+        gw="main",
+    )
+
     yield
 
     # Shutdown
@@ -96,6 +107,7 @@ app.include_router(group_chat_gw.router)
 
 app.include_router(editor_gw.router)
 app.include_router(max_chats_gw.router)
+app.include_router(push_gw.router)
 # app = FastAPI(title="API Gateway", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
 
@@ -1712,6 +1724,7 @@ async def get_user_settings_gw(request: Request):
         "selected_tools": [],
         "selected_model": "gpt",
         "active_chat_id": None,
+        "notify_enabled": False,
     }
 
 
@@ -1729,6 +1742,24 @@ async def post_user_settings_gw(request: Request):
     selected_tools = [str(t).strip() for t in data["selected_tools"] if str(t).strip()] if has_tools else None
     selected_model = run_status.normalize_setting_model(data["selected_model"]) if has_model else None
     active_chat_id = (str(data.get("active_chat_id") or "").strip() or None) if has_chat else None
+
+    # Web Push вкл/выкл: дебаунс 1 с в run_status, дальше общая очередь -> chats_service
+    if data.get("notify_enabled") is not None:
+        notify_enabled = bool(data["notify_enabled"])
+        n_ok = await run_status.push_notify_setting(uid, notify_enabled)
+        if not n_ok:
+            try:
+                await app.state.http_client.post(
+                    f"{SERVICES['chats']['url']}/user/settings",
+                    headers={"X-User-Id": str(uid)},
+                    json={"notify_enabled": notify_enabled},
+                    timeout=5.0,
+                )
+                n_ok = True
+            except Exception as e:
+                logging.warning(f"post_user_settings_gw notify fallback failed: {e}")
+        if not (has_tools or has_model or has_chat):
+            return {"ok": n_ok, "user_id": uid, "notify_enabled": notify_enabled}
 
     ok = await run_status.push_user_settings(
         user_id=uid,

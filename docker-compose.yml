@@ -405,6 +405,8 @@ services:
       OBS_REGION: ${OBS_REGION}
       OBS_ENDPOINT: ${OBS_ENDPOINT}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@augent.local}
       AGENT_SERVICE_URL: ${AGENT_SERVICE_URL:-http://agent_service:9001}
       TG_ASR_PROVIDER: ${TG_ASR_PROVIDER:-cloud_ru}
       ACTIVITY_TOKEN: ${ACTIVITY_TOKEN}
@@ -438,6 +440,8 @@ services:
       DB_NAME: ${DB_NAME}
       KAFKA_BROKER: ${KAFKA_BROKER}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@augent.local}
       TASK_AUTOTRIGGER: ${TASK_AUTOTRIGGER:-1}
       TASK_TRIGGER_MAX_AGE_S: ${TASK_TRIGGER_MAX_AGE_S:-3600}
       TASK_BATCH_WAIT_S: ${TASK_BATCH_WAIT_S:-600}

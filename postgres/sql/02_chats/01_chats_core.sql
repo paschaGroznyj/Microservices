@@ -186,5 +186,21 @@ CREATE TABLE IF NOT EXISTS user_settings (
     selected_tools JSONB NOT NULL DEFAULT '[]'::jsonb,
     selected_model VARCHAR(32) NOT NULL DEFAULT 'gpt',
     active_chat_id TEXT DEFAULT NULL,
+    notify_enabled BOOLEAN NOT NULL DEFAULT FALSE,  -- Web Push об ответе агента
     updated_at     TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS notify_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Web Push-подписки браузеров: одна строка = один браузер (endpoint push-сервиса)
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id          BIGSERIAL PRIMARY KEY,
+    user_id     BIGINT NOT NULL,
+    gw          TEXT NOT NULL DEFAULT 'main',   -- main | sigma: с какого домена подписан
+    endpoint    TEXT NOT NULL UNIQUE,
+    p256dh      TEXT NOT NULL,
+    auth        TEXT NOT NULL,
+    user_agent  TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS ix_push_subs_user ON push_subscriptions(user_id, gw);

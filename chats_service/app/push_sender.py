@@ -40,6 +40,13 @@ def viewing_key(user_id, chat_id) -> str:
     return f"viewing:{int(user_id)}:{chat_id}"
 
 
+def _ep(endpoint: str) -> str:
+    """Короткая метка подписки для логов: хост push-сервиса + хвост токена."""
+    e = str(endpoint or "")
+    host = e.split("/")[2] if e.count("/") >= 2 else "?"
+    return f"{host}…{e[-8:]}"
+
+
 def _b64u(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
 
@@ -143,7 +150,7 @@ class PushSender:
         if self._send_fn is not None:
             return self._send_fn(sub, data, vapid)
         from pywebpush import webpush
-        webpush(
+        return webpush(
             subscription_info={"endpoint": sub["endpoint"],
                                "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]}},
             data=data,
@@ -157,17 +164,21 @@ class PushSender:
     def _worker(self) -> None:
         while True:
             sub, data, vapid = self._q.get()
+            t0 = time.monotonic()
             try:
-                self._send(sub, data, vapid)
+                resp = self._send(sub, data, vapid)
                 self.sent += 1
+                logger.info("[push] отправлено user=%s %s: %s за %d мс", sub.get("user_id", "?"),
+                            _ep(sub.get("endpoint")), getattr(resp, "status_code", "ok"),
+                            (time.monotonic() - t0) * 1000)
             except Exception as e:
                 self.failed += 1
                 status = getattr(getattr(e, "response", None), "status_code", None)
                 if status in DEAD_STATUSES:
                     self.dead.append(sub["endpoint"])
-                    logger.info("[push] подписка отвергнута (%s), удалим: %s…", status, sub["endpoint"][:60])
+                    logger.info("[push] подписка отвергнута (%s), удалим: %s", status, _ep(sub["endpoint"]))
                 else:
-                    logger.warning("[push] отправка не удалась (%s): %s", status, e)
+                    logger.warning("[push] отправка не удалась %s (%s): %s", _ep(sub.get("endpoint")), status, e)
             finally:
                 self._q.task_done()
 
@@ -209,23 +220,32 @@ async def notify_bot_reply(payload: dict, push_db, redis, sender: PushSender, va
         try:
             await push_db.delete_subscription(ep)
         except Exception as e:
-            logger.debug("[push] delete dead failed: %s", e)
+            logger.warning("[push] не удалось удалить подписку %s: %s", _ep(ep), e)
     if not should_push(payload):
         return 0
     chat_id = str(payload["chat_id"])
     gw = (payload.get("gateway_target") or "main").lower()
     uid = await push_db.chat_owner(chat_id)
-    if not uid or not await push_db.notify_enabled(uid):
+    if not uid:
+        logger.info("[push] пропуск chat=%s: владелец чата не найден", chat_id)
+        return 0
+    if not await push_db.notify_enabled(uid):
+        logger.info("[push] пропуск chat=%s user=%s: уведомления выключены (notify_enabled=false)", chat_id, uid)
         return 0
     if redis is not None:
         try:
-            if await redis.exists(viewing_key(uid, chat_id)):
+            key = viewing_key(uid, chat_id)
+            if await redis.exists(key):
+                ttl = await redis.ttl(key) if hasattr(redis, "ttl") else "?"
+                logger.info("[push] пропуск chat=%s user=%s: вкладка на экране (%s, ttl=%s)", chat_id, uid, key, ttl)
                 return 0
         except Exception as e:
-            logger.debug("[push] viewing check failed: %s", e)
+            logger.warning("[push] проверка viewing не удалась, шлём push: %s", e)
     subs = await push_db.list_subscriptions(uid, gw)
     if not subs:
+        logger.info("[push] пропуск chat=%s user=%s: нет подписок для gw=%s", chat_id, uid, gw)
         return 0
+    subs = [dict(s, user_id=uid) for s in subs]
     vapid = await vapid_getter()
     if vapid is None:
         logger.warning("[push] нет VAPID-ключа, уведомление не отправлено")

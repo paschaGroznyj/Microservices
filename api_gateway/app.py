@@ -1185,9 +1185,9 @@ async def send_message(request: Request):
         "is_from_bot": False
     }
     print("Перед отправкой сообщения", data)
-    await broadcast(data["chat_id"], message) # Отравим сразу по вебсокету
     # Флаг «агент в работе» в Redis: переживает F5/переключение чата,
     # фронт по нему восстанавливает стоп-кнопку и индикатор работы.
+    # Ставим ДО broadcast эха: другая вкладка по эху сразу спрашивает run_status.
     await run_status.mark_running(
         data["chat_id"],
         request_id,
@@ -1195,6 +1195,7 @@ async def send_message(request: Request):
         user_message=data.get("message"),
         user_message_id=data.get("message_id"),
     )
+    await broadcast(data["chat_id"], message) # Отравим сразу по вебсокету
     # Старт самоцикла (реальный, не служебный тик): ставим стабильный loop-флаг,
     # чтобы фронт после F5/переключения чата знал, что работа идёт в цикле.
     if data.get("loop") and not data.get("loop_tick"):

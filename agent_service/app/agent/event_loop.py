@@ -72,6 +72,35 @@ FLOW_MAX = int(os.getenv("FLOW_MAX", "600"))
 
 WS_SANDBOX_URL = os.environ.get("SANDBOX_SERVICE_URL", "http://agent_sandbox:8005")
 _WS_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+# Агент может править файлы по абсолютному пути без workspace_id (cd /tmp/exec/workspaces/<wid>/...):
+# такие области тоже снимаем, иначе карточка «Изменённые файлы» правку не увидит.
+_WS_PATH_RE = re.compile(r"/tmp/exec/workspaces/([A-Za-z0-9_-]{1,64})(?![A-Za-z0-9_-])")
+_WS_SNAP_MAX = 4  # потолок областей на один вызов тула
+
+
+def _ws_ids_from_args(args) -> list[str]:
+    """workspace_id из аргумента + все /tmp/exec/workspaces/<wid> в строковых аргументах (рекурсивно)."""
+    ids: list[str] = []
+
+    def add(w) -> None:
+        w = str(w or "")
+        if w and w not in ids and _WS_ID_RE.match(w):
+            ids.append(w)
+
+    if isinstance(args, dict):
+        add(args.get("workspace_id"))
+    stack = [args]
+    while stack and len(ids) < _WS_SNAP_MAX:
+        v = stack.pop()
+        if isinstance(v, str):
+            if "/tmp/exec/workspaces/" in v:
+                for m in _WS_PATH_RE.finditer(v):
+                    add(m.group(1))
+        elif isinstance(v, dict):
+            stack.extend(reversed(list(v.values())))
+        elif isinstance(v, (list, tuple)):
+            stack.extend(reversed(v))
+    return ids[:_WS_SNAP_MAX]
 
 logger = logging.getLogger(__name__)
 
@@ -2515,18 +2544,18 @@ class HarnessAgent:
         gap_ms = int((t0 - last) * 1000) if last is not None else None
         flow_tool = tool_flow_fields(name, args)  # имя тула на фронт не отдаём
         await self._send_flow(request_id, "tool_start", call_id=call_id, gap_ms=gap_ms, **flow_tool)
-        ws_id = args.get("workspace_id") if isinstance(args, dict) else None
-        ws_id = str(ws_id) if ws_id and _WS_ID_RE.match(str(ws_id)) else None
-        if ws_id and request_id:
-            await self._ws_snap(ws_id, request_id)  # baseline/prev до тула
+        ws_ids = _ws_ids_from_args(args) if request_id else []
+        if ws_ids:  # baseline/prev до тула: первое упоминание области в запросе = base
+            await asyncio.gather(*(self._ws_snap(w, request_id) for w in ws_ids))
         t0 = time.monotonic()
         try:
             result     = await tool_fn.ainvoke(args)
-            if ws_id and request_id:
-                snap = await self._ws_snap(ws_id, request_id)
-                if snap and (snap.get("files_count") or (snap.get("step") or {}).get("files_count")):
-                    snap.pop("step", None)
-                    await self._send_ws_diff(request_id, snap)
+            if ws_ids:
+                snaps = await asyncio.gather(*(self._ws_snap(w, request_id) for w in ws_ids))
+                for snap in snaps:
+                    if snap and (snap.get("files_count") or (snap.get("step") or {}).get("files_count")):
+                        snap.pop("step", None)
+                        await self._send_ws_diff(request_id, snap)
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             result_str = str(result)
 

@@ -6,6 +6,11 @@
     try { return new URLSearchParams(location.search).get("workspace_id") || ""; }
     catch (_) { return ""; }
   })();
+  // ?path= — файл, который открыть сразу (кнопки карточки «Изменённые файлы»)
+  const URL_PATH = (() => {
+    try { return (new URLSearchParams(location.search).get("path") || "").replace(/^\/+/, ""); }
+    catch (_) { return ""; }
+  })();
   let editor = null, monacoRef = null;
   let currentWs = null, currentPath = null, currentContent = "";
   let dirty = false, isBinary = false, saving = false;
@@ -198,6 +203,16 @@
     } catch (_) {}
   }
 
+  // открытый файл тоже держим в адресе: F5 вернёт его, а не старый ?path=
+  function syncUrlPath(path) {
+    try {
+      const u = new URL(location.href);
+      if (path) u.searchParams.set("path", path);
+      else u.searchParams.delete("path");
+      history.replaceState(null, "", u);
+    } catch (_) {}
+  }
+
   // ── API ──────────────────────────────────────────────
   async function apiGet(url) {
     const r = await fetch(url, { credentials: "same-origin" });
@@ -231,7 +246,13 @@
     wsSelect.value = currentWs;
     syncUrlWs(currentWs);
     syncWsTitle();
+    // путь из ссылки относится только к запрошенной области
+    const wantPath = wanted && URL_PATH ? URL_PATH : "";
+    if (!wantPath) syncUrlPath(null);
+    const parts = wantPath.split("/");
+    for (let i = 1; i < parts.length; i++) openDirs.add(parts.slice(0, i).join("/"));
     await activateWs();
+    if (wantPath) await openFile(wantPath);
   }
 
   function syncWsTitle() {
@@ -586,6 +607,7 @@
   function renderTree(nodes, container) {
     for (const node of nodes) {
       const row = document.createElement("div");
+      row.dataset.path = node.path;
       row.className = `ed-node ${node.type}`;
       row.innerHTML = `<span class="ed-ic">${iconFor(node)}</span>`;
       const name = document.createElement("span");
@@ -635,6 +657,16 @@
     filenameEl.textContent = (currentPath || "") + (isBinary ? " (бинарный)" : "") + roMark + (dirty ? " •" : "");
   }
 
+  // подсветить файл в дереве и докрутить к нему (открытие по ?path=)
+  function markTreeSel(path) {
+    let row = null;
+    for (const n of treeEl.querySelectorAll(".ed-node.file")) { if (n.dataset.path === path) { row = n; break; } }
+    if (!row) return;
+    treeEl.querySelectorAll(".ed-node.sel").forEach(n => { if (n !== row) n.classList.remove("sel"); });
+    row.classList.add("sel");
+    try { row.scrollIntoView({ block: "nearest" }); } catch (_) {}
+  }
+
   async function openFile(path) {
     if (!currentWs) return;
     try {
@@ -658,6 +690,8 @@
       }
       setDirty(false);
       onFileOpened();
+      syncUrlPath(path);
+      markTreeSel(path);
     } catch (e) {
       filenameEl.textContent = `Ошибка: ${e.message}`;
     }
@@ -1026,6 +1060,7 @@
     hideDiskBanner();
     onFileOpened();
     syncUrlWs(currentWs);
+    syncUrlPath(null);
     syncWsTitle();
     await activateWs();
   });

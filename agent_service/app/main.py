@@ -634,6 +634,19 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                         f"Не удалось привязать message_id к generated_images: {link_err}"
                     )
 
+        # «Изменённые файлы»: request_id → message_id ответа, чтобы карточка после F5
+        # нашла свой пузырь (фронт ищет .agent-message[data-message-id]).
+        if request_id and message_id and gateway_target in ("main", "sigma"):
+            try:
+                import httpx as _hx
+                async with _hx.AsyncClient(timeout=5.0) as _c:
+                    await _c.post(
+                        f"{os.environ.get('SANDBOX_SERVICE_URL', 'http://agent_sandbox:8005')}/diff/attach",
+                        json={"request_id": request_id, "message_id": str(message_id)},
+                    )
+            except Exception as _e:
+                logging.debug(f"[ws_diff] attach {request_id}: {_e}")
+
         bot_message = {
             "user_id": -1,
             "chat_id": chat_id,

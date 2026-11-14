@@ -1006,6 +1006,7 @@ class ChatApp {
 
         this.renderMessages(msgs);
         this._initHistoryScrollLoader();
+        window.WsDiff?.init({ transport: 'ws' }).restore(chatId);
         return true;
     }
 
@@ -1886,7 +1887,8 @@ class ChatApp {
                     !node.classList.contains('message-actions') &&
                     !node.classList.contains('reasoning-live') &&
                     !node.classList.contains('live-block') &&
-                    !node.classList.contains('reasoning-block')) {
+                    !node.classList.contains('reasoning-block') &&
+                    !node.classList.contains('wsd')) {
                     node.remove();
                 }
             }
@@ -4328,6 +4330,12 @@ class ChatApp {
 
             // FlowMap: служебные события пути запроса (accepted / agent_start / tool_*).
             // Ловим до ветки chunk — у них нет текста, пузырь ответа не нужен.
+            // «Изменённые файлы»: diff workspace после тула (ws-diff.js, transport 'ws').
+            if (msg.type === 'ws_diff') {
+                if (isActive) window.WsDiff?.handle(msg);
+                return;
+            }
+
             if (msg.type === 'flow') {
                 if (isActive) _fm(msg.ev, { ...msg, chat: key, id: msg.call_id || undefined });
                 return;

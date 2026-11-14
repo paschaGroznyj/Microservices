@@ -421,6 +421,14 @@ So you can then spy on it/reuse it within the session.
             (newest first); older output/ files — via download_workspace_file.
             To transfer a file between calls, work with a single workspace_id
             or upload it via upload_to_workspace and read it from there.
+          • With workspace_id the script runs in a temporary folder that holds
+            symlinks to every top-level entry of the workspace. Writing INSIDE an
+            existing folder (open("repo/app.py", "w")) goes to the real workspace.
+            A NEW file or folder at the workspace root (open("notes.py", "w"),
+            os.makedirs("new_dir")) stays in the temporary folder and is LOST
+            after the call, with exit_code 0 and no error. To create it, use an
+            absolute path /tmp/exec/workspaces/<workspace_id>/..., or
+            upload_to_workspace / execute_shell_commands with workspace_id.
 
         For analyze_image to see the image created in the sandbox: first,
         download_workspace_file (it places the file in /app/generated_files and returns
@@ -660,7 +668,8 @@ So you can then spy on it/reuse it within the session.
 
         If you plan to work with files within the session, create a workspace
         via create_workspace (files inside the area live for 10 hours).
-        If you init a git repo inside /tmp/exec/workspaces/<id>, it won't be swept by the timer.
+        A git repo inside the workspace does NOT keep it alive: only the .ws_hold
+        marker does (see create_workspace). Do not run git init just to keep files.
 
         Docker specifics:
         - The daemon is accessible via unix:///var/run/docker.sock
@@ -868,6 +877,15 @@ So you can then spy on it/reuse it within the session.
         To keep the workspace permanently, create the file
         `/tmp/exec/workspaces/<wid>/.ws_hold` at the workspace root (not inside
         output/ or repo/). Do it only if the user plans to continue working.
+        This marker is the ONLY thing that keeps a workspace alive; a cloned
+        repo or a .git folder does not.
+
+        CHANGED FILES: the sandbox tracks every file you create, edit or delete
+        in the workspace (shadow git snapshots in .ws_meta/shadow, not visible
+        in the editor and not touching your repos). The user sees them live as
+        a "Changed files" diff card under your answer, so you do not need to
+        paste diffs into the reply. Never touch .ws_meta/: it is service data.
+        Your own `git status/commit/push` inside cloned repos works as usual.
 
         Returns: workspace_id, created_at, path, editor_url
         """

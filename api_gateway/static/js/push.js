@@ -99,6 +99,20 @@
     return sub;
   }
 
+  // выключение: удалить подписку ЭТОГО браузера в БД и отписаться в push-сервисе.
+  // Сначала сервер (нужен endpoint), потом браузер — иначе endpoint потерян.
+  async function dropSubscription() {
+    if (!('serviceWorker' in navigator)) return;
+    const reg = await navigator.serviceWorker.getRegistration('/');
+    const sub = reg && await reg.pushManager.getSubscription();
+    if (!sub) return;
+    try {
+      const res = await post('/api/push/unsubscribe', { endpoint: sub.endpoint });
+      if (!res.ok) console.warn('[push] unsubscribe on server failed:', res.status);
+    } catch (e) { console.warn('[push] unsubscribe on server failed:', e); }
+    try { await sub.unsubscribe(); } catch (_) { /* noop */ }
+  }
+
   function saveSetting(on) {
     return post('/api/user/settings', { notify_enabled: !!on }).catch((e) => {
       console.warn('[push] save setting failed:', e);
@@ -125,6 +139,7 @@
         beat(true);
       } else {
         st.enabled = false;
+        await dropSubscription();
         await saveSetting(false);
       }
     } catch (e) {

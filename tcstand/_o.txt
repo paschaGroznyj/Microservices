@@ -1,0 +1,148 @@
+4756:    _reasoningCaretSVG() {
+4757-        return `<svg class="reasoning-caret" viewBox="0 0 24 24" width="12" height="12" `
+4758-             + `fill="none" stroke="currentColor" stroke-width="2" `
+4759-             + `stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">`
+4760-             + `<path d="M9 6l6 6-6 6"/></svg>`;
+4761-    }
+4762-
+4763-    /* Живой индикатор ожидания/размышления: граф из трёх точек,
+4764-       соединённых линией. Крутится рывками: быстрый прокрут → пауза →
+        // Убираем статус-индикатор при ответе бота (через метод, чтобы захватить субагентов)
+        if (isBot) this._clearAllStatuses();
+
+        const messageEl = document.createElement('div');
+        messageEl.className = isBot ? 'agent-message' : 'user-message';
+
+        let content = rawContent;
+        if (rawContent.trimStart().startsWith('<')) {
+            content = rawContent; // уже HTML — не трогаем
+        } else {
+            content = this._parseMarkdown(rawContent);
+        }
+        if (isBot) {
+            if (typeof DOMPurify !== 'undefined') content = DOMPurify.sanitize(content);
+            // открываем все ссылки в новой вкладке
+            const tmp = document.createElement('div');
+            tmp.innerHTML = content;
+            tmp.querySelectorAll('a').forEach(a => {
+                a.setAttribute('target', '_blank');
+                a.setAttribute('rel', 'noopener noreferrer');
+            });
+            content = tmp.innerHTML;
+        } else {
+            content = this.escapeHtml(rawContent);
+        }
+
+        const time = new Date(message.created_at || Date.now())
+            .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+        if (!isBot) {
+            // Длинный текст (>1000 символов) сворачиваем в чип-файлик,
+            // клик по которому открывает превью в правом сайдбаре.
+            // Длинный текст (Claude-style): рендерим обычным текстом,
+            // но помечаем как collapsible — CSS обрежет по высоте + mask,
+            // а кнопка «Показать больше/Свернуть» развернёт на месте.
+            // NB: прикреплённые файлы (чипы) рендерятся НЕ внутри пузыря,
+            // а над ним — вставляются в wrapper ниже (см. блок else).
+            const TEXT_COLLAPSE_LIMIT = 1000;
+            const isLong = rawContent && rawContent.length > TEXT_COLLAPSE_LIMIT;
+            const textCls = isLong ? 'message-text message-text--collapsible' : 'message-text';
+            const toggleHtml = isLong ? this._renderCollapseToggle() : '';
+            messageEl.innerHTML = `<div class="${textCls}">${content}</div>${toggleHtml}<div class="timestamp">${time}</div>`;
+        } else {
+            messageEl.dataset.id = message.id;
+            if (message.message_id) messageEl.dataset.messageId = message.message_id;
+            const _botMsgKey = message.message_id || (message.id != null ? String(message.id) : '');
+            if (animate) {
+                messageEl.innerHTML = '';
+                this._streamRenderMessage(messageEl, rawContent, container, message.files, message.message_id);
+            } else {
+                this._renderBotStructuredContent(messageEl, rawContent, {
+   Финальный ответ повышается до .live-block (обычный стиль).
+══════════════════════════════════════════════ */
+
+:root,
+[data-theme="light"] {
+  --cds-reasoning-text: #52514e;
+  --cds-reasoning-muted: #898781;
+  --cds-reasoning-ring: rgba(11, 11, 11, 0.1);
+  --cds-reasoning-code-bg: rgba(11, 11, 11, 0.05);
+  --cds-reasoning-code-fg: #8e2626;
+}
+
+[data-theme="dark"] {
+  --cds-reasoning-text: #c3c2b7;
+  --cds-reasoning-muted: #898781;
+  --cds-reasoning-ring: rgba(255, 255, 255, 0.1);
+  --cds-reasoning-code-bg: rgba(255, 255, 255, 0.05);
+  --cds-reasoning-code-fg: #ec7e7e;
+}
+
+/* Финальный блок — наследует обычный стиль .agent-message, без декора. */
+.live-block {
+  animation: subagent-fadein 0.18s ease;
+}
+
+/* Живой стрим мысли в стиле карточки CDS TurnStatus */
+.reasoning-live {
+  font-family: var(--font-anthropic-sans, var(--font-sans));
+  font-size: 13px;
+  line-height: 19.5px;
+  font-weight: 400;
+[data-theme="dark"] {
+  --bg:            #0d0d0d;
+  --surface:       #141414;
+  --surface2:      #1a1a1a;
+  --surface3:      #222222;
+  --border:        #2a2a2a;
+  --border-light:  #222222;
+
+  --accent:        #cc785c;
+  --accent-hover:  #b8684e;
+  --accent-muted:  #a0614a;
+  --accent2:       #8fa68a;
+  --accent2-hover: #7a9175;
+
+  --text-primary:   #e8e4df;
+  --text-secondary: #8a8580;
+  --text-muted:     #555555;
+  --text-on-accent: #0d0d0d;
+
+  --sidebar-bg:    #111111;
+  --sidebar-hover: #1e1e1e;
+  --sidebar-active:#252525;
+
+  --input-bg:      #1a1a1a;
+  --input-border:  #2e2e2e;
+  --input-focus:   var(--accent);
+
+  --msg-user-bg:   #e8e4df;
+  --msg-user-text: #0d0d0d;
+  --msg-bot-bg:    transparent;
+  --msg-bot-text:  #e8e4df;
+
+  --btn-primary-bg:   #e8e4df;
+  --btn-primary-text: #0d0d0d;
+  --btn-primary-hover:#d4cfc8;
+
+  --danger:        #e05252;
+  --danger-hover:  #c94444;
+
+  --shadow-sm:     0 1px 3px rgba(0,0,0,.3);
+  --shadow-md:     0 4px 16px rgba(0,0,0,.4);
+  --shadow-lg:     0 8px 32px rgba(0,0,0,.5);
+
+  --hljs-bg: #1e1e1e;
+}
+
+/* ═══════════════════════════════════════════════
+   GLOBAL RESET & BASE
+════════════════════════════════════════════════ */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 15px;

@@ -1235,7 +1235,14 @@ class ChatApp {
             return false;
         };
 
-        const missing = serverMsgs.filter(m => !hasMessageInDom(m));
+        const missing = serverMsgs.filter(m => {
+            if (hasMessageInDom(m)) return false;
+            // Если стрим ещё не завершён, но message_id уже записан — тоже пропускаем
+            const st = this._getStream(key);
+            if (st?.pendingBotEl && st.pendingBotEl.dataset.messageId && m.message_id &&
+                String(st.pendingBotEl.dataset.messageId) === String(m.message_id)) return false;
+            return true;
+        });
         if (!missing.length) return;
 
         missing.forEach(msg => this.addMessage(msg, false));
@@ -4556,6 +4563,9 @@ class ChatApp {
                         loop: msg.loop === true,
                     };
                     st.streamDone = true;
+                    // Проставляем message_id сразу, чтобы resync не продублировал узел
+                    if (msg.message_id) st.pendingBotEl.dataset.messageId = msg.message_id;
+                    if (incomingDbId) st.pendingBotEl.dataset.id = incomingDbId;
                     this._startStreamLoop(key);
                 } else if (isActive) {
                     // Целое сообщение без стриминга — обычный addMessage (только активный)

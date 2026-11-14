@@ -1,0 +1,44 @@
+<!-- 00 · HERO: настоящий стартовый экран AuGent (разметка из app.js, граф из animations.js) -->
+<section class="sc-ch sc-hero" id="ch-hero" data-theme="light" data-title="Старт">
+  <div class="message-input-container start-screen-host" id="sc-hero-host">
+    <div class="chat-start-screen">
+      <div class="start-bg" aria-hidden="true"><canvas id="start-graph"></canvas></div>
+      <div class="start-body">
+        <div class="start-header">
+          <p class="start-greeting">Привет, <span class="username">DS-сообщество</span> 👋</p>
+          <h1 class="start-title">Почему не только REST?</h1>
+        </div>
+        <div class="start-input-area">
+          <div class="start-input-box" id="start-input-box">
+            <div class="start-input-field" contenteditable="false" data-placeholder="Спросите что-нибудь..."><span class="sc-typed"></span></div>
+            <div class="start-input-footer">
+              <button class="attach-btn" type="button" tabindex="-1" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19 a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <button class="start-send-btn" type="button" disabled tabindex="-1" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="start-footer-note">Павел Солдаткин · CDS · листайте вниз ↓</p>
+    </div>
+  </div>
+</section>
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const host = document.getElementById('sc-hero-host');
+  window.ChatAnimations?.animateStartHeader?.(host);
+  window.ChatAnimations?.initStartGraph?.(host);
+  const typed = host.querySelector('.sc-typed');
+  const send = host.querySelector('.start-send-btn');
+  const text = 'Зачем агенту одновременно REST, Kafka\u00a0и\u00a0Redis?';
+  let i = 0;
+  setTimeout(function tick() {
+    typed.textContent = text.slice(0, ++i);
+    if (i === 1) { send.disabled = false; send.classList.add('active'); }
+    if (i < text.length) setTimeout(tick, 28 + Math.random() * 30);
+  }, 900);
+});
+</script>

@@ -1,0 +1,172 @@
+<!-- 02 · Kafka как шина. Топик и группы из кода: chat-messages, llm-bot-group, db-consumer-group. Гейтвеи Kafka не читают: ответ им доставляет chats-consumer по HTTP -->
+<section class="sc-ch" id="ch-bus" data-theme="light" data-title="2 · Kafka: шина">
+  <header class="sc-ch__head">
+    <div class="sc-kicker">Глава 2 <span class="sc-time">02:00 – 03:30</span></div>
+    <h2 class="sc-h2">Kafka разводит «принять» и «выполнить»</h2>
+    <p class="sc-lead">Гейтвей больше не ждёт агента. chats_service кладёт событие в топик <code>chat-messages</code>, и пользователь сразу получает «принято». Дальше каждый сервис читает топик в своём темпе.</p>
+  </header>
+
+  <div class="sc-scene">
+    <div class="sc-steps">
+      <div class="sc-step" data-step="0"><div class="sc-step__card">
+        <div class="sc-step__n">01</div>
+        <h3>Принято за 40 мс</h3>
+        <p>Gateway → chats_service → <code>producer.send("chat-messages")</code>. HTTP-ответ уходит сразу, соединение закрыто, воркер гейтвея свободен.</p>
+        <p>Кнопка всё ещё в режиме «Стоп»: агент работает, но браузер его не ждёт.</p>
+      </div></div>
+      <div class="sc-step" data-step="1"><div class="sc-step__card">
+        <div class="sc-step__n">02</div>
+        <h3>Один топик, несколько групп</h3>
+        <p>Агент и chats-consumer читают один и тот же топик в разных consumer group: <code>llm-bot-group</code> и <code>db-consumer-group</code>. У каждой группы свой offset.</p>
+        <p>Агент думает минуты, а сообщение пользователя уже в Postgres. Медленный читатель не тормозит быстрого.</p>
+      </div></div>
+      <div class="sc-step" data-step="2"><div class="sc-step__card">
+        <div class="sc-step__n">03</div>
+        <h3>Ответ идёт тем же путём</h3>
+        <p>Агент пишет ответ в <code>chat-messages</code> с флагом <code>is_from_bot</code> и свои же ответы пропускает.</p>
+        <p><code>db-consumer-group</code> сохраняет ответ и по <code>gateway_target</code> доставляет его: в Telegram или MAX через ботов, в веб и Sigma запросом <code>/internal/bot_message</code>. Сами гейтвеи Kafka не читают.</p>
+      </div></div>
+      <div class="sc-step" data-step="3"><div class="sc-step__card">
+        <div class="sc-step__n">04</div>
+        <h3>Агент упал, сообщения ждут</h3>
+        <p>Пока агент перезапускается, сообщения копятся в топике. Группа продолжает с сохранённого offset и догоняет отставание.</p>
+        <p>В групповом чате коммит идёт только после записи в БД, а дубли отсекаются по <code>client_msg_id</code>. Новый получатель — это новая группа, гейтвей править не нужно.</p>
+      </div></div>
+    </div>
+
+    <div class="sc-stage" data-step="0" id="bus-stage">
+      <div class="sc-stage__frame">
+        <div class="sc-win">
+          <div class="sc-win__bar"><i></i><i></i><i></i><b>POST /api/chats/send_message</b><span class="sc-badge sc-badge--ok sc-win__badge" id="bus-http">200 · принято за 40 мс</span></div>
+          <div class="sc-win__body">
+            <div class="chat-main-inner chat-active sc-chat">
+              <div class="chat-messages">
+                <div class="user-message-wrapper"><div class="user-message"><div class="message-text" id="bus-q">Собери отчёт по логам за неделю и построй графики</div></div></div>
+                <div class="agent-placeholder bg-ready" id="bus-ph"><div class="wave-indicator"><canvas class="placeholder-graph" aria-hidden="true"></canvas></div></div>
+                <div class="agent-message sc-reply" hidden><p id="bus-a">Отчёт готов: 3 графика и сводка по ошибкам за 7 дней.</p><span class="sc-badge sc-deliv">/internal/bot_message → WebSocket</span></div>
+              </div>
+              <div class="message-input-container">
+                <div class="chat-input-area">
+                  <div class="chat-input-box">
+                    <div class="chat-input-field" data-placeholder="Напишите сообщение..."></div>
+                    <div class="chat-input-footer">
+                      <button class="attach-btn" type="button" tabindex="-1"><svg viewBox="0 0 24 24" fill="none"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19 a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                      <button class="chat-send-btn active stop-mode" id="bus-send" type="button" tabindex="-1" aria-label="Стоп"><svg class="sc-ic-stop" viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg><svg class="sc-ic-send" viewBox="0 0 24 24" fill="none"><path d="M12 19V5M5 12l7-7 7 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="sc-kafka" id="bus-k">
+              <div class="sc-krow sc-krow--topic">
+                <div class="sc-klabel"><small>topic</small><b>chat-messages</b></div>
+                <div class="sc-klog" id="bus-log"></div>
+                <div class="sc-ktarget sc-klegend"><span class="is-user">user</span><span class="is-bot">bot</span></div>
+              </div>
+              <div class="sc-krow" data-g="agent">
+                <div class="sc-klabel"><small>group</small><b>llm-bot-group</b></div>
+                <div class="sc-ktrack"></div>
+                <div class="sc-ktarget"><b>Agent</b><small>ждёт</small></div>
+              </div>
+              <div class="sc-krow" data-g="db">
+                <div class="sc-klabel"><small>group</small><b>db-consumer-group</b></div>
+                <div class="sc-ktrack"></div>
+                <div class="sc-ktarget"><b>Postgres</b><small>ждёт</small></div>
+              </div>
+              <div class="sc-caption" id="bus-cap"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const SLOTS = 8;
+  const k = document.getElementById('bus-k');
+  const logEl = document.getElementById('bus-log');
+  const http = document.getElementById('bus-http');
+  const cap = document.getElementById('bus-cap');
+  const ph = document.getElementById('bus-ph');
+  const reply = document.querySelector('#bus-stage .sc-reply');
+  const send = document.getElementById('bus-send');
+  const row = (g) => k.querySelector(`[data-g="${g}"]`);
+  let log = [], at = {}, timers = [];
+
+  for (let i = 0; i < SLOTS; i++) logEl.appendChild(document.createElement('i'));
+  k.querySelectorAll('.sc-ktrack').forEach((t) => { for (let i = 0; i < SLOTS; i++) t.appendChild(document.createElement('i')); });
+
+  function paint(note) {
+    [...logEl.children].forEach((c, i) => {
+      const m = log[i];
+      c.className = m ? 'is-' + m.label + (m.kind === 'old' ? ' is-old' : '') : '';
+      c.innerHTML = m ? `<small>${1040 + i}</small><span>${m.label}</span>` : '';
+    });
+    for (const g of ['agent', 'db']) {
+      const r = row(g);
+      [...r.querySelector('.sc-ktrack').children].forEach((c, i) => {
+        const m = log[i];
+        c.className = !m ? '' : i >= at[g] ? 'is-wait' : (g === 'agent' && m.kind === 'bot' && i >= 2) ? 'is-skip' : 'is-read';
+      });
+      const lag = log.length - at[g];
+      const s = r.querySelector('.sc-ktarget small');
+      if (note && note[g]) s.textContent = note[g];
+      r.classList.toggle('is-lag', lag > 0 && !r.classList.contains('is-down'));
+      r.querySelector('.sc-klabel small').textContent = lag > 0 ? `group · lag ${lag}` : 'group';
+    }
+  }
+  const q = document.getElementById('bus-q'), a = document.getElementById('bus-a');
+  const Q = [q.textContent, 'Добавь разбивку 5xx по сервисам'], A = [a.textContent, 'Готово: разбивка по 6 сервисам, больше всего 504 у gateway.'];
+  function say(i) { q.textContent = Q[i]; a.textContent = A[i]; }
+  function chat(done) {
+    ph.hidden = done; reply.hidden = !done;
+    send.classList.toggle('stop-mode', !done);
+    send.classList.toggle('active', !done);
+  }
+  function reset(step) {
+    timers.forEach(clearTimeout); timers = [];
+    k.querySelectorAll('.sc-krow').forEach((r) => r.classList.remove('is-hot', 'is-down', 'is-lag'));
+    
+    log = [{ kind: 'old', label: 'user' }, { kind: 'old', label: 'bot' }];
+    at = { agent: 2, db: 2 };
+  }
+  const later = (ms, fn) => timers.push(setTimeout(fn, ms));
+  const add = (kind, label) => log.push({ kind, label });
+
+  const steps = [
+    () => { chat(false); paint({ agent: 'ждёт', db: 'ждёт' });
+      cap.textContent = 'Событие в топике, HTTP-ответ ушёл. Читать его ещё никто не начал.';
+      later(350, () => { add('user', 'user'); paint(); }); },
+    () => { chat(false); add('user', 'user'); paint({ agent: 'ждёт', db: 'ждёт' });
+      cap.textContent = 'Каждая группа двигает свой offset независимо.';
+      later(300, () => { at.db = 3; paint({ db: 'сохранил' }); });
+      later(1100, () => { at.agent = 3; row('agent').classList.add('is-hot'); paint({ agent: 'думает' }); }); },
+    () => { chat(false); add('user', 'user'); at = { agent: 3, db: 3 };
+      row('agent').classList.add('is-hot'); paint({ agent: 'думает', db: 'сохранил' });
+      cap.textContent = 'Ответ агента — ещё одно событие в том же топике.';
+      later(500, () => { add('bot', 'bot'); row('agent').classList.remove('is-hot'); at.agent = 4; paint({ agent: innerWidth < 600 ? 'пропуск' : 'пропустил ответ' }); });
+      later(900, () => { at.db = 4; paint({ db: 'сохранил' }); });
+      later(1300, () => { paint({ db: 'доставил' }); chat(true); }); },
+    () => { say(1); chat(false); add('user', 'user'); add('bot', 'bot'); at = { agent: 4, db: 4 };
+      row('agent').classList.add('is-down'); paint({ agent: 'упал', db: 'сохранил' });
+      cap.textContent = 'Агент недоступен. Новые сообщения пишутся в топик, их никто не теряет.';
+      later(400, () => { add('user', 'user'); at.db = 5; paint(); });
+      later(900, () => { add('user', 'user'); at.db = 6; paint(); });
+      later(3200, () => { row('agent').classList.remove('is-down'); row('agent').classList.add('is-hot'); at.agent = 5; paint({ agent: 'догоняет' });
+        cap.textContent = 'Агент вернулся и читает с сохранённого offset.'; });
+      later(3700, () => { at.agent = 6; paint(); });
+      later(4400, () => { add('bot', 'bot'); at.agent = 7; row('agent').classList.remove('is-hot'); paint({ agent: 'ответил' }); chat(true); });
+      later(4800, () => { at.db = 7; paint({ db: 'доставил' });
+        cap.textContent = 'Отставание нулевое, ни одно сообщение не потеряно.'; }); },
+  ];
+
+  document.addEventListener('sc:step', (e) => {
+    if (e.detail.ch !== 'ch-bus') return;
+    reset(e.detail.step); say(0);
+    steps[Math.min(e.detail.step, steps.length - 1)]();
+  });
+  reset(0); chat(false); paint();
+  window.ChatAnimations?.initPlaceholderGraph?.(ph);
+});
+</script>

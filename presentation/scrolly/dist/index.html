@@ -1,0 +1,1160 @@
+<!doctype html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AuGent · REST, Kafka и Redis: почему так</title>
+<link rel="stylesheet" href="../../../api_gateway/static/css/theme.css">
+<link rel="stylesheet" href="../../../api_gateway/static/css/layout.css">
+<link rel="stylesheet" href="../../../api_gateway/static/css/chat.css">
+<link rel="stylesheet" href="../../../api_gateway/static/css/tools-panel.css">
+<link rel="stylesheet" href="../../../api_gateway/static/css/query-mode.css">
+<link rel="stylesheet" href="../../../api_gateway/static/css/task-cards.css">
+<link rel="stylesheet" href="../../../api_gateway/static/css/flowmap.css">
+<link rel="stylesheet" href="../../../api_gateway/static/css/file-attach.css">
+<link rel="stylesheet" href="../../../api_gateway/static/css/skills.css">
+<link rel="stylesheet" href="../../../api_gateway/static/css/claude-ui.css">
+<link rel="stylesheet" href="../../../api_gateway/static/css/generative-ui.css">
+<link rel="stylesheet" href="../../../api_gateway/static/css/presence.css">
+<style>
+/* scrolly.css — только раскладка доклада. Цвета, шрифты и компоненты берутся
+   из CSS проекта (theme.css, chat.css, ...): здесь нет своей палитры. */
+
+html { scroll-behavior: smooth; }
+html, body.sc-body { margin: 0; background: var(--bg); color: var(--text-primary); }
+/* theme.css (SPA) ставит body{overflow:hidden;height:100dvh} — для доклада нужен обычный скролл документа */
+html, body.sc-body { height: auto; min-height: 100%; }
+body.sc-body { font-family: var(--font-anthropic-sans); overflow-x: clip; overflow-y: visible; }
+html.sc-theming body, html.sc-theming body * {
+  transition: background-color .6s ease, color .6s ease, border-color .6s ease, fill .6s ease, stroke .6s ease !important;
+}
+
+/* ── прогресс и оглавление ── */
+.sc-progress { position: fixed; inset: 0 0 auto 0; height: 3px; z-index: 50; background: transparent; }
+.sc-progress span { display: block; height: 100%; width: 0; background: var(--accent); }
+.sc-toc { position: fixed; right: 18px; top: 50%; transform: translateY(-50%); z-index: 40;
+  display: flex; flex-direction: column; gap: 10px; }
+.sc-toc a { display: flex; align-items: center; justify-content: flex-end; gap: 8px; text-decoration: none;
+  color: var(--text-muted); font-size: 12px; }
+.sc-toc a i { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid currentColor; flex: none; }
+.sc-toc a span { opacity: 0; transform: translateX(6px); transition: opacity .2s, transform .2s; white-space: nowrap; }
+.sc-toc:hover a span { opacity: 1; transform: none; }
+.sc-toc a.is-on { color: var(--accent); }
+.sc-toc a.is-on i { background: currentColor; }
+
+/* ── главы ── */
+.sc-ch { position: relative; padding: 0 clamp(20px, 5vw, 72px); }
+.sc-ch__head { max-width: 1180px; margin: 0 auto; padding: 18vh 0 6vh; }
+.sc-kicker { font-family: var(--font-anthropic-mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--accent); }
+.sc-h2 { font-family: var(--font-anthropic-serif); font-weight: 500; font-size: clamp(32px, 4.4vw, 58px);
+  line-height: 1.08; letter-spacing: -.015em; margin: 14px 0 18px; max-width: 18ch; }
+.sc-lead { font-family: var(--font-anthropic-serif); font-size: clamp(17px, 1.5vw, 21px); line-height: 1.55;
+  color: var(--text-secondary); max-width: 62ch; margin: 0; }
+.sc-time { display: inline-block; margin-left: 10px; color: var(--text-muted); letter-spacing: .08em; }
+
+/* sticky-сцена: слева шаги, справа сцена с UI */
+.sc-scene { max-width: 1180px; margin: 0 auto; display: grid; grid-template-columns: minmax(280px, 400px) minmax(0, 1fr);
+  gap: clamp(24px, 4vw, 64px); }
+.sc-steps { padding: 4vh 0 40vh; }
+.sc-step { min-height: 72vh; display: flex; align-items: center; }
+.sc-step__card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 22px 24px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.04); opacity: .35; transition: opacity .35s; }
+.sc-step.is-on .sc-step__card { opacity: 1; }
+.sc-step__n { font-family: var(--font-anthropic-mono); font-size: 12px; color: var(--accent); }
+.sc-step h3 { font-family: var(--font-anthropic-serif); font-weight: 500; font-size: 22px; line-height: 1.25; margin: 6px 0 10px; }
+.sc-step p { margin: 0; font-size: 15px; line-height: 1.6; color: var(--text-secondary); }
+.sc-step p + p { margin-top: 8px; }
+.sc-step code, .sc-note code { font-family: var(--font-anthropic-mono); font-size: .88em; background: var(--surface2);
+  border: 1px solid var(--border-light); padding: 1px 5px; border-radius: 5px; color: var(--text-primary); }
+.sc-stage { position: sticky; top: 0; height: 100vh; display: flex; align-items: center; justify-content: center; }
+.sc-stage__frame { width: 100%; max-width: 720px; }
+
+/* окно приложения на сцене: внутри живые компоненты проекта */
+.sc-win { background: var(--bg); border: 1px solid var(--border); border-radius: 18px; overflow: hidden;
+  box-shadow: 0 24px 60px -24px rgba(0,0,0,.25); }
+.sc-win__bar { height: 34px; display: flex; align-items: center; gap: 7px; padding: 0 14px;
+  background: var(--surface2); border-bottom: 1px solid var(--border); }
+.sc-win__bar i { width: 10px; height: 10px; border-radius: 50%; background: var(--border); }
+.sc-win__bar b { margin-left: 10px; font: 500 12px var(--font-anthropic-mono); color: var(--text-muted); }
+.sc-win__body { position: relative; }
+
+/* ── HERO на настоящем стартовом экране ── */
+.sc-hero { min-height: 100vh; padding: 0; }
+.sc-hero .chat-start-screen { min-height: 100vh; }
+.sc-hero .start-body { padding-bottom: 8vh; }
+.sc-hero .start-input-field:empty::before { content: attr(data-placeholder); color: var(--text-muted); }
+.sc-hero__meta { position: absolute; left: 0; right: 0; bottom: 5vh; display: flex; justify-content: center; gap: 22px;
+  font: 12px var(--font-anthropic-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--text-muted); z-index: 2; }
+.sc-hero__scroll { animation: scHint 1.8s ease-in-out infinite; }
+@keyframes scHint { 50% { transform: translateY(5px); opacity: .5; } }
+.sc-hero .sc-typed::after { content: ""; display: inline-block; width: 1.5px; height: 1.05em; margin-left: 2px;
+  vertical-align: -2px; background: var(--text-primary); animation: scCaret 1s steps(1) infinite; }
+@keyframes scCaret { 50% { opacity: 0; } }
+
+/* ── схема «маршрут запроса» (используется в главах) ── */
+.sc-lane { position: relative; padding: 26px 22px 22px; }
+.sc-lane__row { display: grid; grid-template-columns: 1fr 28px 1fr 28px 1fr; align-items: center; }
+.sc-node { background: var(--surface); border: 1.5px solid var(--border); border-radius: 14px; padding: 14px 14px 12px;
+  text-align: center; position: relative; transition: border-color .3s, box-shadow .3s, transform .3s; z-index: 1; }
+.sc-node b { display: block; font: 600 12px var(--font-anthropic-mono); letter-spacing: .1em; text-transform: uppercase; }
+.sc-node small { display: block; margin-top: 4px; font-size: 12px; color: var(--text-muted); }
+.sc-node.is-hot { border-color: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 14%, transparent); }
+.sc-node.is-bad { border-color: #c0392b; box-shadow: 0 0 0 4px rgba(192,57,43,.14); }
+.sc-hold { margin-top: 18px; display: flex; align-items: center; gap: 12px; font: 13px var(--font-anthropic-mono);
+  color: var(--text-secondary); }
+.sc-hold__bar { flex: 1; height: 8px; border-radius: 99px; background: var(--surface2); border: 1px solid var(--border-light); overflow: hidden; }
+.sc-hold__bar span { display: block; height: 100%; width: 0; background: var(--accent); border-radius: inherit; }
+.sc-lane.is-broken .sc-hold__bar span { background: #c0392b; }
+.sc-hold__t { min-width: 64px; text-align: right; font-variant-numeric: tabular-nums; }
+.sc-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 99px;
+  font: 600 11px var(--font-anthropic-mono); letter-spacing: .04em; border: 1px solid var(--border); color: var(--text-secondary);
+  background: var(--surface); }
+.sc-badge--bad { color: #c0392b; border-color: rgba(192,57,43,.4); background: rgba(192,57,43,.06); }
+.sc-badge--ok { color: var(--accent2); border-color: color-mix(in srgb, var(--accent2) 45%, transparent); }
+
+/* воркеры гейтвея */
+.sc-workers { display: grid; grid-template-columns: repeat(10, 1fr); gap: 6px; margin-top: 16px; }
+.sc-workers i { height: 22px; border-radius: 6px; background: var(--surface2); border: 1px solid var(--border-light);
+  transition: background-color .25s; }
+.sc-workers i.is-busy { background: color-mix(in srgb, var(--accent) 55%, transparent); border-color: transparent; }
+.sc-workers i.is-dead { background: rgba(192,57,43,.55); border-color: transparent; }
+.sc-caption { margin-top: 10px; font-size: 13px; color: var(--text-muted); }
+
+
+/* стрелки между узлами */
+.sc-arrow { height: 2px; background: var(--border); position: relative; }
+.sc-arrow::after { content: ""; position: absolute; right: -1px; top: -4px; border: 5px solid transparent;
+  border-left: 7px solid var(--border); border-right: 0; }
+.sc-arrow.is-on { background: var(--accent); } .sc-arrow.is-on::after { border-left-color: var(--accent); }
+.sc-lane.is-broken .sc-arrow { background: #c0392b; } .sc-lane.is-broken .sc-arrow::after { border-left-color: #c0392b; }
+.sc-lane__body { height: 150px; position: relative; display: flow-root; }
+.sc-lane__body > .sc-mesh { position: absolute; inset: 0; }
+
+/* потребители N×M: HTML-узлы, линии в SVG без текста */
+.sc-mesh { display: none; }
+.sc-mesh svg { position: absolute; left: 0; right: 0; top: 0; width: 100%; height: 56px; overflow: visible; }
+.sc-mesh svg path { stroke: #e0604f; stroke-opacity: .85; stroke-width: 1.5; fill: none; vector-effect: non-scaling-stroke; }
+.sc-mesh__row { position: absolute; left: 0; right: 0; top: 56px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+.sc-mesh__row span { text-align: center; padding: 9px 4px; border-radius: 10px; border: 1.5px solid var(--border);
+  background: var(--surface); font: 600 12px var(--font-anthropic-sans); letter-spacing: .01em; color: var(--text-primary); }
+.sc-mesh .sc-caption { position: absolute; left: 0; right: 0; top: 104px; margin: 0; }
+
+/* сцена: состояние по шагу (data-step на .sc-stage) */
+#rest-stage[data-step="3"] .sc-mesh { display: block; }
+#rest-stage[data-step="3"] .sc-hold, #rest-stage[data-step="3"] .sc-workers, #rest-stage[data-step="3"] .sc-caption { display: none; }
+
+/* мобильная раскладка: сцена над шагами */
+@media (max-width: 900px) {
+  .sc-scene { grid-template-columns: minmax(0, 1fr); }
+  .sc-stage { position: sticky; top: 0; height: auto; min-height: 0; padding: 12px 0; z-index: 3;
+    background: var(--bg); order: -1; }
+  .sc-steps { padding-bottom: 20vh; }
+  .sc-step { min-height: 60vh; }
+  .sc-toc { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+/* ── окно чата внутри сцены: фиксированная высота, без шапки приложения ── */
+.sc-chat { display: flex; flex-direction: column; }
+.sc-chat .chat-messages { flex: none; height: 176px; justify-content: flex-start; padding: 22px 0 8px; overflow: hidden; gap: 14px; }
+.sc-chat .message-input-container { padding: 0 24px 4px; }
+.sc-chat .agent-message { padding-top: 0; padding-bottom: 0; }
+.sc-chat .sc-lost { font-family: var(--font-anthropic-sans); }
+.sc-chat .sc-lost p { margin: 0; font-size: 14px; line-height: 1.45; color: var(--text-primary);
+  border-left: 3px solid #c0392b; padding: 6px 12px 6px 12px; background: rgba(192,57,43,.08); border-radius: 0 8px 8px 0; }
+.sc-chat .sc-lost b { color: #e0604f; font-weight: 600; }
+.sc-chat .agent-placeholder[hidden], .sc-chat .agent-message[hidden] { display: none !important; }
+.sc-workers i { border-color: var(--border); }
+.sc-workers i.is-busy { background: var(--accent); }
+.sc-caption, .sc-node small, .sc-hold { color: var(--text-secondary); }
+.sc-badge { white-space: nowrap; min-width: 150px; justify-content: center; }
+.sc-win__bar b { color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+
+/* hero: одна подпись внизу (настоящая .start-footer-note), крупнее для проектора */
+.sc-hero .start-footer-note { font-size: 13px; bottom: 28px; color: var(--text-secondary); }
+
+@media (max-width: 900px) {
+  .sc-chat .chat-messages { height: 172px; padding-top: 12px; gap: 10px; }
+  .sc-chat .user-message-wrapper, .sc-chat .agent-placeholder, .sc-chat .agent-message { padding-left: 14px; padding-right: 14px; }
+  .sc-chat .message-input-container { padding: 0 14px 4px; }
+  .sc-lane { padding: 18px 14px 16px; }
+  .sc-lane__row { grid-template-columns: 1fr 16px 1fr 16px 1fr; }
+  .sc-node { padding: 10px 6px; } .sc-node b { font-size: 10px; letter-spacing: .06em; } .sc-node small { font-size: 11px; }
+  .sc-hold { flex-wrap: wrap; gap: 8px 10px; } .sc-hold__bar { flex-basis: 50%; }
+  .sc-lane__body { height: 168px; }
+  .sc-mesh__row { gap: 4px; } .sc-mesh__row span { font-size: 10px; letter-spacing: 0; padding: 8px 2px; } .sc-mesh .sc-caption { top: 102px; }
+  .sc-badge { min-width: 0; }
+  .sc-hero .start-footer-note { font-size: 12px; bottom: 16px; }
+}
+@media (max-width: 900px) { .sc-mesh__row .sc-tg { font-size: 0; } .sc-mesh__row .sc-tg::after { content: "TG"; font-size: 10px; } }
+@media (max-width: 900px) { .sc-chat .sc-lost p { font-size: 13px; } .sc-win__bar b .sc-long { display: none; } }
+
+/* ── глава 2: топик Kafka и consumer groups. Сетка: метка | лог | получатель ── */
+.sc-kafka { padding: 18px 24px 16px; border-top: 1px solid var(--border-light); background: var(--surface); }
+.sc-krow { display: grid; grid-template-columns: 150px minmax(0, 1fr) 104px; align-items: center; gap: 12px; }
+.sc-krow + .sc-krow { margin-top: 9px; }
+.sc-klabel small { display: block; font: 10.5px var(--font-anthropic-mono); letter-spacing: .06em; text-transform: uppercase;
+  color: var(--text-secondary); }
+.sc-klabel b { display: block; font: 600 12px var(--font-anthropic-mono); color: var(--text-primary); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.sc-klabel b { letter-spacing: 0; }
+.sc-klog { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; }
+.sc-klog i { height: 38px; border-radius: 8px; border: 1px dashed var(--border); display: flex; flex-direction: column;
+  align-items: center; justify-content: center; font-style: normal; transition: background-color .3s, border-color .3s, transform .3s; }
+.sc-klog i small { font: 10px var(--font-anthropic-mono); color: var(--text-secondary); }
+.sc-klog i span { font: 600 11px var(--font-anthropic-mono); }
+.sc-klog i.is-old { opacity: .45; animation: none; }
+.sc-klog i.is-user { border: 1.5px solid var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent);
+  animation: scDrop .35s ease-out; }
+.sc-klog i.is-user span { color: var(--accent); }
+.sc-klog i.is-bot { border: 1.5px solid var(--accent2); background: color-mix(in srgb, var(--accent2) 14%, transparent);
+  animation: scDrop .35s ease-out; }
+.sc-klog i.is-bot span { color: var(--accent2); }
+@keyframes scDrop { from { transform: translateY(-8px); opacity: 0; } to { transform: none; opacity: 1; } }
+.sc-ktrack { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; }
+.sc-ktrack i { height: 10px; border-radius: 99px; background: transparent; border: 1px dashed var(--border-light);
+  transition: background-color .35s, border-color .35s; }
+.sc-ktrack i.is-read { background: var(--text-muted); border: 1px solid transparent; }
+.sc-ktrack i.is-skip { border: 1px solid var(--text-muted);
+  background: repeating-linear-gradient(135deg, var(--text-muted) 0 2px, transparent 2px 5px); }
+.sc-ktrack i.is-wait { border: 1.5px solid var(--accent); background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+  animation: scWait 1.1s ease-in-out infinite alternate; }
+@keyframes scWait { from { opacity: .8; } to { opacity: 1; } }
+.sc-krow.is-hot .sc-ktrack i.is-read { background: var(--accent); }
+.sc-ktarget { min-width: 0; }
+.sc-ktarget b { display: block; font: 600 12px var(--font-anthropic-mono); letter-spacing: .06em; text-transform: uppercase; }
+.sc-ktarget small { display: block; font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sc-ktarget .sc-badge { min-width: 0; }
+.sc-krow.is-hot .sc-ktarget b { color: var(--accent); }
+.sc-krow.is-lag .sc-klabel small { color: var(--accent); }
+.sc-krow.is-down .sc-ktarget b, .sc-krow.is-down .sc-ktarget small, .sc-krow.is-down .sc-klabel small { color: #c0392b; }
+.sc-kafka .sc-caption { margin-top: 12px; min-height: 2.8em; }
+.sc-chat .sc-reply p { margin: 0; font-size: 15px; line-height: 1.5; }
+.chat-send-btn .sc-ic-send { display: none; }
+.chat-send-btn:not(.stop-mode) .sc-ic-stop { display: none; }
+.chat-send-btn:not(.stop-mode) .sc-ic-send { display: block; }
+.sc-lead code { font-family: var(--font-anthropic-mono); font-size: .82em; }
+@media (max-width: 900px) {
+  .sc-kafka { padding: 12px 14px 12px; }
+  .sc-krow { grid-template-columns: 92px minmax(0, 1fr) 62px; gap: 8px; }
+  .sc-krow + .sc-krow { margin-top: 6px; }
+  .sc-klabel b { font-size: 9.5px; } .sc-klabel small { font-size: 9px; letter-spacing: .02em; }
+  .sc-klog { gap: 2px; } .sc-klog i { height: 30px; border-radius: 6px; }
+  .sc-klog i small { display: none; } .sc-klog i span { font-size: 9px; }
+  .sc-ktarget b { font-size: 9.5px; letter-spacing: .02em; } .sc-ktarget small { font-size: 10px; }
+  .sc-kafka .sc-caption { font-size: 12px; margin-top: 8px; min-height: 3em; line-height: 1.5; }
+}
+
+.sc-klegend { display: flex; flex-direction: column; gap: 3px; font: 600 11px var(--font-anthropic-mono); }
+.sc-klegend span { display: flex; align-items: center; gap: 6px; }
+.sc-klegend span::before { content: ""; width: 10px; height: 10px; border-radius: 3px; border: 1.5px solid currentColor;
+  background: color-mix(in srgb, currentColor 14%, transparent); }
+.sc-klegend .is-user { color: var(--accent); } .sc-klegend .is-bot { color: var(--accent2); }
+.sc-win__bar .sc-win__badge { margin-left: auto; min-width: 0; flex: none; }
+.sc-chat .sc-reply .sc-deliv { margin-top: 8px; min-width: 0; font-weight: 500; }
+.sc-step code { white-space: nowrap; }
+
+/* мобила: карточка активного шага показывается под закреплённой сценой (копия из .sc-step) */
+.sc-mcard { display: none; }
+@media (max-width: 900px) {
+  .sc-stage { flex-direction: column; align-items: stretch; }
+  .sc-mcard { display: block; width: 100%; box-sizing: border-box; margin-top: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+    padding: 12px 14px; min-height: 0; }
+  .sc-mcard:empty { display: none; }
+  .sc-mcard .sc-step__n { font-size: 11px; }
+  .sc-mcard h3 { font-family: var(--font-anthropic-serif); font-weight: 500; font-size: 18px; line-height: 1.25; margin: 2px 0 6px; }
+  .sc-mcard p { margin: 0; font-size: 13.5px; line-height: 1.5; color: var(--text-secondary); }
+  .sc-mcard p + p { margin-top: 6px; }
+  .sc-mcard code { white-space: nowrap; font-family: var(--font-anthropic-mono); font-size: .86em; background: var(--surface2);
+    border: 1px solid var(--border-light); padding: 0 4px; border-radius: 4px; color: var(--text-primary); }
+  .sc-steps .sc-step__card { visibility: hidden; }
+  #bus-stage .message-input-container { display: none; }
+  #bus-stage .sc-chat .chat-messages { height: 150px; }
+  .sc-krow { grid-template-columns: minmax(0, 1fr) 70px; grid-template-rows: auto auto; row-gap: 3px; }
+  .sc-krow .sc-klabel { grid-column: 1; grid-row: 1; display: flex; gap: 6px; align-items: baseline; }
+  .sc-krow .sc-klog, .sc-krow .sc-ktrack { grid-column: 1; grid-row: 2; }
+  .sc-krow .sc-ktarget { grid-column: 2; grid-row: 1 / 3; align-self: center; }
+  .sc-klabel b { font-size: 11px; } .sc-klabel small { font-size: 10px; white-space: nowrap; }
+  .sc-krow:not(.sc-krow--topic) { height: 30px; }
+  .sc-ktarget small { white-space: nowrap !important; overflow: hidden; text-overflow: clip; }
+  .sc-klog i { height: 26px; } .sc-klog i span { font-size: 10px; }
+  .sc-ktrack i { height: 8px; } .sc-ktrack { gap: 2px; }
+  .sc-ktarget b { font-size: 10px; } .sc-ktarget small { font-size: 11px; white-space: normal; line-height: 1.2; }
+  .sc-klegend { font-size: 10px; }
+  .sc-win__bar .sc-win__badge { font-size: 10px; padding: 2px 7px; }
+}
+
+/* ── глава 3: ключи Redis. Ряд: тип | ключ + значение | TTL ── */
+.sc-chat .chat-messages[hidden], .sc-chat [hidden] { display: none !important; }
+.sc-win__bar .presence-wrap { margin-left: auto; flex: none; }
+.sc-win__bar .presence-btn { pointer-events: none; }
+.sc-win__body { position: relative; }
+.sc-f5 { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; background: var(--bg); }
+.sc-f5 b { font: 600 34px var(--font-anthropic-mono); color: var(--accent); }
+.sc-f5 small { font-size: 13px; color: var(--text-secondary); }
+.sc-rd-bot .reasoning-block { margin: 0 0 8px; }
+.sc-rd-answer { margin: 0; }
+.sc-rd-skills { padding: 18px 24px 8px !important; }
+.sc-rd-skills .skills-list { display: flex; flex-direction: column; gap: 8px; }
+.sc-rd-skills .skill-card { cursor: default; }
+.sc-rd-likes { font: 600 12px var(--font-anthropic-mono); color: var(--accent); padding: 0 6px; }
+
+.sc-redis { padding: 14px 24px 14px; border-top: 1px solid var(--border-light); background: var(--surface); }
+.sc-rcmd { display: flex; align-items: baseline; gap: 10px; height: 22px; margin-bottom: 8px; min-width: 0; }
+.sc-rcmd small { flex: none; font: 10.5px var(--font-anthropic-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--text-secondary); }
+.sc-rcmd small::after { content: ">"; margin-left: 6px; color: var(--accent); }
+.sc-rcmd code { font: 600 12px var(--font-anthropic-mono); color: var(--text-primary); background: none; padding: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.sc-rcmd code s { text-decoration: none; font-weight: 400; color: var(--text-secondary); }
+.sc-rkeys { display: grid; grid-template-rows: repeat(4, 40px); gap: 6px; }
+.sc-rrow { display: grid; grid-template-columns: 72px minmax(0, 1fr) 88px; align-items: center; gap: 12px; padding: 0 12px;
+  border-radius: 10px; border: 1px solid var(--border-light); background: var(--bg); transition: border-color .25s, background-color .25s, opacity .25s; }
+.sc-rrow.is-empty { border-style: dashed; background: transparent; }
+.sc-rrow i { font: normal 600 10.5px var(--font-anthropic-mono); letter-spacing: .06em; color: var(--text-secondary);
+  border: 1px solid var(--border); border-radius: 6px; padding: 3px 0; text-align: center; }
+.sc-rrow > div { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.sc-rrow b { flex: none; font: 600 12.5px var(--font-anthropic-mono); color: var(--text-primary); white-space: nowrap; }
+.sc-rrow span { min-width: 0; font: 12px var(--font-anthropic-mono); color: var(--text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; gap: 4px; }
+.sc-rrow span u { text-decoration: none; flex: none; padding: 2px 7px; border-radius: 99px; font-size: 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent); animation: scChipIn .3s ease; }
+.sc-rrow em { font: normal 12px var(--font-anthropic-mono); color: var(--text-secondary); text-align: right; white-space: nowrap; }
+.sc-rrow.is-hot { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--bg)); }
+.sc-rrow.is-hot i { color: var(--accent); border-color: var(--accent); }
+.sc-rrow.is-gone { opacity: .5; }
+.sc-rrow.is-gone b { text-decoration: line-through; text-decoration-color: var(--text-muted); }
+@keyframes scChipIn { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+
+@media (max-width: 900px) {
+  .sc-redis { padding: 12px 14px; }
+  .sc-rd-skills { padding: 12px 14px 8px !important; }
+  .sc-rkeys { grid-template-rows: repeat(4, 44px); gap: 5px; }
+  .sc-rrow { grid-template-columns: 54px minmax(0, 1fr) 54px; gap: 8px; padding: 0 8px; }
+  .sc-rrow i { font-size: 9px; letter-spacing: .02em; }
+  .sc-rrow > div { flex-direction: column; align-items: flex-start; gap: 3px; }
+  .sc-rrow b { font-size: 11px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  .sc-rrow span { font-size: 10.5px; max-width: 100%; } .sc-rrow span u { font-size: 10px; padding: 1px 5px; }
+  .sc-rrow em { font-size: 10.5px; }
+  .sc-rcmd code { font-size: 11px; }
+  .sc-win__bar .presence-btn { transform: scale(.9); }
+}
+.sc-f5[hidden] { display: none; }
+@media (max-width: 900px) {
+  #ch-redis .sc-steps { padding-bottom: 45vh; }
+  #redis-stage .sc-chat .chat-messages { height: 140px; }
+  #redis-stage .sc-rkeys { grid-template-rows: repeat(4, 38px); gap: 4px; }
+  #redis-stage .sc-redis .sc-caption { display: none; }
+  #redis-stage .sc-rcmd { margin-bottom: 6px; }
+}
+/* глава 3, v2: ряд = 4 колонки, значения начинаются с одной линии */
+.sc-rrow { grid-template-columns: 72px 214px minmax(0, 1fr) 96px; }
+.sc-rrow b { overflow: hidden; text-overflow: ellipsis; }
+.sc-rrow.is-empty { visibility: hidden; }
+.sc-rrow.is-pg { border-style: dashed; }
+.sc-rrow.is-pg i { border-color: transparent; background: var(--surface2); }
+.sc-rrow.is-pg em { color: var(--text-primary); }
+.sc-rrow.is-gone { opacity: .62; border-color: var(--border-light); background: transparent; }
+.sc-rrow.is-gone span, .sc-rrow.is-gone em { color: var(--text-secondary); }
+.sc-rrow em { color: var(--text-primary); }
+.sc-rrow span u + u { margin-left: 0; }
+@media (max-width: 900px) {
+  #redis-stage .sc-chat .chat-messages { height: 156px; }
+  .sc-rrow { grid-template-columns: 56px minmax(0, 1fr) auto; grid-template-areas: "t k m" "t v m"; row-gap: 2px; align-content: center; }
+  .sc-rrow i { grid-area: t; font-size: 9.5px; } .sc-rrow b { grid-area: k; } .sc-rrow span { grid-area: v; } .sc-rrow em { grid-area: m; }
+  #redis-stage .sc-rkeys { grid-template-rows: repeat(4, 42px); }
+}
+/* глава 3, v3 */
+.sc-rrow { grid-template-columns: 72px 200px minmax(0, 1fr) 96px; }
+.sc-rrow span { gap: 6px; line-height: 18px; min-height: 18px;
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent); }
+.sc-rrow.is-pg i { border: 1px dashed var(--border); background: none; color: var(--text-secondary); }
+.sc-rrow.is-pg.is-hot i { border-color: var(--accent); color: var(--accent); }
+.sc-rd-skills { padding: 18px 24px 8px !important; }
+.sc-rd-skills .skills-list { margin: 0; padding: 0; }
+.sc-rd-skills .skill-card { margin: 0; }
+@media (max-width: 900px) {
+  #redis-stage .sc-rcmd { height: 32px; align-items: flex-start; }
+  #redis-stage .sc-rcmd code { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 16px; word-break: break-all; }
+  .sc-rrow span { line-height: 16px; min-height: 16px; }
+  .sc-rrow i { font-size: 10px; }
+  .sc-rd-skills { padding: 12px 14px 8px !important; }
+}
+/* глава 3, v4: кириллица в значениях — sans (в anthropic-mono её нет), мобильная сетка после десктопной */
+.sc-rrow { grid-template-columns: 72px 190px minmax(0, 1fr) 84px; }
+.sc-rrow span, .sc-rrow em { font-family: var(--font-anthropic-sans); font-variant-numeric: tabular-nums; }
+.sc-rrow span { font-size: 12.5px; } .sc-rrow span u { font-size: 11.5px; }
+.sc-rrow.is-gone { opacity: .85; }
+.sc-rrow.is-gone b { color: var(--text-secondary); }
+@media (max-width: 900px) {
+  .sc-rrow { grid-template-columns: 54px minmax(0, 1fr) max-content; grid-template-areas: "t k m" "t v m"; }
+  .sc-rrow b, .sc-rrow span { max-width: 100%; }
+  .sc-rrow em { font-size: 11px; }
+  .sc-rrow span { font-size: 11px; } .sc-rrow span u { font-size: 10.5px; }
+  #redis-stage .sc-rcmd code { word-break: normal; overflow-wrap: anywhere; }
+}
+
+/* Глава 3, шаг 2: настоящий FlowMap. #fmRail стоит справа в окне чата, как у #view-agent, чат и ключи сдвигаются */
+#redis-stage .sc-win__body { position: relative; }
+#redis-stage .fm-rail { top: 12px; bottom: 12px; left: auto; right: 12px; width: 172px; height: auto; }
+/* на шаге путь показывает панель, волна-плейсхолдер под ней не нужна */
+#redis-stage[data-step="1"] #rd-ph { display: none; }
+@media (min-width: 769px) {
+  #redis-stage[data-step="1"] .sc-chat, #redis-stage[data-step="1"] #rd-k { margin-right: 196px; }
+  /* колонка уже: ключ и значение в два этажа, как на мобиле */
+  #redis-stage[data-step="1"] .sc-rrow { grid-template-columns: 64px minmax(0, 1fr) max-content; grid-template-areas: "t k m" "t v m"; row-gap: 2px; align-content: center; }
+  #redis-stage[data-step="1"] .sc-rrow i { grid-area: t; } #redis-stage[data-step="1"] .sc-rrow b { grid-area: k; font-size: 12px; }
+  #redis-stage[data-step="1"] .sc-rrow span { grid-area: v; } #redis-stage[data-step="1"] .sc-rrow em { grid-area: m; }
+  #redis-stage[data-step="1"] .sc-rrow span u { padding: 0 6px; font-size: 10.5px; line-height: 14px; }
+}
+
+</style>
+</head>
+<body class="sc-body">
+<div class="sc-progress" aria-hidden="true"><span></span></div>
+<nav class="sc-toc" aria-label="Главы"></nav>
+<main class="sc-main">
+<script>window.SC_FLOW = {"key": "flow:{chat_id}", "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783", "ttl": 3599, "taken_ms": 1794505985476, "events": [{"ev": "send", "ts": 1794505885737, "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783"}, {"ev": "gateway", "ts": 1794505885738, "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783"}, {"ev": "accepted", "ts": 1794505885745, "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783"}, {"ev": "agent_start", "ts": 1794505885747, "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783"}, {"ev": "db_saved", "ts": 1794505885748, "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783", "role": "user"}, {"ev": "think_end", "ts": 1794505902212, "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783"}, {"ev": "tool_start", "ts": 1794505902220, "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783", "call_id": "toolu_bdrk_012Kn2U5vzbXqp1NAPTvCMoE", "gap_ms": 16473, "slot": "sandbox", "label": "Выполняю команды", "ext": "sandbox_c"}, {"ev": "tool_end", "ts": 1794505902511, "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783", "call_id": "toolu_bdrk_012Kn2U5vzbXqp1NAPTvCMoE", "ok": true, "ms": 286, "slot": "sandbox", "label": "Выполняю команды", "ext": "sandbox_c"}, {"ev": "think_end", "ts": 1794505914333, "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783"}, {"ev": "tool_start", "ts": 1794505914341, "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783", "call_id": "toolu_bdrk_01Tejha9rSp8cyH1napNgjcu", "gap_ms": 11830, "slot": "sandbox", "label": "Запускаю код", "ext": "sandbox_c"}, {"ev": "tool_end", "ts": 1794505916293, "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783", "call_id": "toolu_bdrk_01Tejha9rSp8cyH1napNgjcu", "ok": true, "ms": 1948, "slot": "sandbox", "label": "Запускаю код", "ext": "sandbox_c"}, {"ev": "think_end", "ts": 1794505926344, "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783"}, {"ev": "tool_start", "ts": 1794505926351, "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783", "call_id": "toolu_bdrk_01AJD5UQ2i9HYvc1TyyWxg2Y", "gap_ms": 10058, "slot": "sandbox", "label": "Запускаю код", "ext": "sandbox_c"}, {"ev": "tool_end", "ts": 1794505931311, "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783", "call_id": "toolu_bdrk_01AJD5UQ2i9HYvc1TyyWxg2Y", "ok": true, "ms": 4956, "slot": "sandbox", "label": "Запускаю код", "ext": "sandbox_c"}, {"ev": "think_end", "ts": 1794505938680, "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783"}, {"ev": "tool_start", "ts": 1794505938688, "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783", "call_id": "toolu_bdrk_015TjLJj4n2Kj1PdkNamH4UY", "gap_ms": 7376, "slot": "sandbox", "label": "Выполняю команды", "ext": "sandbox_c"}, {"ev": "tool_end", "ts": 1794505938747, "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783", "call_id": "toolu_bdrk_015TjLJj4n2Kj1PdkNamH4UY", "ok": true, "ms": 55, "slot": "sandbox", "label": "Выполняю команды", "ext": "sandbox_c"}, {"ev": "tool_start", "ts": 1794505943483, "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783", "call_id": "toolu_bdrk_01RFffRWo5JUWwn23ob6aKRf", "gap_ms": 4735, "slot": "sandbox", "label": "Читаю файл", "ws": "d976e0e002fd"}, {"ev": "tool_end", "ts": 1794505943503, "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783", "call_id": "toolu_bdrk_01RFffRWo5JUWwn23ob6aKRf", "ok": true, "ms": 12, "slot": "sandbox", "label": "Читаю файл", "ws": "d976e0e002fd"}, {"ev": "think_end", "ts": 1794505958655, "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783"}, {"ev": "tool_start", "ts": 1794505958662, "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783", "call_id": "toolu_bdrk_01LBWdaNzKuhC5PRouiQnJzk", "gap_ms": 15159, "slot": "sandbox", "label": "Выполняю команды", "ext": "sandbox_c"}, {"ev": "tool_end", "ts": 1794505958723, "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783", "call_id": "toolu_bdrk_01LBWdaNzKuhC5PRouiQnJzk", "ok": true, "ms": 56, "slot": "sandbox", "label": "Выполняю команды", "ext": "sandbox_c"}, {"ev": "think_end", "ts": 1794505983603, "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783"}, {"ev": "tool_start", "ts": 1794505983611, "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783", "call_id": "toolu_bdrk_0196ERddVHJTR2v3U6EZfBb4", "gap_ms": 24888, "slot": "sandbox", "label": "Запускаю код", "ext": "sandbox_c", "ws": "d976e0e002fd"}]};</script>
+<!-- 00 · HERO: настоящий стартовый экран AuGent (разметка из app.js, граф из animations.js) -->
+<section class="sc-ch sc-hero" id="ch-hero" data-theme="light" data-title="Старт">
+  <div class="message-input-container start-screen-host" id="sc-hero-host">
+    <div class="chat-start-screen">
+      <div class="start-bg" aria-hidden="true"><canvas id="start-graph"></canvas></div>
+      <div class="start-body">
+        <div class="start-header">
+          <p class="start-greeting">Привет, <span class="username">DS-сообщество</span> 👋</p>
+          <h1 class="start-title">Почему не только REST?</h1>
+        </div>
+        <div class="start-input-area">
+          <div class="start-input-box" id="start-input-box">
+            <div class="start-input-field" contenteditable="false" data-placeholder="Спросите что-нибудь..."><span class="sc-typed"></span></div>
+            <div class="start-input-footer">
+              <button class="attach-btn" type="button" tabindex="-1" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19 a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <button class="start-send-btn" type="button" disabled tabindex="-1" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="start-footer-note">Павел Солдаткин · CDS · листайте вниз ↓</p>
+    </div>
+  </div>
+</section>
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const host = document.getElementById('sc-hero-host');
+  window.ChatAnimations?.animateStartHeader?.(host);
+  window.ChatAnimations?.initStartGraph?.(host);
+  const typed = host.querySelector('.sc-typed');
+  const send = host.querySelector('.start-send-btn');
+  const text = 'Зачем агенту одновременно REST, Kafka\u00a0и\u00a0Redis?';
+  let i = 0;
+  setTimeout(function tick() {
+    typed.textContent = text.slice(0, ++i);
+    if (i === 1) { send.disabled = false; send.classList.add('active'); }
+    if (i < text.length) setTimeout(tick, 28 + Math.random() * 30);
+  }, 900);
+});
+</script>
+
+<!-- 01 · Ловушка «всё на REST». Окно чата собрано из разметки app.js, стили chat.css -->
+<section class="sc-ch" id="ch-rest" data-theme="dark" data-title="1 · Всё на REST">
+  <header class="sc-ch__head">
+    <div class="sc-kicker">Глава 1 <span class="sc-time">00:30 – 02:00</span></div>
+    <h2 class="sc-h2">Наивная версия: один POST и ждём ответ</h2>
+    <p class="sc-lead">Самая простая архитектура агента: фронт шлёт запрос, гейтвей синхронно зовёт агента и держит соединение, пока не придёт ответ. На прототипе это работает. В проде ломается в трёх местах.</p>
+  </header>
+
+  <div class="sc-scene">
+    <div class="sc-steps">
+      <div class="sc-step" data-step="0"><div class="sc-step__card">
+        <div class="sc-step__n">01</div>
+        <h3>Запрос держит соединение</h3>
+        <p>Браузер → Gateway → Agent. HTTP-соединение открыто, пока агент не закончит. Пока он думает, на кнопке отправки висит «Стоп», а соединение занимает воркер гейтвея.</p>
+      </div></div>
+      <div class="sc-step" data-step="1"><div class="sc-step__card">
+        <div class="sc-step__n">02</div>
+        <h3>Агент думает минуты, задача идёт до часа</h3>
+        <p>Цикл с инструментами длится от секунд до минут. Фоновая задача в песочнице может работать до часа, пока её не обрубит <code>MAX_TIMEOUT</code>.</p>
+        <p>Десять пользователей занимают десять воркеров. Нагрузку нельзя сгладить, её можно только переждать.</p>
+      </div></div>
+      <div class="sc-step" data-step="2"><div class="sc-step__card">
+        <div class="sc-step__n">03</div>
+        <h3>Соединение рвётся, ответ теряется</h3>
+        <p>Таймаут прокси (504), F5, телефон сменил сеть. Агент дорабатывает и потратил токены, но отдать ответ уже некому.</p>
+      </div></div>
+      <div class="sc-step" data-step="3"><div class="sc-step__card">
+        <div class="sc-step__n">04</div>
+        <h3>Результат нужен многим</h3>
+        <p>Ответ надо сохранить в БД, показать в вебе, отправить в Telegram и MAX, посчитать токены. При синхронной схеме гейтвей обязан знать каждого получателя и звать его сам.</p>
+        <p>Итог главы: нужно развязать «принять запрос» и «выполнить его».</p>
+      </div></div>
+    </div>
+
+    <div class="sc-stage" data-step="0" id="rest-stage">
+      <div class="sc-stage__frame">
+        <div class="sc-win">
+          <div class="sc-win__bar"><i></i><i></i><i></i><b>POST /send_message<span class="sc-long"> · ждём ответ в том же запросе</span></b></div>
+          <div class="sc-win__body">
+            <div class="chat-main-inner chat-active sc-chat">
+              <div class="chat-messages">
+                <div class="user-message-wrapper"><div class="user-message"><div class="message-text">Собери отчёт по логам за неделю и построй графики</div></div></div>
+                <div class="agent-placeholder bg-ready" id="rest-ph"><div class="wave-indicator"><canvas class="placeholder-graph" aria-hidden="true"></canvas></div></div>
+                <div class="agent-message sc-lost" hidden><p><b>Ответ некому отдать.</b> Прокси закрыл соединение через 60 с, агент закончил через 6 мин. Токены потрачены впустую.</p></div>
+              </div>
+              <div class="message-input-container">
+                <div class="chat-input-area">
+                  <div class="chat-input-box">
+                    <div class="chat-input-field" data-placeholder="Напишите сообщение..."></div>
+                    <div class="chat-input-footer">
+                      <button class="attach-btn" type="button" tabindex="-1"><svg viewBox="0 0 24 24" fill="none"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19 a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                      <button class="chat-send-btn active stop-mode" type="button" tabindex="-1" aria-label="Стоп"><svg viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="sc-lane" id="rest-lane">
+              <div class="sc-lane__row">
+                <div class="sc-node" data-n="browser"><b>Браузер</b><small>ждёт ответ</small></div>
+                <div class="sc-arrow"></div>
+                <div class="sc-node" data-n="gw"><b>Gateway</b><small>держит воркер</small></div>
+                <div class="sc-arrow"></div>
+                <div class="sc-node" data-n="agent"><b>Agent</b><small>LLM + тулы</small></div>
+              </div>
+              <div class="sc-lane__body">
+              <div class="sc-hold">
+                <span>соединение</span>
+                <div class="sc-hold__bar"><span></span></div>
+                <span class="sc-hold__t">00:00</span>
+                <span class="sc-badge" id="rest-badge">ожидание</span>
+              </div>
+              <div class="sc-workers" id="rest-workers"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+              <div class="sc-caption" id="rest-cap">Воркеры гейтвея: 1 из 10 занят одним запросом</div>
+              <div class="sc-mesh">
+                <svg viewBox="0 0 100 56" preserveAspectRatio="none" aria-hidden="true">
+                  <path d="M50 0 C50 30 10 26 10 56"/><path d="M50 0 C50 30 30 26 30 56"/><path d="M50 0 L50 56"/>
+                  <path d="M50 0 C50 30 70 26 70 56"/><path d="M50 0 C50 30 90 26 90 56"/>
+                </svg>
+                <div class="sc-mesh__row"><span>Postgres</span><span>Web</span><span class="sc-tg">Telegram</span><span>MAX</span><span>Токены</span></div>
+                <div class="sc-caption">Каждый новый получатель означает правку гейтвея. Упал один, и ответ остальным под угрозой.</div>
+              </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const stage = document.getElementById('rest-stage');
+  const lane = document.getElementById('rest-lane');
+  const arrows = [...lane.querySelectorAll('.sc-arrow')];
+  const bar = lane.querySelector('.sc-hold__bar span');
+  const t = lane.querySelector('.sc-hold__t');
+  const badge = document.getElementById('rest-badge');
+  const workers = [...document.querySelectorAll('#rest-workers i')];
+  const cap = document.getElementById('rest-cap');
+  const ph = document.getElementById('rest-ph');
+  const lost = stage.querySelector('.sc-lost');
+  const nodes = (n) => lane.querySelector(`[data-n="${n}"]`);
+  const fmt = (s) => { s = Math.floor(s); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = s % 60;
+    return (h ? h + ':' + String(m).padStart(2, '0') : String(m).padStart(2, '0')) + ':' + String(x).padStart(2, '0'); };
+  // соединение живёт не дольше LIMIT секунд: дальше таймер стоит на 01:00
+  const LIMIT = 60;
+  let raf = 0, started = 0, speed = 1, cap0 = 0, step = -1, cur = 0;
+
+  function loop(now) {
+    const sec = Math.min(LIMIT, ((now - started) / 1000) * speed + cap0); cur = sec;
+    t.textContent = fmt(sec);
+    bar.style.width = (sec / LIMIT) * 100 + '%';
+    if (step === 1) {
+      const busy = Math.min(10, 1 + Math.floor(sec / 6.5));
+      workers.forEach((w, i) => w.classList.toggle('is-busy', i < busy));
+      cap.textContent = `Воркеры гейтвея: ${busy} из 10 заняты долгими запросами`;
+    }
+    if (sec >= LIMIT) { raf = 0; return; }
+    raf = requestAnimationFrame(loop);
+  }
+  function run(sp, from) { cancelAnimationFrame(raf); speed = sp; cap0 = from; started = performance.now(); raf = requestAnimationFrame(loop); }
+
+  document.addEventListener('sc:step', (e) => {
+    if (e.detail.ch !== 'ch-rest') return;
+    step = e.detail.step;
+    lane.classList.toggle('is-broken', step === 2);
+    ['browser', 'gw', 'agent'].forEach((n) => nodes(n).classList.remove('is-hot', 'is-bad'));
+    arrows.forEach((a) => a.classList.toggle('is-on', step !== 2));
+    workers.forEach((w) => w.classList.remove('is-busy', 'is-dead'));
+    ph.hidden = step >= 2; lost.hidden = step !== 2;
+    if (step === 0) {
+      nodes('agent').classList.add('is-hot');
+      workers[0].classList.add('is-busy'); cap.textContent = 'Воркеры гейтвея: 1 из 10 занят одним запросом';
+      badge.className = 'sc-badge'; badge.textContent = 'ожидание'; run(1, 0);
+    } else if (step === 1) {
+      nodes('gw').classList.add('is-hot'); badge.className = 'sc-badge'; badge.textContent = 'таймаут 60 с'; run(4, cur);
+    } else if (step === 2) {
+      cancelAnimationFrame(raf); t.textContent = '01:00'; bar.style.width = '100%';
+      nodes('browser').classList.add('is-bad'); nodes('gw').classList.add('is-bad');
+      workers.forEach((w, i) => w.classList.toggle('is-dead', i < 3));
+      cap.textContent = 'Три соединения оборвались, агенты дорабатывают вхолостую';
+      badge.className = 'sc-badge sc-badge--bad'; badge.textContent = '504 · таймаут 60 с';
+    } else {
+      cancelAnimationFrame(raf); nodes('gw').classList.add('is-bad');
+    }
+  });
+  window.ChatAnimations?.initPlaceholderGraph?.(ph);
+});
+</script>
+
+<!-- 02 · Kafka как шина. Топик и группы из кода: chat-messages, llm-bot-group, db-consumer-group. Гейтвеи Kafka не читают: ответ им доставляет chats-consumer по HTTP -->
+<section class="sc-ch" id="ch-bus" data-theme="light" data-title="2 · Kafka: шина">
+  <header class="sc-ch__head">
+    <div class="sc-kicker">Глава 2 <span class="sc-time">02:00 – 03:30</span></div>
+    <h2 class="sc-h2">Kafka разводит «принять» и «выполнить»</h2>
+    <p class="sc-lead">Гейтвей больше не ждёт агента. chats_service кладёт событие в топик <code>chat-messages</code>, и пользователь сразу получает «принято». Дальше каждый сервис читает топик в своём темпе.</p>
+  </header>
+
+  <div class="sc-scene">
+    <div class="sc-steps">
+      <div class="sc-step" data-step="0"><div class="sc-step__card">
+        <div class="sc-step__n">01</div>
+        <h3>Принято за 40 мс</h3>
+        <p>Gateway → chats_service → <code>producer.send("chat-messages")</code>. HTTP-ответ уходит сразу, соединение закрыто, воркер гейтвея свободен.</p>
+        <p>Кнопка всё ещё в режиме «Стоп»: агент работает, но браузер его не ждёт.</p>
+      </div></div>
+      <div class="sc-step" data-step="1"><div class="sc-step__card">
+        <div class="sc-step__n">02</div>
+        <h3>Один топик, несколько групп</h3>
+        <p>Агент и chats-consumer читают один и тот же топик в разных consumer group: <code>llm-bot-group</code> и <code>db-consumer-group</code>. У каждой группы свой offset.</p>
+        <p>Агент думает минуты, а сообщение пользователя уже в Postgres. Медленный читатель не тормозит быстрого.</p>
+      </div></div>
+      <div class="sc-step" data-step="2"><div class="sc-step__card">
+        <div class="sc-step__n">03</div>
+        <h3>Ответ идёт тем же путём</h3>
+        <p>Агент пишет ответ в <code>chat-messages</code> с флагом <code>is_from_bot</code> и свои же ответы пропускает.</p>
+        <p><code>db-consumer-group</code> сохраняет ответ и по <code>gateway_target</code> доставляет его: в Telegram или MAX через ботов, в веб и Sigma запросом <code>/internal/bot_message</code>. Сами гейтвеи Kafka не читают.</p>
+      </div></div>
+      <div class="sc-step" data-step="3"><div class="sc-step__card">
+        <div class="sc-step__n">04</div>
+        <h3>Агент упал, сообщения ждут</h3>
+        <p>Пока агент перезапускается, сообщения копятся в топике. Группа продолжает с сохранённого offset и догоняет отставание.</p>
+        <p>В групповом чате коммит идёт только после записи в БД, а дубли отсекаются по <code>client_msg_id</code>. Новый получатель — это новая группа, гейтвей править не нужно.</p>
+      </div></div>
+    </div>
+
+    <div class="sc-stage" data-step="0" id="bus-stage">
+      <div class="sc-stage__frame">
+        <div class="sc-win">
+          <div class="sc-win__bar"><i></i><i></i><i></i><b>POST /api/chats/send_message</b><span class="sc-badge sc-badge--ok sc-win__badge" id="bus-http">200 · принято за 40 мс</span></div>
+          <div class="sc-win__body">
+            <div class="chat-main-inner chat-active sc-chat">
+              <div class="chat-messages">
+                <div class="user-message-wrapper"><div class="user-message"><div class="message-text" id="bus-q">Собери отчёт по логам за неделю и построй графики</div></div></div>
+                <div class="agent-placeholder bg-ready" id="bus-ph"><div class="wave-indicator"><canvas class="placeholder-graph" aria-hidden="true"></canvas></div></div>
+                <div class="agent-message sc-reply" hidden><p id="bus-a">Отчёт готов: 3 графика и сводка по ошибкам за 7 дней.</p><span class="sc-badge sc-deliv">/internal/bot_message → WebSocket</span></div>
+              </div>
+              <div class="message-input-container">
+                <div class="chat-input-area">
+                  <div class="chat-input-box">
+                    <div class="chat-input-field" data-placeholder="Напишите сообщение..."></div>
+                    <div class="chat-input-footer">
+                      <button class="attach-btn" type="button" tabindex="-1"><svg viewBox="0 0 24 24" fill="none"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19 a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                      <button class="chat-send-btn active stop-mode" id="bus-send" type="button" tabindex="-1" aria-label="Стоп"><svg class="sc-ic-stop" viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg><svg class="sc-ic-send" viewBox="0 0 24 24" fill="none"><path d="M12 19V5M5 12l7-7 7 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="sc-kafka" id="bus-k">
+              <div class="sc-krow sc-krow--topic">
+                <div class="sc-klabel"><small>topic</small><b>chat-messages</b></div>
+                <div class="sc-klog" id="bus-log"></div>
+                <div class="sc-ktarget sc-klegend"><span class="is-user">user</span><span class="is-bot">bot</span></div>
+              </div>
+              <div class="sc-krow" data-g="agent">
+                <div class="sc-klabel"><small>group</small><b>llm-bot-group</b></div>
+                <div class="sc-ktrack"></div>
+                <div class="sc-ktarget"><b>Agent</b><small>ждёт</small></div>
+              </div>
+              <div class="sc-krow" data-g="db">
+                <div class="sc-klabel"><small>group</small><b>db-consumer-group</b></div>
+                <div class="sc-ktrack"></div>
+                <div class="sc-ktarget"><b>Postgres</b><small>ждёт</small></div>
+              </div>
+              <div class="sc-caption" id="bus-cap"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const SLOTS = 8;
+  const k = document.getElementById('bus-k');
+  const logEl = document.getElementById('bus-log');
+  const http = document.getElementById('bus-http');
+  const cap = document.getElementById('bus-cap');
+  const ph = document.getElementById('bus-ph');
+  const reply = document.querySelector('#bus-stage .sc-reply');
+  const send = document.getElementById('bus-send');
+  const row = (g) => k.querySelector(`[data-g="${g}"]`);
+  let log = [], at = {}, timers = [];
+
+  for (let i = 0; i < SLOTS; i++) logEl.appendChild(document.createElement('i'));
+  k.querySelectorAll('.sc-ktrack').forEach((t) => { for (let i = 0; i < SLOTS; i++) t.appendChild(document.createElement('i')); });
+
+  function paint(note) {
+    [...logEl.children].forEach((c, i) => {
+      const m = log[i];
+      c.className = m ? 'is-' + m.label + (m.kind === 'old' ? ' is-old' : '') : '';
+      c.innerHTML = m ? `<small>${1040 + i}</small><span>${m.label}</span>` : '';
+    });
+    for (const g of ['agent', 'db']) {
+      const r = row(g);
+      [...r.querySelector('.sc-ktrack').children].forEach((c, i) => {
+        const m = log[i];
+        c.className = !m ? '' : i >= at[g] ? 'is-wait' : (g === 'agent' && m.kind === 'bot' && i >= 2) ? 'is-skip' : 'is-read';
+      });
+      const lag = log.length - at[g];
+      const s = r.querySelector('.sc-ktarget small');
+      if (note && note[g]) s.textContent = note[g];
+      r.classList.toggle('is-lag', lag > 0 && !r.classList.contains('is-down'));
+      r.querySelector('.sc-klabel small').textContent = lag > 0 ? `group · lag ${lag}` : 'group';
+    }
+  }
+  const q = document.getElementById('bus-q'), a = document.getElementById('bus-a');
+  const Q = [q.textContent, 'Добавь разбивку 5xx по сервисам'], A = [a.textContent, 'Готово: разбивка по 6 сервисам, больше всего 504 у gateway.'];
+  function say(i) { q.textContent = Q[i]; a.textContent = A[i]; }
+  function chat(done) {
+    ph.hidden = done; reply.hidden = !done;
+    send.classList.toggle('stop-mode', !done);
+    send.classList.toggle('active', !done);
+  }
+  function reset(step) {
+    timers.forEach(clearTimeout); timers = [];
+    k.querySelectorAll('.sc-krow').forEach((r) => r.classList.remove('is-hot', 'is-down', 'is-lag'));
+    
+    log = [{ kind: 'old', label: 'user' }, { kind: 'old', label: 'bot' }];
+    at = { agent: 2, db: 2 };
+  }
+  const later = (ms, fn) => timers.push(setTimeout(fn, ms));
+  const add = (kind, label) => log.push({ kind, label });
+
+  const steps = [
+    () => { chat(false); paint({ agent: 'ждёт', db: 'ждёт' });
+      cap.textContent = 'Событие в топике, HTTP-ответ ушёл. Читать его ещё никто не начал.';
+      later(350, () => { add('user', 'user'); paint(); }); },
+    () => { chat(false); add('user', 'user'); paint({ agent: 'ждёт', db: 'ждёт' });
+      cap.textContent = 'Каждая группа двигает свой offset независимо.';
+      later(300, () => { at.db = 3; paint({ db: 'сохранил' }); });
+      later(1100, () => { at.agent = 3; row('agent').classList.add('is-hot'); paint({ agent: 'думает' }); }); },
+    () => { chat(false); add('user', 'user'); at = { agent: 3, db: 3 };
+      row('agent').classList.add('is-hot'); paint({ agent: 'думает', db: 'сохранил' });
+      cap.textContent = 'Ответ агента — ещё одно событие в том же топике.';
+      later(500, () => { add('bot', 'bot'); row('agent').classList.remove('is-hot'); at.agent = 4; paint({ agent: innerWidth < 600 ? 'пропуск' : 'пропустил ответ' }); });
+      later(900, () => { at.db = 4; paint({ db: 'сохранил' }); });
+      later(1300, () => { paint({ db: 'доставил' }); chat(true); }); },
+    () => { say(1); chat(false); add('user', 'user'); add('bot', 'bot'); at = { agent: 4, db: 4 };
+      row('agent').classList.add('is-down'); paint({ agent: 'упал', db: 'сохранил' });
+      cap.textContent = 'Агент недоступен. Новые сообщения пишутся в топик, их никто не теряет.';
+      later(400, () => { add('user', 'user'); at.db = 5; paint(); });
+      later(900, () => { add('user', 'user'); at.db = 6; paint(); });
+      later(3200, () => { row('agent').classList.remove('is-down'); row('agent').classList.add('is-hot'); at.agent = 5; paint({ agent: 'догоняет' });
+        cap.textContent = 'Агент вернулся и читает с сохранённого offset.'; });
+      later(3700, () => { at.agent = 6; paint(); });
+      later(4400, () => { add('bot', 'bot'); at.agent = 7; row('agent').classList.remove('is-hot'); paint({ agent: 'ответил' }); chat(true); });
+      later(4800, () => { at.db = 7; paint({ db: 'доставил' });
+        cap.textContent = 'Отставание нулевое, ни одно сообщение не потеряно.'; }); },
+  ];
+
+  document.addEventListener('sc:step', (e) => {
+    if (e.detail.ch !== 'ch-bus') return;
+    reset(e.detail.step); say(0);
+    steps[Math.min(e.detail.step, steps.length - 1)]();
+  });
+  reset(0); chat(false); paint();
+  window.ChatAnimations?.initPlaceholderGraph?.(ph);
+});
+</script>
+
+<!-- 03 · Redis: живое состояние. Ключи из кода: agent:running/reasoning/loop:{chat_id}, flow:{chat_id}, stream:{request_id},
+     skills:selected:state/pending, gc:react:pending, online:{gw} -->
+<section class="sc-ch" id="ch-redis" data-theme="dark" data-title="3 · Redis: живое состояние">
+  <header class="sc-ch__head">
+    <div class="sc-kicker">Глава 3 <span class="sc-time">03:30 – 05:30</span></div>
+    <h2 class="sc-h2">Redis помнит то, что происходит сейчас</h2>
+    <p class="sc-lead">Postgres хранит историю, Kafka возит события. А то, что живёт секунды и минуты (идёт ли запрос, о чём агент думает, кто онлайн), лежит в Redis с TTL и исчезает само.</p>
+  </header>
+
+  <div class="sc-scene">
+    <div class="sc-steps">
+      <div class="sc-step" data-step="0"><div class="sc-step__card">
+        <div class="sc-step__n">01</div>
+        <h3>F5 посреди ответа</h3>
+        <p>Страница перезагрузилась. История приходит из Postgres, но в ней нет того, что агент делает прямо сейчас.</p>
+        <p>Гейтвей читает <code>agent:running:{chat_id}</code> и <code>agent:reasoning:{chat_id}</code>. Кнопка снова «Стоп», размышления на месте, таймер идёт дальше. Ключи живут час (<code>AGENT_RUN_TTL</code>) и пропадут сами, если агент упадёт молча.</p>
+      </div></div>
+      <div class="sc-step" data-step="1"><div class="sc-step__card">
+        <div class="sc-step__n">02</div>
+        <h3>Хронология запроса</h3>
+        <p>Каждое событие пути (принято, агент начал, тул стартовал, тул закончил, ответ) пишется через <code>RPUSH flow:{chat_id}</code>.</p>
+        <p>Список обрезается до 600 записей и живёт час. После F5 FlowMap запрашивает <code>/flow</code> и проигрывает путь заново с того же места.</p>
+        <p>В панели «Путь запроса» (тот же FlowMap, что справа от чата в AuGent) проигрывается настоящий <code>flow:{chat_id}</code>: запрос, в котором агент собирал этот слайд. Время ускорено в 4 раза, длительности тулов и пауз взяты из Redis.</p>
+      </div></div>
+      <div class="sc-step" data-step="2"><div class="sc-step__card">
+        <div class="sc-step__n">03</div>
+        <h3>Ответ находит свой канал</h3>
+        <p>У Sigma нет WebSocket. Агент публикует чанки ответа через <code>PUBLISH stream:{request_id}</code>, а <code>gateway_sigma</code> подписан на этот канал и отдаёт их в SSE.</p>
+        <p>Основной гейтвей получает те же чанки прямым HTTP <code>/internal/bot_stream</code> и в Redis не подписан. После ответа ключ <code>agent:running</code> удаляется, и кнопка возвращается в «Отправить».</p>
+      </div></div>
+      <div class="sc-step" data-step="3"><div class="sc-step__card">
+        <div class="sc-step__n">04</div>
+        <h3>Много кликов, одна запись</h3>
+        <p>Отметка скилла сразу пишется в <code>skills:selected:state:{user_id}</code>, интерфейс читает её оттуда. Событие уходит в очередь <code>skills:selected:pending</code>, chats_service разбирает её в Postgres.</p>
+        <p>Реакции общего чата копятся в <code>gc:react:pending</code> 1 секунду, потом <code>RENAME</code> в inflight и одна пачка в БД.</p>
+      </div></div>
+      <div class="sc-step" data-step="4"><div class="sc-step__card">
+        <div class="sc-step__n">05</div>
+        <h3>Кто онлайн и сколько запросов</h3>
+        <p>Heartbeat вкладки делает <code>ZADD online:{gw}</code> с текущим временем. Всё старше 60 секунд вычищается, счётчик считает остаток.</p>
+        <p>Активные запросы считаются через <code>SCAN agent:running:*</code> и <code>agent:loop:*</code>. В Postgres за этим не ходим.</p>
+      </div></div>
+    </div>
+
+    <div class="sc-stage" data-step="0" id="redis-stage">
+      <div class="sc-stage__frame">
+        <div class="sc-win">
+          <div class="sc-win__bar"><i></i><i></i><i></i><b id="rd-url">GET /api/chats/{chat_id}/run_status</b>
+            <div class="presence-wrap"><button class="presence-btn" id="rd-pres" type="button" tabindex="-1" aria-label="Онлайн"><span class="presence-dot"></span><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg><span class="presence-count" id="rd-pres-n">1</span></button></div>
+          </div>
+          <div class="sc-win__body">
+            <div class="sc-f5" id="rd-f5" hidden><b>F5</b><small>перезагрузка страницы</small></div>
+            <div class="chat-main-inner chat-active sc-chat">
+              <div class="chat-messages" id="rd-msgs">
+                <div class="user-message-wrapper"><div class="user-message"><div class="message-text">Собери отчёт по логам за неделю и построй графики</div></div></div>
+                <div class="agent-message sc-rd-bot" id="rd-bot">
+                  <div class="reasoning-block reasoning-collapsed" data-cds="TurnStatus" data-state="done">
+                    <div class="reasoning-header" data-cds-row=""><span class="reasoning-label">Размышления</span><span class="reasoning-timer" id="rd-timer">0:38</span><svg class="reasoning-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></div>
+                    <div class="reasoning-body" data-cds-row-panel=""></div>
+                  </div>
+                  <p class="sc-rd-answer" id="rd-a" hidden>Отчёт готов: 3 графика и сводка.</p>
+                </div>
+                <div class="agent-placeholder bg-ready" id="rd-ph" hidden><div class="wave-indicator"><canvas class="placeholder-graph" aria-hidden="true"></canvas></div></div>
+              </div>
+              <div class="chat-messages sc-rd-skills" id="rd-skills" hidden>
+                <div class="skills-list">
+                  <div class="skill-card" data-skill-id="12"><div class="skill-card__left"><label class="skill-select-label"><input type="checkbox" class="skill-select-cb" tabindex="-1"><span class="skill-select-box" aria-hidden="true"><svg viewBox="0 0 12 12" fill="none"><path d="M2.2 6.2L4.8 8.8L9.8 3.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span></label><span class="skill-theme">Отчёт по логам с графиками</span></div><div class="skill-card__right"><span class="sc-rd-likes" id="rd-likes">♥ 14</span></div></div>
+                  <div class="skill-card" data-skill-id="31"><div class="skill-card__left"><label class="skill-select-label"><input type="checkbox" class="skill-select-cb" tabindex="-1"><span class="skill-select-box" aria-hidden="true"><svg viewBox="0 0 12 12" fill="none"><path d="M2.2 6.2L4.8 8.8L9.8 3.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span></label><span class="skill-theme">Приёмка UI через Playwright</span></div><div class="skill-card__right"></div></div>
+                  <div class="skill-card" data-skill-id="44"><div class="skill-card__left"><label class="skill-select-label"><input type="checkbox" class="skill-select-cb" tabindex="-1"><span class="skill-select-box" aria-hidden="true"><svg viewBox="0 0 12 12" fill="none"><path d="M2.2 6.2L4.8 8.8L9.8 3.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span></label><span class="skill-theme">Сборка доклада scrollytelling</span></div><div class="skill-card__right"></div></div>
+                </div>
+              </div>
+              <div class="message-input-container">
+                <div class="chat-input-area">
+                  <div class="chat-input-box">
+                    <div class="chat-input-field" data-placeholder="Напишите сообщение..."></div>
+                    <div class="chat-input-footer">
+                      <button class="attach-btn" type="button" tabindex="-1"><svg viewBox="0 0 24 24" fill="none"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19 a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                      <button class="chat-send-btn active stop-mode" id="rd-send" type="button" tabindex="-1" aria-label="Стоп"><svg class="sc-ic-stop" viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg><svg class="sc-ic-send" viewBox="0 0 24 24" fill="none"><path d="M12 19V5M5 12l7-7 7 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="sc-redis" id="rd-k">
+              <div class="sc-rcmd"><small>redis</small><code id="rd-cmd">&nbsp;</code></div>
+              <div class="sc-rkeys" id="rd-keys"></div>
+              <div class="sc-caption" id="rd-cap"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const $ = (id) => document.getElementById(id);
+  const keysEl = $('rd-keys'), cmd = $('rd-cmd'), cap = $('rd-cap'), url = $('rd-url');
+  const msgs = $('rd-msgs'), skills = $('rd-skills'), bot = $('rd-bot'), ans = $('rd-a'), ph = $('rd-ph');
+  const send = $('rd-send'), f5 = $('rd-f5'), timer = $('rd-timer'), presN = $('rd-pres-n');
+  const SNAP = window.SC_FLOW || null;
+  const ROWS = 4, CID = '{chat_id}', RID = SNAP ? SNAP.rid.slice(0, 8) : 'c7bc3a60';
+  const narrow = () => innerWidth < 600;
+  // Настоящий FlowMap (flowmap.js): вертикальная панель #fmRail справа в окне чата, на мобиле полоса #fmMini над вводом
+  const FV = window.FlowViz;
+  const winBody = document.querySelector('#redis-stage .sc-win__body'), inArea = document.querySelector('#redis-stage .chat-input-area');
+  { const r = document.getElementById('fmRail'), m = document.getElementById('fmMini'); if (r) winBody.appendChild(r); if (m) inArea.appendChild(m); }
+  const fitMini = () => { const m = document.getElementById('fmMini'), bx = inArea.querySelector('.chat-input-box'); if (!m || !bx) return;
+    const a = inArea.getBoundingClientRect(), b = bx.getBoundingClientRect();
+    m.style.setProperty('--fm-in-l', Math.round(b.left - a.left) + 'px'); m.style.setProperty('--fm-in-r', Math.round(a.right - b.right) + 'px'); };
+  const fvOff = () => { if (FV) { FV.collapse(); FV.reset(); } };
+  // событие снимка → FlowViz.emit, поля как в FlowViz.replay
+  function fvEmit(e) {
+    if (!FV) return;
+    if (e.ev === 'send') return FV.emit('send', { chat: CID });
+    const d = { chat: CID, request_id: SNAP ? SNAP.rid : undefined };
+    for (const k of ['slot', 'label', 'ext', 'ws', 'ok', 'ms', 'gap_ms', 'role']) if (e[k] != null) d[k] = e[k];
+    if (e.call_id) d.id = e.call_id;
+    FV.emit(e.ev, d);
+  }
+  let rows = [], timers = [], ticks = [], think = 38;
+
+  for (let i = 0; i < ROWS; i++) keysEl.appendChild(document.createElement('div')).className = 'sc-rrow is-empty';
+  const fmtTtl = (s) => s >= 86400 ? Math.round(s / 86400) + ' дн' : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  // ряд: тип | ключ | значение | метрика (TTL у живых ключей, иначе LLEN/HLEN/ZCARD/…)
+  function paint() {
+    [...keysEl.children].forEach((el, i) => {
+      const r = rows[i];
+      el.className = 'sc-rrow' + (!r ? ' is-empty' : '') + (r && r.hot ? ' is-hot' : '') + (r && r.gone ? ' is-gone' : '') + (r && r.pg ? ' is-pg' : '');
+      // точечно: TTL тикает раз в секунду, чипы не пересоздаются (иначе анимация появления мигает)
+      if (!el.children.length) el.innerHTML = '<i></i><b></b><span></span><em></em>';
+      const [ti, kb, vs, me] = el.children;
+      const set = (n, v, html) => { if (n._v !== v) { n._v = v; html ? (n.innerHTML = v) : (n.textContent = v); } };
+      set(ti, r ? r.t : ''); set(kb, r ? r.k : ''); set(vs, r ? (r.v || '') : '', true);
+      set(me, r ? (r.ttl != null ? 'TTL ' + fmtTtl(r.ttl) : (r.m || '')) : '');
+    });
+  }
+  const row = (k) => rows.find((r) => r.k === k);
+  const hot = (k) => { rows.forEach((r) => (r.hot = r.k === k && !r.gone)); paint(); };
+  const later = (ms, fn) => timers.push(setTimeout(fn, ms));
+  const every = (ms, fn) => ticks.push(setInterval(fn, ms));
+  const say = (c, u) => { cmd.innerHTML = c || '&nbsp;'; if (u) url.textContent = u; };
+  const running = (on) => { send.classList.toggle('stop-mode', on); send.classList.toggle('active', on); };
+  function view({ bot: b = false, answer = false, wave = false, skill = false } = {}) {
+    msgs.hidden = skill; skills.hidden = !skill;
+    bot.hidden = !b; ans.hidden = !answer; ph.hidden = !wave;
+  }
+  function reset() {
+    timers.forEach(clearTimeout); ticks.forEach(clearInterval); timers = []; ticks = [];
+    f5.hidden = true; rows = []; cap.textContent = ''; say(''); fvOff();
+    skills.querySelectorAll('.skill-select-cb').forEach((c) => (c.checked = false));
+    presN.textContent = '1';
+  }
+  function tickTtl() { every(1000, () => { rows.forEach((r) => { if (r.ttl > 0 && !r.fixed) r.ttl--; }); paint(); }); }
+  const setThink = () => (timer.textContent = `${Math.floor(think / 60)}:${String(think % 60).padStart(2, '0')}`);
+  function tickThink() { setThink(); every(1000, () => { think++; setThink(); }); }
+  const chip = (s) => `<u>${s}</u>`;
+  const runRow = (ttl) => ({ t: 'STRING', k: `agent:running:${CID}`, v: `{"request_id":"${RID}…"}`, ttl });
+  const rsnRow = (v, ttl) => ({ t: 'STRING', k: `agent:reasoning:${CID}`, v, ttl });
+
+  const steps = [
+    () => { // F5 → восстановление из Redis
+      think = 38; view({ bot: true }); running(true); tickThink();
+      const pg = { t: 'SQL', k: 'chat_messages', v: chip('1 сообщение пользователя'), m: 'Postgres', pg: true };
+      rows = [runRow(3562), rsnRow('«Читаю логи gateway за 7 дней…»', 3562), { t: 'LIST', k: `flow:${CID}`, v: chip('6 событий пути'), ttl: 3562 }, pg];
+      paint(); tickTtl(); say('', `GET /api/chats/${CID}/run_status`);
+      cap.textContent = 'Агент думает. Пользователь жмёт F5.';
+      later(900, () => { f5.hidden = false; });
+      later(1600, () => { f5.hidden = true; view({}); running(false); say('SELECT … FROM chat_messages WHERE chat_id = {chat_id}', `GET /api/chats/${CID}/messages`); hot('chat_messages');
+        cap.textContent = 'История пришла из Postgres. Что идёт сейчас, в ней нет.'; });
+      later(2600, () => { say(`GET agent:running:${CID} <s>→ {request_id…}</s>`, `GET /api/chats/${CID}/run_status`); hot(`agent:running:${CID}`); running(true); });
+      later(3400, () => { say(`GET agent:reasoning:${CID} <s>→ «Читаю логи…»</s>`); hot(`agent:reasoning:${CID}`); view({ bot: true });
+        cap.textContent = 'Кнопка и размышления восстановлены из Redis.'; });
+    },
+    () => { // хронология flow:{chat_id}: настоящий снимок из Redis (snap_flow.py), иначе демо
+      const plural = (n, a, b, c) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? a : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? b : c}`;
+      const fmtS = (ms) => (ms / 1000).toLocaleString('ru-RU', { maximumFractionDigits: 1 }) + ' с';
+      const ev = SNAP ? SNAP.events : ['accepted', 'agent_start', 'tool_start', 'tool_end', 'think_end', 'tool_start', 'tool_end'].map((e, i) => ({ ev: e, ts: i * 900 }));
+      if (!SNAP) { let k = 0; ev.forEach((e) => { if (e.ev === 'tool_start') Object.assign(e, { call_id: 'd' + (++k), slot: 'sandbox', label: 'Запускаю код' });
+        if (e.ev === 'tool_end') Object.assign(e, { call_id: 'd' + k, slot: 'sandbox', label: 'Запускаю код', ok: true, ms: 800 }); }); }
+      const t0 = ev[0].ts, span = ev[ev.length - 1].ts - t0;
+      const tools = ev.filter((e) => e.ev === 'tool_end');
+      const name = (e, i) => {
+        if (e.ev === 'tool_end') return `${e.label || 'тул'} ${fmtS(e.ms || 0)}${e.ok === false ? ' ✕' : ''}`;
+        if (e.ev === 'tool_start') return `▶ ${e.label || 'тул'}`;
+        if (e.ev === 'think_end') return `думал ${fmtS(e.ts - ev[Math.max(0, i - 1)].ts)}`;
+        if (e.ev === 'db_saved') return `db_saved:${e.role || ''}`;
+        return e.ev;
+      };
+      think = 0; view({ bot: true, wave: true }); running(true); setThink();
+      const fl = { t: 'LIST', k: `flow:${CID}`, v: '', m: 'LLEN 0' };
+      const rs = rsnRow('«агент начал»', 3600);
+      rows = [fl, runRow(3600), rs,
+              SNAP ? { t: 'SNAP', k: `rid ${RID}…`, v: chip(plural(ev.length, 'событие', 'события', 'событий')) + chip(fmtS(span)) + chip(plural(tools.length, 'тул', 'тула', 'тулов')), m: 'из Redis' }
+                   : { t: 'SQL', k: 'chat_messages', v: 'хронология сюда не пишется', m: 'Postgres', pg: true }];
+      paint(); tickTtl(); say('', `GET /api/chats/${CID}/flow`);
+      cap.textContent = SNAP ? `Настоящий flow:${CID}: ${plural(ev.length, 'событие', 'события', 'событий')} за ${fmtS(span)}.` : 'Каждое событие пути — одна запись в списке.';
+      // ×4 к реальному времени: пауза между событиями 0,7–4,5 с, чтобы пакет успевал пройти путь в панели
+      let at = 500;
+      if (FV) { FV.reset(); FV.expand(); fitMini(); if (ev[0].ev !== 'send') later(200, () => FV.emit('send', { chat: CID })); }
+      ev.forEach((e, i) => {
+        at += i ? Math.min(4500, Math.max(700, (e.ts - ev[i - 1].ts) * 0.25)) : 0;
+        later(at, () => {
+          fvEmit(e);
+          const n = i + 1, last2 = [name(ev[Math.max(0, i - 1)], Math.max(0, i - 1)), name(e, i)];
+          const keep = narrow() || n < 2 || (last2[0] + last2[1]).length > 22 ? 1 : 2;
+          fl.v = (n > keep ? chip('+' + (n - keep) + ' ранее') : '') + (keep === 2 ? last2 : [last2[1]]).map(chip).join('');
+          fl.m = `LLEN ${n}`;
+          if (e.ev === 'tool_start') rs.v = `«${e.label}…»`;
+          think = Math.round((e.ts - t0) / 1000); setThink();
+          const js = JSON.stringify(Object.fromEntries(Object.entries(e).filter(([k]) => !['rid', 'call_id', 'ext', 'slot', 'ts'].includes(k))));
+          say(`RPUSH flow:${CID} <s>${js.replace(/</g, '&lt;')}</s>`);
+          hot(fl.k);
+        });
+      });
+      later(at + 450, () => { say(`LTRIM flow:${CID} -600 -1 · EXPIRE 3600`); fl.ttl = SNAP ? Math.max(SNAP.ttl, 0) || 3600 : 3600; paint(); });
+      later(at + 1000, () => { say(`LRANGE flow:${CID} 0 -1 <s>→ ${plural(ev.length, 'событие', 'события', 'событий')}</s>`);
+        cap.textContent = SNAP
+          ? `Снято из Redis ${new Date(SNAP.taken_ms).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}, пока агент собирал этот слайд. После F5 FlowMap проиграет ровно это.`
+          : `После F5 FlowMap получает все ${ev.length} событий и проигрывает путь заново.`; });
+    },
+    () => { // PUBLISH stream:{request_id}
+      think = 71; setThink(); view({ bot: true }); running(true);
+      const ch = { t: 'CHANNEL', k: `stream:${RID}`, v: 'ждёт ответ', m: 'pub/sub' };
+      const gs = { t: 'SUB', k: 'gateway_sigma', v: 'SSE → браузер', m: '1 подписка' };
+      const gw = { t: 'SUB', k: 'gateway', v: 'HTTP bot_stream → WS', m: 'не подписан', gone: true };
+      const run = runRow(3488);
+      rows = [ch, gs, gw, run]; paint(); tickTtl(); say('', `SSE /api/chats/${CID}/stream`);
+      cap.textContent = 'У gateway_sigma нет WebSocket, поэтому чанки идут через Redis pub/sub.';
+      later(700, () => { ch.v = chip('PUBLISH → 1 получатель'); say(`PUBLISH stream:${RID} <s>{"answer":"Отчёт готов…"} → (integer) 1</s>`); hot(ch.k); });
+      later(1400, () => { hot('gateway_sigma'); view({ bot: true, answer: true });
+        cap.textContent = 'Чанк получил один подписчик, gateway_sigma, и отдал его в SSE.'; });
+      later(2300, () => { run.gone = true; run.ttl = null; run.m = 'удалён'; run.v = '';
+        say(`DEL agent:running:${CID} <s>→ (integer) 1</s>`); hot(''); running(false);
+        cap.textContent = 'Запрос завершён: ключ удалён, кнопка снова «Отправить».'; });
+    },
+    () => { // скиллы и реакции: state сразу, Postgres пачкой
+      view({ skill: true }); running(false);
+      const cb = skills.querySelector('.skill-card[data-skill-id="12"] .skill-select-cb');
+      const st = { t: 'STRING', k: 'skills:selected:state:56', v: chip('[ ]'), ttl: 7 * 86400, fixed: true };
+      const q = { t: 'LIST', k: 'skills:selected:pending', v: '', m: 'LLEN 0' };
+      const rc = { t: 'HASH', k: 'gc:react:pending', v: '', m: 'HLEN 0' };
+      const pg = { t: 'SQL', k: 'Postgres', v: 'записей пока нет', m: '0 пачек', pg: true };
+      rows = [st, q, rc, pg]; paint(); say('', 'POST /api/skills/12/select');
+      cap.textContent = 'Пользователь кликает по отметке скилла, в общем чате ставят реакции.';
+      let clicks = 0, rn = 0;
+      for (let i = 0; i < 7; i++) later(500 + i * 700, () => {
+        clicks++; cb.checked = !cb.checked; st.v = chip(cb.checked ? '[12]' : '[ ]');
+        q.m = `LLEN ${clicks}`; q.v = chip(cb.checked ? 'select 12' : 'unselect 12');
+        rn += 2; rc.m = `HLEN ${rn}`; rc.v = chip('👍 msg 812') + chip('🔥 msg 815');
+        say(`SET skills:selected:state:56 <s>${cb.checked ? '[12]' : '[]'}</s> · RPUSH … · HSET gc:react:pending`);
+        hot(st.k);
+      });
+      later(5700, () => { say('RENAME gc:react:pending gc:react:inflight:… <s>→ 1 пачка</s>'); hot(pg.k);
+        rc.m = 'HLEN 0'; rc.v = ''; pg.v = chip(`${rn} реакций → 1 запрос`); pg.m = '1 пачка'; paint(); });
+      later(7400, () => { say(`LPOP skills:selected:pending ×${clicks} <s>→ apply_skill_selection</s>`); hot(pg.k);
+        q.m = 'LLEN 0'; q.v = ''; pg.v = chip(`${rn} реакций → 1`) + chip(`${clicks} отметок → 1`); pg.m = '2 пачки'; paint();
+        cap.textContent = `${clicks} кликов и ${rn} реакций дали 2 обращения к Postgres. Интерфейс всё это время читал Redis.`; });
+    },
+    () => { // присутствие и счётчик активных запросов
+      think = 71; setThink(); view({ bot: true, answer: true }); running(false);
+      const on = { t: 'ZSET', k: 'online:gateway', v: '', m: 'ZCARD 0' };
+      const os = { t: 'ZSET', k: 'online:gateway_sigma', v: '', m: 'ZCARD 0' };
+      const run = { t: 'KEYS', k: 'agent:running:*', v: '', m: '' };
+      const lp = { t: 'KEYS', k: 'agent:loop:*', v: '', m: '' };
+      rows = [on, os, run, lp]; paint(); say('', 'GET /api/presence/count');
+      cap.textContent = 'Heartbeat приходит с каждой открытой вкладки.';
+      const users = [['online:gateway', 'pisoldatkin'], ['online:gateway', 'ivanov'], ['online:gateway_sigma', 'petrova']];
+      users.forEach(([k, u], i) => later(400 + i * 650, () => {
+        const r = row(k); r.v += chip(u); r.m = 'ZCARD ' + (r.v.split('<u>').length - 1);
+        say(`ZADD ${k} <s>${Math.floor(Date.now() / 1000)} "${u}"</s> · ZREMRANGEBYSCORE now-60`);
+        hot(k); presN.textContent = String(i + 1);
+      }));
+      later(2500, () => { run.v = chip('…:51190') + chip('…:3305'); run.m = 'найдено 2';
+        lp.v = chip('…:40112'); lp.m = 'найдено 1'; say('SCAN 0 MATCH agent:* <s>→ running 2, loop 1</s>'); hot(run.k);
+        cap.textContent = 'Онлайн 3 человека, активных запросов 3. Postgres в этом не участвует.'; });
+    },
+  ];
+
+  document.addEventListener('sc:step', (e) => {
+    if (e.detail.ch !== 'ch-redis') return;
+    reset(); steps[Math.min(e.detail.step, steps.length - 1)]();
+  });
+  reset(); view({ bot: true }); running(true); rows = [runRow(3562)]; paint();
+  window.ChatAnimations?.initPlaceholderGraph?.(ph);
+});
+</script>
+
+</main>
+<script src="../../../api_gateway/static/js/animations.js"></script>
+<script src="../../../api_gateway/static/js/flowmap.js"></script>
+<script>
+/* scrolly.js — движок доклада: тема по главе, прогресс, оглавление, шаги сцен.
+   Главы подписываются на событие sc:step (detail: {ch, step}). */
+(function () {
+  const root = document.documentElement;
+  const chapters = [...document.querySelectorAll('.sc-ch')];
+
+  /* ── тема: как theme.js проекта, через data-theme на <html> ── */
+  let themeTimer = 0;
+  function setTheme(t) {
+    if (!t || root.getAttribute('data-theme') === t) return;
+    root.classList.add('sc-theming');
+    root.setAttribute('data-theme', t);
+    window.ChatAnimations?.parseAccent?.();
+    document.querySelectorAll('img.js-theme-icon').forEach((img) => {
+      const src = img.dataset[t === 'dark' ? 'srcDark' : 'srcLight'];
+      if (src) img.src = src;
+    });
+    clearTimeout(themeTimer);
+    themeTimer = setTimeout(() => root.classList.remove('sc-theming'), 700);
+  }
+
+  /* ── оглавление ── */
+  const toc = document.querySelector('.sc-toc');
+  chapters.forEach((ch) => {
+    if (!ch.dataset.title) return;
+    const a = document.createElement('a');
+    a.href = '#' + ch.id;
+    a.innerHTML = `<span>${ch.dataset.title}</span><i></i>`;
+    toc.appendChild(a);
+    ch._toc = a;
+  });
+
+  /* ── глава в центре экрана → тема и пункт оглавления ── */
+  const chObs = new IntersectionObserver((entries) => {
+    entries.forEach((e) => {
+      if (!e.isIntersecting) return;
+      setTheme(e.target.dataset.theme);
+      toc.querySelectorAll('a').forEach((a) => a.classList.toggle('is-on', a === e.target._toc));
+    });
+  }, { rootMargin: '-50% 0px -50% 0px' });
+  chapters.forEach((c) => chObs.observe(c));
+
+  /* ── шаги сцены ── */
+  const stepObs = new IntersectionObserver((entries) => {
+    entries.forEach((e) => {
+      if (!e.isIntersecting) return;
+      const step = e.target;
+      const ch = step.closest('.sc-ch');
+      ch.querySelectorAll('.sc-step').forEach((s) => s.classList.toggle('is-on', s === step));
+      const n = Number(step.dataset.step || 0);
+      const stage = ch.querySelector('.sc-stage');
+      if (stage) stage.dataset.step = String(n);
+      const mc = stage && (stage.querySelector('.sc-mcard') || stage.appendChild(Object.assign(document.createElement('div'), { className: 'sc-mcard' })));
+      if (mc) mc.innerHTML = step.querySelector('.sc-step__card')?.innerHTML || '';
+      document.dispatchEvent(new CustomEvent('sc:step', { detail: { ch: ch.id, step: n } }));
+    });
+  }, { rootMargin: '-45% 0px -45% 0px' });
+  document.querySelectorAll('.sc-step').forEach((s) => stepObs.observe(s));
+
+  /* ── прогресс ── */
+  const bar = document.querySelector('.sc-progress span');
+  const onScroll = () => {
+    const max = document.documentElement.scrollHeight - innerHeight;
+    bar.style.width = (max > 0 ? (scrollY / max) * 100 : 0) + '%';
+  };
+  addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+
+  /* общий хелпер для глав */
+  window.Scrolly = {
+    on(chId, fn) {
+      document.addEventListener('sc:step', (e) => { if (e.detail.ch === chId) fn(e.detail.step); });
+    },
+  };
+})();
+
+</script>
+</body>
+</html>

@@ -1,0 +1,201 @@
+{
+ "key": "flow:425826",
+ "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783",
+ "ttl": 3599,
+ "taken_ms": 1794505985476,
+ "events": [
+  {
+   "ev": "send",
+   "ts": 1794505885737,
+   "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783"
+  },
+  {
+   "ev": "gateway",
+   "ts": 1794505885738,
+   "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783"
+  },
+  {
+   "ev": "accepted",
+   "ts": 1794505885745,
+   "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783"
+  },
+  {
+   "ev": "agent_start",
+   "ts": 1794505885747,
+   "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783"
+  },
+  {
+   "ev": "db_saved",
+   "ts": 1794505885748,
+   "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783",
+   "role": "user"
+  },
+  {
+   "ev": "think_end",
+   "ts": 1794505902212,
+   "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783"
+  },
+  {
+   "ev": "tool_start",
+   "ts": 1794505902220,
+   "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783",
+   "call_id": "toolu_bdrk_012Kn2U5vzbXqp1NAPTvCMoE",
+   "gap_ms": 16473,
+   "slot": "sandbox",
+   "label": "Выполняю команды",
+   "ext": "sandbox_c"
+  },
+  {
+   "ev": "tool_end",
+   "ts": 1794505902511,
+   "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783",
+   "call_id": "toolu_bdrk_012Kn2U5vzbXqp1NAPTvCMoE",
+   "ok": true,
+   "ms": 286,
+   "slot": "sandbox",
+   "label": "Выполняю команды",
+   "ext": "sandbox_c"
+  },
+  {
+   "ev": "think_end",
+   "ts": 1794505914333,
+   "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783"
+  },
+  {
+   "ev": "tool_start",
+   "ts": 1794505914341,
+   "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783",
+   "call_id": "toolu_bdrk_01Tejha9rSp8cyH1napNgjcu",
+   "gap_ms": 11830,
+   "slot": "sandbox",
+   "label": "Запускаю код",
+   "ext": "sandbox_c"
+  },
+  {
+   "ev": "tool_end",
+   "ts": 1794505916293,
+   "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783",
+   "call_id": "toolu_bdrk_01Tejha9rSp8cyH1napNgjcu",
+   "ok": true,
+   "ms": 1948,
+   "slot": "sandbox",
+   "label": "Запускаю код",
+   "ext": "sandbox_c"
+  },
+  {
+   "ev": "think_end",
+   "ts": 1794505926344,
+   "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783"
+  },
+  {
+   "ev": "tool_start",
+   "ts": 1794505926351,
+   "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783",
+   "call_id": "toolu_bdrk_01AJD5UQ2i9HYvc1TyyWxg2Y",
+   "gap_ms": 10058,
+   "slot": "sandbox",
+   "label": "Запускаю код",
+   "ext": "sandbox_c"
+  },
+  {
+   "ev": "tool_end",
+   "ts": 1794505931311,
+   "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783",
+   "call_id": "toolu_bdrk_01AJD5UQ2i9HYvc1TyyWxg2Y",
+   "ok": true,
+   "ms": 4956,
+   "slot": "sandbox",
+   "label": "Запускаю код",
+   "ext": "sandbox_c"
+  },
+  {
+   "ev": "think_end",
+   "ts": 1794505938680,
+   "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783"
+  },
+  {
+   "ev": "tool_start",
+   "ts": 1794505938688,
+   "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783",
+   "call_id": "toolu_bdrk_015TjLJj4n2Kj1PdkNamH4UY",
+   "gap_ms": 7376,
+   "slot": "sandbox",
+   "label": "Выполняю команды",
+   "ext": "sandbox_c"
+  },
+  {
+   "ev": "tool_end",
+   "ts": 1794505938747,
+   "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783",
+   "call_id": "toolu_bdrk_015TjLJj4n2Kj1PdkNamH4UY",
+   "ok": true,
+   "ms": 55,
+   "slot": "sandbox",
+   "label": "Выполняю команды",
+   "ext": "sandbox_c"
+  },
+  {
+   "ev": "tool_start",
+   "ts": 1794505943483,
+   "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783",
+   "call_id": "toolu_bdrk_01RFffRWo5JUWwn23ob6aKRf",
+   "gap_ms": 4735,
+   "slot": "sandbox",
+   "label": "Читаю файл",
+   "ws": "d976e0e002fd"
+  },
+  {
+   "ev": "tool_end",
+   "ts": 1794505943503,
+   "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783",
+   "call_id": "toolu_bdrk_01RFffRWo5JUWwn23ob6aKRf",
+   "ok": true,
+   "ms": 12,
+   "slot": "sandbox",
+   "label": "Читаю файл",
+   "ws": "d976e0e002fd"
+  },
+  {
+   "ev": "think_end",
+   "ts": 1794505958655,
+   "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783"
+  },
+  {
+   "ev": "tool_start",
+   "ts": 1794505958662,
+   "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783",
+   "call_id": "toolu_bdrk_01LBWdaNzKuhC5PRouiQnJzk",
+   "gap_ms": 15159,
+   "slot": "sandbox",
+   "label": "Выполняю команды",
+   "ext": "sandbox_c"
+  },
+  {
+   "ev": "tool_end",
+   "ts": 1794505958723,
+   "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783",
+   "call_id": "toolu_bdrk_01LBWdaNzKuhC5PRouiQnJzk",
+   "ok": true,
+   "ms": 56,
+   "slot": "sandbox",
+   "label": "Выполняю команды",
+   "ext": "sandbox_c"
+  },
+  {
+   "ev": "think_end",
+   "ts": 1794505983603,
+   "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783"
+  },
+  {
+   "ev": "tool_start",
+   "ts": 1794505983611,
+   "rid": "f17cf85f-e0ff-4a9e-b647-85e23ed5c783",
+   "call_id": "toolu_bdrk_0196ERddVHJTR2v3U6EZfBb4",
+   "gap_ms": 24888,
+   "slot": "sandbox",
+   "label": "Запускаю код",
+   "ext": "sandbox_c",
+   "ws": "d976e0e002fd"
+  }
+ ]
+}

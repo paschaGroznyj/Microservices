@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <title>AuGent: Путь запроса и Архитектура</title>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        /* Базовые переменные как в theme.css (просто на случай отсутствия сервера) */
+        :root {
+            --bg-body: #f6f4f0;
+            --bg-panel: #ffffff;
+            --text-main: #1d1d1b;
+            --accent-main: #3a644e;
+            --accent-light: rgba(58, 100, 78, 0.1);
+        }
+        [data-theme="dark"] {
+            --bg-body: #161616;
+            --bg-panel: #1b1b1b;
+            --text-main: #e8e8e8;
+            --accent-main: #4a8065;
+            --accent-light: rgba(74, 128, 101, 0.15);
+        }
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            margin: 0;
+            padding: 0;
+            transition: background-color 0.5s ease, color 0.5s ease;
+            overflow-x: hidden;
+        }
+
+        /* Scrollytelling стили */
+        .step {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+            box-sizing: border-box;
+            position: relative;
+            z-index: 10;
+        }
+
+        .step-content {
+            background-color: var(--bg-panel);
+            padding: 2rem 3rem;
+            border-radius: 16px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.05);
+            max-width: 800px;
+            width: 100%;
+            transition: transform 0.3s ease, opacity 0.3s ease;
+        }
+
+        [data-theme="dark"] .step-content {
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+
+        h1, h2 {
+            font-family: 'Playfair Display', serif;
+            margin-top: 0;
+        }
+        h2 {
+            color: var(--accent-main);
+            font-size: 2rem;
+            margin-bottom: 1.5rem;
+        }
+        
+        p, li {
+            font-size: 1.1rem;
+            line-height: 1.6;
+        }
+
+        .highlight {
+            color: var(--accent-main);
+            font-weight: 600;
+        }
+        
+        /* Фиксированный фон для анимаций */
+        .fixed-bg {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            z-index: 1;
+            pointer-events: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        /* Визуализация REST vs Kafka */
+        .viz-box {
+            background: var(--bg-panel);
+            border: 1px solid var(--accent-main);
+            border-radius: 8px;
+            padding: 1rem;
+            margin: 1rem 0;
+            text-align: center;
+            font-family: monospace;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .node {
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            background: var(--accent-light);
+            color: var(--accent-main);
+            font-weight: bold;
+        }
+        .arrow {
+            flex-grow: 1;
+            height: 2px;
+            background: var(--accent-main);
+            margin: 0 1rem;
+            position: relative;
+        }
+        .arrow::after {
+            content: '';
+            position: absolute;
+            right: 0;
+            top: -4px;
+            border-top: 5px solid transparent;
+            border-bottom: 5px solid transparent;
+            border-left: 10px solid var(--accent-main);
+        }
+    </style>
+</head>
+<body>
+
+<div class="fixed-bg" id="bg-visualizer">
+    <!-- Сюда будем добавлять фоновые визуализации через JS при скролле -->
+</div>
+
+<!-- ГЛАВА 1 -->
+<div class="step" data-theme="light">
+    <div class="step-content">
+        <h2>1. Ловушка чистого REST</h2>
+        <p>Начнем с классики. Фронт отправляет <span class="highlight">POST-запрос</span>, шлюз синхронно вызывает агента и ждет ответа.</p>
+        
+        <div class="viz-box">
+            <div class="node">Frontend</div>
+            <div class="arrow" style="border-top: 2px dashed var(--accent-main); background:none; height:0;">(ожидание 60 сек...)</div>
+            <div class="node">Agent</div>
+        </div>
+
+        <p><b>Почему это не работает для AI-агентов:</b></p>
+        <ul>
+            <li>LLM-запрос с инструментами длится от нескольких секунд до минут. HTTP-соединение просто обрывается (таймаут 504, F5, обрыв сети на мобильном).</li>
+            <li>Десять одновременных запросов означают десять "висящих" воркеров на сервере.</li>
+            <li>Результат нужен сразу всем: сохранить в БД, отдать в веб-интерфейс, транслировать в Telegram или MAX, посчитать израсходованные токены.</li>
+        </ul>
+        <p>Мы упираемся в предел. Нужен брокер.</p>
+    </div>
+</div>
+
+<script>
+// Простой скролл-наблюдатель для смены тем
+const steps = document.querySelectorAll('.step');
+const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+        if(entry.isIntersecting) {
+            const theme = entry.target.getAttribute('data-theme');
+            if(theme) document.documentElement.setAttribute('data-theme', theme);
+        }
+    });
+}, { threshold: 0.5 });
+
+steps.forEach(step => observer.observe(step));
+</script>
+
+</body>
+</html>

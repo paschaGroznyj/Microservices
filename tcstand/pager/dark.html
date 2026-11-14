@@ -1,0 +1,12 @@
+<!doctype html><html data-theme="dark" class="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="file:///tmp/exec/workspaces/d976e0e002fd/Microservices/api_gateway/static/css/theme.css"><link rel="stylesheet" href="file:///tmp/exec/workspaces/d976e0e002fd/Microservices/api_gateway/static/css/layout.css"><link rel="stylesheet" href="file:///tmp/exec/workspaces/d976e0e002fd/Microservices/api_gateway/static/css/chat.css"><link rel="stylesheet" href="file:///tmp/exec/workspaces/d976e0e002fd/Microservices/api_gateway/static/css/file-attach.css"><link rel="stylesheet" href="file:///tmp/exec/workspaces/d976e0e002fd/Microservices/api_gateway/static/css/claude-ui.css">
+<style>body{margin:0;background:var(--bg)} .wrap{max-width:760px;margin:0 auto;padding:16px}</style></head>
+<body class="dark-theme"><div class="wrap"><div class="messages-container"><div class="agent-message" id="am"><div class="message-content"><p>Готово, вот 7 аудио и 2 документа.</p></div></div></div></div>
+<script src="file:///tmp/exec/workspaces/d976e0e002fd/Microservices/api_gateway/static/js/animations.js"></script><script src="file:///tmp/exec/workspaces/d976e0e002fd/Microservices/api_gateway/static/js/file-tiles.js"></script>
+<script>
+const names=['news_Mer-Operator.wav','news_Kaz-Lifelike.wav','news_Tsb-Freespeech.wav','news_Gli-Operator.wav','news_Gli-Freespeech.wav','news_Tsb-Hesitating.wav','Очень_длинное_имя_отчёта_по_результатам_прослушивания_всех_голосов_2026.pdf','table.xlsx','news_Kaz-Operator.wav'];
+const wrap=document.createElement('div');wrap.className='fa-bot-files';
+const chips=names.map(n=>{ if(/\.wav$/.test(n)) return window.ChatAnimations.createAudioChip({name:n,url:'#',dlUrl:'#'});
+ const a=document.createElement('a');a.className='fa-chip fa-chip--gray fa-chip--bot';a.innerHTML='<span class="fa-chip__name">'+n+'</span>';return a;});
+wrap.appendChild(window.FileTiles.pager(chips,3));
+document.getElementById('am').appendChild(wrap);
+</script></body></html>

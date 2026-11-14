@@ -1,0 +1,37 @@
+<!doctype html><html lang="ru" data-theme="light"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Стенд: изменённые файлы</title>
+<link rel="stylesheet" href="../../api_gateway/static/css/theme.css"><link rel="stylesheet" href="../../api_gateway/static/css/chat.css">
+<link rel="stylesheet" href="../../api_gateway/static/js/vendor/github.min.css" id="hl-light"><link rel="stylesheet" href="../../api_gateway/static/js/vendor/github-dark.min.css" id="hl-dark" disabled>
+<link rel="stylesheet" href="ws-diff.css">
+<style>
+html,body{background:var(--bg);margin:0}
+.chat-messages{height:auto;overflow:visible;padding:56px 0 40px;-webkit-mask-image:none;mask-image:none}
+.stand-bar{position:fixed;bottom:12px;right:12px;z-index:20;display:flex;gap:4px;padding:3px;border-radius:8px;background:var(--surface);box-shadow:0 0 0 1px var(--border);font:12px var(--font-anthropic-sans)}
+.stand-bar button{border:0;background:none;color:var(--text-secondary);padding:3px 10px;border-radius:5px;cursor:pointer;font:inherit}
+.stand-bar button.on{background:var(--surface3,var(--border));color:var(--text-primary)}
+.agent-message p{margin:0 0 10px} .agent-message code{font-family:var(--font-anthropic-mono);font-size:.85em}
+</style></head><body>
+<div class="stand-bar"><button data-t="light">Светлая</button><button data-t="dark">Тёмная</button></div>
+<div class="chat-messages">
+ <div class="user-message-wrapper"><div class="user-message"><div class="message-text">Давай переведем на асинхронный httpx и проставим timeout. В один коммит</div></div></div>
+ <div class="agent-message">
+  <div class="reasoning-block reasoning-collapsed" data-cds="TurnStatus" data-state="done"><div class="reasoning-header" data-cds-row=""><span class="reasoning-label">Размышления</span><span class="reasoning-timer">2 мин 14 с</span><svg class="reasoning-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></div><div class="reasoning-body" data-cds-row-panel=""><div class="reasoning-step" data-cds="Prose"><p>Нужно найти все синхронные <code>requests.*</code> в консюмерах chats_service.</p></div><div class="reasoning-step" data-cds="Prose"><p>Тесты мокают requests.post — перевести их на AsyncClient.</p></div></div></div>
+  <div data-wsd="main"></div>
+  <p>Перевёл консюмеры на асинхронный <code>httpx</code> и проставил таймауты. Тесты chats_service: 122 passed.</p>
+ </div>
+ <div class="user-message-wrapper"><div class="user-message"><div class="message-text">Убери мёртвый sigma_consumer.py вместе с тестом</div></div></div>
+ <div class="agent-message">
+  <div class="reasoning-block reasoning-collapsed" data-cds="TurnStatus" data-state="done"><div class="reasoning-header" data-cds-row=""><span class="reasoning-label">Размышления</span><span class="reasoning-timer">18 с</span><svg class="reasoning-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></div><div class="reasoning-body" data-cds-row-panel=""><div class="reasoning-step" data-cds="Prose"><p>Проверить, что SigmaConsumer больше никто не импортирует.</p></div></div></div>
+  <div data-wsd="live"></div>
+ </div>
+</div>
+<script src="../../api_gateway/static/js/vendor/highlight.min.js"></script><script src="../../api_gateway/static/js/vendor/python.min.js"></script>
+<script>/*DATA*/</script>
+<script>
+(function(){const q=new URLSearchParams(location.search).get('theme');const set=t=>{document.documentElement.dataset.theme=t;
+ document.getElementById('hl-light').disabled=t==='dark';document.getElementById('hl-dark').disabled=t!=='dark';
+ document.querySelectorAll('.stand-bar button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));};
+ set(q||'light');document.querySelectorAll('.stand-bar button').forEach(b=>b.onclick=()=>set(b.dataset.t));})();
+</script>
+<script src="ws-diff.js"></script>
+</body></html>

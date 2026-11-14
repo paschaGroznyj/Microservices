@@ -1,0 +1,150 @@
+<!-- 01 · Ловушка «всё на REST». Окно чата собрано из разметки app.js, стили chat.css -->
+<section class="sc-ch" id="ch-rest" data-theme="dark" data-title="1 · Всё на REST">
+  <header class="sc-ch__head">
+    <div class="sc-kicker">Глава 1 <span class="sc-time">00:30 – 02:00</span></div>
+    <h2 class="sc-h2">Наивная версия: один POST и ждём ответ</h2>
+    <p class="sc-lead">Самая простая архитектура агента: фронт шлёт запрос, гейтвей синхронно зовёт агента и держит соединение, пока не придёт ответ. На прототипе это работает. В проде ломается в трёх местах.</p>
+  </header>
+
+  <div class="sc-scene">
+    <div class="sc-steps">
+      <div class="sc-step" data-step="0"><div class="sc-step__card">
+        <div class="sc-step__n">01</div>
+        <h3>Запрос держит соединение</h3>
+        <p>Браузер → Gateway → Agent. HTTP-соединение открыто, пока агент не закончит. Пока он думает, на кнопке отправки висит «Стоп», а соединение занимает воркер гейтвея.</p>
+      </div></div>
+      <div class="sc-step" data-step="1"><div class="sc-step__card">
+        <div class="sc-step__n">02</div>
+        <h3>Агент думает минуты, задача идёт до часа</h3>
+        <p>Цикл с инструментами длится от секунд до минут. Фоновая задача в песочнице может работать до часа, пока её не обрубит <code>MAX_TIMEOUT</code>.</p>
+        <p>Десять пользователей занимают десять воркеров. Нагрузку нельзя сгладить, её можно только переждать.</p>
+      </div></div>
+      <div class="sc-step" data-step="2"><div class="sc-step__card">
+        <div class="sc-step__n">03</div>
+        <h3>Соединение рвётся, ответ теряется</h3>
+        <p>Таймаут прокси (504), F5, телефон сменил сеть. Агент дорабатывает и потратил токены, но отдать ответ уже некому.</p>
+      </div></div>
+      <div class="sc-step" data-step="3"><div class="sc-step__card">
+        <div class="sc-step__n">04</div>
+        <h3>Результат нужен многим</h3>
+        <p>Ответ надо сохранить в БД, показать в вебе, отправить в Telegram и MAX, посчитать токены. При синхронной схеме гейтвей обязан знать каждого получателя и звать его сам.</p>
+        <p>Итог главы: нужно развязать «принять запрос» и «выполнить его».</p>
+      </div></div>
+    </div>
+
+    <div class="sc-stage" data-step="0" id="rest-stage">
+      <div class="sc-stage__frame">
+        <div class="sc-win">
+          <div class="sc-win__bar"><i></i><i></i><i></i><b>POST /send_message<span class="sc-long"> · ждём ответ в том же запросе</span></b></div>
+          <div class="sc-win__body">
+            <div class="chat-main-inner chat-active sc-chat">
+              <div class="chat-messages">
+                <div class="user-message-wrapper"><div class="user-message"><div class="message-text">Собери отчёт по логам за неделю и построй графики</div></div></div>
+                <div class="agent-placeholder bg-ready" id="rest-ph"><div class="wave-indicator"><canvas class="placeholder-graph" aria-hidden="true"></canvas></div></div>
+                <div class="agent-message sc-lost" hidden><p><b>Ответ некому отдать.</b> Прокси закрыл соединение через 60 с, агент закончил через 6 мин. Токены потрачены впустую.</p></div>
+              </div>
+              <div class="message-input-container">
+                <div class="chat-input-area">
+                  <div class="chat-input-box">
+                    <div class="chat-input-field" data-placeholder="Напишите сообщение..."></div>
+                    <div class="chat-input-footer">
+                      <button class="attach-btn" type="button" tabindex="-1"><svg viewBox="0 0 24 24" fill="none"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19 a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                      <button class="chat-send-btn active stop-mode" type="button" tabindex="-1" aria-label="Стоп"><svg viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="sc-lane" id="rest-lane">
+              <div class="sc-lane__row">
+                <div class="sc-node" data-n="browser"><b>Браузер</b><small>ждёт ответ</small></div>
+                <div class="sc-arrow"></div>
+                <div class="sc-node" data-n="gw"><b>Gateway</b><small>держит воркер</small></div>
+                <div class="sc-arrow"></div>
+                <div class="sc-node" data-n="agent"><b>Agent</b><small>LLM + тулы</small></div>
+              </div>
+              <div class="sc-lane__body">
+              <div class="sc-hold">
+                <span>соединение</span>
+                <div class="sc-hold__bar"><span></span></div>
+                <span class="sc-hold__t">00:00</span>
+                <span class="sc-badge" id="rest-badge">ожидание</span>
+              </div>
+              <div class="sc-workers" id="rest-workers"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+              <div class="sc-caption" id="rest-cap">Воркеры гейтвея: 1 из 10 занят одним запросом</div>
+              <div class="sc-mesh">
+                <svg viewBox="0 0 100 56" preserveAspectRatio="none" aria-hidden="true">
+                  <path d="M50 0 C50 30 10 26 10 56"/><path d="M50 0 C50 30 30 26 30 56"/><path d="M50 0 L50 56"/>
+                  <path d="M50 0 C50 30 70 26 70 56"/><path d="M50 0 C50 30 90 26 90 56"/>
+                </svg>
+                <div class="sc-mesh__row"><span>Postgres</span><span>Web</span><span class="sc-tg">Telegram</span><span>MAX</span><span>Токены</span></div>
+                <div class="sc-caption">Каждый новый получатель означает правку гейтвея. Упал один, и ответ остальным под угрозой.</div>
+              </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const stage = document.getElementById('rest-stage');
+  const lane = document.getElementById('rest-lane');
+  const arrows = [...lane.querySelectorAll('.sc-arrow')];
+  const bar = lane.querySelector('.sc-hold__bar span');
+  const t = lane.querySelector('.sc-hold__t');
+  const badge = document.getElementById('rest-badge');
+  const workers = [...document.querySelectorAll('#rest-workers i')];
+  const cap = document.getElementById('rest-cap');
+  const ph = document.getElementById('rest-ph');
+  const lost = stage.querySelector('.sc-lost');
+  const nodes = (n) => lane.querySelector(`[data-n="${n}"]`);
+  const fmt = (s) => { s = Math.floor(s); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = s % 60;
+    return (h ? h + ':' + String(m).padStart(2, '0') : String(m).padStart(2, '0')) + ':' + String(x).padStart(2, '0'); };
+  // соединение живёт не дольше LIMIT секунд: дальше таймер стоит на 01:00
+  const LIMIT = 60;
+  let raf = 0, started = 0, speed = 1, cap0 = 0, step = -1, cur = 0;
+
+  function loop(now) {
+    const sec = Math.min(LIMIT, ((now - started) / 1000) * speed + cap0); cur = sec;
+    t.textContent = fmt(sec);
+    bar.style.width = (sec / LIMIT) * 100 + '%';
+    if (step === 1) {
+      const busy = Math.min(10, 1 + Math.floor(sec / 6.5));
+      workers.forEach((w, i) => w.classList.toggle('is-busy', i < busy));
+      cap.textContent = `Воркеры гейтвея: ${busy} из 10 заняты долгими запросами`;
+    }
+    if (sec >= LIMIT) { raf = 0; return; }
+    raf = requestAnimationFrame(loop);
+  }
+  function run(sp, from) { cancelAnimationFrame(raf); speed = sp; cap0 = from; started = performance.now(); raf = requestAnimationFrame(loop); }
+
+  document.addEventListener('sc:step', (e) => {
+    if (e.detail.ch !== 'ch-rest') return;
+    step = e.detail.step;
+    lane.classList.toggle('is-broken', step === 2);
+    ['browser', 'gw', 'agent'].forEach((n) => nodes(n).classList.remove('is-hot', 'is-bad'));
+    arrows.forEach((a) => a.classList.toggle('is-on', step !== 2));
+    workers.forEach((w) => w.classList.remove('is-busy', 'is-dead'));
+    ph.hidden = step >= 2; lost.hidden = step !== 2;
+    if (step === 0) {
+      nodes('agent').classList.add('is-hot');
+      workers[0].classList.add('is-busy'); cap.textContent = 'Воркеры гейтвея: 1 из 10 занят одним запросом';
+      badge.className = 'sc-badge'; badge.textContent = 'ожидание'; run(1, 0);
+    } else if (step === 1) {
+      nodes('gw').classList.add('is-hot'); badge.className = 'sc-badge'; badge.textContent = 'таймаут 60 с'; run(4, cur);
+    } else if (step === 2) {
+      cancelAnimationFrame(raf); t.textContent = '01:00'; bar.style.width = '100%';
+      nodes('browser').classList.add('is-bad'); nodes('gw').classList.add('is-bad');
+      workers.forEach((w, i) => w.classList.toggle('is-dead', i < 3));
+      cap.textContent = 'Три соединения оборвались, агенты дорабатывают вхолостую';
+      badge.className = 'sc-badge sc-badge--bad'; badge.textContent = '504 · таймаут 60 с';
+    } else {
+      cancelAnimationFrame(raf); nodes('gw').classList.add('is-bad');
+    }
+  });
+  window.ChatAnimations?.initPlaceholderGraph?.(ph);
+});
+</script>

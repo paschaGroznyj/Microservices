@@ -1,0 +1,287 @@
+<!-- 03 · Redis: живое состояние. Ключи из кода: agent:running/reasoning/loop:{chat_id}, flow:{chat_id}, stream:{request_id},
+     skills:selected:state/pending, gc:react:pending, online:{gw} -->
+<section class="sc-ch" id="ch-redis" data-theme="dark" data-title="3 · Redis: живое состояние">
+  <header class="sc-ch__head">
+    <div class="sc-kicker">Глава 3 <span class="sc-time">03:30 – 05:30</span></div>
+    <h2 class="sc-h2">Redis помнит то, что происходит сейчас</h2>
+    <p class="sc-lead">Postgres хранит историю, Kafka возит события. А то, что живёт секунды и минуты (идёт ли запрос, о чём агент думает, кто онлайн), лежит в Redis с TTL и исчезает само.</p>
+  </header>
+
+  <div class="sc-scene">
+    <div class="sc-steps">
+      <div class="sc-step" data-step="0"><div class="sc-step__card">
+        <div class="sc-step__n">01</div>
+        <h3>F5 посреди ответа</h3>
+        <p>Страница перезагрузилась. История приходит из Postgres, но в ней нет того, что агент делает прямо сейчас.</p>
+        <p>Гейтвей читает <code>agent:running:{chat_id}</code> и <code>agent:reasoning:{chat_id}</code>. Кнопка снова «Стоп», размышления на месте, таймер идёт дальше. Ключи живут час (<code>AGENT_RUN_TTL</code>) и пропадут сами, если агент упадёт молча.</p>
+      </div></div>
+      <div class="sc-step" data-step="1"><div class="sc-step__card">
+        <div class="sc-step__n">02</div>
+        <h3>Хронология запроса</h3>
+        <p>Каждое событие пути (принято, агент начал, тул стартовал, тул закончил, ответ) пишется через <code>RPUSH flow:{chat_id}</code>.</p>
+        <p>Список обрезается до 600 записей и живёт час. После F5 FlowMap запрашивает <code>/flow</code> и проигрывает путь заново с того же места.</p>
+        <p>В панели «Путь запроса» (тот же FlowMap, что справа от чата в AuGent) проигрывается настоящий <code>flow:{chat_id}</code>: запрос, в котором агент собирал этот слайд. Время ускорено в 4 раза, длительности тулов и пауз взяты из Redis.</p>
+      </div></div>
+      <div class="sc-step" data-step="2"><div class="sc-step__card">
+        <div class="sc-step__n">03</div>
+        <h3>Ответ находит свой канал</h3>
+        <p>У Sigma нет WebSocket. Агент публикует чанки ответа через <code>PUBLISH stream:{request_id}</code>, а <code>gateway_sigma</code> подписан на этот канал и отдаёт их в SSE.</p>
+        <p>Основной гейтвей получает те же чанки прямым HTTP <code>/internal/bot_stream</code> и в Redis не подписан. После ответа ключ <code>agent:running</code> удаляется, и кнопка возвращается в «Отправить».</p>
+      </div></div>
+      <div class="sc-step" data-step="3"><div class="sc-step__card">
+        <div class="sc-step__n">04</div>
+        <h3>Много кликов, одна запись</h3>
+        <p>Отметка скилла сразу пишется в <code>skills:selected:state:{user_id}</code>, интерфейс читает её оттуда. Событие уходит в очередь <code>skills:selected:pending</code>, chats_service разбирает её в Postgres.</p>
+        <p>Реакции общего чата копятся в <code>gc:react:pending</code> 1 секунду, потом <code>RENAME</code> в inflight и одна пачка в БД.</p>
+      </div></div>
+      <div class="sc-step" data-step="4"><div class="sc-step__card">
+        <div class="sc-step__n">05</div>
+        <h3>Кто онлайн и сколько запросов</h3>
+        <p>Heartbeat вкладки делает <code>ZADD online:{gw}</code> с текущим временем. Всё старше 60 секунд вычищается, счётчик считает остаток.</p>
+        <p>Активные запросы считаются через <code>SCAN agent:running:*</code> и <code>agent:loop:*</code>. В Postgres за этим не ходим.</p>
+      </div></div>
+    </div>
+
+    <div class="sc-stage" data-step="0" id="redis-stage">
+      <div class="sc-stage__frame">
+        <div class="sc-win">
+          <div class="sc-win__bar"><i></i><i></i><i></i><b id="rd-url">GET /api/chats/{chat_id}/run_status</b>
+            <div class="presence-wrap"><button class="presence-btn" id="rd-pres" type="button" tabindex="-1" aria-label="Онлайн"><span class="presence-dot"></span><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg><span class="presence-count" id="rd-pres-n">1</span></button></div>
+          </div>
+          <div class="sc-win__body">
+            <div class="sc-f5" id="rd-f5" hidden><b>F5</b><small>перезагрузка страницы</small></div>
+            <div class="chat-main-inner chat-active sc-chat">
+              <div class="chat-messages" id="rd-msgs">
+                <div class="user-message-wrapper"><div class="user-message"><div class="message-text">Собери отчёт по логам за неделю и построй графики</div></div></div>
+                <div class="agent-message sc-rd-bot" id="rd-bot">
+                  <div class="reasoning-block reasoning-collapsed" data-cds="TurnStatus" data-state="done">
+                    <div class="reasoning-header" data-cds-row=""><span class="reasoning-label">Размышления</span><span class="reasoning-timer" id="rd-timer">0:38</span><svg class="reasoning-caret" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></div>
+                    <div class="reasoning-body" data-cds-row-panel=""></div>
+                  </div>
+                  <p class="sc-rd-answer" id="rd-a" hidden>Отчёт готов: 3 графика и сводка.</p>
+                </div>
+                <div class="agent-placeholder bg-ready" id="rd-ph" hidden><div class="wave-indicator"><canvas class="placeholder-graph" aria-hidden="true"></canvas></div></div>
+              </div>
+              <div class="chat-messages sc-rd-skills" id="rd-skills" hidden>
+                <div class="skills-list">
+                  <div class="skill-card" data-skill-id="12"><div class="skill-card__left"><label class="skill-select-label"><input type="checkbox" class="skill-select-cb" tabindex="-1"><span class="skill-select-box" aria-hidden="true"><svg viewBox="0 0 12 12" fill="none"><path d="M2.2 6.2L4.8 8.8L9.8 3.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span></label><span class="skill-theme">Отчёт по логам с графиками</span></div><div class="skill-card__right"><span class="sc-rd-likes" id="rd-likes">♥ 14</span></div></div>
+                  <div class="skill-card" data-skill-id="31"><div class="skill-card__left"><label class="skill-select-label"><input type="checkbox" class="skill-select-cb" tabindex="-1"><span class="skill-select-box" aria-hidden="true"><svg viewBox="0 0 12 12" fill="none"><path d="M2.2 6.2L4.8 8.8L9.8 3.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span></label><span class="skill-theme">Приёмка UI через Playwright</span></div><div class="skill-card__right"></div></div>
+                  <div class="skill-card" data-skill-id="44"><div class="skill-card__left"><label class="skill-select-label"><input type="checkbox" class="skill-select-cb" tabindex="-1"><span class="skill-select-box" aria-hidden="true"><svg viewBox="0 0 12 12" fill="none"><path d="M2.2 6.2L4.8 8.8L9.8 3.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span></label><span class="skill-theme">Сборка доклада scrollytelling</span></div><div class="skill-card__right"></div></div>
+                </div>
+              </div>
+              <div class="message-input-container">
+                <div class="chat-input-area">
+                  <div class="chat-input-box">
+                    <div class="chat-input-field" data-placeholder="Напишите сообщение..."></div>
+                    <div class="chat-input-footer">
+                      <button class="attach-btn" type="button" tabindex="-1"><svg viewBox="0 0 24 24" fill="none"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19 a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                      <button class="chat-send-btn active stop-mode" id="rd-send" type="button" tabindex="-1" aria-label="Стоп"><svg class="sc-ic-stop" viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg><svg class="sc-ic-send" viewBox="0 0 24 24" fill="none"><path d="M12 19V5M5 12l7-7 7 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="sc-redis" id="rd-k">
+              <div class="sc-rcmd"><small>redis</small><code id="rd-cmd">&nbsp;</code></div>
+              <div class="sc-rkeys" id="rd-keys"></div>
+              <div class="sc-caption" id="rd-cap"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const $ = (id) => document.getElementById(id);
+  const keysEl = $('rd-keys'), cmd = $('rd-cmd'), cap = $('rd-cap'), url = $('rd-url');
+  const msgs = $('rd-msgs'), skills = $('rd-skills'), bot = $('rd-bot'), ans = $('rd-a'), ph = $('rd-ph');
+  const send = $('rd-send'), f5 = $('rd-f5'), timer = $('rd-timer'), presN = $('rd-pres-n');
+  const SNAP = window.SC_FLOW || null;
+  const ROWS = 4, CID = '{chat_id}', RID = SNAP ? SNAP.rid.slice(0, 8) : 'c7bc3a60';
+  const narrow = () => innerWidth < 600;
+  // Настоящий FlowMap (flowmap.js): вертикальная панель #fmRail справа в окне чата, на мобиле полоса #fmMini над вводом
+  const FV = window.FlowViz;
+  const winBody = document.querySelector('#redis-stage .sc-win__body'), inArea = document.querySelector('#redis-stage .chat-input-area');
+  { const r = document.getElementById('fmRail'), m = document.getElementById('fmMini'); if (r) winBody.appendChild(r); if (m) inArea.appendChild(m); }
+  const fitMini = () => { const m = document.getElementById('fmMini'), bx = inArea.querySelector('.chat-input-box'); if (!m || !bx) return;
+    const a = inArea.getBoundingClientRect(), b = bx.getBoundingClientRect();
+    m.style.setProperty('--fm-in-l', Math.round(b.left - a.left) + 'px'); m.style.setProperty('--fm-in-r', Math.round(a.right - b.right) + 'px'); };
+  const fvOff = () => { if (FV) { FV.collapse(); FV.reset(); } };
+  // событие снимка → FlowViz.emit, поля как в FlowViz.replay
+  function fvEmit(e) {
+    if (!FV) return;
+    if (e.ev === 'send') return FV.emit('send', { chat: CID });
+    const d = { chat: CID, request_id: SNAP ? SNAP.rid : undefined };
+    for (const k of ['slot', 'label', 'ext', 'ws', 'ok', 'ms', 'gap_ms', 'role']) if (e[k] != null) d[k] = e[k];
+    if (e.call_id) d.id = e.call_id;
+    FV.emit(e.ev, d);
+  }
+  let rows = [], timers = [], ticks = [], think = 38;
+
+  for (let i = 0; i < ROWS; i++) keysEl.appendChild(document.createElement('div')).className = 'sc-rrow is-empty';
+  const fmtTtl = (s) => s >= 86400 ? Math.round(s / 86400) + ' дн' : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  // ряд: тип | ключ | значение | метрика (TTL у живых ключей, иначе LLEN/HLEN/ZCARD/…)
+  function paint() {
+    [...keysEl.children].forEach((el, i) => {
+      const r = rows[i];
+      el.className = 'sc-rrow' + (!r ? ' is-empty' : '') + (r && r.hot ? ' is-hot' : '') + (r && r.gone ? ' is-gone' : '') + (r && r.pg ? ' is-pg' : '');
+      // точечно: TTL тикает раз в секунду, чипы не пересоздаются (иначе анимация появления мигает)
+      if (!el.children.length) el.innerHTML = '<i></i><b></b><span></span><em></em>';
+      const [ti, kb, vs, me] = el.children;
+      const set = (n, v, html) => { if (n._v !== v) { n._v = v; html ? (n.innerHTML = v) : (n.textContent = v); } };
+      set(ti, r ? r.t : ''); set(kb, r ? r.k : ''); set(vs, r ? (r.v || '') : '', true);
+      set(me, r ? (r.ttl != null ? 'TTL ' + fmtTtl(r.ttl) : (r.m || '')) : '');
+    });
+  }
+  const row = (k) => rows.find((r) => r.k === k);
+  const hot = (k) => { rows.forEach((r) => (r.hot = r.k === k && !r.gone)); paint(); };
+  const later = (ms, fn) => timers.push(setTimeout(fn, ms));
+  const every = (ms, fn) => ticks.push(setInterval(fn, ms));
+  const say = (c, u) => { cmd.innerHTML = c || '&nbsp;'; if (u) url.textContent = u; };
+  const running = (on) => { send.classList.toggle('stop-mode', on); send.classList.toggle('active', on); };
+  function view({ bot: b = false, answer = false, wave = false, skill = false } = {}) {
+    msgs.hidden = skill; skills.hidden = !skill;
+    bot.hidden = !b; ans.hidden = !answer; ph.hidden = !wave;
+  }
+  function reset() {
+    timers.forEach(clearTimeout); ticks.forEach(clearInterval); timers = []; ticks = [];
+    f5.hidden = true; rows = []; cap.textContent = ''; say(''); fvOff();
+    skills.querySelectorAll('.skill-select-cb').forEach((c) => (c.checked = false));
+    presN.textContent = '1';
+  }
+  function tickTtl() { every(1000, () => { rows.forEach((r) => { if (r.ttl > 0 && !r.fixed) r.ttl--; }); paint(); }); }
+  const setThink = () => (timer.textContent = `${Math.floor(think / 60)}:${String(think % 60).padStart(2, '0')}`);
+  function tickThink() { setThink(); every(1000, () => { think++; setThink(); }); }
+  const chip = (s) => `<u>${s}</u>`;
+  const runRow = (ttl) => ({ t: 'STRING', k: `agent:running:${CID}`, v: `{"request_id":"${RID}…"}`, ttl });
+  const rsnRow = (v, ttl) => ({ t: 'STRING', k: `agent:reasoning:${CID}`, v, ttl });
+
+  const steps = [
+    () => { // F5 → восстановление из Redis
+      think = 38; view({ bot: true }); running(true); tickThink();
+      const pg = { t: 'SQL', k: 'chat_messages', v: chip('1 сообщение пользователя'), m: 'Postgres', pg: true };
+      rows = [runRow(3562), rsnRow('«Читаю логи gateway за 7 дней…»', 3562), { t: 'LIST', k: `flow:${CID}`, v: chip('6 событий пути'), ttl: 3562 }, pg];
+      paint(); tickTtl(); say('', `GET /api/chats/${CID}/run_status`);
+      cap.textContent = 'Агент думает. Пользователь жмёт F5.';
+      later(900, () => { f5.hidden = false; });
+      later(1600, () => { f5.hidden = true; view({}); running(false); say('SELECT … FROM chat_messages WHERE chat_id = {chat_id}', `GET /api/chats/${CID}/messages`); hot('chat_messages');
+        cap.textContent = 'История пришла из Postgres. Что идёт сейчас, в ней нет.'; });
+      later(2600, () => { say(`GET agent:running:${CID} <s>→ {request_id…}</s>`, `GET /api/chats/${CID}/run_status`); hot(`agent:running:${CID}`); running(true); });
+      later(3400, () => { say(`GET agent:reasoning:${CID} <s>→ «Читаю логи…»</s>`); hot(`agent:reasoning:${CID}`); view({ bot: true });
+        cap.textContent = 'Кнопка и размышления восстановлены из Redis.'; });
+    },
+    () => { // хронология flow:{chat_id}: настоящий снимок из Redis (snap_flow.py), иначе демо
+      const plural = (n, a, b, c) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? a : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? b : c}`;
+      const fmtS = (ms) => (ms / 1000).toLocaleString('ru-RU', { maximumFractionDigits: 1 }) + ' с';
+      const ev = SNAP ? SNAP.events : ['accepted', 'agent_start', 'tool_start', 'tool_end', 'think_end', 'tool_start', 'tool_end'].map((e, i) => ({ ev: e, ts: i * 900 }));
+      if (!SNAP) { let k = 0; ev.forEach((e) => { if (e.ev === 'tool_start') Object.assign(e, { call_id: 'd' + (++k), slot: 'sandbox', label: 'Запускаю код' });
+        if (e.ev === 'tool_end') Object.assign(e, { call_id: 'd' + k, slot: 'sandbox', label: 'Запускаю код', ok: true, ms: 800 }); }); }
+      const t0 = ev[0].ts, span = ev[ev.length - 1].ts - t0;
+      const tools = ev.filter((e) => e.ev === 'tool_end');
+      const name = (e, i) => {
+        if (e.ev === 'tool_end') return `${e.label || 'тул'} ${fmtS(e.ms || 0)}${e.ok === false ? ' ✕' : ''}`;
+        if (e.ev === 'tool_start') return `▶ ${e.label || 'тул'}`;
+        if (e.ev === 'think_end') return `думал ${fmtS(e.ts - ev[Math.max(0, i - 1)].ts)}`;
+        if (e.ev === 'db_saved') return `db_saved:${e.role || ''}`;
+        return e.ev;
+      };
+      think = 0; view({ bot: true, wave: true }); running(true); setThink();
+      const fl = { t: 'LIST', k: `flow:${CID}`, v: '', m: 'LLEN 0' };
+      const rs = rsnRow('«агент начал»', 3600);
+      rows = [fl, runRow(3600), rs,
+              SNAP ? { t: 'SNAP', k: `rid ${RID}…`, v: chip(plural(ev.length, 'событие', 'события', 'событий')) + chip(fmtS(span)) + chip(plural(tools.length, 'тул', 'тула', 'тулов')), m: 'из Redis' }
+                   : { t: 'SQL', k: 'chat_messages', v: 'хронология сюда не пишется', m: 'Postgres', pg: true }];
+      paint(); tickTtl(); say('', `GET /api/chats/${CID}/flow`);
+      cap.textContent = SNAP ? `Настоящий flow:${CID}: ${plural(ev.length, 'событие', 'события', 'событий')} за ${fmtS(span)}.` : 'Каждое событие пути — одна запись в списке.';
+      // ×4 к реальному времени: пауза между событиями 0,7–4,5 с, чтобы пакет успевал пройти путь в панели
+      let at = 500;
+      if (FV) { FV.reset(); FV.expand(); fitMini(); if (ev[0].ev !== 'send') later(200, () => FV.emit('send', { chat: CID })); }
+      ev.forEach((e, i) => {
+        at += i ? Math.min(4500, Math.max(700, (e.ts - ev[i - 1].ts) * 0.25)) : 0;
+        later(at, () => {
+          fvEmit(e);
+          const n = i + 1, last2 = [name(ev[Math.max(0, i - 1)], Math.max(0, i - 1)), name(e, i)];
+          const keep = narrow() || n < 2 || (last2[0] + last2[1]).length > 22 ? 1 : 2;
+          fl.v = (n > keep ? chip('+' + (n - keep) + ' ранее') : '') + (keep === 2 ? last2 : [last2[1]]).map(chip).join('');
+          fl.m = `LLEN ${n}`;
+          if (e.ev === 'tool_start') rs.v = `«${e.label}…»`;
+          think = Math.round((e.ts - t0) / 1000); setThink();
+          const js = JSON.stringify(Object.fromEntries(Object.entries(e).filter(([k]) => !['rid', 'call_id', 'ext', 'slot', 'ts'].includes(k))));
+          say(`RPUSH flow:${CID} <s>${js.replace(/</g, '&lt;')}</s>`);
+          hot(fl.k);
+        });
+      });
+      later(at + 450, () => { say(`LTRIM flow:${CID} -600 -1 · EXPIRE 3600`); fl.ttl = SNAP ? Math.max(SNAP.ttl, 0) || 3600 : 3600; paint(); });
+      later(at + 1000, () => { say(`LRANGE flow:${CID} 0 -1 <s>→ ${plural(ev.length, 'событие', 'события', 'событий')}</s>`);
+        cap.textContent = SNAP
+          ? `Снято из Redis ${new Date(SNAP.taken_ms).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}, пока агент собирал этот слайд. После F5 FlowMap проиграет ровно это.`
+          : `После F5 FlowMap получает все ${ev.length} событий и проигрывает путь заново.`; });
+    },
+    () => { // PUBLISH stream:{request_id}
+      think = 71; setThink(); view({ bot: true }); running(true);
+      const ch = { t: 'CHANNEL', k: `stream:${RID}`, v: 'ждёт ответ', m: 'pub/sub' };
+      const gs = { t: 'SUB', k: 'gateway_sigma', v: 'SSE → браузер', m: '1 подписка' };
+      const gw = { t: 'SUB', k: 'gateway', v: 'HTTP bot_stream → WS', m: 'не подписан', gone: true };
+      const run = runRow(3488);
+      rows = [ch, gs, gw, run]; paint(); tickTtl(); say('', `SSE /api/chats/${CID}/stream`);
+      cap.textContent = 'У gateway_sigma нет WebSocket, поэтому чанки идут через Redis pub/sub.';
+      later(700, () => { ch.v = chip('PUBLISH → 1 получатель'); say(`PUBLISH stream:${RID} <s>{"answer":"Отчёт готов…"} → (integer) 1</s>`); hot(ch.k); });
+      later(1400, () => { hot('gateway_sigma'); view({ bot: true, answer: true });
+        cap.textContent = 'Чанк получил один подписчик, gateway_sigma, и отдал его в SSE.'; });
+      later(2300, () => { run.gone = true; run.ttl = null; run.m = 'удалён'; run.v = '';
+        say(`DEL agent:running:${CID} <s>→ (integer) 1</s>`); hot(''); running(false);
+        cap.textContent = 'Запрос завершён: ключ удалён, кнопка снова «Отправить».'; });
+    },
+    () => { // скиллы и реакции: state сразу, Postgres пачкой
+      view({ skill: true }); running(false);
+      const cb = skills.querySelector('.skill-card[data-skill-id="12"] .skill-select-cb');
+      const st = { t: 'STRING', k: 'skills:selected:state:56', v: chip('[ ]'), ttl: 7 * 86400, fixed: true };
+      const q = { t: 'LIST', k: 'skills:selected:pending', v: '', m: 'LLEN 0' };
+      const rc = { t: 'HASH', k: 'gc:react:pending', v: '', m: 'HLEN 0' };
+      const pg = { t: 'SQL', k: 'Postgres', v: 'записей пока нет', m: '0 пачек', pg: true };
+      rows = [st, q, rc, pg]; paint(); say('', 'POST /api/skills/12/select');
+      cap.textContent = 'Пользователь кликает по отметке скилла, в общем чате ставят реакции.';
+      let clicks = 0, rn = 0;
+      for (let i = 0; i < 7; i++) later(500 + i * 700, () => {
+        clicks++; cb.checked = !cb.checked; st.v = chip(cb.checked ? '[12]' : '[ ]');
+        q.m = `LLEN ${clicks}`; q.v = chip(cb.checked ? 'select 12' : 'unselect 12');
+        rn += 2; rc.m = `HLEN ${rn}`; rc.v = chip('👍 msg 812') + chip('🔥 msg 815');
+        say(`SET skills:selected:state:56 <s>${cb.checked ? '[12]' : '[]'}</s> · RPUSH … · HSET gc:react:pending`);
+        hot(st.k);
+      });
+      later(5700, () => { say('RENAME gc:react:pending gc:react:inflight:… <s>→ 1 пачка</s>'); hot(pg.k);
+        rc.m = 'HLEN 0'; rc.v = ''; pg.v = chip(`${rn} реакций → 1 запрос`); pg.m = '1 пачка'; paint(); });
+      later(7400, () => { say(`LPOP skills:selected:pending ×${clicks} <s>→ apply_skill_selection</s>`); hot(pg.k);
+        q.m = 'LLEN 0'; q.v = ''; pg.v = chip(`${rn} реакций → 1`) + chip(`${clicks} отметок → 1`); pg.m = '2 пачки'; paint();
+        cap.textContent = `${clicks} кликов и ${rn} реакций дали 2 обращения к Postgres. Интерфейс всё это время читал Redis.`; });
+    },
+    () => { // присутствие и счётчик активных запросов
+      think = 71; setThink(); view({ bot: true, answer: true }); running(false);
+      const on = { t: 'ZSET', k: 'online:gateway', v: '', m: 'ZCARD 0' };
+      const os = { t: 'ZSET', k: 'online:gateway_sigma', v: '', m: 'ZCARD 0' };
+      const run = { t: 'KEYS', k: 'agent:running:*', v: '', m: '' };
+      const lp = { t: 'KEYS', k: 'agent:loop:*', v: '', m: '' };
+      rows = [on, os, run, lp]; paint(); say('', 'GET /api/presence/count');
+      cap.textContent = 'Heartbeat приходит с каждой открытой вкладки.';
+      const users = [['online:gateway', 'pisoldatkin'], ['online:gateway', 'ivanov'], ['online:gateway_sigma', 'petrova']];
+      users.forEach(([k, u], i) => later(400 + i * 650, () => {
+        const r = row(k); r.v += chip(u); r.m = 'ZCARD ' + (r.v.split('<u>').length - 1);
+        say(`ZADD ${k} <s>${Math.floor(Date.now() / 1000)} "${u}"</s> · ZREMRANGEBYSCORE now-60`);
+        hot(k); presN.textContent = String(i + 1);
+      }));
+      later(2500, () => { run.v = chip('…:51190') + chip('…:3305'); run.m = 'найдено 2';
+        lp.v = chip('…:40112'); lp.m = 'найдено 1'; say('SCAN 0 MATCH agent:* <s>→ running 2, loop 1</s>'); hot(run.k);
+        cap.textContent = 'Онлайн 3 человека, активных запросов 3. Postgres в этом не участвует.'; });
+    },
+  ];
+
+  document.addEventListener('sc:step', (e) => {
+    if (e.detail.ch !== 'ch-redis') return;
+    reset(); steps[Math.min(e.detail.step, steps.length - 1)]();
+  });
+  reset(); view({ bot: true }); running(true); rows = [runRow(3562)]; paint();
+  window.ChatAnimations?.initPlaceholderGraph?.(ph);
+});
+</script>

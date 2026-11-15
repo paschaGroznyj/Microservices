@@ -2166,11 +2166,12 @@ pre {
 .image-lightbox__pro {
   display: inline-flex; align-items: center; gap: 6px; flex: none;
   height: 32px; padding: 0 12px 0 10px; border-radius: 999px;
-  border: 1px solid rgba(204,120,92,0.5); background: rgba(204,120,92,0.14);
-  color: #e8b49f; font: 600 13px/1 inherit; cursor: pointer;
+  border: 1px solid color-mix(in srgb, var(--accent, #cc785c) 50%, transparent);
+  background: color-mix(in srgb, var(--accent, #cc785c) 14%, transparent);
+  color: color-mix(in srgb, var(--accent, #cc785c) 55%, #fff); font: 600 13px/1 inherit; cursor: pointer;
   transition: background 0.15s ease;
 }
-.image-lightbox__pro:hover { background: rgba(204,120,92,0.26); }
+.image-lightbox__pro:hover { background: color-mix(in srgb, var(--accent, #cc785c) 26%, transparent); }
 .image-lightbox__pro svg { width: 18px; height: 18px; }
 .image-lightbox__pro[hidden] { display: none; }
 

@@ -65,11 +65,13 @@ def test_pack_message_uploads_and_rewrites_data():
     packed = run(json_pack.pack_message(http, "http://agent", data, 56))
     assert http.calls[0]["url"] == "http://agent/web/upload_files"
     form = http.calls[0]["data"]
-    assert form == {"chat_id": "42", "message_id": "msg-1", "user_id": "56", "file_modes": ["file"]}
+    assert form == {"chat_id": "42", "message_id": "msg-1", "user_id": "56", "file_modes": ["file"],
+                    "persist": "0"}
     name, content, mime = http.calls[0]["files"][0][1]
     assert name == "video_edit_request.json" and mime == "application/json"
     assert data["has_files"] is True and "```" not in data["message"]
-    assert data["files"] == [{"name": name, "ext": "json", "size": len(content), "type": "application/json"}]
+    assert data["files"] == [{"name": name, "ext": "json", "size": len(content),
+                              "type": "application/json", "kind": "agent_json"}]
     assert packed == {"message": data["message"], "files": data["files"]}
 
 

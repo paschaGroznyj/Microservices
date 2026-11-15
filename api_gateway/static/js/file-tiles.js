@@ -110,6 +110,7 @@
         ];
         if (f.type) attrs.push(`data-mime="${esc(f.type)}"`);
         if (f.dlUrl) attrs.push(`data-dl-url="${esc(f.dlUrl)}"`);
+        if (f.nofile) attrs.push('data-nofile="1"');
         if (kind === 'audio') attrs.push(`data-audio-url="${esc(url)}"`, `data-audio-name="${esc(name)}"`);
         const metaHtml = kind === 'audio'
             ? `<span class="fa-tile__meta"><span class="fa-tile__meta-txt">${esc(meta)}</span><span class="fa-tile__time"><b class="cur">0:00</b><span class="fa-audio-dur"> / 0:00</span></span></span>`
@@ -755,12 +756,12 @@
     });
 
     // Плитка без рендера в поле ввода: вместо скачивания коротко показываем «Нет превью».
-    function flashNoPreview(t) {
+    function flashNoPreview(t, text = 'Нет превью') {
         const meta = t.querySelector('.fa-tile__meta');
         if (!meta || t.classList.contains('fa-tile--nopreview')) return;
         const prev = meta.textContent;
         t.classList.add('fa-tile--nopreview');
-        meta.textContent = 'Нет превью';
+        meta.textContent = text;
         setTimeout(() => {
             t.classList.remove('fa-tile--nopreview');
             if (meta.isConnected) meta.textContent = t.dataset.meta || prev;
@@ -769,6 +770,8 @@
 
     function activate(t, e) {
         if (t.classList.contains('fa-tile--broken')) return;
+        // Файл есть только у агента (упакованный JSON разметки): не качаем и не открываем.
+        if (t.dataset.nofile) return flashNoPreview(t, 'Передан агенту');
         const kind = t.dataset.kind;
         if (kind === 'image' || kind === 'video') return openLightbox(t);
         if (kind === 'audio') return toggleTileAudio(t);

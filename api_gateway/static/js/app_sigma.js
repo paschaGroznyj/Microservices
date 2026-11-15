@@ -2605,6 +2605,10 @@ class ChatApp {
                 const canServe = !!(chatId && mid);
                 const items = files.map((f) => {
                     const name = String((f && f.name) || 'файл');
+                    // JSON Pro-разметки gateway отдал агенту, на диске его нет (json_pack.py).
+                    if (f && f.kind === 'agent_json') {
+                        return { name, size: f.size, type: f.type || 'application/json', nofile: true };
+                    }
                     let url = (f && f.url) || '';
                     if (!url && canServe) {
                         url = `/api/chats/${encodeURIComponent(chatId)}/files/${encodeURIComponent(mid)}/${encodeURIComponent(name)}`;

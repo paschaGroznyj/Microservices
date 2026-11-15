@@ -9,13 +9,13 @@ Pro-разметка (media-pro.js) шлёт правки обычным тек�
 chats_service и отдаёт его в agent_service тем же путём, что и обычные
 вложения (/web/upload_files, режим "file"):
 
-  * agent_service кладёт байты в медиа-хранилище чата
-    (media_store.put_media → media:chat:{chat_id}:blob:{mid} + :index)
-    и на диск/OBS (/app/generated_files/{message_id}/{name}), откуда плитку
-    отдаёт /api/chats/{chat}/files/{message_id}/{name};
+  * agent_service кладёт байты только в медиа-хранилище чата
+    (media_store.put_media → media:chat:{chat_id}:blob:{mid} + :index).
+    На диск и в OBS не пишем (persist=0): файл нужен агенту, а не ленте;
   * в промпт агента попадает только маркер 📄[DOCUMENT] с media_id;
-  * в Kafka и в БД уходит короткий текст + files=[{name, size, type}],
-    в ленте это обычная плитка вложения (fa-tile).
+  * в Kafka и в БД (chat_files) уходит короткий текст + files=[{name, size,
+    type, kind="agent_json"}]. По kind фронт рисует плитку fa-tile без ссылки
+    на файл, в том числе после F5.
 
 Пакуем только блоки ```json, которые длиннее PACK_MIN_CHARS и парсятся как
 JSON. Если у сообщения уже есть вложения с фронта (has_files), не пакуем:
@@ -32,6 +32,8 @@ log = logging.getLogger(__name__)
 PACK_MIN_CHARS = 1000
 MAX_BLOCKS = 5
 UPLOAD_TIMEOUT = 30.0
+# chat_files.file_kind упакованного JSON: фронт не ходит за ним в /files/.
+PACKED_KIND = "agent_json"
 
 _FENCE = re.compile(r"```json[ \t]*\r?\n(.*?)\r?\n?[ \t]*```", re.S | re.I)
 _SAFE_KIND = re.compile(r"^[A-Za-z0-9_\-]{1,48}$")
@@ -100,6 +102,7 @@ async def pack_message(http_client, agent_url: str, data: dict, user_id) -> dict
             "message_id": str(message_id),
             "user_id": str(user_id),
             "file_modes": ["file"] * len(items),
+            "persist": "0",
         }
         resp = await http_client.post(
             f"{agent_url}/web/upload_files", data=form, files=files_payload,
@@ -111,7 +114,7 @@ async def pack_message(http_client, agent_url: str, data: dict, user_id) -> dict
             return None
         files = [
             {"name": it["name"], "ext": "json", "size": len(it["content"]),
-             "type": "application/json"}
+             "type": "application/json", "kind": PACKED_KIND}
             for it in items
         ]
         data["message"] = new_text

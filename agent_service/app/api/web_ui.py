@@ -80,6 +80,7 @@ async def upload_web_files(
     user_id: str = Form(...),
     files: list[UploadFile] = File(...),
     file_modes: list[str] = Form(default=[]),
+    persist: str = Form(default="1"),
 ):
     """Раскладывает вложения сообщения. Ничего не парсит.
 
@@ -88,7 +89,10 @@ async def upload_web_files(
       "file"   — всё остальное: бинарник в media_store (Redis) + диск/OBS,
                  в промпт идёт только маркер с media_id.
     Если режима нет (TG/MAX-боты шлют файлы напрямую), файл считается "file".
+    persist="0" — не писать на диск/OBS, только media_store. Так gateway
+    отдаёт упакованный JSON Pro-разметки (api_gateway/json_pack.py).
     """
+    keep_on_disk = str(persist).strip() != "0"
     parts = []
     images: list[dict] = []          # картинки JPEG/PNG для vision-тула
     image_media_ids: list[str] = []  # media_id положенных в Redis media_store (пер-чат)
@@ -116,15 +120,16 @@ async def upload_web_files(
         # /api/chats/{chat}/files/{msg}/{name} отдаёт превью в истории.
         safe_fname = os.path.basename(f.filename or "file") or "file"
         safe_mid = os.path.basename(str(message_id or "msg")) or "msg"
-        try:
-            user_dir = os.path.join("/app/generated_files", safe_mid)
-            os.makedirs(user_dir, exist_ok=True)
-            user_fpath = os.path.join(user_dir, safe_fname)
-            with open(user_fpath, "wb") as _uf:
-                _uf.write(raw)
-            await obs_file_storage.upload_user_file(user_fpath, chat_id)
-        except Exception as _uerr:
-            logging.warning(f"[upload_files] не удалось сохранить файл на диск/OBS: {_uerr}")
+        if keep_on_disk:
+            try:
+                user_dir = os.path.join("/app/generated_files", safe_mid)
+                os.makedirs(user_dir, exist_ok=True)
+                user_fpath = os.path.join(user_dir, safe_fname)
+                with open(user_fpath, "wb") as _uf:
+                    _uf.write(raw)
+                await obs_file_storage.upload_user_file(user_fpath, chat_id)
+            except Exception as _uerr:
+                logging.warning(f"[upload_files] не удалось сохранить файл на диск/OBS: {_uerr}")
 
         # Картинки не парсим в текст — кладём base64 отдельно, чтобы vision-тул
         # дёргал строку из pending_files, а контекст модели не засорялся.

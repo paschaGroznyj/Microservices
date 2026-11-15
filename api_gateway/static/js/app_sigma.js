@@ -1247,7 +1247,13 @@ class ChatApp {
             return false;
         };
 
-        const missing = serverMsgs.filter(m => !hasMessageInDom(m));
+        const missing = serverMsgs.filter(m => {
+            if (hasMessageInDom(m)) return false;
+            const st = this._getStream(key);
+            if (st?.pendingBotEl && st.pendingBotEl.dataset.messageId && m.message_id &&
+                String(st.pendingBotEl.dataset.messageId) === String(m.message_id)) return false;
+            return true;
+        });
         if (!missing.length) return;
 
         missing.forEach(msg => this.addMessage(msg, false));

@@ -6,6 +6,8 @@
 import os
 import json
 import time
+import uuid
+import asyncio
 import logging
 
 logger = logging.getLogger(__name__)
@@ -508,6 +510,53 @@ async def push_user_settings(
     except Exception as e:
         logger.warning("run_status.push_user_settings failed: %s", e)
         return False
+
+
+# ── Web Push: настройка notify_enabled с дебаунсом 1 с ──
+# Частые клики по чекбоксу схлопываются: state-ключ обновляется сразу (GET видит
+# новое значение), а в очередь user:settings:pending уходит только последнее
+# значение, простоявшее NOTIFY_DEBOUNCE_SEC. Токен в Redis — чтобы дебаунс работал
+# и при нескольких воркерах гейтвея.
+NOTIFY_DEBOUNCE_SEC = float(os.getenv("NOTIFY_DEBOUNCE_SEC", "1.0"))
+_notify_tasks: set = set()
+
+
+def _notify_debounce_key(user_id: int) -> str:
+    return f"user:settings:notify_debounce:{int(user_id)}"
+
+
+async def _notify_flush_later(uid: int, token: str, delay: float) -> None:
+    try:
+        await asyncio.sleep(delay)
+        raw = await _redis.get(_notify_debounce_key(uid))
+        data = json.loads(raw) if raw else {}
+        if data.get("token") != token:
+            return  # был клик новее — его задача и отправит
+        event = {"user_id": uid, "ts": time.time(), "notify_enabled": bool(data.get("enabled"))}
+        await _redis.rpush(USER_SETTINGS_QUEUE_KEY, json.dumps(event, ensure_ascii=False))
+    except Exception as e:
+        logger.warning("run_status.notify flush failed: %s", e)
+
+
+async def push_notify_setting(user_id: int, enabled: bool, delay: float | None = None) -> bool:
+    if _redis is None or user_id is None:
+        return False
+    uid = int(user_id)
+    token = uuid.uuid4().hex
+    try:
+        state_key = _user_settings_state_key(uid)
+        raw_cur = await _redis.get(state_key)
+        cur = json.loads(raw_cur) if raw_cur else {"user_id": uid}
+        cur["notify_enabled"] = bool(enabled)
+        await _redis.set(state_key, json.dumps(cur, ensure_ascii=False), ex=USER_SETTINGS_STATE_TTL)
+        await _redis.set(_notify_debounce_key(uid), json.dumps({"token": token, "enabled": bool(enabled)}), ex=60)
+    except Exception as e:
+        logger.warning("run_status.push_notify_setting failed: %s", e)
+        return False
+    task = asyncio.create_task(_notify_flush_later(uid, token, NOTIFY_DEBOUNCE_SEC if delay is None else delay))
+    _notify_tasks.add(task)
+    task.add_done_callback(_notify_tasks.discard)
+    return True
 
 
 SKILL_SELECT_QUEUE_KEY = "skills:selected:pending"

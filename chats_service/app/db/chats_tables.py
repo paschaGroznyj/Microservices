@@ -110,6 +110,13 @@ class DataBaseChats:
             await conn.execute("ALTER TABLE chats ADD COLUMN IF NOT EXISTS type_query TEXT DEFAULT 'agent'")
         except Exception as e:
             logging.warning(f"chats.type_query: миграция не выполнена: {e}")
+        # Web Push: user_settings.notify_enabled + push_subscriptions (app/db/push_db.py)
+        from app.db.push_db import DDL_STATEMENTS as _PUSH_DDL
+        for _stmt in _PUSH_DDL:
+            try:
+                await conn.execute(_stmt)
+            except Exception as e:
+                logging.warning(f"web push: миграция не выполнена: {e}")
 
     async def save_poll_answer(
         self,
@@ -1145,6 +1152,7 @@ class DataBaseChats:
         selected_model: str | None = None,
         active_chat_id: str | None = None,
         has_active_chat: bool = False,
+        notify_enabled: bool | None = None,
     ) -> dict:
         uid = int(user_id)
         norm_tools = None
@@ -1155,12 +1163,13 @@ class DataBaseChats:
 
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT selected_tools, selected_model, active_chat_id FROM user_settings WHERE user_id = $1",
+                "SELECT selected_tools, selected_model, active_chat_id, notify_enabled FROM user_settings WHERE user_id = $1",
                 uid,
             )
             cur_tools = []
             cur_model = "gpt"
             cur_chat = None
+            cur_notify = False
             if row:
                 raw_t = row["selected_tools"]
                 if isinstance(raw_t, str):
@@ -1172,26 +1181,30 @@ class DataBaseChats:
                     cur_tools = raw_t
                 cur_model = self._normalize_setting_model(row["selected_model"])
                 cur_chat = row["active_chat_id"]
+                cur_notify = bool(row["notify_enabled"])
 
             final_tools = norm_tools if norm_tools is not None else cur_tools
             final_model = norm_model if norm_model is not None else cur_model
             final_chat = norm_chat if has_active_chat else cur_chat
+            final_notify = bool(notify_enabled) if notify_enabled is not None else cur_notify
 
             saved = await conn.fetchrow(
                 """
-                INSERT INTO user_settings (user_id, selected_tools, selected_model, active_chat_id, updated_at)
-                VALUES ($1, $2::jsonb, $3, $4, CURRENT_TIMESTAMP)
+                INSERT INTO user_settings (user_id, selected_tools, selected_model, active_chat_id, notify_enabled, updated_at)
+                VALUES ($1, $2::jsonb, $3, $4, $5, CURRENT_TIMESTAMP)
                 ON CONFLICT (user_id) DO UPDATE SET
                     selected_tools = EXCLUDED.selected_tools,
                     selected_model = EXCLUDED.selected_model,
                     active_chat_id = EXCLUDED.active_chat_id,
+                    notify_enabled = EXCLUDED.notify_enabled,
                     updated_at = CURRENT_TIMESTAMP
-                RETURNING user_id, selected_tools, selected_model, active_chat_id
+                RETURNING user_id, selected_tools, selected_model, active_chat_id, notify_enabled
                 """,
                 uid,
                 json.dumps(final_tools, ensure_ascii=False),
                 final_model,
                 final_chat,
+                final_notify,
             )
             res_tools = saved["selected_tools"]
             if isinstance(res_tools, str):
@@ -1204,13 +1217,14 @@ class DataBaseChats:
                 "selected_tools": res_tools if isinstance(res_tools, list) else [],
                 "selected_model": self._normalize_setting_model(saved["selected_model"]),
                 "active_chat_id": saved["active_chat_id"],
+                "notify_enabled": bool(saved["notify_enabled"]),
             }
 
     async def get_user_settings(self, user_id: int) -> dict:
         uid = int(user_id)
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT user_id, selected_tools, selected_model, active_chat_id FROM user_settings WHERE user_id = $1",
+                "SELECT user_id, selected_tools, selected_model, active_chat_id, notify_enabled FROM user_settings WHERE user_id = $1",
                 uid,
             )
             if not row:
@@ -1219,6 +1233,7 @@ class DataBaseChats:
                     "selected_tools": [],
                     "selected_model": "gpt",
                     "active_chat_id": None,
+                    "notify_enabled": False,
                 }
             tools = row["selected_tools"]
             if isinstance(tools, str):
@@ -1257,6 +1272,7 @@ class DataBaseChats:
                 "selected_tools": tools if isinstance(tools, list) else [],
                 "selected_model": model,
                 "active_chat_id": active_chat_id,
+                "notify_enabled": bool(row["notify_enabled"]),
             }
 
     async def _fetch_clean_selected_skill_ids(self, conn, uid: int, max_selected: int = 5) -> list[int]:

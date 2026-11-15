@@ -346,12 +346,14 @@ async def _flush_pending_user_settings_from_redis(max_items: int = 200) -> int:
                 has_tools = "selected_tools" in item and item.get("selected_tools") is not None
                 has_model = "selected_model" in item and item.get("selected_model") is not None
                 has_chat = bool(item.get("has_active_chat")) or ("active_chat_id" in item)
+                has_notify = item.get("notify_enabled") is not None
                 saved = await db.upsert_user_settings(
                     user_id=uid,
                     selected_tools=item.get("selected_tools") if has_tools else None,
                     selected_model=item.get("selected_model") if has_model else None,
                     active_chat_id=item.get("active_chat_id") if has_chat else None,
                     has_active_chat=has_chat,
+                    notify_enabled=bool(item["notify_enabled"]) if has_notify else None,
                 )
                 try:
                     await redis_client.set(
@@ -1280,12 +1282,14 @@ async def post_user_settings_endpoint(request: Request, x_user_id: str = Header(
     has_tools = "selected_tools" in data and data.get("selected_tools") is not None
     has_model = "selected_model" in data and data.get("selected_model") is not None
     has_chat = "active_chat_id" in data
+    has_notify = data.get("notify_enabled") is not None
     saved = await db.upsert_user_settings(
         user_id=uid,
         selected_tools=data.get("selected_tools") if has_tools else None,
         selected_model=data.get("selected_model") if has_model else None,
         active_chat_id=data.get("active_chat_id") if has_chat else None,
         has_active_chat=has_chat,
+        notify_enabled=bool(data["notify_enabled"]) if has_notify else None,
     )
     if redis_client is not None:
         try:
@@ -1297,6 +1301,61 @@ async def post_user_settings_endpoint(request: Request, x_user_id: str = Header(
         except Exception:
             pass
     return saved
+
+
+# ── Web Push: VAPID-ключ и подписки браузеров (отправка — app/push_sender.py в chats-consumer) ──
+_vapid_public_cache: str | None = None
+
+
+def _push_uid(x_user_id: str) -> int:
+    try:
+        uid = int(x_user_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid X-User-Id")
+    if uid <= 0:
+        raise HTTPException(status_code=400, detail="Invalid X-User-Id")
+    return uid
+
+
+@app.get("/push/vapid")
+async def push_vapid_endpoint():
+    global _vapid_public_cache
+    if _vapid_public_cache is None:
+        from app.push_sender import load_vapid, public_key_b64
+        vapid = await load_vapid(redis_client)
+        if vapid is None:
+            raise HTTPException(status_code=503, detail="VAPID key unavailable")
+        _vapid_public_cache = public_key_b64(vapid)
+    return {"public_key": _vapid_public_cache}
+
+
+@app.post("/push/subscribe")
+async def push_subscribe_endpoint(request: Request, x_user_id: str = Header(..., alias="X-User-Id")):
+    from app.db.push_db import PushDB, MAX_ENDPOINT_LEN, MAX_KEY_LEN
+    uid = _push_uid(x_user_id)
+    data = await request.json()
+    endpoint = str(data.get("endpoint") or "").strip()
+    keys = data.get("keys") if isinstance(data.get("keys"), dict) else {}
+    p256dh = str(keys.get("p256dh") or "").strip()
+    auth = str(keys.get("auth") or "").strip()
+    gw = "sigma" if str(data.get("gw") or "").lower() == "sigma" else "main"
+    if (not endpoint.startswith("https://") or len(endpoint) > MAX_ENDPOINT_LEN
+            or not p256dh or not auth or len(p256dh) > MAX_KEY_LEN or len(auth) > MAX_KEY_LEN):
+        raise HTTPException(status_code=400, detail="Invalid subscription")
+    await PushDB(db.pool).upsert_subscription(uid, gw, endpoint, p256dh, auth, data.get("user_agent"))
+    return {"ok": True}
+
+
+@app.post("/push/unsubscribe")
+async def push_unsubscribe_endpoint(request: Request, x_user_id: str = Header(..., alias="X-User-Id")):
+    from app.db.push_db import PushDB
+    uid = _push_uid(x_user_id)
+    data = await request.json()
+    endpoint = str(data.get("endpoint") or "").strip()
+    if not endpoint:
+        raise HTTPException(status_code=400, detail="endpoint required")
+    n = await PushDB(db.pool).delete_subscription(endpoint, user_id=uid)
+    return {"ok": True, "deleted": n}
 
 
 @app.get("/skills/selected")

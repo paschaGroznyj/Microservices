@@ -13,3 +13,4 @@ aiobotocore
 Pillow
 python-multipart
 httpx
+pywebpush>=2.0

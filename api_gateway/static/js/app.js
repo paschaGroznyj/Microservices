@@ -1235,7 +1235,14 @@ class ChatApp {
             return false;
         };
 
-        const missing = serverMsgs.filter(m => !hasMessageInDom(m));
+        const missing = serverMsgs.filter(m => {
+            if (hasMessageInDom(m)) return false;
+            // Если стрим ещё не завершён, но message_id уже записан — тоже пропускаем
+            const st = this._getStream(key);
+            if (st?.pendingBotEl && st.pendingBotEl.dataset.messageId && m.message_id &&
+                String(st.pendingBotEl.dataset.messageId) === String(m.message_id)) return false;
+            return true;
+        });
         if (!missing.length) return;
 
         missing.forEach(msg => this.addMessage(msg, false));
@@ -4389,18 +4396,27 @@ class ChatApp {
                 // Основной ключ дедупа — message_id (совпадает с клиентским msgId,
                 // который бэк возвращает в эхе). Надёжно для длинного текста-чипа,
                 // где textContent не содержит полного сообщения.
-                if (msg.message_id &&
-                    document.querySelector(`.user-message-wrapper[data-message-id="${msg.message_id}"], .user-message-wrapper[data-id="${msg.message_id}"]`)) {
-                    return;
+                const _echoBox = this.getMessagesContainer();
+                if (!_echoBox) return;
+                if (msg.message_id) {
+                    // Есть message_id — дедуп только по нему. Текст не сравниваем: повтор того же
+                    // вопроса или короткое «привет» иначе терялись на второй вкладке.
+                    if (_echoBox.querySelector(`.user-message-wrapper[data-message-id="${msg.message_id}"], .user-message-wrapper[data-id="${msg.message_id}"]`)) {
+                        return;
+                    }
+                } else {
+                    // Fallback для эха без message_id: точное совпадение с последним сообщением пользователя.
+                    const _normEcho = String(msg.message || '').replace(/\s+/g, ' ').trim();
+                    const _lastU = [..._echoBox.querySelectorAll('.user-message-wrapper')].pop();
+                    const _lastTxt = (_lastU?.querySelector('.user-message .message-text, .user-message')?.textContent || '').replace(/\s+/g, ' ').trim();
+                    if (_normEcho && _lastTxt === _normEcho) return;
                 }
-                // Fallback по тексту — для старых сообщений/эх без message_id (с нормализацией переводов строк).
-                const _normEcho = String(msg.message || '').replace(/\s+/g, ' ').trim();
-                const dup = [...document.querySelectorAll('.user-message .message-text, .user-message')].find(el => {
-                    const _normEl = (el.textContent || '').replace(/\s+/g, ' ').trim();
-                    return _normEl && _normEcho && _normEl.includes(_normEcho);
-                });
-                if (dup) return;
                 this.addMessage(msg, true, false);
+                // Запрос отправлен из другой вкладки/браузера: стоп-кнопку и волну здесь никто
+                // не поднял — берём состояние из run_status (гейтвей ставит его до broadcast эха).
+                if (String(this._sendingInFlightChat) !== key && this._runState !== 'running') {
+                    this._restoreRunningUI(key).catch(() => {});
+                }
                 return;
             }
 
@@ -4556,6 +4572,9 @@ class ChatApp {
                         loop: msg.loop === true,
                     };
                     st.streamDone = true;
+                    // Проставляем message_id сразу, чтобы resync не продублировал узел
+                    if (msg.message_id) st.pendingBotEl.dataset.messageId = msg.message_id;
+                    if (incomingDbId) st.pendingBotEl.dataset.id = incomingDbId;
                     this._startStreamLoop(key);
                 } else if (isActive) {
                     // Целое сообщение без стриминга — обычный addMessage (только активный)

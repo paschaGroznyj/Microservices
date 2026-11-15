@@ -371,3 +371,21 @@ kbd{font-family:var(--sans);font-weight:600;color:color-mix(in srgb,var(--fg) 55
 .vpe-rbox .rh[data-h=ne]{right:-9px;top:-9px}
 .vpe-rbox .rh[data-h=sw]{left:-9px;bottom:-9px}
 .vpe-rbox .rh[data-h=se]{right:-9px;bottom:-9px}}
+
+/* скачать видео с правками: кнопка в шапке «Правки для агента» и окно записи */
+.vpe-hdbtn{flex:none;width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:8px;background:none;color:var(--fg);cursor:pointer;padding:0;margin-left:0}
+.vpe-hdbtn .ic{width:18px;height:18px}
+.vpe-side__hd .vpe-hdbtn .ic{color:currentColor}
+.vpe-hdbtn:disabled{opacity:.4;cursor:default}
+@media (hover:hover){.vpe-hdbtn:not(:disabled):hover{background:var(--panel2)}}
+.vpe-side__hd #cnt:empty+.vpe-hdbtn{margin-left:auto}
+/* без backdrop-filter: под окном всё время перерисовывается прогресс, размытие фона съедало кадры записи */
+.vpe-exp{position:fixed;inset:0;z-index:210;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(0,0,0,.62)}
+.vpe-exp[hidden]{display:none}
+.vpe-exp__box{width:min(400px,100%);display:flex;flex-direction:column;gap:10px;padding:16px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:16px;box-shadow:var(--sh-lg)}
+.vpe-exp__box b{font-weight:600;font-size:15px}
+.vpe-exp__sub{color:var(--mut);font-size:12.5px;line-height:1.4}
+.vpe-exp__bar{height:6px;border-radius:3px;background:var(--line);overflow:hidden}
+.vpe-exp__bar i{display:block;height:100%;width:0;background:var(--acc);border-radius:3px}
+@media (pointer:coarse){.vpe-exp__ft .vpe-btn{height:40px;padding:0 16px}}
+.vpe-exp__ft{display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--mut);font-size:12.5px;font-variant-numeric:tabular-nums}

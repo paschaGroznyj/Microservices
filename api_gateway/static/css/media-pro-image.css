@@ -218,3 +218,6 @@ input[type=range]::-moz-range-thumb{width:18px;height:18px;border:0;border-radiu
 .stage:not([data-tab=crop]) .pic.tilted::after{display:none}
 .tx.st-outline{text-shadow:none;-webkit-text-stroke:2px rgba(0,0,0,.85);paint-order:stroke fill}
 .tx.st-box{text-shadow:none;background:rgba(0,0,0,.5);border-radius:8px;padding:4px 10px}
+
+/* скачать фото с правками (кнопка в шапке «Правки») */
+#saveBtn:not(:disabled){color:var(--fg)}

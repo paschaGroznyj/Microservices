@@ -3914,6 +3914,13 @@ class ChatApp {
         const dimEl = bar.querySelector('.image-lightbox__dim');
         const cntEl = bar.querySelector('.gc-lb__counter');
         const dlEl = bar.querySelector('.image-lightbox__dl');
+        // Pro-разметка файлов агента (media-pro.js): кнопка перед «Скачать»
+        const mediaPro = window.MediaPro?.bindLightbox({
+            bar, before: dlEl, app: this,
+            getItem: () => items[idx],
+            getSrc: () => mediaContainer.querySelector('img')?.src || items[idx]?.url,
+            closeLightbox: () => close(),
+        });
 
         const revokeObjUrl = () => {
             if (overlay._objUrl) {
@@ -3936,6 +3943,7 @@ class ChatApp {
             nameEl.title = it.imageKey || dlName0;
             dimEl.textContent = '…';
             cntEl.textContent = items.length > 1 ? `${idx + 1}/${items.length}` : '';
+            mediaPro?.refresh();
             const href0 = (isVid ? (it.dlUrl || it.url) : it.url) || '#';
             dlEl.setAttribute('href', href0);
             dlEl.setAttribute('download', dlName0);
@@ -4259,6 +4267,9 @@ class ChatApp {
             revokeObjUrl();
         };
         const onKey = (e) => {
+            if (window.MediaPro?.isOpen()) return;   // клавиши забирает Pro-редактор
+            if (e.code === 'KeyP' && !e.ctrlKey && !e.metaKey && !e.altKey
+                && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName || '')) { mediaPro?.open(); return; }
             if (e.key === 'Escape') close();
             else if (e.key === 'ArrowLeft') nav(-1);
             else if (e.key === 'ArrowRight') nav(1);

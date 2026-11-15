@@ -2162,6 +2162,18 @@ pre {
 .image-lightbox__dl svg,
 .image-lightbox__close svg { width: 18px; height: 18px; }
 
+/* Pro-разметка (media-pro.js) */
+.image-lightbox__pro {
+  display: inline-flex; align-items: center; gap: 6px; flex: none;
+  height: 32px; padding: 0 12px 0 10px; border-radius: 999px;
+  border: 1px solid rgba(204,120,92,0.5); background: rgba(204,120,92,0.14);
+  color: #e8b49f; font: 600 13px/1 inherit; cursor: pointer;
+  transition: background 0.15s ease;
+}
+.image-lightbox__pro:hover { background: rgba(204,120,92,0.26); }
+.image-lightbox__pro svg { width: 18px; height: 18px; }
+.image-lightbox__pro[hidden] { display: none; }
+
 @media (max-width: 768px) {
   .image-lightbox {
     padding: 8px;

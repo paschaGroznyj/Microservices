@@ -561,7 +561,7 @@ function message(p,E){
   if(p.apply_order.length)L.push('Порядок применения: '+p.apply_order.map(o=>TAB[o].label).join(' → ')+'.');
   if(p.prompt)L.push('','Комментарий: '+p.prompt);
   L.push('','Исходник не трогать, результат новым файлом.');
-  L.push('Разметка в JSON ниже (image_edit_request).');
+  L.push('Полная разметка — в JSON (image_edit_request).');
   return L.join('\n');
 }
 function hlJson(s){return esc(s).replace(/(&quot;(?:\\.|(?!&quot;)[^\\])*?&quot;)(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g,
@@ -1037,7 +1037,7 @@ function message(P){
   L.push(`${i+1}. ${s}`);});
  if(P.prompt)L.push('',`Комментарий: ${P.prompt}`);
  if(P.edits.some(e=>e.op==='region'))L.push('','Координаты областей — от левого верхнего угла кадра исходника, в rect доли 0..1.');
- L.push('','Разметка в JSON ниже (video_edit_request).');
+ L.push('','Полная разметка — в JSON (video_edit_request).');
  L.push('',`Время указано по исходному файлу. ${P.output.keep_original?'Исходник не трогать, результат новым файлом.':'Исходник можно перезаписать.'}`);
  return L.join('\n');
 }

@@ -37,6 +37,7 @@ import push_gw
 import os
 import max_chats_gw
 import file_parsers
+import json_pack
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1174,6 +1175,10 @@ async def send_message(request: Request):
     data["request_id"] = request_id
     data["gateway_target"] = "main"
     data["timezone_name"] = (data.get("timezone_name") or request.headers.get("X-Timezone") or "Europe/Moscow").strip()
+    # Длинный ```json (Pro-разметка) → файл-вложение до Kafka и контекста агента.
+    packed = await json_pack.pack_message(
+        app.state.http_client, SERVICES['agent_service']['url'], data, user["user_id"]
+    )
     logger.info(f"Что летит при отправке сообщений {data['chat_id']}, type_query={data['type_query']}, {data['message']}")
 
     message = {
@@ -1184,6 +1189,8 @@ async def send_message(request: Request):
         "poll_answer": data.get("poll_answer"),
         "is_from_bot": False
     }
+    if packed:
+        message["files"] = packed["files"]
     print("Перед отправкой сообщения", data)
     # Флаг «агент в работе» в Redis: переживает F5/переключение чата,
     # фронт по нему восстанавливает стоп-кнопку и индикатор работы.
@@ -1214,6 +1221,8 @@ async def send_message(request: Request):
         except Exception:
             body = {}
         body["request_id"] = request_id
+        if packed:
+            body["packed"] = packed
         body["active_requests"] = await run_status.count_active_requests()
         return JSONResponse(content=body, status_code=response.status_code)
     except httpx.RequestError as e:

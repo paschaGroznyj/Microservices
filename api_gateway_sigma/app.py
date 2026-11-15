@@ -31,6 +31,7 @@ import presence
 import editor_gw
 import os as _os_env
 import run_status
+import json_pack
 import cache_bust
 import reactions_bus
 import reads_bus
@@ -1168,6 +1169,10 @@ async def send_message(request: Request):
     data["request_id"] = request_id
     data["gateway_target"] = "sigma"
     data["timezone_name"] = (data.get("timezone_name") or request.headers.get("X-Timezone") or "Europe/Moscow").strip()
+    # Длинный ```json (Pro-разметка) → файл-вложение до Kafka и контекста агента.
+    packed = await json_pack.pack_message(
+        app.state.http_client, SERVICES['agent_service']['url'], data, user["user_id"]
+    )
     logger.info(f"Что летит при отправке сообщений {data['chat_id']}, type_query={data['type_query']}, {data['message']}")
 
     # SIGMA: WS-эхо убрано. Помечаем в store, что для этого чата ожидается
@@ -1197,6 +1202,8 @@ async def send_message(request: Request):
         except Exception:
             body = {}
         body["request_id"] = request_id
+        if packed:
+            body["packed"] = packed
         body["active_requests"] = await run_status.count_active_requests()
         return JSONResponse(content=body, status_code=response.status_code)
     except httpx.RequestError as e:

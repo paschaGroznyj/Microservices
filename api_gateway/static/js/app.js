@@ -2566,6 +2566,25 @@ class ChatApp {
         }
     }
 
+    /* Gateway упаковал длинный ```json из текста в файл (api_gateway/json_pack.py)
+       и вернул packed = { message, files }. Перерисовываем своё оптимистичное
+       сообщение: короткий текст + плитка вложения, как будет после F5. */
+    _applyPackedUserMessage(chatId, msgId, packed) {
+        if (!packed || !msgId || String(this.currentChat) !== String(chatId)) return;
+        const c = this.getMessagesContainer();
+        const sel = `.user-message-wrapper[data-message-id="${CSS.escape(String(msgId))}"]`;
+        const old = c?.querySelector(sel);
+        if (!old) return;
+        const next = old.nextSibling;
+        old.remove();
+        this.addMessage({
+            message: packed.message || '', is_from_bot: false, id: msgId, message_id: msgId,
+            created_at: new Date().toISOString(), files: Array.isArray(packed.files) ? packed.files : [],
+        }, false);
+        const nw = c.querySelector(sel);
+        if (nw && next && next.parentNode === c && nw !== next) c.insertBefore(nw, next);
+    }
+
     _renderMessageFiles(files, messageId = '') {
         try {
             if (!files || !Array.isArray(files) || files.length === 0) return '';
@@ -3618,6 +3637,7 @@ class ChatApp {
                 else _upTracker?.fail(_upRes ? `Не загружено (ошибка ${_upRes.status})` : 'Не загружено: нет связи');
             }
 
+            const _sendChatId = this.currentChat;
             const resp = await fetch('/api/chats/send_message', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -3657,6 +3677,7 @@ class ChatApp {
             try {
                 const j = await resp.clone().json();
                 this._activeRequestId = j?.request_id || null;
+                if (j?.packed) this._applyPackedUserMessage(_sendChatId, msgId, j.packed);
                 if (j?.request_id) _fm('gateway', { chat: this.currentChat, request_id: j.request_id });
                 if (j?.active_requests !== undefined) {
                     this._updateActiveRequestsUI(this.currentChat, j.active_requests);

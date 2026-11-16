@@ -1185,6 +1185,14 @@
 .fa-chip.fa-tile .fa-chip__tofile:focus-visible { background: var(--accent, #2563eb); outline: none; }
 @media (hover: none) { .fa-chip.fa-tile .fa-chip__tofile { opacity: 1; } }
 
+/* Sigma: чип вставки, помеченный «файлом» (уйдёт в pasted_files, мимо промпта) */
+.fa-chip.fa-tile.input-chip--file {
+  box-shadow: inset 0 0 0 1.5px var(--accent, #2563eb);
+}
+.fa-chip.fa-tile.input-chip--file .fa-chip__meta {
+  color: var(--accent, #2563eb);
+}
+
 .fa-chip.fa-tile.fa-tile--broken { cursor: default; }
 .fa-chip.fa-tile.fa-tile--broken .fa-tile__label { opacity: .45; }
 .fa-chip.fa-tile.fa-tile--broken .fa-tile__meta { color: var(--error, #ef4444); }

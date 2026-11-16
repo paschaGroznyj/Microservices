@@ -1132,7 +1132,14 @@ async def send_message(request: Request):
 
     # Получаем данные из запроса
     data = await request.json()
-    logging.info(data)
+    # pasted_files (текст «файлом») бывает на сотни КБ — в лог только размеры.
+    _pf = data.get("pasted_files")
+    if isinstance(_pf, list) and _pf:
+        logging.info({**data, "pasted_files": [
+            {"name": (x or {}).get("name"), "chars": len(str((x or {}).get("text") or ""))}
+            for x in _pf if isinstance(x, dict)]})
+    else:
+        logging.info(data)
     raw_cmd = (data.get("message") or "").strip().lower()
     if raw_cmd in ("/chat-id", "/workspaces"):
         if raw_cmd == "/workspaces":
@@ -1169,7 +1176,8 @@ async def send_message(request: Request):
     data["request_id"] = request_id
     data["gateway_target"] = "sigma"
     data["timezone_name"] = (data.get("timezone_name") or request.headers.get("X-Timezone") or "Europe/Moscow").strip()
-    # Длинный ```json (Pro-разметка) → файл-вложение до Kafka и контекста агента.
+    # Длинный ```json (Pro-разметка) и pasted_files (текст «файлом») → вложения
+    # в медиа-хранилище до Kafka и контекста агента.
     packed = await json_pack.pack_message(
         app.state.http_client, SERVICES['agent_service']['url'], data, user["user_id"]
     )

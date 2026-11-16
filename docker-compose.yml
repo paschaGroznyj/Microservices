@@ -288,6 +288,7 @@ services:
       - ./api_gateway/reactions_bus.py:/app/reactions_bus.py
       - ./api_gateway/reads_bus.py:/app/reads_bus.py
       - ./api_gateway/json_pack.py:/app/json_pack.py
+      - ./api_gateway/file_parsers.py:/app/file_parsers.py
     depends_on:
       broker:
         condition: service_healthy

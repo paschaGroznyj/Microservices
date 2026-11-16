@@ -17,6 +17,8 @@ class ChatApp {
         this._activeRequestId = null;
         this._statusPollTimer = null;  // фолбэк-таймер, если SSE недоступен
         this.INPUT_MAX_CHARS = 20000;  // жёсткий предел длины поля ввода
+        this.PASTED_FILE_MAX_CHARS = 2000000;  // текст «файлом» (pasted_files), как PASTED_MAX_CHARS в json_pack.py
+        this.PASTED_FILES_MAX = 5;             // как MAX_PASTED_FILES в json_pack.py
 
         /* ══════════════════════════════════════════
            ВАРИАНТ 2: МУЛЬТИПЛЕКС СТРИМИНГА ПО ЧАТАМ (SSE)
@@ -2609,6 +2611,10 @@ class ChatApp {
                     if (f && f.kind === 'agent_json') {
                         return { name, size: f.size, type: f.type || 'application/json', nofile: true };
                     }
+                    // Текст «файлом» (pasted_files) лежит только в медиа-хранилище агента.
+                    if (f && f.kind === 'pasted_text') {
+                        return { name, size: f.size, type: f.type || 'text/plain', nofile: true };
+                    }
                     let url = (f && f.url) || '';
                     if (!url && canServe) {
                         url = `/api/chats/${encodeURIComponent(chatId)}/files/${encodeURIComponent(mid)}/${encodeURIComponent(name)}`;
@@ -3490,8 +3496,9 @@ class ChatApp {
         if (this._runState !== 'idle') return;
 
         const text = isCustom ? customText.trim() : this.getInputText();
+        const pastedFiles = isCustom ? [] : this._collectPastedFiles();
         const hasAttached = !isCustom && this.hasAttachedFiles();
-        if (!text && !hasAttached) return;
+        if (!text && !hasAttached && !pastedFiles.length) return;
 
         if (!isCustom && text && /^\/(chat-id|workspaces)$/i.test(text.trim())) {
             await this._executeSlashCommand(text.trim().toLowerCase());
@@ -3508,7 +3515,14 @@ class ChatApp {
         }
 
         const attachedMeta = hasAttached ? (window.FileAttach?.getFilesMeta?.() || []) : [];
-        const chatPreviewText = text || (attachedMeta[0]?.name ? `📎 ${attachedMeta[0].name}` : 'Файл');
+        const _firstName = attachedMeta[0]?.name || pastedFiles[0]?.name;
+        const chatPreviewText = text || (_firstName ? `📎 ${_firstName}` : 'Файл');
+        // Плитки вставок «файлом» в оптимистичном сообщении (как после F5).
+        const _enc = new TextEncoder();
+        const pastedMeta = pastedFiles.map(f => ({
+            name: f.name, ext: 'txt', size: _enc.encode(f.text).length,
+            type: 'text/plain', kind: 'pasted_text',
+        }));
 
         if (!this.currentChat) {
             if (!isCustom && field) {
@@ -3534,7 +3548,7 @@ class ChatApp {
 
         const msgId = `msg-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
         _fm('send', { chat: this.currentChat });
-        this.addMessage({ message: text, is_from_bot: false, id: msgId, created_at: new Date().toISOString(), files: [] });
+        this.addMessage({ message: text, is_from_bot: false, id: msgId, created_at: new Date().toISOString(), files: pastedMeta });
         this._scrollToUserMessageAndReserve();
 
         // Если ни одна категория инструментов не выбрана — агент работает
@@ -3582,6 +3596,7 @@ class ChatApp {
                     context_size:   window.ToolsPanel?.getContextSize()   ?? 'medium',
                     has_files:      false,
                     files: [],
+                    ...(pastedFiles.length ? { pasted_files: pastedFiles } : {}),
                     timezone_name:  (Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow'),
                     tz_offset_minutes: new Date().getTimezoneOffset(),
                     ...(pollAnswer ? { poll_answer: pollAnswer } : {})
@@ -4915,7 +4930,9 @@ class ChatApp {
     hasAttachedFiles() {
         try {
             const files = window.FileAttach?.getFiles?.() || [];
-            return Array.isArray(files) && files.length > 0;
+            if (Array.isArray(files) && files.length > 0) return true;
+            // Sigma: чипы вставки, помеченные «файлом» (текст уйдёт в pasted_files).
+            return !!(this._fileChips && this._fileChips.size > 0);
         } catch (_) {
             return false;
         }
@@ -5756,7 +5773,8 @@ class ChatApp {
                     const chipId = n.getAttribute && n.getAttribute('data-chip-id');
                     if (chipId && this._pendingChips.has(chipId)) {
                         usedChipIds.add(chipId);
-                        out += this._pendingChips.get(chipId);
+                        // Чип «файлом» уходит отдельно (pasted_files), в текст не идёт.
+                        if (!this._fileChips?.has(chipId)) out += this._pendingChips.get(chipId);
                     } else if (n.tagName === 'BR') {
                         out += '\n';
                     } else if (n.classList && n.classList.contains('fa-chip')) {
@@ -5774,7 +5792,7 @@ class ChatApp {
         walk(field);
 
         for (const [chipId, chipText] of this._pendingChips.entries()) {
-            if (!usedChipIds.has(chipId) && chipText) {
+            if (!usedChipIds.has(chipId) && chipText && !this._fileChips?.has(chipId)) {
                 if (out.length > 0 && !out.endsWith('\n') && !/\s$/.test(out)) {
                     out += '\n';
                 }
@@ -5830,6 +5848,7 @@ class ChatApp {
         if (this._pendingChips) {
             this._pendingChips.delete(chipId);
         }
+        this._fileChips?.delete(chipId);
         if (this._activePreviewChipId === chipId) {
             this._activePreviewChipId = null;
             this.closeTextPreview();
@@ -5865,6 +5884,7 @@ class ChatApp {
             this.closeTextPreview();
         }
         if (this._pendingChips) this._pendingChips.clear();
+        this._fileChips?.clear();
         this._chipSeq = 0;
         if (field) {
             if (field.tagName === 'TEXTAREA') {
@@ -5924,15 +5944,78 @@ class ChatApp {
         delete this._inputDrafts[this._inputDraftKey(chatId)];
     }
 
+    /* ── Текст «файлом» (Sigma) ─────────────────────────────────────
+       Загрузка файлов в Sigma закрыта, поэтому чип не превращается в File,
+       как в CatchPM. Он остаётся в полосе превью с пометкой «файлом», его
+       текст не входит в getInputText() и в лимит INPUT_MAX_CHARS, а при
+       отправке уходит полем pasted_files=[{name, text}]. Gateway
+       (json_pack.py) заворачивает его в .txt и кладёт в медиа-хранилище. */
+    _pastedFileName(text) {
+        const d = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        const firstLine = (String(text || '').split('\n').find(l => l.trim()) || '').trim();
+        const base = firstLine.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40).trim()
+            || `text-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+        return `${base}.txt`;
+    }
+
+    _markChipAsFile(chip, text) {
+        if (!chip) return;
+        chip.classList.add('input-chip--file');
+        chip.setAttribute('title', 'Уйдёт файлом. Нажмите, чтобы открыть текст');
+        const btn = chip.querySelector('.fa-chip__tofile');
+        if (btn) btn.remove();
+        const nameEl = chip.querySelector('.fa-chip__name');
+        if (nameEl) nameEl.textContent = this._pastedFileName(text);
+        const metaEl = chip.querySelector('.fa-chip__meta');
+        if (metaEl) metaEl.textContent = 'файлом · ' + String(text || '').length + ' симв';
+    }
+
+    convertInputChipToFile(chipId) {
+        const text = this._pendingChips?.get(chipId);
+        if (text == null) return false;
+        if (!this._fileChips) this._fileChips = new Set();
+        if (this._fileChips.size >= this.PASTED_FILES_MAX && !this._fileChips.has(chipId)) {
+            this.showToast('Файлом можно отправить не больше ' + this.PASTED_FILES_MAX + ' текстов');
+            return false;
+        }
+        this._fileChips.add(chipId);
+        const container = this.getInputContainer() || document;
+        container.querySelectorAll(`.input-chip[data-chip-id="${chipId}"]`)
+            .forEach(el => this._markChipAsFile(el, text));
+        const field = container.querySelector('#message-input') || document.getElementById('message-input');
+        if (field) { try { field.dispatchEvent(new Event('input')); } catch (_) {} }
+        this._syncSendButtonState();
+        return true;
+    }
+
+    /* Тексты чипов «файлом» в порядке появления → [{name, text}]. */
+    _collectPastedFiles() {
+        if (!this._fileChips || this._fileChips.size === 0 || !this._pendingChips) return [];
+        const out = [];
+        for (const chipId of this._fileChips) {
+            const text = this._pendingChips.get(chipId);
+            if (typeof text === 'string' && text.trim()) {
+                out.push({ name: this._pastedFileName(text), text });
+            }
+        }
+        return out.slice(0, this.PASTED_FILES_MAX);
+    }
+
     /* Вставляет свёрнутый длинный текст как чип в полосу .fa-preview-bar,
        а в поле ввода (#message-input) на текущую позицию каретки помещает
        невидимый якорь .input-chip-anchor, чтобы сохранялся точный порядок
        между текстом и вставленными чипами. */
-    _insertInputChip(field, rawText) {
+    _insertInputChip(field, rawText, opts = {}) {
         if (!this._pendingChips) this._pendingChips = new Map();
         this._chipSeq = (this._chipSeq || 0) + 1;
         const chipId = 'ic-' + Date.now() + '-' + this._chipSeq;
         this._pendingChips.set(chipId, rawText);
+        // Помечаем до вставки якоря: лимит поля ввода не должен видеть этот текст.
+        if (opts.asFile) {
+            if (!this._fileChips) this._fileChips = new Set();
+            this._fileChips.add(chipId);
+        }
 
         const chars = rawText.length;
         const lines = rawText.length ? rawText.split('\n').length : 0;
@@ -5952,12 +6035,26 @@ class ChatApp {
             '<span class="fa-tile__media"><span class="fa-tile__snippet">' + this._chipSnippetHtml(rawText) + '</span></span>' +
             '<span class="fa-tile__cap"><span class="fa-chip__name">' + safeTitle + '</span>' +
             '<span class="fa-chip__meta">' + chars + ' симв · ' + lines + ' стр</span></span>' +
+            '<button class="fa-chip__tofile" type="button"' +
+            ' title="Отправить файлом: текст не попадёт в промпт модели, агент разберёт его как документ"' +
+            ' aria-label="Отправить вставленный текст файлом">' +
+            '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
+            '<path d="M4 1.75h5.2L12.5 5v8.25a1 1 0 0 1-1 1h-7.5a1 1 0 0 1-1-1V2.75a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>' +
+            '<path d="M9 1.9V5.2h3.3M5.6 8.4h4.8M5.6 11h3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>' +
+            '</svg></button>' +
             '<button class="fa-chip__remove" type="button" title="Удалить" aria-label="Удалить вставленный текст">' +
             '<svg viewBox="0 0 14 14" fill="none">' +
             '<path d="M3 3l8 8M11 3L3 11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' +
             '</svg></button>';
 
         const removeBtn = chip.querySelector('.fa-chip__remove');
+        const toFileBtn = chip.querySelector('.fa-chip__tofile');
+        if (toFileBtn) {
+            toFileBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.convertInputChipToFile(chipId);
+            });
+        }
         if (removeBtn) {
             removeBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -5966,12 +6063,14 @@ class ChatApp {
         }
         chip.addEventListener('click', () => this.openTextPreview(chip));
         chip.addEventListener('keydown', (e) => {
-            if (e.target === removeBtn) return;
+            if (e.target === removeBtn || e.target === toFileBtn) return;
             if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
                 this.openTextPreview(chip);
             }
         });
+
+        if (opts.asFile) this._markChipAsFile(chip, rawText);
 
         const bar = this._ensureInputPreviewBar(field);
         if (bar) {
@@ -6500,6 +6599,18 @@ class ChatApp {
 
             // ── Учитываем лимит 10000 символов ──────────────────────────
             const remaining = this.INPUT_MAX_CHARS - this.getInputText().length;
+            // Длинная вставка, которая не влезает в лимит поля: не режем, а
+            // сразу кладём чипом «файлом» (уйдёт в pasted_files, мимо лимита).
+            if (pasted.length > INPUT_COLLAPSE_LIMIT && pasted.length > remaining
+                    && (this._fileChips?.size || 0) < this.PASTED_FILES_MAX) {
+                const big = pasted.slice(0, this.PASTED_FILE_MAX_CHARS);
+                this._insertInputChip(field, big, { asFile: true });
+                this.showToast(big.length < pasted.length
+                    ? 'Текст обрезан до ' + this.PASTED_FILE_MAX_CHARS + ' символов и уйдёт файлом'
+                    : 'Текст длиннее ' + this.INPUT_MAX_CHARS + ' символов, отправится файлом');
+                onInput();
+                return;
+            }
             if (remaining <= 0) {
                 this.showToast('Достигнут предел ' + this.INPUT_MAX_CHARS + ' символов');
                 return;

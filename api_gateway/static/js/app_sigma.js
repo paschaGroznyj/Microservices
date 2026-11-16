@@ -2071,6 +2071,14 @@ class ChatApp {
             reaction: message.reaction ?? (typeof message.reactions === 'string' ? message.reactions : null),
             createdAt: message.created_at || message.timestamp || new Date().toISOString(),
         });
+        // «Использование ресурсов за ход»: tokens_usage из БД (история) или из финала хода.
+        if (isBot && message.tokens_usage && window.UsageOverlay) {
+            window.UsageOverlay.mount(messageEl, {
+                ...message.tokens_usage,
+                family: message.model_family,
+                model: message.agent_model,
+            });
+        }
 
         if (isBot) {
             // Если есть placeholder и это стриминг — рендерим прямо внутрь него
@@ -7179,6 +7187,8 @@ class ChatApp {
             div.appendChild(timeEl);
 
             this._ensureMessageTimeTicker();
+            // Чип usage: из meta или из data-usage пузыря (actions пересоздаются при финализации).
+            queueMicrotask(() => window.UsageOverlay?.decorate(div, meta.usage));
         }
 
         return div;

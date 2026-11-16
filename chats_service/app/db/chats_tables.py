@@ -50,6 +50,47 @@ def _pixels(f: dict, key: str) -> int | None:
     return n if 0 < n <= 65535 else None
 
 
+
+_MODEL_FAMILIES = (
+    ("claude", "claude"), ("anthropic", "claude"),
+    ("gpt", "gpt"), ("openai", "gpt"), ("o1", "gpt"), ("o3", "gpt"), ("o4", "gpt"),
+    ("gemini", "gemini"), ("google", "gemini"),
+    ("deepseek", "deepseek"), ("qwen", "qwen"), ("glm", "glm"), ("zai", "glm"),
+    ("grok", "grok"), ("xai", "grok"), ("llama", "llama"), ("mistral", "mistral"),
+    ("kimi", "kimi"), ("moonshot", "kimi"), ("gigachat", "gigachat"), ("yandexgpt", "yandexgpt"),
+)
+
+
+def model_family(model: str | None) -> str | None:
+    """Семейство модели без версии и провайдера: cloudru/anthropic/claude-sonnet-4.6 -> claude."""
+    if not model:
+        return None
+    m = str(model).lower()
+    tail = m.rsplit("/", 1)[-1]
+    for key, fam in _MODEL_FAMILIES:
+        if tail.startswith(key):
+            return fam
+    for key, fam in _MODEL_FAMILIES:
+        if key in m:
+            return fam
+    return None
+
+
+def _usage_fields(row) -> dict:
+    tu = row["tokens_usage"]
+    if isinstance(tu, str):
+        try:
+            tu = json.loads(tu)
+        except Exception:
+            tu = None
+    if not isinstance(tu, dict):
+        return {}
+    keys = ("input_tokens", "output_tokens", "total_tokens", "cache_read_tokens", "cache_creation_tokens")
+    return {
+        "tokens_usage": {k: int(tu.get(k) or 0) for k in keys},
+        "model_family": model_family(row["model_type"]),
+    }
+
 class DataBaseChats:
     async def init_db_pool(self):
         """Инициализация пула подключений к базе данных."""
@@ -814,6 +855,8 @@ class DataBaseChats:
                         c.message_id,
                         c.created_at,
                         c.reaction AS reaction,
+                        c.model_type AS model_type,
+                        c.tokens_usage AS tokens_usage,
                         COALESCE(
                             (
                                 SELECT json_agg(
@@ -973,6 +1016,9 @@ class DataBaseChats:
                         "files": files or [],
                         "poll_answers": poll_answers or [],
                         "tasks": tasks or [],
+                        # Оверлей «Использование ресурсов за ход»: только у ответов агента,
+                        # модель — семейство (claude/gpt/gemini...), без точного имени.
+                        **(_usage_fields(row) if row["is_from_bot"] else {}),
                     })
 
                 if mode in ("around", "before", "after"):

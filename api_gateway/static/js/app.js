@@ -2060,6 +2060,14 @@ class ChatApp {
             reaction: message.reaction ?? (typeof message.reactions === 'string' ? message.reactions : null),
             createdAt: message.created_at || message.timestamp || new Date().toISOString(),
         });
+        // «Использование ресурсов за ход»: tokens_usage из БД (история) или из финала хода.
+        if (isBot && message.tokens_usage && window.UsageOverlay) {
+            window.UsageOverlay.mount(messageEl, {
+                ...message.tokens_usage,
+                family: message.model_family,
+                model: message.agent_model,
+            });
+        }
 
         if (isBot) {
             // Если есть placeholder и это стриминг — рендерим прямо внутрь него
@@ -4460,6 +4468,19 @@ class ChatApp {
             // собираются в ответ на то же место, что и после F5. Таймер: дать финализации пузыря отработать.
             const isFinalBotMsg = msg.is_from_bot && msg.chunk === undefined && !msg.kind && (msg.done || msg.message !== undefined);
             if (isFinalBotMsg) _fm('done', { chat: key });
+            if (isFinalBotMsg && msg.tokens_usage && window.UsageOverlay) {
+                const _usage = { ...msg.tokens_usage, model: msg.agent_model };
+                if (st.pendingBotEl) window.UsageOverlay.mount(st.pendingBotEl, _usage);
+                if (isActive) setTimeout(() => {
+                    const box = this.getMessagesContainer();
+                    if (!box) return;
+                    const ids = [msg.message_id, msg.id].filter(v => v != null && v !== '').map(String);
+                    const bots = [...box.querySelectorAll(':scope > .agent-message')];
+                    const el = bots.find(b => ids.includes(String(b.dataset.messageId || '')) || ids.includes(String(b.dataset.id || '')))
+                        || bots[bots.length - 1];
+                    if (el && !el.dataset.usage) window.UsageOverlay.mount(el, _usage);
+                }, 120);
+            }
             if (isFinalBotMsg && isActive && window.TaskCards) {
                 const _tcBox = this.getMessagesContainer();
                 setTimeout(() => window.TaskCards.settle(_tcBox, msg), 60);
@@ -7386,6 +7407,8 @@ class ChatApp {
             div.appendChild(timeEl);
 
             this._ensureMessageTimeTicker();
+            // Чип usage: из meta или из data-usage пузыря (actions пересоздаются при финализации).
+            queueMicrotask(() => window.UsageOverlay?.decorate(div, meta.usage));
         }
 
         return div;

@@ -29,12 +29,12 @@ from config import (
 from sigma_status_store import status_store
 import presence
 import editor_gw
-import os as _os_env
 import run_status
 import json_pack
 import cache_bust
 import reactions_bus
 import reads_bus
+import os
 
 import re
 
@@ -132,7 +132,7 @@ SERVICES = {
         "health_endpoint": "/health",
     },
     "sandbox": {
-        "url": _os_env.getenv("SANDBOX_SERVICE_URL", "http://agent_sandbox:8005"),
+        "url": os.getenv("SANDBOX_SERVICE_URL", "http://agent_sandbox:8005"),
         "health_endpoint": "/health",
     },
 }
@@ -1361,8 +1361,8 @@ async def chat_flow(chat_id: str, request: Request):
 # Агент публикует reasoning/answer-чанки в канал stream:{request_id};
 # SSE-стрим подписан на него и релеит фреймы браузеру. Redis уже
 # используется в presence.py — тот же REDIS_URL.
-import os as _os
-_REDIS_URL = _os.getenv("REDIS_URL", "redis://redis:6379/0")
+
+_REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 _sse_redis = None
 _sse_redis_failed = False
 

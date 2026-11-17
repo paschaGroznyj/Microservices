@@ -362,6 +362,9 @@
     };
     const PV_TEXT = new Set(['txt', 'log', 'text', 'rst', 'tex', 'srt', 'vtt', 'gitignore', 'editorconfig']);
     const PV_MAX_BYTES = 2 * 1024 * 1024;
+    // Ноутбук с картинками весит мегабайты из-за base64 в outputs, обрезанный JSON не разбирается.
+    const PV_MAX_BYTES_EXT = { ipynb: 25 * 1024 * 1024 };
+    const pvMaxBytes = (name) => PV_MAX_BYTES_EXT[extOf(name)] || PV_MAX_BYTES;
     const PV_HL_MAX = 200 * 1024;
     const PV_CSV_ROWS = 500;
 
@@ -563,12 +566,14 @@
         emitFp('open');
 
         let text = '';
+        const maxBytes = pvMaxBytes(FP.name);
+        FP.maxBytes = maxBytes;
         try {
             const src = pvSource(t);
             let blob = src.blob || null;
             if (!blob) {
                 if (!src.url) throw new Error('нет ссылки на файл');
-                const headers = src.url.startsWith('blob:') ? {} : { Range: `bytes=0-${PV_MAX_BYTES - 1}` };
+                const headers = src.url.startsWith('blob:') ? {} : { Range: `bytes=0-${maxBytes - 1}` };
                 const r = await fetch(src.url, { headers, credentials: 'same-origin' });
                 if (!r.ok) throw new Error(`HTTP ${r.status}`);
                 const cr = r.headers.get('Content-Range');
@@ -578,8 +583,8 @@
             } else {
                 FP.totalSize = blob.size;
             }
-            if (blob.size > PV_MAX_BYTES) blob = blob.slice(0, PV_MAX_BYTES);
-            FP.truncated = FP.totalSize > PV_MAX_BYTES;
+            if (blob.size > maxBytes) blob = blob.slice(0, maxBytes);
+            FP.truncated = FP.totalSize > maxBytes;
             text = await blob.text();
         } catch (err) {
             if (tok !== FP.token) return true;
@@ -623,7 +628,7 @@
         const mode = curMode();
         syncModeBtns();
         const sizeNote = FP.truncated
-            ? `Показаны первые ${fmtSize(PV_MAX_BYTES)} из ${fmtSize(FP.totalSize)}. Полный файл можно скачать.`
+            ? `Показаны первые ${fmtSize(FP.maxBytes || PV_MAX_BYTES)} из ${fmtSize(FP.totalSize)}. Полный файл можно скачать.`
             : '';
         if (mode === 'raw' && PV_HAS_RENDER.has(FP.type)) {
             render.hidden = true; render.innerHTML = '';
@@ -697,6 +702,9 @@
                     }
                 },
             };
+        }
+        if (type === 'json' && ext === 'ipynb' && window.NotebookRender) {
+            return window.NotebookRender.render(text, name);
         }
         if (type === 'json') {
             try {

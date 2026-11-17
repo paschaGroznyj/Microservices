@@ -1,0 +1,269 @@
+/* ipynb-render.css — стили для Jupyter Notebook в панели превью */
+
+/* Шапка: kernel, число ячеек, сверху над ячейками */
+.nb-head {
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--text-secondary) 4%, transparent);
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+/* Контейнер всех ячеек */
+.nb-cells {
+  padding: 0;
+}
+.nb-empty {
+  padding: 16px;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+  margin: 0;
+}
+
+/* Ячейка (базовая) */
+.nb-cell {
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+  padding: 12px 0;
+}
+.nb-cell:last-child {
+  border-bottom: none;
+}
+
+/* ───── Markdown ───── */
+.nb-cell--md {
+  padding: 12px 16px;
+  line-height: 1.6;
+  font-size: 13.5px;
+  color: var(--text-primary);
+}
+.nb-cell--md > :first-child {
+  margin-top: 0;
+}
+.nb-cell--md > :last-child {
+  margin-bottom: 0;
+}
+.nb-cell--md h1,
+.nb-cell--md h2,
+.nb-cell--md h3 {
+  margin: 1.2em 0 0.6em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.nb-cell--md h1 { font-size: 1.6em; }
+.nb-cell--md h2 { font-size: 1.35em; }
+.nb-cell--md h3 { font-size: 1.15em; }
+.nb-cell--md p {
+  margin: 0.8em 0;
+}
+.nb-cell--md code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text-secondary) 14%, transparent);
+}
+.nb-cell--md pre {
+  padding: 10px 12px;
+  border-radius: 8px;
+  overflow: auto;
+  background: color-mix(in srgb, var(--text-secondary) 13%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 70%, transparent);
+}
+.nb-cell--md pre code {
+  display: block;
+  padding: 0;
+  background: transparent;
+}
+.nb-cell--md a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.nb-cell--md img {
+  max-width: 100%;
+  border-radius: 6px;
+  display: block;
+  margin: 0.5em 0;
+}
+
+/* ───── Raw ───── */
+.nb-cell--raw {
+  padding: 8px 12px;
+}
+.nb-raw {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text-secondary) 8%, transparent);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 17px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-secondary);
+}
+
+/* ───── Code ───── */
+.nb-cell--code {
+  padding: 8px 12px;
+}
+.nb-in {
+  display: grid;
+  grid-template-columns: 50px 1fr;
+  gap: 8px;
+  align-items: start;
+}
+.nb-prompt {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-muted);
+  text-align: right;
+  padding-top: 9px;
+  user-select: none;
+}
+.nb-src {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text-secondary) 8%, transparent);
+  overflow-x: auto;
+}
+.nb-src code {
+  display: block;
+  padding: 0;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 18px;
+}
+
+/* ───── Outputs ───── */
+.nb-outs {
+  margin-top: 8px;
+  padding-left: 58px; /* 50 + 8 */
+}
+.nb-out {
+  margin: 6px 0;
+}
+.nb-out:first-child {
+  margin-top: 0;
+}
+.nb-out:last-child {
+  margin-bottom: 0;
+}
+
+/* Stream (stdout/stderr) */
+.nb-out--stream {
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 17px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: color-mix(in srgb, var(--text-secondary) 6%, transparent);
+  color: var(--text-primary);
+  margin: 0;
+}
+.nb-out--stderr {
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  color: var(--danger);
+}
+
+/* Text/plain result */
+.nb-out--text {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 17px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+
+/* Error */
+.nb-out--error {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--danger);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 16px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+
+/* HTML output */
+.nb-out--html {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  overflow-x: auto;
+}
+
+/* Image output (inline or SVG) */
+.nb-out--img {
+  margin: 8px 0;
+}
+.nb-out--img img,
+.nb-out--img svg {
+  max-width: 100%;
+  border-radius: 6px;
+  display: block;
+}
+
+/* Markdown output (from text/markdown) */
+.nb-out--md {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text-secondary) 6%, transparent);
+  line-height: 1.6;
+  font-size: 13px;
+}
+.nb-out--md > :first-child {
+  margin-top: 0;
+}
+.nb-out--md > :last-child {
+  margin-bottom: 0;
+}
+
+/* Note (unsupported MIME) */
+.nb-out--note {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text-secondary) 6%, transparent);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* ───── Layout wrapper ───── */
+.text-preview-render--ipynb {
+  padding: 0;
+  background: var(--surface);
+}
+
+/* ───── Адаптив ───── */
+@media (max-width: 480px) {
+  .nb-in {
+    grid-template-columns: 32px 1fr;
+  }
+  .nb-outs {
+    padding-left: 40px;
+  }
+}
+
+/* chat.css задаёт глобально pre { padding-top: 36px !important } под шапку code-header, в ноутбуке её нет */
+.text-preview-render--ipynb pre { padding-top: 8px !important; }
+.text-preview-render--ipynb .nb-cell--md pre { padding-top: 10px !important; }

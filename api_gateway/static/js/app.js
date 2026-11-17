@@ -2814,6 +2814,23 @@ class ChatApp {
             chip.title     = name;
             chip.setAttribute('rel', 'noopener noreferrer');
 
+            // Текстовые файлы (md, код, csv, json…) открываем в панели превью, а не скачиваем.
+            // Иконка-стрелка, Ctrl/Cmd/Shift/средний клик — по-прежнему скачивание.
+            const FT = window.FileTiles;
+            if (messageId && FT && typeof FT.previewTypeOf === 'function' && FT.previewTypeOf(name, f.type || f.mime)) {
+                chip.dataset.name = name;
+                chip.dataset.url = url;
+                chip.dataset.dlUrl = `${url}?download=1`;
+                if (f.type || f.mime) chip.dataset.mime = f.type || f.mime;
+                chip.dataset.preview = '1';
+                chip.addEventListener('click', (e) => {
+                    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+                    if (e.target.closest('.fa-chip__dl-icon')) return;
+                    e.preventDefault();
+                    FT.openFilePreview(chip);
+                });
+            }
+
             // ПКМ по файлу: «Открыть в редакторе» / «Скачать».
             chip.addEventListener('contextmenu', (e) => {
                 e.preventDefault();

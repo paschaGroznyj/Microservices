@@ -1635,6 +1635,33 @@ async def get_chats(request: Request):
         raise HTTPException(status_code=500, detail="Failed to fetch chats")
 
 
+@app.get("/api/chats/page")
+async def get_chats_page(request: Request, limit: int = 40, cursor: str | None = None,
+                         include: str | None = None):
+    """Постраничный список чатов сайдбара. Прокси на chats_service /user/chats/page."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    params = {"limit": max(1, min(int(limit), 200))}
+    if cursor:
+        params["cursor"] = cursor
+    if include:
+        params["include"] = include
+    try:
+        response = await app.state.http_client.get(
+            f"{SERVICES['chats']['url']}/user/chats/page",
+            params=params,
+            headers={"X-User-Name": user["username"]},
+        )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Chats service unreachable: {e}")
+    if response.status_code == 400:
+        raise HTTPException(status_code=400, detail="Bad cursor")
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail="Chats service error")
+    return response.json()
+
+
 @app.get("/api/chats/search")
 async def search_chats(request: Request, q: str = "", limit: int = 30):
     """Живой поиск по сообщениям пользователя. Прокси на chats_service.

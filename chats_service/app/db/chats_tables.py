@@ -736,6 +736,121 @@ class DataBaseChats:
             logging.error(f"Ошибка при получении списка чатов пользователя {username}: {e}")
             raise
 
+    # Страница списка чатов для сайдбара (chats-section).
+    # Курсор — "created_at последнего сообщения|chats.id", порядок как у старого
+    # /user/chats: по времени последнего сообщения, новые сверху.
+    CHATS_PAGE_MAX = 200
+    CHATS_PREVIEW_CHARS = 300
+
+    _CHATS_PAGE_SQL = """
+        WITH tu AS (SELECT id FROM users WHERE username = $1),
+        latest AS (
+            SELECT DISTINCT ON (c.chat_id)
+                c.chat_id, c.id AS row_id, c.created_at,
+                LEFT(c.message_text, $2) AS last_message,
+                c.is_from_bot AS last_from_bot
+            FROM chats c
+            JOIN tu ON tu.id = c.user_id
+            ORDER BY c.chat_id, c.created_at DESC, c.id DESC
+        )
+        SELECT l.chat_id AS id, l.row_id, l.created_at AS timestamp,
+               l.last_message, l.last_from_bot,
+               COALESCE(m.is_favorite, FALSE) AS is_favorite,
+               m.renamed_title,
+               (
+                   SELECT am.auto_title
+                   FROM chat_sidebar_meta am
+                   WHERE am.chat_id = l.chat_id
+                     AND am.auto_title IS NOT NULL
+                   ORDER BY am.updated_at DESC
+                   LIMIT 1
+               ) AS auto_title
+        FROM latest l
+        LEFT JOIN chat_sidebar_meta m
+               ON m.chat_id = l.chat_id AND m.user_id = (SELECT id FROM tu)
+        WHERE COALESCE(m.is_deleted, FALSE) = FALSE
+          AND {where}
+        ORDER BY l.created_at DESC, l.row_id DESC
+        {limit}
+    """
+
+    @staticmethod
+    def parse_chats_cursor(cursor):
+        """'2026-11-17T20:10:00+00:00|123' -> (datetime, 123). Пустой -> None, мусор -> ValueError."""
+        if not cursor:
+            return None
+        ts, sep, rid = str(cursor).rpartition("|")
+        if not sep:
+            raise ValueError("bad cursor")
+        dt_ = datetime.fromisoformat(ts)
+        if dt_.tzinfo is None:
+            dt_ = dt_.replace(tzinfo=timezone.utc)
+        return dt_, int(rid)
+
+    @staticmethod
+    def _chat_page_item(row) -> dict:
+        ts = row["timestamp"]
+        if ts is not None and ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return {
+            "id": row["id"],
+            "last_message": row["last_message"],
+            "last_from_bot": bool(row["last_from_bot"]),
+            "timestamp": ts.isoformat() if ts else None,
+            "is_deleted": False,
+            "is_favorite": bool(row["is_favorite"]),
+            "renamed_title": row["renamed_title"],
+            "auto_title": row["auto_title"],
+        }
+
+    async def get_user_chats_page(self, username: str, limit: int = 40,
+                                  cursor: str | None = None, include: str | None = None) -> dict:
+        """Страница чатов пользователя.
+
+        Первая страница (cursor пустой): все избранные + limit обычных.
+        Следующие: только обычные старше курсора. include — чат, который надо
+        вернуть, даже если он дальше страницы (активный чат после F5).
+        В last_message не больше CHATS_PREVIEW_CHARS символов.
+        """
+        limit = max(1, min(int(limit or 40), self.CHATS_PAGE_MAX))
+        cur = self.parse_chats_cursor(cursor)
+        n = self.CHATS_PREVIEW_CHARS
+        sql = self._CHATS_PAGE_SQL
+        if cur is None:
+            await self.ensure_sidebar_meta_for_user(username)
+        async with self.pool.acquire() as conn:
+            favorites = []
+            if cur is None:
+                favorites = await conn.fetch(
+                    sql.format(where="COALESCE(m.is_favorite, FALSE) = TRUE", limit=""),
+                    username, n)
+                rows = await conn.fetch(
+                    sql.format(where="COALESCE(m.is_favorite, FALSE) = FALSE", limit="LIMIT $3"),
+                    username, n, limit + 1)
+            else:
+                rows = await conn.fetch(
+                    sql.format(where="COALESCE(m.is_favorite, FALSE) = FALSE "
+                                     "AND (l.created_at, l.row_id) < ($3, $4)",
+                               limit="LIMIT $5"),
+                    username, n, cur[0], cur[1], limit + 1)
+            has_more = len(rows) > limit
+            rows = list(rows[:limit])
+            extra = []
+            seen = {str(r["id"]) for r in [*favorites, *rows]}
+            if include and str(include) not in seen:
+                extra = await conn.fetch(
+                    sql.format(where="l.chat_id = $3", limit="LIMIT 1"),
+                    username, n, str(include))
+        next_cursor = None
+        if has_more and rows:
+            last = rows[-1]
+            next_cursor = f"{last['timestamp'].isoformat()}|{last['row_id']}"
+        return {
+            "chats": [self._chat_page_item(r) for r in [*favorites, *rows, *extra]],
+            "next_cursor": next_cursor,
+            "has_more": has_more,
+        }
+
     async def get_user_chats_summary_by_user_id(
         self, user_id: int, chat_id: str
     ) -> list[dict]:

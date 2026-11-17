@@ -1207,6 +1207,23 @@ async def get_user_chats(x_user_name: str = Header(..., alias="X-User-Name")):
         raise HTTPException(status_code=500, detail="Не удалось загрузить список чатов")
 
 
+@app.get("/user/chats/page")
+async def get_user_chats_page(
+    x_user_name: str = Header(..., alias="X-User-Name"),
+    limit: int = Query(40, ge=1, le=200),
+    cursor: str | None = Query(None),
+    include: str | None = Query(None),
+):
+    """Постраничный список чатов для сайдбара: избранные + limit обычных, курсор next_cursor."""
+    try:
+        return await db.get_user_chats_page(x_user_name, limit=limit, cursor=cursor, include=include)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Некорректный cursor")
+    except Exception as e:
+        logging.error(f"Ошибка в эндпоинте get_user_chats_page: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось загрузить список чатов")
+
+
 @app.post("/chat/delete")
 async def delete_chat(action: ChatSidebarAction):
     try:

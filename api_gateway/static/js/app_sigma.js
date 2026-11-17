@@ -224,14 +224,14 @@ class ChatApp {
                 }
             }
 
-            if (restoreChatId && this.chats.some(c => !c.is_deleted && String(c.id) === String(restoreChatId))) {
+            if (restoreChatId && await this._ensureChatInList(restoreChatId)) {
                 await this.openChat(restoreChatId);
                 return true;
             }
 
             const savedChatId = userSettings?.active_chat_id ? String(userSettings.active_chat_id).trim() : '';
             if (savedChatId) {
-                const existsInDb = this.chats.some(c => !c.is_deleted && String(c.id) === savedChatId);
+                const existsInDb = await this._ensureChatInList(savedChatId);
                 if (existsInDb) {
                     await this.openChat(savedChatId, { skipSaveSettings: true });
                     return true;
@@ -405,16 +405,116 @@ class ChatApp {
     /* ══════════════════════════════════════════
        CHATS LIST
     ══════════════════════════════════════════ */
-    async loadChats() {
+    /* Список чатов грузится страницами: /api/chats/page отдаёт все избранные
+       и CHATS_PAGE обычных, дальше подгрузка по next_cursor, когда низ списка
+       подходит к краю #chats-section. Повторный loadChats() (resync) берёт
+       столько обычных, сколько уже было показано, чтобы список не схлопывался. */
+    async loadChats(opts = {}) {
+        const CHATS_PAGE = 40;
+        const more = !!opts.more;
+        if (more && (!this._chatsCursor || this._chatsLoading)) return;
+        if (!more) this._chatsGen = (this._chatsGen || 0) + 1;
+        const gen = this._chatsGen || 0;
+        this._chatsLoading = true;
+        this._syncChatsPager();
         try {
-            const res = await fetch('/api/chats', { credentials: 'include' });
-            if (res.ok) {
-                this.chats = await res.json();
-                this.renderChats(this.chats);
+            const shown = (this.chats || []).filter(c => !c.is_favorite).length;
+            const params = new URLSearchParams({
+                limit: String(more ? CHATS_PAGE : Math.min(Math.max(CHATS_PAGE, shown), 200)),
+            });
+            if (more) params.set('cursor', this._chatsCursor);
+            const include = opts.include ?? (more ? null : this.currentChat);
+            if (include != null && include !== '') params.set('include', String(include));
+            const res = await fetch(`/api/chats/page?${params}`, { credentials: 'include' });
+            if (!res.ok || gen !== this._chatsGen) return;
+            const data = await res.json();
+            if (gen !== this._chatsGen) return;
+            const page = Array.isArray(data?.chats) ? data.chats : [];
+            if (more) {
+                const seen = new Set((this.chats || []).map(c => String(c.id)));
+                this.chats = (this.chats || []).concat(page.filter(c => !seen.has(String(c.id))));
+            } else {
+                this.chats = page;
             }
+            this._chatsCursor = data?.next_cursor || null;
+            this.renderChats(this.chats);
         } catch (e) {
             console.error('loadChats error:', e);
+        } finally {
+            if (gen === this._chatsGen) this._chatsLoading = false;
+            this._syncChatsPager();
         }
+    }
+
+    // Чат может лежать дальше загруженных страниц (активный после F5, ссылка
+    // из поиска). Догружаем только его, курсор не трогаем.
+    async _ensureChatInList(chatId) {
+        const id = String(chatId ?? '').trim();
+        if (!id) return false;
+        const has = () => (this.chats || []).some(c => !c.is_deleted && String(c.id) === id);
+        if (has()) return true;
+        try {
+            const res = await fetch(`/api/chats/page?limit=1&include=${encodeURIComponent(id)}`, { credentials: 'include' });
+            if (!res.ok) return false;
+            const data = await res.json();
+            const hit = (data?.chats || []).find(c => String(c.id) === id);
+            if (!hit) return false;
+            if (!has()) {
+                this.chats = (this.chats || []).concat(hit);
+                this.renderChats(this.chats);
+            }
+            return true;
+        } catch (e) {
+            console.warn('_ensureChatInList error:', e);
+            return false;
+        }
+    }
+
+    _initChatsPager() {
+        const host = document.getElementById('chats-section');
+        const list = document.getElementById('chat-list');
+        if (!host || !list || this._chatsPagerIO) return;
+        let s = document.getElementById('chat-list-more');
+        if (!s) {
+            s = document.createElement('div');
+            s.id = 'chat-list-more';
+            s.className = 'chat-list-more';
+            s.setAttribute('aria-hidden', 'true');
+            s.hidden = true;
+        }
+        this._chatsMoreEl = s;
+        // Проверка по скроллу общего контейнера, не чаще раза за кадр.
+        let raf = 0;
+        host.addEventListener('scroll', () => {
+            if (raf) return;
+            raf = requestAnimationFrame(() => { raf = 0; this._checkChatsPager(); });
+        }, { passive: true });
+        this._chatsPagerIO = true;
+        this._syncChatsPager();
+    }
+
+    _syncChatsPager() {
+        const s = this._chatsMoreEl;
+        if (!s) return;
+        // Маркер живёт последним элементом #chat-list: renderChats перезаписывает
+        // innerHTML, поэтому возвращаем его в конец после каждой отрисовки.
+        const list = document.getElementById('chat-list');
+        if (list && list.lastElementChild !== s) list.appendChild(s);
+        s.hidden = !this._chatsCursor;
+        s.classList.toggle('is-loading', !!this._chatsLoading && !!this._chatsCursor);
+        // Если после подгрузки маркер всё ещё виден (страница короче окна),
+        // событий scroll не будет: проверяем на следующем кадре.
+        if (this._chatsCursor && !this._chatsLoading) requestAnimationFrame(() => this._checkChatsPager());
+    }
+
+    _checkChatsPager() {
+        if (!this._chatsCursor || this._chatsLoading) return;
+        if (document.getElementById('your-chats-block')?.classList.contains('collapsed')) return;
+        const host = document.getElementById('chats-section');
+        const s = this._chatsMoreEl;
+        if (!host || !s || s.hidden) return;
+        const hr = host.getBoundingClientRect(), sr = s.getBoundingClientRect();
+        if (hr.height > 0 && sr.top <= hr.bottom + 320) this.loadChats({ more: true });
     }
 
     renderChats(chats) {
@@ -437,21 +537,43 @@ class ChatApp {
             return doc.body.textContent || '';
         };
 
-        // Если есть renamed_title — показываем его как единственную строку (без preview).
-        // Если нет — показываем последнее сообщение как единственную строку.
-        const getDisplayLine = (chat) => {
-            const renamed = (chat.renamed_title || '').trim();
-            if (renamed) return { title: escapeHtml(renamed), preview: null, kind: 'renamed' };
-
-            // Автогенерированный заголовок (по первому обмену) — приоритетнее last_message.
-            const auto = (chat.auto_title || '').trim();
-            if (auto) return { title: escapeHtml(auto), preview: null, kind: 'auto' };
-
+        // Сверху заголовок (ручное имя → автоназвание), снизу последнее сообщение.
+        // Чат без заголовка: последнее сообщение становится заголовком, вторая строка пустая.
+        const previewOf = (chat) => {
             const raw = (chat.last_message || '').trim();
-            if (!raw || raw === 'Чат создан') return { title: 'Новый чат', preview: null, kind: 'auto' };
-            const plainText = stripHtml(raw).trim();
-            const truncated = plainText.length > 60 ? plainText.slice(0, 60) + '...' : plainText;
-            return { title: null, preview: escapeHtml(truncated) };
+            if (!raw || raw === 'Чат создан' || raw === 'Новый чат') return '';
+            let t = stripHtml(raw)
+                .replace(/```[\s\S]*?(```|$)/g, ' ')
+                .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+                .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+                .replace(/^\s{0,3}(#{1,6}|>|[-*+]|\d+\.)\s+/gm, '')
+                .replace(/[*_`~|]+/g, '')
+                .replace(/\s+/g, ' ')
+                .trim();
+            if (t.length > 140) t = t.slice(0, 140) + '…';
+            return t;
+        };
+
+        const timeOf = (iso) => {
+            const d = new Date(iso);
+            if (!iso || isNaN(d)) return '';
+            const now = new Date();
+            const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+            const diff = Math.round((day(now) - day(d)) / 86400000);
+            if (diff <= 0) return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+            if (diff === 1) return 'вчера';
+            if (diff < 7) return d.toLocaleDateString('ru-RU', { weekday: 'short' });
+            if (d.getFullYear() === now.getFullYear()) {
+                return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }).replace('.', '');
+            }
+            return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' });
+        };
+
+        // Две буквы: начала первых двух слов («Media Pro» → «MP»), для одного слова — одна буква.
+        const initialOf = (text) => {
+            const words = String(text || '').match(/[\p{L}\p{N}]+/gu) || [];
+            const ini = words.slice(0, 2).map(w => Array.from(w)[0]).join('');
+            return ini ? ini.toUpperCase() : '#';
         };
 
         const sorted = (Array.isArray(chats) ? chats : [])
@@ -464,16 +586,26 @@ class ChatApp {
                 return '<div class="chat-item-skeleton">Нет чатов</div>';
             }
             return items.map(chat => {
-                const { title, preview, kind } = getDisplayLine(chat);
-                const titleCls = kind === 'renamed' ? 'chat-line chat-line--title chat-line--renamed' : 'chat-line chat-line--title';
-                const lineHtml = title
-                    ? `<div class="${titleCls}">${title}</div>`
-                    : `<div class="chat-line chat-line--preview">${preview}</div>`;
+                const renamed = (chat.renamed_title || '').trim();
+                const auto = (chat.auto_title || '').trim();
+                const preview = previewOf(chat);
+                const titleRaw = renamed || auto || preview || 'Новый чат';
+                const sub = (renamed || auto) && preview
+                    ? (chat.last_from_bot ? '' : 'Вы: ') + preview
+                    : '';
+                const titleCls = renamed ? 'chat-line chat-line--title chat-line--renamed' : 'chat-line chat-line--title';
+                const id = escapeHtml(String(chat.id));
+                const time = timeOf(chat.timestamp);
                 return `
-                <div class="chat-item ${chat.id === this.currentChat ? 'active' : ''}"
-                    data-chat-id="${escapeHtml(String(chat.id))}">
-                    <div class="chat-line-wrap">${lineHtml}</div>
-                    <button class="chat-item-menu-btn" data-menu-chat-id="${escapeHtml(String(chat.id))}" title="Действия" type="button">
+                <div class="chat-item chat-item--c ${String(chat.id) === String(this.currentChat) ? 'active' : ''}"
+                    data-chat-id="${id}">
+                    <span class="chat-av" aria-hidden="true">${escapeHtml(initialOf(titleRaw))}</span>
+                    <div class="chat-line-wrap">
+                        <div class="${titleCls}">${escapeHtml(titleRaw)}</div>
+                        ${sub ? `<div class="chat-line chat-line--preview">${escapeHtml(sub)}</div>` : ''}
+                    </div>
+                    ${time ? `<time class="chat-time" datetime="${escapeHtml(String(chat.timestamp))}">${escapeHtml(time)}</time>` : '<span class="chat-time"></span>'}
+                    <button class="chat-item-menu-btn" data-menu-chat-id="${id}" title="Действия" type="button">
                         <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14">
                             <circle cx="10" cy="4" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="10" cy="16" r="1.5"/>
                         </svg>
@@ -498,6 +630,7 @@ class ChatApp {
         }
 
         list.innerHTML = buildList(regular);
+        this._syncChatsPager();
     }
 
     /* ══════════════════════════════════════════
@@ -3563,6 +3696,7 @@ class ChatApp {
             const existing = this.chats.find(c => c.id === this.currentChat);
             if (existing) {
                 existing.last_message = chatPreviewText;
+                existing.last_from_bot = false;
                 existing.timestamp = new Date().toISOString();
                 this.renderChats(this.chats);
             }
@@ -6870,6 +7004,7 @@ class ChatApp {
             scrollHost.addEventListener('scroll', syncScrolled, { passive: true });
             syncScrolled();
         }
+        this._initChatsPager();
     }
 
     initHelp() {

@@ -820,7 +820,12 @@ class DataBaseChats:
             await self.ensure_sidebar_meta_for_user(username)
         async with self.pool.acquire() as conn:
             favorites = []
+            total = None
             if cur is None:
+                # Сколько всего неудалённых чатов (избранные + обычные) — для счётчика в сайдбаре.
+                total = await conn.fetchval(
+                    "SELECT COUNT(*) FROM (" + sql.format(where="TRUE", limit="") + ") t",
+                    username, n)
                 favorites = await conn.fetch(
                     sql.format(where="COALESCE(m.is_favorite, FALSE) = TRUE", limit=""),
                     username, n)
@@ -849,6 +854,7 @@ class DataBaseChats:
             "chats": [self._chat_page_item(r) for r in [*favorites, *rows, *extra]],
             "next_cursor": next_cursor,
             "has_more": has_more,
+            "total": int(total) if total is not None else None,
         }
 
     async def get_user_chats_summary_by_user_id(

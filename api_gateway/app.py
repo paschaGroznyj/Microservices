@@ -1659,7 +1659,36 @@ async def get_chats_page(request: Request, limit: int = 40, cursor: str | None =
         raise HTTPException(status_code=400, detail="Bad cursor")
     if response.status_code != 200:
         raise HTTPException(status_code=502, detail="Chats service error")
-    return response.json()
+    data = response.json()
+    chats = data.get("chats") if isinstance(data, dict) else None
+    if isinstance(chats, list) and chats:
+        ids = [str(c.get("id")) for c in chats if isinstance(c, dict) and c.get("id") is not None]
+        await run_status.remember_sidebar_ids(user["username"], ids)
+        running = set(await run_status.running_chats(ids))
+        for c in chats:
+            if isinstance(c, dict):
+                c["running"] = str(c.get("id")) in running
+    return data
+
+
+@app.post("/api/chats/running")
+async def get_chats_running(request: Request):
+    """Какие чаты из списка сейчас в работе (agent:running / agent:loop в Redis).
+    Тело: {"ids": [...]} до 200 id. Отвечает только про чаты, которые этот
+    пользователь получал через /api/chats/page."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    ids = body.get("ids") if isinstance(body, dict) else None
+    if not isinstance(ids, list):
+        raise HTTPException(status_code=400, detail="ids must be a list")
+    ids = [str(i)[:64] for i in ids[:run_status.SIDEBAR_IDS_MAX] if isinstance(i, (str, int)) and not isinstance(i, bool)]
+    running = await run_status.running_chats(ids, owner=user["username"])
+    return {"running": running}
 
 
 @app.get("/api/chats/search")

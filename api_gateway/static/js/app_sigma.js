@@ -437,7 +437,10 @@ class ChatApp {
                 this.chats = page;
             }
             this._chatsCursor = data?.next_cursor || null;
+            if (!more && Number.isFinite(data?.total)) this._chatsTotal = data.total;
+            this._applyRunning(page.map(c => String(c.id)), page.filter(c => c.running).map(c => String(c.id)));
             this.renderChats(this.chats);
+            if (!this._runPollT) this._scheduleRunningPoll();
         } catch (e) {
             console.error('loadChats error:', e);
         } finally {
@@ -517,6 +520,108 @@ class ChatApp {
         if (hr.height > 0 && sr.top <= hr.bottom + 320) this.loadChats({ more: true });
     }
 
+    // «Агент работает» в строке чата. Источник: Redis agent:running:{chat_id} / agent:loop:{chat_id}
+    // (поле running в /api/chats/page и опрос POST /api/chats/running). Локальные отметки при
+    // отправке/финале только ускоряют отклик, опрос их подтверждает.
+    get _runHtml() {
+        return '<span class="chat-run-dots" aria-hidden="true"><i></i><i></i><i></i></span>Агент работает';
+    }
+
+    _markChatRunning(chatId, on) {
+        const id = String(chatId ?? '');
+        if (!id) return;
+        if (!this._runningChats) this._runningChats = new Set();
+        if (!this._runningLocalAt) this._runningLocalAt = {};
+        this._runningLocalAt[id] = Date.now();
+        const had = this._runningChats.has(id);
+        if (on) this._runningChats.add(id); else this._runningChats.delete(id);
+        if (had !== !!on) this._paintChatRunning(id);
+        this._scheduleRunningPoll();
+    }
+
+    _paintChatRunning(id) {
+        const on = !!this._runningChats?.has(id);
+        const sel = `.chat-item--c[data-chat-id="${CSS.escape(String(id))}"]`;
+        document.querySelectorAll(sel).forEach(el => {
+            el.classList.toggle('chat-item--running', on);
+            const wrap = el.querySelector('.chat-line-wrap');
+            if (!wrap) return;
+            let pv = wrap.querySelector('.chat-line--preview');
+            if (on) {
+                if (!pv) {
+                    pv = document.createElement('div');
+                    pv.className = 'chat-line chat-line--preview';
+                    wrap.appendChild(pv);
+                }
+                if (!pv.classList.contains('chat-line--run')) {
+                    pv.dataset.prev = pv.textContent || '';
+                    pv.classList.add('chat-line--run');
+                    pv.innerHTML = this._runHtml;
+                }
+            } else if (pv && pv.classList.contains('chat-line--run')) {
+                const prev = pv.dataset.prev || '';
+                if (prev) {
+                    pv.classList.remove('chat-line--run');
+                    pv.textContent = prev;
+                    delete pv.dataset.prev;
+                } else {
+                    pv.remove();
+                }
+            }
+        });
+    }
+
+    _scheduleRunningPoll(delay = null) {
+        if (!this._runVisBound) {
+            this._runVisBound = true;
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible') this._scheduleRunningPoll(300);
+            });
+        }
+        if (this._runPollT) clearTimeout(this._runPollT);
+        const busy = !!(this._runningChats && this._runningChats.size);
+        this._runPollT = setTimeout(() => this._pollRunning(), delay ?? (busy ? 5000 : 20000));
+    }
+
+    async _pollRunning() {
+        this._runPollT = null;
+        try {
+            if (document.visibilityState === 'visible') {
+                const ids = (this.chats || []).filter(c => c && !c.is_deleted)
+                    .map(c => String(c.id)).slice(0, 200);
+                if (ids.length) {
+                    const res = await fetch('/api/chats/running', {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ids }),
+                    });
+                    if (res.ok) {
+                        const data = await res.json();
+                        this._applyRunning(ids, data?.running || []);
+                    }
+                }
+            }
+        } catch (e) { /* сеть: повторим на следующем тике */ }
+        this._scheduleRunningPoll();
+    }
+
+    _applyRunning(ids, runningIds) {
+        if (!this._runningChats) this._runningChats = new Set();
+        const on = new Set((runningIds || []).map(String));
+        const now = Date.now();
+        for (const raw of ids || []) {
+            const id = String(raw);
+            // Ответ мог уйти до локальной отметки (отправка/финал) — 4 с доверяем локальной.
+            if (now - (this._runningLocalAt?.[id] || 0) < 4000) continue;
+            const had = this._runningChats.has(id);
+            const isOn = on.has(id);
+            if (had === isOn) continue;
+            if (isOn) this._runningChats.add(id); else this._runningChats.delete(id);
+            this._paintChatRunning(id);
+        }
+    }
+
     renderChats(chats) {
         const list = document.getElementById('chat-list');
         const favList = document.getElementById('chat-favorites-list');
@@ -576,6 +681,13 @@ class ChatApp {
             return ini ? ini.toUpperCase() : '#';
         };
 
+        // Тон аватара от id чата: один и тот же чат всегда одного цвета.
+        const toneOf = (id) => {
+            let h = 0;
+            for (const ch of String(id)) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+            return h % 8;
+        };
+
         const sorted = (Array.isArray(chats) ? chats : [])
             .filter(chat => chat && !chat.is_deleted)
             .slice()
@@ -596,13 +708,17 @@ class ChatApp {
                 const titleCls = renamed ? 'chat-line chat-line--title chat-line--renamed' : 'chat-line chat-line--title';
                 const id = escapeHtml(String(chat.id));
                 const time = timeOf(chat.timestamp);
+                const run = !!this._runningChats?.has(String(chat.id));
+                const pvHtml = run
+                    ? `<div class="chat-line chat-line--preview chat-line--run" data-prev="${escapeHtml(sub)}">${this._runHtml}</div>`
+                    : (sub ? `<div class="chat-line chat-line--preview">${escapeHtml(sub)}</div>` : '');
                 return `
-                <div class="chat-item chat-item--c ${String(chat.id) === String(this.currentChat) ? 'active' : ''}"
+                <div class="chat-item chat-item--c${String(chat.id) === String(this.currentChat) ? ' active' : ''}${run ? ' chat-item--running' : ''}"
                     data-chat-id="${id}">
-                    <span class="chat-av" aria-hidden="true">${escapeHtml(initialOf(titleRaw))}</span>
+                    <span class="chat-av" data-tone="${toneOf(chat.id)}" aria-hidden="true">${escapeHtml(initialOf(titleRaw))}</span>
                     <div class="chat-line-wrap">
                         <div class="${titleCls}">${escapeHtml(titleRaw)}</div>
-                        ${sub ? `<div class="chat-line chat-line--preview">${escapeHtml(sub)}</div>` : ''}
+                        ${pvHtml}
                     </div>
                     ${time ? `<time class="chat-time" datetime="${escapeHtml(String(chat.timestamp))}">${escapeHtml(time)}</time>` : '<span class="chat-time"></span>'}
                     <button class="chat-item-menu-btn" data-menu-chat-id="${id}" title="Действия" type="button">
@@ -630,6 +746,24 @@ class ChatApp {
         }
 
         list.innerHTML = buildList(regular);
+
+        // Счётчики в заголовках секций. Обычных: total с сервера минус избранные,
+        // пока не всё догружено; когда курсор кончился — точное число в списке.
+        const setCount = (btnId, n) => {
+            const btn = document.getElementById(btnId);
+            if (!btn) return;
+            let el = btn.querySelector('.sec-n');
+            if (!el) {
+                el = document.createElement('span');
+                el.className = 'sec-n';
+                btn.appendChild(el);
+            }
+            el.textContent = n > 0 ? String(n) : '';
+        };
+        setCount('favorites-toggle', favorites.length);
+        setCount('chats-section-toggle', this._chatsCursor
+            ? Math.max((this._chatsTotal || 0) - favorites.length, regular.length)
+            : regular.length);
         this._syncChatsPager();
     }
 
@@ -3601,6 +3735,7 @@ class ChatApp {
             }
             // Убираем из локального списка и перерисовываем только сайдбар
             this.chats = this.chats.filter(c => c.id !== chatId);
+            if (this._chatsTotal) this._chatsTotal--;
             this.renderChats(this.chats);
             // Черновик удалённого чата больше не нужен
             if (this._inputDrafts) delete this._inputDrafts[this._inputDraftKey(chatId)];
@@ -3732,6 +3867,7 @@ class ChatApp {
         }
 
         this._runState = 'running';
+        this._markChatRunning(this.currentChat, true);
         this._setSendButtonMode('stop');
         this._sendingInFlightChat = String(this.currentChat);
 
@@ -3790,6 +3926,7 @@ class ChatApp {
         } catch (err) {
             console.error('sendMessage error:', err);
             this._runState = 'idle';
+            this._markChatRunning(this.currentChat, false);
             this._setSendButtonMode('send');
             this._activeRequestId = null;
         } finally {
@@ -5143,6 +5280,7 @@ class ChatApp {
             this._statusSse = null;
         }
         this._runState = 'idle';
+        this._markChatRunning(this.currentChat, false);
         this._activeRequestId = null;
         this._setSendButtonMode('send');
     }

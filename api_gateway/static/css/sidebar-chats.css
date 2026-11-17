@@ -147,3 +147,99 @@
   animation: chatMoreSpin .8s linear infinite;
 }
 @keyframes chatMoreSpin { to { transform: rotate(360deg); } }
+
+
+/* ── Заголовки секций: шеврон сразу за текстом, счётчик справа над колонкой времени ── */
+.sidebar .favorites-header,
+.sidebar #chats-section-toggle {
+  justify-content: flex-start;
+  gap: 4px;
+  padding-right: 8px;
+}
+.sidebar .favorites-header .sec-n,
+.sidebar #chats-section-toggle .sec-n {
+  margin-left: auto;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
+  box-sizing: border-box;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+}
+.sidebar .sec-n:empty { display: none; }
+
+/* ── Активный чат: полоска accent слева, внутри скругления строки ── */
+.sidebar .chat-item.chat-item--c { position: relative; }
+.sidebar .chat-item--c.active::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 11px;
+  bottom: 11px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+/* ── Палитра аватаров: 8 тонов, тон выбирается по id чата (data-tone) ── */
+.sidebar .chat-av[data-tone="0"] { --av: #2f8580; }
+.sidebar .chat-av[data-tone="1"] { --av: #8a7428; }
+.sidebar .chat-av[data-tone="2"] { --av: #c05a3c; }
+.sidebar .chat-av[data-tone="3"] { --av: #3f9152; }
+.sidebar .chat-av[data-tone="4"] { --av: #5a68c0; }
+.sidebar .chat-av[data-tone="5"] { --av: #a84f8f; }
+.sidebar .chat-av[data-tone="6"] { --av: #b97c16; }
+.sidebar .chat-av[data-tone="7"] { --av: #3f80b0; }
+.sidebar .chat-av[data-tone] {
+  background: color-mix(in srgb, var(--av) 17%, transparent);
+  color: color-mix(in srgb, var(--av) 68%, var(--text-primary));
+}
+.sidebar .chat-item--c.active .chat-av[data-tone] {
+  background: color-mix(in srgb, var(--av) 28%, transparent);
+}
+
+/* ── Агент работает: вторая строка-статус и точка на аватаре ── */
+.sidebar .chat-item--c .chat-line--run {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--chat-run, #2e9a58);
+  font-weight: 500;
+}
+[data-theme="dark"] .sidebar .chat-item--c .chat-line--run { --chat-run: #4cc27a; }
+.sidebar .chat-run-dots { display: inline-flex; gap: 2px; flex: none; }
+.sidebar .chat-run-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: chatRunDot 1.2s ease-in-out infinite;
+}
+.sidebar .chat-run-dots i:nth-child(2) { animation-delay: .15s; }
+.sidebar .chat-run-dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes chatRunDot {
+  0%, 80%, 100% { opacity: .3; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-2px); }
+}
+.sidebar .chat-item--running .chat-av { position: relative; overflow: visible; }
+.sidebar .chat-item--running .chat-av::after {
+  content: "";
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #2e9a58;
+  box-shadow: 0 0 0 2px var(--sidebar-bg, var(--bg-primary, #fff));
+}
+[data-theme="dark"] .sidebar .chat-item--running .chat-av::after { background: #4cc27a; }
+@media (prefers-reduced-motion: reduce) {
+  .sidebar .chat-run-dots i { animation: none; opacity: .8; }
+}

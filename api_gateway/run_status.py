@@ -176,6 +176,64 @@ async def mark_running(
     await flow_push(chat_id, "gateway", request_id)
 
 
+
+# ── Сайдбар: какие чаты сейчас в работе ──────────────────────────────────────
+# sidebar:ids:{username} — SET id чатов, которые гейтвей отдал пользователю в /api/chats/page.
+# По нему /api/chats/running отвечает только про свои чаты.
+SIDEBAR_IDS_TTL = int(os.getenv("SIDEBAR_IDS_TTL", "21600"))
+SIDEBAR_IDS_MAX = 200
+
+
+def _sidebar_ids_key(owner) -> str:
+    return f"sidebar:ids:{owner}"
+
+
+async def remember_sidebar_ids(owner, chat_ids) -> None:
+    if _redis is None or not owner:
+        return
+    ids = [str(c) for c in chat_ids if c not in (None, "")]
+    if not ids:
+        return
+    try:
+        pipe = _redis.pipeline(transaction=False)
+        pipe.sadd(_sidebar_ids_key(owner), *ids)
+        pipe.expire(_sidebar_ids_key(owner), SIDEBAR_IDS_TTL)
+        await pipe.execute()
+    except Exception as e:
+        logger.debug("run_status.remember_sidebar_ids failed: %s", e)
+
+
+async def running_chats(chat_ids, owner: str | None = None) -> list[str]:
+    """Какие из chat_ids в работе: есть agent:running:{id} или agent:loop:{id}.
+
+    owner — оставить только id из sidebar:ids:{owner}. Один round-trip (pipeline).
+    """
+    if _redis is None:
+        return []
+    ids = list(dict.fromkeys(str(c) for c in chat_ids if c not in (None, "")))[:SIDEBAR_IDS_MAX]
+    if not ids:
+        return []
+    try:
+        pipe = _redis.pipeline(transaction=False)
+        for cid in ids:
+            if owner is not None:
+                pipe.sismember(_sidebar_ids_key(owner), cid)
+            pipe.exists(_key(cid), _loop_key(cid))
+        res = await pipe.execute()
+        step = 2 if owner is not None else 1
+        out = []
+        for i, cid in enumerate(ids):
+            chunk = res[i * step:(i + 1) * step]
+            if owner is not None and not chunk[0]:
+                continue
+            if chunk[-1]:
+                out.append(cid)
+        return out
+    except Exception as e:
+        logger.debug("run_status.running_chats failed: %s", e)
+        return []
+
+
 async def count_active_requests() -> int:
     """Считает чаты с активным запросом к агенту: есть agent:running или agent:loop.
 

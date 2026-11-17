@@ -122,3 +122,117 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "request_more_steps": "Запрашивает дополнительные шаги в текущем цикле, когда задача почти готова.",
     "call_subagent": "Делегирует подзадачу специализированному субагенту (изолированный LLM-цикл).",
 }
+
+
+# Рантайм-тулзы: аппендятся внутри цикла (не выбираются в UI), но тоже
+# попадают в tool_trace.
+RUNTIME_TOOLS: set[str] = {"request_more_steps", "call_subagent"}
+
+# ── Что сохранять в tool_trace (память о вызовах тулов между ходами) ──────
+# Одна точка правды для всех тулов из TOOLS_SETTINGS / UNIVERSAL_TOOLS /
+# RUNTIME_TOOLS / TOOL_DESCRIPTIONS. Логика — agent/common/tool_trace.py.
+#
+# Поля политики:
+#   skip        — True: вызов не пишется в trace вообще.
+#   formatter   — имя спец-форматтера из tool_trace.FORMATTERS
+#                 (если не задан — общий: «name(args) → result»).
+#   args        — кортеж аргументов, которые писать (None — все).
+#   arg_limits  — лимит символов на конкретный аргумент (иначе TRACE_ARG_LIMIT).
+#   result      — лимит символов результата (0 — результат не пишем,
+#                 None — без обрезки).
+# Тул, которого нет в политике, получает TRACE_DEFAULT_POLICY и warning в лог,
+# а не теряется молча, как раньше со STATEFUL_TOOLS.
+TRACE_ARG_LIMIT = 300
+TRACE_DEFAULT_POLICY: dict = {"args": None, "result": 1000}
+
+TOOL_TRACE_POLICY: dict[str, dict] = {
+    # --- internet ---
+    # Поисковая выдача: только строки [S1]..[Sn] (заголовок + URL).
+    "search_internet": {"formatter": "search_internet"},
+    # Ссылки целиком, из текста страницы — начало (сам текст можно перечитать).
+    "parse_web_page": {"args": ("urls", "chunk_indices"), "result": 1000},
+
+    # --- content ---
+    # Успех — только файлы/скрипт; ошибка — код + текст ошибки.
+    "execute_python_code": {"formatter": "python_run"},
+    "edit_and_run": {"formatter": "python_run"},
+    "search_code_library": {"args": ("query",), "result": 600},
+    # json_description — это весь код сниппета, в trace только id/статус.
+    "save_to_code_library": {"args": (), "result": 300},
+    "send_file_to_user": {"args": ("paths", "path", "image_keys", "image_key"), "result": 400},
+    # image_key в результате нужен для последующих правок/отправки.
+    "generate_image": {"formatter": "generate_image"},
+    "find_generated_image": {"formatter": "find_generated_image"},
+    # Транскрипт: начало текста + пути .txt/.srt/.json.
+    "transcribe_media": {"formatter": "transcribe_media"},
+    # Код задачи большой и уже есть в вызове — пишем workspace и task_id.
+    "submit_task": {"args": ("workspace_id", "title", "timeout"), "result": 500},
+    "check_task_status": {"args": ("task_id", "workspace_id"), "result": 800},
+    "cancel_task": {"args": ("task_id",), "result": 300},
+
+    # --- sessions ---
+    "work_with_agent_journal": {
+        "args": ("action", "entry_type", "entry_id", "replace", "content", "archive_summary"),
+        "arg_limits": {"content": 300, "replace": 150},
+        "result": 300,
+    },
+    "session_point": {"result": 300},
+
+    # --- media_gen: промпт + пути/URL готового файла ---
+    "generate_video": {
+        "args": ("prompt", "provider", "aspect_ratio", "duration", "resolution"),
+        "result": 800,
+    },
+    "generate_audio": {"args": ("text", "voice", "style"), "arg_limits": {"text": 200}, "result": 600},
+    "generate_music": {"args": ("prompt",), "result": 600},
+
+    # --- admin ---
+    # Схему можно перезапросить, в trace только начало.
+    "get_db_schema": {"args": (), "result": 400},
+    "execute_sql_query": {"args": ("sql",), "arg_limits": {"sql": 500}, "result": 800},
+    "list_tree": {"result": 1000},
+    "read_file": {"result": 1000},
+    "grep_search": {"result": 1000},
+    "find_files": {"result": 1000},
+    # Содержимое файла не дублируем — путь и что записано.
+    "write_sandbox_file": {"args": ("path", "mode", "content"), "arg_limits": {"content": 200}, "result": 300},
+    "edit_sandbox_file": {"args": ("path", "old_str", "new_str"), "arg_limits": {"old_str": 200, "new_str": 200}, "result": 300},
+    "work_with_email": {"result": 800},
+    "execute_shell_commands": {"formatter": "shell"},
+
+    # --- universal ---
+    # Что спрашивали у vision-модели и её ответ — агент помнит картинку.
+    "analyze_image": {"formatter": "analyze_image"},
+    "manage_skills": {
+        "args": ("action", "skill_id", "theme", "query", "old_str", "new_str"),
+        "arg_limits": {"old_str": 150, "new_str": 150},
+        "result": 600,
+    },
+    "create_workspace": {"result": 400},
+    "list_workspace_files": {"result": 800},
+    "download_workspace_file": {"result": 400},
+    "upload_to_workspace": {"result": 500},
+    "read_workspace_file": {"result": 1000},
+    "edit_workspace_file": {
+        "args": ("workspace_id", "path", "old_str", "new_str"),
+        "arg_limits": {"old_str": 200, "new_str": 200},
+        "result": 300,
+    },
+    "delete_workspace": {"result": 200},
+    "cleanup_workspaces": {"result": 200},
+    "send_email": {
+        "args": ("to", "subject", "body", "attachment_paths"),
+        "arg_limits": {"body": 300},
+        "result": 300,
+    },
+    "manage_trigger": {"result": 400},
+
+    # --- design skills: возвращают длинный гайд, в trace — факт вызова ---
+    "presentation_design_skill": {"result": 200},
+    "html_design_skill": {"result": 200},
+
+    # --- runtime ---
+    "request_more_steps": {"skip": True},  # служебный шаг-буст цикла
+    # Ответ субагента — единственный носитель его работы, пишем целиком.
+    "call_subagent": {"args": ("agent_name", "task"), "arg_limits": {"task": 800}, "result": None},
+}

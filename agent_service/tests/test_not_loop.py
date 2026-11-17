@@ -52,7 +52,7 @@ def test_no_tools_history_and_prompt(setup):
     assert "MauDel" in sys and "AuGent, built by CDS" in sys and "InteractivePoll" in sys
     assert isinstance(msgs[-1], HumanMessage) and msgs[-1].content == "привет"
     hist = [m for m in msgs if isinstance(m, (HumanMessage, AIMessage))][:-1]
-    assert len(hist) == 20 and hist[0].content == "q20" and hist[-1].content == "a29"
+    assert len(hist) == 20 and hist[0].content == "q20" and hist[-1].content.startswith("a29")
 
 
 def test_trim_by_tokens(setup, monkeypatch):

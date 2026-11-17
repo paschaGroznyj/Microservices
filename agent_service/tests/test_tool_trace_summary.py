@@ -37,6 +37,19 @@ def test_python_success_marked_success(result):
     assert "ОШИБКА" not in s
 
 
+@pytest.mark.parametrize("result", [OK_RESULT, str(OK_RESULT)], ids=["dict", "str"])
+def test_python_success_keeps_paths_and_stdout(result):
+    s = el._summarize_tool_call(tc(code="print(1)"), result)
+    assert "/app/generated_files/u/report.xlsx" in s
+    assert "stdout: done" in s
+
+
+def test_python_success_stdout_tail_clipped():
+    res = dict(OK_RESULT, stdout="x" * 5000 + "ИТОГ=42", saved_files=[])
+    s = el._summarize_tool_call(tc(code="print(1)"), res)
+    assert "ИТОГ=42" in s and len(s) < 900
+
+
 @pytest.mark.parametrize("result", [FAIL_RESULT, str(FAIL_RESULT)], ids=["dict", "str"])
 def test_python_failure_has_real_error(result):
     s = el._summarize_tool_call(tc(code="1/0"), result)

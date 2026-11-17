@@ -56,6 +56,7 @@ from .judge import judge_final_answer
 from .supervisor import run_supervisor
 from .context_compactor import compact_messages, TOKEN_SOFT_LIMIT
 from .common.tool_output import clip_text, coerce_tool_result, tool_content
+from .common.tool_trace import summarize_tool_call
 from .core.token_usage import (
     normalize_usage, add_usage, apply_anthropic_cache_control, append_to_system_tail,
 )
@@ -258,6 +259,11 @@ TOOL_FIELD_LIMITS = {
 MAX_TRACE_FROM_DB_CHARS = int(os.getenv("MAX_TRACE_FROM_DB_CHARS", "2500"))
 TRACE_SUMMARY_THRESHOLD = int(os.getenv("TRACE_SUMMARY_THRESHOLD", "20000"))
 MAX_TRACE_HARD_CHARS = int(os.getenv("MAX_TRACE_HARD_CHARS", "21000"))
+# Подставляется в историю для ответов бота без вызовов тулов (tool_trace NULL/'').
+EMPTY_TOOL_TRACE_NOTE = "tool_trace пуст, ты не вызывал инструменты"
+# Блок трейса, который дописывается в content AIMessage из истории: модель
+# видит только content, additional_kwargs провайдеру не уходят.
+TRACE_BLOCK_HEAD = "\n\n[Вызовы инструментов:\n"
 
 # Имитация reasoning для моделей, которые НЕ отдают свой reasoning в стрим
 # (определяется флагом imitate_tool_status в models_config.yaml либо env).
@@ -274,154 +280,10 @@ def _truncate_text(text: str, max_chars: int = MAX_STDOUT_CHARS) -> str:
     return clip_text(text, max_chars)
 
 
-# Тулы, чьи вызовы стоит запоминать в истории диалога
-STATEFUL_TOOLS = {
-    "execute_sql_query",
-    # "send_digest_email",
-    # "research_prompt",
-    "search_internet",
-    "parse_web_page",
-    "generate_image",
-    "find_generated_image",
-    "analyze_image",
-    "transcribe_media",
-    "list_tree",
-    "read_file",
-    "grep_search",
-    "find_files",
-    "write_sandbox_file",
-    "edit_sandbox_file",
-    "execute_python_code",
-    "send_file_to_user",
-    "work_with_agent_journal",
-    # "request_more_steps",
-    "submit_task", "check_task_status", "cancel_task",
-    "create_workspace", "list_workspace_files", "download_workspace_file",
-    "delete_workspace", "cleanup_workspaces",
-    "call_subagent", "execute_shell_commands",
-    "upload_to_workspace",
-
-    "read_workspace_file",
-    "edit_workspace_file",
-}
-
 _coerce_tool_result = coerce_tool_result
-
-
-def _summarize_tool_call(tc: dict, result: Any) -> str | None:
-    name = tc["name"]
-    if name not in STATEFUL_TOOLS:
-        return None  # не попадает в trace вообще
-
-    args = tc["args"]
-    if name == "execute_sql_query":
-        return f"execute_sql_query('{args.get('sql', '')[:500]}...') результат: {str(result)[:500]}"
-    if name == "search_internet":
-        # результат — многострочный текст с [S1]...[S5], вытащим только заголовки+URL
-        lines = str(result).split("\n")
-        titles = [l for l in lines if l.startswith("[S")]
-        compact = " | ".join(titles)
-        return f"search_internet(query='{args.get('query')}') → {compact}"
-    if name == "parse_web_page":
-        return f"{name} Передаваемые ссылки в парсер ({args}). -> {str(result)[:1000]}"
-    if name == "generate_image":
-        gi_prompt = str(args.get("prompt", ""))[:300]
-        gi_aspect = args.get("aspect_ratio", "16:9")
-        return (
-            f"generate_image(prompt='{gi_prompt}', aspect_ratio={gi_aspect}, "
-            f"n={args.get('n', 1)}) →\n{str(result)[:1200]}"
-        )
-    if name == "find_generated_image":
-        return (
-            f"find_generated_image(query={args.get('query')!r}, "
-            f"file_path={args.get('file_path')!r}) →\n{str(result)[:1200]}"
-        )
-    if name == "analyze_image":
-        # Запоминаем, что именно спрашивали у vision-модели и её вывод —
-        # чтобы в дальнейшем диалоге агент помнил содержимое картинки.
-        ai_prompt = str(args.get("prompt", ""))[:300]
-        return (
-            f"analyze_image(prompt='{ai_prompt}', "
-            f"image_index={args.get('image_index', 0)}) →\n{str(result)[:1200]}"
-        )
-    if name == "transcribe_media":
-        src = args.get("source_media_id") or args.get("local_path")
-        return f"transcribe_media(source={src!r}, include_visual={args.get('include_visual', False)}) →\n{str(result)[:1500]}"
-    if name == "call_subagent":
-        return f"{name} ({args}). ОТВЕТ СУБАГЕНТА - {str(result)}"
-    if name in ("list_tree", "read_file", "grep_search", "find_files", 
-                "write_sandbox_file", "edit_sandbox_file", "send_file_to_user",
-                "work_with_agent_journal", "read_workspace_file", "edit_workspace_file"):
-        return f"{name}({args}) → {str(result)[:1000]}"
-    if name == "execute_python_code":
-        result_dict = _coerce_tool_result(result)
-        if result_dict is None:
-            # Результат не разобрать (например, обрезан в ToolMessage) —
-            # не помечаем как ошибку, отдаём начало как есть.
-            return f"execute_python_code() [результат не разобран] {clip_text(str(result), 500)}"
-        ok = bool(result_dict.get("ok", False))
-        ws_script = result_dict.get("saved_script_in_workspace")
-        ws_id = result_dict.get("workspace_id") or args.get("workspace_id")
-        if ws_script and ws_id:
-            script_note = f", скрипт: workspace {ws_id} → {ws_script}"
-        elif ws_script:
-            script_note = f", скрипт в workspace: {ws_script}"
-        else:
-            script_note = ""
-
-        if ok:
-            # Успех — код в трейс не дублируем (он есть в вызове и, если задан
-            # workspace, в output/.scripts).
-            # В трейс идёт только компактная сводка результата.
-            saved_files = result_dict.get("saved_files") or []
-            names = [f.get("filename") for f in saved_files if isinstance(f, dict)]
-            files_note = f", файлы: {names}" if names else ""
-            return f"execute_python_code() [успех]{files_note}{script_note}"
-
-        # Ошибка — код в трейс, чтобы агент помнил, что написал и почему упало.
-        code = result_dict.get("code") or args.get("code", "")
-        stderr = str(result_dict.get("stderr") or "")
-        error = (clip_text(str(result_dict.get("error") or "").strip(), 300, head_ratio=0)
-                 or clip_text(stderr.strip(), 300, head_ratio=0))
-        if not error:
-            rc = result_dict.get("exit_code")
-            error = f"exit_code={rc}" if rc is not None else "причина не передана"
-        line_note = f", строка {result_dict['error_line']}" if result_dict.get("error_line") else ""
-        code_s = str(code)
-        err_ctx = str(result_dict.get("error_context") or "")
-        if err_ctx and len(code_s) > 800:
-            # Длинный скрипт: начало (импорты/константы) + строки вокруг ошибки.
-            code_block = f"{clip_text(code_s, 400, head_ratio=1)}\n…\nвокруг ошибки:\n{clip_text(err_ctx, 1200)}"
-        else:
-            code_block = clip_text(code_s, 1200)
-        return (
-            f"execute_python_code() [ОШИБКА]{script_note}{line_note}\n"
-            f"код:\n{code_block}\n"
-            f"ошибка: {error}"
-        )
-    # if name == "request_more_steps":
-    #     return f"{name} ШАГ-БУСТ → {str(result)}"
-    if name == "execute_shell_commands":
-        _cmds = args.get("commands", args)
-        _cmd_s = str(_cmds)
-        if len(_cmd_s) > 400:
-            _cmd_s = _cmd_s[:400] + f"…[+{len(_cmd_s) - 400} симв]"
-        _rd = _coerce_tool_result(result)
-        if _rd is not None:
-            _ok = _rd.get("ok")
-            _out = str(_rd.get("stdout", ""))
-            _err = str(_rd.get("stderr", ""))
-            _rc = _rd.get("exit_code")
-            _res_s = f"ok={_ok} rc={_rc} stdout={clip_text(_out, 800)}"
-            if _err.strip():
-                _res_s += f" stderr={clip_text(_err, 300, head_ratio=0)}"
-        else:
-            _res_s = clip_text(str(result), 800)
-        return f"execute_shell_commands({_cmd_s}) → {_res_s}"
-    _args_s = str(args)
-    if len(_args_s) > 500:
-        _args_s = _args_s[:500] + f"…[+{len(_args_s) - 500} симв]"
-    return f"{name}({_args_s} -> {str(result)[:1000]})"
+# Сводка вызова для tool_trace: политика в core/settings.py (TOOL_TRACE_POLICY),
+# механика в common/tool_trace.py.
+_summarize_tool_call = summarize_tool_call
 
 
 async def _invoke_with_retry(llm, messages, iteration: int, max_retries: int = 3):
@@ -827,11 +689,14 @@ class HarnessAgent:
                     continue
                 kwargs = {"db_id": row["id"]}
                 if row["is_from_bot"]:
-                    if row.get("tool_trace"):
-                        kwargs["tool_trace"] = _truncate_text(
-                            str(row["tool_trace"]), max_chars=MAX_TRACE_HARD_CHARS
-                        )
-                    messages.append(AIMessage(content=row["message_text"], additional_kwargs=kwargs))
+                    _trace = str(row.get("tool_trace") or "").strip()
+                    if _trace:
+                        trace_val = _truncate_text(_trace, max_chars=MAX_TRACE_HARD_CHARS)
+                    else:
+                        trace_val = EMPTY_TOOL_TRACE_NOTE
+                    kwargs["tool_trace"] = trace_val
+                    merged_content = f"{row['message_text']}{TRACE_BLOCK_HEAD}{trace_val}\n]"
+                    messages.append(AIMessage(content=merged_content, additional_kwargs=kwargs))
                 else:
                     messages.append(HumanMessage(content=row["message_text"], additional_kwargs=kwargs))
 
@@ -1322,8 +1187,13 @@ class HarnessAgent:
         # компактный кусок трейса прямо в chunk_text (с жёсткой обрезкой на сообщение).
         def _fmt_cut(m: BaseMessage) -> str:
             role = getattr(m, "type", m.__class__.__name__)
-            body = str(getattr(m, "content", "") or "")[:1000]
+            body = str(getattr(m, "content", "") or "")
             trace = (getattr(m, "additional_kwargs", None) or {}).get("tool_trace")
+            if trace and TRACE_BLOCK_HEAD in body:
+                # trace уже приклеен к content при загрузке истории — срезаем,
+                # чтобы не дублировать и не резать его лимитом текста.
+                body = body.split(TRACE_BLOCK_HEAD, 1)[0]
+            body = body[:1000]
             if trace:
                 body = f"{body}\n  (tool_trace: {str(trace)[:1200]})"
             return f"[{role}]: {body}"

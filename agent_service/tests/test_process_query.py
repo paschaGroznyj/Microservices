@@ -349,7 +349,8 @@ def test_history_rows_converted_and_blank_skipped(h):
     h.run()
     sent = h.models["coder"].calls[0]
     texts = [m.content for m in sent if not isinstance(m, SystemMessage)]
-    assert texts == ["вопрос", "ответ", "привет"]
+    assert texts[0] == "вопрос" and texts[2] == "привет"
+    assert texts[1] == "ответ" + el.TRACE_BLOCK_HEAD + "t" * 50 + "\n]"
 
 
 def test_history_db_error_is_tolerated(h):
@@ -589,3 +590,19 @@ def test_native_thinking_kept_intact(h):
     ai_msg = [m for m in sent if isinstance(m, AIMessage)][-1]
     assert isinstance(ai_msg.content, list)
     assert ai_msg.content[0]["signature"] == "sig123"
+
+
+def test_empty_tool_trace_marked_in_history():
+    """Ответ бота без тулов (tool_trace NULL/'') получает явную пометку."""
+    from unittest.mock import AsyncMock, MagicMock
+    agent = MagicMock()
+    agent.db = MagicMock()
+    agent.db.get_chat_history = AsyncMock(return_value=[
+        {"id": 1, "message_text": "q", "is_from_bot": False},
+        {"id": 2, "message_text": "a1", "is_from_bot": True, "tool_trace": None},
+        {"id": 3, "message_text": "a2", "is_from_bot": True, "tool_trace": "  "},
+        {"id": 4, "message_text": "a3", "is_from_bot": True, "tool_trace": "x:done"},
+    ])
+    msgs = asyncio.run(el.HarnessAgent._load_history_from_db(agent, "c", 10))
+    traces = [m.additional_kwargs.get("tool_trace") for m in msgs]
+    assert traces == [None, el.EMPTY_TOOL_TRACE_NOTE, el.EMPTY_TOOL_TRACE_NOTE, "x:done"]

@@ -1,0 +1,132 @@
+/* ═══════════════════════════════════════════════
+   SIDEBAR REFINE: тонкие линии, рамки, шрифты и иконки
+   Подключается последним, поверх sidebar.css / modals.css.
+   Общий для main и Sigma (цвета берутся из токенов темы).
+════════════════════════════════════════════════ */
+.sidebar {
+  --sb-line: color-mix(in srgb, var(--text-primary) 8%, transparent);
+  --sb-hover: color-mix(in srgb, var(--text-primary) 4.5%, transparent);
+  --sb-active: color-mix(in srgb, var(--text-primary) 9.5%, transparent);
+  --sb-label: color-mix(in srgb, var(--text-secondary) 80%, var(--text-muted));
+  --sb-icon: color-mix(in srgb, var(--text-secondary) 85%, transparent);
+  border-right-color: var(--sb-line);
+  font-family: var(--font-sans);
+}
+[data-theme="dark"] .sidebar {
+  --sb-line: color-mix(in srgb, var(--text-primary) 9%, transparent);
+  --sb-hover: color-mix(in srgb, var(--text-primary) 5%, transparent);
+  --sb-active: color-mix(in srgb, var(--text-primary) 12%, transparent);
+  --sb-label: color-mix(in srgb, var(--text-secondary) 90%, var(--text-muted));
+}
+
+/* Все линейные svg в сайдбаре: одинаковая тонкая линия 1.5 css-px
+   независимо от viewBox, скруглённые концы. */
+.sidebar svg [stroke]:not([stroke="none"]),
+.sidebar svg[stroke] * {
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.sidebar .section-chevron path { stroke: currentColor; }
+
+/* Кнопки шапки */
+.sidebar .sidebar-collapse-btn { color: var(--sb-icon); }
+.sidebar .sidebar-collapse-btn:hover { background: var(--sb-hover); }
+
+/* Новый чат: те же поля 8px, что у навигации и списка */
+.sidebar .sidebar-actions { padding: 10px 8px 6px; }
+.sidebar .new-chat-btn {
+  padding: 6px 10px;
+  min-height: 32px;
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: -0.005em;
+  color: var(--text-primary);
+  border: 1px solid var(--sb-line);
+  background: color-mix(in srgb, var(--bg, #fff) 55%, transparent);
+}
+.sidebar .new-chat-btn svg { width: 15px; height: 15px; color: var(--sb-icon); }
+.sidebar .new-chat-btn:hover {
+  background: var(--sb-hover);
+  border-color: color-mix(in srgb, var(--text-primary) 14%, transparent);
+}
+
+/* Навигация */
+.sidebar .sb-nav { gap: 1px; }
+.sidebar .nav-item {
+  gap: 8px;
+  padding: 6px 10px;
+  min-height: 32px;
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: -0.005em;
+  color: var(--text-secondary);
+}
+.sidebar .nav-item svg { width: 16px; height: 16px; color: var(--sb-icon); }
+.sidebar .nav-item .nav-icon-img { width: 16px; height: 16px; opacity: .85; }
+.sidebar .nav-item:hover { background: var(--sb-hover); color: var(--text-primary); }
+.sidebar .nav-item.active {
+  background: var(--sb-active);
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.sidebar .nav-item.active svg, .sidebar .nav-item:hover svg { color: var(--text-primary); }
+.sidebar .nav-item.active .nav-icon-img { opacity: 1; }
+
+/* Заголовки секций: sentence case вместо КАПСа, светлый шеврон */
+.sidebar .section-label,
+.sidebar .favorites-header {
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--sb-label);
+  padding: 12px 10px 4px;
+  margin: 0;
+}
+.sidebar .section-label:hover,
+.sidebar .favorites-header:hover { color: var(--text-secondary); background: transparent; }
+.sidebar .section-chevron,
+.sidebar .favorites-chevron { width: 12px; height: 12px; color: currentColor; opacity: .7; }
+
+/* Строки чатов */
+.sidebar .chat-list { gap: 1px; }
+.sidebar .chat-item {
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+.sidebar .chat-line {
+  font-size: 13px;
+  line-height: 20px;
+  letter-spacing: -0.005em;
+}
+.sidebar .chat-line--title { color: var(--text-secondary); font-weight: 400; }
+.sidebar .chat-line--renamed { color: var(--text-primary); font-weight: 500; }
+.sidebar .chat-item:hover { background: var(--sb-hover); }
+.sidebar .chat-item:hover .chat-line--title { color: var(--text-primary); }
+.sidebar .chat-item.active { background: var(--sb-active); }
+.sidebar .chat-item.active .chat-line--title { color: var(--text-primary); font-weight: 500; }
+/* Дымка под ⋯ в цвет полупрозрачного фона строки */
+.sidebar .chat-item:hover .chat-line-wrap::after,
+.sidebar .chat-item.active .chat-line-wrap::after { background: none; }
+.sidebar .chat-item:hover .chat-line.chat-line--clamped,
+.sidebar .chat-item.active .chat-line.chat-line--clamped {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 52px), transparent calc(100% - 26px));
+          mask-image: linear-gradient(to right, #000 calc(100% - 52px), transparent calc(100% - 26px));
+}
+.sidebar .chat-item-menu-btn { color: var(--sb-icon); }
+.sidebar .chat-item-skeleton { font-size: 12.5px; padding: 6px 10px; }
+
+/* Профиль */
+.sidebar .profile-section { border-top-color: var(--sb-line); }
+.sidebar .avatar { width: 24px; height: 24px; font-size: 11px; font-weight: 600; }
+.sidebar .profile-name { font-size: 13px; font-weight: 400; }
+.sidebar .chat-search-btn { color: var(--sb-icon); }
+.sidebar .chat-search-btn svg { width: 16px; height: 16px; }
+.sidebar .chat-search-btn:hover { background: var(--sb-hover); color: var(--text-primary); }
+
+/* Скроллбар списка тоньше */
+.sidebar .sidebar-section { scrollbar-width: thin; scrollbar-color: var(--sb-line) transparent; }
+.sidebar .sidebar-section::-webkit-scrollbar { width: 6px; }
+.sidebar .sidebar-section::-webkit-scrollbar-thumb { background: var(--sb-line); border-radius: 3px; }

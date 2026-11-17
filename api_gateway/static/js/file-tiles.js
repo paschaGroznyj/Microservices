@@ -698,9 +698,6 @@
                 },
             };
         }
-        if (type === 'json' && ext === 'ipynb' && window.NotebookRender) {
-            return window.NotebookRender.render(text, name);
-        }
         if (type === 'json') {
             try {
                 let pretty;

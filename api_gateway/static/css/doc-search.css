@@ -1,0 +1,122 @@
+/* doc-search.css — поиск по файлу в правой панели превью (#text-preview-panel). */
+
+/* Кнопка-лупа в шапке */
+.text-preview-header > .tp-search-btn.glass-mode-btn {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+}
+.text-preview-header > .tp-search-btn[hidden] { display: none; }
+.text-preview-header > .tp-search-btn:hover { color: var(--text-primary); }
+.text-preview-header > .tp-search-btn.is-active {
+  color: var(--accent);
+  box-shadow: none;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+/* Строка поиска над документом */
+.ds-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 12px 14px 0;
+  padding: 4px 2px 4px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.75);
+  box-shadow: inset 0 0 0 1px var(--cds-reasoning-ring, var(--border));
+  font-family: var(--font-anthropic-sans, var(--font-sans));
+  transition: box-shadow .15s ease;
+}
+[data-theme="dark"] .ds-bar {
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 0 0 1px var(--cds-reasoning-ring, rgba(255, 255, 255, .10));
+}
+.ds-bar:focus-within { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, var(--cds-reasoning-ring, var(--border))); }
+.ds-bar[hidden] { display: none; }
+.text-preview-panel.is-searching .text-preview-wrap > .text-preview-body { margin-top: 8px; }
+
+.ds-field { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 7px; color: var(--text-secondary); }
+.ds-field__ic { display: inline-flex; flex-shrink: 0; opacity: .8; }
+.ds-input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.ds-input::placeholder { color: var(--text-secondary); opacity: .85; }
+.ds-input::-webkit-search-cancel-button { -webkit-appearance: none; display: none; }
+
+.ds-count {
+  flex-shrink: 0;
+  padding: 0 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  min-width: 52px;
+  text-align: right;
+}
+.ds-count:empty { display: none; }
+.ds-count.is-warn { color: var(--danger, #c4473a); min-width: 0; }
+.ds-count.is-long { white-space: normal; max-width: 46%; text-align: right; }
+
+.ds-btn {
+  all: unset;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ds-btn:hover { color: var(--text-primary); background: color-mix(in srgb, var(--text-secondary) 12%, transparent); }
+.ds-btn:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
+.ds-btn:disabled { opacity: .4; cursor: default; background: none; }
+.ds-btn.is-active { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+/* Подсветка совпадений (CSS Custom Highlight API) */
+::highlight(docsearch) {
+  background-color: rgba(247, 205, 70, .55);
+  color: inherit;
+}
+::highlight(docsearch-cur) {
+  background-color: #f59e0b;
+  color: #1a1206;
+}
+[data-theme="dark"] ::highlight(docsearch) {
+  background-color: rgba(245, 197, 66, .40);
+}
+[data-theme="dark"] ::highlight(docsearch-cur) {
+  background-color: #f5b83d;
+  color: #120c02;
+}
+
+@media (max-width: 480px) {
+  .ds-bar { margin: 10px 14px 0; }
+  .text-preview-panel.is-searching .text-preview-wrap > .text-preview-body { margin-top: 6px; }
+  .ds-btn { width: 34px; height: 34px; }
+  .ds-input { height: 34px; font-size: 16px; } /* 16px — iOS не зумит поле */
+  .ds-case { display: none; }
+}

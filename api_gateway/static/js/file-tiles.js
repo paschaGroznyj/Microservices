@@ -423,6 +423,21 @@
 
     const FP = { token: 0, tile: null, type: null, text: '', loaded: false, truncated: false, totalSize: 0, name: '', modePref: {}, textChip: null, textMode: 'raw' };
 
+    // Состояние файлового превью для модулей-надстроек (doc-edit.js).
+    function emitFp(phase) {
+        try { document.dispatchEvent(new CustomEvent('filepreview:state', { detail: { phase } })); } catch (_) {}
+    }
+    function currentFile() {
+        if (!FP.tile || !FP.type) return null;
+        const t = FP.tile;
+        return {
+            tile: t, name: FP.name, type: FP.type, text: FP.text, loaded: FP.loaded,
+            truncated: FP.truncated, totalSize: FP.totalSize,
+            url: t.dataset.url || '', dlUrl: t.dataset.dlUrl || '', mime: t.dataset.mime || '',
+            isLocal: t._faFile instanceof Blob,
+        };
+    }
+
     function exitFilePreview(opts = {}) {
         const { panel, body, render, modes } = pvEls();
         if (FP.tile) FP.tile.classList.remove('is-preview-open');
@@ -431,6 +446,7 @@
         FP.token++;
         FP.tile = null; FP.type = null; FP.text = ''; FP.loaded = false;
         FP.textChip = null; FP.textMode = 'raw';
+        emitFp('exit');
         if (!wasFile && !wasTextChip) return;
         const tok = FP.token;
         const reset = () => {
@@ -544,6 +560,7 @@
         setNote('');
         panel.classList.add('open');
         panel.setAttribute('aria-hidden', 'false');
+        emitFp('open');
 
         let text = '';
         try {
@@ -581,6 +598,7 @@
         FP.loaded = true;
         renderFilePreview();
         body.scrollTop = 0; render.scrollTop = 0;
+        emitFp('loaded');
         return true;
     }
 
@@ -874,5 +892,6 @@
         tileHtml, groupHtml, enhanceScroller, trackOf, stopAudioFor, bindAudioTiles,
         kindOf, labelOf, fmtSize,
         previewTypeOf, openFilePreview, exitFilePreview, enterTextChipPreview,
+        currentFile, renderFilePreview, buildRendered,
     };
 })();

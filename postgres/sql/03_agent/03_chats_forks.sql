@@ -37,6 +37,14 @@ RETURNS TABLE(chat_id TEXT, upto INT, depth INT) LANGUAGE sql STABLE AS $$
     SELECT chat_id, upto, depth FROM chain
 $$;
 
+-- То же звено цепочки плюс время точки форка: для таблиц без ссылки на chats.id
+-- (generated_images.message_id бывает NULL) граница звена проверяется по created_at.
+CREATE OR REPLACE FUNCTION chat_chain_until(p_chat TEXT)
+RETURNS TABLE(chat_id TEXT, upto INT, upto_at TIMESTAMPTZ) LANGUAGE sql STABLE AS $$
+    SELECT c.chat_id, c.upto, p.created_at
+    FROM chat_chain(p_chat) c LEFT JOIN chats p ON p.id = c.upto
+$$;
+
 -- Страница истории с учётом предков, новые сверху. p_before — курсор (id < p_before).
 -- По каждому звену читается не больше p_limit строк обратным сканом индекса.
 CREATE OR REPLACE FUNCTION chat_history(p_chat TEXT, p_before INT DEFAULT NULL, p_limit INT DEFAULT 50)
@@ -94,10 +102,14 @@ BEGIN
                       WHERE chat_id = p_view_chat AND user_id = p_user), 'pm'))
     ON CONFLICT DO NOTHING;
 
+    -- Как в сайдбаре (_CHATS_PAGE_SQL): renamed_title — из строки пользователя,
+    -- auto_title — из любой строки чата (агент пишет его под user_id = -1).
     v_parent_title := COALESCE(
-        (SELECT COALESCE(renamed_title, auto_title) 
-         FROM chat_sidebar_meta 
-         WHERE chat_id = m.chat_id AND user_id = p_user), 
+        (SELECT NULLIF(renamed_title, '') FROM chat_sidebar_meta
+         WHERE chat_id = m.chat_id AND user_id = p_user),
+        (SELECT NULLIF(auto_title, '') FROM chat_sidebar_meta
+         WHERE chat_id = m.chat_id AND NULLIF(auto_title, '') IS NOT NULL
+         ORDER BY (user_id = p_user) DESC, updated_at DESC LIMIT 1),
         'Новый чат'
     );
     v_fork_count := (SELECT COUNT(*) FROM chats_forks WHERE parent_chat_id = m.chat_id);

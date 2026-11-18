@@ -1481,10 +1481,17 @@ async def find_chat_by_type(type_agent: str, x_user_id: str = Header(..., alias=
 @app.get("/internal/resolve_file")
 async def resolve_file(chat_id: str, message_id: str, file_name: str):
     """Только для gateway. Отдаёт путь на диске agent_service для скачивания."""
+    # Файл ищется по цепочке форков: в ветке вложения унаследованных сообщений
+    # лежат под chat_id родителя. Сообщение должно быть видно в ветке (id <= upto).
     row = await db.pool.fetchrow("""
-        SELECT file_path, source
-        FROM chat_files
-        WHERE chat_id = $1 AND message_id = $2 AND file_name = $3
+        SELECT f.file_path, f.source
+        FROM chat_chain($1) c
+        JOIN chat_files f ON f.chat_id = c.chat_id
+        WHERE f.message_id = $2 AND f.file_name = $3
+          AND (c.upto IS NULL OR EXISTS (
+                SELECT 1 FROM chats m
+                WHERE m.chat_id = c.chat_id AND m.message_id = f.message_id AND m.id <= c.upto))
+        ORDER BY c.depth
         LIMIT 1
     """, chat_id, message_id, file_name)
 

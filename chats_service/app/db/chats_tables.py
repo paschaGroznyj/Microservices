@@ -91,6 +91,14 @@ def _usage_fields(row) -> dict:
         "model_family": model_family(row["model_type"]),
     }
 
+# Видимая история чата с учётом форков: собственные сообщения + сообщения
+# предков до точки форка (chat_chain из postgres/sql/03_agent/03_chats_forks.sql).
+_CHAIN_SRC = """(
+    SELECT x.* FROM chat_chain($1) ch
+    JOIN chats x ON x.chat_id = ch.chat_id AND (ch.upto IS NULL OR x.id <= ch.upto)
+)"""
+
+
 class DataBaseChats:
     async def init_db_pool(self):
         """Инициализация пула подключений к базе данных."""
@@ -1009,17 +1017,16 @@ class DataBaseChats:
         """
         try:
             async with self.pool.acquire() as conn:
-                total_count = await conn.fetchval("""
+                total_count = await conn.fetchval(f"""
                     SELECT COUNT(*)
-                    FROM chats c
-                    WHERE c.chat_id = $1
-                        AND (
+                    FROM {_CHAIN_SRC} c
+                    WHERE (
                             c.user_id = (SELECT id FROM users WHERE username = $2)
                             OR c.user_id = -1
                         )
                 """, chat_id, username)
 
-                base_select = """
+                base_select_t = """
                     SELECT 
                         c.id, 
                         c.user_id,
@@ -1078,14 +1085,18 @@ class DataBaseChats:
                             FROM agent_tasks t
                             WHERE t.chat_id = c.chat_id AND t.message_id = c.message_id
                         ), '[]'::json) AS tasks
-                    FROM chats c
+                    FROM {src} c
                     LEFT JOIN users u ON c.user_id = u.id
-                    WHERE c.chat_id = $1 
-                        AND (
+                    WHERE (
                             c.user_id = (SELECT id FROM users WHERE username = $2)
                             OR c.user_id = -1
                         )
                 """
+                # Ветка (форк) видит сообщения родителей до точки форка.
+                # chain — вся видимая история; page — страница chat_history($1, $3, $4)
+                # (LATERAL по звеньям, быстрее для страниц «с конца» и «вверх»).
+                base_select = base_select_t.replace("{src}", _CHAIN_SRC)
+                page_select = base_select_t.replace("{src}", "chat_history($1, $3, $4)")
 
                 target_db_id = None
                 target_msg_id = None
@@ -1094,11 +1105,10 @@ class DataBaseChats:
 
                 if around_id:
                     target_str = str(around_id).strip()
-                    target_row = await conn.fetchrow("""
+                    target_row = await conn.fetchrow(f"""
                         SELECT c.id, c.message_id
-                        FROM chats c
-                        WHERE c.chat_id = $1
-                            AND (
+                        FROM {_CHAIN_SRC} c
+                        WHERE (
                                 c.user_id = (SELECT id FROM users WHERE username = $2)
                                 OR c.user_id = -1
                             )
@@ -1130,19 +1140,18 @@ class DataBaseChats:
                                     LIMIT $5
                                 )
                             ) sub
-                            ORDER BY sub.created_at ASC, sub.id ASC
+                            ORDER BY sub.id ASC
                         """, chat_id, username, target_db_id, rad, rad + 1)
 
                 if rows is None and before_id is not None:
                     mode = "before"
                     rows = await conn.fetch(f"""
                         SELECT * FROM (
-                            {base_select}
-                              AND c.id < $3
+                            {page_select}
                             ORDER BY c.id DESC
                             LIMIT $4
                         ) sub
-                        ORDER BY sub.created_at ASC, sub.id ASC
+                        ORDER BY sub.id ASC
                     """, chat_id, username, int(before_id), limit)
 
                 if rows is None and after_id is not None:
@@ -1154,18 +1163,18 @@ class DataBaseChats:
                             ORDER BY c.id ASC
                             LIMIT $4
                         ) sub
-                        ORDER BY sub.created_at ASC, sub.id ASC
+                        ORDER BY sub.id ASC
                     """, chat_id, username, int(after_id), limit)
 
                 if rows is None:
                     rows = await conn.fetch(f"""
                         SELECT * FROM (
-                            {base_select}
-                            ORDER BY c.created_at DESC, c.id DESC
-                            LIMIT $3 OFFSET $4
+                            {page_select}
+                            ORDER BY c.id DESC
+                            LIMIT $5 OFFSET $6
                         ) sub
-                        ORDER BY sub.created_at ASC, sub.id ASC
-                    """, chat_id, username, limit, offset)
+                        ORDER BY sub.id ASC
+                    """, chat_id, username, None, limit + offset, limit, offset)
 
                 messages = []
                 for row in rows:
@@ -1200,19 +1209,17 @@ class DataBaseChats:
                     if messages:
                         oldest_id = int(messages[0]["id"])
                         newest_id = int(messages[-1]["id"])
-                        has_more = bool(await conn.fetchval("""
+                        has_more = bool(await conn.fetchval(f"""
                             SELECT EXISTS(
-                                SELECT 1 FROM chats c
-                                WHERE c.chat_id = $1
-                                  AND (c.user_id = (SELECT id FROM users WHERE username = $2) OR c.user_id = -1)
+                                SELECT 1 FROM {_CHAIN_SRC} c
+                                WHERE (c.user_id = (SELECT id FROM users WHERE username = $2) OR c.user_id = -1)
                                   AND c.id < $3
                             )
                         """, chat_id, username, oldest_id))
-                        has_newer = bool(await conn.fetchval("""
+                        has_newer = bool(await conn.fetchval(f"""
                             SELECT EXISTS(
-                                SELECT 1 FROM chats c
-                                WHERE c.chat_id = $1
-                                  AND (c.user_id = (SELECT id FROM users WHERE username = $2) OR c.user_id = -1)
+                                SELECT 1 FROM {_CHAIN_SRC} c
+                                WHERE (c.user_id = (SELECT id FROM users WHERE username = $2) OR c.user_id = -1)
                                   AND c.id > $3
                             )
                         """, chat_id, username, newest_id))

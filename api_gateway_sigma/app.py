@@ -1809,6 +1809,39 @@ async def delete_chat(chat_id: str, request: Request):
         raise HTTPException(status_code=502, detail=f"Chats service unreachable: {str(e)}")
 
 
+@app.post("/api/chats/{chat_id}/fork")
+async def fork_chat(chat_id: str, request: Request):
+    """Ветка чата от сообщения агента.
+
+    Тело {"point": "<chats.id или message_id>"}: в DOM у ответа агента data-id
+    бывает и тем и другим, chats_service сам найдёт строку в цепочке чата.
+    """
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    point = str((data or {}).get("point") or "").strip()
+    if not point or len(point) > 128:
+        raise HTTPException(status_code=400, detail="point required")
+
+    try:
+        response = await app.state.http_client.post(
+            f"{SERVICES['chats']['url']}/chat/fork",
+            json={"chat_id": chat_id, "point": point, "user_id": user["user_id"]}
+        )
+        return Response(
+            content=response.content,
+            status_code=response.status_code,
+            media_type="application/json"
+        )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Chats service unreachable: {str(e)}")
+
+
 @app.post("/api/chats/{chat_id}/rename")
 async def rename_chat(chat_id: str, request: Request):
     user = await get_current_user(request)

@@ -684,6 +684,49 @@ class DataBaseChats:
                 DO UPDATE SET is_favorite = $3, updated_at = CURRENT_TIMESTAMP
             """, chat_id, user_id, is_favorite)
 
+    # SQLSTATE из fork_chat (postgres/sql/03_agent/03_chats_forks.sql) -> HTTP-статус.
+    FORK_ERRORS = {"P0002": 404, "22023": 400, "42501": 403, "23505": 409}
+
+    async def fork_chat(self, view_chat_id: str, point: str, new_chat_id: str, user_id: int) -> dict | None:
+        """Ветка чата от ответа агента point (chats.id или message_id), видимого в view_chat_id.
+
+        None — такого ответа агента в цепочке view_chat_id нет.
+
+        Сообщения родителя не копируются: ветка читает их по chats_forks.
+        В одной транзакции создаются ссылка, chat_types_agent, chat_sidebar_meta
+        и копия памяти (agent_journal, chat_rolling_summary) на момент точки.
+        Ошибки fork_chat приходят как asyncpg.PostgresError с sqlstate из FORK_ERRORS.
+        """
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                # Только ответы агента, видимые в этом чате (свои и унаследованные).
+                point_id = await conn.fetchval(
+                    """
+                    SELECT m.id
+                    FROM chat_chain($1) c
+                    JOIN chats m ON m.chat_id = c.chat_id
+                    WHERE (c.upto IS NULL OR m.id <= c.upto)
+                      AND m.is_from_bot = TRUE
+                      AND (m.message_id = $2 OR m.id::text = $2)
+                    ORDER BY m.id DESC
+                    LIMIT 1
+                    """,
+                    str(view_chat_id), str(point),
+                )
+                if point_id is None:
+                    return None
+                raw = await conn.fetchval(
+                    "SELECT fork_chat_full($1, $2, $3, $4)",
+                    str(view_chat_id), int(point_id), str(new_chat_id), int(user_id),
+                )
+                title = await conn.fetchval(
+                    "SELECT auto_title FROM chat_sidebar_meta WHERE chat_id = $1 AND user_id = $2",
+                    str(new_chat_id), int(user_id),
+                )
+        res = json.loads(raw) if isinstance(raw, str) else dict(raw or {})
+        res["auto_title"] = title
+        return res
+
     async def get_user_chats_summary(self, username: str):
         """Возвращает список чатов пользователя с их последними сообщениями и метаданными сайдбара."""
         try:
@@ -745,13 +788,24 @@ class DataBaseChats:
     _CHATS_PAGE_SQL = """
         WITH tu AS (SELECT id FROM users WHERE username = $1),
         latest AS (
-            SELECT DISTINCT ON (c.chat_id)
-                c.chat_id, c.id AS row_id, c.created_at,
-                LEFT(c.message_text, $2) AS last_message,
-                c.is_from_bot AS last_from_bot
-            FROM chats c
-            JOIN tu ON tu.id = c.user_id
-            ORDER BY c.chat_id, c.created_at DESC, c.id DESC
+            SELECT DISTINCT ON (x.chat_id)
+                x.chat_id, x.row_id, x.created_at,
+                LEFT(x.message_text, $2) AS last_message,
+                x.last_from_bot
+            FROM (
+                SELECT c.chat_id, c.id AS row_id, c.created_at, c.message_text,
+                       c.is_from_bot AS last_from_bot
+                FROM chats c
+                JOIN tu ON tu.id = c.user_id
+                UNION ALL
+                -- Ветка без своих сообщений: момент форка, превью — ответ-точка.
+                -- Как только в ветке появится сообщение, оно новее и победит в DISTINCT ON.
+                SELECT f.child_chat_id, f.point_id, f.created_at, p.message_text, TRUE
+                FROM chats_forks f
+                JOIN tu ON tu.id = f.user_id
+                JOIN chats p ON p.id = f.point_id
+            ) x
+            ORDER BY x.chat_id, x.created_at DESC, x.row_id DESC
         )
         SELECT l.chat_id AS id, l.row_id, l.created_at AS timestamp,
                l.last_message, l.last_from_bot,

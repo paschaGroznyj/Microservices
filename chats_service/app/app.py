@@ -4,6 +4,7 @@ import os
 import uuid
 import requests
 import asyncio
+import asyncpg
 from fastapi import FastAPI, Header, Query
 from kafka import KafkaProducer
 from pydantic import BaseModel
@@ -1257,6 +1258,36 @@ async def favorite_chat(action: ChatFavoriteAction):
     except Exception as e:
         logging.error(f"Ошибка избранного для чата {action.chat_id}: {e}")
         raise HTTPException(status_code=500, detail="Не удалось обновить избранное")
+
+
+class ChatForkAction(BaseModel):
+    chat_id: str        # чат, в котором нажали «ветка»
+    point: str          # chats.id или message_id ответа агента, включительно
+    user_id: int
+
+
+@app.post("/chat/fork")
+async def fork_chat(action: ChatForkAction):
+    """Ветка чата от сообщения агента. История родителя наследуется по ссылке."""
+    new_chat_id = str(uuid.uuid4())
+    try:
+        res = await db.fork_chat(action.chat_id, action.point, new_chat_id, action.user_id)
+        if res is None:
+            raise HTTPException(status_code=404, detail="Ответ агента не найден в этом чате")
+    except asyncpg.PostgresError as e:
+        code = DataBaseChats.FORK_ERRORS.get(getattr(e, "sqlstate", None))
+        if code:
+            logging.info(f"fork {action.chat_id}@{action.point}: {code} {e}")
+            raise HTTPException(status_code=code, detail=str(e).replace("fork: ", "", 1))
+        logging.error(f"Ошибка форка {action.chat_id}@{action.point}: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось создать ветку")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Ошибка форка {action.chat_id}@{action.point}: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось создать ветку")
+    logging.info(f"fork {action.chat_id}@{action.point} -> {new_chat_id}: {res}")
+    return {"ok": True, **res}
 
 
 @app.post("/chat/new")

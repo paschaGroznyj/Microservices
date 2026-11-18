@@ -7340,6 +7340,55 @@ class ChatApp {
         return result.replace(/\n{3,}/g, '\n\n').trim();
     }
 
+    // Ветка чата от ответа агента: POST /api/chats/{chat}/fork {point}.
+    // point — data-id ответа (chats.id или message_id), сервер сам найдёт строку
+    // в цепочке текущего чата. История родителя наследуется по ссылке.
+    async _forkChatFrom(point, btn) {
+        const chatId = this.currentChat;
+        point = String(point || '').trim();
+        if (!chatId || !point || btn?.disabled) return;
+        if (btn) { btn.disabled = true; btn.classList.add('busy'); }
+        try {
+            const resp = await fetch(`/api/chats/${encodeURIComponent(chatId)}/fork`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ point }),
+            });
+            let data = {};
+            try { data = await resp.json(); } catch (_) { /* пустое тело */ }
+            if (!resp.ok || !data.chat_id) {
+                const msg = resp.status === 404
+                    ? 'Ответ ещё не сохранён, попробуйте через пару секунд'
+                    : (typeof data.detail === 'string' ? data.detail : 'Не удалось создать ветку');
+                this.showToast(msg);
+                return;
+            }
+            const newId = String(data.chat_id);
+            const parent = (this.chats || []).find(c => String(c.id) === String(chatId));
+            if (!(this.chats || []).some(c => String(c.id) === newId)) {
+                this.chats = [{
+                    id: newId,
+                    last_message: parent?.last_message || '',
+                    last_from_bot: true,
+                    timestamp: data.created_at || new Date().toISOString(),
+                    is_deleted: false,
+                    is_favorite: false,
+                    renamed_title: null,
+                    auto_title: data.auto_title || 'Ветка',
+                }, ...(this.chats || [])];
+                this.renderChats(this.chats);
+            }
+            this.showToast('Создана ветка');
+            await this.openChat(newId);
+        } catch (err) {
+            console.warn('[fork] failed:', err);
+            this.showToast('Не удалось создать ветку');
+        } finally {
+            if (btn) { btn.disabled = false; btn.classList.remove('busy'); }
+        }
+    }
+
     createMessageActions(messageId, messageText, isBot, meta = {}) {
         const div = document.createElement('div');
         div.className = isBot ? 'message-actions' : 'user-actions';
@@ -7468,6 +7517,28 @@ class ChatApp {
 
             div.appendChild(likeBtn);
             div.appendChild(dislikeBtn);
+
+            // «Ветка»: новый чат с историей до этого ответа включительно.
+            const forkBtn = document.createElement('button');
+            forkBtn.type = 'button';
+            forkBtn.className = 'action-button fork-button';
+            forkBtn.title = 'Ветка от этого ответа';
+            forkBtn.setAttribute('aria-label', 'Ветка от этого ответа');
+            forkBtn.innerHTML = `<svg class="action-icon" viewBox="0 0 24 24" fill="none">
+                <circle cx="6" cy="5" r="2.2" stroke="currentColor" stroke-width="1.8"/>
+                <circle cx="6" cy="19" r="2.2" stroke="currentColor" stroke-width="1.8"/>
+                <circle cx="18" cy="7" r="2.2" stroke="currentColor" stroke-width="1.8"/>
+                <path d="M6 7.2v9.6M18 9.2c0 4.3-5.2 4-10.4 7.9"
+                    stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>`;
+            forkBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const parentMsg = div.closest('.agent-message');
+                const point = meta.dbId || parentMsg?.dataset?.id || meta.messageId
+                    || parentMsg?.dataset?.messageId || messageId || '';
+                this._forkChatFrom(point, forkBtn);
+            });
+            div.appendChild(forkBtn);
 
             const createdAtIso = this._parseMessageDate(meta.createdAt || new Date()).toISOString();
             const timeEl = document.createElement('span');

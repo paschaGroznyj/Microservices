@@ -301,6 +301,12 @@
   background: rgba(239, 68, 68, 0.12);
 }
 
+/* Кнопка «Ветка» в .message-actions: пока идёт запрос — приглушена */
+.action-button.fork-button.busy {
+  opacity: .45;
+  pointer-events: none;
+}
+
 .message-time {
   margin-left: 6px;
   font-family: var(--font-anthropic-sans);

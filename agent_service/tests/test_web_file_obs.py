@@ -139,3 +139,83 @@ def test_db_image_message_fallback_when_no_file(env, monkeypatch):
     r = c.get("/web/db_image", params={"chat_id": "c1", "message_id": "m",
                                         "file_name": "generated_0.jpg"})
     assert r.content == b"BYMSG"
+
+
+class _ChainPool:
+    """Пул с chat_chain: chains = {chat_id: [предки, ближайший первым]}."""
+    def __init__(self, chains):
+        self.chains = chains
+        self.calls = []
+
+    def acquire(self):
+        pool = self
+
+        class _CM:
+            async def __aenter__(self_):
+                class _Conn:
+                    async def fetch(self__, sql, *args):
+                        pool.calls.append((sql, args))
+                        return [{"chat_id": c} for c in pool.chains.get(args[0], [])]
+
+                    async def fetchrow(self__, sql, *args):
+                        return None
+                return _Conn()
+
+            async def __aexit__(self_, *a):
+                return False
+        return _CM()
+
+
+def test_fork_reads_parent_obs_key(env, monkeypatch):
+    c, gen, _, store, _ = env
+    monkeypatch.setattr(web_ui.db, "pool", _ChainPool({"fork": ["mid", "root"]}), raising=False)
+    p = os.path.realpath(gen / "run9" / "edited_altai.png")
+    store[obs.build_obs_key(p, "root")] = b"ROOT-IMG"
+    r = c.get("/web/file", params={"path": p, "chat_id": "fork"})
+    assert r.status_code == 200 and r.content == b"ROOT-IMG"
+    assert r.headers["x-file-source"] == "obs"
+
+
+def test_fork_own_key_wins_over_parent(env, monkeypatch):
+    c, gen, _, store, _ = env
+    pool = _ChainPool({"fork": ["root"]})
+    monkeypatch.setattr(web_ui.db, "pool", pool, raising=False)
+    p = os.path.realpath(gen / "run9" / "x.png")
+    store[obs.build_obs_key(p, "fork")] = b"OWN"
+    store[obs.build_obs_key(p, "root")] = b"ROOT"
+    r = c.get("/web/file", params={"path": p, "chat_id": "fork"})
+    assert r.content == b"OWN"
+    assert pool.calls == []  # предков не ищем, если файл нашёлся у себя
+
+
+def test_plain_chat_no_parent_404(env, monkeypatch):
+    c, gen, _, store, _ = env
+    monkeypatch.setattr(web_ui.db, "pool", _ChainPool({}), raising=False)
+    p = os.path.realpath(gen / "run9" / "y.png")
+    store[obs.build_obs_key(p, "other")] = b"FOREIGN"
+    r = c.get("/web/file", params={"path": p, "chat_id": "c1"})
+    assert r.status_code == 404
+
+
+def test_fork_non_unique_key_parent(env, monkeypatch):
+    c, _, sb, store, _ = env
+    monkeypatch.setattr(web_ui.db, "pool", _ChainPool({"fork": ["root"]}), raising=False)
+    p = os.path.realpath(sb / "draft.txt")
+    store[obs.build_obs_key(p, "root")] = b"SB-ROOT"
+    r = c.get("/web/file", params={"path": p, "chat_id": "fork"})
+    assert r.status_code == 200 and r.content == b"SB-ROOT"
+
+
+def test_db_image_fork_falls_to_parent(env, monkeypatch):
+    c, gen, _, store, _ = env
+    monkeypatch.setattr(web_ui.db, "pool", _ChainPool({"fork": ["root"]}), raising=False)
+    p = os.path.realpath(gen / "1d63" / "edited_altai.png")
+    store[obs.build_obs_key(p, "root")] = b"PNG"
+
+    async def fake_resolve(chat_id, message_id, file_name):
+        return p
+    monkeypatch.setattr(web_ui, "_resolve_chat_file_path", fake_resolve)
+    r = c.get("/web/db_image", params={"message_id": "m1", "file_name": "edited_altai.png",
+                                       "chat_id": "fork"})
+    assert r.status_code == 200 and r.content == b"PNG"
+    assert r.headers["x-image-source"] == "obs"

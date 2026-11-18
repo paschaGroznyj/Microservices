@@ -494,6 +494,7 @@
      чтобы на мобилке dropdown был поверх сайдбара, а не за ним. */
   z-index: 1000;
   min-width: 160px;
+  padding: 4px;
   overflow: hidden;
   animation: dropdown-in .12s ease both;
 }
@@ -514,9 +515,10 @@
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 9px 14px;
+  padding: 8px 10px;
   border: none;
-  background: #fff;
+  border-radius: 6px;
+  background: transparent;
   color: #ef4444;
   font-size: .82rem;
   font-weight: 500;
@@ -530,9 +532,10 @@
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 9px 14px;
+  padding: 8px 10px;
   border: none;
-  background: #fff;
+  border-radius: 6px;
+  background: transparent;
   color: var(--text-primary);
   font-size: .82rem;
   font-weight: 500;
@@ -561,12 +564,19 @@
   line-height: 1;
 }
 
-.chat-item-dropdown-action:hover {
-  background: var(--sidebar-hover);
+.chat-item-dropdown-action:hover,
+.chat-item-dropdown-action:focus-visible {
+  background: color-mix(in srgb, var(--text-primary) 9%, transparent);
+  outline: none;
 }
 
-[data-theme="dark"] .chat-item-dropdown-action {
-  background: var(--surface2);
+.chat-item-dropdown-action:active {
+  background: color-mix(in srgb, var(--text-primary) 13%, transparent);
+}
+
+[data-theme="dark"] .chat-item-dropdown-action:hover,
+[data-theme="dark"] .chat-item-dropdown-action:focus-visible {
+  background: color-mix(in srgb, var(--text-primary) 11%, transparent);
 }
 
 .chat-item-moving {
@@ -674,13 +684,11 @@
   to   { opacity: 1; transform: scale(1); }
 }
 
-[data-theme="dark"] .chat-item-dropdown-delete {
-  background: var(--surface2);
-}
-
-.chat-item-dropdown-delete:hover {
+.chat-item-dropdown-delete:hover,
+.chat-item-dropdown-delete:focus-visible {
   background: #ef4444;
   color: #fff;
+  outline: none;
 }
 
 /* ── Модалка удаления (в стиле chat-search-modal) ── */

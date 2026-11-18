@@ -60,7 +60,7 @@ $$;
 -- 42501 чужой чат / сообщение не видно, 23505 id ветки занят.
 CREATE OR REPLACE FUNCTION fork_chat(p_view_chat TEXT, p_point_id INT, p_new_chat TEXT, p_user BIGINT)
 RETURNS chats_forks LANGUAGE plpgsql AS $$
-DECLARE m chats; r chats_forks;
+DECLARE m chats; r chats_forks; v_parent_title TEXT; v_fork_count INT;
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM chats WHERE chat_id = p_view_chat AND user_id = p_user)
        AND NOT EXISTS (SELECT 1 FROM chats_forks WHERE child_chat_id = p_view_chat AND user_id = p_user) THEN
@@ -94,10 +94,16 @@ BEGIN
                       WHERE chat_id = p_view_chat AND user_id = p_user), 'pm'))
     ON CONFLICT DO NOTHING;
 
+    v_parent_title := COALESCE(
+        (SELECT COALESCE(renamed_title, auto_title) 
+         FROM chat_sidebar_meta 
+         WHERE chat_id = m.chat_id AND user_id = p_user), 
+        'Новый чат'
+    );
+    v_fork_count := (SELECT COUNT(*) FROM chats_forks WHERE parent_chat_id = m.chat_id);
+
     INSERT INTO chat_sidebar_meta (chat_id, user_id, auto_title)
-    VALUES (p_new_chat, p_user,
-            'Ветка: ' || COALESCE((SELECT COALESCE(renamed_title, auto_title) FROM chat_sidebar_meta
-                                   WHERE chat_id = p_view_chat AND user_id = p_user), p_view_chat))
+    VALUES (p_new_chat, p_user, v_parent_title || ' (' || v_fork_count || ')')
     ON CONFLICT DO NOTHING;
     RETURN r;
 END $$;

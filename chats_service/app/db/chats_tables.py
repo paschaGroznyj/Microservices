@@ -98,6 +98,20 @@ _CHAIN_SRC = """(
     JOIN chats x ON x.chat_id = ch.chat_id AND (ch.upto IS NULL OR x.id <= ch.upto)
 )"""
 
+# Ответы на опросы в форке: ответ виден в чате $1, если дан в звене его цепочки
+# не позже точки форка этого звена (по строке ответа пользователя в chats).
+_POLL_VISIBLE_SQL = """
+    FROM chat_poll_answers p
+    JOIN chat_chain($1) pch ON pch.chat_id = p.chat_id
+    WHERE (pch.upto IS NULL OR EXISTS (
+              SELECT 1 FROM chats pu
+              WHERE pu.chat_id = p.chat_id AND pu.message_id = p.user_message_id
+                AND pu.id <= pch.upto)
+           OR (p.user_message_id IS NULL AND p.created_at <=
+               (SELECT pt.created_at FROM chats pt WHERE pt.id = pch.upto)))
+"""
+
+
 
 class DataBaseChats:
     async def init_db_pool(self):
@@ -221,7 +235,8 @@ class DataBaseChats:
         if not chat_id or not bot_message_id:
             return False
         val = await self.pool.fetchval(
-            "SELECT 1 FROM chat_poll_answers WHERE chat_id=$1 AND bot_message_id=$2 AND poll_index=$3 LIMIT 1;",
+            "SELECT 1" + _POLL_VISIBLE_SQL
+            + " AND p.bot_message_id=$2 AND p.poll_index=$3 LIMIT 1;",
             str(chat_id), str(bot_message_id), int(poll_index),
         )
         return val is not None
@@ -231,11 +246,10 @@ class DataBaseChats:
             return []
         rows = await self.pool.fetch(
             """
-            SELECT bot_message_id, poll_index, user_id, user_message_id,
-                   selected_index, selected_value, is_custom, is_skipped, created_at
-            FROM chat_poll_answers
-            WHERE chat_id = $1
-            ORDER BY id ASC;
+            SELECT p.bot_message_id, p.poll_index, p.user_id, p.user_message_id,
+                   p.selected_index, p.selected_value, p.is_custom, p.is_skipped, p.created_at
+            """ + _POLL_VISIBLE_SQL + """
+            ORDER BY p.id ASC;
             """,
             str(chat_id),
         )
@@ -439,14 +453,16 @@ class DataBaseChats:
                 UPDATE chats
                 SET reaction = $1
                 WHERE id = (
-                    SELECT id FROM chats
-                    WHERE chat_id = $2
-                      AND is_from_bot = TRUE
+                    -- форк: ответ может быть унаследован от родителя, реакция пишется
+                    -- в строку владельца, но только если ответ виден в текущем чате
+                    SELECT m.id FROM chat_chain($2) ch
+                    JOIN chats m ON m.chat_id = ch.chat_id AND (ch.upto IS NULL OR m.id <= ch.upto)
+                    WHERE m.is_from_bot = TRUE
                       AND (
-                          ($3 <> '' AND (message_id = $3 OR id::text = $3))
-                          OR ($4 <> '' AND (id::text = $4 OR message_id = $4))
+                          ($3 <> '' AND (m.message_id = $3 OR m.id::text = $3))
+                          OR ($4 <> '' AND (m.id::text = $4 OR m.message_id = $4))
                       )
-                    ORDER BY created_at DESC, id DESC
+                    ORDER BY m.created_at DESC, m.id DESC
                     LIMIT 1
                 )
                 RETURNING id, chat_id, message_id, reaction;
@@ -1068,8 +1084,14 @@ class DataBaseChats:
                                     ORDER BY p.poll_index ASC
                                 )
                                 FROM chat_poll_answers p
-                                WHERE p.chat_id = c.chat_id
-                                  AND (p.bot_message_id = c.message_id OR p.bot_message_id = c.id::text)
+                                JOIN chat_chain($1) pch ON pch.chat_id = p.chat_id
+                                WHERE (p.bot_message_id = c.message_id OR p.bot_message_id = c.id::text)
+                                  AND (pch.upto IS NULL OR EXISTS (
+                                      SELECT 1 FROM chats pu
+                                      WHERE pu.chat_id = p.chat_id AND pu.message_id = p.user_message_id
+                                        AND pu.id <= pch.upto)
+                                      OR (p.user_message_id IS NULL AND p.created_at <=
+                                          (SELECT pt.created_at FROM chats pt WHERE pt.id = pch.upto)))
                             ),
                             '[]'::json
                         ) AS poll_answers,

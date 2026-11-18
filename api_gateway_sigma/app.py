@@ -1887,6 +1887,62 @@ async def get_chats(request: Request):
         raise HTTPException(status_code=500, detail="Failed to fetch chats")
 
 
+@app.get("/api/chats/page")
+async def get_chats_page(request: Request, limit: int = 40, cursor: str | None = None,
+                         include: str | None = None):
+    """Постраничный список чатов сайдбара. Прокси на chats_service /user/chats/page."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    params = {"limit": max(1, min(int(limit), 200))}
+    if cursor:
+        params["cursor"] = cursor
+    if include:
+        params["include"] = include
+    try:
+        response = await app.state.http_client.get(
+            f"{SERVICES['chats']['url']}/user/chats/page",
+            params=params,
+            headers={"X-User-Name": user["username"]},
+        )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Chats service unreachable: {e}")
+    if response.status_code == 400:
+        raise HTTPException(status_code=400, detail="Bad cursor")
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail="Chats service error")
+    data = response.json()
+    chats = data.get("chats") if isinstance(data, dict) else None
+    if isinstance(chats, list) and chats:
+        ids = [str(c.get("id")) for c in chats if isinstance(c, dict) and c.get("id") is not None]
+        await run_status.remember_sidebar_ids(user["username"], ids)
+        running = set(await run_status.running_chats(ids))
+        for c in chats:
+            if isinstance(c, dict):
+                c["running"] = str(c.get("id")) in running
+    return data
+
+
+@app.post("/api/chats/running")
+async def get_chats_running(request: Request):
+    """Какие чаты из списка сейчас в работе (agent:running / agent:loop в Redis).
+    Тело: {"ids": [...]} до 200 id. Отвечает только про чаты, которые этот
+    пользователь получал через /api/chats/page."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    ids = body.get("ids") if isinstance(body, dict) else None
+    if not isinstance(ids, list):
+        raise HTTPException(status_code=400, detail="ids must be a list")
+    ids = [str(i)[:64] for i in ids[:run_status.SIDEBAR_IDS_MAX] if isinstance(i, (str, int)) and not isinstance(i, bool)]
+    running = await run_status.running_chats(ids, owner=user["username"])
+    return {"running": running}
+
+
 @app.get("/api/chats/search")
 async def search_chats(request: Request, q: str = "", limit: int = 30):
     """Живой поиск по сообщениям пользователя. Прокси на chats_service.

@@ -158,3 +158,31 @@ def test_purge_expired():
     st._tasks["run"] = {"status": "running", "finished_at": None}
     assert st.purge_expired(now=1.0 + st.TASK_TTL_SECONDS + 1) == 1
     assert list(st._tasks) == ["run"]
+
+
+def test_cancel_unknown_task_emits_orphan_event(env):
+    async def scenario():
+        r = await st.cancel_task("lost-after-restart")
+        await asyncio.sleep(0.05)
+        return r
+    r = asyncio.run(scenario())
+    assert r["status"] == "cancelled" and r["orphan"] is True
+    evs = [e for e in env["events"] if e["task_id"] == "lost-after-restart"]
+    assert len(evs) == 1 and evs[0]["event"] == st.ORPHAN_EVENT
+
+
+def test_shutdown_finishes_live_tasks(env):
+    async def scenario():
+        req = st.SubmitRequest(code="import time\ntime.sleep(30)\n", workspace_id=env["wid"],
+                               task_id="live1", chat_id="c1")
+        await st.submit_task(req)
+        for _ in range(100):
+            await asyncio.sleep(0.05)
+            if st._tasks["live1"]["status"] == "running":
+                break
+        await st.shutdown()
+        await asyncio.sleep(1.0)   # _run доходит до своего _finish — второго finished быть не должно
+    asyncio.run(scenario())
+    fins = [e for e in _ev(env, "live1") if e["event"] == "finished"]
+    assert len(fins) == 1
+    assert fins[0]["status"] == "cancelled" and fins[0]["error"] == st.SHUTDOWN_ERROR

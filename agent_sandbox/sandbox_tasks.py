@@ -48,6 +48,10 @@ PROGRESS_MIN_INTERVAL = 2.0   # не чаще раза в 2 с для ##PROGRESS
 HEARTBEAT_SEC = 10.0          # если скрипт молчит
 TASK_TTL_SECONDS = 6 * 3600   # завершённые задачи держим в памяти 6 ч
 CANCEL_GRACE_SEC = 5.0        # SIGTERM -> через 5 с SIGKILL
+# Отмена задачи, которой нет в памяти (песочница перезапускалась): карточку закрывает chats_service
+ORPHAN_EVENT = "orphan_cancel"
+ORPHAN_ERROR = "Песочница перезапускалась, задача прервана"
+SHUTDOWN_ERROR = "Песочница остановлена, задача прервана"
 STDERR_TAIL = 2000
 STDOUT_TAIL = 2000
 
@@ -266,6 +270,8 @@ async def _heartbeat(task: dict) -> None:
 
 
 async def _finish(task: dict, status: str, error: str | None = None) -> None:
+    if task["status"] in TERMINAL:  # уже закрыта (shutdown), второй finished не нужен
+        return
     task["status"] = status
     task["finished_at"] = time.time()
     if error:
@@ -426,7 +432,14 @@ async def get_workspace_tasks(workspace_id: str):
 async def cancel_task(task_id: str):
     task = _tasks.get(task_id)
     if task is None:
-        raise HTTPException(status_code=404, detail=f"Задача {task_id} не найдена")
+        # _tasks живёт в памяти: после перезапуска песочницы процесса уже нет, а карточка
+        # в agent_tasks так и висит в running. Закрыть её может только chats_service.
+        _spawn(_send({"event": ORPHAN_EVENT, "task_id": task_id, "status": "cancelled",
+                      "error": ORPHAN_ERROR, "ts": time.time()}))
+        log.info("[tasks] cancel неизвестной задачи task=%s -> %s", task_id, ORPHAN_EVENT)
+        return {"task_id": task_id, "status": "cancelled", "orphan": True,
+                "message": "Песочница не знает эту задачу (скорее всего, перезапускалась), "
+                           "процесса уже нет. Карточка закроется как отменённая"}
     if task["status"] in TERMINAL:
         return {"task_id": task_id, "status": task["status"], "message": "Задача уже завершена"}
     task["cancel_requested"] = True
@@ -452,9 +465,17 @@ def forget_workspace(workspace_id: str) -> None:
 
 async def shutdown() -> None:
     global _producer
-    for t in _tasks.values():
+    live = [t for t in _tasks.values() if t.get("status") not in TERMINAL]
+    for t in live:
+        t["cancel_requested"] = True
         if t.get("_proc") is not None:
             _kill(t["_proc"], signal.SIGKILL)
+    # _tasks умрёт вместе с процессом: без finished карточки остались бы в running навсегда
+    for t in live:
+        try:
+            await asyncio.wait_for(_finish(t, "cancelled", SHUTDOWN_ERROR), timeout=5)
+        except Exception as e:
+            log.warning("[tasks] shutdown: finished task=%s не отправлен: %s", t.get("task_id"), e)
     if _producer is not None:
         try:
             await _producer.stop()

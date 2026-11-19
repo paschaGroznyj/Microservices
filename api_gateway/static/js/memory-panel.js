@@ -113,17 +113,47 @@ function jSlide(e) {
 }
 function sSlide() {
   const sm = (st.data || EMPTY).summary;
-  if (!sm.text) return '<div class="mm-sl"><div class="mm-empty">Саммари ещё нет: история помещается в контекст целиком.</div></div>';
+  if (!sm.text) return `<div class="mm-sl"><div class="mm-empty">${st.sload ? 'Загрузка…' : 'Саммари ещё нет: история помещается в контекст целиком.'}</div></div>`;
   return `<div class="mm-sl"><div class="mm-sl-h"><span class="mm-tag t-summary">саммари</span><span class="mm-meta">до #${sm.upto_id} · ${nf(sm.covered)} из ${nf(sm.total_messages)} сообщ. · ${nf(sm.chars)} зн.</span></div>
    <div class="mm-txt">${esc(plain(sm.text))}</div>
    <div class="mm-sl-f"><button type="button" class="mm-lnk" data-full="summary">${S(P.full)}Открыть полностью</button></div></div>`;
 }
-async function loadMore() {
-  if (st.loading || st.entries.length >= st.total && st.total) return;
+function loadMore() {
+  if (st.jp) return st.jp;
+  if (st.entries.length >= st.total && st.total) return Promise.resolve();
   st.loading = true; const seq = st.seq;
-  try { const r = await api('journal', { limit: PAGE, offset: st.entries.length });
-    if (seq !== st.seq) return; st.entries.push(...r.entries); st.total = r.total;
-  } catch (e) { console.warn('[memory] journal', e); } finally { st.loading = false; }
+  const p = (async () => {
+    try { const r = await api('journal', { limit: PAGE, offset: st.entries.length });
+      if (seq !== st.seq) return; st.entries.push(...r.entries); st.total = r.total;
+    } catch (e) { if (seq === st.seq) st.jerr = true; console.warn('[memory] journal', e); }
+    finally { if (st.jp === p) { st.jp = null; st.loading = false; } }
+  })();
+  st.jp = p; st.jerr = false; return p;
+}
+// Текст саммари берём отдельным GET /summary при открытии вкладки: в stats он мог ещё не
+// прийти (ошибка stats, заглушка из realtime-контекста) или устареть после нового ответа.
+function loadSummary() {
+  if (st.sp) return st.sp;
+  const seq = st.seq; st.sload = true;
+  const p = (async () => {
+    try { const r = await api('summary');
+      if (seq !== st.seq) return;
+      st.data ||= { ...EMPTY, context: {} };
+      const old = st.data.summary || {};
+      st.data.summary = { ...old, ...r, chars: (r.text || '').length, total_messages: old.total_messages ?? r.covered };
+      const sb = q().area?.querySelector('.mm-sline [data-go="s"]');  // строку статуса не перерисовываем: render() снял бы карточку
+      if (sb) { const sm = st.data.summary; sb.querySelector('b').textContent = sm.text ? cov(sm) + '%' : 'нет';
+        if (sm.text && !sb.querySelector('.mm-x')) sb.insertAdjacentHTML('beforeend', '<span class="mm-x"> истории</span>'); }
+    } catch (e) { console.warn('[memory] summary', e); }
+    finally { if (st.sp === p) { st.sp = null; st.sload = false; } }
+  })();
+  st.sp = p; return p;
+}
+// Данные вкладки: журнал — первая страница, если пусто; саммари — свежий текст.
+function ensureTab(tab) {
+  const done = () => { if (st.open && st.tab === tab) { const k = st.i; renderCard(); st.i = k; place(false); } };
+  if (tab === 'j' && !st.entries.length) loadMore().then(done);
+  else if (tab === 's') loadSummary().then(done);
 }
 function openCard(tab, i) {
   st.open = true; st.tab = tab; st.i = i || 0;
@@ -136,12 +166,12 @@ function openCard(tab, i) {
    <div class="mm-types"></div><div class="mm-vp"><div class="mm-trk"></div></div><div class="mm-prog"><i></i></div></div>`);
   box.before(c); bindSwipe(c.querySelector('.mm-vp')); pin();
   c.addEventListener('click', e => { const t = e.target.closest('button'); if (!t) return;
-    if (t.dataset.tab) { st.tab = t.dataset.tab; st.i = 0; renderCard(); }
+    if (t.dataset.tab) { st.tab = t.dataset.tab; st.i = 0; renderCard(); ensureTab(st.tab); }
     else if (t.dataset.nav) go(+t.dataset.nav);
     else if ('close' in t.dataset) closeCard();
     else if ('all' in t.dataset) openModal(st.tab === 'j' ? (st.entries[st.i] || {}).id : 'summary');
     else if (t.dataset.full) openModal(t.dataset.full); });
-  if (tab === 'j' && !st.entries.length) { renderCard(); loadMore().then(renderCard); } else renderCard();
+  renderCard(); ensureTab(tab);
 }
 function renderCard() {
   const c = document.querySelector('.mm-card5'); if (!c) return; const D = st.data || EMPTY, cx = D.context || {};
@@ -155,7 +185,7 @@ function renderCard() {
   q().area.querySelectorAll('.mm-sline [data-go]').forEach(b => { const on = b.dataset.go === st.tab; b.classList.toggle('is-on', on); b.setAttribute('aria-expanded', on); });
   const trk = c.querySelector('.mm-trk');
   trk.innerHTML = st.tab === 'j'
-    ? (st.entries.length ? st.entries.map(jSlide).join('') : `<div class="mm-sl"><div class="mm-empty">${st.loading ? 'Загрузка…' : 'Журнал пуст.'}</div></div>`)
+    ? (st.entries.length ? st.entries.map(jSlide).join('') : `<div class="mm-sl"><div class="mm-empty">${st.loading ? 'Загрузка…' : st.jerr ? 'Не удалось загрузить журнал.' : 'Журнал пуст.'}</div></div>`)
     : st.tab === 'c' ? cSlide() : sSlide();
   // «Открыть полностью» только там, где текст не влез в превью
   requestAnimationFrame(() => c.querySelectorAll('.mm-sl').forEach(sl => { const t = sl.querySelector('.mm-txt'), f = sl.querySelector('.mm-sl-f');
@@ -260,7 +290,7 @@ function align() {
 }
 addEventListener('resize', align);
 
-function cancelRefresh() { clearTimeout(st.timer); st.abort?.abort(); st.abort = new AbortController(); }
+function cancelRefresh() { clearTimeout(st.timer); st.abort?.abort(); st.abort = new AbortController(); st.jp = st.sp = null; st.loading = st.sload = false; }
 function reset(chatId) { cancelRefresh(); st.chat = chatId; st.data = null; st.entries = []; st.total = 0; st.open = false; st.ctx = false; st.i = 0; st.seq++; st.live = null; closeModal(); }
 // Контекст из payload финала новее, чем то, что успел сохранить chats_service: пока stats
 // отдаёт другой message_id, оставляем живой. Совпал — БД догнала, живой больше не нужен.

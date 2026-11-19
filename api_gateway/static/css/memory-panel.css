@@ -163,3 +163,26 @@
 .mm-it b .mm-lim{font-weight:400;color:var(--text-secondary)}
 @media (max-width:600px){.mm-sline .mm-lim{display:none}}
 :root:not([data-theme="dark"]) .mm-card5{border-color:var(--border)}
+
+/* Единая фиксированная высота карточки для всех вкладок: шапка, строка типов и полоса
+   прогресса — постоянные, слайд занимает остаток и прокручивается сам, если не влез. */
+.mm-card5{--mm-card-h:240px;height:var(--mm-card-h);max-height:calc(100dvh - 140px);display:flex;flex-direction:column}
+.mm-card5>.mm-c-h,.mm-card5>.mm-types,.mm-card5>.mm-prog{flex:0 0 auto}
+.mm-card5>.mm-types{min-height:14px;line-height:14px;box-sizing:content-box}
+.mm-card5>.mm-vp{flex:1 1 auto;min-height:0}
+.mm-card5 .mm-trk{height:100%}
+.mm-card5 .mm-sl{height:100%;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}
+.mm-c-h{min-width:0}
+/* высота фиксирована, поэтому превью заполняет слайд, а не оставляет пустоту под ссылкой */
+.mm-card5 .mm-txt{-webkit-line-clamp:5;min-height:0}
+.mm-seg{flex:0 1 auto;min-width:0}
+.mm-seg button{white-space:nowrap}
+@media (max-width:600px){
+ .mm-card5{--mm-card-h:300px}
+ .mm-c-h{gap:2px;padding-right:4px}
+ .mm-seg button{padding:7px 8px}
+ .mm-c-h .mm-cnt{display:none}
+ .mm-c-h .mm-ib{width:34px;height:34px}
+ .mm-card5 .mm-txt{-webkit-line-clamp:7}
+}
+@media (max-width:360px){.mm-seg button{padding:7px 6px;font-size:11.5px}}

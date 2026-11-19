@@ -209,3 +209,8 @@
 @media (max-width:360px){.mm-seg button{padding:7px 5px;font-size:11px}.mm-sline .mm-it{padding:0 5px}}
 @media (max-width:420px){.mm-sline [data-go="c"] .mm-lb{display:none}}
 @media (max-width:360px){.mm-sline{gap:0}.mm-sline .mm-it{padding:0 4px}}
+/* Мобильный: превью в mm-card5 без обрезки по строкам — длинный текст прокручивается внутри слайда пальцем */
+@media (max-width:600px){
+ .mm-card5 .mm-txt{display:block;-webkit-line-clamp:unset;overflow:visible}
+ .mm-card5 .mm-sl{-webkit-overflow-scrolling:touch;touch-action:pan-y}
+}

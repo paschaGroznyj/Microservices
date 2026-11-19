@@ -158,7 +158,9 @@
 }
 .sidebar .favorites-header .sec-n,
 .sidebar #chats-section-toggle .sec-n {
-  margin-left: auto;
+  /* счётчик стоит сразу за названием секции, шеврон — после него */
+  order: 1;
+  margin-left: 2px;
   min-width: 20px;
   height: 18px;
   padding: 0 6px;
@@ -172,7 +174,11 @@
   color: var(--text-secondary);
   background: color-mix(in srgb, var(--text-primary) 6%, transparent);
 }
+.sidebar .favorites-header .favorites-chevron,
+.sidebar #chats-section-toggle .section-chevron { order: 2; }
 .sidebar .sec-n:empty { display: none; }
+/* аватар профиля в стиле аватаров чатов */
+.sidebar .profile-button .profile-av { flex-shrink: 0; text-transform: uppercase; }
 
 /* ── Активный чат: полоска accent слева, внутри скругления строки ── */
 .sidebar .chat-item.chat-item--c { position: relative; }

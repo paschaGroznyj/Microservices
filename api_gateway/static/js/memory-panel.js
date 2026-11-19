@@ -12,8 +12,8 @@ const P = {
   s: '<path d="M4 6h16M4 12h11M4 18h7"/>', x: '<path d="M6 6l12 12M18 6L6 18"/>',
   l: '<path d="M15 6l-6 6 6 6"/>', r: '<path d="M9 6l6 6-6 6"/>',
   full: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
-  // Шаги агента: ступня в греческой сандалии (профиль, ремешок на щиколотке и через подъём)
-  t: '<path d="M8.2 6.5c-.1 2.4.1 4.3-.5 6.3-.5 1.6-1.9 2.6-2.1 4.1-.1 1.1.6 1.9 1.7 1.9h11.9c1 0 1.6-.7 1.3-1.5-.3-.7-1.1-1-2-1.1l-1.5 0c-2.2-.4-3.8-1.4-4.7-3.1-.6-1.2-.8-2.5-.9-4l-.1-2.6"/><path d="M6.4 11.6h6.3M10.8 18.8l2.5-5.1"/>',
+  // Шаги агента: ступня в сандалии по рисунку Павла (профиль: голень с манжетой, два ремешка через подъём), без дуги
+  t: '<path d="M6.1 4.4C6.08 4.93 6.12 6.7 6 7.6C5.88 8.5 5.78 9 5.4 9.8C5.02 10.6 4.13 11.6 3.7 12.4C3.27 13.2 2.87 13.87 2.8 14.6C2.73 15.33 3.22 16.43 3.3 16.8M2.6 17C3.1 17.05 4.68 17.18 5.6 17.3C6.52 17.42 6.88 17.35 8.1 17.7C9.32 18.05 11.78 19.03 12.9 19.4C14.02 19.77 13.58 19.82 14.8 19.9C16.02 19.98 19.12 20.03 20.2 19.9C21.28 19.77 21.13 19.48 21.3 19.1C21.47 18.72 21.42 17.95 21.2 17.6C20.98 17.25 20.57 17.17 20 17C19.43 16.83 18.5 16.82 17.8 16.6C17.1 16.38 16.37 16.12 15.8 15.7C15.23 15.28 14.83 14.57 14.4 14.1C13.97 13.63 13.62 13.2 13.2 12.9C12.78 12.6 12.18 12.77 11.9 12.3C11.62 11.83 11.57 10.82 11.5 10.1C11.43 9.38 11.38 8.97 11.5 8C11.62 7.03 12.08 4.92 12.2 4.3M6 7.5L11.5 8M11.9 12.7C11.48 13.08 10.03 14.22 9.4 15C8.77 15.78 8.32 17 8.1 17.4M15.4 15.6C15.13 15.92 14.22 16.88 13.8 17.5C13.38 18.12 13.05 19 12.9 19.3"/>',
 };
 const TYPE = { evolution: 'эволюция', summary: 'сводка', anomaly: 'аномалия', user_preference: 'предпочтение', identity: 'личность' };
 const PAGE = 20;
@@ -59,7 +59,7 @@ function render() {
    <button type="button" class="mm-it" data-go="j" aria-expanded="false">${S(P.j)}<span class="mm-lb">Журнал</span> <b>${j.active}</b><span class="mm-x"> · ${fmtK(j.total_chars)} зн.</span></button><span class="mm-dot"></span>
    <button type="button" class="mm-it" data-go="s" aria-expanded="false">${S(P.s)}<span class="mm-lb">Саммари</span> <b>${sm.text ? cov(sm) + '%' : 'нет'}</b>${sm.text ? '<span class="mm-x"> истории</span>' : ''}</button><span class="mm-dot"></span>
    <button type="button" class="mm-it" data-go="c" aria-expanded="false" title="Промпт последнего шага. /200K — порог сжатия агентного режима, не окно модели; в режиме только модели не применяется">${ring(c.tokens / c.max_tokens)}<span class="mm-lb">Контекст</span> ${ctxTxt}</button><span class="mm-dot"></span>
-   <button type="button" class="mm-it mm-it-t" data-go="t" aria-expanded="false" title="${ag ? `Последний ответ: ${ag.steps} ${plural(ag.steps, 'шаг', 'шага', 'шагов')} агента, ${ag.tool_calls} ${plural(ag.tool_calls, 'вызов', 'вызова', 'вызовов')} инструментов` : 'Шаги агента и вызовы инструментов'}">${S(P.t)}<span class="mm-lb">Шаги</span> <b>${ag ? ag.steps : '—'}</b>${ag ? `<span class="mm-tq"><span class="mm-tsep">·</span>${ag.tool_calls}<span class="mm-tw"> ${plural(ag.tool_calls, 'вызов', 'вызова', 'вызовов')}</span></span>` : ''}</button></div>`);
+   <button type="button" class="mm-it mm-it-t" data-go="t" aria-expanded="false" title="${ag ? `Последний ответ: ${ag.steps} ${plural(ag.steps, 'шаг', 'шага', 'шагов')} агента, ${ag.tool_calls} ${plural(ag.tool_calls, 'вызов', 'вызова', 'вызовов')} инструментов` : 'Шаги агента и вызовы инструментов'}">${S(P.t, 'mm-ic', 1.4)}<span class="mm-lb">Шаги</span> <b>${ag ? ag.steps : '—'}</b>${ag ? `<span class="mm-tq"><span class="mm-tsep">·</span>${ag.tool_calls}<span class="mm-tw"> ${plural(ag.tool_calls, 'вызов', 'вызова', 'вызовов')}</span></span>` : ''}</button></div>`);
   box.after(el);
   el.addEventListener('click', e => { const b = e.target.closest('[data-go]'); if (!b) return; const g = b.dataset.go;
     if (st.open && st.tab === g) { closeCard(); return; } openCard(g); });

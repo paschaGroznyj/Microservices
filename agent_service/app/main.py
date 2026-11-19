@@ -40,6 +40,7 @@ from agent.core import sandbox_scripts_cleaner
 from agent.media.thumbhash import media_meta_for_file, image_meta
 from api.web_ui import web_router, pending_files, set_db as _set_web_ui_db, set_active_tasks as _set_web_ui_tasks
 from api.memory_api import memory_router, set_db as _set_memory_db
+from api.steps_api import steps_router
 
 
 logging.basicConfig(level=logging.INFO)
@@ -658,6 +659,9 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             "type_query": type_query,
             "selected_tools": selected_tools,
             "action": response.get('action'),
+            # шаги агента и все вызовы тулов хода -> chats.agent_steps / chats.tool_calls
+            "agent_steps": response.get("agent_steps"),
+            "tool_calls": response.get("tool_calls"),
             "attached_files": attached_files,
             "tool_trace": response.get("tool_trace"), # str,
             "agent_model": response.get("agent_model"),
@@ -1045,7 +1049,7 @@ async def tg_transcribe(req: TgTranscribeRequest) -> TgTranscribeResponse:
 
 
 
-routers = [tg_router, web_router, memory_router]
+routers = [tg_router, web_router, memory_router, steps_router]
 
 for rout in routers:
     app.include_router(rout)

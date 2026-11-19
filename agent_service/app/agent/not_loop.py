@@ -201,17 +201,23 @@ class LLModel:
             except Exception as e:
                 logger.error(f"[model][title] chat={chat_id}: {e}")
 
+            _steps = 1 if response is not None else 0
+            context = context_payload(tokens_usage)
+            if context is not None:
+                context["agent"] = {"steps": _steps, "tool_calls": 0}
             return {
                 "input": user_input,
                 "message": final,
                 "used_tools": [],
                 "action": "",
+                "agent_steps": _steps,
+                "tool_calls": [],
                 "success": response is not None,
                 "files_to_send": [],
                 "tool_trace": None,
                 "agent_model": real_model,
                 "tokens_usage": tokens_usage,
-                "context": context_payload(tokens_usage),
+                "context": context,
                 "auto_title": auto_title,
                 "type_query": "model",
             }

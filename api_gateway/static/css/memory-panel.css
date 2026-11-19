@@ -186,3 +186,26 @@
  .mm-card5 .mm-txt{-webkit-line-clamp:7}
 }
 @media (max-width:360px){.mm-seg button{padding:7px 6px;font-size:11.5px}}
+/* Шаги агента: кнопка в строке статуса и четвёртая вкладка карточки mm-card5 */
+.mm-tsep{margin:0 4px 0 2px}
+.mm-it .mm-tq{margin-left:1px;color:var(--text-secondary);font-variant-numeric:tabular-nums}
+.mm-tsum{display:flex;gap:16px;font-size:12.5px;color:var(--text-secondary);margin:2px 0 8px}
+.mm-tsum b{color:var(--text-primary);font-weight:600;font-variant-numeric:tabular-nums;margin-right:2px}
+.mm-tsum .mm-terr,.mm-tsum .mm-terr b{color:var(--danger)}
+.mm-trows{grid-template-rows:repeat(3,auto)}
+.mm-tdot{width:6px!important;height:6px!important;border-radius:50%!important;background:color-mix(in srgb,var(--text-secondary) 60%,transparent)}
+.mm-cmore{color:var(--text-muted)}
+.mm-tseq{display:flex;flex-wrap:wrap;gap:4px;margin-top:9px}
+.mm-ts{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:5px;font-size:10.5px;color:var(--text-secondary);background:color-mix(in srgb,var(--text-primary) 6%,transparent);font-variant-numeric:tabular-nums}
+.mm-ts b{font-weight:600;color:var(--text-primary);margin-right:1px}
+.mm-ts em{font-style:normal;font-weight:700;color:var(--danger);margin-left:2px}
+.mm-empty-in{padding:6px 0}
+@media (max-width:600px){
+ .mm-trows{grid-template-rows:none}
+ .mm-sline .mm-it-t .mm-lb,.mm-sline .mm-tw{display:none}
+ .mm-sline .mm-tsep{margin:0 1px}
+ .mm-seg button{padding:7px 6px}
+}
+@media (max-width:360px){.mm-seg button{padding:7px 5px;font-size:11px}.mm-sline .mm-it{padding:0 5px}}
+@media (max-width:420px){.mm-sline [data-go="c"] .mm-lb{display:none}}
+@media (max-width:360px){.mm-sline{gap:0}.mm-sline .mm-it{padding:0 4px}}

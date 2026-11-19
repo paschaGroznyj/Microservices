@@ -127,7 +127,8 @@ async def get_memory_stats(
         
         # Последний tokens_usage (для контекста)
         last_usage_row = await conn.fetchrow("""
-            SELECT message_id, tokens_usage
+            SELECT message_id, tokens_usage, agent_steps,
+                   COALESCE(jsonb_array_length(tool_calls), 0) AS n_tool_calls
             FROM chats
             WHERE chat_id = $1 AND is_from_bot = TRUE AND tokens_usage IS NOT NULL
             ORDER BY id DESC
@@ -173,6 +174,11 @@ async def get_memory_stats(
             "context": {
                 "message_id": str(last_usage_row["message_id"]) if last_usage_row and last_usage_row["message_id"] is not None else None,
                 **ctx_info,
+                # шаги агента и вызовы тулов последнего ответа (кнопка «Шаги» в строке памяти)
+                "agent": (
+                    {"steps": last_usage_row["agent_steps"], "tool_calls": last_usage_row["n_tool_calls"]}
+                    if last_usage_row and last_usage_row["agent_steps"] is not None else None
+                ),
             },
         }
 

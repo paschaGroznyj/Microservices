@@ -392,12 +392,15 @@ class DataBaseChats:
         gateway_target: str | None = None,
         input_format: str | None = None,
         type_query: str | None = None,
+        agent_steps: int | None = None,
+        tool_calls: list[dict] | None = None,
     ):
         if user_id is None or chat_id is None:
             logging.warning("Пропущено сообщение: отсутствует user_id или chat_id")
             return None
 
         tokens_usage_json = json.dumps(tokens_usage) if tokens_usage is not None else None
+        tool_calls_json = json.dumps(tool_calls, ensure_ascii=False) if tool_calls is not None else None
 
         now_utc = datetime.now(timezone.utc)
         try:
@@ -406,13 +409,15 @@ class DataBaseChats:
                     await conn.execute("""
                         INSERT INTO chats (
                             user_id, chat_id, message_text, is_from_bot,
-                            tool_name, selected_tools, context_size, message_id, created_at, tool_trace, model_type, tokens_usage, gateway_target, input_format, type_query
+                            tool_name, selected_tools, context_size, message_id, created_at, tool_trace, model_type, tokens_usage, gateway_target, input_format, type_query,
+                            agent_steps, tool_calls
                         )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15);
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15, $16, $17::jsonb);
                     """,
                     user_id, chat_id, message, is_from_bot,
                     action, selected_tools, context_size, message_id, now_utc, tool_trace, model_type, tokens_usage_json, gateway_target, (input_format or 'text'),
-                    ('model' if str(type_query or '').lower() == 'model' else 'agent'))
+                    ('model' if str(type_query or '').lower() == 'model' else 'agent'),
+                    agent_steps, tool_calls_json)
 
                     if attached_files:
                         source = "agent" if is_from_bot else "user"

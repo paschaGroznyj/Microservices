@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import json
+from collections import Counter
 import contextvars
 import os
 import re
@@ -1880,6 +1881,10 @@ class HarnessAgent:
  
             final_response = ""
             used_tools = []
+            # Шаги агента (ответы основной модели за ход, со всеми ретраями пустого ответа)
+            # и все вызовы тулов в цикле: пишутся в chats.agent_steps / chats.tool_calls.
+            agent_steps = 0
+            tool_calls_log: list[dict] = []
             tool_trace: list[str] = []
             AUTO_SEND_FILE_TOOLS = {"send_file_to_user"}
             files_to_send = []
@@ -2144,7 +2149,7 @@ class HarnessAgent:
             )
 
             async def agent_event_loop(messages: list):
-                nonlocal total_input_tokens, total_output_tokens, last_iter_in, last_breakdown, last_cache_read # Не видит из-за +=
+                nonlocal total_input_tokens, total_output_tokens, last_iter_in, last_breakdown, last_cache_read, agent_steps # Не видит из-за +=
                 iteration = 0
                 # ФОНОВЫЙ супервизор: храним текущий asyncio-таск (или None).
                 supervisor_task = None
@@ -2248,6 +2253,7 @@ class HarnessAgent:
                             final_response = "Ошибка внутри цикла агента. Но агент запомнил шаги, попробуйте вернуться к запросу"
                         break
 
+                    agent_steps += 1
                     _raw_content = getattr(response, "content", None)
                     has_native_thinking = isinstance(_raw_content, list) and any(
                         isinstance(b, dict) and b.get("type") in ("thinking", "redacted_thinking")
@@ -2459,6 +2465,12 @@ class HarnessAgent:
                             content = tool_content(tr, MAX_TOOL_MSG_CHARS)
 
                         messages.append(ToolMessage(content=content, tool_call_id=tc["id"]))
+                        tool_calls_log.append({
+                            "step": agent_steps,
+                            "name": tool_name,
+                            "ok": not isinstance(tr, Exception)
+                            and not (isinstance(result_dict, dict) and result_dict.get("ok") is False),
+                        })
 
                         summary = _summarize_tool_call(tc, tr)
                         if summary:
@@ -2487,6 +2499,7 @@ class HarnessAgent:
 
                     try:
                         result_response = await llm_with_tools.ainvoke(_sanitize_messages(messages))
+                        agent_steps += 1
                     
                         # Если упрямая модель всё равно вернула tool_calls вместо текста
                         if not result_response.content and getattr(result_response, "tool_calls", None):
@@ -2573,17 +2586,30 @@ class HarnessAgent:
                 self._summarize_tool_trace,
             )
 
+            agent_run = {"steps": agent_steps, "tool_calls": len(tool_calls_log)}
+            logging.info(
+                f"[steps] chat={chat_id} steps={agent_steps} tool_calls={len(tool_calls_log)} "
+                f"tools={json.dumps(dict(Counter(t['name'] for t in tool_calls_log)), ensure_ascii=False)}"
+            )
+            context = context_payload(tokens_usage)
+            if context is not None:
+                context["agent"] = agent_run
+
             return {
                 "input": user_input,
                 "message": final_response,
                 "used_tools": used_tools,
+                # chats.tool_name: первый тул (для статистики профиля), полный список — tool_calls
                 "action": used_tools[0] if len(used_tools)> 0 else '',
+                "agent_steps": agent_steps,
+                "tool_calls": tool_calls_log,
+                "agent_run": agent_run,
                 "success": True,
                 "files_to_send": files_to_send,
                 "tool_trace": trace_out,
                 "agent_model": real_agent_model,
                 "tokens_usage": tokens_usage,
-                "context": context_payload(tokens_usage),
+                "context": context,
                 "auto_title": auto_title
             }
         finally:

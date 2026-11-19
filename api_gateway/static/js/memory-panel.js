@@ -1,6 +1,6 @@
 /* Память чата (только просмотр): строка «Журнал · Саммари · Контекст» под полем ввода,
    полоска заполнения контекста в верхней кромке поля, карточка-карусель над полем, модалка.
-   Данные: GET /api/chats/{id}/memory/{stats|journal|summary} (memory_gw → agent_service).
+   Данные: GET /api/chats/{id}/memory/{stats|journal|summary} и /api/chats/{id}/steps (memory_gw → agent_service).
    Вызовы из app.js / app_sigma.js: MemoryPanel.mount(chatId) после renderMessageInput,
    MemoryPanel.update(chatId, messageId, context) по финалу ответа: context последнего шага
    приходит в payload ответа (agent_service → Kafka → гейтвей) и рисуется сразу, без опроса. */
@@ -12,12 +12,15 @@ const P = {
   s: '<path d="M4 6h16M4 12h11M4 18h7"/>', x: '<path d="M6 6l12 12M18 6L6 18"/>',
   l: '<path d="M15 6l-6 6 6 6"/>', r: '<path d="M9 6l6 6-6 6"/>',
   full: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+  // Шаги агента: ступня в греческой сандалии (профиль, ремешок на щиколотке и через подъём)
+  t: '<path d="M8.2 6.5c-.1 2.4.1 4.3-.5 6.3-.5 1.6-1.9 2.6-2.1 4.1-.1 1.1.6 1.9 1.7 1.9h11.9c1 0 1.6-.7 1.3-1.5-.3-.7-1.1-1-2-1.1l-1.5 0c-2.2-.4-3.8-1.4-4.7-3.1-.6-1.2-.8-2.5-.9-4l-.1-2.6"/><path d="M6.4 11.6h6.3M10.8 18.8l2.5-5.1"/>',
 };
 const TYPE = { evolution: 'эволюция', summary: 'сводка', anomaly: 'аномалия', user_preference: 'предпочтение', identity: 'личность' };
 const PAGE = 20;
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const plain = s => String(s ?? '').replace(/^\s*\|?[-:| ]{3,}\|?\s*$/gm, '').replace(/^#+\s*/gm, '').replace(/\*\*|`/g, '')
   .replace(/\s*\|\s*/g, ' · ').replace(/^\s*-\s+/gm, '• ').replace(/\s+/g, ' ').replace(/(\s*·\s*){2,}/g, ' · ').replace(/^ ?· ?/, '').replace(/ ?· ?$/, '').trim();
+const plural = (n, a, b, c) => { n = Math.abs(n) % 100; const k = n % 10; return n > 10 && n < 20 ? c : k === 1 ? a : k > 1 && k < 5 ? b : c; };
 const fmtK = n => n >= 1000 ? (n / 1000).toFixed(1).replace('.', ',') + 'K' : String(n);
 const nf = n => Number(n || 0).toLocaleString('ru');
 const dt = iso => { if (!iso) return ''; const d = new Date(iso); const p = x => String(x).padStart(2, '0');
@@ -26,15 +29,15 @@ const H = h => { const t = document.createElement('template'); t.innerHTML = h.t
 function ring(pct) { const r = 5, C = 2 * Math.PI * r; pct = Math.max(0, Math.min(1, pct || 0));
   return `<svg class="mm-ring" viewBox="0 0 14 14" aria-hidden="true"><circle class="t" cx="7" cy="7" r="${r}" fill="none" stroke-width="2.2"/><circle class="a" cx="7" cy="7" r="${r}" fill="none" stroke-width="2.2" stroke-dasharray="${(C * pct).toFixed(2)} ${C.toFixed(2)}"/></svg>`; }
 
-const st = { chat: null, data: null, entries: [], total: 0, loading: false, open: false, tab: 'j', i: 0, ctx: false, seq: 0, live: null };
+const st = { chat: null, data: null, entries: [], total: 0, loading: false, open: false, tab: 'j', i: 0, ctx: false, seq: 0, live: null, runs: null, tload: false, terr: false, tp: null };
 
 function q() {
   const box = document.getElementById('chat-input-box');
   const area = box ? box.closest('.chat-input-area') : null;
   return { box, area };
 }
-async function api(tail, params) {
-  const u = new URL(`/api/chats/${encodeURIComponent(st.chat)}/memory/${tail}`, location.origin);
+async function api(tail, params, base = 'memory') {
+  const u = new URL(`/api/chats/${encodeURIComponent(st.chat)}/${base}${tail ? '/' + tail : ''}`, location.origin);
   Object.entries(params || {}).forEach(([k, v]) => u.searchParams.set(k, v));
   const r = await fetch(u, { credentials: 'same-origin', cache: 'no-store', signal: st.abort?.signal });
   if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -47,14 +50,16 @@ function render() {
   const { box, area } = q(); if (!box || !area) return;
   area.querySelectorAll('[data-mm]').forEach(e => e.remove());
   const D = st.data || {journal: {active: 0, total_chars: 0}, summary: {text: ''}, context: {tokens: null, max_tokens: null}};
-  const j = D.journal, sm = D.summary, c = D.context;
+  const j = D.journal, sm = D.summary, c = D.context || {};
+  const ag = c.agent && Number.isInteger(c.agent.steps) ? c.agent : null;
   const note = area.querySelector('.input-footer-note');
   if (note) note.style.display = 'none';
   const ctxTxt = c.tokens ? `<b>${fmtK(c.tokens)}${c.max_tokens ? `<span class="mm-lim">/${fmtK(c.max_tokens).replace(',0K', 'K')}</span>` : ''}</b>${c.cache_pct != null ? `<span class="mm-x">· кэш ${c.cache_pct}%</span>` : ''}` : '<b>—</b>';
   const el = H(`<div class="mm-sline" data-mm>
    <button type="button" class="mm-it" data-go="j" aria-expanded="false">${S(P.j)}<span class="mm-lb">Журнал</span> <b>${j.active}</b><span class="mm-x"> · ${fmtK(j.total_chars)} зн.</span></button><span class="mm-dot"></span>
    <button type="button" class="mm-it" data-go="s" aria-expanded="false">${S(P.s)}<span class="mm-lb">Саммари</span> <b>${sm.text ? cov(sm) + '%' : 'нет'}</b>${sm.text ? '<span class="mm-x"> истории</span>' : ''}</button><span class="mm-dot"></span>
-   <button type="button" class="mm-it" data-go="c" aria-expanded="false" title="Промпт последнего шага. /200K — порог сжатия агентного режима, не окно модели; в режиме только модели не применяется">${ring(c.tokens / c.max_tokens)}<span class="mm-lb">Контекст</span> ${ctxTxt}</button></div>`);
+   <button type="button" class="mm-it" data-go="c" aria-expanded="false" title="Промпт последнего шага. /200K — порог сжатия агентного режима, не окно модели; в режиме только модели не применяется">${ring(c.tokens / c.max_tokens)}<span class="mm-lb">Контекст</span> ${ctxTxt}</button><span class="mm-dot"></span>
+   <button type="button" class="mm-it mm-it-t" data-go="t" aria-expanded="false" title="${ag ? `Последний ответ: ${ag.steps} ${plural(ag.steps, 'шаг', 'шага', 'шагов')} агента, ${ag.tool_calls} ${plural(ag.tool_calls, 'вызов', 'вызова', 'вызовов')} инструментов` : 'Шаги агента и вызовы инструментов'}">${S(P.t)}<span class="mm-lb">Шаги</span> <b>${ag ? ag.steps : '—'}</b>${ag ? `<span class="mm-tq"><span class="mm-tsep">·</span>${ag.tool_calls}<span class="mm-tw"> ${plural(ag.tool_calls, 'вызов', 'вызова', 'вызовов')}</span></span>` : ''}</button></div>`);
   box.after(el);
   el.addEventListener('click', e => { const b = e.target.closest('[data-go]'); if (!b) return; const g = b.dataset.go;
     if (st.open && st.tab === g) { closeCard(); return; } openCard(g); });
@@ -105,7 +110,30 @@ function cSlide() {
 }
 
 /* ── карточка-карусель ── */
-const N = () => st.tab === 'j' ? st.total : 1;  // у саммари и контекста один слайд
+const N = () => st.tab === 'j' ? st.total : st.tab === 't' ? Math.max(1, (st.runs || []).length) : 1;  // у саммари и контекста один слайд
+// Шаги: слайд на ответ агента — шаги цикла, вызовы тулов, сводка по тулам и разбивка по шагам.
+function tSlide(r) {
+  const tools = r.tools.slice(0, 6), more = r.tools.length - tools.length;
+  const rows = tools.map(t => `<div class="mm-crow"><i class="mm-tdot"></i><span class="mm-cl">${esc(t.name)}</span><span class="mm-cv">× ${t.count}</span></div>`).join('');
+  const seq = r.by_step.map(s => `<span class="mm-ts" title="Шаг ${s.step}: ${esc(s.calls.map(c => c.name).join(', '))}"><b>${s.step}</b>${s.calls.length > 1 ? `×${s.calls.length}` : ''}${s.calls.some(c => !c.ok) ? '<em>!</em>' : ''}</span>`).join('');
+  return `<div class="mm-sl mm-sl-t" data-mid="${esc(r.message_id)}"><div class="mm-sl-h"><span class="mm-tag">ответ</span><span class="mm-meta">${dt(r.created_at)}${r.model ? ' · ' + esc(r.model) : ''}</span></div>
+   <div class="mm-tsum"><span><b>${r.steps}</b> ${plural(r.steps, 'шаг', 'шага', 'шагов')}</span><span><b>${r.tool_calls}</b> ${plural(r.tool_calls, 'вызов', 'вызова', 'вызовов')}</span>${r.failed ? `<span class="mm-terr"><b>${r.failed}</b> с ошибкой</span>` : ''}</div>
+   ${r.tool_calls ? `<div class="mm-crows mm-trows">${rows}${more > 0 ? `<div class="mm-crow"><span class="mm-cl mm-cmore">ещё ${more} ${plural(more, 'тул', 'тула', 'тулов')}</span></div>` : ''}</div>
+   <div class="mm-tseq" aria-label="Шаги с вызовами инструментов">${seq}</div>` : '<div class="mm-empty mm-empty-in">Ответ без вызова инструментов.</div>'}</div>`;
+}
+function tEmpty() {
+  return `<div class="mm-sl"><div class="mm-empty">${st.tload ? 'Загрузка…' : st.terr ? 'Не удалось загрузить шаги.' : 'Нет данных о шагах: ответов агента после обновления ещё не было.'}</div></div>`;
+}
+function loadSteps() {
+  if (st.tp) return st.tp;
+  const seq = st.seq; st.tload = true; st.terr = false;
+  const p = (async () => {
+    try { const r = await api('', { limit: 50 }, 'steps'); if (seq !== st.seq) return; st.runs = r.runs || []; }
+    catch (e) { if (seq === st.seq) { st.terr = true; st.runs = null; } console.warn('[memory] steps', e); }
+    finally { if (st.tp === p) { st.tp = null; st.tload = false; } }
+  })();
+  st.tp = p; return p;
+}
 function jSlide(e) {
   return `<div class="mm-sl" data-id="${e.id}"><div class="mm-sl-h"><span class="mm-tag t-${esc(e.type)}">${esc(TYPE[e.type] || e.type)}</span><span class="mm-meta">#${e.id} · ${dt(e.created_at)} · ${nf(e.chars)} зн.</span></div>
    <div class="mm-txt">${esc(plain(e.content))}</div>
@@ -154,12 +182,13 @@ function ensureTab(tab) {
   const done = () => { if (st.open && st.tab === tab) { const k = st.i; renderCard(); st.i = k; place(false); } };
   if (tab === 'j' && !st.entries.length) loadMore().then(done);
   else if (tab === 's') loadSummary().then(done);
+  else if (tab === 't' && !st.runs) loadSteps().then(done);
 }
 function openCard(tab, i) {
   st.open = true; st.tab = tab; st.i = i || 0;
   const { box, area } = q(); if (!box) return; area.querySelector('.mm-card5')?.remove();
   const c = H(`<div class="slash-cmd-card mm-card5" data-mm tabindex="-1" role="region" aria-label="Память чата">
-   <div class="mm-c-h"><div class="mm-seg" role="tablist"><button type="button" role="tab" data-tab="j">Журнал <b>${(st.data || EMPTY).journal.active}</b></button><button type="button" role="tab" data-tab="s">Саммари</button><button type="button" role="tab" data-tab="c">Контекст</button></div>
+   <div class="mm-c-h"><div class="mm-seg" role="tablist"><button type="button" role="tab" data-tab="j">Журнал <b>${(st.data || EMPTY).journal.active}</b></button><button type="button" role="tab" data-tab="s">Саммари</button><button type="button" role="tab" data-tab="c">Контекст</button><button type="button" role="tab" data-tab="t">Шаги</button></div>
     <span class="mm-sp"></span><span class="mm-cnt" aria-live="polite"></span>
     <button type="button" class="mm-ib" data-nav="-1" aria-label="Предыдущая">${S(P.l)}</button><button type="button" class="mm-ib" data-nav="1" aria-label="Следующая">${S(P.r)}</button>
     <button type="button" class="mm-ib" data-all aria-label="Открыть всё">${S(P.full)}</button><button type="button" class="mm-ib" data-close aria-label="Закрыть">${S(P.x)}</button></div>
@@ -179,6 +208,8 @@ function renderCard() {
   const sm = D.summary;
   c.querySelector('.mm-types').innerHTML = st.tab === 'j'
     ? (D.journal.types || []).map(t => `<span>${esc(TYPE[t.type] || t.type)} ${t.count}</span>`).join('')
+    : st.tab === 't'
+    ? ''
     : st.tab === 'c'
     ? (cx.tokens ? `<span>последний шаг</span>${cx.cache_pct != null ? `<span>кэш ${cx.cache_pct}%</span>` : ''}` : '')
     : (sm.text ? `<span>обновлено ${dt(sm.updated_at)}</span>${sm.total_messages > sm.covered ? `<span>вне саммари ${nf(sm.total_messages - sm.covered)} сообщ.</span>` : ''}` : '');
@@ -186,11 +217,12 @@ function renderCard() {
   const trk = c.querySelector('.mm-trk');
   trk.innerHTML = st.tab === 'j'
     ? (st.entries.length ? st.entries.map(jSlide).join('') : `<div class="mm-sl"><div class="mm-empty">${st.loading ? 'Загрузка…' : st.jerr ? 'Не удалось загрузить журнал.' : 'Журнал пуст.'}</div></div>`)
+    : st.tab === 't' ? (st.runs && st.runs.length ? st.runs.map(tSlide).join('') : tEmpty())
     : st.tab === 'c' ? cSlide() : sSlide();
   // «Открыть полностью» только там, где текст не влез в превью
   requestAnimationFrame(() => c.querySelectorAll('.mm-sl').forEach(sl => { const t = sl.querySelector('.mm-txt'), f = sl.querySelector('.mm-sl-f');
     if (t && f) f.style.visibility = t.scrollHeight > t.clientHeight + 1 ? '' : 'hidden'; }));
-  c.querySelector('[data-all]').style.display = st.tab === 'c' ? 'none' : '';
+  c.querySelector('[data-all]').style.display = st.tab === 'c' || st.tab === 't' ? 'none' : '';
   const n = N(); c.querySelectorAll('[data-nav]').forEach(b => b.style.display = n > 1 ? '' : 'none');
   const pr = c.querySelector('.mm-prog'); pr.style.visibility = n > 1 ? '' : 'hidden';
   pr.firstElementChild.style.width = (100 / Math.max(1, n)) + '%';
@@ -202,7 +234,7 @@ function place(anim = true) {
   trk.style.transition = anim ? 'transform .28s cubic-bezier(.2,.7,.2,1)' : 'none';
   trk.style.transform = `translateX(${-st.i * 100}%)`; const n = N();
   c.querySelector('[data-nav="-1"]').disabled = st.i === 0; c.querySelector('[data-nav="1"]').disabled = st.i >= n - 1;
-  if (st.tab === 'j' && n) { c.querySelector('.mm-cnt').textContent = `${st.i + 1} / ${n}`; c.querySelector('.mm-prog i').style.left = (st.i / n * 100) + '%'; }
+  if ((st.tab === 'j' || st.tab === 't') && n > 1) { c.querySelector('.mm-cnt').textContent = `${st.i + 1} / ${n}`; c.querySelector('.mm-prog i').style.left = (st.i / n * 100) + '%'; }
 }
 async function go(d) {
   const n = N(); const ni = Math.max(0, Math.min(n - 1, st.i + d)); if (ni === st.i) { bounce(d); return; }
@@ -290,8 +322,8 @@ function align() {
 }
 addEventListener('resize', align);
 
-function cancelRefresh() { clearTimeout(st.timer); st.abort?.abort(); st.abort = new AbortController(); st.jp = st.sp = null; st.loading = st.sload = false; }
-function reset(chatId) { cancelRefresh(); st.chat = chatId; st.data = null; st.entries = []; st.total = 0; st.open = false; st.ctx = false; st.i = 0; st.seq++; st.live = null; closeModal(); }
+function cancelRefresh() { clearTimeout(st.timer); st.abort?.abort(); st.abort = new AbortController(); st.jp = st.sp = st.tp = null; st.loading = st.sload = st.tload = false; }
+function reset(chatId) { cancelRefresh(); st.chat = chatId; st.data = null; st.entries = []; st.total = 0; st.runs = null; st.open = false; st.ctx = false; st.i = 0; st.seq++; st.live = null; closeModal(); }
 // Контекст из payload финала новее, чем то, что успел сохранить chats_service: пока stats
 // отдаёт другой message_id, оставляем живой. Совпал — БД догнала, живой больше не нужен.
 function withLive(d) {
@@ -332,7 +364,7 @@ window.MemoryPanel = {
   refresh(chatId) {
     if (chatId != null && String(chatId) !== String(st.chat)) return;
     if (!st.chat) return;
-    cancelRefresh(); st.entries = []; st.seq++;
+    cancelRefresh(); st.entries = []; st.runs = null; st.seq++;
     load(st.seq);
   },
   unmount() { reset(null); document.querySelectorAll('[data-mm]').forEach(e => e.remove()); },

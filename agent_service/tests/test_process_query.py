@@ -126,7 +126,7 @@ def test_plain_answer_contract(h):
     assert out["tool_trace"] is None
     assert out["agent_model"] == MODEL_NAMES["coder"]
     assert out["tokens_usage"] == {"input_tokens": 10, "output_tokens": 3, "total_tokens": 13,
-                                   "cache_read_tokens": 0, "cache_creation_tokens": 0}
+                                   "cache_read_tokens": 0, "cache_creation_tokens": 0, "context_tokens": 10}
     assert out["auto_title"] is None
     assert h.models["coder"].methods == ["astream"]
 
@@ -153,7 +153,7 @@ def test_tool_step_then_answer(h):
     assert out["used_tools"] == ["noop"] and out["action"] == "noop"
     assert calls[0].get("x") == 1
     assert out["tokens_usage"] == {"input_tokens": 150, "output_tokens": 12, "total_tokens": 162,
-                                   "cache_read_tokens": 0, "cache_creation_tokens": 0}
+                                   "cache_read_tokens": 0, "cache_creation_tokens": 0, "context_tokens": 50}
     second = h.models["coder"].calls[1]
     [tm] = tool_msgs(second)
     assert "42" in tm.content

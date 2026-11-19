@@ -5101,6 +5101,8 @@ class ChatApp {
     }
 
     _finalizeStream(chatId) {
+        // Счётчики памяти: tokens_usage пишет chats_service из Kafka, даём ему секунду
+        { const mc = chatId != null ? chatId : this.currentChat; setTimeout(() => window.MemoryPanel?.refresh(mc), 1500); }
         const st = this._resolveStream(chatId);
         const isActive = this._isActiveChat(chatId);
         if (!st.pendingBotEl) return;
@@ -5757,6 +5759,7 @@ class ChatApp {
     async renderMessageInput() {
         const container = this.getInputContainer();
         if (!container) return;
+        if (!this.currentChat) window.MemoryPanel?.unmount();
 
         // Гард: не перерисовывать если экран уже соответствует состоянию
         const hasStart     = !!container.querySelector('.chat-start-screen');
@@ -5880,6 +5883,8 @@ class ChatApp {
         window.ToolsPanel?.inject(container);
         window.ModelPicker?.inject(container);
         window.QueryMode?.inject(container);
+        // Память чата: строка под полем, полоска контекста, карточка (memory-panel.js)
+        window.MemoryPanel?.mount(this.currentChat);
 
         // Посимвольная анимация start-header
         // Запоминаем для какого чата отрендерили

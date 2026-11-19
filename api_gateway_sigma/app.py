@@ -2919,6 +2919,12 @@ async def _sigma_task_mark_running(chat_id, request_id):
 _task_gw.bind(push=_sigma_task_push, register=_sigma_task_register, mark_running=_sigma_task_mark_running)
 app.include_router(_task_gw.router)
 
+# ── ПАМЯТЬ ЧАТА (memory_gw.py): журнал, саммари, контекст для полоски под полем ввода ──
+import memory_gw as _memory_gw
+_memory_gw.bind(get_client=lambda: app.state.http_client,
+                agent_url=SERVICES['agent_service']['url'], get_user=get_current_user)
+app.include_router(_memory_gw.router)
+
 
 @app.get("/api/chats/{chat_id}/tasks/stream")
 async def stream_chat_tasks(chat_id: str, request: Request, after: int | None = None):

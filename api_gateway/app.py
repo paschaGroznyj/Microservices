@@ -2421,3 +2421,9 @@ async def _task_mark_running(chat_id, request_id):
 
 _task_gw.bind(push=broadcast, register=_task_register, mark_running=_task_mark_running)
 app.include_router(_task_gw.router)
+
+# ── ПАМЯТЬ ЧАТА (memory_gw.py): журнал, саммари, контекст для полоски под полем ввода ──
+import memory_gw as _memory_gw
+_memory_gw.bind(get_client=lambda: app.state.http_client,
+                agent_url=SERVICES['agent_service']['url'], get_user=get_current_user)
+app.include_router(_memory_gw.router)

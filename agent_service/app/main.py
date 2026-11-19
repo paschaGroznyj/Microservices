@@ -38,6 +38,7 @@ from agent.core import obs_file_storage
 from agent.core import sandbox_scripts_cleaner
 from agent.media.thumbhash import media_meta_for_file, image_meta
 from api.web_ui import web_router, pending_files, set_db as _set_web_ui_db, set_active_tasks as _set_web_ui_tasks
+from api.memory_api import memory_router, set_db as _set_memory_db
 
 
 logging.basicConfig(level=logging.INFO)
@@ -789,6 +790,7 @@ async def lifespan(app: FastAPI):
     await db.init_agent_base_pool()
     # web_ui использует ТОТ ЖЕ прогретый db (иначе его локальный pool=None -> 503)
     _set_web_ui_db(db)
+    _set_memory_db(db)
     _set_web_ui_tasks(active_tasks)   # web_ui.stop_message видит тот же словарь задач
 
 
@@ -1033,7 +1035,7 @@ async def tg_transcribe(req: TgTranscribeRequest) -> TgTranscribeResponse:
 
 
 
-routers = [tg_router, web_router]
+routers = [tg_router, web_router, memory_router]
 
 for rout in routers:
     app.include_router(rout)

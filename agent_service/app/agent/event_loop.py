@@ -760,6 +760,13 @@ async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, err
                 f"[iteration={iteration}] astream попытка {attempt + 1}/{MAX_ATTEMPTS} упала: "
                 f"{type(e).__name__}: {e}"
             )
+            # Close any reasoning already emitted by the failed attempt. The
+            # next attempt must not concatenate onto an abandoned live block.
+            if on_chunk is not None:
+                try:
+                    await on_chunk("", kind="retry")
+                except Exception:
+                    pass
             if attempt < MAX_ATTEMPTS - 1:
                 await asyncio.sleep(_pause(attempt))
 
@@ -2183,11 +2190,24 @@ class HarnessAgent:
                     can_still_extend = not loop_state["extension_used"]
                     current_llm = llm if (is_last_step and not can_still_extend) else llm_with_tools
 
-                    # ── Сбор ответа модели (без стриминга сырой пелены reasoning) ──
-                    # Короткую мысль из <thinking>...</thinking> отправляем готовым
-                    # предложением сразу после получения шага, а финальный ответ
-                    # отдаём чистым response.content.
+                    # GPT reasoning arrives outside content. Stream only that channel;
+                    # answer/tool arguments remain buffered until the step is complete.
                     stream_state = {"sent": False}
+                    native_reasoning = []
+
+                    async def _on_native_reasoning(text, kind="answer"):
+                        if kind == "reasoning" and isinstance(text, str) and text:
+                            native_reasoning.append(text)
+                            await self._send_chunk(
+                                text, request_id, msg_id=str(request_id), kind="live"
+                            )
+                            stream_state["sent"] = True
+                        elif kind == "retry" and stream_state["sent"]:
+                            await self._send_chunk(
+                                "", request_id, msg_id=str(request_id), kind="reasoning_end"
+                            )
+                            stream_state["sent"] = False
+                            native_reasoning.clear()
 
                     from .common.context_usage import prompt_weights, scale_breakdown
                     prompt_estimate = prompt_weights(messages, tools if current_llm is llm_with_tools else ())
@@ -2195,7 +2215,9 @@ class HarnessAgent:
                     _llm_error = {}
                     try:
                         response = await _astream_collect(
-                            current_llm, messages, on_chunk=None, iteration=iteration,
+                            current_llm, messages,
+                            on_chunk=_on_native_reasoning if agent_model == "coder" else None,
+                            iteration=iteration,
                             error_info=_llm_error, cache_control=use_cache_control,
                             extra_headers=openai_cache_headers,
                         )
@@ -2204,6 +2226,10 @@ class HarnessAgent:
                         response = None
                     logging.info(f"[respose] {response}")
                     if response is None:
+                        if stream_state["sent"]:
+                            await self._send_chunk(
+                                "", request_id, msg_id=str(request_id), kind="reasoning_end"
+                            )
                         _err_reason = _llm_error.get("reason", "unknown")
                         logging.error(f"[iteration={iteration}] Все попытки llm провалены, прерываю цикл: {_err_reason}")
                         _is_provider_down = any(kw in str(_err_reason).lower() for kw in (
@@ -2251,10 +2277,28 @@ class HarnessAgent:
                         response.content = _clean_content
 
                     _has_tool_calls = bool(getattr(response, "tool_calls", None))
+                    _native_text = "".join(native_reasoning)
+                    if not _native_text:
+                        _kwargs = getattr(response, "additional_kwargs", {}) or {}
+                        _candidate = _kwargs.get("reasoning_content") or _kwargs.get("reasoning")
+                        _native_text = _candidate if isinstance(_candidate, str) else ""
                     _step_thinking = _thinking_text or (_clean_content if _has_tool_calls else "")
                     _had_text = bool(_step_thinking)
 
-                    if _has_tool_calls and _had_text:
+                    if _native_text:
+                        # ainvoke fallback/non-streamed models: publish once after collection.
+                        # Never put provider reasoning into response.content or the final answer.
+                        loop_state.setdefault("reasoning_trace", []).append(_native_text)
+                        if not native_reasoning:
+                            await self._send_chunk(
+                                _native_text, request_id, msg_id=str(request_id), kind="live"
+                            )
+                        await self._send_chunk(
+                            "", request_id, msg_id=str(request_id), kind="reasoning_end"
+                        )
+                        # Reasoning is already closed; do not promote it to a final answer.
+                        stream_state["sent"] = False
+                    elif _has_tool_calls and _had_text:
                         # Короткое предложение из <thinking>...</thinking> (или fallback content на тул-шаге):
                         # отправляем сразу готовым предложением и закрываем шаг рассуждений.
                         loop_state.setdefault("reasoning_trace", []).append(_step_thinking)

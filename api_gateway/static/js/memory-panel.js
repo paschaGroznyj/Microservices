@@ -35,7 +35,7 @@ function q() {
 async function api(tail, params) {
   const u = new URL(`/api/chats/${encodeURIComponent(st.chat)}/memory/${tail}`, location.origin);
   Object.entries(params || {}).forEach(([k, v]) => u.searchParams.set(k, v));
-  const r = await fetch(u, { credentials: 'same-origin' });
+  const r = await fetch(u, { credentials: 'same-origin', cache: 'no-store', signal: st.abort?.signal });
   if (!r.ok) throw new Error('HTTP ' + r.status);
   return r.json();
 }
@@ -232,11 +232,23 @@ function align() {
 }
 addEventListener('resize', align);
 
-function reset(chatId) { st.chat = chatId; st.data = null; st.entries = []; st.total = 0; st.open = false; st.ctx = false; st.i = 0; st.seq++; closeModal(); }
-async function load() {
-  const seq = st.seq;
-  try { const d = await api('stats'); if (seq !== st.seq) return; st.data = d; st.total = d.journal.active; render(); }
-  catch (e) { if (seq === st.seq) render(); }
+function cancelRefresh() { clearTimeout(st.timer); st.abort?.abort(); st.abort = new AbortController(); }
+function reset(chatId) { cancelRefresh(); st.chat = chatId; st.data = null; st.entries = []; st.total = 0; st.open = false; st.ctx = false; st.i = 0; st.seq++; closeModal(); }
+async function load(seq = st.seq, expected = null, attempt = 0) {
+  try {
+    const d = await api('stats');
+    if (seq !== st.seq) return;
+    if (expected != null && String(d.context?.message_id) !== String(expected)) {
+      if (attempt < 9) st.timer = setTimeout(() => load(seq, expected, attempt + 1), Math.min(250 * 2 ** attempt, 2000));
+      return;
+    }
+    st.data = d; st.total = d.journal.active; render();
+    if (st.open) openCard(st.tab, 0);
+  } catch (e) {
+    if (seq !== st.seq) return;
+    if (expected != null && attempt < 9) st.timer = setTimeout(() => load(seq, expected, attempt + 1), Math.min(250 * 2 ** attempt, 2000));
+    else render();
+  }
 }
 window.MemoryPanel = {
   mount(chatId) {
@@ -245,10 +257,11 @@ window.MemoryPanel = {
     else if (st.data && !q().area?.querySelector('.mm-sline')) render();
     else if (!st.data) { render(); load(); }
   },
-  refresh(chatId) {
+  refresh(chatId, messageId = null) {
     if (chatId != null && String(chatId) !== String(st.chat)) return;
-    if (!st.chat) return; const keepOpen = st.open, tab = st.tab;
-    st.entries = []; st.seq++; load().then(() => { if (keepOpen && st.data) { st.open = false; openCard(tab, 0); } });
+    if (!st.chat) return;
+    cancelRefresh(); st.entries = []; st.seq++;
+    load(st.seq, messageId);
   },
   unmount() { reset(null); document.querySelectorAll('[data-mm]').forEach(e => e.remove()); },
   _state: st,

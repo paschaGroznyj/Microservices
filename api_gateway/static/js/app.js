@@ -5662,8 +5662,6 @@ class ChatApp {
     }
 
     _finalizeStream(chatId) {
-        // Счётчики памяти: tokens_usage пишет chats_service из Kafka, даём ему секунду
-        { const mc = chatId != null ? chatId : this.currentChat; setTimeout(() => window.MemoryPanel?.refresh(mc), 1500); }
         const st = this._resolveStream(chatId);
         if (!st || !st.pendingBotEl) return;
         const key = chatId != null ? String(chatId) : String(this.currentChat);
@@ -5675,6 +5673,7 @@ class ChatApp {
         if (isActive) this._removeImageGenSkeleton();
 
         const data = st.streamFinalData || {};
+        window.MemoryPanel?.refresh(chatId ?? this.currentChat, data.message_id || st.pendingBotEl.dataset.messageId);
         const rawFullText = data.fullText ?? st.streamShown ?? '';
         const fullText = (rawFullText && String(rawFullText).trim())
             ? rawFullText

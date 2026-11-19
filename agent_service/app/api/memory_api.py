@@ -127,7 +127,7 @@ async def get_memory_stats(
         
         # Последний tokens_usage (для контекста)
         last_usage_row = await conn.fetchrow("""
-            SELECT tokens_usage
+            SELECT message_id, tokens_usage
             FROM chats
             WHERE chat_id = $1 AND is_from_bot = TRUE AND tokens_usage IS NOT NULL
             ORDER BY id DESC
@@ -180,6 +180,7 @@ async def get_memory_stats(
             },
             "summary": summary_info,
             "context": {
+                "message_id": str(last_usage_row["message_id"]) if last_usage_row and last_usage_row["message_id"] is not None else None,
                 "tokens": context_tokens,
                 "max_tokens": TOKEN_SOFT_LIMIT,
                 "limit_kind": "compaction_threshold",

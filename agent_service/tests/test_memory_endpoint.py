@@ -27,7 +27,7 @@ def test_endpoint_cache(monkeypatch, cache, expected, serialized):
         if 'FROM chat_rolling_summary' in sql:
             return None
         if 'tokens_usage' in sql:
-            return {'tokens_usage': json.dumps(usage) if serialized else usage}
+            return {'message_id': 'answer-2', 'tokens_usage': json.dumps(usage) if serialized else usage}
         raise AssertionError(sql)
     conn.fetchrow = fetchrow
     pool = MagicMock()
@@ -39,6 +39,7 @@ def test_endpoint_cache(monkeypatch, cache, expected, serialized):
     response = TestClient(app).get('/web/memory/test/stats', params={'user_id': 777})
     assert response.status_code == 200
     c = response.json()['context']
+    assert c['message_id'] == 'answer-2'
     assert c['cache_pct'] == expected
     assert c['context_cache_read_tokens'] == cache
     assert c['tokens'] == 100000

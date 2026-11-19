@@ -665,32 +665,25 @@ def _extract_thinking_and_clean_content(raw_content) -> tuple[str, str, str]:
 
     return thinking_text, reasoning_text, cleaned
 
-
 async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, error_info: dict | None = None,
                            cache_control: bool = False, extra_headers: dict[str, str] | None = None):
-    """Стриминговая версия _invoke_with_retry.
-
-    Собирает ответ через llm.astream(), аккумулируя AIMessageChunk сложением (+=).
-    Финальный AIMessage идентичен тому, что вернул бы ainvoke: content, tool_calls,
-    usage_metadata — всё на месте.
-
-    on_chunk(text) — опциональный коллбэк на каждый текстовый чанк. Вызывается ТОЛЬКО
-    для чистого текста (reasoning/финал). При tool_call-чанках content пустой,
-    поэтому on_chunk для них не сработает.
-
-    Стратегия отказоустойчивости: если astream упал — фолбэк на обычный ainvoke.
-
-    cache_control=True (ChatAnthropic + prompt_cache) — размечаем копию сообщений
-    точками кеша: статический системный блок и последнее сообщение.
-    extra_headers — заголовки (например X-Enable-Prompt-Cache и x-session-id для OpenAI).
-    """
     messages = _sanitize_messages(messages)
     if cache_control:
         messages = apply_anthropic_cache_control(messages)
     call_kwargs = {"extra_headers": extra_headers} if extra_headers else {}
-    backoff = [2, 5, 10]
+
+    MAX_ATTEMPTS = 10        # лимит для исключений (сеть, 5xx)
+    MAX_EMPTY_RETRIES = 4    # лимит для пустых ответов (каждый оплачивается как полный промпт)
+    backoff = [2, 5, 10]     # дальше держим последнее значение (10 с)
+
+    def _pause(n: int) -> float:
+        return backoff[min(n, len(backoff) - 1)]
+
     last_error = None
-    for attempt in range(3):
+    empty_count = 0
+    wasted_in = 0            # входные токены, потраченные на пустые попытки
+
+    for attempt in range(MAX_ATTEMPTS):
         try:
             aggregate = None
             async for chunk in llm.astream(messages, **call_kwargs):
@@ -720,18 +713,49 @@ async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, err
                                 await on_chunk(t, kind="answer")
                 elif raw and on_chunk is not None:
                     await on_chunk(raw, kind="answer")
+
             if aggregate is not None:
-                # return _build_final(aggregate, calls)
-                return aggregate
+                um = aggregate.usage_metadata or {}
+                empty = (
+                    not aggregate.tool_calls
+                    and not aggregate.content
+                    and um.get("output_tokens", 0) == 0
+                )
+                if not empty:
+                    if wasted_in:
+                        logging.info(
+                            f"[iteration={iteration}] ответ получен после {empty_count} пустых попыток, "
+                            f"впустую потрачено ~{wasted_in} входных токенов"
+                        )
+                    return aggregate
+
+                empty_count += 1
+                wasted_in += um.get("input_tokens", 0)
+                logging.warning(
+                    f"[iteration={iteration}] пустой ответ, повтор {empty_count}/{MAX_EMPTY_RETRIES} "
+                    f"meta={aggregate.response_metadata} usage={um} id={aggregate.id}"
+                )
+                if empty_count > MAX_EMPTY_RETRIES:
+                    # попытки кончились: отдаём пустой, дальше сработает внешний ретрай
+                    return aggregate
+                if on_chunk is not None:
+                    try:
+                        await on_chunk("", kind="retry")  # статус на фронт, если коллбэк его поддерживает
+                    except Exception:
+                        pass
+                await asyncio.sleep(_pause(empty_count - 1))
+                continue
+
             return await llm.ainvoke(messages, **call_kwargs)
         except Exception as e:
             last_error = e
             logging.warning(
-                f"[iteration={iteration}] astream попытка {attempt + 1}/3 упала: "
+                f"[iteration={iteration}] astream попытка {attempt + 1}/{MAX_ATTEMPTS} упала: "
                 f"{type(e).__name__}: {e}"
             )
-            if attempt < 2:
-                await asyncio.sleep(backoff[attempt])
+            if attempt < MAX_ATTEMPTS - 1:
+                await asyncio.sleep(_pause(attempt))
+
     # Все стриминговые попытки провалены — последний шанс через ainvoke без стрима
     logging.error(f"[iteration={iteration}] astream провален, фолбэк на ainvoke: {last_error}")
     try:
@@ -741,7 +765,7 @@ async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, err
         if error_info is not None:
             error_info["reason"] = f"{type(e).__name__}: {e}"
         return None
-
+        
 CODE_TOOLS = {"execute_python_code", "write_sandbox_file", "edit_sandbox_file"}
 MAX_ARG_LEN   = 1200   # макс. символов для обычного аргумента
 MAX_CODE_LEN  = 800    # макс. символов для аргумента-кода
@@ -2167,7 +2191,7 @@ class HarnessAgent:
                     except Exception as _exc:
                         _llm_error["reason"] = f"{type(_exc).__name__}: {_exc}"
                         response = None
-
+                    logging.info(f"[respose] {response}")
                     if response is None:
                         _err_reason = _llm_error.get("reason", "unknown")
                         logging.error(f"[iteration={iteration}] Все попытки llm провалены, прерываю цикл: {_err_reason}")
@@ -2429,7 +2453,7 @@ class HarnessAgent:
 
                 return final_response, tool_trace
 
-            MAX_EMPTY_RESPONSE_RETRIES = 5
+            MAX_EMPTY_RESPONSE_RETRIES = 15
             for _empty_attempt in range(MAX_EMPTY_RESPONSE_RETRIES + 1):
                 final_response, tool_trace = await agent_event_loop(messages=messages)
                 if (final_response or "").strip():

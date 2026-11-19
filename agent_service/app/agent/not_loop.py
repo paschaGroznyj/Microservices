@@ -157,6 +157,8 @@ class LLModel:
                 if kind == "answer" and text:
                     await agent._send_chunk(text, request_id, msg_id=str(request_id), kind="live")
 
+            from .common.context_usage import prompt_weights, scale_breakdown
+            prompt_estimate = prompt_weights(messages)
             response, final = None, ""
             for attempt in range(MODEL_EMPTY_RETRIES + 1):
                 try:
@@ -181,6 +183,9 @@ class LLModel:
 
             usage = agent.track_tokens(response) if response is not None else dict(EMPTY_USAGE)
             tokens_usage = {**usage, "total_tokens": usage["input_tokens"] + usage["output_tokens"]}
+            tokens_usage.update(context_tokens=usage["input_tokens"],
+                                context_cache_read_tokens=usage["cache_read_tokens"],
+                                context_breakdown=scale_breakdown(prompt_estimate, usage["input_tokens"]))
             logger.info(
                 f"[tokens] type_query=model in={usage['input_tokens']} out={usage['output_tokens']} "
                 f"cached={usage['cache_read_tokens']}"

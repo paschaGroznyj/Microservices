@@ -125,6 +125,10 @@ def test_plain_answer_contract(h):
     assert out["files_to_send"] == []
     assert out["tool_trace"] is None
     assert out["agent_model"] == MODEL_NAMES["coder"]
+    breakdown = out["tokens_usage"].pop("context_breakdown")
+    assert breakdown["estimated"] is True
+    assert sum(breakdown["tokens"].values()) == out["tokens_usage"]["context_tokens"]
+    assert out["tokens_usage"].pop("context_cache_read_tokens") == 0
     assert out["tokens_usage"] == {"input_tokens": 10, "output_tokens": 3, "total_tokens": 13,
                                    "cache_read_tokens": 0, "cache_creation_tokens": 0, "context_tokens": 10}
     assert out["auto_title"] is None
@@ -152,6 +156,10 @@ def test_tool_step_then_answer(h):
     assert out["message"] == "Готово"
     assert out["used_tools"] == ["noop"] and out["action"] == "noop"
     assert calls[0].get("x") == 1
+    breakdown = out["tokens_usage"].pop("context_breakdown")
+    assert breakdown["estimated"] is True
+    assert sum(breakdown["tokens"].values()) == out["tokens_usage"]["context_tokens"]
+    assert out["tokens_usage"].pop("context_cache_read_tokens") == 0
     assert out["tokens_usage"] == {"input_tokens": 150, "output_tokens": 12, "total_tokens": 162,
                                    "cache_read_tokens": 0, "cache_creation_tokens": 0, "context_tokens": 50}
     second = h.models["coder"].calls[1]

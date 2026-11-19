@@ -1850,6 +1850,8 @@ class HarnessAgent:
             SUPERVISOR_EVERY_N = 5   # как часто запускать фоновый надзор (0 = выкл)
             SUPERVISOR_MIN_ITER = 4  # не трогаем первые шаги (агент только разогнался)
             total_input_tokens  = 0
+            last_breakdown = None
+            last_cache_read = 0
             last_iter_in = 0     # размер промпта последней итерации = текущий контекст
             total_output_tokens = 0
             total_cache = {"cache_read_tokens": 0, "cache_creation_tokens": 0}
@@ -2099,7 +2101,7 @@ class HarnessAgent:
             )
 
             async def agent_event_loop(messages: list):
-                nonlocal total_input_tokens, total_output_tokens, last_iter_in # Не видит из-за +=
+                nonlocal total_input_tokens, total_output_tokens, last_iter_in, last_breakdown, last_cache_read # Не видит из-за +=
                 iteration = 0
                 # ФОНОВЫЙ супервизор: храним текущий asyncio-таск (или None).
                 supervisor_task = None
@@ -2151,6 +2153,9 @@ class HarnessAgent:
                     # отдаём чистым response.content.
                     stream_state = {"sent": False}
 
+                    from .common.context_usage import prompt_weights, scale_breakdown
+                    prompt_estimate = prompt_weights(messages, tools if current_llm is llm_with_tools else ())
+                    last_iter_in, last_cache_read, last_breakdown = 0, 0, None
                     _llm_error = {}
                     try:
                         response = await _astream_collect(
@@ -2271,8 +2276,9 @@ class HarnessAgent:
                     iter_cr  = usage["cache_read_tokens"]
                     iter_cw  = usage["cache_creation_tokens"]
                     total_input_tokens  += iter_in
-                    if iter_in:
-                        last_iter_in = iter_in
+                    last_iter_in = iter_in
+                    last_cache_read = iter_cr
+                    last_breakdown = scale_breakdown(prompt_estimate, iter_in)
                     total_output_tokens += iter_out
                     if iteration == 0 and _tokcal_est and iter_in:
                         _ratio = CALIBRATOR.observe(agent_model, _tokcal_est, iter_in)
@@ -2457,6 +2463,8 @@ class HarnessAgent:
                     "cache_creation_tokens": total_cache["cache_creation_tokens"],
                     # контекст = промпт последней итерации (input_tokens выше — сумма за ход)
                     "context_tokens": last_iter_in,
+                    "context_breakdown": last_breakdown,
+                    "context_cache_read_tokens": last_cache_read,
                 }
             _tools_usage = self._ctx_get("tool_usage") or {}
             if _tools_usage:

@@ -138,3 +138,7 @@
 .mm-sline[hidden],.mm-bud[hidden]{display:none!important}
 .mm-sline{gap:4px}
 @media (max-width:600px){.mm-sline{gap:2px}}
+
+.mm-sline,.mm-legend,.mm-meta,.mm-cnt{color:var(--text-secondary)}
+.mm-part-0{background:#6b7f9e}.mm-part-1{background:#b08d57}.mm-part-2{background:#8a6fb0}
+.mm-part-3{background:var(--accent)}.mm-part-4{background:#328579}.mm-part-5{background:#bd647a}

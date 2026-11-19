@@ -61,11 +61,20 @@ function render() {
     if (g === 'c') { toggleCtx(); return; } if (st.open && st.tab === g) { closeCard(); return; } openCard(g); });
   if (c.tokens) {
     const w = Math.min(100, c.tokens / c.max_tokens * 100);
-    box.prepend(H(`<div class="mm-bud" data-mm title="Контекст ${fmtK(c.tokens)} из ${c.max_tokens / 1000}K"><i class="mm-c2" style="left:0;width:${w}%"></i></div>`));
+    box.prepend(H(`<div class="mm-bud" data-mm title="Контекст ${fmtK(c.tokens)} из ${c.max_tokens / 1000}K">${contextSegments(c) ? contextSegments(c).map((p,i,a)=>`<i class="${p.cls}" title="${p.label}: ≈${nf(p.tokens)} (оценка)" style="left:${a.slice(0,i).reduce((v,x)=>v+x.tokens,0)/c.tokens*w}%;width:${p.tokens/c.tokens*w}%"></i>`).join('') : `<i class="mm-c2" style="left:0;width:${w}%"></i>`}</div>`));
   }
   align();
   if (st.ctx) toggleCtx(true);
   if (st.open) openCard(st.tab, st.i);
+}
+const contextLabels = ['Система', 'Журнал', 'Саммари', 'История', 'Трасса инструментов', 'Схемы инструментов'];
+const contextKeys = ['system', 'journal', 'summary', 'history', 'tool_trace', 'tools'];
+function contextSegments(c) {
+  const b = c.context_breakdown;
+  if (!b || b.estimated !== true || !b.tokens || !c.tokens) return null;
+  const values = contextKeys.map(k => b.tokens[k]);
+  if (values.some(v => !Number.isInteger(v) || v < 0) || values.reduce((a,b)=>a+b,0) !== c.tokens) return null;
+  return values.map((tokens,i)=>({tokens, label:contextLabels[i], cls:`mm-part-${i}`}));
 }
 function toggleCtx(force) {
   const { box, area } = q(); if (!area) return;
@@ -73,8 +82,11 @@ function toggleCtx(force) {
   const b = area.querySelector('[data-go="c"]'); if (b) { b.setAttribute('aria-expanded', st.ctx); b.classList.toggle('is-on', st.ctx); }
   if (!st.ctx) return; if (st.open) closeCard();
   const c = st.data.context;
-  const parts = c.tokens
-    ? `<span><i class="mm-c2"></i>Промпт последнего шага ${fmtK(c.tokens)}</span>${c.cache_pct != null ? `<span>Из кэша за ход ${c.cache_pct}%</span>` : ''}`
+  const segments = contextSegments(c);
+  const parts = segments
+    ? `<span>Оценка состава промпта:</span>${segments.map(p=>`<span><i class="${p.cls}"></i>${p.label} ≈${nf(p.tokens)}</span>`).join('')}${c.cache_pct != null ? `<span>Кэш последнего шага ${c.cache_pct}%</span>` : ''}`
+    : c.tokens
+    ? `<span><i class="mm-c2"></i>Промпт последнего шага ${fmtK(c.tokens)} · состав неизвестен</span>${c.cache_pct != null ? `<span>Из кэша последнего шага ${c.cache_pct}%</span>` : ''}`
     : '<span>Нет данных о контексте: ответов агента после обновления ещё не было</span>';
   box.before(H(`<div class="mm-legend" data-mm>${parts}<span class="mm-sp"></span><span class="mm-tot">порог сжатия ${c.max_tokens / 1000}K</span></div>`));
 }

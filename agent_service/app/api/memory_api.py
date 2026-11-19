@@ -136,6 +136,8 @@ async def get_memory_stats(
         # Парсинг tokens_usage (asyncpg возвращает строку JSON)
         context_tokens = None
         cache_pct = None
+        context_breakdown = None
+        context_cache_read_tokens = None
         if last_usage_row and last_usage_row["tokens_usage"]:
             try:
                 usage_str = last_usage_row["tokens_usage"]
@@ -150,9 +152,11 @@ async def get_memory_stats(
                 # сумму input_tokens за ход за контекст не выдаём.
                 ctx = usage.get("context_tokens")
                 context_tokens = int(ctx) if ctx else None
-                if input_tok > 0:
-                    cache_pct = round(cache_read * 100 / input_tok)
-            except (json.JSONDecodeError, TypeError, AttributeError):
+                context_breakdown = usage.get("context_breakdown")
+                context_cache_read_tokens = usage.get("context_cache_read_tokens")
+                if context_tokens and context_cache_read_tokens is not None:
+                    cache_pct = round(int(context_cache_read_tokens) * 100 / context_tokens)
+            except (json.JSONDecodeError, TypeError, AttributeError, ValueError):
                 logging.warning(f"[memory_api] Failed to parse tokens_usage for chat {chat_id}")
         
         # Формируем ответ
@@ -178,6 +182,8 @@ async def get_memory_stats(
                 "tokens": context_tokens,
                 "max_tokens": 200_000,  # TOKEN_SOFT_LIMIT
                 "cache_pct": cache_pct,
+                "context_breakdown": context_breakdown,
+                "context_cache_read_tokens": context_cache_read_tokens,
             },
         }
 

@@ -1851,7 +1851,7 @@ class HarnessAgent:
             SUPERVISOR_MIN_ITER = 4  # не трогаем первые шаги (агент только разогнался)
             total_input_tokens  = 0
             last_breakdown = None
-            last_cache_read = 0
+            last_cache_read = None
             last_iter_in = 0     # размер промпта последней итерации = текущий контекст
             total_output_tokens = 0
             total_cache = {"cache_read_tokens": 0, "cache_creation_tokens": 0}
@@ -2155,7 +2155,7 @@ class HarnessAgent:
 
                     from .common.context_usage import prompt_weights, scale_breakdown
                     prompt_estimate = prompt_weights(messages, tools if current_llm is llm_with_tools else ())
-                    last_iter_in, last_cache_read, last_breakdown = 0, 0, None
+                    last_iter_in, last_cache_read, last_breakdown = 0, None, None
                     _llm_error = {}
                     try:
                         response = await _astream_collect(
@@ -2277,7 +2277,8 @@ class HarnessAgent:
                     iter_cw  = usage["cache_creation_tokens"]
                     total_input_tokens  += iter_in
                     last_iter_in = iter_in
-                    last_cache_read = iter_cr
+                    from .core.token_usage import cache_read_known
+                    last_cache_read = iter_cr if cache_read_known(response) else None
                     last_breakdown = scale_breakdown(prompt_estimate, iter_in)
                     total_output_tokens += iter_out
                     if iteration == 0 and _tokcal_est and iter_in:

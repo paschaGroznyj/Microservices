@@ -142,3 +142,6 @@
 .mm-sline,.mm-legend,.mm-meta,.mm-cnt{color:var(--text-secondary)}
 .mm-part-0{background:#6b7f9e}.mm-part-1{background:#b08d57}.mm-part-2{background:#8a6fb0}
 .mm-part-3{background:var(--accent)}.mm-part-4{background:#328579}.mm-part-5{background:#bd647a}
+
+.chat-input-area{position:relative}
+.mm-legend{position:absolute;bottom:100%;left:0;right:0;z-index:100;margin:0 0 8px;padding:12px;white-space:normal;max-height: min(50vh,320px);overflow:auto;background:var(--surface,var(--input-bg));border:1px solid var(--border);border-radius:12px;box-shadow:0 8px 24px #0002;overflow-wrap:anywhere}

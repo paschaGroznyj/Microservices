@@ -49,7 +49,7 @@ from .common.tool_output import clip_text, coerce_tool_result, fit_result
 logger = logging.getLogger(__name__)
 
 # --- дефолты (перекрываются аргументами вызова) ----------------------------
-TOKEN_SOFT_LIMIT =200_000   # порог по iter_in (факт от модели), НЕ аппроксимация
+from .common.context_limits import TOKEN_SOFT_LIMIT
 KEEP_LAST_PAIRS  = 3        # сколько последних пар AIMessage+ToolMessage оставить дословно
 COMPACT_MARKER   = "\U0001F5DC СЖАТЫЙ КОНТЕКСТ ИТЕРАЦИЙ"  # 🗜, метка для дедупликации
 

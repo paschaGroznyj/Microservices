@@ -197,3 +197,19 @@ def append_to_system_tail(messages: list[BaseMessage], text: str) -> list[BaseMe
         content = f"{base}\n\n{text}" if base else text
     messages[n - 1] = SystemMessage(content=content)
     return messages
+
+
+def cache_read_known(source: Any) -> bool:
+    """Whether the provider explicitly reported last-call cache reads."""
+    um = getattr(source, "usage_metadata", None)
+    if isinstance(um, dict) and um:
+        return "cache_read" in (um.get("input_token_details") or {})
+    if isinstance(source, BaseMessage):
+        rm = getattr(source, "response_metadata", None) or {}
+        source = rm.get("usage") or rm.get("token_usage") or {}
+    if not isinstance(source, dict):
+        return False
+    source = source.get("usage", source)
+    return ("cache_read_input_tokens" in source
+            or "cached_tokens" in (source.get("prompt_tokens_details") or {})
+            or "cache_read" in (source.get("input_token_details") or {}))

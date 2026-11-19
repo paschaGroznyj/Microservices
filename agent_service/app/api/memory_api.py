@@ -9,6 +9,7 @@ Memory API: статистика журнала, саммари и контек�
 Авторизация: user_id передаётся гейтвеем в query-параметре.
 Владение чатом проверяется через chats, chats_forks или chat_sidebar_meta.
 """
+from ..agent.common.context_limits import TOKEN_SOFT_LIMIT
 import json
 import logging
 from typing import Any
@@ -180,7 +181,9 @@ async def get_memory_stats(
             "summary": summary_info,
             "context": {
                 "tokens": context_tokens,
-                "max_tokens": 200_000,  # TOKEN_SOFT_LIMIT
+                "max_tokens": TOKEN_SOFT_LIMIT,
+                "limit_kind": "compaction_threshold",
+                "model_window_tokens": None,
                 "cache_pct": cache_pct,
                 "context_breakdown": context_breakdown,
                 "context_cache_read_tokens": context_cache_read_tokens,

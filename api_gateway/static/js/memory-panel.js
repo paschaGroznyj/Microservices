@@ -45,21 +45,19 @@ function cov(sm) { return sm && sm.total_messages ? Math.round(sm.covered / sm.t
 function render() {
   const { box, area } = q(); if (!box || !area) return;
   area.querySelectorAll('[data-mm]').forEach(e => e.remove());
-  const D = st.data; if (!D) return;
+  const D = st.data || {journal: {active: 0, total_chars: 0}, summary: {text: ''}, context: {tokens: null, max_tokens: null}};
   const j = D.journal, sm = D.summary, c = D.context;
-  const has = j.active || sm.text || c.tokens;
   const note = area.querySelector('.input-footer-note');
-  if (note) note.style.display = has ? 'none' : '';
-  if (!has) return;
-  const ctxTxt = c.tokens ? `<b>${fmtK(c.tokens)}</b><span class="mm-x">/${c.max_tokens / 1000}K${c.cache_pct != null ? ` · кэш ${c.cache_pct}%` : ''}</span>` : '<b>—</b>';
+  if (note) note.style.display = 'none';
+  const ctxTxt = c.tokens ? `<b>${fmtK(c.tokens)}</b><span class="mm-x">${c.max_tokens ? `/${fmtK(c.max_tokens).replace(',0K', 'K')}` : ''}${c.cache_pct != null ? ` · кэш ${c.cache_pct}%` : ''}</span>` : '<b>—</b>';
   const el = H(`<div class="mm-sline" data-mm>
    <button type="button" class="mm-it" data-go="j" aria-expanded="false">${S(P.j)}<span class="mm-lb">Журнал</span> <b>${j.active}</b><span class="mm-x"> · ${fmtK(j.total_chars)} зн.</span></button><span class="mm-dot"></span>
    <button type="button" class="mm-it" data-go="s" aria-expanded="false">${S(P.s)}<span class="mm-lb">Саммари</span> <b>${sm.text ? cov(sm) + '%' : 'нет'}</b>${sm.text ? '<span class="mm-x"> истории</span>' : ''}</button><span class="mm-dot"></span>
-   <button type="button" class="mm-it" data-go="c" aria-expanded="false" title="Промпт последнего шага агента">${ring(c.tokens / c.max_tokens)}<span class="mm-lb">Контекст</span> ${ctxTxt}</button></div>`);
+   <button type="button" class="mm-it" data-go="c" aria-expanded="false" title="Промпт последнего шага. /200K — порог сжатия агентного режима, не окно модели; в режиме только модели не применяется">${ring(c.tokens / c.max_tokens)}<span class="mm-lb">Контекст</span> ${ctxTxt}</button></div>`);
   box.after(el);
   el.addEventListener('click', e => { const b = e.target.closest('[data-go]'); if (!b) return; const g = b.dataset.go;
     if (g === 'c') { toggleCtx(); return; } if (st.open && st.tab === g) { closeCard(); return; } openCard(g); });
-  if (c.tokens) {
+  if (c.tokens && c.max_tokens) {
     const w = Math.min(100, c.tokens / c.max_tokens * 100);
     box.prepend(H(`<div class="mm-bud" data-mm title="Контекст ${fmtK(c.tokens)} из ${c.max_tokens / 1000}K">${contextSegments(c) ? contextSegments(c).map((p,i,a)=>`<i class="${p.cls}" title="${p.label}: ≈${nf(p.tokens)} (оценка)" style="left:${a.slice(0,i).reduce((v,x)=>v+x.tokens,0)/c.tokens*w}%;width:${p.tokens/c.tokens*w}%"></i>`).join('') : `<i class="mm-c2" style="left:0;width:${w}%"></i>`}</div>`));
   }
@@ -81,14 +79,14 @@ function toggleCtx(force) {
   st.ctx = force ?? !st.ctx; area.querySelector('.mm-legend')?.remove();
   const b = area.querySelector('[data-go="c"]'); if (b) { b.setAttribute('aria-expanded', st.ctx); b.classList.toggle('is-on', st.ctx); }
   if (!st.ctx) return; if (st.open) closeCard();
-  const c = st.data.context;
+  const c = st.data?.context || {};
   const segments = contextSegments(c);
   const parts = segments
     ? `<span>Оценка состава промпта:</span>${segments.map(p=>`<span><i class="${p.cls}"></i>${p.label} ≈${nf(p.tokens)}</span>`).join('')}${c.cache_pct != null ? `<span>Кэш последнего шага ${c.cache_pct}%</span>` : ''}`
     : c.tokens
     ? `<span><i class="mm-c2"></i>Промпт последнего шага ${fmtK(c.tokens)} · состав неизвестен</span>${c.cache_pct != null ? `<span>Из кэша последнего шага ${c.cache_pct}%</span>` : ''}`
     : '<span>Нет данных о контексте: ответов агента после обновления ещё не было</span>';
-  box.before(H(`<div class="mm-legend" data-mm>${parts}<span class="mm-sp"></span><span class="mm-tot">порог сжатия ${c.max_tokens / 1000}K</span></div>`));
+  box.before(H(`<div class="mm-legend" data-mm>${parts}<span class="mm-sp"></span><span class="mm-tot">Порог сжатия агентного режима: ${c.max_tokens ? fmtK(c.max_tokens) + ' (не окно модели; в режиме только модели не применяется)' : 'неизвестен'}</span></div>`));
 }
 
 /* ── карточка-карусель ── */
@@ -238,14 +236,14 @@ function reset(chatId) { st.chat = chatId; st.data = null; st.entries = []; st.t
 async function load() {
   const seq = st.seq;
   try { const d = await api('stats'); if (seq !== st.seq) return; st.data = d; st.total = d.journal.active; render(); }
-  catch (e) { if (seq === st.seq) { st.data = null; q().area?.querySelectorAll('[data-mm]').forEach(x => x.remove()); } }
+  catch (e) { if (seq === st.seq) render(); }
 }
 window.MemoryPanel = {
   mount(chatId) {
     if (!chatId) { this.unmount(); return; }
-    if (String(chatId) !== String(st.chat)) { reset(String(chatId)); load(); }
+    if (String(chatId) !== String(st.chat)) { reset(String(chatId)); render(); load(); }
     else if (st.data && !q().area?.querySelector('.mm-sline')) render();
-    else if (!st.data) load();
+    else if (!st.data) { render(); load(); }
   },
   refresh(chatId) {
     if (chatId != null && String(chatId) !== String(st.chat)) return;

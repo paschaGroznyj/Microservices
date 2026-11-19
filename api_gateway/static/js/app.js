@@ -6041,7 +6041,10 @@ class ChatApp {
         // Стартовый экран уже есть и чат не выбран — пропускаем
         if (!this.currentChat && hasStart) return;
         // Инпут активного чата уже есть И это тот же чат — пропускаем
-        if (this.currentChat && hasActive && renderedChat === String(this.currentChat)) return;
+        if (this.currentChat && hasActive && renderedChat === String(this.currentChat)) {
+            window.MemoryPanel?.mount(this.currentChat);
+            return;
+        }
         // Если чат выбран, но рендерился стартовый — рендерим инпут (смена состояния)
 
         container.classList.add('rending');

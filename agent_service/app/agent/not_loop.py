@@ -181,10 +181,11 @@ class LLModel:
                 final = MODEL_EMPTY_FALLBACK
             await agent._send_chunk("", request_id, msg_id=str(request_id), kind="final_commit")
 
+            from .core.token_usage import cache_read_known
             usage = agent.track_tokens(response) if response is not None else dict(EMPTY_USAGE)
             tokens_usage = {**usage, "total_tokens": usage["input_tokens"] + usage["output_tokens"]}
             tokens_usage.update(context_tokens=usage["input_tokens"],
-                                context_cache_read_tokens=usage["cache_read_tokens"],
+                                context_cache_read_tokens=(usage["cache_read_tokens"] if cache_read_known(response) else None),
                                 context_breakdown=scale_breakdown(prompt_estimate, usage["input_tokens"]))
             logger.info(
                 f"[tokens] type_query=model in={usage['input_tokens']} out={usage['output_tokens']} "

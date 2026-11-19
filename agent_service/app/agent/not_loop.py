@@ -18,7 +18,8 @@ from langchain.schema import HumanMessage, SystemMessage
 from langchain_core.messages import BaseMessage, trim_messages
 from langchain_core.messages.utils import count_tokens_approximately
 
-from .core.agent_provider import get_real_model_name, resolve_model_tag
+from .core.agent_provider import get_model_spec, get_real_model_name, resolve_model_tag
+from .core.token_calibration import CALIBRATOR
 from .prompts.system_prompt import DEFAULT_AGENT_IDENTITY, INTERACTIVE_POLL_GUIDANCE
 from .title_generator import generate_chat_title, is_first_turn
 
@@ -77,12 +78,17 @@ class LLModel:
     def __init__(self, agent):
         self.agent = agent  # HarnessAgent: модели, история из БД, стрим, flow, токены
 
-    async def _history(self, chat_id, max_tokens: int) -> List[BaseMessage]:
+    async def _history(self, chat_id, max_tokens: int, model_tag: str | None = None) -> List[BaseMessage]:
         history = await self.agent._load_history_from_db(chat_id, MODEL_HISTORY_REQUESTS * 2)
+        counter = count_tokens_approximately
+        if model_tag:
+            # тот же счётчик, что у агента: chars_per_token модели с калибровкой
+            spec = get_model_spec(model_tag, self.agent.AGENT_MODELS)
+            counter = CALIBRATOR.counter(model_tag, spec.chars_per_token)
         return trim_messages(
             history,
             max_tokens=max_tokens,
-            token_counter=count_tokens_approximately,
+            token_counter=counter,
             strategy="last",
             start_on="human",
             include_system=True,
@@ -97,9 +103,9 @@ class LLModel:
         return datetime.now(tz).strftime("%d.%m.%Y %H:%M, %A") + f" ({tz.key})"
 
     async def build_messages(self, user_input: str, chat_id, context_size: str | None,
-                             timezone_name: str | None) -> List[BaseMessage]:
+                             timezone_name: str | None, model_tag: str | None = None) -> List[BaseMessage]:
         max_tokens = MODEL_CONTEXT_TOKENS.get(context_size or "medium", MODEL_CONTEXT_TOKENS["medium"])
-        history = await self._history(chat_id, max_tokens)
+        history = await self._history(chat_id, max_tokens, model_tag)
         return [
             SystemMessage(content=MODEL_SYSTEM_PROMPT),
             SystemMessage(content=f"🕒 ТЕКУЩИЙ КОНТЕКСТ:\nCurrent date and time: {self._now(timezone_name)}"),
@@ -136,7 +142,7 @@ class LLModel:
             tag = resolve_model_tag(agent_model, agent.AGENT_MODELS)
             llm = agent.AGENT_MODELS[tag]
             real_model = get_real_model_name(llm)
-            messages = await self.build_messages(user_input, chat_id, context_size, timezone_name)
+            messages = await self.build_messages(user_input, chat_id, context_size, timezone_name, model_tag=tag)
             logger.info(
                 f"[model] type_query=model chat={chat_id} model={tag} ({real_model}) "
                 f"messages={len(messages)}"

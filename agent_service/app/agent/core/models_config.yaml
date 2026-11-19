@@ -21,7 +21,7 @@ models:
     max_tokens: 16384
     reasoning:
       effort: "low"
-    chars_per_token: 4.0
+    chars_per_token: 3.8
     imitate_tool_status: true
     tool_name_integrity_guidance: true
     vision_target: "coder"
@@ -56,7 +56,7 @@ models:
     reasoning:
       type: "adaptive"
       display: "summarized"
-    chars_per_token: 1.3
+    chars_per_token: 2.4
     imitate_tool_status: false
     tool_name_integrity_guidance: false
     vision_target: "designer"
@@ -89,7 +89,7 @@ models:
       - "glm"
     max_tokens: 16384
     reasoning: {}
-    chars_per_token: 2.0
+    chars_per_token: 3.8
     imitate_tool_status: false
     tool_name_integrity_guidance: true
     vision_target: "universal"
@@ -121,7 +121,7 @@ models:
     max_tokens: 16384
     reasoning:
       effort: "low"
-    chars_per_token: 2.0
+    chars_per_token: 3.5
     imitate_tool_status: true
     tool_name_integrity_guidance: true
     vision_target: "designer"
@@ -148,7 +148,7 @@ models:
       </svg>
 
   gigachat:
-    model: "ai-sage/GigaChat3.5-432B-A28B-Reasoning"
+    model: "ai-sage/GigaChat3.5-432B-A28B"
     provider: "openai"
     label: "GigaChat"
     setting_key: "gigachat"
@@ -157,12 +157,12 @@ models:
       - "giga"
     max_tokens: 16384
     reasoning: {}
-    chars_per_token: 2.0
+    chars_per_token: 3.9
     imitate_tool_status: false
     tool_name_integrity_guidance: true
     vision_target: "coder"
     legacy_builder: "get_llm_model_gigachat"
-    hint: "Модель от Сбера (GigaChat 3.5 Reasoning, 432B MoE). Показывает reasoning (размышления)."
+    hint: "Модель от Сбера (GigaChat 3.5, 432B MoE)."
     accent: "#2563eb"
     svg: >-
       <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
@@ -183,7 +183,7 @@ models:
       - "ds"
     max_tokens: 16384
     reasoning: {}
-    chars_per_token: 2.0
+    chars_per_token: 3.5
     imitate_tool_status: false
     tool_name_integrity_guidance: true
     vision_target: "coder"

@@ -22,7 +22,6 @@ from .core.agent_provider import (
     build_agent_models,
     build_lite_models,
     build_openai_cache_headers,
-    get_chars_per_token_map,
     get_imitate_tool_status_models,
     get_llm_lite_model,
     get_llm_lite_model_gemini_flash,
@@ -59,6 +58,7 @@ from .common.tool_output import clip_text, coerce_tool_result, tool_content
 from .core.token_usage import (
     normalize_usage, add_usage, apply_anthropic_cache_control, append_to_system_tail,
 )
+from .core.token_calibration import CALIBRATOR
 
 
 GATEWAY_URL = f"http://api_gateway:{PORT_GATEWAY_PORT}"
@@ -2000,10 +2000,15 @@ class HarnessAgent:
 
             # Собираем историю из памяти
             history = await self._build_history(chat_id, limit=30)
+            # Счётчик под активную модель: chars_per_token из конфига с поправкой
+            # по факту провайдера (EMA). Пресет max_tokens = токены этой модели.
+            await CALIBRATOR.load(await self._get_redis())
+            _cpt_base = model_spec.chars_per_token
+            _cpt = CALIBRATOR.chars_per_token(agent_model, _cpt_base)
             trimmed_history = trim_messages(
                 history,
                 max_tokens=max_tokens,
-                token_counter=count_tokens_approximately,
+                token_counter=CALIBRATOR.counter(agent_model, _cpt_base),
                 strategy='last',
                 start_on='human',
                 include_system=True,
@@ -2076,10 +2081,8 @@ class HarnessAgent:
                 *trimmed_history,
                 HumanMessage(content=user_input),
             ]
-            RATIO = get_chars_per_token_map()   # символов на токен из models_config.yaml
-
             import json
-            def _tok(s): return len(s) // RATIO.get(agent_model, model_spec.chars_per_token)   # для русского ~2 симв/токен, а не 4
+            def _tok(s): return int(len(s) / _cpt)   # символов на токен активной модели с калибровкой
 
             # for m in messages:
             #     c = m.content if isinstance(m.content, str) else json.dumps(m.content, ensure_ascii=False)
@@ -2088,6 +2091,12 @@ class HarnessAgent:
             schemas = json.dumps([t.args_schema.schema() if t.args_schema else {} for t in tools], ensure_ascii=False)
             descr   = sum(len(t.description or "") for t in tools)
             logger.info(f"[budget] tools={len(tools)} schema_chars={len(schemas)} descr_chars={descr} ~tok={_tok(schemas)+_tok('x'*descr)}")
+            # Оценка первого промпта по конфигу (сообщения + схемы тулов) для калибровки.
+            # Картинки в промпте искажают оценку, такие запросы не калибруем.
+            _tokcal_est = (
+                CALIBRATOR.estimate(messages, _cpt_base, extra_chars=len(schemas) + descr)
+                if CALIBRATOR.calibratable(messages) else 0
+            )
 
             async def agent_event_loop(messages: list):
                 nonlocal total_input_tokens, total_output_tokens # Не видит из-за +=
@@ -2263,6 +2272,15 @@ class HarnessAgent:
                     iter_cw  = usage["cache_creation_tokens"]
                     total_input_tokens  += iter_in
                     total_output_tokens += iter_out
+                    if iteration == 0 and _tokcal_est and iter_in:
+                        _ratio = CALIBRATOR.observe(agent_model, _tokcal_est, iter_in)
+                        if _ratio is not None:
+                            await CALIBRATOR.save(await self._get_redis(), agent_model)
+                            logging.info(
+                                f"[tokcal] model={agent_model} est={_tokcal_est} real={iter_in} "
+                                f"x{iter_in / _tokcal_est:.3f} ema={_ratio:.3f} n={CALIBRATOR.samples(agent_model)} "
+                                f"cpt={_cpt_base}->{CALIBRATOR.chars_per_token(agent_model, _cpt_base):.2f}"
+                            )
                     total_cache["cache_read_tokens"] += iter_cr
                     total_cache["cache_creation_tokens"] += iter_cw
                     _hit = f"{iter_cr * 100 // iter_in}%" if iter_in else "-"

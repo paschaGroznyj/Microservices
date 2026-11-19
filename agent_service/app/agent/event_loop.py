@@ -43,7 +43,7 @@ from .core.config import (
     ADMINS_BY_TG_ID, get_role_tg, TG_BOT_PUSH_URL, MAX_BOT_PUSH_URL,
     ADMINS_BY_MAX_ID, get_role_max,
 )
-from .core.settings import TOOLS_SETTINGS, UNIVERSAL_TOOLS, ADMIN_ONLY_CATEGORIES
+from .core.settings import TOOLS_SETTINGS, UNIVERSAL_TOOLS, ADMIN_ONLY_CATEGORIES, MESSENGER_ONLY_CATEGORIES
 from .prompts.summary_prompt import SUMMARIZE_CUT_PROMPT, TOOL_TRACE_SUMMARY_PROMPT
 from .prompts.system_prompt import SYSTEM_PROMPT, INTERACTIVE_POLL_GUIDANCE
 from .title_generator import generate_chat_title, is_first_turn
@@ -1198,7 +1198,11 @@ class HarnessAgent:
         except (TypeError, ValueError):
             _is_admin = False
         allowed_names: set[str] = set()
-        for category in selected_tools:
+        _is_messenger = is_telegram or is_max
+        categories = [c for c in (selected_tools or []) if c not in MESSENGER_ONLY_CATEGORIES]
+        if _is_messenger:
+            categories += list(MESSENGER_ONLY_CATEGORIES)
+        for category in categories:
             if category in ADMIN_ONLY_CATEGORIES and not _is_admin:
                 continue
             allowed_names.update(TOOLS_SETTINGS.get(category, []))

@@ -56,7 +56,8 @@ def test_nothing_selected_gives_universal_only(agent_obj):
     assert got == settings.UNIVERSAL_TOOLS
 
 
-@pytest.mark.parametrize("category", [c for c in settings.TOOLS_SETTINGS if c not in settings.ADMIN_ONLY_CATEGORIES])
+@pytest.mark.parametrize("category", [c for c in settings.TOOLS_SETTINGS
+                                      if c not in settings.ADMIN_ONLY_CATEGORIES | settings.MESSENGER_ONLY_CATEGORIES])
 def test_category_adds_its_tools(agent_obj, category):
     got = set(build(agent_obj, [category]))
     built = set(names(agent_obj._build_tools(56, "c", "q", allow_all=True)))
@@ -66,6 +67,19 @@ def test_category_adds_its_tools(agent_obj, category):
 
 def test_unknown_category_ignored(agent_obj):
     assert set(build(agent_obj, ["no_such"])) == settings.UNIVERSAL_TOOLS
+
+
+@pytest.mark.parametrize("kw", [{"is_telegram": True}, {"is_max": True}])
+def test_messengers_category_auto_for_tg_max(agent_obj, kw):
+    assert "manage_trigger" in build(agent_obj, [], **kw)
+    assert "manage_trigger" in build(agent_obj, ["internet"], **kw)
+
+
+def test_messengers_category_not_in_web(agent_obj):
+    assert "manage_trigger" not in build(agent_obj, [])
+    assert "manage_trigger" not in build(agent_obj, ["internet", "content", "sessions"])
+    # Ручной выбор категории в вебе не включает тул.
+    assert "manage_trigger" not in build(agent_obj, ["messengers"])
 
 
 @pytest.mark.parametrize("index_attr, uid, kw", [

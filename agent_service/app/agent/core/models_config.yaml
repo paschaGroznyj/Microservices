@@ -12,7 +12,7 @@ defaults:
 
 models:
   coder:
-    model: "openai/gpt-5.4"
+    model: "openai/gpt-6.1-sol"
     provider: "openai"
     label: "GPT"
     setting_key: "gpt"
@@ -112,7 +112,7 @@ models:
       </svg>
 
   gemini:
-    model: "google/gemini-3.1-pro-preview"
+    model: "google/gemini-3.8-flash"
     provider: "openai"
     label: "Gemini"
     setting_key: "gemini"

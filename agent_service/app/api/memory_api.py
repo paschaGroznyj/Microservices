@@ -9,7 +9,7 @@ Memory API: статистика журнала, саммари и контек�
 Авторизация: user_id передаётся гейтвеем в query-параметре.
 Владение чатом проверяется через chats, chats_forks или chat_sidebar_meta.
 """
-from ..agent.common.context_limits import TOKEN_SOFT_LIMIT
+from app.agent.common.context_limits import TOKEN_SOFT_LIMIT
 import json
 import logging
 from typing import Any

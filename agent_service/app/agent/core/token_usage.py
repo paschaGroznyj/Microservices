@@ -213,3 +213,18 @@ def cache_read_known(source: Any) -> bool:
     return ("cache_read_input_tokens" in source
             or "cached_tokens" in (source.get("prompt_tokens_details") or {})
             or "cache_read" in (source.get("input_token_details") or {}))
+
+
+def cumulative_stream_usage(llm) -> bool:
+    model = str(getattr(llm, "model_name", "") or getattr(llm, "model", "")).lower()
+    return "gemini" in model or "gigachat" in model
+
+
+def merge_usage_snapshot(acc: dict, snapshot: dict) -> dict:
+    """Merge cumulative counters within one provider call, including late details."""
+    for key, value in snapshot.items():
+        if isinstance(value, dict):
+            merge_usage_snapshot(acc.setdefault(key, {}), value)
+        elif isinstance(value, (int, float)):
+            acc[key] = max(acc.get(key, 0), value)
+    return acc

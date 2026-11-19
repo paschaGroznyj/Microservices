@@ -685,9 +685,16 @@ async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, err
 
     for attempt in range(MAX_ATTEMPTS):
         try:
+            from .core.token_usage import cumulative_stream_usage, merge_usage_snapshot
+            cumulative = cumulative_stream_usage(llm)
+            stream_usage = {}
             aggregate = None
             async for chunk in llm.astream(messages, **call_kwargs):
+                if cumulative and getattr(chunk, "usage_metadata", None):
+                    merge_usage_snapshot(stream_usage, chunk.usage_metadata)
                 aggregate = chunk if aggregate is None else aggregate + chunk
+                if cumulative and stream_usage:
+                    aggregate = aggregate.model_copy(update={"usage_metadata": dict(stream_usage)})
 
                 # --- reasoning-канал (gpt → reasoning, gemini → reasoning_content) ---
                 ak = getattr(chunk, "additional_kwargs", {}) or {}

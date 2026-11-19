@@ -170,7 +170,13 @@ def test_tool_name_integrity_guidance_per_model(h):
     h.models["coder"].script = ["ok"]
     h.run(model="coder")
     coder_sys = system_text(h.models["coder"].calls[0])
-    assert TOOL_NAME_INTEGRITY_GUIDANCE.strip()[:30] in coder_sys
+    # У coder (GPT) в models_config.yaml tool_name_integrity_guidance: false
+    assert TOOL_NAME_INTEGRITY_GUIDANCE.strip()[:30] not in coder_sys
+
+    h.models["gemini"].script = ["ok"]
+    h.run(model="gemini")
+    gemini_sys = system_text(h.models["gemini"].calls[0])
+    assert TOOL_NAME_INTEGRITY_GUIDANCE.strip()[:30] in gemini_sys
 
     h.models["designer"].script = ["ok"]
     h.run(model="claude")

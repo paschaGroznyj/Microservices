@@ -11,7 +11,9 @@ try:
     from langchain_gigachat.embeddings import GigaChatEmbeddings
 except ImportError:  # pragma: no cover
     GigaChatEmbeddings = None  # type: ignore[assignment]
-from langchain_openai import ChatOpenAI
+# Подкласс ChatOpenAI: сохраняет delta.reasoning_content из стрима.
+# Имя ChatOpenAI оставлено, чтобы тесты могли подменять фабрику через monkeypatch.
+from .reasoning_openai import ChatOpenAIWithReasoning as ChatOpenAI
 
 try:
     from langchain_anthropic import ChatAnthropic

@@ -20,10 +20,10 @@ models:
       - "gpt"
     max_tokens: 16384
     reasoning:
-      effort: "low"
+      effort: "high"
     chars_per_token: 3.8
     imitate_tool_status: true
-    tool_name_integrity_guidance: true
+    tool_name_integrity_guidance: false
     vision_target: "coder"
     legacy_builder: "get_llm_model_gpt"
     hint: "Модель от OpenAI. Сильна в коде, инструментах и длинном контексте. Показывает tool-calling."

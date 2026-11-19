@@ -98,6 +98,52 @@ def test_big_file_excluded(client, monkeypatch):
     assert [f["path"] for f in body["files"]] == ["small.txt"]
 
 
+
+def test_snapshot_budget_drops_largest(client, monkeypatch):
+    monkeypatch.setattr(ws_diff, "SNAP_MAX_BYTES", 1000)
+    wid, path = _create(client)
+    client.post(f"/workspace/{wid}/diff/snap", json={"request_id": "rb"})
+    for name, size in (("a.bin", 800), ("b.bin", 600), ("c.txt", 10)):
+        open(os.path.join(path, name), "w").write("x" * size)
+    body = client.post(f"/workspace/{wid}/diff/snap", json={"request_id": "rb"}).json()
+    assert sorted(f["path"] for f in body["files"]) == ["b.bin", "c.txt"]
+
+
+def test_stale_lock_and_tmp_pack_cleaned(client):
+    wid, path = _create(client)
+    gd = os.path.join(path, ".ws_meta", "shadow", "root.git")
+    lock = os.path.join(gd, "index.lock")
+    tmp_pack = os.path.join(gd, "objects", "pack", "tmp_pack_abc123")
+    os.makedirs(os.path.dirname(tmp_pack), exist_ok=True)
+    open(lock, "w").close()
+    open(tmp_pack, "wb").write(b"\0" * 4096)
+    client.post(f"/workspace/{wid}/diff/snap", json={"request_id": "rl"})
+    open(os.path.join(path, "n.txt"), "w").write("1\n")
+    body = client.post(f"/workspace/{wid}/diff/snap", json={"request_id": "rl"}).json()
+    assert [f["path"] for f in body["files"]] == ["n.txt"]
+    assert not os.path.exists(lock) and not os.path.exists(tmp_pack)
+
+
+def test_timeout_cleans_garbage(client, monkeypatch):
+    wid, path = _create(client)
+    gd = os.path.join(path, ".ws_meta", "shadow", "root.git")
+    real_git = ws_diff._git
+
+    def fake_git(git_dir, work_tree, *args, **kw):
+        if args[:1] == ("add",):
+            open(os.path.join(git_dir, "index.lock"), "w").close()
+            open(os.path.join(git_dir, "objects", "pack", "tmp_pack_x"), "wb").write(b"\0" * 100)
+            raise subprocess.TimeoutExpired(["git", "add"], ws_diff.GIT_TIMEOUT)
+        return real_git(git_dir, work_tree, *args, **kw)
+
+    monkeypatch.setattr(ws_diff, "_git", fake_git)
+    r = client.post(f"/workspace/{wid}/diff/snap", json={"request_id": "rt"})
+    assert r.status_code == 500 and "timeout" in r.json()["detail"]
+    assert not os.path.exists(os.path.join(gd, "index.lock"))
+    assert not os.path.exists(os.path.join(gd, "objects", "pack", "tmp_pack_x"))
+    monkeypatch.setattr(ws_diff, "_git", real_git)
+    assert client.post(f"/workspace/{wid}/diff/snap", json={"request_id": "rt"}).status_code == 200
+
 def test_chat_restore_and_attach(client):
     wid, path = _create(client)
     client.post(f"/workspace/{wid}/diff/snap", json={"request_id": "r6", "chat_id": "chat-9"})

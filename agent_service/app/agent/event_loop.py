@@ -59,6 +59,7 @@ from .core.token_usage import (
     normalize_usage, add_usage, apply_anthropic_cache_control, append_to_system_tail,
 )
 from .core.token_calibration import CALIBRATOR
+from .common.trace_budget import CONTENT_MARK, attach_traces, compress_trace
 
 
 GATEWAY_URL = f"http://api_gateway:{PORT_GATEWAY_PORT}"
@@ -255,9 +256,7 @@ TOOL_FIELD_LIMITS = {
     "edit_and_run": {"stdout": 3000, "stderr": 1000},
     "execute_shell_commands": {"stdout": 3000, "stderr": 1000},
 }
-MAX_TRACE_FROM_DB_CHARS = int(os.getenv("MAX_TRACE_FROM_DB_CHARS", "2500"))
-TRACE_SUMMARY_THRESHOLD = int(os.getenv("TRACE_SUMMARY_THRESHOLD", "20000"))
-MAX_TRACE_HARD_CHARS = int(os.getenv("MAX_TRACE_HARD_CHARS", "21000"))
+# Бюджет tool_trace (в токенах модели) — см. common/trace_budget.py
 
 # Имитация reasoning для моделей, которые НЕ отдают свой reasoning в стрим
 # (определяется флагом imitate_tool_status в models_config.yaml либо env).
@@ -828,9 +827,8 @@ class HarnessAgent:
                 kwargs = {"db_id": row["id"]}
                 if row["is_from_bot"]:
                     if row.get("tool_trace"):
-                        kwargs["tool_trace"] = _truncate_text(
-                            str(row["tool_trace"]), max_chars=MAX_TRACE_HARD_CHARS
-                        )
+                        # обрезка по токенам читающей модели — в attach_traces
+                        kwargs["tool_trace"] = str(row["tool_trace"])
                     messages.append(AIMessage(content=row["message_text"], additional_kwargs=kwargs))
                 else:
                     messages.append(HumanMessage(content=row["message_text"], additional_kwargs=kwargs))
@@ -1239,14 +1237,12 @@ class HarnessAgent:
             return await self._lite_ainvoke(messages)
         return await model.ainvoke(messages)
 
-    async def _summarize_tool_trace(self, raw_trace: str) -> str:
-        """LLM-сжатие сырого tool_trace ОДНОГО запроса в компактную md-таблицу.
+    async def _summarize_tool_trace(self, raw_trace: str) -> str | None:
+        """LLM-сжатие ГОЛОВЫ tool_trace одного запроса в md-таблицу.
 
-        Вызывается на выходе из run_agent, если сырой trace длиннее
-        TRACE_SUMMARY_THRESHOLD. Использует основную модель агента
-        (_main_ainvoke) и TOOL_TRACE_SUMMARY_PROMPT. Fail-open: при любой
-        ошибке / пустом ответе деградируем на _truncate_text, чтобы падение
-        LLM никогда не роняло сохранение сообщения.
+        Вызывается из compress_trace, когда трейс больше TRACE_MSG_TOKENS.
+        Хвост (последние вызовы) идёт следом сырым и сюда не попадает.
+        None при ошибке / пустом ответе: compress_trace обрежет голову сам.
         """
         try:
             prompt = TOOL_TRACE_SUMMARY_PROMPT.format(raw_trace=raw_trace)
@@ -1254,14 +1250,14 @@ class HarnessAgent:
             summary = (getattr(resp, "content", "") or "").strip()
             if summary:
                 logging.info(
-                    f"[trace-summary] сырой trace {len(raw_trace)} симв → "
+                    f"[trace-summary] голова trace {len(raw_trace)} симв → "
                     f"сводка {len(summary)} симв"
                 )
                 return summary
             logging.warning("[trace-summary] пустой ответ модели, деградирую на обрезку")
         except Exception as e:
             logging.error(f"[trace-summary] ошибка LLM-сжатия trace: {e}, деградирую на обрезку")
-        return _truncate_text(raw_trace, max_chars=MAX_TRACE_FROM_DB_CHARS)
+        return None
 
     def _spawn_summary_refresh(self, chat_id, new_cut_messages, prev_summary, max_covered_id, total_cut):
         """Фоновая rolling-саммаризация (defer на N+1).
@@ -1322,7 +1318,7 @@ class HarnessAgent:
         # компактный кусок трейса прямо в chunk_text (с жёсткой обрезкой на сообщение).
         def _fmt_cut(m: BaseMessage) -> str:
             role = getattr(m, "type", m.__class__.__name__)
-            body = str(getattr(m, "content", "") or "")[:1000]
+            body = str(getattr(m, "content", "") or "").split(CONTENT_MARK, 1)[0][:1000]
             trace = (getattr(m, "additional_kwargs", None) or {}).get("tool_trace")
             if trace:
                 body = f"{body}\n  (tool_trace: {str(trace)[:1200]})"
@@ -2005,6 +2001,9 @@ class HarnessAgent:
             await CALIBRATOR.load(await self._get_redis())
             _cpt_base = model_spec.chars_per_token
             _cpt = CALIBRATOR.chars_per_token(agent_model, _cpt_base)
+            # tool_trace в content ответов бота: полный у последних, у старых
+            # только сводка. Так его видит модель и считает trim.
+            history = attach_traces(history, _cpt)
             trimmed_history = trim_messages(
                 history,
                 max_tokens=max_tokens,
@@ -2472,17 +2471,13 @@ class HarnessAgent:
             except Exception as e:
                 logging.error(f"[title] ошибка автозаголовка chat={chat_id}: {e}")
 
-            # Сжатие tool_trace ЗДЕСЬ И СЕЙЧАС (на выходе из запроса).
-            # Сырой trace текущего хода: если длиннее порога — гоним через
-            # основную модель в компактную md-таблицу (артефакты сохраняются),
-            # иначе кладём как есть. В БД больше НЕ ложатся сырые простыни.
-            trace_out = None
-            if tool_trace:
-                raw_trace = '; '.join(tool_trace)
-                if len(raw_trace) > TRACE_SUMMARY_THRESHOLD:
-                    trace_out = await self._summarize_tool_trace(raw_trace)
-                else:
-                    trace_out = raw_trace
+            # Сжатие tool_trace на выходе из запроса. До TRACE_MSG_TOKENS — сырой. Больше: последние вызовы сырые,
+            # голова сжимается в md-таблицу (см. common/trace_budget.py).
+            trace_out = await compress_trace(
+                tool_trace,
+                CALIBRATOR.chars_per_token(agent_model, model_spec.chars_per_token),
+                self._summarize_tool_trace,
+            )
 
             return {
                 "input": user_input,

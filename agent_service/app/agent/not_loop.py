@@ -20,6 +20,7 @@ from langchain_core.messages.utils import count_tokens_approximately
 
 from .core.agent_provider import get_model_spec, get_real_model_name, resolve_model_tag
 from .core.token_calibration import CALIBRATOR
+from .common.trace_budget import attach_traces
 from .prompts.system_prompt import DEFAULT_AGENT_IDENTITY, INTERACTIVE_POLL_GUIDANCE
 from .title_generator import generate_chat_title, is_first_turn
 
@@ -81,10 +82,13 @@ class LLModel:
     async def _history(self, chat_id, max_tokens: int, model_tag: str | None = None) -> List[BaseMessage]:
         history = await self.agent._load_history_from_db(chat_id, MODEL_HISTORY_REQUESTS * 2)
         counter = count_tokens_approximately
+        cpt = 4.0  # дефолт count_tokens_approximately
         if model_tag:
             # тот же счётчик, что у агента: chars_per_token модели с калибровкой
             spec = get_model_spec(model_tag, self.agent.AGENT_MODELS)
             counter = CALIBRATOR.counter(model_tag, spec.chars_per_token)
+            cpt = CALIBRATOR.chars_per_token(model_tag, spec.chars_per_token)
+        history = attach_traces(history, cpt)
         return trim_messages(
             history,
             max_tokens=max_tokens,

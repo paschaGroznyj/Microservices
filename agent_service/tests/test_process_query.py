@@ -349,7 +349,9 @@ def test_history_rows_converted_and_blank_skipped(h):
     h.run()
     sent = h.models["coder"].calls[0]
     texts = [m.content for m in sent if not isinstance(m, SystemMessage)]
-    assert texts == ["вопрос", "ответ", "привет"]
+    # tool_trace ответа бота уходит модели в content, после служебного маркера
+    from agent.common.trace_budget import CONTENT_MARK
+    assert texts == ["вопрос", "ответ" + CONTENT_MARK + "t" * 50, "привет"]
 
 
 def test_history_db_error_is_tolerated(h):
@@ -551,12 +553,16 @@ def test_auto_title_errors_fail_open(h, where):
 
 
 def test_long_tool_trace_summarized(h):
-    h.mp.setattr(el, "TRACE_SUMMARY_THRESHOLD", 1)
+    """Сверх бюджета: голова сжимается, последний вызов остаётся сырым."""
+    from agent.common import trace_budget as tb
+    h.mp.setattr(tb, "TRACE_MSG_TOKENS", 1)
+    h.mp.setattr(tb, "TRACE_RAW_TAIL_TOKENS", 2)
     h.mp.setattr(el, "_summarize_tool_call", lambda tc, r: f"{tc['name']}:done")
-    h.add_tool("noop")
-    h.models["coder"].script = [ai("", [("noop", {})]), "ok"]
-    assert h.run()["tool_trace"] == "SUMMARY"
-    h.summarize_trace.assert_awaited_once_with("noop:done")
+    h.add_tool("a")
+    h.add_tool("b")
+    h.models["coder"].script = [ai("", [("a", {}), ("b", {})]), "ok"]
+    assert h.run()["tool_trace"] == "SUMMARY" + tb.TAIL_MARK + "b:done"
+    h.summarize_trace.assert_awaited_once_with("a:done")
 
 
 def test_short_tool_trace_kept_raw(h):

@@ -43,6 +43,8 @@ Rules:
 - In the 3rd column — concise and factual: key results, paths, commits, IDs, errors.
 - DO NOT invent anything that is not in the trace. DO NOT write fluff.
 - If there was an error, indicate it briefly on the same line.
+- This is only the EARLIER part of the request. The last calls are stored raw right after your table, so do not try to describe what comes after this log.
+- Keep the table short: about 1500 tokens at most.
 
 Raw tool_trace:
 {raw_trace}

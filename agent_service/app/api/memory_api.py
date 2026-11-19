@@ -9,7 +9,7 @@ Memory API: статистика журнала, саммари и контек�
 Авторизация: user_id передаётся гейтвеем в query-параметре.
 Владение чатом проверяется через chats, chats_forks или chat_sidebar_meta.
 """
-from app.agent.common.context_limits import TOKEN_SOFT_LIMIT
+from app.agent.common.context_limits import TOKEN_SOFT_LIMIT, context_payload
 import json
 import logging
 from typing import Any
@@ -134,32 +134,23 @@ async def get_memory_stats(
             LIMIT 1
         """, chat_id)
         
-        # Парсинг tokens_usage (asyncpg возвращает строку JSON)
-        context_tokens = None
-        cache_pct = None
-        context_breakdown = None
-        context_cache_read_tokens = None
+        # Парсинг tokens_usage (asyncpg возвращает строку JSON); формат context
+        # общий с финальным payload ответа (context_payload).
+        ctx_info = None
         if last_usage_row and last_usage_row["tokens_usage"]:
             try:
-                usage_str = last_usage_row["tokens_usage"]
-                if isinstance(usage_str, str):
-                    usage = json.loads(usage_str)
-                else:
-                    usage = usage_str
-                
-                input_tok = int(usage.get("input_tokens") or 0)
-                cache_read = int(usage.get("cache_read_tokens") or 0)
-                # До этой версии context_tokens не писался: тогда контекст неизвестен (None),
-                # сумму input_tokens за ход за контекст не выдаём.
-                ctx = usage.get("context_tokens")
-                context_tokens = int(ctx) if ctx else None
-                context_breakdown = usage.get("context_breakdown")
-                context_cache_read_tokens = usage.get("context_cache_read_tokens")
-                if context_tokens and context_cache_read_tokens is not None:
-                    cache_pct = round(int(context_cache_read_tokens) * 100 / context_tokens)
+                usage = last_usage_row["tokens_usage"]
+                if isinstance(usage, str):
+                    usage = json.loads(usage)
+                ctx_info = context_payload(usage)
             except (json.JSONDecodeError, TypeError, AttributeError, ValueError):
                 logging.warning(f"[memory_api] Failed to parse tokens_usage for chat {chat_id}")
-        
+        ctx_info = ctx_info or {
+            "tokens": None, "max_tokens": TOKEN_SOFT_LIMIT, "limit_kind": "compaction_threshold",
+            "model_window_tokens": None, "cache_pct": None,
+            "context_breakdown": None, "context_cache_read_tokens": None,
+        }
+
         # Формируем ответ
         summary_info = {
             "text": summary_row["summary_text"] if summary_row else "",
@@ -181,13 +172,7 @@ async def get_memory_stats(
             "summary": summary_info,
             "context": {
                 "message_id": str(last_usage_row["message_id"]) if last_usage_row and last_usage_row["message_id"] is not None else None,
-                "tokens": context_tokens,
-                "max_tokens": TOKEN_SOFT_LIMIT,
-                "limit_kind": "compaction_threshold",
-                "model_window_tokens": None,
-                "cache_pct": cache_pct,
-                "context_breakdown": context_breakdown,
-                "context_cache_read_tokens": context_cache_read_tokens,
+                **ctx_info,
             },
         }
 

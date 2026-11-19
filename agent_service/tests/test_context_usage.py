@@ -26,3 +26,34 @@ def test_snapshot_and_no_tools():
     after = prompt_weights(messages)
     assert before['tool_trace'] == 0 < after['tool_trace']
     assert before['tools'] == after['tools'] == 0
+
+
+def test_realtime_payload_cache():
+    from agent.common.context_limits import context_payload
+    assert context_payload({}) is None
+    assert context_payload({'input_tokens': 900000}) is None
+    usage = {'context_tokens': 100, 'context_breakdown': {'estimated': True}}
+    assert context_payload(usage)['cache_pct'] is None
+    assert context_payload({**usage, 'context_cache_read_tokens': 0})['cache_pct'] == 0
+    assert context_payload({**usage, 'context_cache_read_tokens': 30})['cache_pct'] == 30
+
+
+def test_direct_context_flow(monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock
+    from tests.conftest import build_agent
+    agent = build_agent(monkeypatch)
+    agent._flow_store = AsyncMock()
+    agent._publish_sigma_stream = AsyncMock()
+    client = AsyncMock()
+    agent._get_http_client = AsyncMock(return_value=client)
+    context = {'tokens': 45678, 'cache_pct': None}
+    for target in ('main', 'sigma'):
+        asyncio.run(agent._send_flow('rid', 'context_usage', target=target, chat_id='chat',
+                                    message_id='msg-123-a', context=context))
+    main = client.post.await_args.kwargs['json']
+    sigma = agent._publish_sigma_stream.await_args.args[1]
+    assert main == sigma
+    assert main['flow']['context'] == context
+    assert main['flow']['message_id'] == 'msg-123-a'
+    assert main['request_id'] == 'rid'

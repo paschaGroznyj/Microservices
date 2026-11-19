@@ -10,6 +10,7 @@ not_loop.py — режим «Модель» (type_query="model"): чистая �
 """
 import logging
 import time
+from app.agent.common.context_limits import context_payload
 from datetime import datetime
 from typing import Any, Dict, List
 from zoneinfo import ZoneInfo
@@ -210,6 +211,7 @@ class LLModel:
                 "tool_trace": None,
                 "agent_model": real_model,
                 "tokens_usage": tokens_usage,
+                "context": context_payload(tokens_usage),
                 "auto_title": auto_title,
                 "type_query": "model",
             }

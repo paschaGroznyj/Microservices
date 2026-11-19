@@ -4659,6 +4659,10 @@ class ChatApp {
     /* Обработчик входящих сообщений WS конкретного чата (замкнут на chatId).
        Пишет в стрим ЭТОГО чата (this._streams[chatId]) напрямую — поэтому
        фоновый чат стримит корректно, даже когда открыт другой. */
+    _applyRealtimeContext(chatId, msg) {
+        window.MemoryPanel?.update(String(chatId), msg.message_id, msg.context);
+    }
+
     _onWsMessage(chatId, event) {
             const key = String(chatId);
             const st = this._ensureStream(key);
@@ -4676,6 +4680,7 @@ class ChatApp {
             }
 
             if (msg.type === 'flow') {
+                if (msg.ev === 'context_usage') { this._applyRealtimeContext(key, msg); return; }
                 if (isActive) _fm(msg.ev, { ...msg, chat: key, id: msg.call_id || undefined });
                 return;
             }
@@ -4756,6 +4761,7 @@ class ChatApp {
             // собираются в ответ на то же место, что и после F5. Таймер: дать финализации пузыря отработать.
             const isFinalBotMsg = msg.is_from_bot && msg.chunk === undefined && !msg.kind && (msg.done || msg.message !== undefined);
             if (isFinalBotMsg) _fm('done', { chat: key });
+            if (isFinalBotMsg) window.MemoryPanel?.update(key, msg.message_id, msg.context);
             if (isFinalBotMsg && msg.tokens_usage && window.UsageOverlay) {
                 const _usage = { ...msg.tokens_usage, model: msg.agent_model };
                 if (st.pendingBotEl) window.UsageOverlay.mount(st.pendingBotEl, _usage);
@@ -5673,7 +5679,6 @@ class ChatApp {
         if (isActive) this._removeImageGenSkeleton();
 
         const data = st.streamFinalData || {};
-        window.MemoryPanel?.refresh(chatId ?? this.currentChat, data.message_id || st.pendingBotEl.dataset.messageId);
         const rawFullText = data.fullText ?? st.streamShown ?? '';
         const fullText = (rawFullText && String(rawFullText).trim())
             ? rawFullText

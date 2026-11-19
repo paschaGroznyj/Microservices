@@ -2,7 +2,8 @@
    полоска заполнения контекста в верхней кромке поля, карточка-карусель над полем, модалка.
    Данные: GET /api/chats/{id}/memory/{stats|journal|summary} (memory_gw → agent_service).
    Вызовы из app.js / app_sigma.js: MemoryPanel.mount(chatId) после renderMessageInput,
-   MemoryPanel.refresh(chatId) после конца ответа агента. */
+   MemoryPanel.update(chatId, messageId, context) по финалу ответа: context последнего шага
+   приходит в payload ответа (agent_service → Kafka → гейтвей) и рисуется сразу, без опроса. */
 (function () {
 'use strict';
 const S = (p, c = 'mm-ic', sw = 1.8) => `<svg class="${c}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
@@ -25,7 +26,7 @@ const H = h => { const t = document.createElement('template'); t.innerHTML = h.t
 function ring(pct) { const r = 5, C = 2 * Math.PI * r; pct = Math.max(0, Math.min(1, pct || 0));
   return `<svg class="mm-ring" viewBox="0 0 14 14" aria-hidden="true"><circle class="t" cx="7" cy="7" r="${r}" fill="none" stroke-width="2.2"/><circle class="a" cx="7" cy="7" r="${r}" fill="none" stroke-width="2.2" stroke-dasharray="${(C * pct).toFixed(2)} ${C.toFixed(2)}"/></svg>`; }
 
-const st = { chat: null, data: null, entries: [], total: 0, loading: false, open: false, tab: 'j', i: 0, ctx: false, seq: 0 };
+const st = { chat: null, data: null, entries: [], total: 0, loading: false, open: false, tab: 'j', i: 0, ctx: false, seq: 0, live: null };
 
 function q() {
   const box = document.getElementById('chat-input-box');
@@ -49,20 +50,19 @@ function render() {
   const j = D.journal, sm = D.summary, c = D.context;
   const note = area.querySelector('.input-footer-note');
   if (note) note.style.display = 'none';
-  const ctxTxt = c.tokens ? `<b>${fmtK(c.tokens)}</b><span class="mm-x">${c.max_tokens ? `/${fmtK(c.max_tokens).replace(',0K', 'K')}` : ''}${c.cache_pct != null ? ` · кэш ${c.cache_pct}%` : ''}</span>` : '<b>—</b>';
+  const ctxTxt = c.tokens ? `<b>${fmtK(c.tokens)}${c.max_tokens ? `<span class="mm-lim">/${fmtK(c.max_tokens).replace(',0K', 'K')}</span>` : ''}</b>${c.cache_pct != null ? `<span class="mm-x">· кэш ${c.cache_pct}%</span>` : ''}` : '<b>—</b>';
   const el = H(`<div class="mm-sline" data-mm>
    <button type="button" class="mm-it" data-go="j" aria-expanded="false">${S(P.j)}<span class="mm-lb">Журнал</span> <b>${j.active}</b><span class="mm-x"> · ${fmtK(j.total_chars)} зн.</span></button><span class="mm-dot"></span>
    <button type="button" class="mm-it" data-go="s" aria-expanded="false">${S(P.s)}<span class="mm-lb">Саммари</span> <b>${sm.text ? cov(sm) + '%' : 'нет'}</b>${sm.text ? '<span class="mm-x"> истории</span>' : ''}</button><span class="mm-dot"></span>
    <button type="button" class="mm-it" data-go="c" aria-expanded="false" title="Промпт последнего шага. /200K — порог сжатия агентного режима, не окно модели; в режиме только модели не применяется">${ring(c.tokens / c.max_tokens)}<span class="mm-lb">Контекст</span> ${ctxTxt}</button></div>`);
   box.after(el);
   el.addEventListener('click', e => { const b = e.target.closest('[data-go]'); if (!b) return; const g = b.dataset.go;
-    if (g === 'c') { toggleCtx(); return; } if (st.open && st.tab === g) { closeCard(); return; } openCard(g); });
+    if (st.open && st.tab === g) { closeCard(); return; } openCard(g); });
   if (c.tokens && c.max_tokens) {
     const w = Math.min(100, c.tokens / c.max_tokens * 100);
     box.prepend(H(`<div class="mm-bud" data-mm title="Контекст ${fmtK(c.tokens)} из ${c.max_tokens / 1000}K">${contextSegments(c) ? contextSegments(c).map((p,i,a)=>`<i class="${p.cls}" title="${p.label}: ≈${nf(p.tokens)} (оценка)" style="left:${a.slice(0,i).reduce((v,x)=>v+x.tokens,0)/c.tokens*w}%;width:${p.tokens/c.tokens*w}%"></i>`).join('') : `<i class="mm-c2" style="left:0;width:${w}%"></i>`}</div>`));
   }
   align();
-  if (st.ctx) toggleCtx(true);
   if (st.open) openCard(st.tab, st.i);
 }
 const contextLabels = ['Система', 'Журнал', 'Саммари', 'История', 'Трасса инструментов', 'Схемы инструментов'];
@@ -74,30 +74,45 @@ function contextSegments(c) {
   if (values.some(v => !Number.isInteger(v) || v < 0) || values.reduce((a,b)=>a+b,0) !== c.tokens) return null;
   return values.map((tokens,i)=>({tokens, label:contextLabels[i], cls:`mm-part-${i}`}));
 }
+// Контекст — третья вкладка карточки mm-card5, в том же стиле, что журнал и саммари.
 function toggleCtx(force) {
-  const { box, area } = q(); if (!area) return;
-  st.ctx = force ?? !st.ctx; area.querySelector('.mm-legend')?.remove();
-  const b = area.querySelector('[data-go="c"]'); if (b) { b.setAttribute('aria-expanded', st.ctx); b.classList.toggle('is-on', st.ctx); }
-  if (!st.ctx) return; if (st.open) closeCard();
-  const c = st.data?.context || {};
-  const segments = contextSegments(c);
-  const parts = segments
-    ? `<span>Оценка состава промпта:</span>${segments.map(p=>`<span><i class="${p.cls}"></i>${p.label} ≈${nf(p.tokens)}</span>`).join('')}${c.cache_pct != null ? `<span>Кэш последнего шага ${c.cache_pct}%</span>` : ''}`
-    : c.tokens
-    ? `<span><i class="mm-c2"></i>Промпт последнего шага ${fmtK(c.tokens)} · состав неизвестен</span>${c.cache_pct != null ? `<span>Из кэша последнего шага ${c.cache_pct}%</span>` : ''}`
-    : '<span>Нет данных о контексте: ответов агента после обновления ещё не было</span>';
-  box.before(H(`<div class="mm-legend" data-mm>${parts}<span class="mm-sp"></span><span class="mm-tot">Порог сжатия агентного режима: ${c.max_tokens ? fmtK(c.max_tokens) + ' (не окно модели; в режиме только модели не применяется)' : 'неизвестен'}</span></div>`));
+  const want = force ?? !(st.open && st.tab === 'c');
+  if (want) openCard('c', 0); else if (st.open && st.tab === 'c') closeCard();
+}
+const EMPTY = { journal: { active: 0, total_chars: 0, types: [] }, summary: { text: '' }, context: {} };
+const pctOf = (v, t) => { const p = v / t * 100; return p > 0 && p < 1 ? '<1' : String(Math.round(p)); };
+// Проценты блоков методом наибольшего остатка: в сумме ровно 100, ненулевой блок не показывается как 0.
+function pctList(vals, total) {
+  const raw = vals.map(v => v / total * 100), out = raw.map(Math.floor);
+  let left = 100 - out.reduce((a, b) => a + b, 0);
+  raw.map((r, i) => [r - out[i], i]).sort((a, b) => b[0] - a[0]).forEach(([, i]) => { if (left > 0) { out[i]++; left--; } });
+  return out.map((v, i) => vals[i] > 0 && v === 0 ? '<1' : String(v));
+}
+function cSlide() {
+  const c = (st.data || EMPTY).context || {};
+  if (!c.tokens) return '<div class="mm-sl"><div class="mm-empty">Нет данных о контексте: ответов агента после обновления ещё не было.</div></div>';
+  const segs = contextSegments(c);
+  const fill = c.max_tokens ? ` · ${pctOf(c.tokens, c.max_tokens)}% порога` : '';
+  const bar = segs
+    ? segs.filter(p => p.tokens > 0).map(p => `<i class="${p.cls}" title="${p.label} ≈${nf(p.tokens)}" style="flex:${p.tokens} 1 0"></i>`).join('')
+    : '<i class="mm-c2" style="flex:1 1 0"></i>';
+  const body = segs
+    ? (pp => `<div class="mm-crows">${segs.map((p, i) => `<div class="mm-crow"><i class="${p.cls}"></i><span class="mm-cl">${p.label}</span><span class="mm-cv">≈${fmtK(p.tokens)}</span><span class="mm-cp">${pp[i]}%</span></div>`).join('')}</div>`)(pctList(segs.map(p => p.tokens), c.tokens))
+    : '<div class="mm-cnote" style="margin-top:0">Состав неизвестен: ответ сохранён до разбивки промпта по блокам.</div>';
+  return `<div class="mm-sl mm-sl-c"><div class="mm-sl-h"><span class="mm-tag">промпт</span><span class="mm-meta">${fmtK(c.tokens)} ток.${c.max_tokens ? ` из ${fmtK(c.max_tokens).replace(',0K', 'K')}` : ''}${fill}</span></div>
+   <div class="mm-cbar" role="img" aria-label="Состав промпта последнего шага">${bar}</div>${body}
+   <div class="mm-cnote">${segs ? '≈ — оценка блоков, итог — фактический счёт модели. ' : ''}${c.max_tokens ? `${fmtK(c.max_tokens).replace(',0K', 'K')} — порог сжатия агентного режима, не окно модели.` : 'Порог сжатия неизвестен.'}</div></div>`;
 }
 
 /* ── карточка-карусель ── */
-const N = () => st.tab === 'j' ? st.total : 1;
+const N = () => st.tab === 'j' ? st.total : 1;  // у саммари и контекста один слайд
 function jSlide(e) {
   return `<div class="mm-sl" data-id="${e.id}"><div class="mm-sl-h"><span class="mm-tag t-${esc(e.type)}">${esc(TYPE[e.type] || e.type)}</span><span class="mm-meta">#${e.id} · ${dt(e.created_at)} · ${nf(e.chars)} зн.</span></div>
    <div class="mm-txt">${esc(plain(e.content))}</div>
    <div class="mm-sl-f"><button type="button" class="mm-lnk" data-full="${e.id}">${S(P.full)}Открыть полностью</button></div></div>`;
 }
 function sSlide() {
-  const sm = st.data.summary;
+  const sm = (st.data || EMPTY).summary;
   if (!sm.text) return '<div class="mm-sl"><div class="mm-empty">Саммари ещё нет: история помещается в контекст целиком.</div></div>';
   return `<div class="mm-sl"><div class="mm-sl-h"><span class="mm-tag t-summary">саммари</span><span class="mm-meta">до #${sm.upto_id} · ${nf(sm.covered)} из ${nf(sm.total_messages)} сообщ. · ${nf(sm.chars)} зн.</span></div>
    <div class="mm-txt">${esc(plain(sm.text))}</div>
@@ -111,15 +126,15 @@ async function loadMore() {
   } catch (e) { console.warn('[memory] journal', e); } finally { st.loading = false; }
 }
 function openCard(tab, i) {
-  toggleCtx(false); st.open = true; st.tab = tab; st.i = i || 0;
+  st.open = true; st.tab = tab; st.i = i || 0;
   const { box, area } = q(); if (!box) return; area.querySelector('.mm-card5')?.remove();
   const c = H(`<div class="slash-cmd-card mm-card5" data-mm tabindex="-1" role="region" aria-label="Память чата">
-   <div class="mm-c-h"><div class="mm-seg" role="tablist"><button type="button" role="tab" data-tab="j">Журнал <b>${st.data.journal.active}</b></button><button type="button" role="tab" data-tab="s">Саммари</button></div>
+   <div class="mm-c-h"><div class="mm-seg" role="tablist"><button type="button" role="tab" data-tab="j">Журнал <b>${(st.data || EMPTY).journal.active}</b></button><button type="button" role="tab" data-tab="s">Саммари</button><button type="button" role="tab" data-tab="c">Контекст</button></div>
     <span class="mm-sp"></span><span class="mm-cnt" aria-live="polite"></span>
     <button type="button" class="mm-ib" data-nav="-1" aria-label="Предыдущая">${S(P.l)}</button><button type="button" class="mm-ib" data-nav="1" aria-label="Следующая">${S(P.r)}</button>
     <button type="button" class="mm-ib" data-all aria-label="Открыть всё">${S(P.full)}</button><button type="button" class="mm-ib" data-close aria-label="Закрыть">${S(P.x)}</button></div>
    <div class="mm-types"></div><div class="mm-vp"><div class="mm-trk"></div></div><div class="mm-prog"><i></i></div></div>`);
-  box.before(c); bindSwipe(c.querySelector('.mm-vp'));
+  box.before(c); bindSwipe(c.querySelector('.mm-vp')); pin();
   c.addEventListener('click', e => { const t = e.target.closest('button'); if (!t) return;
     if (t.dataset.tab) { st.tab = t.dataset.tab; st.i = 0; renderCard(); }
     else if (t.dataset.nav) go(+t.dataset.nav);
@@ -129,20 +144,23 @@ function openCard(tab, i) {
   if (tab === 'j' && !st.entries.length) { renderCard(); loadMore().then(renderCard); } else renderCard();
 }
 function renderCard() {
-  const c = document.querySelector('.mm-card5'); if (!c) return; const D = st.data;
+  const c = document.querySelector('.mm-card5'); if (!c) return; const D = st.data || EMPTY, cx = D.context || {};
   c.querySelectorAll('[data-tab]').forEach(b => { b.classList.toggle('is-on', b.dataset.tab === st.tab); b.setAttribute('aria-selected', b.dataset.tab === st.tab); });
   const sm = D.summary;
   c.querySelector('.mm-types').innerHTML = st.tab === 'j'
-    ? D.journal.types.map(t => `<span>${esc(TYPE[t.type] || t.type)} ${t.count}</span>`).join('')
+    ? (D.journal.types || []).map(t => `<span>${esc(TYPE[t.type] || t.type)} ${t.count}</span>`).join('')
+    : st.tab === 'c'
+    ? (cx.tokens ? `<span>последний шаг</span>${cx.cache_pct != null ? `<span>кэш ${cx.cache_pct}%</span>` : ''}` : '')
     : (sm.text ? `<span>обновлено ${dt(sm.updated_at)}</span>${sm.total_messages > sm.covered ? `<span>вне саммари ${nf(sm.total_messages - sm.covered)} сообщ.</span>` : ''}` : '');
-  q().area.querySelectorAll('.mm-sline [data-go]').forEach(b => { if (b.dataset.go !== 'c') { const on = b.dataset.go === st.tab; b.classList.toggle('is-on', on); b.setAttribute('aria-expanded', on); } });
+  q().area.querySelectorAll('.mm-sline [data-go]').forEach(b => { const on = b.dataset.go === st.tab; b.classList.toggle('is-on', on); b.setAttribute('aria-expanded', on); });
   const trk = c.querySelector('.mm-trk');
   trk.innerHTML = st.tab === 'j'
     ? (st.entries.length ? st.entries.map(jSlide).join('') : `<div class="mm-sl"><div class="mm-empty">${st.loading ? 'Загрузка…' : 'Журнал пуст.'}</div></div>`)
-    : sSlide();
+    : st.tab === 'c' ? cSlide() : sSlide();
   // «Открыть полностью» только там, где текст не влез в превью
   requestAnimationFrame(() => c.querySelectorAll('.mm-sl').forEach(sl => { const t = sl.querySelector('.mm-txt'), f = sl.querySelector('.mm-sl-f');
     if (t && f) f.style.visibility = t.scrollHeight > t.clientHeight + 1 ? '' : 'hidden'; }));
+  c.querySelector('[data-all]').style.display = st.tab === 'c' ? 'none' : '';
   const n = N(); c.querySelectorAll('[data-nav]').forEach(b => b.style.display = n > 1 ? '' : 'none');
   const pr = c.querySelector('.mm-prog'); pr.style.visibility = n > 1 ? '' : 'hidden';
   pr.firstElementChild.style.width = (100 / Math.max(1, n)) + '%';
@@ -164,8 +182,18 @@ async function go(d) {
 }
 function bounce(d) { const trk = document.querySelector('.mm-card5 .mm-trk'); if (!trk) return; trk.style.transition = 'transform .12s';
   trk.style.transform = `translateX(calc(${-st.i * 100}% - ${d * 14}px))`; setTimeout(() => place(), 120); }
+// Карточка лежит поверх ленты над полем (position:absolute) и ничего не сдвигает.
+// Нижний край держим над верхом поля: поле растёт при наборе — пересчитываем.
+const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => pin()) : null;
+function pin() {
+  const { area, box } = q(); const c = area?.querySelector('.mm-card5'); if (!c || !box) return;
+  c.style.setProperty('--mm-cb', (area.clientHeight - box.offsetTop + 10) + 'px');
+  if (ro && !c._ro) { ro.observe(box); ro.observe(area); c._ro = true; }
+}
+addEventListener('resize', pin);
 function closeCard() {
-  const { area } = q(); area?.querySelectorAll('.mm-sline [data-go="j"],.mm-sline [data-go="s"]').forEach(b => { b.classList.remove('is-on'); b.setAttribute('aria-expanded', 'false'); });
+  ro?.disconnect();
+  const { area } = q(); area?.querySelectorAll('.mm-sline [data-go]').forEach(b => { b.classList.remove('is-on'); b.setAttribute('aria-expanded', 'false'); });
   st.open = false; document.querySelector('.mm-card5')?.remove();
 }
 function bindSwipe(vp) {
@@ -183,7 +211,7 @@ document.addEventListener('keydown', e => {
   if (document.querySelector('.mm-modal')) { if (e.key === 'Escape') { closeModal(); e.preventDefault(); } return; }
   if (!st.open) return; const a = document.activeElement;
   const editable = a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
-  if (e.key === 'Escape') { closeCard(); q().area?.querySelector('[data-go="j"]')?.focus(); return; }
+  if (e.key === 'Escape') { const t = st.tab; closeCard(); q().area?.querySelector(`[data-go="${t}"]`)?.focus(); return; }
   if (editable || e.altKey || e.ctrlKey || e.metaKey) return;
   if (e.key === 'ArrowRight') { go(1); e.preventDefault(); } else if (e.key === 'ArrowLeft') { go(-1); e.preventDefault(); }
 });
@@ -233,21 +261,22 @@ function align() {
 addEventListener('resize', align);
 
 function cancelRefresh() { clearTimeout(st.timer); st.abort?.abort(); st.abort = new AbortController(); }
-function reset(chatId) { cancelRefresh(); st.chat = chatId; st.data = null; st.entries = []; st.total = 0; st.open = false; st.ctx = false; st.i = 0; st.seq++; closeModal(); }
-async function load(seq = st.seq, expected = null, attempt = 0) {
+function reset(chatId) { cancelRefresh(); st.chat = chatId; st.data = null; st.entries = []; st.total = 0; st.open = false; st.ctx = false; st.i = 0; st.seq++; st.live = null; closeModal(); }
+// Контекст из payload финала новее, чем то, что успел сохранить chats_service: пока stats
+// отдаёт другой message_id, оставляем живой. Совпал — БД догнала, живой больше не нужен.
+function withLive(d) {
+  if (!st.live || !d) return d;
+  return { ...d, context: { ...(d.context || {}), ...st.live.ctx, message_id: st.live.id } };
+}
+async function load(seq = st.seq) {
   try {
     const d = await api('stats');
     if (seq !== st.seq) return;
-    if (expected != null && String(d.context?.message_id) !== String(expected)) {
-      if (attempt < 9) st.timer = setTimeout(() => load(seq, expected, attempt + 1), Math.min(250 * 2 ** attempt, 2000));
-      return;
-    }
-    st.data = d; st.total = d.journal.active; render();
+    st.data = withLive(d); st.total = d.journal.active; render();
     if (st.open) openCard(st.tab, 0);
   } catch (e) {
     if (seq !== st.seq) return;
-    if (expected != null && attempt < 9) st.timer = setTimeout(() => load(seq, expected, attempt + 1), Math.min(250 * 2 ** attempt, 2000));
-    else render();
+    render();
   }
 }
 window.MemoryPanel = {
@@ -257,11 +286,24 @@ window.MemoryPanel = {
     else if (st.data && !q().area?.querySelector('.mm-sline')) render();
     else if (!st.data) { render(); load(); }
   },
-  refresh(chatId, messageId = null) {
+  // Финал ответа: контекст последнего шага из payload — сразу; журнал и саммари — одним запросом stats.
+  update(chatId, messageId, context) {
+    if (chatId == null || String(chatId) !== String(st.chat)) return;
+    if (context && typeof context === 'object' && messageId != null) {
+      const id = String(messageId);
+      const stamp = v => Number(/^msg-(\d+)-/.exec(v)?.[1] || 0);
+      if (st.live && (st.live.id === id || stamp(id) && stamp(st.live.id) > stamp(id))) return;
+      st.live = { id, ctx: context };
+      st.data ||= {journal: {active: 0, total_chars: 0}, summary: {text: ''}, context: {}};
+      if (st.data) { st.data = withLive(st.data); render(); }
+    }
+    this.refresh(chatId);
+  },
+  refresh(chatId) {
     if (chatId != null && String(chatId) !== String(st.chat)) return;
     if (!st.chat) return;
     cancelRefresh(); st.entries = []; st.seq++;
-    load(st.seq, messageId);
+    load(st.seq);
   },
   unmount() { reset(null); document.querySelectorAll('[data-mm]').forEach(e => e.remove()); },
   _state: st,

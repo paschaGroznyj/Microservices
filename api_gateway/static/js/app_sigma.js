@@ -5111,7 +5111,6 @@ class ChatApp {
         if (isActive) this._removeImageGenSkeleton();
 
         const data = st.streamFinalData || {};
-        window.MemoryPanel?.refresh(chatId ?? this.currentChat, data.message_id || st.pendingBotEl.dataset.messageId);
         const rawFullText = data.fullText ?? st.streamShown ?? '';
         const fullText = (rawFullText && String(rawFullText).trim())
             ? rawFullText
@@ -5302,6 +5301,18 @@ class ChatApp {
     // Достаёт auto_title из финального SSE-события 'done' и обновляет строку
     // чата в сайдбаре немедленно, без перезапроса списка. auto_title кладётся
     // в message бота только на первом обмене (см. chats_service consumer).
+    // Контекст последнего шага из финального события done → строка памяти, без опроса stats.
+    _applyRealtimeContext(chatId, msg) {
+        window.MemoryPanel?.update(String(chatId), msg.message_id, msg.context);
+    }
+
+    _applyMemoryFromDone(ev, chatId) {
+        try {
+            const msg = ev && ev.data ? (JSON.parse(ev.data) || {}).message : null;
+            window.MemoryPanel?.update(chatId != null ? String(chatId) : null, msg?.message_id, msg?.context);
+        } catch (_) { window.MemoryPanel?.refresh(chatId); }
+    }
+
     _applyAutoTitleFromDone(ev, chatId) {
         try {
             if (!ev || !ev.data) return;
@@ -5478,6 +5489,11 @@ class ChatApp {
         window.WsDiff?.init({ transport: 'sse' }).listen(es);
         // FlowMap: служебные события пути запроса (accepted / agent_start / tool_*).
         es.addEventListener('flow', (ev) => {
+            try {
+                const msg = JSON.parse(ev.data);
+                if (msg.ev === 'context_usage') { this._applyRealtimeContext(key, msg); return; }
+            } catch (_) {}
+
             let f; try { f = JSON.parse(ev.data); } catch (_) { return; }
             if (this._isActiveChat(key)) _fm(f.ev, { ...f, chat: key, id: f.call_id || undefined });
         });
@@ -5502,6 +5518,7 @@ class ChatApp {
             // Автогенерированный заголовок чата приходит в message финала —
             // обновляем строку чата в сайдбаре в реалтайме (на первом обмене).
             this._applyAutoTitleFromDone(ev, chatId);
+            this._applyMemoryFromDone(ev, chatId);
             await this._handleRunDone(chatId);
         };
 

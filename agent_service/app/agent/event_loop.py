@@ -8,6 +8,7 @@ import ast
 import httpx
 import hashlib
 import time
+from app.agent.common.context_limits import context_payload
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List, Optional
@@ -2503,6 +2504,7 @@ class HarnessAgent:
                 "tool_trace": trace_out,
                 "agent_model": real_agent_model,
                 "tokens_usage": tokens_usage,
+                "context": context_payload(tokens_usage),
                 "auto_title": auto_title
             }
         finally:

@@ -16,7 +16,7 @@ from agent.prompts.system_prompt import INTERACTIVE_POLL_GUIDANCE
 from tests.conftest import MODEL_NAMES, ai, build_agent
 
 OUT_KEYS = {"input", "message", "used_tools", "action", "success", "files_to_send",
-            "tool_trace", "agent_model", "tokens_usage", "auto_title"}
+            "tool_trace", "agent_model", "tokens_usage", "auto_title", "context"}
 
 
 def fake_tool(name, result="ok", exc=None):
@@ -127,8 +127,10 @@ def test_plain_answer_contract(h):
     assert out["agent_model"] == MODEL_NAMES["coder"]
     breakdown = out["tokens_usage"].pop("context_breakdown")
     assert breakdown["estimated"] is True
+    assert out["context"]["tokens"] == out["tokens_usage"]["context_tokens"]
     assert sum(breakdown["tokens"].values()) == out["tokens_usage"]["context_tokens"]
-    assert out["tokens_usage"].pop("context_cache_read_tokens") == 0
+    assert out["tokens_usage"].pop("context_cache_read_tokens") is None
+    assert out["context"]["cache_pct"] is None
     assert out["tokens_usage"] == {"input_tokens": 10, "output_tokens": 3, "total_tokens": 13,
                                    "cache_read_tokens": 0, "cache_creation_tokens": 0, "context_tokens": 10}
     assert out["auto_title"] is None
@@ -158,8 +160,10 @@ def test_tool_step_then_answer(h):
     assert calls[0].get("x") == 1
     breakdown = out["tokens_usage"].pop("context_breakdown")
     assert breakdown["estimated"] is True
+    assert out["context"]["tokens"] == out["tokens_usage"]["context_tokens"]
     assert sum(breakdown["tokens"].values()) == out["tokens_usage"]["context_tokens"]
-    assert out["tokens_usage"].pop("context_cache_read_tokens") == 0
+    assert out["tokens_usage"].pop("context_cache_read_tokens") is None
+    assert out["context"]["cache_pct"] is None
     assert out["tokens_usage"] == {"input_tokens": 150, "output_tokens": 12, "total_tokens": 162,
                                    "cache_read_tokens": 0, "cache_creation_tokens": 0, "context_tokens": 50}
     second = h.models["coder"].calls[1]

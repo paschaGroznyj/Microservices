@@ -1267,26 +1267,27 @@ class HarnessAgent:
         # Все модели цепочки провалились
         raise last_error if last_error else RuntimeError("Лайт-модель: пустая цепочка")
 
-    async def _main_ainvoke(self, messages: list[BaseMessage]):
-        """Вызов ОСНОВНОЙ (тяжёлой) LLM — той же, на которой работает агент.
+    async def _main_ainvoke(self, messages: list[BaseMessage], *, llm_role: str = "auxiliary"):
+        """Служебный вызов основной LLM из контекста текущего запроса.
 
-        Модель определяется текущим выбором пользователя (self.current_agent_model,
-        выставляется в начале run_agent). Нужен служебным модулям, которым важно
-        рассуждать на том же уровне, что и агент (например, фоновый супервизор цели),
-        а не на дешёвой лайт-модели.
-
-        Fallback: если по какой-то причине текущая модель не выбрана —
-        берём 'universal', а если и её нет — тихо деградируем на лайт-модель.
+        Общий current_agent_model не читаем: параллельный чат может его изменить.
+        Без request-local выбора используем universal; если модели нет — lite.
+        ContextVar наследуется фоновыми задачами супервизора при create_task.
         """
-        agent_model = getattr(self, "current_agent_model", None) or "universal"
-        model = self.AGENT_MODELS.get(agent_model)
-        if model is None:
-            logging.warning(
-                f"_main_ainvoke: модель '{agent_model}' не найдена в AGENT_MODELS, "
-                f"деградирую на лайт-модель"
-            )
-            return await self._lite_ainvoke(messages)
-        return await model.ainvoke(messages)
+        agent_model = self._ctx_get("resolved_agent_model") or self._ctx_get("agent_model") or "universal"
+        token = LOG_CONTEXT.set({**LOG_CONTEXT.get(), "llm_role": llm_role})
+        try:
+            model = self.AGENT_MODELS.get(agent_model)
+            log_event("llm.auxiliary.start", alias=agent_model, fallback=model is None)
+            if model is None:
+                logging.warning(
+                    f"_main_ainvoke: модель '{agent_model}' не найдена в AGENT_MODELS, "
+                    f"деградирую на лайт-модель"
+                )
+                return await self._lite_ainvoke(messages)
+            return await model.ainvoke(messages)
+        finally:
+            LOG_CONTEXT.reset(token)
 
     async def _summarize_tool_trace(self, raw_trace: str) -> str | None:
         """LLM-сжатие ГОЛОВЫ tool_trace одного запроса в md-таблицу.
@@ -1879,6 +1880,8 @@ class HarnessAgent:
                 "large":  {"limit_mem": 14, "max_tokens": 30_000},
             }
             agent_model = resolve_model_tag(agent_model, self.AGENT_MODELS)
+            # Сохраняем разрешённый alias до запуска фоновых служебных вызовов.
+            self._request_ctx.set({**self._request_ctx.get(), "resolved_agent_model": agent_model})
             model_spec = get_model_spec(agent_model, self.AGENT_MODELS)
             llm = self.AGENT_MODELS[agent_model]
             real_agent_model = get_real_model_name(llm)

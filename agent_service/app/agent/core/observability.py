@@ -177,7 +177,7 @@ def tool_logged(fn):
 def llm_logged(fn):
     @functools.wraps(fn)
     async def wrapped(llm, messages, *args, **kwargs):
-        token = LOG_CONTEXT.set({**LOG_CONTEXT.get(), 'iteration': kwargs.get('iteration', 0)})
+        token = LOG_CONTEXT.set({**LOG_CONTEXT.get(), 'iteration': kwargs.get('iteration', 0), 'llm_role': 'main'})
         try:
             from .observability_http import instrument_llm
             instrument_llm(llm)

@@ -43,7 +43,9 @@ from api.memory_api import memory_router, set_db as _set_memory_db
 from api.steps_api import steps_router
 
 
-logging.basicConfig(level=logging.INFO)
+from agent.core.observability import configure_logging, log_event, request_logged, fingerprint
+
+configure_logging()
 
 
 
@@ -115,6 +117,7 @@ async def wait_for_files(message_id: str, timeout: float = FILE_WAIT_TIMEOUT) ->
 
 
 
+@request_logged
 async def handle_message(payload: dict, prod: AIOKafkaProducer):
     """Обработка одного сообщения — запускается конкурентно."""
     start = time.perf_counter()
@@ -191,7 +194,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     # if (not text and not tg_initiated) or chat_id is None:
     #     logging.warning(f"Некорректное сообщение: {payload}")
     #     return
-    print("ВНУТРИ АГЕНТА", payload)
+    log_event("request.accepted", selected_tools=payload.get("selected_tools"), input=fingerprint(payload.get("message", "")))
 
     # FlowMap: агент взял запрос из Kafka в работу. Фоном, чтобы не задерживать ответ.
     if agent is not None and request_id and not loop_tick:
@@ -696,7 +699,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                 tokens_usage=bot_message["tokens_usage"],
             )
         await prod.send_and_wait("chat-messages", value=bot_message)
-        logging.info(f"Ответ в чат {chat_id}: {response_text[:50]}...")
+        log_event("request.answer", answer=fingerprint(response_text))
         logging.info(f"Время обработки: {time.perf_counter() - start:.4f}s")
 
     except asyncio.CancelledError:

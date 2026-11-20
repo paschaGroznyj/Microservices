@@ -8,6 +8,8 @@ not_loop.py — режим «Модель» (type_query="model"): чистая �
 Транспорт (стрим чанков, FlowMap, учёт токенов) переиспользуется у HarnessAgent,
 поэтому фронт, Redis flow и сохранение в БД работают так же, как для агента.
 """
+from .core.observability import request_logged
+
 import logging
 import time
 from app.agent.common.context_limits import context_payload
@@ -118,6 +120,7 @@ class LLModel:
             HumanMessage(content=user_input),
         ]
 
+    @request_logged
     async def process_query(
         self,
         user_input: str,

@@ -205,7 +205,8 @@ def build_llm_from_spec(spec: ModelSpec):
         }
         if spec.reasoning:
             kwargs["thinking"] = dict(spec.reasoning)
-        return cls(**kwargs)
+        from .observability_http import instrument_llm
+        return instrument_llm(cls(**kwargs))
 
     model_kwargs: dict[str, Any] = {}
     if spec.prompt_cache:
@@ -221,7 +222,7 @@ def build_llm_from_spec(spec: ModelSpec):
         if extra_body:
             model_kwargs["extra_body"] = extra_body
 
-    return ChatOpenAI(
+    result = ChatOpenAI(
         model=spec.model,
         base_url=spec.base_url,
         api_key=CLOUD_LLM_ACCESS_KEY,
@@ -230,6 +231,8 @@ def build_llm_from_spec(spec: ModelSpec):
         stream_usage=True,
         model_kwargs=model_kwargs,
     )
+    from .observability_http import instrument_llm
+    return instrument_llm(result)
 
 
 def _make_cached_builder(spec: ModelSpec) -> Callable[[], Any]:

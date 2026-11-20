@@ -7,6 +7,7 @@ import os
 import re
 import ast
 import httpx
+from .core.observability import LOG_CONTEXT, log_event, fingerprint, request_logged, tool_logged, llm_logged
 import hashlib
 import time
 from app.agent.common.context_limits import context_payload
@@ -433,6 +434,7 @@ async def _invoke_with_retry(llm, messages, iteration: int, max_retries: int = 3
         try:
             return await llm.ainvoke(messages)
         except Exception as e:
+            log_event('llm.retry', reason='exception', error_type=type(e).__name__)
             last_error = e
             logging.warning(
                 f"[iteration={iteration}] ainvoke попытка {attempt + 1}/{max_retries} упала: {type(e).__name__}: {e}"
@@ -666,6 +668,7 @@ def _extract_thinking_and_clean_content(raw_content) -> tuple[str, str, str]:
 
     return thinking_text, reasoning_text, cleaned
 
+@llm_logged
 async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, error_info: dict | None = None,
                            cache_control: bool = False, extra_headers: dict[str, str] | None = None):
     messages = _sanitize_messages(messages)
@@ -685,6 +688,8 @@ async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, err
     wasted_in = 0            # входные токены, потраченные на пустые попытки
 
     for attempt in range(MAX_ATTEMPTS):
+        LOG_CONTEXT.set({**LOG_CONTEXT.get(), 'attempt': attempt + 1})
+        log_event('llm.attempt', max_attempts=MAX_ATTEMPTS)
         try:
             from .core.token_usage import cumulative_stream_usage, merge_usage_snapshot
             cumulative = cumulative_stream_usage(llm)
@@ -737,6 +742,7 @@ async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, err
                         )
                     return aggregate
 
+                log_event('llm.retry', reason='empty_response', usage=um)
                 empty_count += 1
                 wasted_in += um.get("input_tokens", 0)
                 logging.warning(
@@ -754,6 +760,7 @@ async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, err
                 await asyncio.sleep(_pause(empty_count - 1))
                 continue
 
+            log_event('llm.fallback', reason='no_stream_chunks', mode='ainvoke')
             return await llm.ainvoke(messages, **call_kwargs)
         except Exception as e:
             last_error = e
@@ -1810,6 +1817,7 @@ class HarnessAgent:
     # Основной цикл: ReAct-style через bind_tools + рекурсивный вызов
     # ------------------------------------------------------------------
 
+    @request_logged
     async def process_query(
         self,
         user_input: str,
@@ -1874,7 +1882,7 @@ class HarnessAgent:
             model_spec = get_model_spec(agent_model, self.AGENT_MODELS)
             llm = self.AGENT_MODELS[agent_model]
             real_agent_model = get_real_model_name(llm)
-            logging.info(f'Выбрана модель {agent_model} ({real_agent_model})')
+            log_event('agent.model', alias=agent_model, model=real_agent_model)
             # Текущая модель нужна субагентам для корректного выбора LLM
             # при изолированном запуске через call_subagent.
             self.current_agent_model = agent_model
@@ -1940,7 +1948,9 @@ class HarnessAgent:
                 request_ctx=self._request_ctx.get(),
             )
 
-            logging.info(f"🙂 {user_input[:200]}")
+            if not isinstance(user_input, str):
+                raise TypeError("user_input must be a string")
+            log_event("agent.input", input=fingerprint(user_input))
             tools = self._build_tools(
                 user_id,
                 chat_id,
@@ -1969,7 +1979,7 @@ class HarnessAgent:
             subagent_tl = make_subagent_tool(self, parent_tools=list(tools))
             tools.append(subagent_tl)
 
-            print(f"ЛИМИТ ПО КОНТЕКСТУ = {limit_mem}, ЧИСЛО ТОКЕНОВ = {max_tokens}")
+            log_event("context.budget", messages_limit=limit_mem, tokens_limit=max_tokens)
             # Привязываем инструменты к модели
 
 
@@ -2034,10 +2044,10 @@ class HarnessAgent:
 
             journal_text = None
             if use_journal:
-                print(f"USER ID: {user_id}")
+                log_event("context.memory", user_id=user_id)
                 tools.append(make_journal_tool(self, chat_id, user_id))
                 journal_text = await self.db.get_agent_journal(chat_id)
-                print(f"ЖУРНАЛ АГЕНТА: длина = {len(journal_text)   }")
+                log_event("context.journal", chars=len(journal_text))
 
             tools_by_name = {t.name: t for t in tools}
             # Имена реально доступных агенту тулов — для каталога фонового супервизора
@@ -2154,6 +2164,7 @@ class HarnessAgent:
                 # ФОНОВЫЙ супервизор: храним текущий asyncio-таск (или None).
                 supervisor_task = None
                 while iteration < loop_state["hard_limit"]:
+                    LOG_CONTEXT.set({**LOG_CONTEXT.get(), "iteration": iteration})
                     loop_state["iteration"] = iteration
 
                     # ── ФОНОВЫЙ reasoning-СУПЕРВИЗОР ЦЕЛИ ─────────────────────
@@ -2229,7 +2240,7 @@ class HarnessAgent:
                     except Exception as _exc:
                         _llm_error["reason"] = f"{type(_exc).__name__}: {_exc}"
                         response = None
-                    logging.info(f"[respose] {response}")
+                    # Parsed result metadata is emitted by @llm_logged, never full reasoning/signatures.
                     if response is None:
                         if stream_state["sent"]:
                             await self._send_chunk(
@@ -2379,13 +2390,12 @@ class HarnessAgent:
                     total_cache["cache_read_tokens"] += iter_cr
                     total_cache["cache_creation_tokens"] += iter_cw
                     _hit = f"{iter_cr * 100 // iter_in}%" if iter_in else "-"
-                    logging.info(
-                        f"[tokens] iter={iteration} "
-                        f"in={iter_in} out={iter_out} cached={iter_cr} cache_write={iter_cw} hit={_hit} "
-                        f"total_in={total_input_tokens} total_out={total_output_tokens} "
-                        f"total_cached={total_cache['cache_read_tokens']}"
-                    )
-                    logger.info(f"🦒Длина стека = {len(messages)}")
+                    log_event("llm.tokens", input_tokens=iter_in, output_tokens=iter_out,
+                              cache_read_tokens=iter_cr, cache_write_tokens=iter_cw,
+                              cache_hit=_hit, total_input_tokens=total_input_tokens,
+                              total_output_tokens=total_output_tokens,
+                              total_cache_read_tokens=total_cache['cache_read_tokens'],
+                              messages_count=len(messages))
 
                     if not getattr(response, "tool_calls", None):
                         final_response = (_clean_content or "").strip()
@@ -2587,10 +2597,9 @@ class HarnessAgent:
             )
 
             agent_run = {"steps": agent_steps, "tool_calls": len(tool_calls_log)}
-            logging.info(
-                f"[steps] chat={chat_id} steps={agent_steps} tool_calls={len(tool_calls_log)} "
-                f"tools={json.dumps(dict(Counter(t['name'] for t in tool_calls_log)), ensure_ascii=False)}"
-            )
+            log_event("agent.final", steps=agent_steps, tool_calls=len(tool_calls_log),
+                      tools=dict(Counter(t['name'] for t in tool_calls_log)),
+                      answer=fingerprint(final_response), usage=tokens_usage)
             context = context_payload(tokens_usage)
             if context is not None:
                 context["agent"] = agent_run
@@ -2618,11 +2627,12 @@ class HarnessAgent:
             self._flow_last.pop(request_id, None)
 
 
+    @tool_logged
     async def _invoke_tool(self, tools_by_name: dict, tool_call: dict, request_id: str) -> str:
         """Вызвать один инструмент по его имени и аргументам."""
         name = tool_call["name"]
         args = tool_call.get("args", {})
-        logging.info(f"[tool call] {name}")
+        # tool.start is emitted by @tool_logged with a request-local call_id.
         # Анти-спам для check_task_status: разрешаем максимум 3 вызова подряд.
         # На 4-й и далее не дёргаем sandbox, а возвращаем инъекцию в контекст модели,
         # чтобы она завершала шаг ответом в чат и ждала асинхронного уведомления.
@@ -2665,11 +2675,10 @@ class HarnessAgent:
 
         tool_fn = tools_by_name.get(name)
         if tool_fn is None:
-            logger.warning(f"[tool] ❓ '{name}' не найден")
+            log_event("tool.result", name=name, ok=False, reason="unknown_tool")
             return f"Инструмент '{name}' не найден. Следует прожать галочку на главной странице приложения. Гаечный ключ."
         
-        fmt = _fmt_args(name, args)
-        logger.info(f"[tool] ▶ {name}({fmt})")
+        log_event("tool.invoke", name=name)
 
         call_id = tool_call.get("id") or None
         t0 = time.monotonic()
@@ -2693,12 +2702,7 @@ class HarnessAgent:
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             result_str = str(result)
 
-            # Сокращаем результат для лога
-            preview = result_str[:MAX_RESULT_LEN].replace("\n", " ")
-            if len(result_str) > MAX_RESULT_LEN:
-                preview += f"…[+{len(result_str)-MAX_RESULT_LEN}]"
-
-            logger.info(f"[tool] ✅ {name} → {elapsed_ms}ms | {preview}")
+            log_event("tool.result", name=name, ok=True, duration_ms=elapsed_ms, result=fingerprint(result_str))
             if request_id:
                 self._flow_last[request_id] = time.monotonic()
             flow_end = tool_flow_fields(name, args, result)
@@ -2707,7 +2711,7 @@ class HarnessAgent:
 
         except Exception as e:
             elapsed_ms = int((time.monotonic() - t0) * 1000)
-            logger.error(f"[tool] ❌ {name} → {elapsed_ms}ms | {e}")
+            log_event("tool.result", name=name, ok=False, duration_ms=elapsed_ms, error_type=type(e).__name__)
             if request_id:
                 self._flow_last[request_id] = time.monotonic()
             await self._send_flow(request_id, "tool_end", call_id=call_id, ok=False, ms=elapsed_ms, **flow_tool)

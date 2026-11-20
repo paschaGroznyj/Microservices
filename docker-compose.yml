@@ -110,6 +110,14 @@ services:
       ADMINS_INFO: ${ADMINS_INFO}
       AGENT_POOL_PASSWORD: ${AGENT_POOL_PASSWORD}
       SANDBOX_SERVICE_URL: ${SANDBOX_SERVICE_URL}
+      # Request-scoped logs; captures opt-in per chat and contain private user data.
+      AGENT_LOG_LEVEL: ${AGENT_LOG_LEVEL:-INFO}
+      AGENT_LOG_JSONL: ${AGENT_LOG_JSONL:-/tmp/agent-logs/events.jsonl}
+      AGENT_DIAGNOSTICS_CHATS: ${AGENT_DIAGNOSTICS_CHATS:-}
+      AGENT_DIAGNOSTICS_DIR: ${AGENT_DIAGNOSTICS_DIR:-/tmp/agent-diagnostics}
+      AGENT_DIAGNOSTICS_MAX_BYTES: ${AGENT_DIAGNOSTICS_MAX_BYTES:-2097152}
+      AGENT_DIAGNOSTICS_MAX_TOTAL_BYTES: ${AGENT_DIAGNOSTICS_MAX_TOTAL_BYTES:-52428800}
+      AGENT_DIAGNOSTICS_TTL_SECONDS: ${AGENT_DIAGNOSTICS_TTL_SECONDS:-86400}
       EDITOR_BASE_URL: ${EDITOR_BASE_URL}
       TG_BOT_PUSH_URL: http://172.18.0.1:8010/push_message # docker network inspect pascha_microservices | grep Gateway
       MAX_BOT_PUSH_URL: http://172.18.0.1:8011/push_message

@@ -18,6 +18,19 @@ from langchain_openai import ChatOpenAI
 REASONING_KEYS = ("reasoning_content", "reasoning")
 
 
+def clean_reasoning(text: str) -> str:
+    """Удаляет HTML-теги, data-атрибуты и markdown-жирность из reasoning."""
+    import re
+    # Убираем <div>, <p>, <strong> с любыми атрибутами
+    text = re.sub(r'<div[^>]*>|</div>|<p[^>]*>|</p>|<strong[^>]*>|</strong>', '', text)
+    # Убираем **
+    text = text.replace('**', '')
+    # Убираем лишние пробелы и переводы строк
+    text = re.sub(r'\n\s*\n+', '\n', text)
+    text = re.sub(r'  +', ' ', text)
+    return text.strip()
+
+
 def delta_reasoning(chunk: dict) -> str:
     """Текст рассуждения из одного SSE-чанка или пустая строка."""
     choices = chunk.get("choices") or (chunk.get("chunk") or {}).get("choices") or []
@@ -27,7 +40,7 @@ def delta_reasoning(chunk: dict) -> str:
     for key in REASONING_KEYS:
         val = delta.get(key)
         if isinstance(val, str) and val:
-            return val
+            return clean_reasoning(val)
     return ""
 
 

@@ -114,9 +114,10 @@ const N = () => st.tab === 'j' ? st.total : st.tab === 't' ? Math.max(1, (st.run
 // Шаги: слайд на ответ агента — шаги цикла, вызовы тулов, сводка по тулам и разбивка по шагам.
 function tSlide(r) {
   const tools = r.tools.slice(0, 6), more = r.tools.length - tools.length;
-  const rows = tools.map(t => `<div class="mm-crow"><i class="mm-tdot"></i><span class="mm-cl">${esc(t.name)}</span><span class="mm-cv">× ${t.count}</span></div>`).join('');
+  const rows = tools.map(t => `<div class="mm-crow"><span class="mm-cl">${esc(t.name)}</span><span class="mm-cv">× ${t.count}</span></div>`).join('');
   const seq = r.by_step.map(s => `<span class="mm-ts" title="Шаг ${s.step}: ${esc(s.calls.map(c => c.name).join(', '))}"><b>${s.step}</b>${s.calls.length > 1 ? `×${s.calls.length}` : ''}${s.calls.some(c => !c.ok) ? '<em>!</em>' : ''}</span>`).join('');
-  return `<div class="mm-sl mm-sl-t" data-mid="${esc(r.message_id)}"><div class="mm-sl-h"><span class="mm-tag">ответ</span><span class="mm-meta">${dt(r.created_at)}${r.model ? ' · ' + esc(r.model) : ''}</span></div>
+  const modelShort = r.model ? r.model.split('/').pop() : '';
+  return `<div class="mm-sl mm-sl-t" data-mid="${esc(r.message_id)}"><div class="mm-sl-h"><span class="mm-tag">ответ</span><span class="mm-meta">${dt(r.created_at)}${modelShort ? ' · ' + esc(modelShort) : ''}</span></div>
    <div class="mm-tsum"><span><b>${r.steps}</b> ${plural(r.steps, 'шаг', 'шага', 'шагов')}</span><span><b>${r.tool_calls}</b> ${plural(r.tool_calls, 'вызов', 'вызова', 'вызовов')}</span>${r.failed ? `<span class="mm-terr"><b>${r.failed}</b> с ошибкой</span>` : ''}</div>
    ${r.tool_calls ? `<div class="mm-crows mm-trows">${rows}${more > 0 ? `<div class="mm-crow"><span class="mm-cl mm-cmore">ещё ${more} ${plural(more, 'тул', 'тула', 'тулов')}</span></div>` : ''}</div>
    <div class="mm-tseq" aria-label="Шаги с вызовами инструментов">${seq}</div>` : '<div class="mm-empty mm-empty-in">Ответ без вызова инструментов.</div>'}</div>`;

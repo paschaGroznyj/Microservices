@@ -37,6 +37,8 @@ SHADOW_REL = os.path.join(".ws_meta", "shadow")
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 BIG_FILE_BYTES = 5 * 1024 * 1024      # крупнее — в снимок не берём
+SNAP_MAX_BYTES = 256 * 1024 * 1024    # бюджет файлов одного репо в снимке: сверх него
+                                      # исключаем самые крупные (иначе add не успевает в GIT_TIMEOUT)
 PATCH_FILE_MAX = 64 * 1024             # patch одного файла
 PATCH_TOTAL_MAX = 256 * 1024           # patch всего ответа
 MAX_FILES = 200                        # файлов в ответе
@@ -158,7 +160,10 @@ def _repos(ws_path: str) -> list[dict]:
 
 
 def _big_files(work_tree: str, skip_top: set[str]) -> list[str]:
-    big = []
+    """Файлы, которые не берём в снимок: крупнее BIG_FILE_BYTES и, если остальное
+    не влезает в SNAP_MAX_BYTES, самые крупные из оставшихся (сначала большие)."""
+    big: list[tuple[int, str]] = []
+    rest: list[tuple[int, str]] = []
     for root, dirs, files in os.walk(work_tree):
         rel_root = os.path.relpath(root, work_tree)
         if rel_root == ".":
@@ -168,11 +173,22 @@ def _big_files(work_tree: str, skip_top: set[str]) -> list[str]:
         for fn in files:
             fp = os.path.join(root, fn)
             try:
-                if not os.path.islink(fp) and os.path.getsize(fp) > BIG_FILE_BYTES:
-                    big.append(os.path.relpath(fp, work_tree).replace(os.sep, "/"))
+                if os.path.islink(fp):
+                    continue
+                item = (os.path.getsize(fp), os.path.relpath(fp, work_tree).replace(os.sep, "/"))
             except OSError:
-                pass
-    return big
+                continue
+            (big if item[0] > BIG_FILE_BYTES else rest).append(item)
+    total = sum(sz for sz, _ in rest)
+    if total > SNAP_MAX_BYTES:
+        rest.sort(reverse=True)
+        i = 0
+        while total > SNAP_MAX_BYTES and i < len(rest):
+            total -= rest[i][0]
+            i += 1
+        big += rest[:i]
+    big.sort(reverse=True)
+    return [rel for _, rel in big]
 
 
 def _glob_escape(path: str) -> str:
@@ -182,7 +198,8 @@ def _glob_escape(path: str) -> str:
 def _write_exclude(git_dir: str, nested: list[str], big: list[str]) -> None:
     lines = ["# ws_diff: служебное и тяжёлое", *STATIC_EXCLUDE]
     lines += ["# вложенные репозитории (свой теневой индекс)"] + [f"/{_glob_escape(n)}/" for n in nested]
-    lines += [f"# файлы > {BIG_FILE_BYTES // (1024 * 1024)} МБ"] + ["/" + _glob_escape(b) for b in big[:2000]]
+    lines += [f"# файлы > {BIG_FILE_BYTES // (1024 * 1024)} МБ и сверх бюджета {SNAP_MAX_BYTES // (1024 * 1024)} МБ"]
+    lines += ["/" + _glob_escape(b) for b in big[:2000]]
     path = os.path.join(git_dir, "info", "exclude")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     text = "\n".join(lines) + "\n"
@@ -193,6 +210,39 @@ def _write_exclude(git_dir: str, nested: list[str], big: list[str]) -> None:
         pass
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
+
+
+def _clean_git_garbage(git_dir: str) -> int:
+    """Убирает следы прерванного git (таймаут, OOM, рестарт): index.lock и
+    недописанные tmp_pack_*/tmp_idx_*/tmp_obj_*. Без этого index.lock блокирует
+    все следующие снимки, а tmp_pack с крупными файлами остаётся на диске.
+    Вызывать только под _Lock: другой git в этом git-dir тогда не работает."""
+    paths = [os.path.join(git_dir, "index.lock")]
+    objects = os.path.join(git_dir, "objects")
+    for d in [os.path.join(objects, "pack"), objects]:
+        try:
+            paths += [os.path.join(d, n) for n in os.listdir(d) if n.startswith("tmp_")]
+        except OSError:
+            pass
+    try:
+        for sub in os.listdir(objects):
+            if len(sub) == 2:
+                sd = os.path.join(objects, sub)
+                paths += [os.path.join(sd, n) for n in os.listdir(sd) if n.startswith("tmp_obj_")]
+    except OSError:
+        pass
+    freed = 0
+    for fp in paths:
+        try:
+            sz = os.path.getsize(fp)
+            os.remove(fp)
+            freed += sz
+            log.warning("[ws_diff] removed stale %s (%d bytes)", fp, sz)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            log.warning("[ws_diff] cannot remove %s: %s", fp, e)
+    return freed
 
 
 # ── состояние и блокировка ─────────────────────────────────────────
@@ -259,9 +309,14 @@ def _snapshot(ws_path: str) -> dict[str, str]:
         skip_top = set(nested) if not r["prefix"] else set()
         if not r["prefix"]:
             skip_top |= ROOT_SERVICE_FILES
+        _clean_git_garbage(r["git_dir"])
         _write_exclude(r["git_dir"], nested if not r["prefix"] else [], _big_files(r["work_tree"], skip_top))
-        _git(r["git_dir"], r["work_tree"], "add", "-A", "--ignore-errors", ".", check=False)
-        trees[r["prefix"]] = _git(r["git_dir"], r["work_tree"], "write-tree").strip() or EMPTY_TREE
+        try:
+            _git(r["git_dir"], r["work_tree"], "add", "-A", "--ignore-errors", ".", check=False)
+            trees[r["prefix"]] = _git(r["git_dir"], r["work_tree"], "write-tree").strip() or EMPTY_TREE
+        except subprocess.TimeoutExpired:
+            _clean_git_garbage(r["git_dir"])
+            raise RuntimeError(f"snapshot {r['prefix'] or '/'}: git timeout {GIT_TIMEOUT}s") from None
     return trees
 
 

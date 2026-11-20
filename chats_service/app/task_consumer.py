@@ -39,6 +39,7 @@ from app.db.tasks_db import FINISHED, TasksDB, jval
 log = logging.getLogger("task_consumer")
 
 TASK_EVENTS_TOPIC = "task-events"
+ORPHAN_EVENT = "orphan_cancel"   # agent_sandbox: отмена задачи, которой нет в памяти
 CHAT_MESSAGES_TOPIC = "chat-messages"
 TASK_TRIGGER_USER_ID = -2
 TASK_TRIGGER_USERNAME = "task-trigger"
@@ -182,6 +183,8 @@ class TaskConsumer:
     # ---------- события ----------
     async def handle_event(self, ev) -> dict:
         res = {"stored": False, "pushed": False, "trigger": False}
+        if isinstance(ev, dict) and ev.get("event") == ORPHAN_EVENT:
+            return await self.handle_orphan_cancel(ev)
         if not isinstance(ev, dict) or not ev.get("task_id") or not ev.get("chat_id"):
             return res
         mid = await self.tasks.upsert_event(ev)
@@ -199,6 +202,24 @@ class TaskConsumer:
             # и отмена тоже: она могла быть последней в пачке, которую ждут готовые задачи
             self.pending.add(str(ev["chat_id"]))
             res["trigger"] = should_trigger(ev, True)
+        return res
+
+    async def handle_orphan_cancel(self, ev: dict) -> dict:
+        """Песочница перезапускалась и задачу не знает: закрываем карточку по строке из БД."""
+        res = {"stored": False, "pushed": False, "trigger": False}
+        if not ev.get("task_id"):
+            return res
+        row = await self.tasks.cancel_orphan(str(ev["task_id"]), ev.get("error"))
+        if not row:  # уже завершена или такой задачи нет
+            return res
+        res["stored"] = True
+        gw = str(row_owner(row).get("gateway_target") or "main").lower()
+        task = row_task(row)
+        task["awaiting_user"] = False
+        res["pushed"] = self._post(gw, "/internal/task_event", {"chat_id": str(row["chat_id"]), "task": task})
+        if gw in GATEWAY_URLS and autotrigger_enabled(self.redis):
+            # отмена могла быть последней в пачке, которую ждут готовые задачи
+            self.pending.add(str(row["chat_id"]))
         return res
 
     def _post(self, gateway: str, path: str, body: dict) -> bool:

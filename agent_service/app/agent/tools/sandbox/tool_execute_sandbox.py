@@ -442,113 +442,13 @@ So you can then spy on it/reuse it within the session.
         error_line and error_context (lines around the failure) — fix only that place.
         For a script worth reusing later, use save_to_code_library.
 
-        ── Ready‑made libraries in dev_utils (use them, don’t write from scratch) ─
-
-        1. HTML → JPEG rendering (one slide/screenshot):
-            import sys; sys.path.insert(0, "/app")
-            from dev_utils.render import render_html_to_image
-            await render_html_to_image(
-                html_path, output_path,
-                full_page=False,   # True — the entire page height, for long documents;
-                                    # False — only the viewport, for slides of a fixed size
-                viewport={"width": 1920, "height": 1080},
-                jpeg_quality=90,
-            )
-            Loading pattern: wait_until="domcontentloaded" (NOT networkidle — freezes
-            on advertising pixels/analytics), then await page.evaluate("document.fonts.ready").
-        
-        IMPORTANT: the code is executed as normal.py script, top-level await is NOT working.
-        All await calls (render_slides_to_pdf, render_html_to_image, parse_web_page)
-        wrap in async def main(): ...; asyncio.run(main())
-
-        2. A presentation consisting of several HTML slides → ready‑made PDF (use THIS,
-        rather than manually assembling Pillow multi‑page):
-
-            async def main():
-                import sys; sys.path.insert(0, "/app")
-                from dev_utils.slides_to_pdf import render_slides_to_pdf
-
-                # Write HTML files with RELATIVE paths to the current working directory —
-                # NOT in /sandbox (not accessible from the sandbox) and not in /tmp manually (not necessary,
-                # the working directory already exists and is unique to this run)
-                with open("slide1.html", "w") as f:
-                    f.write(html_content_1)
-                with open("slide2.html", "w") as f:
-                    f.write(html_content_2)
-
-                result = await render_slides_to_pdf(
-                    html_paths=["slide1.html", "slide2.html"],
-                    output_pdf_path="output/presentation.pdf",
-                )
-                print(result)
-
-            asyncio.run(main())
-
-            # result = {"ok": bool, "output_path": str, "slides_count": int, "error": str|None}
-            # ONLY the final PDF will be saved in saved_files — the intermediate JPEG slides
-            # are deleted automatically; there’s no need to clean them up manually.
-            Each slide is a SEPARATE HTML file (don't try to make one HTML with
-            page-break-after — rendering removes only one viewport, not page-by-page).
-
-            IMPORTANT: the code is executed as .py script, top-level await is not working —
-            always wrap asynchronous calls in async def main(): ...; asyncio.run(main()).
-
-        3. PDF-ПРЕЗЕНТАЦИЯ БЕЗ БЕЛЫХ ПОЛЕЙ (прямой Playwright → PNG → Pillow).
-           Используй ЭТОТ способ, а НЕ render_slides_to_pdf, когда нужна preza
-           фиксированного формата 16:9 (1920×1080) с вшитыми картинками и БЕЗ полей/
-           смещений по краям. Каждый слайд рендерится напрямую в PNG фиксированного
-           размера, затем PNG склеиваются в один PDF через Pillow.
-
-           ПРИЧИНА ПОЛЕЙ: белые поля появляются, когда размер .slide в HTML ≠ размеру
-           viewport рендера ≠ размеру страницы PDF. Решение — свести все три к одному
-           размеру (1920×1080) + CSS-reset в <head> КАЖДОГО слайда:
-               * { margin:0; padding:0; box-sizing:border-box; }
-               html,body { width:1920px; height:1080px; overflow:hidden; }
-               .slide    { width:1920px; height:1080px; overflow:hidden; position:relative; }
-           Картинку покрывать весь лист: <img style="width:100%;height:100%;object-fit:cover">
-           или background. Вшивать локально — через base64 (нет внешних зависимостей):
-               b64 = base64.b64encode(open(img_path,"rb").read()).decode()
-               img = f'<img src="data:image/png;base64,{b64}" style="width:100%;height:100%;object-fit:cover">'
-           либо <img> с ОТНОСИТЕЛЬНЫМ путём к файлу рядом с HTML в рабочей директории.
-
-           Скелет (viewport == размеру слайда, full_page=False — иначе поедут поля):
-
-               import asyncio, base64
-               from playwright.async_api import async_playwright
-               from PIL import Image
-
-               async def render_slide(html_path, out_png, w=1920, h=1080, scale=1):
-                   async with async_playwright() as p:
-                       browser = await p.chromium.launch(args=["--no-sandbox"])
-                       page = await browser.new_page(
-                           viewport={"width": w, "height": h},
-                           device_scale_factor=scale,   # 2..3 — физический растр до 4K
-                       )                                 # ХОЛСТ оставить логическим 1920×1080
-                       await page.goto(f"file://{html_path}", wait_until="domcontentloaded")
-                       await page.evaluate("document.fonts.ready")
-                       await page.wait_for_timeout(400)
-                       await page.screenshot(path=out_png, type="png", full_page=False)
-                       await browser.close()
-
-               async def main(html_files, out_pdf):
-                   pngs = []
-                   for i, html in enumerate(html_files):
-                       out = f"slide_{i}.png"
-                       await render_slide(html, out)
-                       pngs.append(out)
-                   imgs = [Image.open(p).convert("RGB") for p in pngs]
-                   imgs[0].save(out_pdf, save_all=True, append_images=imgs[1:])
-
-               asyncio.run(main(["slide1.html","slide2.html"], "output/deck.pdf"))
-
-           ЗАМЕТКИ:
-           - top-level await не работает — всё в async def main(): ...; asyncio.run(main()).
-           - PNG lossless даёт резкие линии/код; JPEG q96 — если нужен компактный файл.
-           - device_scale_factor=2..3 поднимает растр до 4K БЕЗ изменения вёрстки
-             (холст логический 1920×1080, резкость множителем, а не размером канвы).
-           - ПРОВЕРЯЙ фактический размер PNG после рендера: должен быть ровно W×H (×scale).
-             Если нет — где-то поле/несовпадение размеров .slide/viewport.
-           - Каждый слайд — ОТДЕЛЬНЫЙ HTML-файл (не page-break-after в одном HTML).
+        ── Rendering HTML → PNG/PDF, browser ───────────────────────────────
+        top-level await does NOT work: wrap awaits in async def main(): ...; asyncio.run(main()).
+        dev_utils has ready helpers (sys.path.insert(0, "/app")): render_html_to_image,
+        render_slides_to_pdf. Before rendering HTML to PNG/PDF or building a slide/PDF deck,
+        load the recipe: manage_skills(action="list", query="dev_utils"), then
+        manage_skills(action="export_prompt", skill_id=<id>).
+        Playwright MCP via CDP (JS-SPA): manage_skills(action="list", query="Playwright MCP").
 
         ── Fonts ─────────────────────────────────────────────────────────
         /app/fonts/InterVariable.ttf — variable, NOT for reportlab/Pillow
@@ -591,26 +491,6 @@ So you can then spy on it/reuse it within the session.
 
         Returns: stdout, stderr, exit_code, saved_files (paths to output/ files;
         with workspace_id only those created or changed by this call).
-
-        4. Playwright MCP via CDP (for JS-SPA without WAF):
-        Direct launch `npx @playwright/mcp --browser chromium` does NOT work —
-        MCP is looking for chrome-for-testing, not the system /usr/bin/chromium.
-        The working scheme is to run the system chromium as a CDP server and
-        connect MCP to it:
-
-            chromium --headless=new --no-sandbox --remote-debugging-port=9222 &
-            # wait ~4s, then:
-            npx @playwright/mcp --cdp-endpoint http://localhost:9222
-            # transport — stdin/stdout JSON-RPC, NOT HTTP-SSE
-
-        Timeouts: chromium start ~4s, MCP initialization ~3s,
-        navigation wait 8-12s.
-
-        @playwright/mcp is already installed globally (read-only FS; a subsequent
-        npm install -g will fail with EROFS — this is normal, the package is already in place).
-
-        Available commands: browser_navigate, browser_snapshot,
-        browser_evaluate, browser_click, browser_fill.
 
         For parsing Telegram resources:
             - t.me/s/ returns ~20 latest posts. To get

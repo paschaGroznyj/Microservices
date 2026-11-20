@@ -713,8 +713,13 @@ def make_find_generated_image_tool(agent):
             params.append(f"%{query.strip()}%")
             idx += 1
         if chat_id is not None:
-            conds.append(f"chat_id = ${idx}")
-            params.append(chat_id)
+            # По цепочке форков: в ветке видны картинки родителей до точки форка.
+            conds.append(
+                f"EXISTS (SELECT 1 FROM chat_chain_until(${idx}) cc "
+                f"WHERE cc.chat_id = generated_images.chat_id "
+                f"AND (cc.upto_at IS NULL OR generated_images.created_at <= cc.upto_at))"
+            )
+            params.append(str(chat_id))
             idx += 1
 
         where = (" WHERE " + " AND ".join(conds)) if conds else ""

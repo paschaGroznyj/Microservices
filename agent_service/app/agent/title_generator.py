@@ -59,7 +59,11 @@ def sanitize_title(raw) -> str:
 
 
 async def is_first_turn(pool, chat_id) -> bool:
-    """Первый ход = в chats ещё нет ответов бота для этого чата."""
+    """Первый ход = в chats ещё нет ответов бота для этого чата и чат не ветка.
+
+    Ветка получает заголовок «<родитель> (N)» при форке (fork_chat), автозаголовок
+    по её первому обмену его бы перебил: сайдбар берёт самый свежий auto_title.
+    """
     if pool is None or chat_id is None:
         return False
     async with pool.acquire() as conn:
@@ -67,7 +71,13 @@ async def is_first_turn(pool, chat_id) -> bool:
             "SELECT COUNT(*) FROM chats WHERE chat_id = $1 AND is_from_bot = TRUE",
             chat_id,
         )
-    return not (bot_count and int(bot_count) > 0)
+        if bot_count and int(bot_count) > 0:
+            return False
+        is_fork = await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM chats_forks WHERE child_chat_id = $1)",
+            str(chat_id),
+        )
+    return not is_fork
 
 
 async def generate_chat_title(lite_invoke, user_input: str, final_response: str):

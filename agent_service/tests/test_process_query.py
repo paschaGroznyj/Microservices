@@ -16,7 +16,7 @@ from agent.prompts.system_prompt import INTERACTIVE_POLL_GUIDANCE
 from tests.conftest import MODEL_NAMES, ai, build_agent
 
 OUT_KEYS = {"input", "message", "used_tools", "action", "success", "files_to_send",
-            "tool_trace", "agent_model", "tokens_usage", "auto_title"}
+            "tool_trace", "agent_model", "tokens_usage", "auto_title", "context"}
 
 
 def fake_tool(name, result="ok", exc=None):
@@ -125,8 +125,14 @@ def test_plain_answer_contract(h):
     assert out["files_to_send"] == []
     assert out["tool_trace"] is None
     assert out["agent_model"] == MODEL_NAMES["coder"]
+    breakdown = out["tokens_usage"].pop("context_breakdown")
+    assert breakdown["estimated"] is True
+    assert out["context"]["tokens"] == out["tokens_usage"]["context_tokens"]
+    assert sum(breakdown["tokens"].values()) == out["tokens_usage"]["context_tokens"]
+    assert out["tokens_usage"].pop("context_cache_read_tokens") is None
+    assert out["context"]["cache_pct"] is None
     assert out["tokens_usage"] == {"input_tokens": 10, "output_tokens": 3, "total_tokens": 13,
-                                   "cache_read_tokens": 0, "cache_creation_tokens": 0}
+                                   "cache_read_tokens": 0, "cache_creation_tokens": 0, "context_tokens": 10}
     assert out["auto_title"] is None
     assert h.models["coder"].methods == ["astream"]
 
@@ -152,8 +158,14 @@ def test_tool_step_then_answer(h):
     assert out["message"] == "Готово"
     assert out["used_tools"] == ["noop"] and out["action"] == "noop"
     assert calls[0].get("x") == 1
+    breakdown = out["tokens_usage"].pop("context_breakdown")
+    assert breakdown["estimated"] is True
+    assert out["context"]["tokens"] == out["tokens_usage"]["context_tokens"]
+    assert sum(breakdown["tokens"].values()) == out["tokens_usage"]["context_tokens"]
+    assert out["tokens_usage"].pop("context_cache_read_tokens") is None
+    assert out["context"]["cache_pct"] is None
     assert out["tokens_usage"] == {"input_tokens": 150, "output_tokens": 12, "total_tokens": 162,
-                                   "cache_read_tokens": 0, "cache_creation_tokens": 0}
+                                   "cache_read_tokens": 0, "cache_creation_tokens": 0, "context_tokens": 50}
     second = h.models["coder"].calls[1]
     [tm] = tool_msgs(second)
     assert "42" in tm.content
@@ -349,7 +361,9 @@ def test_history_rows_converted_and_blank_skipped(h):
     h.run()
     sent = h.models["coder"].calls[0]
     texts = [m.content for m in sent if not isinstance(m, SystemMessage)]
-    assert texts == ["вопрос", "ответ", "привет"]
+    # tool_trace ответа бота уходит модели в content, после служебного маркера
+    from agent.common.trace_budget import CONTENT_MARK
+    assert texts == ["вопрос", "ответ" + CONTENT_MARK + "t" * 50, "привет"]
 
 
 def test_history_db_error_is_tolerated(h):
@@ -551,12 +565,16 @@ def test_auto_title_errors_fail_open(h, where):
 
 
 def test_long_tool_trace_summarized(h):
-    h.mp.setattr(el, "TRACE_SUMMARY_THRESHOLD", 1)
+    """Сверх бюджета: голова сжимается, последний вызов остаётся сырым."""
+    from agent.common import trace_budget as tb
+    h.mp.setattr(tb, "TRACE_MSG_TOKENS", 1)
+    h.mp.setattr(tb, "TRACE_RAW_TAIL_TOKENS", 2)
     h.mp.setattr(el, "_summarize_tool_call", lambda tc, r: f"{tc['name']}:done")
-    h.add_tool("noop")
-    h.models["coder"].script = [ai("", [("noop", {})]), "ok"]
-    assert h.run()["tool_trace"] == "SUMMARY"
-    h.summarize_trace.assert_awaited_once_with("noop:done")
+    h.add_tool("a")
+    h.add_tool("b")
+    h.models["coder"].script = [ai("", [("a", {}), ("b", {})]), "ok"]
+    assert h.run()["tool_trace"] == "SUMMARY" + tb.TAIL_MARK + "b:done"
+    h.summarize_trace.assert_awaited_once_with("a:done")
 
 
 def test_short_tool_trace_kept_raw(h):

@@ -176,14 +176,14 @@ class ChatApp {
                 }
             }
 
-            if (restoreChatId && this.chats.some(c => !c.is_deleted && String(c.id) === String(restoreChatId))) {
+            if (restoreChatId && await this._ensureChatInList(restoreChatId)) {
                 await this.openChat(restoreChatId);
                 return true;
             }
 
             const savedChatId = userSettings?.active_chat_id ? String(userSettings.active_chat_id).trim() : '';
             if (savedChatId) {
-                const existsInDb = this.chats.some(c => !c.is_deleted && String(c.id) === savedChatId);
+                const existsInDb = await this._ensureChatInList(savedChatId);
                 if (existsInDb) {
                     await this.openChat(savedChatId, { skipSaveSettings: true });
                     return true;
@@ -362,15 +362,220 @@ class ChatApp {
     /* ══════════════════════════════════════════
        CHATS LIST
     ══════════════════════════════════════════ */
-    async loadChats() {
+    /* Список чатов грузится страницами: /api/chats/page отдаёт все избранные
+       и CHATS_PAGE обычных, дальше подгрузка по next_cursor, когда низ списка
+       подходит к краю #chats-section. Повторный loadChats() (resync) берёт
+       столько обычных, сколько уже было показано, чтобы список не схлопывался. */
+    async loadChats(opts = {}) {
+        const CHATS_PAGE = 40;
+        const more = !!opts.more;
+        if (more && (!this._chatsCursor || this._chatsLoading)) return;
+        if (!more) this._chatsGen = (this._chatsGen || 0) + 1;
+        const gen = this._chatsGen || 0;
+        this._chatsLoading = true;
+        this._syncChatsPager();
         try {
-            const res = await fetch('/api/chats', { credentials: 'include' });
-            if (res.ok) {
-                this.chats = await res.json();
-                this.renderChats(this.chats);
+            const shown = (this.chats || []).filter(c => !c.is_favorite).length;
+            const params = new URLSearchParams({
+                limit: String(more ? CHATS_PAGE : Math.min(Math.max(CHATS_PAGE, shown), 200)),
+            });
+            if (more) params.set('cursor', this._chatsCursor);
+            const include = opts.include ?? (more ? null : this.currentChat);
+            if (include != null && include !== '') params.set('include', String(include));
+            const res = await fetch(`/api/chats/page?${params}`, { credentials: 'include' });
+            if (!res.ok || gen !== this._chatsGen) return;
+            const data = await res.json();
+            if (gen !== this._chatsGen) return;
+            const page = Array.isArray(data?.chats) ? data.chats : [];
+            if (more) {
+                const seen = new Set((this.chats || []).map(c => String(c.id)));
+                this.chats = (this.chats || []).concat(page.filter(c => !seen.has(String(c.id))));
+            } else {
+                this.chats = page;
             }
+            this._chatsCursor = data?.next_cursor || null;
+            if (!more && Number.isFinite(data?.total)) this._chatsTotal = data.total;
+            this._applyRunning(page.map(c => String(c.id)), page.filter(c => c.running).map(c => String(c.id)));
+            this.renderChats(this.chats);
+            if (!this._runPollT) this._scheduleRunningPoll();
         } catch (e) {
             console.error('loadChats error:', e);
+        } finally {
+            if (gen === this._chatsGen) this._chatsLoading = false;
+            this._syncChatsPager();
+        }
+    }
+
+    // Чат может лежать дальше загруженных страниц (активный после F5, ссылка
+    // из поиска). Догружаем только его, курсор не трогаем.
+    async _ensureChatInList(chatId) {
+        const id = String(chatId ?? '').trim();
+        if (!id) return false;
+        const has = () => (this.chats || []).some(c => !c.is_deleted && String(c.id) === id);
+        if (has()) return true;
+        try {
+            const res = await fetch(`/api/chats/page?limit=1&include=${encodeURIComponent(id)}`, { credentials: 'include' });
+            if (!res.ok) return false;
+            const data = await res.json();
+            const hit = (data?.chats || []).find(c => String(c.id) === id);
+            if (!hit) return false;
+            if (!has()) {
+                this.chats = (this.chats || []).concat(hit);
+                this.renderChats(this.chats);
+            }
+            return true;
+        } catch (e) {
+            console.warn('_ensureChatInList error:', e);
+            return false;
+        }
+    }
+
+    _initChatsPager() {
+        const host = document.getElementById('chats-section');
+        const list = document.getElementById('chat-list');
+        if (!host || !list || this._chatsPagerIO) return;
+        let s = document.getElementById('chat-list-more');
+        if (!s) {
+            s = document.createElement('div');
+            s.id = 'chat-list-more';
+            s.className = 'chat-list-more';
+            s.setAttribute('aria-hidden', 'true');
+            s.hidden = true;
+        }
+        this._chatsMoreEl = s;
+        // Проверка по скроллу общего контейнера, не чаще раза за кадр.
+        let raf = 0;
+        host.addEventListener('scroll', () => {
+            if (raf) return;
+            raf = requestAnimationFrame(() => { raf = 0; this._checkChatsPager(); });
+        }, { passive: true });
+        this._chatsPagerIO = true;
+        this._syncChatsPager();
+    }
+
+    _syncChatsPager() {
+        const s = this._chatsMoreEl;
+        if (!s) return;
+        // Маркер живёт последним элементом #chat-list: renderChats перезаписывает
+        // innerHTML, поэтому возвращаем его в конец после каждой отрисовки.
+        const list = document.getElementById('chat-list');
+        if (list && list.lastElementChild !== s) list.appendChild(s);
+        s.hidden = !this._chatsCursor;
+        s.classList.toggle('is-loading', !!this._chatsLoading && !!this._chatsCursor);
+        // Если после подгрузки маркер всё ещё виден (страница короче окна),
+        // событий scroll не будет: проверяем на следующем кадре.
+        if (this._chatsCursor && !this._chatsLoading) requestAnimationFrame(() => this._checkChatsPager());
+    }
+
+    _checkChatsPager() {
+        if (!this._chatsCursor || this._chatsLoading) return;
+        if (document.getElementById('your-chats-block')?.classList.contains('collapsed')) return;
+        const host = document.getElementById('chats-section');
+        const s = this._chatsMoreEl;
+        if (!host || !s || s.hidden) return;
+        const hr = host.getBoundingClientRect(), sr = s.getBoundingClientRect();
+        if (hr.height > 0 && sr.top <= hr.bottom + 320) this.loadChats({ more: true });
+    }
+
+    // «Агент работает» в строке чата. Источник: Redis agent:running:{chat_id} / agent:loop:{chat_id}
+    // (поле running в /api/chats/page и опрос POST /api/chats/running). Локальные отметки при
+    // отправке/финале только ускоряют отклик, опрос их подтверждает.
+    get _runHtml() {
+        return '<span class="chat-run-dots" aria-hidden="true"><i></i><i></i><i></i></span>Агент работает';
+    }
+
+    _markChatRunning(chatId, on) {
+        const id = String(chatId ?? '');
+        if (!id) return;
+        if (!this._runningChats) this._runningChats = new Set();
+        if (!this._runningLocalAt) this._runningLocalAt = {};
+        this._runningLocalAt[id] = Date.now();
+        const had = this._runningChats.has(id);
+        if (on) this._runningChats.add(id); else this._runningChats.delete(id);
+        if (had !== !!on) this._paintChatRunning(id);
+        this._scheduleRunningPoll();
+    }
+
+    _paintChatRunning(id) {
+        const on = !!this._runningChats?.has(id);
+        const sel = `.chat-item--c[data-chat-id="${CSS.escape(String(id))}"]`;
+        document.querySelectorAll(sel).forEach(el => {
+            el.classList.toggle('chat-item--running', on);
+            const wrap = el.querySelector('.chat-line-wrap');
+            if (!wrap) return;
+            let pv = wrap.querySelector('.chat-line--preview');
+            if (on) {
+                if (!pv) {
+                    pv = document.createElement('div');
+                    pv.className = 'chat-line chat-line--preview';
+                    wrap.appendChild(pv);
+                }
+                if (!pv.classList.contains('chat-line--run')) {
+                    pv.dataset.prev = pv.textContent || '';
+                    pv.classList.add('chat-line--run');
+                    pv.innerHTML = this._runHtml;
+                }
+            } else if (pv && pv.classList.contains('chat-line--run')) {
+                const prev = pv.dataset.prev || '';
+                if (prev) {
+                    pv.classList.remove('chat-line--run');
+                    pv.textContent = prev;
+                    delete pv.dataset.prev;
+                } else {
+                    pv.remove();
+                }
+            }
+        });
+    }
+
+    _scheduleRunningPoll(delay = null) {
+        if (!this._runVisBound) {
+            this._runVisBound = true;
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible') this._scheduleRunningPoll(300);
+            });
+        }
+        if (this._runPollT) clearTimeout(this._runPollT);
+        const busy = !!(this._runningChats && this._runningChats.size);
+        this._runPollT = setTimeout(() => this._pollRunning(), delay ?? (busy ? 5000 : 20000));
+    }
+
+    async _pollRunning() {
+        this._runPollT = null;
+        try {
+            if (document.visibilityState === 'visible') {
+                const ids = (this.chats || []).filter(c => c && !c.is_deleted)
+                    .map(c => String(c.id)).slice(0, 200);
+                if (ids.length) {
+                    const res = await fetch('/api/chats/running', {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ids }),
+                    });
+                    if (res.ok) {
+                        const data = await res.json();
+                        this._applyRunning(ids, data?.running || []);
+                    }
+                }
+            }
+        } catch (e) { /* сеть: повторим на следующем тике */ }
+        this._scheduleRunningPoll();
+    }
+
+    _applyRunning(ids, runningIds) {
+        if (!this._runningChats) this._runningChats = new Set();
+        const on = new Set((runningIds || []).map(String));
+        const now = Date.now();
+        for (const raw of ids || []) {
+            const id = String(raw);
+            // Ответ мог уйти до локальной отметки (отправка/финал) — 4 с доверяем локальной.
+            if (now - (this._runningLocalAt?.[id] || 0) < 4000) continue;
+            const had = this._runningChats.has(id);
+            const isOn = on.has(id);
+            if (had === isOn) continue;
+            if (isOn) this._runningChats.add(id); else this._runningChats.delete(id);
+            this._paintChatRunning(id);
         }
     }
 
@@ -394,21 +599,50 @@ class ChatApp {
             return doc.body.textContent || '';
         };
 
-        // Если есть renamed_title — показываем его как единственную строку (без preview).
-        // Если нет — показываем последнее сообщение как единственную строку.
-        const getDisplayLine = (chat) => {
-            const renamed = (chat.renamed_title || '').trim();
-            if (renamed) return { title: escapeHtml(renamed), preview: null, kind: 'renamed' };
-
-            // Автогенерированный заголовок (по первому обмену) — приоритетнее last_message.
-            const auto = (chat.auto_title || '').trim();
-            if (auto) return { title: escapeHtml(auto), preview: null, kind: 'auto' };
-
+        // Сверху заголовок (ручное имя → автоназвание), снизу последнее сообщение.
+        // Чат без заголовка: последнее сообщение становится заголовком, вторая строка пустая.
+        const previewOf = (chat) => {
             const raw = (chat.last_message || '').trim();
-            if (!raw || raw === 'Чат создан') return { title: 'Новый чат', preview: null, kind: 'auto' };
-            const plainText = stripHtml(raw).trim();
-            const truncated = plainText.length > 60 ? plainText.slice(0, 60) + '...' : plainText;
-            return { title: null, preview: escapeHtml(truncated) };
+            if (!raw || raw === 'Чат создан' || raw === 'Новый чат') return '';
+            let t = stripHtml(raw)
+                .replace(/```[\s\S]*?(```|$)/g, ' ')
+                .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+                .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+                .replace(/^\s{0,3}(#{1,6}|>|[-*+]|\d+\.)\s+/gm, '')
+                .replace(/[*_`~|]+/g, '')
+                .replace(/\s+/g, ' ')
+                .trim();
+            if (t.length > 140) t = t.slice(0, 140) + '…';
+            return t;
+        };
+
+        const timeOf = (iso) => {
+            const d = new Date(iso);
+            if (!iso || isNaN(d)) return '';
+            const now = new Date();
+            const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+            const diff = Math.round((day(now) - day(d)) / 86400000);
+            if (diff <= 0) return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+            if (diff === 1) return 'вчера';
+            if (diff < 7) return d.toLocaleDateString('ru-RU', { weekday: 'short' });
+            if (d.getFullYear() === now.getFullYear()) {
+                return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }).replace('.', '');
+            }
+            return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' });
+        };
+
+        // Две буквы: начала первых двух слов («Media Pro» → «MP»), для одного слова — одна буква.
+        const initialOf = (text) => {
+            const words = String(text || '').match(/[\p{L}\p{N}]+/gu) || [];
+            const ini = words.slice(0, 2).map(w => Array.from(w)[0]).join('');
+            return ini ? ini.toUpperCase() : '#';
+        };
+
+        // Тон аватара от id чата: один и тот же чат всегда одного цвета.
+        const toneOf = (id) => {
+            let h = 0;
+            for (const ch of String(id)) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+            return h % 8;
         };
 
         const sorted = (Array.isArray(chats) ? chats : [])
@@ -421,16 +655,30 @@ class ChatApp {
                 return '<div class="chat-item-skeleton">Нет чатов</div>';
             }
             return items.map(chat => {
-                const { title, preview, kind } = getDisplayLine(chat);
-                const titleCls = kind === 'renamed' ? 'chat-line chat-line--title chat-line--renamed' : 'chat-line chat-line--title';
-                const lineHtml = title
-                    ? `<div class="${titleCls}">${title}</div>`
-                    : `<div class="chat-line chat-line--preview">${preview}</div>`;
+                const renamed = (chat.renamed_title || '').trim();
+                const auto = (chat.auto_title || '').trim();
+                const preview = previewOf(chat);
+                const titleRaw = renamed || auto || preview || 'Новый чат';
+                const sub = (renamed || auto) && preview
+                    ? (chat.last_from_bot ? '' : 'Вы: ') + preview
+                    : '';
+                const titleCls = renamed ? 'chat-line chat-line--title chat-line--renamed' : 'chat-line chat-line--title';
+                const id = escapeHtml(String(chat.id));
+                const time = timeOf(chat.timestamp);
+                const run = !!this._runningChats?.has(String(chat.id));
+                const pvHtml = run
+                    ? `<div class="chat-line chat-line--preview chat-line--run" data-prev="${escapeHtml(sub)}">${this._runHtml}</div>`
+                    : (sub ? `<div class="chat-line chat-line--preview">${escapeHtml(sub)}</div>` : '');
                 return `
-                <div class="chat-item ${chat.id === this.currentChat ? 'active' : ''}"
-                    data-chat-id="${escapeHtml(String(chat.id))}">
-                    <div class="chat-line-wrap">${lineHtml}</div>
-                    <button class="chat-item-menu-btn" data-menu-chat-id="${escapeHtml(String(chat.id))}" title="Действия" type="button">
+                <div class="chat-item chat-item--c${String(chat.id) === String(this.currentChat) ? ' active' : ''}${run ? ' chat-item--running' : ''}"
+                    data-chat-id="${id}">
+                    <span class="chat-av" data-tone="${toneOf(chat.id)}" aria-hidden="true">${escapeHtml(initialOf(titleRaw))}</span>
+                    <div class="chat-line-wrap">
+                        <div class="${titleCls}">${escapeHtml(titleRaw)}</div>
+                        ${pvHtml}
+                    </div>
+                    ${time ? `<time class="chat-time" datetime="${escapeHtml(String(chat.timestamp))}">${escapeHtml(time)}</time>` : '<span class="chat-time"></span>'}
+                    <button class="chat-item-menu-btn" data-menu-chat-id="${id}" title="Действия" type="button">
                         <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14">
                             <circle cx="10" cy="4" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="10" cy="16" r="1.5"/>
                         </svg>
@@ -455,6 +703,25 @@ class ChatApp {
         }
 
         list.innerHTML = buildList(regular);
+
+        // Счётчики в заголовках секций. Обычных: total с сервера минус избранные,
+        // пока не всё догружено; когда курсор кончился — точное число в списке.
+        const setCount = (btnId, n) => {
+            const btn = document.getElementById(btnId);
+            if (!btn) return;
+            let el = btn.querySelector('.sec-n');
+            if (!el) {
+                el = document.createElement('span');
+                el.className = 'sec-n';
+                btn.appendChild(el);
+            }
+            el.textContent = n > 0 ? String(n) : '';
+        };
+        setCount('favorites-toggle', favorites.length);
+        setCount('chats-section-toggle', this._chatsCursor
+            ? Math.max((this._chatsTotal || 0) - favorites.length, regular.length)
+            : regular.length);
+        this._syncChatsPager();
     }
 
     /* ══════════════════════════════════════════
@@ -2060,6 +2327,14 @@ class ChatApp {
             reaction: message.reaction ?? (typeof message.reactions === 'string' ? message.reactions : null),
             createdAt: message.created_at || message.timestamp || new Date().toISOString(),
         });
+        // «Использование ресурсов за ход»: tokens_usage из БД (история) или из финала хода.
+        if (isBot && message.tokens_usage && window.UsageOverlay) {
+            window.UsageOverlay.mount(messageEl, {
+                ...message.tokens_usage,
+                family: message.model_family,
+                model: message.agent_model,
+            });
+        }
 
         if (isBot) {
             // Если есть placeholder и это стриминг — рендерим прямо внутрь него
@@ -2566,6 +2841,25 @@ class ChatApp {
         }
     }
 
+    /* Gateway упаковал длинный ```json из текста в файл (api_gateway/json_pack.py)
+       и вернул packed = { message, files }. Перерисовываем своё оптимистичное
+       сообщение: короткий текст + плитка вложения, как будет после F5. */
+    _applyPackedUserMessage(chatId, msgId, packed) {
+        if (!packed || !msgId || String(this.currentChat) !== String(chatId)) return;
+        const c = this.getMessagesContainer();
+        const sel = `.user-message-wrapper[data-message-id="${CSS.escape(String(msgId))}"]`;
+        const old = c?.querySelector(sel);
+        if (!old) return;
+        const next = old.nextSibling;
+        old.remove();
+        this.addMessage({
+            message: packed.message || '', is_from_bot: false, id: msgId, message_id: msgId,
+            created_at: new Date().toISOString(), files: Array.isArray(packed.files) ? packed.files : [],
+        }, false);
+        const nw = c.querySelector(sel);
+        if (nw && next && next.parentNode === c && nw !== next) c.insertBefore(nw, next);
+    }
+
     _renderMessageFiles(files, messageId = '') {
         try {
             if (!files || !Array.isArray(files) || files.length === 0) return '';
@@ -2577,6 +2871,10 @@ class ChatApp {
                 const canServe = !!(chatId && mid);
                 const items = files.map((f) => {
                     const name = String((f && f.name) || 'файл');
+                    // JSON Pro-разметки gateway отдал агенту, на диске его нет (json_pack.py).
+                    if (f && f.kind === 'agent_json') {
+                        return { name, size: f.size, type: f.type || 'application/json', nofile: true };
+                    }
                     let url = (f && f.url) || '';
                     if (!url && canServe) {
                         url = `/api/chats/${encodeURIComponent(chatId)}/files/${encodeURIComponent(mid)}/${encodeURIComponent(name)}`;
@@ -2782,6 +3080,23 @@ class ChatApp {
             chip.download  = name;
             chip.title     = name;
             chip.setAttribute('rel', 'noopener noreferrer');
+
+            // Текстовые файлы (md, код, csv, json…) открываем в панели превью, а не скачиваем.
+            // Иконка-стрелка, Ctrl/Cmd/Shift/средний клик — по-прежнему скачивание.
+            const FT = window.FileTiles;
+            if (messageId && FT && typeof FT.previewTypeOf === 'function' && FT.previewTypeOf(name, f.type || f.mime)) {
+                chip.dataset.name = name;
+                chip.dataset.url = url;
+                chip.dataset.dlUrl = `${url}?download=1`;
+                if (f.type || f.mime) chip.dataset.mime = f.type || f.mime;
+                chip.dataset.preview = '1';
+                chip.addEventListener('click', (e) => {
+                    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+                    if (e.target.closest('.fa-chip__dl-icon')) return;
+                    e.preventDefault();
+                    FT.openFilePreview(chip);
+                });
+            }
 
             // ПКМ по файлу: «Открыть в редакторе» / «Скачать».
             chip.addEventListener('contextmenu', (e) => {
@@ -3455,6 +3770,7 @@ class ChatApp {
             }
             // Убираем из локального списка и перерисовываем только сайдбар
             this.chats = this.chats.filter(c => c.id !== chatId);
+            if (this._chatsTotal) this._chatsTotal--;
             this.renderChats(this.chats);
             // Чат удалён — выбрасываем его черновик ввода.
             this._clearInputDraft(chatId);
@@ -3547,6 +3863,7 @@ class ChatApp {
             const existing = this.chats.find(c => c.id === this.currentChat);
             if (existing) {
                 existing.last_message = chatPreviewText;
+                existing.last_from_bot = false;
                 existing.timestamp = new Date().toISOString();
                 this.renderChats(this.chats);
             }
@@ -3593,6 +3910,7 @@ class ChatApp {
         }
 
         this._runState = 'running';
+        this._markChatRunning(this.currentChat, true);
         this._loopWaiting = false;
         this._setSendButtonMode('stop');
         this._sendingInFlightChat = String(this.currentChat);
@@ -3618,6 +3936,7 @@ class ChatApp {
                 else _upTracker?.fail(_upRes ? `Не загружено (ошибка ${_upRes.status})` : 'Не загружено: нет связи');
             }
 
+            const _sendChatId = this.currentChat;
             const resp = await fetch('/api/chats/send_message', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -3657,6 +3976,7 @@ class ChatApp {
             try {
                 const j = await resp.clone().json();
                 this._activeRequestId = j?.request_id || null;
+                if (j?.packed) this._applyPackedUserMessage(_sendChatId, msgId, j.packed);
                 if (j?.request_id) _fm('gateway', { chat: this.currentChat, request_id: j.request_id });
                 if (j?.active_requests !== undefined) {
                     this._updateActiveRequestsUI(this.currentChat, j.active_requests);
@@ -3668,6 +3988,7 @@ class ChatApp {
             console.error('sendMessage error:', err);
             _upTracker?.fail('Не отправлено');
             this._runState = 'idle';
+            this._markChatRunning(this.currentChat, false);
             this._setSendButtonMode('send');
             this._activeRequestId = null;
         } finally {
@@ -3914,6 +4235,13 @@ class ChatApp {
         const dimEl = bar.querySelector('.image-lightbox__dim');
         const cntEl = bar.querySelector('.gc-lb__counter');
         const dlEl = bar.querySelector('.image-lightbox__dl');
+        // Pro-разметка файлов агента (media-pro.js): кнопка перед «Скачать»
+        const mediaPro = window.MediaPro?.bindLightbox({
+            bar, before: dlEl, app: this,
+            getItem: () => items[idx],
+            getSrc: () => mediaContainer.querySelector('img')?.src || items[idx]?.url,
+            closeLightbox: () => close(),
+        });
 
         const revokeObjUrl = () => {
             if (overlay._objUrl) {
@@ -3936,6 +4264,7 @@ class ChatApp {
             nameEl.title = it.imageKey || dlName0;
             dimEl.textContent = '…';
             cntEl.textContent = items.length > 1 ? `${idx + 1}/${items.length}` : '';
+            mediaPro?.refresh();
             const href0 = (isVid ? (it.dlUrl || it.url) : it.url) || '#';
             dlEl.setAttribute('href', href0);
             dlEl.setAttribute('download', dlName0);
@@ -4259,6 +4588,9 @@ class ChatApp {
             revokeObjUrl();
         };
         const onKey = (e) => {
+            if (window.MediaPro?.isOpen()) return;   // клавиши забирает Pro-редактор
+            if (e.code === 'KeyP' && !e.ctrlKey && !e.metaKey && !e.altKey
+                && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName || '')) { mediaPro?.open(); return; }
             if (e.key === 'Escape') close();
             else if (e.key === 'ArrowLeft') nav(-1);
             else if (e.key === 'ArrowRight') nav(1);
@@ -4327,6 +4659,10 @@ class ChatApp {
     /* Обработчик входящих сообщений WS конкретного чата (замкнут на chatId).
        Пишет в стрим ЭТОГО чата (this._streams[chatId]) напрямую — поэтому
        фоновый чат стримит корректно, даже когда открыт другой. */
+    _applyRealtimeContext(chatId, msg) {
+        window.MemoryPanel?.update(String(chatId), msg.message_id, msg.context);
+    }
+
     _onWsMessage(chatId, event) {
             const key = String(chatId);
             const st = this._ensureStream(key);
@@ -4344,6 +4680,7 @@ class ChatApp {
             }
 
             if (msg.type === 'flow') {
+                if (msg.ev === 'context_usage') { this._applyRealtimeContext(key, msg); return; }
                 if (isActive) _fm(msg.ev, { ...msg, chat: key, id: msg.call_id || undefined });
                 return;
             }
@@ -4424,6 +4761,20 @@ class ChatApp {
             // собираются в ответ на то же место, что и после F5. Таймер: дать финализации пузыря отработать.
             const isFinalBotMsg = msg.is_from_bot && msg.chunk === undefined && !msg.kind && (msg.done || msg.message !== undefined);
             if (isFinalBotMsg) _fm('done', { chat: key });
+            if (isFinalBotMsg) window.MemoryPanel?.update(key, msg.message_id, msg.context);
+            if (isFinalBotMsg && msg.tokens_usage && window.UsageOverlay) {
+                const _usage = { ...msg.tokens_usage, model: msg.agent_model };
+                if (st.pendingBotEl) window.UsageOverlay.mount(st.pendingBotEl, _usage);
+                if (isActive) setTimeout(() => {
+                    const box = this.getMessagesContainer();
+                    if (!box) return;
+                    const ids = [msg.message_id, msg.id].filter(v => v != null && v !== '').map(String);
+                    const bots = [...box.querySelectorAll(':scope > .agent-message')];
+                    const el = bots.find(b => ids.includes(String(b.dataset.messageId || '')) || ids.includes(String(b.dataset.id || '')))
+                        || bots[bots.length - 1];
+                    if (el && !el.dataset.usage) window.UsageOverlay.mount(el, _usage);
+                }, 120);
+            }
             if (isFinalBotMsg && isActive && window.TaskCards) {
                 const _tcBox = this.getMessagesContainer();
                 setTimeout(() => window.TaskCards.settle(_tcBox, msg), 60);
@@ -5501,6 +5852,7 @@ class ChatApp {
             return;
         }
         this._runState = 'idle';
+        this._markChatRunning(this.currentChat, false);
         this._loopWaiting = false;
         this._activeRequestId = null;
         this._setSendButtonMode('send');
@@ -5673,6 +6025,7 @@ class ChatApp {
     async renderMessageInput() {
         const container = this.getInputContainer();
         if (!container) return;
+        if (!this.currentChat) window.MemoryPanel?.unmount();
 
         // Гард: не перерисовывать если экран уже соответствует состоянию
         const hasStart     = !!container.querySelector('.chat-start-screen');
@@ -5692,7 +6045,10 @@ class ChatApp {
         // Стартовый экран уже есть и чат не выбран — пропускаем
         if (!this.currentChat && hasStart) return;
         // Инпут активного чата уже есть И это тот же чат — пропускаем
-        if (this.currentChat && hasActive && renderedChat === String(this.currentChat)) return;
+        if (this.currentChat && hasActive && renderedChat === String(this.currentChat)) {
+            window.MemoryPanel?.mount(this.currentChat);
+            return;
+        }
         // Если чат выбран, но рендерился стартовый — рендерим инпут (смена состояния)
 
         container.classList.add('rending');
@@ -5811,6 +6167,8 @@ class ChatApp {
         window.ToolsPanel?.inject(container);
         window.ModelPicker?.inject(container);
         window.QueryMode?.inject(container);
+        // Память чата: строка под полем, полоска контекста, карточка (memory-panel.js)
+        window.MemoryPanel?.mount(this.currentChat);
 
         // Посимвольная анимация start-header
         // Запоминаем для какого чата отрендерили
@@ -7011,6 +7369,7 @@ class ChatApp {
             scrollHost.addEventListener('scroll', syncScrolled, { passive: true });
             syncScrolled();
         }
+        this._initChatsPager();
     }
 
     initHelp() {
@@ -7213,6 +7572,55 @@ class ChatApp {
         return result.replace(/\n{3,}/g, '\n\n').trim();
     }
 
+    // Ветка чата от ответа агента: POST /api/chats/{chat}/fork {point}.
+    // point — data-id ответа (chats.id или message_id), сервер сам найдёт строку
+    // в цепочке текущего чата. История родителя наследуется по ссылке.
+    async _forkChatFrom(point, btn) {
+        const chatId = this.currentChat;
+        point = String(point || '').trim();
+        if (!chatId || !point || btn?.disabled) return;
+        if (btn) { btn.disabled = true; btn.classList.add('busy'); }
+        try {
+            const resp = await fetch(`/api/chats/${encodeURIComponent(chatId)}/fork`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ point }),
+            });
+            let data = {};
+            try { data = await resp.json(); } catch (_) { /* пустое тело */ }
+            if (!resp.ok || !data.chat_id) {
+                const msg = resp.status === 404
+                    ? 'Ответ ещё не сохранён, попробуйте через пару секунд'
+                    : (typeof data.detail === 'string' ? data.detail : 'Не удалось создать ветку');
+                this.showToast(msg);
+                return;
+            }
+            const newId = String(data.chat_id);
+            const parent = (this.chats || []).find(c => String(c.id) === String(chatId));
+            if (!(this.chats || []).some(c => String(c.id) === newId)) {
+                this.chats = [{
+                    id: newId,
+                    last_message: parent?.last_message || '',
+                    last_from_bot: true,
+                    timestamp: data.created_at || new Date().toISOString(),
+                    is_deleted: false,
+                    is_favorite: false,
+                    renamed_title: null,
+                    auto_title: data.auto_title || 'Ветка',
+                }, ...(this.chats || [])];
+                this.renderChats(this.chats);
+            }
+            this.showToast('Создана ветка');
+            await this.openChat(newId);
+        } catch (err) {
+            console.warn('[fork] failed:', err);
+            this.showToast('Не удалось создать ветку');
+        } finally {
+            if (btn) { btn.disabled = false; btn.classList.remove('busy'); }
+        }
+    }
+
     createMessageActions(messageId, messageText, isBot, meta = {}) {
         const div = document.createElement('div');
         div.className = isBot ? 'message-actions' : 'user-actions';
@@ -7342,6 +7750,28 @@ class ChatApp {
             div.appendChild(likeBtn);
             div.appendChild(dislikeBtn);
 
+            // «Ветка»: новый чат с историей до этого ответа включительно.
+            const forkBtn = document.createElement('button');
+            forkBtn.type = 'button';
+            forkBtn.className = 'action-button fork-button';
+            forkBtn.title = 'Ветка от этого ответа';
+            forkBtn.setAttribute('aria-label', 'Ветка от этого ответа');
+            forkBtn.innerHTML = `<svg class="action-icon" viewBox="0 0 24 24" fill="none">
+                <circle cx="6" cy="5" r="2.2" stroke="currentColor" stroke-width="1.8"/>
+                <circle cx="6" cy="19" r="2.2" stroke="currentColor" stroke-width="1.8"/>
+                <circle cx="18" cy="7" r="2.2" stroke="currentColor" stroke-width="1.8"/>
+                <path d="M6 7.2v9.6M18 9.2c0 4.3-5.2 4-10.4 7.9"
+                    stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>`;
+            forkBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const parentMsg = div.closest('.agent-message');
+                const point = meta.dbId || parentMsg?.dataset?.id || meta.messageId
+                    || parentMsg?.dataset?.messageId || messageId || '';
+                this._forkChatFrom(point, forkBtn);
+            });
+            div.appendChild(forkBtn);
+
             const createdAtIso = this._parseMessageDate(meta.createdAt || new Date()).toISOString();
             const timeEl = document.createElement('span');
             timeEl.className = 'message-time';
@@ -7350,6 +7780,8 @@ class ChatApp {
             div.appendChild(timeEl);
 
             this._ensureMessageTimeTicker();
+            // Чип usage: из meta или из data-usage пузыря (actions пересоздаются при финализации).
+            queueMicrotask(() => window.UsageOverlay?.decorate(div, meta.usage));
         }
 
         return div;

@@ -58,6 +58,17 @@ def event_row(ev: dict) -> dict:
     }
 
 
+def cancel_stages(stages: list, now: float) -> list:
+    """Как close_stages песочницы для cancelled: активный этап -> cancelled, остальные как есть."""
+    out = []
+    for s in stages or []:
+        s = dict(s)
+        if s.get("status") == "active":
+            s["status"], s["finished_at"] = "cancelled", now
+        out.append(s)
+    return out
+
+
 # Что из owner события нужно, чтобы разбудить агента после рестарта консьюмера
 # (событие из Kafka к тому времени уже прочитано, остаётся только строка в БД).
 OWNER_KEYS = ("user_id", "gateway_target", "agent_model", "selected_tools", "context_size",
@@ -107,6 +118,7 @@ ENSURE_SCHEMA_SQL = (
     "WHERE triggered_at IS NULL AND notify_agent",
 )
 FINISHED = ("completed", "failed", "cancelled")
+ORPHAN_ERROR = "Песочница перезапускалась, задача прервана"
 NOTIFY = ("completed", "failed")
 OPEN = ("pending", "running")
 
@@ -180,6 +192,24 @@ class TasksDB:
                 r["finished_at"], message_id, r["owner"],
             )
         return False if row is None else row["message_id"]
+
+    async def cancel_orphan(self, task_id: str, error: str | None = None):
+        """Песочница не знает задачу (перезапуск): закрыть висящую карточку как cancelled.
+        Завершённые не трогаем. Возвращает обновлённую строку или None."""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    "SELECT stages FROM agent_tasks WHERE task_id=$1 AND status = ANY($2::text[]) "
+                    "FOR UPDATE", str(task_id), list(OPEN))
+                if row is None:
+                    return None
+                stages = cancel_stages(jval(row["stages"], []), datetime.now(timezone.utc).timestamp())
+                upd = await conn.fetchrow(
+                    "UPDATE agent_tasks SET status='cancelled', error=$2, finished_at=now(), "
+                    "stages=$3::jsonb, seq=seq+1, updated_at=now() "
+                    "WHERE task_id=$1 RETURNING *",
+                    str(task_id), (error or ORPHAN_ERROR)[:2000], json.dumps(stages, ensure_ascii=False))
+        return dict(upd) if upd else None
 
     async def link_request(self, request_id: str, message_id: str) -> list:
         """Ответ агента сохранён: карточки задач его запроса привязываем к нему."""

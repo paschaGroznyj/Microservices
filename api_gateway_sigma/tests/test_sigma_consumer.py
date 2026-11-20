@@ -81,3 +81,16 @@ def test_handle_swallows_bad_payload(consumer):
     # payload не dict -> внутри поймается исключение, не должно падать
     c._handle("not-a-dict")
     assert store.done == []
+
+
+def test_context_usage_propagation(consumer):
+    c, store = consumer
+    context = {'tokens': 123, 'cache_pct': None}
+    usage = {'context_tokens': 123}
+    c._handle({'is_from_bot': True, 'chat_id': '7', 'message_id': 'msg-123-a',
+               'request_id': 'r', 'context': context, 'tokens_usage': usage})
+    msg = store.done[-1][1]
+    assert msg['context'] == context
+    assert msg['tokens_usage'] == usage
+    assert msg['message_id'] == 'msg-123-a'
+    assert msg['request_id'] == 'r'

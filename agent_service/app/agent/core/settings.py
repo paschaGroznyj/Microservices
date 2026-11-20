@@ -26,6 +26,11 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
         "generate_audio",
         "generate_music",
     ],
+    # Только для Telegram / MAX: добавляется автоматически по источнику запроса
+    # (is_telegram / is_max), вручную в вебе не включается.
+    "messengers": [
+        "manage_trigger",
+    ],
     "admin": [
         "get_db_schema",
         "execute_sql_query",
@@ -43,6 +48,7 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
 }
 
 ADMIN_ONLY_CATEGORIES = {"admin"}
+MESSENGER_ONLY_CATEGORIES = {"messengers"}
 
 # Универсальные тулы — доступны всегда, независимо от выбранных категорий
 # (не фильтруются по selected_tools). Пополняем сюда тулы, которые должны
@@ -61,7 +67,6 @@ UNIVERSAL_TOOLS: set[str] = {
     "delete_workspace",
     "cleanup_workspaces",
     "send_email",
-    "manage_trigger",
 }
 
 # Короткие описания инструментов (1 строка на тул) для ФОНОВОГО СУПЕРВИЗОРА.

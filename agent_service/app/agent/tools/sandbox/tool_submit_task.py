@@ -185,6 +185,9 @@ def make_submit_tools(agent):
         Cancels a running background task (SIGTERM, then SIGKILL after 5 s).
         Call it only when the user asks to stop the task. The card switches to
         "cancelled"; you will not be woken up for a cancelled task.
+        If check_task_status no longer lists a task whose card is still running,
+        the sandbox was restarted and the process is gone: call cancel_task anyway,
+        it closes the card (orphan=true in the answer).
         """
         try:
             async with httpx.AsyncClient(timeout=30) as client:

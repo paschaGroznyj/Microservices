@@ -102,7 +102,23 @@ for (const n of [...NODES, ...SLOT_LIST]) { S.hl[n.id] = 0; S.st[n.id] = {visits
 const errOn = id => { const e = S.err[id]; return !e || !e.n ? 0 : e.last ? 2 : 1; };
 // T_OVR: при восстановлении хронологии из Redis события проигрываются в своём (прошлом) времени.
 let T_OVR = null;
-const now = () => T_OVR != null ? T_OVR : performance.now();
+// Единый UI-индикатор запуска: active без stop-mode — лишь готовность отправить текст.
+// Часы представления замораживаются вместе с анимацией, не подменяя done/error события.
+const RUN_CLOCK = {pausedAt:null, offset:0, demo:false};
+const now = () => T_OVR != null ? T_OVR : (RUN_CLOCK.pausedAt ?? performance.now()) - RUN_CLOCK.offset;
+function resetRunClock() { RUN_CLOCK.pausedAt = null; RUN_CLOCK.offset = 0; }
+function syncRunClock() {
+  const btn = document.querySelector('#view-agent #send-btn.chat-send-btn');
+  const paused = !RUN_CLOCK.demo && S.active && S.phase !== 'done' && btn &&
+    !(btn.classList.contains('active') && btn.classList.contains('stop-mode'));
+  const t = performance.now();
+  if (paused && RUN_CLOCK.pausedAt == null) RUN_CLOCK.pausedAt = t;
+  else if (!paused && RUN_CLOCK.pausedAt != null) {
+    RUN_CLOCK.offset += t - RUN_CLOCK.pausedAt;
+    RUN_CLOCK.pausedAt = null;
+  }
+  return !!paused;
+}
 const fmtS = ms => {
   const s = Math.max(0, ms) / 1000;
   if (s >= 60) {
@@ -114,6 +130,7 @@ const fmtS = ms => {
 function setStatus(t) { S.status = t; }
 // Смена чата: текущий путь гасим без анимации. Раскрытая панель и открытая модалка остаются.
 function reset() {
+  resetRunClock();
   RS.gen++;
   S.active = false; S.phase = 'idle'; S.t0 = 0; S.tEnd = 0; S.d = 0; S.dir = 1; S.allow = 0; S.trail = [];
   S.calls.clear(); S.phases = []; S.toolLog = []; S.fx = []; S.pulses = []; S.lit.fill(0); S.chat = null; S.rid = null;
@@ -137,9 +154,12 @@ function foreign(type, d) {
 }
 function emit(type, d = {}) {
   if (foreign(type, d)) return;
+  if (type === 'send') resetRunClock();
+  else if (!RS.busy) syncRunClock();
   const t = now();
   switch (type) {
     case 'send':
+      RUN_CLOCK.demo = d.demo === true;
       S.chat = d.chat != null ? String(d.chat) : null; S.rid = null;
       S.active = true; S.phase = 'send'; S.t0 = t; S.tEnd = 0; S.d = 0; S.dir = 1; S.allow = D[1]; S.trail = [];
       S.calls.clear(); S.phases = []; S.toolLog = []; S.fx = []; S.pulses = []; S.lit.fill(0); S.lastInside = null; S.stepSeq = 0; S.thinkT0 = null; S.tailThinkMs = 0; S.thinkBuf = ''; S.thinkDone = ''; S.tailText = ''; S.err = {}; TL.follow = true; closeThink();
@@ -1074,15 +1094,16 @@ function frame(ts) {
   if (ts - lastDraw < 31) { raf = requestAnimationFrame(frame); return; }
   const dt = lastT ? Math.min(100, ts - lastT) : 16; lastT = ts; lastDraw = ts;
   const t0 = performance.now();
-  let more = update(dt, ts);
-  if (VIEW.open) for (const R of RENDERERS) { if (R.visible) { if (R.update(dt)) more = true; R.draw(ts); } }
+  const paused = syncRunClock(), visualT = now();
+  let more = paused ? false : update(dt, visualT);
+  if (VIEW.open) for (const R of RENDERERS) { if (R.visible) { if (!paused && R.update(dt)) more = true; R.draw(visualT); } }
   if (MINI.on) { if (HOST.orient === 'v') drawRail(); else drawMini(); }
   const ms = performance.now() - t0;
   STATS.renders++; STATS.ms = ms; STATS.msAvg = STATS.msAvg ? STATS.msAvg * 0.9 + ms * 0.1 : ms; STATS.msMax = Math.max(STATS.msMax, ms); STATS.frames++;
   if (ts - STATS.fpsT > 1000) { STATS.fps = STATS.frames * 1000 / (ts - STATS.fpsT); STATS.frames = 0; STATS.fpsT = ts; }
   if (VIEW.open) renderTimeline(false);
   hud();
-  const live = S.active || (VIEW.open && S.ghosts.length > 0);
+  const live = !paused && (S.active || (VIEW.open && S.ghosts.length > 0));
   if (RM.matches) { if (more) raf = requestAnimationFrame(frame); else if (live) { clearTimeout(slowT); slowT = setTimeout(kick, 500); } else lastT = 0; }
   else if (more || live) raf = requestAnimationFrame(frame);
   else lastT = 0;
@@ -1091,7 +1112,7 @@ function hud() { const h = $('#fvHud'); if (h.style.display !== 'block') return;
 let demoT = [];
 function demo(name) {
   demoT.forEach(clearTimeout); demoT = [];
-  const at = (ms, type, d) => demoT.push(setTimeout(() => emit(type, d), ms));
+  const at = (ms, type, d) => demoT.push(setTimeout(() => emit(type, {...d, demo:true}), ms));
   const T = {web:{slot:'web', label:'Ищу в интернете', ext:'searxng'}, code:{slot:'sandbox', label:'Запускаю код', ext:'sandbox_c', ws:'d976e0e002fd'},
     wsf:{slot:'sandbox', label:'Правлю файл', ws:'d976e0e002fd'},
     img:{slot:'media', label:'Рисую картинку'}, kb:{slot:'kb', label:'Смотрю в базе знаний'}, mem:{slot:'kb', label:'Листаю журнал'},
@@ -1151,6 +1172,16 @@ ro.observe($('#pFlat')); ro.observe($('#pIso'));
 const roHost = new ResizeObserver(() => { if (MINI.on) layoutHost(); }); { const v = document.getElementById('view-agent'); if (v) roHost.observe(v); }
 addEventListener('resize', () => { if (MINI.on) layoutHost(); });
 { const mic = document.querySelector('#view-agent .message-input-container'); if (mic) new MutationObserver(() => { if (MINI.on) layoutHost(); }).observe(mic, {childList:true}); }
+// Делегированное наблюдение переживает пересоздание поля ввода и смену чата.
+// Не завершаем запрос искусственно: поздние done/tool_end по-прежнему обрабатываются.
+new MutationObserver(records => {
+  const isButton = n => n.nodeType === 1 && (n.matches?.('#send-btn.chat-send-btn') || n.querySelector?.('#send-btn.chat-send-btn'));
+  if (!records.some(r => r.type === 'attributes' ? r.target.matches?.('#send-btn.chat-send-btn') :
+    [...r.addedNodes, ...r.removedNodes].some(isButton))) return;
+  syncRunClock(); lastT = 0;
+  kick();
+}).observe(document.getElementById('view-agent') || document.body,
+  {subtree:true, childList:true, attributes:true, attributeFilter:['class']});
 readTheme();
 // ── Восстановление хронологии после F5 / смены чата: Redis flow:{chat_id} + agent:reasoning ──
 // Сервер отдаёт события с ts (мс epoch) и своё now: переводим в performance.now() по разнице

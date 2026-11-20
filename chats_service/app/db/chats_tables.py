@@ -50,6 +50,69 @@ def _pixels(f: dict, key: str) -> int | None:
     return n if 0 < n <= 65535 else None
 
 
+
+_MODEL_FAMILIES = (
+    ("claude", "claude"), ("anthropic", "claude"),
+    ("gpt", "gpt"), ("openai", "gpt"), ("o1", "gpt"), ("o3", "gpt"), ("o4", "gpt"),
+    ("gemini", "gemini"), ("google", "gemini"),
+    ("deepseek", "deepseek"), ("qwen", "qwen"), ("glm", "glm"), ("zai", "glm"),
+    ("grok", "grok"), ("xai", "grok"), ("llama", "llama"), ("mistral", "mistral"),
+    ("kimi", "kimi"), ("moonshot", "kimi"), ("gigachat", "gigachat"), ("yandexgpt", "yandexgpt"),
+)
+
+
+def model_family(model: str | None) -> str | None:
+    """Семейство модели без версии и провайдера: cloudru/anthropic/claude-sonnet-4.6 -> claude."""
+    if not model:
+        return None
+    m = str(model).lower()
+    tail = m.rsplit("/", 1)[-1]
+    for key, fam in _MODEL_FAMILIES:
+        if tail.startswith(key):
+            return fam
+    for key, fam in _MODEL_FAMILIES:
+        if key in m:
+            return fam
+    return None
+
+
+def _usage_fields(row) -> dict:
+    tu = row["tokens_usage"]
+    if isinstance(tu, str):
+        try:
+            tu = json.loads(tu)
+        except Exception:
+            tu = None
+    if not isinstance(tu, dict):
+        return {}
+    keys = ("input_tokens", "output_tokens", "total_tokens", "cache_read_tokens", "cache_creation_tokens")
+    return {
+        "tokens_usage": {k: int(tu.get(k) or 0) for k in keys},
+        "model_family": model_family(row["model_type"]),
+    }
+
+# Видимая история чата с учётом форков: собственные сообщения + сообщения
+# предков до точки форка (chat_chain из postgres/sql/03_agent/03_chats_forks.sql).
+_CHAIN_SRC = """(
+    SELECT x.* FROM chat_chain($1) ch
+    JOIN chats x ON x.chat_id = ch.chat_id AND (ch.upto IS NULL OR x.id <= ch.upto)
+)"""
+
+# Ответы на опросы в форке: ответ виден в чате $1, если дан в звене его цепочки
+# не позже точки форка этого звена (по строке ответа пользователя в chats).
+_POLL_VISIBLE_SQL = """
+    FROM chat_poll_answers p
+    JOIN chat_chain($1) pch ON pch.chat_id = p.chat_id
+    WHERE (pch.upto IS NULL OR EXISTS (
+              SELECT 1 FROM chats pu
+              WHERE pu.chat_id = p.chat_id AND pu.message_id = p.user_message_id
+                AND pu.id <= pch.upto)
+           OR (p.user_message_id IS NULL AND p.created_at <=
+               (SELECT pt.created_at FROM chats pt WHERE pt.id = pch.upto)))
+"""
+
+
+
 class DataBaseChats:
     async def init_db_pool(self):
         """Инициализация пула подключений к базе данных."""
@@ -172,7 +235,8 @@ class DataBaseChats:
         if not chat_id or not bot_message_id:
             return False
         val = await self.pool.fetchval(
-            "SELECT 1 FROM chat_poll_answers WHERE chat_id=$1 AND bot_message_id=$2 AND poll_index=$3 LIMIT 1;",
+            "SELECT 1" + _POLL_VISIBLE_SQL
+            + " AND p.bot_message_id=$2 AND p.poll_index=$3 LIMIT 1;",
             str(chat_id), str(bot_message_id), int(poll_index),
         )
         return val is not None
@@ -182,11 +246,10 @@ class DataBaseChats:
             return []
         rows = await self.pool.fetch(
             """
-            SELECT bot_message_id, poll_index, user_id, user_message_id,
-                   selected_index, selected_value, is_custom, is_skipped, created_at
-            FROM chat_poll_answers
-            WHERE chat_id = $1
-            ORDER BY id ASC;
+            SELECT p.bot_message_id, p.poll_index, p.user_id, p.user_message_id,
+                   p.selected_index, p.selected_value, p.is_custom, p.is_skipped, p.created_at
+            """ + _POLL_VISIBLE_SQL + """
+            ORDER BY p.id ASC;
             """,
             str(chat_id),
         )
@@ -329,12 +392,15 @@ class DataBaseChats:
         gateway_target: str | None = None,
         input_format: str | None = None,
         type_query: str | None = None,
+        agent_steps: int | None = None,
+        tool_calls: list[dict] | None = None,
     ):
         if user_id is None or chat_id is None:
             logging.warning("Пропущено сообщение: отсутствует user_id или chat_id")
             return None
 
         tokens_usage_json = json.dumps(tokens_usage) if tokens_usage is not None else None
+        tool_calls_json = json.dumps(tool_calls, ensure_ascii=False) if tool_calls is not None else None
 
         now_utc = datetime.now(timezone.utc)
         try:
@@ -343,13 +409,15 @@ class DataBaseChats:
                     await conn.execute("""
                         INSERT INTO chats (
                             user_id, chat_id, message_text, is_from_bot,
-                            tool_name, selected_tools, context_size, message_id, created_at, tool_trace, model_type, tokens_usage, gateway_target, input_format, type_query
+                            tool_name, selected_tools, context_size, message_id, created_at, tool_trace, model_type, tokens_usage, gateway_target, input_format, type_query,
+                            agent_steps, tool_calls
                         )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15);
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15, $16, $17::jsonb);
                     """,
                     user_id, chat_id, message, is_from_bot,
                     action, selected_tools, context_size, message_id, now_utc, tool_trace, model_type, tokens_usage_json, gateway_target, (input_format or 'text'),
-                    ('model' if str(type_query or '').lower() == 'model' else 'agent'))
+                    ('model' if str(type_query or '').lower() == 'model' else 'agent'),
+                    agent_steps, tool_calls_json)
 
                     if attached_files:
                         source = "agent" if is_from_bot else "user"
@@ -390,14 +458,16 @@ class DataBaseChats:
                 UPDATE chats
                 SET reaction = $1
                 WHERE id = (
-                    SELECT id FROM chats
-                    WHERE chat_id = $2
-                      AND is_from_bot = TRUE
+                    -- форк: ответ может быть унаследован от родителя, реакция пишется
+                    -- в строку владельца, но только если ответ виден в текущем чате
+                    SELECT m.id FROM chat_chain($2) ch
+                    JOIN chats m ON m.chat_id = ch.chat_id AND (ch.upto IS NULL OR m.id <= ch.upto)
+                    WHERE m.is_from_bot = TRUE
                       AND (
-                          ($3 <> '' AND (message_id = $3 OR id::text = $3))
-                          OR ($4 <> '' AND (id::text = $4 OR message_id = $4))
+                          ($3 <> '' AND (m.message_id = $3 OR m.id::text = $3))
+                          OR ($4 <> '' AND (m.id::text = $4 OR m.message_id = $4))
                       )
-                    ORDER BY created_at DESC, id DESC
+                    ORDER BY m.created_at DESC, m.id DESC
                     LIMIT 1
                 )
                 RETURNING id, chat_id, message_id, reaction;
@@ -643,6 +713,49 @@ class DataBaseChats:
                 DO UPDATE SET is_favorite = $3, updated_at = CURRENT_TIMESTAMP
             """, chat_id, user_id, is_favorite)
 
+    # SQLSTATE из fork_chat (postgres/sql/03_agent/03_chats_forks.sql) -> HTTP-статус.
+    FORK_ERRORS = {"P0002": 404, "22023": 400, "42501": 403, "23505": 409}
+
+    async def fork_chat(self, view_chat_id: str, point: str, new_chat_id: str, user_id: int) -> dict | None:
+        """Ветка чата от ответа агента point (chats.id или message_id), видимого в view_chat_id.
+
+        None — такого ответа агента в цепочке view_chat_id нет.
+
+        Сообщения родителя не копируются: ветка читает их по chats_forks.
+        В одной транзакции создаются ссылка, chat_types_agent, chat_sidebar_meta
+        и копия памяти (agent_journal, chat_rolling_summary) на момент точки.
+        Ошибки fork_chat приходят как asyncpg.PostgresError с sqlstate из FORK_ERRORS.
+        """
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                # Только ответы агента, видимые в этом чате (свои и унаследованные).
+                point_id = await conn.fetchval(
+                    """
+                    SELECT m.id
+                    FROM chat_chain($1) c
+                    JOIN chats m ON m.chat_id = c.chat_id
+                    WHERE (c.upto IS NULL OR m.id <= c.upto)
+                      AND m.is_from_bot = TRUE
+                      AND (m.message_id = $2 OR m.id::text = $2)
+                    ORDER BY m.id DESC
+                    LIMIT 1
+                    """,
+                    str(view_chat_id), str(point),
+                )
+                if point_id is None:
+                    return None
+                raw = await conn.fetchval(
+                    "SELECT fork_chat_full($1, $2, $3, $4)",
+                    str(view_chat_id), int(point_id), str(new_chat_id), int(user_id),
+                )
+                title = await conn.fetchval(
+                    "SELECT auto_title FROM chat_sidebar_meta WHERE chat_id = $1 AND user_id = $2",
+                    str(new_chat_id), int(user_id),
+                )
+        res = json.loads(raw) if isinstance(raw, str) else dict(raw or {})
+        res["auto_title"] = title
+        return res
+
     async def get_user_chats_summary(self, username: str):
         """Возвращает список чатов пользователя с их последними сообщениями и метаданными сайдбара."""
         try:
@@ -694,6 +807,138 @@ class DataBaseChats:
         except Exception as e:
             logging.error(f"Ошибка при получении списка чатов пользователя {username}: {e}")
             raise
+
+    # Страница списка чатов для сайдбара (chats-section).
+    # Курсор — "created_at последнего сообщения|chats.id", порядок как у старого
+    # /user/chats: по времени последнего сообщения, новые сверху.
+    CHATS_PAGE_MAX = 200
+    CHATS_PREVIEW_CHARS = 300
+
+    _CHATS_PAGE_SQL = """
+        WITH tu AS (SELECT id FROM users WHERE username = $1),
+        latest AS (
+            SELECT DISTINCT ON (x.chat_id)
+                x.chat_id, x.row_id, x.created_at,
+                LEFT(x.message_text, $2) AS last_message,
+                x.last_from_bot
+            FROM (
+                SELECT c.chat_id, c.id AS row_id, c.created_at, c.message_text,
+                       c.is_from_bot AS last_from_bot
+                FROM chats c
+                JOIN tu ON tu.id = c.user_id
+                UNION ALL
+                -- Ветка без своих сообщений: момент форка, превью — ответ-точка.
+                -- Как только в ветке появится сообщение, оно новее и победит в DISTINCT ON.
+                SELECT f.child_chat_id, f.point_id, f.created_at, p.message_text, TRUE
+                FROM chats_forks f
+                JOIN tu ON tu.id = f.user_id
+                JOIN chats p ON p.id = f.point_id
+            ) x
+            ORDER BY x.chat_id, x.created_at DESC, x.row_id DESC
+        )
+        SELECT l.chat_id AS id, l.row_id, l.created_at AS timestamp,
+               l.last_message, l.last_from_bot,
+               COALESCE(m.is_favorite, FALSE) AS is_favorite,
+               m.renamed_title,
+               (
+                   SELECT am.auto_title
+                   FROM chat_sidebar_meta am
+                   WHERE am.chat_id = l.chat_id
+                     AND am.auto_title IS NOT NULL
+                   ORDER BY am.updated_at DESC
+                   LIMIT 1
+               ) AS auto_title
+        FROM latest l
+        LEFT JOIN chat_sidebar_meta m
+               ON m.chat_id = l.chat_id AND m.user_id = (SELECT id FROM tu)
+        WHERE COALESCE(m.is_deleted, FALSE) = FALSE
+          AND {where}
+        ORDER BY l.created_at DESC, l.row_id DESC
+        {limit}
+    """
+
+    @staticmethod
+    def parse_chats_cursor(cursor):
+        """'2026-11-17T20:10:00+00:00|123' -> (datetime, 123). Пустой -> None, мусор -> ValueError."""
+        if not cursor:
+            return None
+        ts, sep, rid = str(cursor).rpartition("|")
+        if not sep:
+            raise ValueError("bad cursor")
+        dt_ = datetime.fromisoformat(ts)
+        if dt_.tzinfo is None:
+            dt_ = dt_.replace(tzinfo=timezone.utc)
+        return dt_, int(rid)
+
+    @staticmethod
+    def _chat_page_item(row) -> dict:
+        ts = row["timestamp"]
+        if ts is not None and ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return {
+            "id": row["id"],
+            "last_message": row["last_message"],
+            "last_from_bot": bool(row["last_from_bot"]),
+            "timestamp": ts.isoformat() if ts else None,
+            "is_deleted": False,
+            "is_favorite": bool(row["is_favorite"]),
+            "renamed_title": row["renamed_title"],
+            "auto_title": row["auto_title"],
+        }
+
+    async def get_user_chats_page(self, username: str, limit: int = 40,
+                                  cursor: str | None = None, include: str | None = None) -> dict:
+        """Страница чатов пользователя.
+
+        Первая страница (cursor пустой): все избранные + limit обычных.
+        Следующие: только обычные старше курсора. include — чат, который надо
+        вернуть, даже если он дальше страницы (активный чат после F5).
+        В last_message не больше CHATS_PREVIEW_CHARS символов.
+        """
+        limit = max(1, min(int(limit or 40), self.CHATS_PAGE_MAX))
+        cur = self.parse_chats_cursor(cursor)
+        n = self.CHATS_PREVIEW_CHARS
+        sql = self._CHATS_PAGE_SQL
+        if cur is None:
+            await self.ensure_sidebar_meta_for_user(username)
+        async with self.pool.acquire() as conn:
+            favorites = []
+            total = None
+            if cur is None:
+                # Сколько всего неудалённых чатов (избранные + обычные) — для счётчика в сайдбаре.
+                total = await conn.fetchval(
+                    "SELECT COUNT(*) FROM (" + sql.format(where="TRUE", limit="") + ") t",
+                    username, n)
+                favorites = await conn.fetch(
+                    sql.format(where="COALESCE(m.is_favorite, FALSE) = TRUE", limit=""),
+                    username, n)
+                rows = await conn.fetch(
+                    sql.format(where="COALESCE(m.is_favorite, FALSE) = FALSE", limit="LIMIT $3"),
+                    username, n, limit + 1)
+            else:
+                rows = await conn.fetch(
+                    sql.format(where="COALESCE(m.is_favorite, FALSE) = FALSE "
+                                     "AND (l.created_at, l.row_id) < ($3, $4)",
+                               limit="LIMIT $5"),
+                    username, n, cur[0], cur[1], limit + 1)
+            has_more = len(rows) > limit
+            rows = list(rows[:limit])
+            extra = []
+            seen = {str(r["id"]) for r in [*favorites, *rows]}
+            if include and str(include) not in seen:
+                extra = await conn.fetch(
+                    sql.format(where="l.chat_id = $3", limit="LIMIT 1"),
+                    username, n, str(include))
+        next_cursor = None
+        if has_more and rows:
+            last = rows[-1]
+            next_cursor = f"{last['timestamp'].isoformat()}|{last['row_id']}"
+        return {
+            "chats": [self._chat_page_item(r) for r in [*favorites, *rows, *extra]],
+            "next_cursor": next_cursor,
+            "has_more": has_more,
+            "total": int(total) if total is not None else None,
+        }
 
     async def get_user_chats_summary_by_user_id(
         self, user_id: int, chat_id: str
@@ -793,17 +1038,16 @@ class DataBaseChats:
         """
         try:
             async with self.pool.acquire() as conn:
-                total_count = await conn.fetchval("""
+                total_count = await conn.fetchval(f"""
                     SELECT COUNT(*)
-                    FROM chats c
-                    WHERE c.chat_id = $1
-                        AND (
+                    FROM {_CHAIN_SRC} c
+                    WHERE (
                             c.user_id = (SELECT id FROM users WHERE username = $2)
                             OR c.user_id = -1
                         )
                 """, chat_id, username)
 
-                base_select = """
+                base_select_t = """
                     SELECT 
                         c.id, 
                         c.user_id,
@@ -814,6 +1058,8 @@ class DataBaseChats:
                         c.message_id,
                         c.created_at,
                         c.reaction AS reaction,
+                        c.model_type AS model_type,
+                        c.tokens_usage AS tokens_usage,
                         COALESCE(
                             (
                                 SELECT json_agg(
@@ -843,8 +1089,14 @@ class DataBaseChats:
                                     ORDER BY p.poll_index ASC
                                 )
                                 FROM chat_poll_answers p
-                                WHERE p.chat_id = c.chat_id
-                                  AND (p.bot_message_id = c.message_id OR p.bot_message_id = c.id::text)
+                                JOIN chat_chain($1) pch ON pch.chat_id = p.chat_id
+                                WHERE (p.bot_message_id = c.message_id OR p.bot_message_id = c.id::text)
+                                  AND (pch.upto IS NULL OR EXISTS (
+                                      SELECT 1 FROM chats pu
+                                      WHERE pu.chat_id = p.chat_id AND pu.message_id = p.user_message_id
+                                        AND pu.id <= pch.upto)
+                                      OR (p.user_message_id IS NULL AND p.created_at <=
+                                          (SELECT pt.created_at FROM chats pt WHERE pt.id = pch.upto)))
                             ),
                             '[]'::json
                         ) AS poll_answers,
@@ -860,14 +1112,18 @@ class DataBaseChats:
                             FROM agent_tasks t
                             WHERE t.chat_id = c.chat_id AND t.message_id = c.message_id
                         ), '[]'::json) AS tasks
-                    FROM chats c
+                    FROM {src} c
                     LEFT JOIN users u ON c.user_id = u.id
-                    WHERE c.chat_id = $1 
-                        AND (
+                    WHERE (
                             c.user_id = (SELECT id FROM users WHERE username = $2)
                             OR c.user_id = -1
                         )
                 """
+                # Ветка (форк) видит сообщения родителей до точки форка.
+                # chain — вся видимая история; page — страница chat_history($1, $3, $4)
+                # (LATERAL по звеньям, быстрее для страниц «с конца» и «вверх»).
+                base_select = base_select_t.replace("{src}", _CHAIN_SRC)
+                page_select = base_select_t.replace("{src}", "chat_history($1, $3, $4)")
 
                 target_db_id = None
                 target_msg_id = None
@@ -876,11 +1132,10 @@ class DataBaseChats:
 
                 if around_id:
                     target_str = str(around_id).strip()
-                    target_row = await conn.fetchrow("""
+                    target_row = await conn.fetchrow(f"""
                         SELECT c.id, c.message_id
-                        FROM chats c
-                        WHERE c.chat_id = $1
-                            AND (
+                        FROM {_CHAIN_SRC} c
+                        WHERE (
                                 c.user_id = (SELECT id FROM users WHERE username = $2)
                                 OR c.user_id = -1
                             )
@@ -912,19 +1167,18 @@ class DataBaseChats:
                                     LIMIT $5
                                 )
                             ) sub
-                            ORDER BY sub.created_at ASC, sub.id ASC
+                            ORDER BY sub.id ASC
                         """, chat_id, username, target_db_id, rad, rad + 1)
 
                 if rows is None and before_id is not None:
                     mode = "before"
                     rows = await conn.fetch(f"""
                         SELECT * FROM (
-                            {base_select}
-                              AND c.id < $3
+                            {page_select}
                             ORDER BY c.id DESC
                             LIMIT $4
                         ) sub
-                        ORDER BY sub.created_at ASC, sub.id ASC
+                        ORDER BY sub.id ASC
                     """, chat_id, username, int(before_id), limit)
 
                 if rows is None and after_id is not None:
@@ -936,18 +1190,18 @@ class DataBaseChats:
                             ORDER BY c.id ASC
                             LIMIT $4
                         ) sub
-                        ORDER BY sub.created_at ASC, sub.id ASC
+                        ORDER BY sub.id ASC
                     """, chat_id, username, int(after_id), limit)
 
                 if rows is None:
                     rows = await conn.fetch(f"""
                         SELECT * FROM (
-                            {base_select}
-                            ORDER BY c.created_at DESC, c.id DESC
-                            LIMIT $3 OFFSET $4
+                            {page_select}
+                            ORDER BY c.id DESC
+                            LIMIT $5 OFFSET $6
                         ) sub
-                        ORDER BY sub.created_at ASC, sub.id ASC
-                    """, chat_id, username, limit, offset)
+                        ORDER BY sub.id ASC
+                    """, chat_id, username, None, limit + offset, limit, offset)
 
                 messages = []
                 for row in rows:
@@ -973,25 +1227,26 @@ class DataBaseChats:
                         "files": files or [],
                         "poll_answers": poll_answers or [],
                         "tasks": tasks or [],
+                        # Оверлей «Использование ресурсов за ход»: только у ответов агента,
+                        # модель — семейство (claude/gpt/gemini...), без точного имени.
+                        **(_usage_fields(row) if row["is_from_bot"] else {}),
                     })
 
                 if mode in ("around", "before", "after"):
                     if messages:
                         oldest_id = int(messages[0]["id"])
                         newest_id = int(messages[-1]["id"])
-                        has_more = bool(await conn.fetchval("""
+                        has_more = bool(await conn.fetchval(f"""
                             SELECT EXISTS(
-                                SELECT 1 FROM chats c
-                                WHERE c.chat_id = $1
-                                  AND (c.user_id = (SELECT id FROM users WHERE username = $2) OR c.user_id = -1)
+                                SELECT 1 FROM {_CHAIN_SRC} c
+                                WHERE (c.user_id = (SELECT id FROM users WHERE username = $2) OR c.user_id = -1)
                                   AND c.id < $3
                             )
                         """, chat_id, username, oldest_id))
-                        has_newer = bool(await conn.fetchval("""
+                        has_newer = bool(await conn.fetchval(f"""
                             SELECT EXISTS(
-                                SELECT 1 FROM chats c
-                                WHERE c.chat_id = $1
-                                  AND (c.user_id = (SELECT id FROM users WHERE username = $2) OR c.user_id = -1)
+                                SELECT 1 FROM {_CHAIN_SRC} c
+                                WHERE (c.user_id = (SELECT id FROM users WHERE username = $2) OR c.user_id = -1)
                                   AND c.id > $3
                             )
                         """, chat_id, username, newest_id))

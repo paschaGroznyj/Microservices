@@ -34,7 +34,7 @@ def test_default_yaml_registry_loaded():
     assert reg.aliases["giga"] == "gigachat"
     assert reg.aliases["deepseek"] == "deepseek"
     assert reg.aliases["ds"] == "deepseek"
-    assert reg.models["gigachat"].model == "ai-sage/GigaChat3.5-432B-A28B-Reasoning"
+    assert reg.models["gigachat"].model == "ai-sage/GigaChat3.5-432B-A28B"
     assert reg.models["gigachat"].provider == "openai"
     assert reg.models["deepseek"].model == "deepseek-ai/DeepSeek-V4.1-Flash"
     assert reg.models["deepseek"].provider == "openai"
@@ -44,7 +44,7 @@ def test_default_yaml_registry_loaded():
     assert coder.provider == "openai"
     assert coder.max_tokens == 16384
     assert coder.reasoning == {"effort": "low"}
-    assert coder.chars_per_token == 4.0
+    assert coder.chars_per_token == 3.8
     assert coder.imitate_tool_status is True
     assert coder.tool_name_integrity_guidance is True
 
@@ -53,7 +53,7 @@ def test_default_yaml_registry_loaded():
     assert designer.provider == "anthropic"
     assert designer.max_tokens == 64000
     assert designer.reasoning == {"type": "adaptive", "display": "summarized"}
-    assert designer.chars_per_token == 1.3
+    assert designer.chars_per_token == 2.4
     assert designer.imitate_tool_status is False
     assert designer.tool_name_integrity_guidance is False
 
@@ -170,7 +170,13 @@ def test_tool_name_integrity_guidance_per_model(h):
     h.models["coder"].script = ["ok"]
     h.run(model="coder")
     coder_sys = system_text(h.models["coder"].calls[0])
-    assert TOOL_NAME_INTEGRITY_GUIDANCE.strip()[:30] in coder_sys
+    # У coder (GPT) в models_config.yaml tool_name_integrity_guidance: false
+    assert TOOL_NAME_INTEGRITY_GUIDANCE.strip()[:30] not in coder_sys
+
+    h.models["gemini"].script = ["ok"]
+    h.run(model="gemini")
+    gemini_sys = system_text(h.models["gemini"].calls[0])
+    assert TOOL_NAME_INTEGRITY_GUIDANCE.strip()[:30] in gemini_sys
 
     h.models["designer"].script = ["ok"]
     h.run(model="claude")

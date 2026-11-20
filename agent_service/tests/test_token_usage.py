@@ -191,8 +191,12 @@ def test_cached_tokens_summed_in_tokens_usage(h):
     second.content = "Готово"
     h.models["coder"].script = [first, second]
     out = h.run()
+    breakdown = out["tokens_usage"].pop("context_breakdown")
+    assert breakdown["estimated"] is True
+    assert sum(breakdown["tokens"].values()) == out["tokens_usage"]["context_tokens"]
+    assert out["tokens_usage"].pop("context_cache_read_tokens") == 900
     assert out["tokens_usage"] == {"input_tokens": 2100, "output_tokens": 15, "total_tokens": 2115,
-                                   "cache_read_tokens": 900, "cache_creation_tokens": 1000}
+                                   "cache_read_tokens": 900, "cache_creation_tokens": 1000, "context_tokens": 1100}
 
 
 def _tool_with_usage(h, name, usage, model, extra=None):

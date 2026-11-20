@@ -47,3 +47,13 @@ def test_regular_chunk_unchanged(wired):
 def test_flow_field_optional_for_old_agents():
     p = app_mod.BotStream(request_id="r1", chunk="x")
     assert p.flow is None and p.kind == "final"
+
+
+def test_context_flow_preserves_payload(wired):
+    sent, rs = wired
+    context = {'tokens': 45678, 'cache_pct': None}
+    flow = {'ev': 'context_usage', 'message_id': 'msg-123-a', 'context': context,
+            'tokens_usage': {'context_tokens': 45678}}
+    run(app_mod.bot_stream(app_mod.BotStream(request_id='r1', chunk='', kind='flow', flow=flow)))
+    assert sent == [('chat-1', {'type': 'flow', 'request_id': 'r1', **flow})]
+    rs.assert_not_awaited()

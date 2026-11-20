@@ -4,6 +4,7 @@ import os
 import uuid
 import requests
 import asyncio
+import asyncpg
 from fastapi import FastAPI, Header, Query
 from kafka import KafkaProducer
 from pydantic import BaseModel
@@ -1207,6 +1208,23 @@ async def get_user_chats(x_user_name: str = Header(..., alias="X-User-Name")):
         raise HTTPException(status_code=500, detail="Не удалось загрузить список чатов")
 
 
+@app.get("/user/chats/page")
+async def get_user_chats_page(
+    x_user_name: str = Header(..., alias="X-User-Name"),
+    limit: int = Query(40, ge=1, le=200),
+    cursor: str | None = Query(None),
+    include: str | None = Query(None),
+):
+    """Постраничный список чатов для сайдбара: избранные + limit обычных, курсор next_cursor."""
+    try:
+        return await db.get_user_chats_page(x_user_name, limit=limit, cursor=cursor, include=include)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Некорректный cursor")
+    except Exception as e:
+        logging.error(f"Ошибка в эндпоинте get_user_chats_page: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось загрузить список чатов")
+
+
 @app.post("/chat/delete")
 async def delete_chat(action: ChatSidebarAction):
     try:
@@ -1240,6 +1258,36 @@ async def favorite_chat(action: ChatFavoriteAction):
     except Exception as e:
         logging.error(f"Ошибка избранного для чата {action.chat_id}: {e}")
         raise HTTPException(status_code=500, detail="Не удалось обновить избранное")
+
+
+class ChatForkAction(BaseModel):
+    chat_id: str        # чат, в котором нажали «ветка»
+    point: str          # chats.id или message_id ответа агента, включительно
+    user_id: int
+
+
+@app.post("/chat/fork")
+async def fork_chat(action: ChatForkAction):
+    """Ветка чата от сообщения агента. История родителя наследуется по ссылке."""
+    new_chat_id = str(uuid.uuid4())
+    try:
+        res = await db.fork_chat(action.chat_id, action.point, new_chat_id, action.user_id)
+        if res is None:
+            raise HTTPException(status_code=404, detail="Ответ агента не найден в этом чате")
+    except asyncpg.PostgresError as e:
+        code = DataBaseChats.FORK_ERRORS.get(getattr(e, "sqlstate", None))
+        if code:
+            logging.info(f"fork {action.chat_id}@{action.point}: {code} {e}")
+            raise HTTPException(status_code=code, detail=str(e).replace("fork: ", "", 1))
+        logging.error(f"Ошибка форка {action.chat_id}@{action.point}: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось создать ветку")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Ошибка форка {action.chat_id}@{action.point}: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось создать ветку")
+    logging.info(f"fork {action.chat_id}@{action.point} -> {new_chat_id}: {res}")
+    return {"ok": True, **res}
 
 
 @app.post("/chat/new")
@@ -1433,10 +1481,17 @@ async def find_chat_by_type(type_agent: str, x_user_id: str = Header(..., alias=
 @app.get("/internal/resolve_file")
 async def resolve_file(chat_id: str, message_id: str, file_name: str):
     """Только для gateway. Отдаёт путь на диске agent_service для скачивания."""
+    # Файл ищется по цепочке форков: в ветке вложения унаследованных сообщений
+    # лежат под chat_id родителя. Сообщение должно быть видно в ветке (id <= upto).
     row = await db.pool.fetchrow("""
-        SELECT file_path, source
-        FROM chat_files
-        WHERE chat_id = $1 AND message_id = $2 AND file_name = $3
+        SELECT f.file_path, f.source
+        FROM chat_chain($1) c
+        JOIN chat_files f ON f.chat_id = c.chat_id
+        WHERE f.message_id = $2 AND f.file_name = $3
+          AND (c.upto IS NULL OR EXISTS (
+                SELECT 1 FROM chats m
+                WHERE m.chat_id = c.chat_id AND m.message_id = f.message_id AND m.id <= c.upto))
+        ORDER BY c.depth
         LIMIT 1
     """, chat_id, message_id, file_name)
 

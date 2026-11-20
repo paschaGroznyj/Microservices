@@ -201,9 +201,18 @@ class DBConsumer:
 
             model_type = None
             tokens_usage = None
+            agent_steps = None
+            tool_calls = None
             if is_from_bot:
                 model_type = payload.get("agent_model")
                 tokens_usage = payload.get("tokens_usage")
+                # Шаги цикла агента и все вызовы тулов (tool_name хранит только первый).
+                try:
+                    agent_steps = int(payload["agent_steps"]) if payload.get("agent_steps") is not None else None
+                except (TypeError, ValueError):
+                    agent_steps = None
+                tc = payload.get("tool_calls")
+                tool_calls = tc if isinstance(tc, list) else None
             # Сохраняем в БД
             await self.db.add_message(
                 user_id=user_id,
@@ -218,6 +227,8 @@ class DBConsumer:
                 tool_trace=tool_trace,
                 model_type=model_type,
                 tokens_usage=tokens_usage,
+                agent_steps=agent_steps,
+                tool_calls=tool_calls,
                 gateway_target=gateway_target,
                 input_format=input_format,
                 type_query=type_query,

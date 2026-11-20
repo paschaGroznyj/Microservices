@@ -1,13 +1,16 @@
 import asyncio
 import logging
 import json
+from collections import Counter
 import contextvars
 import os
 import re
 import ast
 import httpx
+from .core.observability import LOG_CONTEXT, log_event, fingerprint, request_logged, tool_logged, llm_logged
 import hashlib
 import time
+from app.agent.common.context_limits import context_payload
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List, Optional
@@ -22,7 +25,6 @@ from .core.agent_provider import (
     build_agent_models,
     build_lite_models,
     build_openai_cache_headers,
-    get_chars_per_token_map,
     get_imitate_tool_status_models,
     get_llm_lite_model,
     get_llm_lite_model_gemini_flash,
@@ -43,7 +45,7 @@ from .core.config import (
     ADMINS_BY_TG_ID, get_role_tg, TG_BOT_PUSH_URL, MAX_BOT_PUSH_URL,
     ADMINS_BY_MAX_ID, get_role_max,
 )
-from .core.settings import TOOLS_SETTINGS, UNIVERSAL_TOOLS, ADMIN_ONLY_CATEGORIES
+from .core.settings import TOOLS_SETTINGS, UNIVERSAL_TOOLS, ADMIN_ONLY_CATEGORIES, MESSENGER_ONLY_CATEGORIES
 from .prompts.summary_prompt import SUMMARIZE_CUT_PROMPT, TOOL_TRACE_SUMMARY_PROMPT
 from .prompts.system_prompt import SYSTEM_PROMPT, INTERACTIVE_POLL_GUIDANCE
 from .title_generator import generate_chat_title, is_first_turn
@@ -59,6 +61,8 @@ from .common.tool_output import clip_text, coerce_tool_result, tool_content
 from .core.token_usage import (
     normalize_usage, add_usage, apply_anthropic_cache_control, append_to_system_tail,
 )
+from .core.token_calibration import CALIBRATOR
+from .common.trace_budget import CONTENT_MARK, attach_traces, compress_trace
 
 
 GATEWAY_URL = f"http://api_gateway:{PORT_GATEWAY_PORT}"
@@ -255,9 +259,7 @@ TOOL_FIELD_LIMITS = {
     "edit_and_run": {"stdout": 3000, "stderr": 1000},
     "execute_shell_commands": {"stdout": 3000, "stderr": 1000},
 }
-MAX_TRACE_FROM_DB_CHARS = int(os.getenv("MAX_TRACE_FROM_DB_CHARS", "2500"))
-TRACE_SUMMARY_THRESHOLD = int(os.getenv("TRACE_SUMMARY_THRESHOLD", "20000"))
-MAX_TRACE_HARD_CHARS = int(os.getenv("MAX_TRACE_HARD_CHARS", "21000"))
+# Бюджет tool_trace (в токенах модели) — см. common/trace_budget.py
 
 # Имитация reasoning для моделей, которые НЕ отдают свой reasoning в стрим
 # (определяется флагом imitate_tool_status в models_config.yaml либо env).
@@ -432,6 +434,7 @@ async def _invoke_with_retry(llm, messages, iteration: int, max_retries: int = 3
         try:
             return await llm.ainvoke(messages)
         except Exception as e:
+            log_event('llm.retry', reason='exception', error_type=type(e).__name__)
             last_error = e
             logging.warning(
                 f"[iteration={iteration}] ainvoke попытка {attempt + 1}/{max_retries} упала: {type(e).__name__}: {e}"
@@ -665,36 +668,39 @@ def _extract_thinking_and_clean_content(raw_content) -> tuple[str, str, str]:
 
     return thinking_text, reasoning_text, cleaned
 
-
+@llm_logged
 async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, error_info: dict | None = None,
                            cache_control: bool = False, extra_headers: dict[str, str] | None = None):
-    """Стриминговая версия _invoke_with_retry.
-
-    Собирает ответ через llm.astream(), аккумулируя AIMessageChunk сложением (+=).
-    Финальный AIMessage идентичен тому, что вернул бы ainvoke: content, tool_calls,
-    usage_metadata — всё на месте.
-
-    on_chunk(text) — опциональный коллбэк на каждый текстовый чанк. Вызывается ТОЛЬКО
-    для чистого текста (reasoning/финал). При tool_call-чанках content пустой,
-    поэтому on_chunk для них не сработает.
-
-    Стратегия отказоустойчивости: если astream упал — фолбэк на обычный ainvoke.
-
-    cache_control=True (ChatAnthropic + prompt_cache) — размечаем копию сообщений
-    точками кеша: статический системный блок и последнее сообщение.
-    extra_headers — заголовки (например X-Enable-Prompt-Cache и x-session-id для OpenAI).
-    """
     messages = _sanitize_messages(messages)
     if cache_control:
         messages = apply_anthropic_cache_control(messages)
     call_kwargs = {"extra_headers": extra_headers} if extra_headers else {}
-    backoff = [2, 5, 10]
+
+    MAX_ATTEMPTS = 10        # лимит для исключений (сеть, 5xx)
+    MAX_EMPTY_RETRIES = 4    # лимит для пустых ответов (каждый оплачивается как полный промпт)
+    backoff = [2, 5, 10]     # дальше держим последнее значение (10 с)
+
+    def _pause(n: int) -> float:
+        return backoff[min(n, len(backoff) - 1)]
+
     last_error = None
-    for attempt in range(3):
+    empty_count = 0
+    wasted_in = 0            # входные токены, потраченные на пустые попытки
+
+    for attempt in range(MAX_ATTEMPTS):
+        LOG_CONTEXT.set({**LOG_CONTEXT.get(), 'attempt': attempt + 1})
+        log_event('llm.attempt', max_attempts=MAX_ATTEMPTS)
         try:
+            from .core.token_usage import cumulative_stream_usage, merge_usage_snapshot
+            cumulative = cumulative_stream_usage(llm)
+            stream_usage = {}
             aggregate = None
             async for chunk in llm.astream(messages, **call_kwargs):
+                if cumulative and getattr(chunk, "usage_metadata", None):
+                    merge_usage_snapshot(stream_usage, chunk.usage_metadata)
                 aggregate = chunk if aggregate is None else aggregate + chunk
+                if cumulative and stream_usage:
+                    aggregate = aggregate.model_copy(update={"usage_metadata": dict(stream_usage)})
 
                 # --- reasoning-канал (gpt → reasoning, gemini → reasoning_content) ---
                 ak = getattr(chunk, "additional_kwargs", {}) or {}
@@ -720,18 +726,58 @@ async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, err
                                 await on_chunk(t, kind="answer")
                 elif raw and on_chunk is not None:
                     await on_chunk(raw, kind="answer")
+
             if aggregate is not None:
-                # return _build_final(aggregate, calls)
-                return aggregate
+                um = aggregate.usage_metadata or {}
+                empty = (
+                    not aggregate.tool_calls
+                    and not aggregate.content
+                    and um.get("output_tokens", 0) == 0
+                )
+                if not empty:
+                    if wasted_in:
+                        logging.info(
+                            f"[iteration={iteration}] ответ получен после {empty_count} пустых попыток, "
+                            f"впустую потрачено ~{wasted_in} входных токенов"
+                        )
+                    return aggregate
+
+                log_event('llm.retry', reason='empty_response', usage=um)
+                empty_count += 1
+                wasted_in += um.get("input_tokens", 0)
+                logging.warning(
+                    f"[iteration={iteration}] пустой ответ, повтор {empty_count}/{MAX_EMPTY_RETRIES} "
+                    f"meta={aggregate.response_metadata} usage={um} id={aggregate.id}"
+                )
+                if empty_count > MAX_EMPTY_RETRIES:
+                    # попытки кончились: отдаём пустой, дальше сработает внешний ретрай
+                    return aggregate
+                if on_chunk is not None:
+                    try:
+                        await on_chunk("", kind="retry")  # статус на фронт, если коллбэк его поддерживает
+                    except Exception:
+                        pass
+                await asyncio.sleep(_pause(empty_count - 1))
+                continue
+
+            log_event('llm.fallback', reason='no_stream_chunks', mode='ainvoke')
             return await llm.ainvoke(messages, **call_kwargs)
         except Exception as e:
             last_error = e
             logging.warning(
-                f"[iteration={iteration}] astream попытка {attempt + 1}/3 упала: "
+                f"[iteration={iteration}] astream попытка {attempt + 1}/{MAX_ATTEMPTS} упала: "
                 f"{type(e).__name__}: {e}"
             )
-            if attempt < 2:
-                await asyncio.sleep(backoff[attempt])
+            # Close any reasoning already emitted by the failed attempt. The
+            # next attempt must not concatenate onto an abandoned live block.
+            if on_chunk is not None:
+                try:
+                    await on_chunk("", kind="retry")
+                except Exception:
+                    pass
+            if attempt < MAX_ATTEMPTS - 1:
+                await asyncio.sleep(_pause(attempt))
+
     # Все стриминговые попытки провалены — последний шанс через ainvoke без стрима
     logging.error(f"[iteration={iteration}] astream провален, фолбэк на ainvoke: {last_error}")
     try:
@@ -741,7 +787,7 @@ async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, err
         if error_info is not None:
             error_info["reason"] = f"{type(e).__name__}: {e}"
         return None
-
+        
 CODE_TOOLS = {"execute_python_code", "write_sandbox_file", "edit_sandbox_file"}
 MAX_ARG_LEN   = 1200   # макс. символов для обычного аргумента
 MAX_CODE_LEN  = 800    # макс. символов для аргумента-кода
@@ -828,9 +874,8 @@ class HarnessAgent:
                 kwargs = {"db_id": row["id"]}
                 if row["is_from_bot"]:
                     if row.get("tool_trace"):
-                        kwargs["tool_trace"] = _truncate_text(
-                            str(row["tool_trace"]), max_chars=MAX_TRACE_HARD_CHARS
-                        )
+                        # обрезка по токенам читающей модели — в attach_traces
+                        kwargs["tool_trace"] = str(row["tool_trace"])
                     messages.append(AIMessage(content=row["message_text"], additional_kwargs=kwargs))
                 else:
                     messages.append(HumanMessage(content=row["message_text"], additional_kwargs=kwargs))
@@ -1168,7 +1213,11 @@ class HarnessAgent:
         except (TypeError, ValueError):
             _is_admin = False
         allowed_names: set[str] = set()
-        for category in selected_tools:
+        _is_messenger = is_telegram or is_max
+        categories = [c for c in (selected_tools or []) if c not in MESSENGER_ONLY_CATEGORIES]
+        if _is_messenger:
+            categories += list(MESSENGER_ONLY_CATEGORIES)
+        for category in categories:
             if category in ADMIN_ONLY_CATEGORIES and not _is_admin:
                 continue
             allowed_names.update(TOOLS_SETTINGS.get(category, []))
@@ -1218,35 +1267,34 @@ class HarnessAgent:
         # Все модели цепочки провалились
         raise last_error if last_error else RuntimeError("Лайт-модель: пустая цепочка")
 
-    async def _main_ainvoke(self, messages: list[BaseMessage]):
-        """Вызов ОСНОВНОЙ (тяжёлой) LLM — той же, на которой работает агент.
+    async def _main_ainvoke(self, messages: list[BaseMessage], *, llm_role: str = "auxiliary"):
+        """Служебный вызов основной LLM из контекста текущего запроса.
 
-        Модель определяется текущим выбором пользователя (self.current_agent_model,
-        выставляется в начале run_agent). Нужен служебным модулям, которым важно
-        рассуждать на том же уровне, что и агент (например, фоновый супервизор цели),
-        а не на дешёвой лайт-модели.
-
-        Fallback: если по какой-то причине текущая модель не выбрана —
-        берём 'universal', а если и её нет — тихо деградируем на лайт-модель.
+        Общий current_agent_model не читаем: параллельный чат может его изменить.
+        Без request-local выбора используем universal; если модели нет — lite.
+        ContextVar наследуется фоновыми задачами супервизора при create_task.
         """
-        agent_model = getattr(self, "current_agent_model", None) or "universal"
-        model = self.AGENT_MODELS.get(agent_model)
-        if model is None:
-            logging.warning(
-                f"_main_ainvoke: модель '{agent_model}' не найдена в AGENT_MODELS, "
-                f"деградирую на лайт-модель"
-            )
-            return await self._lite_ainvoke(messages)
-        return await model.ainvoke(messages)
+        agent_model = self._ctx_get("resolved_agent_model") or self._ctx_get("agent_model") or "universal"
+        token = LOG_CONTEXT.set({**LOG_CONTEXT.get(), "llm_role": llm_role})
+        try:
+            model = self.AGENT_MODELS.get(agent_model)
+            log_event("llm.auxiliary.start", alias=agent_model, fallback=model is None)
+            if model is None:
+                logging.warning(
+                    f"_main_ainvoke: модель '{agent_model}' не найдена в AGENT_MODELS, "
+                    f"деградирую на лайт-модель"
+                )
+                return await self._lite_ainvoke(messages)
+            return await model.ainvoke(messages)
+        finally:
+            LOG_CONTEXT.reset(token)
 
-    async def _summarize_tool_trace(self, raw_trace: str) -> str:
-        """LLM-сжатие сырого tool_trace ОДНОГО запроса в компактную md-таблицу.
+    async def _summarize_tool_trace(self, raw_trace: str) -> str | None:
+        """LLM-сжатие ГОЛОВЫ tool_trace одного запроса в md-таблицу.
 
-        Вызывается на выходе из run_agent, если сырой trace длиннее
-        TRACE_SUMMARY_THRESHOLD. Использует основную модель агента
-        (_main_ainvoke) и TOOL_TRACE_SUMMARY_PROMPT. Fail-open: при любой
-        ошибке / пустом ответе деградируем на _truncate_text, чтобы падение
-        LLM никогда не роняло сохранение сообщения.
+        Вызывается из compress_trace, когда трейс больше TRACE_MSG_TOKENS.
+        Хвост (последние вызовы) идёт следом сырым и сюда не попадает.
+        None при ошибке / пустом ответе: compress_trace обрежет голову сам.
         """
         try:
             prompt = TOOL_TRACE_SUMMARY_PROMPT.format(raw_trace=raw_trace)
@@ -1254,14 +1302,14 @@ class HarnessAgent:
             summary = (getattr(resp, "content", "") or "").strip()
             if summary:
                 logging.info(
-                    f"[trace-summary] сырой trace {len(raw_trace)} симв → "
+                    f"[trace-summary] голова trace {len(raw_trace)} симв → "
                     f"сводка {len(summary)} симв"
                 )
                 return summary
             logging.warning("[trace-summary] пустой ответ модели, деградирую на обрезку")
         except Exception as e:
             logging.error(f"[trace-summary] ошибка LLM-сжатия trace: {e}, деградирую на обрезку")
-        return _truncate_text(raw_trace, max_chars=MAX_TRACE_FROM_DB_CHARS)
+        return None
 
     def _spawn_summary_refresh(self, chat_id, new_cut_messages, prev_summary, max_covered_id, total_cut):
         """Фоновая rolling-саммаризация (defer на N+1).
@@ -1322,7 +1370,7 @@ class HarnessAgent:
         # компактный кусок трейса прямо в chunk_text (с жёсткой обрезкой на сообщение).
         def _fmt_cut(m: BaseMessage) -> str:
             role = getattr(m, "type", m.__class__.__name__)
-            body = str(getattr(m, "content", "") or "")[:1000]
+            body = str(getattr(m, "content", "") or "").split(CONTENT_MARK, 1)[0][:1000]
             trace = (getattr(m, "additional_kwargs", None) or {}).get("tool_trace")
             if trace:
                 body = f"{body}\n  (tool_trace: {str(trace)[:1200]})"
@@ -1770,6 +1818,7 @@ class HarnessAgent:
     # Основной цикл: ReAct-style через bind_tools + рекурсивный вызов
     # ------------------------------------------------------------------
 
+    @request_logged
     async def process_query(
         self,
         user_input: str,
@@ -1831,16 +1880,22 @@ class HarnessAgent:
                 "large":  {"limit_mem": 14, "max_tokens": 30_000},
             }
             agent_model = resolve_model_tag(agent_model, self.AGENT_MODELS)
+            # Сохраняем разрешённый alias до запуска фоновых служебных вызовов.
+            self._request_ctx.set({**self._request_ctx.get(), "resolved_agent_model": agent_model})
             model_spec = get_model_spec(agent_model, self.AGENT_MODELS)
             llm = self.AGENT_MODELS[agent_model]
             real_agent_model = get_real_model_name(llm)
-            logging.info(f'Выбрана модель {agent_model} ({real_agent_model})')
+            log_event('agent.model', alias=agent_model, model=real_agent_model)
             # Текущая модель нужна субагентам для корректного выбора LLM
             # при изолированном запуске через call_subagent.
             self.current_agent_model = agent_model
  
             final_response = ""
             used_tools = []
+            # Шаги агента (ответы основной модели за ход, со всеми ретраями пустого ответа)
+            # и все вызовы тулов в цикле: пишутся в chats.agent_steps / chats.tool_calls.
+            agent_steps = 0
+            tool_calls_log: list[dict] = []
             tool_trace: list[str] = []
             AUTO_SEND_FILE_TOOLS = {"send_file_to_user"}
             files_to_send = []
@@ -1854,6 +1909,9 @@ class HarnessAgent:
             SUPERVISOR_EVERY_N = 5   # как часто запускать фоновый надзор (0 = выкл)
             SUPERVISOR_MIN_ITER = 4  # не трогаем первые шаги (агент только разогнался)
             total_input_tokens  = 0
+            last_breakdown = None
+            last_cache_read = None
+            last_iter_in = 0     # размер промпта последней итерации = текущий контекст
             total_output_tokens = 0
             total_cache = {"cache_read_tokens": 0, "cache_creation_tokens": 0}
             # Явные точки кеша нужны только ChatAnthropic; OpenAI-совместимые
@@ -1893,7 +1951,9 @@ class HarnessAgent:
                 request_ctx=self._request_ctx.get(),
             )
 
-            logging.info(f"🙂 {user_input[:200]}")
+            if not isinstance(user_input, str):
+                raise TypeError("user_input must be a string")
+            log_event("agent.input", input=fingerprint(user_input))
             tools = self._build_tools(
                 user_id,
                 chat_id,
@@ -1922,7 +1982,7 @@ class HarnessAgent:
             subagent_tl = make_subagent_tool(self, parent_tools=list(tools))
             tools.append(subagent_tl)
 
-            print(f"ЛИМИТ ПО КОНТЕКСТУ = {limit_mem}, ЧИСЛО ТОКЕНОВ = {max_tokens}")
+            log_event("context.budget", messages_limit=limit_mem, tokens_limit=max_tokens)
             # Привязываем инструменты к модели
 
 
@@ -1987,10 +2047,10 @@ class HarnessAgent:
 
             journal_text = None
             if use_journal:
-                print(f"USER ID: {user_id}")
+                log_event("context.memory", user_id=user_id)
                 tools.append(make_journal_tool(self, chat_id, user_id))
                 journal_text = await self.db.get_agent_journal(chat_id)
-                print(f"ЖУРНАЛ АГЕНТА: длина = {len(journal_text)   }")
+                log_event("context.journal", chars=len(journal_text))
 
             tools_by_name = {t.name: t for t in tools}
             # Имена реально доступных агенту тулов — для каталога фонового супервизора
@@ -2000,10 +2060,18 @@ class HarnessAgent:
 
             # Собираем историю из памяти
             history = await self._build_history(chat_id, limit=30)
+            # Счётчик под активную модель: chars_per_token из конфига с поправкой
+            # по факту провайдера (EMA). Пресет max_tokens = токены этой модели.
+            await CALIBRATOR.load(await self._get_redis())
+            _cpt_base = model_spec.chars_per_token
+            _cpt = CALIBRATOR.chars_per_token(agent_model, _cpt_base)
+            # tool_trace в content ответов бота: полный у последних, у старых
+            # только сводка. Так его видит модель и считает trim.
+            history = attach_traces(history, _cpt)
             trimmed_history = trim_messages(
                 history,
                 max_tokens=max_tokens,
-                token_counter=count_tokens_approximately,
+                token_counter=CALIBRATOR.counter(agent_model, _cpt_base),
                 strategy='last',
                 start_on='human',
                 include_system=True,
@@ -2076,10 +2144,8 @@ class HarnessAgent:
                 *trimmed_history,
                 HumanMessage(content=user_input),
             ]
-            RATIO = get_chars_per_token_map()   # символов на токен из models_config.yaml
-
             import json
-            def _tok(s): return len(s) // RATIO.get(agent_model, model_spec.chars_per_token)   # для русского ~2 симв/токен, а не 4
+            def _tok(s): return int(len(s) / _cpt)   # символов на токен активной модели с калибровкой
 
             # for m in messages:
             #     c = m.content if isinstance(m.content, str) else json.dumps(m.content, ensure_ascii=False)
@@ -2088,13 +2154,20 @@ class HarnessAgent:
             schemas = json.dumps([t.args_schema.schema() if t.args_schema else {} for t in tools], ensure_ascii=False)
             descr   = sum(len(t.description or "") for t in tools)
             logger.info(f"[budget] tools={len(tools)} schema_chars={len(schemas)} descr_chars={descr} ~tok={_tok(schemas)+_tok('x'*descr)}")
+            # Оценка первого промпта по конфигу (сообщения + схемы тулов) для калибровки.
+            # Картинки в промпте искажают оценку, такие запросы не калибруем.
+            _tokcal_est = (
+                CALIBRATOR.estimate(messages, _cpt_base, extra_chars=len(schemas) + descr)
+                if CALIBRATOR.calibratable(messages) else 0
+            )
 
             async def agent_event_loop(messages: list):
-                nonlocal total_input_tokens, total_output_tokens # Не видит из-за +=
+                nonlocal total_input_tokens, total_output_tokens, last_iter_in, last_breakdown, last_cache_read, agent_steps # Не видит из-за +=
                 iteration = 0
                 # ФОНОВЫЙ супервизор: храним текущий asyncio-таск (или None).
                 supervisor_task = None
                 while iteration < loop_state["hard_limit"]:
+                    LOG_CONTEXT.set({**LOG_CONTEXT.get(), "iteration": iteration})
                     loop_state["iteration"] = iteration
 
                     # ── ФОНОВЫЙ reasoning-СУПЕРВИЗОР ЦЕЛИ ─────────────────────
@@ -2136,24 +2209,46 @@ class HarnessAgent:
                     can_still_extend = not loop_state["extension_used"]
                     current_llm = llm if (is_last_step and not can_still_extend) else llm_with_tools
 
-                    # ── Сбор ответа модели (без стриминга сырой пелены reasoning) ──
-                    # Короткую мысль из <thinking>...</thinking> отправляем готовым
-                    # предложением сразу после получения шага, а финальный ответ
-                    # отдаём чистым response.content.
+                    # GPT reasoning arrives outside content. Stream only that channel;
+                    # answer/tool arguments remain buffered until the step is complete.
                     stream_state = {"sent": False}
+                    native_reasoning = []
 
+                    async def _on_native_reasoning(text, kind="answer"):
+                        if kind == "reasoning" and isinstance(text, str) and text:
+                            native_reasoning.append(text)
+                            await self._send_chunk(
+                                text, request_id, msg_id=str(request_id), kind="live"
+                            )
+                            stream_state["sent"] = True
+                        elif kind == "retry" and stream_state["sent"]:
+                            await self._send_chunk(
+                                "", request_id, msg_id=str(request_id), kind="reasoning_end"
+                            )
+                            stream_state["sent"] = False
+                            native_reasoning.clear()
+
+                    from .common.context_usage import prompt_weights, scale_breakdown
+                    prompt_estimate = prompt_weights(messages, tools if current_llm is llm_with_tools else ())
+                    last_iter_in, last_cache_read, last_breakdown = 0, None, None
                     _llm_error = {}
                     try:
                         response = await _astream_collect(
-                            current_llm, messages, on_chunk=None, iteration=iteration,
+                            current_llm, messages,
+                            on_chunk=_on_native_reasoning if agent_model == "coder" else None,
+                            iteration=iteration,
                             error_info=_llm_error, cache_control=use_cache_control,
                             extra_headers=openai_cache_headers,
                         )
                     except Exception as _exc:
                         _llm_error["reason"] = f"{type(_exc).__name__}: {_exc}"
                         response = None
-
+                    # Parsed result metadata is emitted by @llm_logged, never full reasoning/signatures.
                     if response is None:
+                        if stream_state["sent"]:
+                            await self._send_chunk(
+                                "", request_id, msg_id=str(request_id), kind="reasoning_end"
+                            )
                         _err_reason = _llm_error.get("reason", "unknown")
                         logging.error(f"[iteration={iteration}] Все попытки llm провалены, прерываю цикл: {_err_reason}")
                         _is_provider_down = any(kw in str(_err_reason).lower() for kw in (
@@ -2172,6 +2267,7 @@ class HarnessAgent:
                             final_response = "Ошибка внутри цикла агента. Но агент запомнил шаги, попробуйте вернуться к запросу"
                         break
 
+                    agent_steps += 1
                     _raw_content = getattr(response, "content", None)
                     has_native_thinking = isinstance(_raw_content, list) and any(
                         isinstance(b, dict) and b.get("type") in ("thinking", "redacted_thinking")
@@ -2201,10 +2297,28 @@ class HarnessAgent:
                         response.content = _clean_content
 
                     _has_tool_calls = bool(getattr(response, "tool_calls", None))
+                    _native_text = "".join(native_reasoning)
+                    if not _native_text:
+                        _kwargs = getattr(response, "additional_kwargs", {}) or {}
+                        _candidate = _kwargs.get("reasoning_content") or _kwargs.get("reasoning")
+                        _native_text = _candidate if isinstance(_candidate, str) else ""
                     _step_thinking = _thinking_text or (_clean_content if _has_tool_calls else "")
                     _had_text = bool(_step_thinking)
 
-                    if _has_tool_calls and _had_text:
+                    if _native_text:
+                        # ainvoke fallback/non-streamed models: publish once after collection.
+                        # Never put provider reasoning into response.content or the final answer.
+                        loop_state.setdefault("reasoning_trace", []).append(_native_text)
+                        if not native_reasoning:
+                            await self._send_chunk(
+                                _native_text, request_id, msg_id=str(request_id), kind="live"
+                            )
+                        await self._send_chunk(
+                            "", request_id, msg_id=str(request_id), kind="reasoning_end"
+                        )
+                        # Reasoning is already closed; do not promote it to a final answer.
+                        stream_state["sent"] = False
+                    elif _has_tool_calls and _had_text:
                         # Короткое предложение из <thinking>...</thinking> (или fallback content на тул-шаге):
                         # отправляем сразу готовым предложением и закрываем шаг рассуждений.
                         loop_state.setdefault("reasoning_trace", []).append(_step_thinking)
@@ -2262,17 +2376,29 @@ class HarnessAgent:
                     iter_cr  = usage["cache_read_tokens"]
                     iter_cw  = usage["cache_creation_tokens"]
                     total_input_tokens  += iter_in
+                    last_iter_in = iter_in
+                    from .core.token_usage import cache_read_known
+                    last_cache_read = iter_cr if cache_read_known(response) else None
+                    last_breakdown = scale_breakdown(prompt_estimate, iter_in)
                     total_output_tokens += iter_out
+                    if iteration == 0 and _tokcal_est and iter_in:
+                        _ratio = CALIBRATOR.observe(agent_model, _tokcal_est, iter_in)
+                        if _ratio is not None:
+                            await CALIBRATOR.save(await self._get_redis(), agent_model)
+                            logging.info(
+                                f"[tokcal] model={agent_model} est={_tokcal_est} real={iter_in} "
+                                f"x{iter_in / _tokcal_est:.3f} ema={_ratio:.3f} n={CALIBRATOR.samples(agent_model)} "
+                                f"cpt={_cpt_base}->{CALIBRATOR.chars_per_token(agent_model, _cpt_base):.2f}"
+                            )
                     total_cache["cache_read_tokens"] += iter_cr
                     total_cache["cache_creation_tokens"] += iter_cw
                     _hit = f"{iter_cr * 100 // iter_in}%" if iter_in else "-"
-                    logging.info(
-                        f"[tokens] iter={iteration} "
-                        f"in={iter_in} out={iter_out} cached={iter_cr} cache_write={iter_cw} hit={_hit} "
-                        f"total_in={total_input_tokens} total_out={total_output_tokens} "
-                        f"total_cached={total_cache['cache_read_tokens']}"
-                    )
-                    logger.info(f"🦒Длина стека = {len(messages)}")
+                    log_event("llm.tokens", input_tokens=iter_in, output_tokens=iter_out,
+                              cache_read_tokens=iter_cr, cache_write_tokens=iter_cw,
+                              cache_hit=_hit, total_input_tokens=total_input_tokens,
+                              total_output_tokens=total_output_tokens,
+                              total_cache_read_tokens=total_cache['cache_read_tokens'],
+                              messages_count=len(messages))
 
                     if not getattr(response, "tool_calls", None):
                         final_response = (_clean_content or "").strip()
@@ -2352,6 +2478,12 @@ class HarnessAgent:
                             content = tool_content(tr, MAX_TOOL_MSG_CHARS)
 
                         messages.append(ToolMessage(content=content, tool_call_id=tc["id"]))
+                        tool_calls_log.append({
+                            "step": agent_steps,
+                            "name": tool_name,
+                            "ok": not isinstance(tr, Exception)
+                            and not (isinstance(result_dict, dict) and result_dict.get("ok") is False),
+                        })
 
                         summary = _summarize_tool_call(tc, tr)
                         if summary:
@@ -2380,6 +2512,7 @@ class HarnessAgent:
 
                     try:
                         result_response = await llm_with_tools.ainvoke(_sanitize_messages(messages))
+                        agent_steps += 1
                     
                         # Если упрямая модель всё равно вернула tool_calls вместо текста
                         if not result_response.content and getattr(result_response, "tool_calls", None):
@@ -2401,7 +2534,7 @@ class HarnessAgent:
 
                 return final_response, tool_trace
 
-            MAX_EMPTY_RESPONSE_RETRIES = 5
+            MAX_EMPTY_RESPONSE_RETRIES = 15
             for _empty_attempt in range(MAX_EMPTY_RESPONSE_RETRIES + 1):
                 final_response, tool_trace = await agent_event_loop(messages=messages)
                 if (final_response or "").strip():
@@ -2435,6 +2568,10 @@ class HarnessAgent:
                     "total_tokens": total_input_tokens + total_output_tokens,
                     "cache_read_tokens": total_cache["cache_read_tokens"],
                     "cache_creation_tokens": total_cache["cache_creation_tokens"],
+                    # контекст = промпт последней итерации (input_tokens выше — сумма за ход)
+                    "context_tokens": last_iter_in,
+                    "context_breakdown": last_breakdown,
+                    "context_cache_read_tokens": last_cache_read,
                 }
             _tools_usage = self._ctx_get("tool_usage") or {}
             if _tools_usage:
@@ -2454,28 +2591,37 @@ class HarnessAgent:
             except Exception as e:
                 logging.error(f"[title] ошибка автозаголовка chat={chat_id}: {e}")
 
-            # Сжатие tool_trace ЗДЕСЬ И СЕЙЧАС (на выходе из запроса).
-            # Сырой trace текущего хода: если длиннее порога — гоним через
-            # основную модель в компактную md-таблицу (артефакты сохраняются),
-            # иначе кладём как есть. В БД больше НЕ ложатся сырые простыни.
-            trace_out = None
-            if tool_trace:
-                raw_trace = '; '.join(tool_trace)
-                if len(raw_trace) > TRACE_SUMMARY_THRESHOLD:
-                    trace_out = await self._summarize_tool_trace(raw_trace)
-                else:
-                    trace_out = raw_trace
+            # Сжатие tool_trace на выходе из запроса. До TRACE_MSG_TOKENS — сырой. Больше: последние вызовы сырые,
+            # голова сжимается в md-таблицу (см. common/trace_budget.py).
+            trace_out = await compress_trace(
+                tool_trace,
+                CALIBRATOR.chars_per_token(agent_model, model_spec.chars_per_token),
+                self._summarize_tool_trace,
+            )
+
+            agent_run = {"steps": agent_steps, "tool_calls": len(tool_calls_log)}
+            log_event("agent.final", steps=agent_steps, tool_calls=len(tool_calls_log),
+                      tools=dict(Counter(t['name'] for t in tool_calls_log)),
+                      answer=fingerprint(final_response), usage=tokens_usage)
+            context = context_payload(tokens_usage)
+            if context is not None:
+                context["agent"] = agent_run
 
             return {
                 "input": user_input,
                 "message": final_response,
                 "used_tools": used_tools,
+                # chats.tool_name: первый тул (для статистики профиля), полный список — tool_calls
                 "action": used_tools[0] if len(used_tools)> 0 else '',
+                "agent_steps": agent_steps,
+                "tool_calls": tool_calls_log,
+                "agent_run": agent_run,
                 "success": True,
                 "files_to_send": files_to_send,
                 "tool_trace": trace_out,
                 "agent_model": real_agent_model,
                 "tokens_usage": tokens_usage,
+                "context": context,
                 "auto_title": auto_title
             }
         finally:
@@ -2484,11 +2630,12 @@ class HarnessAgent:
             self._flow_last.pop(request_id, None)
 
 
+    @tool_logged
     async def _invoke_tool(self, tools_by_name: dict, tool_call: dict, request_id: str) -> str:
         """Вызвать один инструмент по его имени и аргументам."""
         name = tool_call["name"]
         args = tool_call.get("args", {})
-        logging.info(f"[tool call] {name}")
+        # tool.start is emitted by @tool_logged with a request-local call_id.
         # Анти-спам для check_task_status: разрешаем максимум 3 вызова подряд.
         # На 4-й и далее не дёргаем sandbox, а возвращаем инъекцию в контекст модели,
         # чтобы она завершала шаг ответом в чат и ждала асинхронного уведомления.
@@ -2531,11 +2678,10 @@ class HarnessAgent:
 
         tool_fn = tools_by_name.get(name)
         if tool_fn is None:
-            logger.warning(f"[tool] ❓ '{name}' не найден")
+            log_event("tool.result", name=name, ok=False, reason="unknown_tool")
             return f"Инструмент '{name}' не найден. Следует прожать галочку на главной странице приложения. Гаечный ключ."
         
-        fmt = _fmt_args(name, args)
-        logger.info(f"[tool] ▶ {name}({fmt})")
+        log_event("tool.invoke", name=name)
 
         call_id = tool_call.get("id") or None
         t0 = time.monotonic()
@@ -2559,12 +2705,7 @@ class HarnessAgent:
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             result_str = str(result)
 
-            # Сокращаем результат для лога
-            preview = result_str[:MAX_RESULT_LEN].replace("\n", " ")
-            if len(result_str) > MAX_RESULT_LEN:
-                preview += f"…[+{len(result_str)-MAX_RESULT_LEN}]"
-
-            logger.info(f"[tool] ✅ {name} → {elapsed_ms}ms | {preview}")
+            log_event("tool.result", name=name, ok=True, duration_ms=elapsed_ms, result=fingerprint(result_str))
             if request_id:
                 self._flow_last[request_id] = time.monotonic()
             flow_end = tool_flow_fields(name, args, result)
@@ -2573,7 +2714,7 @@ class HarnessAgent:
 
         except Exception as e:
             elapsed_ms = int((time.monotonic() - t0) * 1000)
-            logger.error(f"[tool] ❌ {name} → {elapsed_ms}ms | {e}")
+            log_event("tool.result", name=name, ok=False, duration_ms=elapsed_ms, error_type=type(e).__name__)
             if request_id:
                 self._flow_last[request_id] = time.monotonic()
             await self._send_flow(request_id, "tool_end", call_id=call_id, ok=False, ms=elapsed_ms, **flow_tool)

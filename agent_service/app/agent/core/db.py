@@ -563,14 +563,16 @@ class AgentDB:
     async def get_chat_history(self, chat_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         """
         Получить последние N сообщений из чата для восстановления контекста.
-        Возвращает список словарей с полями: message_text, is_from_bot, created_at
+        Читает через chat_history(): у ветки (форка) сюда же попадают сообщения
+        родителей до точки форка. Порядок по chats.id (глобальный SERIAL),
+        самое новое сообщение (текущий вопрос) пропускается.
+        Возвращает список словарей с полями: id, message_text, is_from_bot, created_at, tool_trace
         """
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("""
                 SELECT id, message_text, is_from_bot, created_at, tool_trace
-                FROM chats
-                WHERE chat_id = $1
-                ORDER BY created_at DESC
+                FROM chat_history($1, NULL, $2 + 1)
+                ORDER BY id DESC
                 LIMIT $2 OFFSET 1
             """, chat_id, limit)
             

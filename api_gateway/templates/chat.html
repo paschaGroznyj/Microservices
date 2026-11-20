@@ -28,9 +28,13 @@
     <link rel="stylesheet" href="/static/css/tools-panel.css">
     <link rel="stylesheet" href="/static/css/query-mode.css">
     <link rel="stylesheet" href="/static/css/task-cards.css">
+    <link rel="stylesheet" href="/static/css/memory-panel.css">
     <link rel="stylesheet" href="/static/css/ws-diff.css">
     <link rel="stylesheet" href="/static/css/flowmap.css">
     <link rel="stylesheet" href="/static/css/file-attach.css">
+    <link rel="stylesheet" href="/static/css/usage-overlay.css">
+    <link rel="stylesheet" href="/static/css/doc-edit.css">
+    <link rel="stylesheet" href="/static/css/doc-search.css">
     <link rel="stylesheet" href="/static/css/upload-progress.css">
     <link rel="stylesheet" href="/static/css/whatsnew.css">
     <link rel="stylesheet" href="/static/css/skills.css">
@@ -42,6 +46,9 @@
     <link rel="stylesheet" href="/static/css/palette.css">
     {% if not is_sigma %}<link rel="stylesheet" href="/static/css/tg-chats.css">{% endif %}
     {% if not is_sigma %}<link rel="stylesheet" href="/static/css/push.css">{% endif %}
+    <link rel="stylesheet" href="/static/css/sidebar-refine.css">
+    <link rel="stylesheet" href="/static/css/sidebar-chats.css">
+    <link rel="stylesheet" href="/static/css/ipynb-render.css">
 
     <script src="/static/js/palette.js"></script>
 </head>
@@ -161,9 +168,9 @@
             <!-- PROFILE -->
             <div class="profile-section">
                 <button class="profile-button" id="profile-btn">
-                    <div class="avatar">{{ user.username[0]|upper }}</div>
+                    <span class="profile-av-wrap"><span class="chat-av profile-av" data-tone="{{ user.av_tone if user.av_tone is defined else 0 }}" aria-hidden="true">{{ user.initials if user.initials is defined else (user.username or '?')[:2]|upper }}</span><span class="lvl-badge" id="sb-level" hidden></span></span>
                     <div class="profile-info">
-                        <div class="profile-name">{{ user.username }}</div>
+                        <div class="profile-name" title="{{ user.display_name if user.display_name is defined else user.username }}">{{ user.display_name if user.display_name is defined else user.username }}</div>
                     </div>
                 </button>
                 <button class="chat-search-btn" id="chat-search-btn" title="Поиск по чатам" aria-label="Поиск по чатам">
@@ -490,6 +497,10 @@
                     <div class="hero-meta">
                         <span class="joined-badge" id="modal-joined">с янв 2024</span>
                     </div>
+                    <div class="hero-level" id="modal-level" hidden>
+                        <div class="hero-level-top"><span class="lvl-chip" id="modal-level-chip"></span><span class="lvl-next" id="modal-level-next"></span></div>
+                        <div class="lvl-track"><div class="lvl-fill" id="modal-level-fill"></div></div>
+                    </div>
                 </div>
             </div>
             <div>
@@ -554,7 +565,7 @@
                 </svg>
                 Выйти из приложения
             </button>
-            <span class="version-tag">v1.0.4</span>
+            <span class="version-tag">v1.0.7</span>
         </div>
     </div>
 </div>
@@ -740,12 +751,14 @@
 {% if is_sigma %}<script src="/static/js/modalWindow.js"></script>{% endif %}
 <script src="/static/js/mobile.js"></script>
 <script src="/static/js/mode_modal_info.js"></script>
+<script src="/static/js/userLevel.js"></script>
 <script src="/static/js/profileModal.js"></script>
 <script src="/static/js/graph.js"></script>
 <script src="/static/js/animations.js"></script>
 <script src="/static/js/flowmap.js"></script>
 <script src="/static/js/reasoning-clamp.js"></script>
 <script src="/static/js/sidebar-ui.js"></script>
+<script src="/static/js/ipynb-render.js"></script>
 <script src="/static/js/file-tiles.js"></script>
 <script src="/static/js/upload-progress.js"></script>
 {% if not is_sigma %}<script src="/static/js/file-attach.js"></script>{% endif %}
@@ -755,8 +768,13 @@
 <script src="/static/js/generative-ui.js"></script>
 <script src="/static/js/media-ring.js"></script>
 <script src="/static/js/task-cards.js"></script>
+<script src="/static/js/memory-panel.js"></script>
+<script src="/static/js/usage-overlay.js"></script>
+<script src="/static/js/doc-edit.js"></script>
+<script src="/static/js/doc-search.js"></script>
 <script src="/static/js/ws-diff.js"></script>
 <script src="/static/js/task-hint.js"></script>
+<script src="/static/js/media-pro.js"></script>
 <script type="module" src="{{ '/static/js/app_sigma.js' if is_sigma else '/static/js/app.js' }}"></script>
 <script type="module" src="/static/js/chatSearchModal.js"></script>
 <script src="/static/js/system-notice.js"></script>

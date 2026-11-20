@@ -1,0 +1,279 @@
+/* sidebar-chats.css — строки чатов в две линии (вариант C) и подгрузка списка.
+   Сверху заголовок чата, снизу последнее сообщение, справа время.
+   Подключается после sidebar-refine.css. */
+
+/* В sidebar.css у .chat-list max-height: 2000px для анимации сворачивания.
+   С подгрузкой страниц список длиннее, поэтому ограничение снимаем. */
+.sidebar .chat-list { max-height: none; gap: 1px; }
+.sidebar .your-chats-block.collapsed .chat-list { max-height: 0; }
+
+.sidebar .chat-item.chat-item--c {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 10px;
+  min-height: 46px;
+  padding: 7px 8px;
+  border-radius: 10px;
+  box-sizing: border-box;
+}
+.sidebar .chat-item--c.active {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.sidebar .chat-av {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  /* буквы чуть ближе к цвету текста: темнее в светлой теме, светлее в тёмной — контраст выше, чем у чистого accent */
+  color: color-mix(in srgb, var(--accent) 72%, var(--text-primary));
+  user-select: none;
+}
+/* у активной строки фон уже 10% accent — аватар делаем плотнее, чтобы квадрат не сливался со строкой */
+.sidebar .chat-item--c.active .chat-av {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+.sidebar .chat-item--c .chat-line-wrap {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+}
+.sidebar .chat-item--c .chat-line--title {
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.sidebar .chat-item--c .chat-line--preview {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+.sidebar .chat-item--c .chat-line-wrap::after { display: none; }
+/* Время стоит отдельной колонкой, поэтому затухание текста короткое и
+   одинаковое во всех состояниях (в sidebar.css и refine оно рассчитано
+   на ⋯ поверх текста и съедает до половины строки). */
+.sidebar .chat-item--c .chat-line.chat-line--clamped,
+.sidebar .chat-item--c:hover .chat-line.chat-line--clamped,
+.sidebar .chat-item--c.active .chat-line.chat-line--clamped {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent);
+          mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent);
+}
+
+.sidebar .chat-time {
+  align-self: start;
+  margin-top: 3px;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--text-secondary);
+  opacity: .8;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.sidebar .chat-item--c .chat-item-menu-btn { right: 4px; }
+
+/* Строка без превью: время по центру, на одной линии с заголовком. */
+.sidebar .chat-item--c:not(:has(.chat-line--preview)) .chat-time {
+  align-self: center;
+  margin-top: 0;
+}
+
+/* Мышь: ⋯ только при наведении, время на это время прячется. */
+@media (hover: hover) {
+  .sidebar .chat-item--c.active:not(:hover) .chat-item-menu-btn { display: none; }
+  .sidebar .chat-item--c:hover .chat-time { visibility: hidden; }
+}
+
+/* Мобильный (sidebar.css показывает ⋯ всегда): время сверху справа,
+   ⋯ под ним в нижнем правом углу, друг на друга не налезают. */
+@media (max-width: 768px) {
+  .sidebar .chat-item.chat-item--c { min-height: 48px; }
+  /* sidebar.css резервирует 30px под ⋯ поверх текста; у варианта C ⋯ в своей колонке. */
+  .sidebar .chat-item--c .chat-line-wrap { padding-right: 0; }
+  .sidebar .chat-item--c .chat-time,
+  .sidebar .chat-item--c:not(:has(.chat-line--preview)) .chat-time {
+    align-self: start;
+    margin-top: 1px;
+    min-width: 28px;
+    text-align: right;
+  }
+  .sidebar .chat-item--c .chat-item-menu-btn {
+    top: auto;
+    bottom: 2px;
+    right: 2px;
+    transform: none;
+    width: 26px;
+    height: 22px;
+    padding: 3px 5px;
+  }
+  .sidebar .chat-item--c .chat-time { visibility: visible !important; }
+  /* Строка без превью: заголовок на одной линии со временем, ⋯ под ними. */
+  .sidebar .chat-item--c:not(:has(.chat-line--preview)) .chat-line-wrap { align-self: start; }
+  .sidebar .chat-item--c:not(:has(.chat-line--preview)) .chat-av { align-self: start; }
+}
+
+/* Маркер подгрузки под списком */
+.sidebar .chat-list-more {
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+}
+.sidebar .chat-list-more[hidden],
+.sidebar .your-chats-block.collapsed .chat-list-more { display: none; }
+.sidebar .chat-list-more.is-loading::before {
+  content: "";
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  opacity: .6;
+  animation: chatMoreSpin .8s linear infinite;
+}
+@keyframes chatMoreSpin { to { transform: rotate(360deg); } }
+
+
+/* ── Заголовки секций: шеврон сразу за текстом, счётчик справа над колонкой времени ── */
+.sidebar .favorites-header,
+.sidebar #chats-section-toggle {
+  justify-content: flex-start;
+  gap: 4px;
+  padding-right: 8px;
+}
+.sidebar .favorites-header .sec-n,
+.sidebar #chats-section-toggle .sec-n {
+  /* счётчик стоит сразу за названием секции, шеврон — после него */
+  order: 1;
+  margin-left: 2px;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
+  box-sizing: border-box;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+}
+.sidebar .favorites-header .favorites-chevron,
+.sidebar #chats-section-toggle .section-chevron { order: 2; }
+.sidebar .sec-n:empty { display: none; }
+/* аватар профиля в стиле аватаров чатов */
+.sidebar .profile-button .profile-av { flex-shrink: 0; text-transform: uppercase; font-size: 10.5px; letter-spacing: 0; }
+
+/* ── Активный чат: полоска accent слева, внутри скругления строки ── */
+.sidebar .chat-item.chat-item--c { position: relative; }
+.sidebar .chat-item--c.active::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 11px;
+  bottom: 11px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+/* ── Палитра аватаров: 8 тонов, тон выбирается по id чата (data-tone) ── */
+.sidebar .chat-av[data-tone="0"] { --av: #2f8580; }
+.sidebar .chat-av[data-tone="1"] { --av: #8a7428; }
+.sidebar .chat-av[data-tone="2"] { --av: #c05a3c; }
+.sidebar .chat-av[data-tone="3"] { --av: #3f9152; }
+.sidebar .chat-av[data-tone="4"] { --av: #5a68c0; }
+.sidebar .chat-av[data-tone="5"] { --av: #a84f8f; }
+.sidebar .chat-av[data-tone="6"] { --av: #b97c16; }
+.sidebar .chat-av[data-tone="7"] { --av: #3f80b0; }
+.sidebar .chat-av[data-tone] {
+  background: color-mix(in srgb, var(--av) 17%, transparent);
+  color: color-mix(in srgb, var(--av) 68%, var(--text-primary));
+}
+.sidebar .chat-item--c.active .chat-av[data-tone] {
+  background: color-mix(in srgb, var(--av) 28%, transparent);
+}
+
+/* ── Агент работает: вторая строка-статус и точка на аватаре ── */
+.sidebar .chat-item--c .chat-line--run {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--chat-run, #2e9a58);
+  font-weight: 500;
+}
+[data-theme="dark"] .sidebar .chat-item--c .chat-line--run { --chat-run: #4cc27a; }
+.sidebar .chat-run-dots { display: inline-flex; gap: 2px; flex: none; }
+.sidebar .chat-run-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: chatRunDot 1.2s ease-in-out infinite;
+}
+.sidebar .chat-run-dots i:nth-child(2) { animation-delay: .15s; }
+.sidebar .chat-run-dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes chatRunDot {
+  0%, 80%, 100% { opacity: .3; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-2px); }
+}
+.sidebar .chat-item--running .chat-av { position: relative; overflow: visible; }
+.sidebar .chat-item--running .chat-av::after {
+  content: "";
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #2e9a58;
+  box-shadow: 0 0 0 2px var(--sidebar-bg, var(--bg-primary, #fff));
+}
+[data-theme="dark"] .sidebar .chat-item--running .chat-av::after { background: #4cc27a; }
+@media (prefers-reduced-motion: reduce) {
+  .sidebar .chat-run-dots i { animation: none; opacity: .8; }
+}
+
+/* ── Уровень пользователя: бейдж на углу аватара профиля ── */
+.sidebar .profile-av-wrap { position: relative; flex-shrink: 0; display: inline-flex; }
+.sidebar .lvl-badge {
+  --lv: var(--text-muted);
+  position: absolute;
+  right: -5px;
+  bottom: -4px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  font: 600 9px/1 Inter, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  background: var(--lv);
+  box-shadow: 0 0 0 2px var(--sidebar-bg);
+  pointer-events: none;
+}
+.sidebar .lvl-badge[hidden] { display: none; }
+.lvl-badge[data-level="1"], .hero-level[data-level="1"] { --lv: #8a8580; }
+.lvl-badge[data-level="2"], .hero-level[data-level="2"] { --lv: #3f9152; }
+.lvl-badge[data-level="3"], .hero-level[data-level="3"] { --lv: #3f80b0; }
+.lvl-badge[data-level="4"], .hero-level[data-level="4"] { --lv: #8a5ac0; }
+.lvl-badge[data-level="5"], .hero-level[data-level="5"] { --lv: #c08a16; }

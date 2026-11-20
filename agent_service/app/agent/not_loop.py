@@ -8,8 +8,11 @@ not_loop.py — режим «Модель» (type_query="model"): чистая �
 Транспорт (стрим чанков, FlowMap, учёт токенов) переиспользуется у HarnessAgent,
 поэтому фронт, Redis flow и сохранение в БД работают так же, как для агента.
 """
+from .core.observability import request_logged
+
 import logging
 import time
+from app.agent.common.context_limits import context_payload
 from datetime import datetime
 from typing import Any, Dict, List
 from zoneinfo import ZoneInfo
@@ -18,7 +21,9 @@ from langchain.schema import HumanMessage, SystemMessage
 from langchain_core.messages import BaseMessage, trim_messages
 from langchain_core.messages.utils import count_tokens_approximately
 
-from .core.agent_provider import get_real_model_name, resolve_model_tag
+from .core.agent_provider import get_model_spec, get_real_model_name, resolve_model_tag
+from .core.token_calibration import CALIBRATOR
+from .common.trace_budget import attach_traces
 from .prompts.system_prompt import DEFAULT_AGENT_IDENTITY, INTERACTIVE_POLL_GUIDANCE
 from .title_generator import generate_chat_title, is_first_turn
 
@@ -77,12 +82,20 @@ class LLModel:
     def __init__(self, agent):
         self.agent = agent  # HarnessAgent: модели, история из БД, стрим, flow, токены
 
-    async def _history(self, chat_id, max_tokens: int) -> List[BaseMessage]:
+    async def _history(self, chat_id, max_tokens: int, model_tag: str | None = None) -> List[BaseMessage]:
         history = await self.agent._load_history_from_db(chat_id, MODEL_HISTORY_REQUESTS * 2)
+        counter = count_tokens_approximately
+        cpt = 4.0  # дефолт count_tokens_approximately
+        if model_tag:
+            # тот же счётчик, что у агента: chars_per_token модели с калибровкой
+            spec = get_model_spec(model_tag, self.agent.AGENT_MODELS)
+            counter = CALIBRATOR.counter(model_tag, spec.chars_per_token)
+            cpt = CALIBRATOR.chars_per_token(model_tag, spec.chars_per_token)
+        history = attach_traces(history, cpt)
         return trim_messages(
             history,
             max_tokens=max_tokens,
-            token_counter=count_tokens_approximately,
+            token_counter=counter,
             strategy="last",
             start_on="human",
             include_system=True,
@@ -97,9 +110,9 @@ class LLModel:
         return datetime.now(tz).strftime("%d.%m.%Y %H:%M, %A") + f" ({tz.key})"
 
     async def build_messages(self, user_input: str, chat_id, context_size: str | None,
-                             timezone_name: str | None) -> List[BaseMessage]:
+                             timezone_name: str | None, model_tag: str | None = None) -> List[BaseMessage]:
         max_tokens = MODEL_CONTEXT_TOKENS.get(context_size or "medium", MODEL_CONTEXT_TOKENS["medium"])
-        history = await self._history(chat_id, max_tokens)
+        history = await self._history(chat_id, max_tokens, model_tag)
         return [
             SystemMessage(content=MODEL_SYSTEM_PROMPT),
             SystemMessage(content=f"🕒 ТЕКУЩИЙ КОНТЕКСТ:\nCurrent date and time: {self._now(timezone_name)}"),
@@ -107,6 +120,7 @@ class LLModel:
             HumanMessage(content=user_input),
         ]
 
+    @request_logged
     async def process_query(
         self,
         user_input: str,
@@ -136,7 +150,7 @@ class LLModel:
             tag = resolve_model_tag(agent_model, agent.AGENT_MODELS)
             llm = agent.AGENT_MODELS[tag]
             real_model = get_real_model_name(llm)
-            messages = await self.build_messages(user_input, chat_id, context_size, timezone_name)
+            messages = await self.build_messages(user_input, chat_id, context_size, timezone_name, model_tag=tag)
             logger.info(
                 f"[model] type_query=model chat={chat_id} model={tag} ({real_model}) "
                 f"messages={len(messages)}"
@@ -147,6 +161,8 @@ class LLModel:
                 if kind == "answer" and text:
                     await agent._send_chunk(text, request_id, msg_id=str(request_id), kind="live")
 
+            from .common.context_usage import prompt_weights, scale_breakdown
+            prompt_estimate = prompt_weights(messages)
             response, final = None, ""
             for attempt in range(MODEL_EMPTY_RETRIES + 1):
                 try:
@@ -169,8 +185,12 @@ class LLModel:
                 final = MODEL_EMPTY_FALLBACK
             await agent._send_chunk("", request_id, msg_id=str(request_id), kind="final_commit")
 
+            from .core.token_usage import cache_read_known
             usage = agent.track_tokens(response) if response is not None else dict(EMPTY_USAGE)
             tokens_usage = {**usage, "total_tokens": usage["input_tokens"] + usage["output_tokens"]}
+            tokens_usage.update(context_tokens=usage["input_tokens"],
+                                context_cache_read_tokens=(usage["cache_read_tokens"] if cache_read_known(response) else None),
+                                context_breakdown=scale_breakdown(prompt_estimate, usage["input_tokens"]))
             logger.info(
                 f"[tokens] type_query=model in={usage['input_tokens']} out={usage['output_tokens']} "
                 f"cached={usage['cache_read_tokens']}"
@@ -184,16 +204,23 @@ class LLModel:
             except Exception as e:
                 logger.error(f"[model][title] chat={chat_id}: {e}")
 
+            _steps = 1 if response is not None else 0
+            context = context_payload(tokens_usage)
+            if context is not None:
+                context["agent"] = {"steps": _steps, "tool_calls": 0}
             return {
                 "input": user_input,
                 "message": final,
                 "used_tools": [],
                 "action": "",
+                "agent_steps": _steps,
+                "tool_calls": [],
                 "success": response is not None,
                 "files_to_send": [],
                 "tool_trace": None,
                 "agent_model": real_model,
                 "tokens_usage": tokens_usage,
+                "context": context,
                 "auto_title": auto_title,
                 "type_query": "model",
             }

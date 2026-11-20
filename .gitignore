@@ -20,6 +20,7 @@ agent_sandbox/result_parsing
 
 searxng
 documents
+notice.md
 
 certs/
 
@@ -37,3 +38,7 @@ api_gateway_sigma/presence.py
 api_gateway_sigma/reactions_bus.py
 api_gateway_sigma/reads_bus.py
 api_gateway_sigma/run_status.py
+
+# Private runtime logs: never commit or bake into images.
+**/agent-logs/
+**/agent-diagnostics/

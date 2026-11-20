@@ -264,7 +264,7 @@ async def run_supervisor(agent, user_input, messages_snapshot: list, loop_state:
             HumanMessage(content=user_msg),
         ]
 
-        resp = await agent._main_ainvoke(sup_messages)
+        resp = await agent._main_ainvoke(sup_messages, llm_role="supervisor")
         raw = getattr(resp, "content", "") or ""
         if isinstance(raw, list):
             raw = " ".join(

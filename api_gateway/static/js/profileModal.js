@@ -70,6 +70,8 @@ function applyProfileData(data) {
   modalSubtitle.textContent = '@' + username;
 
   document.getElementById('stat-chats').textContent = stats.agent_requests;
+  // уровень только по реальным данным, не по заглушке
+  if (data && window.UserLevel) window.UserLevel.apply(data?.stats?.agent_requests);
 
   // Рендер тулзов
   const tools = data?.stats?.tools || [];

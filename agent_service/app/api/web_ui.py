@@ -80,6 +80,7 @@ async def upload_web_files(
     user_id: str = Form(...),
     files: list[UploadFile] = File(...),
     file_modes: list[str] = Form(default=[]),
+    persist: str = Form(default="1"),
 ):
     """Раскладывает вложения сообщения. Ничего не парсит.
 
@@ -88,7 +89,10 @@ async def upload_web_files(
       "file"   — всё остальное: бинарник в media_store (Redis) + диск/OBS,
                  в промпт идёт только маркер с media_id.
     Если режима нет (TG/MAX-боты шлют файлы напрямую), файл считается "file".
+    persist="0" — не писать на диск/OBS, только media_store. Так gateway
+    отдаёт упакованный JSON Pro-разметки (api_gateway/json_pack.py).
     """
+    keep_on_disk = str(persist).strip() != "0"
     parts = []
     images: list[dict] = []          # картинки JPEG/PNG для vision-тула
     image_media_ids: list[str] = []  # media_id положенных в Redis media_store (пер-чат)
@@ -116,15 +120,16 @@ async def upload_web_files(
         # /api/chats/{chat}/files/{msg}/{name} отдаёт превью в истории.
         safe_fname = os.path.basename(f.filename or "file") or "file"
         safe_mid = os.path.basename(str(message_id or "msg")) or "msg"
-        try:
-            user_dir = os.path.join("/app/generated_files", safe_mid)
-            os.makedirs(user_dir, exist_ok=True)
-            user_fpath = os.path.join(user_dir, safe_fname)
-            with open(user_fpath, "wb") as _uf:
-                _uf.write(raw)
-            await obs_file_storage.upload_user_file(user_fpath, chat_id)
-        except Exception as _uerr:
-            logging.warning(f"[upload_files] не удалось сохранить файл на диск/OBS: {_uerr}")
+        if keep_on_disk:
+            try:
+                user_dir = os.path.join("/app/generated_files", safe_mid)
+                os.makedirs(user_dir, exist_ok=True)
+                user_fpath = os.path.join(user_dir, safe_fname)
+                with open(user_fpath, "wb") as _uf:
+                    _uf.write(raw)
+                await obs_file_storage.upload_user_file(user_fpath, chat_id)
+            except Exception as _uerr:
+                logging.warning(f"[upload_files] не удалось сохранить файл на диск/OBS: {_uerr}")
 
         # Картинки не парсим в текст — кладём base64 отдельно, чтобы vision-тул
         # дёргал строку из pending_files, а контекст модели не засорялся.
@@ -311,6 +316,33 @@ async def _resolve_chat_file_path(chat_id, message_id, file_name) -> str | None:
     return None
 
 
+async def _fork_ancestors(chat_id) -> list[str]:
+    """chat_id предков ветки по chats_forks, ближайший первым. Для обычного чата []."""
+    pool = getattr(db, "pool", None)
+    if pool is None or not chat_id:
+        return []
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT chat_id FROM chat_chain($1) WHERE depth > 0 ORDER BY depth",
+                str(chat_id),
+            )
+        return [r["chat_id"] for r in rows]
+    except Exception as e:
+        logging.warning(f"chat_chain {chat_id}: {e}")
+        return []
+
+
+async def _obs_lookup(real_path: str, chat_ids) -> tuple[str | None, int | None]:
+    """Первый ключ OBS, который есть в бакете, перебором по chat_ids."""
+    for cid in chat_ids:
+        key = obs_file_storage.build_obs_key(real_path, cid)
+        size = await obs_file_storage.stat_object(key)
+        if size is not None:
+            return key, size
+    return None, None
+
+
 async def _serve_file(
     real_path: str,
     request: Request,
@@ -333,17 +365,21 @@ async def _serve_file(
     disposition = "attachment" if (download or not is_inline_media) else "inline"
 
     source, obs_key, file_size = None, None, None
-    if chat_id is not None and obs_file_storage.has_unique_obs_key(real_path):
-        obs_key = obs_file_storage.build_obs_key(real_path, chat_id)
-        file_size = await obs_file_storage.stat_object(obs_key)
+    unique_key = chat_id is not None and obs_file_storage.has_unique_obs_key(real_path)
+    if unique_key:
+        obs_key, file_size = await _obs_lookup(real_path, [chat_id])
         if file_size is not None:
             source = "obs"
     if source is None and os.path.isfile(real_path):
         source, file_size = "disk", os.path.getsize(real_path)
-    if source is None and obs_key is None and chat_id is not None:
-        # Неуникальный ключ и локальной копии нет: последний шанс — OBS.
-        obs_key = obs_file_storage.build_obs_key(real_path, chat_id)
-        file_size = await obs_file_storage.stat_object(obs_key)
+    if source is None and chat_id is not None:
+        # Последний шанс — OBS: для неуникального ключа под своим чатом, для любого
+        # ключа под предками форка (файл унаследованного сообщения лежит под
+        # catchpm/{chat_id родителя}/...).
+        ids = await _fork_ancestors(chat_id)
+        if not unique_key:
+            ids = [chat_id] + ids
+        obs_key, file_size = await _obs_lookup(real_path, ids)
         if file_size is not None:
             source = "obs"
     if source is None:

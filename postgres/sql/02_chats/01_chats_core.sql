@@ -22,8 +22,14 @@ CREATE TABLE IF NOT EXISTS chats (
     reaction       TEXT DEFAULT NULL,
     input_format   TEXT DEFAULT 'text',
     type_query     TEXT DEFAULT 'agent',  -- agent | model (MauDel без тулов)
+    agent_steps    INTEGER,               -- шаги цикла агента за ход (ответы модели)
+    tool_calls     JSONB,                 -- все вызовы тулов хода: [{step, name, ok}]
     created_at     TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Существующая база
+ALTER TABLE chats ADD COLUMN IF NOT EXISTS agent_steps INTEGER;
+ALTER TABLE chats ADD COLUMN IF NOT EXISTS tool_calls JSONB;
 
 CREATE INDEX IF NOT EXISTS ix_chats_user_id ON chats(user_id);
 CREATE INDEX IF NOT EXISTS ix_chats_chat_id ON chats(chat_id);

@@ -110,6 +110,7 @@
         ];
         if (f.type) attrs.push(`data-mime="${esc(f.type)}"`);
         if (f.dlUrl) attrs.push(`data-dl-url="${esc(f.dlUrl)}"`);
+        if (f.nofile) attrs.push('data-nofile="1"');
         if (kind === 'audio') attrs.push(`data-audio-url="${esc(url)}"`, `data-audio-name="${esc(name)}"`);
         const metaHtml = kind === 'audio'
             ? `<span class="fa-tile__meta"><span class="fa-tile__meta-txt">${esc(meta)}</span><span class="fa-tile__time"><b class="cur">0:00</b><span class="fa-audio-dur"> / 0:00</span></span></span>`
@@ -361,6 +362,9 @@
     };
     const PV_TEXT = new Set(['txt', 'log', 'text', 'rst', 'tex', 'srt', 'vtt', 'gitignore', 'editorconfig']);
     const PV_MAX_BYTES = 2 * 1024 * 1024;
+    // Ноутбук с картинками весит мегабайты из-за base64 в outputs, обрезанный JSON не разбирается.
+    const PV_MAX_BYTES_EXT = { ipynb: 25 * 1024 * 1024 };
+    const pvMaxBytes = (name) => PV_MAX_BYTES_EXT[extOf(name)] || PV_MAX_BYTES;
     const PV_HL_MAX = 200 * 1024;
     const PV_CSV_ROWS = 500;
 
@@ -422,6 +426,21 @@
 
     const FP = { token: 0, tile: null, type: null, text: '', loaded: false, truncated: false, totalSize: 0, name: '', modePref: {}, textChip: null, textMode: 'raw' };
 
+    // Состояние файлового превью для модулей-надстроек (doc-edit.js).
+    function emitFp(phase) {
+        try { document.dispatchEvent(new CustomEvent('filepreview:state', { detail: { phase } })); } catch (_) {}
+    }
+    function currentFile() {
+        if (!FP.tile || !FP.type) return null;
+        const t = FP.tile;
+        return {
+            tile: t, name: FP.name, type: FP.type, text: FP.text, loaded: FP.loaded,
+            truncated: FP.truncated, totalSize: FP.totalSize,
+            url: t.dataset.url || '', dlUrl: t.dataset.dlUrl || '', mime: t.dataset.mime || '',
+            isLocal: t._faFile instanceof Blob,
+        };
+    }
+
     function exitFilePreview(opts = {}) {
         const { panel, body, render, modes } = pvEls();
         if (FP.tile) FP.tile.classList.remove('is-preview-open');
@@ -430,6 +449,7 @@
         FP.token++;
         FP.tile = null; FP.type = null; FP.text = ''; FP.loaded = false;
         FP.textChip = null; FP.textMode = 'raw';
+        emitFp('exit');
         if (!wasFile && !wasTextChip) return;
         const tok = FP.token;
         const reset = () => {
@@ -543,14 +563,17 @@
         setNote('');
         panel.classList.add('open');
         panel.setAttribute('aria-hidden', 'false');
+        emitFp('open');
 
         let text = '';
+        const maxBytes = pvMaxBytes(FP.name);
+        FP.maxBytes = maxBytes;
         try {
             const src = pvSource(t);
             let blob = src.blob || null;
             if (!blob) {
                 if (!src.url) throw new Error('нет ссылки на файл');
-                const headers = src.url.startsWith('blob:') ? {} : { Range: `bytes=0-${PV_MAX_BYTES - 1}` };
+                const headers = src.url.startsWith('blob:') ? {} : { Range: `bytes=0-${maxBytes - 1}` };
                 const r = await fetch(src.url, { headers, credentials: 'same-origin' });
                 if (!r.ok) throw new Error(`HTTP ${r.status}`);
                 const cr = r.headers.get('Content-Range');
@@ -560,8 +583,8 @@
             } else {
                 FP.totalSize = blob.size;
             }
-            if (blob.size > PV_MAX_BYTES) blob = blob.slice(0, PV_MAX_BYTES);
-            FP.truncated = FP.totalSize > PV_MAX_BYTES;
+            if (blob.size > maxBytes) blob = blob.slice(0, maxBytes);
+            FP.truncated = FP.totalSize > maxBytes;
             text = await blob.text();
         } catch (err) {
             if (tok !== FP.token) return true;
@@ -580,6 +603,7 @@
         FP.loaded = true;
         renderFilePreview();
         body.scrollTop = 0; render.scrollTop = 0;
+        emitFp('loaded');
         return true;
     }
 
@@ -604,7 +628,7 @@
         const mode = curMode();
         syncModeBtns();
         const sizeNote = FP.truncated
-            ? `Показаны первые ${fmtSize(PV_MAX_BYTES)} из ${fmtSize(FP.totalSize)}. Полный файл можно скачать.`
+            ? `Показаны первые ${fmtSize(FP.maxBytes || PV_MAX_BYTES)} из ${fmtSize(FP.totalSize)}. Полный файл можно скачать.`
             : '';
         if (mode === 'raw' && PV_HAS_RENDER.has(FP.type)) {
             render.hidden = true; render.innerHTML = '';
@@ -678,6 +702,9 @@
                     }
                 },
             };
+        }
+        if (type === 'json' && ext === 'ipynb' && window.NotebookRender) {
+            return window.NotebookRender.render(text, name);
         }
         if (type === 'json') {
             try {
@@ -755,12 +782,12 @@
     });
 
     // Плитка без рендера в поле ввода: вместо скачивания коротко показываем «Нет превью».
-    function flashNoPreview(t) {
+    function flashNoPreview(t, text = 'Нет превью') {
         const meta = t.querySelector('.fa-tile__meta');
         if (!meta || t.classList.contains('fa-tile--nopreview')) return;
         const prev = meta.textContent;
         t.classList.add('fa-tile--nopreview');
-        meta.textContent = 'Нет превью';
+        meta.textContent = text;
         setTimeout(() => {
             t.classList.remove('fa-tile--nopreview');
             if (meta.isConnected) meta.textContent = t.dataset.meta || prev;
@@ -769,6 +796,8 @@
 
     function activate(t, e) {
         if (t.classList.contains('fa-tile--broken')) return;
+        // Файл есть только у агента (упакованный JSON разметки): не качаем и не открываем.
+        if (t.dataset.nofile) return flashNoPreview(t, 'Передан агенту');
         const kind = t.dataset.kind;
         if (kind === 'image' || kind === 'video') return openLightbox(t);
         if (kind === 'audio') return toggleTileAudio(t);
@@ -871,5 +900,6 @@
         tileHtml, groupHtml, enhanceScroller, trackOf, stopAudioFor, bindAudioTiles,
         kindOf, labelOf, fmtSize,
         previewTypeOf, openFilePreview, exitFilePreview, enterTextChipPreview,
+        currentFile, renderFilePreview, buildRendered,
     };
 })();

@@ -8,6 +8,7 @@ import logging
 import base64
 import uuid
 import asyncio
+from app.agent.common.context_limits import context_payload
 from task_trigger import (
     TASK_TRIGGER_USER_ID, is_task_trigger, owner_user_id as task_owner_user_id,
     build_message as build_task_trigger_message, payload_tasks as task_trigger_tasks,
@@ -38,9 +39,13 @@ from agent.core import obs_file_storage
 from agent.core import sandbox_scripts_cleaner
 from agent.media.thumbhash import media_meta_for_file, image_meta
 from api.web_ui import web_router, pending_files, set_db as _set_web_ui_db, set_active_tasks as _set_web_ui_tasks
+from api.memory_api import memory_router, set_db as _set_memory_db
+from api.steps_api import steps_router
 
 
-logging.basicConfig(level=logging.INFO)
+from agent.core.observability import configure_logging, log_event, request_logged, fingerprint
+
+configure_logging()
 
 
 
@@ -112,6 +117,7 @@ async def wait_for_files(message_id: str, timeout: float = FILE_WAIT_TIMEOUT) ->
 
 
 
+@request_logged
 async def handle_message(payload: dict, prod: AIOKafkaProducer):
     """Обработка одного сообщения — запускается конкурентно."""
     start = time.perf_counter()
@@ -188,7 +194,7 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
     # if (not text and not tg_initiated) or chat_id is None:
     #     logging.warning(f"Некорректное сообщение: {payload}")
     #     return
-    print("ВНУТРИ АГЕНТА", payload)
+    log_event("request.accepted", selected_tools=payload.get("selected_tools"), input=fingerprint(payload.get("message", "")))
 
     # FlowMap: агент взял запрос из Kafka в работу. Фоном, чтобы не задерживать ответ.
     if agent is not None and request_id and not loop_tick:
@@ -656,10 +662,16 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             "type_query": type_query,
             "selected_tools": selected_tools,
             "action": response.get('action'),
+            # шаги агента и все вызовы тулов хода -> chats.agent_steps / chats.tool_calls
+            "agent_steps": response.get("agent_steps"),
+            "tool_calls": response.get("tool_calls"),
             "attached_files": attached_files,
             "tool_trace": response.get("tool_trace"), # str,
             "agent_model": response.get("agent_model"),
             "tokens_usage": response.get("tokens_usage"),
+            # Контекст последнего шага для строки памяти: фронт обновляет её из этого
+            # поля сразу по финалу, без опроса stats.
+            "context": response.get("context") or context_payload(response.get("tokens_usage")),
             "gateway_target": gateway_target,
             "tg_chat_id": tg_chat_id,
             "max_chat_id": deliver_chat_id,
@@ -680,8 +692,14 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             "task_ids": [t.get("task_id") for t in task_trigger_tasks(payload)] if task_trigger else None,
         }
 
+        if gateway_target in ("main", "sigma"):
+            await _agent._send_flow(
+                request_id, "context_usage", target=gateway_target, chat_id=chat_id,
+                message_id=message_id, context=bot_message["context"],
+                tokens_usage=bot_message["tokens_usage"],
+            )
         await prod.send_and_wait("chat-messages", value=bot_message)
-        logging.info(f"Ответ в чат {chat_id}: {response_text[:50]}...")
+        log_event("request.answer", answer=fingerprint(response_text))
         logging.info(f"Время обработки: {time.perf_counter() - start:.4f}s")
 
     except asyncio.CancelledError:
@@ -789,6 +807,7 @@ async def lifespan(app: FastAPI):
     await db.init_agent_base_pool()
     # web_ui использует ТОТ ЖЕ прогретый db (иначе его локальный pool=None -> 503)
     _set_web_ui_db(db)
+    _set_memory_db(db)
     _set_web_ui_tasks(active_tasks)   # web_ui.stop_message видит тот же словарь задач
 
 
@@ -1033,7 +1052,7 @@ async def tg_transcribe(req: TgTranscribeRequest) -> TgTranscribeResponse:
 
 
 
-routers = [tg_router, web_router]
+routers = [tg_router, web_router, memory_router, steps_router]
 
 for rout in routers:
     app.include_router(rout)

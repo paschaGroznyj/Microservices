@@ -11,7 +11,9 @@ try:
     from langchain_gigachat.embeddings import GigaChatEmbeddings
 except ImportError:  # pragma: no cover
     GigaChatEmbeddings = None  # type: ignore[assignment]
-from langchain_openai import ChatOpenAI
+# Подкласс ChatOpenAI: сохраняет delta.reasoning_content из стрима.
+# Имя ChatOpenAI оставлено, чтобы тесты могли подменять фабрику через monkeypatch.
+from .reasoning_openai import ChatOpenAIWithReasoning as ChatOpenAI
 
 try:
     from langchain_anthropic import ChatAnthropic
@@ -203,7 +205,8 @@ def build_llm_from_spec(spec: ModelSpec):
         }
         if spec.reasoning:
             kwargs["thinking"] = dict(spec.reasoning)
-        return cls(**kwargs)
+        from .observability_http import instrument_llm
+        return instrument_llm(cls(**kwargs))
 
     model_kwargs: dict[str, Any] = {}
     if spec.prompt_cache:
@@ -219,7 +222,7 @@ def build_llm_from_spec(spec: ModelSpec):
         if extra_body:
             model_kwargs["extra_body"] = extra_body
 
-    return ChatOpenAI(
+    result = ChatOpenAI(
         model=spec.model,
         base_url=spec.base_url,
         api_key=CLOUD_LLM_ACCESS_KEY,
@@ -228,6 +231,8 @@ def build_llm_from_spec(spec: ModelSpec):
         stream_usage=True,
         model_kwargs=model_kwargs,
     )
+    from .observability_http import instrument_llm
+    return instrument_llm(result)
 
 
 def _make_cached_builder(spec: ModelSpec) -> Callable[[], Any]:
@@ -477,6 +482,28 @@ def get_router_api_config() -> dict:
         "music_model": ROUTER_MUSIC_MODEL,
         "avatar_model": ROUTER_AVATAR_MODEL,
     }
+
+
+def get_model_label(model_or_tag: str | None) -> str:
+    """Короткая подпись модели для UI (label из models_config.yaml).
+
+    Принимает тег/алиас ("designer", "claude") или реальное имя провайдера
+    ("anthropic/claude-opus-5.5"). Неизвестное имя -> последний сегмент после "/".
+    """
+    key = str(model_or_tag or "").strip()
+    if not key:
+        return ""
+    specs = list(_REGISTRY.models.values()) + [_REGISTRY.lite_primary]
+    specs += [fb for fb in _REGISTRY.lite_fallbacks if isinstance(fb, ModelSpec)]
+    tag = _REGISTRY.aliases.get(key, key)
+    for spec in specs:
+        if spec.tag == tag or spec.model == key:
+            return spec.label or spec.model.split("/")[-1]
+    low = key.lower()
+    for spec in specs:
+        if spec.model.lower() == low:
+            return spec.label or spec.model.split("/")[-1]
+    return key.split("/")[-1]
 
 
 def get_real_model_name(model_or_key) -> str:

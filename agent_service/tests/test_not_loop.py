@@ -39,6 +39,7 @@ def test_no_tools_history_and_prompt(setup):
     a.AGENT_MODELS["coder"] = llm
     res = run(nl.LLModel(a).process_query("привет", "r1", 56, "c1", "coder"))
 
+    assert res["context"]["tokens"] == res["tokens_usage"]["context_tokens"]
     assert res["message"] == "Привет, я MauDel"
     assert res["type_query"] == "model" and res["used_tools"] == [] and res["files_to_send"] == []
     assert res["tokens_usage"]["input_tokens"] == 120 and res["tokens_usage"]["total_tokens"] == 128

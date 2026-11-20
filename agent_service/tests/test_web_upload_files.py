@@ -95,3 +95,19 @@ def test_big_media_without_media_id_gets_local_path(client, monkeypatch):
     monkeypatch.setattr(web_ui.media_store, "put_media", no_put)
     text = _post(c, [("long.mp3", b"x" * 10)], ["file"])
     assert "transcribe_media с local_path=/app/generated_files/m1/long.mp3" in text
+
+
+def test_persist_0_keeps_file_off_disk_and_obs(client, monkeypatch):
+    """JSON Pro-разметки от gateway (json_pack.py): только media_store."""
+    c, stored = client
+    touched = []
+    monkeypatch.setattr(web_ui.os, "makedirs", lambda *a, **k: touched.append(a))
+    r = c.post("/web/upload_files",
+               data={"chat_id": "c1", "message_id": "m9", "user_id": "56",
+                     "file_modes": ["file"], "persist": "0"},
+               files=[("files", ("image_edit_request.json", b'{"a": 1}', "application/json"))])
+    assert r.status_code == 200, r.text
+    text = web_ui.pending_files["m9"]["text"]
+    assert touched == []
+    assert stored == [{"name": "image_edit_request.json", "size": 8, "kind": "file"}]
+    assert "media_id=mid1" in text and "path=" not in text

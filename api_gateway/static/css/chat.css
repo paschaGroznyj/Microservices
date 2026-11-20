@@ -301,6 +301,12 @@
   background: rgba(239, 68, 68, 0.12);
 }
 
+/* Кнопка «Ветка» в .message-actions: пока идёт запрос — приглушена */
+.action-button.fork-button.busy {
+  opacity: .45;
+  pointer-events: none;
+}
+
 .message-time {
   margin-left: 6px;
   font-family: var(--font-anthropic-sans);
@@ -2161,6 +2167,19 @@ pre {
 }
 .image-lightbox__dl svg,
 .image-lightbox__close svg { width: 18px; height: 18px; }
+
+/* Pro-разметка (media-pro.js) */
+.image-lightbox__pro {
+  display: inline-flex; align-items: center; gap: 6px; flex: none;
+  height: 32px; padding: 0 12px 0 10px; border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent, #cc785c) 50%, transparent);
+  background: color-mix(in srgb, var(--accent, #cc785c) 14%, transparent);
+  color: color-mix(in srgb, var(--accent, #cc785c) 55%, #fff); font: 600 13px/1 inherit; cursor: pointer;
+  transition: background 0.15s ease;
+}
+.image-lightbox__pro:hover { background: color-mix(in srgb, var(--accent, #cc785c) 26%, transparent); }
+.image-lightbox__pro svg { width: 18px; height: 18px; }
+.image-lightbox__pro[hidden] { display: none; }
 
 @media (max-width: 768px) {
   .image-lightbox {

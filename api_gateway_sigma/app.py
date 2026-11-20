@@ -29,11 +29,12 @@ from config import (
 from sigma_status_store import status_store
 import presence
 import editor_gw
-import os as _os_env
 import run_status
+import json_pack
 import cache_bust
 import reactions_bus
 import reads_bus
+import os
 
 import re
 
@@ -131,7 +132,7 @@ SERVICES = {
         "health_endpoint": "/health",
     },
     "sandbox": {
-        "url": _os_env.getenv("SANDBOX_SERVICE_URL", "http://agent_sandbox:8005"),
+        "url": os.getenv("SANDBOX_SERVICE_URL", "http://agent_sandbox:8005"),
         "health_endpoint": "/health",
     },
 }
@@ -260,6 +261,34 @@ def _extract_authentik_username(request: Request) -> Optional[str]:
     return None
 
 
+def sidebar_identity(user: dict, raw_name: Optional[str]) -> dict:
+    """Имя для сайдбара из X-Authentik-Name (только на рендер, в БД не пишем).
+
+    display_name: полное имя из Authentik, иначе username.
+    initials: две буквы для chat-av (Имя Фамилия -> ИФ, одно слово -> первые 2 буквы).
+    av_tone: тон палитры chat-av, тот же хеш, что toneOf(id) во фронте.
+    """
+    name = ""
+    if raw_name:
+        try:
+            name = raw_name.encode("latin-1").decode("utf-8").strip()
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            name = raw_name.strip()
+    if name.lower() == "unknown":
+        name = ""
+    username = str(user.get("username") or "")
+    display = name or username or "user"
+    words = [w for w in re.split(r"[\s._@-]+", display) if w]
+    if len(words) >= 2:
+        initials = words[0][0] + words[1][0]
+    else:
+        initials = (words[0] if words else display)[:2]
+    h = 0
+    for ch in (username or display):
+        h = (h * 31 + ord(ch)) & 0xFFFFFFFF
+    return {**user, "display_name": display, "initials": initials.upper(), "av_tone": h % 8}
+
+
 # Аутентификация через Gateway
 async def get_current_user(request: Request):
     """Получение текущего пользователя из заголовков Authentik или cookie"""
@@ -323,12 +352,12 @@ async def homepage(request: Request):
         if _has_authentik_headers(request):
             return templates.TemplateResponse("chat.html", {
                 "request": request,
-                "user": {
+                "user": sidebar_identity({
                     "username": _extract_authentik_username(request) or "user",
                     "user_id": None,
                     "authenticated": True,
                     "source": "authentik",
-                },
+                }, request.headers.get("X-Authentik-Name")),
             })
         # Не авторизован - показываем приветственную страницу
         return templates.TemplateResponse("login.html", {
@@ -339,7 +368,7 @@ async def homepage(request: Request):
     # Авторизован - показываем SPA чата
     return templates.TemplateResponse("chat.html", {
         "request": request,
-        "user": user
+        "user": sidebar_identity(user, request.headers.get("X-Authentik-Name"))
     })
 
 @app.get("/login-page", response_class=HTMLResponse)
@@ -1131,7 +1160,14 @@ async def send_message(request: Request):
 
     # Получаем данные из запроса
     data = await request.json()
-    logging.info(data)
+    # pasted_files (текст «файлом») бывает на сотни КБ — в лог только размеры.
+    _pf = data.get("pasted_files")
+    if isinstance(_pf, list) and _pf:
+        logging.info({**data, "pasted_files": [
+            {"name": (x or {}).get("name"), "chars": len(str((x or {}).get("text") or ""))}
+            for x in _pf if isinstance(x, dict)]})
+    else:
+        logging.info(data)
     raw_cmd = (data.get("message") or "").strip().lower()
     if raw_cmd in ("/chat-id", "/workspaces"):
         if raw_cmd == "/workspaces":
@@ -1168,6 +1204,11 @@ async def send_message(request: Request):
     data["request_id"] = request_id
     data["gateway_target"] = "sigma"
     data["timezone_name"] = (data.get("timezone_name") or request.headers.get("X-Timezone") or "Europe/Moscow").strip()
+    # Длинный ```json (Pro-разметка) и pasted_files (текст «файлом») → вложения
+    # в медиа-хранилище до Kafka и контекста агента.
+    packed = await json_pack.pack_message(
+        app.state.http_client, SERVICES['agent_service']['url'], data, user["user_id"]
+    )
     logger.info(f"Что летит при отправке сообщений {data['chat_id']}, type_query={data['type_query']}, {data['message']}")
 
     # SIGMA: WS-эхо убрано. Помечаем в store, что для этого чата ожидается
@@ -1197,6 +1238,8 @@ async def send_message(request: Request):
         except Exception:
             body = {}
         body["request_id"] = request_id
+        if packed:
+            body["packed"] = packed
         body["active_requests"] = await run_status.count_active_requests()
         return JSONResponse(content=body, status_code=response.status_code)
     except httpx.RequestError as e:
@@ -1354,8 +1397,8 @@ async def chat_flow(chat_id: str, request: Request):
 # Агент публикует reasoning/answer-чанки в канал stream:{request_id};
 # SSE-стрим подписан на него и релеит фреймы браузеру. Redis уже
 # используется в presence.py — тот же REDIS_URL.
-import os as _os
-_REDIS_URL = _os.getenv("REDIS_URL", "redis://redis:6379/0")
+
+_REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 _sse_redis = None
 _sse_redis_failed = False
 
@@ -1794,6 +1837,39 @@ async def delete_chat(chat_id: str, request: Request):
         raise HTTPException(status_code=502, detail=f"Chats service unreachable: {str(e)}")
 
 
+@app.post("/api/chats/{chat_id}/fork")
+async def fork_chat(chat_id: str, request: Request):
+    """Ветка чата от сообщения агента.
+
+    Тело {"point": "<chats.id или message_id>"}: в DOM у ответа агента data-id
+    бывает и тем и другим, chats_service сам найдёт строку в цепочке чата.
+    """
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    point = str((data or {}).get("point") or "").strip()
+    if not point or len(point) > 128:
+        raise HTTPException(status_code=400, detail="point required")
+
+    try:
+        response = await app.state.http_client.post(
+            f"{SERVICES['chats']['url']}/chat/fork",
+            json={"chat_id": chat_id, "point": point, "user_id": user["user_id"]}
+        )
+        return Response(
+            content=response.content,
+            status_code=response.status_code,
+            media_type="application/json"
+        )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Chats service unreachable: {str(e)}")
+
+
 @app.post("/api/chats/{chat_id}/rename")
 async def rename_chat(chat_id: str, request: Request):
     user = await get_current_user(request)
@@ -1870,6 +1946,62 @@ async def get_chats(request: Request):
     except Exception as e:
         logging.error(f"Ошибка получения чатов: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch chats")
+
+
+@app.get("/api/chats/page")
+async def get_chats_page(request: Request, limit: int = 40, cursor: str | None = None,
+                         include: str | None = None):
+    """Постраничный список чатов сайдбара. Прокси на chats_service /user/chats/page."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    params = {"limit": max(1, min(int(limit), 200))}
+    if cursor:
+        params["cursor"] = cursor
+    if include:
+        params["include"] = include
+    try:
+        response = await app.state.http_client.get(
+            f"{SERVICES['chats']['url']}/user/chats/page",
+            params=params,
+            headers={"X-User-Name": user["username"]},
+        )
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Chats service unreachable: {e}")
+    if response.status_code == 400:
+        raise HTTPException(status_code=400, detail="Bad cursor")
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail="Chats service error")
+    data = response.json()
+    chats = data.get("chats") if isinstance(data, dict) else None
+    if isinstance(chats, list) and chats:
+        ids = [str(c.get("id")) for c in chats if isinstance(c, dict) and c.get("id") is not None]
+        await run_status.remember_sidebar_ids(user["username"], ids)
+        running = set(await run_status.running_chats(ids))
+        for c in chats:
+            if isinstance(c, dict):
+                c["running"] = str(c.get("id")) in running
+    return data
+
+
+@app.post("/api/chats/running")
+async def get_chats_running(request: Request):
+    """Какие чаты из списка сейчас в работе (agent:running / agent:loop в Redis).
+    Тело: {"ids": [...]} до 200 id. Отвечает только про чаты, которые этот
+    пользователь получал через /api/chats/page."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    ids = body.get("ids") if isinstance(body, dict) else None
+    if not isinstance(ids, list):
+        raise HTTPException(status_code=400, detail="ids must be a list")
+    ids = [str(i)[:64] for i in ids[:run_status.SIDEBAR_IDS_MAX] if isinstance(i, (str, int)) and not isinstance(i, bool)]
+    running = await run_status.running_chats(ids, owner=user["username"])
+    return {"running": running}
 
 
 @app.get("/api/chats/search")
@@ -2814,6 +2946,12 @@ async def _sigma_task_mark_running(chat_id, request_id):
 
 _task_gw.bind(push=_sigma_task_push, register=_sigma_task_register, mark_running=_sigma_task_mark_running)
 app.include_router(_task_gw.router)
+
+# ── ПАМЯТЬ ЧАТА (memory_gw.py): журнал, саммари, контекст для полоски под полем ввода ──
+import memory_gw as _memory_gw
+_memory_gw.bind(get_client=lambda: app.state.http_client,
+                agent_url=SERVICES['agent_service']['url'], get_user=get_current_user)
+app.include_router(_memory_gw.router)
 
 
 @app.get("/api/chats/{chat_id}/tasks/stream")

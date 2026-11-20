@@ -31,6 +31,13 @@ class FakeTasks:
         self.rows[ev["task_id"]] = row
         return self.mid
 
+    async def cancel_orphan(self, task_id, error=None):
+        r = self.rows.get(task_id)
+        if not r or r["status"] not in ("pending", "running"):
+            return None
+        r.update(status="cancelled", error=error, finished_at=NOW, seq=r["seq"] + 1)
+        return dict(r)
+
     async def chat_state(self, chat_id, max_age_s, gateways):
         rows = [dict(r) for r in self.rows.values()
                 if r["chat_id"] == chat_id and r["triggered_at"] is None and r["notify_agent"]
@@ -410,3 +417,36 @@ def test_poll_throttle():
     assert run(c.tick()) == {}
     t[0] += 2
     assert run(c.tick()) == {"c1": "busy"}
+
+
+# ---------- отмена задачи, потерянной песочницей ----------
+
+def test_orphan_cancel_closes_running_card_and_pushes():
+    c, posts = make()
+    run(c.handle_event(ev(task_id="t1", seq=3, status="running", gw="sigma")))
+    posts.clear()
+    res = run(c.handle_event({"event": "orphan_cancel", "task_id": "t1", "status": "cancelled",
+                              "error": "Песочница перезапускалась, задача прервана"}))
+    assert res["stored"] and res["pushed"] and not res["trigger"]
+    assert c.tasks.rows["t1"]["status"] == "cancelled"
+    url, body = posts[-1]
+    assert url.endswith("/internal/task_event") and "7010" in url
+    assert body["task"]["status"] == "cancelled" and body["chat_id"] == "c1"
+    assert not triggers(c)
+
+
+def test_orphan_cancel_ignores_finished_and_unknown():
+    c, posts = make()
+    run(c.handle_event(done(task_id="t1")))
+    posts.clear()
+    assert not run(c.handle_event({"event": "orphan_cancel", "task_id": "t1"}))["stored"]
+    assert not run(c.handle_event({"event": "orphan_cancel", "task_id": "nope"}))["stored"]
+    assert c.tasks.rows["t1"]["status"] == "completed" and not posts
+
+
+def test_cancel_stages_marks_only_active():
+    from app.db.tasks_db import cancel_stages
+    out = cancel_stages([{"title": "a", "status": "done"}, {"title": "b", "status": "active"},
+                         {"title": "c", "status": "pending"}], 5.0)
+    assert [s["status"] for s in out] == ["done", "cancelled", "pending"]
+    assert out[1]["finished_at"] == 5.0

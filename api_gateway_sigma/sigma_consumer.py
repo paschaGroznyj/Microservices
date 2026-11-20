@@ -99,6 +99,10 @@ class SigmaConsumer:
                 "files": _sanitize_files(attached),
                 "tool_trace": payload.get("tool_trace"),
                 "agent_model": payload.get("agent_model"),
+                # контекст последнего шага для строки памяти (MemoryPanel.update)
+                "context": payload.get("context"),
+                "tokens_usage": payload.get("tokens_usage"),
+                "request_id": payload.get("request_id"),
             }
             self._store.mark_done(chat_id, message)
             try:

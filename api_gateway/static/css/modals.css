@@ -645,3 +645,17 @@
 
 @keyframes animateSpin { to { transform: rotate(360deg); } }
 .animate-spin { animation: animateSpin .7s linear infinite; }
+
+/* ── Уровень пользователя в профиле ── */
+.hero-level { --lv: var(--text-muted); margin-top: 8px; width: max-content; min-width: 200px; max-width: 100%; }
+.hero-level[hidden] { display: none; }
+.hero-level-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.lvl-chip {
+  font-size: .72rem; font-weight: 600; white-space: nowrap;
+  color: color-mix(in srgb, var(--lv) 75%, var(--text-primary));
+  background: color-mix(in srgb, var(--lv) 15%, transparent);
+  padding: 2px 8px; border-radius: 99px;
+}
+.lvl-next { font-size: .7rem; color: var(--text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.lvl-track { margin-top: 6px; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--text-primary) 10%, transparent); overflow: hidden; }
+.lvl-fill { height: 100%; width: 0; border-radius: 2px; background: var(--lv); transition: width .4s ease; }

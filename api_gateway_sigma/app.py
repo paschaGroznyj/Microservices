@@ -261,6 +261,34 @@ def _extract_authentik_username(request: Request) -> Optional[str]:
     return None
 
 
+def sidebar_identity(user: dict, raw_name: Optional[str]) -> dict:
+    """Имя для сайдбара из X-Authentik-Name (только на рендер, в БД не пишем).
+
+    display_name: полное имя из Authentik, иначе username.
+    initials: две буквы для chat-av (Имя Фамилия -> ИФ, одно слово -> первые 2 буквы).
+    av_tone: тон палитры chat-av, тот же хеш, что toneOf(id) во фронте.
+    """
+    name = ""
+    if raw_name:
+        try:
+            name = raw_name.encode("latin-1").decode("utf-8").strip()
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            name = raw_name.strip()
+    if name.lower() == "unknown":
+        name = ""
+    username = str(user.get("username") or "")
+    display = name or username or "user"
+    words = [w for w in re.split(r"[\s._@-]+", display) if w]
+    if len(words) >= 2:
+        initials = words[0][0] + words[1][0]
+    else:
+        initials = (words[0] if words else display)[:2]
+    h = 0
+    for ch in (username or display):
+        h = (h * 31 + ord(ch)) & 0xFFFFFFFF
+    return {**user, "display_name": display, "initials": initials.upper(), "av_tone": h % 8}
+
+
 # Аутентификация через Gateway
 async def get_current_user(request: Request):
     """Получение текущего пользователя из заголовков Authentik или cookie"""
@@ -324,12 +352,12 @@ async def homepage(request: Request):
         if _has_authentik_headers(request):
             return templates.TemplateResponse("chat.html", {
                 "request": request,
-                "user": {
+                "user": sidebar_identity({
                     "username": _extract_authentik_username(request) or "user",
                     "user_id": None,
                     "authenticated": True,
                     "source": "authentik",
-                },
+                }, request.headers.get("X-Authentik-Name")),
             })
         # Не авторизован - показываем приветственную страницу
         return templates.TemplateResponse("login.html", {
@@ -340,7 +368,7 @@ async def homepage(request: Request):
     # Авторизован - показываем SPA чата
     return templates.TemplateResponse("chat.html", {
         "request": request,
-        "user": user
+        "user": sidebar_identity(user, request.headers.get("X-Authentik-Name"))
     })
 
 @app.get("/login-page", response_class=HTMLResponse)

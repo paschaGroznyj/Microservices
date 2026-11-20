@@ -121,7 +121,15 @@
 /* Профиль */
 .sidebar .profile-section { border-top-color: var(--sb-line); }
 .sidebar .avatar { width: 24px; height: 24px; font-size: 11px; font-weight: 600; }
-.sidebar .profile-name { font-size: 13px; font-weight: 400; }
+/* имя профиля в стиле пунктов навигации (.nav-item / .gc-nav-label) */
+.sidebar .profile-name {
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: -0.005em;
+  line-height: 1.3;
+  color: var(--text-secondary);
+}
+.sidebar .profile-button:hover .profile-name { color: var(--text-primary); }
 .sidebar .chat-search-btn { color: var(--sb-icon); }
 .sidebar .chat-search-btn svg { width: 16px; height: 16px; }
 .sidebar .chat-search-btn:hover { background: var(--sb-hover); color: var(--text-primary); }

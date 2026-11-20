@@ -178,7 +178,7 @@
 .sidebar #chats-section-toggle .section-chevron { order: 2; }
 .sidebar .sec-n:empty { display: none; }
 /* аватар профиля в стиле аватаров чатов */
-.sidebar .profile-button .profile-av { flex-shrink: 0; text-transform: uppercase; }
+.sidebar .profile-button .profile-av { flex-shrink: 0; text-transform: uppercase; font-size: 10.5px; letter-spacing: 0; }
 
 /* ── Активный чат: полоска accent слева, внутри скругления строки ── */
 .sidebar .chat-item.chat-item--c { position: relative; }
@@ -249,3 +249,31 @@
 @media (prefers-reduced-motion: reduce) {
   .sidebar .chat-run-dots i { animation: none; opacity: .8; }
 }
+
+/* ── Уровень пользователя: бейдж на углу аватара профиля ── */
+.sidebar .profile-av-wrap { position: relative; flex-shrink: 0; display: inline-flex; }
+.sidebar .lvl-badge {
+  --lv: var(--text-muted);
+  position: absolute;
+  right: -5px;
+  bottom: -4px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  font: 600 9px/1 Inter, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  background: var(--lv);
+  box-shadow: 0 0 0 2px var(--sidebar-bg);
+  pointer-events: none;
+}
+.sidebar .lvl-badge[hidden] { display: none; }
+.lvl-badge[data-level="1"], .hero-level[data-level="1"] { --lv: #8a8580; }
+.lvl-badge[data-level="2"], .hero-level[data-level="2"] { --lv: #3f9152; }
+.lvl-badge[data-level="3"], .hero-level[data-level="3"] { --lv: #3f80b0; }
+.lvl-badge[data-level="4"], .hero-level[data-level="4"] { --lv: #8a5ac0; }
+.lvl-badge[data-level="5"], .hero-level[data-level="5"] { --lv: #c08a16; }

@@ -168,9 +168,9 @@
             <!-- PROFILE -->
             <div class="profile-section">
                 <button class="profile-button" id="profile-btn">
-                    <span class="chat-av profile-av" aria-hidden="true">{{ user.username[0]|upper }}</span>
+                    <span class="profile-av-wrap"><span class="chat-av profile-av" data-tone="{{ user.av_tone if user.av_tone is defined else 0 }}" aria-hidden="true">{{ user.initials if user.initials is defined else (user.username or '?')[:2]|upper }}</span><span class="lvl-badge" id="sb-level" hidden></span></span>
                     <div class="profile-info">
-                        <div class="profile-name">{{ user.username }}</div>
+                        <div class="profile-name" title="{{ user.display_name if user.display_name is defined else user.username }}">{{ user.display_name if user.display_name is defined else user.username }}</div>
                     </div>
                 </button>
                 <button class="chat-search-btn" id="chat-search-btn" title="Поиск по чатам" aria-label="Поиск по чатам">
@@ -497,6 +497,10 @@
                     <div class="hero-meta">
                         <span class="joined-badge" id="modal-joined">с янв 2024</span>
                     </div>
+                    <div class="hero-level" id="modal-level" hidden>
+                        <div class="hero-level-top"><span class="lvl-chip" id="modal-level-chip"></span><span class="lvl-next" id="modal-level-next"></span></div>
+                        <div class="lvl-track"><div class="lvl-fill" id="modal-level-fill"></div></div>
+                    </div>
                 </div>
             </div>
             <div>
@@ -747,6 +751,7 @@
 {% if is_sigma %}<script src="/static/js/modalWindow.js"></script>{% endif %}
 <script src="/static/js/mobile.js"></script>
 <script src="/static/js/mode_modal_info.js"></script>
+<script src="/static/js/userLevel.js"></script>
 <script src="/static/js/profileModal.js"></script>
 <script src="/static/js/graph.js"></script>
 <script src="/static/js/animations.js"></script>

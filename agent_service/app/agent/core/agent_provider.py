@@ -484,6 +484,28 @@ def get_router_api_config() -> dict:
     }
 
 
+def get_model_label(model_or_tag: str | None) -> str:
+    """Короткая подпись модели для UI (label из models_config.yaml).
+
+    Принимает тег/алиас ("designer", "claude") или реальное имя провайдера
+    ("anthropic/claude-opus-5.5"). Неизвестное имя -> последний сегмент после "/".
+    """
+    key = str(model_or_tag or "").strip()
+    if not key:
+        return ""
+    specs = list(_REGISTRY.models.values()) + [_REGISTRY.lite_primary]
+    specs += [fb for fb in _REGISTRY.lite_fallbacks if isinstance(fb, ModelSpec)]
+    tag = _REGISTRY.aliases.get(key, key)
+    for spec in specs:
+        if spec.tag == tag or spec.model == key:
+            return spec.label or spec.model.split("/")[-1]
+    low = key.lower()
+    for spec in specs:
+        if spec.model.lower() == low:
+            return spec.label or spec.model.split("/")[-1]
+    return key.split("/")[-1]
+
+
 def get_real_model_name(model_or_key) -> str:
     """Возвращает точное название модели из провайдера (например 'openai/gpt-5.4')."""
     if hasattr(model_or_key, "model_name") and getattr(model_or_key, "model_name"):

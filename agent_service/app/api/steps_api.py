@@ -18,6 +18,10 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from api.memory_api import _check_ownership
+try:
+    from agent.core.agent_provider import get_model_label
+except ImportError:  # pragma: no cover - запуск из корня репозитория
+    from app.agent.core.agent_provider import get_model_label
 import api.memory_api as _mem
 
 steps_router = APIRouter()
@@ -52,6 +56,7 @@ def _run(row) -> dict[str, Any]:
         "chat_id": row["chat_id"],
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
         "model": row["model_type"],
+        "model_label": get_model_label(row["model_type"]),
         "steps": row["agent_steps"],
         "tool_calls": len(calls),
         "failed": sum(1 for c in calls if c.get("ok") is False),

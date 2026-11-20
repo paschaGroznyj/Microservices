@@ -192,9 +192,11 @@
 .mm-tsum{display:flex;gap:16px;font-size:12.5px;color:var(--text-secondary);margin:2px 0 8px}
 .mm-tsum b{color:var(--text-primary);font-weight:600;font-variant-numeric:tabular-nums;margin-right:2px}
 .mm-tsum .mm-terr,.mm-tsum .mm-terr b{color:var(--danger)}
-.mm-trows{flex-direction:column;gap:4px}
-.mm-trows .mm-crow{display:flex;justify-content:space-between;align-items:center}
-.mm-tdot{width:6px!important;height:6px!important;border-radius:50%!important;background:color-mix(in srgb,var(--text-secondary) 60%,transparent)}
+/* Шаги: до 3 тулов одна колонка во всю ширину, с 4-х — две колонки сеткой */
+.mm-trows{display:flex;flex-direction:column;gap:5px}
+.mm-trows.is-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:none;grid-auto-flow:row;gap:5px 28px}
+.mm-trows .mm-crow{display:flex;justify-content:space-between;align-items:center;gap:12px}
+@media (max-width:600px){.mm-trows.is-grid{grid-template-columns:1fr}}
 .mm-cmore{color:var(--text-muted)}
 .mm-tseq{display:flex;flex-wrap:wrap;gap:4px;margin-top:9px}
 .mm-ts{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:5px;font-size:10.5px;color:var(--text-secondary);background:color-mix(in srgb,var(--text-primary) 6%,transparent);font-variant-numeric:tabular-nums}

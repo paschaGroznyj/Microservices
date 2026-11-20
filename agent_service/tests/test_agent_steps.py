@@ -47,3 +47,12 @@ def test_steps_run_shape():
     assert r["steps"] == 3 and r["tool_calls"] == 3 and r["failed"] == 1
     assert r["tools"] == [{"name": "add", "count": 2}, {"name": "mul", "count": 1}]
     assert [s["step"] for s in r["by_step"]] == [1, 2]
+
+
+def test_model_label_from_config():
+    from agent.core.agent_provider import get_model_label
+    assert get_model_label("anthropic/claude-opus-5.5") == "Claude"
+    assert get_model_label("designer") == "Claude"
+    assert get_model_label("openai/gpt-6.1-sol") == "GPT"
+    assert get_model_label("vendor/unknown-x") == "unknown-x"
+    assert get_model_label(None) == ""

@@ -28,8 +28,26 @@ CREATE TABLE IF NOT EXISTS telegram_chat_settings (
     orchestrator_context_n INT NOT NULL DEFAULT 6,
     proactive_enabled      BOOLEAN NOT NULL DEFAULT TRUE,
     timezone_name          TEXT NOT NULL DEFAULT 'Europe/Moscow',
+    current_session_id     TEXT,
     updated_at             TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+
+-- CREATE TABLE IF NOT EXISTS does not upgrade existing deployments.
+ALTER TABLE telegram_chat_settings
+    ADD COLUMN IF NOT EXISTS current_session_id TEXT;
+
+-- UUID or the group's own physical ID (pre-session history); upgrade the UUID column.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'telegram_chat_settings'
+          AND column_name = 'current_session_id' AND data_type = 'uuid'
+    ) THEN
+        ALTER TABLE telegram_chat_settings
+            ALTER COLUMN current_session_id TYPE TEXT USING current_session_id::text;
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS telegram_chat_members (
     chat_id    TEXT NOT NULL
@@ -111,8 +129,26 @@ CREATE TABLE IF NOT EXISTS max_chat_settings (
     orchestrator_context_n INTEGER DEFAULT 8,
     proactive_enabled      BOOLEAN NOT NULL DEFAULT TRUE,
     timezone_name          TEXT NOT NULL DEFAULT 'Europe/Moscow',
+    current_session_id     TEXT,
     updated_at             TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+
+-- CREATE TABLE IF NOT EXISTS does not upgrade existing deployments.
+ALTER TABLE max_chat_settings
+    ADD COLUMN IF NOT EXISTS current_session_id TEXT;
+
+-- UUID or the group's own physical ID (pre-session history); upgrade the UUID column.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'max_chat_settings'
+          AND column_name = 'current_session_id' AND data_type = 'uuid'
+    ) THEN
+        ALTER TABLE max_chat_settings
+            ALTER COLUMN current_session_id TYPE TEXT USING current_session_id::text;
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS max_triggers (
     id               SERIAL PRIMARY KEY,

@@ -628,6 +628,36 @@ class TgSettingsIn(BaseModel):
     timezone_name: str | None = None
 
 
+class CurrentSessionIn(BaseModel):
+    session_id: str | None = None
+    only_if_unset: bool = False
+
+
+class CurrentSessionOut(BaseModel):
+    session_id: str | None
+
+
+def _session_candidate(chat_id: str, raw: str | None) -> str:
+    """UUID сессии или физический ID этой же группы.
+
+    Физический ID — корневая история группы, созданная до появления сессий;
+    он же значение по умолчанию, когда кандидат не передан. ID другой
+    группы и произвольные строки отклоняются до записи в БД.
+    """
+    if raw is None:
+        # Миграция: корневая история группы. Новые UUID создаёт только меню (/chat/new).
+        return str(chat_id)
+    try:
+        return str(uuid.UUID(raw))
+    except ValueError:
+        pass
+    if raw == str(chat_id):
+        return raw
+    raise HTTPException(
+        status_code=422, detail="session_id must be a UUID or this chat's own ID",
+    )
+
+
 @app.get("/tg/chats")
 async def tg_list_chats(added_by_user_id: int | None = None):
     """Список встроенных активных чатов вместе с настройками — для CatchPM UI.
@@ -670,6 +700,23 @@ async def tg_remove_chat(chat_id: str):
 async def tg_allowed():
     """Список активных chat_id — telegram_service кэширует в Redis."""
     return {"chat_ids": await tg_db.list_active_chat_ids()}
+
+
+@app.get("/tg/session/{chat_id}", response_model=CurrentSessionOut)
+async def tg_get_current_session(chat_id: str):
+    session = await tg_db.get_current_session(chat_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Chat settings not found")
+    return session
+
+
+@app.post("/tg/session/{chat_id}", response_model=CurrentSessionOut)
+async def tg_set_current_session(chat_id: str, body: CurrentSessionIn):
+    candidate = _session_candidate(chat_id, body.session_id)
+    session = await tg_db.set_current_session(chat_id, candidate, body.only_if_unset)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Chat settings not found")
+    return session
 
 
 @app.get("/tg/settings/{chat_id}")
@@ -1020,6 +1067,23 @@ async def max_upsert_member(body: MaxMemberIn):
 async def max_random_member(chat_id: str):
     m = await max_db.get_random_member(chat_id)
     return {"member": m}
+
+
+@app.get("/max/session/{chat_id}", response_model=CurrentSessionOut)
+async def max_get_current_session(chat_id: str):
+    session = await max_db.get_current_session(chat_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Chat settings not found")
+    return session
+
+
+@app.post("/max/session/{chat_id}", response_model=CurrentSessionOut)
+async def max_set_current_session(chat_id: str, body: CurrentSessionIn):
+    candidate = _session_candidate(chat_id, body.session_id)
+    session = await max_db.set_current_session(chat_id, candidate, body.only_if_unset)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Chat settings not found")
+    return session
 
 
 @app.get("/max/settings/{chat_id}")

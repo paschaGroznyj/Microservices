@@ -58,6 +58,7 @@ from .judge import judge_final_answer
 from .supervisor import run_supervisor
 from .context_compactor import compact_messages, TOKEN_SOFT_LIMIT
 from .common.tool_output import clip_text, coerce_tool_result, tool_content
+from .common.tool_call_meta import tool_call_record, tool_failed
 from .core.token_usage import (
     normalize_usage, add_usage, apply_anthropic_cache_control, append_to_system_tail,
 )
@@ -1896,6 +1897,7 @@ class HarnessAgent:
             # и все вызовы тулов в цикле: пишутся в chats.agent_steps / chats.tool_calls.
             agent_steps = 0
             tool_calls_log: list[dict] = []
+            run_t0 = time.monotonic()  # отсчёт t0 вызовов тулов от начала хода
             tool_trace: list[str] = []
             AUTO_SEND_FILE_TOOLS = {"send_file_to_user"}
             files_to_send = []
@@ -2422,16 +2424,22 @@ class HarnessAgent:
                     tool_calls = response.tool_calls
                     # logging.info(response)
                     tool_names = [tc['name'] for tc in tool_calls]
+                    tool_timing: list[tuple[int, int] | None] = [None] * len(tool_calls)
+
+                    async def _timed(k, tc):
+                        t = time.monotonic()
+                        try:
+                            return await self._invoke_tool(tools_by_name, tc, request_id)
+                        finally:
+                            tool_timing[k] = (int((t - run_t0) * 1000), int((time.monotonic() - t) * 1000))
+
                     tool_results = await asyncio.gather(
-                        *[
-                            self._invoke_tool(tools_by_name, tc, request_id)
-                            for tc in tool_calls
-                        ],
+                        *[_timed(k, tc) for k, tc in enumerate(tool_calls)],
                         return_exceptions=True,
                     )
                     # logging.info(f"Результаты тулзов: {tool_results}")
 
-                    for tc, tr in zip(tool_calls, tool_results):
+                    for tc_i, (tc, tr) in enumerate(zip(tool_calls, tool_results)):
                         tool_name = tc["name"]
                         used_tools.append(tool_name)
                         # logging.info(f"РЕЗУЛЬАТЫ ТУЛЗЫ: {tr}")
@@ -2478,12 +2486,17 @@ class HarnessAgent:
                             content = tool_content(tr, MAX_TOOL_MSG_CHARS)
 
                         messages.append(ToolMessage(content=content, tool_call_id=tc["id"]))
-                        tool_calls_log.append({
-                            "step": agent_steps,
-                            "name": tool_name,
-                            "ok": not isinstance(tr, Exception)
-                            and not (isinstance(result_dict, dict) and result_dict.get("ok") is False),
-                        })
+                        tool_calls_log.append(tool_call_record(
+                            step=agent_steps,
+                            name=tool_name,
+                            ok=not tool_failed(tool_name, tr, result_dict),
+                            i=tc_i,
+                            par=len(tool_calls),
+                            timing=tool_timing[tc_i],
+                            args=tc.get("args"),
+                            result=tr,
+                            result_dict=result_dict,
+                        ))
 
                         summary = _summarize_tool_call(tc, tr)
                         if summary:

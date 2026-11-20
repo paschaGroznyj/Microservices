@@ -34,7 +34,52 @@ def test_failed_tool_marked(monkeypatch):
     h.add_tool("bad", result="{'ok': False, 'error': 'x'}")
     h.models["coder"].script = [ai("", calls=[("bad", {})]), ai("ok")]
     r = h.run("go")
-    assert r["tool_calls"] == [{"step": 1, "name": "bad", "ok": False}]
+    c = r["tool_calls"][0]
+    assert {k: c[k] for k in ("step", "name", "ok", "i", "par")} == {"step": 1, "name": "bad", "ok": False, "i": 0, "par": 1}
+    assert c["err"] == "x" and c["ms"] >= 0 and c["t0"] >= 0 and "hint" not in c
+
+
+def test_parallel_calls_meta(monkeypatch):
+    h = Harness(monkeypatch)
+    h.add_tool("sh", result="{'ok': True}")
+    h.add_tool("q", result="1")
+    h.models["coder"].script = [
+        ai("", calls=[("sh", {"commands": "git push  https://u:s3cr3t@github.com/x  \n&& echo ok"}), ("q", {"query": "курс золота"})]),
+        ai("", calls=[("q", {"query": "слово " * 40})]),
+        ai("done"),
+    ]
+    calls = h.run("go")["tool_calls"]
+    assert [(c["step"], c["i"], c["par"]) for c in calls] == [(1, 0, 2), (1, 1, 2), (2, 0, 1)]
+    assert calls[0]["hint"] == "git push https://u:***@github.com/x && echo ok"
+    assert calls[1]["hint"] == "курс золота"
+    assert len(calls[2]["hint"]) == 80 and calls[2]["hint"].endswith("…")
+    assert all(isinstance(c["t0"], int) and isinstance(c["ms"], int) for c in calls)
+    assert calls[2]["t0"] >= calls[0]["t0"]
+
+
+def test_tool_exception_err(monkeypatch):
+    h = Harness(monkeypatch)
+    h.add_tool("boom", exc=RuntimeError("disk full"))
+    h.models["coder"].script = [ai("", calls=[("boom", {"path": "/tmp/a"})]), ai("ok")]
+    c = h.run("go")["tool_calls"][0]
+    assert c["ok"] is False and "disk full" in c["err"] and c["hint"] == "/tmp/a"
+
+
+def test_unknown_tool_is_error(monkeypatch):
+    h = Harness(monkeypatch)
+    h.models["coder"].script = [ai("", calls=[("ghost", {})]), ai("ok")]
+    c = h.run("go")["tool_calls"][0]
+    assert c["ok"] is False and "не найден" in c["err"]
+
+
+def test_hint_redaction_and_split_fields():
+    from agent.common.tool_call_meta import tool_call_hint, redact
+    assert tool_call_hint({"__fg_sql_001": "LIMIT 1", "__fg_sql_000": "SELECT 1 "}) == "SELECT 1 LIMIT 1"
+    assert "ghp_" not in tool_call_hint({"commands": "export T=ghp_" + "A" * 36})
+    assert redact("password=hunter2 x") == "password=*** x"
+    assert redact("Authorization: Bearer abcdefghijkl") == "Authorization: ***"
+    assert tool_call_hint({}) == "" and tool_call_hint(None) == ""
+    assert tool_call_hint({"n": 3, "note": "  first\n line "}) == "first line"
 
 
 def test_steps_run_shape():
@@ -47,6 +92,19 @@ def test_steps_run_shape():
     assert r["steps"] == 3 and r["tool_calls"] == 3 and r["failed"] == 1
     assert r["tools"] == [{"name": "add", "count": 2}, {"name": "mul", "count": 1}]
     assert [s["step"] for s in r["by_step"]] == [1, 2]
+    assert r["by_step"][0]["calls"][0] == {"name": "add", "ok": True}   # старая запись: только name/ok
+
+
+def test_steps_run_extended_fields():
+    import datetime
+    from api.steps_api import _run
+    row = {"id": 8, "message_id": "m", "chat_id": "c", "created_at": datetime.datetime(2026, 11, 20),
+           "model_type": "gpt", "agent_steps": 2,
+           "tool_calls": '[{"step":1,"name":"sh","ok":false,"i":0,"par":2,"t0":10,"ms":1200,"hint":"ls","err":"rc 1"},'
+                         '{"step":1,"name":"q","ok":true,"i":1,"par":2,"t0":11,"ms":300,"hint":"","x":1}]'}
+    calls = _run(row)["by_step"][0]["calls"]
+    assert calls[0] == {"name": "sh", "ok": False, "hint": "ls", "err": "rc 1", "t0": 10, "ms": 1200, "i": 0, "par": 2}
+    assert calls[1] == {"name": "q", "ok": True, "t0": 11, "ms": 300, "i": 1, "par": 2}
 
 
 def test_model_label_from_config():

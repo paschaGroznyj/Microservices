@@ -112,7 +112,9 @@ services:
       SANDBOX_SERVICE_URL: ${SANDBOX_SERVICE_URL}
       # Request-scoped logs; captures opt-in per chat and contain private user data.
       AGENT_LOG_LEVEL: ${AGENT_LOG_LEVEL:-INFO}
-      AGENT_LOG_JSONL: ${AGENT_LOG_JSONL:-/tmp/agent-logs/events.jsonl}
+      AGENT_LOG_DIR: ${AGENT_LOG_DIR:-/tmp/agent-logs}
+      AGENT_LOG_RETENTION_DAYS: ${AGENT_LOG_RETENTION_DAYS:-7}
+      AGENT_LOG_MAX_TOTAL_BYTES: ${AGENT_LOG_MAX_TOTAL_BYTES:-524288000}
       AGENT_DIAGNOSTICS_CHATS: ${AGENT_DIAGNOSTICS_CHATS:-}
       AGENT_DIAGNOSTICS_DIR: ${AGENT_DIAGNOSTICS_DIR:-/tmp/agent-diagnostics}
       AGENT_DIAGNOSTICS_MAX_BYTES: ${AGENT_DIAGNOSTICS_MAX_BYTES:-2097152}
@@ -126,6 +128,8 @@ services:
     volumes:
       - ./agent_service:/app
       - ./agent_service/sandbox:/sandbox:rw
+      - ./agent-logs:/tmp/agent-logs:rw
+      - ./agent-diagnostics:/tmp/agent-diagnostics:rw
     restart: unless-stopped
     networks:
       - catchPM

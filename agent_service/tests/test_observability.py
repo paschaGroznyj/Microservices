@@ -14,6 +14,7 @@ from agent.core.observability_http import instrument_async_client, instrument_ll
 def isolated_context(monkeypatch, tmp_path):
     token = obs.LOG_CONTEXT.set({})
     monkeypatch.setenv('AGENT_DIAGNOSTICS_DIR', str(tmp_path / 'raw'))
+    monkeypatch.delenv('AGENT_LOG_DIR', raising=False)
     monkeypatch.setenv('AGENT_LOG_JSONL', str(tmp_path / 'events.jsonl'))
     monkeypatch.delenv('AGENT_DIAGNOSTICS_CHATS', raising=False)
     yield
@@ -177,11 +178,14 @@ def test_jsonl_rotation_is_private(tmp_path, monkeypatch):
         obs.configure_logging(); obs.configure_logging()
         handlers = [h for h in root.handlers if getattr(h, '_agent_jsonl', False)]
         assert len(handlers) == 1
-        h = handlers[0]; h.maxBytes = 1024
+        h = handlers[0]; h.max_bytes = 1024
         obs.LOG_CONTEXT.set({'chat_id': 'c', 'query_text': 'hidden'})
         for i in range(40):
             obs.log_event('check', n=i, note='x'*50)
-        for p in (tmp_path/'events.jsonl').parent.glob('events.jsonl*'):
+        files = list(tmp_path.glob('??_??_????.jsonl'))
+        assert files
+        assert sum(p.stat().st_size for p in files) <= 1024
+        for p in files:
             assert p.stat().st_mode & 0o777 == 0o600
             for line in p.read_text().splitlines():
                 value=json.loads(line); assert value['chat_id']=='c'

@@ -1,0 +1,4 @@
+
+# Private runtime logs: never commit or bake into images.
+**/agent-logs/
+**/agent-diagnostics/

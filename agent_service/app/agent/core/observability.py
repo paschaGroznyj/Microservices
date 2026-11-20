@@ -7,7 +7,7 @@ import hashlib
 import inspect
 import json
 import logging
-from logging.handlers import RotatingFileHandler
+from .event_log import DailyEventHandler
 import os
 from pathlib import Path
 import re
@@ -69,13 +69,6 @@ class ConsoleFormatter(logging.Formatter):
         return f'{self.formatTime(record)} [{record.levelname}] {tags} {getattr(record, "agent_message", record.getMessage())}{detail}'
 
 
-class PrivateRotatingFileHandler(RotatingFileHandler):
-    def _open(self):
-        fd = os.open(self.baseFilename, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
-        os.chmod(self.baseFilename, 0o600)
-        return os.fdopen(fd, 'a', encoding=self.encoding)
-
-
 class JSONFormatter(logging.Formatter):
     def format(self, record):
         data = {'ts': datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
@@ -96,23 +89,21 @@ def configure_logging():
     for handler in root.handlers:
         if not any(isinstance(f, ContextFilter) for f in handler.filters):
             handler.addFilter(ContextFilter())
-        if not isinstance(handler, RotatingFileHandler) and handler.__class__ is logging.StreamHandler:
+        if handler.__class__ is logging.StreamHandler:
             handler.setFormatter(ConsoleFormatter())
-    path = os.getenv('AGENT_LOG_JSONL', '/tmp/agent-logs/events.jsonl')
+    # Legacy AGENT_LOG_JSONL remains a directory locator (basename is ignored).
+    legacy = os.getenv('AGENT_LOG_JSONL')
+    path = os.getenv('AGENT_LOG_DIR', str(Path(legacy).parent) if legacy else '/tmp/agent-logs')
     if path and not any(getattr(h, '_agent_jsonl', False) for h in root.handlers):
         try:
-            p = Path(path)
-            p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            # File is private from its first open, not chmod after writing.
-            fd = os.open(p, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
-            os.close(fd)
-            os.chmod(p, 0o600)
-            h = PrivateRotatingFileHandler(p, maxBytes=10 * 1024 * 1024, backupCount=3, encoding='utf-8', delay=True)
+            h = DailyEventHandler(path,
+                days=int(os.getenv('AGENT_LOG_RETENTION_DAYS', '7')),
+                max_bytes=int(os.getenv('AGENT_LOG_MAX_TOTAL_BYTES', str(500 * 1024 * 1024))))
             h._agent_jsonl = True
             h.addFilter(ContextFilter())
             h.setFormatter(JSONFormatter())
             root.addHandler(h)
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             log_event('logging.file_unavailable', error_type=type(exc).__name__)
     logging.getLogger('httpx').setLevel(logging.WARNING)
     logging.getLogger('httpcore').setLevel(logging.WARNING)

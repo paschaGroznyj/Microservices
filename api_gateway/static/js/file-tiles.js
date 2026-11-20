@@ -74,7 +74,7 @@
         const b = Number(bytes);
         if (!isFinite(b) || b <= 0) return '';
         if (b < 1024) return `${b} Б`;
-        if (b < 1024 * 1024) return `${Math.round(b / 1024)} КБ`;
+        if (b < 1024 * 1024) return b < 10 * 1024 ? `${(b / 1024).toFixed(1).replace('.', ',')} КБ` : `${Math.round(b / 1024)} КБ`;
         return `${(b / 1024 / 1024).toFixed(b < 10 * 1024 * 1024 ? 1 : 0)} МБ`;
     }
     function tileHtml(file, opts = {}) {
@@ -258,6 +258,21 @@
         return root;
     }
 
+    /* ── Затухание краёв горизонтального ряда: классы is-ov-l / is-ov-r, пока есть куда скроллить ── */
+    function edgeFade(el) {
+        if (!el || el._edgeFade) return el;
+        el._edgeFade = true;
+        const upd = () => {
+            const max = el.scrollWidth - el.clientWidth;
+            el.classList.toggle('is-ov-l', max > 1 && el.scrollLeft > 1);
+            el.classList.toggle('is-ov-r', max > 1 && el.scrollLeft < max - 1);
+        };
+        el.addEventListener('scroll', upd, { passive: true });
+        try { new ResizeObserver(upd).observe(el); } catch (_) {}
+        requestAnimationFrame(upd);
+        return el;
+    }
+
     /* ── Аудио внутри плитки: тот же матричный визуализатор, что у fa-audio-viz ── */
     function bindAudioTile(t) {
         if (!t) return null;
@@ -362,6 +377,7 @@
     };
     const PV_TEXT = new Set(['txt', 'log', 'text', 'rst', 'tex', 'srt', 'vtt', 'gitignore', 'editorconfig']);
     const PV_MAX_BYTES = 2 * 1024 * 1024;
+    const PV_PDF_MAX_BYTES = 60 * 1024 * 1024;
     // Ноутбук с картинками весит мегабайты из-за base64 в outputs, обрезанный JSON не разбирается.
     const PV_MAX_BYTES_EXT = { ipynb: 25 * 1024 * 1024 };
     const pvMaxBytes = (name) => PV_MAX_BYTES_EXT[extOf(name)] || PV_MAX_BYTES;
@@ -376,6 +392,7 @@
         if (!ext && (base === 'dockerfile' || base === 'makefile')) ext = base;
         if (!ext && base.startsWith('.')) ext = base.slice(1);
         const m = String(mime || '').toLowerCase();
+        if ((ext === 'pdf' || m === 'application/pdf') && window.TPView) return 'pdf';
         if (PV_MD.has(ext)) return 'md';
         if (PV_JSON.has(ext)) return 'json';
         if (PV_CSV.has(ext)) return 'csv';
@@ -416,6 +433,30 @@
         const close = document.getElementById('text-preview-close');
         if (a.parentElement !== head) head.insertBefore(a, close || null);
     }
+    const TPV = () => window.TPView || null;
+    function linesOf(text) {
+        if (!text) return 0;
+        const n = text.split('\n').length;
+        return text.endsWith('\n') ? n - 1 : n;
+    }
+    function fileMeta() {
+        const size = fmtSize(FP.totalSize);
+        if (FP.type === 'pdf') return [FP.pages ? `${FP.pages} стр.` : '', size].filter(Boolean).join(' · ');
+        if (FP.type === 'html') return [size, 'скрипты отключены'].filter(Boolean).join(' · ');
+        // JSON показывается отформатированным: число строк исходника (часто 1) только путает
+        if (FP.type === 'json') return size;
+        if (!FP.loaded) return size;
+        const n = linesOf(FP.text);
+        const tv = TPV();
+        const ln = tv ? `${n} ${tv.plural(n, 'строка', 'строки', 'строк')}` : `${n} стр`;
+        return [ln, size].filter(Boolean).join(' · ');
+    }
+    function syncHead() {
+        const tv = TPV();
+        if (!tv) return;
+        if (!FP.type) { tv.head(null); return; }
+        tv.head({ name: FP.name, type: FP.type, label: labelOf(FP.name), color: colorOf(FP.name, 'doc'), meta: fileMeta() });
+    }
     function setNote(text, isErr) {
         const { note } = pvEls();
         if (!note) return;
@@ -448,7 +489,8 @@
         const wasTextChip = !!FP.textChip;
         FP.token++;
         FP.tile = null; FP.type = null; FP.text = ''; FP.loaded = false;
-        FP.textChip = null; FP.textMode = 'raw';
+        FP.textChip = null; FP.textMode = 'raw'; FP.pages = 0;
+        TPV()?.closePdf();
         emitFp('exit');
         if (!wasFile && !wasTextChip) return;
         const tok = FP.token;
@@ -466,6 +508,7 @@
             placeDlBtn(false);
             if (modes) modes.hidden = true;
             setNote('');
+            TPV()?.head(null);
         };
         if (opts.deferred) setTimeout(reset, 300); else reset();
     }
@@ -547,7 +590,8 @@
         const tok = ++FP.token;
         FP.tile = t; FP.type = type; FP.text = ''; FP.loaded = false;
         FP.textChip = null; FP.textMode = 'raw';
-        FP.truncated = false; FP.totalSize = 0; FP.name = t.dataset.name || 'файл';
+        FP.truncated = false; FP.totalSize = 0; FP.name = t.dataset.name || 'файл'; FP.pages = 0;
+        TPV()?.closePdf();
         t.classList.add('is-preview-open');
 
         panel.classList.add('text-preview-panel--file');
@@ -555,6 +599,7 @@
         body.setAttribute('contenteditable', 'false');
         body.setAttribute('aria-label', 'Содержимое файла');
         if (title) title.textContent = FP.name;
+        syncHead();
         if (modes) modes.hidden = !PV_HAS_RENDER.has(type);
         syncModeBtns();
         render.hidden = true; render.innerHTML = '';
@@ -564,6 +609,8 @@
         panel.classList.add('open');
         panel.setAttribute('aria-hidden', 'false');
         emitFp('open');
+
+        if (type === 'pdf') return openPdfPreview(t, tok);
 
         let text = '';
         const maxBytes = pvMaxBytes(FP.name);
@@ -601,8 +648,55 @@
         }
         FP.text = text.replace(/\r\n/g, '\n');
         FP.loaded = true;
+        syncHead();
         renderFilePreview();
         body.scrollTop = 0; render.scrollTop = 0;
+        emitFp('loaded');
+        return true;
+    }
+
+    // PDF: файл целиком (без Range), рендер через pdf.js — подгружается только здесь.
+    async function openPdfPreview(t, tok) {
+        const { body, render } = pvEls();
+        const fail = (msg) => {
+            if (tok !== FP.token) return true;
+            body.hidden = false; body.textContent = '';
+            render.hidden = true; render.innerHTML = '';
+            setNote(msg, true);
+            return true;
+        };
+        let buf;
+        try {
+            const src = pvSource(t);
+            let blob = src.blob || null;
+            if (!blob) {
+                if (!src.url) throw new Error('нет ссылки на файл');
+                const r = await fetch(src.url, { credentials: 'same-origin' });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                const len = Number(r.headers.get('Content-Length') || 0);
+                if (len > PV_PDF_MAX_BYTES) throw new Error(`файл больше ${fmtSize(PV_PDF_MAX_BYTES)}, скачайте его`);
+                blob = await r.blob();
+            }
+            if (blob.size > PV_PDF_MAX_BYTES) throw new Error(`файл больше ${fmtSize(PV_PDF_MAX_BYTES)}, скачайте его`);
+            FP.totalSize = blob.size;
+            buf = new Uint8Array(await blob.arrayBuffer());
+        } catch (err) {
+            return fail(`Не удалось загрузить файл: ${err && err.message ? err.message : err}`);
+        }
+        if (tok !== FP.token) return true;
+        body.hidden = true; body.textContent = '';
+        render.className = 'text-preview-body text-preview-render text-preview-render--pdf';
+        render.hidden = false;
+        syncHead();
+        try {
+            const res = await TPV().pdf(render, buf);
+            if (tok !== FP.token || !res) return true;
+            FP.pages = res.pages;
+        } catch (err) {
+            return fail(`PDF не открылся: ${err && err.message ? err.message : err}`);
+        }
+        FP.loaded = true;
+        syncHead();
         emitFp('loaded');
         return true;
     }
@@ -625,12 +719,23 @@
     function renderFilePreview() {
         const { body, render } = pvEls();
         if (!FP.loaded || !body || !render) return;
+        if (FP.type === 'pdf') return; // PDF рисует TPView.pdf, перерисовка не нужна
         const mode = curMode();
         syncModeBtns();
         const sizeNote = FP.truncated
             ? `Показаны первые ${fmtSize(FP.maxBytes || PV_MAX_BYTES)} из ${fmtSize(FP.totalSize)}. Полный файл можно скачать.`
             : '';
         if (mode === 'raw' && PV_HAS_RENDER.has(FP.type)) {
+            const cvOut = TPV()?.code(FP.text, { md: 'markdown', json: 'json', csv: '', html: 'xml' }[FP.type] || '', { size: FP.totalSize || undefined, label: FP.type.toUpperCase() });
+            if (cvOut) {
+                body.hidden = true; body.textContent = '';
+                render.className = 'text-preview-body text-preview-render text-preview-render--cv';
+                render.hidden = false;
+                render.innerHTML = ''; render.appendChild(cvOut.node);
+                cvOut.after();
+                setNote(sizeNote);
+                return;
+            }
             render.hidden = true; render.innerHTML = '';
             body.hidden = false;
             body.classList.remove('is-code');
@@ -715,6 +820,9 @@
                 } else {
                     pretty = JSON.stringify(JSON.parse(text), null, 2);
                 }
+                // размер — исходного файла; строки — отформатированного вида (подписано в статус-баре)
+                const cvJson = TPV()?.code(pretty, 'json', { size: FP.totalSize || new Blob([text]).size, formatted: pretty !== text });
+                if (cvJson) return cvJson;
                 return { cls: 'code', html: `<pre class="tp-code"><code class="hljs language-json">${hl(pretty, 'json')}</code></pre>` };
             } catch (err) {
                 return {
@@ -743,18 +851,39 @@
         if (type === 'html') {
             const fr = document.createElement('iframe');
             fr.className = 'tp-frame';
-            fr.setAttribute('sandbox', '');
+            // allow-same-origin без allow-scripts: скрипты в документе по-прежнему не выполняются
+            // (плюс CSP default-src 'none'), но родитель может измерить высоту содержимого.
+            fr.setAttribute('sandbox', 'allow-same-origin');
             fr.setAttribute('referrerpolicy', 'no-referrer');
             fr.title = name;
             const csp = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data: blob:; style-src \'unsafe-inline\'; font-src data:">';
             fr.srcdoc = csp + text;
-            return { cls: 'frame', node: fr, note: 'Скрипты и внешние ресурсы отключены.' };
+            const fit = () => {
+                const d = fr.contentDocument, box = fr.parentElement;
+                if (!d || !d.documentElement || !box) return;
+                fr.style.height = '0px';
+                const h = Math.max(d.documentElement.scrollHeight, d.body ? d.body.scrollHeight : 0);
+                fr.style.height = `${Math.max(120, h)}px`;
+                box.classList.add('is-fit');
+            };
+            fr.addEventListener('load', () => {
+                fit();
+                // ширина панели меняется при развороте и ресайзе — пересчитываем высоту
+                if (window.ResizeObserver && fr.parentElement) {
+                    let w = 0;
+                    new ResizeObserver((es) => { const nw = Math.round(es[0].contentRect.width); if (nw !== w) { w = nw; fit(); } }).observe(fr.parentElement);
+                }
+            });
+            // «скрипты отключены» показывается в мете шапки
+            return { cls: 'frame', node: fr };
         }
         // code | text
         if (type === 'code') {
             let base = String(name || '').toLowerCase().split('/').pop();
             let e = extOf(base) || base;
             const lang = PV_CODE[e] || '';
+            const cvCode = TPV()?.code(text, lang, { label: labelOf(name) });
+            if (cvCode) return cvCode;
             return { cls: 'code', html: `<pre class="tp-code"><code class="hljs${lang ? ' language-' + lang : ''}">${hl(text, lang)}</code></pre>` };
         }
         return { cls: 'text', html: `<pre class="tp-plain">${esc(text)}</pre>` };
@@ -897,6 +1026,7 @@
 
     window.FileTiles = {
         pager,
+        edgeFade,
         tileHtml, groupHtml, enhanceScroller, trackOf, stopAudioFor, bindAudioTiles,
         kindOf, labelOf, fmtSize,
         previewTypeOf, openFilePreview, exitFilePreview, enterTextChipPreview,

@@ -3075,7 +3075,7 @@ class ChatApp {
             }
 
             const chip = document.createElement('a');
-            chip.className = `fa-chip fa-chip--${color} fa-chip--bot`;
+            chip.className = `fa-chip fa-chip--${color} fa-chip--bot fa-chip--card`;
             chip.href      = url;
             chip.download  = name;
             chip.title     = name;
@@ -3104,15 +3104,11 @@ class ChatApp {
                 this._showFileContextMenu(e, { name, url, chatId: this.currentChat });
             });
 
+            // Карточка файла агента: бейдж типа (палитра .tp-ty), имя и размер под ним.
+            const sizeTxt = (window.FileTiles && typeof window.FileTiles.fmtSize === 'function') ? window.FileTiles.fmtSize(f.size) : '';
             chip.innerHTML = `
-<span class="fa-chip__icon" aria-hidden="true">
-  <svg viewBox="0 0 36 44" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path d="M4 0h20l12 12v28a4 4 0 0 1-4 4H4a4 4 0 0 1-4-4V4a4 4 0 0 1 4-4z" class="fa-chip__bg"/>
-    <path d="M24 0l12 12H28a4 4 0 0 1-4-4V0z" class="fa-chip__fold"/>
-    <text x="18" y="32" text-anchor="middle" class="fa-chip__text">${label}</text>
-  </svg>
-</span>
-<span class="fa-chip__name">${safeName}</span>
+<span class="fa-chip__ty tp-ty" data-c="${color}" aria-hidden="true">${label}</span>
+<span class="fa-chip__cap"><span class="fa-chip__name">${safeName}</span>${sizeTxt ? `<span class="fa-chip__meta">${sizeTxt}</span>` : ''}</span>
 <span class="fa-chip__dl-icon" aria-hidden="true">
   <svg viewBox="0 0 14 14" fill="none">
     <path d="M7 2v7M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5"
@@ -3522,9 +3518,16 @@ class ChatApp {
         const PAGE_SIZE = 3;
         const chips = otherFiles.map(f => makeChip(f));
         if (chips.length > PAGE_SIZE && window.FileTiles?.pager) {
-            wrap.appendChild(window.FileTiles.pager(chips, PAGE_SIZE));
-        } else {
-            chips.forEach(c => wrap.appendChild(c));
+            const pg = window.FileTiles.pager(chips, PAGE_SIZE);
+            window.FileTiles.edgeFade?.(pg.querySelector('.fa-pager__track'));
+            wrap.appendChild(pg);
+        } else if (chips.length) {
+            // Ряд карточек: на ПК в одну линию со скроллом по X, на мобиле столбиком.
+            const row = document.createElement('div');
+            row.className = 'fa-chip-row';
+            chips.forEach(c => row.appendChild(c));
+            wrap.appendChild(row);
+            window.FileTiles?.edgeFade?.(row);
         }
 
         return wrap;

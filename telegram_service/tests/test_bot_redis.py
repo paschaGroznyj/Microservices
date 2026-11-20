@@ -1,4 +1,4 @@
-"""Redis-backed async helpers with a mocked aioredis client.
+"""Redis helpers and the DB-backed current-session read boundary.
 
 No pytest-asyncio in the sandbox; coroutines are driven via asyncio.run().
 """
@@ -95,10 +95,26 @@ def test_pop_tag_returns_and_deletes(bot, fake_redis):
     fake_redis.delete.assert_awaited_once_with("tg:lasttag:4")
 
 
-def test_get_current_session_reads_key(bot, fake_redis):
-    fake_redis.get.return_value = "sess-1"
-    assert run(bot.get_current_session(55)) == "sess-1"
-    fake_redis.get.assert_awaited_once_with("tg:session:55")
+def test_get_current_session_reads_db_not_redis(bot, fake_redis, monkeypatch):
+    import httpx
+
+    sid = "d0923394-5d5a-4a88-bd41-a057951888db"
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(200, json={"session_id": sid})
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(bot.httpx, "AsyncClient", lambda **kwargs: real_client(
+        transport=httpx.MockTransport(handle), **kwargs))
+    fake_redis.get.return_value = "obsolete-redis-choice"
+    assert run(bot.get_current_session(55)) == sid
+    assert len(requests) == 1
+    assert requests[0].method == "GET"
+    assert str(requests[0].url) == f"{bot.CHATS_SERVICE_URL}/tg/session/55"
+    fake_redis.get.assert_not_awaited()
+    fake_redis.set.assert_not_awaited()
 
 
 def test_list_sessions_sorts_newest_first(bot, fake_redis):

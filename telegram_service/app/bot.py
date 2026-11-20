@@ -204,26 +204,48 @@ def _tg_username(user_id: int, username: str | None) -> str:
     return u if u else f"tg_{user_id}"
 
 
-async def get_current_session(tg_chat_id: int) -> str | None:
-    """Текущий session_id (chat_id chats_service) для telegram-чата, либо None."""
+def _session_id(chat_id, raw) -> str:
+    """UUID сессии или физический ID этой же группы (история до появления сессий).
+
+    Физический ID сам как fallback не подставляется — допустим только уже
+    выбранный/сохранённый. Всё остальное — ValueError, без записи и dispatch.
+    """
+    from uuid import UUID
+    raw = str(raw)
     try:
-        r = await get_redis()
-        return await r.get(_k_session(tg_chat_id))
-    except Exception as e:
-        log.warning(f"get_current_session fail chat={tg_chat_id}: {e}")
-        return None
+        return str(UUID(raw))
+    except ValueError:
+        if raw == str(chat_id):
+            return raw
+        raise ValueError(f"Invalid session id for chat {chat_id}")
+
+
+async def get_current_session(tg_chat_id: int) -> str | None:
+    """Активный UUID из БД chats_service; сбои не маскируем отсутствием."""
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.get(f"{CHATS_SERVICE_URL}/tg/session/{tg_chat_id}")
+        response.raise_for_status()
+        sid = response.json()["session_id"]
+        if sid is not None:
+            sid = _session_id(tg_chat_id, sid)
+        return sid
 
 
 async def set_current_session(tg_chat_id: int, session_id) -> None:
-    try:
-        r = await get_redis()
-        await r.set(_k_session(tg_chat_id), str(session_id))
-    except Exception as e:
-        log.warning(f"set_current_session fail chat={tg_chat_id}: {e}")
+    """Выбор меню сохраняется в PostgreSQL до отправки подтверждения."""
+    sid = _session_id(tg_chat_id, session_id)
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.post(
+            f"{CHATS_SERVICE_URL}/tg/session/{tg_chat_id}",
+            json={"session_id": sid},
+        )
+        response.raise_for_status()
+        if response.json()["session_id"] != sid:
+            raise RuntimeError("Session selection was not persisted")
 
 
 async def create_session(user_id: int) -> str | None:
-    """Создаёт новую сессию в chats_service (/chat/new -> числовой chat_id)."""
+    """Создаёт новую сессию в chats_service (/chat/new -> UUID)."""
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(
@@ -264,19 +286,34 @@ async def touch_session_title(tg_chat_id: int, session_id, last_text: str) -> No
         log.warning(f"touch_session_title fail chat={tg_chat_id}: {e}")
 
 
-async def ensure_session(tg_chat_id: int, user_id: int) -> str:
-    """Возвращает активную сессию telegram-чата; если её нет — создаёт первую
-    и запоминает в Redis. Фолбэк на tg_chat_id, если chats_service недоступен
-    (диалог не падает — работает как раньше, одна сессия на чат)."""
+async def ensure_session(tg_chat_id: int, user_id) -> str:
+    """ID группы -> активная сессия (UUID или корневая история = ID группы).
+
+    Источник истины — БД. Если поле NULL (миграция / первое обращение):
+    старая Redis-привязка, если есть, иначе физический ID группы — та история,
+    в которой группа жила до появления сессий. Новый UUID здесь не создаётся,
+    только через меню. Атомарный only_if_unset сохраняет конкурентный выбор меню.
+    Сбой БД/Redis или невалидная старая привязка — fail closed.
+    """
     sid = await get_current_session(tg_chat_id)
     if sid:
         return sid
-    sid = await create_session(user_id)
-    if not sid:
-        return str(tg_chat_id)
-    await set_current_session(tg_chat_id, sid)
+    r = await get_redis()
+    legacy = await r.get(_k_session(tg_chat_id))
+    payload = {"only_if_unset": True, "session_id": str(tg_chat_id)}
+    if legacy:
+        try:
+            payload["session_id"] = _session_id(tg_chat_id, legacy)
+        except ValueError as exc:
+            raise RuntimeError("Invalid legacy session; select the original session in menu") from exc
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.post(
+            f"{CHATS_SERVICE_URL}/tg/session/{tg_chat_id}", json=payload,
+        )
+        response.raise_for_status()
+        sid = _session_id(tg_chat_id, response.json()["session_id"])
+    # Метаданные меню остаются кешем: потеря Redis не влияет на активный UUID.
     await register_session(tg_chat_id, sid)
-    log.info(f"session created chat={tg_chat_id} user={user_id} -> {sid}")
     return sid
 
 
@@ -795,7 +832,7 @@ async def dispatch_to_agent(chat_id: int, user_id: int, username: str,
     message_id = str(uuid.uuid4())
     # chat_id-аргумент = telegram chat id (физический адрес доставки ответа).
     # Ключ СЕССИИ (память/история агента) резолвим отдельно: активная сессия
-    # этого telegram-чата из Redis, либо автосоздание первой через /chat/new.
+    # этого telegram-чата из Redis, либо исторический telegram chat id.
     session_id = await ensure_session(chat_id, user_id)
     # Обновляем подпись сессии последним сообщением юзера (для списка сессий).
     if merged_text and merged_text.strip():
@@ -1112,10 +1149,12 @@ async def dispatch_initiation(chat_id: int, slot: str, addressed: bool,
     settings = await get_chat_settings(chat_id)
     target_uid = (target or {}).get("user_id")
     target_username = (target or {}).get("username") or (target or {}).get("first_name")
+    session_id = await ensure_session(chat_id, target_uid or 0)
     payload = {
         "user_id": target_uid if target_uid else 0,
         "username": target_username or "чат",
-        "chat_id": str(chat_id),
+        "chat_id": session_id,
+        "tg_chat_id": str(chat_id),
         "message": "",
         "type_query": "agent",
         "gateway_target": "telegram",
@@ -1140,7 +1179,7 @@ async def dispatch_initiation(chat_id: int, slot: str, addressed: bool,
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(f"{CHATS_SERVICE_URL}/send_message", json=payload)
             resp.raise_for_status()
-        log.info(f"proactive dispatched chat={chat_id} slot={slot} "
+        log.info(f"proactive dispatched chat={chat_id} session={session_id} slot={slot} "
                  f"addressed={addressed} sad={sad_followup} target={target_username}")
     except Exception as e:
         log.error(f"dispatch_initiation fail chat={chat_id}: {e}")

@@ -5321,6 +5321,7 @@ class ChatApp {
     // Контекст последнего шага из финального события done → строка памяти, без опроса stats.
     _applyRealtimeContext(chatId, msg) {
         window.MemoryPanel?.update(String(chatId), msg.message_id, msg.context);
+        window.AttachmentsPanel?.refresh(String(chatId));
     }
 
     _applyMemoryFromDone(ev, chatId) {
@@ -5792,7 +5793,7 @@ class ChatApp {
     async renderMessageInput() {
         const container = this.getInputContainer();
         if (!container) return;
-        if (!this.currentChat) window.MemoryPanel?.unmount();
+        if (!this.currentChat) { window.MemoryPanel?.unmount(); window.AttachmentsPanel?.unmount(); }
 
         // Гард: не перерисовывать если экран уже соответствует состоянию
         const hasStart     = !!container.querySelector('.chat-start-screen');
@@ -5814,6 +5815,7 @@ class ChatApp {
         // Инпут активного чата уже есть И это тот же чат — пропускаем
         if (this.currentChat && hasActive && renderedChat === String(this.currentChat)) {
             window.MemoryPanel?.mount(this.currentChat);
+            window.AttachmentsPanel?.mount(this.currentChat);
             return;
         }
         // Если чат выбран, но рендерился стартовый — рендерим инпут (смена состояния)
@@ -5921,6 +5923,7 @@ class ChatApp {
         window.QueryMode?.inject(container);
         // Память чата: строка под полем, полоска контекста, карточка (memory-panel.js)
         window.MemoryPanel?.mount(this.currentChat);
+        window.AttachmentsPanel?.mount(this.currentChat);
 
         // Посимвольная анимация start-header
         // Запоминаем для какого чата отрендерили

@@ -15,6 +15,7 @@ from app.core.config import SECRET_KEY, ALGORITHM, KAFKA_BROKER
 from app.db.group_chat_db import GroupChatDB
 from app.db.editor_db import EditorDB
 from app import group_chat as group_chat_module
+from app import attachments as attachments_module
 from app.db.telegram_db import TelegramDB
 from app.db.max_db import MaxDB
 import time
@@ -98,6 +99,7 @@ app = FastAPI(title="Chats Service")
 group_db = GroupChatDB(None)  # pool проставится на startup
 editor_db = EditorDB(None)  # pool проставится на startup
 app.include_router(group_chat_module.router)
+app.include_router(attachments_module.router)
 
 # Telegram-интеграция: отдельный слой БД (allow-list + per-chat настройки).
 tg_db = TelegramDB(None)  # pool проставится на startup
@@ -184,6 +186,8 @@ async def startup():
     group_db.pool = db.pool
     await group_db.init_schema()
     group_chat_module.bind(group_db, producer)
+    # Вложения чата (правая панель): тот же пул.
+    attachments_module.bind(db.pool)
 
     # Editor: тот же пул (таблица editor_workspaces создаётся миграцией).
     editor_db.pool = db.pool

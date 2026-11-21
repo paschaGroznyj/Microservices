@@ -4678,6 +4678,7 @@ class ChatApp {
        фоновый чат стримит корректно, даже когда открыт другой. */
     _applyRealtimeContext(chatId, msg) {
         window.MemoryPanel?.update(String(chatId), msg.message_id, msg.context);
+        window.AttachmentsPanel?.refresh(String(chatId));
     }
 
     _onWsMessage(chatId, event) {
@@ -4779,6 +4780,7 @@ class ChatApp {
             const isFinalBotMsg = msg.is_from_bot && msg.chunk === undefined && !msg.kind && (msg.done || msg.message !== undefined);
             if (isFinalBotMsg) _fm('done', { chat: key });
             if (isFinalBotMsg) window.MemoryPanel?.update(key, msg.message_id, msg.context);
+            if (isFinalBotMsg) window.AttachmentsPanel?.refresh(key);
             if (isFinalBotMsg && msg.tokens_usage && window.UsageOverlay) {
                 const _usage = { ...msg.tokens_usage, model: msg.agent_model };
                 if (st.pendingBotEl) window.UsageOverlay.mount(st.pendingBotEl, _usage);
@@ -6042,7 +6044,7 @@ class ChatApp {
     async renderMessageInput() {
         const container = this.getInputContainer();
         if (!container) return;
-        if (!this.currentChat) window.MemoryPanel?.unmount();
+        if (!this.currentChat) { window.MemoryPanel?.unmount(); window.AttachmentsPanel?.unmount(); }
 
         // Гард: не перерисовывать если экран уже соответствует состоянию
         const hasStart     = !!container.querySelector('.chat-start-screen');
@@ -6064,6 +6066,7 @@ class ChatApp {
         // Инпут активного чата уже есть И это тот же чат — пропускаем
         if (this.currentChat && hasActive && renderedChat === String(this.currentChat)) {
             window.MemoryPanel?.mount(this.currentChat);
+            window.AttachmentsPanel?.mount(this.currentChat);
             return;
         }
         // Если чат выбран, но рендерился стартовый — рендерим инпут (смена состояния)
@@ -6186,6 +6189,7 @@ class ChatApp {
         window.QueryMode?.inject(container);
         // Память чата: строка под полем, полоска контекста, карточка (memory-panel.js)
         window.MemoryPanel?.mount(this.currentChat);
+        window.AttachmentsPanel?.mount(this.currentChat);
 
         // Посимвольная анимация start-header
         // Запоминаем для какого чата отрендерили

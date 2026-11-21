@@ -32,6 +32,8 @@ RUN uv pip install --no-cache -r requirements.txt
 
 # Копируем исходный код сразу с нужными правами
 COPY --chown=appuser:appuser . .
+# общий код gateway: именованный контекст gw_shared (additional_contexts в compose)
+COPY --from=gw_shared --chown=appuser:appuser . /app/gw_shared
 COPY --from=monaco /opt/vendor/monaco /opt/vendor/monaco
 
 USER appuser

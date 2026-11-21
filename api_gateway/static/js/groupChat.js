@@ -2192,7 +2192,7 @@
       const attachBtn = document.getElementById('gc-attach-btn');
       const wrapper = document.querySelector('.gc-input-area');
       if (attachBtn && wrapper) {
-        try { window.FileAttach?.init(attachBtn, wrapper); } catch (e) { /* noop */ }
+        try { window.FileAttach?.init(attachBtn, wrapper, 'g:' + ROOM_UID); } catch (e) { /* noop */ }
       }
     },
 

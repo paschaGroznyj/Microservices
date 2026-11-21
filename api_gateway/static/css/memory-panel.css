@@ -248,3 +248,12 @@
  .mm-card5 .mm-txt{display:block;-webkit-line-clamp:unset;overflow:visible}
  .mm-card5 .mm-sl{-webkit-overflow-scrolling:touch;touch-action:pan-y}
 }
+
+/* Строка статуса по ширине колонки, а не окна (memory-panel.js fitLine → data-fit):
+   при открытой правой панели (вложения, превью) подписи прячутся ступенями, без наложения. */
+.mm-sline{max-width:100%;overflow:hidden}
+.mm-sline[data-fit] .mm-x,.mm-sline[data-fit] .mm-tw{display:none}
+.mm-sline[data-fit="2"] .mm-lim,.mm-sline[data-fit="3"] .mm-lim,.mm-sline[data-fit="4"] .mm-lim,
+.mm-sline[data-fit="2"] .mm-it-t .mm-lb,.mm-sline[data-fit="3"] .mm-it-t .mm-lb,.mm-sline[data-fit="4"] .mm-it-t .mm-lb{display:none}
+.mm-sline[data-fit="3"] [data-go="c"] .mm-lb,.mm-sline[data-fit="3"] [data-go="s"] .mm-lb,.mm-sline[data-fit="4"] .mm-lb{display:none}
+.mm-sline[data-fit="4"] .mm-it{padding:3px 5px}

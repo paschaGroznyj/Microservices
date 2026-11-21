@@ -68,6 +68,7 @@ function render() {
     box.prepend(H(`<div class="mm-bud" data-mm title="Контекст ${fmtK(c.tokens)} из ${c.max_tokens / 1000}K">${contextSegments(c) ? contextSegments(c).map((p,i,a)=>`<i class="${p.cls}" title="${p.label}: ≈${nf(p.tokens)} (оценка)" style="left:${a.slice(0,i).reduce((v,x)=>v+x.tokens,0)/c.tokens*w}%;width:${p.tokens/c.tokens*w}%"></i>`).join('') : `<i class="mm-c2" style="left:0;width:${w}%"></i>`}</div>`));
   }
   align();
+  if (fitRO) { fitRO.disconnect(); fitRO.observe(area); }
   if (st.open) openCard(st.tab, st.i);
 }
 const contextLabels = ['Система', 'Журнал', 'Саммари', 'История', 'Трасса инструментов', 'Схемы инструментов'];
@@ -399,8 +400,20 @@ function align() {
   const { area, box } = q(); if (!area || !box) return; const f = box.querySelector('.chat-input-field, textarea'); if (!f) return;
   const inset = parseFloat(getComputedStyle(box).borderLeftWidth) + parseFloat(getComputedStyle(f).paddingLeft);
   area.style.setProperty('--mm-in', inset + 'px');
+  fitLine();
 }
 addEventListener('resize', align);
+// Ступени подписей по реальной ширине строки: 1 — без «· 57K зн.», «истории», «кэш»;
+// 2 — без «/200K» и «Шаги»; 3 — без «Саммари»/«Контекст»; 4 — только иконки и числа.
+function fitLine() {
+  const el = q().area?.querySelector('.mm-sline'); if (!el) return;
+  // при центровке вылет влево не попадает в scrollWidth — меряем от левого края
+  el.style.justifyContent = 'flex-start';
+  el.removeAttribute('data-fit');
+  for (let k = 1; k <= 4 && el.scrollWidth > el.clientWidth + 1; k++) el.dataset.fit = k;
+  el.style.justifyContent = '';
+}
+const fitRO = 'ResizeObserver' in window ? new ResizeObserver(() => fitLine()) : null;
 
 function cancelRefresh() { clearTimeout(st.timer); st.abort?.abort(); st.abort = new AbortController(); st.jp = st.sp = st.tp = null; st.loading = st.sload = st.tload = false; }
 function reset(chatId) { cancelRefresh(); st.chat = chatId; st.data = null; st.entries = []; st.total = 0; st.runs = null; st.open = false; st.ctx = false; st.i = 0; st.seq++; st.live = null; closeModal(); }

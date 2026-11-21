@@ -3875,6 +3875,8 @@ class ChatApp {
             this._sendingInFlightChat = String(newChatId);
             this.chats.push({ id: newChatId, last_message: chatPreviewText, timestamp: new Date().toISOString() });
             this.renderChats(this.chats);
+            // файлы стартового экрана уходят с первым сообщением нового чата
+            window.FileAttach?.moveTo?.('a:' + this._inputDraftKey(newChatId));
             await this.openChat(newChatId, { isNewChat: true });
         } else {
             const existing = this.chats.find(c => c.id === this.currentChat);
@@ -6038,7 +6040,7 @@ class ChatApp {
         const attachBtn = container.querySelector('#attach-btn')
                        || container.querySelector('#start-attach-btn');
         if (!attachBtn) return; // стартовый экран без инпута — нечего привязывать
-        try { window.FileAttach?.init(attachBtn, container); } catch (e) { /* noop */ }
+        try { window.FileAttach?.init(attachBtn, container, 'a:' + this._inputDraftKey(this.currentChat)); } catch (e) { /* noop */ }
     }
 
     async renderMessageInput() {
@@ -6440,30 +6442,15 @@ class ChatApp {
        При переключении между чатами (и на стартовый экран) недописанный
        текст поля #message-input сохраняется и восстанавливается по ключу
        чата. Ключ '__start__' — стартовый экран (currentChat == null).
-       Храним ПЛОСКИЙ текст (с раскрытыми чипами), как в разделах. */
+       Чипы вставленного текста сохраняются чипами и остаются в своём чате. */
     _inputDraftKey(chatId) {
         return (chatId == null || chatId === '') ? '__start__' : String(chatId);
     }
 
-    _saveInputDraft(chatId) {
-        if (!this._inputDrafts) this._inputDrafts = {};
-        const text = this.getInputText();
-        const key = this._inputDraftKey(chatId);
-        if (text) this._inputDrafts[key] = text;
-        else delete this._inputDrafts[key];
-    }
+    // Текст и чипы вставленного текста — в input-drafts.js (общий с app_sigma.js).
+    _saveInputDraft(chatId) { window.InputDrafts?.save(this, chatId); }
 
-    _restoreInputDraft(chatId) {
-        if (!this._inputDrafts) return;
-        const key = this._inputDraftKey(chatId);
-        const text = this._inputDrafts[key];
-        if (!text) return;
-        const field = this.getInputContainer()?.querySelector('#message-input');
-        if (!field) return;
-        this.setInputText(field, text);
-        // Синхронизируем кнопку отправки/подсказки под восстановленный текст.
-        try { field.dispatchEvent(new Event('input')); } catch (_) {}
-    }
+    _restoreInputDraft(chatId) { window.InputDrafts?.restore(this, chatId); }
 
     _clearInputDraft(chatId) {
         if (!this._inputDrafts) return;
@@ -6591,10 +6578,11 @@ class ChatApp {
        а в поле ввода (#message-input) на текущую позицию каретки помещает
        невидимый якорь .input-chip-anchor, чтобы сохранялся точный порядок
        между текстом и вставленными чипами. */
-    _insertInputChip(field, rawText) {
+    _insertInputChip(field, rawText, opts = {}) {
         if (!this._pendingChips) this._pendingChips = new Map();
         this._chipSeq = (this._chipSeq || 0) + 1;
-        const chipId = 'ic-' + Date.now() + '-' + this._chipSeq;
+        // restoreId: чип из черновика чата (InputDrafts) — якорь уже стоит в поле
+        const chipId = opts.restoreId || ('ic-' + Date.now() + '-' + this._chipSeq);
         this._pendingChips.set(chipId, rawText);
 
         const chars = rawText.length;
@@ -6659,6 +6647,8 @@ class ChatApp {
             this._syncInputPreviewBar(bar);
             if (_track !== bar) requestAnimationFrame(() => _track.scrollTo({ left: _track.scrollWidth, behavior: 'smooth' }));
         }
+
+        if (opts.restoreId) return;
 
         const anchor = document.createElement('span');
         anchor.className = 'input-chip-anchor';
@@ -7279,7 +7269,7 @@ class ChatApp {
         // Кнопка прикрепления файла
         const attachBtn = container?.querySelector('#attach-btn')
                        || container?.querySelector('#start-attach-btn');
-        window.FileAttach?.init(attachBtn, container);
+        window.FileAttach?.init(attachBtn, container, 'a:' + this._inputDraftKey(this.currentChat));
     }
 
 

@@ -6254,31 +6254,10 @@ class ChatApp {
             : String(chatId);
     }
 
-    _saveInputDraft(chatId) {
-        if (!this._inputDrafts) this._inputDrafts = {};
-        const container = this.getInputContainer();
-        const field = container?.querySelector('#message-input');
-        if (!field) return;
-        const text = this.getInputText();
-        const key = this._inputDraftKey(chatId);
-        if (text && text.length) {
-            this._inputDrafts[key] = text;
-        } else {
-            delete this._inputDrafts[key];
-        }
-    }
+    // Текст и чипы вставленного текста — в input-drafts.js (общий с app.js).
+    _saveInputDraft(chatId) { window.InputDrafts?.save(this, chatId); }
 
-    _restoreInputDraft(chatId) {
-        if (!this._inputDrafts) this._inputDrafts = {};
-        const container = this.getInputContainer();
-        const field = container?.querySelector('#message-input');
-        if (!field) return;
-        const key = this._inputDraftKey(chatId);
-        const draft = this._inputDrafts[key];
-        if (!draft) return;
-        // setInputText диспатчит input → пересчёт кнопки/лимита.
-        this.setInputText(field, draft);
-    }
+    _restoreInputDraft(chatId) { window.InputDrafts?.restore(this, chatId); }
 
     _clearInputDraft(chatId) {
         if (!this._inputDrafts) return;
@@ -6350,7 +6329,8 @@ class ChatApp {
     _insertInputChip(field, rawText, opts = {}) {
         if (!this._pendingChips) this._pendingChips = new Map();
         this._chipSeq = (this._chipSeq || 0) + 1;
-        const chipId = 'ic-' + Date.now() + '-' + this._chipSeq;
+        // restoreId: чип из черновика чата (InputDrafts) — якорь уже стоит в поле
+        const chipId = opts.restoreId || ('ic-' + Date.now() + '-' + this._chipSeq);
         this._pendingChips.set(chipId, rawText);
         // Помечаем до вставки якоря: лимит поля ввода не должен видеть этот текст.
         if (opts.asFile) {
@@ -6420,6 +6400,8 @@ class ChatApp {
             this._syncInputPreviewBar(bar);
             if (_track !== bar) requestAnimationFrame(() => _track.scrollTo({ left: _track.scrollWidth, behavior: 'smooth' }));
         }
+
+        if (opts.restoreId) return;
 
         const anchor = document.createElement('span');
         anchor.className = 'input-chip-anchor';

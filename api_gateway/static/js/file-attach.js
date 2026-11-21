@@ -8,6 +8,9 @@
  *   addFiles(files, {forceFile})     — добавить File[] программно (forceFile:
  *                                      gateway не положит текст в промпт)
  *   clear()                          — сбросить все файлы и превью
+ *   init(btn, box, ctx)              — ctx: ключ черновика ('a:<chat>', 'a:__start__', 'g:main').
+ *                                      Файлы живут в своём ctx: в другом чате их не видно.
+ *   moveTo(ctx)                      — перенести файлы текущего ctx в новый (старт → созданный чат)
  */
 
 const FileAttach = (() => {
@@ -19,6 +22,8 @@ const FileAttach = (() => {
     let _inputBox     = null;        // .chat-input-box | .start-input-box
     let _previewBar   = null;        // .fa-preview-bar (создаём динамически)
     let _hiddenInput  = null;        // <input type="file"> скрытый
+    let _ctx          = null;        // ключ контекста текущих _files (null — без привязки)
+    const _bank       = new Map();   // ctx -> File[] неотправленных файлов других чатов
 
     /* ─── расширение → метка ─────────────────────────────────── */
     const EXT_LABEL = {
@@ -407,7 +412,25 @@ const FileAttach = (() => {
      * @param {HTMLElement|null} attachBtn  — кнопка прикрепить (или null — найдём сами)
      * @param {HTMLElement|null} inputContainer — .message-input-container (или null — весь document)
      */
-    function init(attachBtn, inputContainer) {
+    /* Переключить контекст: файлы уходящего чата откладываются в _bank, у нового — свои. */
+    function _switchCtx(key) {
+        if (key == null || key === _ctx) return;
+        if (_ctx != null) {
+            if (_files.length) _bank.set(_ctx, _files); else _bank.delete(_ctx);
+        }
+        _files = _bank.get(key) || [];
+        _bank.delete(key);
+        _ctx = key;
+    }
+
+    /* Новый чат со стартового экрана: файлы едут вместе с первым сообщением. */
+    function moveTo(key) {
+        if (key == null) return;
+        _bank.delete(key);
+        _ctx = key;
+    }
+
+    function init(attachBtn, inputContainer, ctx) {
         const root = inputContainer || document;
 
         // Снимаем слушатели с ПРЕДЫДУЩЕГО контекста, иначе синглтон
@@ -432,8 +455,9 @@ const FileAttach = (() => {
             _hiddenInput = _createHiddenInput();
         }
 
-        // Сбрасываем старое превью при смене контекста (новый чат / переключение)
-        // НЕ трогаем _files — файлы живут до отправки
+        // Файлы привязаны к чату (ctx): при переходе в другой чат / общий чат / старт
+        // показываем файлы именно этого контекста.
+        _switchCtx(ctx);
         _previewBar = null;
 
         // Кнопка открывает проводник (именованный хендлер — снимается в _unbindPrevious)
@@ -448,11 +472,9 @@ const FileAttach = (() => {
         _boundBox = _inputBox;
         _boundBtn = _attachBtn;
 
-        // Если файлы уже есть — показать превью сразу
-        if (_files.length > 0) {
-            _renderPreview();
-            _updateAttachBtn();
-        }
+        // Превью синхронизируем и когда файлов нет: полоса могла остаться от другого ctx
+        if (_files.length > 0 || _inputBox.querySelector('.fa-preview-bar')) _renderPreview();
+        _updateAttachBtn();
     }
 
     /**
@@ -544,7 +566,7 @@ const FileAttach = (() => {
         return _files.length > before;
     }
 
-    return { init, getFiles, upload, clear, getFilesMeta, getPreviewItems, addFiles, showToast: _showToast };
+    return { init, moveTo, getFiles, upload, clear, getFilesMeta, getPreviewItems, addFiles, showToast: _showToast };
 
 })();
 

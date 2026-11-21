@@ -300,6 +300,7 @@
     const list = $('.att-list');
     const frag = document.createDocumentFragment();
     items.forEach((it, k) => {
+    if (tree()) list.classList.toggle('att-list--fk', forked());
       const idx = from + k;
       if (tree()) { treeAppend(frag, it, idx); return; }
       const dk = dayKey(it.created_at);
@@ -369,7 +370,13 @@
     if (!L || L.msg !== it.msg_id) {
       if (L && L.depth !== depth) {
         const t = c?.title ? `ответвление от «${c.title}»` : 'ответвление от родительского чата';
-        frag.appendChild(node(`<svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path d="M23 0 C23 15, 4 10, 4 26" fill="none"/></svg><span>${esc(t)}</span>`, 'att-fork-in'));
+        // Точка форка на линии родителя (x=16): снизу серая магистраль, вверх уходит S-изгибом
+        // линия ветки (x=32) и стыкуется с ней без разрыва. Между предками — прямой переход.
+        const up = L.depth === 0;
+        const g = up
+          ? '<path class="att-fk-b" d="M32 0 C32 15 16 9 16 22"/><path class="att-fk-m" d="M16 22 V44"/>'
+          : '<path class="att-fk-m" d="M16 0 V44"/>';
+        frag.appendChild(node(`<svg class="att-fork-g" width="44" height="44" viewBox="0 0 44 44" aria-hidden="true">${g}<circle cx="16" cy="22" r="4"/></svg><span>${esc(t)}</span>`, `att-fork-in${up ? ' att-fork-in--up' : ''}`));
       }
       const fk = forked() && depth === 0 ? ' att-node--fk' : '';
       const n = node(`<span class="att-dot"></span><div class="att-node__h">${av(it.author)}<b>${esc(who(it.author))}</b><time>${esc(dayLabel(it.created_at))}, ${esc(hm(it.created_at))}</time></div>`,

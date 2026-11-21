@@ -42,3 +42,6 @@ api_gateway_sigma/run_status.py
 # Private runtime logs: never commit or bake into images.
 **/agent-logs/
 **/agent-diagnostics/
+
+# Data dumps for one-off scripts (chat_files export etc.): keep local only.
+agent_service/scripts/files_dump.json

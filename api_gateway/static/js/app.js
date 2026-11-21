@@ -442,6 +442,8 @@ class ChatApp {
             s.setAttribute('aria-hidden', 'true');
             s.hidden = true;
         }
+        // Пока идёт подгрузка, маркер показывает две строки скелетона (видны только с .is-loading)
+        if (!s.firstChild && window.Skeleton) s.innerHTML = window.Skeleton.chats(2);
         this._chatsMoreEl = s;
         // Проверка по скроллу общего контейнера, не чаще раза за кадр.
         let raf = 0;
@@ -866,12 +868,17 @@ class ChatApp {
             this._initHistoryScrollLoader();
             await this.renderMessageInput();
         } else {
+            if (msgContainer && window.Skeleton) msgContainer.innerHTML = window.Skeleton.messages();
             await Promise.all([
                 targetMsgId
                     ? this.loadMessagesAround(chatId, targetMsgId, opts?.radius || 10, { dbId: opts?.targetDbId })
                     : this.loadMessages(chatId),
                 this.renderMessageInput()
             ]);
+            // История не пришла (ошибка сети/доступа): скелетон не оставляем висеть
+            if (String(this.currentChat) === String(chatId)) {
+                msgContainer?.querySelector(':scope > .sk-wrap')?.remove();
+            }
         }
 
         // Восстанавливаем черновик поля ввода этого чата (если был сохранён).
@@ -6967,7 +6974,7 @@ class ChatApp {
             <div class="slash-card-header">
                 <div class="slash-card-info">
                     <span class="slash-card-badge">/workspaces</span>
-                    <span class="slash-card-value is-muted">Загрузка областей…</span>
+                    <span class="slash-card-value is-muted">${window.Skeleton ? window.Skeleton.inline(132) : 'Загрузка областей…'}</span>
                 </div>
                 <div class="slash-card-actions">
                     <label class="slash-ws-filter" title="Показать воркспейсы только для текущего чата">
@@ -6978,7 +6985,7 @@ class ChatApp {
                     <button type="button" class="slash-card-close-btn" title="Закрыть" aria-label="Закрыть">${closeSvg}</button>
                 </div>
             </div>
-            <div class="slash-ws-list"></div>`;
+            <div class="slash-ws-list">${window.Skeleton ? window.Skeleton.rows(3) : ''}</div>`;
 
         card.querySelector('.slash-card-close-btn')?.addEventListener('click', () => card.remove());
         const filterCb = card.querySelector('.slash-ws-filter-cb');

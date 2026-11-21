@@ -1797,9 +1797,11 @@
     if (!CHAT_ID || !aiLog) return;
     hist.loading = true;
     aiLog.innerHTML = "";
-    setHistoryState("loading", "Загрузка истории…");
+    if (window.Skeleton) aiLog.insertAdjacentHTML("beforeend", window.Skeleton.messages({ compact: true }));
+    else setHistoryState("loading", "Загрузка истории…");
     try {
       const data = await fetchHistoryPage(`limit=${HISTORY_PAGE}&offset=0`);
+      aiLog.querySelector(":scope > .sk-wrap")?.remove();
       const msgs = Array.isArray(data?.messages) ? data.messages : [];
       for (const m of msgs) appendHistoryMessage(m);
       hist.loaded = msgs.length;
@@ -1811,6 +1813,7 @@
     } catch (_) {
       setHistoryState("error", "Не удалось загрузить историю");
     } finally {
+      aiLog.querySelector(":scope > .sk-wrap")?.remove();
       hist.loading = false;
     }
   }

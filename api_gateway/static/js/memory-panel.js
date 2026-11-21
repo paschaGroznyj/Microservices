@@ -197,6 +197,7 @@ function tAutoScroll(root, only) {
 }
 
 function tEmpty() {
+  if (st.tload && window.Skeleton) return window.Skeleton.mm('t');
   return `<div class="mm-sl"><div class="mm-empty">${st.tload ? 'Загрузка…' : st.terr ? 'Не удалось загрузить шаги.' : 'Нет данных о шагах: ответов агента после обновления ещё не было.'}</div></div>`;
 }
 function loadSteps() {
@@ -216,6 +217,7 @@ function jSlide(e) {
 }
 function sSlide() {
   const sm = (st.data || EMPTY).summary;
+  if (!sm.text && st.sload && window.Skeleton) return window.Skeleton.mm('s');
   if (!sm.text) return `<div class="mm-sl"><div class="mm-empty">${st.sload ? 'Загрузка…' : 'Саммари ещё нет: история помещается в контекст целиком.'}</div></div>`;
   return `<div class="mm-sl"><div class="mm-sl-h"><span class="mm-tag t-summary">саммари</span><span class="mm-meta">до #${sm.upto_id} · ${nf(sm.covered)} из ${nf(sm.total_messages)} сообщ. · ${nf(sm.chars)} зн.</span></div>
    <div class="mm-txt">${esc(plain(sm.text))}</div>
@@ -270,12 +272,13 @@ function openCard(tab, i) {
    <div class="mm-types"></div><div class="mm-vp"><div class="mm-trk"></div></div><div class="mm-prog"><i></i></div></div>`);
   box.before(c); bindSwipe(c.querySelector('.mm-vp')); pin();
   c.addEventListener('click', e => { const t = e.target.closest('button'); if (!t) return;
-    if (t.dataset.tab) { st.tab = t.dataset.tab; st.i = 0; renderCard(); ensureTab(st.tab); }
+    if (t.dataset.tab) { st.tab = t.dataset.tab; st.i = 0; ensureTab(st.tab); renderCard(); }
     else if (t.dataset.nav) go(+t.dataset.nav);
     else if ('close' in t.dataset) closeCard();
     else if ('all' in t.dataset) openModal(st.tab === 'j' ? (st.entries[st.i] || {}).id : 'summary');
     else if (t.dataset.full) openModal(t.dataset.full); });
-  renderCard(); ensureTab(tab);
+  // запрос вкладки стартует до отрисовки: флаги загрузки уже выставлены, карточка сразу показывает скелетон
+  ensureTab(tab); renderCard();
 }
 function renderCard() {
   const c = document.querySelector('.mm-card5'); if (!c) return; const D = st.data || EMPTY, cx = D.context || {};
@@ -291,7 +294,7 @@ function renderCard() {
   q().area.querySelectorAll('.mm-sline [data-go]').forEach(b => { const on = b.dataset.go === st.tab; b.classList.toggle('is-on', on); b.setAttribute('aria-expanded', on); });
   const trk = c.querySelector('.mm-trk');
   trk.innerHTML = st.tab === 'j'
-    ? (st.entries.length ? st.entries.map(jSlide).join('') : `<div class="mm-sl"><div class="mm-empty">${st.loading ? 'Загрузка…' : st.jerr ? 'Не удалось загрузить журнал.' : 'Журнал пуст.'}</div></div>`)
+    ? (st.entries.length ? st.entries.map(jSlide).join('') : st.loading && window.Skeleton ? window.Skeleton.mm('j') : `<div class="mm-sl"><div class="mm-empty">${st.loading ? 'Загрузка…' : st.jerr ? 'Не удалось загрузить журнал.' : 'Журнал пуст.'}</div></div>`)
     : st.tab === 't' ? (st.runs && st.runs.length ? st.runs.map(tSlide).join('') : tEmpty())
     : st.tab === 'c' ? cSlide() : sSlide();
   // «Открыть полностью» только там, где текст не влез в превью

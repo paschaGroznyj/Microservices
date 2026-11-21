@@ -50,8 +50,10 @@
     <link rel="stylesheet" href="/static/css/sidebar-chats.css">
     <link rel="stylesheet" href="/static/css/ipynb-render.css">
     <link rel="stylesheet" href="/static/css/text-preview-view.css">
+    <link rel="stylesheet" href="/static/css/skeleton.css">
 
     <script src="/static/js/palette.js"></script>
+    <script src="/static/js/skeleton.js"></script>
 </head>
 <body data-gateway="{{ 'sigma' if is_sigma else 'main' }}" data-auth-source="{{ user.source|default('') if user else '' }}">
 
@@ -160,7 +162,7 @@
                         </svg>
                     </button>
                     <div id="chat-list" class="chat-list">
-                        <div class="chat-item-skeleton">Загрузка...</div>
+                        <div class="sk-wrap sk-chats" role="status" aria-busy="true" aria-label="Загрузка чатов">{% for w in [72, 58, 84, 46, 66, 78, 52, 88] %}<div class="sk-row"><span class="sk sk-av" style="--i:{{ loop.index0 }}"></span><span class="sk" style="width:{{ w }}%;--i:{{ loop.index0 }}"></span></div>{% endfor %}</div>
                     </div>
                 </div>
             </div>
@@ -489,7 +491,7 @@
                 </div>
                 <div>
                     <div class="profile-title">Профиль</div>
-                    <div class="profile-subtitle" id="modal-subtitle">Загружается...</div>
+                    <div class="profile-subtitle sk-txt" id="modal-subtitle" style="--i:0">@username</div>
                 </div>
             </div>
             <button class="profile-close" id="profile-close" aria-label="Закрыть">✕</button>
@@ -498,10 +500,10 @@
             <div class="profile-hero">
                 <div class="avatar-lg" id="modal-avatar">A<div class="avatar-badge"></div></div>
                 <div class="hero-info">
-                    <div class="hero-username" id="modal-username">username</div>
-                    <div class="hero-name" id="modal-name">Имя Фамилия</div>
+                    <div class="hero-username sk-txt" id="modal-username" style="--i:1">username</div>
+                    <div class="hero-name sk-txt" id="modal-name" style="--i:2">Имя Фамилия</div>
                     <div class="hero-meta">
-                        <span class="joined-badge" id="modal-joined">с янв 2024</span>
+                        <span class="joined-badge sk-txt" id="modal-joined" style="--i:3">с янв 2024</span>
                     </div>
                     <div class="hero-level" id="modal-level" hidden>
                         <div class="hero-level-top"><span class="lvl-chip" id="modal-level-chip"></span><span class="lvl-next" id="modal-level-next"></span></div>
@@ -513,7 +515,7 @@
                 <div class="section-label">Статистика</div>
                 <div class="stats-grid">
                     <div class="stat-card">
-                        <div class="stat-value" id="stat-chats">—</div>
+                        <div class="stat-value sk-txt" id="stat-chats" style="--i:4">000</div>
                         <div class="stat-label">Запросов к ассистенту</div>
                         <div class="stat-sub">за всё время</div>
                     </div>

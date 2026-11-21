@@ -618,7 +618,9 @@
         syncModeBtns();
         render.hidden = true; render.innerHTML = '';
         body.hidden = false; body.classList.remove('is-code');
-        body.textContent = 'Загружаю…';
+        const SK = window.Skeleton;
+        if (SK) body.innerHTML = type === 'pdf' ? SK.pdf() : (type === 'md' || type === 'html') ? SK.doc() : SK.code();
+        else body.textContent = 'Загружаю…';
         setNote('');
         panel.inert = false;
         panel.classList.add('open');

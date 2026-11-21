@@ -311,7 +311,7 @@
 
     /* ── «кто прочитал» в меню ── */
     _readersRowHtml() {
-      return `<button class="gc-ctx-item gc-ctx-readers" data-act="readers" disabled>${svg('seen')}<span>Загрузка…</span></button><div class="gc-ctx-sep"></div>`;
+      return `<button class="gc-ctx-item gc-ctx-readers" data-act="readers" disabled>${svg('seen')}${window.Skeleton ? window.Skeleton.inline(88) : '<span>Загрузка…</span>'}</button><div class="gc-ctx-sep"></div>`;
     },
 
     _readersListHtml(list) {

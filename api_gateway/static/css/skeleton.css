@@ -1,0 +1,104 @@
+/* Скелетоны загрузки, вариант «пульс»: блоки мягко бледнеют и проявляются,
+   соседние строки сдвинуты по фазе через --i. Разметку отдаёт window.Skeleton (js/skeleton.js). */
+.sk-wrap,
+#profile-overlay.is-sk {
+  --sk-base: color-mix(in srgb, var(--text-muted) 44%, transparent);
+}
+[data-theme="dark"] .sk-wrap,
+[data-theme="dark"] #profile-overlay.is-sk { --sk-base: rgba(255, 255, 255, .17); }
+
+.sk-wrap { animation: skFade .18s ease-out both; }
+.sk {
+  display: block; height: 10px; border-radius: 5px; flex: 0 0 auto;
+  background: var(--sk-base);
+  animation: skPulse 1.5s ease-in-out infinite;
+  animation-delay: calc(var(--i, 0) * 90ms);
+}
+@keyframes skPulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+@keyframes skFade { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .sk, .sk-wrap, #profile-overlay.is-sk .sk-txt { animation: none !important; }
+}
+
+/* Сайдбар: строки как .chat-item--c (аватар 28 px, 46 px, шаг 47; на мобиле 48) */
+.sk-chats { display: flex; flex-direction: column; gap: 1px; }
+.sk-chats .sk-row { height: 46px; padding: 0 8px; gap: 10px; display: flex; align-items: center; box-sizing: border-box; }
+.sk-chats .sk-av { width: 28px; height: 28px; border-radius: 8px; opacity: .8; }
+.sk-chats .sk:not(.sk-av) { height: 10px; max-width: 150px; }
+@media (max-width: 600px) { .sk-chats .sk-row { height: 48px; } }
+
+/* Лента сообщений */
+.sk-msgs { display: flex; flex-direction: column; gap: 28px; padding: 28px 0; width: 100%; }
+.sk-msgs .sk-u, .sk-msgs .sk-b { max-width: 720px; width: 100%; margin: 0 auto; padding: 0 24px; box-sizing: border-box; display: flex; }
+.sk-msgs .sk-u { justify-content: flex-end; }
+.sk-msgs .sk-u .sk { height: 40px; border-radius: 14px 14px 3px 14px; }
+.sk-msgs .sk-b { flex-direction: column; gap: 10px; }
+.sk-msgs .sk-b .sk { height: 11px; }
+.sk-msgs .sk-files { display: flex; gap: 8px; margin-top: 6px; }
+.sk-msgs .sk-files .sk { height: 49px; width: 200px; border-radius: 11px; }
+.sk-msgs--compact { gap: 20px; padding: 16px 0; }
+.sk-msgs--compact .sk-u, .sk-msgs--compact .sk-b { padding: 0 12px; }
+@media (max-width: 600px) {
+  .sk-msgs .sk-files { flex-direction: column; }
+  .sk-msgs .sk-files .sk { width: 100% !important; }
+}
+
+/* Превью файла */
+.text-preview-body:has(> .sk-wrap) { padding: 0; overflow: hidden; white-space: normal; }
+.sk-pv { padding: 22px 18px; height: 100%; box-sizing: border-box; overflow: hidden; }
+.sk-page {
+  margin: 0 auto; width: 100%; max-width: 560px; aspect-ratio: 1 / 1.414; box-sizing: border-box;
+  background: var(--surface, #fff); border: 1px solid var(--border); border-radius: 4px; padding: 9%;
+  display: flex; flex-direction: column; gap: 12px; box-shadow: 0 1px 3px rgba(0, 0, 0, .06);
+}
+[data-theme="dark"] .sk-page { background: #161616; }
+.sk-page .sk-h, .sk-doc .sk-h { height: 16px; width: 55%; margin-bottom: 10px; }
+.sk-gap { display: block; height: 6px; flex: 0 0 auto; }
+.sk-doc { display: flex; flex-direction: column; gap: 12px; padding: 22px 24px; height: 100%; box-sizing: border-box; overflow: hidden; }
+.sk-code { display: flex; flex-direction: column; padding: 8px 0; height: 100%; box-sizing: border-box; overflow: hidden; }
+.sk-code .sk-ln { height: 20px; display: flex; align-items: center; gap: 16px; padding-left: 14px; flex: 0 0 auto; }
+.sk-code .sk-no { width: 16px; height: 7px; opacity: .6; }
+.sk-code .sk { height: 8px; }
+
+/* Скиллы: строки как .skill-card */
+.sk-skills { display: flex; flex-direction: column; }
+.sk-skills .sk-row { min-height: 36px; padding: 6px 10px; box-sizing: border-box; display: flex; align-items: center; gap: 12px; }
+.sk-skills .sk-cb { width: 16px; height: 16px; border-radius: 4px; opacity: .75; }
+.sk-skills .sk-dots {
+  width: 18px; height: 4px; margin-left: auto; margin-right: 4px; border-radius: 2px;
+  -webkit-mask: radial-gradient(circle 2px, #000 98%, transparent) 0 0 / 7px 4px repeat-x;
+  mask: radial-gradient(circle 2px, #000 98%, transparent) 0 0 / 7px 4px repeat-x;
+}
+.sk-detail { display: flex; flex-direction: column; gap: 12px; padding: 18px 4px; }
+.sk-detail .sk-h { height: 18px; width: 45%; margin-bottom: 8px; }
+
+/* Панель памяти: карточка журнала / саммари / шагов */
+.sk-mm { display: flex; flex-direction: column; gap: 9px; }
+.sk-mm .sk-hd { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
+.sk-mm .sk-tag { width: 54px; height: 16px; border-radius: 8px; }
+.sk-mm .sk-chips { display: flex; gap: 6px; margin-top: 4px; }
+.sk-mm .sk-chips .sk { width: 22px; height: 22px; border-radius: 6px; }
+
+/* Списки с иконкой (модели) и простые строки (воркспейсы) */
+.sk-opts { display: flex; flex-direction: column; gap: 2px; padding: 2px 0; }
+.sk-opts .sk-opt { display: flex; align-items: center; gap: 10px; padding: 9px 10px; }
+.sk-opts .sk-ico { width: 28px; height: 28px; border-radius: 8px; }
+.sk-opts .sk-col { display: flex; flex-direction: column; gap: 7px; flex: 1; min-width: 0; }
+.sk-rows { display: flex; flex-direction: column; gap: 6px; }
+.sk-rows .sk-row { height: 36px; padding: 0 11px; display: flex; align-items: center; box-sizing: border-box;
+  border-radius: 11px; border: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+
+/* Строчный скелетон внутри текста (меню, подписи) */
+.sk-inline { display: inline-flex; align-items: center; vertical-align: middle; }
+.sk-inline .sk { height: 9px; }
+
+/* Модалка профиля: текстовые поля становятся плашками, пока идёт первый запрос */
+#profile-overlay.is-sk .sk-txt {
+  color: transparent !important; width: fit-content; min-width: 48px; border-radius: 5px;
+  background: var(--sk-base) !important; border-color: transparent !important;
+  animation: skPulse 1.5s ease-in-out infinite; animation-delay: calc(var(--i, 0) * 90ms);
+  user-select: none;
+}
+#profile-overlay.is-sk .stat-value.sk-txt { margin: 2px auto 6px; }
+#profile-overlay.is-sk #modal-avatar { color: transparent; }
+#profile-overlay.is-sk #modal-level { visibility: hidden; }

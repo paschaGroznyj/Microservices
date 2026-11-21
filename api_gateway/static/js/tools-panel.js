@@ -1072,6 +1072,10 @@ class ModelPickerClass {
       const msg = this._agentAvailable === false
         ? 'Сервис агента недоступен. Отправка запросов временно заблокирована.'
         : 'Загрузка списка моделей…';
+      if (this._agentAvailable !== false && window.Skeleton) {
+        panel.innerHTML = `<div class="mp-panel-title">Выбор модели</div>${window.Skeleton.options(3)}`;
+        return;
+      }
       panel.innerHTML = `
         <div class="mp-panel-title">Выбор модели</div>
         <div class="mp-panel-empty" data-state="${this._agentAvailable === false ? 'offline' : 'loading'}">

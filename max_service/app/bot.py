@@ -523,21 +523,44 @@ def _k_sessions_reg(max_chat_id: int) -> str: return f"max:sessions:{max_chat_id
 def _k_setname(max_chat_id: int, uid) -> str: return f"max:setname:{max_chat_id}:{uid}"
 
 
-async def get_current_session(max_chat_id: int):
+def _session_id(chat_id, raw) -> str:
+    """UUID сессии или физический ID этой же группы (история до появления сессий).
+
+    Физический ID сам как fallback не подставляется — допустим только уже
+    выбранный/сохранённый. Всё остальное — ValueError, без записи и dispatch.
+    """
+    from uuid import UUID
+    raw = str(raw)
     try:
-        r = await get_redis()
-        return await r.get(_k_session(max_chat_id))
-    except Exception as e:
-        log.warning(f"get_current_session fail chat={max_chat_id}: {e}")
-        return None
+        return str(UUID(raw))
+    except ValueError:
+        if raw == str(chat_id):
+            return raw
+        raise ValueError(f"Invalid session id for chat {chat_id}")
+
+
+async def get_current_session(max_chat_id: int) -> str | None:
+    """Активный UUID из БД chats_service; сбои не маскируем отсутствием."""
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.get(f"{CHATS_SERVICE_URL}/max/session/{max_chat_id}")
+        response.raise_for_status()
+        sid = response.json()["session_id"]
+        if sid is not None:
+            sid = _session_id(max_chat_id, sid)
+        return sid
 
 
 async def set_current_session(max_chat_id: int, session_id) -> None:
-    try:
-        r = await get_redis()
-        await r.set(_k_session(max_chat_id), str(session_id))
-    except Exception as e:
-        log.warning(f"set_current_session fail chat={max_chat_id}: {e}")
+    """Выбор меню сохраняется в PostgreSQL до отправки подтверждения."""
+    sid = _session_id(max_chat_id, session_id)
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.post(
+            f"{CHATS_SERVICE_URL}/max/session/{max_chat_id}",
+            json={"session_id": sid},
+        )
+        response.raise_for_status()
+        if response.json()["session_id"] != sid:
+            raise RuntimeError("Session selection was not persisted")
 
 
 async def create_session(user_id) -> str | None:
@@ -576,15 +599,33 @@ async def touch_session_title(max_chat_id: int, session_id, last_text: str) -> N
 
 
 async def ensure_session(max_chat_id: int, user_id) -> str:
+    """ID группы -> активная сессия (UUID или корневая история = ID группы).
+
+    Источник истины — БД. Если поле NULL (миграция / первое обращение):
+    старая Redis-привязка, если есть, иначе физический ID группы — та история,
+    в которой группа жила до появления сессий. Новый UUID здесь не создаётся,
+    только через меню. Атомарный only_if_unset сохраняет конкурентный выбор меню.
+    Сбой БД/Redis или невалидная старая привязка — fail closed.
+    """
     sid = await get_current_session(max_chat_id)
     if sid:
         return sid
-    sid = await create_session(user_id)
-    if not sid:
-        return str(max_chat_id)
-    await set_current_session(max_chat_id, sid)
+    r = await get_redis()
+    legacy = await r.get(_k_session(max_chat_id))
+    payload = {"only_if_unset": True, "session_id": str(max_chat_id)}
+    if legacy:
+        try:
+            payload["session_id"] = _session_id(max_chat_id, legacy)
+        except ValueError as exc:
+            raise RuntimeError("Invalid legacy session; select the original session in menu") from exc
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.post(
+            f"{CHATS_SERVICE_URL}/max/session/{max_chat_id}", json=payload,
+        )
+        response.raise_for_status()
+        sid = _session_id(max_chat_id, response.json()["session_id"])
+    # Метаданные меню остаются кешем: потеря Redis не влияет на активный UUID.
     await register_session(max_chat_id, sid)
-    log.info(f"session created chat={max_chat_id} user={user_id} -> {sid}")
     return sid
 
 

@@ -77,7 +77,7 @@
     let btn = null, bar = null, selBtn = null;
 
     function editable(f) {
-        if (!f || f.isLocal || !f.loaded || f.truncated) return false;
+        if (!f || f.isLocal || !f.loaded || f.truncated || f.type === 'pdf') return false;
         return !!parseUrl(f.url || f.dlUrl);
     }
 

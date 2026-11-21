@@ -1,7 +1,7 @@
 """
 Память чата в UI (только просмотр): прокси к agent_service /web/memory/* и /web/steps/*.
 
-Один и тот же модуль в api_gateway и api_gateway_sigma.
+Общий модуль api_gateway и api_gateway_sigma (gw_shared/, см. gw_shared/__init__.py).
 bind(get_client=..., agent_url=..., get_user=...) вызывается из app.py:
 http_client создаётся на старте приложения, поэтому берём его через функцию.
 """

@@ -442,6 +442,8 @@ class ChatApp {
             s.setAttribute('aria-hidden', 'true');
             s.hidden = true;
         }
+        // Пока идёт подгрузка, маркер показывает две строки скелетона (видны только с .is-loading)
+        if (!s.firstChild && window.Skeleton) s.innerHTML = window.Skeleton.chats(2);
         this._chatsMoreEl = s;
         // Проверка по скроллу общего контейнера, не чаще раза за кадр.
         let raf = 0;
@@ -866,12 +868,20 @@ class ChatApp {
             this._initHistoryScrollLoader();
             await this.renderMessageInput();
         } else {
+            // Скелетон ленты только если история не пришла за 100 мс, иначе он мелькает и сразу пропадает
+            const cancelSk = window.Skeleton
+                ? window.Skeleton.defer(msgContainer, window.Skeleton.messages(), 100, () => String(this.currentChat) === String(chatId))
+                : () => {};
             await Promise.all([
                 targetMsgId
                     ? this.loadMessagesAround(chatId, targetMsgId, opts?.radius || 10, { dbId: opts?.targetDbId })
                     : this.loadMessages(chatId),
                 this.renderMessageInput()
-            ]);
+            ]).finally(cancelSk);
+            // История не пришла (ошибка сети/доступа): скелетон не оставляем висеть
+            if (String(this.currentChat) === String(chatId)) {
+                msgContainer?.querySelector(':scope > .sk-wrap')?.remove();
+            }
         }
 
         // Восстанавливаем черновик поля ввода этого чата (если был сохранён).
@@ -2729,6 +2739,7 @@ class ChatApp {
             const first = (text.split('\n').find(l => l.trim()) || 'Просмотр текста').trim();
             titleEl.textContent = first.length > 60 ? first.slice(0, 60) + '…' : first;
         }
+        panel.inert = false;
         panel.classList.add('open');
         panel.setAttribute('aria-hidden', 'false');
         body.scrollTop = 0;
@@ -2747,8 +2758,11 @@ class ChatApp {
 
         const panel = document.getElementById('text-preview-panel');
         if (panel) {
+            // Фокус (обычно на «Закрыть») уводим из панели до aria-hidden, иначе браузер блокирует атрибут.
+            if (panel.contains(document.activeElement)) document.activeElement.blur();
             panel.classList.remove('open');
             panel.setAttribute('aria-hidden', 'true');
+            panel.inert = true;
         }
 
         if (activeId && this._pendingChips && this._pendingChips.has(activeId)) {
@@ -3075,7 +3089,7 @@ class ChatApp {
             }
 
             const chip = document.createElement('a');
-            chip.className = `fa-chip fa-chip--${color} fa-chip--bot`;
+            chip.className = `fa-chip fa-chip--${color} fa-chip--bot fa-chip--card`;
             chip.href      = url;
             chip.download  = name;
             chip.title     = name;
@@ -3104,15 +3118,11 @@ class ChatApp {
                 this._showFileContextMenu(e, { name, url, chatId: this.currentChat });
             });
 
+            // Карточка файла агента: бейдж типа (палитра .tp-ty), имя и размер под ним.
+            const sizeTxt = (window.FileTiles && typeof window.FileTiles.fmtSize === 'function') ? window.FileTiles.fmtSize(f.size) : '';
             chip.innerHTML = `
-<span class="fa-chip__icon" aria-hidden="true">
-  <svg viewBox="0 0 36 44" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path d="M4 0h20l12 12v28a4 4 0 0 1-4 4H4a4 4 0 0 1-4-4V4a4 4 0 0 1 4-4z" class="fa-chip__bg"/>
-    <path d="M24 0l12 12H28a4 4 0 0 1-4-4V0z" class="fa-chip__fold"/>
-    <text x="18" y="32" text-anchor="middle" class="fa-chip__text">${label}</text>
-  </svg>
-</span>
-<span class="fa-chip__name">${safeName}</span>
+<span class="fa-chip__ty tp-ty" data-c="${color}" aria-hidden="true">${label}</span>
+<span class="fa-chip__cap"><span class="fa-chip__name">${safeName}</span>${sizeTxt ? `<span class="fa-chip__meta">${sizeTxt}</span>` : ''}</span>
 <span class="fa-chip__dl-icon" aria-hidden="true">
   <svg viewBox="0 0 14 14" fill="none">
     <path d="M7 2v7M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5"
@@ -3522,9 +3532,16 @@ class ChatApp {
         const PAGE_SIZE = 3;
         const chips = otherFiles.map(f => makeChip(f));
         if (chips.length > PAGE_SIZE && window.FileTiles?.pager) {
-            wrap.appendChild(window.FileTiles.pager(chips, PAGE_SIZE));
-        } else {
-            chips.forEach(c => wrap.appendChild(c));
+            const pg = window.FileTiles.pager(chips, PAGE_SIZE);
+            window.FileTiles.edgeFade?.(pg.querySelector('.fa-pager__track'));
+            wrap.appendChild(pg);
+        } else if (chips.length) {
+            // Ряд карточек: на ПК в одну линию со скроллом по X, на мобиле столбиком.
+            const row = document.createElement('div');
+            row.className = 'fa-chip-row';
+            chips.forEach(c => row.appendChild(c));
+            wrap.appendChild(row);
+            window.FileTiles?.edgeFade?.(row);
         }
 
         return wrap;
@@ -4661,6 +4678,7 @@ class ChatApp {
        фоновый чат стримит корректно, даже когда открыт другой. */
     _applyRealtimeContext(chatId, msg) {
         window.MemoryPanel?.update(String(chatId), msg.message_id, msg.context);
+        window.AttachmentsPanel?.refresh(String(chatId));
     }
 
     _onWsMessage(chatId, event) {
@@ -4762,6 +4780,7 @@ class ChatApp {
             const isFinalBotMsg = msg.is_from_bot && msg.chunk === undefined && !msg.kind && (msg.done || msg.message !== undefined);
             if (isFinalBotMsg) _fm('done', { chat: key });
             if (isFinalBotMsg) window.MemoryPanel?.update(key, msg.message_id, msg.context);
+            if (isFinalBotMsg) window.AttachmentsPanel?.refresh(key);
             if (isFinalBotMsg && msg.tokens_usage && window.UsageOverlay) {
                 const _usage = { ...msg.tokens_usage, model: msg.agent_model };
                 if (st.pendingBotEl) window.UsageOverlay.mount(st.pendingBotEl, _usage);
@@ -6025,7 +6044,7 @@ class ChatApp {
     async renderMessageInput() {
         const container = this.getInputContainer();
         if (!container) return;
-        if (!this.currentChat) window.MemoryPanel?.unmount();
+        if (!this.currentChat) { window.MemoryPanel?.unmount(); window.AttachmentsPanel?.unmount(); }
 
         // Гард: не перерисовывать если экран уже соответствует состоянию
         const hasStart     = !!container.querySelector('.chat-start-screen');
@@ -6047,6 +6066,7 @@ class ChatApp {
         // Инпут активного чата уже есть И это тот же чат — пропускаем
         if (this.currentChat && hasActive && renderedChat === String(this.currentChat)) {
             window.MemoryPanel?.mount(this.currentChat);
+            window.AttachmentsPanel?.mount(this.currentChat);
             return;
         }
         // Если чат выбран, но рендерился стартовый — рендерим инпут (смена состояния)
@@ -6169,6 +6189,7 @@ class ChatApp {
         window.QueryMode?.inject(container);
         // Память чата: строка под полем, полоска контекста, карточка (memory-panel.js)
         window.MemoryPanel?.mount(this.currentChat);
+        window.AttachmentsPanel?.mount(this.currentChat);
 
         // Посимвольная анимация start-header
         // Запоминаем для какого чата отрендерили
@@ -6960,7 +6981,7 @@ class ChatApp {
             <div class="slash-card-header">
                 <div class="slash-card-info">
                     <span class="slash-card-badge">/workspaces</span>
-                    <span class="slash-card-value is-muted">Загрузка областей…</span>
+                    <span class="slash-card-value is-muted">${window.Skeleton ? window.Skeleton.inline(132) : 'Загрузка областей…'}</span>
                 </div>
                 <div class="slash-card-actions">
                     <label class="slash-ws-filter" title="Показать воркспейсы только для текущего чата">
@@ -6971,7 +6992,7 @@ class ChatApp {
                     <button type="button" class="slash-card-close-btn" title="Закрыть" aria-label="Закрыть">${closeSvg}</button>
                 </div>
             </div>
-            <div class="slash-ws-list"></div>`;
+            <div class="slash-ws-list">${window.Skeleton ? window.Skeleton.rows(3) : ''}</div>`;
 
         card.querySelector('.slash-card-close-btn')?.addEventListener('click', () => card.remove());
         const filterCb = card.querySelector('.slash-ws-filter-cb');

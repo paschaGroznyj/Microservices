@@ -100,7 +100,8 @@
     function syncBtn() {
         const b = ensureBtn();
         if (!b) return;
-        b.hidden = !panelOpen() || !target();
+        // PDF рисуется в canvas: текстового слоя нет, искать нечего.
+        b.hidden = !panelOpen() || !target() || panel()?.dataset.tpType === 'pdf';
         b.classList.toggle('is-active', S.open);
         b.setAttribute('aria-pressed', String(S.open));
     }
@@ -239,9 +240,11 @@
         const r = S.hits[S.cur];
         const root = target();
         if (!r || !root) return;
-        const rr = rectOf(r), cr = root.getBoundingClientRect();
+        // Просмотр кода (TPView) прокручивается внутри .cv-sc, а не в самом render.
+        const sy = root.querySelector(':scope > .cv-root .cv-sc') || root;
+        const rr = rectOf(r), cr = sy.getBoundingClientRect();
         if (rr.top < cr.top + 8 || rr.bottom > cr.bottom - 8) {
-            root.scrollTop += rr.top - cr.top - Math.round(root.clientHeight / 3);
+            sy.scrollTop += rr.top - cr.top - Math.round(sy.clientHeight / 3);
         }
         const sx = scrollerX(r.startContainer.parentElement, root);
         if (sx) {

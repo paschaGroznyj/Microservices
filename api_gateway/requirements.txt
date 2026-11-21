@@ -8,3 +8,4 @@ dotenv
 python-multipart
 starlette==0.52.1
 redis
+Pillow==10.3.0

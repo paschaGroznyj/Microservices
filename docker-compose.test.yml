@@ -25,6 +25,8 @@ services:
   api_gateway_test:
     build:
       context: ./api_gateway
+      additional_contexts:
+        gw_shared: ./gw_shared
       target: test
     image: microservices-tests/api_gateway:test
     network_mode: none
@@ -32,6 +34,8 @@ services:
   api_gateway_sigma_test:
     build:
       context: ./api_gateway_sigma
+      additional_contexts:
+        gw_shared: ./gw_shared
       target: test
     image: microservices-tests/api_gateway_sigma:test
     network_mode: none

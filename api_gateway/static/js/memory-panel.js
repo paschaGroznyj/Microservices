@@ -112,17 +112,92 @@ function cSlide() {
 /* ── карточка-карусель ── */
 const N = () => st.tab === 'j' ? st.total : st.tab === 't' ? Math.max(1, (st.runs || []).length) : 1;  // у саммари и контекста один слайд
 // Шаги: слайд на ответ агента — шаги цикла, вызовы тулов, сводка по тулам и разбивка по шагам.
-function tSlide(r) {
-  const tools = r.tools.slice(0, 6), more = r.tools.length - tools.length;
-  const rows = tools.map(t => `<div class="mm-crow"><span class="mm-cl">${esc(t.name)}</span><span class="mm-cv">× ${t.count}</span></div>`).join('');
-  const seq = r.by_step.map(s => `<span class="mm-ts" title="Шаг ${s.step}: ${esc(s.calls.map(c => c.name).join(', '))}"><b>${s.step}</b>${s.calls.length > 1 ? `×${s.calls.length}` : ''}${s.calls.some(c => !c.ok) ? '<em>!</em>' : ''}</span>`).join('');
-  const modelShort = r.model_label || (r.model ? r.model.split('/').pop() : '');
-  return `<div class="mm-sl mm-sl-t" data-mid="${esc(r.message_id)}"><div class="mm-sl-h"><span class="mm-tag">ответ</span><span class="mm-meta">${dt(r.created_at)}${modelShort ? ' · ' + esc(modelShort) : ''}</span></div>
-   <div class="mm-tsum"><span><b>${r.steps}</b> ${plural(r.steps, 'шаг', 'шага', 'шагов')}</span><span><b>${r.tool_calls}</b> ${plural(r.tool_calls, 'вызов', 'вызова', 'вызовов')}</span>${r.failed ? `<span class="mm-terr"><b>${r.failed}</b> с ошибкой</span>` : ''}</div>
-   ${r.tool_calls ? `<div class="mm-crows mm-trows${tools.length + (more > 0 ? 1 : 0) > 3 ? ' is-grid' : ''}">${rows}${more > 0 ? `<div class="mm-crow"><span class="mm-cl mm-cmore">ещё ${more} ${plural(more, 'тул', 'тула', 'тулов')}</span></div>` : ''}</div>
-   <div class="mm-tseq" aria-label="Шаги с вызовами инструментов">${seq}</div>` : '<div class="mm-empty mm-empty-in">Ответ без вызова инструментов.</div>'}</div>`;
+// Граф шагов (Bitbucket-стиль): сверху вниз, параллельные вызовы шага — ветки, слияние кривыми Безье.
+// Поля вызова hint/err/ms/t0 необязательны: у старых записей chats.tool_calls только name/ok.
+const TG = { row: 22, lane: 17, x0: 7, tones: [1, 2, 4, 3] };
+// 640 мс · 1,2 с · 14 с · 2,1 мин
+function tDur(ms) {
+  if (typeof ms !== 'number' || ms < 0) return '';
+  if (ms < 1000) return `${ms} мс`;
+  const s = ms / 1000; if (s < 10) return `${s.toFixed(1).replace('.', ',')} с`;
+  if (s < 60) return `${Math.round(s)} с`;
+  return `${(s / 60).toFixed(1).replace('.', ',')} мин`;
 }
+// Время шага: от старта первого параллельного вызова до конца самого долгого
+function tWall(calls) {
+  const t = calls.filter(c => typeof c.t0 === 'number' && typeof c.ms === 'number');
+  if (t.length !== calls.length || !t.length) return null;
+  return Math.max(...t.map(c => c.t0 + c.ms)) - Math.min(...t.map(c => c.t0));
+}
+function tGraph(r) {
+  const R = TG.row, X = j => TG.x0 + j * TG.lane, Y = i => i * R + R / 2, k = R * 0.6;
+  const rows = [{ kind: 'start' }];
+  r.by_step.forEach(s => {
+    const wall = tWall(s.calls), ms = s.calls.map(c => typeof c.ms === 'number' ? c.ms : -1), slow = ms.indexOf(Math.max(...ms));
+    s.calls.forEach((c, j) => rows.push({ kind: 'call', step: s.step, j, n: s.calls.length, c, wall, slow: ms[slow] >= 0 ? slow : -1 }));
+  });
+  const final = (r.steps || 0) > r.by_step.length;
+  if (final) rows.push({ kind: 'end', step: r.steps });
+  const paths = [], nodes = [];
+  let i = 1, lanes = 1;
+  r.by_step.forEach(s => {
+    const n = s.calls.length, last = i + n - 1, next = last + 1, hasNext = next < rows.length;
+    lanes = Math.max(lanes, n);
+    s.calls.forEach((c, j) => {
+      const row = i + j, x = X(j), tone = j ? TG.tones[(j - 1) % TG.tones.length] : 0;
+      if (j) {
+        let d = `M${X(0)},${Y(i)} C${X(0)},${Y(i) + k} ${x},${Y(i + 1) - k} ${x},${Y(i + 1)}`;
+        if (last > i + 1) d += ` L${x},${Y(last)}`;
+        if (hasNext) { const m = Y(last) + R * 0.4 + (n - 1 - j) * 1.2; d += ` C${x},${Y(last) + R * 0.3} ${X(0)},${m - R * 0.25} ${X(0)},${m}`; }
+        paths.push(`<path class="mm-tg-p t${tone}" d="${d}"/>`);
+      }
+      nodes.push(`<g class="mm-tg-o t${tone}${c.ok ? '' : ' is-err'}">${c.ok ? '' : `<circle class="mm-tg-h" cx="${x}" cy="${Y(row)}" r="7.5"/>`}<circle cx="${x}" cy="${Y(row)}" r="4"/></g>`);
+    });
+    i = next;
+  });
+  const lastRow = rows.length - 1;
+  const trunk = `<path class="mm-tg-p t0" d="M${X(0)},${Y(0)} L${X(0)},${Y(lastRow)}"/>`;
+  const ends = `<circle class="mm-tg-q0" cx="${X(0)}" cy="${Y(0)}" r="4"/>` + (final ? `<circle class="mm-tg-fin" cx="${X(0)}" cy="${Y(lastRow)}" r="4"/>` : '');
+  const W = X(lanes - 1) + 12, H = rows.length * R;
+  const svg = `<svg class="mm-tg-svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" aria-hidden="true">${trunk}${paths.join('')}${nodes.join('')}${ends}</svg>`;
+  const html = rows.map(o => {
+    if (o.kind === 'start') return '<div class="mm-tg-r is-q"><span class="mm-tg-t">запрос</span></div>';
+    if (o.kind === 'end') return `<div class="mm-tg-r is-q"><span class="mm-tg-t">ответ</span><span class="mm-tg-s">шаг ${o.step}</span></div>`;
+    const c = o.c, err = !c.ok, d = tDur(c.ms), slow = o.n > 1 && o.slow === o.j;
+    const sub = err && c.err ? c.err : c.hint || '';
+    const side = o.j === 0 ? `<span class="mm-tg-s">шаг ${o.step}${o.n > 1 ? ` · <i data-n="×${o.n}">${o.n} параллельно</i>` : ''}</span>` : '<span class="mm-tg-s"></span>';
+    const tip = [`Шаг ${o.step}${o.n > 1 ? ` (${o.j + 1} из ${o.n} параллельно)` : ''}: ${c.name}`, c.hint, d && `${d}${slow ? ', самый долгий в шаге' : ''}`, o.j === 0 && o.wall != null && o.n > 1 ? `шаг целиком ${tDur(o.wall)}` : '', err ? `Ошибка${c.err ? ': ' + c.err : ''}` : ''].filter(Boolean).join('\n');
+    return `<div class="mm-tg-r${err ? ' is-err' : ''}" title="${esc(tip)}"><span class="mm-tg-t">${esc(c.name)}</span>${sub ? `<span class="mm-tg-a">${esc(sub)}</span>` : ''}${err ? '<span class="mm-tg-e">ошибка</span>' : ''}${d ? `<span class="mm-tg-d${slow ? ' is-slow' : ''}">${d}</span>` : ''}${side}</div>`;
+  }).join('');
+  return `<div class="mm-tg" style="--tg-w:${W}px;--tg-row:${R}px">${svg}<div class="mm-tg-rows">${html}</div></div>`;
+}
+function tSlide(r) {
+  const modelShort = r.model_label || (r.model ? r.model.split('/').pop() : '');
+  const failed = r.by_step.reduce((a, s) => a + s.calls.filter(c => !c.ok).length, 0);
+  return `<div class="mm-sl mm-sl-t" data-mid="${esc(r.message_id)}"><div class="mm-sl-h"><span class="mm-tag">ответ</span><span class="mm-meta">${dt(r.created_at)}${modelShort ? ' · ' + esc(modelShort) : ''}</span></div>
+   <div class="mm-tsum"><span><b>${r.steps}</b> ${plural(r.steps, 'шаг', 'шага', 'шагов')}</span><span><b>${r.tool_calls}</b> ${plural(r.tool_calls, 'вызов', 'вызова', 'вызовов')}</span>${failed ? `<span class="mm-terr"><b>${failed}</b> ${plural(failed, 'ошибка', 'ошибки', 'ошибок')}</span>` : ''}</div>
+   ${r.tool_calls ? tGraph(r) : '<div class="mm-empty mm-empty-in">Ответ без вызова инструментов.</div>'}</div>`;
+}
+
+// Автоскролл по Y: длинный граф сразу показывает первую ошибку (на трети высоты слайда).
+// Без ошибок слайд остаётся сверху. Если пользователь сам крутил слайд, не трогаем его.
+function tAutoScroll(root, only) {
+  const sls = [...(root || document).querySelectorAll('.mm-card5 .mm-sl-t')];
+  (only == null ? sls : [sls[only]].filter(Boolean)).forEach(sl => {
+    if (!sl._tgUser) ['wheel', 'touchmove', 'keydown', 'pointerdown'].forEach(ev => sl.addEventListener(ev, () => { sl.dataset.tgUser = '1'; }, { passive: true, once: true }));
+    if (!sl._tgUser) sl.addEventListener('scroll', () => sl.classList.toggle('is-scrolled', sl.scrollTop > 0), { passive: true });
+    sl._tgUser = true;
+    if (sl.dataset.tgUser || sl.scrollHeight <= sl.clientHeight + 1) return;
+    const e = sl.querySelector('.mm-tg-r.is-err'); if (!e) return;
+    const top = e.getBoundingClientRect().top - sl.getBoundingClientRect().top + sl.scrollTop;
+    // над ошибкой две строки контекста, край — по границе строки
+    sl.scrollTop = top + e.offsetHeight <= sl.clientHeight - 30 ? 0 : Math.max(0, top - 2 * e.offsetHeight);
+    sl.classList.toggle('is-scrolled', sl.scrollTop > 0);
+  });
+}
+
 function tEmpty() {
+  if (st.tload && window.Skeleton) return window.Skeleton.mm('t');
   return `<div class="mm-sl"><div class="mm-empty">${st.tload ? 'Загрузка…' : st.terr ? 'Не удалось загрузить шаги.' : 'Нет данных о шагах: ответов агента после обновления ещё не было.'}</div></div>`;
 }
 function loadSteps() {
@@ -142,6 +217,7 @@ function jSlide(e) {
 }
 function sSlide() {
   const sm = (st.data || EMPTY).summary;
+  if (!sm.text && st.sload && window.Skeleton) return window.Skeleton.mm('s');
   if (!sm.text) return `<div class="mm-sl"><div class="mm-empty">${st.sload ? 'Загрузка…' : 'Саммари ещё нет: история помещается в контекст целиком.'}</div></div>`;
   return `<div class="mm-sl"><div class="mm-sl-h"><span class="mm-tag t-summary">саммари</span><span class="mm-meta">до #${sm.upto_id} · ${nf(sm.covered)} из ${nf(sm.total_messages)} сообщ. · ${nf(sm.chars)} зн.</span></div>
    <div class="mm-txt">${esc(plain(sm.text))}</div>
@@ -196,12 +272,13 @@ function openCard(tab, i) {
    <div class="mm-types"></div><div class="mm-vp"><div class="mm-trk"></div></div><div class="mm-prog"><i></i></div></div>`);
   box.before(c); bindSwipe(c.querySelector('.mm-vp')); pin();
   c.addEventListener('click', e => { const t = e.target.closest('button'); if (!t) return;
-    if (t.dataset.tab) { st.tab = t.dataset.tab; st.i = 0; renderCard(); ensureTab(st.tab); }
+    if (t.dataset.tab) { st.tab = t.dataset.tab; st.i = 0; ensureTab(st.tab); renderCard(); }
     else if (t.dataset.nav) go(+t.dataset.nav);
     else if ('close' in t.dataset) closeCard();
     else if ('all' in t.dataset) openModal(st.tab === 'j' ? (st.entries[st.i] || {}).id : 'summary');
     else if (t.dataset.full) openModal(t.dataset.full); });
-  renderCard(); ensureTab(tab);
+  // запрос вкладки стартует до отрисовки: флаги загрузки уже выставлены, карточка сразу показывает скелетон
+  ensureTab(tab); renderCard();
 }
 function renderCard() {
   const c = document.querySelector('.mm-card5'); if (!c) return; const D = st.data || EMPTY, cx = D.context || {};
@@ -217,10 +294,11 @@ function renderCard() {
   q().area.querySelectorAll('.mm-sline [data-go]').forEach(b => { const on = b.dataset.go === st.tab; b.classList.toggle('is-on', on); b.setAttribute('aria-expanded', on); });
   const trk = c.querySelector('.mm-trk');
   trk.innerHTML = st.tab === 'j'
-    ? (st.entries.length ? st.entries.map(jSlide).join('') : `<div class="mm-sl"><div class="mm-empty">${st.loading ? 'Загрузка…' : st.jerr ? 'Не удалось загрузить журнал.' : 'Журнал пуст.'}</div></div>`)
+    ? (st.entries.length ? st.entries.map(jSlide).join('') : st.loading && window.Skeleton ? window.Skeleton.mm('j') : `<div class="mm-sl"><div class="mm-empty">${st.loading ? 'Загрузка…' : st.jerr ? 'Не удалось загрузить журнал.' : 'Журнал пуст.'}</div></div>`)
     : st.tab === 't' ? (st.runs && st.runs.length ? st.runs.map(tSlide).join('') : tEmpty())
     : st.tab === 'c' ? cSlide() : sSlide();
   // «Открыть полностью» только там, где текст не влез в превью
+  requestAnimationFrame(() => st.tab === 't' && typeof tAutoScroll === 'function' && tAutoScroll(c));
   requestAnimationFrame(() => c.querySelectorAll('.mm-sl').forEach(sl => { const t = sl.querySelector('.mm-txt'), f = sl.querySelector('.mm-sl-f');
     if (t && f) f.style.visibility = t.scrollHeight > t.clientHeight + 1 ? '' : 'hidden'; }));
   c.querySelector('[data-all]').style.display = st.tab === 'c' || st.tab === 't' ? 'none' : '';
@@ -234,6 +312,7 @@ function place(anim = true) {
   const c = document.querySelector('.mm-card5'); if (!c) return; const trk = c.querySelector('.mm-trk');
   trk.style.transition = anim ? 'transform .28s cubic-bezier(.2,.7,.2,1)' : 'none';
   trk.style.transform = `translateX(${-st.i * 100}%)`; const n = N();
+  if (st.tab === 't' && typeof tAutoScroll === 'function') tAutoScroll(c, st.i);
   c.querySelector('[data-nav="-1"]').disabled = st.i === 0; c.querySelector('[data-nav="1"]').disabled = st.i >= n - 1;
   if ((st.tab === 'j' || st.tab === 't') && n > 1) { c.querySelector('.mm-cnt').textContent = `${st.i + 1} / ${n}`; c.querySelector('.mm-prog i').style.left = (st.i / n * 100) + '%'; }
 }

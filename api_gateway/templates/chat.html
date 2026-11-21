@@ -228,12 +228,6 @@
                         </div>
                     </div>
 
-                    <button class="info-btn" id="open-help" aria-label="Помощь" title="Руководство">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-                            <circle cx="12" cy="12" r="10"/>
-                            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01"/>
-                        </svg>
-                    </button>
 
                     <!-- THEME TOGGLE — встроен в header-actions -->
                     <button class="theme-toggle" id="theme-toggle" aria-label="Переключить тему" title="Светлая / Тёмная тема">
@@ -490,12 +484,22 @@
                         <path d="M2.5 13.5c0-2.76 2.46-5 5.5-5s5.5 2.24 5.5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
                     </svg>
                 </div>
-                <div>
+                <div class="profile-header-text">
                     <div class="profile-title">Профиль</div>
                     <div class="profile-subtitle sk-txt" id="modal-subtitle" style="--i:0">@username</div>
                 </div>
             </div>
-            <button class="profile-close" id="profile-close" aria-label="Закрыть">✕</button>
+            <div class="profile-header-actions">
+                <button class="mm-ib profile-ib" id="open-help" type="button" aria-label="Помощь" title="Руководство">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+                        <circle cx="12" cy="12" r="8.5"/>
+                        <path d="M9.6 9.3a2.5 2.5 0 0 1 4.85.85c0 1.7-2.45 2.35-2.45 2.35M12 16.4h.01"/>
+                    </svg>
+                </button>
+                <button class="mm-ib profile-ib profile-close" id="profile-close" type="button" aria-label="Закрыть" title="Закрыть">
+                    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+                </button>
+            </div>
         </div>
         <div class="profile-body">
             <div class="profile-hero">

@@ -125,6 +125,8 @@ function closeProfile() {
 document.addEventListener('click', async (e) => {
   if (e.target.closest('#profile-btn')) openProfile();
   if (e.target.closest('#profile-close')) closeProfile();
+  // Помощь теперь в шапке профиля: профиль уступает место руководству.
+  if (e.target.closest('#open-help') && overlay.classList.contains('active')) closeProfile();
   if (e.target === overlay) closeProfile();
 
   if (e.target.closest('#logout-btn')) {

@@ -91,11 +91,33 @@
       b = document.createElement('button');
       b.type = 'button'; b.className = 'info-btn att-open-btn'; b.id = 'att-open-btn';
       b.title = 'Медиа и файлы чата'; b.setAttribute('aria-label', 'Медиа и файлы чата');
-      b.setAttribute('aria-expanded', 'false'); b.innerHTML = ICON; b.hidden = !st.chat;
-      b.addEventListener('click', () => (st.open ? close() : open()));
-      ha.insertBefore(b, ha.querySelector('#open-help'));
+      b.setAttribute('aria-expanded', 'false'); b.innerHTML = ICON;
+      b.addEventListener('click', () => { if (!b.disabled) (st.open ? close() : open()); });
+      // Место бывшей кнопки «Помощь» (она переехала в шапку профиля): перед переключателем темы.
+      ha.insertBefore(b, ha.querySelector('#theme-toggle'));
+      watchViews();
     }
+    syncButton(b);
     return b;
+  }
+  // Кнопка видна всегда, но работает только в разделе «Агент» с открытым чатом.
+  // В Скиллах, Графе и т. п. — затушена; открытая панель закрывается.
+  const agentVisible = () => { const v = document.getElementById('view-agent'); return !!v && !v.classList.contains('hidden'); };
+  const available = () => !!st.chat && agentVisible();
+  function syncButton(b = document.getElementById('att-open-btn')) {
+    if (!b) return;
+    const ok = available();
+    b.disabled = !ok;
+    b.setAttribute('aria-disabled', String(!ok));
+    if (!ok && st.open) close();
+  }
+  let viewsMo = null;
+  function watchViews() {
+    if (viewsMo) return;
+    const views = document.querySelectorAll('.view');
+    if (!views.length) return;
+    viewsMo = new MutationObserver(() => syncButton());
+    views.forEach(v => viewsMo.observe(v, { attributes: true, attributeFilter: ['class'] }));
   }
 
   // ---------- каркас панели ----------
@@ -139,7 +161,7 @@
 
   // ---------- открытие / закрытие ----------
   function open() {
-    if (!st.chat) return;
+    if (!available()) return;
     if (!st.el) {
       st.el = shell();
       if (mobile()) {
@@ -456,9 +478,9 @@
     // Чат открыт / сменился (вызывается рядом с MemoryPanel.mount).
     mount(chatId) {
       const id = chatId ? String(chatId) : null;
-      const b = ensureButton(); if (b) b.hidden = !id;
-      if (id === st.chat) return;
+      if (id === st.chat) { ensureButton(); return; }
       st.chat = id; st.counts = null; st.chain = [];
+      ensureButton();
       if (!id) { close(); return; }
       if (st.open) reload();
     },

@@ -133,6 +133,8 @@
 .att-open-btn svg{width:18px;height:18px}
 .att-open-btn.is-on{background:var(--cds-fill-ghost-hover,color-mix(in srgb,var(--text-primary) 8%,transparent));color:var(--text-primary)}
 .att-open-btn[hidden]{display:none}
+/* вне раздела «Агент» и без открытого чата кнопка затушена и не реагирует */
+.att-open-btn:disabled{opacity:.35;cursor:default;pointer-events:none}
 
 /* мобила: шторка */
 @media (max-width:600px){

@@ -10,4 +10,3 @@ aiokafka
 python-multipart
 
 redis
-Pillow==10.3.0

@@ -1,20 +1,11 @@
-"""attachments_gw.py: прокси списка вложений в chats_service и уменьшенные превью картинок."""
-import io
-
+"""attachments_gw.py и group_attachments_gw.py: прокси списка вложений и готовых превью из chats_service."""
 import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from gw_shared import attachments_gw as gw
-
-PIL = pytest.importorskip("PIL.Image")
-
-
-def png(w, h, color=(200, 30, 30)):
-    b = io.BytesIO()
-    PIL.new("RGB", (w, h), color).save(b, "PNG")
-    return b.getvalue()
+from gw_shared import group_attachments_gw as ggw
 
 
 class R:
@@ -44,11 +35,11 @@ def make(routes, user={"username": "pavel", "user_id": 56}):
 
     async def get_user(_):
         return user
-    gw.bind(get_client=lambda: fc, chats_url="http://chats/", agent_url="http://agent", get_user=get_user)
-    gw._cache.clear()
-    gw._cache_size = 0
+    gw.bind(get_client=lambda: fc, chats_url="http://chats/", get_user=get_user)
+    ggw.bind(get_client=lambda: fc, chats_url="http://chats/", get_user=get_user)
     app = FastAPI()
     app.include_router(gw.router)
+    app.include_router(ggw.router)
     return TestClient(app), fc
 
 
@@ -82,47 +73,41 @@ def test_list_maps_errors():
 def test_requires_auth():
     c, fc = make({}, user=None)
     assert c.get("/api/chats/F/attachments").status_code == 401
-    assert c.get("/api/chats/F/thumb/m1/a.png").status_code == 401
+    assert c.get("/api/chats/F/thumb/7").status_code == 401
+    assert c.get("/api/group/thumb/7").status_code == 401
     assert fc.calls == []
 
 
-def test_thumb_from_file_resized_and_cached():
-    big = png(1600, 900)
-    c, fc = make({"/internal/resolve_file": R(200, js={"path": "/app/generated_files/m1/a.png"}),
-                  "/web/file": R(200, big, "image/png")})
-    r = c.get("/api/chats/F/thumb/m1/a.png?w=230")
-    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
-    im = PIL.open(io.BytesIO(r.content))
-    assert im.size == (216, 122) and len(r.content) < len(big)
-    assert [u.rsplit("/", 1)[-1] for u, *_ in fc.calls] == ["resolve_file", "file"]
-    n = len(fc.calls)
-    assert c.get("/api/chats/F/thumb/m1/a.png?w=216").content == r.content
-    assert len(fc.calls) == n  # второй раз из кэша
-    assert c.get("/api/chats/OTHER/thumb/m1/a.png?w=216").status_code == 200
-    assert len(fc.calls) > n   # другой чат — мимо кэша
+WEBP = b"RIFF\x10\x00\x00\x00WEBPVP8 fake"
 
 
-def test_thumb_db_first_with_image_key_and_fallback():
-    c, fc = make({"/web/db_image": R(404),
-                  "/internal/resolve_file": R(200, js={"path": "/p"}),
-                  "/web/file": R(200, png(100, 50), "image/png")})
-    r = c.get("/api/chats/F/thumb/m1/generated_0.jpg?image_key=abc&w=480")
-    assert r.status_code == 200
-    assert [u.rsplit("/", 1)[-1] for u, *_ in fc.calls] == ["db_image", "resolve_file", "file"]
-    # маленький оригинал не раздуваем: отдаётся как есть, если превью не меньше
-    assert PIL.open(io.BytesIO(r.content)).size == (100, 50)
-
-
-def test_thumb_not_found_and_bad_name():
-    c, _ = make({})
-    assert c.get("/api/chats/F/thumb/m1/a.png").status_code == 404
-    assert c.get("/api/chats/F/thumb/m1/..").status_code in (400, 404)
-    assert c.get("/api/chats/F/thumb/m1/a%5Cb.png").status_code == 400
-
-
-def test_thumb_not_image_passthrough():
-    c, _ = make({"/internal/resolve_file": R(200, js={"path": "/p"}),
-                 "/web/file": R(200, b"<svg xmlns='http://www.w3.org/2000/svg'/>", "image/svg+xml")})
-    r = c.get("/api/chats/F/thumb/m1/a.svg")
-    assert r.status_code == 200 and r.headers["content-type"].startswith("image/svg+xml")
+def test_chat_thumb_proxies_ready_preview():
+    c, fc = make({"/chat/F/thumb/7": R(200, WEBP, "image/webp")})
+    r = c.get("/api/chats/F/thumb/7")
+    assert r.status_code == 200 and r.content == WEBP and r.headers["content-type"] == "image/webp"
+    assert r.headers["cache-control"] == "private, max-age=86400"
     assert r.headers["x-content-type-options"] == "nosniff"
+    assert fc.calls == [("http://chats/chat/F/thumb/7", None, {"X-User-Name": "pavel"})]
+
+
+def test_group_thumb_passes_viewer():
+    c, fc = make({"/group/thumb/9": R(200, WEBP, "image/webp")})
+    r = c.get("/api/group/thumb/9")
+    assert r.status_code == 200 and r.content == WEBP
+    assert fc.calls == [("http://chats/group/thumb/9", {"viewer_id": 56}, None)]
+
+
+def test_thumb_errors():
+    c, _ = make({"/chat/F/thumb/7": R(404)})
+    assert c.get("/api/chats/F/thumb/7").status_code == 404
+    c, _ = make({"/chat/F/thumb/7": R(500)})
+    assert c.get("/api/chats/F/thumb/7").status_code == 502
+    c, _ = make({"/chat/F/thumb/7": R(200, b"{}", "application/json")})
+    assert c.get("/api/chats/F/thumb/7").status_code == 502   # не картинка наружу не уходит
+    c, _ = make({"/group/thumb/9": httpx.ConnectError("down")})
+    assert c.get("/api/group/thumb/9").status_code == 502
+    c, fc = make({})
+    assert c.get("/api/chats/F/thumb/abc").status_code == 422
+    assert c.get("/api/chats/F/thumb/m1/a.png").status_code == 404   # старый адрес больше не обслуживается
+    assert c.get("/api/chats/a%5Cb/thumb/7").status_code == 400
+    assert fc.calls == []

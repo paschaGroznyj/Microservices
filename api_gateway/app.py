@@ -2460,7 +2460,7 @@ app.include_router(_memory_gw.router)
 # ── ВЛОЖЕНИЯ ЧАТА (gw_shared/attachments_gw.py): правая панель «Медиа / Файлы / Ссылки» и превью картинок ──
 from gw_shared import attachments_gw as _attachments_gw
 _attachments_gw.bind(get_client=lambda: app.state.http_client, chats_url=SERVICES['chats']['url'],
-                     agent_url=SERVICES['agent_service']['url'], get_user=get_current_user)
+                     get_user=get_current_user)
 app.include_router(_attachments_gw.router)
 
 # ── ВЛОЖЕНИЯ ОБЩЕГО ЧАТА (gw_shared/group_attachments_gw.py): та же панель, без веток ──

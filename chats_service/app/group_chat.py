@@ -26,6 +26,7 @@ from pydantic import BaseModel
 
 from app.core import obs_file_storage
 from app.core.thumbhash import media_meta_from_bytes
+from app.core import file_thumbs
 
 logger = logging.getLogger(__name__)
 
@@ -252,6 +253,9 @@ async def group_upload(
             width=meta.get("width"), height=meta.get("height"),
             thumbhash=meta.get("thumbhash"))
         if rec:
+            # превью 384 px для панели вложений из уже прочитанных байтов
+            if rec.get("id") and getattr(group_db, "pool", None) is not None:
+                await file_thumbs.store_group_upload(group_db.pool, rec["id"], body, mime, up.filename or "")
             saved.append(rec)
     return {"ok": True, "files": saved}
 

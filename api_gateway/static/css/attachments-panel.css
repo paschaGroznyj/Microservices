@@ -65,6 +65,10 @@
 .att-mgrid>.att-im:last-child{border-bottom-right-radius:10px}
 .att-im img{width:100%;height:100%;object-fit:cover;display:block;opacity:0;transition:opacity .18s}
 .att-im.is-ld img{opacity:1}
+.att-im--sk{--sk-base:color-mix(in srgb,var(--text-muted) 44%,transparent)}
+[data-theme="dark"] .att-im--sk{--sk-base:rgba(255,255,255,.17)}
+.att-im--sk:not(.is-ld):not(.is-broken)::before{content:"";position:absolute;inset:0;background:var(--sk-base);animation:skPulse 1.5s ease-in-out infinite;animation-delay:calc(var(--i,0)*90ms);pointer-events:none}
+@media (prefers-reduced-motion:reduce){.att-im--sk::before{animation:none}}
 .att-im::after{content:"";position:absolute;inset:0;border-radius:inherit;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--text-primary) 10%,transparent);pointer-events:none;transition:background .15s}
 .att-im:hover::after{background:rgba(0,0,0,.12)}
 .att-im.is-broken::before{content:"";position:absolute;inset:34%;border:2px solid var(--text-muted);border-radius:4px;opacity:.5}

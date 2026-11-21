@@ -8,6 +8,7 @@ from app.core.config import KAFKA_BROKER
 from app.db.tasks_db import TasksDB
 from app.db.push_db import PushDB
 from app import push_sender
+from app.core import file_thumbs
 from typing import List
 import os
 import base64
@@ -233,6 +234,15 @@ class DBConsumer:
                 input_format=input_format,
                 type_query=type_query,
             )
+            # Превью 384 px картинок для панели вложений (file_thumbs) строит chats_service в фоне:
+            # здесь цикл блокируется на KafkaConsumer, фоновая задача стояла бы до следующего сообщения.
+            if file_thumbs.has_images(attached_files):
+                try:
+                    async with httpx.AsyncClient(timeout=2.0) as _hc:
+                        await _hc.post(f"{CHATS_SELF_URL}/internal/thumbs/chat_message",
+                                       params={"chat_id": chat_id, "message_id": message_id})
+                except Exception as _th_err:
+                    logger.info(f"[file_thumbs] warm {chat_id}/{message_id}: {_th_err}")
             if not is_from_bot and isinstance(poll_answer, dict):
                 try:
                     saved_pa = await self.db.save_poll_answer(

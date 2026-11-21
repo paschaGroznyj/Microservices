@@ -1,7 +1,7 @@
 // Правая панель вложений чата: вкладки «Медиа / Файлы / Ссылки», фильтр «Все / Я / Агент»,
 // во вкладке «Файлы» переключатель «Список / Ветки» (дерево по цепочке форков).
 // Данные: GET /api/chats/{id}/attachments (attachments_gw.py -> chats_service),
-// превью сетки: GET /api/chats/{id}/thumb/{message_id}/{file_name}?w=216.
+// превью сетки: GET /api/chats/{id}/thumb/{file_id} (готовое 384 px из chats_service, под ним — размытый thumbhash).
 // Клик: картинка/видео -> лайтбокс приложения, файл -> text-preview-panel (FileTiles), ссылка -> новая вкладка.
 // ПКМ (долгое нажатие на тач): «Перейти к сообщению» через app.navigateToSearchMessage, как в поиске.
 // Общий чат (раздел #view-group): те же вкладки без «Веток», фильтр «Все / Я / Остальные»,
@@ -78,8 +78,9 @@
   const base = () => (isGroup() ? `/api/group/${enc(GROUP_ROOM)}` : `/api/chats/${enc(st.chat)}`);
   const fileUrl = it => (isGroup() ? `/api/group/file/${enc(it.id)}` : `${base()}/files/${enc(it.message_id)}/${enc(it.name)}`);
   const dbUrl = it => `${base()}/image/${enc(it.message_id)}/${enc(it.name)}${it.image_key ? `?image_key=${enc(it.image_key)}` : ''}`;
-  const thumbUrl = it => (isGroup() ? `/api/group/thumb/${enc(it.id)}?w=216`
-    : `${base()}/thumb/${enc(it.message_id)}/${enc(it.name)}?w=216${it.image_key ? `&image_key=${enc(it.image_key)}` : ''}`);
+  const thumbUrl = it => (isGroup() ? `/api/group/thumb/${enc(it.id)}` : `${base()}/thumb/${enc(it.id)}`);
+  // Размытая заглушка из thumbhash (приходит в списке), пока грузится превью; декодер в media-ring.js.
+  const thumbBg = it => (it.thumbhash && window.MediaRing && MediaRing.thumbUrl ? MediaRing.thumbUrl(it.thumbhash) : null);
   function mediaItem(it) {
     if (isGroup()) {
       const url = fileUrl(it);
@@ -299,8 +300,8 @@
   function append(items, from) {
     const list = $('.att-list');
     const frag = document.createDocumentFragment();
-    items.forEach((it, k) => {
     if (tree()) list.classList.toggle('att-list--fk', forked());
+    items.forEach((it, k) => {
       const idx = from + k;
       if (tree()) { treeAppend(frag, it, idx); return; }
       const dk = dayKey(it.created_at);
@@ -323,6 +324,10 @@
     d.dataset.k = 'media'; d.dataset.i = idx; d.tabIndex = 0;
     d.setAttribute('role', 'button'); d.setAttribute('aria-label', `${it.kind === 'video' ? 'Видео' : 'Картинка'} ${it.name}`);
     d.title = it.name;
+    const bg = thumbBg(it);
+    if (bg) d.style.backgroundImage = `url("${bg}")`;
+    // Без thumbhash — фирменный пульс до загрузки превью (фаза по позиции в сетке).
+    else if (it.kind !== 'video') { d.classList.add('att-im--sk'); d.style.setProperty('--i', idx % 6); }
     if (it.kind === 'video') d.insertAdjacentHTML('beforeend', PLAY);
     else {
       const img = new Image();
@@ -330,7 +335,7 @@
       img.onload = () => d.classList.add('is-ld');
       img.onerror = () => {
         if (!img.dataset.fb) { img.dataset.fb = '1'; img.src = mediaItem(it).url; return; }
-        d.classList.add('is-broken'); img.remove();
+        d.classList.add('is-broken'); d.style.backgroundImage = ''; img.remove();
       };
       img.src = thumbUrl(it);
       d.prepend(img);

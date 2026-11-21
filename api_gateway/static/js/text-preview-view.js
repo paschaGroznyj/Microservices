@@ -107,16 +107,131 @@
         b.classList.toggle('is-on', on);
         b.setAttribute('aria-pressed', on ? 'true' : 'false');
     }
+    // Разворот анимируется одним движением: панель px→px, сайдбар по ширине, оба 260 мс
+    // с одной кривой. Лента чата на время анимации фиксируется по ширине, чтобы не
+    // перекладываться в каждом кадре (её всё равно перекрывает панель).
+    const ANIM_MS = 260, EASE = 'cubic-bezier(.22,.61,.36,1)';
+    let animEnd = null;
+    const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    // «Устоявшийся» разворот: во время анимации документ ещё масштабируем как в узкой панели.
+    const isWideSettled = () => {
+        const p = $('text-preview-panel');
+        return !!p && p.classList.contains('is-wide') && !p.classList.contains('tp-anim');
+    };
+    function applyWide(panel, next) {
+        panel.classList.toggle('is-wide', next);
+        sidebarForWide(next);
+        syncWideBtn();
+        syncRailBtn();
+    }
+    function finishWide() {
+        if (animEnd) animEnd();
+    }
     function setWide(on) {
         const panel = $('text-preview-panel');
         if (!panel) return;
         const next = !!on && !narrowScreen();
         if (next === isWide()) return;
-        panel.classList.toggle('is-wide', next);
-        sidebarForWide(next);
-        syncWideBtn();
-        syncRailBtn();
+        finishWide();
+        const layout = document.querySelector('.chat-layout');
+        const view = panel.parentElement;
+        const inner = view && view.querySelector(':scope > .chat-main-inner');
+        const animate = panel.classList.contains('open') && layout && view && !reducedMotion();
+        if (!animate) {
+            applyWide(panel, next);
+            afterWide(panel, next);
+            return;
+        }
+        const sb = layout.querySelector('.sidebar');
+        const sbW = () => (sb ? sb.getBoundingClientRect().width : 0);
+        // FLIP: замеряем конечное состояние без переходов, возвращаем начальное и анимируем.
+        const w0 = panel.getBoundingClientRect().width, iw0 = inner ? inner.getBoundingClientRect().width : 0;
+        if (inner) inner.style.width = `${iw0}px`;
+        layout.classList.add('tp-snap');
+        applyWide(panel, next);
+        const w1 = panel.getBoundingClientRect().width, vw1 = view.getBoundingClientRect().width;
+        applyWide(panel, !next);
+        sbW();
+        layout.classList.remove('tp-snap');
+        // Лента: при развороте остаётся прежней ширины, при сворачивании сразу получает конечную.
+        if (inner) inner.style.width = `${next ? iw0 : vw1}px`;
+        panel.style.setProperty('--tp-w', `${w0}px`);
+        panel.classList.add('tp-anim');
+        layout.classList.add('tp-anim');
+        void panel.offsetWidth;
+        applyWide(panel, next);
+        panel.style.setProperty('--tp-w', `${w1}px`);
+        let tm = 0;
+        const onEnd = (e) => { if (e.target === panel && e.propertyName === 'width') done(); };
+        const done = () => {
+            animEnd = null;
+            clearTimeout(tm);
+            panel.removeEventListener('transitionend', onEnd);
+            panel.classList.remove('tp-anim');
+            layout.classList.remove('tp-anim');
+            panel.style.removeProperty('--tp-w');
+            if (inner) inner.style.width = '';
+            afterWide(panel, next);
+        };
+        animEnd = done;
+        panel.addEventListener('transitionend', onEnd);
+        tm = setTimeout(done, ANIM_MS + 120);
+    }
+    // Закрытие из разворота. MutationObserver срабатывает до отрисовки кадра, поэтому
+    // панель ещё не начала выезжать: фиксируем её ширину в px (контент не перекладывается),
+    // сайдбар раскрываем с той же кривой, ленте сразу даём конечную ширину.
+    // is-wide снимаем после анимации, когда панель уже за краем.
+    function closeWide(panel) {
+        if (!isWide()) return false;
+        finishWide();
+        const layout = document.querySelector('.chat-layout');
+        const view = panel.parentElement;
+        if (!layout || !view || reducedMotion()) return false;
+        const inner = view.querySelector(':scope > .chat-main-inner');
+        // Выезд (transform) уже пошёл с первым замером: transition панели оставляем только
+        // на transform. tp-snap здесь нельзя, он оборвал бы выезд прыжком в конец.
+        const w0 = panel.getBoundingClientRect().width;
+        panel.style.transition = `transform ${ANIM_MS}ms ${EASE}`;
+        panel.style.setProperty('--tp-w', `${w0}px`);
+        panel.classList.add('tp-anim');
+        const expand = sbAuto && layout.classList.contains('sidebar-collapsed');
+        let vw1 = view.getBoundingClientRect().width;
+        if (expand) {
+            layout.classList.add('tp-snap-sb');
+            layout.classList.remove('sidebar-collapsed');
+            vw1 = view.getBoundingClientRect().width;
+            layout.classList.add('sidebar-collapsed');
+            void layout.offsetWidth;
+            layout.classList.remove('tp-snap-sb');
+        }
+        if (inner) inner.style.width = `${vw1}px`;
+        layout.classList.add('tp-anim');
+        if (expand) sidebarForWide(false);
+        let tm = 0;
+        const onEnd = (e) => { if (e.target === panel && e.propertyName === 'transform') done(); };
+        const done = () => {
+            animEnd = null;
+            clearTimeout(tm);
+            panel.removeEventListener('transitionend', onEnd);
+            layout.classList.add('tp-snap');
+            panel.classList.remove('tp-anim');
+            layout.classList.remove('tp-anim');
+            panel.style.removeProperty('--tp-w');
+            panel.style.transition = '';
+            if (inner) inner.style.width = '';
+            applyWide(panel, false);
+            void panel.offsetWidth;
+            layout.classList.remove('tp-snap');
+            afterWide(panel, false);
+        };
+        animEnd = done;
+        panel.addEventListener('transitionend', onEnd);
+        tm = setTimeout(done, ANIM_MS + 120);
+        return true;
+    }
+    function afterWide(panel, next) {
         if (PDF && PDF.setMode && (PDF.mode === 'fw' || PDF.mode === 'fp')) PDF.setMode(next ? 'fp' : 'fw');
+        if (PDF && PDF.paintAmb) PDF.paintAmb();
         document.dispatchEvent(new CustomEvent('tpview:layout', { detail: { wide: next } }));
     }
 
@@ -127,7 +242,7 @@
         const layout = document.querySelector('.chat-layout');
         if (!layout) return;
         const collapsed = layout.classList.contains('sidebar-collapsed');
-        if (on === collapsed) { if (!on) sbAuto = false; return; }
+        if (on === collapsed) { if (!on && !layout.classList.contains('tp-snap')) sbAuto = false; return; }
         if (!on && !sbAuto) return;
         sbAuto = on;
         layout.classList.toggle('sidebar-collapsed', on);
@@ -193,11 +308,16 @@
                 syncRailBtn();
             }
         });
-        // Панель закрыли: после выезда возвращаем обычную ширину.
-        let tm = 0;
+        // Панель закрыли. Из разворота: выезд панели и раскрытие сайдбара одним движением
+        // (closeWide), иначе после выезда тихо возвращаем обычную ширину.
+        let tm = 0, wasOpen = panel.classList.contains('open');
         new MutationObserver(() => {
+            const open = panel.classList.contains('open');
+            if (open === wasOpen) return;
+            wasOpen = open;
             clearTimeout(tm);
-            if (panel.classList.contains('open')) return;
+            if (open) { finishWide(); return; }
+            if (closeWide(panel)) return;
             tm = setTimeout(() => { if (!panel.classList.contains('open')) setWide(false); }, 300);
         }).observe(panel, { attributes: true, attributeFilter: ['class'] });
         document.addEventListener('keydown', (e) => {
@@ -397,7 +517,7 @@
         render.innerHTML =
             '<div class="tpv-pdf">' +
             '<div class="tpv-rail" aria-label="Страницы"></div>' +
-            '<div class="tpv-stage"><div class="tpv-sc" tabindex="0"><div class="tpv-pages"></div></div>' +
+            '<div class="tpv-stage"><canvas class="tpv-amb" aria-hidden="true"></canvas><div class="tpv-sc" tabindex="0"><div class="tpv-pages"></div></div>' +
             '<div class="tpv-zm" role="toolbar" aria-label="Масштаб">' +
             ib('z-out', 'Уменьшить', IC.minus) + '<b class="z-val">100%</b>' + ib('z-in', 'Увеличить', IC.plus) +
             '<span class="mm-dot"></span>' + ib('z-fw', 'По ширине', IC.fitw) + ib('z-fp', 'Страница целиком', IC.fitp) +
@@ -407,6 +527,57 @@
         const root = render.firstElementChild;
         const sc = root.querySelector('.tpv-sc'), pagesEl = root.querySelector('.tpv-pages');
         const rail = root.querySelector('.tpv-rail'), zval = root.querySelector('.z-val');
+
+        // Фон за страницами: цветные места видимых страниц, размытые в CSS.
+        // Для каждой отрисованной страницы один раз делаем миниатюру шириной 64 px,
+        // где прозрачность = насыщенность: белое и серое (текст, поля) прозрачны,
+        // светятся только графики и картинки. При прокрутке миниатюры просто
+        // переставляются в холсте 1/12 размера; во время разворота не рисуем.
+        const amb = root.querySelector('.tpv-amb'), actx = amb.getContext('2d');
+        const AK = 1 / 12, MINI_W = 64, SPREAD_X = 2.2, SPREAD_Y = 1.25;
+        st.minis = new Map();
+        function mini(n, cv) {
+            if (st.minis.has(n) || !cv.width) return;
+            const mh = Math.max(1, Math.round(MINI_W * cv.height / cv.width));
+            const m = document.createElement('canvas');
+            m.width = MINI_W; m.height = mh;
+            const x = m.getContext('2d', { willReadFrequently: true });
+            x.drawImage(cv, 0, 0, MINI_W, mh);
+            const img = x.getImageData(0, 0, MINI_W, mh), d = img.data;
+            let lit = 0;
+            for (let i = 0; i < d.length; i += 4) {
+                const c = Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]);
+                const a = c < 18 ? 0 : Math.min(255, (c - 18) * 3);
+                d[i + 3] = a;
+                if (a) lit++;
+            }
+            if (!lit) { st.minis.set(n, null); return; }
+            x.putImageData(img, 0, 0);
+            st.minis.set(n, m);
+        }
+        let araf = 0;
+        function paintAmb() {
+            araf = 0;
+            if (st.dead || !amb.offsetParent) return;
+            const panel = $('text-preview-panel');
+            if (panel && panel.classList.contains('tp-anim')) return;
+            const vr = sc.getBoundingClientRect();
+            const w = Math.max(1, Math.ceil(vr.width * AK)), h = Math.max(1, Math.ceil(vr.height * AK));
+            if (amb.width !== w || amb.height !== h) { amb.width = w; amb.height = h; } else actx.clearRect(0, 0, w, h);
+            for (const pg of pagesEl.children) {
+                const r = pg.getBoundingClientRect();
+                if (r.bottom < vr.top) continue;
+                if (r.top > vr.bottom) break;
+                const m = st.minis.get(Number(pg.dataset.n));
+                if (!m) continue;
+                const pw = r.width * AK * SPREAD_X, ph = r.height * AK * SPREAD_Y;
+                const cx = (r.left + r.width / 2 - vr.left) * AK, cy = (r.top + r.height / 2 - vr.top) * AK;
+                actx.drawImage(m, cx - pw / 2, cy - ph / 2, pw, ph);
+            }
+        }
+        const ambQ = () => { if (!araf && !st.dead) araf = requestAnimationFrame(paintAmb); };
+        st.paintAmb = ambQ;
+        sc.addEventListener('scroll', ambQ, { passive: true });
 
         const lib = await loadPdfjs();
         if (st.dead) return null;
@@ -468,6 +639,8 @@
             st.tasks.delete(n);
             st.drawn.set(n, z);
             pg.replaceChildren(cv);
+            mini(n, cv);
+            ambQ();
         }
         const drawVisible = () => {
             clearTimeout(st.timer);
@@ -485,6 +658,7 @@
                 pg.style.height = Math.round(h * st.zoom) + 'px';
             });
             if (anchor != null) sc.scrollTop = anchor * sc.scrollHeight - sc.clientHeight / 2;
+            ambQ();
             zval.textContent = Math.round(st.zoom * 100) + '%';
             root.querySelectorAll('.z-fw,.z-fp').forEach((b) => b.classList.toggle('is-on', b.classList.contains('z-' + st.mode)));
             drawVisible();
@@ -594,5 +768,5 @@
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
     else init();
 
-    window.TPView = { head, setMeta, code, pdf, closePdf, loadPdfjs, setWide, isWide, plural, fmtBytes };
+    window.TPView = { head, setMeta, code, pdf, closePdf, loadPdfjs, setWide, isWide, isWideSettled, plural, fmtBytes };
 })();

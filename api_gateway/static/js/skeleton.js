@@ -86,6 +86,15 @@
       for (let i = 0; i < n; i++) s += `<div class="sk-row">${bar([46, 62, 38][i % 3], i)}</div>`;
       return wrap('sk-rows', s, 'Загрузка');
     },
+    // Показать скелетон только если ответ не пришёл за ms (по умолчанию 100): без мигания на быстрых загрузках.
+    // Возвращает функцию отмены. Не трогает контейнер, если в нём уже что-то отрисовано.
+    defer(el, html, ms = 100, ok) {
+      if (!el) return () => {};
+      const t = setTimeout(() => {
+        if (el.isConnected && !el.firstElementChild && (!ok || ok())) el.innerHTML = html;
+      }, ms);
+      return () => clearTimeout(t);
+    },
     // Одна плашка внутри строки текста
     inline(px = 96) {
       return `<span class="sk-wrap sk-inline" role="status" aria-label="Загрузка"><span class="sk" style="width:${px}px"></span></span>`;

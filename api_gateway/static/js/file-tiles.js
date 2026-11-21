@@ -372,6 +372,18 @@
         + 'font-src data: https://fonts.gstatic.com; img-src data: blob:; media-src data: blob:">';
     // Документ «на весь экран»: height: 100vh / 100dvh (min-height и max-height не считаются).
     const PV_SLIDE_RE = /(?<![-\w])height\s*:\s*100d?vh/i;
+    // Холст фиксированного размера: html/body { width: 1920px; height: 1080px }. Такой документ
+    // всегда вписываем по ширине панели, иначе в iframe виден только левый верхний угол.
+    function fixedCanvas(html) {
+        const css = (html.match(/<style\b[^>]*>([\s\S]*?)<\/style>/gi) || []).join('\n').replace(/url\([^)]*\)/gi, '');
+        const re = /(?:^|[}\s,])(?:html|body)\b[^{}]*\{([^}]*)\}/gi;
+        let m;
+        while ((m = re.exec(css))) {
+            const w = /(?<![-\w])width\s*:\s*(\d{3,5})px/i.exec(m[1]), h = /(?<![-\w])height\s*:\s*(\d{3,5})px/i.exec(m[1]);
+            if (w && h && +w[1] >= 300 && +h[1] >= 200) return { w: +w[1], h: +h[1] };
+        }
+        return null;
+    }
     // CSP ставим внутрь <head>: meta перед <!DOCTYPE> переводит документ в quirks mode.
     function withCsp(html) {
         const m = /<head\b[^>]*>/i.exec(html) || /<!doctype[^>]*>/i.exec(html);
@@ -882,20 +894,23 @@
             stage.appendChild(slide);
             // Документ на весь экран (height: 100vh) в узкой панели масштабируем как страницу PDF:
             // окно 16:9 шириной в экран, уменьшенное под ширину панели.
-            const isSlide = PV_SLIDE_RE.test(text);
+            const canvas = fixedCanvas(text);
+            const isSlide = !canvas && PV_SLIDE_RE.test(text);
             const SLIDE_PAD = 18;
             const fit = () => {
                 const host = stage.parentElement;
                 if (!host) return;
-                const scaled = isSlide && !TPV()?.isWide() && !window.matchMedia('(max-width: 900px)').matches;
+                const scaled = !!canvas || (isSlide && !(TPV()?.isWideSettled || TPV()?.isWide)?.() && !window.matchMedia('(max-width: 900px)').matches);
                 host.classList.toggle('is-slide', scaled);
                 if (!scaled) {
                     slide.style.width = slide.style.height = '';
                     fr.style.width = fr.style.height = fr.style.transform = '';
                     return;
                 }
-                const baseW = Math.max(1024, window.innerWidth), baseH = Math.round(baseW * 9 / 16);
-                const w = Math.max(120, host.clientWidth - 2 * SLIDE_PAD), k = w / baseW;
+                const baseW = canvas ? canvas.w : Math.max(1024, window.innerWidth);
+                const baseH = canvas ? canvas.h : Math.round(baseW * 9 / 16);
+                const pad = window.matchMedia('(max-width: 600px)').matches ? 10 : SLIDE_PAD;
+                const w = Math.min(baseW, Math.max(120, host.clientWidth - 2 * pad)), k = w / baseW;
                 slide.style.width = `${Math.floor(w)}px`;
                 slide.style.height = `${Math.floor(baseH * k)}px`;
                 fr.style.width = `${baseW}px`;
@@ -906,6 +921,9 @@
                 cls: 'frame', node: stage,
                 after: (root) => {
                     fit();
+                    // Разворот закончился: режим (страница или натуральный размер) мог смениться без смены ширины.
+                    const onLayout = () => { if (stage.isConnected) fit(); else document.removeEventListener('tpview:layout', onLayout); };
+                    document.addEventListener('tpview:layout', onLayout);
                     if (!window.ResizeObserver) return;
                     let w = 0;
                     const ro = new ResizeObserver((es) => {

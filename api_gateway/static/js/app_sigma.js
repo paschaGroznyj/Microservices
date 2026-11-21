@@ -904,13 +904,16 @@ class ChatApp {
             await this.renderMessageInput();
             return;
         }
-        if (msgContainer && window.Skeleton) msgContainer.innerHTML = window.Skeleton.messages();
+        // Скелетон ленты только если история не пришла за 100 мс, иначе он мелькает и сразу пропадает
+        const cancelSk = window.Skeleton
+            ? window.Skeleton.defer(msgContainer, window.Skeleton.messages(), 100, () => String(this.currentChat) === String(chatId))
+            : () => {};
         await Promise.all([
             targetMsgId
                 ? this.loadMessagesAround(chatId, targetMsgId, opts?.radius || 10, { dbId: opts?.targetDbId })
                 : this.loadMessages(chatId),
             this.renderMessageInput()
-        ]);
+        ]).finally(cancelSk);
         // История не пришла (ошибка сети/доступа): скелетон не оставляем висеть
         if (String(this.currentChat) === String(chatId)) {
             msgContainer?.querySelector(':scope > .sk-wrap')?.remove();

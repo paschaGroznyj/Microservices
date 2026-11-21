@@ -7,6 +7,13 @@
 /* Hide chat navigation above any open preview; retain its scroll state for closing. */
 body:has(#text-preview-panel.open) .scroll-to-bottom { display: none !important; }
 .text-preview-panel.is-resizing { transition: none; user-select: none; }
+/* Разворот (text-preview-view.js setWide): панель и левый сайдбар двигаются одним переходом. */
+.chat-layout.tp-snap .sidebar, .chat-layout.tp-snap-sb .sidebar, .chat-layout.tp-snap .text-preview-panel { transition: none !important; }
+.text-preview-panel.tp-anim, .text-preview-panel.is-wide.tp-anim { width: var(--tp-w) !important; max-width: none !important; min-width: 0;
+  transition: width .26s cubic-bezier(.22,.61,.36,1), transform .26s cubic-bezier(.22,.61,.36,1); }
+.chat-layout.tp-anim .sidebar { transition: width .26s cubic-bezier(.22,.61,.36,1), min-width .26s cubic-bezier(.22,.61,.36,1), opacity .2s ease; }
+.chat-layout.tp-anim .sidebar > * { min-width: var(--sidebar-w, 250px); }
+.chat-layout.tp-anim .text-preview-panel .tp-frame { pointer-events: none; }
 .text-preview-panel.is-wide { width: 100% !important; max-width: none !important; border-left-color: transparent; box-shadow: none; }
 .tp-grip { position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 4; touch-action: none; }
 .tp-grip::after { content: ""; position: absolute; left: 3px; top: 50%; width: 2px; height: 36px; margin-top: -18px; border-radius: 2px; background: var(--border); opacity: 0; transition: opacity .15s; }
@@ -28,6 +35,19 @@ body:has(#text-preview-panel.open) .scroll-to-bottom { display: none !important;
 .tp-meta[hidden] { display: none; }
 [data-theme="dark"] .tp-meta { color: color-mix(in srgb, var(--text-primary) 62%, var(--bg)); }
 .tp-sep { width: 1px; height: 16px; margin: 0 4px; flex-shrink: 0; background: color-mix(in srgb, var(--text-primary) 14%, transparent); }
+/* Узкая панель: по очереди прячем разделитель, подпись «Править», мету и бейдж типа, чтобы имени файла оставалось место. */
+.text-preview-panel { container: tp-panel / inline-size; }
+.tp-tt { min-width: 72px; }
+@container tp-panel (max-width: 440px) { .tp-meta { display: none; } }
+@container tp-panel (max-width: 480px) {
+  .text-preview-header > .tp-sep { display: none; }
+  .text-preview-header .tp-edit-btn__lbl { display: none; }
+  .text-preview-header > .tp-edit-btn.glass-mode-btn { padding: 0 7px; }
+}
+@container tp-panel (max-width: 400px) {
+  .text-preview-header > .tp-ty { display: none; }
+  .text-preview-panel .text-preview-header { gap: 2px; padding-left: 10px; }
+}
 
 /* бейдж типа: цвет из палитры плиток файлов */
 .tp-ty { flex-shrink: 0; font: 600 9.5px/1 var(--font-anthropic-sans, var(--font-sans)); letter-spacing: .04em; padding: 4px 5px; border-radius: 5px;
@@ -96,8 +116,10 @@ body:has(#text-preview-panel.open) .scroll-to-bottom { display: none !important;
 .tp-slide { flex: 1; min-width: 0; display: flex; }
 .tp-slide > .tp-frame { flex: 1; display: block; width: 100%; height: 100%; border: 0; border-radius: 0; background: #fff; }
 /* Документ на весь экран (16:9) в узкой панели: уменьшенная страница, как в PDF */
-.text-preview-panel--file .text-preview-wrap > .text-preview-render--frame.is-slide { display: block; overflow: auto; background: color-mix(in srgb, var(--text-primary) 4%, var(--bg)); }
-.is-slide > .tp-fstage { display: block; padding: 18px; }
+.text-preview-panel--file .text-preview-wrap > .text-preview-render--frame.is-slide { display: flex; flex-direction: column; overflow: auto; background: color-mix(in srgb, var(--text-primary) 4%, var(--bg)); }
+/* страница по центру по высоте; если выше панели, auto-отступы схлопываются и работает обычный скролл */
+.is-slide > .tp-fstage { display: block; flex: none; margin-block: auto; padding: 18px; }
+@media (max-width: 600px) { .is-slide > .tp-fstage { padding: 10px; } }
 .is-slide .tp-slide { display: block; position: relative; overflow: hidden; background: #fff; border-radius: 2px; box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 4px 16px rgba(0,0,0,.06); }
 .is-slide .tp-slide > .tp-frame { position: absolute; left: 0; top: 0; flex: none; transform-origin: 0 0; }
 [data-theme="dark"] .is-slide .tp-slide { box-shadow: 0 0 0 1px rgba(255,255,255,.06), 0 6px 22px rgba(0,0,0,.5); }
@@ -153,7 +175,14 @@ body:has(#text-preview-panel.open) .scroll-to-bottom { display: none !important;
 .tpv-th.is-on .tpv-thc { outline: 2px solid var(--accent); outline-offset: -1px; }
 .tpv-th.is-on { color: var(--text-primary); font-weight: 600; }
 .tpv-stage { position: relative; flex: 1; min-width: 0; display: flex; }
-.tpv-sc { flex: 1; min-width: 0; overflow: auto; outline: none; scrollbar-width: thin; }
+.tpv-sc { position: relative; z-index: 1; flex: 1; min-width: 0; overflow: auto; outline: none; scrollbar-width: thin; }
+/* размытая копия видимых страниц за ними; сдвигается вместе с прокруткой */
+.tpv-stage { overflow: hidden; }
+.tpv-amb { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none;
+  filter: blur(34px) saturate(1.6); opacity: .75; transition: opacity .2s ease; }
+[data-theme="dark"] .tpv-amb { opacity: .6; }
+.text-preview-panel.tp-anim .tpv-amb { opacity: 0; }
+@media (prefers-reduced-motion: reduce) { .tpv-amb { display: none; } }
 .tpv-pages { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 18px 18px 72px; min-width: min-content; }
 .tpv-pg { flex-shrink: 0; background: #fff; border-radius: 2px; box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 4px 16px rgba(0,0,0,.06); overflow: hidden; }
 .tpv-pg canvas { display: block; width: 100%; height: 100%; }

@@ -113,10 +113,27 @@
         const next = !!on && !narrowScreen();
         if (next === isWide()) return;
         panel.classList.toggle('is-wide', next);
+        sidebarForWide(next);
         syncWideBtn();
         syncRailBtn();
         if (PDF && PDF.setMode && (PDF.mode === 'fw' || PDF.mode === 'fp')) PDF.setMode(next ? 'fp' : 'fw');
         document.dispatchEvent(new CustomEvent('tpview:layout', { detail: { wide: next } }));
+    }
+
+    // Разворот на всю ширину сворачивает левый сайдбар, а возврат раскрывает его,
+    // если свернули мы. Состояние в localStorage не пишем: это временный режим.
+    let sbAuto = false;
+    function sidebarForWide(on) {
+        const layout = document.querySelector('.chat-layout');
+        if (!layout) return;
+        const collapsed = layout.classList.contains('sidebar-collapsed');
+        if (on === collapsed) { if (!on) sbAuto = false; return; }
+        if (!on && !sbAuto) return;
+        sbAuto = on;
+        layout.classList.toggle('sidebar-collapsed', on);
+        const exp = $('sidebar-expand-btn'), col = $('sidebar-collapse-btn');
+        if (exp) exp.hidden = !on;
+        if (col) col.setAttribute('aria-expanded', String(!on));
     }
 
     function savedWidth() {
@@ -350,6 +367,11 @@
 
     let PDF = null;
     const PAD = 18, PILL = 64, ZMIN = 0.1, ZMAX = 5, THUMB_W = 92;
+    // Шаги +/− как в браузерах; от «по ширине» (например, 87%) идём к ближайшему шагу.
+    const ZSTEPS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5];
+    const zStep = (z, dir) => (dir > 0
+        ? (ZSTEPS.find((s) => s > z + 0.005) ?? ZMAX)
+        : ([...ZSTEPS].reverse().find((s) => s < z - 0.005) ?? ZMIN));
 
     function closePdf() {
         const st = PDF;
@@ -388,7 +410,7 @@
 
         const lib = await loadPdfjs();
         if (st.dead) return null;
-        st.task = lib.getDocument({ data, isEvalSupported: false });
+        st.task = lib.getDocument({ data, isEvalSupported: false, verbosity: 0 });
         const doc = await st.task.promise;
         if (st.dead) { try { doc.destroy(); } catch (_) {} return null; }
         st.doc = doc;
@@ -518,8 +540,8 @@
             const b = e.target.closest('button');
             if (!b) return;
             const c = b.classList;
-            if (c.contains('z-in')) { st.mode = 'free'; st.zoom = clampZ(st.zoom * 1.2); layout(); }
-            else if (c.contains('z-out')) { st.mode = 'free'; st.zoom = clampZ(st.zoom / 1.2); layout(); }
+            if (c.contains('z-in')) { st.mode = 'free'; st.zoom = clampZ(zStep(st.zoom, 1)); layout(); }
+            else if (c.contains('z-out')) { st.mode = 'free'; st.zoom = clampZ(zStep(st.zoom, -1)); layout(); }
             else if (c.contains('z-fw')) st.setMode('fw');
             else if (c.contains('z-fp')) { st.setMode('fp'); goPage(st.cur); }
             else if (c.contains('p-prev')) goPage(st.cur - 1);

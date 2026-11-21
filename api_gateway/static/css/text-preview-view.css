@@ -4,6 +4,8 @@
 
 /* ── Панель: ширина, разворот, ручка ─────────────────────────── */
 .text-preview-panel { min-width: 360px; transition: transform .26s cubic-bezier(.22,.61,.36,1), width .26s cubic-bezier(.22,.61,.36,1), background var(--transition); }
+/* Hide chat navigation above any open preview; retain its scroll state for closing. */
+body:has(#text-preview-panel.open) .scroll-to-bottom { display: none !important; }
 .text-preview-panel.is-resizing { transition: none; user-select: none; }
 .text-preview-panel.is-wide { width: 100% !important; max-width: none !important; border-left-color: transparent; box-shadow: none; }
 .tp-grip { position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 4; touch-action: none; }
@@ -13,7 +15,7 @@
 
 /* ── Шапка ───────────────────────────────────────────────────── */
 .text-preview-panel .text-preview-header {
-  height: 44px; min-height: 44px; gap: 6px; padding: 0 8px 0 12px; justify-content: flex-start;
+  height: 54px; min-height: 54px; gap: 6px; padding: 0 8px 0 12px; justify-content: flex-start;
   background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
@@ -80,9 +82,25 @@
   margin: 0; padding: 0; border-radius: 0; box-shadow: none; overflow: hidden; display: flex; flex-direction: column; white-space: normal;
 }
 .text-preview-render--cv { background: var(--wsd-code-bg); }
-/* HTML: высота iframe по содержимому, без белой пустоты под коротким документом */
-.text-preview-render--frame.is-fit { overflow: auto; display: block; }
-.text-preview-render--frame.is-fit .tp-frame { flex: none; display: block; }
+/* Файл рендерится в сплошной области панели, без внутренней карточки: скролл у правого края */
+.text-preview-panel--file .text-preview-wrap > .text-preview-body:not(.text-preview-render--edit) {
+  margin-left: 0; margin-right: 0; margin-bottom: 0; border-radius: 0; box-shadow: none;
+}
+.text-preview-panel--file:not(.is-searching) .text-preview-wrap > .text-preview-body:not(.text-preview-render--edit) { margin-top: 0; }
+.text-preview-panel--file .text-preview-wrap > .text-preview-body:not(.text-preview-render--edit):not(.text-preview-render--cv):not(.text-preview-render--pdf) { background: transparent; }
+[data-theme="dark"] .text-preview-panel--file .text-preview-wrap > .text-preview-body:not(.text-preview-render--edit):not(.text-preview-render--cv):not(.text-preview-render--pdf) { background: transparent; box-shadow: none; }
+/* HTML: iframe на всю область, документ скроллится сам */
+.text-preview-panel--file .text-preview-wrap > .text-preview-render--frame { display: flex; overflow: hidden; padding: 0; }
+.text-preview-panel--file .text-preview-wrap > .text-preview-render--frame:not(.is-slide) { background: #fff; }
+.tp-fstage { flex: 1; min-width: 0; min-height: 0; display: flex; }
+.tp-slide { flex: 1; min-width: 0; display: flex; }
+.tp-slide > .tp-frame { flex: 1; display: block; width: 100%; height: 100%; border: 0; border-radius: 0; background: #fff; }
+/* Документ на весь экран (16:9) в узкой панели: уменьшенная страница, как в PDF */
+.text-preview-panel--file .text-preview-wrap > .text-preview-render--frame.is-slide { display: block; overflow: auto; background: color-mix(in srgb, var(--text-primary) 4%, var(--bg)); }
+.is-slide > .tp-fstage { display: block; padding: 18px; }
+.is-slide .tp-slide { display: block; position: relative; overflow: hidden; background: #fff; border-radius: 2px; box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 4px 16px rgba(0,0,0,.06); }
+.is-slide .tp-slide > .tp-frame { position: absolute; left: 0; top: 0; flex: none; transform-origin: 0 0; }
+[data-theme="dark"] .is-slide .tp-slide { box-shadow: 0 0 0 1px rgba(255,255,255,.06), 0 6px 22px rgba(0,0,0,.5); }
 .text-preview-render--pdf { background: color-mix(in srgb, var(--text-primary) 4%, var(--bg)); }
 .text-preview-panel.is-searching .text-preview-wrap > .text-preview-render--cv,
 .text-preview-panel.is-searching .text-preview-wrap > .text-preview-render--pdf { margin-top: 0; }
@@ -164,7 +182,7 @@
   .tp-grip, #text-preview-wide, #text-preview-wide + .tp-sep, .tp-sep { display: none !important; }
 }
 @media (max-width: 600px) {
-  .text-preview-panel .text-preview-header { height: 52px; min-height: 52px; }
+  .text-preview-panel .text-preview-header { height: 54px; min-height: 54px; }
   .tp-meta { display: none; }
   .tp-ib, .text-preview-panel .text-preview-close,
   .text-preview-header > #text-preview-dl.fa-card-dl-btn,

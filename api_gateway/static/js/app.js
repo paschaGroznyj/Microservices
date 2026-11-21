@@ -2729,6 +2729,7 @@ class ChatApp {
             const first = (text.split('\n').find(l => l.trim()) || 'Просмотр текста').trim();
             titleEl.textContent = first.length > 60 ? first.slice(0, 60) + '…' : first;
         }
+        panel.inert = false;
         panel.classList.add('open');
         panel.setAttribute('aria-hidden', 'false');
         body.scrollTop = 0;
@@ -2747,8 +2748,11 @@ class ChatApp {
 
         const panel = document.getElementById('text-preview-panel');
         if (panel) {
+            // Фокус (обычно на «Закрыть») уводим из панели до aria-hidden, иначе браузер блокирует атрибут.
+            if (panel.contains(document.activeElement)) document.activeElement.blur();
             panel.classList.remove('open');
             panel.setAttribute('aria-hidden', 'true');
+            panel.inert = true;
         }
 
         if (activeId && this._pendingChips && this._pendingChips.has(activeId)) {

@@ -365,6 +365,20 @@
     const PV_JSON = new Set(['json', 'jsonl', 'ndjson', 'geojson', 'ipynb']);
     const PV_CSV = new Set(['csv', 'tsv']);
     const PV_HTML = new Set(['html', 'htm']);
+    // CSP для srcdoc: инлайн-скрипты и стили документа, шрифты Google Fonts, картинки data:/blob:.
+    // Остальная сеть (fetch, XHR, внешние скрипты) закрыта.
+    const PV_HTML_CSP = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; '
+        + 'script-src \'unsafe-inline\'; style-src \'unsafe-inline\' https://fonts.googleapis.com; '
+        + 'font-src data: https://fonts.gstatic.com; img-src data: blob:; media-src data: blob:">';
+    // Документ «на весь экран»: height: 100vh / 100dvh (min-height и max-height не считаются).
+    const PV_SLIDE_RE = /(?<![-\w])height\s*:\s*100d?vh/i;
+    // CSP ставим внутрь <head>: meta перед <!DOCTYPE> переводит документ в quirks mode.
+    function withCsp(html) {
+        const m = /<head\b[^>]*>/i.exec(html) || /<!doctype[^>]*>/i.exec(html);
+        if (!m) return PV_HTML_CSP + html;
+        const at = m.index + m[0].length;
+        return html.slice(0, at) + PV_HTML_CSP + html.slice(at);
+    }
     const PV_CODE = {
         py: 'python', js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
         ts: 'typescript', tsx: 'typescript', css: 'css', scss: 'scss', less: 'less',
@@ -442,7 +456,7 @@
     function fileMeta() {
         const size = fmtSize(FP.totalSize);
         if (FP.type === 'pdf') return [FP.pages ? `${FP.pages} стр.` : '', size].filter(Boolean).join(' · ');
-        if (FP.type === 'html') return [size, 'скрипты отключены'].filter(Boolean).join(' · ');
+        if (FP.type === 'html') return size;
         // JSON показывается отформатированным: число строк исходника (часто 1) только путает
         if (FP.type === 'json') return size;
         if (!FP.loaded) return size;
@@ -606,6 +620,7 @@
         body.hidden = false; body.classList.remove('is-code');
         body.textContent = 'Загружаю…';
         setNote('');
+        panel.inert = false;
         panel.classList.add('open');
         panel.setAttribute('aria-hidden', 'false');
         emitFp('open');
@@ -851,31 +866,54 @@
         if (type === 'html') {
             const fr = document.createElement('iframe');
             fr.className = 'tp-frame';
-            // allow-same-origin без allow-scripts: скрипты в документе по-прежнему не выполняются
-            // (плюс CSP default-src 'none'), но родитель может измерить высоту содержимого.
-            fr.setAttribute('sandbox', 'allow-same-origin');
+            // Скрипты включены, allow-same-origin нет: у документа непрозрачный origin,
+            // cookie, localStorage и DOM чата ему недоступны. Сеть закрыта CSP, кроме Google Fonts.
+            fr.setAttribute('sandbox', 'allow-scripts');
             fr.setAttribute('referrerpolicy', 'no-referrer');
             fr.title = name;
-            const csp = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data: blob:; style-src \'unsafe-inline\'; font-src data:">';
-            fr.srcdoc = csp + text;
+            fr.srcdoc = withCsp(text);
+            const slide = document.createElement('div');
+            slide.className = 'tp-slide';
+            slide.appendChild(fr);
+            const stage = document.createElement('div');
+            stage.className = 'tp-fstage';
+            stage.appendChild(slide);
+            // Документ на весь экран (height: 100vh) в узкой панели масштабируем как страницу PDF:
+            // окно 16:9 шириной в экран, уменьшенное под ширину панели.
+            const isSlide = PV_SLIDE_RE.test(text);
+            const SLIDE_PAD = 18;
             const fit = () => {
-                const d = fr.contentDocument, box = fr.parentElement;
-                if (!d || !d.documentElement || !box) return;
-                fr.style.height = '0px';
-                const h = Math.max(d.documentElement.scrollHeight, d.body ? d.body.scrollHeight : 0);
-                fr.style.height = `${Math.max(120, h)}px`;
-                box.classList.add('is-fit');
-            };
-            fr.addEventListener('load', () => {
-                fit();
-                // ширина панели меняется при развороте и ресайзе — пересчитываем высоту
-                if (window.ResizeObserver && fr.parentElement) {
-                    let w = 0;
-                    new ResizeObserver((es) => { const nw = Math.round(es[0].contentRect.width); if (nw !== w) { w = nw; fit(); } }).observe(fr.parentElement);
+                const host = stage.parentElement;
+                if (!host) return;
+                const scaled = isSlide && !TPV()?.isWide() && !window.matchMedia('(max-width: 900px)').matches;
+                host.classList.toggle('is-slide', scaled);
+                if (!scaled) {
+                    slide.style.width = slide.style.height = '';
+                    fr.style.width = fr.style.height = fr.style.transform = '';
+                    return;
                 }
-            });
-            // «скрипты отключены» показывается в мете шапки
-            return { cls: 'frame', node: fr };
+                const baseW = Math.max(1024, window.innerWidth), baseH = Math.round(baseW * 9 / 16);
+                const w = Math.max(120, host.clientWidth - 2 * SLIDE_PAD), k = w / baseW;
+                slide.style.width = `${Math.floor(w)}px`;
+                slide.style.height = `${Math.floor(baseH * k)}px`;
+                fr.style.width = `${baseW}px`;
+                fr.style.height = `${baseH}px`;
+                fr.style.transform = `scale(${k})`;
+            };
+            return {
+                cls: 'frame', node: stage,
+                after: (root) => {
+                    fit();
+                    if (!window.ResizeObserver) return;
+                    let w = 0;
+                    const ro = new ResizeObserver((es) => {
+                        if (!stage.isConnected) { ro.disconnect(); return; }
+                        const nw = Math.round(es[0].contentRect.width);
+                        if (nw !== w) { w = nw; fit(); }
+                    });
+                    ro.observe(root);
+                },
+            };
         }
         // code | text
         if (type === 'code') {

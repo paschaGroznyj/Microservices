@@ -2462,3 +2462,9 @@ from gw_shared import attachments_gw as _attachments_gw
 _attachments_gw.bind(get_client=lambda: app.state.http_client, chats_url=SERVICES['chats']['url'],
                      agent_url=SERVICES['agent_service']['url'], get_user=get_current_user)
 app.include_router(_attachments_gw.router)
+
+# ── ВЛОЖЕНИЯ ОБЩЕГО ЧАТА (gw_shared/group_attachments_gw.py): та же панель, без веток ──
+from gw_shared import group_attachments_gw as _group_attachments_gw
+_group_attachments_gw.bind(get_client=lambda: app.state.http_client, chats_url=SERVICES['chats']['url'],
+                           get_user=get_current_user)
+app.include_router(_group_attachments_gw.router)

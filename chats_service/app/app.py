@@ -16,6 +16,7 @@ from app.db.group_chat_db import GroupChatDB
 from app.db.editor_db import EditorDB
 from app import group_chat as group_chat_module
 from app import attachments as attachments_module
+from app import group_attachments as group_attachments_module
 from app.db.telegram_db import TelegramDB
 from app.db.max_db import MaxDB
 import time
@@ -100,6 +101,7 @@ group_db = GroupChatDB(None)  # pool проставится на startup
 editor_db = EditorDB(None)  # pool проставится на startup
 app.include_router(group_chat_module.router)
 app.include_router(attachments_module.router)
+app.include_router(group_attachments_module.router)
 
 # Telegram-интеграция: отдельный слой БД (allow-list + per-chat настройки).
 tg_db = TelegramDB(None)  # pool проставится на startup
@@ -188,6 +190,7 @@ async def startup():
     group_chat_module.bind(group_db, producer)
     # Вложения чата (правая панель): тот же пул.
     attachments_module.bind(db.pool)
+    group_attachments_module.bind(db.pool)
 
     # Editor: тот же пул (таблица editor_workspaces создаётся миграцией).
     editor_db.pool = db.pool

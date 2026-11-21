@@ -9,8 +9,8 @@
 [data-theme="dark"] .att-panel{--fk:#7eaee8;--rl:rgba(255,255,255,.22);background:var(--sidebar-bg,#111);border-left-color:rgba(255,255,255,.10);box-shadow:-12px 0 36px rgba(0,0,0,.55)}
 /* лента сужается, а не уходит под панель */
 @media (min-width:601px){
-  #view-agent .chat-main-inner{transition:margin-right .26s cubic-bezier(.22,.61,.36,1)}
-  #view-agent.att-open .chat-main-inner{margin-right:360px}
+  #view-agent .chat-main-inner,#view-group .chat-main-inner{transition:margin-right .26s cubic-bezier(.22,.61,.36,1)}
+  #view-agent.att-open .chat-main-inner,#view-group.att-open .chat-main-inner{margin-right:360px}
 }
 .att-grip{display:none}
 
@@ -152,7 +152,9 @@
 /* мобила: превью файла открыто поверх — шторка уезжает вниз, но остаётся в DOM */
 .att-panel--sheet.is-under-pv{transform:translateY(100%)!important;visibility:hidden}
 .att-scrim.is-under-pv{opacity:0;pointer-events:none}
-@media (prefers-reduced-motion:reduce){.att-panel,.att-scrim,#view-agent .chat-main-inner{transition:none!important}}
+@media (prefers-reduced-motion:reduce){.att-panel,.att-scrim,#view-agent .chat-main-inner,#view-group .chat-main-inner{transition:none!important}}
 /* тёмная тема: --text-muted (#555) на #111 ниже 4.5:1 — мета и унаследованные строки на --text-secondary */
 [data-theme="dark"] .att-meta,[data-theme="dark"] .att-inh,[data-theme="dark"] .att-tab b{color:var(--text-secondary)}
 [data-theme="dark"] .att-inh .tp-ty{filter:brightness(1.25)}
+/* автор в общем чате: другие участники — нейтральный кружок с инициалами */
+.att-av--oth{background:color-mix(in srgb,var(--text-primary) 14%,transparent);color:var(--text-primary)}

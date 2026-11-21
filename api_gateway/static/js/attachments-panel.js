@@ -4,12 +4,16 @@
 // превью сетки: GET /api/chats/{id}/thumb/{message_id}/{file_name}?w=216.
 // Клик: картинка/видео -> лайтбокс приложения, файл -> text-preview-panel (FileTiles), ссылка -> новая вкладка.
 // ПКМ (долгое нажатие на тач): «Перейти к сообщению» через app.navigateToSearchMessage, как в поиске.
+// Общий чат (раздел #view-group): те же вкладки без «Веток», фильтр «Все / Я / Остальные»,
+// данные GET /api/group/{room}/attachments, превью /api/group/thumb/{file_id}, переход — GroupChat._scrollToMessage.
 (function () {
   'use strict';
   const LS = 'att:prefs';
   const PAGE = { media: 36, files: 30, links: 30 };
   const TABS = [['media', 'Медиа'], ['files', 'Файлы'], ['links', 'Ссылки']];
   const AUTH = [['all', 'Все'], ['me', 'Я'], ['agent', 'Агент']];
+  const GAUTH = [['all', 'Все'], ['me', 'Я'], ['others', 'Остальные']];
+  const GROUP_ROOM = 'global';
   const LABEL = { xlsx: 'XLS', xls: 'XLS', docx: 'DOC', doc: 'DOC', pptx: 'PPT', ppt: 'PPT', jpeg: 'JPG', markdown: 'MD' };
   const COLOR = {
     pdf: 'red', doc: 'blue', docx: 'blue', md: 'blue', txt: 'gray', ts: 'blue',
@@ -30,11 +34,17 @@
     chat: null, open: false, el: null, scrim: null,
     tab: TABS.some(t => t[0] === prefs.tab) ? prefs.tab : 'media',
     view: prefs.view === 'tree' ? 'tree' : 'list',
+    mode: 'agent',
     author: AUTH.some(a => a[0] === prefs.author) ? prefs.author : 'all',
+    aauthor: AUTH.some(a => a[0] === prefs.author) ? prefs.author : 'all',
+    gauthor: GAUTH.some(a => a[0] === prefs.gauthor) ? prefs.gauthor : 'all',
     seq: 0, items: [], cursor: null, done: false, loading: false,
     counts: null, chain: [], stale: false, cancelSk: null, io: null, last: null,
   };
-  const save = () => { try { localStorage.setItem(LS, JSON.stringify({ tab: st.tab, view: st.view, author: st.author })); } catch (_) {} };
+  const save = () => { try { localStorage.setItem(LS, JSON.stringify({ tab: st.tab, view: st.view, author: st.aauthor, gauthor: st.gauthor })); } catch (_) {} };
+  const isGroup = () => st.mode === 'group';
+  const authList = () => (isGroup() ? GAUTH : AUTH);
+  const ctxKey = () => (isGroup() ? `group:${GROUP_ROOM}` : st.chat);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const mobile = () => window.matchMedia('(max-width: 600px)').matches;
   const app = () => window.__catchpmApp;
@@ -43,8 +53,11 @@
   const lab = e => LABEL[e] || (e ? e.toUpperCase().slice(0, 4) : 'FILE');
   const fmtSize = b => (b ? (window.FileTiles?.fmtSize ? window.FileTiles.fmtSize(b) : `${Math.round(b / 1024)} КБ`) : '');
   const myInitials = () => (document.querySelector('.profile-av')?.textContent || '').trim().slice(0, 2) || 'Я';
-  const av = a => a === 'agent' ? '<span class="att-av att-av--bot" aria-hidden="true">A</span>' : `<span class="att-av" aria-hidden="true">${esc(myInitials())}</span>`;
-  const who = a => a === 'agent' ? 'Агент' : 'Вы';
+  const initialsOf = n => String(n || '').trim().split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?';
+  const av = (a, it) => a === 'agent' ? '<span class="att-av att-av--bot" aria-hidden="true">A</span>'
+    : a === 'other' ? `<span class="att-av att-av--oth" aria-hidden="true">${esc(initialsOf(it?.username))}</span>`
+    : `<span class="att-av" aria-hidden="true">${esc(myInitials())}</span>`;
+  const who = (a, it) => a === 'agent' ? 'Агент' : a === 'other' ? (it?.username || 'Участник') : 'Вы';
   const plural = (n, a, b, c) => { const m = n % 10, h = n % 100; return m === 1 && h !== 11 ? a : m >= 2 && m <= 4 && (h < 12 || h > 14) ? b : c; };
 
   const dayKey = iso => { const d = new Date(iso || 0); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; };
@@ -62,11 +75,17 @@
   const host = u => { try { return new URL(u).host.replace(/^www\./, ''); } catch (_) { return u; } };
 
   // ---------- URL файлов ----------
-  const base = () => `/api/chats/${enc(st.chat)}`;
-  const fileUrl = it => `${base()}/files/${enc(it.message_id)}/${enc(it.name)}`;
+  const base = () => (isGroup() ? `/api/group/${enc(GROUP_ROOM)}` : `/api/chats/${enc(st.chat)}`);
+  const fileUrl = it => (isGroup() ? `/api/group/file/${enc(it.id)}` : `${base()}/files/${enc(it.message_id)}/${enc(it.name)}`);
   const dbUrl = it => `${base()}/image/${enc(it.message_id)}/${enc(it.name)}${it.image_key ? `?image_key=${enc(it.image_key)}` : ''}`;
-  const thumbUrl = it => `${base()}/thumb/${enc(it.message_id)}/${enc(it.name)}?w=216${it.image_key ? `&image_key=${enc(it.image_key)}` : ''}`;
+  const thumbUrl = it => (isGroup() ? `/api/group/thumb/${enc(it.id)}?w=216`
+    : `${base()}/thumb/${enc(it.message_id)}/${enc(it.name)}?w=216${it.image_key ? `&image_key=${enc(it.image_key)}` : ''}`);
   function mediaItem(it) {
+    if (isGroup()) {
+      const url = fileUrl(it);
+      return { isVideo: it.kind === 'video', name: it.name, ext: it.ext, url, dlUrl: `${url}?download=1`,
+        mime: it.mime || VMIME[it.ext] || (it.kind === 'video' ? 'video/mp4' : ''), size: it.size || 0, file: it };
+    }
     if (it.kind === 'video') return { isVideo: true, name: it.name, ext: it.ext, url: fileUrl(it), dlUrl: `${fileUrl(it)}?download=1`, mime: VMIME[it.ext] || 'video/mp4', file: it };
     const url = it.image_key ? dbUrl(it) : fileUrl(it);
     return { isVideo: false, name: it.name, ext: it.ext, url, fallbackUrl: it.image_key ? fileUrl(it) : dbUrl(it), dlUrl: url, imageKey: it.image_key || null, file: it };
@@ -102,14 +121,17 @@
   }
   // Кнопка видна всегда, но работает только в разделе «Агент» с открытым чатом.
   // В Скиллах, Графе и т. п. — затушена; открытая панель закрывается.
-  const agentVisible = () => { const v = document.getElementById('view-agent'); return !!v && !v.classList.contains('hidden'); };
-  const available = () => !!st.chat && agentVisible();
+  // В общем чате (#view-group) — вложения комнаты.
+  const shown = id => { const v = document.getElementById(id); return !!v && !v.classList.contains('hidden'); };
+  const modeNow = () => (shown('view-group') ? 'group' : shown('view-agent') && st.chat ? 'agent' : null);
+  const available = () => !!modeNow();
   function syncButton(b = document.getElementById('att-open-btn')) {
     if (!b) return;
-    const ok = available();
-    b.disabled = !ok;
-    b.setAttribute('aria-disabled', String(!ok));
-    if (!ok && st.open) close();
+    const m = modeNow();
+    b.disabled = !m;
+    b.setAttribute('aria-disabled', String(!m));
+    b.title = m === 'group' ? 'Медиа и файлы общего чата' : 'Медиа и файлы чата';
+    if (st.open && m !== st.mode) close();
   }
   let viewsMo = null;
   function watchViews() {
@@ -125,7 +147,7 @@
     const p = document.createElement('aside');
     p.className = 'att-panel'; p.setAttribute('role', 'dialog'); p.setAttribute('aria-label', 'Медиа и файлы чата');
     p.innerHTML = `<div class="att-grip" aria-hidden="true"></div><div class="att-h"><span class="att-h__t">Вложения</span>
-      <div class="mm-seg att-auth" role="group" aria-label="Автор">${AUTH.map(([k, t]) => `<button type="button" data-auth="${k}">${t}</button>`).join('')}</div>
+      <div class="mm-seg att-auth" role="group" aria-label="Автор">${authList().map(([k, t]) => `<button type="button" data-auth="${k}">${t}</button>`).join('')}</div>
       <button type="button" class="mm-ib att-x" aria-label="Закрыть">${X}</button></div>
       <div class="att-tabs" role="tablist">${TABS.map(([k, t]) => `<button type="button" role="tab" class="att-tab" data-tab="${k}">${t}<b></b></button>`).join('')}</div>
       <div class="att-b"><div class="att-viewsw" hidden><span class="att-meta att-viewsw__m"></span>
@@ -153,7 +175,7 @@
       b.querySelector('b').textContent = n ? String(n) : '';
     });
     const sw = $('.att-viewsw');
-    sw.hidden = st.tab !== 'files';
+    sw.hidden = st.tab !== 'files' || isGroup();
     sw.querySelectorAll('[data-view]').forEach(b => { const on = b.dataset.view === st.view; b.classList.toggle('is-on', on); b.setAttribute('aria-pressed', on); });
     const n = st.counts?.files || 0, br = st.chain.length;
     $('.att-viewsw__m').textContent = n ? `${n} ${plural(n, 'файл', 'файла', 'файлов')}${br > 1 ? ` · ${br} ${plural(br, 'ветка', 'ветки', 'веток')}` : ''}` : '';
@@ -161,7 +183,11 @@
 
   // ---------- открытие / закрытие ----------
   function open() {
-    if (!available()) return;
+    const m = modeNow();
+    if (!m) return;
+    if (st.el && m !== st.mode) close();
+    if (m !== st.mode) { st.mode = m; st.counts = null; st.chain = []; }
+    st.author = isGroup() ? st.gauthor : st.aauthor;
     if (!st.el) {
       st.el = shell();
       if (mobile()) {
@@ -170,7 +196,7 @@
         st.el.classList.add('att-panel--sheet');
         document.body.append(st.scrim, st.el);
       } else {
-        const va = document.getElementById('view-agent');
+        const va = document.getElementById(isGroup() ? 'view-group' : 'view-agent');
         if (!va) { st.el = null; return; }
         va.appendChild(st.el);
         va.classList.add('att-open');
@@ -191,6 +217,7 @@
     st.el = st.scrim = null;
     if (el.contains(document.activeElement)) document.getElementById('att-open-btn')?.focus({ preventScroll: true });
     document.getElementById('view-agent')?.classList.remove('att-open');
+    document.getElementById('view-group')?.classList.remove('att-open');
     const b = document.getElementById('att-open-btn'); b?.classList.remove('is-on'); b?.setAttribute('aria-expanded', 'false');
     // Превью файла, открытое из панели, закрываем вместе с ней.
     if (el.querySelector('.is-preview-open')) app()?.closeTextPreview?.();
@@ -207,7 +234,7 @@
     st.seq++; st.cancelSk?.(); st.cancelSk = null;
     st.items = []; st.cursor = null; st.done = false; st.last = null; st.loading = false; st.stale = false;
     const list = $('.att-list'); list.innerHTML = '';
-    list.className = `att-list att-list--${st.tab}${st.tab === 'files' && st.view === 'tree' ? ' att-list--tree' : ''}`;
+    list.className = `att-list att-list--${st.tab}${tree() ? ' att-list--tree' : ''}`;
     $('.att-sent').innerHTML = '';
     $('.att-b').scrollTop = 0;
     st.io?.disconnect();
@@ -264,7 +291,7 @@
   }
   function renderEmpty() {
     const t = { media: 'Картинок и видео', files: 'Файлов', links: 'Ссылок' }[st.tab];
-    const w = { all: '', me: ' от вас', agent: ' от агента' }[st.author];
+    const w = { all: '', me: ' от вас', agent: ' от агента', others: ' от других участников' }[st.author] || '';
     $('.att-list').innerHTML = `<div class="att-empty">${ICON}<span>${t}${w} пока нет</span></div>`;
   }
 
@@ -274,7 +301,7 @@
     const frag = document.createDocumentFragment();
     items.forEach((it, k) => {
       const idx = from + k;
-      if (st.tab === 'files' && st.view === 'tree') { treeAppend(frag, it, idx); return; }
+      if (tree()) { treeAppend(frag, it, idx); return; }
       const dk = dayKey(it.created_at);
       if (!st.last || st.last.day !== dk) {
         const h = document.createElement('div'); h.className = 'att-day'; h.textContent = dayLabel(it.created_at);
@@ -288,6 +315,7 @@
     });
     list.appendChild(frag);
   }
+  function tree() { return st.tab === 'files' && st.view === 'tree' && !isGroup(); }
   function node(html, cls) { const d = document.createElement('div'); d.className = cls; d.innerHTML = html; return d; }
   function mediaTile(it, idx) {
     const d = node('', `att-im${it.inherited ? ' att-inh' : ''}`);
@@ -306,7 +334,7 @@
       img.src = thumbUrl(it);
       d.prepend(img);
     }
-    d.insertAdjacentHTML('beforeend', `<span class="att-badge">${av(it.author)}</span>`);
+    d.insertAdjacentHTML('beforeend', `<span class="att-badge">${av(it.author, it)}</span>`);
     return d;
   }
   function fileAttrs(el, it, idx) {
@@ -315,7 +343,7 @@
   }
   function fileRow(it, idx) {
     const e = it.ext || extOf(it.name);
-    const meta = [fmtSize(it.size), who(it.author), hm(it.created_at)].filter(Boolean).map(esc).join(' · ');
+    const meta = [fmtSize(it.size), who(it.author, it), hm(it.created_at)].filter(Boolean).map(esc).join(' · ');
     const d = node(`<span class="tp-ty att-tg__ic" data-c="${COLOR[e] || 'gray'}">${esc(lab(e))}</span>
       <div class="att-tg__t"><div class="att-nm" title="${esc(it.name)}">${esc(it.name)}</div><div class="att-meta">${meta}${branchTag(it)}</div></div>${DL}`,
     `att-tg${it.inherited ? ' att-inh' : ''}`);
@@ -327,7 +355,7 @@
     const d = node(`<span class="att-tg__ic att-lnk__ic" aria-hidden="true">${esc((h[0] || '#').toUpperCase())}</span>
       <div class="att-tg__t"><div class="att-nm" title="${esc(it.title || h)}">${esc(it.title || h)}</div>
       <div class="att-meta att-lnk__u" title="${esc(it.url)}">${esc(it.url.replace(/^https?:\/\//, ''))}</div>
-      <div class="att-meta">${esc(who(it.author))} · ${esc(hm(it.created_at))}${branchTag(it)}</div></div>`,
+      <div class="att-meta">${esc(who(it.author, it))} · ${esc(hm(it.created_at))}${branchTag(it)}</div></div>`,
     `att-tg att-lnk${it.inherited ? ' att-inh' : ''}`);
     d.dataset.k = 'link'; d.dataset.i = idx; d.tabIndex = 0; d.setAttribute('role', 'link');
     return d;
@@ -356,7 +384,12 @@
   }
 
   // ---------- действия ----------
-  function setPref(key, val) { if (st[key] === val) return; st[key] = val; save(); syncChrome(); reload(); }
+  function setPref(key, val) {
+    if (st[key] === val) return;
+    st[key] = val;
+    if (key === 'author') st[isGroup() ? 'gauthor' : 'aauthor'] = val;
+    save(); syncChrome(); reload();
+  }
   function onClick(e) {
     const t = e.target;
     if (t.closest('.att-x')) { close(); return; }
@@ -373,12 +406,15 @@
     if (el.dataset.k === 'media') {
       const media = st.items.filter(x => x.kind === 'image' || x.kind === 'video');
       if (mobile()) close();
-      if (app()?._openMediaLightbox) app()._openMediaLightbox(media.map(mediaItem), Math.max(0, media.indexOf(it)));
+      if (isGroup() && window.GroupChat?._openLightbox) window.GroupChat._openLightbox(media.map(mediaItem), Math.max(0, media.indexOf(it)));
+      else if (app()?._openMediaLightbox) app()._openMediaLightbox(media.map(mediaItem), Math.max(0, media.indexOf(it)));
       else window.open(mediaItem(it).url, '_blank', 'noopener');
       return;
     }
     if (el.dataset.k === 'link') { openLink(it.url); return; }
     const FT = window.FileTiles;
+    // Панель превью живёт в разделе «Агент»; в общем чате файл открывается во вкладке, как в ленте группы.
+    if (isGroup()) { window.open(fileUrl(it), '_blank', 'noopener'); return; }
     if (!FT?.previewTypeOf?.(it.name, '')) { download(it); return; }
     st.el.querySelectorAll('.is-preview-open').forEach(x => x !== el && x.classList.remove('is-preview-open'));
     // На мобиле превью во весь экран: шторку прячем, но оставляем в DOM (иначе FileTiles закроет превью
@@ -390,7 +426,7 @@
   function download(it) {
     if (!it || !it.name) return;
     const a = document.createElement('a');
-    a.href = it.kind === 'image' ? mediaItem(it).dlUrl : `${fileUrl(it)}?download=1`;
+    a.href = it.kind === 'image' || isGroup() ? mediaItem(it).dlUrl : `${fileUrl(it)}?download=1`;
     a.download = it.name; a.rel = 'noopener noreferrer';
     document.body.appendChild(a); a.click(); a.remove();
   }
@@ -400,6 +436,7 @@
     if (!it) return;
     const a = app();
     if (mobile()) close();
+    if (isGroup()) { window.GroupChat?._scrollToMessage?.(it.msg_id); return; }
     const dbId = it.msg_id != null ? String(it.msg_id) : null;
     if (a?.navigateToSearchMessage) a.navigateToSearchMessage(st.chat, { messageId: it.message_id || null, dbId });
   }
@@ -423,6 +460,9 @@
     menu.className = 'att-menu'; menu.setAttribute('role', 'menu');
     menu.innerHTML = acts.map(([k, t]) => `<button type="button" role="menuitem" data-act="${k}">${t}</button>`).join('');
     document.body.appendChild(menu);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || (x === 0 && y === 0)) {
+      const er = el.getBoundingClientRect(); x = er.left + 12; y = er.bottom - 4;
+    }
     const r = menu.getBoundingClientRect();
     menu.style.left = `${Math.max(8, Math.min(x, innerWidth - r.width - 8))}px`;
     menu.style.top = `${Math.max(8, Math.min(y, innerHeight - r.height - 8))}px`;
@@ -479,15 +519,17 @@
     mount(chatId) {
       const id = chatId ? String(chatId) : null;
       if (id === st.chat) { ensureButton(); return; }
-      st.chat = id; st.counts = null; st.chain = [];
+      st.chat = id;
+      if (!isGroup()) { st.counts = null; st.chain = []; }
       ensureButton();
+      if (isGroup()) return;
       if (!id) { close(); return; }
       if (st.open) reload();
     },
     unmount() { this.mount(null); },
     // Финал ответа агента: в чате могли появиться файлы. Не дёргаем, если пользователь листает или смотрит превью.
     refresh(chatId) {
-      if (chatId != null && String(chatId) !== String(st.chat)) return;
+      if (chatId != null && String(chatId) !== String(ctxKey())) return;
       if (!st.open || !st.el) return;
       if (st.el.querySelector('.is-preview-open') || $('.att-b').scrollTop > 40) { st.stale = true; return; }
       reload();

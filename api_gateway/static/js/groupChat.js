@@ -846,6 +846,7 @@
       if (ev === 'new_message' && data.message) {
         window.GroupInteraction?.onNewMessage(data.message);
         this._upsertMessage(data.message);
+        if (data.message.files?.length) window.AttachmentsPanel?.refresh(`group:${ROOM_UID}`);
       } else if (ev === 'edit_message' && data.message) {
         this._upsertMessage(data.message);
         this._loadPinned();

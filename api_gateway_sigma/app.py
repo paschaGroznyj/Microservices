@@ -2959,6 +2959,12 @@ _attachments_gw.bind(get_client=lambda: app.state.http_client, chats_url=SERVICE
                      agent_url=SERVICES['agent_service']['url'], get_user=get_current_user)
 app.include_router(_attachments_gw.router)
 
+# ── ВЛОЖЕНИЯ ОБЩЕГО ЧАТА (gw_shared/group_attachments_gw.py): та же панель, без веток ──
+from gw_shared import group_attachments_gw as _group_attachments_gw
+_group_attachments_gw.bind(get_client=lambda: app.state.http_client, chats_url=SERVICES['chats']['url'],
+                           get_user=get_current_user)
+app.include_router(_group_attachments_gw.router)
+
 
 @app.get("/api/chats/{chat_id}/tasks/stream")
 async def stream_chat_tasks(chat_id: str, request: Request, after: int | None = None):

@@ -15,7 +15,9 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 
-MAX_COUNT_JOURNAL = 9 # Максимальное 
+MAX_COUNT_JOURNAL = 9  # порог активных записей, после которого агенту подсказывается архивация
+MAX_JOURNAL_OTHER_IN_CONTEXT = 10    # неличностных активных записей в контексте
+MAX_JOURNAL_ARCHIVE_IN_CONTEXT = 50  # строк реестра архива в контексте
 
 def _coerce_tags(val) -> list:
     if val is None:
@@ -124,33 +126,32 @@ class AgentDB:
     async def get_agent_journal(self, chat_id: str | None = None) -> str:
         async with self.pool.acquire() as conn:
             # В основной контекст тянем ТОЛЬКО активные (не архивные) записи.
-            identity_row = await conn.fetchrow("""
+            # identity — правила поведения: в контекст идут ВСЕ активные, по порядку.
+            identity_rows = await conn.fetch("""
                 SELECT id, entry_type, content, context, created_at, updated_at
                 FROM agent_journal
                 WHERE entry_type = 'identity' AND chat_id = $1
                   AND is_archived = FALSE
-                LIMIT 1
+                ORDER BY created_at ASC, id ASC
             """, chat_id)
 
             other_rows = await conn.fetch("""
                 SELECT id, entry_type, content, context, created_at, updated_at
-                FROM (
-                    SELECT id, entry_type, content, context, created_at, updated_at,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY entry_type
-                            ORDER BY updated_at DESC
-                        ) AS rn
-                    FROM agent_journal
-                    WHERE entry_type != 'identity'
-                    AND chat_id = $1
-                    AND is_archived = FALSE
-                ) ranked
-                ORDER BY updated_at DESC
-                LIMIT 10
+                FROM agent_journal
+                WHERE entry_type != 'identity'
+                  AND chat_id = $1
+                  AND is_archived = FALSE
+                ORDER BY updated_at DESC, id DESC
+                LIMIT $2
+            """, chat_id, MAX_JOURNAL_OTHER_IN_CONTEXT)
+
+            other_total = await conn.fetchval("""
+                SELECT count(id) FROM agent_journal
+                WHERE chat_id = $1 AND is_archived = FALSE AND entry_type != 'identity'
             """, chat_id)
 
-            count = await conn.fetchval(
-                "SELECT count(id) FROM agent_journal WHERE chat_id = $1 AND is_archived = FALSE;",
+            archived_total = await conn.fetchval(
+                "SELECT count(id) FROM agent_journal WHERE chat_id = $1 AND is_archived = TRUE;",
                 chat_id,
             )
 
@@ -160,11 +161,11 @@ class AgentDB:
                 SELECT id, entry_type, archive_summary, updated_at
                 FROM agent_journal
                 WHERE chat_id = $1 AND is_archived = TRUE
-                ORDER BY updated_at DESC
-                LIMIT 50
-            """, chat_id)
+                ORDER BY updated_at DESC, id DESC
+                LIMIT $2
+            """, chat_id, MAX_JOURNAL_ARCHIVE_IN_CONTEXT)
 
-        if not identity_row and not other_rows and not archived_rows:
+        if not identity_rows and not other_rows and not archived_rows:
             return "Журнал агента пуст."
 
         def _format_entry(row) -> str:
@@ -183,18 +184,28 @@ class AgentDB:
 
         parts = []
 
-        if count and count > MAX_COUNT_JOURNAL:
+        other_total = other_total or 0
+        archived_total = archived_total or 0
+        active_total = len(identity_rows) + other_total
+        if active_total > MAX_COUNT_JOURNAL:
             parts.append(
-                f"Записей в журнале уже больше порога = {MAX_COUNT_JOURNAL}. "
-                f"Пора бы делать summary и дроппать лишние строки\n"
+                f"Активных записей в журнале {active_total}, порог {MAX_COUNT_JOURNAL}. "
+                f"Неактуальные записи сворачивай в архив (action=\"archive\"); "
+                f"автосжатие тоже архивирует, а не удаляет.\n"
             )
 
-        if identity_row:
-            parts.append("── ЛИЧНОСТЬ ──\n" + _format_entry(identity_row))
+        if identity_rows:
+            parts.append("── ЛИЧНОСТЬ ──\n" + "\n\n".join(_format_entry(r) for r in identity_rows))
 
         if other_rows:
             others_formatted = "\n\n".join(_format_entry(r) for r in other_rows)
-            parts.append(("── ОСТАЛЬНЫЕ ЗАПИСИ ──\n" if identity_row else "") + others_formatted)
+            hidden = other_total - len(other_rows)
+            if hidden > 0:
+                others_formatted += (
+                    f"\n\n(ещё {hidden} активных записей старше не показаны; "
+                    f"они есть в БД и попадут в автосжатие)"
+                )
+            parts.append(("── ОСТАЛЬНЫЕ ЗАПИСИ ──\n" if identity_rows else "") + others_formatted)
 
         # Компактный реестр архива: id + одно предложение о содержимом.
         # В основной контекст сами тексты не тянутся, но модель видит, что
@@ -204,6 +215,9 @@ class AgentDB:
             for r in archived_rows:
                 summ = (r["archive_summary"] or "").strip() or "(без описания)"
                 arch_lines.append(f"  ID: {r['id']} | [{r['entry_type']}] — {summ}")
+            hidden_arch = archived_total - len(archived_rows)
+            if hidden_arch > 0:
+                arch_lines.append(f"  (ещё {hidden_arch} более старых архивных записей не показаны)")
             parts.append(
                 "── В АРХИВЕ (свёрнуто, в контекст не тянется; разархивировать по id) ──\n"
                 + "\n".join(arch_lines)

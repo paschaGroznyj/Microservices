@@ -298,6 +298,7 @@
           t.appendChild(txt("small", null, "Описание"));
         }
         row.appendChild(t);
+        row.title = t.firstChild ? t.firstChild.textContent : "";
         row.addEventListener("click", () => select(st.flat.indexOf(e)));
         list.appendChild(row);
         rows.push(row);

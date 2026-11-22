@@ -49,3 +49,10 @@ agent_service/scripts/files_dump.json
 # Медиа релизов «Что нового»: лежат на хосте и заливаются в OBS скриптом
 # chats_service/scripts/release.py, в git только releases/<версия>.yml.
 releases/media/
+
+# Python bytecode and test fixtures
+**/__pycache__/
+*.py[cod]
+*.pyo
+**/fixtures/
+**/fixture/

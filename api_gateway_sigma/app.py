@@ -740,6 +740,24 @@ async def whatsnew_pending(request: Request):
         raise HTTPException(status_code=502, detail=f"Auth service dead: {str(e)}")
 
 
+@app.get("/api/whatsnew/history")
+async def whatsnew_history(request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    auth_url = SERVICES['auth']['url']
+    try:
+        response = await app.state.http_client.post(
+            f"{auth_url}/whatsnew/history",
+            json={"user_id": user["user_id"]},
+            timeout=10.0
+        )
+        return JSONResponse(content=response.json(), status_code=response.status_code)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Auth service dead: {str(e)}")
+
+
 @app.post("/api/whatsnew/demo/seen")
 async def whatsnew_demo_seen(request: Request):
     user = await get_current_user(request)

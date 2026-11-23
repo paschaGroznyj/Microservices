@@ -10,6 +10,9 @@ not_loop.py — режим «Модель» (type_query="model"): чистая �
 """
 from .core.observability import request_logged
 
+import os
+os.environ['OPENBLAS_NUM_THREADS'] = '1'
+
 import logging
 import time
 from app.agent.common.context_limits import context_payload
@@ -22,6 +25,8 @@ from langchain_core.messages import BaseMessage, trim_messages
 from langchain_core.messages.utils import count_tokens_approximately
 
 from .core.agent_provider import get_model_spec, get_real_model_name, resolve_model_tag
+from .core.content_stream import ContentStreamRouter
+from .core.reasoning_clean import ReasoningCleaner, clean_reasoning
 from .core.token_calibration import CALIBRATOR
 from .common.trace_budget import attach_traces
 from .prompts.system_prompt import DEFAULT_AGENT_IDENTITY, INTERACTIVE_POLL_GUIDANCE
@@ -55,13 +60,41 @@ MODEL_EMPTY_FALLBACK = (
 )
 
 
+def _content_of(response) -> tuple[str, str, str]:
+    from .event_loop import _unwrap_escaped_tags
+
+    raw = getattr(response, "content", "")
+    if isinstance(raw, list):
+        parts = []
+        for block in raw:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                parts.append(str(block.get("text") or ""))
+        raw = "".join(parts)
+    router = ContentStreamRouter()
+    # Complete content needs no envelope buffering, but still obeys private scopes.
+    router.started = True
+    router.feed(_unwrap_escaped_tags(str(raw or "")))
+    router.flush()
+    return router.thinking_text, router.private_text, router.answer_text
+
+
+def _native_reasoning_of(response) -> str:
+    kwargs = getattr(response, "additional_kwargs", {}) or {}
+    native = kwargs.get("reasoning_content") or kwargs.get("reasoning")
+    parts = [native] if isinstance(native, str) else []
+    raw = getattr(response, "content", None)
+    if isinstance(raw, list):
+        parts.extend(
+            str(b.get("thinking") or "") for b in raw
+            if isinstance(b, dict) and b.get("type") == "thinking"
+        )
+    return "".join(parts)
+
+
 def _text_of(response) -> str:
-    """Текст ответа без thinking/reasoning — тем же парсером, что и у агента."""
-    if response is None:
-        return ""
-    from .event_loop import _extract_thinking_and_clean_content  # ленивый импорт
-    _, _, cleaned = _extract_thinking_and_clean_content(getattr(response, "content", ""))
-    return (cleaned or "").strip()
+    return _content_of(response)[2].strip()
 
 
 def _shape_of(response) -> str:
@@ -156,22 +189,90 @@ class LLModel:
                 f"messages={len(messages)}"
             )
 
+            content_router = ContentStreamRouter()
+            reasoning_cleaner = ReasoningCleaner()
+            native_reasoning = []
+            stream_state = {"reasoning": False, "answer": False, "thinking": False}
+            reasoning_trace, internal_reasoning_trace = [], []
+
+            async def send(text, kind):
+                await agent._send_chunk(text, request_id, msg_id=str(request_id), kind=kind)
+
+            async def emit_reasoning(text):
+                piece = reasoning_cleaner.feed(text)
+                if piece and (stream_state["reasoning"] or piece.strip()):
+                    await send(piece, "live")
+                    stream_state["reasoning"] = True
+
+            async def close_reasoning():
+                tail = reasoning_cleaner.flush()
+                if tail and (stream_state["reasoning"] or tail.strip()):
+                    await send(tail, "live")
+                    stream_state["reasoning"] = True
+                if stream_state["reasoning"]:
+                    await send("", "reasoning_end")
+                    stream_state["reasoning"] = False
+
+            async def emit_content(events):
+                for channel, piece in events:
+                    if channel == "reasoning":
+                        stream_state["thinking"] = True
+                        await emit_reasoning(piece)
+                    else:
+                        await close_reasoning()
+                        await send(piece, "answer_delta")
+                        stream_state["answer"] = True
+
+            async def reset_stream():
+                nonlocal content_router, reasoning_cleaner
+                await close_reasoning()
+                if stream_state["answer"]:
+                    await send("", "answer_reset")
+                stream_state.update(reasoning=False, answer=False, thinking=False)
+                native_reasoning.clear()
+                reasoning_trace.clear()
+                internal_reasoning_trace.clear()
+                content_router = ContentStreamRouter()
+                reasoning_cleaner = ReasoningCleaner()
+
             async def on_chunk(text: str, kind: str = "answer"):
-                # Сырой reasoning провайдера не показываем — только текст ответа.
-                if kind == "answer" and text:
-                    await agent._send_chunk(text, request_id, msg_id=str(request_id), kind="live")
+                if kind == "retry":
+                    await reset_stream()
+                elif kind == "reasoning" and isinstance(text, str) and text:
+                    native_reasoning.append(text)
+                    await emit_reasoning(text)
+                elif kind == "answer" and isinstance(text, str):
+                    await emit_content(content_router.feed(text))
 
             from .common.context_usage import prompt_weights, scale_breakdown
             prompt_estimate = prompt_weights(messages)
             response, final = None, ""
             for attempt in range(MODEL_EMPTY_RETRIES + 1):
+                if attempt:
+                    await reset_stream()
                 try:
                     response = await _astream_collect(llm, messages, on_chunk=on_chunk, error_info={})
                 except Exception as e:
                     logger.error(f"[model] вызов модели упал: {type(e).__name__}: {e}")
                     response = None
                     break
-                final = _text_of(response)
+                if response is None:
+                    break
+                await emit_content(content_router.flush())
+                thinking, internal, answer = _content_of(response)
+                native = "".join(native_reasoning) or _native_reasoning_of(response)
+                if native:
+                    reasoning_trace.append(clean_reasoning(native))
+                    if not native_reasoning:
+                        await emit_reasoning(native)
+                if thinking:
+                    reasoning_trace.append(clean_reasoning(thinking))
+                    if not stream_state["thinking"]:
+                        await emit_reasoning(thinking)
+                if internal:
+                    internal_reasoning_trace.append(internal)
+                await close_reasoning()
+                final = answer.strip()
                 if final:
                     break
                 logger.warning(
@@ -183,7 +284,9 @@ class LLModel:
                 final = "⚠️ Модель сейчас недоступна. Попробуйте повторить запрос через пару минут."
             elif not final:
                 final = MODEL_EMPTY_FALLBACK
-            await agent._send_chunk("", request_id, msg_id=str(request_id), kind="final_commit")
+            await close_reasoning()
+            await send(final, "answer_end")
+            await send("", "final_commit")
 
             from .core.token_usage import cache_read_known
             usage = agent.track_tokens(response) if response is not None else dict(EMPTY_USAGE)

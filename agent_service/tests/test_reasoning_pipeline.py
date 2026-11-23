@@ -22,8 +22,9 @@ def test_native_reasoning_tool_and_final(monkeypatch, key):
     result = h.run("Use add")
     assert calls and result["message"] == "Result: 42"
     events = [(c.kwargs["kind"], c.args[0]) for c in h.send_chunk.await_args_list]
-    assert events == [("live", "Tool-step summary."), ("reasoning_end", ""),
+    assert [e for e in events if not e[0].startswith("answer_") and e[0] != "final_commit"] == [("live", "Tool-step summary."), ("reasoning_end", ""),
                       ("live", "Final-step summary."), ("reasoning_end", "")]
+    assert events[-2:] == [("answer_end", "Result: 42"), ("final_commit", "")]
     assert "summary" not in result["message"]
     assert all(m.content != "Tool-step summary." for m in h.models["coder"].calls[-1])
 
@@ -87,7 +88,8 @@ def test_failed_stream_closes_reasoning_before_retry(monkeypatch, fast_sleep):
     monkeypatch.setattr(h.models["coder"], "astream", astream)
     result = h.run()
     assert result["message"] == "Recovered answer"
-    assert [(c.kwargs["kind"], c.args[0]) for c in h.send_chunk.await_args_list] == [
+    assert [(c.kwargs["kind"], c.args[0]) for c in h.send_chunk.await_args_list
+            if c.kwargs["kind"] in ("live", "reasoning_end")] == [
         ("live", "Abandoned attempt"), ("reasoning_end", ""),
         ("live", "Recovered summary"), ("reasoning_end", "")]
 
@@ -103,7 +105,8 @@ def test_ainvoke_fallback_publishes_native_reasoning_once(monkeypatch, fast_slee
     monkeypatch.setattr(h.models["coder"], "ainvoke", AsyncMock(return_value=response))
     result = h.run()
     assert result["message"] == "Fallback answer"
-    assert [(c.kwargs["kind"], c.args[0]) for c in h.send_chunk.await_args_list] == [
+    assert [(c.kwargs["kind"], c.args[0]) for c in h.send_chunk.await_args_list
+            if c.kwargs["kind"] in ("live", "reasoning_end")] == [
         ("live", "Fallback summary"), ("reasoning_end", "")]
 
 
@@ -121,4 +124,7 @@ def test_markdown_stripped_without_gluing(monkeypatch):
     live = "".join(c.args[0] for c in h.send_chunk.await_args_list if c.kwargs["kind"] == "live")
     assert live == "The user is asking:\n◦ Plan: one.\nNext"
     kinds = [c.kwargs["kind"] for c in h.send_chunk.await_args_list]
-    assert kinds[-1] == "reasoning_end" and kinds.count("reasoning_end") == 1
+    assert kinds.count("reasoning_end") == 1
+    assert kinds[-2:] == ["answer_end", "final_commit"]
+    assert kinds.index("reasoning_end") < kinds.index("answer_end")
+    assert "answer_delta" in kinds

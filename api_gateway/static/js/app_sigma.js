@@ -74,6 +74,11 @@ class ChatApp {
             reasoningWrapEl: null,
             streamBuffer: '',
             streamShown: '',
+            answerCandidateEl: null,
+            answerBuffer: '',
+            answerShown: '',
+            answerRaf: null,
+            answerProtocol: false,
             streamDone: false,
             streamIsFinal: false,
             streamFinalData: null,
@@ -4504,72 +4509,107 @@ class ChatApp {
 
 
 
-    /* ══════════════════════════════════════════
-       TYPEWRITER-СТРИМИНГ
-       Приём чанков отвязан от отрисовки: чанки копятся
-       в _streamBuffer, а ровный RAF-цикл каждый кадр
-       «подъедает» из буфера фиксированную порцию символов
-       и дорисовывает. Тяжёлый marked.parse троттлится.
-    ══════════════════════════════════════════ */
-
-    // Базовый темп: символов за кадр (~60fps → ~240 симв/сек).
-    // При переполнении буфера порция плавно растёт, чтобы не отставать
-    // от быстрой генерации, но не рвать плавность.
-    _streamTypewriterStep(st) {
-        st = st || this._resolveStream(null);
-        const CHARS_PER_FRAME = 7;
-        const buffered = (st && st.streamBuffer) ? st.streamBuffer.length : 0;
-        let step = CHARS_PER_FRAME;
-        if (buffered > 400)  step = Math.min(16, CHARS_PER_FRAME + Math.floor(buffered / 150));
-        if (buffered > 2000) step = Math.min(48, Math.floor(buffered / 50));
-
-        if (st && window.GenerativeUI && typeof window.GenerativeUI.computeStreamStep === 'function') {
-            return window.GenerativeUI.computeStreamStep(st.streamShown || '', st.streamBuffer || '', step);
-        }
-        return step;
+    _discardAnswerCandidate(chatId) {
+        const st = this._resolveStream(chatId);
+        if (!st) return;
+        if (st.answerRaf != null) cancelAnimationFrame(st.answerRaf);
+        st.answerRaf = null;
+        st.answerCandidateEl?.remove();
+        st.answerCandidateEl = null;
+        st.answerBuffer = '';
+        st.answerShown = '';
     }
+
+    _ensureAnswerCandidate(chatId, frame = {}) {
+        const st = this._resolveStream(chatId);
+        const container = this._isActiveChat(chatId) ? this.getMessagesContainer() : null;
+        if (!st.runStartedAt) st.runStartedAt = Date.now();
+        if (!st.pendingBotEl) {
+            st.pendingBotEl = document.createElement('div');
+            st.pendingBotEl.className = 'agent-message';
+            st.pendingBotEl.dataset.id = frame.id || '';
+        }
+        if (container && this._loadingMessagesChat !== String(chatId)) {
+            this._ensureBotAfterLastUserMessage(container, st.pendingBotEl);
+            this._dedupeTurnReasoningAndActions(container, st, frame.id);
+        }
+        if (!st.answerCandidateEl) {
+            st.answerCandidateEl = document.createElement('div');
+            st.answerCandidateEl.className = 'live-block answer-candidate';
+            st.pendingBotEl.appendChild(st.answerCandidateEl);
+        }
+        st.botAnswered = true;
+        st.streamingActive = true;
+        return st.answerCandidateEl;
+    }
+
+    _startAnswerLoop(chatId) {
+        const st = this._resolveStream(chatId);
+        if (!st || st.answerRaf != null || !st.answerCandidateEl || !st.answerBuffer) return;
+        st.answerRaf = requestAnimationFrame(() => {
+            st.answerRaf = null;
+            if (!st.answerCandidateEl) return;
+            st.answerShown += st.answerBuffer;
+            st.answerBuffer = '';
+            const container = this._isActiveChat(chatId) ? this.getMessagesContainer() : null;
+            const nearBottom = container && container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+            this._renderBotStructuredContent(st.answerCandidateEl, st.answerShown, {
+                botMessageId: st.pendingBotEl?.dataset?.messageId || st.pendingBotEl?.dataset?.id || '',
+                isStreaming: true,
+            });
+            if (nearBottom) container.scrollTop = container.scrollHeight;
+        });
+    }
+
+    _handleAnswerFrame(chatId, frame) {
+        if (!['answer_delta', 'answer_reset', 'answer_end'].includes(frame.kind)) return false;
+        const st = this._resolveStream(chatId);
+        st.answerProtocol = true;
+        if (frame.kind === 'answer_reset') {
+            this._discardAnswerCandidate(chatId);
+            return true;
+        }
+        this._ensureAnswerCandidate(chatId, frame);
+        if (frame.kind === 'answer_delta') {
+            st.answerBuffer += String(frame.chunk ?? '');
+            this._startAnswerLoop(chatId);
+            return true;
+        }
+        const answerText = String(frame.chunk ?? ((st.answerShown || '') + (st.answerBuffer || '')));
+        if (st.answerRaf != null) cancelAnimationFrame(st.answerRaf);
+        st.answerRaf = null;
+        this._commitReasoningBlock(chatId);
+        if (st.streamRaf != null) cancelAnimationFrame(st.streamRaf);
+        st.streamRaf = null;
+        if (st.liveBlockEl && st.liveBlockEl !== st.answerCandidateEl) st.liveBlockEl.remove();
+        st.liveBlockEl = st.answerCandidateEl;
+        st.liveBlockEl.className = 'live-block';
+        st.liveBlockEl.style.whiteSpace = '';
+        st.answerCandidateEl = null;
+        st.answerBuffer = '';
+        st.answerShown = '';
+        st.streamShown = answerText;
+        st.streamBuffer = '';
+        st.streamIsFinal = true;
+        st.streamDone = false;
+        this._stopReasoningTimer(chatId);
+        this._renderStreamPartial(chatId);
+        return true;
+    }
+
 
     _startStreamLoop(chatId) {
         const st = this._resolveStream(chatId);
-        if (st.streamRaf) return;  // цикл уже крутится
-
-        const RENDER_THROTTLE_MS = 70;  // не чаще — тяжёлый marked.parse
-        st.lastStreamRender = 0;
-
-        const tick = (ts) => {
-            if (!st.liveBlockEl) {
-                st.streamRaf = null;
-                return;
-            }
-
-            // Вытаскиваем порцию символов из буфера
-            const step = this._streamTypewriterStep(st);
-            if (st.streamBuffer && st.streamBuffer.length) {
-                const take = st.streamBuffer.slice(0, step);
-                st.streamShown  += take;
-                st.streamBuffer  = st.streamBuffer.slice(step);
-            }
-
-            // Троттлим тяжёлый Markdown-ре-рендер
-            if (!ts) ts = performance.now();
-            if (ts - st.lastStreamRender >= RENDER_THROTTLE_MS) {
-                this._renderStreamPartial(chatId);
-                st.lastStreamRender = ts;
-            }
-
-            // Условие завершения: сервер сказал done И буфер пуст
-            const drained = !st.streamBuffer || st.streamBuffer.length === 0;
-            if (st.streamDone && drained) {
-                this._renderStreamPartial(chatId);   // финальный partial-рендер текста
-                this._finalizeStream(chatId);        // файлы, actions, подсветка
-                st.streamRaf = null;
-                return;
-            }
-
-            st.streamRaf = requestAnimationFrame(tick);
-        };
-
-        st.streamRaf = requestAnimationFrame(tick);
+        if (!st || st.streamRaf != null || (!st.streamBuffer && !st.streamDone)) return;
+        st.streamRaf = requestAnimationFrame((ts) => {
+            st.streamRaf = null;
+            if (!st.liveBlockEl) return;
+            st.streamShown += st.streamBuffer;
+            st.streamBuffer = '';
+            st.lastStreamRender = ts;
+            this._renderStreamPartial(chatId);
+            if (st.streamDone) this._finalizeStream(chatId);
+        });
     }
 
     _renderStreamPartial(chatId) {
@@ -4578,6 +4618,7 @@ class ChatApp {
         const container = this._isActiveChat(chatId) ? this.getMessagesContainer() : null;
 
         if (st.streamIsFinal || st.streamDone || st.liveBlockEl.classList.contains('live-block')) {
+            st.liveBlockEl.style.whiteSpace = '';
             const data = st.streamFinalData || {};
             this._renderBotStructuredContent(st.liveBlockEl, st.streamShown || '', {
                 botMessageId: data.message_id || st.pendingBotEl?.dataset?.messageId || st.pendingBotEl?.dataset?.id || '',
@@ -4585,16 +4626,8 @@ class ChatApp {
                 isStreaming: true,
             });
         } else {
-            let html = this._reasoningHtml(st.streamShown || '');
-            if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
-                ADD_TAGS: ['table','thead','tbody','tr','th','td'],
-                ADD_ATTR: ['colspan','rowspan','align']
-            });
-            st.liveBlockEl.innerHTML = html;
-            st.liveBlockEl.querySelectorAll('a[href]').forEach(a => {
-                a.setAttribute('target', '_blank');
-                a.setAttribute('rel', 'noopener noreferrer');
-            });
+            st.liveBlockEl.style.whiteSpace = 'pre-wrap';
+            st.liveBlockEl.textContent = st.streamShown || '';
         }
 
         if (container) {
@@ -4893,14 +4926,13 @@ class ChatApp {
                     [...body.querySelectorAll('.reasoning-step')].map(el => el.textContent.trim())
                 );
                 steps.forEach(rawStep => {
-                    let html = this._reasoningHtml(rawStep);
-                    if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html);
                     const step = document.createElement('div');
                     step.className = 'reasoning-step';
                     step.setAttribute('data-cds', 'Prose');
                     step.setAttribute('data-prose-font', 'sans');
                     step.setAttribute('data-prose-size', 'inherit');
-                    step.innerHTML = html;
+                    step.style.whiteSpace = 'pre-wrap';
+                    step.textContent = String(rawStep);
                     const t = step.textContent.trim();
                     if (t && !existingTexts.has(t)) {
                         existingTexts.add(t);
@@ -4949,14 +4981,13 @@ class ChatApp {
                 });
                 const body = wrap.querySelector('.reasoning-body');
                 steps.forEach(rawStep => {
-                    let html = this._reasoningHtml(rawStep);
-                    if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html);
                     const step = document.createElement('div');
                     step.className = 'reasoning-step';
                     step.setAttribute('data-cds', 'Prose');
                     step.setAttribute('data-prose-font', 'sans');
                     step.setAttribute('data-prose-size', 'inherit');
-                    step.innerHTML = html;
+                    step.style.whiteSpace = 'pre-wrap';
+                    step.textContent = String(rawStep);
                     body.appendChild(step);
                 });
                 targetBotEl.insertBefore(wrap, targetBotEl.firstElementChild);
@@ -5019,7 +5050,7 @@ class ChatApp {
        шагов копятся в одном свёртке как параграфы, а не отдельными блоками. */
     _commitReasoningBlock(chatId) {
         const st = this._resolveStream(chatId);
-        if (!st.liveBlockEl) return;
+        if (!st || !st.liveBlockEl || st.streamIsFinal) return;
 
         // Дренаж буфера: забираем всю накопленную мысль сразу
         st.streamShown = (st.streamShown || '') + (st.streamBuffer || '');
@@ -5040,12 +5071,6 @@ class ChatApp {
             return;
         }
 
-        let html = this._reasoningHtml(text);
-        if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
-            ADD_TAGS: ['table','thead','tbody','tr','th','td'],
-            ADD_ATTR: ['colspan','rowspan','align']
-        });
-
         liveEl.remove();
 
         const body = this._ensureReasoningWrap(chatId);
@@ -5054,7 +5079,8 @@ class ChatApp {
         step.setAttribute('data-cds', 'Prose');
         step.setAttribute('data-prose-font', 'sans');
         step.setAttribute('data-prose-size', 'inherit');
-        step.innerHTML = html;
+        step.style.whiteSpace = 'pre-wrap';
+        step.textContent = text;
         const stepPlain = step.textContent.trim();
         const alreadyExists = [...body.querySelectorAll('.reasoning-step')].some(
             s => s.textContent.trim() === stepPlain
@@ -5080,10 +5106,16 @@ class ChatApp {
        с приглушённого reasoning-live до обычного (основной шрифт). */
     _promoteLiveToFinal(chatId) {
         const st = this._resolveStream(chatId);
+        if (st?.answerProtocol) {
+            this._commitReasoningBlock(chatId);
+            this._stopReasoningTimer(chatId);
+            return;
+        }
         this._stopReasoningTimer(chatId);
         st.streamIsFinal = true;
         if (st.liveBlockEl) {
             st.liveBlockEl.className = 'live-block';
+            st.liveBlockEl.style.whiteSpace = '';
             st.liveBlockEl.style.display = '';
             // Форсим немедленный ре-рендер уже видимого текста, чтобы новый
             // (обычный) стиль применился сразу, а не «дожидался» финализации.
@@ -5102,6 +5134,8 @@ class ChatApp {
         // Сбрасываем ТОЛЬКО указанный/текущий чат. Фоновые стримящие чаты
         // (свой this._streams[chatId] + открытый SSE) сброс не затрагивает.
         const st = this._resolveStream(chatId);
+        this._discardAnswerCandidate(chatId);
+        st.answerProtocol = false;
         if (st.streamRaf) {
             cancelAnimationFrame(st.streamRaf);
             st.streamRaf = null;
@@ -5114,6 +5148,7 @@ class ChatApp {
         // чтобы предыдущий ответ не выглядел как незавершённое размышление.
         if (st.liveBlockEl && st.liveBlockEl.classList.contains('reasoning-live')) {
             st.liveBlockEl.className = 'live-block';
+            st.liveBlockEl.style.whiteSpace = '';
         }
         st.pendingBotEl    = null;
         st.liveBlockEl     = null;
@@ -5131,6 +5166,12 @@ class ChatApp {
         const st = this._resolveStream(chatId);
         const isActive = this._isActiveChat(chatId);
         if (!st.pendingBotEl) return;
+        if (st.answerCandidateEl) {
+            this._handleAnswerFrame(chatId, {
+                kind: 'answer_end',
+                chunk: st.streamFinalData?.fullText ?? st.answerShown + st.answerBuffer,
+            });
+        }
 
         // Страховка: если генерация картинки завершилась (успех или ошибка),
         // а превью так и не пришло — снимаем висящий скелетон на финале.
@@ -5154,6 +5195,7 @@ class ChatApp {
         // Гарантия: финальный ответ всегда в обычном стиле, даже если маркер
         // final_commit не пришёл (например обрыв SSE) — снимаем reasoning-стиль.
         targetBlock.className = 'live-block';
+        targetBlock.style.whiteSpace = '';
         if (data.message_id) st.pendingBotEl.dataset.messageId = data.message_id;
 
         this._renderBotStructuredContent(targetBlock, fullText, {
@@ -5188,6 +5230,9 @@ class ChatApp {
         st.pendingBotEl.appendChild(actions);
         st.pendingBotEl.style.transition = '';
         st.pendingBotEl.style.opacity    = '';
+
+        this._discardAnswerCandidate(chatId);
+        st.answerProtocol = false;
 
         // Сброс всего стрим-состояния этого чата
         st.pendingBotEl    = null;
@@ -5365,6 +5410,12 @@ class ChatApp {
         const key = String(chatId);
         const isActive = this._isActiveChat(key);
         const st = this._getStream(key);
+        if (st?.answerCandidateEl) {
+            this._handleAnswerFrame(chatId, {
+                kind: 'answer_end',
+                chunk: st.streamFinalData?.fullText ?? st.answerShown + st.answerBuffer,
+            });
+        }
         this._stopReasoningTimer(key);
         const savedReasoningWrap = st?.reasoningWrapEl || st?.pendingBotEl?.querySelector('.reasoning-block') || null;
         this._hardResetStreamState(key);
@@ -5505,6 +5556,7 @@ class ChatApp {
             }
 
             st.streamBuffer += chunk;
+            this._startStreamLoop(key);
             if (!st.streamIsFinal) {
                 // FlowMap: текст размышлений для оверлея по тапу на блок «думает».
                 if (isActive) _fm('think_text', { chat: key, text: chunk });
@@ -5512,6 +5564,14 @@ class ChatApp {
             }
         };
 
+        for (const kind of ['answer_delta', 'answer_reset', 'answer_end']) {
+            es.addEventListener(kind, (ev) => {
+                let frame;
+                try { frame = JSON.parse(ev.data); } catch (_) { return; }
+                if (frame.active_requests !== undefined) this._updateActiveRequestsUI(key, frame.active_requests);
+                this._handleAnswerFrame(key, { ...frame, kind });
+            });
+        }
         es.addEventListener('live', onLive);
         // «Изменённые файлы»: тот же ws-diff.js, transport 'sse'.
         window.WsDiff?.init({ transport: 'sse' }).listen(es);
@@ -5536,7 +5596,6 @@ class ChatApp {
             // Живой блок оказался финальным ответом — повышаем его стиль.
             // Реальная финализация (файлы, actions) придёт с 'done' из Kafka.
             this._promoteLiveToFinal(key);
-            st.streamIsFinal = true;
         });
 
         const onDone = async (ev) => {

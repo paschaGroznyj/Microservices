@@ -7,6 +7,7 @@ import os
 import re
 import ast
 import httpx
+from .core.content_stream import ContentStreamRouter
 from .core.observability import LOG_CONTEXT, log_event, fingerprint, request_logged, tool_logged, llm_logged
 import hashlib
 import time
@@ -669,6 +670,7 @@ def _extract_thinking_and_clean_content(raw_content) -> tuple[str, str, str]:
     cleaned = _strip_stray_tags_outside_code(text)
 
     return thinking_text, reasoning_text, cleaned
+
 
 @llm_logged
 async def _astream_collect(llm, messages, on_chunk=None, iteration: int = 0, error_info: dict | None = None,
@@ -1588,7 +1590,7 @@ class HarnessAgent:
         if not request_id:
             return
         # Для управляющих маркеров пустой chunk допустим
-        if not chunk and kind not in ("reasoning_end", "final_commit"):
+        if not chunk and kind not in ("reasoning_end", "final_commit", "answer_reset", "answer_end"):
             return
 
         target = (getattr(self, "_gateway_target", "main") or "main").lower()
@@ -2212,9 +2214,10 @@ class HarnessAgent:
                     can_still_extend = not loop_state["extension_used"]
                     current_llm = llm if (is_last_step and not can_still_extend) else llm_with_tools
 
-                    # GPT reasoning arrives outside content. Stream only that channel;
-                    # answer/tool arguments remain buffered until the step is complete.
-                    stream_state = {"sent": False}
+                    # Both channels are forwarded before the provider finishes the step.
+                    # Answer candidates can be discarded on tool use / retry.
+                    stream_state = {"sent": False, "answer": False, "thinking": False}
+                    content_router = ContentStreamRouter()
                     native_reasoning = []
                     # Markdown/HTML снимаем потоково на склеенном тексте шага, а не по чанкам:
                     # иначе теряются пробелы и переносы на стыках (GLM шлёт по 1–3 слова).
@@ -2228,23 +2231,45 @@ class HarnessAgent:
                             )
                             stream_state["sent"] = True
 
+                    async def _close_reasoning():
+                        await _flush_native_reasoning()
+                        if stream_state["sent"]:
+                            await self._send_chunk("", request_id, msg_id=str(request_id), kind="reasoning_end")
+                            stream_state["sent"] = False
+
+                    async def _emit_reasoning(text):
+                        piece = reasoning_cleaner.feed(text)
+                        if piece and (stream_state["sent"] or piece.strip()):
+                            await self._send_chunk(piece, request_id, msg_id=str(request_id), kind="live")
+                            stream_state["sent"] = True
+
+                    async def _emit_content(events):
+                        for channel, piece in events:
+                            if not piece:
+                                continue
+                            if channel == "reasoning":
+                                stream_state["thinking"] = True
+                                await _emit_reasoning(piece)
+                            else:
+                                # End reasoning BEFORE starting the answer candidate.
+                                await _close_reasoning()
+                                await self._send_chunk(piece, request_id, msg_id=str(request_id), kind="answer_delta")
+                                stream_state["answer"] = True
+
                     async def _on_native_reasoning(text, kind="answer"):
+                        nonlocal content_router
                         if kind == "reasoning" and isinstance(text, str) and text:
                             native_reasoning.append(text)
-                            piece = reasoning_cleaner.feed(text)
-                            if piece and (stream_state["sent"] or piece.strip()):
-                                await self._send_chunk(
-                                    piece, request_id, msg_id=str(request_id), kind="live"
-                                )
-                                stream_state["sent"] = True
+                            await _emit_reasoning(text)
+                        elif kind == "answer" and isinstance(text, str):
+                            await _emit_content(content_router.feed(text))
                         elif kind == "retry":
-                            reasoning_cleaner.flush()
+                            await _close_reasoning()
                             native_reasoning.clear()
-                            if stream_state["sent"]:
-                                await self._send_chunk(
-                                    "", request_id, msg_id=str(request_id), kind="reasoning_end"
-                                )
-                                stream_state["sent"] = False
+                            if stream_state["answer"]:
+                                await self._send_chunk("", request_id, msg_id=str(request_id), kind="answer_reset")
+                            stream_state.update(sent=False, answer=False, thinking=False)
+                            content_router = ContentStreamRouter()
 
                     from .common.context_usage import prompt_weights, scale_breakdown
                     prompt_estimate = prompt_weights(messages, tools if current_llm is llm_with_tools else ())
@@ -2253,7 +2278,7 @@ class HarnessAgent:
                     try:
                         response = await _astream_collect(
                             current_llm, messages,
-                            on_chunk=_on_native_reasoning if agent_model == "coder" else None,
+                            on_chunk=_on_native_reasoning,
                             iteration=iteration,
                             error_info=_llm_error, cache_control=use_cache_control,
                             extra_headers=openai_cache_headers,
@@ -2286,6 +2311,7 @@ class HarnessAgent:
                             final_response = "Ошибка внутри цикла агента. Но агент запомнил шаги, попробуйте вернуться к запросу"
                         break
 
+                    await _emit_content(content_router.flush())
                     agent_steps += 1
                     _raw_content = getattr(response, "content", None)
                     has_native_thinking = isinstance(_raw_content, list) and any(
@@ -2295,6 +2321,28 @@ class HarnessAgent:
                     _thinking_text, _reasoning_text, _clean_content = _extract_thinking_and_clean_content(
                         _raw_content
                     )
+                    # Use identical scope rules for live candidates and the authoritative
+                    # answer, including ainvoke (which never called our stream callback).
+                    # Legacy escaped/code-wrapped envelopes retain their buffered parser.
+                    if isinstance(_raw_content, list):
+                        _text_parts = []
+                        for _block in _raw_content:
+                            if isinstance(_block, str):
+                                _text_parts.append(_block)
+                            elif isinstance(_block, dict) and _block.get("type") == "text":
+                                _text_parts.append(str(_block.get("text") or ""))
+                            elif isinstance(_block, dict) and _block.get("type") == "thinking":
+                                _text_parts.append(f"<thinking>{_block.get('thinking') or ''}</thinking>")
+                        _scope_text = "".join(_text_parts)
+                    else:
+                        _scope_text = str(_raw_content or "")
+                    _scope_router = ContentStreamRouter()
+                    _scope_router.feed(_unwrap_escaped_tags(_scope_text))
+                    _scope_router.flush()
+                    if not _scope_router.envelope:
+                        _thinking_text = _scope_router.thinking_text.strip()
+                        _reasoning_text = _scope_router.private_text.strip()
+                        _clean_content = _scope_router.answer_text
                     if _reasoning_text:
                         loop_state.setdefault("internal_reasoning_trace", []).append(_reasoning_text)
                     # На шаге с tool_calls оставляем внутреннее рассуждение в стеке контекста модели,
@@ -2316,72 +2364,44 @@ class HarnessAgent:
                         response.content = _clean_content
 
                     _has_tool_calls = bool(getattr(response, "tool_calls", None))
-                    _native_text = "".join(native_reasoning)
-                    if not _native_text:
+                    if _has_tool_calls and stream_state["answer"]:
+                        await self._send_chunk("", request_id, msg_id=str(request_id), kind="answer_reset")
+                        stream_state["answer"] = False
+                    # Keep the raw provider reasoning separate from streamed <thinking>.
+                    # Trace cleanup must not change the bytes fed to the live cleaner.
+                    _native_raw = "".join(native_reasoning)
+                    if not _native_raw:
                         _kwargs = getattr(response, "additional_kwargs", {}) or {}
                         _candidate = _kwargs.get("reasoning_content") or _kwargs.get("reasoning")
-                        _native_text = _candidate if isinstance(_candidate, str) else ""
-                    _native_text = clean_reasoning(_native_text)
+                        _native_raw = _candidate if isinstance(_candidate, str) else ""
+                    _native_text = clean_reasoning(_native_raw)
                     _step_thinking = _thinking_text or (_clean_content if _has_tool_calls else "")
-                    _had_text = bool(_step_thinking)
 
                     if _native_text:
-                        # ainvoke fallback/non-streamed models: publish once after collection.
-                        # Never put provider reasoning into response.content or the final answer.
                         loop_state.setdefault("reasoning_trace", []).append(_native_text)
-                        if native_reasoning:
-                            await _flush_native_reasoning()
-                        else:
-                            await self._send_chunk(
-                                _native_text, request_id, msg_id=str(request_id), kind="live"
-                            )
-                        await self._send_chunk(
-                            "", request_id, msg_id=str(request_id), kind="reasoning_end"
-                        )
-                        # Reasoning is already closed; do not promote it to a final answer.
-                        stream_state["sent"] = False
-                    elif _has_tool_calls and _had_text:
-                        # Короткое предложение из <thinking>...</thinking> (или fallback content на тул-шаге):
-                        # отправляем сразу готовым предложением и закрываем шаг рассуждений.
-                        loop_state.setdefault("reasoning_trace", []).append(_step_thinking)
-                        await self._send_chunk(
-                            _step_thinking, request_id, msg_id=str(request_id), kind="live"
-                        )
-                        stream_state["sent"] = True
-                        await self._send_chunk(
-                            "", request_id, msg_id=str(request_id), kind="reasoning_end"
-                        )
-                    elif _has_tool_calls and not _had_text:
-                        # Шаг без текста (сразу tool_calls). Модель не отдала свой
-                        # reasoning — для "немых" моделей (coder/gemini) имитируем его:
-                        # льём в reasoning-блок короткую фразу-описание тула из словаря.
-                        _imitate = (
-                            IMITATE_TOOL_STATUS
-                            and not stream_state["sent"]
-                            and agent_model in IMITATE_TOOL_STATUS_MODELS
-                        )
-                        if _imitate:
+                        if not native_reasoning:
+                            await _emit_reasoning(_native_raw)
+                    # Native Anthropic thinking is already represented by _native_raw.
+                    # Content thinking still belongs in the trace even when streamed.
+                    if _step_thinking and not (has_native_thinking and _native_text):
+                        _trace_thinking = clean_reasoning(_step_thinking)
+                        if _trace_thinking:
+                            loop_state.setdefault("reasoning_trace", []).append(_trace_thinking)
+                        if not stream_state["thinking"] and not _native_text:
+                            await _emit_reasoning(_step_thinking)
+                    elif _has_tool_calls and not _native_text and not stream_state["thinking"]:
+                        if IMITATE_TOOL_STATUS and agent_model in IMITATE_TOOL_STATUS_MODELS:
                             _names = [tc.get("name", "") for tc in (response.tool_calls or [])]
                             _phrase = get_tools_status(_names)
                             if _phrase:
-                                await self._send_chunk(
-                                    _phrase, request_id, msg_id=str(request_id), kind="live"
-                                )
-                                stream_state["sent"] = True
-                        if stream_state["sent"]:
-                            await self._send_chunk(
-                                "", request_id, msg_id=str(request_id), kind="reasoning_end"
-                            )
-                    elif not _has_tool_calls and _thinking_text:
-                        # Если модель оставила <thinking> на финальном шаге — фиксируем мысль в свёртке,
-                        # а в final_response пойдёт уже очищенный response.content.
-                        loop_state.setdefault("reasoning_trace", []).append(_thinking_text)
-                        await self._send_chunk(
-                            _thinking_text, request_id, msg_id=str(request_id), kind="live"
-                        )
-                        await self._send_chunk(
-                            "", request_id, msg_id=str(request_id), kind="reasoning_end"
-                        )
+                                await _emit_reasoning(_phrase)
+
+                    # Closing after answer_end lets the frontend consume the candidate
+                    # as reasoning. Always finish every reasoning channel first.
+                    await _close_reasoning()
+                    if not _has_tool_calls and (_clean_content or "").strip():
+                        await self._send_chunk(_clean_content.strip(), request_id, msg_id=str(request_id), kind="answer_end")
+                        stream_state["answer"] = True
 
                     if (
                         _has_tool_calls
@@ -2429,7 +2449,7 @@ class HarnessAgent:
                         # Если модель стримила мысли, но финальный ответ пустой (пойдёт на ретрай
                         # empty_response), закрываем блок размышлений через reasoning_end, чтобы
                         # мысли не потерялись и не остались висеть в live_text.
-                        if stream_state["sent"]:
+                        if stream_state["sent"] or stream_state["answer"]:
                             if final_response:
                                 await self._send_chunk(
                                     "", request_id, msg_id=str(request_id), kind="final_commit"

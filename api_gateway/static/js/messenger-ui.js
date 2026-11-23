@@ -234,7 +234,7 @@
     });
     var first = m.querySelector('button'); if (first) first.focus({ preventScroll: true });
   }
-  document.addEventListener('mousedown', function (e) { if (!e.target.closest('#tgx-menu,[data-more]')) closeMenu(); }, true);
+  document.addEventListener('mousedown', function (e) { if (!e.target.closest('#tgx-menu,[data-more],[data-tr-more]')) closeMenu(); }, true);
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && document.getElementById('tgx-menu')) { e.stopPropagation(); closeMenu(); }
   }, true);
@@ -382,6 +382,6 @@
     categories: categories, toolsValueHtml: toolsValueHtml, toolsContentHtml: toolsContentHtml, toggleAll: toggleAll,
     overLimit: overLimit, warnHtml: warnHtml, usageHtml: usageHtml, canAdd: canAdd,
     listHtml: listHtml, renderSectionMeta: renderSectionMeta, bindList: bindList, modalHtml: modalHtml,
-    bindModal: bindModal, escLayer: escLayer, isSheet: isSheet, copy: copy, chatType: chatType
+    bindModal: bindModal, escLayer: escLayer, isSheet: isSheet, copy: copy, chatType: chatType, menu: menu, closeMenu: closeMenu, moreIcon: function () { return IC.more; }
   };
 })();

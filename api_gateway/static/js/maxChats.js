@@ -172,29 +172,26 @@
     if (!_triggers || _triggers.length === 0) {
       return '<div class="tgc-tr-empty">Триггеров пока нет</div>';
     }
-    return _triggers.map(function (t) {
+    return '<div class="tgx-grp tgx-trs">' + _triggers.map(function (t) {
       var meta;
       if (t.kind === 'once') {
         meta = 'Разово · ' + fmtDateRu(t.trigger_date) + ' · ' + (t.time_msk || '') + ' МСК';
       } else {
         meta = 'Регулярно · ' + (t.time_msk || '') + ' МСК · ' + dowLabel(t.days_of_week);
       }
-      return '<div class="tgc-tr-item' + (t.is_active ? '' : ' tgc-tr-item--off') + '">' +
-        '<div class="tgc-tr-item-head">' +
-          '<span class="tgc-tr-title">' + esc(t.title || (t.kind === 'once' ? 'Разовый триггер' : 'Регулярный триггер')) + '</span>' +
-          '<span class="tgc-tr-actions">' +
-            '<button class="tgc-tr-ic" type="button" data-tr-edit="' + t.id + '" title="Редактировать">' +
-              '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M12 20h9"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>' +
-            '</button>' +
-            '<button class="tgc-tr-ic tgc-tr-ic--del" type="button" data-tr-del="' + t.id + '" title="Удалить">' +
-              '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M3 6h18"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M10 11v6M14 11v6"/></svg>' +
-            '</button>' +
-          '</span>' +
+      var off = !t.is_active;
+      return '<div class="tgx-trow' + (off ? ' is-off' : '') + '" title="' + esc(t.title || '') + '">' +
+        '<span class="tgx-trow-ic" aria-hidden="true">' + (t.kind === 'once'
+          ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>'
+          : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>') + '</span>' +
+        '<div class="tgx-trow-tx"><span class="tgx-trow-t"><span class="tgx-trow-tt">' + esc(t.title || (t.kind === 'once' ? 'Разовый триггер' : 'Регулярный триггер')) + '</span>' +
+          (off ? '<em>выкл.</em>' : '') + '</span>' +
+          '<small>' + esc(meta + (t.addressed ? ' · адресно' : ' · всем')) + '</small>' +
+          (t.prompt ? '<small class="tgx-trow-p">' + esc(t.prompt) + '</small>' : '') +
         '</div>' +
-        '<div class="tgc-tr-meta">' + meta + (t.addressed ? ' · адресно' : ' · всем') + '</div>' +
-        (t.prompt ? '<div class="tgc-tr-prompt">' + esc(t.prompt) + '</div>' : '') +
+        '<button type="button" class="tgx-more" data-tr-more="' + t.id + '" title="Действия" aria-label="Действия с триггером" aria-haspopup="menu">' + window.MessengerUI.moreIcon() + '</button>' +
       '</div>';
-    }).join('');
+    }).join('') + '</div>';
   }
 
   function calendarHtml() {
@@ -514,31 +511,46 @@
       _trForm = trDefaults(); _calOpen = false; _calView = null; renderModal();
     });
 
-    _modalOverlay.querySelectorAll('[data-tr-edit]').forEach(function (b) {
+    function trEdit(id) {
+      var t = _triggers.find(function (x) { return x.id === id; });
+      if (!t) return;
+      _trForm = {
+        id: t.id, kind: t.kind || 'recurring', title: t.title || '',
+        time_msk: t.time_msk || '09:00',
+        days_of_week: (t.days_of_week || []).slice(),
+        trigger_date: t.trigger_date || '',
+        prompt: t.prompt || '', addressed: !!t.addressed,
+        is_active: t.is_active != null ? t.is_active : true
+      };
+      _calOpen = false; _calView = null; renderModal();
+    }
+    async function trPatch(id, patch) {
+      try {
+        await api('PATCH', API_TR + encodeURIComponent(_editing) + '/' + encodeURIComponent(id), patch);
+        await loadTriggers(_editing);
+      } catch (err) { showMsg('Ошибка: ' + err.message, true); }
+    }
+    async function trDel(id) {
+      if (!confirm('Удалить триггер?')) return;
+      try {
+        await api('DELETE', API_TR + encodeURIComponent(_editing) + '/' + encodeURIComponent(id));
+        await loadTriggers(_editing);
+      } catch (err) { showMsg('Ошибка: ' + err.message, true); }
+    }
+    var API_TR = '/api/max/triggers/';
+    _modalOverlay.querySelectorAll('[data-tr-more]').forEach(function (b) {
       b.addEventListener('click', function (e) {
-        var id = parseInt(e.currentTarget.dataset.trEdit, 10);
+        e.stopPropagation();
+        var id = parseInt(e.currentTarget.dataset.trMore, 10);
         var t = _triggers.find(function (x) { return x.id === id; });
         if (!t) return;
-        _trForm = {
-          id: t.id, kind: t.kind || 'recurring', title: t.title || '',
-          time_msk: t.time_msk || '09:00',
-          days_of_week: (t.days_of_week || []).slice(),
-          trigger_date: t.trigger_date || '',
-          prompt: t.prompt || '', addressed: !!t.addressed,
-          is_active: t.is_active != null ? t.is_active : true
-        };
-        _calOpen = false; _calView = null; renderModal();
-      });
-    });
-
-    _modalOverlay.querySelectorAll('[data-tr-del]').forEach(function (b) {
-      b.addEventListener('click', async function (e) {
-        var id = e.currentTarget.dataset.trDel;
-        if (!confirm('Удалить триггер?')) return;
-        try {
-          await api('DELETE', '/api/max/triggers/' + encodeURIComponent(_editing) + '/' + encodeURIComponent(id));
-          await loadTriggers(_editing);
-        } catch (err) { showMsg('Ошибка: ' + err.message, true); }
+        if (document.getElementById('tgx-menu')) { window.MessengerUI.closeMenu(); return; }
+        var r = e.currentTarget.getBoundingClientRect();
+        window.MessengerUI.menu(r.right - 200, r.bottom + 4, [
+          { t: 'Редактировать', f: function () { trEdit(id); } },
+          { t: t.is_active ? 'Выключить' : 'Включить', f: function () { trPatch(id, { is_active: !t.is_active }); } },
+          { t: 'Удалить', danger: true, f: function () { trDel(id); } }
+        ]);
       });
     });
 

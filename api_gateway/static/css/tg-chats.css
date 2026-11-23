@@ -773,3 +773,28 @@
 .tgx-sw:not(:checked){background:color-mix(in srgb,var(--text-primary) 32%,transparent)}
 .tgx-ft{box-shadow:0 -10px 16px -12px rgba(0,0,0,.25)}
 [data-theme="dark"] .tgx-ft{box-shadow:0 -10px 16px -10px rgba(0,0,0,.7)}
+
+/* ── Триггеры в «Расписании»: строки группы + меню ⋯ (как список чатов) ── */
+.tgx-trs{display:flex;flex-direction:column}
+.tgx-trow{display:flex;align-items:center;gap:12px;min-height:56px;padding:8px 6px 8px 12px;box-sizing:border-box}
+.tgx-trow+.tgx-trow{border-top:1px solid var(--border)}
+.tgx-trow-ic{flex-shrink:0;width:32px;height:32px;border-radius:9px;display:grid;place-items:center;color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.tgx-trow-ic svg{width:16px;height:16px}
+.tgx-trow-tx{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.tgx-trow-t{display:flex;align-items:center;gap:6px;font-size:13.5px;font-weight:500;color:var(--text-primary);min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tgx-trow-t em{flex-shrink:0;font-style:normal;font-size:11px;font-weight:500;padding:1px 6px;border-radius:5px;color:var(--text-secondary);background:color-mix(in srgb,var(--text-primary) 7%,transparent)}
+.tgx-trow-tx small{font-size:12px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tgx-trow-p{opacity:.85}
+.tgx-trow.is-off .tgx-trow-ic{color:var(--text-secondary);background:color-mix(in srgb,var(--text-primary) 6%,transparent)}
+.tgx-trow.is-off .tgx-trow-t>:not(em),.tgx-trow.is-off .tgx-trow-tx small{opacity:.7}
+.tgx-trow{align-items:flex-start;padding-top:10px;padding-bottom:10px;min-height:0}
+.tgx-trow-ic{margin-top:1px}
+.tgx-trow .tgx-more{margin-top:2px}
+.tgx-trow-t{display:flex;white-space:normal}
+.tgx-trow-tt{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tgx-trow-tx{padding-right:4px}
+.tgx-trow-t em{color:var(--text-primary);background:color-mix(in srgb,var(--text-primary) 12%,transparent)}
+.tgx-trow.is-off .tgx-trow-tt,.tgx-trow.is-off .tgx-trow-tx small{opacity:.6}
+.tgx-trow.is-off .tgx-trow-tt{opacity:.7}
+[data-theme="dark"] .tgx-menu{background:#3a3a3a;box-shadow:0 14px 36px rgba(0,0,0,.65),0 0 0 1px rgba(255,255,255,.12)}
+.tgx-menu{border-color:color-mix(in srgb,var(--text-primary) 14%,transparent)}

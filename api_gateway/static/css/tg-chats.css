@@ -798,3 +798,37 @@
 .tgx-trow.is-off .tgx-trow-tt{opacity:.7}
 [data-theme="dark"] .tgx-menu{background:#3a3a3a;box-shadow:0 14px 36px rgba(0,0,0,.65),0 0 0 1px rgba(255,255,255,.12)}
 .tgx-menu{border-color:color-mix(in srgb,var(--text-primary) 14%,transparent)}
+
+/* Редактор триггера — тот же экран и контролы, что у настроек чата. */
+.tgx-bd--editor .tgc-tr-editor{padding:0;margin:0;border:0;border-radius:0;background:none;box-shadow:none;gap:16px;flex-shrink:0}
+.tgx-bd--editor .tgc-tr-row{gap:6px;min-width:0}
+.tgx-bd--editor .tgc-tr-sub{font-size:12px;color:var(--text-secondary);font-weight:500;line-height:1.4;flex-wrap:wrap}
+.tgx-bd--editor .tgc-tr-hint{font-size:11px;font-weight:400;color:var(--text-secondary)}
+.tgx-bd--editor .tgc-tr-tabs{box-shadow:none;border:0;padding:3px;gap:3px}
+.tgx-bd--editor .tgc-tr-tab{font:500 13px/1.3 var(--font-anthropic-sans,var(--font-sans));padding:9px 10px;border-radius:7px;color:var(--text-secondary);background:none;min-height:36px}
+.tgx-bd--editor .tgc-tr-tab.is-on{color:var(--text-primary);background:var(--surface);box-shadow:0 1px 2px rgba(0,0,0,.08),0 0 0 1px var(--border)}
+[data-theme="dark"] .tgx-bd--editor .tgc-tr-tab.is-on{background:#333;box-shadow:0 1px 3px rgba(0,0,0,.4),0 0 0 1px var(--border)}
+.tgx-bd--editor .tgc-input--sm{width:100%;min-height:40px;color-scheme:light}
+[data-theme="dark"] .tgx-bd--editor .tgc-input--sm{color-scheme:dark}
+.tgx-bd--editor .tgc-dow-row{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px}
+.tgx-bd--editor .tgc-dow{width:100%;min-width:0;height:36px;padding:0;border:1px solid var(--border);border-radius:8px;font-size:12px;background:none;color:var(--text-secondary)}
+.tgx-bd--editor .tgc-dow.active{background:color-mix(in srgb,var(--accent) 15%,var(--surface));border-color:color-mix(in srgb,var(--accent) 55%,var(--border));color:var(--text-primary)}
+.tgx-bd--editor .tgc-cal-input{box-sizing:border-box;min-height:40px;border:1px solid var(--border);box-shadow:none;border-radius:10px;background:var(--surface);color:var(--text-primary);font:inherit;font-size:13.5px}
+.tgx-bd--editor .tgc-cal{border:1px solid var(--border);background:var(--surface);box-shadow:none}
+.tgx-bd--editor .tgc-cal-title,.tgx-bd--editor .tgc-cal-cell{color:var(--text-primary)}
+.tgx-bd--editor .tgc-cal-hdr,.tgx-bd--editor .tgc-cal-arrow{color:var(--text-secondary)}
+.tgx-bd--editor .tgc-cal-cell--sel{background:color-mix(in srgb,var(--accent) 20%,var(--surface));color:var(--text-primary);box-shadow:inset 0 0 0 1px var(--accent)}
+.tgx-bd--editor .tgc-cal-cell{font-size:12px;min-height:30px;aspect-ratio:auto}
+.tgx-sub .tgc-tr-editor-actions{gap:8px;margin:0}
+.tgx-more[aria-expanded="true"]{background:color-mix(in srgb,var(--text-primary) 8%,transparent);color:var(--text-primary)}
+.tgx-more:focus-visible,.tgc-tr-editor button:focus-visible,.tgc-tr-editor input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media(max-width:600px){.tgx-bd--editor .tgc-cal-input{font-size:16px;min-height:44px}.tgx-bd--editor .tgc-dow{height:40px}}
+.tgx-sub>.tgc-msg{flex-shrink:0;padding:0 16px 8px}
+.tgx-sub>.tgc-msg:empty{display:none}
+/* Редактор триггера: вторичные контроли должны оставаться читаемыми в тёмной теме. */
+.tgx-bd--editor .tgc-tr-tab:not(.is-on),
+.tgx-bd--editor .tgc-dow:not(.active){color:var(--text-primary);opacity:.82}
+[data-theme="dark"] .tgx-bd--editor .tgc-tr-tab:not(.is-on),
+[data-theme="dark"] .tgx-bd--editor .tgc-dow:not(.active){color:#d0d0d0;opacity:.9}
+.tgx-bd--editor .tgc-tr-sub,.tgx-bd--editor .tgc-hint,.tgx-bd--editor .tgc-tr-hint{color:var(--text-secondary)}
+[data-theme="dark"] .tgx-bd--editor .tgc-tr-sub,[data-theme="dark"] .tgx-bd--editor .tgc-tr-hint{color:#b9b9b9}

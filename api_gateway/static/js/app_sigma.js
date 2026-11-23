@@ -3565,41 +3565,7 @@ class ChatApp {
         dropdown.appendChild(makeItem('chat-item-dropdown-action', chat.is_favorite ? 'Убрать из избранного' : 'В избранное', iconStar, () => this._favoriteChat(chatId, !chat.is_favorite)));
         dropdown.appendChild(makeItem('chat-item-dropdown-delete', 'Удалить', iconTrash, () => this._deleteChat(chatId)));
 
-        // Позиционируем dropdown через fixed, чтобы он не выходил за viewport
-        // даже когда chat-item находится в самом низу скролл-контейнера.
-        document.body.appendChild(dropdown);
-
-        // Сначала вставляем без координат, чтобы измерить высоту.
-        dropdown.style.visibility = 'hidden';
-        dropdown.style.top = '0px';
-        dropdown.style.left = '0px';
-
-        requestAnimationFrame(() => {
-            const btnRect      = btn.getBoundingClientRect();
-            const ddHeight     = dropdown.offsetHeight;
-            const ddWidth      = dropdown.offsetWidth;
-            const viewportH    = window.innerHeight;
-
-            const spaceBelow   = viewportH - btnRect.bottom;
-            const spaceAbove   = btnRect.top;
-
-            let top;
-            if (spaceBelow >= ddHeight + 4 || spaceBelow >= spaceAbove) {
-                // показываем снизу
-                top = btnRect.bottom + 4;
-            } else {
-                // не влезает снизу — показываем сверху
-                top = btnRect.top - ddHeight - 4;
-            }
-
-            // Не выходить за правый край
-            let left = btnRect.right - ddWidth;
-            if (left < 4) left = 4;
-
-            dropdown.style.top        = `${top}px`;
-            dropdown.style.left       = `${left}px`;
-            dropdown.style.visibility = '';
-        });
+        window.AnchoredPopup.attach(dropdown, btn);
     }
 
     async _renameChat(chatId, chat) {

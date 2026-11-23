@@ -474,7 +474,8 @@
 }
 
 .chat-item:hover .chat-item-menu-btn,
-.chat-item.active .chat-item-menu-btn {
+.chat-item.active .chat-item-menu-btn,
+.chat-item .chat-item-menu-btn[aria-expanded="true"] {
   display: flex;
 }
 

@@ -233,9 +233,9 @@
     }
     var f = _trForm;
     var kindTabs =
-      '<div class="tgc-tr-tabs">' +
-        '<button type="button" class="tgc-tr-tab' + (f.kind === 'recurring' ? ' active' : '') + '" data-tr-kind="recurring">Регулярный</button>' +
-        '<button type="button" class="tgc-tr-tab' + (f.kind === 'once' ? ' active' : '') + '" data-tr-kind="once">Разовый (дата)</button>' +
+      '<div class="tgc-tr-tabs tgx-seg" role="radiogroup" aria-label="Периодичность">' +
+        '<button type="button" class="tgc-tr-tab tgx-sb tgx-sb--acc' + (f.kind === 'recurring' ? ' active is-on' : '') + '" data-tr-kind="recurring" role="radio" aria-checked="' + (f.kind === 'recurring') + '">Регулярный</button>' +
+        '<button type="button" class="tgc-tr-tab tgx-sb tgx-sb--acc' + (f.kind === 'once' ? ' active is-on' : '') + '" data-tr-kind="once" role="radio" aria-checked="' + (f.kind === 'once') + '">Разовый</button>' +
       '</div>';
 
     var kindBody;
@@ -246,17 +246,17 @@
       }).join('');
       kindBody =
         '<div class="tgc-tr-row">' +
-          '<label class="tgc-tr-sub">Время (МСК)</label>' +
+          '<label class="tgc-tr-sub tgx-lb" for="tgc-tr-time">Время (МСК)</label>' +
           '<input type="time" class="tgc-input tgc-input--sm" id="tgc-tr-time" value="' + esc(f.time_msk) + '"/>' +
         '</div>' +
         '<div class="tgc-tr-row">' +
-          '<label class="tgc-tr-sub">Дни недели <span class="tgc-tr-hint">(пусто = все)</span></label>' +
+          '<label class="tgc-tr-sub tgx-lb">Дни недели <span class="tgc-tr-hint">· без выбора — каждый день</span></label>' +
           '<div class="tgc-dow-row">' + dows + '</div>' +
         '</div>';
     } else {
       kindBody =
         '<div class="tgc-tr-row">' +
-          '<label class="tgc-tr-sub">Дата</label>' +
+          '<label class="tgc-tr-sub tgx-lb">Дата</label>' +
           '<div class="tgc-cal-field">' +
             '<button type="button" class="tgc-cal-input" id="tgc-cal-open">' +
               (f.trigger_date ? fmtDateRu(f.trigger_date) : 'Выбрать дату') +
@@ -266,32 +266,26 @@
           '</div>' +
         '</div>' +
         '<div class="tgc-tr-row">' +
-          '<label class="tgc-tr-sub">Время (МСК)</label>' +
+          '<label class="tgc-tr-sub tgx-lb" for="tgc-tr-time">Время (МСК)</label>' +
           '<input type="time" class="tgc-input tgc-input--sm" id="tgc-tr-time" value="' + esc(f.time_msk) + '"/>' +
         '</div>';
     }
 
     return '<div class="tgc-tr-editor">' +
-      '<div class="tgc-tr-editor-title">' + (f.id ? 'Редактирование триггера' : 'Новый триггер') + '</div>' +
       kindTabs +
       '<div class="tgc-tr-row">' +
-        '<label class="tgc-tr-sub">Название</label>' +
+        '<label class="tgc-tr-sub tgx-lb" for="tgc-tr-title">Название</label>' +
         '<input type="text" class="tgc-input" id="tgc-tr-title" placeholder="Напр. Утренний дайджест" value="' + esc(f.title) + '"/>' +
       '</div>' +
       kindBody +
       '<div class="tgc-tr-row">' +
-        '<label class="tgc-tr-sub">Промпт триггера</label>' +
-        '<textarea class="tgc-textarea" id="tgc-tr-prompt" placeholder="Что агент должен сделать при срабатывании...">' + esc(f.prompt) + '</textarea>' +
+        '<label class="tgc-tr-sub tgx-lb" for="tgc-tr-prompt">Промпт триггера</label>' +
+        '<textarea class="tgc-textarea tgx-ta" rows="4" id="tgc-tr-prompt" placeholder="Что агент должен сделать при срабатывании...">' + esc(f.prompt) + '</textarea>' +
       '</div>' +
-      '<label class="tgc-check tgc-check--sm">' +
-        '<input type="checkbox" class="tgc-check-cb" id="tgc-tr-addressed"' + (f.addressed ? ' checked' : '') + '/>' +
-        '<span class="tgc-check-box" aria-hidden="true">' + CHECK_SVG + '</span>' +
-        '<span class="tgc-check-label">Адресно случайному участнику (иначе — всем)</span>' +
-      '</label>' +
-      '<div class="tgc-tr-editor-actions">' +
-        '<button class="tgc-save tgc-save--sm" type="button" id="tgc-tr-save">' + (f.id ? 'Сохранить' : 'Добавить') + '</button>' +
-        '<button class="tgc-cancel tgc-cancel--sm" type="button" id="tgc-tr-cancel">Отмена</button>' +
-      '</div>' +
+      '<div class="tgx-grp"><label class="tgx-ln" for="tgc-tr-addressed">' +
+        '<span class="tgx-ln-tx"><span>Адресное сообщение</span><span class="tgx-hint">Случайному участнику · иначе — всему чату</span></span>' +
+        '<input type="checkbox" class="tgx-sw" id="tgc-tr-addressed"' + (f.addressed ? ' checked' : '') + '/>' +
+      '</label></div>' +
     '</div>';
   }
 
@@ -384,7 +378,7 @@
     ensureModal();
     var prevBody = _modalOverlay.querySelector('.tgx-box > .tgx-bd');
     var savedScrollTop = prevBody ? prevBody.scrollTop : 0;
-    var prevTrList = _modalOverlay.querySelector('.tgc-tr-list');
+    var prevTrList = _modalOverlay.querySelector('.tgx-bd--sub');
     var savedTrListScroll = prevTrList ? prevTrList.scrollTop : 0;
     var openDdIds = Array.prototype.map.call(
       _modalOverlay.querySelectorAll('.tgc-dd.tgc-dd--open'),
@@ -404,7 +398,8 @@
     _modalOverlay.innerHTML = window.MessengerUI.modalHtml({
       modalId: 'maxc-modal', editing: _editing, form: _form, models: getActualModels(),
       toolsContent: toolsContent, isSheet: sheet, sub: _sub, trCount: _triggers.length,
-      schedule: '<div class="tgc-tr-list">' + triggersListHtml() + '</div>' + triggerFormHtml()
+      triggerEditor: !!_trForm, triggerEditing: !!(_trForm && _trForm.id),
+      schedule: (_trForm ? '' : '<div class="tgc-tr-list">' + triggersListHtml() + '</div>') + triggerFormHtml()
     });
 
     bindModalEvents();
@@ -415,7 +410,7 @@
     });
     var newBody = _modalOverlay.querySelector('.tgx-box > .tgx-bd');
     if (newBody && savedScrollTop > 0) newBody.scrollTop = savedScrollTop;
-    var newTrList = _modalOverlay.querySelector('.tgx-sub .tgc-tr-list');
+    var newTrList = _modalOverlay.querySelector('.tgx-bd--sub');
     if (newTrList && savedTrListScroll > 0) newTrList.scrollTop = savedTrListScroll;
   }
 
@@ -494,6 +489,7 @@
       },
       del: function () { if (_editing) delChat(_editing); },
       sub: function (on) {
+        if (!on && _trForm) { _trForm = null; _calOpen = false; renderModal(); return; }
         _sub = on;
         var el = _modalOverlay.querySelector('.tgx-sub');
         if (el) { el.classList.toggle('is-in', on); el.setAttribute('aria-hidden', String(!on)); }
@@ -509,6 +505,7 @@
     var addBtn = _modalOverlay.querySelector('#tgc-tr-add');
     if (addBtn) addBtn.addEventListener('click', function () {
       _trForm = trDefaults(); _calOpen = false; _calView = null; renderModal();
+      var editorBody = _modalOverlay.querySelector('.tgx-bd--editor'); if (editorBody) editorBody.scrollTop = 0;
     });
 
     function trEdit(id) {
@@ -523,6 +520,7 @@
         is_active: t.is_active != null ? t.is_active : true
       };
       _calOpen = false; _calView = null; renderModal();
+      var editorBody = _modalOverlay.querySelector('.tgx-bd--editor'); if (editorBody) editorBody.scrollTop = 0;
     }
     async function trPatch(id, patch) {
       try {
@@ -545,12 +543,12 @@
         var t = _triggers.find(function (x) { return x.id === id; });
         if (!t) return;
         if (document.getElementById('tgx-menu')) { window.MessengerUI.closeMenu(); return; }
-        var r = e.currentTarget.getBoundingClientRect();
-        window.MessengerUI.menu(r.right - 200, r.bottom + 4, [
+        var anchor = e.currentTarget;
+        window.MessengerUI.menu(0, 0, [
           { t: 'Редактировать', f: function () { trEdit(id); } },
           { t: t.is_active ? 'Выключить' : 'Включить', f: function () { trPatch(id, { is_active: !t.is_active }); } },
           { t: 'Удалить', danger: true, f: function () { trDel(id); } }
-        ]);
+        ], anchor);
       });
     });
 
@@ -634,7 +632,7 @@
   }
 
   function showMsg(text, isErr) {
-    var el = _modalOverlay && _modalOverlay.querySelector('#tgc-msg');
+    var el = _modalOverlay && _modalOverlay.querySelector(_sub ? '#tgc-tr-msg' : '#tgc-msg');
     if (!el) return;
     el.textContent = text;
     el.className = 'tgc-msg ' + (isErr ? 'tgc-msg--err' : 'tgc-msg--ok');
@@ -677,7 +675,7 @@
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && _modalOpen) {
       e.stopPropagation();
-      if (window.MessengerUI.escLayer(_modalOverlay, _sub, function () { _sub = false; renderModal(); })) return;
+      if (window.MessengerUI.escLayer(_modalOverlay, _sub, function () { if (_trForm) { _trForm = null; _calOpen = false; } else { _sub = false; } renderModal(); })) return;
       closeModal();
     }
   });

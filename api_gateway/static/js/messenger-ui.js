@@ -139,7 +139,7 @@
   var IC = {
     group: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.6-3 2.8-4.6 5.5-4.6S13.9 16 14.5 19"/><circle cx="17" cy="9" r="2.4"/><path d="M15.8 14.6c2.3.2 4 1.7 4.6 4.4"/></svg>',
     user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="3.6"/><path d="M5 20c.8-3.6 3.6-5.6 7-5.6s6.2 2 7 5.6"/></svg>',
-    more: '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>',
+    more: '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg>',
     close: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
     back: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none"><path d="M10 3.5 5.5 8l4.5 4.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     copy: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5.5" y="5.5" width="8" height="8" rx="1.8"/><path d="M10.5 3.2A1.7 1.7 0 0 0 9 2.5H4.2A1.7 1.7 0 0 0 2.5 4.2V9a1.7 1.7 0 0 0 .7 1.4"/></svg>',
@@ -187,7 +187,7 @@
         '<span class="tgx-tx"><span class="tgx-nm' + (nm ? '' : ' is-empty') + '">' + (nm ? esc(nm) : 'Без имени') + '</span>' +
         '<span class="tgx-l2"><span class="tgx-id">' + esc(c.chat_id) + '</span><span class="tgx-ty">· ' + typeRu(t) + '</span></span></span>' +
         (m ? '<span class="tgx-mdl" style="--m:' + m.accent + '">' + mdlSvg(m) + esc(m.label) + '</span>' : '') +
-        '<button type="button" class="tgx-more" data-more="' + esc(c.chat_id) + '" title="Действия" aria-label="Действия">' + IC.more + '</button></div>';
+        '<button type="button" class="tgx-more" data-more="' + esc(c.chat_id) + '" title="Действия" aria-label="Действия" aria-haspopup="menu" aria-expanded="false">' + IC.more + '</button></div>';
     }).join('');
     return tabs + '<div class="tgx-rows">' + (rows || '<div class="tgc-empty">Нет чатов этого типа</div>') + '</div>';
   }
@@ -217,7 +217,7 @@
 
   // Контекстное меню строки (как в панели вложений).
   function closeMenu() { var m = document.getElementById('tgx-menu'); if (m) m.remove(); }
-  function menu(x, y, items) {
+  function menu(x, y, items, anchor) {
     closeMenu();
     var m = document.createElement('div');
     m.className = 'att-menu tgx-menu'; m.id = 'tgx-menu'; m.setAttribute('role', 'menu');
@@ -225,9 +225,13 @@
       return (it.danger ? '<hr class="tgx-menu-sep"/>' : '') + '<button type="button" role="menuitem" data-i="' + i + '"' + (it.danger ? ' class="tgx-danger"' : '') + '>' + esc(it.t) + '</button>';
     }).join('');
     document.body.appendChild(m);
-    var r = m.getBoundingClientRect();
-    m.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + 'px';
-    m.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) + 'px';
+    if (anchor) {
+      window.AnchoredPopup.attach(m, anchor);
+    } else {
+      var r = m.getBoundingClientRect();
+      m.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + 'px';
+      m.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) + 'px';
+    }
     m.addEventListener('click', function (e) {
       var b = e.target.closest('[data-i]'); if (!b) return;
       var f = items[+b.dataset.i].f; closeMenu(); if (f) f();
@@ -238,7 +242,6 @@
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && document.getElementById('tgx-menu')) { e.stopPropagation(); closeMenu(); }
   }, true);
-  window.addEventListener('resize', closeMenu);
 
   function copy(text) {
     try { if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text); } catch (_) {}
@@ -252,12 +255,12 @@
   function bindList(root, h) {
     if (!root || root.dataset.tgxBound) return;
     root.dataset.tgxBound = '1';
-    function rowMenu(cid, x, y) {
+    function rowMenu(cid, x, y, anchor) {
       menu(x, y, [
         { t: 'Редактировать', f: function () { h.open(cid); } },
         { t: 'Копировать ID', f: function () { copy(cid); } },
         { t: 'Удалить', danger: true, f: function () { h.del(cid); } }
-      ]);
+      ], anchor);
     }
     root.addEventListener('click', function (e) {
       var t;
@@ -265,14 +268,14 @@
       if ((t = e.target.closest('[data-more]'))) {
         e.stopPropagation();
         var r = t.getBoundingClientRect();
-        rowMenu(t.dataset.more, r.right - 200, r.bottom + 4);
+        rowMenu(t.dataset.more, r.right - 200, r.bottom + 4, t);
         return;
       }
       if ((t = e.target.closest('[data-open]'))) h.open(t.dataset.open);
     });
     root.addEventListener('contextmenu', function (e) {
       var t = e.target.closest('[data-open]'); if (!t) return;
-      e.preventDefault(); rowMenu(t.dataset.open, e.clientX, e.clientY);
+      e.preventDefault(); rowMenu(t.dataset.open, e.clientX, e.clientY, t);
     });
     root.addEventListener('keydown', function (e) {
       var t = e.target.closest && e.target.closest('[data-open]');
@@ -330,9 +333,12 @@
       '<button type="button" class="tgx-btn tgx-btn--pri" id="tgc-save">' + (ed ? 'Сохранить' : 'Встроить') + '</button></div>';
     var sub = ed
       ? '<div class="tgx-sub' + (o.sub ? ' is-in' : '') + '" aria-hidden="' + !o.sub + '">' + (o.isSheet ? '<div class="tgx-grab"></div>' : '') +
-          '<div class="tgx-hd"><button type="button" class="tgx-x" data-subx aria-label="Назад">' + IC.back + '</button><div class="tgx-ttl">Расписание</div></div>' +
-          '<div class="tgx-bd tgx-bd--sub">' + (o.schedule || '') + '</div>' +
-          '<div class="tgx-ft"><span class="tgx-hint">Триггеры сохраняются сразу</span><span class="tgx-sp"></span><button type="button" class="tgx-btn tgx-btn--pri" data-subx>Готово</button></div></div>'
+          '<div class="tgx-hd"><button type="button" class="tgx-x" data-subx aria-label="Назад">' + IC.back + '</button><div class="tgx-ttl">' + (o.triggerEditor ? (o.triggerEditing ? 'Редактирование триггера' : 'Новый триггер') : 'Расписание') + '</div></div>' +
+          '<div class="tgx-bd tgx-bd--sub' + (o.triggerEditor ? ' tgx-bd--editor' : '') + '">' + (o.schedule || '') + '</div>' +
+          '<div class="tgc-msg" id="tgc-tr-msg" role="status" aria-live="polite"></div>' +
+          (o.triggerEditor
+            ? '<div class="tgx-ft tgc-tr-editor-actions"><span class="tgx-sp"></span><button class="tgx-btn" type="button" id="tgc-tr-cancel">Отмена</button><button class="tgx-btn tgx-btn--pri" type="button" id="tgc-tr-save">' + (o.triggerEditing ? 'Сохранить' : 'Добавить') + '</button></div>'
+            : '<div class="tgx-ft"><span class="tgx-hint">Триггеры сохраняются сразу</span><span class="tgx-sp"></span><button type="button" class="tgx-btn tgx-btn--pri" data-subx>Готово</button></div>') + '</div>'
       : '';
     return '<div class="tgx-box' + (o.isSheet ? ' tgx-box--sheet' : '') + '" id="' + o.modalId + '">' + (o.isSheet ? '<div class="tgx-grab"></div>' : '') +
       head + '<div class="tgx-bd">' + body + '</div><div class="tgc-msg" id="tgc-msg"></div>' + foot + sub + '</div>';

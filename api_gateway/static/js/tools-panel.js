@@ -611,6 +611,8 @@ class ToolsPanel {
 window.ToolsPanel = new ToolsPanel();
 // Экспорт иконок тулов для переиспользования в tgChats.js (те же SVG, что в панели).
 window.__TP_ICONS = ICONS;
+// Категории (id, подпись, описание, adminOnly) — для раздела «Инструменты» в TG/MAX-чатах.
+window.__TP_CATEGORIES = TOOL_CATEGORIES;
 export default window.ToolsPanel;
 /* ══════════════════════════════════════════════════════════════════════════
    MODEL PICKER — выбор модели агента (динамический каталог из /api/models)

@@ -520,3 +520,50 @@
     font-size:13.5px;
   }
 }
+
+/* ── Инструменты: выпадающий список (вариант D), общий для TG и MAX ── */
+.tgc-dd-value .tgc-tv{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--cds-text-primary)}
+.tgc-dd-value .tgc-tv--none{color:var(--cds-text-secondary)}
+.tgc-dd-value .tgc-tn{flex-shrink:0;margin-left:6px;font-size:12px;color:var(--cds-text-secondary);font-variant-numeric:tabular-nums}
+#tgc-dd-tools .tgc-dd-toggle{gap:8px}
+#tgc-dd-tools .tgc-dd-value{flex:1;justify-content:flex-start}
+.tgc-dd--open .tgc-dd-pop:has(.tgc-topt--d){max-height:420px}
+.tgc-topt--d{align-items:center;gap:11px;padding:8px 10px}
+.tgc-topt--d .tgc-topt-ic{width:30px;height:30px;flex-shrink:0;border-radius:8px;justify-content:center;color:var(--cds-text-secondary);background:var(--cds-alpha-1);transition:background .15s,color .15s}
+.tgc-topt--d .tgc-topt-ic svg{width:16px;height:16px}
+.tgc-topt-tx{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.tgc-topt-tx b{display:flex;align-items:center;gap:6px;font-size:13.5px;font-weight:500}
+.tgc-topt-tx em{font-style:normal;font-size:10.5px;font-weight:600;letter-spacing:.02em;padding:1px 6px;border-radius:999px;color:var(--cds-text-secondary);background:var(--cds-alpha-2)}
+.tgc-topt-tx small{font-size:11.5px;color:var(--cds-text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tgc-topt-ck{width:18px;height:18px;flex-shrink:0;border-radius:5px;display:grid;place-items:center;color:transparent;
+  box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--cds-text-primary) 30%,transparent);transition:background .12s,box-shadow .12s}
+/* в D выделение — чекбоксом и иконкой, без заливки всей строки */
+.tgc-topt--d.tgc-topt--on{background:transparent;box-shadow:none;font-weight:400}
+.tgc-topt--d.tgc-topt--on:hover{background:var(--cds-alpha-2)}
+.tgc-topt--d.tgc-topt--on .tgc-topt-ic{color:var(--accent);background:color-mix(in srgb,var(--accent) 13%,transparent)}
+.tgc-topt--d.tgc-topt--on .tgc-topt-ck{background:var(--accent);box-shadow:none;color:#fff}
+.tgc-topt-ft{display:flex;justify-content:flex-end;margin:2px -4px -4px;padding:4px 6px;border-top:1px solid var(--cds-ring-color,var(--border))}
+.tgc-topt-ft button{height:28px;padding:0 10px;border:0;border-radius:7px;background:none;cursor:pointer;font:500 12.5px/1 inherit;font-family:inherit;color:var(--accent)}
+.tgc-topt-ft button:hover{background:color-mix(in srgb,var(--accent) 10%,transparent)}
+
+/* ── Лимиты: жёлтый «!» у чатов сверх лимита и строка использования ── */
+.tgc-warn{flex-shrink:0;width:18px;height:18px;border-radius:50%;display:inline-grid;place-items:center;cursor:help;
+  font:700 12px/1 var(--font-sans,inherit);color:#7a5200;background:#f5c542}
+[data-theme="dark"] .tgc-warn{color:#2a1d00;background:#e9b434}
+.tgc-lim{padding:0 2px;font-size:12px;color:var(--text-secondary,var(--cds-text-secondary));font-variant-numeric:tabular-nums}
+.tgc-lim-full{color:#9a6700;font-weight:600}
+[data-theme="dark"] .tgc-lim-full{color:#e9b434}
+/* правки по скринам: лимит ровно и сверх, контраст бейджа и чекбоксов в тёмной теме */
+.tgc-lim-full{color:var(--text-primary,var(--cds-text-primary));font-weight:600}
+[data-theme="dark"] .tgc-lim-full{color:var(--text-primary,var(--cds-text-primary))}
+.tgc-lim-over{color:#8a5a00;font-weight:600}
+.tgc-lim-over::before{content:"!";display:inline-grid;place-items:center;width:13px;height:13px;margin-right:4px;border-radius:50%;font-size:9.5px;font-weight:700;color:#7a5200;background:#f5c542;vertical-align:1px}
+[data-theme="dark"] .tgc-lim-over{color:#e9b434}
+[data-theme="dark"] .tgc-lim-over::before{color:#2a1d00;background:#e9b434}
+.tgc-topt-tx em{color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent)}
+[data-theme="dark"] .tgc-topt-ck{box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.42)}
+[data-theme="dark"] .tgc-topt--d.tgc-topt--on .tgc-topt-ck{color:#1a1208}
+.tgc-row-main .tgc-warn{order:-1}
+.tgc-topt-tx em{font-size:11px;padding:1px 7px}
+[data-theme="dark"] .tgc-topt-tx em{color:#f0b89f;background:color-mix(in srgb,var(--accent) 24%,transparent)}
+[data-theme="dark"] .tgc-topt-ck{box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.55)}

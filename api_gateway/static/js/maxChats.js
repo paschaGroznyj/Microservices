@@ -142,6 +142,7 @@
   }
 
   function toolsDisplay() {
+    if (window.MessengerUI) return window.MessengerUI.toolsValueHtml(_form.selected_tools);
     if (!_form.selected_tools.length) return 'Не выбраны';
     return _form.selected_tools.map(function (id) {
       var t = TG_TOOLS.find(function (x) { return x.id === id; });
@@ -378,6 +379,7 @@
   function renderSidebar() {
     if (!_mount) return;
 
+    var over = window.MessengerUI ? window.MessengerUI.overLimit(_chats) : {};
     var listHtml = _chats.length === 0
       ? '<div class="tgc-empty">Нет встроенных чатов</div>'
       : _chats.map(function (c) {
@@ -386,6 +388,7 @@
           var isEditing = _modalOpen && _editing === c.chat_id;
           return '<div class="tgc-row' + (isEditing ? ' tgc-row--active' : '') + '">' +
             '<div class="tgc-row-main">' +
+              (over[c.chat_id] ? window.MessengerUI.warnHtml(over[c.chat_id]) : '') +
               '<span class="tgc-cid">' + esc(c.chat_id) + '</span>' +
               '<span class="tgc-badge tgc-badge--' + (c.chat_type || 'private') + '">' + (c.chat_type === 'group' ? 'группа' : 'личка') + '</span>' +
               (s.agent_name ? '<span class="tgc-aname">' + esc(s.agent_name) + '</span>' : '') +
@@ -401,6 +404,7 @@
     _mount.innerHTML =
       '<div class="tgc-wrap">' +
         '<div class="tgc-list">' + listHtml + '</div>' +
+        (window.MessengerUI ? window.MessengerUI.usageHtml(_chats) : '') +
         '<button class="tgc-open-modal-btn" id="tgc-open-create" type="button">' +
           '<svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M10 4v12M4 10h12"/></svg>' +
           '<span>Встроить чат</span>' +
@@ -459,7 +463,7 @@
       '</button>';
     }).join('');
 
-    var toolsContent = TG_TOOLS.map(function (t) {
+    var toolsContent = window.MessengerUI ? window.MessengerUI.toolsContentHtml(_form.selected_tools) : TG_TOOLS.map(function (t) {
       var on = _form.selected_tools.indexOf(t.id) >= 0;
       return '<button class="tgc-topt' + (on ? ' tgc-topt--on' : '') + '" data-tool="' + t.id + '" type="button">' +
         '<span class="tgc-topt-ic">' + toolIcon(t.id) + '</span>' +
@@ -568,6 +572,12 @@
         if (i >= 0) _form.selected_tools.splice(i, 1); else _form.selected_tools.push(id);
         renderModal();
       });
+    });
+
+    var allBtn = _modalOverlay.querySelector('[data-tools-all]');
+    if (allBtn) allBtn.addEventListener('click', function () {
+      _form.selected_tools = window.MessengerUI.toggleAll(_form.selected_tools);
+      renderModal();
     });
 
     _modalOverlay.querySelectorAll('[data-trigger]').forEach(function (b) {
@@ -741,6 +751,8 @@
       } else {
         var cid = (_form.chat_id || '').trim();
         if (!cid) { showMsg('Укажи Chat ID', true); return; }
+        var limErr = window.MessengerUI && window.MessengerUI.canAdd(_chats, cid);
+        if (limErr) { showMsg(limErr, true); return; }
         await api('POST', '/api/max/chats', Object.assign({ chat_id: cid }, payload));
         await loadChats();
         renderSidebar();
@@ -782,7 +794,7 @@
     section.style.display = '';
     wirePanel();
     resetForm();
-    await loadChats();
+    await Promise.all([loadChats(), window.MessengerUI ? window.MessengerUI.load() : null]);
     render();
     updatePanelCount();
   }

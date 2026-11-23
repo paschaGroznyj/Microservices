@@ -43,7 +43,6 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
         # "push_message_to_telegram",
         # "work_with_email",
         "execute_shell_commands",
-        "execute_python_code",
     ],
 }
 

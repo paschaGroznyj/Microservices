@@ -534,8 +534,8 @@ services:
       - no-new-privileges:true
     networks:
       - catchPM
-    mem_limit: 4g                     
-    memswap_limit: 4g
+    mem_limit: 8g                     
+    memswap_limit: 8g
     cpus: "4.0"
     environment:
       - OPENBLAS_NUM_THREADS=8
@@ -579,7 +579,7 @@ services:
       - ./agent_sandbox/output:/tmp/output:rw
       - dind_data:/var/lib/docker
     restart: unless-stopped
-    mem_limit: 4g
+    mem_limit: 8g
     cpus: "2.0"
 
 

@@ -1,4 +1,4 @@
-TOKEN_SOFT_LIMIT = 200_000
+TOKEN_SOFT_LIMIT = 150_000
 
 
 def context_payload(tokens_usage):

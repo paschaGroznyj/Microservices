@@ -147,6 +147,12 @@
   animation: chatMoreSpin .8s linear infinite;
 }
 @keyframes chatMoreSpin { to { transform: rotate(360deg); } }
+/* Есть скелетон (skeleton.js): вместо спиннера две строки, только во время подгрузки */
+.sidebar .chat-list-more:has(> .sk-wrap) { display: block; height: auto; min-height: 32px; flex: 0 0 auto; }
+.sidebar .chat-list-more:has(> .sk-wrap)[hidden] { display: none; }
+.sidebar .chat-list-more > .sk-wrap { display: none; }
+.sidebar .chat-list-more.is-loading > .sk-wrap { display: flex; }
+.sidebar .chat-list-more.is-loading:has(> .sk-wrap)::before { content: none; }
 
 
 /* ── Заголовки секций: шеврон сразу за текстом, счётчик справа над колонкой времени ── */

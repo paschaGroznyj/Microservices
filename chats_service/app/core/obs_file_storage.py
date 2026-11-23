@@ -175,7 +175,8 @@ def build_group_obs_key(chat_id: int | str, run_id: str, name: str) -> str:
 
 
 async def upload_bytes(obs_key: str, body: bytes,
-                       content_type: Optional[str] = None) -> Optional[str]:
+                       content_type: Optional[str] = None,
+                       cache_control: Optional[str] = None) -> Optional[str]:
     """
     Заливает произвольные байты в OBS под явным ключом (для group-chat files:
     файл приходит multipart-ом, промежуточного файла на диске нет).
@@ -186,6 +187,8 @@ async def upload_bytes(obs_key: str, body: bytes,
                       ContentLength=len(body))
         if content_type:
             kwargs["ContentType"] = content_type
+        if cache_control:
+            kwargs["CacheControl"] = cache_control
         async with AioSession().create_client(**_obs_params()) as client:
             await client.put_object(**kwargs)
         log.info("[obs] uploaded bytes(%d) → obs://%s/%s", len(body), _bucket(), obs_key)
@@ -193,6 +196,34 @@ async def upload_bytes(obs_key: str, body: bytes,
     except Exception as e:
         log.error("[obs] ошибка заливки bytes → %s: %s", obs_key, e)
         return None
+
+
+async def exists(obs_key: str) -> bool:
+    """Есть ли объект в бакете (HEAD). Ошибка доступа/сети → False."""
+    try:
+        async with AioSession().create_client(**_obs_params()) as client:
+            await client.head_object(Bucket=_bucket(), Key=obs_key)
+        return True
+    except Exception:
+        return False
+
+
+def public_url(obs_key: str) -> str:
+    """
+    Прямая ссылка на объект открытого бакета, без gateway.
+    OBS_PUBLIC_BASE задаёт базу явно; иначе virtual-host: https://{bucket}.{endpoint}/{key}.
+    """
+    base = (os.getenv("OBS_PUBLIC_BASE") or "").rstrip("/")
+    if not base:
+        endpoint = (os.getenv("OBS_ENDPOINT") or "").rstrip("/")
+        scheme, _, host = endpoint.partition("://")
+        if not host:
+            scheme, host = "https", endpoint
+        if (os.getenv("OBS_S3_ADDRESSING_STYLE") or "virtual").strip().lower() == "path":
+            base = f"{scheme}://{host}/{_bucket()}"
+        else:
+            base = f"{scheme}://{_bucket()}.{host}"
+    return f"{base}/{obs_key}"
 
 
 async def download_range(obs_key: str, start: int, end: int) -> tuple[Optional[bytes], Optional[int]]:

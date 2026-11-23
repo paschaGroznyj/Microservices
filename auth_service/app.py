@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 from contextlib import asynccontextmanager
 from jose import JWTError, jwt
@@ -287,6 +288,19 @@ async def whatsnew_pending(request: Request):
     lazy = bool(data.get("lazy"))
     result = await db.get_pending_whatsnew(user_id=int(user_id), lazy=lazy)
     return result
+
+
+@app.post("/whatsnew/history")
+async def whatsnew_history(request: Request):
+    """Все опубликованные обновления с фичами — кнопка «Обновления» в профиле."""
+    data = await request.json()
+    user_id = data.get("user_id")
+    if user_id is None:
+        raise HTTPException(status_code=400, detail="user_id обязателен")
+    # Черновики релизов видят только id из WHATSNEW_PREVIEW_USERS (через запятую).
+    preview = {x.strip() for x in os.getenv("WHATSNEW_PREVIEW_USERS", "").split(",") if x.strip()}
+    drafts = str(user_id) in preview
+    return {"updates": await db.get_whatsnew_history(include_drafts=drafts)}
 
 
 @app.post("/whatsnew/updates/body")

@@ -34,7 +34,11 @@
     updateBody: (id) => "/api/whatsnew/updates/" + encodeURIComponent(id) + "/body",
     demoSeen:   "/api/whatsnew/demo/seen",
     updateSeen: "/api/whatsnew/updates/seen",
+    // Релизы с фичами и медиа: сплит на ПК / лента на мобиле (whatsnew-releases.js).
+    history:    "/api/whatsnew/history",
   };
+  const RELEASES_JS  = "/static/js/whatsnew-releases.js";
+  const RELEASES_CSS = "/static/css/whatsnew-releases.css";
 
   // ── Ассеты героев (заполним, когда сгенерируем PNG) ──────────────────────
   // Формат: { light: "/static/img/heroes/xxx.png", dark: "/static/img/heroes/xxx_night.png" }
@@ -1012,18 +1016,80 @@
     }
 
     const updates = Array.isArray(data.updates) ? data.updates : [];
-    if (updates.length) {
-      await showUpdates(
-        updates,
-        (upd) => {
-          apiPost(API.updateSeen, { update_id: upd.id }).catch(() => {});
-        },
-        (allIds) => {
-          apiPost(API.updateSeen, { update_ids: allIds }).catch(() => {});
-        }
-      );
+    if (!updates.length) return;
+    const ids = updates.map((u) => u.id);
+    // Новая модалка релизов. Если не загрузилась — старый слайдер.
+    if (await openReleases({ mode: "pending", pendingIds: ids })) {
+      apiPost(API.updateSeen, { update_ids: ids }).catch(() => {});
+      return;
+    }
+    await showUpdates(
+      updates,
+      (upd) => {
+        apiPost(API.updateSeen, { update_id: upd.id }).catch(() => {});
+      },
+      (allIds) => {
+        apiPost(API.updateSeen, { update_ids: allIds }).catch(() => {});
+      }
+    );
+  }
+
+  // ── Модалка релизов: грузим модуль лениво, только когда она нужна ──────────
+  let releasesLoad = null;
+  function loadReleases() {
+    if (window.WhatsNewReleases) return Promise.resolve(window.WhatsNewReleases);
+    if (releasesLoad) return releasesLoad;
+    releasesLoad = new Promise((resolve, reject) => {
+      if (!document.querySelector('link[href="' + RELEASES_CSS + '"]')) {
+        const l = document.createElement("link");
+        l.rel = "stylesheet"; l.href = RELEASES_CSS;
+        document.head.appendChild(l);
+      }
+      const sc = document.createElement("script");
+      sc.src = RELEASES_JS; sc.async = true;
+      sc.onload = () => window.WhatsNewReleases ? resolve(window.WhatsNewReleases) : reject(new Error("no module"));
+      sc.onerror = () => reject(new Error("load " + RELEASES_JS));
+      document.head.appendChild(sc);
+    }).catch((e) => { releasesLoad = null; throw e; });
+    return releasesLoad;
+  }
+
+  // true — модалка показана и закрыта; false — нечего показать или не загрузилось.
+  async function openReleases(opts) {
+    try {
+      const [mod, hist] = await Promise.all([loadReleases(), apiGet(API.history)]);
+      const list = Array.isArray(hist && hist.updates) ? hist.updates : [];
+      if (!list.length) return false;
+      await mod.open(Object.assign({ updates: list }, opts));
+      return true;
+    } catch (e) {
+      console.warn("[whatsnew] releases:", e);
+      return false;
     }
   }
+
+  // Кнопка «Обновления» в шапке профиля: вся история релизов.
+  function bindHistoryButton() {
+    const btn = document.getElementById("open-updates");
+    if (!btn || btn.dataset.bound) return;
+    btn.dataset.bound = "1";
+    btn.addEventListener("click", async () => {
+      if (btn.getAttribute("aria-busy") === "true") return;
+      btn.setAttribute("aria-busy", "true");
+      try { await openReleases({ mode: "history" }); }
+      finally { btn.removeAttribute("aria-busy"); }
+    });
+  }
+
+  window.WhatsNew = Object.assign(window.WhatsNew || {}, {
+    md: (s) => {
+      const h = wnRenderMarkdown(s || "");
+      return window.DOMPurify ? window.DOMPurify.sanitize(h) : h;
+    },
+    openHistory: () => openReleases({ mode: "history" }),
+  });
+  bindHistoryButton();
+  document.addEventListener("DOMContentLoaded", bindHistoryButton);
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", run);

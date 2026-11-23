@@ -378,6 +378,8 @@
       // до того как лента встанет на место, видимые строки прочтением не считаем
       window.GroupInteraction?.holdRead(true);
       let opened = false;
+      const skBox = document.getElementById('gc-messages');
+      if (skBox && !(this.messages && this.messages.length) && window.Skeleton) skBox.innerHTML = window.Skeleton.messages();
       try {
         const res = await fetch(`/api/group/${ROOM_UID}/messages?limit=${GC_PAGE}`, { credentials: 'include', redirect: 'manual' });
         if (window.__isAuthRedirectOrUnauthorized?.(res)) { window.__onAuthSessionExpired?.(); return; }
@@ -401,6 +403,7 @@
         }
       } catch (e) { console.warn('[group] history error', e); }
       finally {
+        skBox?.querySelector(':scope > .sk-wrap')?.remove();
         if (!opened) this._releaseReadHold();
         this._recountUnread();
       }
@@ -843,6 +846,7 @@
       if (ev === 'new_message' && data.message) {
         window.GroupInteraction?.onNewMessage(data.message);
         this._upsertMessage(data.message);
+        if (data.message.files?.length) window.AttachmentsPanel?.refresh(`group:${ROOM_UID}`);
       } else if (ev === 'edit_message' && data.message) {
         this._upsertMessage(data.message);
         this._loadPinned();
@@ -2188,7 +2192,7 @@
       const attachBtn = document.getElementById('gc-attach-btn');
       const wrapper = document.querySelector('.gc-input-area');
       if (attachBtn && wrapper) {
-        try { window.FileAttach?.init(attachBtn, wrapper); } catch (e) { /* noop */ }
+        try { window.FileAttach?.init(attachBtn, wrapper, 'g:' + ROOM_UID); } catch (e) { /* noop */ }
       }
     },
 

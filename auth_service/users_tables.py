@@ -1,4 +1,5 @@
 import asyncio
+import json
 import asyncpg
 import bcrypt
 from config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME, FERNET_KEY
@@ -437,6 +438,58 @@ class DataBaseUser:
                 item["created_at"] = item["created_at"].isoformat()
             updates.append(item)
         return updates
+
+    # Таблица есть в postgres/sql/01_auth/02_app_update_items.sql; здесь — для базы,
+    # где postgres не перезапускали после выката.
+    _ITEMS_DDL = """
+        CREATE TABLE IF NOT EXISTS app_update_items (
+            id        SERIAL PRIMARY KEY,
+            update_id INTEGER NOT NULL REFERENCES app_updates(id) ON DELETE CASCADE,
+            ord       INTEGER NOT NULL,
+            kind      VARCHAR(16) NOT NULL CHECK (kind IN ('new', 'improve', 'fix')),
+            title     TEXT NOT NULL,
+            body      TEXT NOT NULL DEFAULT '',
+            media     JSONB,
+            UNIQUE (update_id, ord)
+        )
+    """
+    _items_ready = False
+
+    async def get_whatsnew_history(self, limit: int = 50, include_drafts: bool = False) -> list[dict]:
+        """
+        Все published-обновления, от новых к старым, с фичами (app_update_items).
+        Для кнопки «Обновления» в профиле и модалки после релиза.
+        У старых обновлений items пустой — фронт показывает body (markdown).
+        include_drafts=True — ещё и черновики (is_published=false): превью релиза
+        для пользователей из WHATSNEW_PREVIEW_USERS до публикации.
+        """
+        async with self.pool.acquire() as conn:
+            if not DataBaseUser._items_ready:
+                await conn.execute(self._ITEMS_DDL)
+                DataBaseUser._items_ready = True
+            rows = await conn.fetch("""
+                SELECT au.id, au.version, au.title, au.body, au.created_at, au.is_published,
+                       COALESCE((
+                           SELECT json_agg(json_build_object(
+                                      'kind', i.kind, 'title', i.title,
+                                      'body', i.body, 'media', i.media
+                                  ) ORDER BY i.ord)
+                           FROM app_update_items i WHERE i.update_id = au.id
+                       ), '[]'::json) AS items
+                FROM app_updates au
+                WHERE au.is_published = TRUE OR $2::bool
+                ORDER BY au.created_at DESC, au.id DESC
+                LIMIT $1
+            """, int(limit), bool(include_drafts))
+        out = []
+        for r in rows:
+            item = dict(r)
+            if item.get("created_at"):
+                item["created_at"] = item["created_at"].isoformat()
+            items = item.get("items")
+            item["items"] = json.loads(items) if isinstance(items, str) else (items or [])
+            out.append(item)
+        return out
 
     async def get_app_update_body(self, update_id: int) -> dict | None:
         """Текст одного published-обновления (ленивая догрузка в модалке What's New)."""

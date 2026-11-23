@@ -974,6 +974,24 @@ async def whatsnew_update_body(update_id: int, request: Request):
         raise HTTPException(status_code=502, detail=f"Auth service dead: {str(e)}")
 
 
+@app.get("/api/whatsnew/history")
+async def whatsnew_history(request: Request):
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    auth_url = SERVICES['auth']['url']
+    try:
+        response = await app.state.http_client.post(
+            f"{auth_url}/whatsnew/history",
+            json={"user_id": user["user_id"]},
+            timeout=10.0
+        )
+        return JSONResponse(content=response.json(), status_code=response.status_code)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Auth service dead: {str(e)}")
+
+
 @app.post("/api/whatsnew/demo/seen")
 async def whatsnew_demo_seen(request: Request):
     user = await get_current_user(request)
@@ -2451,8 +2469,20 @@ async def _task_mark_running(chat_id, request_id):
 _task_gw.bind(push=broadcast, register=_task_register, mark_running=_task_mark_running)
 app.include_router(_task_gw.router)
 
-# ── ПАМЯТЬ ЧАТА (memory_gw.py): журнал, саммари, контекст для полоски под полем ввода ──
-import memory_gw as _memory_gw
+# ── ПАМЯТЬ ЧАТА (gw_shared/memory_gw.py): журнал, саммари, контекст для полоски под полем ввода ──
+from gw_shared import memory_gw as _memory_gw
 _memory_gw.bind(get_client=lambda: app.state.http_client,
                 agent_url=SERVICES['agent_service']['url'], get_user=get_current_user)
 app.include_router(_memory_gw.router)
+
+# ── ВЛОЖЕНИЯ ЧАТА (gw_shared/attachments_gw.py): правая панель «Медиа / Файлы / Ссылки» и превью картинок ──
+from gw_shared import attachments_gw as _attachments_gw
+_attachments_gw.bind(get_client=lambda: app.state.http_client, chats_url=SERVICES['chats']['url'],
+                     get_user=get_current_user)
+app.include_router(_attachments_gw.router)
+
+# ── ВЛОЖЕНИЯ ОБЩЕГО ЧАТА (gw_shared/group_attachments_gw.py): та же панель, без веток ──
+from gw_shared import group_attachments_gw as _group_attachments_gw
+_group_attachments_gw.bind(get_client=lambda: app.state.http_client, chats_url=SERVICES['chats']['url'],
+                           get_user=get_current_user)
+app.include_router(_group_attachments_gw.router)

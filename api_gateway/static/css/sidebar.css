@@ -846,7 +846,10 @@
 
 /* ── PROFILE ──────────────────────────────────── */
 .profile-section {
-  padding: 8px;
+  /* высота как у sidebar-header и main-header (54px, граница внутри) */
+  height: 54px;
+  box-sizing: border-box;
+  padding: 0 8px;
   border-top: 1px solid var(--border);
   flex-shrink: 0;
   margin-top: auto;

@@ -246,7 +246,10 @@ services:
       - catchPM
 
   gateway:
-    build: ./api_gateway
+    build:
+      context: ./api_gateway
+      additional_contexts:
+        gw_shared: ./gw_shared
     container_name: api_gateway
     ports:
       - "127.0.0.1:7000:7000"
@@ -264,6 +267,7 @@ services:
       EDITOR_NOTIFY_TOKEN: ${EDITOR_NOTIFY_TOKEN:-}
     volumes:
       - ./api_gateway:/app
+      - ./gw_shared:/app/gw_shared
     depends_on:
       redis:
         condition: service_healthy
@@ -273,7 +277,10 @@ services:
 
   # SIGMA-фронт: копия gateway без WebSocket и без загрузки файлов.
   gateway_sigma:
-    build: ./api_gateway_sigma
+    build:
+      context: ./api_gateway_sigma
+      additional_contexts:
+        gw_shared: ./gw_shared
     container_name: api_gateway_sigma
     ports:
       - "127.0.0.1:7010:7010"
@@ -301,6 +308,7 @@ services:
       - ./api_gateway/reads_bus.py:/app/reads_bus.py
       - ./api_gateway/json_pack.py:/app/json_pack.py
       - ./api_gateway/file_parsers.py:/app/file_parsers.py
+      - ./gw_shared:/app/gw_shared
     depends_on:
       broker:
         condition: service_healthy
@@ -324,6 +332,8 @@ services:
         DB_USER: ${DB_USER}
         DB_PASSWORD: ${DB_PASSWORD}
         DB_NAME: ${DB_NAME}
+        # id пользователей, которые видят черновики релизов «Что нового»
+        WHATSNEW_PREVIEW_USERS: ${WHATSNEW_PREVIEW_USERS:-}
 
         FERNET_KEY: ${FERNET_KEY}
     depends_on:
@@ -417,6 +427,7 @@ services:
       OBS_SECRET_KEY: ${OBS_SECRET_KEY}
       OBS_REGION: ${OBS_REGION}
       OBS_ENDPOINT: ${OBS_ENDPOINT}
+      OBS_PUBLIC_BASE: ${OBS_PUBLIC_BASE:-}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@augent.local}
@@ -429,6 +440,8 @@ services:
       BUDGET_CACHE_TTL: ${BUDGET_CACHE_TTL:-900}
     volumes:
       - ./chats_service:/app
+      # релизы «Что нового»: yml + releases/media (см. chats_service/docs/releases.md)
+      - ./releases:/releases:ro
     depends_on:
       - postgres
       - broker

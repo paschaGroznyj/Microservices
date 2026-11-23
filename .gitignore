@@ -42,3 +42,17 @@ api_gateway_sigma/run_status.py
 # Private runtime logs: never commit or bake into images.
 **/agent-logs/
 **/agent-diagnostics/
+
+# Data dumps for one-off scripts (chat_files export etc.): keep local only.
+agent_service/scripts/files_dump.json
+
+# Медиа релизов «Что нового»: лежат на хосте и заливаются в OBS скриптом
+# chats_service/scripts/release.py, в git только releases/<версия>.yml.
+releases/media/
+
+# Python bytecode and test fixtures
+**/__pycache__/
+*.py[cod]
+*.pyo
+**/fixtures/
+**/fixture/

@@ -11,6 +11,19 @@ chat_id MAX храним как TEXT (совпадает с chats.chat_id).
 """
 import asyncio
 from datetime import datetime
+CURRENT_SESSION_TEXT_SQL = """
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = '{table}'
+          AND column_name = 'current_session_id' AND data_type = 'uuid'
+    ) THEN
+        ALTER TABLE {table}
+            ALTER COLUMN current_session_id TYPE TEXT USING current_session_id::text;
+    END IF;
+END $$
+"""
 try:
     from zoneinfo import ZoneInfo
 except ImportError:
@@ -55,8 +68,15 @@ class MaxDB:
                     raise
 
     async def _ensure_schema(self):
-        # DDL-схема таблиц max_* вынесена в postgres/sql/02_chats/03_messengers_tg_max.sql
-        return
+        # Base tables are managed by postgres/sql/02_chats/03_messengers_tg_max.sql.
+        # Upgrade an existing settings table when chats_service starts as well.
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "ALTER TABLE max_chat_settings "
+                "ADD COLUMN IF NOT EXISTS current_session_id TEXT"
+            )
+            # 0006bc4 создавал UUID-колонку; физический ID группы в неё не влезает.
+            await conn.execute(CURRENT_SESSION_TEXT_SQL.format(table="max_chat_settings"))
 
     async def upsert_chat(self, chat_id: str, added_by_user_id: int | None) -> dict:
         chat_id = str(chat_id).strip()
@@ -153,6 +173,36 @@ class MaxDB:
             except Exception:
                 d["selected_tools"] = None
         return d
+
+    async def get_current_session(self, chat_id: str) -> dict | None:
+        """None means unknown/inactive chat or missing settings; session_id may be NULL."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT s.current_session_id AS session_id
+                FROM max_chat_settings s
+                JOIN max_chats c ON c.chat_id = s.chat_id
+                WHERE s.chat_id = $1 AND c.is_active = TRUE
+            """, str(chat_id))
+        return dict(row) if row is not None else None
+
+    async def set_current_session(
+        self, chat_id: str, session_id: str, only_if_unset: bool = False,
+    ) -> dict | None:
+        """Persist a candidate, or return the winner of concurrent initialization.
+
+        Never inserts settings or allow-list entries. COALESCE runs under the
+        UPDATE row lock, so an initializer cannot overwrite a menu selection.
+        """
+        value = "COALESCE(s.current_session_id, $2::text)" if only_if_unset else "$2::text"
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(f"""
+                UPDATE max_chat_settings AS s
+                SET current_session_id = {value}, updated_at = CURRENT_TIMESTAMP
+                FROM max_chats AS c
+                WHERE s.chat_id = $1 AND c.chat_id = s.chat_id AND c.is_active = TRUE
+                RETURNING s.current_session_id AS session_id
+            """, str(chat_id), str(session_id))
+        return dict(row) if row is not None else None
 
     async def update_settings(self, chat_id: str, **fields) -> dict | None:
         sets, args, i = [], [], 1

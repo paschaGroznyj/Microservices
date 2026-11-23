@@ -158,6 +158,13 @@
       const sort = this._sort || 'new';
       const filter = this._filter || 'all';
       let skills = [];
+      // Первая загрузка: скелетон строк. Повторные (поиск, фильтр) держат прежний список до ответа.
+      if (!this._skLoaded && window.Skeleton) {
+        const listEl = document.getElementById('skills-list');
+        if (listEl && !listEl.querySelector('.skill-card')) listEl.innerHTML = window.Skeleton.skills();
+        const countEl = document.getElementById('skills-count');
+        if (countEl) countEl.textContent = '';
+      }
       await Promise.all([this._loadSelected(), this._loadLiked()]);
       try {
         const res = await fetch(`/api/skills?query=${encodeURIComponent(q)}&sort_by=${encodeURIComponent(sort)}&filter_by=${encodeURIComponent(filter)}`, {credentials:'include'});
@@ -172,6 +179,7 @@
         }
       }
       this._allSkills = skills;
+      this._skLoaded = true;
       if (!q.trim() && (!this._filter || this._filter === 'all')) {
         const aliveIds = new Set(skills.map(s => Number(s.id)));
         for (const selId of Array.from(this._selectedIds)) {
@@ -386,7 +394,9 @@
       this._isEditingDetail = false;
       this._detailTab = 'overview';
 
-      detail.innerHTML = `<div class="skills-empty" style="min-height:180px;"><div class="skills-empty__hint">Загрузка скилла…</div></div>`;
+      detail.innerHTML = window.Skeleton
+        ? window.Skeleton.skillDetail()
+        : `<div class="skills-empty" style="min-height:180px;"><div class="skills-empty__hint">Загрузка скилла…</div></div>`;
 
       try {
         const res = await fetch(`/api/skills/${sid}`, { credentials: 'include' });

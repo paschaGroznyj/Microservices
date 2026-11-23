@@ -5,7 +5,7 @@ Steps API: шаги цикла агента и вызовы тулов по от
 - GET /web/steps/{chat_id}              — последние ответы агента: шаги, вызовы тулов, сводка по тулам
 - GET /web/steps/{chat_id}/{message_id} — один ответ целиком
 
-Источник — chats.agent_steps и chats.tool_calls ([{step, name, ok}]), их пишет chats_service
+Источник — chats.agent_steps и chats.tool_calls ([{step, name, ok, i, par, t0, ms, hint?, err?}], старые записи — только step/name/ok), их пишет chats_service
 из финального payload ответа. Ответы, сохранённые до появления колонок, не возвращаются.
 Видимость по форкам как у истории: chat_chain() с границей точки ветвления.
 Авторизация: user_id от гейтвея, владение — та же проверка, что у /web/memory.
@@ -45,11 +45,24 @@ def _calls(raw) -> list[dict]:
     return [c for c in raw if isinstance(c, dict) and c.get("name")] if isinstance(raw, list) else []
 
 
+_OPT = (("hint", str), ("err", str), ("t0", int), ("ms", int), ("i", int), ("par", int))
+
+
+def _call_view(c: dict) -> dict:
+    """Вызов для фронта. Расширенные поля (hint/err/t0/ms/i/par) есть только у новых записей."""
+    v: dict[str, Any] = {"name": c["name"], "ok": c.get("ok") is not False}
+    for key, typ in _OPT:
+        val = c.get(key)
+        if isinstance(val, typ) and not isinstance(val, bool) and val != "":
+            v[key] = val
+    return v
+
+
 def _run(row) -> dict[str, Any]:
     calls = _calls(row["tool_calls"])
     by_step: dict[int, list[dict]] = {}
     for c in calls:
-        by_step.setdefault(int(c.get("step") or 0), []).append({"name": c["name"], "ok": c.get("ok") is not False})
+        by_step.setdefault(int(c.get("step") or 0), []).append(_call_view(c))
     return {
         "id": row["id"],
         "message_id": row["message_id"],

@@ -5,6 +5,7 @@ const modalSubtitle = document.getElementById('modal-subtitle');
 const toast = document.getElementById('toast-token');
 
 let isLoading = false;
+let profileLoaded = false;
 
 function showToast(msg) {
   toast.textContent = msg;
@@ -15,7 +16,9 @@ function showToast(msg) {
 async function fetchProfileData() {
   if (isLoading) return;
   isLoading = true;
-  modalSubtitle.innerHTML = '<span style="display:flex;align-items:center;gap:5px;"><span class="spinner"></span> Загружается...</span>';
+  // Первый запрос: текстовые поля карточки показываются плашками скелетона.
+  // Повторные открытия обновляют данные молча, без мигания.
+  if (!profileLoaded) overlay.classList.add('is-sk');
 
   try {
     const res = await fetch('/api/profile/me', {
@@ -27,11 +30,13 @@ async function fetchProfileData() {
     const data = await res.json();
     console.log(data)
     applyProfileData(data);
+    profileLoaded = true;
   } catch {
     modalSubtitle.textContent = 'локальные данные';
     applyProfileData(null);
   } finally {
     isLoading = false;
+    overlay.classList.remove('is-sk');
   }
 }
 
@@ -120,6 +125,8 @@ function closeProfile() {
 document.addEventListener('click', async (e) => {
   if (e.target.closest('#profile-btn')) openProfile();
   if (e.target.closest('#profile-close')) closeProfile();
+  // Помощь теперь в шапке профиля: профиль уступает место руководству.
+  if (e.target.closest('#open-help') && overlay.classList.contains('active')) closeProfile();
   if (e.target === overlay) closeProfile();
 
   if (e.target.closest('#logout-btn')) {

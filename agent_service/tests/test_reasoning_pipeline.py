@@ -105,3 +105,20 @@ def test_ainvoke_fallback_publishes_native_reasoning_once(monkeypatch, fast_slee
     assert result["message"] == "Fallback answer"
     assert [(c.kwargs["kind"], c.args[0]) for c in h.send_chunk.await_args_list] == [
         ("live", "Fallback summary"), ("reasoning_end", "")]
+
+
+def test_markdown_stripped_without_gluing(monkeypatch):
+    # GLM шлёт по 1–3 слова; раньше strip() на каждом чанке давал «Theuser isasking»
+    h = Harness(monkeypatch)
+    pieces = ["The", " user", " is", " asking", ":\n", "    *", "   **Plan", ":** one", ".\n**Next**"]
+    async def astream(messages, **kw):
+        for p in pieces:
+            yield AIMessageChunk(content="", additional_kwargs={"reasoning_content": p})
+        yield AIMessageChunk(content="Answer")
+    monkeypatch.setattr(h.models["coder"], "astream", astream)
+    result = h.run()
+    assert result["message"] == "Answer"
+    live = "".join(c.args[0] for c in h.send_chunk.await_args_list if c.kwargs["kind"] == "live")
+    assert live == "The user is asking:\n◦ Plan: one.\nNext"
+    kinds = [c.kwargs["kind"] for c in h.send_chunk.await_args_list]
+    assert kinds[-1] == "reasoning_end" and kinds.count("reasoning_end") == 1

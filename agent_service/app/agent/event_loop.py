@@ -63,6 +63,7 @@ from .core.token_usage import (
     normalize_usage, add_usage, apply_anthropic_cache_control, append_to_system_tail,
 )
 from .core.token_calibration import CALIBRATOR
+from .core.reasoning_clean import ReasoningCleaner, clean_reasoning
 from .common.trace_budget import CONTENT_MARK, attach_traces, compress_trace
 
 
@@ -2215,20 +2216,35 @@ class HarnessAgent:
                     # answer/tool arguments remain buffered until the step is complete.
                     stream_state = {"sent": False}
                     native_reasoning = []
+                    # Markdown/HTML снимаем потоково на склеенном тексте шага, а не по чанкам:
+                    # иначе теряются пробелы и переносы на стыках (GLM шлёт по 1–3 слова).
+                    reasoning_cleaner = ReasoningCleaner()
+
+                    async def _flush_native_reasoning():
+                        tail = reasoning_cleaner.flush()
+                        if tail.strip() or (tail and stream_state["sent"]):
+                            await self._send_chunk(
+                                tail, request_id, msg_id=str(request_id), kind="live"
+                            )
+                            stream_state["sent"] = True
 
                     async def _on_native_reasoning(text, kind="answer"):
                         if kind == "reasoning" and isinstance(text, str) and text:
                             native_reasoning.append(text)
-                            await self._send_chunk(
-                                text, request_id, msg_id=str(request_id), kind="live"
-                            )
-                            stream_state["sent"] = True
-                        elif kind == "retry" and stream_state["sent"]:
-                            await self._send_chunk(
-                                "", request_id, msg_id=str(request_id), kind="reasoning_end"
-                            )
-                            stream_state["sent"] = False
+                            piece = reasoning_cleaner.feed(text)
+                            if piece and (stream_state["sent"] or piece.strip()):
+                                await self._send_chunk(
+                                    piece, request_id, msg_id=str(request_id), kind="live"
+                                )
+                                stream_state["sent"] = True
+                        elif kind == "retry":
+                            reasoning_cleaner.flush()
                             native_reasoning.clear()
+                            if stream_state["sent"]:
+                                await self._send_chunk(
+                                    "", request_id, msg_id=str(request_id), kind="reasoning_end"
+                                )
+                                stream_state["sent"] = False
 
                     from .common.context_usage import prompt_weights, scale_breakdown
                     prompt_estimate = prompt_weights(messages, tools if current_llm is llm_with_tools else ())
@@ -2247,6 +2263,7 @@ class HarnessAgent:
                         response = None
                     # Parsed result metadata is emitted by @llm_logged, never full reasoning/signatures.
                     if response is None:
+                        await _flush_native_reasoning()
                         if stream_state["sent"]:
                             await self._send_chunk(
                                 "", request_id, msg_id=str(request_id), kind="reasoning_end"
@@ -2304,6 +2321,7 @@ class HarnessAgent:
                         _kwargs = getattr(response, "additional_kwargs", {}) or {}
                         _candidate = _kwargs.get("reasoning_content") or _kwargs.get("reasoning")
                         _native_text = _candidate if isinstance(_candidate, str) else ""
+                    _native_text = clean_reasoning(_native_text)
                     _step_thinking = _thinking_text or (_clean_content if _has_tool_calls else "")
                     _had_text = bool(_step_thinking)
 
@@ -2311,7 +2329,9 @@ class HarnessAgent:
                         # ainvoke fallback/non-streamed models: publish once after collection.
                         # Never put provider reasoning into response.content or the final answer.
                         loop_state.setdefault("reasoning_trace", []).append(_native_text)
-                        if not native_reasoning:
+                        if native_reasoning:
+                            await _flush_native_reasoning()
+                        else:
                             await self._send_chunk(
                                 _native_text, request_id, msg_id=str(request_id), kind="live"
                             )

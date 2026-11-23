@@ -1799,6 +1799,16 @@ class ChatApp {
         return segments;
     }
 
+    /* Рассуждения приходят плоским текстом (agent_service снимает markdown),
+       поэтому одиночный перенос — это строка, а не пробел внутри абзаца. */
+    _reasoningHtml(text) {
+        const raw = String(text || '');
+        if (typeof marked !== 'undefined' && marked && typeof marked.parse === 'function') {
+            try { return marked.parse(raw, { breaks: true, gfm: true }); } catch (_) {}
+        }
+        return this._parseMarkdown(raw);
+    }
+
     _parseMarkdown(mdText) {
         const raw = String(mdText || '');
         if (typeof marked !== 'undefined' && marked && typeof marked.parse === 'function') {
@@ -4575,7 +4585,7 @@ class ChatApp {
                 isStreaming: true,
             });
         } else {
-            let html = this._parseMarkdown(st.streamShown || '');
+            let html = this._reasoningHtml(st.streamShown || '');
             if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
                 ADD_TAGS: ['table','thead','tbody','tr','th','td'],
                 ADD_ATTR: ['colspan','rowspan','align']
@@ -4883,7 +4893,7 @@ class ChatApp {
                     [...body.querySelectorAll('.reasoning-step')].map(el => el.textContent.trim())
                 );
                 steps.forEach(rawStep => {
-                    let html = this._parseMarkdown(rawStep);
+                    let html = this._reasoningHtml(rawStep);
                     if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html);
                     const step = document.createElement('div');
                     step.className = 'reasoning-step';
@@ -4939,7 +4949,7 @@ class ChatApp {
                 });
                 const body = wrap.querySelector('.reasoning-body');
                 steps.forEach(rawStep => {
-                    let html = this._parseMarkdown(rawStep);
+                    let html = this._reasoningHtml(rawStep);
                     if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html);
                     const step = document.createElement('div');
                     step.className = 'reasoning-step';
@@ -5030,7 +5040,7 @@ class ChatApp {
             return;
         }
 
-        let html = this._parseMarkdown(text);
+        let html = this._reasoningHtml(text);
         if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html, {
             ADD_TAGS: ['table','thead','tbody','tr','th','td'],
             ADD_ATTR: ['colspan','rowspan','align']

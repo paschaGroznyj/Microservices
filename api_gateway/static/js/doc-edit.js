@@ -10,7 +10,7 @@
 (function () {
     'use strict';
 
-    const MAX_LINES = 4000;
+    const MAX_LINES = 20000;
     const STORE_KEY = 'docedit:v1';
     const MONO_TYPES = new Set(['code', 'json', 'csv', 'html']);
     const IC = {

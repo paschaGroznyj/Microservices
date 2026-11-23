@@ -82,7 +82,7 @@
   text-transform: none;
   letter-spacing: 0;
   color: var(--sb-label);
-  padding: 12px 10px 4px;
+  padding: 6px 10px 4px;
   margin: 0;
 }
 .sidebar .section-label:hover,
@@ -97,7 +97,7 @@
   border-radius: 6px;
 }
 .sidebar .chat-line {
-  font-size: 13px;
+  font-size: 12px;
   line-height: 20px;
   letter-spacing: -0.005em;
 }

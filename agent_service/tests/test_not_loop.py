@@ -1,11 +1,14 @@
 """Режим «Модель» (type_query="model"): LLModel из agent/not_loop.py."""
+import os
+os.environ['OPENBLAS_NUM_THREADS'] = '1'
+
 import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage
 
-from tests.conftest import ScriptedLLM, ai, build_agent
+from tests.conftest import MODEL_NAMES, ScriptedLLM, ai, build_agent
 
 
 def run(coro):
@@ -72,7 +75,7 @@ def test_stream_and_flow(setup):
     run(nl.LLModel(a).process_query("x", "r1", 56, "c1", "coder"))
     a._send_flow.assert_any_await("r1", "agent_start")
     kinds = [c.kwargs.get("kind") for c in a._send_chunk.await_args_list]
-    assert kinds == ["live", "final_commit"]
+    assert kinds == ["answer_delta", "answer_end", "final_commit"]
     assert a._send_chunk.await_args_list[0].args[0] == "ответ"
 
 
@@ -84,7 +87,7 @@ def test_model_down(setup, fast_sleep):
     assert a._send_chunk.await_args_list[-1].kwargs["kind"] == "final_commit"
 
 
-def test_empty_then_text_retries(setup):
+def test_empty_then_text_retries(setup, fast_sleep):
     nl, a, _ = setup
     llm = ScriptedLLM("openai/gpt-test", ["", "второй раз"])
     a.AGENT_MODELS["coder"] = llm
@@ -93,13 +96,15 @@ def test_empty_then_text_retries(setup):
     assert len(llm.calls) == 2
 
 
-def test_empty_always_gives_fallback(setup):
+def test_empty_always_gives_fallback(setup, monkeypatch):
     nl, a, _ = setup
-    llm = ScriptedLLM("openai/gpt-test", ["", "", ""])
-    a.AGENT_MODELS["coder"] = llm
+    import agent.event_loop as el
+    collect = AsyncMock(return_value=ai(""))
+    monkeypatch.setattr(el, "_astream_collect", collect)
+    llm = a.AGENT_MODELS["coder"]
     res = run(nl.LLModel(a).process_query("x", "r1", 56, "c1", "coder"))
     assert res["message"] == nl.MODEL_EMPTY_FALLBACK
-    assert len(llm.calls) == nl.MODEL_EMPTY_RETRIES + 1
+    assert collect.await_count == nl.MODEL_EMPTY_RETRIES + 1
 
 
 def test_text_of_thinking_only_is_empty():
@@ -108,3 +113,133 @@ def test_text_of_thinking_only_is_empty():
     assert nl._text_of(msg) == ""
     msg2 = AIMessage(content=[{"type": "thinking", "thinking": "t"}, {"type": "text", "text": "ок"}])
     assert nl._text_of(msg2) == "ок"
+
+
+def events(agent):
+    return [(c.kwargs["kind"], c.args[0]) for c in agent._send_chunk.await_args_list]
+
+
+@pytest.mark.parametrize("model", MODEL_NAMES)
+@pytest.mark.parametrize("key", ["reasoning", "reasoning_content", "thinking"])
+def test_native_reasoning_is_live_before_answer(setup, monkeypatch, model, key):
+    nl, a, _ = setup
+
+    async def astream(messages, **kwargs):
+        for text in ("**Native", " summary**", " ", "tail<"):
+            if key == "thinking":
+                yield AIMessageChunk(content=[{"type": "thinking", "thinking": text}])
+            else:
+                yield AIMessageChunk(content="", additional_kwargs={key: text})
+        assert "".join(t for k, t in events(a) if k == "live") == "Native summary tail"
+        yield AIMessageChunk(content="First ")
+        assert events(a)[-1] == ("answer_delta", "First ")
+        assert ("reasoning_end", "") in events(a)
+        assert not any(k == "answer_end" for k, _ in events(a))
+        yield AIMessageChunk(content="second")
+
+    monkeypatch.setattr(a.AGENT_MODELS[model], "astream", astream)
+    result = run(nl.LLModel(a).process_query("x", "r1", 56, "c1", model))
+    assert result["message"] == "First second"
+    assert "".join(t for k, t in events(a) if k == "live") == "Native summary tail<"
+    assert events(a).count(("reasoning_end", "")) == 1
+    assert events(a)[-2:] == [("answer_end", "First second"), ("final_commit", "")]
+
+
+@pytest.mark.parametrize("model", MODEL_NAMES)
+@pytest.mark.parametrize("text,answer,thinking", [
+    ("A<thinking>**Plan**</thinking>B", "AB", "Plan"),
+    ("A<reasoning>SECRET</reasoning>B", "AB", ""),
+    ("<thinking>Plan<reasoning>SECRET<thinking>SECRET</thinking></reasoning> done</thinking>Answer", "Answer", "Plan done"),
+    ("A<reasoning>SECRET", "A", ""),
+    ("A<thinking>Plan<reasoning>SECRET</thinking>SECRET", "A", "Plan"),
+    ("A<reason", "A", ""),
+])
+def test_fragmented_content_privacy(setup, monkeypatch, model, text, answer, thinking):
+    nl, a, _ = setup
+
+    async def astream(messages, **kwargs):
+        for char in text:
+            yield AIMessageChunk(content=char)
+
+    monkeypatch.setattr(a.AGENT_MODELS[model], "astream", astream)
+    result = run(nl.LLModel(a).process_query("x", "r1", 56, "c1", model))
+    assert result["message"] == answer
+    assert "SECRET" not in str(events(a))
+    assert "".join(t for k, t in events(a) if k == "answer_delta") == answer
+    assert "".join(t for k, t in events(a) if k == "live") == thinking
+    assert events(a)[-2:] == [("answer_end", answer), ("final_commit", "")]
+
+
+@pytest.mark.parametrize("model", ["coder", "universal"])
+def test_stream_retry_resets_candidate_cleaner_and_router(setup, monkeypatch, fast_sleep, model):
+    nl, a, _ = setup
+    attempts = 0
+
+    async def astream(messages, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            yield AIMessageChunk(content="Abandoned ")
+            yield AIMessageChunk(content="<thinking>**Old")
+            yield AIMessageChunk(content="<reasoning>SECRET")
+            raise RuntimeError("temporary failure")
+        assert events(a)[-1] == ("answer_reset", "")
+        assert events(a).count(("reasoning_end", "")) == 1
+        yield AIMessageChunk(content="", additional_kwargs={"reasoning_content": "**New**"})
+        yield AIMessageChunk(content="Recovered")
+
+    monkeypatch.setattr(a.AGENT_MODELS[model], "astream", astream)
+    result = run(nl.LLModel(a).process_query("x", "r1", 56, "c1", model))
+    assert result["message"] == "Recovered"
+    assert attempts == 2
+    assert "SECRET" not in str(events(a))
+    assert events(a).count(("answer_reset", "")) == 1
+    assert events(a).count(("reasoning_end", "")) == 2
+    assert [t for k, t in events(a) if k == "live"] == ["Old", "New"]
+    assert events(a)[-2:] == [("answer_end", "Recovered"), ("final_commit", "")]
+
+
+@pytest.mark.parametrize("model", MODEL_NAMES)
+@pytest.mark.parametrize("key", ["reasoning", "reasoning_content", "thinking"])
+def test_ainvoke_reasoning_shown_once(setup, monkeypatch, model, key):
+    nl, a, _ = setup
+
+    async def astream(messages, **kwargs):
+        if False:
+            yield
+
+    response = ai("<thinking>**Content plan**</thinking><reasoning>SECRET</reasoning>Fallback")
+    if key == "thinking":
+        response.content = [{"type": "thinking", "thinking": "**Native summary**"},
+                            {"type": "text", "text": response.content}]
+    else:
+        response.additional_kwargs[key] = "**Native summary**"
+    monkeypatch.setattr(a.AGENT_MODELS[model], "astream", astream)
+    monkeypatch.setattr(a.AGENT_MODELS[model], "ainvoke", AsyncMock(return_value=response))
+    result = run(nl.LLModel(a).process_query("x", "r1", 56, "c1", model))
+    assert result["message"] == "Fallback"
+    assert "SECRET" not in str(events(a))
+    live = "".join(t for k, t in events(a) if k == "live")
+    assert live.count("Native summary") == 1
+    assert live.count("Content plan") == 1
+    assert events(a).count(("reasoning_end", "")) == 1
+    assert events(a)[-2:] == [("answer_end", "Fallback"), ("final_commit", "")]
+
+
+@pytest.mark.parametrize("text", [
+    r"\<thinking\>Plan\</thinking\>\<reasoning\>SECRET\</reasoning\>Answer",
+    "```xml\n<thinking>Plan</thinking><reasoning>SECRET</reasoning>\n```Answer",
+    "`<thinking>Plan</thinking>`<reasoning>SECRET</reasoning>Answer",
+])
+def test_buffered_envelope_authoritative_answer_is_private(setup, monkeypatch, text):
+    nl, a, _ = setup
+
+    async def astream(messages, **kwargs):
+        for char in text:
+            yield AIMessageChunk(content=char)
+
+    monkeypatch.setattr(a.AGENT_MODELS["coder"], "astream", astream)
+    result = run(nl.LLModel(a).process_query("x", "r1", 56, "c1", "coder"))
+    assert result["message"] == "Answer"
+    assert "SECRET" not in str(events(a))
+    assert events(a)[-2:] == [("answer_end", "Answer"), ("final_commit", "")]

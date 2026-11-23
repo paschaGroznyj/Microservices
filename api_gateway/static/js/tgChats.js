@@ -2,8 +2,9 @@
   'use strict';
 
   function getActualModels() {
-    if (window.ModelPicker && typeof window.ModelPicker.getModels === 'function') {
-      return window.ModelPicker.getModels().map(function (m) {
+    var live = window.ModelPicker && typeof window.ModelPicker.getModels === 'function' ? window.ModelPicker.getModels() : null;
+    if (live && live.length) {
+      return live.map(function (m) {
         return {
           id: m.id,
           label: m.label,
@@ -71,6 +72,8 @@
   var _modalOpen = false;
   var _chats = [];
   var _editing = null;
+  var _tab = 'all';
+  var _sub = false;
   var _form = Object.assign({}, DEFAULTS, { chat_id: '' });
 
   async function api(method, path, body) {
@@ -136,11 +139,6 @@
     if (_modalOpen) renderModal();
   }
 
-  function modelDisplay() {
-    var m = getActualModels().find(function (x) { return x.id === _form.agent_model; });
-    return m ? '<span class="tgc-dd-ic" style="color:' + m.accent + '">' + m.svg + '</span>' + m.label : '\u2014';
-  }
-
   function toolsDisplay() {
     if (window.MessengerUI) return window.MessengerUI.toolsValueHtml(_form.selected_tools);
     if (!_form.selected_tools.length) return 'Не выбраны';
@@ -148,22 +146,6 @@
       var t = TG_TOOLS.find(function (x) { return x.id === id; });
       return t ? t.label : id;
     }).join(', ');
-  }
-
-  function triggerDisplay() {
-    var t = TG_TRIGGERS.find(function (x) { return x.id === _form.trigger_mode; });
-    return t ? t.label : '\u2014';
-  }
-
-  function ddToggle(labelText, valueHtml, contentHtml, sectionId) {
-    return '<div class="tgc-dd" id="' + sectionId + '">' +
-      '<button class="tgc-dd-toggle" type="button">' +
-        '<span class="tgc-dd-label">' + labelText + '</span>' +
-        '<span class="tgc-dd-value">' + valueHtml + '</span>' +
-        '<svg class="tgc-dd-chevron" viewBox="0 0 20 20" fill="none"><path d="M5 8l5 5 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
-      '</button>' +
-      '<div class="tgc-dd-pop">' + contentHtml + '</div>' +
-    '</div>';
   }
 
   function esc(s) {
@@ -316,24 +298,13 @@
     '</div>';
   }
 
-  function triggersSectionHtml() {
-    if (!_editing) {
-      return '<div class="tgc-tr-section tgc-tr-section--hint">Сохраните чат, чтобы настраивать индивидуальные триггеры.</div>';
-    }
-    return '<div class="tgc-tr-section">' +
-      '<div class="tgc-tr-section-title">Индивидуальные триггеры</div>' +
-      '<div class="tgc-tr-list">' + triggersListHtml() + '</div>' +
-      triggerFormHtml() +
-    '</div>';
-  }
-
   function ensureModal() {
     if (_modalOverlay && document.body.contains(_modalOverlay)) return _modalOverlay;
     var el = document.getElementById('tgc-modal-overlay');
     if (!el) {
       el = document.createElement('div');
       el.id = 'tgc-modal-overlay';
-      el.className = 'tgc-modal-overlay';
+      el.className = 'tgc-modal-overlay tgx-ov';
       el.setAttribute('role', 'dialog');
       el.setAttribute('aria-modal', 'true');
       el.setAttribute('aria-label', 'Telegram-чат');
@@ -354,6 +325,7 @@
       resetForm();
     }
     _modalOpen = true;
+    _sub = false;
     _modalOverlay.innerHTML = '';
     _modalOverlay.classList.remove('closing');
     _modalOverlay.classList.add('active');
@@ -376,78 +348,44 @@
     }, 220);
   }
 
+  async function delChat(cid) {
+    if (!confirm('Удалить чат ' + cid + '?')) return;
+    try {
+      await api('DELETE', '/api/tg/chats/' + encodeURIComponent(cid));
+      if (_editing === cid) closeModal();
+      await loadChats();
+      render();
+    } catch (err) {
+      alert('Ошибка: ' + err.message);
+    }
+  }
+
   function renderSidebar() {
     if (!_mount) return;
-
-    var over = window.MessengerUI ? window.MessengerUI.overLimit(_chats) : {};
-    var listHtml = _chats.length === 0
-      ? '<div class="tgc-empty">Нет встроенных чатов</div>'
-      : _chats.map(function (c) {
-          var s = c.settings || {};
-          var mdl = getActualModels().find(function (m) { return m.id === s.agent_model; });
-          var isEditing = _modalOpen && _editing === c.chat_id;
-          return '<div class="tgc-row' + (isEditing ? ' tgc-row--active' : '') + '">' +
-            '<div class="tgc-row-main">' +
-              (over[c.chat_id] ? window.MessengerUI.warnHtml(over[c.chat_id]) : '') +
-              '<span class="tgc-cid">' + esc(c.chat_id) + '</span>' +
-              '<span class="tgc-badge tgc-badge--' + (c.chat_type || 'private') + '">' + (c.chat_type === 'group' ? 'группа' : 'личка') + '</span>' +
-              (s.agent_name ? '<span class="tgc-aname">' + esc(s.agent_name) + '</span>' : '') +
-              (mdl ? '<span class="tgc-model" style="color:' + mdl.accent + '">' + mdl.svg + ' ' + mdl.label + '</span>' : '') +
-            '</div>' +
-            '<div class="tgc-row-actions">' +
-              '<button class="tgc-btn" data-edit="' + esc(c.chat_id) + '" title="Редактировать"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M12 20h9"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>' +
-              '<button class="tgc-btn tgc-del" data-del="' + esc(c.chat_id) + '" title="Удалить"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M3 6h18"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" d="M10 11v6M14 11v6"/></svg></button>' +
-            '</div>' +
-          '</div>';
-        }).join('');
-
+    var U = window.MessengerUI;
     _mount.innerHTML =
-      '<div class="tgc-wrap">' +
-        '<div class="tgc-list">' + listHtml + '</div>' +
-        (window.MessengerUI ? window.MessengerUI.usageHtml(_chats) : '') +
+      '<div class="tgc-wrap tgx-list">' + U.listHtml(_chats, { tab: _tab, models: getActualModels(), active: _modalOpen ? _editing : null }) +
         '<button class="tgc-open-modal-btn" id="tgc-open-create" type="button">' +
           '<svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M10 4v12M4 10h12"/></svg>' +
           '<span>Встроить чат</span>' +
         '</button>' +
       '</div>';
-
     var createBtn = _mount.querySelector('#tgc-open-create');
-    if (createBtn) {
-      createBtn.addEventListener('click', function () {
-        openModal(null);
-      });
-    }
-
-    _mount.querySelectorAll('[data-edit]').forEach(function (b) {
-      b.addEventListener('click', function (e) {
-        var cid = e.currentTarget.dataset.edit;
-        var chat = _chats.find(function (c) { return c.chat_id === cid; });
-        if (chat) openModal(chat);
-      });
+    if (createBtn) createBtn.addEventListener('click', function () { openModal(null); });
+    U.bindList(_mount, {
+      tab: function (t) { _tab = t; renderSidebar(); },
+      open: function (cid) { var chat = _chats.find(function (c) { return c.chat_id === cid; }); if (chat) openModal(chat); },
+      del: delChat
     });
-
-    _mount.querySelectorAll('[data-del]').forEach(function (b) {
-      b.addEventListener('click', async function (e) {
-        var cid = e.currentTarget.dataset.del;
-        if (!confirm('Удалить чат ' + cid + '?')) return;
-        try {
-          await api('DELETE', '/api/tg/chats/' + encodeURIComponent(cid));
-          if (_editing === cid) closeModal();
-          await loadChats();
-          render();
-        } catch (err) {
-          alert('Ошибка: ' + err.message);
-        }
-      });
-    });
-
+    var sec = _mount.closest('[id$="-chats-section"]');
+    U.renderSectionMeta(sec && sec.querySelector('.section-label'), _chats);
     updatePanelCount();
   }
 
   function renderModal() {
     if (!_modalOpen) return;
     ensureModal();
-    var prevBody = _modalOverlay.querySelector('.tgc-modal-body');
+    var prevBody = _modalOverlay.querySelector('.tgx-box > .tgx-bd');
     var savedScrollTop = prevBody ? prevBody.scrollTop : 0;
     var prevTrList = _modalOverlay.querySelector('.tgc-tr-list');
     var savedTrListScroll = prevTrList ? prevTrList.scrollTop : 0;
@@ -455,13 +393,6 @@
       _modalOverlay.querySelectorAll('.tgc-dd.tgc-dd--open'),
       function (el) { return el.id; }
     ).filter(Boolean);
-
-    var modelContent = getActualModels().map(function (m) {
-      return '<button class="tgc-opt' + (m.id === _form.agent_model ? ' tgc-opt--on' : '') + '" data-model="' + m.id + '" type="button" style="--tgc-accent:' + m.accent + '">' +
-        '<span class="tgc-opt-ic">' + m.svg + '</span>' +
-        '<span class="tgc-opt-label">' + m.label + '</span>' +
-      '</button>';
-    }).join('');
 
     var toolsContent = window.MessengerUI ? window.MessengerUI.toolsContentHtml(_form.selected_tools) : TG_TOOLS.map(function (t) {
       var on = _form.selected_tools.indexOf(t.id) >= 0;
@@ -471,57 +402,13 @@
       '</button>';
     }).join('');
 
-    var triggerContent = TG_TRIGGERS.map(function (t) {
-      return '<button class="tgc-opt' + (t.id === _form.trigger_mode ? ' tgc-opt--on' : '') + '" data-trigger="' + t.id + '" type="button">' +
-        '<span class="tgc-opt-label">' + t.label + '</span>' +
-      '</button>';
-    }).join('');
-
-    var tgIconSvg = '<svg class="tgc-modal-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M21 4L3 11l6.5 2.5L18 7l-6 8.5v4.5l3.2-3.2L19 19l2-15z"/></svg>';
-
-    _modalOverlay.innerHTML =
-      '<div class="tgc-modal" id="tgc-modal">' +
-        '<div class="tgc-modal-head">' +
-          tgIconSvg +
-          '<div class="tgc-modal-title">' + (_editing ? 'Редактирование чата' : 'Встроить новый чат') + '</div>' +
-          '<button class="tgc-modal-close" id="tgc-modal-close" type="button" aria-label="Закрыть">✕</button>' +
-        '</div>' +
-        '<div class="tgc-modal-body">' +
-          '<div class="tgc-form">' +
-            '<div class="tgc-field">' +
-              '<span class="tgc-field-label">Chat ID</span>' +
-              '<input class="tgc-input" id="tgc-chatid" type="text" placeholder="-1004313379449 или 123456789" value="' + esc(_form.chat_id) + '"' + (_editing ? ' disabled' : '') + '/>' +
-              '<span class="tgc-field-hint">Минус \u2192 группа, без минуса \u2192 личка</span>' +
-            '</div>' +
-            '<div class="tgc-field">' +
-              '<span class="tgc-field-label">Имя агента</span>' +
-              '<input class="tgc-input" id="tgc-agentname" type="text" placeholder="Напр. AuGent (пусто \u2192 дефолт)" value="' + esc(_form.agent_name || '') + '"/>' +
-            '</div>' +
-            ddToggle('Модель', modelDisplay(), modelContent, 'tgc-dd-model') +
-            ddToggle('Инструменты', toolsDisplay(), toolsContent, 'tgc-dd-tools') +
-            ddToggle('Триггер', triggerDisplay(), triggerContent, 'tgc-dd-trigger') +
-            '<div class="tgc-field">' +
-              '<span class="tgc-field-label">Глубина контекста</span>' +
-              '<input class="tgc-input tgc-input--sm" id="tgc-ctxn" type="number" min="1" max="20" value="' + esc(_form.orchestrator_context_n) + '"/>' +
-            '</div>' +
-            '<label class="tgc-check">' +
-              '<input type="checkbox" class="tgc-check-cb" id="tgc-proactive"' + (_form.proactive_enabled ? ' checked' : '') + '/>' +
-              '<span class="tgc-check-box" aria-hidden="true">' + CHECK_SVG + '</span>' +
-              '<span class="tgc-check-label">Проактивные триггеры</span>' +
-            '</label>' +
-            '<div class="tgc-field">' +
-              '<span class="tgc-field-label">Базовый промпт</span>' +
-              '<textarea class="tgc-textarea" id="tgc-prompt" placeholder="Системный промпт для агента в этом чате...">' + esc(_form.system_prompt) + '</textarea>' +
-            '</div>' +
-            triggersSectionHtml() +
-            '<div class="tgc-actions">' +
-              '<button class="tgc-save" id="tgc-save" type="button">' + (_editing ? 'Сохранить' : 'Встроить чат') + '</button>' +
-              '<button class="tgc-cancel" id="tgc-cancel" type="button">Отмена</button>' +
-            '</div>' +
-            '<div class="tgc-msg" id="tgc-msg"></div>' +
-          '</div>' +
-        '</div>' +
-      '</div>';
+    var sheet = window.MessengerUI.isSheet();
+    _modalOverlay.classList.toggle('tgx-ov--sheet', sheet);
+    _modalOverlay.innerHTML = window.MessengerUI.modalHtml({
+      modalId: 'tgc-modal', editing: _editing, form: _form, models: getActualModels(),
+      toolsContent: toolsContent, isSheet: sheet, sub: _sub, trCount: _triggers.length,
+      schedule: '<div class="tgc-tr-list">' + triggersListHtml() + '</div>' + triggerFormHtml()
+    });
 
     bindModalEvents();
 
@@ -529,9 +416,9 @@
       var dd = _modalOverlay.querySelector('#' + id);
       if (dd) dd.classList.add('tgc-dd--open');
     });
-    var newBody = _modalOverlay.querySelector('.tgc-modal-body');
+    var newBody = _modalOverlay.querySelector('.tgx-box > .tgx-bd');
     if (newBody && savedScrollTop > 0) newBody.scrollTop = savedScrollTop;
-    var newTrList = _modalOverlay.querySelector('.tgc-tr-list');
+    var newTrList = _modalOverlay.querySelector('.tgx-sub .tgc-tr-list');
     if (newTrList && savedTrListScroll > 0) newTrList.scrollTop = savedTrListScroll;
   }
 
@@ -591,8 +478,6 @@
 
     var cidEl = _modalOverlay.querySelector('#tgc-chatid');
     if (cidEl) cidEl.addEventListener('input', function (e) { _form.chat_id = e.target.value.trim(); });
-    var ctxEl = _modalOverlay.querySelector('#tgc-ctxn');
-    if (ctxEl) ctxEl.addEventListener('input', function (e) { _form.orchestrator_context_n = parseInt(e.target.value, 10) || 1; });
     var proEl = _modalOverlay.querySelector('#tgc-proactive');
     if (proEl) proEl.addEventListener('change', function (e) { _form.proactive_enabled = e.target.checked; });
     var prEl = _modalOverlay.querySelector('#tgc-prompt');
@@ -604,6 +489,19 @@
     if (saveBtn) saveBtn.addEventListener('click', onSave);
     var cancelBtn = _modalOverlay.querySelector('#tgc-cancel');
     if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
+
+    window.MessengerUI.bindModal(_modalOverlay, {
+      step: function (d) {
+        _form.orchestrator_context_n = Math.max(1, Math.min(20, (parseInt(_form.orchestrator_context_n, 10) || 1) + d));
+        return _form.orchestrator_context_n;
+      },
+      del: function () { if (_editing) delChat(_editing); },
+      sub: function (on) {
+        _sub = on;
+        var el = _modalOverlay.querySelector('.tgx-sub');
+        if (el) { el.classList.toggle('is-in', on); el.setAttribute('aria-hidden', String(!on)); }
+      }
+    });
 
     bindTriggerEvents();
   }
@@ -767,8 +665,16 @@
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && _modalOpen) {
       e.stopPropagation();
+      if (window.MessengerUI.escLayer(_modalOverlay, _sub, function () { _sub = false; renderModal(); })) return;
       closeModal();
     }
+  });
+
+  var _wasSheet = null;
+  window.addEventListener('resize', function () {
+    if (!_modalOpen || !window.MessengerUI) return;
+    var sh = window.MessengerUI.isSheet();
+    if (sh !== _wasSheet) { _wasSheet = sh; renderModal(); }
   });
 
   function updatePanelCount() {

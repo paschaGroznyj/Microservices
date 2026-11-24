@@ -31,6 +31,11 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
     "messengers": [
         "manage_trigger",
     ],
+    # Desktop devices via Device Bridge (раздел «Плагины»): owner = request user.
+    "plugins": [
+        "list_devices",
+        "run_on_device",
+    ],
     "admin": [
         "get_db_schema",
         "execute_sql_query",
@@ -74,6 +79,9 @@ UNIVERSAL_TOOLS: set[str] = {
 # чтобы он понимал, ЧТО умеет агент, и не засорять контекст выключенными.
 # pm_research НАМЕРЕННО не описан — категория будет убрана.
 TOOL_DESCRIPTIONS: dict[str, str] = {
+    # --- plugins ---
+    "list_devices": "Список десктоп-устройств пользователя (Device Bridge): id, ОС, online, разрешён ли exec.",
+    "run_on_device": "Выполняет shell-команду, показывает текст или пингует устройство пользователя через Device Bridge.",
     # --- internet ---
     "parse_web_page": "Парсит содержимое веб-страницы по URL и возвращает её текст.",
     "search_internet": "Ищет информацию в интернете и возвращает список релевантных ссылок/сниппетов.",

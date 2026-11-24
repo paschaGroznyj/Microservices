@@ -1166,6 +1166,12 @@ class HarnessAgent:
         # 14b. Универсальная отправка письма (текст + вложения, лимит 20МБ)
         from .tools.email.tool_send_email_universal import make_send_email_tool
         send_email = make_send_email_tool(agent)
+        # 15. Плагины: десктоп-устройства пользователя (Device Bridge).
+        # Владелец берётся из user_id запроса; в мессенджерах и триггерах
+        # user_id — не веб-аккаунт, поэтому там тулы отключены.
+        from .tools.plugins.tool_device_bridge import make_device_tools
+        device_tools = make_device_tools(
+            user_id, enabled=not (is_telegram or is_max or initiated))
         # 16. Публикация задачи в планировщик-песок
         from .tools.sandbox.tool_submit_task import make_submit_tools
         submit_task = make_submit_tools(agent)
@@ -1239,6 +1245,7 @@ class HarnessAgent:
             + _normalize(save_or_search_code)
             + submit_task
             + codeedit_tools
+            + device_tools
         )
 
         if allow_all:

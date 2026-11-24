@@ -110,6 +110,9 @@ services:
       ADMINS_INFO: ${ADMINS_INFO}
       AGENT_POOL_PASSWORD: ${AGENT_POOL_PASSWORD}
       SANDBOX_SERVICE_URL: ${SANDBOX_SERVICE_URL}
+      # Plugins / Device Bridge internal API (same secret as gateway).
+      DEVICE_BRIDGE_URL: ${DEVICE_BRIDGE_URL:-http://gateway:7000}
+      DEVICE_BRIDGE_SERVICE_TOKEN: ${DEVICE_BRIDGE_SERVICE_TOKEN:-}
       # Request-scoped logs; captures opt-in per chat and contain private user data.
       AGENT_LOG_LEVEL: ${AGENT_LOG_LEVEL:-INFO}
       AGENT_LOG_DIR: ${AGENT_LOG_DIR:-/tmp/agent-logs}

@@ -8,8 +8,10 @@ from tkinter.scrolledtext import ScrolledText
 
 if __package__:
     from .core import BridgeClient, valid_notification_text
+    from .executor import ExecConfig, Executor
 else:
     from core import BridgeClient, valid_notification_text
+    from executor import ExecConfig, Executor
 
 
 DEFAULT_URL = 'https://augent.uva-advanced.ru'
@@ -56,6 +58,12 @@ class BridgeDesktop:
         self.url = tk.StringVar(value=DEFAULT_URL)
         self.token = tk.StringVar()
         self.status = tk.StringVar(value='Stopped')
+        try:
+            self.exec_config = ExecConfig()
+            self.executor = Executor(self.exec_config)
+        except Exception:
+            self.exec_config = self.executor = None
+        self.exec_enabled = tk.BooleanVar(value=bool(self.exec_config and self.exec_config.exec_enabled))
         self._build_ui()
         self.root.protocol('WM_DELETE_WINDOW', self.close)
         self.root.after(POLL_MS, self._poll)
@@ -77,7 +85,7 @@ class BridgeDesktop:
         frame.rowconfigure(9, weight=1)
         ttk.Label(frame, text='Device Bridge', style='Title.TLabel').grid(
             row=0, column=0, sticky='w')
-        ttk.Label(frame, text='Secure device connection · Ping + text messages · No shell',
+        ttk.Label(frame, text='Secure device connection · Ping, messages, opt-in commands',
                   style='Hint.TLabel').grid(row=1, column=0, sticky='w', pady=(4, 20))
 
         fields = ttk.Frame(frame)
@@ -106,7 +114,19 @@ class BridgeDesktop:
                                             state='disabled')
         self.disconnect_button.pack(side='left', padx=8)
         ttk.Label(actions, textvariable=self.status, style='Status.TLabel').pack(side='right')
-        ttk.Separator(frame).grid(row=5, column=0, sticky='ew', pady=16)
+        self.exec_toggle = ttk.Checkbutton(actions, text='Allow agent commands',
+                                           variable=self.exec_enabled, command=self.toggle_exec)
+        self.exec_toggle.pack(side='left', padx=(16, 0))
+        if self.exec_config is None:
+            self.exec_toggle.state(['disabled'])
+        else:
+            mode = self.exec_config.data['mode']
+            where = (self.exec_config.data['workspace_dir'] if mode == 'workspace'
+                     else 'full access except protected folders')
+            ttk.Label(frame, text=f'Commands: {mode} · {where}\nConfig: {self.exec_config.path}',
+                      style='Hint.TLabel', wraplength=760).grid(row=5, column=0, sticky='nw', pady=(8, 0))
+        ttk.Separator(frame).grid(row=5, column=0, sticky='sew', pady=(0, 12))
+        frame.rowconfigure(5, minsize=64)
         ttk.Label(frame, text='Messages · latest 20 · plain text (not system notifications)',
                   style='Status.TLabel').grid(row=6, column=0, sticky='w', pady=(0, 8))
         self.message_area = ScrolledText(frame, height=9, wrap='word', state='disabled',
@@ -220,12 +240,28 @@ class BridgeDesktop:
 
         return emit
 
+    def toggle_exec(self):
+        if self.exec_config is None:
+            return
+        value = bool(self.exec_enabled.get())
+        try:
+            if self.client is not None:
+                self.client.set_exec_enabled(value)
+            else:
+                self.exec_config.set_exec_enabled(value)
+        except OSError:
+            self.exec_enabled.set(not value)
+            self._append_log('error', 'Could not save the config file')
+            return
+        self._append_log('status', 'Agent commands ' + ('allowed' if value else 'disabled'))
+
     def connect(self):
         if self.closing or self._busy() or self.client is not None:
             return
         emit = self._event_sink(self.token.get())
         try:
-            client = BridgeClient(self.url.get(), self.token.get(), on_event=emit)
+            client = BridgeClient(self.url.get(), self.token.get(), on_event=emit,
+                                  executor=self.executor)
         except ValueError:
             self._append_log('error', 'Invalid server URL or device token. Check both fields.')
             return

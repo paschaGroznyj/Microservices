@@ -747,3 +747,74 @@ def test_internal_ping_keeps_legacy_frames_and_results(gateways):
         assert response.json() == {'job_id': command['job_id'], 'status': 'ok', 'output': 'pong', 'exit_code': 0}
     finally:
         close_ws(context, ws)
+
+
+def _wait_field(gateways, device_id, field, present=True):
+    service = gateways.alice_service
+    deadline = time.monotonic() + 2
+    while bool(gateways.alice.portal.call(service.redis.hget, service._key('device', device_id), field)) != present:
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+
+
+def test_exec_requires_capability_and_relays_command_verbatim(gateways):
+    device = create_device(gateways.alice)
+    device_id = device['device_id']
+    context, ws, hello = open_device_ws(gateways.bob, device['token'])
+    try:
+        # Without the exec capability: immediate 409, nothing dispatched.
+        ws.send_json({'type': 'hello', 'protocol': 1, 'capabilities': ['ping', 'notify']})
+        _wait_field(gateways, device_id, 'notify_session')
+        r = post_command(gateways.alice, device_id, operation='exec', command='echo hi')
+        assert r.status_code == 409
+        listed = gateways.alice.get('/api/devices').json()['devices'][0]
+        assert listed['capabilities'] == ['ping', 'notify']
+
+        # Desktop toggle ON mid-session.
+        ws.send_json({'type': 'capabilities', 'capabilities': ['ping', 'notify', 'exec']})
+        _wait_field(gateways, device_id, 'exec_session')
+        cmd_text = 'Get-ChildItem "C:\\Users" | Select -First 3; echo $(whoami) && ls ~'
+        thread, result = call_in_thread(lambda: gateways.alice.post(
+            f'/internal/devices/{device_id}/commands', headers=SERVICE_HEADERS,
+            json={'user_id': 101, 'operation': 'exec', 'command': cmd_text, 'cwd': 'proj', 'timeout': 120}))
+        command = receive_until(ws, 'command')
+        assert command['operation'] == 'exec' and command['command'] == cmd_text
+        assert command['cwd'] == 'proj' and command['timeout'] == 120
+        ws.send_json({'type': 'result', 'job_id': command['job_id'], 'session_id': hello['session_id'],
+                      'status': 'error', 'output': 'out', 'stderr': 'err', 'exit_code': 2,
+                      'truncated': False, 'duration_ms': 15})
+        response = thread_result(thread, result)
+        assert response.status_code == 200
+        assert response.json() == {'job_id': command['job_id'], 'status': 'error', 'output': 'out',
+                                   'stderr': 'err', 'exit_code': 2, 'truncated': False, 'duration_ms': 15}
+
+        # Toggle OFF: exec rejected again.
+        ws.send_json({'type': 'capabilities', 'capabilities': ['ping', 'notify']})
+        _wait_field(gateways, device_id, 'exec_session', present=False)
+        assert post_command(gateways.alice, device_id, operation='exec', command='echo hi').status_code == 409
+    finally:
+        close_ws(context, ws)
+
+
+def test_exec_schema_limits(gateways):
+    device = create_device(gateways.alice)
+    did = device['device_id']
+    for body in ({'operation': 'exec'}, {'operation': 'exec', 'command': '   '},
+                 {'operation': 'exec', 'command': 'a\x00b'},
+                 {'operation': 'exec', 'command': 'x' * 16001},
+                 {'operation': 'exec', 'command': 'ls', 'timeout': 301},
+                 {'operation': 'ping', 'command': 'ls'}, {'operation': 'notify', 'text': 'hi', 'cwd': '/'},
+                 {'operation': 'ping', 'timeout': 31}):
+        assert post_command(gateways.alice, did, **body).status_code == 422, body
+
+
+def test_capabilities_frame_before_hello_closes(gateways):
+    device = create_device(gateways.alice)
+    context, ws, _ = open_device_ws(gateways.bob, device['token'])
+    try:
+        ws.send_json({'type': 'capabilities', 'capabilities': ['exec']})
+        with pytest.raises(WebSocketDisconnect) as error:
+            receive_bounded(ws)
+        assert error.value.code == 1008
+    finally:
+        close_ws(context, ws)

@@ -1,4 +1,4 @@
-"""User-mediated device relay; no commands are executed by the gateway.
+"""User-mediated device relay; the gateway itself never executes commands.
 
 Integration::
 
@@ -22,7 +22,11 @@ HTTP (JSON bodies reject extra fields and coercions):
   Status is online/offline/revoked; only the authenticated owner's records show.
 * DELETE /api/devices/{id} -> {device_id, revoked:true}. Invalidates the token
   and lease atomically; the socket notices in <=1s (plus network scheduling).
-* POST /api/devices/{id}/commands {operation:"ping", timeout:1..30,text?} waits for the result. ping and plain-text notify only; no execution.
+* POST /api/devices/{id}/commands {operation, timeout, text?|command?,cwd?} waits for the result.
+  ping/notify: timeout 1..30. exec: arbitrary shell text (<=16000 chars),
+  timeout 1..300, optional cwd; relayed verbatim, the gateway never executes.
+  exec is accepted only if the current session advertised the "exec"
+  capability (desktop toggle ON), otherwise 409. Path policy lives on device.
   -> {job_id,status:"ok"|"error",output,exit_code?}; offline/disconnected 409,
   full queue 429, deadline 504. HTTP cancellation removes its outstanding job.
 
@@ -33,9 +37,11 @@ connections are rejected, not allowed to replace the existing session.
 Gateway -> {type:"hello",device_id,session_id,heartbeat_interval:5}.
 Gateway -> {type:"ping",nonce}; reply {type:"pong",nonce} within 15s.
 Client -> {type:"hello",protocol:1,capabilities:["ping","notify"]} (optional for legacy ping).
-Gateway -> {type:"command",job_id,session_id,deadline,operation,timeout,text?}; deadline is Unix seconds (Redis clock).
+Gateway -> {type:"command",job_id,session_id,deadline,operation,timeout,text?|command?,cwd?}; deadline is Unix seconds (Redis clock).
+Client -> {type:"capabilities",capabilities:[...]} after hello: mid-session update
+           (desktop exec toggle); exec requires the "exec" capability.
 Device -> {type:"result",job_id,session_id,status:"ok"|"error",output:str,
-           exit_code?:int}. Unknown/late/duplicate results receive
+           exit_code?:int,stderr?:str,truncated?:bool,duration_ms?:int}. Unknown/late/duplicate results receive
 {type:"error",error:"result_not_pending"}; malformed frames close 1008/1009.
 Output is at most 64KiB UTF-8; frames at most 512KiB, including JSON escaping.
 Configure the ASGI server's websocket frame limit too: application validation
@@ -77,6 +83,8 @@ MAX_OUTPUT = 64 * 1024
 MAX_MESSAGE = 512 * 1024
 PREFIX = "gw:device-bridge:"
 MAX_OWNER_ID = 2**63 - 1
+RESULT_FIELDS = frozenset({'type', 'job_id', 'session_id', 'status', 'output', 'exit_code',
+                           'stderr', 'truncated', 'duration_ms'})
 
 
 class _StrictModel(BaseModel):
@@ -89,10 +97,16 @@ class DeviceCreate(_StrictModel):
     platform: StrictStr = Field(..., min_length=1, max_length=64)
 
 
+MAX_EXEC_COMMAND = 16000
+MAX_EXEC_TIMEOUT = 300
+
+
 class CommandCreate(_StrictModel):
-    operation: Literal["ping", "notify"]
-    timeout: conint(strict=True, ge=1, le=30) = 10
+    operation: Literal["ping", "notify", "exec"]
+    timeout: conint(strict=True, ge=1, le=MAX_EXEC_TIMEOUT) = 10
     text: Optional[StrictStr] = Field(None, max_length=2000)
+    command: Optional[StrictStr] = Field(None, max_length=MAX_EXEC_COMMAND)
+    cwd: Optional[StrictStr] = Field(None, max_length=1024)
 
     @root_validator(pre=True)
     def validate_text(cls, values):
@@ -107,6 +121,20 @@ class CommandCreate(_StrictModel):
                 raise ValueError('notify requires 1..2000 nonblank safe text characters')
         elif 'text' in values:
             raise ValueError('text is only allowed for notify')
+        if values.get('operation') == 'exec':
+            command, cwd = values.get('command'), values.get('cwd')
+            # Shell text is relayed verbatim. The desktop client owns the
+            # execution policy: exec toggle, workspace root, blocked paths.
+            if not isinstance(command, str) or not command.strip() or '\x00' in command:
+                raise ValueError('exec requires a nonblank command without NUL')
+            if cwd is not None and (not isinstance(cwd, str) or not cwd.strip() or '\x00' in cwd):
+                raise ValueError('cwd must be nonblank text without NUL')
+        else:
+            if 'command' in values or 'cwd' in values:
+                raise ValueError('command/cwd are only allowed for exec')
+            timeout = values.get('timeout', 10)
+            if type(timeout) is int and timeout > 30:
+                raise ValueError('ping/notify timeout must be 1..30')
         return values
 
 
@@ -141,7 +169,7 @@ if redis.call('HGET',KEYS[1],'revoked') ~= '0'
 if redis.call('EXISTS',KEYS[2]) == 1 then return 2 end
 redis.call('SET',KEYS[2],ARGV[1],'EX',ARGV[4])
 redis.call('HSET',KEYS[1],'session_id',ARGV[1])
-redis.call('HDEL',KEYS[1],'notify_session')
+redis.call('HDEL',KEYS[1],'notify_session','exec_session')
 return 1
 """
 _RENEW = _LIVE + """
@@ -152,6 +180,8 @@ _ADVERTISE = _LIVE + """
 if not live then return 0 end
 if ARGV[4] == '1' then redis.call('HSET',KEYS[1],'notify_session',ARGV[1])
 else redis.call('HDEL',KEYS[1],'notify_session') end
+if ARGV[5] == '1' then redis.call('HSET',KEYS[1],'exec_session',ARGV[1])
+else redis.call('HDEL',KEYS[1],'exec_session') end
 return 1
 """
 _REVOKE = """
@@ -163,6 +193,7 @@ return 1
 _ENQUEUE = _NOW + _LIVE + """
 if not live or redis.call('HGET',KEYS[1],'owner_id') ~= ARGV[4] then return {0} end
 if ARGV[11] == 'notify' and redis.call('HGET',KEYS[1],'notify_session') ~= ARGV[1] then return {3} end
+if ARGV[11] == 'exec' and redis.call('HGET',KEYS[1],'exec_session') ~= ARGV[1] then return {4} end
 if redis.call('SCARD',KEYS[5]) >= tonumber(ARGV[10])
     or redis.call('LLEN',KEYS[4]) >= tonumber(ARGV[10]) then return {2} end
 local deadline = now + tonumber(ARGV[6])
@@ -218,7 +249,7 @@ _DISCONNECT = """
 -- Never erase a replacement connection's lease or session field.
 if redis.call('GET',KEYS[2]) == ARGV[1] then redis.call('DEL',KEYS[2]) end
 if redis.call('HGET',KEYS[1],'session_id') == ARGV[1] then
-    redis.call('HDEL',KEYS[1],'session_id','notify_session') end
+    redis.call('HDEL',KEYS[1],'session_id','notify_session','exec_session') end
 local ids=redis.call('SMEMBERS',KEYS[3])
 for _,id in ipairs(ids) do
     local job=ARGV[2] .. id
@@ -402,8 +433,17 @@ class DeviceBridgeService:
                 lease = await self._call('get', self._key('lease', device_id))
                 online = bool(lease and self._text(lease) == d.get('session_id'))
                 status = 'revoked' if d.get('revoked') == '1' else ('online' if online else 'offline')
-                devices.append({'device_id': device_id, 'name': d['name'], 'platform': d['platform'],
-                                'status': status, 'created_at': int(d['created_at'])})
+                item = {'device_id': device_id, 'name': d['name'], 'platform': d['platform'],
+                        'status': status, 'created_at': int(d['created_at'])}
+                if online:
+                    # Per-session capabilities, advertised by the client hello.
+                    caps = ['ping']
+                    if d.get('notify_session') == d.get('session_id'):
+                        caps.append('notify')
+                    if d.get('exec_session') == d.get('session_id'):
+                        caps.append('exec')
+                    item['capabilities'] = caps
+                devices.append(item)
             if int(cursor) == 0:
                 break
         return {'devices': devices}
@@ -431,18 +471,24 @@ class DeviceBridgeService:
         payload = {'operation': body.operation, 'timeout': body.timeout}
         if body.operation == 'notify':
             payload['text'] = body.text
+        elif body.operation == 'exec':
+            payload['command'] = body.command
+            if body.cwd is not None:
+                payload['cwd'] = body.cwd
         # Cleanup is attempted even if an enqueue response is lost after Redis
         # has applied it. The fallback safety net is bounded key TTLs.
         try:
             result = await self._eval(_ENQUEUE, live_keys + [queue_key, pending_key, job_key],
                                       session, d['token_hash'], device_id, owner, job_id,
                                       body.timeout, json.dumps(payload), body.timeout + 30,
-                                      150, QUEUE_LIMIT, body.operation)
+                                      max(150, body.timeout + 60), QUEUE_LIMIT, body.operation)
             code = int(result[0])
             if code == 0:
                 raise HTTPException(409, 'Device is offline')
             if code == 3:
                 raise HTTPException(409, 'Device does not support notify in this session')
+            if code == 4:
+                raise HTTPException(409, 'Exec is disabled on this device or not supported by this client')
             if code == 2:
                 raise HTTPException(429, 'Device command queue is full')
             local_deadline = time.monotonic() + body.timeout
@@ -545,17 +591,30 @@ class DeviceBridgeService:
                                 return 1008
                             hello_seen = True
                             if not await self._eval(_ADVERTISE, live_keys, session, digest, device_id,
-                                                    int('notify' in capabilities)):
+                                                    int('notify' in capabilities),
+                                                    int('exec' in capabilities)):
                                 return 1008
                             continue
                         return 1008
+                    if msg.get('type') == 'capabilities':
+                        # Mid-session update (desktop exec toggle). Requires hello first.
+                        capabilities = msg.get('capabilities')
+                        if (not hello_seen or set(msg) != {'type', 'capabilities'}
+                                or not isinstance(capabilities, list) or len(capabilities) > 16
+                                or any(not isinstance(c, str) or not 1 <= len(c) <= 64 for c in capabilities)):
+                            return 1008
+                        if not await self._eval(_ADVERTISE, live_keys, session, digest, device_id,
+                                                int('notify' in capabilities),
+                                                int('exec' in capabilities)):
+                            return 1008
+                        continue
                     if msg.get('type') == 'pong':
                         if set(msg) != {'type', 'nonce'} or nonce is None or msg['nonce'] != nonce:
                             return 1008
                         nonce = None
                         last_pong = time.monotonic()
                         continue
-                    if msg.get('type') != 'result' or set(msg) - {'type', 'job_id', 'session_id', 'status', 'output', 'exit_code'}:
+                    if msg.get('type') != 'result' or set(msg) - RESULT_FIELDS:
                         return 1008
                     if msg.get('session_id') != session:
                         return 1008
@@ -570,7 +629,17 @@ class DeviceBridgeService:
                     if 'exit_code' in msg and (type(msg['exit_code']) is not int
                                                or not -(2**31) <= msg['exit_code'] < 2**31):
                         return 1008
-                    result = {k: msg[k] for k in ('status', 'output', 'exit_code') if k in msg}
+                    if 'stderr' in msg:
+                        if not isinstance(msg['stderr'], str):
+                            return 1008
+                        if len(msg['stderr'].encode('utf-8')) > MAX_OUTPUT:
+                            return 1009
+                    if 'truncated' in msg and type(msg['truncated']) is not bool:
+                        return 1008
+                    if 'duration_ms' in msg and (type(msg['duration_ms']) is not int
+                                                 or not 0 <= msg['duration_ms'] < 2**31):
+                        return 1008
+                    result = {k: msg[k] for k in RESULT_FIELDS - {'type', 'job_id', 'session_id'} if k in msg}
                     accepted = await self._eval(_COMPLETE,
                                                 live_keys + [pending_key, self._key('job', job_id)],
                                                 session, digest, device_id, job_id, json.dumps(result))

@@ -361,6 +361,7 @@ class ChatApp {
             else if (tab === 'agent') titleEl.textContent = 'Агент';
             else if (tab === 'graph') titleEl.textContent = 'Граф';
             else if (tab === 'group') titleEl.textContent = 'Общий чат';
+            else if (tab === 'plugins') titleEl.textContent = 'Плагины';
             else titleEl.textContent = 'AuGent';
         }
 
@@ -375,6 +376,11 @@ class ChatApp {
         if (tab === 'skills') {
             chatMain?.classList.remove('start-screen-mode');
             window.SkillsPanel?.open(this);
+        }
+        if (tab === 'plugins') {
+            chatMain?.classList.remove('start-screen-mode');
+            inputContainer?.classList.remove('start-screen-host');
+            window.PluginsPanel?.open();
         }
         if (tab === 'group') {
             chatMain?.classList.remove('start-screen-mode');

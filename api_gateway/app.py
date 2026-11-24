@@ -448,6 +448,9 @@ device_redis = DeviceRedis.from_url(
 device_router = create_device_router(get_current_user, device_redis)
 app.include_router(device_router)
 app.include_router(device_router.internal_router)
+# Раздел «Плагины»: JS-скрипты регистрации устройств из Redis (plugins:snippets).
+from gw_shared import plugins_gw as _plugins_gw
+app.include_router(_plugins_gw.create_router(get_current_user, device_redis))
 
 
 @app.get("/", response_class=HTMLResponse)

@@ -38,6 +38,7 @@
     <link rel="stylesheet" href="/static/css/upload-progress.css">
     <link rel="stylesheet" href="/static/css/whatsnew.css">
     <link rel="stylesheet" href="/static/css/skills.css">
+    <link rel="stylesheet" href="/static/css/plugins.css">
     <link rel="stylesheet" href="/static/css/claude-ui.css">
     <link rel="stylesheet" href="/static/css/generative-ui.css">
     <link rel="stylesheet" href="/static/css/presence.css">
@@ -135,6 +136,13 @@
                     <span class="gc-nav-label">Общий чат</span>
                     <span class="nav-badge gc-nav-count" hidden></span>
                     <span class="presence-dot gc-nav-dot" hidden aria-hidden="true"></span>
+                </div>
+
+                <div class="nav-item" data-tab="plugins">
+                    <svg viewBox="0 0 16 16" fill="none">
+                        <path d="M6 1.8v2.4M10 1.8v2.4M4.2 4.2h7.6v2.6a3.8 3.8 0 0 1-7.6 0V4.2zM8 10.6v3.6" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    Плагины
                 </div>
 
 
@@ -382,6 +390,18 @@
                 <!-- GRAPH VIEW -->
                 <div class="view hidden" id="view-graph">
                     <div id="graph-section" style="height:100%;display:flex;flex-direction:column;"></div>
+                </div>
+
+                <!-- PLUGINS VIEW -->
+                <div class="view hidden" id="view-plugins">
+                    <div class="pl-wrap" id="plugins-section">
+                        <div class="pl-hero">
+                            <h2 class="pl-hero__title">Плагины</h2>
+                            <p class="pl-hero__text">Скоро здесь появятся приложения для ваших десктопных устройств.</p>
+                            <p class="pl-hero__hint">Пока устройство подключается вручную: запустите скрипт в консоли браузера (F12 → Console) на этой странице, затем вставьте токен в десктоп-клиент.</p>
+                        </div>
+                        <div class="pl-list" id="plugins-snippets" aria-live="polite"></div>
+                    </div>
                 </div>
 
                 <!-- GROUP CHAT VIEW -->
@@ -787,6 +807,7 @@
 <script type="module" src="/static/js/tools-panel.js"></script>
 <script src="/static/js/query-mode.js"></script>
 <script src="/static/js/skills.js"></script>
+<script src="/static/js/plugins.js"></script>
 <script src="/static/js/generative-ui.js"></script>
 <script src="/static/js/media-ring.js"></script>
 <script src="/static/js/task-cards.js"></script>

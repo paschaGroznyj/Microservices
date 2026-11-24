@@ -1,4 +1,7 @@
-"""Outbound Device Bridge client: ping and plain-text notify only. No execution."""
+"""Outbound Device Bridge client: ping, plain-text notify and opt-in shell exec.
+
+exec runs only when the local config enables it (desktop toggle); the policy
+lives in executor.py, never on the server."""
 from __future__ import annotations
 
 import json
@@ -80,7 +83,7 @@ class ProtocolError(Exception):
 
 
 class BridgeClient:
-    def __init__(self, server_url: str, token: str, on_event=None):
+    def __init__(self, server_url: str, token: str, on_event=None, executor=None):
         self.url = normalize_url(server_url)
         if not isinstance(token, str) or not 16 <= len(token.strip()) <= 4096:
             raise ValueError('Enter a device token')
@@ -93,6 +96,27 @@ class BridgeClient:
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._socket = None
+        self._executor = executor
+        self._send_lock = threading.Lock()
+        self._live = None  # (ws, session) while online
+
+    def capabilities(self):
+        caps = ['ping', 'notify']
+        if self._executor is not None and self._executor.config.exec_enabled:
+            caps.append('exec')
+        return caps
+
+    def set_exec_enabled(self, value: bool):
+        """Persist the toggle and tell the gateway mid-session."""
+        if self._executor is None:
+            return
+        self._executor.config.set_exec_enabled(value)
+        live = self._live
+        if live:
+            try:
+                self._send(live[0], {'type': 'capabilities', 'capabilities': self.capabilities()})
+            except Exception:
+                pass
 
     def _emit(self, kind, message):
         # Only notification events contain validated raw server text, never log events.
@@ -111,7 +135,9 @@ class BridgeClient:
                 pass
 
     def _send(self, ws, value):
-        ws.send(json.dumps(value, separators=(',', ':')))
+        data = json.dumps(value, separators=(',', ':'), ensure_ascii=False)
+        with self._send_lock:
+            ws.send(data)
 
     def _session(self, ws):
         session = None
@@ -144,7 +170,8 @@ class BridgeClient:
                     raise ProtocolError()
                 session = msg['session_id']
                 self._send(ws, {'type': 'hello', 'protocol': 1,
-                                'capabilities': ['ping', 'notify']})
+                                'capabilities': self.capabilities()})
+                self._live = (ws, session)
                 self._emit('status', 'online')
             elif kind == 'ping':
                 nonce = msg.get('nonce')
@@ -160,7 +187,7 @@ class BridgeClient:
                         or not math.isfinite(deadline)):
                     raise ProtocolError()
                 if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
-                        or not 0 < timeout <= 30):
+                        or not 0 < timeout <= (300 if msg.get('operation') == 'exec' else 30)):
                     raise ProtocolError()
                 if job in seen:
                     continue
@@ -170,6 +197,9 @@ class BridgeClient:
                 seen.add(job)
                 expired = deadline < time.time()
                 operation = msg.get('operation')
+                if operation == 'exec' and not expired and self._executor is not None:
+                    self._start_exec(ws, session, job, msg)
+                    continue
                 status, output = 'error', 'Unsupported operation'
                 if expired:
                     output = 'Job expired'
@@ -197,6 +227,24 @@ class BridgeClient:
                 self._emit('log', 'Gateway no longer waits for this result')
             else:
                 raise ProtocolError()
+
+    def _start_exec(self, ws, session, job, msg):
+        # Runs in a worker thread so heartbeat pongs keep flowing.
+        def work():
+            self._emit('log', 'Running command')
+            try:
+                result = self._executor.run(msg.get('command'), msg.get('cwd'), msg.get('timeout') or 30)
+            except Exception:
+                result = {'status': 'error', 'output': '', 'stderr': 'Local execution failed',
+                          'exit_code': 1}
+            frame = {'type': 'result', 'job_id': job, 'session_id': session}
+            frame.update(result)
+            try:
+                self._send(ws, frame)
+            except Exception:
+                return
+            self._emit('log', 'Command finished, exit ' + str(result.get('exit_code')))
+        threading.Thread(target=work, name='bridge-exec', daemon=True).start()
 
     def run(self):
         delay = 1
@@ -238,6 +286,7 @@ class BridgeClient:
                     if not self._stop.is_set():
                         self._emit('log', connection_diagnostic(exc))
                 finally:
+                    self._live = None
                     with self._lock:
                         self._socket = None
                     if ws:

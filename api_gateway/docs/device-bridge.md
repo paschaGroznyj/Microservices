@@ -281,3 +281,14 @@ Redis. Результат допускает `status: "ok" | "error"`, стро�
   восстановления токенов нет. Желателен **выделенный durable Redis** с persistence,
   резервным копированием и политикой без вытеснения credentials; одного TTL
   недостаточно для долговечности.
+
+## Настольный клиент Windows (ping-only)
+
+Клиент с окном подключения находится в [device_client/README.md](../../device_client/README.md).
+Требуется Python 3.10+ с Tk; запуск — `device_client/start-windows.ps1` либо
+`python device_client/desktop.py` после установки device_client/requirements.txt.
+Он использует существующий endpoint и не требует изменения gateway.
+В поле Server — `https://augent.uva-advanced.ru`, в поле Device token —
+значение `registered.token`, полученное при регистрации (не device_id).
+Встроены heartbeat, ответ `pong`, переподключение и остановка при отказе авторизации.
+Никаких shell, прав администратора, сохранения токена или открытых входящих портов.

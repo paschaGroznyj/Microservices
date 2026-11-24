@@ -1141,9 +1141,11 @@ async def _build_react_prompt(kind: str, reactions: list, count: int = 0) -> str
 
 async def dispatch_initiation(chat_id: int, slot: str, addressed: bool,
                               target: dict | None, sad_followup: bool = False,
-                              custom_prompt: str | None = None):
+                              custom_prompt: str | None = None,
+                              trigger_id: int | None = None):
     """
-    Шлёт агенту проактивный payload (initiated=True). Текст задачи агент
+    Шлёт агенту проактивный payload (initiated=True).
+    trigger_id — для автотриггера: chats_service по нему достаёт автора из БД. Текст задачи агент
     сгенерит сам из промпта инициации/грусти (см. tg_integration).
     """
     settings = await get_chat_settings(chat_id)
@@ -1174,6 +1176,7 @@ async def dispatch_initiation(chat_id: int, slot: str, addressed: bool,
         "sad_followup": sad_followup,
         # индивидуальный промпт триггера (None -> агент берёт дефолт по slot)
         "custom_prompt": custom_prompt,
+        "trigger_id": trigger_id,
     }
     try:
         async with httpx.AsyncClient(timeout=15) as client:
@@ -1314,7 +1317,7 @@ async def run_trigger_scan():
             slot = t.get("preset_key") or t.get("kind") or "custom"
             await dispatch_initiation(
                 int(cid), slot=slot, addressed=addressed, target=target,
-                custom_prompt=t.get("prompt"),
+                custom_prompt=t.get("prompt"), trigger_id=tid,
             )
             # гасим last_fired_at для ЛЮБОГО kind: это второй слой дедупа
             # в окне (scan_due_triggers скипнет, если last_fired_at >= scheduled)
@@ -1687,7 +1690,7 @@ async def debug_trigger(
         kind = trig.get("kind") or "custom"
         await dispatch_initiation(
             int(cid), slot=kind, addressed=addressed, target=target,
-            custom_prompt=trig.get("prompt"),
+            custom_prompt=trig.get("prompt"), trigger_id=trigger_id,
         )
         if addressed and target:
             asyncio.create_task(_sadness_watch(int(cid), target))
@@ -2195,6 +2198,7 @@ async def ensure_alarm_trigger(chat_id: int, uid: int, preset_key: str) -> dict 
         "preset_key": preset_key,
         "addressed": False,
         "added_by_user_id": uid,
+        "added_by_source": "tg",
     }
     try:
         async with httpx.AsyncClient(timeout=5) as client:
@@ -2206,7 +2210,11 @@ async def ensure_alarm_trigger(chat_id: int, uid: int, preset_key: str) -> dict 
         return None
 
 
-async def patch_trigger(chat_id: int, trigger_id: int, patch: dict) -> dict | None:
+async def patch_trigger(chat_id: int, trigger_id: int, patch: dict,
+                        by: int | None = None) -> dict | None:
+    """by — tg id автора правки промпта (от него права автотриггера)."""
+    if by and "prompt" in patch:
+        patch = {**patch, "added_by_user_id": int(by), "added_by_source": "tg"}
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.patch(f"{CHATS_SERVICE_URL}/tg/triggers/{chat_id}/{trigger_id}", json=patch)
@@ -2578,7 +2586,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         preset_key = data.rsplit(":", 1)[-1]
         uid = query.from_user.id if query.from_user else 0
         trig = await ensure_alarm_trigger(chat_id, uid, preset_key)
-        ok = trig and await patch_trigger(chat_id, int(trig["id"]), {"prompt": ""})
+        ok = trig and await patch_trigger(chat_id, int(trig["id"]), {"prompt": ""}, by=uid)
         await query.answer("Промпт очищен" if ok else "Ошибка")
         trig = await ensure_alarm_trigger(chat_id, uid, preset_key)
         try:
@@ -2786,7 +2794,7 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if kind_flag == "prompt":
             new_prompt = value[:2000]
             trig = await ensure_alarm_trigger(chat_id, user.id, preset_key)
-            ok = trig and await patch_trigger(chat_id, int(trig["id"]), {"prompt": new_prompt})
+            ok = trig and await patch_trigger(chat_id, int(trig["id"]), {"prompt": new_prompt}, by=user.id)
             await msg.reply_text(("Промпт для " + ALARM_TITLES.get(preset_key, preset_key) + " сохранён.") if ok else "Ошибка сохранения.")
             return
         # неизвестный флаг — молча выходим, не шлём в агента

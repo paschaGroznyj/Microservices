@@ -55,7 +55,10 @@ def test_startup_adds_column_idempotently(database):
     # Second statement upgrades a UUID column created by the previous release.
     assert "ALTER COLUMN current_session_id TYPE TEXT" in calls[1]
     assert f"table_name = '{provider}_chat_settings'" in calls[1]
-    assert len(calls) == 2
+    # Автор триггера: источник id (web | tg | max) для прав автотриггера.
+    triggers = "telegram_triggers" if provider == "telegram" else "max_triggers"
+    assert calls[2] == f"ALTER TABLE {triggers} ADD COLUMN IF NOT EXISTS added_by_source TEXT"
+    assert len(calls) == 3
 
 
 def test_settings_whitelist_does_not_allow_session_bypass(database):

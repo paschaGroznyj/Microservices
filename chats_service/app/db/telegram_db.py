@@ -32,6 +32,7 @@ from zoneinfo import ZoneInfo
 import asyncpg
 
 from app.core.config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME
+from app.trigger_owner import owner_fields_for_patch
 
 log = logging.getLogger("telegram_db")
 
@@ -70,6 +71,10 @@ class TelegramDB:
             )
             # 0006bc4 создавал UUID-колонку; физический ID группы в неё не влезает.
             await conn.execute(CURRENT_SESSION_TEXT_SQL.format(table="telegram_chat_settings"))
+            # Автор триггера: web | tg | max (права автотриггера, см. update_trigger).
+            await conn.execute(
+                "ALTER TABLE telegram_triggers ADD COLUMN IF NOT EXISTS added_by_source TEXT"
+            )
 
     # ── allow-list ───────────────────────────────────────────────────────────
     async def upsert_chat(self, chat_id: str, added_by_user_id: int | None) -> dict:
@@ -323,7 +328,7 @@ class TelegramDB:
         """Все триггеры чата (активные и нет) — для UI."""
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("""
-                SELECT id, chat_id, added_by_user_id, kind, title,
+                SELECT id, chat_id, added_by_user_id, added_by_source, kind, title,
                        time_msk, days_of_week, trigger_date, prompt, preset_key,
                        addressed, is_active, last_fired_at, created_at, updated_at
                 FROM telegram_triggers
@@ -338,7 +343,8 @@ class TelegramDB:
                              days_of_week: list | None = None,
                              trigger_date=None, prompt: str | None = None,
                              preset_key: str | None = None,
-                             addressed: bool = False) -> dict:
+                             addressed: bool = False,
+                             added_by_source: str | None = None) -> dict:
         """Создать триггер. days_of_week — список 1..7 или None.
 
         Идемпотентно: при повторе с тем же ключом (preset_key ЛИБО
@@ -356,26 +362,31 @@ class TelegramDB:
             row = await conn.fetchrow(f"""
                 INSERT INTO telegram_triggers
                     (chat_id, added_by_user_id, kind, title, time_msk,
-                     days_of_week, trigger_date, prompt, preset_key, addressed)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                     days_of_week, trigger_date, prompt, preset_key, addressed,
+                     added_by_source)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
                 ON CONFLICT {conflict} DO UPDATE SET
                     added_by_user_id = EXCLUDED.added_by_user_id,
+                    added_by_source  = EXCLUDED.added_by_source,
                     days_of_week     = EXCLUDED.days_of_week,
                     trigger_date     = EXCLUDED.trigger_date,
                     prompt           = EXCLUDED.prompt,
                     addressed        = EXCLUDED.addressed,
                     updated_at       = CURRENT_TIMESTAMP
-                RETURNING id, chat_id, added_by_user_id, kind, title,
+                RETURNING id, chat_id, added_by_user_id, added_by_source, kind, title,
                           time_msk, days_of_week, trigger_date, prompt, preset_key,
                           addressed, is_active, last_fired_at, created_at, updated_at
             """, chat_id, added_by_user_id, kind, title, time_msk,
-                 days_of_week, trigger_date, prompt, preset_key, addressed)
+                 days_of_week, trigger_date, prompt, preset_key, addressed,
+                 added_by_source)
         return dict(row)
 
     async def update_trigger(self, trigger_id: int, **fields) -> dict | None:
         """Точечное обновление триггера."""
         allowed = {"kind", "title", "time_msk", "days_of_week",
-                   "trigger_date", "prompt", "preset_key", "addressed", "is_active"}
+                   "trigger_date", "prompt", "preset_key", "addressed", "is_active",
+                   "added_by_user_id", "added_by_source"}
+        fields = owner_fields_for_patch(fields)
         sets, vals = [], []
         for k, v in fields.items():
             if k in allowed:
@@ -389,7 +400,7 @@ class TelegramDB:
                 UPDATE telegram_triggers
                 SET {', '.join(sets)}, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ${len(vals)}
-                RETURNING id, chat_id, added_by_user_id, kind, title,
+                RETURNING id, chat_id, added_by_user_id, added_by_source, kind, title,
                           time_msk, days_of_week, trigger_date, prompt, preset_key,
                           addressed, is_active, last_fired_at, created_at, updated_at
             """, *vals)
@@ -493,7 +504,7 @@ class TelegramDB:
         """Один триггер по id (для debug-прогона)."""
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow("""
-                SELECT id, chat_id, added_by_user_id, kind, title,
+                SELECT id, chat_id, added_by_user_id, added_by_source, kind, title,
                        time_msk, days_of_week, trigger_date, prompt, preset_key,
                        addressed, is_active, last_fired_at, created_at, updated_at
                 FROM telegram_triggers
@@ -520,7 +531,7 @@ class TelegramDB:
     async def get_alarm_trigger(self, chat_id: str, preset_key: str) -> dict | None:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow("""
-                SELECT id, chat_id, added_by_user_id, kind, title,
+                SELECT id, chat_id, added_by_user_id, added_by_source, kind, title,
                        time_msk, days_of_week, trigger_date, prompt, preset_key,
                        addressed, is_active, last_fired_at, created_at, updated_at
                 FROM telegram_triggers

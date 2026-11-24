@@ -8,6 +8,7 @@ import asyncpg
 from fastapi import FastAPI, Header, Query
 from kafka import KafkaProducer
 from pydantic import BaseModel
+from typing import Literal
 from app.db.chats_tables import DataBaseChats
 from fastapi import Depends, HTTPException, Request, status
 from jose import JWTError, jwt
@@ -21,6 +22,7 @@ from app import thumbs as thumbs_module
 from app.core import file_thumbs
 from app.db.telegram_db import TelegramDB
 from app.db.max_db import MaxDB
+from app.trigger_owner import resolve_trigger_owner
 import time
 
 WATCHDOG_INTERVAL = 10      # как часто проверяем
@@ -178,6 +180,9 @@ class ChatMessage(BaseModel):
     task_ids: list[str] | None = None
     timezone_name: str | None = None
     tz_offset_minutes: int | None = None
+    # Автотриггер по расписанию (telegram/max бот): id строки *_triggers.
+    # Автора (права) chats_service берёт из БД, а не из payload.
+    trigger_id: int | None = None
     
 
 @app.on_event("startup")
@@ -592,6 +597,17 @@ async def send_message(chat: ChatMessage):
         "timezone_name": chat.timezone_name,
         "tz_offset_minutes": chat.tz_offset_minutes,
     }
+    # Автотриггер: автор из БД -> agent_service решает по нему админ-категории.
+    if chat.initiated and chat.trigger_id is not None and chat.gateway_target in ("telegram", "max"):
+        _is_max = chat.gateway_target == "max"
+        owner = await resolve_trigger_owner(
+            max_db if _is_max else tg_db, chat.trigger_id,
+            chat.max_chat_id if _is_max else chat.tg_chat_id,
+        )
+        if owner:
+            # Права выдаются под промпт автора из БД, а не под текст из payload.
+            message["custom_prompt"] = owner.pop("prompt")
+            message["trigger_owner"] = owner
     # Ручной триггер задачника: пользователь отправил подсказку «задачи выполнены» —
     # забираем результаты (triggered_at) и прикладываем их агенту.
     if chat.task_ids and chat.user_id is not None:
@@ -816,6 +832,8 @@ class TgTriggerIn(BaseModel):
     preset_key: str | None = None
     addressed: bool = False
     added_by_user_id: int | None = None
+    # web — наш user_id (gateway), tg/max — id в мессенджере (боты, agent_service)
+    added_by_source: Literal["web", "tg", "max"] | None = None
 
 
 class TgTriggerPatch(BaseModel):
@@ -828,6 +846,9 @@ class TgTriggerPatch(BaseModel):
     preset_key: str | None = None
     addressed: bool | None = None
     is_active: bool | None = None
+    # Автор правки промпта. Промпт без автора -> автор сбрасывается (не админ).
+    added_by_user_id: int | None = None
+    added_by_source: Literal["web", "tg", "max"] | None = None
 
 
 @app.get("/tg/triggers/{chat_id}")
@@ -849,6 +870,7 @@ async def tg_create_trigger(chat_id: str, body: TgTriggerIn):
         chat_id, body.added_by_user_id, body.kind, body.time_msk,
         title=body.title, days_of_week=body.days_of_week,
         trigger_date=td, prompt=body.prompt, preset_key=body.preset_key, addressed=body.addressed,
+        added_by_source=body.added_by_source,
     )
     return {"status": "ok", "trigger": row}
 
@@ -1136,6 +1158,7 @@ async def max_create_trigger(chat_id: str, body: TgTriggerIn):
         chat_id, body.added_by_user_id, body.kind, body.time_msk,
         title=body.title, days_of_week=body.days_of_week,
         trigger_date=td, prompt=body.prompt, preset_key=body.preset_key, addressed=body.addressed,
+        added_by_source=body.added_by_source,
     )
     return {"status": "ok", "trigger": row}
 

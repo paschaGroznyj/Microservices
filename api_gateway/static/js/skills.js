@@ -313,7 +313,6 @@
       this._closeActionDropdown();
       if (wasExpanded) return;
 
-      anchorBtn.setAttribute('aria-expanded', 'true');
       const liked = this._likedIds.has(sid) || Boolean(skillObj?.liked_by_me);
       const likesCount = Number(skillObj?.likes_count || 0);
       const canEditOwn = Number(skillObj?.published_by_user_id || 0) === Number(this.app?.currentUser?.user_id || 0) || this._isAdmin;
@@ -341,18 +340,12 @@
         </button>` : ''}
       `;
 
-      document.body.appendChild(dd);
       this._openDropdown = dd;
-
-      const rect = anchorBtn.getBoundingClientRect();
-      const ddRect = dd.getBoundingClientRect();
-      let left = rect.right - ddRect.width;
-      let top = rect.bottom + 6;
-      if (left < 8) left = 8;
-      if (left + ddRect.width > window.innerWidth - 8) left = window.innerWidth - ddRect.width - 8;
-      if (top + ddRect.height > window.innerHeight - 8) top = Math.max(8, rect.top - ddRect.height - 6);
-      dd.style.left = `${Math.round(left)}px`;
-      dd.style.top = `${Math.round(top)}px`;
+      window.AnchoredPopup.attach(dd, anchorBtn, {
+        onClose: () => {
+          if (this._openDropdown === dd) this._openDropdown = null;
+        }
+      });
 
       dd.addEventListener('click', async (e) => {
         e.stopPropagation();

@@ -28,6 +28,8 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+import messenger_limits
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -114,7 +116,9 @@ async def api_max_list_chats(request: Request):
 @router.post("/api/max/chats")
 async def api_max_add_chat(request: Request, body: MaxChatUpsert):
     user = await _require_auth(request)
+    await messenger_limits.ensure_can_add(user, "max", body.chat_id)
     payload = body.dict()
+    payload["selected_tools"] = messenger_limits.sanitize_tools(user, payload.get("selected_tools"))
     payload["added_by_user_id"] = user["user_id"]
     try:
         resp = await _http.post(f"{_chats_url}/max/chats", json=payload, timeout=10.0)
@@ -149,8 +153,10 @@ async def api_max_get_settings(request: Request, chat_id: str):
 
 @router.post("/api/max/settings/{chat_id}")
 async def api_max_set_settings(request: Request, chat_id: str, body: MaxSettingsUpdate):
-    await _require_auth(request)
+    user = await _require_auth(request)
     payload = {k: v for k, v in body.dict().items() if v is not None}
+    if "selected_tools" in payload:
+        payload["selected_tools"] = messenger_limits.sanitize_tools(user, payload["selected_tools"])
     try:
         resp = await _http.post(
             f"{_chats_url}/max/settings/{quote(chat_id, safe='')}",
@@ -178,6 +184,7 @@ async def api_max_create_trigger(request: Request, chat_id: str, body: MaxTrigge
     user = await _require_auth(request)
     payload = body.dict()
     payload["added_by_user_id"] = user["user_id"]
+    payload["added_by_source"] = "web"
     try:
         resp = await _http.post(
             f"{_chats_url}/max/triggers/{quote(chat_id, safe='')}",
@@ -190,8 +197,11 @@ async def api_max_create_trigger(request: Request, chat_id: str, body: MaxTrigge
 
 @router.patch("/api/max/triggers/{chat_id}/{trigger_id}")
 async def api_max_update_trigger(request: Request, chat_id: str, trigger_id: int, body: MaxTriggerPatchIn):
-    await _require_auth(request)
+    user = await _require_auth(request)
     payload = {k: v for k, v in body.dict().items() if v is not None}
+    if "prompt" in payload:  # автор промпта = чьи права у автотриггера
+        payload["added_by_user_id"] = user["user_id"]
+        payload["added_by_source"] = "web"
     try:
         resp = await _http.patch(
             f"{_chats_url}/max/triggers/{quote(chat_id, safe='')}/{trigger_id}",

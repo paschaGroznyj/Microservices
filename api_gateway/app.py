@@ -37,6 +37,7 @@ import editor_gw
 import push_gw
 import os
 import max_chats_gw
+import messenger_limits
 import file_parsers
 import json_pack
 
@@ -87,6 +88,15 @@ async def lifespan(app: FastAPI):
         get_current_user=get_current_user,
     )
 
+    # Лимиты TG/MAX-чатов по уровню: /api/messengers/limits + проверка в POST /api/{tg,max}/chats
+    messenger_limits.bind(
+        http_client=app.state.http_client,
+        chats_url=SERVICES['chats']['url'],
+        auth_url=SERVICES['auth']['url'],
+        get_current_user=get_current_user,
+        admin_usernames=ADMIN_USERNAMES,
+    )
+
     # Web Push: /sw.js, /api/push/* (подписки, VAPID, «вкладка на экране»)
     push_gw.bind(
         http_client=app.state.http_client,
@@ -109,6 +119,7 @@ app.include_router(group_chat_gw.router)
 
 app.include_router(editor_gw.router)
 app.include_router(max_chats_gw.router)
+app.include_router(messenger_limits.router)
 app.include_router(push_gw.router)
 # app = FastAPI(title="API Gateway", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -823,8 +834,10 @@ async def api_tg_list_chats(request: Request):
 @app.post("/api/tg/chats")
 async def api_tg_add_chat(request: Request, body: TgChatUpsert):
     user = await _require_auth(request)
+    await messenger_limits.ensure_can_add(user, "tg", body.chat_id)
     chats_url = SERVICES['chats']['url']
     payload = body.dict()
+    payload["selected_tools"] = messenger_limits.sanitize_tools(user, payload.get("selected_tools"))
     payload["added_by_user_id"] = user["user_id"]
     try:
         resp = await app.state.http_client.post(
@@ -868,6 +881,7 @@ async def api_tg_create_trigger(request: Request, chat_id: str, body: TgTriggerU
     chats_url = SERVICES['chats']['url']
     payload = body.dict()
     payload["added_by_user_id"] = user["user_id"]
+    payload["added_by_source"] = "web"
     try:
         resp = await app.state.http_client.post(
             f"{chats_url}/tg/triggers/{quote(chat_id, safe='')}", json=payload, timeout=10.0
@@ -879,9 +893,12 @@ async def api_tg_create_trigger(request: Request, chat_id: str, body: TgTriggerU
 
 @app.patch("/api/tg/triggers/{chat_id}/{trigger_id}")
 async def api_tg_update_trigger(request: Request, chat_id: str, trigger_id: int, body: TgTriggerPatchIn):
-    await _require_auth(request)
+    user = await _require_auth(request)
     chats_url = SERVICES['chats']['url']
     payload = {k: v for k, v in body.dict().items() if v is not None}
+    if "prompt" in payload:  # автор промпта = чьи права у автотриггера
+        payload["added_by_user_id"] = user["user_id"]
+        payload["added_by_source"] = "web"
     try:
         resp = await app.state.http_client.patch(
             f"{chats_url}/tg/triggers/{quote(chat_id, safe='')}/{trigger_id}", json=payload, timeout=10.0
@@ -919,12 +936,14 @@ async def api_tg_get_settings(request: Request, chat_id: str):
 
 @app.post("/api/tg/settings/{chat_id}")
 async def api_tg_set_settings(request: Request, chat_id: str, body: TgSettingsUpdate):
-    await _require_auth(request)
+    user = await _require_auth(request)
     chats_url = SERVICES['chats']['url']
+    payload = body.dict()
+    payload["selected_tools"] = messenger_limits.sanitize_tools(user, payload.get("selected_tools"))
     try:
         resp = await app.state.http_client.post(
             f"{chats_url}/tg/settings/{quote(chat_id, safe='')}",
-            json=body.dict(), timeout=10.0
+            json=payload, timeout=10.0
         )
         return JSONResponse(content=resp.json(), status_code=resp.status_code)
     except httpx.RequestError as e:

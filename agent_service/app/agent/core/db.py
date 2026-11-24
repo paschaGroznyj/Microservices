@@ -1499,7 +1499,8 @@ class AgentDB:
                                 kind: str, time_msk: str,
                                 title=None, days_of_week=None,
                                 trigger_date=None, prompt=None,
-                                addressed: bool = False) -> dict:
+                                addressed: bool = False,
+                                added_by_source: str | None = None) -> dict:
         """Создать запись в telegram_triggers (та же БД, что у chats_service).
         days_of_week — список 1..7 (пн..вс) или None. trigger_date — date для once.
         Сканер chats_service подхватит запись автоматически (proactive_enabled должен быть TRUE)."""
@@ -1523,11 +1524,13 @@ class AgentDB:
                 row = await conn.fetchrow("""
                     INSERT INTO telegram_triggers
                         (chat_id, added_by_user_id, kind, title, time_msk,
-                         days_of_week, trigger_date, prompt, addressed)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                         days_of_week, trigger_date, prompt, addressed, added_by_source)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
                     ON CONFLICT (chat_id, kind, time_msk, COALESCE(title,''), COALESCE(trigger_date,'0001-01-01'::date))
                         WHERE preset_key IS NULL
                     DO UPDATE SET
+                        added_by_user_id = EXCLUDED.added_by_user_id,
+                        added_by_source  = EXCLUDED.added_by_source,
                         days_of_week  = EXCLUDED.days_of_week,
                         prompt        = EXCLUDED.prompt,
                         addressed     = EXCLUDED.addressed,
@@ -1538,7 +1541,7 @@ class AgentDB:
                               days_of_week, trigger_date, prompt, addressed,
                               is_active, created_at
                 """, chat_id, added_by_user_id, kind, title, time_msk,
-                     days_of_week, trigger_date, prompt, addressed)
+                     days_of_week, trigger_date, prompt, addressed, added_by_source)
         return dict(row)
 
     async def register_editor_workspace(self, user_id, workspace_id: str,
@@ -1608,7 +1611,8 @@ class AgentDB:
                                  kind: str, time_msk: str,
                                  title=None, days_of_week=None,
                                  trigger_date=None, prompt=None,
-                                 addressed: bool = False) -> dict:
+                                 addressed: bool = False,
+                                 added_by_source: str | None = None) -> dict:
         chat_id = str(chat_id).strip()
         try:
             chat_type = "group" if int(chat_id) < 0 else "private"
@@ -1629,11 +1633,13 @@ class AgentDB:
                 row = await conn.fetchrow("""
                     INSERT INTO max_triggers
                         (chat_id, added_by_user_id, kind, title, time_msk,
-                         days_of_week, trigger_date, prompt, addressed)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                         days_of_week, trigger_date, prompt, addressed, added_by_source)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
                     ON CONFLICT (chat_id, kind, time_msk, COALESCE(title,''), COALESCE(trigger_date,'0001-01-01'::date))
                         WHERE preset_key IS NULL
                     DO UPDATE SET
+                        added_by_user_id = EXCLUDED.added_by_user_id,
+                        added_by_source  = EXCLUDED.added_by_source,
                         days_of_week  = EXCLUDED.days_of_week,
                         prompt        = EXCLUDED.prompt,
                         addressed     = EXCLUDED.addressed,
@@ -1644,7 +1650,7 @@ class AgentDB:
                               days_of_week, trigger_date, prompt, addressed,
                               is_active, created_at
                 """, chat_id, added_by_user_id, kind, title, time_msk,
-                     days_of_week, trigger_date, prompt, addressed)
+                     days_of_week, trigger_date, prompt, addressed, added_by_source)
         return dict(row)
 
     async def list_max_triggers(self, chat_id: str) -> list[dict]:

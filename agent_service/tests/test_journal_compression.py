@@ -102,17 +102,22 @@ def db():
     loop.close()
 
 
-def _seed(db, n, entry_type="evolution", archived=()):
+def _seed(db, n, entry_type="evolution", archived=(), priorities=None, expires=None):
+    """priorities/expires — {индекс: значение}; expires задаётся в минутах от NOW()."""
+    priorities, expires = priorities or {}, expires or {}
+
     async def go():
         ids = []
         for i in range(n):
             ids.append(await db.pool.fetchval("""
                 INSERT INTO agent_journal (chat_id, entry_type, content, is_archived, archive_summary,
-                                           created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, NOW() - make_interval(mins => $6), NOW())
+                                           priority, expires_at, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $7,
+                        CASE WHEN $8::int IS NULL THEN NULL ELSE NOW() + make_interval(mins => $8::int) END,
+                        NOW() - make_interval(mins => $6), NOW())
                 RETURNING id
             """, CHAT, entry_type, f"запись {i}", i in archived, "ручной архив" if i in archived else None,
-                n - i))
+                n - i, priorities.get(i, 3), expires.get(i)))
         return ids
     return db.loop.run_until_complete(go())
 
@@ -217,6 +222,112 @@ def test_context_all_identity_and_hidden_counters(db, monkeypatch):
     text = db.loop.run_until_complete(agent_db.get_agent_journal(CHAT))
     for i in ident:
         assert f"ID: {i} | Тип: [identity]" in text
-    assert "ещё 2 активных записей старше не показаны" in text
+    # 12 обычных записей, в контекст идут 8 — 4 скрыты; identity в счётчик не входят
+    assert "ещё 4 активных записей с меньшим приоритетом или старше не показаны" in text
     assert "ещё 2 более старых архивных записей не показаны" in text
-    assert "Активных записей в журнале 15, порог 9" in text
+    assert "Активных записей в журнале 12 (без identity и сводок), порог 9" in text
+
+
+# ── приоритеты, разовые записи, лимит сводок ────────────────────────────────
+
+@pg
+def test_priority_one_survives_compression_even_if_oldest(db):
+    ids = _seed(db, 9, priorities={0: 1, 1: 5})  # ids[0] самая старая, но приоритет 1
+    res = _run(db, _LLM())
+    assert res["compressed"] is True
+    rows = {r["id"]: r for r in _rows(db)}
+    assert not rows[ids[0]]["is_archived"]          # старая, но важная — осталась
+    assert rows[ids[1]]["is_archived"]              # низкий приоритет ушёл в архив
+    active = [i for i in ids if not rows[i]["is_archived"]]
+    assert active == [ids[0], ids[7], ids[8]]       # priority 1 + две самые свежие
+
+
+@pg
+def test_expired_entries_hidden_and_not_counted(db):
+    ids = _seed(db, 9, expires={0: -5, 1: -1})       # две разовые записи уже просрочены
+    llm = _LLM()
+    assert _run(db, llm) is None and llm.calls == []  # живых 7 <= порога: сжатия нет
+    flags = dict(db.loop.run_until_complete(db.pool.fetch(
+        "SELECT id, is_expired FROM agent_journal WHERE chat_id = $1", CHAT)))
+    assert flags[ids[0]] and flags[ids[1]] and not flags[ids[2]]
+    assert len(flags) == 9                           # ничего не удалено
+
+
+@pg
+def test_compression_keeps_at_most_two_summaries(db):
+    old = _seed(db, 2, entry_type="summary")
+    _seed(db, 9)
+    res = _run(db, _LLM())
+    assert res["compressed"] is True and res["merged_summary_ids"] == [old[0]]
+    live = db.loop.run_until_complete(db.pool.fetch(
+        "SELECT id FROM agent_journal WHERE chat_id = $1 AND entry_type = 'summary' "
+        "AND is_archived = FALSE ORDER BY id", CHAT))
+    assert [r["id"] for r in live] == [old[1], res["summary_id"]]
+
+
+@pg
+def test_context_summaries_separate_and_expired_hidden(db):
+    from datetime import timezone, timedelta
+    from agent.core import db as core_db
+
+    s = _seed(db, 3, entry_type="summary")
+    ev = _seed(db, 8, expires={0: -1, 1: 120})
+    agent_db = core_db.AgentDB()
+    agent_db.pool = db.pool
+    tz = timezone(timedelta(hours=4))
+    text = db.loop.run_until_complete(agent_db.get_agent_journal(CHAT, tz=tz))
+    assert "── СВОДКИ ЖУРНАЛА ──" in text
+    assert f"ID: {s[0]} |" not in text and f"ID: {s[1]} |" in text and f"ID: {s[2]} |" in text
+    assert "ещё 1 старых сводок не показаны" in text
+    assert f"ID: {ev[0]} |" not in text              # просроченная разовая не в контексте
+    for i in ev[1:]:                                  # 7 живых обычных, сводки лимит 8 не едят
+        assert f"ID: {i} |" in text
+    assert "Приоритет: 3 | Истекает:" in text
+    assert "Активных записей в журнале" not in text   # 7 <= порог 9
+
+
+# ── инструмент: insert/update/expire через handler ──────────────────────────
+
+def _op(db, **kw):
+    from agent.tools.journal.journal_handler import handle_journal_operation
+    kw.setdefault("entry_type", "evolution")
+    kw.setdefault("content", "")
+    return db.loop.run_until_complete(handle_journal_operation(db=db, llm=_LLM(), chat_id=CHAT, **kw))
+
+
+@pg
+def test_handler_priority_expiry_local_time(db):
+    from datetime import timezone, timedelta
+    tz = timezone(timedelta(hours=4))   # Самара
+    res = _op(db, action="insert", content="Напомнить про ревью", priority=1,
+              expires_at="2099-11-25 10:00", tz=tz)
+    assert res["ok"] and res["priority"] == 1
+    row = db.loop.run_until_complete(db.pool.fetchrow(
+        "SELECT priority, expires_at FROM agent_journal WHERE id = $1", res["id"]))
+    assert row["priority"] == 1
+    assert row["expires_at"].astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M") == "2099-11-25 06:00"
+
+    assert _op(db, action="update", entry_id=res["id"], priority=4)["ok"]
+    assert _op(db, action="expire", entry_id=res["id"])["ok"]
+    hidden = db.loop.run_until_complete(db.pool.fetchrow(
+        "SELECT is_expired, priority FROM agent_journal WHERE id = $1", res["id"]))
+    assert hidden["is_expired"] and hidden["priority"] == 4
+
+    bad = _op(db, action="insert", content="x", priority=9, tz=tz)
+    assert bad.get("ok") is not True
+
+
+# ── время прошлых сообщений в истории ───────────────────────────────────────
+
+def test_history_stamp_uses_user_timezone():
+    from datetime import datetime, timezone
+    from agent.core.timezone_utils import stamp_history_text, user_tzinfo
+
+    utc = datetime(2026, 11, 24, 4, 30, tzinfo=timezone.utc)
+    assert stamp_history_text("привет", utc, user_tzinfo("Europe/Samara")) == "[24.11.2026 08:30] привет"
+    # пояс истории совпадает с часами «Current date and time» в промпте
+    from agent.core.timezone_utils import resolve_tzinfo
+    assert user_tzinfo(None, -240) is resolve_tzinfo(None, -240)[0] or \
+        user_tzinfo(None, -240).utcoffset(utc) == resolve_tzinfo(None, -240)[0].utcoffset(utc)
+    assert stamp_history_text("x", utc, user_tzinfo("UTC+04:00")) == "[24.11.2026 08:30] x"
+    assert stamp_history_text("x", None, user_tzinfo("Europe/Samara")) == "x"

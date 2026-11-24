@@ -76,14 +76,14 @@ async def get_memory_stats(
                 COALESCE(SUM(LENGTH(content)) FILTER (WHERE NOT is_archived), 0) as total_chars,
                 COUNT(*) FILTER (WHERE is_archived) as archived_count
             FROM agent_journal
-            WHERE chat_id = $1
+            WHERE chat_id = $1 AND NOT is_expired
         """, chat_id)
         
         # Типы записей (только активные)
         journal_types = await conn.fetch("""
             SELECT entry_type, COUNT(*) as count
             FROM agent_journal
-            WHERE chat_id = $1 AND NOT is_archived
+            WHERE chat_id = $1 AND NOT is_archived AND NOT is_expired
             GROUP BY entry_type
             ORDER BY count DESC
         """, chat_id)
@@ -200,16 +200,16 @@ async def get_journal_entries(
     
     async with _db.pool.acquire() as conn:
         entries = await conn.fetch("""
-            SELECT id, entry_type, content, created_at, updated_at,
+            SELECT id, entry_type, content, priority, expires_at, created_at, updated_at,
                    LENGTH(content) as chars
             FROM agent_journal
-            WHERE chat_id = $1 AND NOT is_archived
+            WHERE chat_id = $1 AND NOT is_archived AND NOT is_expired
             ORDER BY updated_at DESC
             LIMIT $2 OFFSET $3
         """, chat_id, limit, offset)
         
         total = await conn.fetchval(
-            "SELECT COUNT(*) FROM agent_journal WHERE chat_id = $1 AND NOT is_archived",
+            "SELECT COUNT(*) FROM agent_journal WHERE chat_id = $1 AND NOT is_archived AND NOT is_expired",
             chat_id
         ) or 0
         
@@ -219,6 +219,8 @@ async def get_journal_entries(
                     "id": e["id"],
                     "type": e["entry_type"],
                     "content": e["content"],
+                    "priority": e["priority"],
+                    "expires_at": e["expires_at"].isoformat() if e["expires_at"] else None,
                     "created_at": e["created_at"].isoformat(),
                     "updated_at": e["updated_at"].isoformat(),
                     "chars": e["chars"],

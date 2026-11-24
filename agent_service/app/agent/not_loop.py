@@ -8,6 +8,7 @@ not_loop.py — режим «Модель» (type_query="model"): чистая �
 Транспорт (стрим чанков, FlowMap, учёт токенов) переиспользуется у HarnessAgent,
 поэтому фронт, Redis flow и сохранение в БД работают так же, как для агента.
 """
+from .core.timezone_utils import HISTORY_TIME_NOTE, user_tzinfo
 from .core.observability import request_logged
 
 import os
@@ -115,8 +116,9 @@ class LLModel:
     def __init__(self, agent):
         self.agent = agent  # HarnessAgent: модели, история из БД, стрим, flow, токены
 
-    async def _history(self, chat_id, max_tokens: int, model_tag: str | None = None) -> List[BaseMessage]:
-        history = await self.agent._load_history_from_db(chat_id, MODEL_HISTORY_REQUESTS * 2)
+    async def _history(self, chat_id, max_tokens: int, model_tag: str | None = None,
+                       tz=None) -> List[BaseMessage]:
+        history = await self.agent._load_history_from_db(chat_id, MODEL_HISTORY_REQUESTS * 2, tz=tz)
         counter = count_tokens_approximately
         cpt = 4.0  # дефолт count_tokens_approximately
         if model_tag:
@@ -145,10 +147,12 @@ class LLModel:
     async def build_messages(self, user_input: str, chat_id, context_size: str | None,
                              timezone_name: str | None, model_tag: str | None = None) -> List[BaseMessage]:
         max_tokens = MODEL_CONTEXT_TOKENS.get(context_size or "medium", MODEL_CONTEXT_TOKENS["medium"])
-        history = await self._history(chat_id, max_tokens, model_tag)
+        history = await self._history(chat_id, max_tokens, model_tag, tz=user_tzinfo(timezone_name))
         return [
             SystemMessage(content=MODEL_SYSTEM_PROMPT),
-            SystemMessage(content=f"🕒 ТЕКУЩИЙ КОНТЕКСТ:\nCurrent date and time: {self._now(timezone_name)}"),
+            SystemMessage(content=(
+                f"🕒 ТЕКУЩИЙ КОНТЕКСТ:\nCurrent date and time: {self._now(timezone_name)}\n{HISTORY_TIME_NOTE}"
+            )),
             *history,
             HumanMessage(content=user_input),
         ]

@@ -3,11 +3,16 @@ tools/journal/journal_compression.py
 ────────────────────────────────────────
 Автосжатие бортового журнала без потери данных.
 
-Когда активных записей одного типа становится больше COMPRESSION_THRESHOLD,
-все, кроме KEEP_RECENT самых свежих, сворачиваются:
+Сжимаются только обычные записи (всё, кроме identity и summary) — живые:
+не в архиве и не истёкшие. Когда их больше COMPRESSION_THRESHOLD, активными
+остаются KEEP_RECENT самых важных: сначала по приоритету (1 — наивысший),
+затем по свежести. Поэтому запись с priority=1 уходит в архив последней,
+даже если она старая. Остальные сворачиваются:
   * одним запросом к модели получаем JSON со сводкой и однострочными
     описаниями для каждой свёрнутой записи;
-  * сводка пишется отдельной summary-записью со ссылками на id исходников;
+  * сводка пишется summary-записью со ссылками на id исходников;
+  * активных сводок не больше MAX_SUMMARIES: лишние старые сводки
+    передаются модели и вливаются в новую, а сами уходят в архив;
   * исходники НЕ удаляются, а уходят в архив (is_archived = TRUE,
     archive_summary = описание) и возвращаются через action="unarchive".
 
@@ -21,14 +26,21 @@ import re
 
 log = logging.getLogger(__name__)
 
-COMPRESSION_THRESHOLD = 8
-KEEP_RECENT = 3
+COMPRESSION_THRESHOLD = 8   # живых обычных записей (без identity и summary)
+KEEP_RECENT = 3             # сколько самых важных записей остаются активными
+MAX_SUMMARIES = 2           # активных summary-записей в журнале
+SKIP_TYPES = ("identity", "summary")
 MAX_ARCHIVE_SUMMARY_CHARS = 300
 MIN_SUMMARY_CHARS = 40
 
 SYSTEM_PROMPT = """Ты сворачиваешь старые записи бортового журнала AI-агента в архив.
 Исходные записи сохранятся в архиве; в контексте агента останутся твоя сводка
 и по одному предложению на каждую запись. Поэтому точность важнее краткости.
+
+У каждой записи есть тип и приоритет 1–5 (1 — самый важный). Факты из записей
+с приоритетом 1–2 переноси в сводку полностью, без сокращений.
+Если переданы предыдущие сводки, новая сводка ЗАМЕНЯЕТ их: перенеси из них все
+факты со ссылками (#id), объединяя повторы, и добавь факты из новых записей.
 
 Верни ТОЛЬКО один JSON-объект, без Markdown-обёртки и пояснений:
 {"summary": "<сводка>", "archive": {"<id>": "<одно предложение>", ...}}
@@ -117,88 +129,130 @@ def parse_compression_response(text: str, expected_ids: list[int]) -> tuple[str,
     return summary, result
 
 
-def build_prompt(entry_type: str, rows) -> str:
+def _fmt_dt(value) -> str | None:
+    return value.strftime("%Y-%m-%d %H:%M") if value else None
+
+
+def build_prompt(rows, previous_summaries=()) -> str:
     entries = [
         {
             "id": r["id"],
-            "created_at": r["created_at"].strftime("%Y-%m-%d %H:%M") if r["created_at"] else None,
+            "type": r["entry_type"],
+            "priority": r["priority"],
+            "created_at": _fmt_dt(r["created_at"]),
             "content": r["content"],
         }
         for r in rows
     ]
-    return (
-        f"Тип записей: {entry_type}. Количество: {len(entries)}.\n"
+    parts = []
+    if previous_summaries:
+        prev = [{"id": r["id"], "created_at": _fmt_dt(r["created_at"]), "content": r["content"]}
+                for r in previous_summaries]
+        parts.append(
+            f"Предыдущие сводки, которые надо влить в новую (JSON):\n"
+            f"{json.dumps(prev, ensure_ascii=False, indent=1)}\n"
+        )
+    # Блок записей всегда последний: его ключи и только их ждёт парсер.
+    parts.append(
+        f"Количество записей: {len(entries)}.\n"
         f"Записи (JSON):\n{json.dumps(entries, ensure_ascii=False, indent=1)}"
     )
+    return "\n".join(parts)
 
 
 class _Race(Exception):
     """Записи изменились между выборкой и архивацией."""
 
 
-async def maybe_compress_journal(db, llm, chat_id: str, entry_type: str) -> dict | None:
+EXPIRE_DUE_SQL = """
+    UPDATE agent_journal
+    SET is_expired = TRUE, expired_at = NOW(), updated_at = NOW()
+    WHERE chat_id = $1 AND is_expired = FALSE
+      AND expires_at IS NOT NULL AND expires_at <= NOW()
+"""
+
+
+async def maybe_compress_journal(db, llm, chat_id: str, entry_type: str | None = None) -> dict | None:
     """
-    Проверяет порог активных записей entry_type под chat_id и при превышении
-    сворачивает старые записи в архив + summary-запись.
+    Проверяет порог живых обычных записей под chat_id и при превышении
+    сворачивает наименее важные записи в архив + summary-запись.
 
     Вызывать после каждого успешного INSERT в journal_handler.
     None — сжатие не требовалось; {"compressed": True, ...} — выполнено;
     {"compressed": False, "reason": ...} — пропущено, журнал не изменён.
     """
-    if entry_type in ("identity", "summary"):
+    if entry_type in SKIP_TYPES:
         # identity — правила поведения, не сворачиваем.
         # summary — результат сжатия, повторно не сжимаем (рекурсия).
         return None
 
+    await db.pool.execute(EXPIRE_DUE_SQL, chat_id)
+
+    # Порядок «важности»: приоритет, затем свежесть. Голова списка остаётся.
     rows = await db.pool.fetch("""
-        SELECT id, content, created_at
+        SELECT id, entry_type, content, priority, created_at
         FROM agent_journal
-        WHERE chat_id = $1 AND entry_type = $2 AND is_archived = FALSE
-        ORDER BY created_at ASC, id ASC
-    """, chat_id, entry_type)
+        WHERE chat_id = $1 AND entry_type <> ALL($2::text[])
+          AND is_archived = FALSE AND is_expired = FALSE
+        ORDER BY priority ASC, created_at DESC, id DESC
+    """, chat_id, list(SKIP_TYPES))
 
     if len(rows) <= COMPRESSION_THRESHOLD:
         return None
 
-    # KEEP_RECENT самых свежих остаются активными, остальные сворачиваются.
-    to_compress = rows[:-KEEP_RECENT]
+    to_compress = sorted(rows[KEEP_RECENT:], key=lambda r: (r["created_at"], r["id"]))
     compressed_ids = [r["id"] for r in to_compress]
+    compressed_types = sorted({r["entry_type"] for r in to_compress})
+
+    # Сводок после вставки новой должно остаться не больше MAX_SUMMARIES:
+    # самые свежие MAX_SUMMARIES - 1 остаются, остальные вливаются в новую.
+    summaries = await db.pool.fetch("""
+        SELECT id, content, created_at
+        FROM agent_journal
+        WHERE chat_id = $1 AND entry_type = 'summary'
+          AND is_archived = FALSE AND is_expired = FALSE
+        ORDER BY created_at DESC, id DESC
+    """, chat_id)
+    to_merge = sorted(summaries[MAX_SUMMARIES - 1:], key=lambda r: (r["created_at"], r["id"]))
+    merged_ids = [r["id"] for r in to_merge]
 
     try:
         response = await llm.ainvoke([
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": build_prompt(entry_type, to_compress)},
+            {"role": "user", "content": build_prompt(to_compress, to_merge)},
         ])
         summary_text, archive_map = parse_compression_response(_response_text(response), compressed_ids)
     except Exception as e:
         # Не роняем insert и ничего не трогаем: попробуем при следующем insert.
         log.warning(
-            f"[journal_compression] пропуск chat_id={chat_id} entry_type={entry_type}: "
-            f"{type(e).__name__}: {e}"
+            f"[journal_compression] пропуск chat_id={chat_id}: {type(e).__name__}: {e}"
         )
-        return {"compressed": False, "entry_type": entry_type, "reason": f"{type(e).__name__}: {e}"}
+        return {"compressed": False, "reason": f"{type(e).__name__}: {e}"}
 
     try:
-        summary_id = await _apply(db, chat_id, entry_type, compressed_ids, archive_map, summary_text)
+        summary_id = await _apply(db, chat_id, compressed_ids, compressed_types,
+                                  archive_map, summary_text, merged_ids)
     except _Race:
-        log.warning(f"[journal_compression] гонка chat_id={chat_id} entry_type={entry_type}, откат")
-        return {"compressed": False, "entry_type": entry_type, "reason": "записи изменились параллельно"}
+        log.warning(f"[journal_compression] гонка chat_id={chat_id}, откат")
+        return {"compressed": False, "reason": "записи изменились параллельно"}
 
     log.info(
-        f"[journal_compression] chat_id={chat_id} entry_type={entry_type}: "
-        f"{len(compressed_ids)} записей в архив, summary_id={summary_id}"
+        f"[journal_compression] chat_id={chat_id}: {len(compressed_ids)} записей в архив, "
+        f"сводок влито {len(merged_ids)}, summary_id={summary_id}"
     )
     return {
         "compressed": True,
-        "entry_type": entry_type,
         "compressed_count": len(compressed_ids),
         "archived_ids": compressed_ids,
+        "merged_summary_ids": merged_ids,
         "summary_id": summary_id,
     }
 
 
-async def _apply(db, chat_id, entry_type, compressed_ids, archive_map, summary_text) -> int:
-    """Одна транзакция: архивирует исходники и вставляет summary-запись."""
+async def _apply(db, chat_id, compressed_ids, compressed_types, archive_map, summary_text,
+                 merged_ids=()) -> int:
+    """Одна транзакция: архивирует исходники и старые сводки, вставляет новую сводку."""
+    merged_ids = list(merged_ids)
     async with db.pool.acquire() as conn:
         async with conn.transaction():
             # Если параллельный insert уже свернул часть этих записей,
@@ -207,22 +261,38 @@ async def _apply(db, chat_id, entry_type, compressed_ids, archive_map, summary_t
                 UPDATE agent_journal j
                 SET is_archived = TRUE, archive_summary = s.summary, updated_at = NOW()
                 FROM unnest($1::bigint[], $2::text[]) AS s(id, summary)
-                WHERE j.id = s.id AND j.chat_id = $3 AND j.is_archived = FALSE
+                WHERE j.id = s.id AND j.chat_id = $3
+                  AND j.is_archived = FALSE AND j.is_expired = FALSE
                 RETURNING j.id
             """, compressed_ids, [archive_map[i] for i in compressed_ids], chat_id)
 
             if len(archived) != len(compressed_ids):
                 raise _Race()
 
-            return await conn.fetchval("""
-                INSERT INTO agent_journal (chat_id, entry_type, content, context, created_at, updated_at)
-                VALUES ($1, 'summary', $2, $3, NOW(), NOW())
+            summary_id = await conn.fetchval("""
+                INSERT INTO agent_journal (chat_id, entry_type, content, context, priority,
+                                           created_at, updated_at)
+                VALUES ($1, 'summary', $2, $3, 2, NOW(), NOW())
                 RETURNING id
             """, chat_id, summary_text, json.dumps({
                 "source": "auto_compression",
                 "chat_id": chat_id,
-                "compressed_entry_type": entry_type,
+                "compressed_entry_types": compressed_types,
                 "compressed_count": len(compressed_ids),
                 "compressed_ids": compressed_ids,
+                "merged_summary_ids": merged_ids,
                 "archived": True,
             }))
+
+            if merged_ids:
+                merged = await conn.fetch("""
+                    UPDATE agent_journal
+                    SET is_archived = TRUE, archive_summary = $2, updated_at = NOW()
+                    WHERE id = ANY($1::bigint[]) AND chat_id = $3
+                      AND entry_type = 'summary' AND is_archived = FALSE
+                    RETURNING id
+                """, merged_ids, f"Сводка журнала, влита в сводку #{summary_id}.", chat_id)
+                if len(merged) != len(merged_ids):
+                    raise _Race()
+
+            return summary_id

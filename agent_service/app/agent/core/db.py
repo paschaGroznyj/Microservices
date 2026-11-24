@@ -15,8 +15,9 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 
-MAX_COUNT_JOURNAL = 9  # порог активных записей, после которого агенту подсказывается архивация
-MAX_JOURNAL_OTHER_IN_CONTEXT = 10    # неличностных активных записей в контексте
+MAX_COUNT_JOURNAL = 9  # порог обычных активных записей, после которого агенту подсказывается архивация
+MAX_JOURNAL_OTHER_IN_CONTEXT = 8     # обычных записей (не identity и не summary) в контексте
+MAX_JOURNAL_SUMMARIES_IN_CONTEXT = 2  # сводок в контексте, отдельно от обычных записей
 MAX_JOURNAL_ARCHIVE_IN_CONTEXT = 50  # строк реестра архива в контексте
 
 def _coerce_tags(val) -> list:
@@ -123,35 +124,68 @@ class AgentDB:
             _lg.error(f"[self-loop] deactivate_loop_task chat={chat_id}: {e}")
             return False
 
-    async def get_agent_journal(self, chat_id: str | None = None) -> str:
+    async def get_agent_journal(self, chat_id: str | None = None, tz=None) -> str:
+        """
+        Журнал для системного промпта. tz — часовой пояс пользователя: все
+        времена показываются по его часам, как и «ТЕКУЩИЙ КОНТЕКСТ».
+
+        Истёкшие разовые записи (expires_at <= NOW) сначала помечаются
+        is_expired = TRUE и дальше никуда не попадают. Порядок блоков:
+        identity (все) → сводки (не больше MAX_JOURNAL_SUMMARIES_IN_CONTEXT) →
+        обычные записи по приоритету и свежести → компактный реестр архива.
+        """
+        from .timezone_utils import format_local
+
         async with self.pool.acquire() as conn:
-            # В основной контекст тянем ТОЛЬКО активные (не архивные) записи.
-            # identity — правила поведения: в контекст идут ВСЕ активные, по порядку.
+            await conn.execute("""
+                UPDATE agent_journal
+                SET is_expired = TRUE, expired_at = NOW(), updated_at = NOW()
+                WHERE chat_id = $1 AND is_expired = FALSE
+                  AND expires_at IS NOT NULL AND expires_at <= NOW()
+            """, chat_id)
+
+            # identity — правила поведения: в контекст идут ВСЕ живые, важные первыми.
             identity_rows = await conn.fetch("""
-                SELECT id, entry_type, content, context, created_at, updated_at
+                SELECT id, entry_type, content, context, priority, expires_at, created_at, updated_at
                 FROM agent_journal
                 WHERE entry_type = 'identity' AND chat_id = $1
-                  AND is_archived = FALSE
-                ORDER BY created_at ASC, id ASC
+                  AND is_archived = FALSE AND is_expired = FALSE
+                ORDER BY priority ASC, created_at ASC, id ASC
+            """, chat_id)
+
+            summary_rows = await conn.fetch("""
+                SELECT id, entry_type, content, context, priority, expires_at, created_at, updated_at
+                FROM agent_journal
+                WHERE entry_type = 'summary' AND chat_id = $1
+                  AND is_archived = FALSE AND is_expired = FALSE
+                ORDER BY created_at DESC, id DESC
+                LIMIT $2
+            """, chat_id, MAX_JOURNAL_SUMMARIES_IN_CONTEXT)
+
+            summary_total = await conn.fetchval("""
+                SELECT count(id) FROM agent_journal
+                WHERE chat_id = $1 AND entry_type = 'summary'
+                  AND is_archived = FALSE AND is_expired = FALSE
             """, chat_id)
 
             other_rows = await conn.fetch("""
-                SELECT id, entry_type, content, context, created_at, updated_at
+                SELECT id, entry_type, content, context, priority, expires_at, created_at, updated_at
                 FROM agent_journal
-                WHERE entry_type != 'identity'
+                WHERE entry_type NOT IN ('identity', 'summary')
                   AND chat_id = $1
-                  AND is_archived = FALSE
-                ORDER BY updated_at DESC, id DESC
+                  AND is_archived = FALSE AND is_expired = FALSE
+                ORDER BY priority ASC, updated_at DESC, id DESC
                 LIMIT $2
             """, chat_id, MAX_JOURNAL_OTHER_IN_CONTEXT)
 
             other_total = await conn.fetchval("""
                 SELECT count(id) FROM agent_journal
-                WHERE chat_id = $1 AND is_archived = FALSE AND entry_type != 'identity'
+                WHERE chat_id = $1 AND is_archived = FALSE AND is_expired = FALSE
+                  AND entry_type NOT IN ('identity', 'summary')
             """, chat_id)
 
             archived_total = await conn.fetchval(
-                "SELECT count(id) FROM agent_journal WHERE chat_id = $1 AND is_archived = TRUE;",
+                "SELECT count(id) FROM agent_journal WHERE chat_id = $1 AND is_archived = TRUE AND is_expired = FALSE;",
                 chat_id,
             )
 
@@ -160,52 +194,67 @@ class AgentDB:
             archived_rows = await conn.fetch("""
                 SELECT id, entry_type, archive_summary, updated_at
                 FROM agent_journal
-                WHERE chat_id = $1 AND is_archived = TRUE
+                WHERE chat_id = $1 AND is_archived = TRUE AND is_expired = FALSE
                 ORDER BY updated_at DESC, id DESC
                 LIMIT $2
             """, chat_id, MAX_JOURNAL_ARCHIVE_IN_CONTEXT)
 
-        if not identity_rows and not other_rows and not archived_rows:
+        if not identity_rows and not summary_rows and not other_rows and not archived_rows:
             return "Журнал агента пуст."
 
+        def _ts(value) -> str:
+            return format_local(value, tz, "%Y-%m-%d %H:%M:%S")
+
         def _format_entry(row) -> str:
-            created_str = row["created_at"].strftime("%Y-%m-%d %H:%M:%S") if row["created_at"] else "—"
-            updated_str = row["updated_at"].strftime("%Y-%m-%d %H:%M:%S") if row["updated_at"] else "—"
             context_data = row["context"]
             ctx_str = (
                 json.dumps(context_data, ensure_ascii=False) if isinstance(context_data, dict)
                 else (str(context_data) if context_data else "без контекста")
             )
+            expiry = (
+                f" | Истекает: {format_local(row['expires_at'], tz)}" if row["expires_at"] else ""
+            )
             return (
-                f"• [{created_str}] [{updated_str}] ID: {row['id']} | Тип: [{row['entry_type']}]\n"
+                f"• [{_ts(row['created_at'])}] [{_ts(row['updated_at'])}] ID: {row['id']} | "
+                f"Тип: [{row['entry_type']}] | Приоритет: {row['priority']}{expiry}\n"
                 f"  Содержание: {row['content']}\n"
                 f"  Контекст: {ctx_str}"
             )
 
-        parts = []
+        parts = ["Время записей — по часам пользователя. Приоритет 1 — наивысший, 5 — низший."]
 
         other_total = other_total or 0
+        summary_total = summary_total or 0
         archived_total = archived_total or 0
-        active_total = len(identity_rows) + other_total
-        if active_total > MAX_COUNT_JOURNAL:
+        if other_total > MAX_COUNT_JOURNAL:
             parts.append(
-                f"Активных записей в журнале {active_total}, порог {MAX_COUNT_JOURNAL}. "
-                f"Неактуальные записи сворачивай в архив (action=\"archive\"); "
-                f"автосжатие тоже архивирует, а не удаляет.\n"
+                f"Активных записей в журнале {other_total} (без identity и сводок), порог {MAX_COUNT_JOURNAL}. "
+                f"Неактуальные записи сворачивай в архив (action=\"archive\"), выполненные разовые — "
+                f"action=\"expire\"; автосжатие тоже архивирует, а не удаляет."
             )
 
         if identity_rows:
             parts.append("── ЛИЧНОСТЬ ──\n" + "\n\n".join(_format_entry(r) for r in identity_rows))
+
+        if summary_rows:
+            block = "\n\n".join(_format_entry(r) for r in summary_rows)
+            hidden_sum = summary_total - len(summary_rows)
+            if hidden_sum > 0:
+                block += (
+                    f"\n\n(ещё {hidden_sum} старых сводок не показаны; "
+                    f"следующее автосжатие вольёт их в новую)"
+                )
+            parts.append("── СВОДКИ ЖУРНАЛА ──\n" + block)
 
         if other_rows:
             others_formatted = "\n\n".join(_format_entry(r) for r in other_rows)
             hidden = other_total - len(other_rows)
             if hidden > 0:
                 others_formatted += (
-                    f"\n\n(ещё {hidden} активных записей старше не показаны; "
+                    f"\n\n(ещё {hidden} активных записей с меньшим приоритетом или старше не показаны; "
                     f"они есть в БД и попадут в автосжатие)"
                 )
-            parts.append(("── ОСТАЛЬНЫЕ ЗАПИСИ ──\n" if identity_rows else "") + others_formatted)
+            parts.append("── ОСТАЛЬНЫЕ ЗАПИСИ ──\n" + others_formatted)
 
         # Компактный реестр архива: id + одно предложение о содержимом.
         # В основной контекст сами тексты не тянутся, но модель видит, что

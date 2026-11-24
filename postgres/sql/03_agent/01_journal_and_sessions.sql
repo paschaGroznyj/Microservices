@@ -76,6 +76,43 @@ COMMENT ON COLUMN agent_journal.created_at IS
 COMMENT ON COLUMN agent_journal.updated_at IS
 'Время последнего обновления записи (UTC). Обновляется при компрессии summary.';
 
+-- 1a. Приоритет и срок действия записей (идемпотентная миграция существующих баз)
+ALTER TABLE agent_journal ADD COLUMN IF NOT EXISTS priority   SMALLINT NOT NULL DEFAULT 3;
+ALTER TABLE agent_journal ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+ALTER TABLE agent_journal ADD COLUMN IF NOT EXISTS is_expired BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE agent_journal ADD COLUMN IF NOT EXISTS expired_at TIMESTAMPTZ;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_journal_priority_range') THEN
+        ALTER TABLE agent_journal
+            ADD CONSTRAINT agent_journal_priority_range CHECK (priority BETWEEN 1 AND 5);
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_agent_journal_chat_live
+    ON agent_journal (chat_id, priority, updated_at DESC)
+    WHERE (is_archived = FALSE AND is_expired = FALSE);
+CREATE INDEX IF NOT EXISTS idx_agent_journal_chat_expiry
+    ON agent_journal (chat_id, expires_at)
+    WHERE (expires_at IS NOT NULL AND is_expired = FALSE);
+
+COMMENT ON COLUMN agent_journal.priority IS
+'Приоритет записи 1–5, 1 — наивысший. Ставит модель через work_with_agent_journal.
+При автосжатии записи с меньшим приоритетом (большим числом) сворачиваются первыми;
+в контексте записи сортируются по приоритету, затем по свежести.';
+
+COMMENT ON COLUMN agent_journal.expires_at IS
+'Срок действия записи о разовом действии. После этого момента запись помечается
+is_expired = TRUE и больше не попадает в контекст. NULL — бессрочная запись.';
+
+COMMENT ON COLUMN agent_journal.is_expired IS
+'Мягкое удаление: запись истекла (по expires_at) или модель сняла её action="expire".
+Строка остаётся в таблице, но не попадает в контекст, сжатие и реестр архива.';
+
+COMMENT ON COLUMN agent_journal.expired_at IS
+'Когда запись помечена истёкшей (UTC).';
+
 -- 2. Аудит удалений из agent_journal убран: таблица agent_journal_audit
 -- больше не создаётся. На существующих базах снимаем триггер и функцию,
 -- чтобы DELETE из agent_journal не зависел от таблицы аудита.

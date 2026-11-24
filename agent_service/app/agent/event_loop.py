@@ -8,6 +8,7 @@ import re
 import ast
 import httpx
 from .core.content_stream import ContentStreamRouter
+from .core.timezone_utils import HISTORY_TIME_NOTE, stamp_history_text, user_tzinfo
 from .core.observability import LOG_CONTEXT, log_event, fingerprint, request_logged, tool_logged, llm_logged
 import hashlib
 import time
@@ -888,7 +889,12 @@ class HarnessAgent:
     # Память per-user с загрузкой из БД через AgentDB
     # ------------------------------------------------------------------
 
-    async def _load_history_from_db(self, chat_id: str, limit: int) -> List[BaseMessage]:
+    async def _load_history_from_db(self, chat_id: str, limit: int, tz=None) -> List[BaseMessage]:
+        """
+        tz — часовой пояс пользователя (tzinfo). Если задан, перед текстом
+        прошлых сообщений пользователя ставится время отправки по его часам.
+        Ответам агента метка не ставится: модель начинает копировать её в новые ответы.
+        """
         if not self.db:
             logger.warning("БД не подключена, история не загружена")
             return []
@@ -908,7 +914,8 @@ class HarnessAgent:
                         kwargs["tool_trace"] = str(row["tool_trace"])
                     messages.append(AIMessage(content=row["message_text"], additional_kwargs=kwargs))
                 else:
-                    messages.append(HumanMessage(content=row["message_text"], additional_kwargs=kwargs))
+                    text = stamp_history_text(row["message_text"], row.get("created_at"), tz)
+                    messages.append(HumanMessage(content=text, additional_kwargs=kwargs))
 
             logger.info(f"📚 Загружено {len(messages)} сообщений из БД для chat={chat_id}")
             return messages
@@ -978,12 +985,12 @@ class HarnessAgent:
             logger.info(f"✅ Память инициализирована для {key} ({len(messages)} сообщений)")
         return self._memories[key]
 
-    async def _build_history(self, chat_id: str, limit: int = 40) -> List[BaseMessage]:
+    async def _build_history(self, chat_id: str, limit: int = 40, tz=None) -> List[BaseMessage]:
         """
         Всегда подгружает свежий срез из БД (не растущий in-memory буфер).
         limit — верхняя граница, реальную обрезку по токенам делает trim_messages выше по стеку.
         """
-        return await self._load_history_from_db(chat_id, limit)
+        return await self._load_history_from_db(chat_id, limit, tz=tz)
 
     async def _save_turn(self, chat_id, human_text: str, ai_text: str, tool_trace: list[str] | None = None) -> None:
         mem = await self._get_memory(chat_id)
@@ -1996,6 +2003,10 @@ class HarnessAgent:
                 request_ctx=self._request_ctx.get(),
             )
 
+            user_tz = user_tzinfo(user_tz_name, tz_offset_minutes)
+            # Журнал-тул читает пояс отсюда: expires_at задаётся по часам пользователя.
+            self._request_ctx.set({**(self._request_ctx.get() or {}), "user_tz": user_tz})
+
             if not isinstance(user_input, str):
                 raise TypeError("user_input must be a string")
             log_event("agent.input", input=fingerprint(user_input))
@@ -2045,7 +2056,7 @@ class HarnessAgent:
             system_content = SYSTEM_PROMPT.format(role_block=role_block)
             # Динамика (дата, медиа-реестр) — отдельным SystemMessage ПОСЛЕ статики,
             # чтобы префикс промпта был стабилен и попадал в кеш провайдера.
-            dynamic_parts: list[str] = [f"Current date and time: {current_datetime}"]
+            dynamic_parts: list[str] = [f"Current date and time: {current_datetime}", HISTORY_TIME_NOTE]
             _gw_target = (gateway_target or "main").strip().lower()
             if _gw_target in ("main", "sigma") and not is_telegram and not is_max:
                 system_content += "\n" + INTERACTIVE_POLL_GUIDANCE
@@ -2098,7 +2109,7 @@ class HarnessAgent:
             if use_journal:
                 log_event("context.memory", user_id=user_id)
                 tools.append(make_journal_tool(self, chat_id, user_id))
-                journal_text = await self.db.get_agent_journal(chat_id)
+                journal_text = await self.db.get_agent_journal(chat_id, tz=user_tz)
                 log_event("context.journal", chars=len(journal_text))
 
             tools_by_name = {t.name: t for t in tools}
@@ -2108,7 +2119,7 @@ class HarnessAgent:
             session_summary = await self.db.get_last_session_summary(chat_id)
 
             # Собираем историю из памяти
-            history = await self._build_history(chat_id, limit=30)
+            history = await self._build_history(chat_id, limit=30, tz=user_tz)
             # Счётчик под активную модель: chars_per_token из конфига с поправкой
             # по факту провайдера (EMA). Пресет max_tokens = токены этой модели.
             await CALIBRATOR.load(await self._get_redis())

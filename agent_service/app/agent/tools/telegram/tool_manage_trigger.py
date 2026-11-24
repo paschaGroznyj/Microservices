@@ -156,10 +156,15 @@ def make_manage_trigger_tool(
                         if not dow:
                             return "days_of_week: допустимы только числа 1..7 (1=пн..7=вс)."
 
+                # Автор = кто попросил агента. В автотриггере автора нет
+                # (не тиражируем права автора исходного триггера).
+                _ctx = agent._request_ctx.get() or {}
+                _owner_uid = None if _ctx.get("initiated") else (int(user_id) if user_id else None)
+                _owner_src = "tg" if is_telegram else ("max" if is_max else "web")
                 if use_max:
                     row = await agent.db.create_max_trigger(
                         chat_id=target_chat_id,
-                        added_by_user_id=int(user_id) if user_id else None,
+                        added_by_user_id=_owner_uid, added_by_source=_owner_src,
                         kind=k, time_msk=time_msk,
                         title=(title or None), days_of_week=dow,
                         trigger_date=td, prompt=prompt.strip(),
@@ -168,7 +173,7 @@ def make_manage_trigger_tool(
                 else:
                     row = await agent.db.create_tg_trigger(
                         chat_id=target_chat_id,
-                        added_by_user_id=int(user_id) if user_id else None,
+                        added_by_user_id=_owner_uid, added_by_source=_owner_src,
                         kind=k, time_msk=time_msk,
                         title=(title or None), days_of_week=dow,
                         trigger_date=td, prompt=prompt.strip(),

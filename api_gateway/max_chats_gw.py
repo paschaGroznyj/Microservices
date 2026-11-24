@@ -184,6 +184,7 @@ async def api_max_create_trigger(request: Request, chat_id: str, body: MaxTrigge
     user = await _require_auth(request)
     payload = body.dict()
     payload["added_by_user_id"] = user["user_id"]
+    payload["added_by_source"] = "web"
     try:
         resp = await _http.post(
             f"{_chats_url}/max/triggers/{quote(chat_id, safe='')}",
@@ -196,8 +197,11 @@ async def api_max_create_trigger(request: Request, chat_id: str, body: MaxTrigge
 
 @router.patch("/api/max/triggers/{chat_id}/{trigger_id}")
 async def api_max_update_trigger(request: Request, chat_id: str, trigger_id: int, body: MaxTriggerPatchIn):
-    await _require_auth(request)
+    user = await _require_auth(request)
     payload = {k: v for k, v in body.dict().items() if v is not None}
+    if "prompt" in payload:  # автор промпта = чьи права у автотриггера
+        payload["added_by_user_id"] = user["user_id"]
+        payload["added_by_source"] = "web"
     try:
         resp = await _http.patch(
             f"{_chats_url}/max/triggers/{quote(chat_id, safe='')}/{trigger_id}",

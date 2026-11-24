@@ -405,7 +405,10 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
                                             gateway_target=gateway_target,
                                             tg_chat_id=tg_chat_id,
                                             timezone_name=client_tz_name,
-                                            tz_offset_minutes=client_tz_offset)
+                                            tz_offset_minutes=client_tz_offset,
+                                            initiated=tg_initiated and (is_telegram or is_max),
+                                            trigger_owner=(payload.get("trigger_owner")
+                                                           if tg_initiated and (is_telegram or is_max) else None))
             response_text = response["message"]
         # Mobile: ответ приходит СТРОГИМ JSON {"v","speech","actions","style",...}.
         # Парсер fallback-safe: при кривом JSON весь текст уходит в speech.

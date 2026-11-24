@@ -881,6 +881,7 @@ async def api_tg_create_trigger(request: Request, chat_id: str, body: TgTriggerU
     chats_url = SERVICES['chats']['url']
     payload = body.dict()
     payload["added_by_user_id"] = user["user_id"]
+    payload["added_by_source"] = "web"
     try:
         resp = await app.state.http_client.post(
             f"{chats_url}/tg/triggers/{quote(chat_id, safe='')}", json=payload, timeout=10.0
@@ -892,9 +893,12 @@ async def api_tg_create_trigger(request: Request, chat_id: str, body: TgTriggerU
 
 @app.patch("/api/tg/triggers/{chat_id}/{trigger_id}")
 async def api_tg_update_trigger(request: Request, chat_id: str, trigger_id: int, body: TgTriggerPatchIn):
-    await _require_auth(request)
+    user = await _require_auth(request)
     chats_url = SERVICES['chats']['url']
     payload = {k: v for k, v in body.dict().items() if v is not None}
+    if "prompt" in payload:  # автор промпта = чьи права у автотриггера
+        payload["added_by_user_id"] = user["user_id"]
+        payload["added_by_source"] = "web"
     try:
         resp = await app.state.http_client.patch(
             f"{chats_url}/tg/triggers/{quote(chat_id, safe='')}/{trigger_id}", json=payload, timeout=10.0

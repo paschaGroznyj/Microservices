@@ -252,6 +252,7 @@ async def ensure_alarm_trigger(chat_id: int, uid: int, preset_key: str) -> dict 
         "preset_key": preset_key,
         "addressed": False,
         "added_by_user_id": uid,
+        "added_by_source": "max",
     }
     try:
         async with httpx.AsyncClient(timeout=5) as c:
@@ -262,7 +263,11 @@ async def ensure_alarm_trigger(chat_id: int, uid: int, preset_key: str) -> dict 
         log.error(f"ensure_alarm_trigger fail chat={chat_id} preset={preset_key}: {e}")
         return None
 
-async def patch_trigger(chat_id: int, trigger_id: int, patch: dict) -> dict | None:
+async def patch_trigger(chat_id: int, trigger_id: int, patch: dict,
+                        by: int | None = None) -> dict | None:
+    """by — max id автора правки промпта (от него права автотриггера)."""
+    if by and "prompt" in patch:
+        patch = {**patch, "added_by_user_id": int(by), "added_by_source": "max"}
     try:
         async with httpx.AsyncClient(timeout=5) as c:
             resp = await c.patch(f"{CHATS_SERVICE_URL}/max/triggers/{chat_id}/{trigger_id}", json=patch)
@@ -337,6 +342,8 @@ async def run_trigger_scan():
                 "target_username": None,
                 "sad_followup": False,
                 "custom_prompt": custom_prompt,
+                # chats_service по нему берёт автора из БД (права автотриггера)
+                "trigger_id": tid,
             }
             async with httpx.AsyncClient(timeout=15) as client:
                 await client.post(f"{CHATS_SERVICE_URL}/send_message", json=payload)
@@ -692,7 +699,7 @@ async def _consume_alarmedit(max_chat_id: int, user_id, text: str) -> bool:
         elif kind_flag == "prompt":
             new_prompt = value[:2000]
             trig = await ensure_alarm_trigger(max_chat_id, int(user_id), preset_key)
-            ok = trig and await patch_trigger(max_chat_id, int(trig["id"]), {"prompt": new_prompt})
+            ok = trig and await patch_trigger(max_chat_id, int(trig["id"]), {"prompt": new_prompt}, by=int(user_id))
             reply_msg = f"Промпт для {MAX_ALARM_TITLES.get(preset_key, preset_key)} сохранён." if ok else "Ошибка сохранения."
 
     if reply_msg and client is not None:
@@ -987,7 +994,7 @@ async def handle_callback(update: dict) -> None:
     if data.startswith("max:alarm:clear_prompt:"):
         preset_key = data.rsplit(":", 1)[-1]
         trig = await ensure_alarm_trigger(chat_id, user_id, preset_key)
-        ok = trig and await patch_trigger(chat_id, int(trig["id"]), {"prompt": ""})
+        ok = trig and await patch_trigger(chat_id, int(trig["id"]), {"prompt": ""}, by=user_id)
         await ack("Промпт очищен" if ok else "Ошибка")
         trig = await ensure_alarm_trigger(chat_id, user_id, preset_key)
         s = await get_chat_settings(chat_id)

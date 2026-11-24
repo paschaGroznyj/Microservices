@@ -85,6 +85,9 @@ CREATE TABLE IF NOT EXISTS telegram_triggers (
     chat_id          TEXT NOT NULL
                      REFERENCES telegram_chats(chat_id) ON DELETE CASCADE,
     added_by_user_id BIGINT,
+    -- пространство id автора: web (наш user_id) | tg | max. От автора зависят
+    -- права автотриггера (админ-категории в agent_service). NULL -> не админ.
+    added_by_source  TEXT,
     kind             TEXT NOT NULL DEFAULT 'recurring', -- 'recurring' | 'once'
     title            TEXT,
     time_msk         TEXT NOT NULL,
@@ -98,6 +101,8 @@ CREATE TABLE IF NOT EXISTS telegram_triggers (
     created_at       TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at       TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE telegram_triggers ADD COLUMN IF NOT EXISTS added_by_source TEXT;
 
 CREATE INDEX IF NOT EXISTS ix_tg_triggers_chat ON telegram_triggers(chat_id);
 CREATE INDEX IF NOT EXISTS ix_tg_triggers_scan ON telegram_triggers(is_active, time_msk);
@@ -154,6 +159,7 @@ CREATE TABLE IF NOT EXISTS max_triggers (
     id               SERIAL PRIMARY KEY,
     chat_id          TEXT NOT NULL REFERENCES max_chats(chat_id) ON DELETE CASCADE,
     added_by_user_id BIGINT,
+    added_by_source  TEXT,  -- web | tg | max (см. telegram_triggers)
     kind             TEXT NOT NULL DEFAULT 'recurring',
     title            TEXT,
     time_msk         TEXT NOT NULL,
@@ -167,6 +173,8 @@ CREATE TABLE IF NOT EXISTS max_triggers (
     created_at       TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at       TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE max_triggers ADD COLUMN IF NOT EXISTS added_by_source TEXT;
 
 CREATE INDEX IF NOT EXISTS ix_max_triggers_scan ON max_triggers(is_active, time_msk);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_max_triggers_chat_preset

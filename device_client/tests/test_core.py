@@ -251,7 +251,8 @@ def test_connect_security_options_and_protocol_error_is_terminal(monkeypatch):
     bridge.run()
     args, kwargs = connect.call_args
     assert args == (bridge.url,)
-    assert kwargs == dict(header={'Authorization': 'Bearer ' + bridge._token}, timeout=5,
+    assert kwargs == dict(header={'Authorization': 'Bearer ' + bridge._token,
+                                  'User-Agent': core.USER_AGENT}, timeout=5,
                           suppress_origin=True, redirect_limit=0, enable_multithread=True)
     assert ws.closed
     assert ws.timeout == 1
@@ -478,3 +479,22 @@ def test_handshake_http_status_is_visible_without_response_secrets(monkeypatch, 
     bridge.run()
     assert ('log', 'WebSocket handshake HTTP ' + str(status)) in events
     assert 'sensitive-token' not in repr(events)
+
+
+def test_handshake_identifies_device_client_without_origin_or_redirect(monkeypatch):
+    c = client()
+    captured = {}
+
+    def connect(url, **kwargs):
+        captured.update(url=url, **kwargs)
+        c.stop()
+        raise websocket.WebSocketConnectionClosedException()
+
+    monkeypatch.setattr(core.websocket, 'create_connection', connect)
+    c.run()
+    assert captured['header']['User-Agent'] == 'AuGent-Device-Bridge/0.1'
+    assert captured['header']['Authorization'] == 'Bearer ' + 't' * 64
+    assert captured['suppress_origin'] is True
+    assert captured['redirect_limit'] == 0
+    assert 'Cookie' not in captured['header']
+    assert 't' * 64 not in captured['url']

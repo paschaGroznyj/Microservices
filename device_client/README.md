@@ -169,3 +169,11 @@ GUI-поток через `root.after`. Других методов или вн�
 Клиент не использует браузерную сессию Authentik. Системный/браузерный прокси
 и прокси Python могут отличаться; websocket-client учитывает proxy-переменные
 окружения. Не присылайте значения proxy-переменных, если в них есть пароли.
+
+### nginx 444 / empty User-Agent
+
+The connector sends `User-Agent: AuGent-Device-Bridge/0.1` during the WebSocket
+handshake. Older clients omitted this header and may be dropped by nginx
+`$bad_bot` rules before location matching (access log: status 444, user agent `-`).
+Update the client rather than disabling the global filter. User-Agent is public
+client identification, not authentication; the device bearer token remains required.

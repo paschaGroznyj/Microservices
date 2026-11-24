@@ -14,6 +14,7 @@ from urllib.parse import urlsplit, urlunsplit
 import websocket
 
 MAX_FRAME = 512 * 1024
+USER_AGENT = 'AuGent-Device-Bridge/0.1'
 
 
 def connection_diagnostic(exc: Exception) -> str:
@@ -170,7 +171,8 @@ class BridgeClient:
                 try:
                     # No URL tokens, Origin, cookies, redirects, or TLS bypass.
                     ws = websocket.create_connection(
-                        self.url, header={'Authorization': 'Bearer ' + self._token},
+                        self.url, header={'Authorization': 'Bearer ' + self._token,
+                                          'User-Agent': USER_AGENT},
                         timeout=5, suppress_origin=True, redirect_limit=0,
                         enable_multithread=True)
                     if ws.getstatus() != 101:

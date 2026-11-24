@@ -1,4 +1,5 @@
 import queue
+from collections import deque
 import threading
 import time
 import tkinter as tk
@@ -6,14 +7,15 @@ from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
 
 if __package__:
-    from .core import BridgeClient
+    from .core import BridgeClient, valid_notification_text
 else:
-    from core import BridgeClient
+    from core import BridgeClient, valid_notification_text
 
 
 DEFAULT_URL = 'https://augent.uva-advanced.ru'
 MAX_EVENTS = 500
 MAX_LOG_LINES = 300
+MAX_MESSAGES = 20
 POLL_MS = 100
 CLOSE_TIMEOUT = 4.0
 STATUSES = {
@@ -43,6 +45,7 @@ class BridgeDesktop:
     def __init__(self, root):
         self.root = root
         self.events = queue.Queue(maxsize=MAX_EVENTS)
+        self.messages = deque(maxlen=MAX_MESSAGES)
         self.client = None
         self.worker = None
         self.stopper = None
@@ -59,8 +62,8 @@ class BridgeDesktop:
 
     def _build_ui(self):
         self.root.title('Device Bridge')
-        self.root.geometry('760x540')
-        self.root.minsize(640, 480)
+        self.root.geometry('820x760')
+        self.root.minsize(700, 650)
         style = ttk.Style(self.root)
         if 'clam' in style.theme_names():
             style.theme_use('clam')
@@ -70,10 +73,11 @@ class BridgeDesktop:
         frame = ttk.Frame(self.root, padding=24)
         frame.pack(fill='both', expand=True)
         frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(7, weight=1)
+        frame.rowconfigure(7, weight=2)
+        frame.rowconfigure(9, weight=1)
         ttk.Label(frame, text='Device Bridge', style='Title.TLabel').grid(
             row=0, column=0, sticky='w')
-        ttk.Label(frame, text='Secure device connection · Ping only · No shell',
+        ttk.Label(frame, text='Secure device connection · Ping + text messages · No shell',
                   style='Hint.TLabel').grid(row=1, column=0, sticky='w', pady=(4, 20))
 
         fields = ttk.Frame(frame)
@@ -103,15 +107,27 @@ class BridgeDesktop:
         self.disconnect_button.pack(side='left', padx=8)
         ttk.Label(actions, textvariable=self.status, style='Status.TLabel').pack(side='right')
         ttk.Separator(frame).grid(row=5, column=0, sticky='ew', pady=16)
+        ttk.Label(frame, text='Messages · latest 20 · plain text (not system notifications)',
+                  style='Status.TLabel').grid(row=6, column=0, sticky='w', pady=(0, 8))
+        self.message_area = ScrolledText(frame, height=9, wrap='word', state='disabled',
+                                         font=('Segoe UI', 11), relief='solid', borderwidth=1,
+                                         background='#ffffff', foreground='#243246')
+        self.message_area.grid(row=7, column=0, sticky='nsew', pady=(0, 16))
+        self.message_area.tag_configure('timestamp', foreground='#526174',
+                                        font=('Segoe UI', 10, 'bold'))
+        # Display-only: no link/markup handlers, shell, or automatic clipboard use.
+        # Disable built-in Text copy/cut/paste virtual bindings as well.
+        for event in ('<<Copy>>', '<<Cut>>', '<<Paste>>', '<<PasteSelection>>'):
+            self.message_area.bind(event, lambda _event: 'break')
         log_header = ttk.Frame(frame)
-        log_header.grid(row=6, column=0, sticky='ew', pady=(0, 8))
+        log_header.grid(row=8, column=0, sticky='ew', pady=(0, 8))
         ttk.Label(log_header, text='Connection log').pack(side='left')
         self.clear_log_button = ttk.Button(log_header, text='Clear log', command=self.clear_log)
         self.clear_log_button.pack(side='right')
-        self.log = ScrolledText(frame, height=9, wrap='word', state='disabled',
+        self.log = ScrolledText(frame, height=5, wrap='word', state='disabled',
                                 font=('Consolas', 10), relief='solid', borderwidth=1,
                                 background='#f7f9fc', foreground='#243246')
-        self.log.grid(row=7, column=0, sticky='nsew')
+        self.log.grid(row=9, column=0, sticky='nsew')
         self.log.tag_configure('error', foreground='#a32121')
         self.log.tag_configure('status', foreground='#235b91')
         self._append_log('log', 'Ready. Paste a device token, then select Connect.')
@@ -165,11 +181,31 @@ class BridgeDesktop:
         self.log.configure(state='disabled')
         self.log.see('end')
 
+    def _append_notification(self, text):
+        # Main Tk thread only. Raw content is never sent through the log formatter.
+        self.messages.append((time.strftime('%Y-%m-%d %H:%M:%S'), text))
+        self.message_area.configure(state='normal')
+        self.message_area.delete('1.0', 'end')
+        for timestamp, message in self.messages:
+            self.message_area.insert('end', timestamp + '\n', 'timestamp')
+            self.message_area.insert('end', message + '\n\n')
+        self.message_area.configure(state='disabled')
+        self.message_area.see('end')
+
     def _event_sink(self, token):
         events = self.events
         secrets = tuple(value for value in (token, token.strip()) if value)
 
         def emit(kind, message):
+            if kind == 'notification':
+                if self.closing:
+                    raise RuntimeError('Desktop is closing')
+                if not valid_notification_text(message):
+                    raise ValueError('Invalid notification text')
+                # Never drop a notification silently then ACK success. A full
+                # bounded queue rejects immediately so network/UI stay responsive.
+                events.put_nowait((kind, message))
+                return
             if kind not in ('status', 'log', 'error'):
                 return
             text = str(message)
@@ -179,14 +215,8 @@ class BridgeDesktop:
             try:
                 events.put_nowait(item)
             except queue.Full:
-                try:
-                    events.get_nowait()
-                except queue.Empty:
-                    pass
-                try:
-                    events.put_nowait(item)
-                except queue.Full:
-                    pass
+                # Do not evict a notification already accepted into the UI queue.
+                pass
 
         return emit
 
@@ -245,6 +275,9 @@ class BridgeDesktop:
                 kind, message = self.events.get_nowait()
             except queue.Empty:
                 break
+            if kind == 'notification':
+                self._append_notification(message)
+                continue
             if kind == 'status':
                 if message == 'unauthorized':
                     self.unauthorized = True

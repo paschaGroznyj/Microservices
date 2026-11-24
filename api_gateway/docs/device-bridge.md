@@ -1,7 +1,7 @@
-# Device Bridge: первый этап (только gateway)
+# Device Bridge: ping + текстовые сообщения
 
 Реализован транспорт в `gw_shared/device_bridge.py`: регистрация устройства,
-WebSocket с bearer-аутентификацией, heartbeat, передача **только `ping`** и возврат
+WebSocket с bearer-аутентификацией, heartbeat, передача **`ping` и `notify`** и возврат
 результата. Gateway сам ничего на устройстве не исполняет.
 
 Main gateway и Sigma подключают одну фабрику
@@ -11,7 +11,7 @@ Main gateway и Sigma подключают одну фабрику
 Sticky sessions не нужны; сам открытый WS остаётся на принявшем его процессе.
 
 **Не реализованы:** исполняемый Windows-клиент, установка/автозапуск клиента,
-agent tool, внутренний endpoint для агента, UI управления устройствами, shell/exec,
+agent tool, UI управления устройствами, shell/exec,
 PowerShell, файловые операции. Изменений UI и схемы БД нет; Device Bridge не
 хранит данные в SQL. Будущее выполнение программ — отдельный этап с отдельной
 моделью разрешений и безопасности, а не скрытая возможность этого API.
@@ -282,13 +282,81 @@ Redis. Результат допускает `status: "ok" | "error"`, стро�
   резервным копированием и политикой без вытеснения credentials; одного TTL
   недостаточно для долговечности.
 
-## Настольный клиент Windows (ping-only)
+## Настольный клиент Windows (ping + notify)
 
 Клиент с окном подключения находится в [device_client/README.md](../../device_client/README.md).
 Требуется Python 3.10+ с Tk; запуск — `device_client/start-windows.ps1` либо
 `python device_client/desktop.py` после установки device_client/requirements.txt.
-Он использует существующий endpoint и не требует изменения gateway.
+Для notify обновите gateway и клиент; WSS endpoint остался прежним.
 В поле Server — `https://augent.uva-advanced.ru`, в поле Device token —
 значение `registered.token`, полученное при регистрации (не device_id).
 Встроены heartbeat, ответ `pong`, переподключение и остановка при отказе авторизации.
 Никаких shell, прав администратора, сохранения токена или открытых входящих портов.
+
+
+## Notify и внутренний API для будущей тулы агента
+
+Поддержаны public `POST /api/devices/{device_id}/commands` и service-only
+`POST /internal/devices/{device_id}/commands`. Операции только `ping`/`notify`.
+Для notify обязательный `text`: непустая строка до 2000 Unicode code points,
+LF/CR/tab допустимы, остальные Cc/Cf/Cs запрещены. Payload не исполняется.
+Client hello protocol1 объявляет capabilities; старый ping-only клиент получает
+HTTP 409 для notify. ACK `displayed` означает принято в UI-очередь, **не прочитано**.
+Timeout/disconnect не отменяют уже показанное сообщение; автоматического replay нет.
+
+### Доверенная граница
+
+`DEVICE_BRIDGE_SERVICE_TOKEN` — отдельный случайный секрет (32–512 printable ASCII
+без пробелов, рекомендуется 64 hex chars). Пустой/некорректный секрет отключает
+internal API (503). Должен совпадать у gateway и доверенного сервиса-потребителя.
+Device bearer token для этого не подходит. Требуется ровно один
+`Authorization: Bearer <service secret>`; cookies/SSO не заменяют его.
+`user_id` берётся **только из серверного authenticated контекста запроса агента**,
+никогда из ответа LLM, аргументов тулы или произвольного ввода браузера.
+Сервисный credential разрешает делегирование любому owner: его утечка критична.
+На данном этапе LLM tool ещё не подключена.
+
+Trusted caller обращается напрямую по закрытой Docker-сети: `http://gateway:7000`.
+Не публикуйте internal API через nginx. В server-блоках **обоих публичных vhost**
+(main и Sigma, включая aliases) добавьте:
+
+```nginx
+location = /internal/devices { return 404; }
+location ^~ /internal/devices/ { return 404; }
+```
+
+Это не замена bearer auth. Не логируйте Authorization, секрет или текст сообщений.
+На хосте генерируйте секрет один раз в защищённый файл/secret store и настройте
+`DEVICE_BRIDGE_SERVICE_TOKEN` в .env с ограниченными правами. Compose пробрасывает
+его в оба gateway; после изменения окружения требуется пересоздание контейнеров.
+Agent service пока не получает секрет — подключим вместе с реальной тулой.
+Обновляйте **оба gateway и все workers одновременно**, перед обновлением завершите
+активные bridge команды/соединения. Rolling/mixed-version notify не поддерживается.
+
+### Контракт сервиса
+
+- `GET /internal/devices?user_id=56` — список только этого owner, без токенов.
+- `POST /internal/devices/{device_id}/commands` с JSON:
+
+```json
+{"user_id":56,"operation":"notify","text":"Привет с сервера","timeout":10}
+```
+
+`user_id` — положительный strict integer; чужое устройство — 404, offline или
+legacy notify — 409, timeout — 504, неверный body — 422, Redis outage — 503.
+Результат содержит `job_id`, `status`, `output`, `exit_code` (exit_code опционален у legacy ping).
+Internal register/revoke отсутствуют. Public API owner-параметра не принимает.
+
+### Ручной тест с авторизованной страницы
+
+```javascript
+await deviceRequest(`/api/devices/${deviceId}/commands`, {
+  method: 'POST',
+  headers: {'Content-Type':'application/json','X-Device-Bridge':'1'},
+  body: JSON.stringify({operation:'notify', text:'Привет, Павел! Сообщение с сервера.', timeout:10})
+});
+```
+
+Этот запрос инициирует delivery с gateway на ноутбук через уже открытый WSS,
+несмотря на то, что запуск теста — из браузера. Настоящий internal smoke проверяет
+тот же Redis relay с отдельным bearer, без пользовательских cookies.

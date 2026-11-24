@@ -35,6 +35,7 @@ def worker(redis_url, fd):
 
     app = FastAPI(lifespan=lifespan)
     app.include_router(router)
+    app.include_router(router.internal_router)
 
     @app.get('/_smoke/ready')
     async def ready():

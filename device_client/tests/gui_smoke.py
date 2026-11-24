@@ -6,7 +6,7 @@ from PIL import ImageGrab
 from device_client.desktop import BridgeDesktop
 from test_integration import network
 
-out=Path('output/device_client')
+out=Path('output/device_notify'); out.mkdir(parents=True, exist_ok=True)
 import tempfile
 tmp=tempfile.TemporaryDirectory()
 gen=network.__wrapped__(Path(tmp.name))
@@ -40,8 +40,25 @@ try:
     checks['real_ui_ping']=True
     assert reg['token'] not in app.log.get('1.0','end')
     checks['token_not_in_log']=True
-    # Hide temporary loopback fixture address from presentation; actual transport remains untouched.
-    app.url.set('https://augent.uva-advanced.ru')
+    # Actual loopback fixture address is intentionally visible.
+    text = 'Message from server to desktop\nWSS notify: plain text, no shell.\nПривет, Павел! Канал работает.'
+    r=http.post(http_base+'/api/devices/'+reg['device_id']+'/commands',json={'operation':'notify','text':text,'timeout':5})
+    assert r.status_code==200, r.text
+    assert r.json()['output']=='displayed'
+    pump_until(lambda: text in app.message_area.get('1.0','end'))
+    assert text not in app.log.get('1.0','end')
+    checks['notify_cross_worker_rendered']=True
+    checks['notify_not_in_log']=True
+    assert str(app.message_area['state'])=='disabled'
+    checks['messages_readonly']=True
+    # Bounded display history, raw payload is never evaluated.
+    for i in range(25): app._event_sink('')('notification', f'History item {i}')
+    pump_until(lambda: len(app.messages)==20)
+    assert 'History item 0\n' not in app.message_area.get('1.0','end')
+    checks['bounded_history']=True
+    app.messages.clear()
+    app._event_sink('')('notification',text)
+    pump_until(lambda: text in app.message_area.get('1.0','end'))
     snap('desktop_online.png')
     app.disconnect_button.invoke()
     pump_until(lambda: app.client is None)

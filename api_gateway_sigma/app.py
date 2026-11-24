@@ -347,7 +347,7 @@ async def get_current_user(request: Request):
 
 # Главная страница (SPA)
 # ========== HTML СТРАНИЦЫ ==========
-# Shared Redis routes: owner is resolved by this gateway's current_user only.
+# Shared Redis routes: cookie owner publicly; dedicated bearer + delegated owner internally.
 # Creation is lazy (no network IO during import); both gateways share namespace.
 device_redis = DeviceRedis.from_url(
     os.getenv("REDIS_URL", "redis://redis:6379/0"),
@@ -356,6 +356,7 @@ device_redis = DeviceRedis.from_url(
 )
 device_router = create_device_router(get_current_user, device_redis)
 app.include_router(device_router)
+app.include_router(device_router.internal_router)
 
 
 @app.get("/", response_class=HTMLResponse)

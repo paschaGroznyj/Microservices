@@ -1,4 +1,4 @@
-"""Outbound, ping-only Device Bridge client. No command execution capability."""
+"""Outbound Device Bridge client: ping and plain-text notify only. No execution."""
 from __future__ import annotations
 
 import json
@@ -9,11 +9,23 @@ import ssl
 import threading
 import time
 import uuid
+import unicodedata
 from urllib.parse import urlsplit, urlunsplit
 
 import websocket
 
 MAX_FRAME = 512 * 1024
+MAX_NOTIFICATION_TEXT = 2000
+
+
+def valid_notification_text(value) -> bool:
+    """Validate raw text, without interpreting or normalizing its contents."""
+    return (isinstance(value, str) and 0 < len(value) <= MAX_NOTIFICATION_TEXT
+            and bool(value.strip())
+            and all(char in '\n\t\r' or unicodedata.category(char) not in ('Cc', 'Cf', 'Cs')
+                    for char in value))
+
+
 USER_AGENT = 'AuGent-Device-Bridge/0.1'
 
 
@@ -83,7 +95,8 @@ class BridgeClient:
         self._socket = None
 
     def _emit(self, kind, message):
-        # Never forward raw exceptions, headers, frames or server strings to UI.
+        # Only notification events contain validated raw server text, never log events.
+        # Never forward raw exceptions, headers or frames to UI.
         self._callback(kind, message)
 
     def stop(self):
@@ -125,9 +138,13 @@ class BridgeClient:
             last_frame = time.monotonic()
             if session is None:
                 if (kind != 'hello' or not valid_id(msg.get('session_id'))
-                        or not valid_id(msg.get('device_id')) or msg.get('heartbeat_interval') != 5):
+                        or not valid_id(msg.get('device_id')) or msg.get('heartbeat_interval') != 5
+                        or ('protocol' in msg and (type(msg['protocol']) is not int
+                                                  or msg['protocol'] != 1))):
                     raise ProtocolError()
                 session = msg['session_id']
+                self._send(ws, {'type': 'hello', 'protocol': 1,
+                                'capabilities': ['ping', 'notify']})
                 self._emit('status', 'online')
             elif kind == 'ping':
                 nonce = msg.get('nonce')
@@ -140,8 +157,10 @@ class BridgeClient:
                     raise ProtocolError()
                 deadline, timeout = msg.get('deadline'), msg.get('timeout')
                 if (isinstance(deadline, bool) or not isinstance(deadline, (int, float))
-                        or not math.isfinite(deadline) or isinstance(timeout, bool)
-                        or not isinstance(timeout, (int, float)) or not 0 < timeout <= 30):
+                        or not math.isfinite(deadline)):
+                    raise ProtocolError()
+                if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+                        or not 0 < timeout <= 30):
                     raise ProtocolError()
                 if job in seen:
                     continue
@@ -150,12 +169,30 @@ class BridgeClient:
                     raise ProtocolError()
                 seen.add(job)
                 expired = deadline < time.time()
-                allowed = msg.get('operation') == 'ping' and not expired
-                self._send(ws, {'type': 'result', 'job_id': job, 'session_id': session,
-                                'status': 'ok' if allowed else 'error',
-                                'output': 'pong' if allowed else ('Job expired' if expired else 'Unsupported operation'),
-                                'exit_code': 0 if allowed else 1})
-                self._emit('log', 'Ping answered' if allowed else 'Job rejected')
+                operation = msg.get('operation')
+                status, output = 'error', 'Unsupported operation'
+                if expired:
+                    output = 'Job expired'
+                elif operation == 'ping':
+                    status, output = 'ok', 'pong'
+                elif operation == 'notify':
+                    if not valid_notification_text(msg.get('text')):
+                        output = 'Invalid notification text'
+                    else:
+                        try:
+                            # Callback must enqueue synchronously; no success ACK
+                            # if the UI queue rejects the event or callback fails.
+                            self._emit('notification', msg['text'])
+                        except Exception:
+                            output = 'Notification unavailable'
+                        else:
+                            status, output = 'ok', 'displayed'
+                result = {'type': 'result', 'job_id': job, 'session_id': session,
+                          'status': status, 'output': output,
+                          'exit_code': 0 if status == 'ok' else 1}
+                self._send(ws, result)
+                self._emit('log', ('Ping answered' if operation == 'ping' else 'Notification queued')
+                           if status == 'ok' else 'Job rejected')
             elif kind == 'error' and msg.get('error') == 'result_not_pending':
                 self._emit('log', 'Gateway no longer waits for this result')
             else:

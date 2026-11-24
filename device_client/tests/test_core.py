@@ -14,6 +14,7 @@ from device_client import core
 SESSION = str(uuid.UUID(int=1))
 DEVICE = str(uuid.UUID(int=2))
 JOB = str(uuid.UUID(int=3))
+CLIENT_HELLO = {'type': 'hello', 'protocol': 1, 'capabilities': ['ping', 'notify']}
 
 
 def client(events=None):
@@ -118,6 +119,7 @@ def test_hello_ping_command_duplicates_and_expiry(monkeypatch):
     with pytest.raises(EndSession):
         client(events)._session(ws)
     assert ws.sent == [
+        CLIENT_HELLO,
         {'type': 'pong', 'nonce': 'abc'},
         {'type': 'result', 'job_id': JOB, 'session_id': SESSION,
          'status': 'ok', 'output': 'pong', 'exit_code': 0},
@@ -140,8 +142,8 @@ def test_unsupported_operation_never_executes(monkeypatch, operation):
     ws = Frames([hello(), command(operation=operation, arguments=['sh', '-c', 'echo unsafe'])])
     with pytest.raises(EndSession):
         client()._session(ws)
-    assert ws.sent[0]['status'] == 'error'
-    assert ws.sent[0]['output'] == 'Unsupported operation'
+    assert ws.sent[1]['status'] == 'error'
+    assert ws.sent[1]['output'] == 'Unsupported operation'
     forbidden.assert_not_called()
 
 
@@ -149,13 +151,18 @@ def test_unsupported_operation_never_executes(monkeypatch, operation):
     b'{}', 'not json', '[]', 'null', '1', '{', '[' * 2000,
     'x' * (core.MAX_FRAME + 1), 'я' * (core.MAX_FRAME // 2 + 1),
     {}, {'type': 'ping', 'nonce': 'before-hello'},
+    hello(protocol=0), hello(protocol=2), hello(protocol=True), hello(protocol='1'),
     {'type': 'hello', 'session_id': SESSION, 'device_id': DEVICE, 'heartbeat_interval': 6},
     {'type': 'hello', 'session_id': 'bad', 'device_id': DEVICE, 'heartbeat_interval': 5},
     {'type': 'hello', 'session_id': SESSION, 'device_id': 'bad', 'heartbeat_interval': 5},
 ], ids=lambda value: None if isinstance(value, dict) else type(value).__name__)
 def test_malformed_initial_frame(frame):
+    ws = Frames([frame])
+    events = []
     with pytest.raises(core.ProtocolError):
-        client()._session(Frames([frame]))
+        client(events)._session(ws)
+    assert ws.sent == []
+    assert events == []
 
 
 @pytest.mark.parametrize('frame', [
@@ -178,7 +185,8 @@ def test_duplicate_cache_is_bounded(monkeypatch):
     ws = Frames([hello()] + [command(job_id=str(uuid.UUID(int=n + 10))) for n in range(10001)])
     with pytest.raises(core.ProtocolError):
         client()._session(ws)
-    assert len(ws.sent) == 10000
+    assert len(ws.sent) == 10001
+    assert ws.sent[0] == CLIENT_HELLO
 
 
 @pytest.mark.parametrize(('frames', 'clock'), [
@@ -198,7 +206,7 @@ def test_receive_timeout_does_not_immediately_disconnect(monkeypatch):
                  websocket.WebSocketTimeoutException(), {'type': 'ping', 'nonce': 'alive'}])
     with pytest.raises(EndSession):
         client()._session(ws)
-    assert ws.sent == [{'type': 'pong', 'nonce': 'alive'}]
+    assert ws.sent == [CLIENT_HELLO, {'type': 'pong', 'nonce': 'alive'}]
 
 
 class BackoffStop:
@@ -375,7 +383,7 @@ def test_send_failure_reconnects_and_closes_old_socket(monkeypatch):
     bridge = client(events)
     bridge._stop = BackoffStop(2)
     first = Frames([hello(), {'type': 'ping', 'nonce': 'alive'}])
-    first.send = Mock(side_effect=OSError(bridge._token))
+    first.send = Mock(side_effect=[None, OSError(bridge._token)])
     second = Frames([hello(), {'type': 'unknown'}])
     connect = Mock(side_effect=[first, second])
     monkeypatch.setattr(core.websocket, 'create_connection', connect)
@@ -498,3 +506,148 @@ def test_handshake_identifies_device_client_without_origin_or_redirect(monkeypat
     assert captured['redirect_limit'] == 0
     assert 'Cookie' not in captured['header']
     assert 't' * 64 not in captured['url']
+
+
+def test_capability_hello_sent_before_online():
+    ws = Frames([hello(protocol=1)])
+    events = []
+
+    def on_event(kind, message):
+        assert ws.sent == [CLIENT_HELLO]
+        events.append((kind, message))
+
+    bridge = core.BridgeClient('http://127.0.0.1', 't' * 64, on_event)
+    with pytest.raises(EndSession):
+        bridge._session(ws)
+    assert events == [('status', 'online')]
+
+
+def test_capability_send_failure_never_emits_online():
+    events = []
+    ws = Frames([hello()])
+    ws.send = Mock(side_effect=OSError('private send error'))
+    with pytest.raises(OSError):
+        client(events)._session(ws)
+    assert events == []
+
+
+@pytest.mark.parametrize('text', [
+    'Hello', '  keep surrounding whitespace  ', 'line one\nline two\tend\r\n',
+    'Привет 世界 café e\u0301 😀', '<script>alert("literal")</script>',
+    'https://example.test/path?x=1&y=2', '$(touch forbidden); `id` | powershell',
+    'a' * 2000, '\u2028\u2029text',
+])
+def test_notify_valid_raw_text_preserved_and_not_logged(monkeypatch, text, capsys, caplog):
+    monkeypatch.setattr(core.time, 'time', lambda: 1000)
+    events = []
+    ws = Frames([hello(), command(operation='notify', text=text)])
+    with pytest.raises(EndSession):
+        client(events)._session(ws)
+    assert ws.sent == [CLIENT_HELLO, {
+        'type': 'result', 'job_id': JOB, 'session_id': SESSION,
+        'status': 'ok', 'output': 'displayed', 'exit_code': 0,
+    }]
+    assert events == [('status', 'online'), ('notification', text),
+                      ('log', 'Notification queued')]
+    captured = capsys.readouterr()
+    assert text not in repr([event for event in events if event[0] != 'notification'])
+    assert not captured.out and not captured.err and not caplog.text
+
+
+def test_duplicate_notify_never_redisplays(monkeypatch):
+    monkeypatch.setattr(core.time, 'time', lambda: 1000)
+    events = []
+    first = command(operation='notify', text='first message')
+    ws = Frames([hello(), first, first, command(operation='notify', text='changed duplicate')])
+    with pytest.raises(EndSession):
+        client(events)._session(ws)
+    assert [event for event in events if event[0] == 'notification'] == [
+        ('notification', 'first message')]
+    assert len(ws.sent) == 2
+    assert ws.sent[-1]['status'] == 'ok'
+
+
+@pytest.mark.parametrize('error_type', [RuntimeError, __import__('queue').Full])
+def test_notify_callback_failure_fixed_result_no_secret_log(monkeypatch, error_type, capsys, caplog):
+    monkeypatch.setattr(core.time, 'time', lambda: 1000)
+    secret = 'private-notification-error-and-token'
+    events = []
+    attempts = []
+
+    def on_event(kind, message):
+        if kind == 'notification':
+            attempts.append(message)
+            raise error_type(secret)
+        events.append((kind, message))
+
+    bridge = core.BridgeClient('http://127.0.0.1', secret, on_event)
+    job = command(operation='notify', text='raw private message')
+    ws = Frames([hello(), job, job, command(job_id=str(uuid.UUID(int=4)))])
+    with pytest.raises(EndSession):
+        bridge._session(ws)
+    assert attempts == ['raw private message']
+    assert ws.sent[1] == {
+        'type': 'result', 'job_id': JOB, 'session_id': SESSION,
+        'status': 'error', 'output': 'Notification unavailable', 'exit_code': 1,
+    }
+    assert ws.sent[2]['output'] == 'pong'  # Callback failure does not kill session.
+    captured = capsys.readouterr()
+    observed = repr(events) + repr(ws.sent) + captured.out + captured.err + caplog.text
+    assert secret not in observed
+    assert 'raw private message' not in observed
+
+
+@pytest.mark.parametrize('text', [
+    None, True, 123, [], {}, '', ' \n\t\r ', 'a' * 2001,
+    'nul\x00', 'escape\x1b[31m', 'delete\x7f', 'nextline\x85',
+    'bidi\u202e', 'zero width\u200b', 'joiner\u200d', 'bom\ufeff',
+    'surrogate\ud800', 'surrogate\udfff',
+])
+def test_invalid_notify_text_rejected_without_callback(monkeypatch, text):
+    monkeypatch.setattr(core.time, 'time', lambda: 1000)
+    events = []
+    ws = Frames([hello(), command(operation='notify', text=text)])
+    with pytest.raises(EndSession):
+        client(events)._session(ws)
+    assert ws.sent == [CLIENT_HELLO, {
+        'type': 'result', 'job_id': JOB, 'session_id': SESSION,
+        'status': 'error', 'output': 'Invalid notification text', 'exit_code': 1,
+    }]
+    assert events == [('status', 'online'), ('log', 'Job rejected')]
+
+
+def test_expired_notify_is_not_queued(monkeypatch):
+    monkeypatch.setattr(core.time, 'time', lambda: 1000)
+    events = []
+    ws = Frames([hello(), command(operation='notify', text='expired', deadline=999)])
+    with pytest.raises(EndSession):
+        client(events)._session(ws)
+    assert ws.sent[-1]['output'] == 'Job expired'
+    assert events == [('status', 'online'), ('log', 'Job rejected')]
+
+
+@pytest.mark.parametrize('missing', ['job_id', 'session_id', 'deadline', 'timeout'])
+def test_notify_requires_original_command_envelope(missing):
+    frame = command(operation='notify', text='hello')
+    del frame[missing]
+    # command_id is not a substitute for job_id or the session/deadline envelope.
+    frame['command_id'] = JOB
+    events = []
+    ws = Frames([hello(), frame])
+    with pytest.raises(core.ProtocolError):
+        client(events)._session(ws)
+    assert ws.sent == [CLIENT_HELLO]
+    assert events == [('status', 'online')]
+
+
+def test_gateway_error_secret_not_logged(monkeypatch, capsys, caplog):
+    secret = 'private-gateway-error-token'
+    events = []
+    bridge = core.BridgeClient('http://127.0.0.1', secret, lambda *event: events.append(event))
+    ws = Frames([hello(), {'type': 'error', 'error': secret, 'message': secret}])
+    monkeypatch.setattr(core.websocket, 'create_connection', Mock(return_value=ws))
+    bridge.run()
+    captured = capsys.readouterr()
+    assert secret not in repr(events) + captured.out + captured.err + caplog.text
+    assert ws.closed
+    assert ('error', 'Protocol mismatch: connection stopped') in events

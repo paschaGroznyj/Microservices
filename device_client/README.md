@@ -1,13 +1,15 @@
 # Device Bridge — настольный клиент
 
 Минимальное окно Tkinter с английскими подписями для подключения устройства к
-Device Bridge. Поддерживается **только `ping`**: проверка связи возвращает `pong`,
-это не системный ping и не запуск программы. Shell, PowerShell-команды, доступ к
+Device Bridge. Поддерживаются **`ping` и `notify`**: проверка связи возвращает `pong`,
+текстовое сообщение отображается в панели Messages.
+Это не системный ping и не запуск программы. Shell, PowerShell-команды, доступ к
 файлам и произвольное выполнение кода отсутствуют. Скрипт PowerShell ниже —
 только локальный запуск приложения, не исполнитель удалённых команд.
 
-**Windows пока не проверен на реальной системе.** Нужна отдельная проверка
-запуска, буфера обмена, TLS, отключения и закрытия окна на целевой Windows.
+**Предыдущий ping-only клиент проверен Павлом на Windows и production nginx.**
+Новый notify после обновления требует отдельной приёмки на целевой Windows;
+на фабрике проверено настоящее окно Tk/Xvfb и обмен через два gateway workers.
 
 ## Подготовка и запуск на Windows
 
@@ -177,3 +179,19 @@ handshake. Older clients omitted this header and may be dropped by nginx
 `$bad_bot` rules before location matching (access log: status 444, user agent `-`).
 Update the client rather than disabling the global filter. User-Agent is public
 client identification, not authentication; the device bearer token remains required.
+
+
+## Текстовые сообщения (`notify`)
+
+Новая версия объявляет capabilities `ping` и `notify`. Gateway отправляет
+сообщение в отдельную read-only панель Messages. Хранятся только последние
+20 сообщений в памяти; текст не попадает в журнал. Нет shell, HTML, исполнения
+ссылок, доступа к файлам или системных уведомлений. Допустимы LF/CR/tab,
+остальные управляющие/formatting символы и суррогаты запрещены; лимит 2000 символов.
+
+Ответ `status: ok, output: displayed, exit_code: 0` означает **принятие в UI-очередь**
+(и может предшествовать фактическому Tk-render). Это не подтверждение прочтения
+человеком и не OS delivery receipt. Если UI закрывается или очередь заполнена,
+новая notification отклоняется. Старый клиент без capability `notify` получает
+HTTP 409; обновите клиент, а не отключайте проверку. Таймаут не отменяет уже
+принятое сообщение, при повторной отправке можно получить дубликат.

@@ -195,3 +195,24 @@ client identification, not authentication; the device bearer token remains requi
 новая notification отклоняется. Старый клиент без capability `notify` получает
 HTTP 409; обновите клиент, а не отключайте проверку. Таймаут не отменяет уже
 принятое сообщение, при повторной отправке можно получить дубликат.
+
+## Agent commands (exec)
+
+The **Allow agent commands** switch in the window is off by default. While it is off the
+device accepts only ping and notify; exec returns 409 to the agent.
+
+Path policy lives in a local config, created on first start:
+
+- Windows: `%APPDATA%\AuGent\DeviceBridge\config.json`
+- macOS: `~/Library/Application Support/AuGent/DeviceBridge/config.json`
+- Linux: `~/.config/augent-device-bridge/config.json` (or `$XDG_CONFIG_HOME`)
+- Override: `DEVICE_BRIDGE_CONFIG=<path>`
+
+Fields: `mode` (`workspace` = only inside `workspace_dir`, `full` = anywhere except
+`blocked_paths`), `workspace_dir` (default `~/AuGent-Workspace`), `blocked_paths`
+(system folders, `.ssh`, `.aws`, the config folder itself), `shell`, `max_timeout`.
+Restart the client after editing. Every command is written to `exec-audit.log`
+next to the config (command, cwd, exit code; output is not logged).
+
+The path check catches mistakes and direct references, not deliberately obfuscated
+commands. For a hard boundary run the client as a separate OS user.

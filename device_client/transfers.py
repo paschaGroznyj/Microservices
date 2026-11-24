@@ -56,10 +56,22 @@ def _parent(path):
             os.close(fd)
 
 
+def _user_agent():
+    if __package__:
+        from .core import USER_AGENT
+    else:
+        from core import USER_AGENT
+    return USER_AGENT
+
+
 class FileTransport:
     def __init__(self, server_url, executor):
         # Reuse exactly the WS connection policy, not any command-provided URL.
-        from .core import normalize_url
+        # Windows launcher runs desktop.py as a script: no package, so no relative import.
+        if __package__:
+            from .core import normalize_url
+        else:
+            from core import normalize_url
         self.origin = urlsplit(normalize_url(server_url))
         self.executor = executor
 
@@ -68,7 +80,9 @@ class FileTransport:
         conn = cls(self.origin.hostname, self.origin.port, timeout=timeout)
         try:
             conn.request(method, '/api/device-transfers/' + identifier, body=body,
-                         headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/octet-stream'})
+                         headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/octet-stream',
+                                  # nginx $bad_bot drops requests without User-Agent (444).
+                                  'User-Agent': _user_agent()})
             response = conn.getresponse()
             # No redirect handling, proxies, cookies, alternate host or TLS bypass.
             if response.status != 200:

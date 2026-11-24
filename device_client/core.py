@@ -243,7 +243,12 @@ class BridgeClient:
                 from .transfers import FileTransport
             else:
                 from transfers import FileTransport
-            result = FileTransport(self.url, self._executor).run(msg)
+            try:
+                result = FileTransport(self.url, self._executor).run(msg)
+            except Exception as exc:
+                # Always answer: a silent thread death leaves the gateway waiting (HTTP 504).
+                self._emit('log', 'File operation crashed: ' + type(exc).__name__)
+                result = {'status': 'error', 'output': 'File operation failed on the device', 'exit_code': 1}
             try:
                 self._send(ws, {'type': 'result', 'job_id': job, 'session_id': session, **result})
             except Exception:

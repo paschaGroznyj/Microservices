@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import math
 import random
+import socket
+import ssl
 import threading
 import time
 import uuid
@@ -12,6 +14,27 @@ from urllib.parse import urlsplit, urlunsplit
 import websocket
 
 MAX_FRAME = 512 * 1024
+
+
+def connection_diagnostic(exc: Exception) -> str:
+    """Fixed safe messages only: never echo exceptions, headers or credentials."""
+    if isinstance(exc, ssl.SSLCertVerificationError):
+        return 'TLS certificate verification failed. Check Windows clock, certificate chain and HTTPS inspection; do not disable TLS verification.'
+    if isinstance(exc, ssl.SSLError):
+        return 'TLS handshake interrupted or failed. Check server TLS and network/HTTPS inspection.'
+    if isinstance(exc, websocket.WebSocketProxyException):
+        return 'Proxy connection failed. Check HTTP_PROXY/HTTPS_PROXY/ALL_PROXY settings and proxy availability.'
+    if isinstance(exc, socket.gaierror):
+        return 'DNS lookup failed. Check server hostname and DNS/network settings.'
+    if isinstance(exc, ConnectionRefusedError):
+        return 'TCP connection refused. Check server port, firewall and proxy.'
+    if isinstance(exc, (TimeoutError, websocket.WebSocketTimeoutException)):
+        return 'Connection or heartbeat timed out. Check network, proxy and gateway availability.'
+    if isinstance(exc, websocket.WebSocketConnectionClosedException):
+        return 'Remote peer closed the connection. Check nginx access/error logs, correct domain/location and network proxy.'
+    if isinstance(exc, OSError):
+        return 'Network socket error. Check network, firewall and proxy settings.'
+    return 'Connection failed (unclassified). Check client installation and gateway logs.'
 
 
 def normalize_url(value: str) -> str:
@@ -151,7 +174,7 @@ class BridgeClient:
                         timeout=5, suppress_origin=True, redirect_limit=0,
                         enable_multithread=True)
                     if ws.getstatus() != 101:
-                        self._emit('error', 'Check nginx WebSocket route: redirect or non-WebSocket response refused')
+                        self._emit('error', 'WebSocket upgrade refused (HTTP ' + str(ws.getstatus()) + '). Check redirect, exact nginx location and Authentik bypass on this path only.')
                         break
                     with self._lock:
                         self._socket = ws
@@ -160,6 +183,7 @@ class BridgeClient:
                     ws.settimeout(1)
                     self._session(ws)
                 except websocket.WebSocketBadStatusException as exc:
+                    self._emit('log', 'WebSocket handshake HTTP ' + (str(exc.status_code) if type(exc.status_code) is int else 'unknown'))
                     if exc.status_code in (401, 403):
                         self._emit('status', 'unauthorized')
                         self._emit('error', 'Connection refused: token expired/revoked, another client active, or ingress denied access. Reconnect manually after checking.')
@@ -171,9 +195,9 @@ class BridgeClient:
                 except ProtocolError:
                     self._emit('error', 'Protocol mismatch: connection stopped')
                     break
-                except Exception:
+                except Exception as exc:
                     if not self._stop.is_set():
-                        self._emit('log', 'Connection interrupted or unavailable')
+                        self._emit('log', connection_diagnostic(exc))
                 finally:
                     with self._lock:
                         self._socket = None

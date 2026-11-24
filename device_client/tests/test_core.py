@@ -434,3 +434,47 @@ def test_real_http_redirect_does_not_forward_token():
         server.shutdown()
         server.server_close()
         thread.join(2)
+
+
+@pytest.mark.parametrize('exc,fragment', [
+    (core.ssl.SSLCertVerificationError('sensitive-token'), 'TLS certificate'),
+    (core.ssl.SSLError('sensitive-token'), 'TLS handshake'),
+    (core.socket.gaierror('sensitive-token'), 'DNS'),
+    (ConnectionRefusedError('sensitive-token'), 'TCP'),
+    (websocket.WebSocketProxyException('sensitive-token'), 'Proxy'),
+    (websocket.WebSocketTimeoutException('sensitive-token'), 'timed out'),
+    (TimeoutError('sensitive-token'), 'timed out'),
+    (websocket.WebSocketConnectionClosedException('sensitive-token'), 'Remote peer'),
+    (OSError('sensitive-token'), 'Network socket'),
+    (RuntimeError('sensitive-token'), 'unclassified'),
+])
+def test_safe_diagnostic_categories(exc, fragment):
+    message = core.connection_diagnostic(exc)
+    assert fragment in message
+    assert 'sensitive-token' not in message
+
+
+def test_diagnostic_emitted_by_real_run_loop(monkeypatch):
+    events = []
+    def emit(kind, msg):
+        events.append((kind, msg))
+        if kind == 'log':
+            bridge.stop()
+    bridge = core.BridgeClient('http://127.0.0.1', 't' * 64, emit)
+    monkeypatch.setattr(core.websocket, 'create_connection', Mock(side_effect=core.socket.gaierror('secret')))
+    bridge.run()
+    assert any(kind == 'log' and 'DNS' in msg for kind, msg in events)
+    assert 'secret' not in repr(events)
+
+
+@pytest.mark.parametrize('status', [401, 403, 404, 429, 502])
+def test_handshake_http_status_is_visible_without_response_secrets(monkeypatch, status):
+    events = []
+    bridge = client(events)
+    bridge._stop = BackoffStop(1)
+    monkeypatch.setattr(core.websocket, 'create_connection', Mock(side_effect=
+        websocket.WebSocketBadStatusException('sensitive-token', status_code=status,
+            resp_headers={'Authorization': 'sensitive-token'}, resp_body='sensitive-token')))
+    bridge.run()
+    assert ('log', 'WebSocket handshake HTTP ' + str(status)) in events
+    assert 'sensitive-token' not in repr(events)

@@ -157,7 +157,7 @@ def test_hello_advertises_exec_only_when_enabled(cfg):
     ws = Frames([_hello()])
     with pytest.raises(KeyboardInterrupt):
         c._session(ws)
-    assert ws.sent[0]['capabilities'] == ['ping', 'notify', 'exec']
+    assert ws.sent[0]['capabilities'] == ['ping', 'notify', 'exec', 'files']
 
 
 def test_toggle_sends_capabilities_mid_session(cfg):
@@ -165,7 +165,7 @@ def test_toggle_sends_capabilities_mid_session(cfg):
     ws = Frames([])
     c._live = (ws, SESSION)
     c.set_exec_enabled(True)
-    assert ws.sent == [{'type': 'capabilities', 'capabilities': ['ping', 'notify', 'exec']}]
+    assert ws.sent == [{'type': 'capabilities', 'capabilities': ['ping', 'notify', 'exec', 'files']}]
     assert ExecConfig(cfg.path).exec_enabled is True
 
 

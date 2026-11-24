@@ -1,6 +1,6 @@
-/* Раздел «Плагины»: JS-скрипты для консоли браузера из /api/plugins/snippets
-   (Redis plugins:snippets). Код вставляется через textContent — не исполняется
-   страницей, пользователь копирует его в DevTools сам. */
+/* Раздел «Плагины»: безопасно показывает JS-скрипты из /api/plugins/snippets.
+   Код вставляется через textContent — он не исполняется страницей. Скрипты
+   предназначены для DevTools и используют общую вкладочную выборку устройства. */
 (function () {
   'use strict';
   let loaded = false, loading = null;

@@ -128,6 +128,13 @@
                     Граф
                 </div>
 
+                <div class="nav-item" data-tab="plugins">
+                    <svg viewBox="0 0 16 16" fill="none">
+                        <path d="M6 1.8v2.4M10 1.8v2.4M4.2 4.2h7.6v2.6a3.8 3.8 0 0 1-7.6 0V4.2zM8 10.6v3.6" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    Плагины
+                </div>
+
                 <div class="nav-item" data-tab="group">
                     <span class="gc-nav-bg" aria-hidden="true"><canvas class="gc-nav-graph"></canvas></span>
                     <svg viewBox="0 0 16 16" fill="none">
@@ -137,13 +144,6 @@
                     <span class="gc-nav-label">Общий чат</span>
                     <span class="nav-badge gc-nav-count" hidden></span>
                     <span class="presence-dot gc-nav-dot" hidden aria-hidden="true"></span>
-                </div>
-
-                <div class="nav-item" data-tab="plugins">
-                    <svg viewBox="0 0 16 16" fill="none">
-                        <path d="M6 1.8v2.4M10 1.8v2.4M4.2 4.2h7.6v2.6a3.8 3.8 0 0 1-7.6 0V4.2zM8 10.6v3.6" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
-                    Плагины
                 </div>
 
 
@@ -354,8 +354,8 @@
                     <div class="pl-wrap" id="plugins-section">
                         <div class="pl-hero">
                             <h2 class="pl-hero__title">Плагины</h2>
-                            <p class="pl-hero__text">Скоро здесь появятся приложения для ваших десктопных устройств.</p>
-                            <p class="pl-hero__hint">Пока устройство подключается вручную: запустите скрипт в консоли браузера (F12 → Console) на этой странице, затем вставьте токен в десктоп-клиент.</p>
+                            <p class="pl-hero__text">Скрипты для управления подключёнными десктопными устройствами.</p>
+                            <p class="pl-hero__hint">Запустите скрипт в консоли браузера (F12 → Console). Выбор устройства и device_id сохраняются между скриптами в этой вкладке. Для exec включите Allow agent commands в конфигурации клиента. Инструменты send_file_to_device, get_file_from_device и capture_screenshot доступны для передачи файлов и получения скриншотов с устройства.</p>
                         </div>
                         <div class="pl-list" id="plugins-snippets" aria-live="polite"></div>
                     </div>

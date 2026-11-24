@@ -15,6 +15,11 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
         "submit_task",
         "check_task_status",
         "cancel_task",
+        "list_devices",
+        "run_on_device",
+        "send_file_to_device",
+        "get_file_from_device",
+        "capture_screenshot",
     ],
     "sessions": [
         # "session_point",
@@ -35,6 +40,9 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
     "plugins": [
         "list_devices",
         "run_on_device",
+        "send_file_to_device",
+        "get_file_from_device",
+        "capture_screenshot",
     ],
     "admin": [
         "get_db_schema",
@@ -82,6 +90,9 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     # --- plugins ---
     "list_devices": "Список десктоп-устройств пользователя (Device Bridge): id, ОС, online, разрешён ли exec.",
     "run_on_device": "Выполняет shell-команду, показывает текст или пингует устройство пользователя через Device Bridge.",
+    "send_file_to_device": "Отправляет файл до 10 МиБ из generated_files/workspace или image_key на устройство пользователя.",
+    "get_file_from_device": "Скачивает файл до 10 МиБ с устройства в generated_files; затем send_file_to_user/analyze_image.",
+    "capture_screenshot": "Снимок экрана устройства до 10 МиБ; только по запросу пользователя, нужен full mode (приватные данные).",
     # --- internet ---
     "parse_web_page": "Парсит содержимое веб-страницы по URL и возвращает её текст.",
     "search_internet": "Ищет информацию в интернете и возвращает список релевантных ссылок/сниппетов.",

@@ -282,27 +282,50 @@ class Executor:
             raise PolicyError('Command execution is disabled on this device')
         if not isinstance(command, str) or not command.strip() or len(command) > MAX_COMMAND or '\x00' in command:
             raise PolicyError('Invalid command')
-        workspace = cfg.workspace
-        workspace.mkdir(parents=True, exist_ok=True)
-        if cwd_text is None:
-            cwd = workspace
-        else:
-            if not isinstance(cwd_text, str) or not cwd_text.strip() or '\x00' in cwd_text:
-                raise PolicyError('Invalid cwd')
-            raw = Path(os.path.expandvars(os.path.expanduser(cwd_text.strip())))
-            cwd = Path(os.path.realpath(str(raw if raw.is_absolute() else workspace / raw)))
-        if cfg.data['mode'] == 'workspace' and not is_inside(cwd, workspace):
-            raise PolicyError('cwd is outside the workspace folder ' + str(workspace))
+        cwd = self.safe_path(cwd_text, directory=True)
         blocked = cfg.blocked
-        for b in blocked:
-            if is_inside(cwd, b):
-                raise PolicyError('cwd is inside a protected folder ' + str(b))
         hit = referenced_blocked_path(command, cwd, blocked)
         if hit is not None:
             raise PolicyError('Command references a protected folder ' + str(hit))
         if not cwd.is_dir():
             raise PolicyError('cwd does not exist: ' + str(cwd))
         return cwd
+
+    def safe_path(self, path_text=None, cwd_text=None, *, directory=False) -> Path:
+        """Shared file/cwd policy: opt-in, realpaths, workspace and blocked paths.
+
+        Relative file paths are rooted at the policy-checked cwd (workspace by
+        default), never the process cwd. Does not create parent directories.
+        File I/O must still use no-follow/open-fd checks to resist path races.
+        """
+        cfg = self.config
+        if not cfg.exec_enabled:
+            raise PolicyError('Command execution is disabled on this device')
+        workspace = cfg.workspace
+        # Validate BEFORE mkdir; a configured symlink into a blocked folder is
+        # not a reason to create anything there.
+        def allowed(path):
+            if cfg.data['mode'] == 'workspace' and not is_inside(path, workspace):
+                raise PolicyError('Path is outside the workspace folder')
+            if any(is_inside(path, b) for b in cfg.blocked):
+                raise PolicyError('Path is inside a protected folder')
+            return path
+        allowed(workspace)
+        workspace.mkdir(parents=True, exist_ok=True)
+        def resolve(text, base):
+            if text is None:
+                return allowed(base)
+            if not isinstance(text, str) or not text.strip() or '\x00' in text:
+                raise PolicyError('Invalid path')
+            raw = Path(os.path.expandvars(os.path.expanduser(text.strip())))
+            return allowed(Path(os.path.realpath(str(raw if raw.is_absolute() else base / raw))))
+        cwd = resolve(cwd_text, workspace)
+        if not cwd.is_dir():
+            raise PolicyError('cwd does not exist')
+        result = resolve(path_text, cwd)
+        if directory and not result.is_dir():
+            raise PolicyError('cwd does not exist')
+        return result
 
     def run(self, command, cwd_text=None, timeout=30) -> dict:
         """Return a result dict: status, output, stderr, exit_code, truncated, duration_ms."""

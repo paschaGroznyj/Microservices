@@ -103,7 +103,13 @@ class BridgeClient:
     def capabilities(self):
         caps = ['ping', 'notify']
         if self._executor is not None and self._executor.config.exec_enabled:
-            caps.append('exec')
+            caps.extend(['exec', 'files'])
+            if __package__:
+                from .transfers import screenshot_available
+            else:
+                from transfers import screenshot_available
+            if self._executor.config.data['mode'] == 'full' and screenshot_available():
+                caps.append('screenshot')
         return caps
 
     def set_exec_enabled(self, value: bool):
@@ -187,7 +193,7 @@ class BridgeClient:
                         or not math.isfinite(deadline)):
                     raise ProtocolError()
                 if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
-                        or not 0 < timeout <= (300 if msg.get('operation') == 'exec' else 30)):
+                        or not 0 < timeout <= (300 if msg.get('operation') in ('exec', 'file_download', 'file_upload', 'screenshot') else 30)):
                     raise ProtocolError()
                 if job in seen:
                     continue
@@ -199,6 +205,9 @@ class BridgeClient:
                 operation = msg.get('operation')
                 if operation == 'exec' and not expired and self._executor is not None:
                     self._start_exec(ws, session, job, msg)
+                    continue
+                if operation in ('file_download', 'file_upload', 'screenshot') and not expired and self._executor is not None:
+                    self._start_file(ws, session, job, msg)
                     continue
                 status, output = 'error', 'Unsupported operation'
                 if expired:
@@ -227,6 +236,20 @@ class BridgeClient:
                 self._emit('log', 'Gateway no longer waits for this result')
             else:
                 raise ProtocolError()
+
+    def _start_file(self, ws, session, job, msg):
+        def work():
+            if __package__:
+                from .transfers import FileTransport
+            else:
+                from transfers import FileTransport
+            result = FileTransport(self.url, self._executor).run(msg)
+            try:
+                self._send(ws, {'type': 'result', 'job_id': job, 'session_id': session, **result})
+            except Exception:
+                pass
+            self._emit('log', 'File operation finished')
+        threading.Thread(target=work, name='bridge-files', daemon=True).start()
 
     def _start_exec(self, ws, session, job, msg):
         # Runs in a worker thread so heartbeat pongs keep flowing.

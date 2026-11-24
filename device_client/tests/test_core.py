@@ -651,3 +651,21 @@ def test_gateway_error_secret_not_logged(monkeypatch, capsys, caplog):
     assert secret not in repr(events) + captured.out + captured.err + caplog.text
     assert ws.closed
     assert ('error', 'Protocol mismatch: connection stopped') in events
+
+
+def test_standalone_windows_launcher_imports_file_transport(tmp_path):
+    """start-windows.ps1 runs desktop.py directly: no package-relative imports."""
+    import subprocess, sys
+    from pathlib import Path
+    client_dir = Path(core.__file__).resolve().parent
+    script = """
+import core, executor, transfers
+from types import SimpleNamespace
+config = SimpleNamespace(exec_enabled=True, data={'mode': 'workspace'})
+client = core.BridgeClient('https://example.test', 'x'*32, executor=SimpleNamespace(config=config))
+assert 'files' in client.capabilities()
+assert transfers.FileTransport
+"""
+    result = subprocess.run([sys.executable, '-c', script], cwd=client_dir,
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr

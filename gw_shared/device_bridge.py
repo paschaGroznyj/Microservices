@@ -74,7 +74,7 @@ from typing import Any, Callable, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.routing import APIRoute
 from urllib.parse import urlsplit
-from pydantic import BaseModel, Field, StrictStr, conint, root_validator
+from pydantic import BaseModel, Field, StrictStr, SecretStr, conint, root_validator
 
 TOKEN_TTL = 30 * 86400
 LEASE_TTL = 5
@@ -102,16 +102,44 @@ MAX_EXEC_TIMEOUT = 300
 
 
 class CommandCreate(_StrictModel):
-    operation: Literal["ping", "notify", "exec"]
+    operation: Literal["ping", "notify", "exec", "file_download", "file_upload", "screenshot"]
     timeout: conint(strict=True, ge=1, le=MAX_EXEC_TIMEOUT) = 10
     text: Optional[StrictStr] = Field(None, max_length=2000)
     command: Optional[StrictStr] = Field(None, max_length=MAX_EXEC_COMMAND)
     cwd: Optional[StrictStr] = Field(None, max_length=1024)
 
+    transfer_id: Optional[StrictStr] = None
+    transfer_token: Optional[SecretStr] = Field(None, repr=False)
+    path: Optional[StrictStr] = Field(None, max_length=4096)
+    expected_size: Optional[conint(strict=True, ge=0, le=10 * 1024 * 1024)] = None
+    sha256: Optional[StrictStr] = None
+
     @root_validator(pre=True)
     def validate_text(cls, values):
         if not isinstance(values, dict):
             return values
+        files = values.get('operation') in ('file_download', 'file_upload', 'screenshot')
+        if files:
+            tid, token = values.get('transfer_id'), values.get('transfer_token')
+            try:
+                if not isinstance(tid, str) or str(uuid.UUID(tid)) != tid:
+                    raise ValueError
+            except (ValueError, AttributeError):
+                raise ValueError('transfer_id must be a canonical UUID')
+            if not isinstance(token, str) or len(token) != 64 or any(c not in 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_' for c in token):
+                raise ValueError('Invalid transfer token')
+            path = values.get('path')
+            if path is not None and (not isinstance(path, str) or not path.strip() or '\x00' in path):
+                raise ValueError('path must be nonblank without NUL')
+            if values.get('operation') == 'screenshot' and path is not None:
+                raise ValueError('screenshot does not accept a path')
+            if values.get('operation') == 'file_upload' and path is None:
+                raise ValueError('file_upload requires path')
+            sha = values.get('sha256')
+            if sha is not None and (not isinstance(sha, str) or len(sha) != 64 or any(c not in '0123456789abcdef' for c in sha)):
+                raise ValueError('Invalid sha256')
+        elif any(k in values for k in ('transfer_id', 'transfer_token', 'path', 'expected_size', 'sha256')):
+            raise ValueError('Transfer fields require a file operation')
         if values.get('operation') == 'notify':
             text = values.get('text')
             # Plain display text; LF/CR/tab are allowed. Reject other controls,
@@ -130,10 +158,10 @@ class CommandCreate(_StrictModel):
             if cwd is not None and (not isinstance(cwd, str) or not cwd.strip() or '\x00' in cwd):
                 raise ValueError('cwd must be nonblank text without NUL')
         else:
-            if 'command' in values or 'cwd' in values:
+            if 'command' in values or ('cwd' in values and not files):
                 raise ValueError('command/cwd are only allowed for exec')
             timeout = values.get('timeout', 10)
-            if type(timeout) is int and timeout > 30:
+            if not files and type(timeout) is int and timeout > 30:
                 raise ValueError('ping/notify timeout must be 1..30')
         return values
 
@@ -169,7 +197,7 @@ if redis.call('HGET',KEYS[1],'revoked') ~= '0'
 if redis.call('EXISTS',KEYS[2]) == 1 then return 2 end
 redis.call('SET',KEYS[2],ARGV[1],'EX',ARGV[4])
 redis.call('HSET',KEYS[1],'session_id',ARGV[1])
-redis.call('HDEL',KEYS[1],'notify_session','exec_session')
+redis.call('HDEL',KEYS[1],'notify_session','exec_session','files_session')
 return 1
 """
 _RENEW = _LIVE + """
@@ -182,6 +210,8 @@ if ARGV[4] == '1' then redis.call('HSET',KEYS[1],'notify_session',ARGV[1])
 else redis.call('HDEL',KEYS[1],'notify_session') end
 if ARGV[5] == '1' then redis.call('HSET',KEYS[1],'exec_session',ARGV[1])
 else redis.call('HDEL',KEYS[1],'exec_session') end
+if ARGV[5] == '1' and ARGV[6] == '1' then redis.call('HSET',KEYS[1],'files_session',ARGV[1])
+else redis.call('HDEL',KEYS[1],'files_session') end
 return 1
 """
 _REVOKE = """
@@ -194,6 +224,10 @@ _ENQUEUE = _NOW + _LIVE + """
 if not live or redis.call('HGET',KEYS[1],'owner_id') ~= ARGV[4] then return {0} end
 if ARGV[11] == 'notify' and redis.call('HGET',KEYS[1],'notify_session') ~= ARGV[1] then return {3} end
 if ARGV[11] == 'exec' and redis.call('HGET',KEYS[1],'exec_session') ~= ARGV[1] then return {4} end
+if ARGV[11] == 'file_download' or ARGV[11] == 'file_upload' or ARGV[11] == 'screenshot' then
+    if redis.call('HGET',KEYS[1],'exec_session') ~= ARGV[1]
+        or redis.call('HGET',KEYS[1],'files_session') ~= ARGV[1] then return {5} end
+end
 if redis.call('SCARD',KEYS[5]) >= tonumber(ARGV[10])
     or redis.call('LLEN',KEYS[4]) >= tonumber(ARGV[10]) then return {2} end
 local deadline = now + tonumber(ARGV[6])
@@ -249,7 +283,7 @@ _DISCONNECT = """
 -- Never erase a replacement connection's lease or session field.
 if redis.call('GET',KEYS[2]) == ARGV[1] then redis.call('DEL',KEYS[2]) end
 if redis.call('HGET',KEYS[1],'session_id') == ARGV[1] then
-    redis.call('HDEL',KEYS[1],'session_id','notify_session','exec_session') end
+    redis.call('HDEL',KEYS[1],'session_id','notify_session','exec_session','files_session') end
 local ids=redis.call('SMEMBERS',KEYS[3])
 for _,id in ipairs(ids) do
     local job=ARGV[2] .. id
@@ -305,6 +339,8 @@ class DeviceBridgeService:
     def __init__(self, get_current_user: Callable[..., Any], redis_client: Any):
         self.get_current_user = get_current_user
         self.redis = redis_client
+        from .device_transfers import DeviceTransfers
+        self.transfers = DeviceTransfers(self)
         self._closing = asyncio.Event()
         # Dedicated trust boundary: no JWT/editor/device token or cookie fallback.
         token = os.getenv('DEVICE_BRIDGE_SERVICE_TOKEN', '')
@@ -442,6 +478,8 @@ class DeviceBridgeService:
                         caps.append('notify')
                     if d.get('exec_session') == d.get('session_id'):
                         caps.append('exec')
+                    if d.get('files_session') == d.get('session_id') and 'exec' in caps:
+                        caps.append('files')
                     item['capabilities'] = caps
                 devices.append(item)
             if int(cursor) == 0:
@@ -475,6 +513,15 @@ class DeviceBridgeService:
             payload['command'] = body.command
             if body.cwd is not None:
                 payload['cwd'] = body.cwd
+        elif body.operation in ('file_download', 'file_upload', 'screenshot'):
+            token = body.transfer_token.get_secret_value()
+            await self.transfers.validate_command(body.transfer_id, token, device_id, owner,
+                                                  'to_device' if body.operation == 'file_download' else 'from_device')
+            payload.update(transfer_id=body.transfer_id, transfer_token=token)
+            for field in ('path', 'cwd', 'expected_size', 'sha256'):
+                value = getattr(body, field)
+                if value is not None:
+                    payload[field] = value
         # Cleanup is attempted even if an enqueue response is lost after Redis
         # has applied it. The fallback safety net is bounded key TTLs.
         try:
@@ -487,6 +534,8 @@ class DeviceBridgeService:
                 raise HTTPException(409, 'Device is offline')
             if code == 3:
                 raise HTTPException(409, 'Device does not support notify in this session')
+            if code == 5:
+                raise HTTPException(409, 'Files or exec are disabled or not supported by this client')
             if code == 4:
                 raise HTTPException(409, 'Exec is disabled on this device or not supported by this client')
             if code == 2:
@@ -592,7 +641,7 @@ class DeviceBridgeService:
                             hello_seen = True
                             if not await self._eval(_ADVERTISE, live_keys, session, digest, device_id,
                                                     int('notify' in capabilities),
-                                                    int('exec' in capabilities)):
+                                                    int('exec' in capabilities), int('files' in capabilities)):
                                 return 1008
                             continue
                         return 1008
@@ -605,7 +654,7 @@ class DeviceBridgeService:
                             return 1008
                         if not await self._eval(_ADVERTISE, live_keys, session, digest, device_id,
                                                 int('notify' in capabilities),
-                                                int('exec' in capabilities)):
+                                                int('exec' in capabilities), int('files' in capabilities)):
                             return 1008
                         continue
                     if msg.get('type') == 'pong':
@@ -716,6 +765,14 @@ def create_router(get_current_user: Callable[..., Any], redis_client: Any) -> AP
     internal = APIRouter(route_class=InternalDeviceRoute, dependencies=[Depends(service.service_auth)])
     internal.add_api_route('/internal/devices', service.internal_list, methods=['GET'])
     internal.add_api_route('/internal/devices/{device_id}/commands', service.internal_command, methods=['POST'])
+    internal.add_api_route('/internal/devices/{device_id}/transfers', service.transfers.create, methods=['POST'])
+    internal.add_api_route('/internal/device-transfers/{transfer_id}', service.transfers.internal_put, methods=['PUT'])
+    internal.add_api_route('/internal/device-transfers/{transfer_id}', service.transfers.internal_get, methods=['GET'])
+    internal.add_api_route('/internal/device-transfers/{transfer_id}', service.transfers.internal_delete, methods=['DELETE'])
+    public = APIRouter(route_class=InternalDeviceRoute)
+    public.add_api_route('/api/device-transfers/{transfer_id}', service.transfers.public_get, methods=['GET'])
+    public.add_api_route('/api/device-transfers/{transfer_id}', service.transfers.public_put, methods=['PUT'])
+    router.include_router(public)
     router.internal_router = internal  # type: ignore[attr-defined]
     router.add_api_route('/api/devices', service.create_device, methods=['POST'], status_code=201)
     router.add_api_route('/api/devices', service.list_devices, methods=['GET'])

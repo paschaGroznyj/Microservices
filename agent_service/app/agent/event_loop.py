@@ -1171,7 +1171,7 @@ class HarnessAgent:
         # user_id — не веб-аккаунт, поэтому там тулы отключены.
         from .tools.plugins.tool_device_bridge import make_device_tools
         device_tools = make_device_tools(
-            user_id, enabled=not (is_telegram or is_max or initiated))
+            user_id, enabled=not (is_telegram or is_max or initiated), agent=agent)
         # 16. Публикация задачи в планировщик-песок
         from .tools.sandbox.tool_submit_task import make_submit_tools
         submit_task = make_submit_tools(agent)

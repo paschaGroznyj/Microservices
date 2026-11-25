@@ -15,6 +15,11 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
         "submit_task",
         "check_task_status",
         "cancel_task",
+        "list_devices",
+        "run_on_device",
+        "send_file_to_device",
+        "get_file_from_device",
+        "capture_screenshot",
     ],
     "sessions": [
         # "session_point",
@@ -30,6 +35,14 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
     # (is_telegram / is_max), вручную в вебе не включается.
     "messengers": [
         "manage_trigger",
+    ],
+    # Desktop devices via Device Bridge (раздел «Плагины»): owner = request user.
+    "plugins": [
+        "list_devices",
+        "run_on_device",
+        "send_file_to_device",
+        "get_file_from_device",
+        "capture_screenshot",
     ],
     "admin": [
         "get_db_schema",
@@ -74,6 +87,12 @@ UNIVERSAL_TOOLS: set[str] = {
 # чтобы он понимал, ЧТО умеет агент, и не засорять контекст выключенными.
 # pm_research НАМЕРЕННО не описан — категория будет убрана.
 TOOL_DESCRIPTIONS: dict[str, str] = {
+    # --- plugins ---
+    "list_devices": "Список десктоп-устройств пользователя (Device Bridge): id, ОС, online, разрешён ли exec.",
+    "run_on_device": "Выполняет shell-команду, показывает текст или пингует устройство пользователя через Device Bridge.",
+    "send_file_to_device": "Отправляет файл до 10 МиБ из generated_files/workspace или image_key на устройство пользователя.",
+    "get_file_from_device": "Скачивает файл до 10 МиБ с устройства в generated_files; затем send_file_to_user/analyze_image.",
+    "capture_screenshot": "Снимок экрана устройства до 10 МиБ; только по запросу пользователя, нужен full mode (приватные данные).",
     # --- internet ---
     "parse_web_page": "Парсит содержимое веб-страницы по URL и возвращает её текст.",
     "search_internet": "Ищет информацию в интернете и возвращает список релевантных ссылок/сниппетов.",
@@ -86,10 +105,10 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "html_design_skill": "Генерирует HTML-вёрстку/дизайн страницы.",
     "generate_image": "Генерирует изображение по текстовому описанию.",
     "transcribe_media": "Дословно расшифровывает аудио и видео с таймкодами и спикерами (gemini-3.1-pro), сохраняет .txt/.srt/.json.",
-    # --- media_gen (admin-only, RouterAPI) ---
-    "generate_video": "Генерирует короткое видео по промпту (RouterAPI, админ, платно).",
-    "generate_audio": "Синтезирует речь из текста (TTS, RouterAPI, админ, платно).",
-    "generate_music": "Генерирует инструментальную/фоновую музыку (mp3) по описанию (Lyria, RouterAPI, админ, платно).",
+    # --- media_gen (RouterAPI, личный ключ юзера из vault.user_secrets; env-ключ только админу) ---
+    "generate_video": "Генерирует короткое видео по промпту (RouterAPI, личный ключ, платно).",
+    "generate_audio": "Синтезирует речь из текста (TTS, RouterAPI, личный ключ, платно).",
+    "generate_music": "Генерирует инструментальную/фоновую музыку (mp3) по описанию (Lyria, RouterAPI, личный ключ, платно).",
     # --- sessions ---
     "session_point": "Фиксирует точку сессии (начало/конец диалога) и делает саммари.",
     "work_with_agent_journal": "Ведёт бортовой журнал памяти внутри чата (запомнить/обновить/архив факты).",

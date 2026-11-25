@@ -64,6 +64,38 @@ def trigger_owner_is_admin(owner) -> bool:
         return False
 
 
+def media_key_owner(user_id, *, is_telegram: bool, is_max: bool,
+                    initiated: bool, trigger_owner) -> dict:
+    """Чей ключ RouterAPI брать в этом запросе: {"user_id": web id | None, "is_admin"}.
+
+    user_id — только наш web user_id (у ключей в vault он же). В TG/MAX user_id —
+    id мессенджера, связки с web-аккаунтом нет -> личного ключа нет. В автотриггере
+    решает автор триггера (из БД chats_service), а не user_id запроса.
+    """
+    if initiated:
+        owner = trigger_owner if isinstance(trigger_owner, dict) else {}
+        uid = owner.get("user_id") if owner.get("source") == "web" else None
+        is_admin = trigger_owner_is_admin(owner)
+    elif is_telegram or is_max:
+        uid = None
+        index = ADMINS_BY_TG_ID if is_telegram else ADMINS_BY_MAX_ID
+        try:
+            is_admin = int(user_id) in index
+        except (TypeError, ValueError):
+            is_admin = False
+    else:
+        uid = user_id
+        try:
+            is_admin = int(user_id) in ADMINS_BY_USER_ID
+        except (TypeError, ValueError):
+            is_admin = False
+    try:
+        uid = int(uid) if uid else None
+    except (TypeError, ValueError):
+        uid = None
+    return {"user_id": uid, "is_admin": bool(is_admin)}
+
+
 def trigger_admin_role(owner: dict) -> str:
     """role_block автотриггера админа: без персональных данных — ответ уходит в чат."""
     return (
@@ -1166,6 +1198,12 @@ class HarnessAgent:
         # 14b. Универсальная отправка письма (текст + вложения, лимит 20МБ)
         from .tools.email.tool_send_email_universal import make_send_email_tool
         send_email = make_send_email_tool(agent)
+        # 15. Плагины: десктоп-устройства пользователя (Device Bridge).
+        # Владелец берётся из user_id запроса; в мессенджерах и триггерах
+        # user_id — не веб-аккаунт, поэтому там тулы отключены.
+        from .tools.plugins.tool_device_bridge import make_device_tools
+        device_tools = make_device_tools(
+            user_id, enabled=not (is_telegram or is_max or initiated), agent=agent)
         # 16. Публикация задачи в планировщик-песок
         from .tools.sandbox.tool_submit_task import make_submit_tools
         submit_task = make_submit_tools(agent)
@@ -1239,6 +1277,7 @@ class HarnessAgent:
             + _normalize(save_or_search_code)
             + submit_task
             + codeedit_tools
+            + device_tools
         )
 
         if allow_all:
@@ -1990,6 +2029,11 @@ class HarnessAgent:
             allow_all_tools = False
             selected_tools = selected_tools or []
             use_journal = is_telegram or is_max or ("sessions" in selected_tools)
+            # владелец личного ключа RouterAPI для generate_* (core/user_secrets.py)
+            self._request_ctx.set({**(self._request_ctx.get() or {}),
+                                   "media_key_owner": media_key_owner(
+                                       user_id, is_telegram=is_telegram, is_max=is_max,
+                                       initiated=initiated, trigger_owner=trigger_owner)})
 
             from .core.timezone_utils import resolve_chat_context_and_timezone
             user_tz_name, current_datetime, _tg_settings, _max_settings = await resolve_chat_context_and_timezone(

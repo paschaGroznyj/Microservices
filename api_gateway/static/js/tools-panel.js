@@ -92,8 +92,8 @@ const TOOL_CATEGORIES = [
   {
     id:          "media_gen",
     label:       "Видео и аудио",
-    description: "Генерация видео и синтез речи (RouterAPI, платно)",
-    adminOnly:   true
+    description: "Генерация видео и синтез речи (RouterAPI, по вашему ключу из профиля)",
+    adminOnly:   false
   },
   {
     id:          "admin",

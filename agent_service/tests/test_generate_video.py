@@ -12,6 +12,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from unittest.mock import AsyncMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 os.environ.setdefault("FERNET_KEY", base64.urlsafe_b64encode(b"0" * 32).decode())
@@ -55,6 +56,8 @@ def gen(monkeypatch, tmp_path):
     monkeypatch.setattr(tgv.httpx, "AsyncClient", client)
     monkeypatch.setattr(tgv, "get_router_api_config",
                         lambda: {"api_key": "k", "base_url": "https://router.test/api/v1"})
+    key = {"value": ("k", None)}
+    monkeypatch.setattr(tgv, "resolve_router_api_key", AsyncMock(side_effect=lambda a: key["value"]))
     monkeypatch.setattr(tgv, "GENERATED_ROOT", str(tmp_path))
     monkeypatch.setattr(tgv, "POLL_INTERVAL_SEC", 0)
 
@@ -67,6 +70,7 @@ def gen(monkeypatch, tmp_path):
         return out, (sent[-1] if sent else None)
 
     call.sent = sent
+    call.key = key
     return call
 
 
@@ -219,3 +223,12 @@ def test_provider_matrix_shape():
     assert lite["model"] == "google/veo-3.1-lite"
     assert "4K" not in lite["resolution"]
     assert lite["refs"] is False
+
+
+def test_no_personal_key_blocks_request(gen):
+    """Без личного ключа (и не админ) в RouterAPI ничего не уходит."""
+    from agent.core.user_secrets import NO_KEY_MSG
+    gen.key["value"] = (None, NO_KEY_MSG)
+    out, payload = gen()
+    assert "generate_video error" in out and NO_KEY_MSG in out
+    assert payload is None

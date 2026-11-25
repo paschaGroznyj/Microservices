@@ -27,7 +27,10 @@ from fastapi.testclient import TestClient
 from redis.asyncio import Redis
 from starlette.websockets import WebSocketDisconnect
 
-from gw_shared.device_bridge import MAX_MESSAGE, TOKEN_TTL, create_router
+from gw_shared.device_bridge import MAX_MESSAGE, PREFIX, TOKEN_TTL, create_router
+
+SERVICE_TOKEN = "test-only-service-credential-" + "x" * 32
+SERVICE_HEADERS = {"Authorization": "Bearer " + SERVICE_TOKEN}
 
 
 @dataclass
@@ -87,8 +90,10 @@ def redis_url():
 
 
 @pytest.fixture
-def gateways(redis_url):
+def gateways(redis_url, monkeypatch):
     """Separate persistent event loops, Redis pools, apps and auth callbacks."""
+    monkeypatch.setenv('DEVICE_BRIDGE_SERVICE_TOKEN', SERVICE_TOKEN)
+
     def make(owner, *, decode_responses, flush=False):
         store = Redis.from_url(redis_url, decode_responses=decode_responses)
 
@@ -99,7 +104,7 @@ def gateways(redis_url):
         async def async_user(_request):
             return sync_user(_request)
 
-        router = create_router(sync_user if owner == "alice" else async_user, store)
+        router = create_router(sync_user if owner == 101 else async_user, store)
 
         @contextlib.asynccontextmanager
         async def lifespan(_app):
@@ -113,10 +118,11 @@ def gateways(redis_url):
 
         app = FastAPI(lifespan=lifespan)
         app.include_router(router)
+        app.include_router(router.internal_router)
         return TestClient(app, headers={"X-Device-Bridge": "1"}), router.device_bridge_service
 
-    alice, alice_service = make("alice", decode_responses=True, flush=True)
-    bob, bob_service = make("bob", decode_responses=False)
+    alice, alice_service = make(101, decode_responses=True, flush=True)
+    bob, bob_service = make(202, decode_responses=False)
     with alice, bob:
         assert alice_service is not bob_service
         assert alice_service.redis is not bob_service.redis
@@ -507,6 +513,7 @@ def test_both_gateways_hookup_current_user_and_shutdown():
         assert [n.id for n in factory[0].args] == ["get_current_user", "device_redis"]
         source = Path(gateway, "app.py").read_text()
         assert "app.include_router(device_router)" in source
+        assert "app.include_router(device_router.internal_router)" in source
         assert "await device_router.device_bridge_service.close()" in source
         assert "await device_redis.aclose()" in source
 
@@ -550,5 +557,264 @@ def test_result_output_limit(gateways):
             receive_bounded(ws)
         assert error.value.code == 1009
         assert thread_result(thread, result).status_code == 409
+    finally:
+        close_ws(context, ws)
+
+
+@pytest.mark.parametrize('configured', [None, '', 'too-short', ' ' * 40])
+def test_internal_auth_disabled_fails_closed(monkeypatch, configured):
+    if configured is None:
+        monkeypatch.delenv('DEVICE_BRIDGE_SERVICE_TOKEN', raising=False)
+    else:
+        monkeypatch.setenv('DEVICE_BRIDGE_SERVICE_TOKEN', configured)
+    def forbidden_user(_):
+        pytest.fail('internal request consulted cookie/SSO authentication')
+    # An unreachable store proves disabled auth never touches Redis.
+    router = create_router(forbidden_user, None)
+    app = FastAPI()
+    app.include_router(router.internal_router)
+    with TestClient(app) as client:
+        assert client.get('/internal/devices?user_id=101', headers=SERVICE_HEADERS).status_code == 503
+        assert client.post('/internal/devices/invalid/commands', headers=SERVICE_HEADERS,
+                           json={'user_id': 101, 'operation': 'ping'}).status_code == 503
+
+
+def test_service_bearer_only_auth_no_cookie_or_other_token_fallback(gateways):
+    client = gateways.alice
+    def forbidden_user(_):
+        pytest.fail('internal request consulted cookie/SSO authentication')
+    original = gateways.alice_service.get_current_user
+    gateways.alice_service.get_current_user = forbidden_user
+    try:
+        for headers in ({}, {'Authorization': 'Basic ' + SERVICE_TOKEN},
+                        {'Authorization': 'Bearer ' + 'z' * len(SERVICE_TOKEN)},
+                        {'Authorization': 'Bearer short'},
+                        {'X-Editor-Token': SERVICE_TOKEN},
+                        {'Cookie': 'access_token=' + SERVICE_TOKEN,
+                         'X-Authentik-Username': 'admin'},
+                        [('Authorization', 'Bearer ' + SERVICE_TOKEN),
+                         ('Authorization', 'Bearer ' + SERVICE_TOKEN)]):
+            assert client.get('/internal/devices?user_id=101', headers=headers).status_code == 401
+            assert client.post('/internal/devices/invalid/commands', headers=headers,
+                               json={'user_id': 101, 'operation': 'ping'}).status_code == 401
+        # Not subject to the public cookie Origin/CSRF route class.
+        response = client.get('/internal/devices?user_id=101',
+                              headers={**SERVICE_HEADERS, 'Origin': 'https://service.invalid',
+                                       'Sec-Fetch-Site': 'cross-site'})
+        assert response.status_code == 200
+        assert response.headers['cache-control'] == 'no-store'
+        assert response.json() == {'devices': []}
+    finally:
+        gateways.alice_service.get_current_user = original
+    device = create_device(client)
+    assert client.get('/internal/devices?user_id=101', headers={
+        'Authorization': 'Bearer ' + device['token']}).status_code == 401
+    assert client.get('/api/devices?user_id=202').json()['devices'][0]['device_id'] == device['device_id']
+
+
+def test_internal_owner_validation_and_ownership(gateways):
+    alice = create_device(gateways.alice)
+    bob = create_device(gateways.bob)
+    # Service on either gateway can delegate either owner, independent of its
+    # cookie callback. Listing and command authorization use the same indexes.
+    for client in (gateways.alice, gateways.bob):
+        response = client.get('/internal/devices?user_id=101', headers=SERVICE_HEADERS)
+        assert response.status_code == 200
+        assert response.json() == gateways.alice.get('/api/devices').json()
+        assert alice['token'] not in response.text and 'token_hash' not in response.text
+        assert client.get('/internal/devices?user_id=202', headers=SERVICE_HEADERS).json() == gateways.bob.get('/api/devices').json()
+        for uid in (None, '', '0', '-1', 'true', '1.5', '01', '+1', ' 1', '9223372036854775808'):
+            params = {} if uid is None else {'user_id': uid}
+            assert client.get('/internal/devices', params=params, headers=SERVICE_HEADERS).status_code == 422
+        for uid in (None, 0, -1, True, 1.5, '101', 2**63):
+            assert client.post(f"/internal/devices/{alice['device_id']}/commands", headers=SERVICE_HEADERS,
+                               json={'user_id': uid, 'operation': 'ping'}).status_code == 422
+        for device, wrong_owner in ((alice, 202), (bob, 101)):
+            assert client.post(f"/internal/devices/{device['device_id']}/commands", headers=SERVICE_HEADERS,
+                               json={'user_id': wrong_owner, 'operation': 'ping'}).status_code == 404
+            assert client.post(f"/internal/devices/{device['device_id']}/commands", headers=SERVICE_HEADERS,
+                               json={'user_id': wrong_owner, 'operation': 'notify', 'text': 'hello'}).status_code == 404
+        assert client.post('/internal/devices', headers=SERVICE_HEADERS, json={}).status_code == 405
+        assert client.delete(f"/internal/devices/{alice['device_id']}", headers=SERVICE_HEADERS).status_code == 404
+        assert client.post(f"/internal/devices/{alice['device_id']}/commands", headers=SERVICE_HEADERS,
+                           json={'user_id': 101, 'owner_id': 202, 'operation': 'ping'}).status_code == 422
+    assert post_command(gateways.alice, alice['device_id'], user_id=202, operation='ping').status_code == 422
+    assert post_command(gateways.alice, alice['device_id'], user_id=101, operation='notify', text='hi').status_code == 422
+
+
+@pytest.mark.parametrize('text', [None, '', '  ', '\u2003', 12, True, ['hello'], 'x' * 2001,
+                                 'bad\0text', 'bad\x1b[31m',
+                                 'bad\x7f', 'bad\x85', 'bad\u202etext'])
+def test_notify_rejects_invalid_text_public_and_internal(gateways, text):
+    device_id = str(uuid.uuid4())
+    body = {'operation': 'notify', 'text': text}
+    assert post_command(gateways.alice, device_id, **body).status_code == 422
+    assert gateways.bob.post(f'/internal/devices/{device_id}/commands', headers=SERVICE_HEADERS,
+                             json={**body, 'user_id': 101}).status_code == 422
+
+
+def test_command_schema_missing_text_and_ping_legacy_restrictions(gateways):
+    device = create_device(gateways.alice)
+    for body in ({'operation': 'notify'}, {'operation': 'ping', 'text': None},
+                 {'operation': 'ping', 'text': 'hello'}, {'operation': 'exec'},
+                 {'operation': 'notify', 'text': 'hi', 'shell': 'cmd'},
+                 {'operation': 'notify', 'text': 'hi', 'timeout': True},
+                 {'operation': 'ping', 'timeout': '10'}):
+        assert post_command(gateways.alice, device['device_id'], **body).status_code == 422
+        assert gateways.bob.post(f"/internal/devices/{device['device_id']}/commands", headers=SERVICE_HEADERS,
+                                 json={**body, 'user_id': 101}).status_code == 422
+
+
+def advertise_notify(gateways, ws, device_id):
+    ws.send_json({'type': 'hello', 'protocol': 1, 'capabilities': ['ping', 'notify']})
+    # Wait for advertisement to reach shared Redis rather than racing HTTP
+    # against a websocket write; no artificial production handshake timeout.
+    service = gateways.alice_service
+    deadline = time.monotonic() + 2
+    while not gateways.alice.portal.call(service.redis.hget, service._key('device', device_id), 'notify_session'):
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+
+
+@pytest.mark.parametrize('internal', [False, True])
+def test_notify_cross_gateway_dispatch_result_and_no_replay(gateways, internal):
+    device = create_device(gateways.alice)
+    device_id = device['device_id']
+    context, ws, hello = open_device_ws(gateways.bob, device['token'])
+    try:
+        # Legacy clients (no optional hello) reject notify immediately, not 504.
+        started = time.monotonic()
+        assert post_command(gateways.alice, device_id, operation='notify', text='hello').status_code == 409
+        assert time.monotonic() - started < 2
+        advertise_notify(gateways, ws, device_id)
+        # Shell-looking text remains inert display text and is preserved exactly.
+        text = ' $(echo not-executed); Привет 🔔 ' + 'x' * (2000 - 39)
+        text = text[:2000]
+        body = {'operation': 'notify', 'text': text, 'timeout': 3}
+        def issue():
+            if internal:
+                request = gateways.alice.build_request('POST', f'/internal/devices/{device_id}/commands',
+                    headers={**SERVICE_HEADERS, 'Origin': 'https://service.invalid', 'Sec-Fetch-Site': 'cross-site'},
+                    json={**body, 'user_id': 101})
+                del request.headers['X-Device-Bridge']
+                return gateways.alice.send(request)
+            return post_command(gateways.alice, device_id, **body)
+        thread, result = call_in_thread(issue)
+        command = receive_until(ws, 'command')
+        assert set(command) == {'type', 'job_id', 'session_id', 'deadline', 'operation', 'text', 'timeout'}
+        assert command['operation'] == 'notify' and command['text'] == text
+        assert command['session_id'] == hello['session_id']
+        # Wrong schema cannot complete a notify job; operation is checked in Lua.
+        ws.send_json({'type': 'result', 'job_id': str(uuid.uuid4()), 'session_id': hello['session_id'],
+                      'status': 'ok', 'output': 'wrong correlation', 'exit_code': 0})
+        assert receive_until(ws, 'error')['error'] == 'result_not_pending'
+        ack = {'type': 'result', 'job_id': command['job_id'], 'session_id': hello['session_id'],
+               'status': 'ok', 'output': 'displayed', 'exit_code': 0}
+        ws.send_json(ack)
+        response = thread_result(thread, result)
+        assert response.status_code == 200
+        assert response.json() == {'job_id': command['job_id'], 'status': 'ok', 'output': 'displayed', 'exit_code': 0}
+        assert response.headers['cache-control'] == 'no-store'
+        ws.send_json(ack)
+        assert receive_until(ws, 'error')['error'] == 'result_not_pending'
+    finally:
+        close_ws(context, ws)
+    context, ws, _ = open_device_ws(gateways.alice, device['token'])
+    try:
+        # Capability never persists across sessions/reconnects.
+        assert post_command(gateways.alice, device_id, operation='notify', text='again').status_code == 409
+        with pytest.raises(TimeoutError):
+            receive_until(ws, 'command', timeout=0.3)
+    finally:
+        close_ws(context, ws)
+    service = gateways.alice_service
+    assert gateways.alice.portal.call(service.redis.keys, PREFIX + 'job:*') == []
+
+
+def test_internal_ping_keeps_legacy_frames_and_results(gateways):
+    device = create_device(gateways.alice)
+    context, ws, hello = open_device_ws(gateways.bob, device['token'])
+    try:
+        thread, result = call_in_thread(lambda: gateways.alice.post(
+            f"/internal/devices/{device['device_id']}/commands", headers=SERVICE_HEADERS,
+            json={'user_id': 101, 'operation': 'ping', 'timeout': 3}))
+        command = receive_until(ws, 'command')
+        assert set(command) == {'type', 'job_id', 'session_id', 'deadline', 'operation', 'timeout'}
+        ws.send_json({'type': 'result', 'job_id': command['job_id'], 'session_id': hello['session_id'],
+                      'status': 'ok', 'output': 'pong', 'exit_code': 0})
+        response = thread_result(thread, result)
+        assert response.status_code == 200
+        assert response.json() == {'job_id': command['job_id'], 'status': 'ok', 'output': 'pong', 'exit_code': 0}
+    finally:
+        close_ws(context, ws)
+
+
+def _wait_field(gateways, device_id, field, present=True):
+    service = gateways.alice_service
+    deadline = time.monotonic() + 2
+    while bool(gateways.alice.portal.call(service.redis.hget, service._key('device', device_id), field)) != present:
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+
+
+def test_exec_requires_capability_and_relays_command_verbatim(gateways):
+    device = create_device(gateways.alice)
+    device_id = device['device_id']
+    context, ws, hello = open_device_ws(gateways.bob, device['token'])
+    try:
+        # Without the exec capability: immediate 409, nothing dispatched.
+        ws.send_json({'type': 'hello', 'protocol': 1, 'capabilities': ['ping', 'notify']})
+        _wait_field(gateways, device_id, 'notify_session')
+        r = post_command(gateways.alice, device_id, operation='exec', command='echo hi')
+        assert r.status_code == 409
+        listed = gateways.alice.get('/api/devices').json()['devices'][0]
+        assert listed['capabilities'] == ['ping', 'notify']
+
+        # Desktop toggle ON mid-session.
+        ws.send_json({'type': 'capabilities', 'capabilities': ['ping', 'notify', 'exec']})
+        _wait_field(gateways, device_id, 'exec_session')
+        cmd_text = 'Get-ChildItem "C:\\Users" | Select -First 3; echo $(whoami) && ls ~'
+        thread, result = call_in_thread(lambda: gateways.alice.post(
+            f'/internal/devices/{device_id}/commands', headers=SERVICE_HEADERS,
+            json={'user_id': 101, 'operation': 'exec', 'command': cmd_text, 'cwd': 'proj', 'timeout': 120}))
+        command = receive_until(ws, 'command')
+        assert command['operation'] == 'exec' and command['command'] == cmd_text
+        assert command['cwd'] == 'proj' and command['timeout'] == 120
+        ws.send_json({'type': 'result', 'job_id': command['job_id'], 'session_id': hello['session_id'],
+                      'status': 'error', 'output': 'out', 'stderr': 'err', 'exit_code': 2,
+                      'truncated': False, 'duration_ms': 15})
+        response = thread_result(thread, result)
+        assert response.status_code == 200
+        assert response.json() == {'job_id': command['job_id'], 'status': 'error', 'output': 'out',
+                                   'stderr': 'err', 'exit_code': 2, 'truncated': False, 'duration_ms': 15}
+
+        # Toggle OFF: exec rejected again.
+        ws.send_json({'type': 'capabilities', 'capabilities': ['ping', 'notify']})
+        _wait_field(gateways, device_id, 'exec_session', present=False)
+        assert post_command(gateways.alice, device_id, operation='exec', command='echo hi').status_code == 409
+    finally:
+        close_ws(context, ws)
+
+
+def test_exec_schema_limits(gateways):
+    device = create_device(gateways.alice)
+    did = device['device_id']
+    for body in ({'operation': 'exec'}, {'operation': 'exec', 'command': '   '},
+                 {'operation': 'exec', 'command': 'a\x00b'},
+                 {'operation': 'exec', 'command': 'x' * 16001},
+                 {'operation': 'exec', 'command': 'ls', 'timeout': 301},
+                 {'operation': 'ping', 'command': 'ls'}, {'operation': 'notify', 'text': 'hi', 'cwd': '/'},
+                 {'operation': 'ping', 'timeout': 31}):
+        assert post_command(gateways.alice, did, **body).status_code == 422, body
+
+
+def test_capabilities_frame_before_hello_closes(gateways):
+    device = create_device(gateways.alice)
+    context, ws, _ = open_device_ws(gateways.bob, device['token'])
+    try:
+        ws.send_json({'type': 'capabilities', 'capabilities': ['exec']})
+        with pytest.raises(WebSocketDisconnect) as error:
+            receive_bounded(ws)
+        assert error.value.code == 1008
     finally:
         close_ws(context, ws)

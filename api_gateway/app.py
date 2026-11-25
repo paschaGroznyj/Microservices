@@ -438,7 +438,7 @@ async def get_current_user(request: Request):
 
 # Главная страница (SPA)
 # ========== HTML СТРАНИЦЫ ==========
-# Shared Redis routes: owner is resolved by this gateway's current_user only.
+# Shared Redis routes: cookie owner publicly; dedicated bearer + delegated owner internally.
 # Creation is lazy (no network IO during import); both gateways share namespace.
 device_redis = DeviceRedis.from_url(
     os.getenv("REDIS_URL", "redis://redis:6379/0"),
@@ -447,6 +447,10 @@ device_redis = DeviceRedis.from_url(
 )
 device_router = create_device_router(get_current_user, device_redis)
 app.include_router(device_router)
+app.include_router(device_router.internal_router)
+# Раздел «Плагины»: JS-скрипты регистрации устройств из Redis (plugins:snippets).
+from gw_shared import plugins_gw as _plugins_gw
+app.include_router(_plugins_gw.create_router(get_current_user, device_redis))
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1073,34 +1077,6 @@ async def whatsnew_update_seen(request: Request):
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Auth service dead: {str(e)}")
 
-
-@app.post("/api/profile/token")
-async def token(request: Request):
-    """Получение Scholar токена с сохранение в БД"""
-    user = await get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    auth_url = SERVICES['auth']['url']
-    data = await request.json()
-    logging.info(f"Прилет токена")
-    if len(data["token"]) > 50:
-        raise HTTPException(status_code=400, detail="Некорректная длина токена")
-    try:
-        response = await app.state.http_client.post(
-            f"{auth_url}/profile/token",
-            json={"username": user['username'], "token": data["token"]},
-            timeout=10.0
-        )
-        if response.status_code == 200:
-            logging.info(f'Статистика пользователя: {response.text}')
-            return Response(
-                content=response.content,
-                status_code=200,
-                media_type="application/json"
-            )
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"Auth service dead: {str(e)}")
 
 @app.get("/api/preferences")
 async def get_preferences(request: Request):
@@ -2502,6 +2478,12 @@ async def _task_mark_running(chat_id, request_id):
 
 _task_gw.bind(push=broadcast, register=_task_register, mark_running=_task_mark_running)
 app.include_router(_task_gw.router)
+
+# ── КЛЮЧИ ВНЕШНИХ СЕРВИСОВ (gw_shared/secrets_gw.py): профиль → auth_service vault ──
+from gw_shared import secrets_gw as _secrets_gw
+_secrets_gw.bind(get_client=lambda: app.state.http_client,
+                 auth_url=SERVICES['auth']['url'], get_user=get_current_user)
+app.include_router(_secrets_gw.router)
 
 # ── ПАМЯТЬ ЧАТА (gw_shared/memory_gw.py): журнал, саммари, контекст для полоски под полем ввода ──
 from gw_shared import memory_gw as _memory_gw

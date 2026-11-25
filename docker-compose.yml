@@ -94,6 +94,8 @@ services:
       DIGEST_UPLOAD_TO_OBS: ${DIGEST_UPLOAD_TO_OBS}
 
       FERNET_KEY: ${FERNET_KEY}
+      # ключи шифрования vault.user_secrets (через запятую, первый шифрует); пусто -> FERNET_KEY
+      USER_SECRETS_KEYS: ${USER_SECRETS_KEYS:-}
 
       CLOUD_LLM_ACCESS_KEY: ${CLOUD_LLM_ACCESS_KEY}
 
@@ -110,6 +112,9 @@ services:
       ADMINS_INFO: ${ADMINS_INFO}
       AGENT_POOL_PASSWORD: ${AGENT_POOL_PASSWORD}
       SANDBOX_SERVICE_URL: ${SANDBOX_SERVICE_URL}
+      # Plugins / Device Bridge internal API (same secret as gateway).
+      DEVICE_BRIDGE_URL: ${DEVICE_BRIDGE_URL:-http://gateway:7000}
+      DEVICE_BRIDGE_SERVICE_TOKEN: ${DEVICE_BRIDGE_SERVICE_TOKEN:-}
       # Request-scoped logs; captures opt-in per chat and contain private user data.
       AGENT_LOG_LEVEL: ${AGENT_LOG_LEVEL:-INFO}
       AGENT_LOG_DIR: ${AGENT_LOG_DIR:-/tmp/agent-logs}
@@ -265,6 +270,7 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       SANDBOX_SERVICE_URL: ${SANDBOX_SERVICE_URL:-http://agent_sandbox:8005}
       EDITOR_NOTIFY_TOKEN: ${EDITOR_NOTIFY_TOKEN:-}
+      DEVICE_BRIDGE_SERVICE_TOKEN: ${DEVICE_BRIDGE_SERVICE_TOKEN:-}
     volumes:
       - ./api_gateway:/app
       - ./gw_shared:/app/gw_shared
@@ -295,6 +301,7 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       SANDBOX_SERVICE_URL: ${SANDBOX_SERVICE_URL:-http://agent_sandbox:8005}
       EDITOR_NOTIFY_TOKEN: ${EDITOR_NOTIFY_TOKEN:-}
+      DEVICE_BRIDGE_SERVICE_TOKEN: ${DEVICE_BRIDGE_SERVICE_TOKEN:-}
     volumes:
       - ./api_gateway_sigma:/app
       - ./api_gateway/static:/app/static
@@ -336,6 +343,7 @@ services:
         WHATSNEW_PREVIEW_USERS: ${WHATSNEW_PREVIEW_USERS:-}
 
         FERNET_KEY: ${FERNET_KEY}
+        USER_SECRETS_KEYS: ${USER_SECRETS_KEYS:-}
     depends_on:
       - postgres
     volumes:

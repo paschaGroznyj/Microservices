@@ -1,4 +1,4 @@
-"""User-mediated device relay; no commands are executed by the gateway.
+"""User-mediated device relay; the gateway itself never executes commands.
 
 Integration::
 
@@ -22,7 +22,11 @@ HTTP (JSON bodies reject extra fields and coercions):
   Status is online/offline/revoked; only the authenticated owner's records show.
 * DELETE /api/devices/{id} -> {device_id, revoked:true}. Invalidates the token
   and lease atomically; the socket notices in <=1s (plus network scheduling).
-* POST /api/devices/{id}/commands {operation:"ping", timeout:1..30} waits for the result. Only ping is permitted.
+* POST /api/devices/{id}/commands {operation, timeout, text?|command?,cwd?} waits for the result.
+  ping/notify: timeout 1..30. exec: arbitrary shell text (<=16000 chars),
+  timeout 1..300, optional cwd; relayed verbatim, the gateway never executes.
+  exec is accepted only if the current session advertised the "exec"
+  capability (desktop toggle ON), otherwise 409. Path policy lives on device.
   -> {job_id,status:"ok"|"error",output,exit_code?}; offline/disconnected 409,
   full queue 429, deadline 504. HTTP cancellation removes its outstanding job.
 
@@ -32,9 +36,12 @@ Authentication and an atomic exclusive session claim precede accept; duplicate
 connections are rejected, not allowed to replace the existing session.
 Gateway -> {type:"hello",device_id,session_id,heartbeat_interval:5}.
 Gateway -> {type:"ping",nonce}; reply {type:"pong",nonce} within 15s.
-Gateway -> {type:"command",job_id,session_id,deadline,operation,timeout}; deadline is Unix seconds (Redis clock).
+Client -> {type:"hello",protocol:1,capabilities:["ping","notify"]} (optional for legacy ping).
+Gateway -> {type:"command",job_id,session_id,deadline,operation,timeout,text?|command?,cwd?}; deadline is Unix seconds (Redis clock).
+Client -> {type:"capabilities",capabilities:[...]} after hello: mid-session update
+           (desktop exec toggle); exec requires the "exec" capability.
 Device -> {type:"result",job_id,session_id,status:"ok"|"error",output:str,
-           exit_code?:int}. Unknown/late/duplicate results receive
+           exit_code?:int,stderr?:str,truncated?:bool,duration_ms?:int}. Unknown/late/duplicate results receive
 {type:"error",error:"result_not_pending"}; malformed frames close 1008/1009.
 Output is at most 64KiB UTF-8; frames at most 512KiB, including JSON escaping.
 Configure the ASGI server's websocket frame limit too: application validation
@@ -56,16 +63,18 @@ import asyncio
 import hashlib
 import inspect
 import json
+import os
 import secrets
 import time
 import uuid
+import unicodedata
 from collections.abc import Mapping
 from typing import Any, Callable, Literal, Optional
 
-from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.routing import APIRoute
 from urllib.parse import urlsplit
-from pydantic import BaseModel, Field, StrictStr, conint
+from pydantic import BaseModel, Field, StrictStr, SecretStr, conint, root_validator
 
 TOKEN_TTL = 30 * 86400
 LEASE_TTL = 5
@@ -73,6 +82,9 @@ QUEUE_LIMIT = 100
 MAX_OUTPUT = 64 * 1024
 MAX_MESSAGE = 512 * 1024
 PREFIX = "gw:device-bridge:"
+MAX_OWNER_ID = 2**63 - 1
+RESULT_FIELDS = frozenset({'type', 'job_id', 'session_id', 'status', 'output', 'exit_code',
+                           'stderr', 'truncated', 'duration_ms'})
 
 
 class _StrictModel(BaseModel):
@@ -85,9 +97,77 @@ class DeviceCreate(_StrictModel):
     platform: StrictStr = Field(..., min_length=1, max_length=64)
 
 
+MAX_EXEC_COMMAND = 16000
+MAX_EXEC_TIMEOUT = 300
+
+
 class CommandCreate(_StrictModel):
-    operation: Literal["ping"]
-    timeout: conint(strict=True, ge=1, le=30) = 10
+    operation: Literal["ping", "notify", "exec", "file_download", "file_upload", "screenshot"]
+    timeout: conint(strict=True, ge=1, le=MAX_EXEC_TIMEOUT) = 10
+    text: Optional[StrictStr] = Field(None, max_length=2000)
+    command: Optional[StrictStr] = Field(None, max_length=MAX_EXEC_COMMAND)
+    cwd: Optional[StrictStr] = Field(None, max_length=1024)
+
+    transfer_id: Optional[StrictStr] = None
+    transfer_token: Optional[SecretStr] = Field(None, repr=False)
+    path: Optional[StrictStr] = Field(None, max_length=4096)
+    expected_size: Optional[conint(strict=True, ge=0, le=10 * 1024 * 1024)] = None
+    sha256: Optional[StrictStr] = None
+
+    @root_validator(pre=True)
+    def validate_text(cls, values):
+        if not isinstance(values, dict):
+            return values
+        files = values.get('operation') in ('file_download', 'file_upload', 'screenshot')
+        if files:
+            tid, token = values.get('transfer_id'), values.get('transfer_token')
+            try:
+                if not isinstance(tid, str) or str(uuid.UUID(tid)) != tid:
+                    raise ValueError
+            except (ValueError, AttributeError):
+                raise ValueError('transfer_id must be a canonical UUID')
+            if not isinstance(token, str) or len(token) != 64 or any(c not in 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_' for c in token):
+                raise ValueError('Invalid transfer token')
+            path = values.get('path')
+            if path is not None and (not isinstance(path, str) or not path.strip() or '\x00' in path):
+                raise ValueError('path must be nonblank without NUL')
+            if values.get('operation') == 'screenshot' and path is not None:
+                raise ValueError('screenshot does not accept a path')
+            if values.get('operation') == 'file_upload' and path is None:
+                raise ValueError('file_upload requires path')
+            sha = values.get('sha256')
+            if sha is not None and (not isinstance(sha, str) or len(sha) != 64 or any(c not in '0123456789abcdef' for c in sha)):
+                raise ValueError('Invalid sha256')
+        elif any(k in values for k in ('transfer_id', 'transfer_token', 'path', 'expected_size', 'sha256')):
+            raise ValueError('Transfer fields require a file operation')
+        if values.get('operation') == 'notify':
+            text = values.get('text')
+            # Plain display text; LF/CR/tab are allowed. Reject other controls,
+            # bidi formatting and surrogates. Never trim the payload.
+            if (not isinstance(text, str) or not text.strip() or len(text) > 2000
+                    or any(unicodedata.category(c) in {'Cc', 'Cf', 'Cs'} and c not in '\n\r\t' for c in text)):
+                raise ValueError('notify requires 1..2000 nonblank safe text characters')
+        elif 'text' in values:
+            raise ValueError('text is only allowed for notify')
+        if values.get('operation') == 'exec':
+            command, cwd = values.get('command'), values.get('cwd')
+            # Shell text is relayed verbatim. The desktop client owns the
+            # execution policy: exec toggle, workspace root, blocked paths.
+            if not isinstance(command, str) or not command.strip() or '\x00' in command:
+                raise ValueError('exec requires a nonblank command without NUL')
+            if cwd is not None and (not isinstance(cwd, str) or not cwd.strip() or '\x00' in cwd):
+                raise ValueError('cwd must be nonblank text without NUL')
+        else:
+            if 'command' in values or ('cwd' in values and not files):
+                raise ValueError('command/cwd are only allowed for exec')
+            timeout = values.get('timeout', 10)
+            if not files and type(timeout) is int and timeout > 30:
+                raise ValueError('ping/notify timeout must be 1..30')
+        return values
+
+
+class InternalCommandCreate(CommandCreate):
+    user_id: conint(strict=True, gt=0, le=MAX_OWNER_ID)
 
 
 # Scripts deliberately have no non-atomic fallback. Redis TIME defines all job
@@ -117,11 +197,22 @@ if redis.call('HGET',KEYS[1],'revoked') ~= '0'
 if redis.call('EXISTS',KEYS[2]) == 1 then return 2 end
 redis.call('SET',KEYS[2],ARGV[1],'EX',ARGV[4])
 redis.call('HSET',KEYS[1],'session_id',ARGV[1])
+redis.call('HDEL',KEYS[1],'notify_session','exec_session','files_session')
 return 1
 """
 _RENEW = _LIVE + """
 if not live then return 0 end
 redis.call('EXPIRE',KEYS[2],ARGV[4]); return 1
+"""
+_ADVERTISE = _LIVE + """
+if not live then return 0 end
+if ARGV[4] == '1' then redis.call('HSET',KEYS[1],'notify_session',ARGV[1])
+else redis.call('HDEL',KEYS[1],'notify_session') end
+if ARGV[5] == '1' then redis.call('HSET',KEYS[1],'exec_session',ARGV[1])
+else redis.call('HDEL',KEYS[1],'exec_session') end
+if ARGV[5] == '1' and ARGV[6] == '1' then redis.call('HSET',KEYS[1],'files_session',ARGV[1])
+else redis.call('HDEL',KEYS[1],'files_session') end
+return 1
 """
 _REVOKE = """
 if redis.call('HGET',KEYS[1],'owner_id') ~= ARGV[1] then return 0 end
@@ -131,12 +222,18 @@ return 1
 """
 _ENQUEUE = _NOW + _LIVE + """
 if not live or redis.call('HGET',KEYS[1],'owner_id') ~= ARGV[4] then return {0} end
+if ARGV[11] == 'notify' and redis.call('HGET',KEYS[1],'notify_session') ~= ARGV[1] then return {3} end
+if ARGV[11] == 'exec' and redis.call('HGET',KEYS[1],'exec_session') ~= ARGV[1] then return {4} end
+if ARGV[11] == 'file_download' or ARGV[11] == 'file_upload' or ARGV[11] == 'screenshot' then
+    if redis.call('HGET',KEYS[1],'exec_session') ~= ARGV[1]
+        or redis.call('HGET',KEYS[1],'files_session') ~= ARGV[1] then return {5} end
+end
 if redis.call('SCARD',KEYS[5]) >= tonumber(ARGV[10])
     or redis.call('LLEN',KEYS[4]) >= tonumber(ARGV[10]) then return {2} end
 local deadline = now + tonumber(ARGV[6])
 redis.call('HSET',KEYS[6],'job_id',ARGV[5],'owner_id',ARGV[4],
     'device_id',ARGV[3],'session_id',ARGV[1],'state','queued',
-    'deadline',tostring(deadline),'payload',ARGV[7])
+    'deadline',tostring(deadline),'payload',ARGV[7],'operation',ARGV[11])
 redis.call('EXPIRE',KEYS[6],ARGV[8])
 redis.call('SADD',KEYS[5],ARGV[5]); redis.call('EXPIRE',KEYS[5],ARGV[9])
 redis.call('RPUSH',KEYS[4],ARGV[5]); redis.call('EXPIRE',KEYS[4],ARGV[9])
@@ -186,7 +283,7 @@ _DISCONNECT = """
 -- Never erase a replacement connection's lease or session field.
 if redis.call('GET',KEYS[2]) == ARGV[1] then redis.call('DEL',KEYS[2]) end
 if redis.call('HGET',KEYS[1],'session_id') == ARGV[1] then
-    redis.call('HDEL',KEYS[1],'session_id') end
+    redis.call('HDEL',KEYS[1],'session_id','notify_session','exec_session','files_session') end
 local ids=redis.call('SMEMBERS',KEYS[3])
 for _,id in ipairs(ids) do
     local job=ARGV[2] .. id
@@ -196,6 +293,20 @@ for _,id in ipairs(ids) do
 end
 redis.call('DEL',KEYS[3],KEYS[4]); return 1
 """
+
+
+class InternalDeviceRoute(APIRoute):
+    """No cookie/CSRF checks; bearer-only routes must not be cached either."""
+
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+
+        async def guarded(request: Request):
+            response = await handler(request)
+            response.headers['Cache-Control'] = 'no-store'
+            response.headers['Pragma'] = 'no-cache'
+            return response
+        return guarded
 
 
 class DeviceRoute(APIRoute):
@@ -228,7 +339,34 @@ class DeviceBridgeService:
     def __init__(self, get_current_user: Callable[..., Any], redis_client: Any):
         self.get_current_user = get_current_user
         self.redis = redis_client
+        from .device_transfers import DeviceTransfers
+        self.transfers = DeviceTransfers(self)
         self._closing = asyncio.Event()
+        # Dedicated trust boundary: no JWT/editor/device token or cookie fallback.
+        token = os.getenv('DEVICE_BRIDGE_SERVICE_TOKEN', '')
+        self._service_digest = (hashlib.sha256(token.encode()).digest()
+                                if 32 <= len(token) <= 512 and token.isascii()
+                                and all(33 <= ord(c) <= 126 for c in token) else None)
+
+    async def service_auth(self, request: Request) -> None:
+        if self._service_digest is None:
+            raise HTTPException(503, 'Device service authentication is not configured')
+        headers = request.headers.getlist('authorization')
+        parts = headers[0].split(' ') if len(headers) == 1 else []
+        if (len(parts) != 2 or parts[0].lower() != 'bearer'
+                or not 32 <= len(parts[1]) <= 512
+                or not secrets.compare_digest(hashlib.sha256(parts[1].encode()).digest(), self._service_digest)):
+            raise HTTPException(401, 'Invalid service credential', headers={'WWW-Authenticate': 'Bearer'})
+
+    async def internal_list(self, user_id: str = Query(..., min_length=1, max_length=19,
+                                                     regex=r'^[1-9][0-9]*$')) -> dict[str, Any]:
+        if int(user_id) > MAX_OWNER_ID:
+            raise HTTPException(422, 'user_id must be a positive signed 64-bit integer')
+        return await self._list_devices(user_id)
+
+    async def internal_command(self, device_id: str, body: InternalCommandCreate,
+                               request: Request) -> dict[str, Any]:
+        return await self._command(device_id, body, request, str(body.user_id))
 
     async def close(self) -> None:
         """Signal active handlers to stop on their next <=1s lease check."""
@@ -308,7 +446,9 @@ class DeviceBridgeService:
         return {'device_id': device_id, 'token': token, 'expires_in': TOKEN_TTL}
 
     async def list_devices(self, request: Request) -> dict[str, Any]:
-        owner = await self._user(request)
+        return await self._list_devices(await self._user(request))
+
+    async def _list_devices(self, owner: str) -> dict[str, Any]:
         owner_key = self._owner_key(owner)
         devices = []
         # SSCAN avoids a single unbounded Redis SMEMBERS response. Expired
@@ -329,8 +469,19 @@ class DeviceBridgeService:
                 lease = await self._call('get', self._key('lease', device_id))
                 online = bool(lease and self._text(lease) == d.get('session_id'))
                 status = 'revoked' if d.get('revoked') == '1' else ('online' if online else 'offline')
-                devices.append({'device_id': device_id, 'name': d['name'], 'platform': d['platform'],
-                                'status': status, 'created_at': int(d['created_at'])})
+                item = {'device_id': device_id, 'name': d['name'], 'platform': d['platform'],
+                        'status': status, 'created_at': int(d['created_at'])}
+                if online:
+                    # Per-session capabilities, advertised by the client hello.
+                    caps = ['ping']
+                    if d.get('notify_session') == d.get('session_id'):
+                        caps.append('notify')
+                    if d.get('exec_session') == d.get('session_id'):
+                        caps.append('exec')
+                    if d.get('files_session') == d.get('session_id') and 'exec' in caps:
+                        caps.append('files')
+                    item['capabilities'] = caps
+                devices.append(item)
             if int(cursor) == 0:
                 break
         return {'devices': devices}
@@ -343,7 +494,10 @@ class DeviceBridgeService:
         return {'device_id': device_id, 'revoked': True}
 
     async def command(self, device_id: str, body: CommandCreate, request: Request) -> dict[str, Any]:
-        owner = await self._user(request)
+        return await self._command(device_id, body, request, await self._user(request))
+
+    async def _command(self, device_id: str, body: CommandCreate, request: Request,
+                       owner: str) -> dict[str, Any]:
         d = await self._owned(device_id, owner)
         session = d.get('session_id', '')
         if not session or d.get('revoked') != '0' or self._closing.is_set():
@@ -353,16 +507,37 @@ class DeviceBridgeService:
         job_id = str(uuid.uuid4())
         job_key = self._key('job', job_id)
         payload = {'operation': body.operation, 'timeout': body.timeout}
+        if body.operation == 'notify':
+            payload['text'] = body.text
+        elif body.operation == 'exec':
+            payload['command'] = body.command
+            if body.cwd is not None:
+                payload['cwd'] = body.cwd
+        elif body.operation in ('file_download', 'file_upload', 'screenshot'):
+            token = body.transfer_token.get_secret_value()
+            await self.transfers.validate_command(body.transfer_id, token, device_id, owner,
+                                                  'to_device' if body.operation == 'file_download' else 'from_device')
+            payload.update(transfer_id=body.transfer_id, transfer_token=token)
+            for field in ('path', 'cwd', 'expected_size', 'sha256'):
+                value = getattr(body, field)
+                if value is not None:
+                    payload[field] = value
         # Cleanup is attempted even if an enqueue response is lost after Redis
         # has applied it. The fallback safety net is bounded key TTLs.
         try:
             result = await self._eval(_ENQUEUE, live_keys + [queue_key, pending_key, job_key],
                                       session, d['token_hash'], device_id, owner, job_id,
                                       body.timeout, json.dumps(payload), body.timeout + 30,
-                                      150, QUEUE_LIMIT)
+                                      max(150, body.timeout + 60), QUEUE_LIMIT, body.operation)
             code = int(result[0])
             if code == 0:
                 raise HTTPException(409, 'Device is offline')
+            if code == 3:
+                raise HTTPException(409, 'Device does not support notify in this session')
+            if code == 5:
+                raise HTTPException(409, 'Files or exec are disabled or not supported by this client')
+            if code == 4:
+                raise HTTPException(409, 'Exec is disabled on this device or not supported by this client')
             if code == 2:
                 raise HTTPException(429, 'Device command queue is full')
             local_deadline = time.monotonic() + body.timeout
@@ -440,6 +615,7 @@ class DeviceBridgeService:
 
             async def receive() -> int:
                 nonlocal last_pong, nonce
+                hello_seen = False
                 while True:
                     packet = await ws.receive()
                     if packet['type'] == 'websocket.disconnect':
@@ -455,17 +631,45 @@ class DeviceBridgeService:
                         return 1008
                     if not isinstance(msg, dict):
                         return 1008
+                    if msg.get('type') == 'hello':
+                        capabilities = msg.get('capabilities')
+                        if set(msg) == {'type', 'protocol', 'capabilities'}:
+                            if (hello_seen or type(msg.get('protocol')) is not int or msg['protocol'] != 1
+                                    or not isinstance(capabilities, list) or len(capabilities) > 16
+                                    or any(not isinstance(c, str) or not 1 <= len(c) <= 64 for c in capabilities)):
+                                return 1008
+                            hello_seen = True
+                            if not await self._eval(_ADVERTISE, live_keys, session, digest, device_id,
+                                                    int('notify' in capabilities),
+                                                    int('exec' in capabilities), int('files' in capabilities)):
+                                return 1008
+                            continue
+                        return 1008
+                    if msg.get('type') == 'capabilities':
+                        # Mid-session update (desktop exec toggle). Requires hello first.
+                        capabilities = msg.get('capabilities')
+                        if (not hello_seen or set(msg) != {'type', 'capabilities'}
+                                or not isinstance(capabilities, list) or len(capabilities) > 16
+                                or any(not isinstance(c, str) or not 1 <= len(c) <= 64 for c in capabilities)):
+                            return 1008
+                        if not await self._eval(_ADVERTISE, live_keys, session, digest, device_id,
+                                                int('notify' in capabilities),
+                                                int('exec' in capabilities), int('files' in capabilities)):
+                            return 1008
+                        continue
                     if msg.get('type') == 'pong':
                         if set(msg) != {'type', 'nonce'} or nonce is None or msg['nonce'] != nonce:
                             return 1008
                         nonce = None
                         last_pong = time.monotonic()
                         continue
-                    if msg.get('type') != 'result' or set(msg) - {
-                        'type', 'job_id', 'session_id', 'status', 'output', 'exit_code'
-                    }:
+                    if msg.get('type') != 'result' or set(msg) - RESULT_FIELDS:
                         return 1008
-                    if (not self._valid_id(msg.get('job_id')) or msg.get('session_id') != session
+                    if msg.get('session_id') != session:
+                        return 1008
+                    job_id = msg.get('job_id')
+                    if (not self._valid_id(job_id)
+                            or msg.get('session_id') != session
                             or msg.get('status') not in ('ok', 'error')
                             or not isinstance(msg.get('output'), str)):
                         return 1008
@@ -474,10 +678,20 @@ class DeviceBridgeService:
                     if 'exit_code' in msg and (type(msg['exit_code']) is not int
                                                or not -(2**31) <= msg['exit_code'] < 2**31):
                         return 1008
-                    result = {k: msg[k] for k in ('status', 'output', 'exit_code') if k in msg}
+                    if 'stderr' in msg:
+                        if not isinstance(msg['stderr'], str):
+                            return 1008
+                        if len(msg['stderr'].encode('utf-8')) > MAX_OUTPUT:
+                            return 1009
+                    if 'truncated' in msg and type(msg['truncated']) is not bool:
+                        return 1008
+                    if 'duration_ms' in msg and (type(msg['duration_ms']) is not int
+                                                 or not 0 <= msg['duration_ms'] < 2**31):
+                        return 1008
+                    result = {k: msg[k] for k in RESULT_FIELDS - {'type', 'job_id', 'session_id'} if k in msg}
                     accepted = await self._eval(_COMPLETE,
-                                                live_keys + [pending_key, self._key('job', msg['job_id'])],
-                                                session, digest, device_id, msg['job_id'], json.dumps(result))
+                                                live_keys + [pending_key, self._key('job', job_id)],
+                                                session, digest, device_id, job_id, json.dumps(result))
                     if not accepted:
                         await send({'type': 'error', 'error': 'result_not_pending'})
 
@@ -505,9 +719,10 @@ class DeviceBridgeService:
                     if code == 0:
                         return 1008
                     if code == 2:
+                        payload = json.loads(self._text(item[3]))
                         await send({'type': 'command', 'job_id': self._text(item[1]),
                                     'session_id': session, 'deadline': float(self._text(item[2])),
-                                    **json.loads(self._text(item[3]))})
+                                    **payload})
                     await asyncio.sleep(0.1)
 
             tasks = [asyncio.create_task(receive()), asyncio.create_task(relay())]
@@ -545,6 +760,20 @@ def create_router(get_current_user: Callable[..., Any], redis_client: Any) -> AP
     service = DeviceBridgeService(get_current_user, redis_client)
     router = APIRouter(route_class=DeviceRoute)
     router.device_bridge_service = service  # type: ignore[attr-defined]
+    # Mount separately, never through DeviceRoute's cookie/CSRF guard. A router
+    # dependency authenticates before handlers and never calls get_current_user.
+    internal = APIRouter(route_class=InternalDeviceRoute, dependencies=[Depends(service.service_auth)])
+    internal.add_api_route('/internal/devices', service.internal_list, methods=['GET'])
+    internal.add_api_route('/internal/devices/{device_id}/commands', service.internal_command, methods=['POST'])
+    internal.add_api_route('/internal/devices/{device_id}/transfers', service.transfers.create, methods=['POST'])
+    internal.add_api_route('/internal/device-transfers/{transfer_id}', service.transfers.internal_put, methods=['PUT'])
+    internal.add_api_route('/internal/device-transfers/{transfer_id}', service.transfers.internal_get, methods=['GET'])
+    internal.add_api_route('/internal/device-transfers/{transfer_id}', service.transfers.internal_delete, methods=['DELETE'])
+    public = APIRouter(route_class=InternalDeviceRoute)
+    public.add_api_route('/api/device-transfers/{transfer_id}', service.transfers.public_get, methods=['GET'])
+    public.add_api_route('/api/device-transfers/{transfer_id}', service.transfers.public_put, methods=['PUT'])
+    router.include_router(public)
+    router.internal_router = internal  # type: ignore[attr-defined]
     router.add_api_route('/api/devices', service.create_device, methods=['POST'], status_code=201)
     router.add_api_route('/api/devices', service.list_devices, methods=['GET'])
     router.add_api_route('/api/devices/{device_id}', service.revoke_device, methods=['DELETE'])

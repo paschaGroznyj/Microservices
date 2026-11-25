@@ -3,7 +3,10 @@
 // Открывается по кнопке-лупе в футере сайдбара или Ctrl+K,
 // ищет от 2 символов с дебаунсом и перебрасывает к найденному message_id (±15 сообщений).
 
-import app from './app.js';
+// Import the active gateway app; importing main on Sigma initializes a second UI.
+const { default: app } = await import(
+  document.body.dataset.gateway === 'sigma' ? './app_sigma.js' : './app.js'
+);
 
 const MIN_CHARS = 2;
 const DEBOUNCE_MS = 220;

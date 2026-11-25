@@ -7,7 +7,6 @@ CREATE TABLE IF NOT EXISTS users (
     id            SERIAL PRIMARY KEY,
     username      VARCHAR(50) UNIQUE NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
-    scholar_token VARCHAR(255),
     source        VARCHAR(20) DEFAULT 'catchPM',
     is_guest      BOOLEAN DEFAULT FALSE,
     created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP

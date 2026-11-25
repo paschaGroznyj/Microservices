@@ -81,10 +81,19 @@
   }
 
   function detectPlatform() {
-    const p = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
-    return /win/i.test(p) ? 'windows' : /mac/i.test(p) ? 'macos' : 'linux';
+    const nav = navigator;
+    const uad = (nav.userAgentData && nav.userAgentData.platform) || '';
+    const ua = nav.userAgent || '';
+    const p = nav.platform || '';
+    // Android отдаёт navigator.platform = "Linux armv8l", поэтому проверяем его раньше Linux.
+    if (/android/i.test(uad) || /android/i.test(ua)) return 'android';
+    const src = uad || p;
+    // iPadOS 13+ притворяется Mac; у настоящих Mac maxTouchPoints = 0.
+    if (/^ios$/i.test(uad) || /iphone|ipad|ipod/i.test(ua) || (/mac/i.test(src) && nav.maxTouchPoints > 1)) return 'ios';
+    return /win/i.test(src) ? 'windows' : /mac/i.test(src) ? 'macos' : 'linux';
   }
-  const PLATFORM_LABEL = { windows: 'Windows', macos: 'macOS', linux: 'Linux' };
+  const PLATFORM_LABEL = { windows: 'Windows', macos: 'macOS', linux: 'Linux', android: 'Android', ios: 'iOS' };
+  const MOBILE_PLATFORMS = { android: 1, ios: 1 };
 
   /* ── Devices card ──────────────────────────────────────────── */
   function root() { return document.getElementById('plugins-devices'); }
@@ -288,14 +297,14 @@
     const form = el('form', 'pl-form'); form.noValidate = true; form.id = 'pl-reg-form';
     const l1 = el('label', 'pl-field');
     const nameIn = el('input', 'pl-input'); nameIn.id = 'pl-dev-name'; nameIn.maxLength = 128; nameIn.required = true;
-    nameIn.value = (PLATFORM_LABEL[platform] || 'My') + ' desktop'; nameIn.autocomplete = 'off';
+    nameIn.value = (PLATFORM_LABEL[platform] || 'My') + (MOBILE_PLATFORMS[platform] ? ' device' : ' desktop'); nameIn.autocomplete = 'off';
     l1.append(el('span', 'pl-field__label', 'Имя устройства'), nameIn);
     const l2 = el('label', 'pl-field');
     const sel = el('select', 'pl-input'); sel.id = 'pl-dev-platform';
     Object.keys(PLATFORM_LABEL).forEach(k => { const o = el('option', null, PLATFORM_LABEL[k]); o.value = k; o.selected = k === platform; sel.append(o); });
     l2.append(el('span', 'pl-field__label', 'Платформа'), sel);
     const err = el('div', 'pl-form__err'); err.hidden = true; err.setAttribute('role', 'alert');
-    form.append(l1, l2, el('p', 'modal-hint', 'После регистрации появится токен. Его нужно вставить в поле Device token клиента Device Bridge на этом ПК.'), err);
+    form.append(l1, l2, el('p', 'modal-hint', 'После регистрации появится токен. Его нужно вставить в поле Device token клиента Device Bridge на ' + (MOBILE_PLATFORMS[platform] ? 'этом устройстве.' : 'этом ПК.')), err);
     s.body.append(form);
     const cancel = el('button', 'btn btn-secondary', 'Отмена'); cancel.type = 'button'; cancel.addEventListener('click', closeModal);
     const ok = el('button', 'btn pl-btn-accent', 'Зарегистрировать'); ok.type = 'submit'; ok.setAttribute('form', 'pl-reg-form');

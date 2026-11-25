@@ -2,10 +2,10 @@
    text-preview-header (tp-ib 30px r7, mm-seg), mm-sline (ghost-пилюли mm-it), chat-av тона. */
 .skv{--f:var(--font-anthropic-sans,var(--font-sans));--g:var(--cds-fill-ghost-hover,color-mix(in srgb,var(--text-primary) 7%,transparent));
   --ln:color-mix(in srgb,var(--border) 70%,transparent);font:400 13px/1.35 var(--f);color:var(--text-primary)}
-#skills-view.skv-on{padding:54px 0 0;gap:0;overflow:hidden}
+#skills-view.skv-on{padding:54px 0 0;gap:0;overflow:hidden;overscroll-behavior:none}
 #skills-view.skv-on>.skills-intro,#skills-view.skv-on>.skills-toolbar,#skills-view.skv-on>.skills-list,#skills-view.skv-on>.skill-detail{display:none!important}
 .skv-root{position:relative;flex:1;min-height:0;display:flex;flex-direction:column}
-.skv-sc{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin}
+.skv-sc{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
 .skv-col{max-width:720px;margin:0 auto;padding:0 24px 28px}
 /* аватар как chat-av */
 .skv-av{flex-shrink:0;width:32px;height:32px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;
@@ -29,14 +29,16 @@
 .skv-seg svg{width:14px;height:14px}
 /* поиск */
 .skv-q{flex:1 1 auto;min-width:0;height:32px;display:flex;align-items:center;gap:7px;padding:0 10px;border-radius:9px;background:color-mix(in srgb,var(--text-primary) 5%,transparent);color:var(--text-muted)}
-.skv-q:focus-within{background:var(--surface);box-shadow:0 0 0 1px var(--border)}
+.skv-q:focus-within{background:var(--surface)}
 .skv-q svg{width:15px;height:15px;flex-shrink:0}
 .skv-q input{flex:1;min-width:0;border:0;background:none;outline:0;font:400 13px/1 var(--f);color:var(--text-primary)}
 .skv-q input::placeholder{color:var(--text-muted)}
 [data-theme="dark"] .skv-q{background:rgba(255,255,255,.06);color:#8f8f8f}
 /* бар как mm-sline / шапка превью */
-.skv-bar{position:sticky;top:0;z-index:3;display:flex;align-items:center;gap:8px;height:54px;padding:0 24px;max-width:720px;margin:0 auto;box-sizing:border-box}
-.skv-barw{position:sticky;top:0;z-index:3;background:var(--bg);border-bottom:1px solid var(--ln)}
+.skv-bar{position:relative;display:flex;align-items:center;gap:8px;height:54px;padding:0 24px;max-width:720px;margin:0 auto;box-sizing:border-box}
+.skv-barw{flex-shrink:0;position:relative;z-index:3;background:var(--bg)}
+/* без рамки: строки уходят под бар через короткий туман, как у mm-sl */
+.skv-barw::after{content:"";position:absolute;left:0;right:0;top:100%;height:12px;background:linear-gradient(var(--bg),transparent);pointer-events:none}
 .skv-sline{display:flex;align-items:center;gap:4px;padding:8px 0 6px;font-size:.72rem;color:var(--text-secondary);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden}
 .skv-it{display:inline-flex;align-items:center;gap:5px;padding:3px 7px;border-radius:7px;white-space:nowrap}
 .skv-it b{font-weight:600}

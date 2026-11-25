@@ -2,11 +2,9 @@ import asyncio
 import json
 import asyncpg
 import bcrypt
-from config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME, FERNET_KEY
+from config import DB_PASSWORD, DB_HOST, DB_PORT, DB_USER, DB_NAME
 import logging
-from cryptography.fernet import Fernet
-
-fernet = Fernet(FERNET_KEY)
+import user_secrets
 
 logging.basicConfig(
     level=logging.INFO,
@@ -51,11 +49,32 @@ class DataBaseUser:
                 else:
                     raise
 
+    _VAULT_DDL = """
+        CREATE SCHEMA IF NOT EXISTS vault;
+        REVOKE ALL ON SCHEMA vault FROM PUBLIC;
+        CREATE TABLE IF NOT EXISTS vault.user_secrets (
+            id           BIGSERIAL PRIMARY KEY,
+            user_id      INTEGER NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+            provider     TEXT NOT NULL CHECK (provider ~ '^[a-z0-9_]{2,32}$'),
+            name         TEXT NOT NULL DEFAULT 'default' CHECK (name ~ '^[a-z0-9_-]{1,32}$'),
+            secret_enc   TEXT NOT NULL,
+            last4        TEXT,
+            created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+            last_used_at TIMESTAMPTZ,
+            UNIQUE (user_id, provider, name)
+        );
+        REVOKE ALL ON ALL TABLES IN SCHEMA vault FROM PUBLIC;
+    """
+
     @staticmethod
     async def __init_db(conn):
         # DDL-схема таблиц (users, app_updates, user_seen_updates,
         # user_onboarding, user_preferences) вынесена в postgres/sql/01_auth/
         await conn.execute("SET TIME ZONE '+4'")
+        # vault.user_secrets есть в postgres/sql/01_auth/03_user_secrets.sql; init-скрипты
+        # postgres идут только на пустом томе, поэтому для живой базы — здесь же.
+        await conn.execute(DataBaseUser._VAULT_DDL)
 
     async def check_user_password(self, username: str, password: str = None, back_user_id=False):
         async with self.pool.acquire() as conn:
@@ -175,35 +194,44 @@ class DataBaseUser:
             logging.error(f"Ошибка при работе с пользователем {username}: {e}")
             raise
 
-    def _encrypt_token(self, token: str) -> str:
-        return fernet.encrypt(token.encode()).decode()
-
-    def _decrypt_token(self, encrypted: str) -> str:
-        return fernet.decrypt(encrypted.encode()).decode()
-
-    async def set_scholar_token(self, username: str, token: str) -> bool:
-        encrypted = await asyncio.to_thread(self._encrypt_token, token)
-        print(encrypted, len(encrypted))
-        try:
-            async with self.pool.acquire() as conn:
-                result = await conn.execute("""
-                                            UPDATE users
-                                            SET scholar_token = $1
-                                            WHERE username = $2;
-                                            """, encrypted, username)
-                return result.split()[-1] == "1"
-        except Exception as e:
-            logging.error(f"Ошибка при сохранении токена для {username}: {e}")
-            return False
-
-    async def get_scholar_token(self, username: str) -> str | None:
+    # ── Ключи внешних сервисов (vault.user_secrets, см. user_secrets.py) ──
+    async def list_user_secrets(self, user_id: int) -> list[dict]:
+        """Только метаданные: значение ключа из auth_service наружу не уходит."""
         async with self.pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT scholar_token FROM users WHERE username = $1", username
-            )
-        if row and row["scholar_token"]:
-            return await asyncio.to_thread(self._decrypt_token, row["scholar_token"])
-        return None
+            rows = await conn.fetch("""
+                SELECT provider, name, last4, updated_at, last_used_at
+                FROM vault.user_secrets WHERE user_id = $1
+                ORDER BY provider, name
+            """, user_id)
+        return [{
+            "provider": r["provider"], "name": r["name"], "last4": r["last4"] or "",
+            "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+            "last_used_at": r["last_used_at"].isoformat() if r["last_used_at"] else None,
+        } for r in rows]
+
+    async def set_user_secret(self, user_id: int, provider: str, secret: str,
+                              name: str = "default") -> dict:
+        secret = user_secrets.validate(provider, secret, name)
+        enc = await asyncio.to_thread(user_secrets.encrypt, user_id, provider, name, secret)
+        tail = user_secrets.last4(secret)
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                INSERT INTO vault.user_secrets (user_id, provider, name, secret_enc, last4)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (user_id, provider, name) DO UPDATE
+                   SET secret_enc = EXCLUDED.secret_enc, last4 = EXCLUDED.last4,
+                       updated_at = now(), last_used_at = NULL
+                RETURNING provider, name, last4, updated_at, last_used_at
+            """, user_id, provider, name, enc, tail)
+        return {"provider": row["provider"], "name": row["name"], "last4": row["last4"] or "",
+                "updated_at": row["updated_at"].isoformat(), "last_used_at": None}
+
+    async def delete_user_secret(self, user_id: int, provider: str, name: str = "default") -> bool:
+        async with self.pool.acquire() as conn:
+            res = await conn.execute(
+                "DELETE FROM vault.user_secrets WHERE user_id = $1 AND provider = $2 AND name = $3",
+                user_id, provider, name)
+        return res.split()[-1] != "0"
 
     async def get_user_preferences(self, user_id: int) -> dict:
         """Персональные настройки юзера. Нет строки — дефолт (пустая палитра)."""
@@ -345,13 +373,6 @@ class DataBaseUser:
                                                    )
                                             """, username)
 
-            token = await conn.fetchval("""SELECT scholar_token
-                                                FROM users
-                                                WHERE username = $1
-                                             """, username)
-            token_bool = None
-            if token:
-                token_bool = True
             # Форматируем для фронта — "янв 2026"
             MONTHS_RU = {
                 1: "января", 2: "февраля", 3: "марта", 4: "апреля",
@@ -373,8 +394,7 @@ class DataBaseUser:
                     "agent_requests": agent_requests or 0,
                     "search_requests": search_requests or 0,
                     "favorites_count": favorites_count or 0,
-                    "tools": [{"tool": r["tool_name"], "count": r["cnt"]} for r in tool_rows],
-                    "token_bool": token_bool
+                    "tools": [{"tool": r["tool_name"], "count": r["cnt"]} for r in tool_rows]
                 }
             }
 

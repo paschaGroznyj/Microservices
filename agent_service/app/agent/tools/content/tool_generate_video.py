@@ -29,6 +29,7 @@ import httpx
 from langchain.tools import tool
 
 from ...core.agent_provider import get_router_api_config
+from ...core.user_secrets import resolve_router_api_key
 from ._image_sources import (
     resolve_path_to_data_uri,
     resolve_image_key_to_data_uri,
@@ -259,7 +260,7 @@ def _any_source(*vals) -> bool:
 
 
 def make_generate_video_tool(agent, images: list[dict] | None = None):
-    """Factory: builds the admin-only generate_video langchain tool.
+    """Factory: builds the generate_video langchain tool.
 
     images: the user-attached images of the current request (same list passed to
     analyze_image / generate_image): [{filename, mime_type, b64}]. Used so the
@@ -293,7 +294,7 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
         avatar_audio_url: str | None = None,
         avatar_audio_path: str | None = None,
     ) -> str:
-        """Generate a short video from a text prompt via RouterAPI (admin-only, paid).
+        """Generate a short video from a text prompt via RouterAPI (paid, billed to the user's own RouterAPI key).
 
         Asynchronous: creates a generation task, polls until ready and saves the
         resulting mp4 for delivery to the user. Use short, cinematic prompts.
@@ -381,7 +382,9 @@ def make_generate_video_tool(agent, images: list[dict] | None = None):
         clear error message on failure.
         """
         cfg = get_router_api_config()
-        api_key = cfg.get("api_key") or ""
+        api_key, key_err = await resolve_router_api_key(agent)
+        if key_err:
+            return f"generate_video error: {key_err}"
         base_url = (cfg.get("base_url") or "").rstrip("/")
         prov_key = (provider or DEFAULT_PROVIDER).strip().lower()
         prov_key = PROVIDER_ALIASES.get(prov_key, prov_key)

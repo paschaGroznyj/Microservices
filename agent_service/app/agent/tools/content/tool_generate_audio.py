@@ -30,6 +30,7 @@ import httpx
 from langchain.tools import tool
 
 from ...core.agent_provider import get_router_api_config
+from ...core.user_secrets import resolve_router_api_key
 
 log = logging.getLogger(__name__)
 
@@ -85,9 +86,12 @@ def _pcm_to_ogg_opus(pcm_data: bytes) -> bytes:
     return stdout
 
 
-async def audio_generator(text: str, voice: str = DEFAULT_VOICE, style: str = ""):
+async def audio_generator(text: str, voice: str = DEFAULT_VOICE, style: str = "",
+                          api_key: str | None = None):
+    """api_key=None — системный ключ из env (голосовые ответы бота, мобилка).
+    Инструмент generate_audio передаёт личный ключ юзера (resolve_router_api_key)."""
     cfg = get_router_api_config()
-    api_key = cfg.get("api_key") or ""
+    api_key = api_key or cfg.get("api_key") or ""
     base_url = (cfg.get("base_url") or "").rstrip("/")
     model = cfg.get("audio_model")
     if not api_key:
@@ -160,7 +164,7 @@ async def audio_generator(text: str, voice: str = DEFAULT_VOICE, style: str = ""
 
 
 def make_generate_audio_tool(agent):
-    """Factory: builds the admin-only generate_audio langchain tool."""
+    """Factory: builds the generate_audio langchain tool."""
 
     @tool
     async def generate_audio(
@@ -168,7 +172,7 @@ def make_generate_audio_tool(agent):
         voice: str = DEFAULT_VOICE,
         style: str = "",
     ) -> str:
-        """Synthesize speech from text via RouterAPI TTS (admin-only, paid).
+        """Synthesize speech from text via RouterAPI TTS (paid, billed to the user's own RouterAPI key).
 
         Converts the given text into a spoken voice message and saves it as an
         OGG/Opus file ready to be sent as a native Telegram voice message
@@ -203,7 +207,10 @@ def make_generate_audio_tool(agent):
         Returns a human-readable status with the local .ogg path on success, or
         a clear error message on failure.
         """
-        voice_meta = await audio_generator(text, voice, style)
+        api_key, key_err = await resolve_router_api_key(agent)
+        if key_err:
+            return f"generate_audio error: {key_err}"
+        voice_meta = await audio_generator(text, voice, style, api_key=api_key)
         if not voice_meta["result"]:
             return (f"Voice message generated (voice={voice_meta['voice']}{voice_meta['style_note']}, OGG/Opus). "
                     f"Saved to {voice_meta['fpath']} ({voice_meta['size_kb']} KB). Send it with send_file_to_user.")
@@ -221,10 +228,10 @@ def make_generate_audio_tool(agent):
 # base64-encoded mp3 fragment at delta.audio.data. We concatenate all base64
 # strings, decode once and write a ready-to-play .mp3 (no ffmpeg transcode).
 
-async def music_generator(prompt: str):
+async def music_generator(prompt: str, api_key: str | None = None):
     """Call RouterAPI Lyria, stream mp3 chunks, return (mp3_bytes | error_str)."""
     cfg = get_router_api_config()
-    api_key = cfg.get("api_key") or ""
+    api_key = api_key or cfg.get("api_key") or ""
     base_url = (cfg.get("base_url") or "").rstrip("/")
     model = cfg.get("music_model")
     if not api_key:
@@ -292,11 +299,11 @@ async def music_generator(prompt: str):
 
 
 def make_generate_music_tool(agent):
-    """Factory: builds the admin-only generate_music langchain tool."""
+    """Factory: builds the generate_music langchain tool."""
 
     @tool
     async def generate_music(prompt: str) -> str:
-        """Generate instrumental/background MUSIC from a text prompt via RouterAPI (admin-only, paid).
+        """Generate instrumental/background MUSIC from a text prompt via RouterAPI (paid, billed to the user's own RouterAPI key).
 
         Uses google/lyria-3-pro-preview. Produces an mp3 track from a free-form
         description of the desired music and saves it for delivery to the user
@@ -313,7 +320,10 @@ def make_generate_music_tool(agent):
         Returns a human-readable status with the local .mp3 path on success, or
         a clear error message on failure.
         """
-        result = await music_generator(prompt)
+        api_key, key_err = await resolve_router_api_key(agent)
+        if key_err:
+            return f"generate_music error: {key_err}"
+        result = await music_generator(prompt, api_key=api_key)
         if isinstance(result, str):
             # error path (generator returns an error string)
             return result

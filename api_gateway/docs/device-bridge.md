@@ -105,6 +105,15 @@ redirect или подстановку `Authorization` из auth subrequest.
 | `GET /api/devices` | `{devices: [{device_id, name, platform, status, created_at}]}` только текущего владельца; `status`: `online`, `offline`, `revoked`; `created_at`: Unix seconds |
 | `POST /api/devices/{device_id}/commands` | `{ "operation": "ping", "timeout": 10 }` → ожидание `{job_id, status, output, exit_code?}` |
 | `DELETE /api/devices/{device_id}` | Без тела → `{device_id, revoked: true}` |
+| `DELETE /api/devices/{device_id}?offline_only=true` | Без тела → `{device_id, revoked: true}`; окончательно удаляет только offline-устройство |
+
+Без query (или с `offline_only=false`) DELETE сохраняет legacy-отзыв: запись
+остаётся в списке со статусом `revoked`. При `offline_only=true` Lua атомарно
+проверяет владельца и актуальный lease/session: если устройство успело выйти
+online, ответ **409** (`Device came online`), ничего не удаляется. Иначе удаляются
+запись, token lookup, lease, очередь/pending и связанные задания, а ID убирается
+из индекса владельца. Устройство исчезает из списка/UI, старый токен больше не
+авторизует WS. Чужой ID и повторное удаление — **404**. Токен в ответ не включается.
 
 `name`: 1–128 символов, `platform`: 1–64; строки не должны быть пустыми после
 trim или содержать NUL. `platform` — метка, а не подтверждение совместимости ОС.

@@ -590,90 +590,25 @@
   100% { transform: translateX(0); opacity: 1; }
 }
 
-/* ── Rename modal ─────────────────────────────── */
-.sidebar-rename-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.45);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1200;
-  animation: sidebar-modal-fade .15s ease both;
+/* ── Rename modal: shared application modal layout ── */
+.sidebar-rename-overlay { z-index:1200; padding:16px; animation:sidebar-modal-fade .15s ease both; }
+.sidebar-rename-modal.modal-card {
+  width:100%; max-width:440px; max-height:calc(100dvh - 32px); overflow-y:auto;
+  font-family:var(--font-anthropic-sans,Arial,sans-serif);
+  animation:sidebar-modal-in .15s ease both;
 }
-
-.sidebar-rename-modal {
-  width: min(380px, calc(100vw - 32px));
-  background: var(--surface, #fff);
-  border: 1px solid var(--border);
-  border-radius: var(--radius, 12px);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
-  padding: 24px 24px 20px;
-  animation: sidebar-modal-in .15s cubic-bezier(.34,1.56,.64,1) both;
-  font-family: var(--font-sans, Inter, sans-serif);
-}
-
-.sidebar-rename-title {
-  font-size: .92rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 14px;
-  font-family: var(--font-serif, 'Playfair Display', serif);
-}
-
+.sidebar-rename-modal .modal-header h3,
+.sidebar-rename-modal .btn,
+.sidebar-rename-modal input { font-family:inherit; }
+.sidebar-rename-modal .modal-body label { display:block; margin-bottom:8px; font-size:.82rem; font-weight:500; color:var(--text-secondary); }
 .sidebar-rename-input {
-  width: 100%;
-  border: 1px solid var(--border);
-  background: var(--surface2, #f9fafb);
-  color: var(--text-primary);
-  border-radius: var(--radius-sm, 8px);
-  padding: 10px 12px;
-  font-size: .88rem;
-  outline: none;
-  font-family: var(--font-sans, Inter, sans-serif);
-  transition: border-color .15s, box-shadow .15s;
-  box-sizing: border-box;
+  box-sizing:border-box; width:100%; min-height:40px; padding:10px 12px;
+  border:1px solid var(--border); border-radius:10px;
+  background:var(--surface2,var(--surface)); color:var(--text-primary); font-size:.88rem; outline:none;
 }
-
-.sidebar-rename-input:focus {
-  border-color: var(--accent, #6366f1);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #6366f1) 18%, transparent);
-}
-
-.sidebar-rename-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 16px;
-}
-
-.sidebar-rename-btn {
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-secondary);
-  border-radius: var(--radius-sm, 8px);
-  padding: 8px 18px;
-  font-size: .82rem;
-  font-family: var(--font-sans, Inter, sans-serif);
-  font-weight: 500;
-  cursor: pointer;
-  transition: background .13s, color .13s, border-color .13s;
-}
-
-.sidebar-rename-cancel:hover {
-  background: var(--sidebar-hover);
-  color: var(--text-primary);
-}
-
-.sidebar-rename-save {
-  background: var(--accent, #6366f1);
-  border-color: var(--accent, #6366f1);
-  color: #fff;
-}
-
-.sidebar-rename-save:hover {
-  filter: brightness(1.1);
-}
+.sidebar-rename-input:focus { border-color:var(--accent); box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 15%,transparent); }
+.sidebar-rename-actions .btn { box-sizing:border-box; height:36px; min-height:36px; display:inline-flex; align-items:center; justify-content:center; }
+@media(max-width:500px){.sidebar-rename-actions{flex-wrap:wrap}.sidebar-rename-input{font-size:16px}}
 
 @keyframes sidebar-modal-fade {
   from { opacity: 0; }
@@ -1185,3 +1120,6 @@
     transform: scaleX(1.36);
   }
 }
+
+.sidebar-rename-save { background:var(--accent); color:var(--text-on-accent); border:1px solid var(--accent); border-radius:99px; }
+.sidebar-rename-save:hover { background:var(--accent-hover); border-color:var(--accent-hover); }

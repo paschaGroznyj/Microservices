@@ -1,15 +1,13 @@
-/* Раздел «Плагины»: подключение устройств по кнопке и JS-скрипты из
-   /api/plugins/snippets. Код скриптов вставляется через textContent и
-   страницей не исполняется. Токен устройства живёт только в памяти и
-   sessionStorage этой вкладки (те же ключи, что у консольных скриптов). */
+/* Подключение устройств, проверка канала и удаление офлайн-записей.
+   Токен хранится только в памяти и sessionStorage текущей вкладки. */
 (function () {
   'use strict';
-  let loaded = false, loading = null;
 
   const SS_ID = 'augent.device_id', SS_TOKEN = 'augent.device_token';
   const shared = () => window.__auGentDeviceBridge || (window.__auGentDeviceBridge = {});
-  const dev = { list: [], loaded: false, busy: false, showOffline: false, pings: {}, error: '' };
-  let modal = null, pollTimer = null;
+  const dev = { list: [], loaded: false, busy: false, showOffline: false, pings: {}, deleting: {}, error: '' };
+  let modal = null, pollTimer = null, request = null, failures = 0;
+  const REFRESH_MS = 3000;
 
   function el(tag, cls, text) {
     const n = document.createElement(tag);
@@ -64,7 +62,8 @@
     catch (_) { throw new Error('Сеть недоступна.'); }
     // Response bodies are not shown: the status code is enough and safe.
     if (!r.ok) throw new Error('HTTP ' + r.status + '. ' + (HTTP_REASON[r.status] || 'Ошибка сервера.'));
-    return r.json();
+    const data = await r.json();
+    return data;
   }
 
   function savedCreds() {
@@ -90,18 +89,65 @@
   /* ── Devices card ──────────────────────────────────────────── */
   function root() { return document.getElementById('plugins-devices'); }
 
-  async function loadDevices(quiet) {
-    if (dev.busy) return;
+  function active() {
+    return !document.hidden && (!!modal || !document.getElementById('view-plugins')?.classList.contains('hidden'));
+  }
+
+  function schedule() {
+    clearTimeout(pollTimer); pollTimer = null;
+    if (active()) pollTimer = setTimeout(() => loadDevices(true), Math.min(30000, REFRESH_MS * 2 ** Math.min(failures, 3)));
+  }
+
+  function forgetCreds(deviceId) {
+    const creds = savedCreds();
+    if (!creds || creds.deviceId !== deviceId) return;
+    const state = shared(); delete state.deviceId; delete state.token;
+    try { sessionStorage.removeItem(SS_ID); sessionStorage.removeItem(SS_TOKEN); } catch (_) {}
+    if (modal?.dataset.deviceId === deviceId) closeModal();
+  }
+
+  function loadDevices(quiet) {
+    if (request) return request;
     dev.busy = true;
     if (!quiet) render();
+    request = (async () => {
+      try {
+        const data = await api('/api/devices');
+        const all = data.devices || [];
+        const creds = savedCreds();
+        if (creds && !all.some(d => d.device_id === creds.deviceId && d.status !== 'revoked')) forgetCreds(creds.deviceId);
+        dev.list = all.filter(d => d.status !== 'revoked');
+        dev.error = ''; dev.loaded = true; failures = 0;
+      } catch (e) {
+        dev.error = e.message; dev.loaded = true; failures++;
+      } finally {
+        dev.busy = false; request = null; render(); syncModalStatus(); schedule();
+      }
+    })();
+    return request;
+  }
+
+  async function removeOffline(d) {
+    if (d.status === 'online' || dev.deleting[d.device_id]) return;
+    if (!window.confirm('Удалить офлайн-устройство «' + d.name + '»? Его токен будет отозван. Для подключения понадобится новая регистрация.')) return;
+    dev.deleting[d.device_id] = true; render();
     try {
-      const data = await api('/api/devices');
-      dev.list = (data.devices || []).filter(d => d.status !== 'revoked');
-      dev.error = ''; dev.loaded = true;
+      await api('/api/devices/' + encodeURIComponent(d.device_id) + '?offline_only=true', { method: 'DELETE' });
+      forgetCreds(d.device_id);
+      dev.list = dev.list.filter(x => x.device_id !== d.device_id);
+      delete dev.pings[d.device_id];
+      // Wait for a pre-existing refresh, then fetch after DELETE so a stale
+      // pre-delete response cannot resurrect the removed row.
+      if (request) await request;
+      await loadDevices(true);
     } catch (e) {
-      dev.error = e.message; dev.loaded = true;
+      dev.error = e.message;
+      // A connect can win the race with DELETE; re-read but retain the error.
+      const message = e.message;
+      if (request) await request;
+      await loadDevices(true); dev.error = message;
     } finally {
-      dev.busy = false; render(); syncModalStatus();
+      delete dev.deleting[d.device_id]; render(); schedule();
     }
   }
 
@@ -147,10 +193,11 @@
     if (res) info.append(el('div', 'pl-dev__res pl-dev__res--' + res.state, res.text));
     const act = el('div', 'pl-dev__act');
     const busy = !!(res && res.state === 'busy');
-    const pb = el('button', 'pl-btn', busy ? 'Пинг…' : 'Пинг'); pb.type = 'button';
-    pb.disabled = !online || busy;
-    pb.title = online ? 'Проверить связь с устройством' : 'Устройство офлайн';
-    pb.addEventListener('click', () => ping(d));
+    const pb = el('button', 'pl-btn' + (online ? '' : ' pl-btn--danger'), online ? (busy ? 'Пинг…' : 'Пинг') : (dev.deleting[d.device_id] ? 'Удаление…' : 'Удалить')); pb.type = 'button';
+    pb.disabled = online ? busy : !!dev.deleting[d.device_id];
+    pb.title = online ? 'Проверить связь с устройством' : 'Удалить устройство и отозвать токен';
+    if (!online) pb.dataset.deleteDevice = d.device_id;
+    pb.addEventListener('click', () => online ? ping(d) : removeOffline(d));
     act.append(pb);
     row.append(dot, info, act);
     return row;
@@ -162,7 +209,7 @@
     const head = el('div', 'pl-devs__head');
     const meta = el('div', 'pl-card__meta');
     meta.append(el('h3', 'pl-card__title', 'Устройства'),
-      el('p', 'pl-card__desc', 'Подключите ПК к агенту: зарегистрируйте устройство и вставьте токен в клиент Device Bridge.'));
+      el('p', 'pl-card__desc', 'Статус обновляется каждые 3 секунды. Пинг проверяет канал с клиентом.'));
     const btns = el('div', 'pl-card__btns');
     const refresh = el('button', 'pl-icon-btn'); refresh.type = 'button';
     refresh.title = 'Обновить список'; refresh.setAttribute('aria-label', 'Обновить список');
@@ -177,7 +224,6 @@
     const body = el('div', 'pl-devs__body');
     const current = savedCreds() ? shared().deviceId : null;
     if (!dev.loaded) body.append(el('div', 'pl-state', 'Загрузка устройств…'));
-    else if (dev.error) body.append(el('div', 'pl-state pl-state--err', 'Не удалось загрузить устройства. ' + dev.error));
     else if (!dev.list.length) body.append(el('div', 'pl-state', 'Устройств пока нет. Нажмите «Подключить устройство».'));
     else {
       const on = dev.list.filter(d => d.status === 'online');
@@ -192,17 +238,19 @@
         if (dev.showOffline) off.forEach(d => body.append(deviceRow(d, current)));
       }
     }
+    if (dev.error) body.prepend(el('div', 'pl-state pl-state--err', dev.error));
     box.replaceChildren(head, body);
   }
 
   /* ── Registration modal ────────────────────────────────────── */
   function closeModal() {
     if (!modal) return;
-    clearInterval(pollTimer); pollTimer = null;
+    clearTimeout(pollTimer); pollTimer = null;
     document.removeEventListener('keydown', onKey, true);
     modal.remove(); modal = null;
     const add = document.getElementById('plugins-connect');
     if (add) add.focus();
+    schedule();
   }
 
   function onKey(e) { if (e.key === 'Escape' && modal && !modal.dataset.busy) { e.stopPropagation(); closeModal(); } }
@@ -234,7 +282,7 @@
   }
 
   function showForm() {
-    clearInterval(pollTimer); pollTimer = null;
+    clearTimeout(pollTimer); pollTimer = null;
     const s = shell('Подключить устройство');
     const platform = detectPlatform();
     const form = el('form', 'pl-form'); form.noValidate = true; form.id = 'pl-reg-form';
@@ -325,13 +373,7 @@
     s.foot.append(done);
     mount(s);
     syncModalStatus();
-    clearInterval(pollTimer);
-    const started = Date.now();
-    pollTimer = setInterval(() => {
-      const st = document.getElementById('pl-reg-status');
-      if (!st || st.dataset.state === 'on' || Date.now() - started > 600000) { clearInterval(pollTimer); pollTimer = null; return; }
-      loadDevices(true);
-    }, 4000);
+    schedule();
     copy.focus();
   }
 
@@ -339,56 +381,28 @@
     const st = document.getElementById('pl-reg-status');
     if (!st || !modal) return;
     const d = dev.list.find(x => x.device_id === modal.dataset.deviceId);
-    const on = !!d && d.status === 'online';
-    st.dataset.state = on ? 'on' : 'wait';
+    const on = !dev.error && !!d && d.status === 'online';
+    st.dataset.state = dev.error ? 'error' : on ? 'on' : 'wait';
     st.replaceChildren(on ? svg('M5 12l5 5L20 7', 16) : el('span', 'pl-dot pl-dot--wait'),
-      document.createTextNode(on ? 'Устройство подключено' : 'Ожидаем подключения клиента…'));
+      document.createTextNode(dev.error ? 'Не удалось проверить подключение. Повторяем…' : on ? 'Устройство подключено' : 'Ожидаем подключения клиента…'));
     const steps = document.getElementById('pl-reg-steps');
     if (steps) steps.hidden = on;
     const done = document.getElementById('pl-reg-done');
     if (done) done.className = on ? 'btn pl-btn-accent' : 'btn btn-secondary';
   }
 
-  /* ── Snippets ──────────────────────────────────────────────── */
-  function card(s) {
-    const c = el('div', 'pl-card'); c.dataset.id = s.id;
-    const head = el('div', 'pl-card__head');
-    const meta = el('div', 'pl-card__meta');
-    meta.append(el('h3', 'pl-card__title', s.title), el('p', 'pl-card__desc', s.description));
-    const btns = el('div', 'pl-card__btns');
-    const show = el('button', 'pl-btn', 'Показать код'); show.type = 'button';
-    const copy = el('button', 'pl-btn', 'Копировать'); copy.type = 'button';
-    btns.append(show, copy); head.append(meta, btns);
-    const pre = el('pre', 'pl-code', s.code); pre.hidden = true;
-    show.addEventListener('click', () => { pre.hidden = !pre.hidden; show.textContent = pre.hidden ? 'Показать код' : 'Скрыть код'; });
-    copy.addEventListener('click', async () => {
-      const ok = await copyText(s.code);
-      copy.textContent = ok ? 'Скопировано' : 'Не удалось'; copy.classList.toggle('pl-btn--ok', ok);
-      setTimeout(() => { copy.textContent = 'Копировать'; copy.classList.remove('pl-btn--ok'); }, 1600);
-    });
-    c.append(head, pre); return c;
-  }
-
-  async function load() {
-    const list = document.getElementById('plugins-snippets');
-    if (!list) return;
-    list.replaceChildren(el('div', 'pl-state', 'Загрузка…'));
-    try {
-      const r = await fetch('/api/plugins/snippets', { credentials: 'same-origin', cache: 'no-store' });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      const items = (await r.json()).snippets || [];
-      list.replaceChildren(...(items.length ? items.map(card) : [el('div', 'pl-state', 'Скриптов пока нет')]));
-      loaded = true;
-    } catch (e) {
-      list.replaceChildren(el('div', 'pl-state', 'Не удалось загрузить скрипты (' + e.message + ')'));
-    }
-  }
+  document.addEventListener('visibilitychange', () => {
+    if (active()) loadDevices(true); else { clearTimeout(pollTimer); pollTimer = null; }
+  });
+  window.addEventListener('online', () => { if (active()) loadDevices(true); });
+  window.addEventListener('focus', () => { if (active()) loadDevices(true); });
+  const view = document.getElementById('view-plugins');
+  if (view) new MutationObserver(() => {
+    if (active()) schedule(); else { clearTimeout(pollTimer); pollTimer = null; }
+  }).observe(view, { attributes: true, attributeFilter: ['class'] });
 
   window.PluginsPanel = {
-    open() {
-      if (root()) { if (!dev.loaded) render(); loadDevices(dev.loaded); }
-      if (!loaded && !loading) loading = load().finally(() => { loading = null; });
-    },
-    reload() { loaded = false; dev.loaded = false; return this.open(); },
+    open() { if (!dev.loaded) render(); return loadDevices(dev.loaded); },
+    reload() { return loadDevices(false); },
   };
 })();

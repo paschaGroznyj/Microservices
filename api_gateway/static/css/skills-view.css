@@ -36,7 +36,7 @@
 [data-theme="dark"] .skv-q{background:rgba(255,255,255,.06);color:#8f8f8f}
 /* бар как mm-sline / шапка превью */
 .skv-bar{position:sticky;top:0;z-index:3;display:flex;align-items:center;gap:8px;height:54px;padding:0 24px;max-width:720px;margin:0 auto;box-sizing:border-box}
-.skv-barw{position:sticky;top:0;z-index:3;background:var(--bg);border-bottom:1px solid var(--ln)}
+.skv-barw{flex-shrink:0;position:relative;z-index:3;background:var(--bg);border-bottom:1px solid var(--ln)}
 .skv-sline{display:flex;align-items:center;gap:4px;padding:8px 0 6px;font-size:.72rem;color:var(--text-secondary);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden}
 .skv-it{display:inline-flex;align-items:center;gap:5px;padding:3px 7px;border-radius:7px;white-space:nowrap}
 .skv-it b{font-weight:600}

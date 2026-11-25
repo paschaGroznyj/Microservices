@@ -16,7 +16,9 @@ OBS-хранилище для файлов, которые улетают пол
 
 Файлы на хосте (generated_files) эфемерны: живут 30 мин, потом
 чистятся фоновым клинером (start_generated_files_cleaner). Источник
-истины — OBS.
+истины — OBS. Платные медиа (generate_video/audio/music) лежат в
+generated_files/media_<uuid>/ и живут 3 часа (PAID_MEDIA_TTL_SECONDS):
+их дорого генерировать заново, а в OBS они уходят сразу после создания.
 """
 
 import asyncio
@@ -50,6 +52,28 @@ SANDBOX_ROOT = "/sandbox"
 # TTL эфемерных файлов на хосте (секунды).
 HOST_FILE_TTL_SECONDS = 30 * 60  # 30 мин
 CLEANER_INTERVAL_SECONDS = 5 * 60  # период запуска фонового клинера
+
+# Платные медиа: отдельная папка-run на файл, префикс задаёт длинный TTL.
+PAID_MEDIA_DIR_PREFIX = "media_"
+PAID_MEDIA_TTL_SECONDS = int(os.getenv("PAID_MEDIA_TTL_SECONDS", str(3 * 60 * 60)))
+
+
+def paid_media_path(filename: str) -> str:
+    """generated_files/media_<uuid>/<filename>: уникальный OBS-ключ и TTL 3 ч."""
+    import uuid
+    d = os.path.join(GENERATED_FILES_ROOT, f"{PAID_MEDIA_DIR_PREFIX}{uuid.uuid4().hex}")
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, os.path.basename(filename))
+
+
+def _ttl_for(path: Path, root: Path, ttl: int, paid_ttl: int) -> int:
+    try:
+        top = path.relative_to(root).parts[0]
+    except (ValueError, IndexError):
+        return ttl
+    if top.startswith(PAID_MEDIA_DIR_PREFIX) and path.parent != root:
+        return max(ttl, paid_ttl)
+    return ttl
 
 
 def _obs_params() -> dict:
@@ -212,6 +236,28 @@ async def upload_user_file(local_path: str, chat_id: int | str) -> Optional[str]
         return None
 
 
+async def get_object_bytes(obs_key: str, max_bytes: int) -> tuple[Optional[bytes], Optional[str]]:
+    """(bytes, error). HEAD проверяет размер до скачивания, чтобы не тянуть гигабайты."""
+    try:
+        async with AioSession().create_client(**_obs_params()) as client:
+            try:
+                head = await client.head_object(Bucket=_bucket(), Key=obs_key)
+            except Exception as e:
+                code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
+                if str(code) in ("404", "NoSuchKey", "NotFound"):
+                    return None, "not_found"
+                raise
+            size = int(head.get("ContentLength") or 0)
+            if size > max_bytes:
+                return None, f"too_large:{size}"
+            resp = await client.get_object(Bucket=_bucket(), Key=obs_key)
+            data = await resp["Body"].read()
+        return data, None
+    except Exception as e:
+        log.warning("[obs] get %s: %s", obs_key, e)
+        return None, f"{type(e).__name__}: {e}"
+
+
 async def download_to_local(obs_key: str, dest_path: str) -> Optional[str]:
     """
     Тянет объект из OBS и кладёт в dest_path (generated_files/{chat_id}/...).
@@ -234,8 +280,11 @@ async def download_to_local(obs_key: str, dest_path: str) -> Optional[str]:
         return None
 
 
-def _sweep_dir(root: str, ttl: int) -> int:
-    """Удаляет файлы старше ttl сек. Возвращает число удалённых."""
+def _sweep_dir(root: str, ttl: int, paid_ttl: int = PAID_MEDIA_TTL_SECONDS) -> int:
+    """Удаляет файлы старше ttl сек (платные медиа — старше paid_ttl).
+
+    Возвращает число удалённых. Опустевшие папки media_<uuid> тоже убираются.
+    """
     removed = 0
     now = time.time()
     root_p = Path(root)
@@ -245,9 +294,15 @@ def _sweep_dir(root: str, ttl: int) -> int:
         if not p.is_file():
             continue
         try:
-            if now - p.stat().st_mtime > ttl:
+            if now - p.stat().st_mtime > _ttl_for(p, root_p, ttl, paid_ttl):
                 p.unlink()
                 removed += 1
+        except OSError:
+            continue
+    for d in root_p.glob(PAID_MEDIA_DIR_PREFIX + "*"):
+        try:
+            if d.is_dir() and not any(d.iterdir()):
+                d.rmdir()
         except OSError:
             continue
     return removed

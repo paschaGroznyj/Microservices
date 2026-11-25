@@ -31,6 +31,7 @@ from langchain.tools import tool
 
 from ...core.agent_provider import get_router_api_config
 from ...core.user_secrets import resolve_router_api_key
+from ...core import obs_file_storage
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +50,103 @@ DEFAULT_VOICE = "Algenib"
 # Gemini TTS raw PCM parameters (fixed by the model).
 PCM_SAMPLE_RATE = 24000
 PCM_CHANNELS = 1
+
+
+# ── Хвостовой артефакт Gemini TTS ─────────────────────────────────────────
+# После последнего слова модель иногда дописывает короткий громкий щелчок/шум
+# (на образце: речь до 5.45 с, тишина ~150 мс, затем 190 мс с клиппингом до 1.0).
+# Режем по PCM: если в конце после паузы стоит короткий кусок — это не речь.
+TRIM_FRAME_MS = 10
+TRIM_SILENCE_DB = -45.0     # ниже — тишина
+TRIM_MIN_GAP_MS = 60        # пауза перед артефактом
+TRIM_MAX_TAIL_MS = 450      # кусок после паузы длиннее — считаем речью и не трогаем
+TRIM_KEEP_SILENCE_MS = 200  # сколько тишины оставить после речи
+TRIM_FADE_MS = 15
+TRIM_LOUDER_DB = 8.0        # артефакт громче медианы речи хотя бы на столько
+TRIM_CLIP_LEVEL = 0.97      # ...или клиппует (на образце пик ровно 1.0)
+
+
+def _frame_db(pcm: bytes, sr: int = PCM_SAMPLE_RATE) -> list[float]:
+    import array
+    import math
+    a = array.array("h")
+    a.frombytes(pcm[: len(pcm) // 2 * 2])
+    if a.itemsize == 2 and array.array("h", [1]).tobytes() != b"\x01\x00":
+        a.byteswap()  # big-endian хост; PCM у модели little-endian
+    fr = max(1, sr * TRIM_FRAME_MS // 1000)
+    out = []
+    for i in range(0, len(a) - fr + 1, fr):
+        acc = 0
+        for v in a[i:i + fr]:
+            acc += v * v
+        rms = math.sqrt(acc / fr) / 32768.0
+        out.append(20 * math.log10(rms + 1e-9))
+    return out
+
+
+def _is_artifact(pcm: bytes, db: list[float], loud: list[bool], j: int, end: int,
+                 sr: int) -> bool:
+    """Хвост [j, end) — не последнее короткое слово, а щелчок: громкий или с клиппингом."""
+    speech = sorted(d for d, l in zip(db[:j], loud[:j]) if l)
+    if not speech:
+        return False
+    median = speech[len(speech) // 2]
+    burst = db[j:end]
+    if sum(burst) / len(burst) >= median + TRIM_LOUDER_DB:
+        return True
+    import array
+    fr = sr * TRIM_FRAME_MS // 1000
+    a = array.array("h")
+    a.frombytes(pcm[j * fr * 2: end * fr * 2])
+    lim = int(TRIM_CLIP_LEVEL * 32767)
+    return sum(1 for v in a if v >= lim or v <= -lim) >= 3
+
+
+def trim_tts_tail(pcm: bytes, sr: int = PCM_SAMPLE_RATE) -> bytes:
+    """Срезает короткий хвост-артефакт после паузы и лишнюю тишину, делает fade-out."""
+    db = _frame_db(pcm, sr)
+    if len(db) < 20:
+        return pcm
+    loud = [d > TRIM_SILENCE_DB for d in db]
+    gap_n = TRIM_MIN_GAP_MS // TRIM_FRAME_MS
+    tail_n = TRIM_MAX_TAIL_MS // TRIM_FRAME_MS
+    end = len(db)
+    while end > 0 and not loud[end - 1]:
+        end -= 1
+    if end == 0:
+        return pcm
+    limit = len(db)  # тишину после речи оставляем, но не дальше начала срезанного хвоста
+    # Срезаем до 2 подряд коротких хвостов (бывает щелчок + шорох)
+    for _ in range(2):
+        j = end
+        while j > 0 and loud[j - 1]:
+            j -= 1
+        burst = end - j
+        g = j
+        while g > 0 and not loud[g - 1]:
+            g -= 1
+        gap = j - g
+        if (burst <= tail_n and gap >= gap_n and g > 0 and g > burst * 3
+                and _is_artifact(pcm, db, loud, j, end, sr)):
+            limit = j
+            end = g
+        else:
+            break
+    fr = sr * TRIM_FRAME_MS // 1000
+    keep = min(end * fr + sr * TRIM_KEEP_SILENCE_MS // 1000, limit * fr)
+    cut = min(len(pcm) // 2, keep) * 2
+    if cut >= len(pcm) - fr * 2:
+        return pcm  # срезать нечего
+    out = bytearray(pcm[:cut])
+    # fade-out по последним TRIM_FADE_MS, чтобы обрез не щёлкнул сам
+    n = min(len(out) // 2, sr * TRIM_FADE_MS // 1000)
+    import struct
+    base = len(out) // 2 - n
+    for k in range(n):
+        off = (base + k) * 2
+        v = struct.unpack_from("<h", out, off)[0]
+        struct.pack_into("<h", out, off, int(v * (1 - (k + 1) / n)))
+    return bytes(out)
 
 
 def _pcm_to_ogg_opus(pcm_data: bytes) -> bytes:
@@ -139,6 +237,10 @@ async def audio_generator(text: str, voice: str = DEFAULT_VOICE, style: str = ""
         return {"result": f"generate_audio error: {e}"}
 
     try:
+        pcm_bytes = trim_tts_tail(pcm_bytes)
+    except Exception as e:  # обрезка — косметика, генерацию не ломаем
+        log.warning("generate_audio: trim failed: %s", e)
+    try:
         ogg_bytes = _pcm_to_ogg_opus(pcm_bytes)
     except RuntimeError as e:
         return {"result": f"generate_audio error: transcode failed: {e}"}
@@ -161,6 +263,32 @@ async def audio_generator(text: str, voice: str = DEFAULT_VOICE, style: str = ""
     size_kb = len(ogg_bytes) // 1024
     style_note = f", style='{style.strip()}'" if (style or "").strip() else ""
     return {"result": None, "voice": v, "style_note": style_note, "fpath": fpath, "size_kb": size_kb}
+
+
+async def persist_paid_media(agent, src_path: str) -> tuple[str, str | None]:
+    """Платный результат: переносим в generated_files/media_<uuid>/ (TTL 3 ч)
+    и сразу заливаем в OBS, чтобы его можно было вернуть fetch_from_obs без
+    повторной генерации. Возвращает (новый путь, obs_key | None)."""
+    dst = obs_file_storage.paid_media_path(os.path.basename(src_path))
+    try:
+        os.replace(src_path, dst)
+    except OSError as e:
+        log.warning("persist_paid_media: move %s failed: %s", src_path, e)
+        dst = src_path
+    pend = getattr(agent, "_pending_generated_files", None)
+    if isinstance(pend, list):
+        pend[:] = [dst if x == src_path else x for x in pend]
+    chat_id = agent._ctx_get("chat_id", getattr(agent, "current_chat_id", None)) \
+        if hasattr(agent, "_ctx_get") else getattr(agent, "current_chat_id", None)
+    obs_key = await obs_file_storage.upload_user_file(dst, chat_id) if chat_id else None
+    return dst, obs_key
+
+
+def _obs_note(obs_key: str | None) -> str:
+    if obs_key:
+        return (f" Stored in OBS as {obs_key}: if the local file expires (3 h), get it back with "
+                f"fetch_from_obs(obs_key='{obs_key}') instead of generating again.")
+    return " OBS upload failed: the local file is the only copy (3 h)."
 
 
 def make_generate_audio_tool(agent):
@@ -212,8 +340,10 @@ def make_generate_audio_tool(agent):
             return f"generate_audio error: {key_err}"
         voice_meta = await audio_generator(text, voice, style, api_key=api_key)
         if not voice_meta["result"]:
+            fpath, obs_key = await persist_paid_media(agent, voice_meta["fpath"])
             return (f"Voice message generated (voice={voice_meta['voice']}{voice_meta['style_note']}, OGG/Opus). "
-                    f"Saved to {voice_meta['fpath']} ({voice_meta['size_kb']} KB). Send it with send_file_to_user.")
+                    f"Saved to {fpath} ({voice_meta['size_kb']} KB). Send it with send_file_to_user."
+                    + _obs_note(obs_key))
         else:
             return voice_meta["result"]
 
@@ -329,11 +459,11 @@ def make_generate_music_tool(agent):
             return result
 
         mp3_bytes = result
-        os.makedirs(GENERATED_ROOT, exist_ok=True)
-        fname = f"music_{uuid.uuid4().hex[:12]}.mp3"
-        fpath = os.path.join(GENERATED_ROOT, fname)
+        fpath = obs_file_storage.paid_media_path(f"music_{uuid.uuid4().hex[:12]}.mp3")
         with open(fpath, "wb") as f:
             f.write(mp3_bytes)
+        chat_id = agent._ctx_get("chat_id", getattr(agent, "current_chat_id", None))
+        obs_key = await obs_file_storage.upload_user_file(fpath, chat_id) if chat_id else None
 
         try:
             pend = getattr(agent, "_pending_generated_files", None)
@@ -344,6 +474,6 @@ def make_generate_music_tool(agent):
 
         size_kb = len(mp3_bytes) // 1024
         return (f"Music generated (mp3). Saved to {fpath} ({size_kb} KB). "
-                f"Send it with send_file_to_user.")
+                f"Send it with send_file_to_user." + _obs_note(obs_key))
 
     return generate_music

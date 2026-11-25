@@ -18,6 +18,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 os.environ.setdefault("FERNET_KEY", base64.urlsafe_b64encode(b"0" * 32).decode())
 
 from agent.tools.content import tool_generate_video as tgv  # noqa: E402
+from agent.core import media_jobs  # noqa: E402
+
+
+class FakeRedis:
+    """In-memory замена Redis для media_jobs: тесты не трогают общий Redis."""
+
+    def __init__(self):
+        self.d = {}
+
+    async def set(self, k, v, ex=None, nx=False):
+        if nx and k in self.d:
+            return None
+        self.d[k] = v
+        return True
+
+    async def get(self, k):
+        return self.d.get(k)
+
+    async def delete(self, *ks):
+        return sum(1 for k in ks if self.d.pop(k, None) is not None)
 
 FIRST = "https://img.test/first.png"
 LAST = "https://img.test/last.png"
@@ -59,6 +79,14 @@ def gen(monkeypatch, tmp_path):
     key = {"value": ("k", None)}
     monkeypatch.setattr(tgv, "resolve_router_api_key", AsyncMock(side_effect=lambda a: key["value"]))
     monkeypatch.setattr(tgv, "GENERATED_ROOT", str(tmp_path))
+    fake = FakeRedis()
+
+    async def _fake_r():
+        return fake
+    monkeypatch.setattr(media_jobs, "_r", _fake_r)
+    monkeypatch.setattr(tgv.obs_file_storage, "GENERATED_FILES_ROOT", str(tmp_path))
+    monkeypatch.setattr(tgv.obs_file_storage, "upload_user_file",
+                        AsyncMock(return_value="catchpm/1/media_x__video.mp4"))
     monkeypatch.setattr(tgv, "POLL_INTERVAL_SEC", 0)
 
     agent = FakeAgent()

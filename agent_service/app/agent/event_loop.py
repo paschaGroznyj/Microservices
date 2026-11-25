@@ -384,6 +384,11 @@ STATEFUL_TOOLS = {
 
     "read_workspace_file",
     "edit_workspace_file",
+    # Платные генерации: путь/obs_key/task_id нужны в следующих ходах,
+    # иначе агент «забывает» результат и запускает оплату заново.
+    "generate_video", "check_video_status",
+    "generate_audio", "generate_music",
+    "fetch_from_obs",
 }
 
 _coerce_tool_result = coerce_tool_result
@@ -1258,12 +1263,19 @@ class HarnessAgent:
         # Admin-only paid media generation via RouterAPI (routerai.ru):
         # text-to-video (async task + polling) and text-to-speech. Gated by
         # the admin-only "media_gen" category in TOOLS_SETTINGS.
-        from .tools.content.tool_generate_video import make_generate_video_tool
+        from .tools.content.tool_generate_video import (
+            make_generate_video_tool,
+            make_check_video_status_tool,
+        )
         from .tools.content.tool_generate_audio import make_generate_audio_tool
         from .tools.content.tool_generate_audio import make_generate_music_tool
+        from .tools.storage.tool_obs_fetch import make_obs_fetch_tool
         generate_video = make_generate_video_tool(agent, images)
+        check_video_status = make_check_video_status_tool(agent)
         generate_audio = make_generate_audio_tool(agent)
         generate_music = make_generate_music_tool(agent)
+        # Выгрузка уже отданных/сгенерированных файлов из OBS (без регенерации)
+        fetch_from_obs = make_obs_fetch_tool(agent)
 
         base_tools = [
             analyze_image,
@@ -1271,8 +1283,10 @@ class HarnessAgent:
             generate_image,
             find_generated_image,
             generate_video,
+            check_video_status,
             generate_audio,
             generate_music,
+            fetch_from_obs,
             get_db_schema,
             execute_sql_query,
             parse_web_page,

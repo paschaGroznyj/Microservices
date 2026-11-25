@@ -355,7 +355,12 @@
                         <div class="pl-hero">
                             <h2 class="pl-hero__title">Плагины</h2>
                             <p class="pl-hero__text">Скрипты для управления подключёнными десктопными устройствами.</p>
-                            <p class="pl-hero__hint">Запустите скрипт в консоли браузера (F12 → Console). Выбор устройства и device_id сохраняются между скриптами в этой вкладке. Для exec включите Allow agent commands в конфигурации клиента. Инструменты send_file_to_device, get_file_from_device и capture_screenshot доступны для передачи файлов и получения скриншотов с устройства.</p>
+                            <p class="pl-hero__hint">Агент работает с подключёнными ПК: выполняет команды, передаёт файлы (send_file_to_device, get_file_from_device) и делает скриншоты (capture_screenshot). Для команд включите Allow agent commands в клиенте.</p>
+                        </div>
+                        <div class="pl-devs" id="plugins-devices" aria-live="polite"></div>
+                        <div class="pl-section">
+                            <h3 class="pl-section__title">Скрипты для консоли</h3>
+                            <p class="pl-section__text">Запускаются в F12 → Console. Выбор устройства и токен общие с разделом выше в пределах вкладки.</p>
                         </div>
                         <div class="pl-list" id="plugins-snippets" aria-live="polite"></div>
                     </div>

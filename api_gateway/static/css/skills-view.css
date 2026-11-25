@@ -5,7 +5,7 @@
 #skills-view.skv-on{padding:54px 0 0;gap:0;overflow:hidden}
 #skills-view.skv-on>.skills-intro,#skills-view.skv-on>.skills-toolbar,#skills-view.skv-on>.skills-list,#skills-view.skv-on>.skill-detail{display:none!important}
 .skv-root{position:relative;flex:1;min-height:0;display:flex;flex-direction:column}
-.skv-sc{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin}
+.skv-sc{flex:1;min-height:0;overflow-y:auto}
 .skv-col{max-width:720px;margin:0 auto;padding:0 24px 28px}
 /* аватар как chat-av */
 .skv-av{flex-shrink:0;width:32px;height:32px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;

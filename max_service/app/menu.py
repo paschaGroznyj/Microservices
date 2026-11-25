@@ -53,6 +53,7 @@ def menu_root(is_admin: bool = False) -> list[dict]:
         [_btn("Триггер", "max:menu:trigger")],
         [_btn("Будильники", "max:menu:alarms")],
         [_btn("\U0001f4ac Сессии", "max:sess:list:0")],
+        [_btn("\U0001f511 Ключи API", "max:menu:keys")],
     ]
     if is_admin:
         rows.append([_btn("\U0001f512 Кто жал /start", "max:admin:startlog")])
@@ -91,6 +92,17 @@ def menu_alarms(settings: dict | None = None, triggers: list[dict] | None = None
         hhmm = (trig or {}).get("time_msk") or default_time
         label = f"{'✅' if active else '⏸'} {title}: {hhmm}"
         rows.append([_btn(label, f"max:alarm:open:{preset_key}")])
+    rows.append([_btn("‹ Назад", "max:menu:root")])
+    return keyboard(rows)
+
+
+def menu_keys(item: dict | None, error: str | None = None) -> list[dict]:
+    """Раздел «Ключи API» (только личный чат, см. apikeys_ui.py)."""
+    rows = []
+    if not error:
+        rows.append([_btn("Заменить ключ" if item else "Добавить ключ RouterAPI", "max:keys:set")])
+        if item:
+            rows.append([_btn("Удалить ключ", "max:keys:del")])
     rows.append([_btn("‹ Назад", "max:menu:root")])
     return keyboard(rows)
 

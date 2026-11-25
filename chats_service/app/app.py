@@ -12,13 +12,14 @@ from typing import Literal
 from app.db.chats_tables import DataBaseChats
 from fastapi import Depends, HTTPException, Request, status
 from jose import JWTError, jwt
-from app.core.config import SECRET_KEY, ALGORITHM, KAFKA_BROKER
+from app.core.config import SECRET_KEY, ALGORITHM, KAFKA_BROKER, AUTH_SERVICE_URL
 from app.db.group_chat_db import GroupChatDB
 from app.db.editor_db import EditorDB
 from app import group_chat as group_chat_module
 from app import attachments as attachments_module
 from app import group_attachments as group_attachments_module
 from app import thumbs as thumbs_module
+from app import messenger_secrets as messenger_secrets_module
 from app.core import file_thumbs
 from app.db.telegram_db import TelegramDB
 from app.db.max_db import MaxDB
@@ -107,6 +108,7 @@ app.include_router(thumbs_module.router)
 app.include_router(group_chat_module.router)
 app.include_router(attachments_module.router)
 app.include_router(group_attachments_module.router)
+app.include_router(messenger_secrets_module.router)
 
 # Telegram-интеграция: отдельный слой БД (allow-list + per-chat настройки).
 tg_db = TelegramDB(None)  # pool проставится на startup
@@ -215,6 +217,8 @@ async def startup():
 
     # MAX: тот же пул, таблицы max_*.
     max_db.pool = db.pool
+    # Ключи API из /start ботов: владелец личного чата -> auth_service (тот же маршрут, что из профиля).
+    messenger_secrets_module.bind(tg_db, max_db, AUTH_SERVICE_URL)
     await max_db.init_db_pool()
 
     # Redis-клиент для обратного пути мобильного клиента (long-poll).

@@ -45,9 +45,10 @@ from app.api.max_client import MaxClient, MaxApiError
 from app.media import (
     collect_message_items, upload_items_to_agent, AlbumBuffer,
 )
+from app import apikeys_ui
 from app.menu import (
     settings_summary, menu_root, menu_model, menu_tools, menu_trigger,
-    menu_alarms, menu_alarm_detail, menu_sessions,
+    menu_alarms, menu_alarm_detail, menu_sessions, menu_keys,
     MAX_MODELS, MAX_TRIGGERS, MAX_TOOL_CATEGORIES, MAX_ADMIN_TOOL_CATEGORIES,
     MAX_ALARM_PRESETS, MAX_ALARM_TITLES, _btn, keyboard,
 )
@@ -217,6 +218,8 @@ async def save_chat_settings(chat_id: int, patch: dict) -> bool:
 # Триггеры и Будильники
 # ══════════════════════════════════════════════════════════════
 def _k_alarmedit(max_chat_id: int, uid: int) -> str: return f"max:alarmedit:{max_chat_id}:{uid}"
+# ждём сообщение с ключом API после «Добавить/Заменить» в разделе «Ключи API»
+def _k_apikey(max_chat_id: int, uid) -> str: return f"max:apikey:{max_chat_id}:{uid}"
 def _k_trig(tid: int, stamp: str) -> str: return f"max:trig:{tid}:{stamp}"
 
 async def fetch_chat_triggers(chat_id: int) -> list[dict]:
@@ -710,6 +713,50 @@ async def _consume_alarmedit(max_chat_id: int, user_id, text: str) -> bool:
     return True
 
 
+async def _consume_apikey(info: dict) -> bool:
+    """Личка: если ждём ключ API — сохраняем его через chats_service и удаляем
+    сообщение с ключом. Текст ключа не логируется и не уходит агенту.
+    GETDEL — защита от дубля апдейта. True, если сообщение поглощено."""
+    if info.get("is_group", True):
+        return False
+    chat_id, user_id = info["chat_id"], info.get("user_id")
+    try:
+        r = await get_redis()
+        key = _k_apikey(chat_id, user_id)
+        try:
+            flag = await r.execute_command("GETDEL", key)
+        except Exception:
+            flag = await r.get(key)
+            if flag:
+                await r.delete(key)
+    except Exception:
+        return False
+    if not flag:
+        return False
+    deleted = False
+    if client is not None and info.get("message_id"):
+        try:
+            await client.delete_message(info["message_id"])
+            deleted = True
+        except Exception:
+            deleted = False
+    value = (info.get("text") or "").strip()
+    ok, err = (await apikeys_ui.save(CHATS_SERVICE_URL, chat_id, value)) if value else (False, "Пустой ключ")
+    log.info(f"[apikeys] set chat={chat_id} ok={ok} msg_deleted={deleted}")
+    item, st_err = await apikeys_ui.fetch_status(CHATS_SERVICE_URL, chat_id)
+    note = "✅ Ключ сохранён." if ok else f"❌ Не сохранён: {apikeys_ui._md(err or 'ошибка')}"
+    if not deleted:
+        note += "\n\nНе получилось удалить сообщение с ключом, удали его вручную."
+    if client is not None:
+        try:
+            await client.send_message(text=apikeys_ui.keys_text(item, st_err) + "\n\n" + note,
+                                      chat_id=chat_id, fmt="markdown",
+                                      attachments=menu_keys(item, st_err))
+        except Exception as e:
+            log.warning(f"[apikeys] reply fail chat={chat_id}: {type(e).__name__}")
+    return True
+
+
 async def _consume_setname(max_chat_id: int, user_id, text: str) -> bool:
     """Если для чата/юзера висит флаг ожидания имени — сохраняем имя
     и гасим флаг. Возвращает True, если сообщение было поглощено."""
@@ -892,6 +939,69 @@ async def handle_callback(update: dict) -> None:
     if data == "max:menu:root":
         await ack()
         await rerender(menu_root(is_admin=is_admin))
+        return
+
+    # ── Ключи API: только личка (в группе ключ увидели бы все участники) ──
+    if data.startswith("max:menu:keys") or data.startswith("max:keys:"):
+        if _is_group(recipient):
+            await ack("Ключи API настраиваются только в личном чате с ботом.")
+            return
+
+        async def _show_keys(note: str = ""):
+            item, err = await apikeys_ui.fetch_status(CHATS_SERVICE_URL, chat_id)
+            text = apikeys_ui.keys_text(item, err) + (f"\n\n{note}" if note else "")
+            att = menu_keys(item, err)
+            if message_id:
+                try:
+                    await client.edit_message(message_id, text, attachments=att, fmt="markdown")
+                    return
+                except Exception as e:
+                    log.warning(f"[apikeys] edit_message fail: {type(e).__name__}")
+            await client.send_message(text=text, chat_id=chat_id, fmt="markdown", attachments=att)
+
+        if data in ("max:menu:keys", "max:keys:cancel"):
+            if data == "max:keys:cancel":
+                try:
+                    r = await get_redis()
+                    await r.delete(_k_apikey(chat_id, user_id))
+                except Exception:
+                    pass
+            await ack()
+            await _show_keys()
+            return
+        if data == "max:keys:set":
+            try:
+                r = await get_redis()
+                await r.set(_k_apikey(chat_id, user_id), apikeys_ui.PROVIDER, ex=apikeys_ui.AWAIT_TTL)
+            except Exception:
+                await ack("Redis недоступен, попробуй позже")
+                return
+            await ack()
+            if message_id:
+                try:
+                    await client.edit_message(message_id, apikeys_ui.await_text(),
+                                              attachments=keyboard([[_btn("Отмена", "max:keys:cancel")]]),
+                                              fmt=None)
+                except Exception:
+                    pass
+            return
+        if data == "max:keys:del":
+            await ack()
+            if message_id:
+                try:
+                    await client.edit_message(
+                        message_id, "Удалить ключ RouterAPI? Он удалится и из профиля CatchPM.",
+                        attachments=keyboard([[_btn("Да, удалить", "max:keys:delok")],
+                                              [_btn("Отмена", "max:menu:keys")]]), fmt=None)
+                except Exception:
+                    pass
+            return
+        if data == "max:keys:delok":
+            ok = await apikeys_ui.delete(CHATS_SERVICE_URL, chat_id)
+            await ack("Ключ удалён" if ok else "Не удалось удалить")
+            await _show_keys()
+            return
+        await ack()
         return
     if data == "max:menu:model":
         await ack()
@@ -1135,6 +1245,9 @@ async def handle_update(update: dict) -> None:
         return
     info = _extract_message(update)
     if not info:
+        return
+    # Ключ API — первым делом: сообщение не должно попасть ни агенту, ни в буфер, ни в логи.
+    if await _consume_apikey(info):
         return
     _words = (info.get("text") or "").strip().split()
     if _words and _words[0].lower() in ("/start", "start"):

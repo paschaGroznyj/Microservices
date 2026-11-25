@@ -87,6 +87,39 @@ location = /api/devices/connect {
 }
 ```
 
+### nginx: HTTP file transfers
+
+The public binary transfer route must bypass SSO like the device WebSocket, while
+retaining the single-use Bearer token checked by the gateway. Put this location
+in the same public server as `/api/devices`; route it to the same gateway/Redis
+instance (here Sigma is `7010`):
+
+```nginx
+location ^~ /api/device-transfers/ {
+    auth_request off;
+    client_max_body_size 10m;
+    proxy_pass http://127.0.0.1:7010;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Authorization $http_authorization;
+    proxy_set_header Cookie "";
+    proxy_set_header X-Authentik-Username "";
+    proxy_set_header X-Authentik-Name "";
+    proxy_buffering off;
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
+}
+
+location = /internal/device-transfers { return 404; }
+location ^~ /internal/device-transfers/ { return 404; }
+```
+
+Do not expose `/internal/devices` or `/internal/device-transfers/`; the agent
+uses the trusted Docker route for those endpoints.
+
 Если ingress использует другие identity-заголовки, их тоже следует очистить в
 этом location. Проверьте итоговый набор `proxy_set_header`: директивы из родителя
 не всегда наследуются при наличии локальных директив. Не переносите сюда SSO

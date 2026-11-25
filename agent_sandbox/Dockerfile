@@ -9,6 +9,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers \
     MPLCONFIGDIR=/tmp/matplotlib_cache \
     NPM_CONFIG_CACHE=/tmp/npm_cache \
+    NODE_PATH=/opt/node-tools/node_modules \
     XDG_DATA_HOME=/tmp/.local/share \
     XDG_CONFIG_HOME=/tmp/.config \
     XDG_CACHE_HOME=/tmp/.cache \
@@ -60,6 +61,12 @@ RUN useradd -m -u 1500 -s /usr/sbin/nologin sandboxrunner
 # Полный chromium + headless shell: channel="chromium" и headless=False
 # (headless=False под Xvfb: `Xvfb :99 &` + DISPLAY=:99; xvfb-run без xauth не работает).
 RUN playwright install chromium && playwright install-deps chromium
+
+# Общие CommonJS-зависимости доступны через NODE_PATH из любого workspace.
+# jsdom 24 совместим с Node.js 20; нужен для DOM-тестов, не для layout/скриншотов.
+RUN --mount=type=cache,target=/tmp/npm_cache \
+    npm install --prefix /opt/node-tools --no-save --package-lock=false jsdom@24.1.3 \
+    && node -e "const { JSDOM } = require('jsdom'); const dom = new JSDOM('<p>ok</p>'); if (dom.window.document.querySelector('p').textContent !== 'ok') process.exit(1); dom.window.close();"
 
 RUN --mount=type=cache,target=/tmp/npm_cache \
     npm install --no-save animejs

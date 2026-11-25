@@ -5,6 +5,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from contextlib import asynccontextmanager
+from redis.asyncio import Redis as DeviceRedis
+from gw_shared.device_bridge import create_router as create_device_router
 import httpx
 import asyncio
 import logging
@@ -105,6 +107,8 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
+    await device_router.device_bridge_service.close()
+    await device_redis.aclose()
     logger.info("Shutting down API Gateway SIGMA...")
     await reactions_bus.stop()
     await reads_bus.stop()
@@ -180,7 +184,7 @@ app.add_middleware(
 
 @app.get("/some-route")
 async def some_route(request: Request):
-    logging.info(request.headers)
+    # Request headers may contain device credentials; never log them.
     authentik_user = request.headers.get("X-Authentik-Username")
     logger.info(authentik_user)
 
@@ -343,6 +347,17 @@ async def get_current_user(request: Request):
 
 # Главная страница (SPA)
 # ========== HTML СТРАНИЦЫ ==========
+# Shared Redis routes: owner is resolved by this gateway's current_user only.
+# Creation is lazy (no network IO during import); both gateways share namespace.
+device_redis = DeviceRedis.from_url(
+    os.getenv("REDIS_URL", "redis://redis:6379/0"),
+    decode_responses=True, socket_connect_timeout=2, socket_timeout=2,
+    max_connections=64,
+)
+device_router = create_device_router(get_current_user, device_redis)
+app.include_router(device_router)
+
+
 @app.get("/", response_class=HTMLResponse)
 async def homepage(request: Request):
     """Главная страница - проверяем авторизацию и показываем соответствующую страницу"""

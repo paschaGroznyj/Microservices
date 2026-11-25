@@ -26,6 +26,41 @@
       : `${d.getDate()} ${months[d.getMonth()]} ${yr}`;
   }
 
+
+  const I = {
+    q:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+    sort:'<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M6 4v12M6 16l-2.5-2.5M6 16l2.5-2.5M13 5h5M13 9h4M13 13h2"/></svg>',
+    x:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+    back:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
+    more:'<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg>',
+    heart:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10Z"/></svg>',
+    use:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.3-5.7M4 4v4h4"/></svg>',
+    tool:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.5-2.5Z"/></svg>',
+    pin:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+    ok:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>',
+    copy:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg>',
+    eye:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>',
+    code:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m8 7-5 5 5 5M16 7l5 5-5 5"/></svg>',
+    edit:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16v4Z"/></svg>',
+    del:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
+    send:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
+  };
+  /* Раздел «Скиллы» (вариант D): строки в общей рамке + панель скилла справа.
+     На ПК список сжимается в левую колонку, на мобиле скилл выезжает экраном. Стили: css/skills-view.css. */
+  const tone = id => Math.abs(Number(id) * 2654435761 % 8);
+  const ini = t => { const w = String(t || '').replace(/[«»"(),.:]/g, ' ').split(/\s+/).filter(x => /[A-Za-zА-Яа-яЁё]/.test(x)); return ((w[0] || '?')[0] + ((w[1] || '')[0] || '')).toUpperCase(); };
+  const av = (s, m = '') => `<span class="skv-av ${m}" data-tone="${tone(s.id)}" aria-hidden="true">${esc(ini(s.theme))}</span>`;
+  const MON = ['янв','фев','мар','апр','мая','июн','июл','авг','сен','окт','ноя','дек'];
+  const dt = v => { const d = new Date(v); if (isNaN(d)) return ''; return d.getFullYear() === new Date().getFullYear() ? `${d.getDate()} ${MON[d.getMonth()]}` : `${d.getDate()} ${MON[d.getMonth()]} ${d.getFullYear()}`; };
+  const plural = (n, a, b, c) => { n = Math.abs(n) % 100; const m = n % 10; return n > 10 && n < 20 ? c : m === 1 ? a : m > 1 && m < 5 ? b : c; };
+  const meta = s => {
+    const tools = Array.isArray(s.tools) ? s.tools.length : 0;
+    return `<span title="Использований">${I.use}${Number(s.uses_count || 0)}</span><span class="skv-dot"></span><span title="Лайков">${I.heart}${Number(s.likes_count || 0)}</span>${tools ? `<span class="skv-dot"></span><span title="Инструментов">${I.tool}${tools}</span>` : ''}${s.created_at ? `<span class="skv-dot"></span><span>${esc(dt(s.created_at))}</span>` : ''}`;
+  };
+  const isMobile = () => window.matchMedia('(max-width: 600px)').matches;
+  const FILTERS = [['all', 'Все'], ['liked', 'Избранные'], ['selected', 'В чате']];
+  const SORTS = [['new', 'Сначала новые'], ['popular', 'Сначала популярные'], ['liked', 'Сначала отмеченные']];
+
   const SkillsPanel = {
     app: null,
     inited: false,
@@ -37,74 +72,58 @@
     _selectedLimit: 5,
     _sort: 'new',
     _filter: 'all',
+    _query: '',
     _allSkills: [],
     _activeSkillId: null,
     _activeSkillData: null,
     _isEditingDetail: false,
     _detailTab: 'overview',
+    _detailBodyMode: 'preview',
     _openDropdown: null,
+    _loadSeq: 0,
+    _detailSeq: 0,
+    _closeTimer: null,
 
     init(app){
       this.app = app;
       if (this.inited) return;
+      const host = document.getElementById('skills-view');
+      if (!host) return;
       this.inited = true;
+      this._mount(host);
 
-      const searchToggle = document.getElementById('skills-search-toggle');
-      const searchClear = document.getElementById('skills-search-clear');
-      const toolbar = document.getElementById('skills-toolbar');
-      const q = document.getElementById('skills-query');
-      const openSearch = () => {
-        this._closeAllMenus();
-        toolbar?.classList.add('searching');
-        searchClear?.removeAttribute('hidden');
-        searchToggle?.setAttribute('aria-expanded','true');
-        if (q) {
-          q.placeholder = 'Поиск по теме или содержанию…';
-          q.focus();
-        }
-      };
-      const closeSearch = () => {
-        const hadValue = !!(q && q.value);
-        toolbar?.classList.remove('searching');
-        searchClear?.setAttribute('hidden','');
-        searchToggle?.setAttribute('aria-expanded','false');
-        if (q) {
-          q.value = '';
-          q.placeholder = 'Поиск…';
-          q.blur();
-        }
-        if (hadValue) this.load();
-      };
-      q?.addEventListener('focus', () => openSearch());
-      q?.addEventListener('click', () => openSearch());
-      searchToggle?.addEventListener('click', () => {
-        if (!toolbar?.classList.contains('searching')) {
-          openSearch();
-        } else {
-          q?.focus();
-          this.load();
-        }
-      });
-      searchClear?.addEventListener('click', (e) => {
-        e.stopPropagation();
-        closeSearch();
-      });
-      q?.addEventListener('input', () => {
+      host.addEventListener('click', (e) => this._onClick(e));
+      host.addEventListener('input', (e) => {
+        if (e.target.id !== 'skv-q') return;
         clearTimeout(this._debounce);
-        this._debounce = setTimeout(() => this.load(), 250);
+        const v = e.target.value;
+        this._debounce = setTimeout(() => { this._query = v; this.load(); }, 250);
       });
-      q?.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') closeSearch();
-      });
-
-      this._bindMenu('skills-filter-btn', 'skills-filter-menu', 'filter', (val) => { this._filter = val; this.load(); });
-      this._bindMenu('skills-sort-btn', 'skills-sort-menu', 'sort', (val) => { this._sort = val; this.load(); });
-
-      document.addEventListener('click', (e) => {
-        if (!e.target.closest('.skills-menu-wrap')) this._closeAllMenus();
-        if (!e.target.closest('.skill-menu-btn') && !e.target.closest('.chat-item-dropdown')) {
-          this._closeActionDropdown();
+      host.addEventListener('keydown', (e) => {
+        if (e.target.id === 'skv-q' && e.key === 'Escape' && e.target.value) {
+          e.stopPropagation();
+          e.target.value = '';
+          clearTimeout(this._debounce);
+          this._query = '';
+          this.load();
+          return;
         }
+        if ((e.key === 'Enter' || e.key === ' ') && e.target.classList?.contains('skv-row')) {
+          e.preventDefault();
+          this._openRow(Number(e.target.dataset.open));
+        }
+      });
+      host.addEventListener('dragstart', (e) => this._onDragStart(e));
+      host.addEventListener('dragend', () => { this._dragSkillId = null; });
+
+      document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape' || this._activeSkillId === null || this._isEditingDetail) return;
+        if (document.getElementById('view-skills')?.classList.contains('hidden')) return;
+        if (this._openDropdown || document.getElementById('skill-confirm-overlay')) return;
+        this.closeSkillDetail(false);
+      });
+      document.addEventListener('click', (e) => {
+        if (!e.target.closest('[data-skill-menu], #skv-sort, .chat-item-dropdown')) this._closeActionDropdown();
       });
 
       this._bindDropToInput();
@@ -112,39 +131,119 @@
       Promise.all([this._loadSelected(), this._loadLiked()]).then(() => this._updateSelectedCounterUi()).catch(() => {});
     },
 
-    _bindMenu(btnId, menuId, dataAttr, onPick){
-      const btn = document.getElementById(btnId);
-      const menu = document.getElementById(menuId);
-      if (!btn || !menu) return;
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const willOpen = menu.hasAttribute('hidden');
-        this._closeAllMenus();
-        if (willOpen){ menu.removeAttribute('hidden'); btn.setAttribute('aria-expanded','true'); }
-      });
-      menu.querySelectorAll('.skills-menu-item').forEach(item => {
-        item.addEventListener('click', () => {
-          const val = item.dataset[dataAttr];
-          menu.querySelectorAll('.skills-menu-item').forEach(i => i.setAttribute('aria-checked', String(i===item)));
-          this._closeAllMenus();
-          const isDefault = (dataAttr==='sort' && val==='new') || (dataAttr==='filter' && val==='all');
-          btn.classList.toggle('is-active', !isDefault);
-          onPick(val);
-        });
-      });
+    _mount(host){
+      host.classList.add('skv-on');
+      host.innerHTML = `<div class="skv skv-root skv-v-D" id="skv-root"><div class="skv-split">
+        <div class="skv-dl"><div class="skv-barw"><div class="skv-bar">
+          <label class="skv-q">${I.q}<input type="search" id="skv-q" placeholder="Поиск" autocomplete="off" aria-label="Поиск скиллов"></label>
+          <div class="skv-seg" id="skv-seg" role="tablist" aria-label="Фильтр"></div>
+          <button type="button" class="skv-ib" id="skv-sort" title="Сортировка" aria-label="Сортировка" aria-haspopup="menu" aria-expanded="false">${I.sort}</button>
+        </div></div>
+        <div class="skv-sc"><div class="skv-col"><div class="skv-hl" id="skv-hl"></div><div class="skv-grp" id="skv-list"></div></div></div>
+        <div class="skv-msf" id="skv-foot"></div></div>
+        <div class="skv-md-pane" id="skv-pane" aria-live="polite"></div>
+      </div></div>`;
     },
 
-    _closeAllMenus(){
-      document.querySelectorAll('.skills-menu').forEach(m => m.setAttribute('hidden',''));
-      document.querySelectorAll('#skills-filter-btn, #skills-sort-btn').forEach(b => b.setAttribute('aria-expanded','false'));
+    _onClick(e){
+      const t = e.target;
+      const menuBtn = t.closest('[data-skill-menu]');
+      if (menuBtn) {
+        e.stopPropagation();
+        const id = Number(menuBtn.dataset.skillMenu);
+        const obj = (this._activeSkillId === id && this._activeSkillData) || this._allSkills.find(x => Number(x.id) === id) || { id };
+        return this._openSkillDropdown(menuBtn, obj);
+      }
+      const sortBtn = t.closest('#skv-sort');
+      if (sortBtn) { e.stopPropagation(); return this._openSortMenu(sortBtn); }
+      const pin = t.closest('[data-pin]');
+      if (pin) { e.stopPropagation(); if (!pin.disabled) this.toggleSelectedSkill(Number(pin.dataset.pin)); return; }
+      const f = t.closest('[data-f]');
+      if (f) { this._filter = f.dataset.f; return this._applyFilterSort(); }
+      const lk = t.closest('[data-like]');
+      if (lk) return this.like(Number(lk.dataset.like));
+      const cp = t.closest('[data-copy]');
+      if (cp) return this._copyRaw(cp);
+      const tab = t.closest('[data-dtab]');
+      if (tab) { this._detailTab = tab.dataset.dtab; return this._renderSkillDetail(this._activeSkillData); }
+      const mode = t.closest('[data-mode]');
+      if (mode) {
+        this._detailBodyMode = mode.dataset.mode === 'raw' ? 'raw' : 'preview';
+        document.querySelectorAll('#skv-pane [data-mode]').forEach(b => {
+          const on = b.dataset.mode === this._detailBodyMode;
+          b.classList.toggle('is-on', on);
+          b.setAttribute('aria-pressed', String(on));
+        });
+        return this._fillBody(this._activeSkillData);
+      }
+      const ia = t.closest('[data-inline-act]');
+      if (ia) {
+        if (ia.dataset.inlineAct === 'save') return this._saveEdit(ia);
+        this._isEditingDetail = false;
+        return this._renderSkillDetail(this._activeSkillData);
+      }
+      if (t.closest('[data-close]')) {
+        if (this._isEditingDetail) this._isEditingDetail = false;
+        return this.closeSkillDetail(false);
+      }
+      const row = t.closest('[data-open]');
+      if (row) return this._openRow(Number(row.dataset.open));
     },
+
+    _openRow(id){
+      if (!id) return;
+      if (id === this._activeSkillId && this._activeSkillData) return;
+      if (this._isEditingDetail) {
+        this.app?.showToast?.('Сначала сохраните или отмените редактирование');
+        return;
+      }
+      this.openSkillDetail(id);
+    },
+
+    _onDragStart(e){
+      const row = e.target.closest?.('.skv-row');
+      if (!row || this._isEditingDetail) {
+        if (e.target.closest?.('#skv-pane') || this._isEditingDetail) { e.preventDefault(); e.stopPropagation(); }
+        return;
+      }
+      const sid = row.dataset.open || '';
+      const theme = row.dataset.skillTheme || '';
+      this._dragSkillId = sid;
+      e.dataTransfer.setData('application/x-catchpm-skill-id', String(sid));
+      e.dataTransfer.setData('text/plain', theme ? `Тема скилла: ${theme}` : '');
+      e.dataTransfer.effectAllowed = 'copy';
+    },
+
+    _closeAllMenus(){ this._closeActionDropdown(); },
 
     _closeActionDropdown(){
       if (this._openDropdown) {
         this._openDropdown.remove();
         this._openDropdown = null;
       }
-      document.querySelectorAll('.skill-menu-btn[aria-expanded="true"]').forEach(b => b.setAttribute('aria-expanded', 'false'));
+      document.querySelectorAll('#skills-view [aria-expanded="true"][data-skill-menu], #skv-sort[aria-expanded="true"]').forEach(b => b.setAttribute('aria-expanded', 'false'));
+    },
+
+    _openSortMenu(btn){
+      const was = btn.getAttribute('aria-expanded') === 'true';
+      this._closeActionDropdown();
+      if (was) return;
+      const dd = document.createElement('div');
+      dd.className = 'chat-item-dropdown skv-sort-dd';
+      dd.setAttribute('role', 'menu');
+      dd.innerHTML = SORTS.map(([k, t]) => `<button type="button" class="chat-item-dropdown-action${this._sort === k ? ' is-on' : ''}" role="menuitemradio" aria-checked="${this._sort === k}" data-sort="${k}"><span class="chat-item-dropdown-text">${t}</span></button>`).join('');
+      document.body.appendChild(dd);
+      this._openDropdown = dd;
+      window.AnchoredPopup.attach(dd, btn, { onClose: () => { if (this._openDropdown === dd) this._openDropdown = null; } });
+      dd.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const k = e.target.closest('[data-sort]')?.dataset.sort;
+        if (!k) return;
+        this._closeActionDropdown();
+        if (k === this._sort) return;
+        this._sort = k;
+        this.load();
+      });
     },
 
     open(app){
@@ -154,156 +253,351 @@
     },
 
     async load(){
-      const q = document.getElementById('skills-query')?.value || '';
+      const q = this._query || '';
       const sort = this._sort || 'new';
-      const filter = this._filter || 'all';
+      const seq = ++this._loadSeq;
       let skills = [];
-      // Первая загрузка: скелетон строк. Повторные (поиск, фильтр) держат прежний список до ответа.
+      // Первая загрузка: скелетон строк. Повторные (поиск, сортировка) держат прежний список до ответа.
       if (!this._skLoaded && window.Skeleton) {
-        const listEl = document.getElementById('skills-list');
-        if (listEl && !listEl.querySelector('.skill-card')) listEl.innerHTML = window.Skeleton.skills();
-        const countEl = document.getElementById('skills-count');
-        if (countEl) countEl.textContent = '';
+        const listEl = document.getElementById('skv-list');
+        if (listEl && !listEl.querySelector('.skv-row')) listEl.innerHTML = window.Skeleton.skillRows ? window.Skeleton.skillRows() : window.Skeleton.skills();
       }
       await Promise.all([this._loadSelected(), this._loadLiked()]);
       try {
-        const res = await fetch(`/api/skills?query=${encodeURIComponent(q)}&sort_by=${encodeURIComponent(sort)}&filter_by=${encodeURIComponent(filter)}`, {credentials:'include'});
+        const res = await fetch(`/api/skills?query=${encodeURIComponent(q)}&sort_by=${encodeURIComponent(sort)}&filter_by=all`, {credentials:'include'});
         const data = res.ok ? await res.json() : {skills:[]};
         skills = data.skills || [];
       } catch (e) { skills = []; }
       await this._fetchIsAdmin();
+      if (seq !== this._loadSeq) return;
       for (const s of skills) {
         const sid = Number(s?.id || 0);
-        if (sid > 0 && s?.liked_by_me === true) {
-          this._likedIds.add(sid);
-        }
+        if (sid > 0 && s?.liked_by_me === true) this._likedIds.add(sid);
       }
       this._allSkills = skills;
       this._skLoaded = true;
-      if (!q.trim() && (!this._filter || this._filter === 'all')) {
+      if (!q.trim()) {
         const aliveIds = new Set(skills.map(s => Number(s.id)));
         for (const selId of Array.from(this._selectedIds)) {
-          if (!aliveIds.has(Number(selId))) {
-            this._selectedIds.delete(Number(selId));
-          }
+          if (!aliveIds.has(Number(selId))) this._selectedIds.delete(Number(selId));
         }
       }
-      const addBtn = document.getElementById('skills-add-btn');
-      if (addBtn) addBtn.hidden = true;
       this._applyFilterSort();
     },
 
-    _applyFilterSort(){
+    _filtered(){
       let list = (this._allSkills || []).slice();
       if (this._filter === 'liked') list = list.filter(s => this._likedIds.has(Number(s.id)));
       else if (this._filter === 'selected') list = list.filter(s => this._selectedIds.has(Number(s.id)));
-
       if (this._sort === 'popular') {
         list.sort((a, b) => (Number(b.uses_count || 0) - Number(a.uses_count || 0)) || (Number(b.likes_count || 0) - Number(a.likes_count || 0)));
       } else if (this._sort === 'liked') {
         list.sort((a, b) => (Number(b.likes_count || 0) - Number(a.likes_count || 0)) || (Number(b.uses_count || 0) - Number(a.uses_count || 0)));
       }
-
-      this.render(list);
-      this._updateSelectedCounterUi(list.length);
+      return list;
     },
 
-    _ensureDetailMount(){
-      let detail = document.getElementById('skill-detail-view');
-      if (!detail) {
-        const host = document.getElementById('skills-view');
-        if (host) {
-          detail = document.createElement('div');
-          detail.className = 'skill-detail';
-          detail.id = 'skill-detail-view';
-          detail.hidden = true;
-          host.appendChild(detail);
-        }
+    _applyFilterSort(){
+      this.render(this._filtered());
+      this._updateSelectedCounterUi();
+    },
+
+    _isFull(){ return this._selectedIds.size >= this._selectedLimit; },
+
+    _renderBar(){
+      const seg = document.getElementById('skv-seg');
+      if (seg) {
+        const all = this._allSkills.length;
+        const liked = this._allSkills.filter(s => this._likedIds.has(Number(s.id))).length;
+        const n = { all, liked, selected: `${this._selectedIds.size}/${this._selectedLimit}` };
+        seg.innerHTML = FILTERS.map(([k, t]) => `<button type="button" role="tab" data-f="${k}" aria-selected="${this._filter === k}" class="${this._filter === k ? 'is-on' : ''}${k === 'selected' && this._isFull() ? ' is-full' : ''}">${t} <b>${n[k]}</b></button>`).join('');
       }
-      return detail;
+      document.getElementById('skv-sort')?.classList.toggle('is-active', this._sort !== 'new');
+    },
+
+    _renderFoot(){
+      const f = document.getElementById('skv-foot');
+      if (!f) return;
+      const full = this._isFull();
+      f.classList.toggle('is-full', full);
+      f.innerHTML = `<span class="skv-it">${I.ok}в чате <b>${this._selectedIds.size}/${this._selectedLimit}</b></span><span class="skv-dot"></span><span class="skv-it">${full ? 'лимит, отключите лишний' : '＋ подключает скилл к чату'}</span>`;
+    },
+
+    _qpHtml(sid){
+      const on = this._selectedIds.has(sid);
+      const full = !on && this._isFull();
+      const L = this._selectedLimit;
+      const title = on ? 'Отключить от чата' : full ? `Лимит ${L}/${L}: отключите другой скилл` : 'Подключить к чату';
+      return `<button type="button" class="skv-qp${on ? ' is-on' : ''}" data-pin="${sid}" aria-pressed="${on}"${full ? ' disabled' : ''} title="${title}" aria-label="${on ? 'Отключить от чата' : 'Подключить к чату'}">${on ? I.ok : I.pin}</button>`;
+    },
+
+    _pinHtml(sid){
+      const on = this._selectedIds.has(sid);
+      const full = !on && this._isFull();
+      return `<button type="button" class="skv-pin${on ? ' is-on' : ''}" data-pin="${sid}" aria-pressed="${on}"${full ? ` disabled title="Лимит ${this._selectedLimit}/${this._selectedLimit}: отключите другой скилл"` : ` title="${on ? 'Отключить от чата' : 'Подключить к чату'}"`}>${on ? I.ok : I.pin}<span>${on ? 'В чате' : 'В чат'}</span></button>`;
+    },
+
+    _rowHtml(s){
+      const sid = Number(s.id);
+      const act = this._activeSkillId === sid;
+      return `<div class="skv-row${act ? ' is-act' : ''}" data-open="${sid}" data-skill-theme="${esc(s.theme || '')}" draggable="true" role="button" tabindex="0" aria-current="${act}">${av(s)}<div class="skv-row__b"><div class="skv-row__t" title="${esc(s.theme)}">${esc(s.theme)}</div><div class="skv-row__m">${meta(s)}</div></div>${this._qpHtml(sid)}<button type="button" class="skv-ib" data-skill-menu="${sid}" title="Действия" aria-label="Действия" aria-expanded="false">${I.more}</button></div>`;
     },
 
     render(skills){
-      const list = document.getElementById('skills-list');
-      const countEl = document.getElementById('skills-count');
+      const list = document.getElementById('skv-list');
       if (!list) return;
+      const sc = list.closest('.skv-sc');
+      const top = sc ? sc.scrollTop : 0;
+      this._renderBar();
+      const n = skills.length;
+      const hl = document.getElementById('skv-hl');
+      if (hl) hl.innerHTML = `${({ liked: 'Избранные', selected: 'В чате' })[this._filter] || 'Библиотека'} <span>${n} ${plural(n, 'скилл', 'скилла', 'скиллов')}</span>`;
+      if (!n) {
+        const msg = this._query.trim() ? 'Ничего не нашлось'
+          : this._filter === 'liked' ? 'В избранном пока пусто'
+          : this._filter === 'selected' ? 'К чату не подключено ни одного скилла'
+          : 'Скиллы публикует агент в ходе работы. Как только появятся, они будут здесь.';
+        list.innerHTML = `<div class="skv-empty">${msg}</div>`;
+      } else {
+        list.innerHTML = skills.map(s => this._rowHtml(s)).join('');
+      }
+      this._renderFoot();
+      if (sc) sc.scrollTop = top;
+    },
 
-      if (countEl) countEl.textContent = `${skills.length} • выбрано ${this._selectedIds.size}/${this._selectedLimit}`;
+    _markActiveRow(){
+      document.querySelectorAll('#skv-list .skv-row').forEach(r => {
+        const a = Number(r.dataset.open) === this._activeSkillId;
+        r.classList.toggle('is-act', a);
+        r.setAttribute('aria-current', String(a));
+      });
+    },
 
-      if (!skills.length){
-        list.classList.remove('skills-list-grid');
-        list.innerHTML = `
-          <div class="skills-empty">
-            <svg viewBox="0 0 24 24" width="48" height="48" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M4 12h16M4 17h10"/></svg>
-            <div class="skills-empty__title">Пока пусто</div>
-            <div class="skills-empty__hint">Скиллы публикует агент в ходе работы. Как только появятся — они отобразятся здесь списком.</div>
-          </div>`;
+    _setOpen(open){
+      const split = document.querySelector('#skv-root .skv-split');
+      const pane = document.getElementById('skv-pane');
+      clearTimeout(this._closeTimer);
+      split?.classList.toggle('is-open', open);
+      if (open) {
+        if (isMobile()) requestAnimationFrame(() => { if (this._activeSkillId !== null) pane?.classList.add('is-in'); });
+        else pane?.classList.add('is-in');
+      } else {
+        pane?.classList.remove('is-in');
+        this._closeTimer = setTimeout(() => { if (this._activeSkillId === null && pane) pane.innerHTML = ''; }, 320);
+      }
+      this._markActiveRow();
+    },
+
+    _paneHead(skill, loading = false){
+      const sid = Number(skill?.id || 0);
+      const liked = this._likedIds.has(sid);
+      const showMode = !loading && this._detailTab === 'overview' && !this._isEditingDetail;
+      const mode = this._detailBodyMode === 'raw' ? 'raw' : 'preview';
+      const modeSeg = `<div class="skv-seg" role="group" aria-label="Режим просмотра"><button type="button" data-mode="preview" class="${mode === 'preview' ? 'is-on' : ''}" aria-pressed="${mode === 'preview'}" title="Превью" aria-label="Превью">${I.eye}</button><button type="button" data-mode="raw" class="${mode === 'raw' ? 'is-on' : ''}" aria-pressed="${mode === 'raw'}" title="Markdown" aria-label="Markdown">${I.code}</button></div>`;
+      const tools = loading ? '' : `${showMode ? modeSeg : ''}<span class="skv-sep skv-hide-m"></span>`
+        + `<button type="button" class="skv-ib skv-hide-m" data-copy title="Скопировать Markdown" aria-label="Скопировать Markdown">${I.copy}</button>`
+        + `<button type="button" class="skv-ib skv-like${liked ? ' is-on' : ''}" data-like="${sid}" aria-pressed="${liked}" title="${liked ? 'Убрать из избранного' : 'В избранное'}" aria-label="${liked ? 'Убрать из избранного' : 'В избранное'}">${I.heart}</button>`
+        + `<button type="button" class="skv-ib" data-skill-menu="${sid}" title="Действия" aria-label="Действия" aria-expanded="false">${I.more}</button>`;
+      return `<div class="skv-wh"><button type="button" class="skv-ib skv-only-m" data-close title="Назад" aria-label="Назад">${I.back}</button><span class="skv-ty">SKILL</span><span class="skv-wh__t" title="${esc(skill?.theme || '')}">${esc(skill?.theme || '')}</span><span class="sp"></span>${tools}<button type="button" class="skv-ib skv-hide-m" data-close title="Закрыть" aria-label="Закрыть">${I.x}</button></div>`;
+    },
+
+    async openSkillDetail(skillId, opts = {}){
+      const sid = Number(skillId);
+      if (!sid) return;
+      this._closeActionDropdown();
+      const pane = document.getElementById('skv-pane');
+      if (!pane) return;
+      const same = this._activeSkillId === sid && !!this._activeSkillData;
+      this._activeSkillId = sid;
+      this._isEditingDetail = false;
+      if (!same) {
+        this._detailTab = 'overview';
+        this._activeSkillData = null;
+        const summary = this._allSkills.find(x => Number(x.id) === sid) || { id: sid, theme: '' };
+        const sk = window.Skeleton ? window.Skeleton.skillDetail() : '';
+        pane.innerHTML = this._paneHead(summary, true) + `<div class="skv-wb"><div class="skv-col skv-col--sk">${sk}</div></div>`;
+      }
+      this._setOpen(true);
+
+      const seq = ++this._detailSeq;
+      try {
+        const res = await fetch(`/api/skills/${sid}`, { credentials: 'include' });
+        if (seq !== this._detailSeq) return;
+        if (!res.ok) {
+          this.app?.showToast?.('Скилл не найден');
+          this.closeSkillDetail(false);
+          return;
+        }
+        const data = await res.json();
+        if (seq !== this._detailSeq) return;
+        const skill = data.skill || data;
+        if (typeof skill?.liked_by_me === 'boolean') {
+          if (skill.liked_by_me) this._likedIds.add(sid);
+          else this._likedIds.delete(sid);
+        }
+        this._activeSkillData = skill;
+        this._renderSkillDetail(skill);
+        if (opts.edit) this._enterDetailEdit(skill);
+      } catch (e) {
+        if (seq !== this._detailSeq) return;
+        this.app?.showToast?.('Ошибка загрузки скилла');
+        this.closeSkillDetail(false);
+      }
+    },
+
+    closeSkillDetail(reloadList = true){
+      this._closeActionDropdown();
+      this._detailSeq++;
+      this._activeSkillId = null;
+      this._activeSkillData = null;
+      this._isEditingDetail = false;
+      this._setOpen(false);
+      if (reloadList) this._applyFilterSort();
+    },
+
+    _renderSkillDetail(skill){
+      const pane = document.getElementById('skv-pane');
+      if (!pane || !skill) return;
+      const sid = Number(skill.id);
+      const tools = Array.isArray(skill.tools) ? skill.tools : [];
+      if (!['overview', 'tools', 'info'].includes(this._detailTab)) this._detailTab = 'overview';
+      const tab = this._detailTab;
+      const author = skill.published_by_name || 'Агент';
+      const tabs = [['overview', 'Обзор'], ['tools', 'Инструменты', tools.length], ['info', 'Сведения']];
+      const prevScroll = pane.querySelector('.skv-wb')?.scrollTop || 0;
+      pane.innerHTML = this._paneHead(skill) + `<div class="skv-wb"><div class="skv-col">
+        <div class="skv-wtitle">${av(skill, 'skv-av--l')}<div class="skv-wtitle__b"><h2>${esc(skill.theme || '')}</h2><div class="skv-sline"><span class="skv-it">${esc(author)}</span><span class="skv-dot"></span><span class="skv-it" title="Использований">${I.use}<b>${Number(skill.uses_count || 0)}</b></span><span class="skv-dot"></span><span class="skv-it" title="Лайков">${I.heart}<b>${Number(skill.likes_count || 0)}</b></span><span class="skv-dot"></span><span class="skv-it">${esc(dt(skill.created_at))}</span></div></div>${this._pinHtml(sid)}</div>
+        <div class="skv-tabs" role="tablist">${tabs.map(([k, t, n]) => `<button type="button" role="tab" class="skv-tab${tab === k ? ' is-on' : ''}" aria-selected="${tab === k}" data-dtab="${k}">${t}${n ? `<b>${n}</b>` : ''}</button>`).join('')}</div>
+        <div class="skv-dbody" id="skill-detail-main">${this._detailBodyHtml(skill, tab)}</div>
+      </div></div>`;
+      this._fillBody(skill);
+      const wb = pane.querySelector('.skv-wb');
+      if (wb && prevScroll) wb.scrollTop = prevScroll;
+    },
+
+    _detailBodyHtml(skill, tab){
+      const tools = Array.isArray(skill.tools) ? skill.tools : [];
+      if (tab === 'tools') {
+        return tools.length
+          ? `<div class="skv-sec">Рекомендуемые инструменты</div><div class="skv-chips">${tools.map(t => `<span class="skv-chip">${I.tool}${esc(t)}</span>`).join('')}</div>`
+          : '<p class="skv-sec">Инструменты не указаны</p>';
+      }
+      if (tab === 'info') {
+        const author = skill.published_by_name || 'Агент';
+        return `<dl class="skv-kv"><dt>Автор</dt><dd><span class="skv-av skv-av--s" data-tone="${tone(skill.published_by_user_id || 3)}">${esc(ini(author))}</span>${esc(author)}</dd><dt>Модель</dt><dd>${esc(skill.model_used || '—')}</dd><dt>Создан</dt><dd>${esc(formatSkillDate(skill.created_at))}</dd><dt>Использований</dt><dd>${Number(skill.uses_count || 0)}</dd><dt>Лайков</dt><dd>${Number(skill.likes_count || 0)}</dd><dt>ID</dt><dd>#${Number(skill.id)}</dd></dl>`;
+      }
+      return '<div class="skv-body" id="skv-body"></div>';
+    },
+
+    _fillBody(skill){
+      const el = document.getElementById('skv-body');
+      if (!el || !skill) return;
+      const raw = String(skill.body || '');
+      if (this._detailBodyMode === 'raw') {
+        el.className = 'skv-body';
+        el.innerHTML = `<pre class="skv-raw">${esc(raw)}</pre>`;
         return;
       }
+      el.className = 'skv-body skv-md';
+      try {
+        if (typeof marked !== 'undefined') {
+          let html = marked.parse(raw);
+          if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html);
+          el.innerHTML = html;
+        } else {
+          el.textContent = raw;
+        }
+      } catch (e) {
+        el.textContent = raw;
+      }
+    },
 
-      list.innerHTML = skills.map(s => {
-        const sid = Number(s.id);
-        const selected = this._selectedIds.has(sid);
-        return `
-        <div class="skill-card" draggable="true" data-skill-id="${sid}" data-skill-theme="${esc(s.theme||'')}">
-          <div class="skill-card__left">
-            <label class="skill-select-label" title="Выбрать скилл для чата">
-              <input type="checkbox" class="skill-select-cb" data-select-cb="${sid}" ${selected ? 'checked' : ''} />
-              <span class="skill-select-box" aria-hidden="true">${ICON_CHECK}</span>
-            </label>
-            <span class="skill-theme" title="${esc(s.theme)}">${esc(s.theme)}</span>
-          </div>
-          <div class="skill-card__right">
-            <button class="chat-item-menu-btn skill-menu-btn" type="button" data-skill-menu="${sid}" title="Действия" aria-label="Действия" aria-expanded="false">
-              ${ICON_DOTS}
-            </button>
-          </div>
+    async _copyRaw(btn){
+      const raw = String(this._activeSkillData?.body || '');
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(raw);
+        } else {
+          const ta = document.createElement('textarea');
+          ta.value = raw;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          ta.remove();
+        }
+        btn.innerHTML = I.ok;
+        btn.classList.add('is-copied');
+        this.app?.showToast?.('Markdown скилла скопирован');
+        setTimeout(() => {
+          if (btn.isConnected) { btn.innerHTML = I.copy; btn.classList.remove('is-copied'); }
+        }, 1400);
+      } catch (err) {
+        this.app?.showToast?.('Не удалось скопировать');
+      }
+    },
+
+    _updatePanePin(){
+      const sid = this._activeSkillId;
+      const old = sid !== null ? document.querySelector(`#skv-pane .skv-wtitle [data-pin="${sid}"]`) : null;
+      if (old) old.outerHTML = this._pinHtml(sid);
+    },
+
+    _enterDetailEdit(skill){
+      const main = document.getElementById('skill-detail-main');
+      if (!main || !skill) return;
+      this._isEditingDetail = true;
+      const theme = skill.theme || '';
+      const body = skill.body || '';
+      const toolsCsv = Array.isArray(skill.tools) ? skill.tools.join(', ') : '';
+      const pane = document.getElementById('skv-pane');
+      pane?.querySelector('.skv-tabs')?.setAttribute('hidden', '');
+      pane?.querySelector('.skv-wh .skv-seg')?.setAttribute('hidden', '');
+      main.innerHTML = `
+        <div class="skv-edit" draggable="false">
+          <label class="skv-f"><span>Тема</span><input data-inline="theme" type="text" maxlength="200" value="${esc(theme)}"></label>
+          <label class="skv-f"><span>Инструменты через запятую</span><input data-inline="tools" type="text" maxlength="1000" value="${esc(toolsCsv)}"></label>
+          <label class="skv-f"><span>Тело скилла (Markdown)</span><textarea data-inline="body" maxlength="10000" rows="16">${esc(body)}</textarea></label>
+          <div class="skv-edit__act"><button type="button" class="skv-btn" data-inline-act="cancel">Отмена</button><button type="button" class="skv-btn skv-btn--p" data-inline-act="save">Сохранить</button></div>
         </div>`;
-      }).join('');
+      main.querySelector('[data-inline="theme"]')?.focus();
+    },
 
-      list.querySelectorAll('.skill-select-label').forEach(lbl => {
-        lbl.addEventListener('click', (e) => e.stopPropagation());
-      });
-
-      list.querySelectorAll('[data-select-cb]').forEach(cb => {
-        cb.addEventListener('change', (e) => {
-          e.stopPropagation();
-          const id = Number(cb.dataset.selectCb);
-          if (id) this.toggleSelectedSkill(id, cb.checked, cb);
+    async _saveEdit(saveBtn){
+      const main = document.getElementById('skill-detail-main');
+      const sid = Number(this._activeSkillId);
+      if (!main || !sid) return;
+      const newTheme = main.querySelector('[data-inline="theme"]')?.value?.trim() || '';
+      const newToolsCsv = main.querySelector('[data-inline="tools"]')?.value || '';
+      const newBody = main.querySelector('[data-inline="body"]')?.value?.trim() || '';
+      if (!newTheme || !newBody) {
+        this.app?.showToast?.('Тема и тело скилла обязательны');
+        return;
+      }
+      const newTools = newToolsCsv.split(',').map(x => x.trim()).filter(Boolean);
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Сохранение…';
+      try {
+        const res = await fetch(`/api/skills/${sid}`, {
+          method: 'PUT',
+          credentials: 'include',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ theme: newTheme, body: newBody, tools: newTools }),
         });
-      });
-
-      list.querySelectorAll('[data-skill-menu]').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const id = Number(btn.dataset.skillMenu);
-          const summaryObj = (this._allSkills || []).find(x => Number(x.id) === id) || { id };
-          this._openSkillDropdown(btn, summaryObj);
-        });
-      });
-
-      list.querySelectorAll('.skill-card').forEach(card => {
-        card.addEventListener('click', (e) => {
-          if (e.target.closest('.skill-select-label, .skill-menu-btn, button, input, a')) return;
-          const id = Number(card.dataset.skillId);
-          if (id) this.openSkillDetail(id);
-        });
-        card.addEventListener('dragstart', (e) => {
-          if (this._activeSkillId !== null || this._isEditingDetail) {
-            e.preventDefault();
-            return;
-          }
-          const sid = card.dataset.skillId || '';
-          const theme = card.dataset.skillTheme || '';
-          this._dragSkillId = sid;
-          e.dataTransfer.setData('application/x-catchpm-skill-id', String(sid));
-          e.dataTransfer.setData('text/plain', theme ? `Тема скилла: ${theme}` : '');
-          e.dataTransfer.effectAllowed = 'copy';
-        });
-        card.addEventListener('dragend', () => {
-          this._dragSkillId = null;
-        });
-      });
+        if (res.status === 403) { this.app?.showToast?.('Редактировать можно только свои скиллы'); return; }
+        if (res.status === 404) { this.app?.showToast?.('Скилл не найден'); return; }
+        if (!res.ok) { this.app?.showToast?.('Не удалось обновить скилл'); return; }
+        this._isEditingDetail = false;
+        this.app?.showToast?.('Скилл обновлён');
+        await this.load();
+        this._activeSkillData = null;
+        await this.openSkillDetail(sid);
+      } catch (err) {
+        this.app?.showToast?.('Ошибка обновления скилла');
+      } finally {
+        if (saveBtn.isConnected) { saveBtn.disabled = false; saveBtn.textContent = 'Сохранить'; }
+      }
     },
 
     _openSkillDropdown(anchorBtn, skillObj){
@@ -316,17 +610,23 @@
       const liked = this._likedIds.has(sid) || Boolean(skillObj?.liked_by_me);
       const likesCount = Number(skillObj?.likes_count || 0);
       const canEditOwn = Number(skillObj?.published_by_user_id || 0) === Number(this.app?.currentUser?.user_id || 0) || this._isAdmin;
+      const selected = this._selectedIds.has(sid);
+      const pinBlocked = !selected && this._isFull();
 
       const dd = document.createElement('div');
       dd.className = 'chat-item-dropdown skill-actions-dropdown';
       dd.innerHTML = `
-        <button type="button" class="chat-item-dropdown-action${liked ? ' is-liked' : ''}" data-dd-act="like" data-liked="${liked ? 'true' : 'false'}" aria-pressed="${liked ? 'true' : 'false'}">
-          <span class="chat-item-dropdown-icon">${liked ? ICON_HEART_FILLED : ICON_HEART_OUTLINE}</span>
-          <span class="chat-item-dropdown-text">${liked ? 'Убрать лайк' : 'Лайкнуть'} (${likesCount})</span>
+        <button type="button" class="chat-item-dropdown-action" data-dd-act="pin"${pinBlocked ? ' disabled' : ''}>
+          <span class="chat-item-dropdown-icon">${selected ? I.ok : I.pin}</span>
+          <span class="chat-item-dropdown-text">${selected ? 'Отключить от чата' : pinBlocked ? `Лимит ${this._selectedLimit}/${this._selectedLimit}` : 'Подключить к чату'}</span>
         </button>
         <button type="button" class="chat-item-dropdown-action" data-dd-act="copy">
-          <span class="chat-item-dropdown-icon">${ICON_COPY}</span>
-          <span class="chat-item-dropdown-text">Скопировать в чат</span>
+          <span class="chat-item-dropdown-icon">${I.send}</span>
+          <span class="chat-item-dropdown-text">Вставить в ввод</span>
+        </button>
+        <button type="button" class="chat-item-dropdown-action${liked ? ' is-liked' : ''}" data-dd-act="like" data-liked="${liked ? 'true' : 'false'}" aria-pressed="${liked ? 'true' : 'false'}">
+          <span class="chat-item-dropdown-icon">${liked ? ICON_HEART_FILLED : ICON_HEART_OUTLINE}</span>
+          <span class="chat-item-dropdown-text">${liked ? 'Убрать из избранного' : 'В избранное'} (${likesCount})</span>
         </button>
         ${canEditOwn ? `
         <button type="button" class="chat-item-dropdown-action" data-dd-act="edit">
@@ -340,6 +640,7 @@
         </button>` : ''}
       `;
 
+      document.body.appendChild(dd);
       this._openDropdown = dd;
       window.AnchoredPopup.attach(dd, anchorBtn, {
         onClose: () => {
@@ -349,10 +650,13 @@
 
       dd.addEventListener('click', async (e) => {
         e.stopPropagation();
-        const act = e.target.closest('[data-dd-act]')?.dataset?.ddAct;
-        if (!act) return;
+        const btn = e.target.closest('[data-dd-act]');
+        const act = btn?.dataset?.ddAct;
+        if (!act || btn.disabled) return;
         this._closeActionDropdown();
-        if (act === 'like') {
+        if (act === 'pin') {
+          await this.toggleSelectedSkill(sid);
+        } else if (act === 'like') {
           await this.like(sid);
         } else if (act === 'copy') {
           await this.copyToChat(sid);
@@ -368,378 +672,6 @@
       });
     },
 
-    async openSkillDetail(skillId, opts = {}){
-      const sid = Number(skillId);
-      if (!sid) return;
-      this._closeActionDropdown();
-      const detail = this._ensureDetailMount();
-      if (!detail) return;
-
-      const intro = document.querySelector('#skills-view .skills-intro');
-      const toolbar = document.getElementById('skills-toolbar');
-      const list = document.getElementById('skills-list');
-      if (intro) intro.hidden = true;
-      if (toolbar) toolbar.hidden = true;
-      if (list) list.hidden = true;
-      detail.hidden = false;
-
-      this._activeSkillId = sid;
-      this._isEditingDetail = false;
-      this._detailTab = 'overview';
-
-      detail.innerHTML = window.Skeleton
-        ? window.Skeleton.skillDetail()
-        : `<div class="skills-empty" style="min-height:180px;"><div class="skills-empty__hint">Загрузка скилла…</div></div>`;
-
-      try {
-        const res = await fetch(`/api/skills/${sid}`, { credentials: 'include' });
-        if (!res.ok) {
-          this.app?.showToast?.('Скилл не найден');
-          this.closeSkillDetail();
-          return;
-        }
-        const data = await res.json();
-        const skill = data.skill || data;
-        if (typeof skill?.liked_by_me === 'boolean') {
-          if (skill.liked_by_me) this._likedIds.add(sid);
-          else this._likedIds.delete(sid);
-        }
-        this._activeSkillData = skill;
-        this._renderSkillDetail(skill);
-        if (opts.edit) {
-          this._enterDetailEdit(skill);
-        }
-      } catch (e) {
-        this.app?.showToast?.('Ошибка загрузки скилла');
-        this.closeSkillDetail();
-      }
-    },
-
-    closeSkillDetail(reloadList = true){
-      this._closeActionDropdown();
-      this._activeSkillId = null;
-      this._activeSkillData = null;
-      this._isEditingDetail = false;
-
-      const detail = document.getElementById('skill-detail-view');
-      const intro = document.querySelector('#skills-view .skills-intro');
-      const toolbar = document.getElementById('skills-toolbar');
-      const list = document.getElementById('skills-list');
-
-      if (detail) {
-        detail.hidden = true;
-        detail.innerHTML = '';
-      }
-      if (intro) intro.hidden = false;
-      if (toolbar) toolbar.hidden = false;
-      if (list) list.hidden = false;
-
-      if (reloadList) this._applyFilterSort();
-    },
-
-    _renderSkillDetail(skill){
-      const detail = this._ensureDetailMount();
-      if (!detail || !skill) return;
-
-      const sid = Number(skill.id);
-      const selected = this._selectedIds.has(sid);
-      const authorName = skill.published_by_name || 'Агент';
-      const dateStr = formatSkillDate(skill.created_at);
-      const usesCount = Number(skill.uses_count || 0);
-      const likesCount = Number(skill.likes_count || 0);
-      const modelUsed = skill.model_used || '—';
-      const toolsArr = Array.isArray(skill.tools) ? skill.tools : [];
-
-      detail.setAttribute('draggable', 'false');
-      detail.innerHTML = `
-        <button type="button" class="skill-detail__back" id="skill-detail-back">
-          ${ICON_BACK_ARROW}
-          <span>Все скиллы</span>
-        </button>
-
-        <div class="skill-detail__header">
-          <div class="skill-detail__head-left">
-            <div class="skill-detail__avatar">${ICON_SKILL_DOC}</div>
-            <div class="skill-detail__title-wrap">
-              <h2 class="skill-detail__title">${esc(skill.theme || '')}</h2>
-              <div class="skill-detail__subtitle">
-                <span>от ${esc(authorName)}</span>
-                <span>·</span>
-                <span>${esc(dateStr)}</span>
-                <span>·</span>
-                <span>использований: ${usesCount}</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="skill-detail__head-right">
-            <label class="skill-select-label" title="Выбрать скилл для чата">
-              <input type="checkbox" class="skill-select-cb" id="skill-detail-select-cb" ${selected ? 'checked' : ''} />
-              <span class="skill-select-box" aria-hidden="true">${ICON_CHECK}</span>
-            </label>
-            <button class="chat-item-menu-btn skill-menu-btn" type="button" id="skill-detail-menu-btn" title="Действия" aria-label="Действия" aria-expanded="false">
-              ${ICON_DOTS}
-            </button>
-          </div>
-        </div>
-
-        <div class="skill-detail__tabs">
-          <button type="button" class="skill-detail__tab ${this._detailTab === 'overview' ? 'is-active' : ''}" data-detail-tab="overview">Обзор</button>
-          ${toolsArr.length ? `<button type="button" class="skill-detail__tab ${this._detailTab === 'tools' ? 'is-active' : ''}" data-detail-tab="tools">Инструменты <span class="skill-detail__tab-count">· ${toolsArr.length}</span></button>` : ''}
-        </div>
-
-        <div class="skill-detail__grid">
-          <div class="skill-detail__main" id="skill-detail-main">
-            ${this._detailTab === 'tools' && toolsArr.length ? `
-              <div class="skill-detail__section-label">Рекомендуемые инструменты</div>
-              <div class="skill-detail__body reasoning-body" draggable="false">
-                <div class="skill-detail__tools-list">
-                  ${toolsArr.map(t => `<span class="skill-badge">${esc(t)}</span>`).join('')}
-                </div>
-              </div>
-            ` : `
-              <div class="skill-detail__section-label">Содержимое</div>
-              <div class="skill-detail__body-wrap">
-                <div class="skill-detail__body reasoning-body md-content" id="skill-detail-body" draggable="false">
-                  <div class="skill-detail__body-head">
-                    <span class="skill-detail__body-path">/SKILL.md</span>
-                    <div class="skill-detail__body-actions">
-                      <button type="button" class="skill-detail__copy-btn glass-mode-btn" id="skill-detail-copy-raw-btn" title="Скопировать raw Markdown" aria-label="Скопировать raw Markdown">
-                        ${ICON_COPY}
-                      </button>
-                      <div class="skill-detail__mode-switch" role="group" aria-label="Режим просмотра">
-                        <button type="button" class="skill-detail__mode-btn glass-mode-btn is-active" data-body-mode="preview" title="Превью" aria-label="Превью">
-                          ${ICON_EYE}
-                        </button>
-                        <button type="button" class="skill-detail__mode-btn glass-mode-btn" data-body-mode="raw" title="Сырой код" aria-label="Сырой код">
-                          ${ICON_CODE}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="skill-detail__body-content is-preview" id="skill-detail-body-content" draggable="false"></div>
-                </div>
-              </div>
-            `}
-          </div>
-
-          <aside class="skill-detail__card">
-            <div class="skill-detail__meta-group">
-              <div class="skill-detail__meta-label">Кем собран</div>
-              <div class="skill-detail__author-row">
-                <span class="skill-detail__author-icon">${ICON_USER}</span>
-                <span>${esc(authorName)}</span>
-              </div>
-            </div>
-            <div class="skill-detail__meta-group">
-              <div class="skill-detail__meta-label">Модель</div>
-              <div class="skill-detail__meta-val">${esc(modelUsed)}</div>
-            </div>
-            <div class="skill-detail__meta-group">
-              <div class="skill-detail__meta-label">Дата создания</div>
-              <div class="skill-detail__meta-val">${esc(dateStr)}</div>
-            </div>
-            <div class="skill-detail__meta-group">
-              <div class="skill-detail__meta-label">Использований</div>
-              <div class="skill-detail__meta-val">${usesCount}</div>
-            </div>
-            <div class="skill-detail__meta-group">
-              <div class="skill-detail__meta-label">Лайков</div>
-              <div class="skill-detail__meta-val">${likesCount}</div>
-            </div>
-          </aside>
-        </div>
-      `;
-
-      const bodyEl = document.getElementById('skill-detail-body');
-      const contentEl = document.getElementById('skill-detail-body-content');
-      const copyRawBtn = document.getElementById('skill-detail-copy-raw-btn');
-      const modeBtns = bodyEl ? Array.from(bodyEl.querySelectorAll('[data-body-mode]')) : [];
-
-      if (bodyEl && contentEl) {
-        const raw = String(skill.body || '');
-        let currentMode = this._detailBodyMode === 'raw' ? 'raw' : 'preview';
-
-        const buildRawLinesHtml = (text) => {
-          const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
-          return `<div class="skill-raw-lines">${lines.map((line, idx) => {
-            const isHeading = /^\s*#{1,6}\s+/.test(line);
-            const cls = isHeading ? 'skill-raw-line__text is-heading' : 'skill-raw-line__text';
-            return `<div class="skill-raw-line"><span class="skill-raw-line__num">${idx + 1}</span><span class="${cls}">${line.length ? esc(line) : '&#8203;'}</span></div>`;
-          }).join('')}</div>`;
-        };
-
-        const renderBody = () => {
-          const isPreview = currentMode === 'preview';
-          contentEl.classList.toggle('is-preview', isPreview);
-          contentEl.classList.toggle('is-raw', !isPreview);
-          modeBtns.forEach(btn => {
-            const active = btn.dataset.bodyMode === currentMode;
-            btn.classList.toggle('is-active', active);
-            btn.setAttribute('aria-pressed', active ? 'true' : 'false');
-          });
-          if (isPreview) {
-            try {
-              if (typeof marked !== 'undefined') {
-                let html = marked.parse(raw);
-                if (typeof DOMPurify !== 'undefined') html = DOMPurify.sanitize(html);
-                contentEl.innerHTML = html;
-              } else {
-                contentEl.textContent = raw;
-              }
-            } catch (e) {
-              contentEl.textContent = raw;
-            }
-          } else {
-            contentEl.innerHTML = buildRawLinesHtml(raw);
-          }
-        };
-
-        renderBody();
-
-        modeBtns.forEach(btn => {
-          btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const nextMode = btn.dataset.bodyMode === 'raw' ? 'raw' : 'preview';
-            if (nextMode === currentMode) return;
-            currentMode = nextMode;
-            this._detailBodyMode = currentMode;
-            renderBody();
-          });
-        });
-
-        copyRawBtn?.addEventListener('click', async (e) => {
-          e.stopPropagation();
-          try {
-            if (navigator.clipboard?.writeText) {
-              await navigator.clipboard.writeText(raw);
-            } else {
-              const ta = document.createElement('textarea');
-              ta.value = raw;
-              ta.style.position = 'fixed';
-              ta.style.opacity = '0';
-              document.body.appendChild(ta);
-              ta.select();
-              document.execCommand('copy');
-              ta.remove();
-            }
-            copyRawBtn.innerHTML = ICON_CHECK;
-            copyRawBtn.classList.add('is-copied');
-            this.app?.showToast?.('Скилл скопирован в raw-формате');
-            setTimeout(() => {
-              if (copyRawBtn.isConnected) {
-                copyRawBtn.innerHTML = ICON_COPY;
-                copyRawBtn.classList.remove('is-copied');
-              }
-            }, 1400);
-          } catch (err) {
-            this.app?.showToast?.('Не удалось скопировать');
-          }
-        });
-      }
-
-      detail.addEventListener('dragstart', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-      });
-
-      document.getElementById('skill-detail-back')?.addEventListener('click', () => {
-        this.closeSkillDetail(true);
-      });
-
-      const detailCb = document.getElementById('skill-detail-select-cb');
-      detailCb?.addEventListener('change', (e) => {
-        e.stopPropagation();
-        this.toggleSelectedSkill(sid, detailCb.checked, detailCb);
-      });
-
-      const menuBtn = document.getElementById('skill-detail-menu-btn');
-      menuBtn?.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this._openSkillDropdown(menuBtn, skill);
-      });
-
-      detail.querySelectorAll('[data-detail-tab]').forEach(tabBtn => {
-        tabBtn.addEventListener('click', () => {
-          this._detailTab = tabBtn.dataset.detailTab || 'overview';
-          this._renderSkillDetail(this._activeSkillData || skill);
-        });
-      });
-    },
-
-    _enterDetailEdit(skill){
-      const mainCol = document.getElementById('skill-detail-main');
-      if (!mainCol || !skill) return;
-      this._isEditingDetail = true;
-
-      const sid = Number(skill.id);
-      const theme = skill.theme || '';
-      const body = skill.body || '';
-      const toolsCsv = Array.isArray(skill.tools) ? skill.tools.join(', ') : '';
-
-      mainCol.innerHTML = `
-        <div class="skill-detail__section-label">Редактирование скилла</div>
-        <div class="skill-edit-box reasoning-body" draggable="false">
-          <label class="skill-inline-edit__label">Тема</label>
-          <input class="skill-inline-edit__input" data-inline="theme" type="text" maxlength="200" value="${esc(theme)}" draggable="false">
-          <label class="skill-inline-edit__label">Инструменты через запятую</label>
-          <input class="skill-inline-edit__input" data-inline="tools" type="text" maxlength="1000" value="${esc(toolsCsv)}" draggable="false">
-          <label class="skill-inline-edit__label">Тело скилла (Markdown)</label>
-          <textarea class="skill-inline-edit__textarea" data-inline="body" maxlength="10000" draggable="false">${esc(body)}</textarea>
-          <div class="skill-inline-edit__actions">
-            <button type="button" class="skill-inline-edit__btn skill-inline-edit__btn--cancel" data-inline-act="cancel">Отмена</button>
-            <button type="button" class="skill-inline-edit__btn skill-inline-edit__btn--save" data-inline-act="save">Сохранить</button>
-          </div>
-        </div>
-      `;
-
-      mainCol.addEventListener('dragstart', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-      });
-
-      mainCol.querySelector('[data-inline-act="cancel"]')?.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this._isEditingDetail = false;
-        this._renderSkillDetail(this._activeSkillData || skill);
-      });
-
-      mainCol.querySelector('[data-inline-act="save"]')?.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const newTheme = mainCol.querySelector('[data-inline="theme"]')?.value?.trim() || '';
-        const newToolsCsv = mainCol.querySelector('[data-inline="tools"]')?.value || '';
-        const newBody = mainCol.querySelector('[data-inline="body"]')?.value?.trim() || '';
-        if (!newTheme || !newBody) {
-          this.app?.showToast?.('Тема и тело скилла обязательны');
-          return;
-        }
-        const newTools = newToolsCsv.split(',').map(x => x.trim()).filter(Boolean);
-        const saveBtn = mainCol.querySelector('[data-inline-act="save"]');
-        if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Сохранение…'; }
-        try {
-          const res = await fetch(`/api/skills/${sid}`, {
-            method: 'PUT',
-            credentials: 'include',
-            headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({ theme: newTheme, body: newBody, tools: newTools }),
-          });
-          if (res.status === 403) { this.app?.showToast?.('Редактировать можно только свои скиллы'); return; }
-          if (res.status === 404) { this.app?.showToast?.('Скилл не найден'); return; }
-          if (!res.ok) { this.app?.showToast?.('Не удалось обновить скилл'); return; }
-          const updated = await res.json().catch(() => ({}));
-          this._isEditingDetail = false;
-          this.app?.showToast?.('Скилл обновлён');
-          await this.load();
-          await this.openSkillDetail(sid);
-        } catch (err) {
-          this.app?.showToast?.('Ошибка обновления скилла');
-        } finally {
-          if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Сохранить'; }
-        }
-      });
-
-      mainCol.querySelector('[data-inline="theme"]')?.focus();
-    },
 
     async _fetchIsAdmin(force = false){
       if (!force && this._adminLoaded) return this._isAdmin;
@@ -914,15 +846,16 @@
         const data = await res.json();
         const ids = Array.isArray(data?.selected_ids) ? data.selected_ids : [];
         this._selectedIds = new Set(ids.map(Number));
+        if (Number(data?.limit) > 0) this._selectedLimit = Number(data.limit);
       } catch (_) {}
     },
 
-    _updateSelectedCounterUi(totalSkills){
+
+    _updateSelectedCounterUi(){
       const nav = document.getElementById('skills-selected-nav-count');
       if (nav) nav.textContent = `${this._selectedIds.size || 0}/${this._selectedLimit}`;
-      const countEl = document.getElementById('skills-count');
-      const total = typeof totalSkills === 'number' ? totalSkills : (this._allSkills?.length || 0);
-      if (countEl) countEl.textContent = `${total} • выбрано ${this._selectedIds.size}/${this._selectedLimit}`;
+      this._renderBar();
+      this._renderFoot();
     },
 
     async toggleSelectedSkill(skillId, desiredState = null, checkboxEl = null){
@@ -934,7 +867,7 @@
 
       if (nextSelected && !currentlySelected && this._selectedIds.size >= this._selectedLimit) {
         if (checkboxEl) checkboxEl.checked = false;
-        this.app?.showToast?.('Можно выбрать не более 5 скиллов');
+        this.app?.showToast?.(`Можно выбрать не более ${this._selectedLimit} скиллов`);
         return;
       }
 
@@ -956,7 +889,7 @@
         });
 
         if (res.status === 400) {
-          this.app?.showToast?.('Можно выбрать не более 5 скиллов');
+          this.app?.showToast?.(`Можно выбрать не более ${this._selectedLimit} скиллов`);
           await Promise.all([this._loadSelected(), this._loadLiked()]);
           this._syncCheckboxesUi(sid, this._selectedIds.has(sid));
           this._updateSelectedCounterUi();
@@ -985,15 +918,10 @@
       }
     },
 
-    _syncCheckboxesUi(skillId, isChecked){
+    _syncCheckboxesUi(skillId){
       const sid = Number(skillId);
-      document.querySelectorAll(`.skill-select-cb[data-select-cb="${sid}"]`).forEach(cb => {
-        cb.checked = isChecked;
-      });
-      if (this._activeSkillId === sid) {
-        const detailCb = document.getElementById('skill-detail-select-cb');
-        if (detailCb) detailCb.checked = isChecked;
-      }
+      document.querySelectorAll('#skv-list [data-pin]').forEach(b => { b.outerHTML = this._qpHtml(Number(b.dataset.pin)); });
+      if (this._activeSkillId === sid) this._updatePanePin();
     },
 
     _appendToInput(text){
@@ -1036,11 +964,11 @@
 
     _bindDropToInput(){
       document.addEventListener('dragover', (e)=>{
-        if (this._activeSkillId !== null || this._isEditingDetail) return;
+        if (this._isEditingDetail) return;
         if (e.target.closest && e.target.closest('#message-input')) e.preventDefault();
       });
       document.addEventListener('drop', async (e)=>{
-        if (this._activeSkillId !== null || this._isEditingDetail) return;
+        if (this._isEditingDetail) return;
         const input = e.target.closest && e.target.closest('#message-input');
         if (!input) return;
         const sid = e.dataTransfer?.getData('application/x-catchpm-skill-id') || this._dragSkillId;
@@ -1058,7 +986,7 @@
 
     _bindDropToChats(){
       const onDragOver = (e)=>{
-        if (this._activeSkillId !== null || this._isEditingDetail) return;
+        if (this._isEditingDetail) return;
         const item = e.target.closest && e.target.closest('.chat-item');
         if (!item) return;
         e.preventDefault();
@@ -1070,7 +998,7 @@
         if (item) item.classList.remove('chat-item--drop');
       };
       const onDrop = async (e)=>{
-        if (this._activeSkillId !== null || this._isEditingDetail) return;
+        if (this._isEditingDetail) return;
         const item = e.target.closest && e.target.closest('.chat-item');
         if (!item) return;
         e.preventDefault();

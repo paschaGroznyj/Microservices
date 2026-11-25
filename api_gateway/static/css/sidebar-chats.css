@@ -94,8 +94,9 @@
 
 /* Мышь: ⋯ только при наведении, время на это время прячется. */
 @media (hover: hover) {
-  .sidebar .chat-item--c.active:not(:hover) .chat-item-menu-btn { display: none; }
-  .sidebar .chat-item--c:hover .chat-time { visibility: hidden; }
+  .sidebar .chat-item--c.active:not(:hover) .chat-item-menu-btn:not([aria-expanded="true"]) { display: none; }
+  .sidebar .chat-item--c:hover .chat-time,
+  .sidebar .chat-item--c:has(.chat-item-menu-btn[aria-expanded="true"]) .chat-time { visibility: hidden; }
 }
 
 /* Мобильный (sidebar.css показывает ⋯ всегда): время сверху справа,

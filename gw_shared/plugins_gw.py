@@ -7,13 +7,14 @@ installations and user-edited lists remain readable without a deployment.
 import copy
 import json
 import logging
+from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import APIRouter, HTTPException, Request
 
 KEY = 'plugins:snippets'
 VERSION_KEY = 'plugins:snippets:version'
-DEFAULT_VERSION = '2'
+DEFAULT_VERSION = '3'
 MAX_ITEMS = 50
 
 # This is the default shipped before the snippets became self-contained.  It
@@ -58,10 +59,18 @@ _REQ = """(async () => {
       credentials: 'same-origin', cache: 'no-store', ...options,
       headers: { 'X-Device-Bridge': '1', ...(options.headers || {}) }
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}: запрос устройства не выполнен`);
-    return response.json();
+    if (!response.ok) {
+      // Only fixed texts per status: server bodies are never echoed.
+      const reason = {
+        401: 'нужен вход в AuGent', 403: 'доступ запрещён', 404: 'устройство не найдено',
+        409: 'устройство офлайн или функция выключена в клиенте', 422: 'некорректный запрос',
+        429: 'очередь устройства переполнена', 504: 'устройство не ответило вовремя'
+      }[response.status] || 'запрос устройства не выполнен';
+      throw new Error(`HTTP ${response.status}: ${reason}`);
+    }
+    return response.status === 204 ? null : response.json();
   }
-  async function selectDevice(force = false) {
+  async function selectDevice(force = false, includeOffline = false) {
     if (!force && typeof state.deviceId === 'string' && state.deviceId.trim()) return state.deviceId;
     const devices = (await request('/api/devices')).devices || [];
     if (!devices.length) {
@@ -70,14 +79,15 @@ _REQ = """(async () => {
       throw new Error('Нет устройств');
     }
     const online = devices.filter(d => d.status === 'online');
-    const choices = online.length ? online : devices;
+    const choices = includeOffline || !online.length ? devices : online;
     let selected = choices[0];
     if (choices.length > 1) {
       // Select by number, never interpolate an unchecked id into a URL.
       const answer = window.prompt('Выберите номер устройства:\\n' + choices.map((d, i) =>
-        `${i + 1}. ${d.name} (${d.device_id})`).join('\\n'), '1');
+        `${i + 1}. ${d.name} [${d.status}] (${d.device_id})`).join('\\n'), '1');
       if (answer === null || !/^[1-9]\\d*$/.test(answer.trim())) throw new Error('Выбор устройства отменён.');
       selected = choices[Number(answer) - 1];
+      if (!selected) throw new Error('Нет устройства с таким номером.');
     }
     if (!selected || typeof selected.device_id !== 'string' || !selected.device_id.trim()) {
       throw new Error('Устройство не выбрано. Запустите «Список устройств».');
@@ -86,9 +96,9 @@ _REQ = """(async () => {
     return selected.device_id;
   }
 """
-_END = """})().catch(() => {
-  // Do not print server bodies or rejected values: they could contain secrets.
-  console.error('Не удалось выполнить скрипт. Проверьте вход, выбор устройства и доступ клиента.');
+_END = """})().catch(err => {
+  // Messages are built by these snippets only (request() never includes server bodies).
+  console.error('Не удалось выполнить скрипт:', err && err.message ? err.message : 'неизвестная ошибка');
 });
 """
 
@@ -98,9 +108,27 @@ def _snippet(code: str, **fields: str) -> dict[str, str]:
 
 
 DEFAULT_SNIPPETS = [
-    _snippet("""  const registered = await request('/api/devices', {
+    _snippet("""  if (state.deviceId && state.token &&
+      !window.confirm('В этой вкладке уже зарегистрировано устройство ' + state.deviceId + '.\\n' +
+        'OK: создать ещё одно. Отмена: заново показать токен этого устройства.')) {
+    try {
+      window.prompt('Device token (не отправляйте его в чат):', state.token);
+    } catch (_) {}
+    console.info('Новое устройство не создано. Текущее:', state.deviceId);
+    return;
+  }
+  const hint = String((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '');
+  const platform = /win/i.test(hint) ? 'windows' : /mac|iphone|ipad/i.test(hint) ? 'macos' : 'linux';
+  const label = { windows: 'Windows', macos: 'Mac', linux: 'Linux' }[platform];
+  let typed = label + ' desktop';
+  try {
+    typed = window.prompt('Имя устройства (видно в списке):', typed);
+  } catch (_) {} // Dialogs can be blocked: keep the default name.
+  if (typed === null) throw new Error('Регистрация отменена.');
+  const name = String(typed).trim().slice(0, 128) || label + ' desktop';
+  const registered = await request('/api/devices', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: 'My desktop', platform: 'windows' }) // windows | macos | linux
+    body: JSON.stringify({ name, platform })
   });
   if (!registered.device_id || !registered.token) throw new Error('Некорректный ответ регистрации');
   // Persist BEFORE attempting clipboard or prompt; either can be unavailable.
@@ -119,9 +147,11 @@ DEFAULT_SNIPPETS = [
   // To reopen the copy dialog later (without a new registration):
   // window.prompt('Device token', window.__auGentDeviceBridge.token)
 """, id='register', title='Зарегистрировать устройство и сохранить токен',
-             description='Сохраняет device_id и токен в памяти и sessionStorage этой вкладки до копирования. '
+             description='Платформа определяется по браузеру, имя можно задать. Если в вкладке уже есть устройство, '
+                         'сначала спрашивает подтверждение, чтобы не плодить дубли. '
+                         'Сохраняет device_id и токен в памяти и sessionStorage этой вкладки до копирования. '
                          'Без Clipboard API открывает диалог. Не выводит токен в консоль. '
-                         'Вставьте токен в Device token клиента; после настройки удалите его из сессии/закройте вкладку.'),
+                         'Вставьте токен в Device token клиента, затем запустите «Забыть токен в этой вкладке».'),
     _snippet("""  const devices = (await request('/api/devices')).devices || [];
   console.table(devices.map(d => ({
     device_id: d.device_id, name: d.name, status: d.status,
@@ -158,14 +188,47 @@ DEFAULT_SNIPPETS = [
 """, id='exec', title='Выполнить команду (проверка exec)',
              description='Нужна capability exec: включите Allow agent commands в настройках/config клиента. '
                          'Windows — PowerShell, macOS — zsh, Linux — bash. Не запускайте недоверенные команды.'),
-    _snippet("""  const deviceId = await selectDevice();
-  if (!window.confirm('Навсегда отозвать устройство ' + deviceId + '?')) return;
+    _snippet("""  // Always choose explicitly from all devices, offline duplicates included.
+  const previous = [state.deviceId, state.token];
+  const deviceId = await selectDevice(true, true);
+  // Selecting another device must not lose this tab's current credential.
+  const restore = () => previous[0] !== deviceId && remember(...previous);
+  if (!window.confirm('Навсегда отозвать устройство ' + deviceId + '?')) { restore(); return; }
   await request(`/api/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE' });
-  remember(null);
+  if (previous[0] === deviceId) remember(null); else restore();
   console.info('Устройство отозвано:', deviceId);
 """, id='revoke', title='Отозвать устройство',
-             description='После подтверждения навсегда отзывает токен и очищает выбор и токен из этой вкладки. '
+             description='Показывает все устройства, включая офлайн, и спрашивает номер. '
+                         'После подтверждения навсегда отзывает токен и очищает выбор и токен из этой вкладки. '
                          'Для повторного подключения нужна новая регистрация.'),
+    _snippet("""  const devices = (await request('/api/devices')).devices || [];
+  const offline = devices.filter(d => d.status === 'offline');
+  if (!offline.length) { console.info('Офлайн-устройств нет.'); return; }
+  console.table(offline.map(d => ({ device_id: d.device_id, name: d.name, platform: d.platform })));
+  if (!window.confirm('Навсегда отозвать офлайн-устройства: ' + offline.length + '?\\n' +
+      'Клиенты с их токенами больше не подключатся.')) return;
+  let done = 0;
+  for (const d of offline) {
+    try {
+      await request(`/api/devices/${encodeURIComponent(d.device_id)}`, { method: 'DELETE' });
+      done += 1;
+      if (d.device_id === state.deviceId) remember(null);
+    } catch (err) {
+      console.error('Не отозвано', d.device_id + ':', err.message);
+    }
+  }
+  console.info(`Отозвано ${done} из ${offline.length}. Online-устройства не тронуты.`);
+""", id='revoke_offline', title='Удалить все офлайн-устройства',
+             description='Чистит дубли после повторных регистраций. Показывает список, спрашивает подтверждение '
+                         'и отзывает только устройства со статусом offline. Online не трогает.'),
+    _snippet("""  const had = Boolean(state.token);
+  // Keep the selected device for ping/notify/exec; drop only the credential.
+  state.token = null;
+  remember(state.deviceId);
+  console.info(had ? 'Токен удалён из этой вкладки. Выбранное устройство сохранено.' : 'Токена в этой вкладке нет.');
+""", id='forget', title='Забыть токен в этой вкладке',
+             description='Удаляет токен из памяти и sessionStorage вкладки после настройки клиента. '
+                         'Устройство продолжает работать, выбор устройства сохраняется.'),
 ]
 
 # Exact old values are generated from the old source shape so migration is
@@ -239,8 +302,13 @@ def _valid(items: Any) -> bool:
     return True
 
 
+# Frozen copy of the v2 built-in set: replaced automatically, like the legacy one.
+_V2_DEFAULT_SNIPPETS = json.loads(
+    (Path(__file__).with_name('plugins_snippets_v2.json')).read_text(encoding='utf-8'))
+
+
 def _is_legacy_default(items: list[dict[str, str]]) -> bool:
-    return items == _LEGACY_DEFAULT_SNIPPETS
+    return items == _LEGACY_DEFAULT_SNIPPETS or items == _V2_DEFAULT_SNIPPETS
 
 
 # Compare-and-set both value and migration metadata in one Redis operation.

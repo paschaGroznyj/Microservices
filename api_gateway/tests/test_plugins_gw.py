@@ -9,6 +9,7 @@ from gw_shared.plugins_gw import (
     KEY,
     VERSION_KEY,
     _LEGACY_DEFAULT_SNIPPETS,
+    _V2_DEFAULT_SNIPPETS,
     create_router,
 )
 
@@ -58,7 +59,7 @@ def test_missing_redis_set_is_initialized_without_mutating_defaults():
     assert response.status_code == 200
     assert [item['id'] for item in response.json()['snippets']] == [item['id'] for item in original]
     assert json.loads(redis.values[KEY]) == original
-    assert redis.values[VERSION_KEY] == '2'
+    assert redis.values[VERSION_KEY] == '3'
     assert DEFAULT_SNIPPETS == original
 
 
@@ -68,11 +69,28 @@ def test_exact_legacy_builtin_set_is_migrated():
 
     assert response.status_code == 200
     assert json.loads(redis.values[KEY]) == DEFAULT_SNIPPETS
-    assert redis.values[VERSION_KEY] == '2'
+    assert redis.values[VERSION_KEY] == '3'
     register = next(item for item in response.json()['snippets'] if item['id'] == 'register')
     assert 'copy(registered.token)' not in register['code']
     assert 'console.log(registered.token)' not in register['code']
     assert 'window.__auGentDeviceBridge' in register['code']
+
+
+def test_v2_builtin_set_is_migrated_to_current():
+    redis = MemoryRedis({KEY: json.dumps(_V2_DEFAULT_SNIPPETS, ensure_ascii=False)})
+    ids = [item['id'] for item in client_for(redis).get('/api/plugins/snippets').json()['snippets']]
+    assert ids == ['register', 'list', 'ping', 'notify', 'exec', 'revoke', 'revoke_offline', 'forget']
+    assert json.loads(redis.values[KEY]) == DEFAULT_SNIPPETS
+    assert redis.values[VERSION_KEY] == '3'
+
+
+def test_edited_v2_list_is_preserved():
+    edited = copy.deepcopy(_V2_DEFAULT_SNIPPETS)
+    edited[0]['title'] = 'Мой заголовок'
+    raw = json.dumps(edited, ensure_ascii=False)
+    redis = MemoryRedis({KEY: raw})
+    client_for(redis).get('/api/plugins/snippets')
+    assert redis.values[KEY] == raw
 
 
 def test_custom_set_is_preserved_during_version_migration():
@@ -176,25 +194,30 @@ let input = '';
 process.stdin.on('data', d => input += d);
 process.stdin.on('end', async () => {
   const snippets = Object.fromEntries(JSON.parse(input).map(s => [s.id, s.code]));
-  function setup({clipboard = false, storage = true, promptThrows = false, devices = [
+  function setup({clipboard = false, storage = true, promptThrows = false, platform = 'Win32',
+    status = 200, confirmAnswer = true, devices = [
     {device_id:'dev-one',name:'Desktop',status:'online',capabilities:['exec']}
   ]} = {}) {
     const requests = [], logs = [], prompts = [], values = {}, copies = [];
     const context = vm.createContext({
       console: Object.fromEntries(['log','info','error','table'].map(k => [k, (...a) => logs.push(a)])),
-      navigator: clipboard ? {clipboard:{writeText: async t => copies.push(t)}} : {},
+      navigator: clipboard ? {platform, clipboard:{writeText: async t => copies.push(t)}} : {platform},
       sessionStorage: {
         getItem(k) { if (!storage) throw Error('denied'); return values[k] || null; },
         setItem(k,v) { if (!storage) throw Error('denied'); values[k] = v; },
         removeItem(k) { if (!storage) throw Error('denied'); delete values[k]; }
       },
-      prompt: (label,value) => { prompts.push([label,value]); if (promptThrows) throw Error('blocked'); return '1'; },
-      confirm: () => true,
+      prompt: (label,value) => { prompts.push([label,value]); if (promptThrows) throw Error('blocked');
+        return label.startsWith('Имя') ? value : '1'; },
+      confirm: () => confirmAnswer,
       fetch: async (path, options = {}) => {
         requests.push([path, options]);
         const result = path === '/api/devices' ? (options.method === 'POST'
           ? {device_id:'registered',token:'SUPER_SECRET_TOKEN'} : {devices}) : {output:'pong'};
-        return {ok:true, json: async () => result};
+        if (status !== 200 && !(path === '/api/devices' && !options.method)) {
+          return {ok:false, status, json: async () => ({detail:'SERVER_BODY_SECRET'})};
+        }
+        return {ok:true, status:200, json: async () => result};
       }
     });
     context.window = context;
@@ -202,7 +225,7 @@ process.stdin.on('end', async () => {
       run: id => vm.runInContext(snippets[id], context)};
   }
   for (const options of [{}, {clipboard:true}, {storage:false}, {promptThrows:true}, {storage:false,promptThrows:true}]) {
-    const s = setup(options);
+    const s = setup({...options, devices:[{device_id:'registered',name:'Desktop',status:'online'}]});
     // Pre-existing global lexical names must not interfere with any paste.
     vm.runInContext('const deviceId = "external"; const state = {}; const registered = {};', s.context);
     await s.run('register'); await s.run('register');
@@ -214,7 +237,10 @@ process.stdin.on('end', async () => {
     }
     assert(!JSON.stringify(s.logs).includes('SUPER_SECRET_TOKEN'));
     assert.equal(s.copies.length, options.clipboard ? 2 : 0);
-    if (!options.clipboard) assert.equal(s.prompts[0][1], 'SUPER_SECRET_TOKEN');
+    if (!options.clipboard) assert(s.prompts.some(p => p[1] === 'SUPER_SECRET_TOKEN'));
+    const created = s.requests.filter(([u, o]) => u === '/api/devices' && o.method === 'POST');
+    assert.equal(created.length, 2);
+    assert.deepEqual(JSON.parse(created[0][1].body), {name: 'Windows desktop', platform: 'windows'});
     for (const id of ['ping','notify','exec']) { await s.run(id); await s.run(id); }
     assert(s.requests.every(([url]) => !url.includes('undefined')));
     await s.run('revoke');
@@ -225,7 +251,7 @@ process.stdin.on('end', async () => {
   for (const id of ['list','ping','notify','exec','revoke']) {
     const s = setup();
     await s.run(id); await s.run(id);
-    assert(!s.logs.some(row => row[0] === 'Не удалось выполнить скрипт. Проверьте вход, выбор устройства и доступ клиента.'));
+    assert(!s.logs.some(row => row[0] === 'Не удалось выполнить скрипт:'));
     assert(s.requests.every(([url]) => !url.includes('undefined')));
     for (const [, opts] of s.requests) {
       assert.equal(opts.credentials, 'same-origin');
@@ -242,6 +268,52 @@ process.stdin.on('end', async () => {
   await cancelled.run('exec'); assert.equal(cancelled.requests.length,1);
   const restored = setup(); restored.values['augent.device_id'] = 'restored';
   await restored.run('ping'); assert.equal(restored.requests[0][0], '/api/devices/restored/commands');
+  // Register on macOS/Linux; repeated register declined keeps the first device.
+  const mac = setup({platform:'MacIntel'}); await mac.run('register');
+  assert.equal(JSON.parse(mac.requests[0][1].body).platform, 'macos');
+  const lin = setup({platform:'Linux x86_64'}); await lin.run('register');
+  assert.equal(JSON.parse(lin.requests[0][1].body).platform, 'linux');
+  const keep = setup(); await keep.run('register'); keep.context.confirm = () => false;
+  keep.prompts.length = 0; await keep.run('register');
+  assert.equal(keep.requests.filter(([, o]) => o.method === 'POST').length, 1);
+  assert.equal(keep.prompts[0][1], 'SUPER_SECRET_TOKEN'); // Cancel re-shows the token.
+  assert(!JSON.stringify(keep.logs).includes('SUPER_SECRET_TOKEN'));
+  // Revoking a different (offline) device keeps this tab's device and token.
+  const other = setup({devices:[{device_id:'registered',status:'online'},{device_id:'old',status:'offline'}]});
+  await other.run('register');
+  other.context.prompt = () => '2'; await other.run('revoke');
+  assert.equal(other.requests.at(-1)[0], '/api/devices/old');
+  assert.equal(other.context.__auGentDeviceBridge.deviceId, 'registered');
+  assert.equal(other.context.__auGentDeviceBridge.token, 'SUPER_SECRET_TOKEN');
+  // Revoke lists offline devices too while one is online.
+  const mixed = setup({devices:[{device_id:'on',name:'A',status:'online'},{device_id:'off',name:'B',status:'offline'}]});
+  mixed.context.prompt = (label) => { mixed.prompts.push([label]); return '2'; };
+  await mixed.run('revoke');
+  assert(mixed.prompts[0][0].includes('[offline]'));
+  assert.equal(mixed.requests.at(-1)[0], '/api/devices/off');
+  assert.equal(mixed.requests.at(-1)[1].method, 'DELETE');
+  // Bulk offline cleanup never touches online devices.
+  const bulk = setup({devices:[{device_id:'on',status:'online'},{device_id:'x1',status:'offline'},
+    {device_id:'x2',status:'offline'},{device_id:'gone',status:'revoked'}]});
+  await bulk.run('revoke_offline');
+  assert.deepEqual(bulk.requests.filter(([, o]) => o.method === 'DELETE').map(([u]) => u),
+    ['/api/devices/x1', '/api/devices/x2']);
+  const declined = setup({confirmAnswer:false, devices:[{device_id:'x1',status:'offline'}]});
+  await declined.run('revoke_offline');
+  assert(!declined.requests.some(([, o]) => o.method === 'DELETE'));
+  // Forget drops the token but keeps the selected device.
+  const fg = setup(); await fg.run('register'); await fg.run('forget');
+  assert.equal(fg.context.__auGentDeviceBridge.token, null);
+  assert.equal(fg.context.__auGentDeviceBridge.deviceId, 'registered');
+  assert.equal(fg.values['augent.device_token'], undefined);
+  assert.equal(fg.values['augent.device_id'], 'registered');
+  // Errors are specific, but server bodies never reach the console.
+  const busy = setup({status:409}); await busy.run('exec');
+  const err = busy.logs.find(r => r[0] === 'Не удалось выполнить скрипт:');
+  assert(err && err[1].includes('409') && err[1].includes('выключена в клиенте'), JSON.stringify(busy.logs));
+  assert(!JSON.stringify(busy.logs).includes('SERVER_BODY_SECRET'));
+  const none = setup({devices:[]}); await none.run('ping');
+  assert(none.logs.some(r => r[0] === 'Не удалось выполнить скрипт:' && r[1] === 'Нет устройств'));
   console.log('All snippets: repeated pastes, clipboard/prompt/storage failures, selection, revoke passed');
 }).on('error', e => { console.error(e); process.exitCode = 1; });
 '''

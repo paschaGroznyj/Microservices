@@ -282,6 +282,32 @@ async def test_bad_device_result(gateway, bad):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(('device_output', 'expected'), [
+    ('Screenshot requires full mode (private desktop capture)', 'нужен Full mode'),
+    ('Screenshot unavailable: install Pillow and enable a graphical desktop/capture permission', 'нет доступного GUI/Pillow'),
+    ('Screenshot capture failed: no GUI or OS screen recording permission', 'отклонён Windows'),
+    ('Path is inside a protected folder', 'защищённая папка'),
+    ('Path is outside the workspace folder', 'вне рабочей папки'),
+])
+async def test_known_device_policy_errors_are_explained_without_raw_output(gateway, device_output, expected):
+    gateway.command_result = {'status': 'error', 'exit_code': 1, 'output': device_output}
+    result = await invoke('capture_screenshot')
+    assert not result['ok'] and expected in result['error']
+    assert device_output not in result['error']
+    assert SECRET not in str(result) and CREDENTIAL not in str(result)
+    assert len(deleted(gateway)) == 1
+
+
+@pytest.mark.asyncio
+async def test_unknown_device_error_stays_generic(gateway):
+    gateway.command_result = {'status': 'error', 'exit_code': 1, 'output': 'secret=' + SECRET}
+    result = await invoke('capture_screenshot')
+    assert not result['ok']
+    assert 'Устройство отклонило файловую операцию' in result['error']
+    assert SECRET not in str(result) and CREDENTIAL not in str(result)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('field,value', [('size', len(DATA) + 1), ('sha256', '0' * 64)])
 @pytest.mark.parametrize('direction', ['send', 'get'])
 async def test_integrity_metadata(gateway, env, field, value, direction):

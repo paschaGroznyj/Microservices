@@ -1,5 +1,5 @@
 """
-max_service — интеграция бота мессенджера MAX в CatchPM (аналог telegram_service).
+max_service — интеграция бота мессенджера MAX в AuGent (аналог telegram_service).
 
 Ядро (Коммит 1):
   • long-polling GET /updates (marker-based) — собственный цикл на MaxClient;
@@ -515,7 +515,7 @@ def _mentions_bot(msg: dict, text: str) -> bool:
 def _registration_gate_text(chat_id: int) -> str:
     return (
         "У вас нет доступа к агенту в этом чате.\n\n"
-        f"Регистрация чатов — через интерфейс CatchPM: {CATCHPM_URL}\n\n"
+        f"Регистрация чатов — через интерфейс AuGent: {CATCHPM_URL}\n\n"
         f"Передайте администратору chat_id этого чата: {chat_id}"
     )
 
@@ -990,7 +990,7 @@ async def handle_callback(update: dict) -> None:
             if message_id:
                 try:
                     await client.edit_message(
-                        message_id, "Удалить ключ RouterAPI? Он удалится и из профиля CatchPM.",
+                        message_id, "Удалить ключ RouterAPI? Он удалится и из профиля AuGent.",
                         attachments=keyboard([[_btn("Да, удалить", "max:keys:delok")],
                                               [_btn("Отмена", "max:menu:keys")]]), fmt=None)
                 except Exception:

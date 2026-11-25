@@ -1,7 +1,7 @@
 """
 telegram_service/app/bot.py
 ───────────────────────────
-Тонкий Telegram-шлюз в микросервис CatchPM.
+Тонкий Telegram-шлюз в микросервис AuGent.
 
 Поток (Коммит 1):
   update → allow-list (Redis `tg:allowed_chats`, фолбэк HTTP chats_service)
@@ -1967,7 +1967,7 @@ def _registration_gate_text(chat_id: int) -> str:
     """Единый текст отказа для незарегистрированного чата (/start + on_text_message)."""
     return (
         "У вас нет доступа к агенту в этом чате.\n\n"
-        f"Регистрация чатов доступна только через интерфейс CatchPM: внедрение в процессе\n\n"
+        f"Регистрация чатов доступна только через интерфейс AuGent: внедрение в процессе\n\n"
         f"Передайте администратору chat_id этого чата: {chat_id}"
     )
 
@@ -2014,7 +2014,7 @@ def extract_urls_from_message(msg: Message) -> list[str]:
 # /start — интерактивное меню настроек чата (Коммит 2)
 # Доступно всем участникам, из группы И из лички. Настройки строго per-chat.
 # Обязательное условие: чат зарегистрирован (allow-list). Иначе — отбойник
-# со ссылкой на регистрацию через интерфейс CatchPM.
+# со ссылкой на регистрацию через интерфейс AuGent.
 # ══════════════════════════════════════════════════════════════════════════════
 
 CATCHPM_URL = os.environ.get("CATCHPM_URL", "https://catchpm.cds.uva-advanced.ru")
@@ -2025,9 +2025,10 @@ TG_MODEL_LABELS = {"coder": "GPT", "designer": "Claude", "universal": "GLM", "ge
 
 # Тул-категории, которые можно включать из телеги. Админская категория
 # намеренно ОТСУТСТВУЕТ — из телеги её включить нельзя.
-# Админская категория тулов (платный RouterAPI: видео/аудио). Видна только админу.
-TG_ADMIN_TOOL_CATEGORIES = ["media_gen", "admin"]
-TG_TOOL_CATEGORIES = ["internet", "content", "sessions"]
+# Админская категория тулов. Видна только админу. media_gen доступна всем:
+# генерация идёт на личном ключе RouterAPI (раздел «Ключи API» в /start).
+TG_ADMIN_TOOL_CATEGORIES = ["admin"]
+TG_TOOL_CATEGORIES = ["internet", "content", "sessions", "media_gen"]
 
 
 def _parse_tg_admin_ids():
@@ -2309,7 +2310,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /start - menu nastroek, per-chat. Dostupno vsem (gruppa + lichka).
     Snachala proverka registracii v BD (allow-list). Ne zaregistrirovan -
-    return s instrukciej zaregistrirovat chat cherez interfejs CatchPM.
+    return s instrukciej zaregistrirovat chat cherez interfejs AuGent.
     """
     chat_id = update.effective_chat.id
     _allowed = await is_allowed(chat_id)
@@ -2408,7 +2409,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer()
             try:
                 await query.edit_message_text(
-                    "Удалить ключ RouterAPI? Он удалится и из профиля CatchPM.",
+                    "Удалить ключ RouterAPI? Он удалится и из профиля AuGent.",
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("Да, удалить", callback_data="tg:keys:delok")],
                         [InlineKeyboardButton("Отмена", callback_data="tg:menu:keys")]]))

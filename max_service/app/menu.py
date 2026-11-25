@@ -14,9 +14,10 @@ from __future__ import annotations
 MAX_MODELS = ["coder", "designer", "universal", "gemini"]
 MAX_MODEL_LABELS = {"coder": "GPT", "designer": "Claude", "universal": "GLM", "gemini": "Gemini"}
 MAX_TRIGGERS = ["mention", "orchestrator"]
-MAX_TOOL_CATEGORIES = ["internet", "content", "sessions"]
-# Платные/админские категории — видны только админу (аналог TG_ADMIN_TOOL_CATEGORIES).
-MAX_ADMIN_TOOL_CATEGORIES = ["media_gen", "admin"]
+# media_gen доступна всем: генерация идёт на личном ключе RouterAPI (раздел «Ключи API» в /start).
+MAX_TOOL_CATEGORIES = ["internet", "content", "sessions", "media_gen"]
+# Админские категории — видны только админу (аналог TG_ADMIN_TOOL_CATEGORIES).
+MAX_ADMIN_TOOL_CATEGORIES = ["admin"]
 
 
 def _btn(text: str, payload: str) -> dict:

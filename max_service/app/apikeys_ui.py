@@ -1,6 +1,6 @@
 """Раздел «Ключи API» в /start MAX-бота.
 
-Маршрут сохранения тот же, что у профиля CatchPM: ключ пишет auth_service в
+Маршрут сохранения тот же, что у профиля AuGent: ключ пишет auth_service в
 vault.user_secrets под web user_id. Бот обращается к chats_service
 (/max/secrets*), тот берёт владельца личного чата (max_chats.added_by_user_id)
 и вызывает auth_service /profile/secrets/*. Значение ключа назад не приходит.
@@ -35,7 +35,7 @@ def keys_text(item: dict | None, error: str | None = None) -> str:
     """Текст раздела в markdown (MAX fmt="markdown")."""
     lines = ["**🔑 Ключи API**", "",
              f"**{PROVIDER_LABEL}** нужен для категории «Видео и аудио»: генерация видео, "
-             "синтез речи и музыки. Ключ общий с профилем CatchPM.", ""]
+             "синтез речи и музыки. Ключ общий с профилем AuGent.", ""]
     if error:
         lines.append(f"⚠️ {_md(error)}")
     elif item:

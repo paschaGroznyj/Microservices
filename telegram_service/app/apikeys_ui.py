@@ -1,6 +1,6 @@
 """Раздел «Ключи API» в /start Telegram-бота.
 
-Маршрут сохранения тот же, что у профиля CatchPM: ключ пишет auth_service в
+Маршрут сохранения тот же, что у профиля AuGent: ключ пишет auth_service в
 vault.user_secrets под web user_id. Бот обращается к chats_service
 (/tg/secrets*), тот берёт владельца личного чата (telegram_chats.added_by_user_id)
 и вызывает auth_service /profile/secrets/*. Значение ключа назад не приходит.
@@ -29,7 +29,7 @@ def fmt_date(iso: str | None) -> str:
 def keys_text(item: dict | None, error: str | None = None) -> str:
     lines = ["<b>🔑 Ключи API</b>", "",
              f"<b>{PROVIDER_LABEL}</b> нужен для категории «Видео и аудио»: генерация видео, "
-             "синтез речи и музыки. Ключ общий с профилем CatchPM.", ""]
+             "синтез речи и музыки. Ключ общий с профилем AuGent.", ""]
     if error:
         lines.append(f"⚠️ {html.escape(error)}")
     elif item:

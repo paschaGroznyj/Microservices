@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 KEY = 'plugins:snippets'
 VERSION_KEY = 'plugins:snippets:version'
-DEFAULT_VERSION = '3'
+DEFAULT_VERSION = '4'
 MAX_ITEMS = 50
 
 # This is the default shipped before the snippets became self-contained.  It
@@ -108,50 +108,114 @@ def _snippet(code: str, **fields: str) -> dict[str, str]:
 
 
 DEFAULT_SNIPPETS = [
-    _snippet("""  if (state.deviceId && state.token &&
-      !window.confirm('В этой вкладке уже зарегистрировано устройство ' + state.deviceId + '.\\n' +
-        'OK: создать ещё одно. Отмена: заново показать токен этого устройства.')) {
-    try {
-      window.prompt('Device token (не отправляйте его в чат):', state.token);
-    } catch (_) {}
-    console.info('Новое устройство не создано. Текущее:', state.deviceId);
+    {
+        'id': 'register',
+        'title': 'Зарегистрировать устройство и сохранить токен',
+        'description': ('Платформа определяется по браузеру, имя вводится в диалоге. '
+                        'Повторный запуск показывает сохранённый токен, не создавая новое устройство. '
+                        'Токен хранится в памяти и sessionStorage вкладки, в консоль не выводится. '
+                        'Скопируйте токен из диалога в Device token клиента, затем выполните '
+                        '«Забыть токен в этой вкладке».'),
+        'code': """(async () => {
+  const s = window.__auGentDeviceBridge ||= {};
+
+  if (s.registering) {
+    console.warn('Регистрация уже выполняется. Подожди.');
     return;
   }
-  const hint = String((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '');
-  const platform = /win/i.test(hint) ? 'windows' : /mac|iphone|ipad/i.test(hint) ? 'macos' : 'linux';
-  const label = { windows: 'Windows', macos: 'Mac', linux: 'Linux' }[platform];
-  let typed = label + ' desktop';
+
   try {
-    typed = window.prompt('Имя устройства (видно в списке):', typed);
-  } catch (_) {} // Dialogs can be blocked: keep the default name.
-  if (typed === null) throw new Error('Регистрация отменена.');
-  const name = String(typed).trim().slice(0, 128) || label + ' desktop';
-  const registered = await request('/api/devices', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, platform })
-  });
-  if (!registered.device_id || !registered.token) throw new Error('Некорректный ответ регистрации');
-  // Persist BEFORE attempting clipboard or prompt; either can be unavailable.
-  remember(registered.device_id, registered.token);
-  let copied = false;
-  try {
-    await navigator.clipboard.writeText(registered.token);
-    copied = true;
+    s.deviceId ||= sessionStorage.getItem('augent.device_id');
+    s.token ||= sessionStorage.getItem('augent.device_token');
   } catch (_) {}
-  if (!copied) {
+
+  if (!s.deviceId || !s.token) {
+    const platform = /Win/i.test(navigator.platform) ? 'windows'
+      : /Mac/i.test(navigator.platform) ? 'macos'
+      : 'linux';
+
+    const name = window.prompt('Имя устройства:', 'My desktop');
+    if (name === null) return;
+
+    if (!name.trim() || name.trim().length > 128) {
+      console.error('Имя должно содержать от 1 до 128 символов.');
+      return;
+    }
+
+    s.registering = true;
+
     try {
-      window.prompt('Скопируйте Device token в клиент. Не отправляйте его в чат:', registered.token);
-    } catch (_) {} // A blocked/cancelled dialog must not lose the credential.
+      const response = await fetch('/api/devices', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Device-Bridge': '1'
+        },
+        body: JSON.stringify({
+          name: name.trim(),
+          platform
+        })
+      });
+
+      if (!response.ok) {
+        const reason = {
+          401: 'Войди в AuGent заново.',
+          403: 'Доступ запрещён.',
+          404: 'Маршрут регистрации недоступен.',
+          422: 'Сервер отклонил имя или платформу.',
+          502: 'Gateway недоступен.',
+          503: 'Сервис недоступен.'
+        };
+
+        console.error(
+          `Регистрация: HTTP ${response.status}. ` +
+          (reason[response.status] || 'Ошибка сервера.')
+        );
+        return;
+      }
+
+      const data = await response.json();
+
+      if (
+        typeof data.device_id !== 'string' ||
+        !data.device_id ||
+        typeof data.token !== 'string' ||
+        !data.token
+      ) {
+        console.error(
+          'Неожиданный ответ регистрации. Не повторяй запрос: устройство могло создаться.'
+        );
+        return;
+      }
+
+      s.deviceId = data.device_id;
+      s.token = data.token;
+
+      try {
+        sessionStorage.setItem('augent.device_id', s.deviceId);
+        sessionStorage.setItem('augent.device_token', s.token);
+      } catch (_) {}
+    } finally {
+      s.registering = false;
+    }
   }
-  console.info(copied ? 'Токен скопирован. device_id:' : 'Токен сохранён в этой вкладке. device_id:', state.deviceId);
-  // To reopen the copy dialog later (without a new registration):
-  // window.prompt('Device token', window.__auGentDeviceBridge.token)
-""", id='register', title='Зарегистрировать устройство и сохранить токен',
-             description='Платформа определяется по браузеру, имя можно задать. Если в вкладке уже есть устройство, '
-                         'сначала спрашивает подтверждение, чтобы не плодить дубли. '
-                         'Сохраняет device_id и токен в памяти и sessionStorage этой вкладки до копирования. '
-                         'Без Clipboard API открывает диалог. Не выводит токен в консоль. '
-                         'Вставьте токен в Device token клиента, затем запустите «Забыть токен в этой вкладке».'),
+
+  console.info('Device ID:', s.deviceId);
+
+  // copy() в обычной консоли не работает, поэтому используем prompt.
+  window.prompt(
+    'Скопируй токен в Device token клиента. В чат его не отправляй:',
+    s.token
+  );
+})().catch(() => {
+  console.error(
+    'Ошибка сети или ответа. Проверь Network → /api/devices. ' +
+    'Не повторяй POST вслепую.'
+  );
+});
+""",
+    },
     _snippet("""  const devices = (await request('/api/devices')).devices || [];
   console.table(devices.map(d => ({
     device_id: d.device_id, name: d.name, status: d.status,
@@ -307,8 +371,13 @@ _V2_DEFAULT_SNIPPETS = json.loads(
     (Path(__file__).with_name('plugins_snippets_v2.json')).read_text(encoding='utf-8'))
 
 
+_V3_DEFAULT_SNIPPETS = json.loads(
+    (Path(__file__).with_name('plugins_snippets_v3.json')).read_text(encoding='utf-8'))
+
+
 def _is_legacy_default(items: list[dict[str, str]]) -> bool:
-    return items == _LEGACY_DEFAULT_SNIPPETS or items == _V2_DEFAULT_SNIPPETS
+    return (items == _LEGACY_DEFAULT_SNIPPETS or items == _V2_DEFAULT_SNIPPETS
+            or items == _V3_DEFAULT_SNIPPETS)
 
 
 # Compare-and-set both value and migration metadata in one Redis operation.

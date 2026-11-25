@@ -6,6 +6,8 @@ from fastapi.testclient import TestClient
 
 from gw_shared.plugins_gw import (
     DEFAULT_SNIPPETS,
+    DEFAULT_VERSION,
+    _V3_DEFAULT_SNIPPETS,
     KEY,
     VERSION_KEY,
     _LEGACY_DEFAULT_SNIPPETS,
@@ -59,7 +61,7 @@ def test_missing_redis_set_is_initialized_without_mutating_defaults():
     assert response.status_code == 200
     assert [item['id'] for item in response.json()['snippets']] == [item['id'] for item in original]
     assert json.loads(redis.values[KEY]) == original
-    assert redis.values[VERSION_KEY] == '3'
+    assert redis.values[VERSION_KEY] == DEFAULT_VERSION
     assert DEFAULT_SNIPPETS == original
 
 
@@ -69,7 +71,7 @@ def test_exact_legacy_builtin_set_is_migrated():
 
     assert response.status_code == 200
     assert json.loads(redis.values[KEY]) == DEFAULT_SNIPPETS
-    assert redis.values[VERSION_KEY] == '3'
+    assert redis.values[VERSION_KEY] == DEFAULT_VERSION
     register = next(item for item in response.json()['snippets'] if item['id'] == 'register')
     assert 'copy(registered.token)' not in register['code']
     assert 'console.log(registered.token)' not in register['code']
@@ -81,7 +83,25 @@ def test_v2_builtin_set_is_migrated_to_current():
     ids = [item['id'] for item in client_for(redis).get('/api/plugins/snippets').json()['snippets']]
     assert ids == ['register', 'list', 'ping', 'notify', 'exec', 'revoke', 'revoke_offline', 'forget']
     assert json.loads(redis.values[KEY]) == DEFAULT_SNIPPETS
-    assert redis.values[VERSION_KEY] == '3'
+    assert redis.values[VERSION_KEY] == DEFAULT_VERSION
+
+
+def test_v3_builtin_set_is_migrated_to_current():
+    redis = MemoryRedis({KEY: json.dumps(_V3_DEFAULT_SNIPPETS), VERSION_KEY: '3'})
+    response = client_for(redis).get('/api/plugins/snippets')
+    assert response.json()['snippets'] == DEFAULT_SNIPPETS
+    assert json.loads(redis.values[KEY]) == DEFAULT_SNIPPETS
+    assert redis.values[VERSION_KEY] == DEFAULT_VERSION
+    assert DEFAULT_SNIPPETS[1:] == _V3_DEFAULT_SNIPPETS[1:]
+
+
+def test_edited_v3_list_is_preserved():
+    edited = copy.deepcopy(_V3_DEFAULT_SNIPPETS)
+    edited[0]['code'] += '\n// custom'
+    raw = json.dumps(edited)
+    redis = MemoryRedis({KEY: raw, VERSION_KEY: '3'})
+    assert client_for(redis).get('/api/plugins/snippets').json()['snippets'] == edited
+    assert redis.values == {KEY: raw, VERSION_KEY: '3'}
 
 
 def test_edited_v2_list_is_preserved():
@@ -200,7 +220,7 @@ process.stdin.on('end', async () => {
   ]} = {}) {
     const requests = [], logs = [], prompts = [], values = {}, copies = [];
     const context = vm.createContext({
-      console: Object.fromEntries(['log','info','error','table'].map(k => [k, (...a) => logs.push(a)])),
+      console: Object.fromEntries(['log','info','error','table','warn'].map(k => [k, (...a) => logs.push(a)])),
       navigator: clipboard ? {platform, clipboard:{writeText: async t => copies.push(t)}} : {platform},
       sessionStorage: {
         getItem(k) { if (!storage) throw Error('denied'); return values[k] || null; },
@@ -224,7 +244,7 @@ process.stdin.on('end', async () => {
     return {context, requests, logs, prompts, values, copies,
       run: id => vm.runInContext(snippets[id], context)};
   }
-  for (const options of [{}, {clipboard:true}, {storage:false}, {promptThrows:true}, {storage:false,promptThrows:true}]) {
+  for (const options of [{}, {clipboard:true}, {storage:false}]) {
     const s = setup({...options, devices:[{device_id:'registered',name:'Desktop',status:'online'}]});
     // Pre-existing global lexical names must not interfere with any paste.
     vm.runInContext('const deviceId = "external"; const state = {}; const registered = {};', s.context);
@@ -236,11 +256,12 @@ process.stdin.on('end', async () => {
       assert.equal(s.values['augent.device_token'], 'SUPER_SECRET_TOKEN');
     }
     assert(!JSON.stringify(s.logs).includes('SUPER_SECRET_TOKEN'));
-    assert.equal(s.copies.length, options.clipboard ? 2 : 0);
-    if (!options.clipboard) assert(s.prompts.some(p => p[1] === 'SUPER_SECRET_TOKEN'));
+    assert.equal(s.copies.length, 0);
+    assert(s.prompts.some(p => p[1] === 'SUPER_SECRET_TOKEN'));
+    assert.equal(s.requests.filter(([,o]) => o.method === 'POST').length, 1);
     const created = s.requests.filter(([u, o]) => u === '/api/devices' && o.method === 'POST');
-    assert.equal(created.length, 2);
-    assert.deepEqual(JSON.parse(created[0][1].body), {name: 'Windows desktop', platform: 'windows'});
+    assert.equal(created.length, 1);
+    assert.deepEqual(JSON.parse(created[0][1].body), {name: 'My desktop', platform: 'windows'});
     for (const id of ['ping','notify','exec']) { await s.run(id); await s.run(id); }
     assert(s.requests.every(([url]) => !url.includes('undefined')));
     await s.run('revoke');
@@ -268,6 +289,54 @@ process.stdin.on('end', async () => {
   await cancelled.run('exec'); assert.equal(cancelled.requests.length,1);
   const restored = setup(); restored.values['augent.device_id'] = 'restored';
   await restored.run('ping'); assert.equal(restored.requests[0][0], '/api/devices/restored/commands');
+  // Registration: busy lock, exact headers, recovery from errors and invalid input.
+  const concurrent = setup();
+  await Promise.all([concurrent.run('register'), concurrent.run('register')]);
+  assert.equal(concurrent.requests.length, 1);
+  assert.equal(concurrent.context.__auGentDeviceBridge.registering, false);
+  const opts = concurrent.requests[0][1];
+  assert.equal(opts.credentials, 'same-origin');
+  assert.equal(opts.headers['Content-Type'], 'application/json');
+  assert.equal(opts.headers['X-Device-Bridge'], '1');
+  const fromSession = setup();
+  fromSession.values['augent.device_id'] = 'saved';
+  fromSession.values['augent.device_token'] = 'SAVED_SECRET';
+  await fromSession.run('register');
+  assert.equal(fromSession.requests.length, 0);
+  assert(fromSession.prompts.some(p => p[1] === 'SAVED_SECRET'));
+  assert(!JSON.stringify(fromSession.logs).includes('SAVED_SECRET'));
+  for (const answer of [null, '', '   ', 'a'.repeat(129)]) {
+    const invalid = setup(); invalid.context.prompt = () => answer;
+    await invalid.run('register'); assert.equal(invalid.requests.length, 0);
+  }
+  const blocked = setup({promptThrows:true});
+  await blocked.run('register'); assert.equal(blocked.requests.length, 0);
+  const blockedToken = setup();
+  blockedToken.context.prompt = (label,value) => {
+    if (label.startsWith('Имя')) return value;
+    throw Error('dialog blocked');
+  };
+  await blockedToken.run('register');
+  assert.equal(blockedToken.values['augent.device_token'], 'SUPER_SECRET_TOKEN');
+  assert.equal(blockedToken.context.__auGentDeviceBridge.registering, false);
+  for (const status of [401,403,404,422,429,502,503]) {
+    const failed = setup({status}); await failed.run('register');
+    assert(failed.logs.some(r => String(r[0]).includes(`HTTP ${status}`)));
+    assert(!JSON.stringify(failed.logs).includes('SERVER_BODY_SECRET'));
+    assert.equal(failed.context.__auGentDeviceBridge.registering, false);
+    assert(!failed.context.__auGentDeviceBridge.token);
+  }
+  for (const data of [{}, {device_id:3,token:'secret'}, {device_id:'d',token:null}]) {
+    const malformed = setup();
+    malformed.context.fetch = async () => ({ok:true,json:async()=>data});
+    await malformed.run('register');
+    assert(malformed.logs.some(r => String(r[0]).includes('Неожиданный ответ')));
+    assert.equal(malformed.context.__auGentDeviceBridge.registering, false);
+  }
+  const network = setup(); network.context.fetch = async () => {throw Error('NETWORK_SECRET');};
+  await network.run('register');
+  assert.equal(network.context.__auGentDeviceBridge.registering, false);
+  assert(!JSON.stringify(network.logs).includes('NETWORK_SECRET'));
   // Register on macOS/Linux; repeated register declined keeps the first device.
   const mac = setup({platform:'MacIntel'}); await mac.run('register');
   assert.equal(JSON.parse(mac.requests[0][1].body).platform, 'macos');

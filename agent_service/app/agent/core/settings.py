@@ -105,10 +105,10 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "html_design_skill": "Генерирует HTML-вёрстку/дизайн страницы.",
     "generate_image": "Генерирует изображение по текстовому описанию.",
     "transcribe_media": "Дословно расшифровывает аудио и видео с таймкодами и спикерами (gemini-3.1-pro), сохраняет .txt/.srt/.json.",
-    # --- media_gen (admin-only, RouterAPI) ---
-    "generate_video": "Генерирует короткое видео по промпту (RouterAPI, админ, платно).",
-    "generate_audio": "Синтезирует речь из текста (TTS, RouterAPI, админ, платно).",
-    "generate_music": "Генерирует инструментальную/фоновую музыку (mp3) по описанию (Lyria, RouterAPI, админ, платно).",
+    # --- media_gen (RouterAPI, личный ключ юзера из vault.user_secrets; env-ключ только админу) ---
+    "generate_video": "Генерирует короткое видео по промпту (RouterAPI, личный ключ, платно).",
+    "generate_audio": "Синтезирует речь из текста (TTS, RouterAPI, личный ключ, платно).",
+    "generate_music": "Генерирует инструментальную/фоновую музыку (mp3) по описанию (Lyria, RouterAPI, личный ключ, платно).",
     # --- sessions ---
     "session_point": "Фиксирует точку сессии (начало/конец диалога) и делает саммари.",
     "work_with_agent_journal": "Ведёт бортовой журнал памяти внутри чата (запомнить/обновить/архив факты).",

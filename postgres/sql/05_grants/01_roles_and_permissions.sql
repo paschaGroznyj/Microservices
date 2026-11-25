@@ -15,6 +15,12 @@ END $$;
 
 GRANT USAGE ON SCHEMA public TO knowledge_manager, my_journal;
 
+-- Ключи пользователей (01_auth/03_user_secrets.sql): ролям агента для SQL-инструмента
+-- доступа нет. Явный REVOKE на случай ручных GRANT в существующих базах.
+REVOKE ALL ON SCHEMA vault FROM knowledge_manager, my_journal;
+REVOKE ALL ON ALL TABLES IN SCHEMA vault FROM knowledge_manager, my_journal;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA vault FROM knowledge_manager, my_journal;
+
 -- Базовое право чтения на все таблицы public для knowledge_manager
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO knowledge_manager;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO knowledge_manager;

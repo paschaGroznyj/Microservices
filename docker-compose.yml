@@ -94,6 +94,8 @@ services:
       DIGEST_UPLOAD_TO_OBS: ${DIGEST_UPLOAD_TO_OBS}
 
       FERNET_KEY: ${FERNET_KEY}
+      # ключи шифрования vault.user_secrets (через запятую, первый шифрует); пусто -> FERNET_KEY
+      USER_SECRETS_KEYS: ${USER_SECRETS_KEYS:-}
 
       CLOUD_LLM_ACCESS_KEY: ${CLOUD_LLM_ACCESS_KEY}
 
@@ -341,6 +343,7 @@ services:
         WHATSNEW_PREVIEW_USERS: ${WHATSNEW_PREVIEW_USERS:-}
 
         FERNET_KEY: ${FERNET_KEY}
+        USER_SECRETS_KEYS: ${USER_SECRETS_KEYS:-}
     depends_on:
       - postgres
     volumes:

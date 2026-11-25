@@ -7,6 +7,7 @@ from fastapi import FastAPI, Depends, HTTPException, Request, status, APIRouter
 from fastapi.responses import Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from users_tables import DataBaseUser
+import user_secrets
 from config import SECRET_KEY, ALGORITHM, REDIS_URL
 import json
 from datetime import datetime, timedelta, timezone
@@ -236,13 +237,44 @@ async def me(request: Request):
     result = await db.get_user_stats(username=username)
     return result
 
-@app.post("/profile/token")
-async def me(request: Request):
+# ── Ключи внешних сервисов (vault.user_secrets). Вызывает только gateway,
+# user_id берётся из проверенной сессии там. Значение ключа назад не отдаём.
+def _secret_args(data: dict) -> tuple[int, str, str]:
+    try:
+        user_id = int(data["user_id"])
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="user_id required")
+    provider = str(data.get("provider") or "").strip().lower()
+    name = str(data.get("name") or "default").strip().lower()
+    return user_id, provider, name
+
+
+@app.post("/profile/secrets/list")
+async def secrets_list(request: Request):
+    user_id, _, _ = _secret_args(await request.json())
+    return {"items": await db.list_user_secrets(user_id),
+            "providers": [{"id": k, "label": v["label"]} for k, v in user_secrets.PROVIDERS.items()]}
+
+
+@app.post("/profile/secrets/set")
+async def secrets_set(request: Request):
     data = await request.json()
-    username = data['username']
-    token = data['token']
-    result = await db.set_scholar_token(username=username, token=token)
-    return result
+    user_id, provider, name = _secret_args(data)
+    try:
+        item = await db.set_user_secret(user_id, provider, str(data.get("secret") or ""), name)
+    except user_secrets.SecretError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    logging.info(f"user_secret set: user_id={user_id} provider={provider} name={name}")
+    return item
+
+
+@app.post("/profile/secrets/delete")
+async def secrets_delete(request: Request):
+    user_id, provider, name = _secret_args(await request.json())
+    deleted = await db.delete_user_secret(user_id, provider, name)
+    logging.info(f"user_secret delete: user_id={user_id} provider={provider} name={name} -> {deleted}")
+    return {"deleted": deleted}
+
 
 @app.post("/profile/preferences/get")
 async def preferences_get(request: Request):

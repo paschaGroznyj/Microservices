@@ -20,3 +20,4 @@ python-multipart
 Pillow==10.3.0
 
 redis
+cryptography

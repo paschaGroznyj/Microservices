@@ -15,11 +15,6 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
         "submit_task",
         "check_task_status",
         "cancel_task",
-        "list_devices",
-        "run_on_device",
-        "send_file_to_device",
-        "get_file_from_device",
-        "capture_screenshot",
     ],
     "sessions": [
         # "session_point",

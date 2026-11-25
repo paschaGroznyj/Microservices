@@ -40,6 +40,12 @@ const ICONS = {
           stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
   </svg>`,
 
+  plugins: `<svg viewBox="0 0 16 16" fill="none" width="17" height="17">
+    <path d="M6 1.8v2.4M10 1.8v2.4M4.2 4.2h7.6v2.6a3.8 3.8 0 0 1-7.6 0V4.2zM8 10.6v3.6"
+          stroke="currentColor" stroke-width="1.1"
+          stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`,
+
   sessions: `<svg viewBox="0 0 24 24" fill="none" width="17" height="17">
     <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
           stroke="currentColor" stroke-width="2"
@@ -81,6 +87,12 @@ const TOOL_CATEGORIES = [
     id:          "content",
     label:       "Контент и файлы",
     description: "Генерация PPTX, DOCX, Excel, PNG, расшифровка аудио и видео",
+    adminOnly:   false
+  },
+  {
+    id:          "plugins",
+    label:       "Плагины",
+    description: "Устройства Device Bridge: команды, файлы, скриншоты",
     adminOnly:   false
   },
   {

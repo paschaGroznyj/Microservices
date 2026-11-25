@@ -132,8 +132,8 @@ def test_registry_and_schema():
     registered = tools()
     assert set(registered) == {'list_devices', 'run_on_device', 'send_file_to_device',
                                'get_file_from_device', 'capture_screenshot'}
-    for category in ('content', 'plugins'):
-        assert set(registered) <= set(settings.TOOLS_SETTINGS[category])
+    assert set(registered) <= set(settings.TOOLS_SETTINGS['plugins'])
+    assert not set(registered) & set(settings.TOOLS_SETTINGS['content'])
     for name, tool in registered.items():
         assert name in settings.TOOL_DESCRIPTIONS
         assert 'user_id' not in tool.args

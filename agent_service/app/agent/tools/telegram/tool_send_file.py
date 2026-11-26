@@ -22,6 +22,8 @@ log = logging.getLogger(__name__)
 ALLOWED_SEND_ROOTS = ["/app/generated_files"]
 
 MAX_SEND_FILE_SIZE = 20 * 1024 * 1024
+# Куда материализуются файлы из media_store перед отправкой.
+MEDIA_DEST_ROOT = "/app/generated_files"
 
 
 def _valid_send_path(path: str) -> str | None:
@@ -111,6 +113,49 @@ async def _materialize_image_key(agent, image_key: str) -> dict | None:
         return None
 
 
+_MIME_EXT = {
+    "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif",
+    "audio/ogg": ".ogg", "audio/mpeg": ".mp3", "video/mp4": ".mp4", "application/pdf": ".pdf",
+}
+
+
+async def _materialize_media_id(chat_id, media_id: str) -> tuple[dict | None, str | None]:
+    """Файл из media_store этого чата (Redis) → временный файл в generated_files.
+
+    Возвращает (saved_file, err). Чужие чаты недоступны: ключ строится по chat_id.
+    """
+    mid = str(media_id).strip()
+    if chat_id is None:
+        return None, "Медиа-хранилище недоступно: chat_id неизвестен."
+    try:
+        from agent.media import media_store
+        raw, meta = await media_store.get_media(chat_id, mid)
+    except Exception as e:
+        log.error("send_file_to_user: media_store недоступен (mid=%s): %s", mid, e)
+        return None, f"Медиа-хранилище недоступно: {e}"
+    if not raw:
+        return None, f"media_id '{mid}' не найден в хранилище чата (TTL 24 ч или неверный id)."
+    if len(raw) > MAX_SEND_FILE_SIZE:
+        return None, f"media_id '{mid}': {len(raw)} байт, лимит {MAX_SEND_FILE_SIZE}."
+    meta = meta or {}
+    name = os.path.basename(str(meta.get("name") or "")) or f"media_{mid}"
+    if not os.path.splitext(name)[1]:
+        name += _MIME_EXT.get(str(meta.get("mime") or "").lower(), "")
+    safe_mid = re.sub(r"[^A-Za-z0-9_-]", "", mid)[:32] or "x"
+    dest_dir = os.path.join(MEDIA_DEST_ROOT, f"media_{safe_mid}")
+    os.makedirs(dest_dir, exist_ok=True)
+    path = os.path.join(dest_dir, name)
+    with open(path, "wb") as f:
+        f.write(raw)
+    return {
+        "filename": name,
+        "name": name,
+        "path": path,
+        "size_bytes": len(raw),
+        "kind": _detect_media_kind(path),
+    }, None
+
+
 def _normalize_str_list(*values) -> List[str]:
     result: List[str] = []
     seen = set()
@@ -190,7 +235,7 @@ async def _resolve_single_path(raw_path: str) -> tuple[dict | None, str | None]:
     }, None
 
 
-def make_send_file_tool(agent):
+def make_send_file_tool(agent, chat_id=None):
 
     @tool
     async def send_file_to_user(
@@ -198,6 +243,7 @@ def make_send_file_tool(agent):
         image_keys: Optional[List[str]] = None,
         path: str = "",
         image_key: str = "",
+        media_ids: Optional[List[str]] = None,
     ) -> dict:
         """
         Sends one or multiple existing files from the sandbox or generated_files
@@ -213,6 +259,10 @@ def make_send_file_tool(agent):
         create a workspace (create_workspace), assemble the files there, place them in output/,
         and call this tool once with `paths=["/tmp/exec/workspaces/{workspace_id}/output/<file1>", ...]`
         — all listed files will be auto-downloaded from the factory and sent.
+        Do NOT call download_workspace_file before this tool: workspace paths are passed directly.
+
+        To resend a file the user sent earlier in this chat (voice, photo, document),
+        pass its media_id from the "CHAT MEDIA STORAGE" registry in `media_ids`.
         If a file does not exist, inform the user instead of retrying.
 
         Arguments:
@@ -221,15 +271,17 @@ def make_send_file_tool(agent):
             image_keys: list of UUIDs of pictures created by generate_image to send in one batch.
             path: (optional, backward-compatible) single file path. Prefer `paths` when sending multiple files.
             image_key: (optional, backward-compatible) single UUID of a generated image. Prefer `image_keys` for multiple images.
+            media_ids: list of media_id from this chat's media storage (files the user sent, TTL 24h).
         """
         all_paths = _normalize_str_list(paths, path)
         all_image_keys = _normalize_str_list(image_keys, image_key)
+        all_media_ids = _normalize_str_list(media_ids)
 
-        if not all_paths and not all_image_keys:
+        if not all_paths and not all_image_keys and not all_media_ids:
             return {
                 "ok": False,
-                "error": "Не переданы ни paths/path, ни image_keys/image_key. "
-                         "Укажи список путей в paths или ключи картинок в image_keys.",
+                "error": "Не переданы ни paths/path, ни image_keys/image_key, ни media_ids. "
+                         "Укажи пути в paths, ключи картинок в image_keys или media_id в media_ids.",
             }
 
         saved_files: List[dict] = []
@@ -252,6 +304,13 @@ def make_send_file_tool(agent):
                         "kind": "image",
                     }
                 )
+
+        for mid in all_media_ids:
+            file_entry, err = await _materialize_media_id(chat_id, mid)
+            if err:
+                errors.append(err)
+            else:
+                saved_files.append(file_entry)
 
         for raw_p in all_paths:
             file_entry, err = await _resolve_single_path(raw_p)

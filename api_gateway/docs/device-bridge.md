@@ -87,6 +87,39 @@ location = /api/devices/connect {
 }
 ```
 
+### nginx: HTTP file transfers
+
+The public binary transfer route must bypass SSO like the device WebSocket, while
+retaining the single-use Bearer token checked by the gateway. Put this location
+in the same public server as `/api/devices`; route it to the same gateway/Redis
+instance (here Sigma is `7010`):
+
+```nginx
+location ^~ /api/device-transfers/ {
+    auth_request off;
+    client_max_body_size 10m;
+    proxy_pass http://127.0.0.1:7010;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Authorization $http_authorization;
+    proxy_set_header Cookie "";
+    proxy_set_header X-Authentik-Username "";
+    proxy_set_header X-Authentik-Name "";
+    proxy_buffering off;
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
+}
+
+location = /internal/device-transfers { return 404; }
+location ^~ /internal/device-transfers/ { return 404; }
+```
+
+Do not expose `/internal/devices` or `/internal/device-transfers/`; the agent
+uses the trusted Docker route for those endpoints.
+
 Если ingress использует другие identity-заголовки, их тоже следует очистить в
 этом location. Проверьте итоговый набор `proxy_set_header`: директивы из родителя
 не всегда наследуются при наличии локальных директив. Не переносите сюда SSO
@@ -105,6 +138,15 @@ redirect или подстановку `Authorization` из auth subrequest.
 | `GET /api/devices` | `{devices: [{device_id, name, platform, status, created_at}]}` только текущего владельца; `status`: `online`, `offline`, `revoked`; `created_at`: Unix seconds |
 | `POST /api/devices/{device_id}/commands` | `{ "operation": "ping", "timeout": 10 }` → ожидание `{job_id, status, output, exit_code?}` |
 | `DELETE /api/devices/{device_id}` | Без тела → `{device_id, revoked: true}` |
+| `DELETE /api/devices/{device_id}?offline_only=true` | Без тела → `{device_id, revoked: true}`; окончательно удаляет только offline-устройство |
+
+Без query (или с `offline_only=false`) DELETE сохраняет legacy-отзыв: запись
+остаётся в списке со статусом `revoked`. При `offline_only=true` Lua атомарно
+проверяет владельца и актуальный lease/session: если устройство успело выйти
+online, ответ **409** (`Device came online`), ничего не удаляется. Иначе удаляются
+запись, token lookup, lease, очередь/pending и связанные задания, а ID убирается
+из индекса владельца. Устройство исчезает из списка/UI, старый токен больше не
+авторизует WS. Чужой ID и повторное удаление — **404**. Токен в ответ не включается.
 
 `name`: 1–128 символов, `platform`: 1–64; строки не должны быть пустыми после
 trim или содержать NUL. `platform` — метка, а не подтверждение совместимости ОС.

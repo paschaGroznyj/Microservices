@@ -774,6 +774,12 @@ class ChatApp {
        OPEN / CREATE CHAT
     ══════════════════════════════════════════ */
     async openChat(chatId, opts = {}) {
+        const sameChat = this.currentChat != null && String(this.currentChat) === String(chatId);
+        if (sameChat && !opts?.targetMessageId && !opts?.targetDbId) {
+            this.switchTab('agent');
+            return;
+        }
+
         // Сохраняем черновик поля ввода уходящего чата (в т.ч. стартовый
         // экран, если currentChat == null) перед сносом DOM.
         if (String(this.currentChat) !== String(chatId)) {
@@ -896,7 +902,7 @@ class ChatApp {
         }
 
         // Восстанавливаем черновик поля ввода этого чата (если был сохранён).
-        if (!isNewChat) {
+        if (!isNewChat && !sameChat) {
             this._restoreInputDraft(chatId);
         }
 
@@ -3610,7 +3616,12 @@ class ChatApp {
     }
 
     async _renameChat(chatId, chat) {
-        const initialTitle = (chat?.renamed_title || `Чат ${chatId}`).trim();
+        // Use the title currently visible in the sidebar, including generated titles.
+        const row = Array.from(document.querySelectorAll('.chat-item[data-chat-id]'))
+            .find(el => String(el.dataset.chatId) === String(chatId));
+        const visibleTitle = row?.querySelector('.chat-line--title')?.textContent?.trim();
+        const initialTitle = visibleTitle || chat?.renamed_title?.trim()
+            || chat?.auto_title?.trim() || 'Новый чат';
         const newTitle = await this._askChatRename(initialTitle);
         if (newTitle === null) return;
 
@@ -3633,46 +3644,61 @@ class ChatApp {
             document.querySelector('.sidebar-rename-overlay')?.remove();
 
             const overlay = document.createElement('div');
-            overlay.className = 'sidebar-rename-overlay';
+            overlay.className = 'modal-overlay sidebar-rename-overlay';
+            const previousFocus = document.activeElement;
 
             const modal = document.createElement('div');
-            modal.className = 'sidebar-rename-modal';
+            modal.className = 'modal-card sidebar-rename-modal';
+            modal.setAttribute('role', 'dialog');
+            modal.setAttribute('aria-modal', 'true');
+            modal.setAttribute('aria-labelledby', 'chat-rename-title');
+            const header = document.createElement('div');
+            header.className = 'modal-header';
+            const body = document.createElement('div');
+            body.className = 'modal-body';
 
-            const title = document.createElement('div');
+            const title = document.createElement('h3');
             title.className = 'sidebar-rename-title';
+            title.id = 'chat-rename-title';
             title.textContent = 'Переименовать чат';
 
             const input = document.createElement('input');
             input.className = 'sidebar-rename-input';
             input.type = 'text';
+            input.id = 'chat-rename-input';
+            input.autocomplete = 'off';
+            const label = document.createElement('label');
+            label.htmlFor = input.id;
+            label.textContent = 'Название чата';
             input.maxLength = 120;
             input.value = initialTitle || '';
 
             const actions = document.createElement('div');
-            actions.className = 'sidebar-rename-actions';
+            actions.className = 'modal-footer sidebar-rename-actions';
 
             const cancelBtn = document.createElement('button');
-            cancelBtn.className = 'sidebar-rename-btn sidebar-rename-cancel';
+            cancelBtn.className = 'btn btn-secondary sidebar-rename-cancel';
             cancelBtn.type = 'button';
             cancelBtn.textContent = 'Отмена';
 
             const saveBtn = document.createElement('button');
-            saveBtn.className = 'sidebar-rename-btn sidebar-rename-save';
+            saveBtn.className = 'btn sidebar-rename-save';
             saveBtn.type = 'button';
             saveBtn.textContent = 'Сохранить';
 
             actions.appendChild(cancelBtn);
             actions.appendChild(saveBtn);
 
-            modal.appendChild(title);
-            modal.appendChild(input);
-            modal.appendChild(actions);
+            header.appendChild(title);
+            body.append(label, input);
+            modal.append(header, body, actions);
             overlay.appendChild(modal);
             document.body.appendChild(overlay);
 
             const cleanup = (value) => {
                 document.removeEventListener('keydown', onKeydown, true);
                 overlay.remove();
+                previousFocus?.focus();
                 resolve(value);
             };
 
@@ -3683,11 +3709,16 @@ class ChatApp {
             };
 
             const onKeydown = (e) => {
+                if (e.key === 'Tab') {
+                    const first = input, last = saveBtn;
+                    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+                    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+                }
                 if (e.key === 'Escape') {
                     e.preventDefault();
                     cleanup(null);
                 }
-                if (e.key === 'Enter') {
+                if (e.key === 'Enter' && !e.isComposing && e.target === input) {
                     e.preventDefault();
                     submit();
                 }

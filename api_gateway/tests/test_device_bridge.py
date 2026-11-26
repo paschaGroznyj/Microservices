@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import queue
 import shutil
@@ -449,6 +450,168 @@ def test_revoke_invalidates_token_and_closes_socket_quickly(gateways):
             "/api/devices/connect", headers={"Authorization": f"Bearer {device['token']}"}
         ):
             pass
+
+
+
+@pytest.mark.parametrize("owner", ["alice", "bob"])
+@pytest.mark.parametrize("session_state", ["none", "expired", "mismatched"])
+def test_offline_purge_removes_credentials_record_and_session_keys(gateways, owner, session_state):
+    client = getattr(gateways, owner)
+    service = getattr(gateways, owner + "_service")
+    device = create_device(client)
+    survivor = create_device(client, name="keep me")
+    device_id = device["device_id"]
+    owner_id = "101" if owner == "alice" else "202"
+    digest = hashlib.sha256(device["token"].encode()).hexdigest()
+    device_key, lease_key, token_key = service._live_keys(device_id, digest)
+    owner_key = service._owner_key(owner_id)
+    session = str(uuid.uuid4())
+    queue_key, pending_key = service._session_keys(session)
+    job_ids = [str(uuid.uuid4()), str(uuid.uuid4())]
+    job_keys = [service._key("job", job_id) for job_id in job_ids]
+
+    async def seed():
+        if session_state != "none":
+            await service.redis.hset(device_key, "session_id", session)
+            # A sent job is absent from the queue but must still be purged.
+            await service.redis.rpush(queue_key, job_ids[0])
+            await service.redis.sadd(pending_key, *job_ids)
+            for job_key, state in zip(job_keys, ("queued", "sent")):
+                await service.redis.hset(job_key, mapping={"state": state,
+                    "device_id": device_id, "session_id": session})
+        if session_state == "mismatched":
+            await service.redis.set(lease_key, str(uuid.uuid4()), ex=30)
+
+    client.portal.call(seed)
+    assert next(d for d in client.get("/api/devices").json()["devices"]
+                if d["device_id"] == device_id)["status"] == "offline"
+    response = client.delete(f"/api/devices/{device_id}?offline_only=true")
+    assert response.status_code == 200
+    assert response.json() == {"device_id": device_id, "revoked": True}
+    assert response.headers["cache-control"] == "no-store"
+    assert device["token"] not in response.text and "token_hash" not in response.text
+    for key in (device_key, lease_key, token_key, queue_key, pending_key, *job_keys):
+        assert client.portal.call(service.redis.exists, key) == 0
+    assert not client.portal.call(service.redis.sismember, owner_key, device_id)
+    assert client.portal.call(service.redis.sismember, owner_key, survivor["device_id"])
+    assert [d["device_id"] for d in client.get("/api/devices").json()["devices"]] == [survivor["device_id"]]
+    assert client.delete(f"/api/devices/{device_id}?offline_only=true").status_code == 404
+    assert client.delete(f"/api/devices/{device_id}").status_code == 404
+    with pytest.raises(WebSocketDisconnect):
+        with gateways.bob.websocket_connect("/api/devices/connect", headers={
+                "Authorization": "Bearer " + device["token"]}):
+            pass
+
+
+def test_offline_purge_foreign_owner_is_404_and_changes_nothing(gateways):
+    device = create_device(gateways.alice)
+    service = gateways.alice_service
+
+    async def snapshot():
+        keys = await service.redis.keys(PREFIX + "*")
+        return {key: await service.redis.dump(key) for key in keys}
+
+    before = gateways.alice.portal.call(snapshot)
+    response = gateways.bob.delete(f"/api/devices/{device['device_id']}?offline_only=true")
+    assert response.status_code == 404
+    assert device["token"] not in response.text
+    assert gateways.alice.portal.call(snapshot) == before
+    # Credentials still work on the other gateway after the rejected delete.
+    context, ws, _ = open_device_ws(gateways.bob, device["token"])
+    close_ws(context, ws)
+
+
+@pytest.mark.parametrize("race", [False, True])
+def test_offline_purge_rejects_online_including_claim_race(gateways, monkeypatch, race):
+    from gw_shared.device_bridge import _PURGE_OFFLINE
+
+    device = create_device(gateways.alice)
+    service = gateways.alice_service
+    device_id = device["device_id"]
+    url = f"/api/devices/{device_id}?offline_only=true"
+    reached_delete = threading.Event()
+    allow_delete = threading.Event()
+    original_eval = service._eval
+
+    async def paused_eval(script, keys, *args):
+        if script == _PURGE_OFFLINE:
+            reached_delete.set()
+            deadline = time.monotonic() + 5
+            while not allow_delete.is_set():
+                if time.monotonic() >= deadline:
+                    raise AssertionError("test did not release offline purge")
+                await asyncio.sleep(0.01)
+        return await original_eval(script, keys, *args)
+
+    if race:
+        # Start with the exact offline snapshot the UI would see, then let a
+        # real WS claim a new session just before the DELETE Lua executes.
+        assert gateways.alice.get("/api/devices").json()["devices"][0]["status"] == "offline"
+        monkeypatch.setattr(service, "_eval", paused_eval)
+        thread, result = call_in_thread(lambda: gateways.alice.delete(url))
+        assert reached_delete.wait(timeout=3)
+    context, ws, hello = open_device_ws(gateways.bob, device["token"])
+    try:
+        digest = hashlib.sha256(device["token"].encode()).hexdigest()
+        device_key, lease_key, token_key = service._live_keys(device_id, digest)
+        queue_key, pending_key = service._session_keys(hello["session_id"])
+        # Use a pending/sent job (no dispatchable queue item) to verify that
+        # rejected deletion does not clean up the active session's work.
+        job_id = str(uuid.uuid4())
+        job_key = service._key("job", job_id)
+
+        async def seed_and_snapshot():
+            await service.redis.sadd(pending_key, job_id)
+            await service.redis.hset(job_key, mapping={"state": "sent"})
+            keys = (device_key, lease_key, token_key, pending_key, job_key,
+                    service._owner_key("101"))
+            return {key: await service.redis.dump(key) for key in keys}
+
+        before = gateways.alice.portal.call(seed_and_snapshot)
+        if race:
+            allow_delete.set()
+            response = thread_result(thread, result)
+        else:
+            response = gateways.alice.delete(url)
+        assert response.status_code == 409
+        assert response.json() == {"detail": "Device came online"}
+
+        async def snapshot():
+            return {key: await service.redis.dump(key) for key in before}
+
+        assert gateways.alice.portal.call(snapshot) == before
+        assert gateways.alice.get("/api/devices").json()["devices"][0]["status"] == "online"
+        # The very same socket can still execute a transport ping.
+        thread, result = call_in_thread(lambda: post_command(
+            gateways.alice, device_id, operation="ping", timeout=3))
+        command = receive_until(ws, "command")
+        ws.send_json({"type": "result", "job_id": command["job_id"],
+                      "session_id": hello["session_id"], "status": "ok", "output": "pong"})
+        assert thread_result(thread, result).status_code == 200
+    finally:
+        allow_delete.set()
+        close_ws(context, ws)
+
+
+@pytest.mark.parametrize("query", ["", "?offline_only=false"])
+def test_legacy_revoke_preserves_record_and_owner_index(gateways, query):
+    device = create_device(gateways.alice)
+    service = gateways.alice_service
+    device_id = device["device_id"]
+    digest = hashlib.sha256(device["token"].encode()).hexdigest()
+    device_key, lease_key, token_key = service._live_keys(device_id, digest)
+    url = f"/api/devices/{device_id}{query}"
+    for _ in range(2):
+        response = gateways.alice.delete(url)
+        assert response.status_code == 200
+        assert response.json() == {"device_id": device_id, "revoked": True}
+    assert gateways.alice.portal.call(service.redis.hget, device_key, "revoked") == "1"
+    assert gateways.alice.portal.call(service.redis.sismember, service._owner_key("101"), device_id)
+    assert gateways.alice.portal.call(service.redis.exists, token_key, lease_key) == 0
+    assert gateways.alice.get("/api/devices").json()["devices"][0]["status"] == "revoked"
+    # Explicit offline deletion can also remove an old revoked record.
+    assert gateways.alice.delete(f"/api/devices/{device_id}?offline_only=true").status_code == 200
+    assert gateways.alice.get("/api/devices").json() == {"devices": []}
 
 
 def test_timeout_disconnect_and_reconnect_never_replays_a_command(gateways):

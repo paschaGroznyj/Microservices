@@ -1,7 +1,7 @@
 """
 telegram_service/app/bot.py
 ───────────────────────────
-Тонкий Telegram-шлюз в микросервис CatchPM.
+Тонкий Telegram-шлюз в микросервис AuGent.
 
 Поток (Коммит 1):
   update → allow-list (Redis `tg:allowed_chats`, фолбэк HTTP chats_service)
@@ -43,6 +43,8 @@ import uuid
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+import html
+
 import httpx
 import redis.asyncio as aioredis
 from telegram import (
@@ -60,6 +62,11 @@ from telegram.request import HTTPXRequest
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+
+try:  # прод: python app/bot.py (app/ в sys.path); тесты: import app.bot
+    import apikeys_ui
+except ImportError:  # pragma: no cover
+    from app import apikeys_ui
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
@@ -177,6 +184,8 @@ def _k_post(chat_id: int, pid: str) -> str: return f"tg:post:{chat_id}:{pid}"
 # дедуп срабатывания триггера в конкретную минуту (tid + YYYYMMDDHHMM)
 def _k_trig(tid: int, stamp: str) -> str: return f"tg:trig:{tid}:{stamp}"
 def _k_alarmedit(chat_id: int, uid: int) -> str: return f"tg:alarmedit:{chat_id}:{uid}"
+# ждём сообщение с ключом API после «Добавить/Заменить» в разделе «Ключи API»
+def _k_apikey(chat_id: int, uid: int) -> str: return f"tg:apikey:{chat_id}:{uid}"
 # Связка tg_message_id бота -> agent_message_id + текст (для реакций). TTL сутки.
 def _k_msgmap(chat_id: int, tg_mid: int) -> str: return f"tg:msgmap:{chat_id}:{tg_mid}"
 # Буфер реакций для большого агента (очищается только после next-сообщения, без TTL).
@@ -1958,7 +1967,7 @@ def _registration_gate_text(chat_id: int) -> str:
     """Единый текст отказа для незарегистрированного чата (/start + on_text_message)."""
     return (
         "У вас нет доступа к агенту в этом чате.\n\n"
-        f"Регистрация чатов доступна только через интерфейс CatchPM: внедрение в процессе\n\n"
+        f"Регистрация чатов доступна только через интерфейс AuGent: внедрение в процессе\n\n"
         f"Передайте администратору chat_id этого чата: {chat_id}"
     )
 
@@ -2005,7 +2014,7 @@ def extract_urls_from_message(msg: Message) -> list[str]:
 # /start — интерактивное меню настроек чата (Коммит 2)
 # Доступно всем участникам, из группы И из лички. Настройки строго per-chat.
 # Обязательное условие: чат зарегистрирован (allow-list). Иначе — отбойник
-# со ссылкой на регистрацию через интерфейс CatchPM.
+# со ссылкой на регистрацию через интерфейс AuGent.
 # ══════════════════════════════════════════════════════════════════════════════
 
 CATCHPM_URL = os.environ.get("CATCHPM_URL", "https://catchpm.cds.uva-advanced.ru")
@@ -2016,9 +2025,10 @@ TG_MODEL_LABELS = {"coder": "GPT", "designer": "Claude", "universal": "GLM", "ge
 
 # Тул-категории, которые можно включать из телеги. Админская категория
 # намеренно ОТСУТСТВУЕТ — из телеги её включить нельзя.
-# Админская категория тулов (платный RouterAPI: видео/аудио). Видна только админу.
-TG_ADMIN_TOOL_CATEGORIES = ["media_gen", "admin"]
-TG_TOOL_CATEGORIES = ["internet", "content", "sessions"]
+# Админская категория тулов. Видна только админу. media_gen доступна всем:
+# генерация идёт на личном ключе RouterAPI (раздел «Ключи API» в /start).
+TG_ADMIN_TOOL_CATEGORIES = ["admin"]
+TG_TOOL_CATEGORIES = ["internet", "content", "sessions", "media_gen"]
 
 
 def _parse_tg_admin_ids():
@@ -2113,10 +2123,23 @@ def _menu_root(settings: dict | None = None, is_admin: bool = False) -> InlineKe
         [InlineKeyboardButton("Триггер", callback_data="tg:menu:trigger")],
         [InlineKeyboardButton("Будильники", callback_data="tg:menu:alarms")],
         [InlineKeyboardButton("\U0001f4ac Сессии", callback_data="tg:sess:list:0")],
+        [InlineKeyboardButton("\U0001f511 Ключи API", callback_data="tg:menu:keys")],
     ]
     if is_admin:
         rows.append([InlineKeyboardButton("🔒 Кто жал /start", callback_data="tg:admin:startlog")])
     rows.append([InlineKeyboardButton("Закрыть", callback_data="tg:close")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _menu_keys(item: dict | None, error: str | None = None) -> InlineKeyboardMarkup:
+    """Раздел «Ключи API» (только личный чат, см. apikeys_ui.py)."""
+    rows = []
+    if not error:
+        rows.append([InlineKeyboardButton("Заменить ключ" if item else "Добавить ключ RouterAPI",
+                                          callback_data="tg:keys:set")])
+        if item:
+            rows.append([InlineKeyboardButton("Удалить ключ", callback_data="tg:keys:del")])
+    rows.append([InlineKeyboardButton("‹ Назад", callback_data="tg:menu:root")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -2287,7 +2310,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /start - menu nastroek, per-chat. Dostupno vsem (gruppa + lichka).
     Snachala proverka registracii v BD (allow-list). Ne zaregistrirovan -
-    return s instrukciej zaregistrirovat chat cherez interfejs CatchPM.
+    return s instrukciej zaregistrirovat chat cherez interfejs AuGent.
     """
     chat_id = update.effective_chat.id
     _allowed = await is_allowed(chat_id)
@@ -2339,6 +2362,65 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         await _refresh(lambda s: _menu_root(s, is_admin=_cb_admin))
         return
+
+    # ── Ключи API: только личка (в группе ключ увидели бы все участники) ──
+    if data.startswith("tg:keys"):
+        chat_type = getattr(query.message.chat, "type", "") if query.message else ""
+        if chat_type != "private":
+            await query.answer("Ключи API настраиваются только в личном чате с ботом.", show_alert=True)
+            return
+
+        async def _show_keys(note: str = ""):
+            item, err = await apikeys_ui.fetch_status(CHATS_SERVICE_URL, chat_id)
+            text = apikeys_ui.keys_text(item, err) + (f"\n\n{note}" if note else "")
+            try:
+                await query.edit_message_text(text, parse_mode=ParseMode.HTML,
+                                              reply_markup=_menu_keys(item, err))
+            except Exception:
+                pass
+
+        if data in ("tg:menu:keys", "tg:keys:cancel"):
+            if data == "tg:keys:cancel":
+                try:
+                    r = await get_redis()
+                    await r.delete(_k_apikey(chat_id, user_id))
+                except Exception:
+                    pass
+            await query.answer()
+            await _show_keys()
+            return
+        if data == "tg:keys:set":
+            try:
+                r = await get_redis()
+                await r.set(_k_apikey(chat_id, user_id), apikeys_ui.PROVIDER, ex=apikeys_ui.AWAIT_TTL)
+            except Exception:
+                await query.answer("Redis недоступен, попробуй позже", show_alert=True)
+                return
+            await query.answer()
+            try:
+                await query.edit_message_text(
+                    apikeys_ui.await_text(),
+                    reply_markup=InlineKeyboardMarkup(
+                        [[InlineKeyboardButton("Отмена", callback_data="tg:keys:cancel")]]))
+            except Exception:
+                pass
+            return
+        if data == "tg:keys:del":
+            await query.answer()
+            try:
+                await query.edit_message_text(
+                    "Удалить ключ RouterAPI? Он удалится и из профиля AuGent.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("Да, удалить", callback_data="tg:keys:delok")],
+                        [InlineKeyboardButton("Отмена", callback_data="tg:menu:keys")]]))
+            except Exception:
+                pass
+            return
+        if data == "tg:keys:delok":
+            ok = await apikeys_ui.delete(CHATS_SERVICE_URL, chat_id)
+            await query.answer("Ключ удалён" if ok else "Не удалось удалить", show_alert=not ok)
+            await _show_keys()
+            return
 
     # ── Сессии (n-диалогов на один telegram-чат) ──────────────────────────
     if data.startswith("tg:sess:"):
@@ -2679,6 +2761,31 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
 
+async def _handle_apikey_input(update: Update, context: ContextTypes.DEFAULT_TYPE, raw_text: str):
+    """Сохраняет ключ из сообщения и удаляет само сообщение из чата."""
+    msg = update.message
+    chat_id = update.effective_chat.id
+    try:
+        await post_already_dispatched(chat_id, msg)
+    except Exception:
+        pass
+    try:
+        await msg.delete()
+        deleted = True
+    except Exception:
+        deleted = False
+    value = (raw_text or "").strip()
+    ok, err = (await apikeys_ui.save(CHATS_SERVICE_URL, chat_id, value)) if value else (False, "Пустой ключ")
+    log.info(f"[apikeys] set chat={chat_id} ok={ok} msg_deleted={deleted}")
+    item, st_err = await apikeys_ui.fetch_status(CHATS_SERVICE_URL, chat_id)
+    note = "✅ Ключ сохранён." if ok else f"❌ Не сохранён: {html.escape(err or 'ошибка')}"
+    if not deleted:
+        note += "\n\nНе получилось удалить сообщение с ключом, удали его вручную."
+    await context.bot.send_message(
+        chat_id, apikeys_ui.keys_text(item, st_err) + "\n\n" + note,
+        parse_mode=ParseMode.HTML, reply_markup=_menu_keys(item, st_err))
+
+
 async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     bot_username = context.bot.username
@@ -2700,6 +2807,24 @@ async def on_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw_text = msg.text or msg.caption or ""
     user = update.effective_user
     author = user.full_name or user.username or "Аноним"
+
+    # ── перехват ключа API (после «Добавить/Заменить ключ» в /start) ──
+    # Первым делом и без логов текста: сообщение с ключом не должно попасть
+    # ни в агента, ни в буфер реплик, ни в логи. GETDEL — защита от дубля update.
+    if update.effective_chat.type == "private":
+        try:
+            r = await get_redis()
+            try:
+                key_flag = await r.execute_command("GETDEL", _k_apikey(chat_id, user.id))
+            except Exception:
+                key_flag = await r.get(_k_apikey(chat_id, user.id))
+                if key_flag:
+                    await r.delete(_k_apikey(chat_id, user.id))
+        except Exception:
+            key_flag = None
+        if key_flag:
+            await _handle_apikey_input(update, context, raw_text)
+            return
 
     # ── перехват ввода имени агента (после кнопки «Имя агента») ──
     # Атомарный GETDEL — защита от дубля update (см. комментарий у alarmedit).

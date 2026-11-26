@@ -64,12 +64,29 @@ def trigger_owner_is_admin(owner) -> bool:
         return False
 
 
+async def _resolve_messenger_owner(db, tg_chat_id: str, is_telegram: bool) -> int | None:
+    """Возвращает web user_id владельца личного TG/MAX чата (added_by_user_id) или None."""
+    if not tg_chat_id or not db or not db.pool:
+        return None
+    table = "telegram_chats" if is_telegram else "max_chats"
+    try:
+        async with db.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"SELECT chat_type, added_by_user_id FROM {table} WHERE chat_id = $1",
+                str(tg_chat_id))
+        if row and row["chat_type"] == "private" and row["added_by_user_id"]:
+            return int(row["added_by_user_id"])
+    except Exception as e:
+        logging.warning(f"[_resolve_messenger_owner] не удалось резолвить владельца {tg_chat_id}: {e}")
+    return None
+
+
 def media_key_owner(user_id, *, is_telegram: bool, is_max: bool,
-                    initiated: bool, trigger_owner) -> dict:
+                    initiated: bool, trigger_owner, messenger_owner_id=None) -> dict:
     """Чей ключ RouterAPI брать в этом запросе: {"user_id": web id | None, "is_admin"}.
 
-    user_id — только наш web user_id (у ключей в vault он же). В TG/MAX user_id —
-    id мессенджера, связки с web-аккаунтом нет -> личного ключа нет. В автотриггере
+    user_id — только наш web user_id (у ключей в vault он же). В TG/MAX личного
+    чата владелец (added_by_user_id) передаётся через messenger_owner_id. В автотриггере
     решает автор триггера (из БД chats_service), а не user_id запроса.
     """
     if initiated:
@@ -77,7 +94,7 @@ def media_key_owner(user_id, *, is_telegram: bool, is_max: bool,
         uid = owner.get("user_id") if owner.get("source") == "web" else None
         is_admin = trigger_owner_is_admin(owner)
     elif is_telegram or is_max:
-        uid = None
+        uid = messenger_owner_id  # web user_id владельца личного TG/MAX чата (или None)
         index = ADMINS_BY_TG_ID if is_telegram else ADMINS_BY_MAX_ID
         try:
             is_admin = int(user_id) in index
@@ -2030,10 +2047,13 @@ class HarnessAgent:
             selected_tools = selected_tools or []
             use_journal = is_telegram or is_max or ("sessions" in selected_tools)
             # владелец личного ключа RouterAPI для generate_* (core/user_secrets.py)
+            _msg_owner = (await _resolve_messenger_owner(self.db, tg_chat_id, is_telegram)
+                          if (is_telegram or is_max) and not initiated else None)
             self._request_ctx.set({**(self._request_ctx.get() or {}),
                                    "media_key_owner": media_key_owner(
                                        user_id, is_telegram=is_telegram, is_max=is_max,
-                                       initiated=initiated, trigger_owner=trigger_owner)})
+                                       initiated=initiated, trigger_owner=trigger_owner,
+                                       messenger_owner_id=_msg_owner)})
 
             from .core.timezone_utils import resolve_chat_context_and_timezone
             user_tz_name, current_datetime, _tg_settings, _max_settings = await resolve_chat_context_and_timezone(

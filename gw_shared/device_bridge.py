@@ -22,6 +22,9 @@ HTTP (JSON bodies reject extra fields and coercions):
   Status is online/offline/revoked; only the authenticated owner's records show.
 * DELETE /api/devices/{id} -> {device_id, revoked:true}. Invalidates the token
   and lease atomically; the socket notices in <=1s (plus network scheduling).
+* DELETE /api/devices/{id}?offline_only=true -> {device_id, revoked:true}.
+  Permanently removes the offline record; an atomic lease check rejects online
+  devices with 409, including connections racing the deletion.
 * POST /api/devices/{id}/commands {operation, timeout, text?|command?,cwd?} waits for the result.
   ping/notify: timeout 1..30. exec: arbitrary shell text (<=16000 chars),
   timeout 1..300, optional cwd; relayed verbatim, the gateway never executes.
@@ -218,6 +221,27 @@ _REVOKE = """
 if redis.call('HGET',KEYS[1],'owner_id') ~= ARGV[1] then return 0 end
 redis.call('HSET',KEYS[1],'revoked','1')
 redis.call('DEL',KEYS[2],KEYS[3]); redis.call('HDEL',KEYS[1],'session_id')
+return 1
+"""
+# Read credentials and session inside the same script as the lease check and
+# deletion: an earlier HTTP/list snapshot must never authorize deleting a new
+# live session. All dynamic keys come from server-owned Redis state.
+_PURGE_OFFLINE = """
+if redis.call('HGET',KEYS[1],'owner_id') ~= ARGV[1]
+    or redis.call('HGET',KEYS[1],'device_id') ~= ARGV[2] then return 0 end
+local session=redis.call('HGET',KEYS[1],'session_id')
+local lease=redis.call('GET',KEYS[2])
+if lease and lease == session then return 2 end
+local digest=redis.call('HGET',KEYS[1],'token_hash')
+if digest then redis.call('DEL',ARGV[3] .. 'token:' .. digest) end
+if session then
+    local pending=ARGV[3] .. 'pending:' .. session
+    local ids=redis.call('SMEMBERS',pending)
+    for _,id in ipairs(ids) do redis.call('DEL',ARGV[3] .. 'job:' .. id) end
+    redis.call('DEL',ARGV[3] .. 'queue:' .. session,pending)
+end
+redis.call('DEL',KEYS[1],KEYS[2])
+redis.call('SREM',KEYS[3],ARGV[2])
 return 1
 """
 _ENQUEUE = _NOW + _LIVE + """
@@ -486,8 +510,21 @@ class DeviceBridgeService:
                 break
         return {'devices': devices}
 
-    async def revoke_device(self, device_id: str, request: Request) -> dict[str, Any]:
+    async def revoke_device(self, device_id: str, request: Request,
+                            offline_only: bool = False) -> dict[str, Any]:
         owner = await self._user(request)
+        if offline_only:
+            if not self._valid_id(device_id):
+                raise HTTPException(404, 'Device not found')
+            code = int(await self._eval(
+                _PURGE_OFFLINE,
+                [self._key('device', device_id), self._key('lease', device_id),
+                 self._owner_key(owner)], owner, device_id, PREFIX))
+            if code == 0:
+                raise HTTPException(404, 'Device not found')
+            if code == 2:
+                raise HTTPException(409, 'Device came online')
+            return {'device_id': device_id, 'revoked': True}
         d = await self._owned(device_id, owner)
         if not await self._eval(_REVOKE, self._live_keys(device_id, d['token_hash']), owner):
             raise HTTPException(404, 'Device not found')

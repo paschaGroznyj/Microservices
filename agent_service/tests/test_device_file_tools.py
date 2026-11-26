@@ -132,8 +132,8 @@ def test_registry_and_schema():
     registered = tools()
     assert set(registered) == {'list_devices', 'run_on_device', 'send_file_to_device',
                                'get_file_from_device', 'capture_screenshot'}
-    for category in ('content', 'plugins'):
-        assert set(registered) <= set(settings.TOOLS_SETTINGS[category])
+    assert set(registered) <= set(settings.TOOLS_SETTINGS['plugins'])
+    assert not set(registered) & set(settings.TOOLS_SETTINGS['content'])
     for name, tool in registered.items():
         assert name in settings.TOOL_DESCRIPTIONS
         assert 'user_id' not in tool.args
@@ -279,6 +279,32 @@ async def test_bad_device_result(gateway, bad):
     assert not result['ok'] and SECRET not in str(result) and CREDENTIAL not in str(result)
     assert len(deleted(gateway)) == 1
     assert len(list(bridge.DOWNLOAD_DIR.glob('73/*'))) == 1  # only fixture source
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('device_output', 'expected'), [
+    ('Screenshot requires full mode (private desktop capture)', 'нужен Full mode'),
+    ('Screenshot unavailable: install Pillow and enable a graphical desktop/capture permission', 'нет доступного GUI/Pillow'),
+    ('Screenshot capture failed: no GUI or OS screen recording permission', 'отклонён Windows'),
+    ('Path is inside a protected folder', 'защищённая папка'),
+    ('Path is outside the workspace folder', 'вне рабочей папки'),
+])
+async def test_known_device_policy_errors_are_explained_without_raw_output(gateway, device_output, expected):
+    gateway.command_result = {'status': 'error', 'exit_code': 1, 'output': device_output}
+    result = await invoke('capture_screenshot')
+    assert not result['ok'] and expected in result['error']
+    assert device_output not in result['error']
+    assert SECRET not in str(result) and CREDENTIAL not in str(result)
+    assert len(deleted(gateway)) == 1
+
+
+@pytest.mark.asyncio
+async def test_unknown_device_error_stays_generic(gateway):
+    gateway.command_result = {'status': 'error', 'exit_code': 1, 'output': 'secret=' + SECRET}
+    result = await invoke('capture_screenshot')
+    assert not result['ok']
+    assert 'Устройство отклонило файловую операцию' in result['error']
+    assert SECRET not in str(result) and CREDENTIAL not in str(result)
 
 
 @pytest.mark.asyncio

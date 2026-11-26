@@ -134,12 +134,12 @@
     _mount(host){
       host.classList.add('skv-on');
       host.innerHTML = `<div class="skv skv-root skv-v-D" id="skv-root"><div class="skv-split">
-        <div class="skv-dl"><div class="skv-sc"><div class="skv-barw"><div class="skv-bar">
+        <div class="skv-dl"><div class="skv-barw"><div class="skv-bar">
           <label class="skv-q">${I.q}<input type="search" id="skv-q" placeholder="Поиск" autocomplete="off" aria-label="Поиск скиллов"></label>
           <div class="skv-seg" id="skv-seg" role="tablist" aria-label="Фильтр"></div>
           <button type="button" class="skv-ib" id="skv-sort" title="Сортировка" aria-label="Сортировка" aria-haspopup="menu" aria-expanded="false">${I.sort}</button>
         </div></div>
-        <div class="skv-col"><div class="skv-hl" id="skv-hl"></div><div class="skv-grp" id="skv-list"></div></div></div>
+        <div class="skv-sc"><div class="skv-col"><div class="skv-hl" id="skv-hl"></div><div class="skv-grp" id="skv-list"></div></div></div>
         <div class="skv-msf" id="skv-foot"></div></div>
         <div class="skv-md-pane" id="skv-pane" aria-live="polite"></div>
       </div></div>`;

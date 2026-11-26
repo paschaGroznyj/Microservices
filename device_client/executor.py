@@ -188,19 +188,56 @@ def is_inside(child: Path, parent: Path) -> bool:
     return c.startswith(p.rstrip(sep) + sep)
 
 
-_PATH_TOKEN = re.compile(r'''(?:[A-Za-z]:[\\/]|\\\\|~[\\/]|/|%[A-Za-z_]+%|\$env:[A-Za-z_]+|\$[A-Za-z_]+|\.\.)[^\s'"`;|&<>(){}]*''')
+_PATH_TOKEN = re.compile(
+    r'''(?:[A-Za-z]:[\\/]|\\\\|~[\\/]|/|\.\.?[\\/]|%[^%\s]+%|\$\{[^}]+\}|\$env:[A-Za-z_][A-Za-z0-9_]*|\$[A-Za-z_][A-Za-z0-9_]*)(?:[^\s'"`;|&<>(){}=,]*)''',
+    re.IGNORECASE,
+)
+_ENV_TOKEN = re.compile(
+    r'''\$\{env:([^}]+)\}|\$env:([A-Za-z_][A-Za-z0-9_]*)|%([^%]+)%''',
+    re.IGNORECASE,
+)
+
+
+def _environment_value(name: str) -> str | None:
+    for key, value in os.environ.items():
+        if key.lower() == name.lower():
+            return value
+    return None
+
+
+def _expand_command_path(token: str) -> str:
+    if not IS_WINDOWS:
+        return os.path.expandvars(os.path.expanduser(token))
+
+    def replace(match):
+        name = match.group(1) or match.group(2) or match.group(3)
+        value = _environment_value(name)
+        return value if value is not None else match.group(0)
+
+    return os.path.expanduser(_ENV_TOKEN.sub(replace, token))
+
+
+def _command_path_tokens(command: str):
+    for match in re.finditer(r'''(['"])(.*?)\1''', command, re.DOTALL):
+        token = match.group(2).strip()
+        if token:
+            yield token
+    yield from (match.group(0) for match in _PATH_TOKEN.finditer(command))
 
 
 def referenced_blocked_path(command: str, cwd: Path, blocked: list[Path]) -> Path | None:
     """Best-effort: absolute/relative paths written in the command text."""
-    for match in _PATH_TOKEN.finditer(command):
-        token = match.group(0).rstrip('.,:')
-        if not token:
+    seen = set()
+    for token in _command_path_tokens(command):
+        token = token.rstrip('.,:')
+        if not token or token in seen:
             continue
-        expanded = token
-        if IS_WINDOWS:
-            expanded = re.sub(r'\$env:([A-Za-z_]+)', r'%\1%', expanded)
-        candidate = Path(os.path.expandvars(os.path.expanduser(expanded)))
+        seen.add(token)
+        if IS_WINDOWS and token.startswith('$') and not re.match(
+                r'''(?i)^\$(?:\{env:[^}]+\}|env:[A-Za-z_][A-Za-z0-9_]*)''', token):
+            continue
+        expanded = _expand_command_path(token)
+        candidate = Path(expanded)
         if not candidate.is_absolute():
             candidate = cwd / candidate
         real = Path(os.path.realpath(str(candidate)))

@@ -497,9 +497,38 @@ def make_device_tools(user_id, enabled: bool = True, *, agent=None):
                         command.update(expected_size=body['size'], sha256=body['sha256'])
                     result = await request('POST', f'/internal/devices/{device_id}/commands', json=command)
                     if result.get('status') != 'ok' or result.get('exit_code') != 0:
-                        # Device output is untrusted and may contain credentials.
-                        raise _FileError('Device refused or failed the operation. Check Allow agent commands, '
-                                         'file policy, path and permissions; screenshots require full mode and a GUI.')
+                        # The client returns fixed PolicyError text. Expose only an
+                        # exact allowlist; arbitrary device output may contain secrets.
+                        safe_errors = {
+                            'Screenshot requires full mode (private desktop capture)':
+                                'Скриншот отклонён: на устройстве нужен Full mode.',
+                            'Screenshot unavailable: install Pillow and enable a graphical desktop/capture permission':
+                                'Скриншот недоступен: на устройстве нет доступного GUI/Pillow.',
+                            'Screenshot capture failed: no GUI or OS screen recording permission':
+                                'Скриншот отклонён Windows: нет разрешения захвата экрана или GUI.',
+                            'Command execution is disabled on this device':
+                                'На устройстве выключен переключатель Allow agent commands.',
+                            'Path is outside the workspace folder':
+                                'Путь отклонён политикой: он вне рабочей папки устройства.',
+                            'Path is inside a protected folder':
+                                'Путь отклонён политикой: защищённая папка устройства.',
+                            'cwd does not exist':
+                                'Рабочая папка устройства не существует.',
+                            'cwd does not exist:':
+                                'Рабочая папка устройства не существует.',
+                            'Source must be a regular file':
+                                'Источник не является обычным файлом.',
+                            'Destination parent directory must exist':
+                                'Родительская папка назначения не существует.',
+                        }
+                        output = result.get('output')
+                        safe = safe_errors.get(output)
+                        if safe is None and isinstance(output, str):
+                            for prefix, message in safe_errors.items():
+                                if prefix.endswith(':') and output.startswith(prefix):
+                                    safe = message
+                                    break
+                        raise _FileError(safe or 'Устройство отклонило файловую операцию. Проверь Allow agent commands и локальную политику файлов.')
                     try:
                         metadata = json.loads(result['output'])
                     except (KeyError, TypeError, ValueError):

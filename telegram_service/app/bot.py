@@ -139,6 +139,23 @@ logging.basicConfig(
 )
 log = logging.getLogger("tg_bot")
 
+
+class _MaskBotToken(logging.Filter):
+    """httpx пишет на INFO полный URL api.telegram.org/bot<id>:<secret>/method.
+    Секрет токена в логи контейнера не пускаем: оставляем id бота, остальное — ***."""
+    _RX = re.compile(r"(/bot\d+:)[A-Za-z0-9_-]+")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        masked = self._RX.sub(r"\1***", msg)
+        if masked != msg:
+            record.msg, record.args = masked, None
+        return True
+
+
+for _h in logging.getLogger().handlers:
+    _h.addFilter(_MaskBotToken())
+
 api = FastAPI(title="TG Bot Push API")
 
 _bot_app: Application | None = None

@@ -23,6 +23,7 @@ TOOLS_SETTINGS: dict[str, list[str]] = {
     # Admin-only paid media generation via RouterAPI (routerai.ru).
     "media_gen": [
         "generate_video",
+        "check_video_status",
         "generate_audio",
         "generate_music",
     ],
@@ -74,6 +75,8 @@ UNIVERSAL_TOOLS: set[str] = {
     "delete_workspace",
     "cleanup_workspaces",
     "send_email",
+    # бесплатно и только в пределах своего чата: вернуть уже отданный файл из OBS
+    "fetch_from_obs",
 }
 
 # Короткие описания инструментов (1 строка на тул) для ФОНОВОГО СУПЕРВИЗОРА.
@@ -102,6 +105,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "transcribe_media": "Дословно расшифровывает аудио и видео с таймкодами и спикерами (gemini-3.1-pro), сохраняет .txt/.srt/.json.",
     # --- media_gen (RouterAPI, личный ключ юзера из vault.user_secrets; env-ключ только админу) ---
     "generate_video": "Генерирует короткое видео по промпту (RouterAPI, личный ключ, платно).",
+    "check_video_status": "Проверяет статус уже запущенной генерации видео и забирает готовый ролик без повторной оплаты.",
+    "fetch_from_obs": "Выгружает ранее отданный/сгенерированный файл из OBS (по ключу, URL или пути) в generated_files или workspace, без регенерации.",
     "generate_audio": "Синтезирует речь из текста (TTS, RouterAPI, личный ключ, платно).",
     "generate_music": "Генерирует инструментальную/фоновую музыку (mp3) по описанию (Lyria, RouterAPI, личный ключ, платно).",
     # --- sessions ---

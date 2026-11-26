@@ -5,7 +5,9 @@ Admin-only text-to-speech (TTS) via RouterAPI (routerai.ru).
 
 RouterAPI is a SEPARATE paid provider (different base_url + auth token). Speech
 synthesis uses the OpenAI-compatible endpoint POST /v1/audio/speech. The TTS
-model (google/gemini-3.8-flash-tts) only returns RAW PCM (24 kHz, 16-bit, mono).
+model (google/gemini-3.8-flash-tts) returns 24 kHz, 16-bit, mono audio. Even with
+response_format=pcm RouterAPI wraps it in a WAV (RIFF: fmt + data + C2PA chunk with
+AI-provenance metadata); only the data chunk is audio (see extract_pcm).
 Raw PCM is not directly playable and Telegram sendVoice requires OGG/Opus, so
 this tool ALWAYS requests pcm from the API and then transcodes it in-memory to
 OGG (Opus) via ffmpeg (stdin -> stdout, no temp files). The resulting .ogg is a
@@ -31,6 +33,7 @@ from langchain.tools import tool
 
 from ...core.agent_provider import get_router_api_config
 from ...core.user_secrets import resolve_router_api_key
+from ...core import obs_file_storage
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +52,39 @@ DEFAULT_VOICE = "Algenib"
 # Gemini TTS raw PCM parameters (fixed by the model).
 PCM_SAMPLE_RATE = 24000
 PCM_CHANNELS = 1
+PCM_SAMPLE_WIDTH = 2
+
+
+def extract_pcm(body: bytes) -> bytes:
+    """Достать сырой PCM из ответа /audio/speech.
+
+    RouterAPI при response_format=pcm отдаёт content-type audio/pcm, но тело — WAV:
+    'fmt ' + 'data' + 'C2PA' (метка AI-контента, ~7.6 КБ). Если скормить всё
+    ffmpeg как s16le, 44 байта заголовка звучат щелчком в начале, а C2PA —
+    ~160 мс шума с клиппингом в конце. Не-RIFF тело возвращаем как есть.
+    Raises ValueError: битый WAV или формат не 24 кГц / mono / 16 бит.
+    """
+    if len(body) < 12 or body[:4] != b"RIFF" or body[8:12] != b"WAVE":
+        return body
+    fmt = None
+    i = 12
+    while i + 8 <= len(body):
+        cid = body[i:i + 4]
+        size = int.from_bytes(body[i + 4:i + 8], "little")
+        chunk = body[i + 8:i + 8 + size]
+        if cid == b"fmt " and len(chunk) >= 16:
+            tag = int.from_bytes(chunk[0:2], "little")
+            ch = int.from_bytes(chunk[2:4], "little")
+            sr = int.from_bytes(chunk[4:8], "little")
+            bits = int.from_bytes(chunk[14:16], "little")
+            fmt = (tag, ch, sr, bits)
+        elif cid == b"data":
+            want = (1, PCM_CHANNELS, PCM_SAMPLE_RATE, PCM_SAMPLE_WIDTH * 8)
+            if fmt is not None and fmt != want:
+                raise ValueError(f"unsupported WAV format {fmt}, expected {want}")
+            return chunk[:len(chunk) // PCM_SAMPLE_WIDTH * PCM_SAMPLE_WIDTH]
+        i += 8 + size + (size & 1)
+    raise ValueError("WAV without data chunk")
 
 
 def _pcm_to_ogg_opus(pcm_data: bytes) -> bytes:
@@ -102,7 +138,7 @@ async def audio_generator(text: str, voice: str = DEFAULT_VOICE, style: str = ""
 
     v = voice if voice in AVAILABLE_VOICES else DEFAULT_VOICE
 
-    # Gemini TTS only returns raw PCM -> always request pcm, transcode later.
+    # Просим pcm; RouterAPI всё равно может завернуть его в WAV -> extract_pcm.
     payload = {
         "model": model,
         "voice": v,
@@ -129,7 +165,7 @@ async def audio_generator(text: str, voice: str = DEFAULT_VOICE, style: str = ""
             )
             if r.status_code >= 400:
                 return {"result": f"generate_audio error: HTTP {r.status_code}: {r.text[:300]}"}
-            pcm_bytes = r.content
+            pcm_bytes = extract_pcm(r.content)
             if not pcm_bytes:
                 return {"result": "generate_audio error: empty audio response."}
     except httpx.HTTPError as e:
@@ -161,6 +197,32 @@ async def audio_generator(text: str, voice: str = DEFAULT_VOICE, style: str = ""
     size_kb = len(ogg_bytes) // 1024
     style_note = f", style='{style.strip()}'" if (style or "").strip() else ""
     return {"result": None, "voice": v, "style_note": style_note, "fpath": fpath, "size_kb": size_kb}
+
+
+async def persist_paid_media(agent, src_path: str) -> tuple[str, str | None]:
+    """Платный результат: переносим в generated_files/media_<uuid>/ (TTL 3 ч)
+    и сразу заливаем в OBS, чтобы его можно было вернуть fetch_from_obs без
+    повторной генерации. Возвращает (новый путь, obs_key | None)."""
+    dst = obs_file_storage.paid_media_path(os.path.basename(src_path))
+    try:
+        os.replace(src_path, dst)
+    except OSError as e:
+        log.warning("persist_paid_media: move %s failed: %s", src_path, e)
+        dst = src_path
+    pend = getattr(agent, "_pending_generated_files", None)
+    if isinstance(pend, list):
+        pend[:] = [dst if x == src_path else x for x in pend]
+    chat_id = agent._ctx_get("chat_id", getattr(agent, "current_chat_id", None)) \
+        if hasattr(agent, "_ctx_get") else getattr(agent, "current_chat_id", None)
+    obs_key = await obs_file_storage.upload_user_file(dst, chat_id) if chat_id else None
+    return dst, obs_key
+
+
+def _obs_note(obs_key: str | None) -> str:
+    if obs_key:
+        return (f" Stored in OBS as {obs_key}: if the local file expires (3 h), get it back with "
+                f"fetch_from_obs(obs_key='{obs_key}') instead of generating again.")
+    return " OBS upload failed: the local file is the only copy (3 h)."
 
 
 def make_generate_audio_tool(agent):
@@ -212,8 +274,10 @@ def make_generate_audio_tool(agent):
             return f"generate_audio error: {key_err}"
         voice_meta = await audio_generator(text, voice, style, api_key=api_key)
         if not voice_meta["result"]:
+            fpath, obs_key = await persist_paid_media(agent, voice_meta["fpath"])
             return (f"Voice message generated (voice={voice_meta['voice']}{voice_meta['style_note']}, OGG/Opus). "
-                    f"Saved to {voice_meta['fpath']} ({voice_meta['size_kb']} KB). Send it with send_file_to_user.")
+                    f"Saved to {fpath} ({voice_meta['size_kb']} KB). Send it with send_file_to_user."
+                    + _obs_note(obs_key))
         else:
             return voice_meta["result"]
 
@@ -329,11 +393,11 @@ def make_generate_music_tool(agent):
             return result
 
         mp3_bytes = result
-        os.makedirs(GENERATED_ROOT, exist_ok=True)
-        fname = f"music_{uuid.uuid4().hex[:12]}.mp3"
-        fpath = os.path.join(GENERATED_ROOT, fname)
+        fpath = obs_file_storage.paid_media_path(f"music_{uuid.uuid4().hex[:12]}.mp3")
         with open(fpath, "wb") as f:
             f.write(mp3_bytes)
+        chat_id = agent._ctx_get("chat_id", getattr(agent, "current_chat_id", None))
+        obs_key = await obs_file_storage.upload_user_file(fpath, chat_id) if chat_id else None
 
         try:
             pend = getattr(agent, "_pending_generated_files", None)
@@ -344,6 +408,6 @@ def make_generate_music_tool(agent):
 
         size_kb = len(mp3_bytes) // 1024
         return (f"Music generated (mp3). Saved to {fpath} ({size_kb} KB). "
-                f"Send it with send_file_to_user.")
+                f"Send it with send_file_to_user." + _obs_note(obs_key))
 
     return generate_music

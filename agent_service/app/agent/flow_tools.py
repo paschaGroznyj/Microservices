@@ -32,6 +32,8 @@ TOOL_FLOW: dict[str, tuple] = {
     "generate_image": ("media", "Рисую картинку"),
     "analyze_image": ("media", "Рассматриваю картинку"),
     "generate_video": ("media", "Рендерю видео"),
+    "check_video_status": ("media", "Проверяю видео"),
+    "fetch_from_obs": ("sandbox", "Достаю файл из хранилища"),
     "transcribe_media": ("media", "Расшифровываю запись"),
     "generate_audio": ("media", "Озвучиваю"),
     "generate_music": ("media", "Пишу музыку"),

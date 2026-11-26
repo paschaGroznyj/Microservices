@@ -67,6 +67,8 @@ class DataBaseUser:
         REVOKE ALL ON ALL TABLES IN SCHEMA vault FROM PUBLIC;
     """
 
+    _PRIVILEGED_DDL = '-- Персональные привилегии без админского доступа.\nCREATE TABLE IF NOT EXISTS public.privileged_users (\n    user_id INTEGER PRIMARY KEY REFERENCES public.users(id) ON DELETE CASCADE,\n    reason TEXT,\n    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()\n);\n'
+
     @staticmethod
     async def __init_db(conn):
         # DDL-схема таблиц (users, app_updates, user_seen_updates,
@@ -75,6 +77,7 @@ class DataBaseUser:
         # vault.user_secrets есть в postgres/sql/01_auth/03_user_secrets.sql; init-скрипты
         # postgres идут только на пустом томе, поэтому для живой базы — здесь же.
         await conn.execute(DataBaseUser._VAULT_DDL)
+        await conn.execute(DataBaseUser._PRIVILEGED_DDL)
 
     async def check_user_password(self, username: str, password: str = None, back_user_id=False):
         async with self.pool.acquire() as conn:
@@ -232,6 +235,13 @@ class DataBaseUser:
                 "DELETE FROM vault.user_secrets WHERE user_id = $1 AND provider = $2 AND name = $3",
                 user_id, provider, name)
         return res.split()[-1] != "0"
+
+    async def is_privileged_user(self, user_id: int) -> bool:
+        async with self.pool.acquire() as conn:
+            return bool(await conn.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM public.privileged_users WHERE user_id = $1)",
+                int(user_id),
+            ))
 
     async def get_user_preferences(self, user_id: int) -> dict:
         """Персональные настройки юзера. Нет строки — дефолт (пустая палитра)."""

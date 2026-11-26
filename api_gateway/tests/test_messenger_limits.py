@@ -111,3 +111,27 @@ def test_sanitize_tools(mocker):
     assert ml.sanitize_tools(USER, ["internet", "admin", "media_gen"]) == ["internet"]
     assert ml.sanitize_tools(ADMIN, ["internet", "admin"]) == ["internet", "admin"]
     assert ml.sanitize_tools(USER, None) is None
+
+
+def test_privileged_user_unlimited_without_admin_tools(mocker):
+    http = setup(mocker, [{"chat_id": str(i), "chat_type": "private"} for i in range(12)], 0)
+    http.post.return_value = R({"privileged": True})
+    run(ml.ensure_can_add(USER, "max", "100500"))
+    http.get.assert_not_called()
+    assert ml.sanitize_tools(USER, ["internet", "admin", "media_gen"]) == ["internet"]
+
+
+def test_privileged_user_is_reported_without_admin_status(mocker):
+    setup(mocker, [], 0)
+    ml._http.post.return_value = R({"privileged": True})
+    app = FastAPI(); app.include_router(ml.router)
+    js = TestClient(app).get("/api/messengers/limits").json()
+    assert js["is_admin"] is False
+    assert js["is_privileged"] is True
+    assert js["limits"] is None
+
+
+def test_privileged_user_ui_does_not_get_admin_tools(mocker):
+    setup(mocker, [], 0)
+    ml._http.post.return_value = R({"privileged": True})
+    assert ml.sanitize_tools(USER, ["internet", "admin", "media_gen"]) == ["internet"]

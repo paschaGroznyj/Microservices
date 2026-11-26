@@ -44,6 +44,7 @@ class _FakeDB:
         self.list_user_secrets = AsyncMock()
         self.set_user_secret = AsyncMock()
         self.delete_user_secret = AsyncMock()
+        self.is_privileged_user = AsyncMock(return_value=False)
         self.get_user_preferences = AsyncMock()
         self.upsert_user_preferences = AsyncMock()
         self.get_pending_whatsnew = AsyncMock()

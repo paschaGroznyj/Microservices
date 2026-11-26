@@ -6,7 +6,7 @@
 
   L1            — 1 личный + 1 группа (на каждый мессенджер отдельно)
   L2 и выше     — 2 личных + 2 группы
-  админ         — без ограничений
+  админ / привилегированный пользователь — без ограничений на чаты
 
 Чаты, встроенные до введения лимитов, не трогаем: UI помечает лишние жёлтым «!».
 
@@ -87,6 +87,22 @@ def sanitize_tools(user, tools):
     return [t for t in tools if t not in ADMIN_ONLY_TOOLS]
 
 
+async def _is_privileged(user) -> bool:
+    """Только auth_service/БД, не поле из браузера или JWT. Без кэша: отзыв сразу.
+
+    Любая ошибка/неожиданный ответ НЕ даёт привилегий. Остаются лимиты уровня.
+    """
+    try:
+        r = await _http.post(f"{_auth_url}/profile/privileges/check",
+                             json={"user_id": user["user_id"]}, timeout=5.0)
+        if r.status_code == 200:
+            data = r.json()
+            return isinstance(data, dict) and data.get("privileged") is True
+    except (httpx.RequestError, ValueError, TypeError) as e:
+        logger.warning("[msgr-limits] privilege lookup failed: %s", e)
+    return False
+
+
 async def _user_level(user) -> int:
     """Уровень по auth_service. Если сервис недоступен — L1 (строже, но не ломает добавление первого чата)."""
     try:
@@ -122,7 +138,7 @@ def _usage(chats: list) -> dict:
 
 async def ensure_can_add(user, kind: str, chat_id: str) -> None:
     """403, если новый чат превысит лимит уровня. Повторное встраивание своего чата — не новый чат."""
-    if is_admin(user):
+    if is_admin(user) or await _is_privileged(user):
         return
     chats = await _user_chats(user, kind)
     cid = str(chat_id).strip()
@@ -146,6 +162,7 @@ async def api_messenger_limits(request: Request):
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     admin = is_admin(user)
+    privileged = False if admin else await _is_privileged(user)
     level = await _user_level(user)
     usage = {}
     for kind in KINDS:
@@ -154,7 +171,7 @@ async def api_messenger_limits(request: Request):
         except HTTPException:
             usage[kind] = None
     return JSONResponse(
-        content={"is_admin": admin, "level": level,
-                 "limits": None if admin else limits_for(level), "usage": usage},
+        content={"is_admin": admin, "is_privileged": privileged, "level": level,
+                 "limits": None if admin or privileged else limits_for(level), "usage": usage},
         headers={"Cache-Control": "no-store"},
     )

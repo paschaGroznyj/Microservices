@@ -276,6 +276,22 @@ async def secrets_delete(request: Request):
     return {"deleted": deleted}
 
 
+@app.post("/profile/privileges/check")
+async def privileges_check(request: Request):
+    """Внутренний read-only маршрут: gateway передаёт user_id из своей сессии.
+
+    Нет публичного прокси и нет маршрута назначения привилегий.
+    """
+    try:
+        data = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    user_id = data.get("user_id") if isinstance(data, dict) else None
+    if type(user_id) is not int or user_id <= 0:
+        raise HTTPException(status_code=400, detail="positive integer user_id required")
+    return {"privileged": await db.is_privileged_user(user_id)}
+
+
 @app.post("/profile/preferences/get")
 async def preferences_get(request: Request):
     """Персональные настройки юзера по user_id. Redis-cache → Postgres."""

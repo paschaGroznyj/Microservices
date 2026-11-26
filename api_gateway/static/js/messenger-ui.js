@@ -27,6 +27,7 @@
   }
 
   function isAdmin() { return !!(_info && _info.is_admin); }
+  function isPrivileged() { return !!(_info && _info.is_privileged); }
   function esc(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
@@ -80,7 +81,7 @@
     var n = parseInt(String((c && c.chat_id) || c || '').trim(), 10);
     return isNaN(n) || n < 0 ? 'group' : 'private';
   }
-  function limits() { return (_info && !_info.is_admin && _info.limits) || null; }
+  function limits() { return (_info && !_info.is_admin && !_info.is_privileged && _info.limits) || null; }
 
   function usage(chats) {
     var u = { private: 0, group: 0 };
@@ -384,7 +385,7 @@
   }
 
   window.MessengerUI = {
-    load: load, isAdmin: isAdmin, info: function () { return _info; },
+    load: load, isAdmin: isAdmin, isPrivileged: isPrivileged, info: function () { return _info; },
     categories: categories, toolsValueHtml: toolsValueHtml, toolsContentHtml: toolsContentHtml, toggleAll: toggleAll,
     overLimit: overLimit, warnHtml: warnHtml, usageHtml: usageHtml, canAdd: canAdd,
     listHtml: listHtml, renderSectionMeta: renderSectionMeta, bindList: bindList, modalHtml: modalHtml,

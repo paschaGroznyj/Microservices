@@ -102,3 +102,17 @@ def test_whatsnew_update_body_validation_and_404(client, fake_db):
     assert client.post("/whatsnew/updates/body", json={"user_id": 7, "update_id": "x"}).status_code == 400
     fake_db.get_app_update_body.return_value = None
     assert client.post("/whatsnew/updates/body", json={"user_id": 7, "update_id": 999}).status_code == 404
+
+
+def test_privileges_check(client, fake_db):
+    fake_db.is_privileged_user.return_value = True
+    r = client.post("/profile/privileges/check", json={"user_id": 29137})
+    assert r.status_code == 200
+    assert r.json() == {"privileged": True}
+    fake_db.is_privileged_user.assert_awaited_once_with(29137)
+
+
+def test_privileges_check_validates_user_id(client, fake_db):
+    assert client.post("/profile/privileges/check", json={}).status_code == 400
+    assert client.post("/profile/privileges/check", json={"user_id": "29137"}).status_code == 400
+    assert client.post("/profile/privileges/check", json={"user_id": 0}).status_code == 400

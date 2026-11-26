@@ -243,42 +243,30 @@ def tone(sec, amp, f=220):
                     for i in range(int(sec * SR)))
 
 
-def sil(sec):
-    return b"\x00\x00" * int(sec * SR)
+def wav(pcm, extra=b"", sr=SR, ch=1, bits=16):
+    fmt = struct.pack("<HHIIHH", 1, ch, sr, sr * ch * bits // 8, ch * bits // 8, bits)
+    body = b"WAVE" + b"fmt " + struct.pack("<I", 16) + fmt
+    body += b"data" + struct.pack("<I", len(pcm)) + pcm + extra
+    return b"RIFF" + struct.pack("<I", len(body)) + body
 
 
-def dur(pcm):
-    return len(pcm) / 2 / SR
+def test_extract_pcm_drops_header_and_c2pa():
+    pcm = tone(.5, .2)
+    c2pa = b"C2PA" + struct.pack("<I", 7) + b"\xff" * 7 + b"\x00"  # нечётный -> pad
+    assert tga.extract_pcm(wav(pcm, c2pa)) == pcm
 
 
-def test_trim_cuts_loud_click_after_pause():
-    pcm = tone(1, .1) + sil(.15) + tone(.15, .9, 3000) + sil(.05)
-    assert dur(tga.trim_tts_tail(pcm)) == pytest.approx(1.15, abs=0.02)
+def test_extract_pcm_passthrough_raw():
+    pcm = tone(.1, .2)
+    assert tga.extract_pcm(pcm) == pcm
+    assert tga.extract_pcm(b"") == b""
 
 
-def test_trim_cuts_clipped_burst():
-    pcm = tone(1, .3) + sil(.15) + tone(.2, .999, 2000)
-    assert dur(tga.trim_tts_tail(pcm)) == pytest.approx(1.15, abs=0.02)
-
-
-def test_trim_keeps_short_last_word():
-    pcm = tone(1, .1) + sil(.1) + tone(.3, .1) + sil(.2)
-    assert dur(tga.trim_tts_tail(pcm)) == pytest.approx(dur(pcm), abs=0.01)
-
-
-def test_trim_shortens_long_silence_only():
-    pcm = tone(1, .1) + sil(.3) + tone(1, .1) + sil(.8)
-    assert dur(tga.trim_tts_tail(pcm)) == pytest.approx(2.5, abs=0.02)
-
-
-def test_trim_fades_out_without_click():
-    out = tga.trim_tts_tail(tone(1, .3) + sil(.15) + tone(.2, .999, 2000))
-    assert abs(struct.unpack("<h", out[-2:])[0]) < 200
-
-
-def test_trim_noop_on_short_or_empty():
-    assert tga.trim_tts_tail(b"") == b""
-    assert tga.trim_tts_tail(tone(.05, .3)) == tone(.05, .3)
+def test_extract_pcm_rejects_other_format():
+    with pytest.raises(ValueError):
+        tga.extract_pcm(wav(tone(.1, .2), sr=44100))
+    with pytest.raises(ValueError):
+        tga.extract_pcm(b"RIFF" + struct.pack("<I", 4) + b"WAVE")
 
 
 def test_persist_paid_media_moves_and_uploads(env, tmp_path):

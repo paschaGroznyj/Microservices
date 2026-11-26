@@ -5,7 +5,9 @@ Admin-only text-to-speech (TTS) via RouterAPI (routerai.ru).
 
 RouterAPI is a SEPARATE paid provider (different base_url + auth token). Speech
 synthesis uses the OpenAI-compatible endpoint POST /v1/audio/speech. The TTS
-model (google/gemini-3.8-flash-tts) only returns RAW PCM (24 kHz, 16-bit, mono).
+model (google/gemini-3.8-flash-tts) returns 24 kHz, 16-bit, mono audio. Even with
+response_format=pcm RouterAPI wraps it in a WAV (RIFF: fmt + data + C2PA chunk with
+AI-provenance metadata); only the data chunk is audio (see extract_pcm).
 Raw PCM is not directly playable and Telegram sendVoice requires OGG/Opus, so
 this tool ALWAYS requests pcm from the API and then transcodes it in-memory to
 OGG (Opus) via ffmpeg (stdin -> stdout, no temp files). The resulting .ogg is a
@@ -50,103 +52,39 @@ DEFAULT_VOICE = "Algenib"
 # Gemini TTS raw PCM parameters (fixed by the model).
 PCM_SAMPLE_RATE = 24000
 PCM_CHANNELS = 1
+PCM_SAMPLE_WIDTH = 2
 
 
-# ── Хвостовой артефакт Gemini TTS ─────────────────────────────────────────
-# После последнего слова модель иногда дописывает короткий громкий щелчок/шум
-# (на образце: речь до 5.45 с, тишина ~150 мс, затем 190 мс с клиппингом до 1.0).
-# Режем по PCM: если в конце после паузы стоит короткий кусок — это не речь.
-TRIM_FRAME_MS = 10
-TRIM_SILENCE_DB = -45.0     # ниже — тишина
-TRIM_MIN_GAP_MS = 60        # пауза перед артефактом
-TRIM_MAX_TAIL_MS = 450      # кусок после паузы длиннее — считаем речью и не трогаем
-TRIM_KEEP_SILENCE_MS = 200  # сколько тишины оставить после речи
-TRIM_FADE_MS = 15
-TRIM_LOUDER_DB = 8.0        # артефакт громче медианы речи хотя бы на столько
-TRIM_CLIP_LEVEL = 0.97      # ...или клиппует (на образце пик ровно 1.0)
+def extract_pcm(body: bytes) -> bytes:
+    """Достать сырой PCM из ответа /audio/speech.
 
-
-def _frame_db(pcm: bytes, sr: int = PCM_SAMPLE_RATE) -> list[float]:
-    import array
-    import math
-    a = array.array("h")
-    a.frombytes(pcm[: len(pcm) // 2 * 2])
-    if a.itemsize == 2 and array.array("h", [1]).tobytes() != b"\x01\x00":
-        a.byteswap()  # big-endian хост; PCM у модели little-endian
-    fr = max(1, sr * TRIM_FRAME_MS // 1000)
-    out = []
-    for i in range(0, len(a) - fr + 1, fr):
-        acc = 0
-        for v in a[i:i + fr]:
-            acc += v * v
-        rms = math.sqrt(acc / fr) / 32768.0
-        out.append(20 * math.log10(rms + 1e-9))
-    return out
-
-
-def _is_artifact(pcm: bytes, db: list[float], loud: list[bool], j: int, end: int,
-                 sr: int) -> bool:
-    """Хвост [j, end) — не последнее короткое слово, а щелчок: громкий или с клиппингом."""
-    speech = sorted(d for d, l in zip(db[:j], loud[:j]) if l)
-    if not speech:
-        return False
-    median = speech[len(speech) // 2]
-    burst = db[j:end]
-    if sum(burst) / len(burst) >= median + TRIM_LOUDER_DB:
-        return True
-    import array
-    fr = sr * TRIM_FRAME_MS // 1000
-    a = array.array("h")
-    a.frombytes(pcm[j * fr * 2: end * fr * 2])
-    lim = int(TRIM_CLIP_LEVEL * 32767)
-    return sum(1 for v in a if v >= lim or v <= -lim) >= 3
-
-
-def trim_tts_tail(pcm: bytes, sr: int = PCM_SAMPLE_RATE) -> bytes:
-    """Срезает короткий хвост-артефакт после паузы и лишнюю тишину, делает fade-out."""
-    db = _frame_db(pcm, sr)
-    if len(db) < 20:
-        return pcm
-    loud = [d > TRIM_SILENCE_DB for d in db]
-    gap_n = TRIM_MIN_GAP_MS // TRIM_FRAME_MS
-    tail_n = TRIM_MAX_TAIL_MS // TRIM_FRAME_MS
-    end = len(db)
-    while end > 0 and not loud[end - 1]:
-        end -= 1
-    if end == 0:
-        return pcm
-    limit = len(db)  # тишину после речи оставляем, но не дальше начала срезанного хвоста
-    # Срезаем до 2 подряд коротких хвостов (бывает щелчок + шорох)
-    for _ in range(2):
-        j = end
-        while j > 0 and loud[j - 1]:
-            j -= 1
-        burst = end - j
-        g = j
-        while g > 0 and not loud[g - 1]:
-            g -= 1
-        gap = j - g
-        if (burst <= tail_n and gap >= gap_n and g > 0 and g > burst * 3
-                and _is_artifact(pcm, db, loud, j, end, sr)):
-            limit = j
-            end = g
-        else:
-            break
-    fr = sr * TRIM_FRAME_MS // 1000
-    keep = min(end * fr + sr * TRIM_KEEP_SILENCE_MS // 1000, limit * fr)
-    cut = min(len(pcm) // 2, keep) * 2
-    if cut >= len(pcm) - fr * 2:
-        return pcm  # срезать нечего
-    out = bytearray(pcm[:cut])
-    # fade-out по последним TRIM_FADE_MS, чтобы обрез не щёлкнул сам
-    n = min(len(out) // 2, sr * TRIM_FADE_MS // 1000)
-    import struct
-    base = len(out) // 2 - n
-    for k in range(n):
-        off = (base + k) * 2
-        v = struct.unpack_from("<h", out, off)[0]
-        struct.pack_into("<h", out, off, int(v * (1 - (k + 1) / n)))
-    return bytes(out)
+    RouterAPI при response_format=pcm отдаёт content-type audio/pcm, но тело — WAV:
+    'fmt ' + 'data' + 'C2PA' (метка AI-контента, ~7.6 КБ). Если скормить всё
+    ffmpeg как s16le, 44 байта заголовка звучат щелчком в начале, а C2PA —
+    ~160 мс шума с клиппингом в конце. Не-RIFF тело возвращаем как есть.
+    Raises ValueError: битый WAV или формат не 24 кГц / mono / 16 бит.
+    """
+    if len(body) < 12 or body[:4] != b"RIFF" or body[8:12] != b"WAVE":
+        return body
+    fmt = None
+    i = 12
+    while i + 8 <= len(body):
+        cid = body[i:i + 4]
+        size = int.from_bytes(body[i + 4:i + 8], "little")
+        chunk = body[i + 8:i + 8 + size]
+        if cid == b"fmt " and len(chunk) >= 16:
+            tag = int.from_bytes(chunk[0:2], "little")
+            ch = int.from_bytes(chunk[2:4], "little")
+            sr = int.from_bytes(chunk[4:8], "little")
+            bits = int.from_bytes(chunk[14:16], "little")
+            fmt = (tag, ch, sr, bits)
+        elif cid == b"data":
+            want = (1, PCM_CHANNELS, PCM_SAMPLE_RATE, PCM_SAMPLE_WIDTH * 8)
+            if fmt is not None and fmt != want:
+                raise ValueError(f"unsupported WAV format {fmt}, expected {want}")
+            return chunk[:len(chunk) // PCM_SAMPLE_WIDTH * PCM_SAMPLE_WIDTH]
+        i += 8 + size + (size & 1)
+    raise ValueError("WAV without data chunk")
 
 
 def _pcm_to_ogg_opus(pcm_data: bytes) -> bytes:
@@ -200,7 +138,7 @@ async def audio_generator(text: str, voice: str = DEFAULT_VOICE, style: str = ""
 
     v = voice if voice in AVAILABLE_VOICES else DEFAULT_VOICE
 
-    # Gemini TTS only returns raw PCM -> always request pcm, transcode later.
+    # Просим pcm; RouterAPI всё равно может завернуть его в WAV -> extract_pcm.
     payload = {
         "model": model,
         "voice": v,
@@ -227,7 +165,7 @@ async def audio_generator(text: str, voice: str = DEFAULT_VOICE, style: str = ""
             )
             if r.status_code >= 400:
                 return {"result": f"generate_audio error: HTTP {r.status_code}: {r.text[:300]}"}
-            pcm_bytes = r.content
+            pcm_bytes = extract_pcm(r.content)
             if not pcm_bytes:
                 return {"result": "generate_audio error: empty audio response."}
     except httpx.HTTPError as e:
@@ -236,10 +174,6 @@ async def audio_generator(text: str, voice: str = DEFAULT_VOICE, style: str = ""
         log.exception("generate_audio request error")
         return {"result": f"generate_audio error: {e}"}
 
-    try:
-        pcm_bytes = trim_tts_tail(pcm_bytes)
-    except Exception as e:  # обрезка — косметика, генерацию не ломаем
-        log.warning("generate_audio: trim failed: %s", e)
     try:
         ogg_bytes = _pcm_to_ogg_opus(pcm_bytes)
     except RuntimeError as e:

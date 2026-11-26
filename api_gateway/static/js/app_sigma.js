@@ -4944,6 +4944,7 @@ class ChatApp {
                     }
                 });
             }
+            window.ReasoningRounds?.restore(chatId, body);
             if (reasoningState.is_final) {
                 this._stopReasoningTimer(chatId, durSec);
             } else {
@@ -4995,6 +4996,7 @@ class ChatApp {
                     body.appendChild(step);
                 });
                 targetBotEl.insertBefore(wrap, targetBotEl.firstElementChild);
+                window.ReasoningRounds?.restore(chatId, body);
                 window.TaskCards?.place?.(targetBotEl);
             }
         }
@@ -5019,6 +5021,7 @@ class ChatApp {
         const wrap = document.createElement('div');
         wrap.className = 'reasoning-block reasoning-collapsed';
         wrap.setAttribute('data-cds', 'TurnStatus');
+        wrap.setAttribute('data-rr-chat', String(chatId));
         wrap.innerHTML = `
             <div class="reasoning-header" data-cds-row="">
                 <span class="reasoning-label">Размышления</span>
@@ -5588,6 +5591,10 @@ class ChatApp {
 
             let f; try { f = JSON.parse(ev.data); } catch (_) { return; }
             if (this._isActiveChat(key)) _fm(f.ev, { ...f, chat: key, id: f.call_id || undefined });
+            window.ReasoningRounds?.flow(key, f, () => {
+                const s = this._resolveStream(key);
+                return s?.reasoningWrapEl || s?.pendingBotEl?.querySelector('.reasoning-block') || null;
+            });
         });
         es.addEventListener('reasoning_end', () => {
             if (this._isActiveChat(key)) _fm('think_end', { chat: key });

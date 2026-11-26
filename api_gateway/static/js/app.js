@@ -4720,6 +4720,10 @@ class ChatApp {
             if (msg.type === 'flow') {
                 if (msg.ev === 'context_usage') { this._applyRealtimeContext(key, msg); return; }
                 if (isActive) _fm(msg.ev, { ...msg, chat: key, id: msg.call_id || undefined });
+                window.ReasoningRounds?.flow(key, msg, () => {
+                    const s = this._resolveStream(key);
+                    return s?.reasoningWrapEl || s?.pendingBotEl?.querySelector('.reasoning-block') || null;
+                });
                 return;
             }
 
@@ -5510,6 +5514,7 @@ class ChatApp {
                     }
                 });
             }
+            window.ReasoningRounds?.restore(chatId, body);
             if (reasoningState.is_final) {
                 this._stopReasoningTimer(chatId, durSec);
             } else {
@@ -5561,6 +5566,7 @@ class ChatApp {
                     body.appendChild(step);
                 });
                 targetBotEl.insertBefore(wrap, targetBotEl.firstElementChild);
+                window.ReasoningRounds?.restore(chatId, body);
                 window.TaskCards?.place?.(targetBotEl);
             }
         }
@@ -5588,6 +5594,7 @@ class ChatApp {
         const wrap = document.createElement('div');
         wrap.className = 'reasoning-block reasoning-collapsed';
         wrap.setAttribute('data-cds', 'TurnStatus');
+        wrap.setAttribute('data-rr-chat', String(chatId));
         wrap.innerHTML = `
             <div class="reasoning-header" data-cds-row="">
                 <span class="reasoning-label">Размышления</span>

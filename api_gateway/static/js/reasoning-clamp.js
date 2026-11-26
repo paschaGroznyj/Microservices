@@ -77,7 +77,7 @@
         if (empty) return;
         // Свёрнутый блок имеет display:none, мерить нечего.
         if (!body.offsetParent && getComputedStyle(body).display === 'none') return;
-        body.querySelectorAll(STEP).forEach(function (step) {
+        body.querySelectorAll(':scope > ' + STEP).forEach(function (step) {
             if (step.classList.contains('reasoning-step--open')) {
                 step.classList.add('reasoning-step--clampable');
                 return;

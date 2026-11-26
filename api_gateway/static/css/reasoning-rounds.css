@@ -1,0 +1,102 @@
+/* reasoning-rounds.css — «Размышления» раундами (reasoning-rounds.js).
+   Раунд = итерация агента: номер, заголовок, мета «n инстр. · ошибка · с»;
+   внутри мысли (первое предложение + продолжение по клику) и чипы тулов. */
+.reasoning-body.rr-on {
+  --rr-t: var(--cds-reasoning-text);
+  --rr-m: var(--cds-reasoning-muted);
+  --rr-r: var(--cds-reasoning-ring);
+  --rr-ok: #3f8a5a;
+  --rr-err: #c0463a;
+  gap: 0;
+  overflow-wrap: anywhere;
+}
+[data-theme="dark"] .reasoning-body.rr-on { --rr-ok: #6fbf8a; --rr-err: #e57f73; --rr-m: #a3a199; }
+.rr-rounds { display: flex; flex-direction: column; min-width: 0; }
+.rr-rd + .rr-rd { border-top: 1px solid var(--rr-r); }
+.rr-on .rr-rd__h { font: inherit; color: inherit; background: none; border: 0; text-align: left; cursor: pointer; }
+.rr-on :focus-visible { outline: 1px solid var(--rr-m); outline-offset: 2px; border-radius: 6px; }
+.rr-chev { flex: 0 0 auto; width: 12px; height: 12px; color: var(--rr-m); transition: transform .2s cubic-bezier(.22,.61,.36,1); }
+.rr-rd.is-open > .rr-rd__h .rr-chev, .rr-th.is-open > .rr-chev { transform: rotate(90deg); }
+
+/* ── Шапка раунда ── */
+.rr-on .rr-rd__h {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; box-sizing: border-box;
+  margin: 0; padding: 7px 6px; border-radius: 7px;
+  font-family: var(--font-anthropic-sans, var(--font-sans)); font-size: 13px; line-height: 19.5px;
+}
+@media (hover: hover) { .rr-on .rr-rd__h:hover { background: var(--rr-r); } }
+.rr-rd__n {
+  flex: 0 0 auto; width: 18px; height: 18px; border-radius: 5px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
+  background: var(--cds-reasoning-code-bg); color: var(--rr-m);
+}
+.rr-rd.is-open .rr-rd__n { background: var(--rr-r); color: var(--rr-t); }
+.rr-rd.is-run .rr-rd__n { animation: rr-pulse 1.6s ease-in-out infinite; }
+.rr-rd__t { display: block; flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-primary, var(--rr-t)); font-weight: 500; }
+.rr-rd__m { flex: 0 0 auto; font-size: 12px; color: var(--rr-m); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rr-err { color: var(--rr-err); font-weight: 500; }
+.rr-rd.is-leaf > .rr-rd__h { cursor: default; }
+.rr-rd.is-leaf > .rr-rd__h .rr-chev { visibility: hidden; }
+@media (hover: hover) { .rr-on .rr-rd.is-leaf > .rr-rd__h:hover { background: none; } }
+.rr-on .rr-rd__h:disabled { opacity: 1; }
+
+/* ── Тело раунда (плавное раскрытие) ── */
+.rr-rd__b { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .24s cubic-bezier(.22,.61,.36,1); }
+.rr-rd.is-open > .rr-rd__b { grid-template-rows: 1fr; }
+.rr-rd__in { min-height: 0; min-width: 0; overflow: hidden; display: flex; flex-direction: column; gap: 4px; padding: 0 6px 0 32px; }
+.rr-rd.is-open .rr-rd__in { padding-top: 2px; padding-bottom: 8px; }
+.rr-flat > .rr-rd__in { padding: 2px 6px; }
+/* Свёрнутый раунд имеет высоту 0: без этого flex сжимает чипы и мысли во время анимации. */
+.rr-rd__in > * { flex-shrink: 0; }
+
+/* ── Мысль: заголовок + продолжение (вариант C) ── */
+.reasoning-body.rr-on .reasoning-step.rr-th {
+  display: grid; grid-template-columns: minmax(0, 1fr) 12px; column-gap: 10px;
+  max-height: none; overflow: visible; -webkit-mask-image: none; mask-image: none;
+  margin: 0 -6px; padding: 4px 6px; border-radius: 7px; cursor: default;
+  white-space: normal; transition: background-color .15s;
+}
+.reasoning-body.rr-on .reasoning-step.rr-th.has-more { cursor: pointer; }
+@media (hover: hover) { .reasoning-body.rr-on .reasoning-step.rr-th.has-more:hover { background: var(--rr-r); } }
+.rr-th > .rr-chev { margin-top: 4px; }
+.rr-th__h, .rr-th__b { max-width: 76ch; white-space: pre-wrap; }
+.rr-th__h { color: var(--text-primary, var(--rr-t)); }
+.rr-th__b { display: none; grid-column: 1; margin-top: 4px; padding-left: 10px; box-shadow: inset 1.5px 0 0 color-mix(in srgb, var(--rr-m) 40%, transparent); color: var(--rr-t); }
+.rr-th.is-open > .rr-th__b { display: block; }
+/* Продолжение первой мысли раунда: её первое предложение уже в шапке. */
+.rr-th__hid { display: none; }
+.reasoning-body.rr-on .reasoning-step.rr-th--cont { display: block; padding-top: 0; }
+.rr-th--cont > .rr-th__b { display: block; margin-top: 0; padding-left: 0; box-shadow: none; }
+.reasoning-body.rr-on .reasoning-step.rr-th--empty { display: none; }
+
+/* ── Чип вызова инструмента ── */
+.rr-tool {
+  display: flex; align-items: center; gap: 7px; min-width: 0; box-sizing: border-box;
+  height: 28px; margin: 1px 0; padding: 0 8px; border-radius: 7px;
+  background: var(--cds-reasoning-code-bg);
+  font-family: var(--font-anthropic-sans, var(--font-sans)); font-size: 12px; line-height: 16px; color: var(--rr-m);
+}
+.rr-tool__ic, .rr-tool__st { flex: 0 0 auto; width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; }
+.rr-tool__ic svg, .rr-tool__st svg { width: 14px; height: 14px; }
+.rr-tool__st { color: var(--rr-ok); }
+.rr-tool.is-err .rr-tool__st, .rr-tool.is-err .rr-tool__n { color: var(--rr-err); }
+.rr-tool__n { flex: 1 1 auto; min-width: 0; color: var(--rr-t); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rr-tool__d { flex: 0 0 auto; margin-left: auto; font-variant-numeric: tabular-nums; }
+.rr-spin { width: 10px; height: 10px; box-sizing: border-box; border-radius: 50%; border: 1.5px solid var(--rr-r); border-top-color: var(--rr-m); animation: rr-spin .8s linear infinite; }
+
+@keyframes rr-spin { to { transform: rotate(360deg); } }
+@keyframes rr-pulse { 50% { opacity: .45; } }
+
+@media (max-width: 600px) {
+  .rr-on .rr-rd__h { display: grid; grid-template-columns: 18px minmax(0, 1fr) 12px; column-gap: 8px; row-gap: 1px; }
+  .rr-rd__n { grid-row: 1; align-self: start; margin-top: 1px; }
+  .rr-rd__t { grid-column: 2; }
+  .rr-rd__m { grid-column: 2; grid-row: 2; font-size: 11px; line-height: 15px; }
+  .rr-rd__h .rr-chev { grid-column: 3; grid-row: 1 / span 2; }
+  .rr-rd__in { padding-left: 32px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rr-rd__b, .rr-chev { transition: none; }
+  .rr-spin, .rr-rd.is-run .rr-rd__n { animation: none; }
+}

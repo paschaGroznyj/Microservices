@@ -119,3 +119,19 @@ def test_trim_counts_attached_trace():
     plain = _hist(2, None)
     withtr = tb.attach_traces(_hist(2, "; ".join(item(i) for i in range(20))), CPT)
     assert count_tokens_approximately(withtr) > count_tokens_approximately(plain) + 1000
+
+
+def test_fast_short_trace_raw_no_llm():
+    items = [item(i) for i in range(3)]
+    assert tb.compress_trace_fast(items, CPT) == ("; ".join(items), False)
+    assert tb.compress_trace_fast([], CPT) == (None, False)
+
+
+def test_fast_long_trace_clips_head_and_asks_llm():
+    items = [item(i) for i in range(60)]
+    out, need = tb.compress_trace_fast(items, CPT)
+    assert need is True
+    head, tail = out.split(tb.TAIL_MARK)
+    assert tb.tokens(head, CPT) <= tb.TRACE_HEAD_TOKENS + 1
+    full = run(tb.compress_trace(items, CPT, fake_sum))
+    assert tail == full.split(tb.TAIL_MARK)[1]

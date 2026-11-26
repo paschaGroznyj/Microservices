@@ -573,7 +573,18 @@ def test_long_tool_trace_summarized(h):
     h.add_tool("a")
     h.add_tool("b")
     h.models["coder"].script = [ai("", [("a", {}), ("b", {})]), "ok"]
-    assert h.run()["tool_trace"] == "SUMMARY" + tb.TAIL_MARK + "b:done"
+    params = dict(user_input="привет", request_id="req-1", user_id=56, chat_id="chat-1",
+                  database=h.db, agent_model="coder")
+
+    async def go():
+        res = await h.agent.process_query(**params)
+        return res, await res["tool_trace_refine"]
+
+    res, refined = asyncio.run(go())
+    # Финал не ждёт LLM: в ответе голова обрезана по токенам, сводка — фоновой задачей.
+    assert res["tool_trace"].endswith(tb.TAIL_MARK + "b:done")
+    assert not res["tool_trace"].startswith("SUMMARY")
+    assert refined == "SUMMARY" + tb.TAIL_MARK + "b:done"
     h.summarize_trace.assert_awaited_once_with("a:done")
 
 
@@ -582,7 +593,9 @@ def test_short_tool_trace_kept_raw(h):
     h.add_tool("a")
     h.add_tool("b")
     h.models["coder"].script = [ai("", [("a", {}), ("b", {})]), "ok"]
-    assert h.run()["tool_trace"] == "a:done; b:done"
+    res = h.run()
+    assert res["tool_trace"] == "a:done; b:done"
+    assert res["tool_trace_refine"] is None
     h.summarize_trace.assert_not_awaited()
 
 

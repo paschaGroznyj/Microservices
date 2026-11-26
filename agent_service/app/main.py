@@ -40,6 +40,7 @@ from agent.core import sandbox_scripts_cleaner
 from agent.media.thumbhash import media_meta_for_file, image_meta
 from api.web_ui import web_router, pending_files, set_db as _set_web_ui_db, set_active_tasks as _set_web_ui_tasks
 from api.memory_api import memory_router, set_db as _set_memory_db
+from agent.common.trace_budget import refine_tool_trace
 from api.steps_api import steps_router
 
 
@@ -703,6 +704,9 @@ async def handle_message(payload: dict, prod: AIOKafkaProducer):
             )
         await prod.send_and_wait("chat-messages", value=bot_message)
         log_event("request.answer", answer=fingerprint(response_text))
+        _refine = response.get("tool_trace_refine")
+        if isinstance(_refine, asyncio.Future):
+            asyncio.create_task(refine_tool_trace(_refine, message_id, db.set_bot_tool_trace))
         logging.info(f"Время обработки: {time.perf_counter() - start:.4f}s")
 
     except asyncio.CancelledError:

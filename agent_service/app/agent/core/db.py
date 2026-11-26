@@ -684,6 +684,15 @@ class AgentDB:
             logging.warning(f"get_bot_message_text fail: {e}")
             return None
 
+    async def set_bot_tool_trace(self, message_id: str, tool_trace: str) -> bool:
+        """Заменить chats.tool_trace ответа бота. False, если строки ещё нет."""
+        async with self.pool.acquire() as conn:
+            res = await conn.execute(
+                "UPDATE chats SET tool_trace = $2 WHERE message_id = $1 AND is_from_bot = TRUE",
+                message_id, tool_trace,
+            )
+        return res.split()[-1] != "0"
+
     async def append_reaction(self, message_id: str, reaction: dict):
         """Добавить реакцию в JSONB-массив reactions сообщения бота."""
         try:

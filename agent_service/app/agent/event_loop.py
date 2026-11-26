@@ -1210,7 +1210,7 @@ class HarnessAgent:
         knowledge_graph_tool = make_knowledge_graph_tool(agent)
         # 12. Отправка файла в телегу, на входе только название файла
         from .tools.telegram.tool_send_file import make_send_file_tool
-        send_file_tool = make_send_file_tool(agent)
+        send_file_tool = make_send_file_tool(agent, chat_id=chat_id)
         # 13. Отправка сообщений в ТГ
         from .tools.telegram.tool_send_message import make_push_telegram_tool
         send_message_tool = make_push_telegram_tool(agent)

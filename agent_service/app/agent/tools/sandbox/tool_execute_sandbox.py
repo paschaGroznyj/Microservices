@@ -430,9 +430,9 @@ So you can then spy on it/reuse it within the session.
             absolute path /tmp/exec/workspaces/<workspace_id>/..., or
             upload_to_workspace / execute_shell_commands with workspace_id.
 
-        For analyze_image to see the image created in the sandbox: first,
-        download_workspace_file (it places the file in /app/generated_files and returns
-        the path), then call analyze_image using that path. It doesn’t see the local output/.
+        For analyze_image to see an image created in the workspace, pass its full path
+        /tmp/exec/workspaces/<workspace_id>/output/<file> as local_path. send_file_to_user
+        takes the same workspace paths directly. No download_workspace_file is needed.
 
         Do not print binary data using print().
 
@@ -876,10 +876,11 @@ So you can then spy on it/reuse it within the session.
     ) -> dict:
         """
         Downloads a specific file from workspace and saves it to
-        /app/generated_files to send to the user.
+        /app/generated_files.
 
-        Use it when the final file is created in workspace and it needs to be
-        give it to the user via send_file_to_user.
+        Use it only when a tool needs a local file in /app/generated_files
+        (send_email attachments, transcribe_media). send_file_to_user and
+        analyze_image accept workspace paths directly, so do not download for them.
 
         Arguments:
             workspace_id: ID workspace

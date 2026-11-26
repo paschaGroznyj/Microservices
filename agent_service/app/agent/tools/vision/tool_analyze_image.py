@@ -19,6 +19,7 @@ tools/vision/tool_analyze_image.py
 """
 
 import os
+import re
 import glob
 import base64
 import logging
@@ -185,9 +186,8 @@ def _local_image_as_data_uri(path_or_name: str) -> tuple[str | None, str | None]
         return None, (
             f"Файл «{path_or_name}» не найден в разрешённых папках "
             f"(/app/generated_files) или путь недопустим. "
-            f"Если картинка собрана/сгенерирована в workspace (output/...) — она ещё не "
-            f"в локальной ФС агента: сначала скачай её через download_workspace_file "
-            f"(он положит файл в /app/generated_files и вернёт path), затем передай этот path в local_path."
+            f"Для файла из workspace передай полный путь "
+            f"/tmp/exec/workspaces/<workspace_id>/output/<file>."
         )
     ext = os.path.splitext(real)[1].lower()
     if ext not in _IMAGE_EXT:
@@ -205,6 +205,58 @@ def _local_image_as_data_uri(path_or_name: str) -> tuple[str | None, str | None]
     except Exception as e:
         log.error("analyze_image: не смог прочитать %s: %s", real, e)
         return None, f"Ошибка чтения «{path_or_name}»: {e}"
+
+
+# Пути workspace фабрики: /tmp/exec/workspaces/<workspace_id>/<rel_path>.
+# Такие файлы не лежат в ФС агента, их байты берём у sandbox по HTTP.
+_WS_PATH_RE = re.compile(r"^/tmp/exec/workspaces/(?P<ws>[a-f0-9\-]+)/(?P<rel>.+)$")
+_SANDBOX_URL = os.environ.get("SANDBOX_SERVICE_URL", "http://agent_sandbox:8005")
+_WS_IMAGE_MAX_BYTES = 20 * 1024 * 1024
+
+
+def _parse_workspace_path(path: str) -> tuple[str | None, str | None]:
+    """(workspace_id, rel_path) для пути workspace, иначе (None, None).
+
+    rel_path с сегментами «..» или пустыми отвергается.
+    """
+    m = _WS_PATH_RE.match((path or "").strip())
+    if not m:
+        return None, None
+    rel = m.group("rel")
+    parts = rel.split("/")
+    if any(p in ("", ".", "..") for p in parts):
+        return None, None
+    return m.group("ws"), rel
+
+
+async def _workspace_image_as_data_uri(path: str) -> tuple[str | None, str | None]:
+    """Картинка из workspace фабрики → (data_uri, err), без записи на диск."""
+    ws_id, rel = _parse_workspace_path(path)
+    if not ws_id:
+        return None, f"«{path}»: недопустимый путь workspace."
+    ext = os.path.splitext(rel)[1].lower()
+    if ext not in _IMAGE_EXT:
+        return None, f"«{path}»: неподдерживаемое расширение {ext} (только JPEG/PNG/WEBP/GIF)."
+    url = f"{_SANDBOX_URL}/workspace/{ws_id}/file/{rel}"
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(url)
+    except Exception as e:
+        log.error("analyze_image: workspace %s/%s недоступен: %s", ws_id, rel, e)
+        return None, f"Не удалось получить «{path}» из workspace: {e}"
+    if resp.status_code != 200:
+        return None, (f"Файл «{rel}» не найден в workspace {ws_id} (HTTP {resp.status_code}). "
+                      f"Проверь имя через list_workspace_files.")
+    raw = resp.content
+    if not raw:
+        return None, f"«{path}»: пустой файл."
+    if len(raw) > _WS_IMAGE_MAX_BYTES:
+        return None, f"«{path}»: {len(raw)} байт, лимит {_WS_IMAGE_MAX_BYTES}."
+    fallback = mimetypes.guess_type(rel)[0] or "image/jpeg"
+    mime = _sniff_media_type(raw, fallback=fallback)
+    raw, mime = _maybe_compress(raw, mime)
+    return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}", None
 
 
 async def _db_image_as_data_uri(agent, image_key: str) -> tuple[str | None, str | None]:
@@ -306,18 +358,13 @@ def make_analyze_image_tool(agent, images: list[dict] | None = None,
              was in the report / find_generated_image). You can send several —
              they will be analyzed one at a time in a single response.
 
-          2. local_path is the path OR name of the image file on the server disk. It reads
-             STRICTLY from the allowed folder /app/generated_files
-             (you can specify the full path inside them or just the file name — then
-             searched by name recursively). It will be useful for the pictures that I made.
-             another tool (screenshot, rendered graph, saved asset).
-             IMPORTANT: files collected in the factory workspace (output/... inside
-             execute_python_code), are NOT directly visible to this tool — it only reads
-             /app/generated_files. First, download the image using
-             download_workspace_file (it will place it in /app/generated_files and return
-             path), and only then pass this path to local_path. The format
-             (JPEG/PNG/...) is automatically determined by the byte signature.
-             You do NOT need to manually resave png-as-jpg.
+          2. local_path — an image file made by another tool (screenshot, rendered
+             chart, saved asset). Two forms are accepted:
+             - a workspace path "/tmp/exec/workspaces/<workspace_id>/output/<file>.png" —
+               the file is read straight from the factory, no download_workspace_file needed;
+             - a path or bare file name inside /app/generated_files (a bare name is
+               searched recursively there).
+             The format (JPEG/PNG/...) is detected by the byte signature.
 
           3. image_index — the image that the USER has attached to the current one.
              the message. In the text of the message, they are marked with [IMAGE #0: file] markers.
@@ -451,7 +498,11 @@ def make_analyze_image_tool(agent, images: list[dict] | None = None,
 
         # ── Источник 2: локальный путь/имя в /app/generated_files ─
         if local_path and str(local_path).strip():
-            data_uri, err = _local_image_as_data_uri(str(local_path))
+            _lp = str(local_path).strip()
+            if _lp.startswith("/tmp/exec/workspaces/"):
+                data_uri, err = await _workspace_image_as_data_uri(_lp)
+            else:
+                data_uri, err = _local_image_as_data_uri(_lp)
             if err:
                 return err
             return await _run_vision(data_uri, f"local:{os.path.basename(str(local_path))}")
@@ -460,7 +511,7 @@ def make_analyze_image_tool(agent, images: list[dict] | None = None,
         if not images:
             return ("К текущему сообщению не приложено ни одного изображения, "
                     "и не указан ни local_path, ни source_image_keys. "
-                    "Передай local_path (файл в /app/generated_files), "
+                    "Передай local_path (путь workspace или файл в /app/generated_files), "
                     "source_image_keys (сгенерированные картинки) или попроси "
                     "пользователя загрузить картинку.")
 

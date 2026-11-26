@@ -284,8 +284,25 @@
     });
   }
 
+  // Памятка «Как подключить» в окне нового чата: где найти бота и откуда взять chat_id.
+  var BOTS = {
+    tg:  { name: 'Telegram', nick: 'pmnij_bot', url: 'https://t.me/pmnij_bot' },
+    max: { name: 'MAX', nick: 'se14696029_bot', url: 'https://max.ru/se14696029_bot' }
+  };
+  function howHtml(platform) {
+    var b = BOTS[platform];
+    if (!b) return '';
+    return '<details class="tgx-how" open><summary>Как подключить чат<span class="tgx-how-ch">' + IC.chev + '</span></summary>' +
+      '<ol class="tgx-how-ol">' +
+        '<li>Найдите бота в ' + b.name + ': <a href="' + b.url + '" target="_blank" rel="noopener noreferrer">@' + b.nick + '</a>. Чтобы&nbsp;подключить группу, добавьте бота в&nbsp;неё.</li>' +
+        '<li>Напишите боту <code>/start</code> в личном чате или в&nbsp;группе.</li>' +
+        '<li>Бот ответит, что доступа нет, и пришлёт Chat&nbsp;ID. Так&nbsp;и&nbsp;должно быть, пока чат не&nbsp;подключён.</li>' +
+        '<li>Скопируйте Chat&nbsp;ID и вставьте в поле ниже.</li>' +
+      '</ol></details>';
+  }
+
   // Окно настроек: модалка на ПК, шторка на мобиле. Поля сохраняют прежние id/data-*.
-  // o: { modalId, editing, form, models, toolsContent, schedule, trCount, sub, isSheet }
+  // o: { modalId, platform ('tg'|'max'), editing, form, models, toolsContent, schedule, trCount, sub, isSheet }
   function modalHtml(o) {
     var f = o.form, ed = o.editing, t = chatType(ed || f.chat_id);
     var head = '<div class="tgx-hd"><div class="tgx-ttl">' + (ed ? 'Настройки чата' : 'Встроить чат') + '</div>' +
@@ -295,7 +312,8 @@
           '<div class="tgx-who-tx"><div class="tgx-who-nm" data-who-nm>' + (f.agent_name ? esc(f.agent_name) : '<span class="is-empty">Без имени</span>') + '</div>' +
           '<div class="tgx-who-l2"><button type="button" class="tgx-idc" data-copy="' + esc(ed) + '" title="Скопировать ID"><span>' + esc(ed) + '</span>' + IC.copy + '</button>' +
           '<span class="tgx-ty">' + typeRu(t) + '</span></div></div></div>'
-      : '<label class="tgx-fl"><span class="tgx-lb">Chat ID <i data-cid-type>' + (f.chat_id ? typeRu(t) : '') + '</i></span>' +
+      : howHtml(o.platform) +
+        '<label class="tgx-fl"><span class="tgx-lb">Chat ID <i data-cid-type>' + (f.chat_id ? typeRu(t) : '') + '</i></span>' +
           '<input class="tgc-input" id="tgc-chatid" type="text" inputmode="numeric" autocomplete="off" placeholder="-1004313379449 или 123456789" value="' + esc(f.chat_id) + '"/>' +
           '<span class="tgx-hint">С минусом — группа, без минуса — личный чат</span></label>';
     var seg = (o.models || []).map(function (m) {

@@ -2364,7 +2364,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ── Ключи API: только личка (в группе ключ увидели бы все участники) ──
-    if data.startswith("tg:keys"):
+    if data == "tg:menu:keys" or data.startswith("tg:keys:"):
         chat_type = getattr(query.message.chat, "type", "") if query.message else ""
         if chat_type != "private":
             await query.answer("Ключи API настраиваются только в личном чате с ботом.", show_alert=True)

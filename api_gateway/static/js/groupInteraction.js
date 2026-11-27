@@ -2,7 +2,7 @@
    Реакции и контекстное меню общего чата (как в Telegram).
 
    ПКМ по сообщению: панель быстрых реакций + пункты с SVG-иконками.
-   Шеврон раскрывает квадрат 8×8 со всеми реакциями (без поиска).
+   Шеврон раскрывает сетку 8×10 со всеми реакциями (без поиска).
    Выбранная реакция попадает в .gc-meta плашкой.
 
    До трёх реакций пользователя на сообщение; повтор снимает выбранную.
@@ -98,7 +98,7 @@
 
     patchRow(messageId) {
       const gc = this._gc();
-      const m = gc?.messages?.find(x => x.id === messageId);
+      const m = gc?.messages?.find(x => String(x.id) === String(messageId));
       const row = document.querySelector(`#gc-messages .gc-row[data-id="${messageId}"]`);
       if (!m || !row) return;
       // у медиа без подписи реакции в своей полосе под медиа
@@ -138,8 +138,9 @@
     },
 
     toggle(messageId, emoji) {
-      if (!ALLOWED.has(emoji)) return;
-      const m = this._gc()?.messages?.find(x => x.id === messageId);
+      messageId = Number(messageId);
+      if (!Number.isSafeInteger(messageId) || messageId <= 0 || !ALLOWED.has(emoji)) return;
+      const m = this._gc()?.messages?.find(x => String(x.id) === String(messageId));
       if (!this.canReact(m)) return;
       const mine = this.myEmojis(m);
       if (!mine.includes(emoji) && mine.length >= 3) {
@@ -160,7 +161,7 @@
       if (!gc) return;
       for (const it of data.items || []) {
         const id = Number(it.message_id);
-        const m = gc.messages?.find(x => x.id === id);
+        const m = gc.messages?.find(x => String(x.id) === String(id));
         if (!m) continue;
         m.reactions = Array.isArray(it.reactions) ? it.reactions : [];
         const ov = this._override.get(id);

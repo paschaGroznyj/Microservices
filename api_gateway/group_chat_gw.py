@@ -284,7 +284,10 @@ async def api_group_reactions(body: ReactionsBody, request: Request):
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     items = [i.model_dump() for i in body.items]
-    via = await reactions_bus.enqueue(int(user["user_id"]), items)
+    try:
+        via = await reactions_bus.enqueue(int(user["user_id"]), items)
+    except reactions_bus.ReactionDeliveryError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {"ok": True, "queued": len(items), "via": via}
 
 

@@ -1,4 +1,5 @@
 """Реакции общего чата: нормализация, сводка, /group/reactions/apply, консюмер."""
+
 import asyncio
 import json
 
@@ -11,9 +12,28 @@ from app.core.reactions import REACTION_EMOJI, load_map, normalize_emoji, summar
 from app.group_endpoint_consumer import GroupDBConsumer
 
 
-def test_set_is_8x8_unique():
-    assert len(REACTION_EMOJI) == 64
-    assert len(set(REACTION_EMOJI)) == 64
+ADDED_EMOJI = (
+    "✅", "❌", "0️⃣", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣",
+    "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🦧", "🤷‍♂️", "🤦‍♂️", "🫂",
+)
+
+
+def test_palette_has_80_unique_and_appends_exact_sequences():
+    import ast
+    from pathlib import Path
+    assert len(REACTION_EMOJI) == len(set(REACTION_EMOJI)) == 80
+    assert REACTION_EMOJI[64:] == ADDED_EMOJI
+    source = Path(__file__).resolve().parents[2] / "api_gateway/reactions_bus.py"
+    assignments = ast.parse(source.read_text()).body
+    gateway_palette = next(ast.literal_eval(node.value) for node in assignments
+                           if isinstance(node, ast.Assign)
+                           and any(isinstance(t, ast.Name) and t.id == "REACTION_EMOJI" for t in node.targets))
+    assert gateway_palette == REACTION_EMOJI
+    # The browser menu must never offer emoji rejected by either backend.
+    import re
+    frontend = (source.parent / 'static/js/groupInteraction.js').read_text()
+    js_palette = re.findall(r"'([^']+)'", frontend.split('const REACTIONS = [', 1)[1].split('];', 1)[0])
+    assert tuple(js_palette) == REACTION_EMOJI
 
 
 def test_normalize():
@@ -281,3 +301,35 @@ def test_db_atomic_per_user_patch_replaces_clears_and_preserves_other_users():
     assert conn.rows[5] == {"8": ["❤️", "🔥"], "9": ["❤️"]}
     asyncio.run(db.apply_reactions([{"message_id": 5, "user_id": 8, "emoji": ""}]))
     assert conn.rows[5] == {"9": ["❤️"]}
+
+
+@pytest.mark.parametrize("emoji", ADDED_EMOJI)
+def test_added_emoji_api_db_summary_and_broadcast(env, emoji):
+    from app.db.group_chat_db import GroupChatDB
+    client, _, prod = env
+    conn = StatefulConn()
+    group_chat.bind(GroupChatDB(StatefulPool(conn)), prod)
+    response = client.post("/group/reactions/apply", json={"ops": [
+        {"message_id": 5, "user_id": 7, "emojis": [emoji, "👍", "🔥", emoji]},
+    ]})
+    assert response.status_code == 200
+    assert conn.rows[5]["7"] == [emoji, "👍", "🔥"]
+    expected = summarize(conn.rows[5])
+    assert {"emoji": emoji, "count": 1, "user_ids": [7]} in expected
+    assert GroupChatDB._serialize({"id": 5, "user_id": 7, "reactions": conn.rows[5]}, "global")["reactions"] == expected
+    assert prod.sent[-1][2]["items"] == [{"message_id": 5, "reactions": expected}]
+    response = client.post("/group/reactions/apply", json={"ops": [
+        {"message_id": 5, "user_id": 7, "emojis": []},
+    ]})
+    assert response.status_code == 200
+    assert conn.rows[5] == {"8": ["❤️", "🔥"]}
+
+
+@pytest.mark.parametrize("emoji", ["0⃣", "0", "🤷‍♂", "🤦‍♂", "🤷♂️", "🤦♂️", "🫠"])
+def test_non_whitelisted_sequences_rejected(env, emoji):
+    client, db, prod = env
+    response = client.post("/group/reactions/apply", json={"ops": [
+        {"message_id": 5, "user_id": 7, "emojis": [emoji]},
+    ]})
+    assert response.status_code == 422
+    assert db.ops is None and prod.sent == []

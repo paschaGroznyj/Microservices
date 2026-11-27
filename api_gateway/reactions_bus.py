@@ -33,6 +33,8 @@ REACTION_EMOJI = (
     "💋", "🖕", "😈", "😴", "😭", "🤓", "👻", "👨‍💻",
     "👀", "🎃", "🙈", "😇", "✍️", "🤗", "🫡", "🎅",
     "🎄", "☃️", "💅", "🤪", "🗿", "🆒", "💘", "🦄",
+    "✅", "❌", "0️⃣", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣",
+    "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🦧", "🤷‍♂️", "🤦‍♂️", "🫂",
 )
 _ALLOWED = frozenset(REACTION_EMOJI)
 def normalize_emojis(value) -> list[str]:
@@ -69,6 +71,7 @@ logger = logging.getLogger(__name__)
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 PENDING_KEY = "gc:react:pending"
 INFLIGHT_PREFIX = "gc:react:inflight:"
+MAX_APPLY_OPS = 2000
 DEBOUNCE = float(os.getenv("GC_REACT_DEBOUNCE", "1.0"))
 SWEEP = float(os.getenv("GC_REACT_SWEEP", "5.0"))
 # inflight старше этого считаем брошенным упавшим воркером
@@ -122,7 +125,18 @@ def _ops_from(mapping: dict) -> list:
     return ops
 
 
+class ReactionDeliveryError(RuntimeError):
+    pass
+
+
 async def _post(ops: list) -> bool:
+    for offset in range(0, len(ops), MAX_APPLY_OPS):
+        if not await _post_chunk(ops[offset:offset + MAX_APPLY_OPS]):
+            return False
+    return True
+
+
+async def _post_chunk(ops: list) -> bool:
     if not ops:
         return True
     try:
@@ -153,7 +167,8 @@ async def enqueue(user_id: int, items: list) -> str:
             return "redis"
         except Exception as e:
             logger.warning("reactions_bus: redis down, direct apply: %s", e)
-    await _post(_ops_from(mapping))
+    if not await _post(_ops_from(mapping)):
+        raise ReactionDeliveryError("reaction delivery failed")
     return "direct"
 
 

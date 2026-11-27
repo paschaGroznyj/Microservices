@@ -66,6 +66,8 @@
             '" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + p + '</svg>';
     };
     var IC = {
+        dl: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>',
+        ext: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17L17 7M9 7h8v8"/></svg>',
         chev: '<svg class="rr-chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5"/></svg>',
         sandbox: SVG('<path d="M3 4.5 6 7.5 3 10.5M7.5 11.5H13"/>'),
         kb: SVG('<ellipse cx="8" cy="4" rx="5" ry="2"/><path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>'),
@@ -263,12 +265,19 @@
         list.forEach(function (it) {
             var p = String(it.p || ''), k = x.id + FP_SEP + p, open = !!m.fp[k], cut = p.lastIndexOf('/');
             var st = String(it.s || 'M')[0], badge = st === 'A' || st === 'D' ? st : 'M';
-            out += '<div class="rg-fp is-' + badge + (open ? ' is-open' : '') + '" role="button" tabindex="0" aria-expanded="' + open + '"' +
+            var live = badge !== 'D' && it.ws, W = window.WsDiff;
+            // Бинарная картинка/видео/pdf: по клику — лайтбокс или правая панель, строку не раскрываем.
+            var side = live && it.b && W && W.kindOf ? W.kindOf(p) : null;
+            if (side) open = false;
+            out += '<div class="rg-fp is-' + badge + (open ? ' is-open' : '') + (side ? ' is-side' : '') + '" role="button" tabindex="0"' +
+                (side ? ' aria-haspopup="dialog" data-side="' + side + '" data-ws="' + esc(it.ws) + '"' : ' aria-expanded="' + open + '"') +
                 ' data-p="' + esc(p) + '" title="' + esc(p) + '">' + IC.chev +
                 '<span class="rg-fb">' + badge + '</span>' +
                 '<span class="rg-fpn"><span class="rg-fdir"><bdi>' + esc(cut >= 0 ? p.slice(0, cut + 1) : '') + '</bdi></span>' +
                 '<span class="rg-fname">' + esc(p.slice(cut + 1)) + '</span></span>' +
-                (it.b ? '<span class="rg-fbin">бинарный</span>' : statHtml(+it.a || 0, +it.d || 0)) + '</div>' +
+                (it.b ? '<span class="rg-fbin">бинарный</span>' : statHtml(+it.a || 0, +it.d || 0)) +
+                (live && W && W.rawUrl ? '<a class="rg-fo rg-fdl" href="' + esc(W.rawUrl(it.ws, p, 1)) + '" download="' + esc(p.slice(cut + 1)) + '" title="Скачать" aria-label="Скачать">' + IC.dl + '</a>' : '') +
+                (live ? '<button class="rg-fo" type="button" data-ws="' + esc(it.ws) + '" title="Открыть в редакторе" aria-label="Открыть в редакторе">' + IC.ext + '</button>' : '<span class="rg-fo-sp" aria-hidden="true"></span>') + '</div>' +
                 (open ? '<div class="rg-fx" data-p="' + esc(p) + '"></div>' : '');
         });
         var more = (+fs.n || 0) - list.length;
@@ -624,8 +633,32 @@
         (attrEl || el).setAttribute('aria-expanded', String(on));
         return on;
     }
+    // Якорь правой панели: FileTiles закрывает превью, когда его плитка уходит из DOM,
+    // а строки графа перерисовываются. Поэтому превью держится за отдельный скрытый узел.
+    var sideAnchor = null;
+    function openSide(fp) {
+        var W = window.WsDiff, ws = fp.getAttribute('data-ws'), p = fp.getAttribute('data-p'), kind = fp.getAttribute('data-side');
+        if (!W || !W.rawUrl || !ws || !p) return;
+        var url = W.rawUrl(ws, p), dl = W.rawUrl(ws, p, 1), name = p.split('/').pop();
+        var app = window.__catchpmApp, FT = window.FileTiles;
+        if ((kind === 'image' || kind === 'video') && app && app._openMediaLightbox) {
+            app._openMediaLightbox([{ isVideo: kind === 'video', url: url, dlUrl: dl, name: name, imageKey: null }], 0);
+            return;
+        }
+        if (kind === 'pdf' && FT && FT.openFilePreview && FT.previewTypeOf(name) === 'pdf') {
+            var view = fp.closest('.view') || document.body;
+            if (!sideAnchor) { sideAnchor = document.createElement('span'); sideAnchor.className = 'rg-side-a'; sideAnchor.hidden = true; }
+            if (sideAnchor.parentNode !== view) view.appendChild(sideAnchor);
+            sideAnchor.dataset.name = name; sideAnchor.dataset.mime = 'application/pdf';
+            sideAnchor.dataset.url = url; sideAnchor.dataset.dlUrl = dl;
+            FT.openFilePreview(sideAnchor);
+            return;
+        }
+        window.open(url, '_blank', 'noopener');
+    }
     function onFiles(t) {
         var fp = t.closest('.rg-fp');
+        if (fp && fp.classList.contains('is-side')) { openSide(fp); return true; }
         var fh = !fp && t.closest('.rg-fh');
         if (!fp && !fh && !t.closest('.rg-fm')) return false;
         var row = t.closest('.rg-r.has-files'), body = row && row.closest(BODY), m = body && models.get(body);
@@ -658,6 +691,14 @@
     document.addEventListener('click', function (e) {
         if (OFF || !e.target.closest) return;
         if (e.target.closest('.rg-fx')) return;   // клики внутри patch (выделение, кнопки) — не сворачивают
+        var fo = e.target.closest('.rg-fo');
+        if (fo && fo.classList.contains('rg-fdl')) { e.stopPropagation(); return; }   // скачивание: обычный переход по ссылке
+        if (fo) {
+            e.stopPropagation();
+            var fpo = fo.closest('.rg-fp');
+            if (window.WsDiff && WsDiff.openEditor) WsDiff.openEditor(fo.getAttribute('data-ws'), fpo && fpo.getAttribute('data-p'));
+            return;
+        }
         if (onFiles(e.target)) return;
         if (onTask(e.target)) return;
         var h = e.target.closest('.rr-rd__h');

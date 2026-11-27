@@ -192,9 +192,13 @@ function handle(msg){if(msg&&msg.type==='ws_diff'){apply(msg);return true;}retur
 function listen(es){if(!es||es._wsdBound)return;es._wsdBound=true;
  es.addEventListener('ws_diff',e=>{let d;try{d=JSON.parse(e.data);}catch(_){return;}apply(d);});}
 let _rz=0;addEventListener('resize',()=>{cancelAnimationFrame(_rz);_rz=requestAnimationFrame(()=>document.querySelectorAll('.wsd-file.is-open .wsd-code').forEach(edge));},{passive:true});
+// Файл workspace потоком из GET /api/editor/raw (Range 206): лайтбокс, правая панель, скачивание.
+const rawUrl=(ws,p,dl)=>'/api/editor/raw?workspace_id='+encodeURIComponent(ws)+'&path='+encodeURIComponent(p)+(dl?'&download=1':'');
+const KIND={image:'png jpg jpeg gif webp avif bmp ico',video:'mp4 webm mov m4v ogv',pdf:'pdf'};
+function kindOf(p){const e=String(p).toLowerCase().split('.').pop();for(const k in KIND)if(KIND[k].split(' ').includes(e))return k;return null;}
 /* Patch одного файла без карточки — для diff шага в «Размышлениях» (reasoning-rounds.js). */
 function renderFile(el,raw,ws){const f=normFile(raw,ws);el.classList.add('wsd','wsd--step');el.innerHTML='';
  const c=document.createElement('div');c.className='wsd-code';const n=note(f);if(n)c.innerHTML=n;else c.appendChild(unified(f));el.appendChild(c);return el;}
-const api={init,handle,listen,apply,restore,reset,render,renderFile,parsePatch,get transport(){return transport;}};
+const api={init,handle,listen,apply,restore,reset,render,renderFile,parsePatch,openEditor,rawUrl,kindOf,get transport(){return transport;}};
 window.WsDiff=api;
 })();

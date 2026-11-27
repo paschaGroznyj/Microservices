@@ -1271,6 +1271,38 @@ async def download_workspace_file_endpoint(workspace_id: str, filepath: str):
     )
 
 
+# Сырой файл для превью/скачивания из графа размышлений (картинки, pdf, видео, html).
+# Без фоллбэков по имени (в отличие от /file/...): только точный путь, служебные папки закрыты.
+# FileResponse сам отдаёт Range → 206, видео и pdf грузятся потоково.
+_RAW_TYPES = {".webp": "image/webp", ".avif": "image/avif", ".mkv": "video/x-matroska",
+              ".m4v": "video/mp4", ".mov": "video/quicktime", ".md": "text/plain"}
+
+
+@app.get("/workspace/{workspace_id}/raw")
+async def workspace_raw_endpoint(workspace_id: str, path: str, download: int = 0):
+    import mimetypes
+    ws_path = _get_workspace_path(workspace_id)
+    if ws_path is None:
+        raise HTTPException(status_code=404, detail="Workspace не найден")
+    try:
+        target = _safe_join(ws_path, path.lstrip("/"))
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Путь вне workspace")
+    rel = os.path.relpath(target, os.path.realpath(ws_path))
+    if _is_service_path(rel) or not os.path.isfile(target):
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    if not download and ws_diff._is_secret(rel):
+        raise HTTPException(status_code=403, detail="Секретный файл: только скачивание")
+    ext = os.path.splitext(target)[1].lower()
+    mt = _RAW_TYPES.get(ext) or mimetypes.guess_type(target)[0] or "application/octet-stream"
+    if mt.startswith("text/") or mt in ("application/json", "image/svg+xml", "application/javascript"):
+        mt += "; charset=utf-8"
+    return FileResponse(
+        path=target, media_type=mt, filename=os.path.basename(target),
+        content_disposition_type="attachment" if download else "inline",
+    )
+
+
 @app.delete("/workspace/{workspace_id}")
 async def delete_workspace_endpoint(workspace_id: str):
     ws_path = _get_workspace_path(workspace_id)

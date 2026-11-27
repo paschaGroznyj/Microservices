@@ -196,6 +196,19 @@
 .rg-fx.wsd { box-shadow: none; background: transparent; margin: 2px 0 6px 16px; border-radius: 6px; overflow: hidden; }
 .rg-fx.wsd .wsd-code { display: block; max-height: 360px; overflow: auto; border: 1px solid var(--wsd-ring); border-radius: 6px; box-sizing: border-box; max-width: 100%; }
 .rg-fxm { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--rr-m); padding: 2px 0; }
+/* «Скачать» и «Открыть в редакторе» у пути шага: маленькие, видна при наведении (на тач — всегда, приглушённо) */
+.rg-fo { flex: none; width: 18px; height: 18px; padding: 0; margin-left: 2px; border: 0; border-radius: 4px; background: transparent; color: var(--rr-m); display: grid; place-items: center; cursor: pointer; opacity: 0; transition: opacity .12s, background-color .12s, color .12s; }
+.rg-fo svg { width: 11px; height: 11px; }
+.rg-fp:hover .rg-fo, .rg-fp:focus-within .rg-fo, .rg-fp.is-open .rg-fo, .rg-fo:focus-visible { opacity: 1; }
+.rg-fo:hover { background: var(--wsd-ring); color: var(--text-primary); }
+.rg-fo:focus-visible { outline: 1.5px solid var(--accent, #cc785c); outline-offset: 1px; }
+@media (hover: none) { .rg-fo { opacity: .7; } }
+/* Картинка/видео/pdf открываются в лайтбоксе или правой панели: раскрывать нечего, шеврон прячем (место сохраняем) */
+.rg-fp.is-side .rr-chev { visibility: hidden; }
+.rg-fp a.rg-fo { text-decoration: none; color: var(--rr-m); }
+.rg-fp a.rg-fo:hover { color: var(--text-primary); }
+/* У удалённого файла кнопок нет: держим место, чтобы «бинарный» и счётчики стояли в одной колонке */
+.rg-fo-sp { flex: none; width: 46px; }
 
 @media (max-width: 600px) {
   .rr-rounds.rg { --rg-lane: 14px; }
@@ -204,7 +217,7 @@
   .rg-s::after { content: attr(data-n); font-size: 11.5px; }
   .rg-fw { display: none; }
   .rg-fl { padding-left: 4px; }
-  .rg-fx, .rg-fx.wsd { margin-left: 0; }
+  .rg-fx, .rg-fx.wsd { margin-left: 0; max-width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) { .rg-p.is-run, .rg-o .rg-pl { animation: none; } }
 

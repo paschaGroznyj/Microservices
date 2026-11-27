@@ -91,13 +91,12 @@
 @media (prefers-reduced-motion:reduce){.fm-think.is-on,.fm-think__live::before{animation:none}}
 .fm-think.no-arrow::after{display:none}
 
-.wave-indicator.fm-tap .rgw-n{transform-box:fill-box;transform-origin:center}
-.wave-indicator.rgw-egg svg{animation:rgwEggSvg .9s ease-out}
+.wave-indicator.rgw-egg .rgw-box{animation:rgwEggSvg .9s ease-out}
 .wave-indicator.rgw-egg .rgw-n{animation:rgwEgg .6s cubic-bezier(.3,1.6,.5,1) both!important;opacity:1}
-.wave-indicator.rgw-egg .rgw-e{stroke-dashoffset:0!important;opacity:1!important;animation:none!important}
+.wave-indicator.rgw-egg .rgw-e{transform:none!important;opacity:1!important;animation:none!important}
 .wave-indicator.rgw-egg .rgw-n:nth-of-type(n){animation-delay:0s}
 .rgw-say{position:absolute;left:calc(100% + 10px);top:50%;transform:translateY(-50%);white-space:nowrap;font-size:12.5px;color:var(--text-secondary,var(--muted,#888));animation:rgwSay 2.2s ease forwards;pointer-events:none}
 @keyframes rgwEgg{0%{transform:translateY(0) scale(1)}40%{transform:translateY(-7px) scale(1.25)}100%{transform:translateY(0) scale(1)}}
 @keyframes rgwEggSvg{30%{transform:rotate(-2deg)}60%{transform:rotate(2deg)}}
 @keyframes rgwSay{0%{opacity:0;transform:translate(-4px,-50%)}12%,80%{opacity:1;transform:translate(0,-50%)}100%{opacity:0}}
-@media (prefers-reduced-motion:reduce){.wave-indicator.rgw-egg svg,.wave-indicator.rgw-egg .rgw-n{animation:none!important}.rgw-say{animation:none}}
+@media (prefers-reduced-motion:reduce){.wave-indicator.rgw-egg .rgw-box,.wave-indicator.rgw-egg .rgw-n{animation:none!important}.rgw-say{animation:none}}

@@ -36,17 +36,16 @@
     },
 
     // Ожидание ответа: «Шаги» в стиле графа размышлений (.rg-* из reasoning-rounds.css).
-    // Чистый CSS/SVG, без canvas и RAF.
+    // HTML + CSS transform/opacity (compositor), без canvas, RAF и SVG-штрихов.
     waveIndicatorSVG() {
-      const e = (d, x1, x2) => `<path class="rg-p rg-t0 rgw-e" pathLength="1" d="M${x1} 12H${x2}" style="animation-delay:${d}s"/>`;
-      const q = (x) => `<circle class="rg-q" cx="${x}" cy="12" r="3.5"/>`;
-      const n = (t, x, d) => `<circle class="rg-c rg-${t} rgw-n" cx="${x}" cy="12" r="4" style="animation-delay:${d}s"/>`;
-      return '<div class="wave-indicator rg-wait">'
-           + '<svg width="112" height="24" viewBox="0 0 112 24" aria-hidden="true" focusable="false">'
-           + e(.18, 8, 40) + e(.53, 40, 72) + e(.88, 72, 104)
+      const e = (x, d) => `<i class="rgw-e rg-t0" style="--x:${x}px;--d:${d}s"></i>`;
+      const q = (x) => `<i class="rgw-q" style="--x:${x}px"></i>`;
+      const n = (t, x, d) => `<i class="rgw-n rg-${t}" style="--x:${x}px;--d:${d}s"></i>`;
+      return '<div class="wave-indicator rg-wait"><div class="rgw-box" aria-hidden="true">'
+           + e(8, .18) + e(40, .53) + e(72, .88)
            + q(8) + q(40) + q(72) + q(104)
            + n('t1', 8, 0) + n('t2', 40, .35) + n('t4', 72, .7) + n('t3', 104, 1.05)
-           + '</svg></div>';
+           + '</div></div>';
     },
 
     // owner — узел плейсхолдера, который просит остановку. Если анимацию уже

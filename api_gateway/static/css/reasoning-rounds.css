@@ -175,19 +175,29 @@
 @media (prefers-reduced-motion: reduce) { .rg-p.is-run, .rg-o .rg-pl { animation: none; } }
 
 /* Ожидание ответа агента («Шаги»): рёбра дорастают, узлы заливаются по очереди.
-   Разметка — ChatAnimations.waveIndicatorSVG(). */
+   Разметка — ChatAnimations.waveIndicatorSVG(). HTML-элементы + transform/opacity:
+   без pathLength/stroke-dasharray и transform-box у SVG, которые браузеры поддерживают по-разному. */
 .wave-indicator.rg-wait { --rg-node-bg: var(--bg); width: 112px; height: 24px; }
-.rg-wait svg { display: block; overflow: visible; }
-.rg-wait .rg-c { fill: var(--rg); stroke: var(--rg-node-bg); stroke-width: 2; }
-.rg-wait .rgw-e { stroke-dasharray: 1 1; stroke-dashoffset: 1; animation: rgw-e 2.8s ease-out infinite; }
-.rg-wait .rgw-n { transform-box: fill-box; transform-origin: center; transform: scale(0);
-  animation: rgw-n 2.8s cubic-bezier(.3, 1.5, .5, 1) infinite; }
-@keyframes rgw-e { 0% { stroke-dashoffset: 1; opacity: 1; } 12% { stroke-dashoffset: 0; }
-  70% { opacity: 1; stroke-dashoffset: 0; } 85%, 100% { opacity: 0; stroke-dashoffset: 0; } }
-@keyframes rgw-n { 0% { transform: scale(0); opacity: 1; } 12% { transform: scale(1); }
-  70% { transform: scale(1); opacity: 1; } 85%, 100% { transform: scale(1); opacity: 0; } }
+.rg-wait .rgw-box { position: relative; width: 112px; height: 24px; }
+.rg-wait .rgw-e, .rg-wait .rgw-q, .rg-wait .rgw-n { position: absolute; top: 12px; box-sizing: border-box; }
+.rg-wait .rgw-e { left: var(--x); width: 32px; height: 1.75px; margin-top: -.875px; border-radius: 1px;
+  background: var(--rg); transform-origin: 0 50%; transform: scaleX(0);
+  animation: rgw-e 2.8s ease-out var(--d) infinite both; }
+.rg-wait .rgw-q { left: var(--x); width: 8.6px; height: 8.6px; margin: -4.3px 0 0 -4.3px; border-radius: 50%;
+  background: var(--rg-node-bg); box-shadow: inset 0 0 0 1.6px #7d8aa0; }
+[data-theme="dark"] .rg-wait .rgw-q { box-shadow: inset 0 0 0 1.6px #8e9bb3; }
+.rg-wait .rgw-n { left: var(--x); width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%;
+  background: var(--rg); border: 2px solid var(--rg-node-bg); transform: scale(0);
+  animation: rgw-n 2.8s cubic-bezier(.3, 1.5, .5, 1) var(--d) infinite both; }
+@keyframes rgw-e { 0% { transform: scaleX(0); opacity: 1; } 12%, 70% { transform: scaleX(1); opacity: 1; }
+  85%, 100% { transform: scaleX(1); opacity: 0; } }
+@keyframes rgw-n { 0% { transform: scale(0); opacity: 1; } 12%, 70% { transform: scale(1); opacity: 1; }
+  85%, 100% { transform: scale(1); opacity: 0; } }
+/* reduced-motion: без роста и масштаба, только мягкое мерцание узлов по очереди
+   (раньше animation:none — при выключенных анимациях в ОС индикатор стоял). */
+@keyframes rgw-f { 0%, 100% { opacity: .25; } 30%, 60% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
-  .rg-wait .rgw-e, .rg-wait .rgw-n { animation: none; }
-  .rg-wait .rgw-e { stroke-dashoffset: 0; }
-  .rg-wait .rgw-n { transform: none; }
+  .rg-wait .rgw-e { animation: none; transform: none; opacity: .5; }
+  .rg-wait .rgw-n { transform: none; animation: rgw-f 2.8s ease-in-out var(--d) infinite both; }
 }
+

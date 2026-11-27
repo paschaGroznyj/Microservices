@@ -1234,3 +1234,43 @@
   padding: 10px 14px 8px;
   border-bottom-color: var(--border);
 }
+
+/* Pending attachments only: the shared history/preview tiles stay unchanged. */
+.fa-preview-bar .fa-reorder-handle {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: rgba(0, 0, 0, .65);
+  color: #fff;
+  font-size: 22px;
+  line-height: 1;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.fa-preview-bar .fa-reorder-handle:focus-visible {
+  outline: 2px solid var(--accent, #2563eb);
+  outline-offset: 2px;
+}
+.fa-preview-bar .fa-reordering { scroll-snap-type: none; }
+.fa-preview-bar .fa-reordering > .fa-chip { cursor: grabbing; }
+.fa-preview-bar .fa-reorder-source { opacity: .45; }
+.fa-preview-bar .fa-chip.fa-reorder-before { box-shadow: inset 4px 0 var(--accent, #2563eb); }
+.fa-preview-bar .fa-chip.fa-reorder-after { box-shadow: inset -4px 0 var(--accent, #2563eb); }
+.fa-reorder-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

@@ -5,7 +5,7 @@
    Шеврон раскрывает квадрат 8×8 со всеми реакциями (без поиска).
    Выбранная реакция попадает в .gc-meta плашкой.
 
-   Одна реакция на пользователя: выбор другой заменяет, повтор снимает.
+   До трёх реакций пользователя на сообщение; повтор снимает выбранную.
    Клики копятся 1 с и уходят пачкой в POST /api/group/reactions,
    дальше Redis-шина гейтвея (reactions_bus.py) и событие reactions.
    Набор эмодзи совпадает с chats_service/app/core/reactions.py.
@@ -69,8 +69,8 @@
     _readTimer: null,
     _readIo: null,
     _visible: new Set(),
-    _queue: new Map(),      // message_id -> emoji ('' = снять)
-    _override: new Map(),   // message_id -> {emoji, ts}
+    _queue: new Map(),      // message_id -> emojis ('' = снять)
+    _override: new Map(),   // message_id -> {emojis, ts}
     _timer: null,
     _firstAt: 0,
 
@@ -80,19 +80,18 @@
       return !!m && !m._optimistic && Number.isFinite(Number(m.id)) && Number(m.id) > 0;
     },
 
-    myEmoji(m) {
+    myEmojis(m) {
       const uid = String(this._uid());
-      const r = (m?.reactions || []).find(x => (x.user_ids || []).some(u => String(u) === uid));
-      return r ? r.emoji : '';
+      return (m?.reactions || []).filter(x => (x.user_ids || []).some(u => String(u) === uid)).map(x => x.emoji);
     },
 
     /* ── рендер плашек ── */
     chipsHtml(m) {
       const list = (m?.reactions || []).filter(r => r && r.count > 0 && ALLOWED.has(r.emoji));
       if (!list.length) return '';
-      const mine = this.myEmoji(m);
+      const mine = this.myEmojis(m);
       return `<span class="gc-reacts">${list.map(r =>
-        `<button type="button" class="gc-react${r.emoji === mine ? ' gc-react--mine' : ''}" data-emoji="${r.emoji}">` +
+        `<button type="button" class="gc-react${mine.includes(r.emoji) ? ' gc-react--mine' : ''}" data-emoji="${r.emoji}">` +
         `<span class="gc-react__e">${r.emoji}</span>${r.count > 1 ? `<span class="gc-react__n">${r.count}</span>` : ''}</button>`
       ).join('')}</span>`;
     },
@@ -103,9 +102,9 @@
       const row = document.querySelector(`#gc-messages .gc-row[data-id="${messageId}"]`);
       if (!m || !row) return;
       // у медиа без подписи реакции в своей полосе под медиа
-      const host = row.querySelector('.gc-msg__reacts') || row.querySelector('.gc-meta');
+      const host = row.querySelector('.gc-msg__reacts') || [...row.querySelectorAll('.gc-meta')].pop();
       if (!host) return;
-      host.querySelector('.gc-reacts')?.remove();
+      row.querySelectorAll('.gc-reacts').forEach(el => el.remove());
       const html = this.chipsHtml(m);
       if (html) host.insertAdjacentHTML('afterbegin', html);
       this.bindChips(row);
@@ -123,13 +122,13 @@
     },
 
     /* ── локальное применение ── */
-    _applyLocal(m, emoji) {
+    _applyLocal(m, emojis) {
       const uid = this._uid();
       const us = String(uid);
       const list = (m.reactions || []).map(r => ({
         ...r, user_ids: (r.user_ids || []).filter(u => String(u) !== us),
       }));
-      if (emoji) {
+      for (const emoji of emojis) {
         let r = list.find(x => x.emoji === emoji);
         if (!r) { r = { emoji, count: 0, user_ids: [] }; list.push(r); }
         r.user_ids.push(uid);
@@ -142,9 +141,14 @@
       if (!ALLOWED.has(emoji)) return;
       const m = this._gc()?.messages?.find(x => x.id === messageId);
       if (!this.canReact(m)) return;
-      const next = this.myEmoji(m) === emoji ? '' : emoji;
+      const mine = this.myEmojis(m);
+      if (!mine.includes(emoji) && mine.length >= 3) {
+        window.FileAttach?.showToast?.('Не более 3 реакций на сообщение');
+        return;
+      }
+      const next = mine.includes(emoji) ? mine.filter(x => x !== emoji) : [...mine, emoji];
       this._applyLocal(m, next);
-      this._override.set(messageId, { emoji: next, ts: Date.now() });
+      this._override.set(messageId, { emojis: next, ts: Date.now() });
       this._queue.set(messageId, next);
       this.patchRow(messageId);
       this._schedule();
@@ -162,8 +166,8 @@
         const ov = this._override.get(id);
         if (ov) {
           const fresh = Date.now() - ov.ts < OVERRIDE_TTL_MS;
-          if (this.myEmoji(m) === ov.emoji || !fresh) this._override.delete(id);
-          else this._applyLocal(m, ov.emoji);   // сервер ещё не видел последний клик
+          if (JSON.stringify(this.myEmojis(m).slice().sort()) === JSON.stringify(ov.emojis.slice().sort()) || !fresh) this._override.delete(id);
+          else this._applyLocal(m, ov.emojis);   // сервер ещё не видел последний клик
         }
         this.patchRow(id);
       }
@@ -185,10 +189,11 @@
       const gc = this._gc();
       document.querySelectorAll('#gc-messages .gc-row[data-mine="1"]').forEach(row => {
         const m = gc?.messages?.find(x => String(x.id) === row.dataset.id);
-        const old = row.querySelector('.gc-ticks');
-        if (!m || !old) return;
+        if (!m) return;
         const html = this.ticksHtml(m);
-        if (old.outerHTML !== html) old.outerHTML = html;
+        row.querySelectorAll('.gc-ticks').forEach(old => {
+          if (old.outerHTML !== html) old.outerHTML = html;
+        });
       });
     },
 
@@ -361,7 +366,7 @@
     },
 
     _take() {
-      const items = [...this._queue].map(([message_id, emoji]) => ({ message_id, emoji }));
+      const items = [...this._queue].map(([message_id, emojis]) => ({ message_id, emojis }));
       this._queue.clear();
       clearTimeout(this._timer);
       this._timer = null;
@@ -380,7 +385,7 @@
         if (r.status >= 500) throw new Error('HTTP ' + r.status);
       } catch (e) {
         // сеть или 5xx: вернуть в очередь, не затирая более свежие клики
-        for (const it of items) if (!this._queue.has(it.message_id)) this._queue.set(it.message_id, it.emoji);
+        for (const it of items) if (!this._queue.has(it.message_id)) this._queue.set(it.message_id, it.emojis);
         setTimeout(() => this._schedule(), 2000);
       }
     },
@@ -403,13 +408,13 @@
 
     _barHtml(mine) {
       const btns = QUICK.map(e =>
-        `<button type="button" class="gc-rbar__btn${e === mine ? ' is-mine' : ''}" data-emoji="${e}">${e}</button>`).join('');
+        `<button type="button" class="gc-rbar__btn${mine.includes(e) ? ' is-mine' : ''}" data-emoji="${e}">${e}</button>`).join('');
       return `<div class="gc-rbar">${btns}<button type="button" class="gc-rbar__more" aria-label="Все реакции">${svg('chevron', 18)}</button></div>`;
     },
 
     _gridHtml(mine) {
       return `<div class="gc-rgrid">${REACTIONS.map(e =>
-        `<button type="button" class="gc-rgrid__btn${e === mine ? ' is-mine' : ''}" data-emoji="${e}">${e}</button>`).join('')}</div>`;
+        `<button type="button" class="gc-rgrid__btn${mine.includes(e) ? ' is-mine' : ''}" data-emoji="${e}">${e}</button>`).join('')}</div>`;
     },
 
     _place(pop, x, y) {
@@ -427,7 +432,7 @@
       const readers = react && String(opts.message?.user_id) === String(this._uid());
       const itemsHtml = this._itemsHtml(opts);
       if (!react && !itemsHtml) return null;
-      const mine = react ? this.myEmoji(opts.message) : '';
+      const mine = react ? this.myEmojis(opts.message) : [];
       const pop = document.createElement('div');
       pop.id = 'gc-ctx-menu';
       pop.className = 'gc-ctx-pop';

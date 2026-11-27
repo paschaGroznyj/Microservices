@@ -1,6 +1,7 @@
 """reactions_bus: Redis-хеш, дебаунс-выгрузка, возврат при ошибке, fallback."""
 import asyncio
 import fnmatch
+import json
 
 import pytest
 
@@ -79,7 +80,7 @@ def test_enqueue_last_click_wins(env):
     r, _ = env
     run(rb.enqueue(7, [{"message_id": 5, "emoji": "👍"}]))
     run(rb.enqueue(7, [{"message_id": 5, "emoji": "🔥"}, {"message_id": 6, "emoji": ""}]))
-    assert r.h[rb.PENDING_KEY] == {"5:7": "🔥", "6:7": ""}
+    assert {k: json.loads(v) for k, v in r.h[rb.PENDING_KEY].items()} == {"5:7": ["🔥"], "6:7": []}
 
 
 def test_flush_posts_batch_and_cleans(env):
@@ -90,7 +91,7 @@ def test_flush_posts_batch_and_cleans(env):
     assert len(http.calls) == 1
     url, body = http.calls[0]
     assert url == "http://chats/group/reactions/apply"
-    assert sorted((o["user_id"], o["emoji"]) for o in body["ops"]) == [(7, "👍"), (8, "❤️")]
+    assert sorted((o["user_id"], o["emojis"]) for o in body["ops"]) == [(7, ["👍"]), (8, ["❤️"])]
     assert r.h == {}
     assert run(rb.flush_once()) == 0
 
@@ -123,7 +124,7 @@ def test_redis_down_direct(mocker):
     broken.hset.side_effect = ConnectionError("no redis")
     mocker.patch.object(rb, "_redis", broken)
     assert run(rb.enqueue(7, [{"message_id": 5, "emoji": "👍"}])) == "direct"
-    assert http.calls[0][1]["ops"] == [{"message_id": 5, "user_id": 7, "emoji": "👍"}]
+    assert http.calls[0][1]["ops"] == [{"message_id": 5, "user_id": 7, "emojis": ["👍"]}]
 
 
 def test_recover_orphans(env):
@@ -155,3 +156,66 @@ def test_loop_debounces(env, mocker):
         return early
     assert run(scenario()) == 0
     assert len(http.calls) == 1 and len(http.calls[0][1]["ops"]) == 2
+
+
+def test_full_list_roundtrip_and_last_state_wins(env):
+    r, http = env
+    run(rb.enqueue(7, [{"message_id": 5, "emojis": ["👍", "🔥", "❤️"]}]))
+    run(rb.enqueue(7, [{"message_id": 5, "emojis": ["👍", "🔥", "👍"]}]))
+    run(rb.enqueue(8, [{"message_id": 5, "emojis": []}]))
+    assert json.loads(r.h[rb.PENDING_KEY]["5:7"]) == ["👍", "🔥"]
+    assert run(rb.flush_once()) == 2
+    assert http.calls[0][1] == {"ops": [
+        {"message_id": 5, "user_id": 7, "emojis": ["👍", "🔥"]},
+        {"message_id": 5, "user_id": 8, "emojis": []},
+    ]}
+
+
+def test_decode_legacy_bytes_and_corrupt_fields_independently(env):
+    r, http = env
+    r.h[rb.PENDING_KEY] = {
+        "5:7": "👍", "5:8": "", b"6:7": '["🔥", "🔥", "❤️"]'.encode(),
+        "5:9": '"😁"', "broken": "👍", "1:2:3": "👍", "x:7": "👍",
+        "0:7": "👍", b"\xff:7": "👍", "5:10": b"\xff",
+        "5:11": '["👍",', "5:12": "null", "5:13": "42", "5:14": '{}',
+        "5:15": '["👍", "bad"]', "5:16": '["👍", "🔥", "❤️", "😁"]',
+        "5:17": None, "5:18": '[""]', "5:19": '[null]',
+    }
+    run(rb.flush_once())
+    assert http.calls[0][1]["ops"] == [
+        {"message_id": 5, "user_id": 7, "emojis": ["👍"]},
+        {"message_id": 5, "user_id": 8, "emojis": []},
+        {"message_id": 6, "user_id": 7, "emojis": ["🔥", "❤️"]},
+        {"message_id": 5, "user_id": 9, "emojis": ["😁"]},
+    ]
+    assert r.h == {}
+
+
+@pytest.mark.parametrize("payload", [
+    {"emojis": ["👍", "🔥", "❤️", "😁"]}, {"emojis": ["bad"]},
+    {"emojis": None}, {"emojis": "👍"}, {"emoji": "bad"},
+])
+def test_enqueue_rejects_invalid_before_redis(env, payload):
+    r, http = env
+    with pytest.raises(ValueError):
+        run(rb.enqueue(7, [{"message_id": 5, **payload}]))
+    assert r.h == {} and http.calls == []
+
+
+def test_direct_preserves_full_list(env, monkeypatch):
+    _, http = env
+    monkeypatch.setattr(rb, "_redis", None)
+    assert run(rb.enqueue(7, [{"message_id": 5, "emojis": ["👍", "🔥", "❤️"]}])) == "direct"
+    assert http.calls[0][1]["ops"][0]["emojis"] == ["👍", "🔥", "❤️"]
+
+
+def test_failed_flush_requeues_full_list_then_retries(env):
+    r, http = env
+    run(rb.enqueue(7, [{"message_id": 5, "emojis": ["👍", "🔥"]}]))
+    http.code = 503
+    run(rb.flush_once())
+    assert json.loads(r.h[rb.PENDING_KEY]["5:7"]) == ["👍", "🔥"]
+    http.code = 200
+    run(rb.flush_once())
+    assert http.calls[0][1] == http.calls[1][1]
+    assert r.h == {}

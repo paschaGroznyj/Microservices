@@ -1042,3 +1042,26 @@
   pointer-events: none;
 }
 #gc-scroll-to-bottom-btn .gc-arrow-count[hidden] { display: none; }
+
+/* Mixed attachments are separate bubbles, never a document caption on an album. */
+.gc-row > .gc-msg--attachment { margin-bottom: 6px; }
+/* chat.css .message-text has its own foreground; captions inherit the bubble theme. */
+.gc-msg .gc-bubble-text { color: inherit; }
+
+/* Standalone file cards, like Agent attachments: no enclosing message bubble. */
+.gc-file-block {
+  display: flex;
+  flex-direction: column;
+  max-width: 75%;
+  min-width: 0;
+  width: fit-content;
+  color: var(--text-primary);
+  font-family: var(--font-anthropic-sans);
+  font-size: .875rem;
+  line-height: 1.25rem;
+}
+.gc-row > .gc-file-block:not(:last-child) { margin-bottom: 6px; }
+.gc-file-block > .gc-files { margin: 0; }
+.gc-file-block > .gc-meta { color: var(--text-muted); }
+
+.gc-file-block > .gc-meta > :not(.gc-reacts) { opacity: .8; }

@@ -173,3 +173,21 @@
   .rg-s::after { content: attr(data-n); font-size: 11.5px; }
 }
 @media (prefers-reduced-motion: reduce) { .rg-p.is-run, .rg-o .rg-pl { animation: none; } }
+
+/* Ожидание ответа агента («Шаги»): рёбра дорастают, узлы заливаются по очереди.
+   Разметка — ChatAnimations.waveIndicatorSVG(). */
+.wave-indicator.rg-wait { --rg-node-bg: var(--bg); width: 112px; height: 24px; }
+.rg-wait svg { display: block; overflow: visible; }
+.rg-wait .rg-c { fill: var(--rg); stroke: var(--rg-node-bg); stroke-width: 2; }
+.rg-wait .rgw-e { stroke-dasharray: 1 1; stroke-dashoffset: 1; animation: rgw-e 2.8s ease-out infinite; }
+.rg-wait .rgw-n { transform-box: fill-box; transform-origin: center; transform: scale(0);
+  animation: rgw-n 2.8s cubic-bezier(.3, 1.5, .5, 1) infinite; }
+@keyframes rgw-e { 0% { stroke-dashoffset: 1; opacity: 1; } 12% { stroke-dashoffset: 0; }
+  70% { opacity: 1; stroke-dashoffset: 0; } 85%, 100% { opacity: 0; stroke-dashoffset: 0; } }
+@keyframes rgw-n { 0% { transform: scale(0); opacity: 1; } 12% { transform: scale(1); }
+  70% { transform: scale(1); opacity: 1; } 85%, 100% { transform: scale(1); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .rg-wait .rgw-e, .rg-wait .rgw-n { animation: none; }
+  .rg-wait .rgw-e { stroke-dashoffset: 0; }
+  .rg-wait .rgw-n { transform: none; }
+}

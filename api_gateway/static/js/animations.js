@@ -35,10 +35,18 @@
       return [`${r},${gg},${b}`, shade(1.18), shade(0.82)];
     },
 
+    // Ожидание ответа: «Шаги» в стиле графа размышлений (.rg-* из reasoning-rounds.css).
+    // Чистый CSS/SVG, без canvas и RAF.
     waveIndicatorSVG() {
-      return '<div class="wave-indicator">'
-           + '<canvas class="placeholder-graph" aria-hidden="true"></canvas>'
-           + '</div>';
+      const e = (d, x1, x2) => `<path class="rg-p rg-t0 rgw-e" pathLength="1" d="M${x1} 12H${x2}" style="animation-delay:${d}s"/>`;
+      const q = (x) => `<circle class="rg-q" cx="${x}" cy="12" r="3.5"/>`;
+      const n = (t, x, d) => `<circle class="rg-c rg-${t} rgw-n" cx="${x}" cy="12" r="4" style="animation-delay:${d}s"/>`;
+      return '<div class="wave-indicator rg-wait">'
+           + '<svg width="112" height="24" viewBox="0 0 112 24" aria-hidden="true" focusable="false">'
+           + e(.18, 8, 40) + e(.53, 40, 72) + e(.88, 72, 104)
+           + q(8) + q(40) + q(72) + q(104)
+           + n('t1', 8, 0) + n('t2', 40, .35) + n('t4', 72, .7) + n('t3', 104, 1.05)
+           + '</svg></div>';
     },
 
     // owner — узел плейсхолдера, который просит остановку. Если анимацию уже
@@ -59,6 +67,7 @@
     initPlaceholderGraph(placeholder) {
       this.stopPlaceholderGraph();
       const cv = placeholder?.querySelector('.placeholder-graph');
+      // SVG-индикатор (.rg-wait) анимируется CSS — canvas-цикл не нужен.
       if (!cv) return;
       this._placeholderOwner = placeholder;
 

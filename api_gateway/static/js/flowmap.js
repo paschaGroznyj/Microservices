@@ -163,7 +163,7 @@ function emit(type, d = {}) {
       S.chat = d.chat != null ? String(d.chat) : null; S.rid = null;
       S.active = true; S.phase = 'send'; S.t0 = t; S.tEnd = 0; S.d = 0; S.dir = 1; S.allow = D[1]; S.trail = [];
       S.calls.clear(); S.phases = []; S.toolLog = []; S.fx = []; S.pulses = []; S.lit.fill(0); S.lastInside = null; S.stepSeq = 0; S.thinkT0 = null; S.tailThinkMs = 0; S.thinkBuf = ''; S.thinkDone = ''; S.tailText = ''; S.err = {}; TL.follow = true; closeThink();
-      openPhase('gw', 'Шлюз', t); setStatus('Отправляю…'); if (!RS.busy) pulseTapHint(); break;
+      openPhase('gw', 'Шлюз', t); setStatus('Отправляю…'); break;
     case 'gateway':
       if (!S.active) break;
       if (d.request_id) S.rid = d.request_id;
@@ -623,35 +623,25 @@ class MapR {
 const HOST = {orient:'h', expanded:false};
 let SANS = '';
 function layoutHost() {}
-let tapHintT = 0;
-function pulseTapHint() {
-  clearTimeout(tapHintT);
-  document.querySelectorAll('.wave-indicator.fm-tap').forEach(w => {
-    w.classList.remove('is-hint');
-    void w.offsetWidth;
-    w.classList.add('is-hint');
-  });
-  tapHintT = setTimeout(() => {
-    document.querySelectorAll('.wave-indicator.fm-tap.is-hint').forEach(w => w.classList.remove('is-hint'));
-  }, 3600);
-}
-function expand() {
-  clearTimeout(tapHintT);
-  document.querySelectorAll('.wave-indicator.fm-tap.is-hint').forEach(w => w.classList.remove('is-hint'));
-  openModal();
-}
+// Модалка «Путь запроса» (#fmBack) больше не открывается: expand/open оставлены no-op для совместимости.
+function expand() {}
 function collapse() {}
-// Плейсхолдер animations.js: тап открывает модалку «Путь запроса».
+// Плейсхолдер animations.js: по клику узлы подпрыгивают (пасхалка), каждый 7-й клик — фраза.
+const EGG = ['Тсс, агент думает', 'Ещё чуть-чуть…', 'Узлы щекотно', 'Не торопи, он старается', 'Кофе уже на подходе ☕'];
+let eggN = 0;
+function egg(w) {
+  w.classList.remove('rgw-egg'); void w.offsetWidth; w.classList.add('rgw-egg');
+  clearTimeout(w._eggT); w._eggT = setTimeout(() => w.classList.remove('rgw-egg'), 900);
+  if (++eggN % 7) return;
+  w.querySelector('.rgw-say')?.remove();
+  const t = document.createElement('span'); t.className = 'rgw-say';
+  t.textContent = EGG[(eggN / 7 - 1) % EGG.length];
+  w.appendChild(t); setTimeout(() => t.remove(), 2200);
+}
 function bindPlaceholder(ph) {
-  const w = ph && ph.querySelector('.wave-indicator'); if (!w) return;
-  if (!w.classList.contains('fm-tap')) {
-    w.classList.add('fm-tap'); w.setAttribute('role', 'button'); w.tabIndex = 0;
-    w.setAttribute('aria-label', 'Показать путь запроса'); w.title = 'Показать путь запроса';
-    const go = e => { e.preventDefault(); e.stopPropagation(); expand(); };
-    w.addEventListener('click', go);
-    w.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') go(e); });
-  }
-  pulseTapHint();
+  const w = ph && ph.querySelector('.wave-indicator'); if (!w || w.classList.contains('fm-tap')) return;
+  w.classList.add('fm-tap');
+  w.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); egg(w); });
 }
 function fitTxt(c, t, w) { if (c.measureText(t).width <= w) return t; while (t.length > 1 && c.measureText(t + '…').width > w) t = t.slice(0, -1); return t + '…'; }
 let tlLast = 0;
@@ -889,8 +879,7 @@ function setMode(m) {
   kick();
 }
 function syncFit() { $('#fmFit').classList.toggle('is-on', VIEW.fit); }
-function openModal() { VIEW.open = true; $('#fmBack').classList.add('is-open'); setLayout(VIEW.layout); renderTimeline(true); kick(); }
-function closeModal() { closeThink(); VIEW.open = false; $('#fmBack').classList.remove('is-open'); for (const c of document.querySelectorAll('.fm-card')) c.classList.remove('is-on'); for (const R of RENDERERS) R.visible = false; }
+function closeModal() { closeThink(); VIEW.open = false; for (const c of document.querySelectorAll('.fm-card')) c.classList.remove('is-on'); for (const R of RENDERERS) R.visible = false; }
 const STATS = {renders:0, ms:0, msAvg:0, msMax:0, fps:0, frames:0, fpsT:0};
 let raf = 0, slowT = 0, lastT = 0, lastDraw = 0;
 function kick() { if (!raf) raf = requestAnimationFrame(frame); }
@@ -1089,7 +1078,7 @@ function replay(chatId, j, opts) {
   renderTimeline(true); kick();
   return true;
 }
-window.FlowViz = {emit, reset, restore, replay, demo, open:openModal, close:closeModal, expand, collapse, bindPlaceholder, host:HOST, layoutHost, setLayout, setMode, setOthers:n => { S.others = n; kick(); }, state:S, view:VIEW, stats:STATS, renderers:{flat:rFlat, iso:rIso}, SLOTS, tl:TL};
+window.FlowViz = {emit, reset, restore, replay, demo, open:expand, close:closeModal, expand, collapse, bindPlaceholder, host:HOST, layoutHost, setLayout, setMode, setOthers:n => { S.others = n; kick(); }, state:S, view:VIEW, stats:STATS, renderers:{flat:rFlat, iso:rIso}, SLOTS, tl:TL};
 
 function mountDom() {
   if (document.getElementById('fmBack')) return;

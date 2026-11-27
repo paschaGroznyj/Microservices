@@ -129,7 +129,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "analyze_image": "Анализирует изображение и отвечает на вопрос о нём (OCR, описание, данные с графика).",
     "create_workspace": "Создаёт persistent workspace на фабрике и сразу открывает его в веб-редакторе /editor (возвращает editor_url).",
     "list_workspace_files": "Показывает список файлов в workspace фабрики.",
-    "download_workspace_file": "Скачивает файл из workspace в generated_files для отправки пользователю.",
+    "download_workspace_file": "Скачивает файл из workspace в generated_files (для вложений email и transcribe_media; send_file_to_user и analyze_image берут пути workspace сами).",
     "upload_to_workspace": "Заливает файлы/сгенерированные картинки в workspace фабрики.",
     "read_workspace_file": "Читает текстовый файл внутри workspace фабрики.",
     "edit_workspace_file": "Точечно правит файл внутри workspace фабрики (find&replace).",

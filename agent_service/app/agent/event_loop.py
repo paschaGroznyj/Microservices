@@ -141,7 +141,7 @@ from .core.token_usage import (
 )
 from .core.token_calibration import CALIBRATOR
 from .core.reasoning_clean import ReasoningCleaner, clean_reasoning
-from .common.trace_budget import CONTENT_MARK, attach_traces, compress_trace
+from .common.trace_budget import CONTENT_MARK, attach_traces, compress_trace, compress_trace_fast
 
 
 GATEWAY_URL = f"http://api_gateway:{PORT_GATEWAY_PORT}"
@@ -1210,7 +1210,7 @@ class HarnessAgent:
         knowledge_graph_tool = make_knowledge_graph_tool(agent)
         # 12. Отправка файла в телегу, на входе только название файла
         from .tools.telegram.tool_send_file import make_send_file_tool
-        send_file_tool = make_send_file_tool(agent)
+        send_file_tool = make_send_file_tool(agent, chat_id=chat_id)
         # 13. Отправка сообщений в ТГ
         from .tools.telegram.tool_send_message import make_push_telegram_tool
         send_message_tool = make_push_telegram_tool(agent)
@@ -2779,10 +2779,15 @@ class HarnessAgent:
 
             # Сжатие tool_trace на выходе из запроса. До TRACE_MSG_TOKENS — сырой. Больше: последние вызовы сырые,
             # голова сжимается в md-таблицу (см. common/trace_budget.py).
-            trace_out = await compress_trace(
-                tool_trace,
-                CALIBRATOR.chars_per_token(agent_model, model_spec.chars_per_token),
-                self._summarize_tool_trace,
+            # LLM-сводка головы длинного трейса занимает секунды (17,6 с на ходе с 19 вызовами),
+            # поэтому не держит финал: в ответ идёт голова, обрезанная по токенам, а сводка
+            # считается фоновой задачей. Задача создаётся здесь, пока жив контекст запроса
+            # (модель хода для _main_ainvoke). main.py дождётся её и обновит chats.tool_trace.
+            _cpt = CALIBRATOR.chars_per_token(agent_model, model_spec.chars_per_token)
+            trace_out, _trace_needs_llm = compress_trace_fast(tool_trace, _cpt)
+            trace_refine = (
+                asyncio.create_task(compress_trace(list(tool_trace), _cpt, self._summarize_tool_trace))
+                if _trace_needs_llm else None
             )
 
             agent_run = {"steps": agent_steps, "tool_calls": len(tool_calls_log)}
@@ -2805,6 +2810,8 @@ class HarnessAgent:
                 "success": True,
                 "files_to_send": files_to_send,
                 "tool_trace": trace_out,
+                # asyncio.Task | None: итоговый tool_trace с LLM-сводкой головы (в Kafka не идёт)
+                "tool_trace_refine": trace_refine,
                 "agent_model": real_agent_model,
                 "tokens_usage": tokens_usage,
                 "context": context,

@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import os
@@ -69,6 +70,26 @@ def head_of(stored: str) -> str:
     return stored.split(TAIL_MARK, 1)[0] if TAIL_MARK in stored else stored
 
 
+def compress_trace_fast(items: List[str], cpt: float) -> tuple[Optional[str], bool]:
+    """Та же запись, что compress_trace, но без LLM: голова обрезается по токенам.
+
+    Возвращает (строка для БД, нужно ли фоновое LLM-сжатие головы). Ответ уходит
+    пользователю с этой строкой сразу; сводку головы agent досчитывает фоном и
+    обновляет chats.tool_trace (см. main.py, _refine_tool_trace).
+    """
+    if not items:
+        return None, False
+    raw = SEP.join(items)
+    if tokens(raw, cpt) <= TRACE_MSG_TOKENS:
+        return raw, False
+    head_items, tail_items = split_tail(items, TRACE_RAW_TAIL_TOKENS, cpt)
+    tail = SEP.join(tail_items)
+    head_raw = SEP.join(head_items)
+    if not head_raw:
+        return tail, False
+    return f"{clip_tokens(head_raw, TRACE_HEAD_TOKENS, cpt)}{TAIL_MARK}{tail}", True
+
+
 async def compress_trace(
     items: List[str],
     cpt: float,
@@ -122,3 +143,32 @@ def attach_traces(messages: Iterable[BaseMessage], cpt: float) -> List[BaseMessa
             additional_kwargs={**kw, "trace_in_content": True},
         )
     return msgs
+
+
+# Запись chats.tool_trace делает chats_service из Kafka, поэтому строка может
+# появиться позже, чем закончится LLM-сводка: несколько попыток с паузой.
+TRACE_REFINE_RETRIES = 10
+TRACE_REFINE_DELAY_SEC = 1.0
+
+
+async def refine_tool_trace(
+    task: "asyncio.Future[Optional[str]]",
+    message_id: str,
+    save: Callable[[str, str], Awaitable[bool]],
+) -> None:
+    """Фон: дождаться LLM-сводки головы трейса и записать её вместо обрезанной головы.
+
+    save(message_id, trace) -> False, пока строки ответа в chats ещё нет.
+    """
+    try:
+        trace = await task
+        if not trace:
+            return
+        for _ in range(TRACE_REFINE_RETRIES):
+            if await save(message_id, trace):
+                logger.info(f"[trace-budget] {message_id}: tool_trace обновлён сводкой ({len(trace)} симв)")
+                return
+            await asyncio.sleep(TRACE_REFINE_DELAY_SEC)
+        logger.warning(f"[trace-budget] {message_id}: строка ответа не появилась, сводка не записана")
+    except Exception as e:
+        logger.warning(f"[trace-budget] {message_id}: фоновая сводка трейса: {e}")

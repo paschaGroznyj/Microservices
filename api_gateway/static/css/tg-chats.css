@@ -832,3 +832,21 @@
 [data-theme="dark"] .tgx-bd--editor .tgc-dow:not(.active){color:#d0d0d0;opacity:.9}
 .tgx-bd--editor .tgc-tr-sub,.tgx-bd--editor .tgc-hint,.tgx-bd--editor .tgc-tr-hint{color:var(--text-secondary)}
 [data-theme="dark"] .tgx-bd--editor .tgc-tr-sub,[data-theme="dark"] .tgx-bd--editor .tgc-tr-hint{color:#b9b9b9}
+
+/* Памятка «Как подключить чат» в окне нового TG/MAX-чата */
+.tgx-how{border:1px solid var(--border);border-radius:12px;background:color-mix(in srgb,var(--accent) 6%,transparent);flex-shrink:0}
+.tgx-how>summary{list-style:none;display:flex;align-items:center;gap:8px;min-height:36px;padding:0 12px;cursor:pointer;font:600 12.5px/1.2 var(--font-anthropic-sans,var(--font-sans));color:var(--text-primary);border-radius:12px}
+.tgx-how>summary::-webkit-details-marker{display:none}
+.tgx-how>summary:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.tgx-how-ch{margin-left:auto;display:inline-flex;color:var(--text-secondary);transition:transform .2s}
+.tgx-how-ch svg{width:14px;height:14px}
+.tgx-how[open] .tgx-how-ch{transform:rotate(90deg)}
+.tgx-how-ol{margin:0;padding:2px 12px 12px 30px;display:flex;flex-direction:column;gap:7px;font-size:12px;line-height:1.4;color:color-mix(in srgb,var(--text-primary) 78%,transparent)}
+.tgx-how-ol li::marker{color:var(--text-secondary);font-variant-numeric:tabular-nums}
+.tgx-how-ol a{color:var(--accent);font-weight:600;text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--accent) 40%,transparent);text-underline-offset:2px;word-break:break-all}
+.tgx-how-ol a:hover{text-decoration-color:currentColor}
+.tgx-how-ol a:focus-visible{outline:2px solid var(--accent);outline-offset:1px;border-radius:3px}
+.tgx-how-ol code{font-family:var(--font-mono,ui-monospace,monospace);font-size:11.5px;padding:1px 5px;border-radius:5px;background:color-mix(in srgb,var(--text-primary) 8%,transparent);color:var(--text-primary)}
+[data-theme="dark"] .tgx-how{background:color-mix(in srgb,var(--accent) 11%,#1f1f1f);border-color:color-mix(in srgb,var(--accent) 28%,var(--border))}
+[data-theme="dark"] .tgx-how-ol code{background:rgba(255,255,255,.12)}
+[data-theme="dark"] .tgx-how-ol li::marker{color:color-mix(in srgb,var(--text-primary) 70%,transparent)}

@@ -396,7 +396,7 @@
     var sheet = window.MessengerUI.isSheet();
     _modalOverlay.classList.toggle('tgx-ov--sheet', sheet);
     _modalOverlay.innerHTML = window.MessengerUI.modalHtml({
-      modalId: 'maxc-modal', editing: _editing, form: _form, models: getActualModels(),
+      modalId: 'maxc-modal', platform: 'max', editing: _editing, form: _form, models: getActualModels(),
       toolsContent: toolsContent, isSheet: sheet, sub: _sub, trCount: _triggers.length,
       triggerEditor: !!_trForm, triggerEditing: !!(_trForm && _trForm.id),
       schedule: (_trForm ? '' : '<div class="tgc-tr-list">' + triggersListHtml() + '</div>') + triggerFormHtml()

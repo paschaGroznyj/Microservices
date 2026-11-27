@@ -109,6 +109,9 @@
     }
 
     function attach(body) {
+        // Шаг мог быть уже вынут из .reasoning-body (reasoning-rounds перекладывает
+        // мысли в раунды) — тогда closest() даёт null, а WeakSet.add(null) бросает.
+        if (!body || body.nodeType !== 1) return;
         if (seen.has(body)) { schedule(body); return; }
         seen.add(body);
         if (ro) ro.observe(body);
@@ -116,7 +119,7 @@
     }
 
     function scan(node) {
-        if (!node || node.nodeType !== 1) return;
+        if (!node || node.nodeType !== 1 || !node.isConnected) return;
         if (node.matches(BODY)) attach(node);
         else if (node.matches(STEP)) attach(node.closest(BODY));
         if (node.querySelectorAll) node.querySelectorAll(BODY).forEach(attach);

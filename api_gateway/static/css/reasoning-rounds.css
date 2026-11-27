@@ -245,3 +245,50 @@
 .rg-x circle { fill: var(--rg-node-bg); stroke: #8a8f98; stroke-width: 1.5; }
 .rg-x path { stroke: #8a8f98; stroke-width: 1.5; stroke-linecap: round; fill: none; }
 [data-theme="dark"] .rg-x circle, [data-theme="dark"] .rg-x path, [data-theme="dark"] .rg-o.is-stop .rg-c { stroke: #8e95a0; }
+
+/* Фоновая задача узлом графа (вместо .task-card): квадрат на стволе, статус, раскрытие с этапами/логом */
+.rg-r.is-task { cursor: default; }
+.rg-r.is-task.has-tk { cursor: pointer; }
+.rg-r.is-task.is-open { flex-wrap: wrap; height: auto; row-gap: 0; }
+.rg-r.is-task .rr-chev { width: 10px; height: 10px; flex: 0 0 auto; color: var(--rr-m); }
+.rg-r.is-task.is-open > .rr-chev { transform: rotate(90deg); }
+.rg-tks { flex: 0 0 auto; font-size: 12px; color: var(--rr-m); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rg-r.is-running .rg-tks { color: var(--rg); }
+.rg-r.is-completed .rg-tks { color: var(--rr-ok, #3f8a5a); }
+.rg-r.is-failed .rg-tks { color: var(--danger); }
+.rg-tkb { flex: 0 0 100%; min-width: 0; padding: 2px 0 8px 21px; cursor: auto; }
+.rg-tkst { list-style: none; margin: 0 0 4px; padding: 0; display: flex; flex-direction: column; gap: 1px; font-size: 12px; line-height: 18px; color: var(--rr-m); }
+.rg-tkst li { display: flex; gap: 8px; min-width: 0; }
+.rg-tkst li b { flex: 0 0 10px; text-align: center; font-weight: 600; }
+.rg-tkst li.is-done { color: var(--rr-t); }
+.rg-tkst li.is-running { color: var(--text-primary); }
+.rg-tkst li.is-failed { color: var(--danger); }
+.rg-tkst li.is-skipped span { text-decoration: line-through; }
+.rg-tkl { margin: 2px 0 4px; padding: 6px 8px; max-height: 160px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  font: 11.5px/1.5 var(--wsd-mono, ui-monospace, Menlo, Consolas, monospace); color: var(--rr-t);
+  border: 1px solid var(--wsd-ring, var(--border)); border-radius: 6px; }
+.rg-tkl.is-err { color: var(--danger); }
+.rg-tkm { font: 11px/16px var(--wsd-mono, ui-monospace, Menlo, Consolas, monospace); color: var(--rr-m); overflow-wrap: anywhere; }
+.rg-tn .rg-c { fill: var(--rg-node-bg); stroke: #7d8aa0; stroke-width: 1.6; }
+.rg-tn.is-running .rg-c, .rg-tn.is-pending .rg-c { stroke: var(--accent); }
+.rg-tn.is-running .rg-pl { fill: var(--accent); transform-box: fill-box; transform-origin: center; animation: rg-pulse 1.3s ease-out infinite; }
+.rg-tn.is-completed .rg-c { fill: var(--rr-ok, #3f8a5a); stroke: var(--rg-node-bg); stroke-width: 2; }
+.rg-tn.is-failed .rg-c { fill: var(--danger); stroke: var(--rg-node-bg); stroke-width: 2; }
+.rg-tn.is-cancelled .rg-c { stroke: #8a8f98; }
+[data-theme="dark"] .rg-tn .rg-c { stroke: #8e9bb3; }
+[data-theme="dark"] .rg-tn.is-completed .rg-c, [data-theme="dark"] .rg-tn.is-failed .rg-c { stroke: var(--rg-node-bg); }
+.rg-fm[role="button"] { cursor: pointer; display: flex; align-items: center; gap: 6px; }
+.rg-fm[role="button"]:hover { color: var(--rr-t); }
+@media (max-width: 600px) { .rg-tkb { padding-left: 4px; } }
+@media (prefers-reduced-motion: reduce) { .rg-tn .rg-pl { animation: none; } }
+
+/* Общие ol/pre из chat.css (.reasoning-body ol/pre) не должны трогать тело задачи */
+.reasoning-body .rg-tkb .rg-tkst { margin: 0 0 4px; padding: 0; list-style: none; }
+.reasoning-body .rg-tkb .rg-tkst li { margin: 0; padding: 0; }
+.agent-message .reasoning-body .rg-tkb pre.rg-tkl, .reasoning-body .rg-tkb pre.rg-tkl { margin: 2px 0 4px; padding: 6px 8px !important; background: transparent; max-width: 100%; box-sizing: border-box; min-height: 0; }
+.rg-r.is-task.is-err .rg-n { color: var(--text-primary); }
+.rg-r.is-task .rg-n { flex: 0 1 auto; }
+.rg-r.is-task .rg-tks, .rg-r.is-task .rg-d { flex-shrink: 0; }
+.rg-tkm { margin-top: 2px; color: var(--rr-t); }
+.reasoning-body .rg-tkb pre.rg-tkl { border-color: color-mix(in srgb, var(--rr-m) 45%, transparent); }
+.rg-tkm { margin-top: 4px; }

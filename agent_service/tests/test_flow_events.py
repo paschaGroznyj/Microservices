@@ -274,3 +274,13 @@ def test_empty_response_sends_final_commit(agent, mocker):
     run(agent.process_query("r1", 9, "test", [HumanMessage(content="test")]))
     evs = [rec["ev"] for _, rec in _pushed(r)]
     assert "answer" in evs
+
+
+def test_submit_task_end_carries_task_id():
+    from app.agent.flow_tools import tool_flow_fields
+    r = tool_flow_fields("submit_task", {"workspace_id": "abc123"}, {"ok": True, "task_id": "f00dbeef12"})
+    assert r["task"] == "f00dbeef12" and r["ws"] == "abc123"
+    s = tool_flow_fields("submit_task", {}, '{"ok": true, "task_id": "aa11bb22"}')
+    assert s["task"] == "aa11bb22"
+    assert "task" not in tool_flow_fields("submit_task", {}, None)
+    assert "task" not in tool_flow_fields("check_task_status", {}, {"task_id": "f00dbeef12"})

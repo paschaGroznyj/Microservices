@@ -20,7 +20,12 @@
     var pending = {};                // chatId → [flow-события до появления body]
     var NEW_ROUND_GAP = 400;         // мс без текста между тулами = новая итерация
 
-    function newModel() { return { ev: [], user: {}, rid: null, chat: null, fo: {}, fp: {}, stop: null }; }
+    function newModel() { return { ev: [], user: {}, rid: null, chat: null, fo: {}, fp: {}, fm: {}, tk: {}, to: {}, stop: null }; }
+    /* Фоновые задачи (submit_task) — узлом графа вместо карточки .task-card.
+       tk: task_id → {task, at}; узел встаёт за вызовом с tool_end.task === task_id, иначе в конец. */
+    var tkBody = new Map();          // task_id → .reasoning-body, где живёт узел
+    var TK_FINAL = { completed: 1, failed: 1, cancelled: 1 };
+    var TK_RU = { pending: 'в очереди', running: 'выполняется', cancelling: 'отмена…', completed: 'готово', failed: 'ошибка', cancelled: 'отменена' };
     /* Файлы шага: tool_end.files = {n, add, del, rid, approx, list:[{p,s,a,d,b,ws}]}.
        Patch шага — по клику: /api/chats/{chat}/ws_diff/step (кеш по rid|call_id). */
     var stepCache = {};
@@ -130,6 +135,7 @@
             e.ok = f.ok !== false;
             if (f.label) e.label = f.label;
             if (f.files && typeof f.files === 'object' && +f.files.n > 0) e.files = f.files;
+            if (f.task) e.task = String(f.task);
             return true;
         }
         return false;
@@ -217,6 +223,15 @@
             if (g && g.calls.some(function (x) { return x.t1 == null || x.t1 > e.t + 1; })) { g.calls.push(e); return; }
             g = { k: 'grp', calls: [e] }; out.push(g);
         });
+        var tk = m.tk || {}, used = {}, withTk = [];
+        out.forEach(function (it) {
+            withTk.push(it);
+            if (it.k !== 'grp') return;
+            it.calls.forEach(function (x) { if (x.task && tk[x.task] && !used[x.task]) { used[x.task] = 1; withTk.push({ k: 'task', id: x.task }); } });
+        });
+        out = withTk;
+        Object.keys(tk).sort(function (a, b) { return tk[a].at - tk[b].at; })
+            .forEach(function (id) { if (!used[id]) out.push({ k: 'task', id: id }); });
         if (m.stop && out.length) out.push({ k: 'stop', t: m.stop });
         return out;
     }
@@ -238,6 +253,13 @@
     }
     function filesPanel(m, x) {
         var fs = x.files, list = fs.list || [], out = '';
+        // «и ещё N»: полный список шага берём из того же GET /ws_diff/step, что и patch.
+        var full = m.fm[x.id] && stepCache[(fs.rid || m.rid) + '|' + x.id];
+        if (full && full.st === 'ok' && full.files.length > list.length) {
+            list = full.files.map(function (f) {
+                return { p: f.path, s: f.status, a: f.add, d: f.del, b: f.binary, ws: f._ws };
+            });
+        }
         list.forEach(function (it) {
             var p = String(it.p || ''), k = x.id + FP_SEP + p, open = !!m.fp[k], cut = p.lastIndexOf('/');
             var st = String(it.s || 'M')[0], badge = st === 'A' || st === 'D' ? st : 'M';
@@ -250,7 +272,11 @@
                 (open ? '<div class="rg-fx" data-p="' + esc(p) + '"></div>' : '');
         });
         var more = (+fs.n || 0) - list.length;
-        if (more > 0) out += '<div class="rg-fm" title="Полный список — в «Изменённых файлах»">и ещё ' + more + ' ' + plural(more, 'файл', 'файла', 'файлов') + '</div>';
+        if (more > 0) {
+            var c = m.fm[x.id] && stepCache[(fs.rid || m.rid) + '|' + x.id];
+            out += '<div class="rg-fm" role="button" tabindex="0">' + (c && c.st === 'load' ? '<span class="rr-spin"></span>' : '') +
+                (c && c.st === 'err' ? 'Остальные файлы недоступны' : 'и ещё ' + more + ' ' + plural(more, 'файл', 'файла', 'файлов')) + '</div>';
+        }
         return '<div class="rg-fl">' + out + '</div>';
     }
     function callHtml(x, j, g, m) {
@@ -270,6 +296,46 @@
             '<span class="rg-d">' + sec(run ? Date.now() - x.t : x.ms) + '</span>' + side +
             (fopen ? filesPanel(m, x) : '') + '</div>';
     }
+    function tkHtml(m, id) {
+        var s = m.tk[id], t = s.task, st = t.status || 'pending', open = !!m.to[id];
+        var run = st === 'running' || st === 'pending' || st === 'cancelling';
+        var p = t.progress || {}, pct = typeof p.percent === 'number' ? Math.max(0, Math.min(100, Math.round(p.percent))) : null;
+        var el = (t.elapsed_ms || 0) + (st === 'running' ? Date.now() - s.at : 0);
+        var body = tkBodyHtml(t, st);
+        return '<div class="rg-r is-call is-task rg-t0 is-' + st + (run ? ' is-tkrun' : '') + (st === 'running' ? ' is-run' : '') +
+            (st === 'failed' ? ' is-err' : '') + (body ? ' has-tk' : '') + (open && body ? ' is-open' : '') + '" data-tk="' + esc(id) + '"' +
+            (st === 'running' ? ' data-t="' + (Date.now() - el) + '"' : '') +
+            (body ? ' role="button" tabindex="0" aria-expanded="' + !!(open && body) + '"' : '') + ' title="' + esc(t.label || 'Задача') + '">' +
+            '<span class="rg-ic">' + IC.tasks + '</span>' +
+            '<span class="rg-n">' + esc(t.label || 'Фоновая задача') + '</span>' +
+            '<span class="rg-tks">' + (TK_RU[st] || esc(st)) + (pct != null && !TK_FINAL[st] ? ' · ' + pct + '%' : '') + '</span>' +
+            (body ? IC.chev : '') +
+            '<span class="rg-d">' + (st === 'pending' ? '' : sec(el)) + '</span>' +
+            (open && body ? '<div class="rg-tkb">' + body + '</div>' : '') + '</div>';
+    }
+    function tkBodyHtml(t, st) {
+        var IC_ST = { done: '✓', running: '›', failed: '✕', skipped: '–', pending: '·' }, out = '';
+        var stages = (t.stages || []).map(function (g) {
+            var c = g.status === 'done' || g.status === 'completed' ? 'done' : (['running', 'failed', 'skipped'].indexOf(g.status) >= 0 ? g.status : 'pending');
+            if (c === 'running' && st === 'failed') c = 'failed';
+            else if ((c === 'running' || c === 'pending') && st === 'cancelled') c = 'skipped';
+            return '<li class="is-' + c + '"><b>' + IC_ST[c] + '</b><span>' + esc(g.title) + '</span></li>';
+        }).join('');
+        if (stages) out += '<ol class="rg-tkst">' + stages + '</ol>';
+        var tail = function (x, n) { return String(x || '').replace(/\s+$/, '').split('\n').slice(-n).join('\n'); };
+        var log = st === 'failed' ? (t.error && t.stderr_tail ? t.error + '\n' : '') + (tail(t.stderr_tail, 8) || t.error || '')
+            : TK_FINAL[st] ? tail(t.stdout_tail, 6) : ((t.progress || {}).text ? '› ' + t.progress.text : '');
+        if (log) out += '<pre class="rg-tkl' + (st === 'failed' ? ' is-err' : '') + '">' + esc(log) + '</pre>';
+        var files = (Array.isArray(t.files) ? t.files : []).map(function (f) {
+            return typeof f === 'string' ? f.split('/').pop() : (f && (f.filename || f.name || String(f.path || '').split('/').pop())) || '';
+        }).filter(Boolean);
+        var meta = [];
+        if (t.exit_code != null && TK_FINAL[st]) meta.push('exit ' + esc(t.exit_code));
+        if (files.length) meta.push(esc(files.slice(0, 6).join(', ')) + (files.length > 6 ? ' +' + (files.length - 6) : ''));
+        if (t.workspace_id) meta.push('ws ' + esc(t.workspace_id));
+        if (meta.length) out += '<div class="rg-tkm">' + meta.join(' · ') + '</div>';
+        return out;
+    }
     function render(body) {
         var m = models.get(body);
         if (!m) return;
@@ -287,6 +353,7 @@
         sq.forEach(function (it) {
             if (it.k === 'th') { rows.push('<div class="rg-r is-th">' + thoughtHtml(it.e.text, false) + '</div>'); return; }
             if (it.k === 'stop') { rows.push('<div class="rg-r is-stop-end"><span class="rg-n">Остановлено</span></div>'); return; }
+            if (it.k === 'task') { rows.push(tkHtml(m, it.id)); return; }
             lanes = Math.max(lanes, Math.min(it.calls.length, MAXL));
             it.calls.forEach(function (x, j) { rows.push(callHtml(x, j, it, m)); });
         });
@@ -356,6 +423,13 @@
         }
         sq.forEach(function (it) {
             if (it.k === 'th') { nodes.push('<circle class="rg-q" cx="' + X(0) + '" cy="' + Y(i) + '" r="3.5"/>'); i++; return; }
+            if (it.k === 'task') {
+                var t = (models.get(box.closest(BODY)) || { tk: {} }).tk[it.id], tst = t ? t.task.status || 'pending' : 'pending';
+                var tx = X(0), ty = Y(i);
+                nodes.push('<g class="rg-tn is-' + tst + '">' + (tst === 'running' ? '<rect class="rg-pl" x="' + (tx - 4) + '" y="' + (ty - 4) + '" width="8" height="8" rx="2"/>' : '') +
+                    '<rect class="rg-c" x="' + (tx - 4.5) + '" y="' + (ty - 4.5) + '" width="9" height="9" rx="2.5"/></g>');
+                i++; return;
+            }
             if (it.k === 'stop') {
                 var sx = X(0), sy = Y(i), k = 2.1;
                 nodes.push('<g class="rg-x"><circle cx="' + sx + '" cy="' + sy + '" r="5"/><path d="M' + (sx - k) + ',' + (sy - k) + ' L' + (sx + k) + ',' + (sy + k) + ' M' + (sx + k) + ',' + (sy - k) + ' L' + (sx - k) + ',' + (sy + k) + '"/></g>');
@@ -432,7 +506,27 @@
             if (addThought(m, step.textContent, Date.now())) changed = true;
             step.remove();
         });
+        if (adoptCards(body, m)) changed = true;
         if (changed) schedule(body);
+    }
+    // Карточки, отрисованные до появления «Размышлений» (task-cards.js), переезжают в граф.
+    function adoptCards(body, m) {
+        var msg = body.closest('.agent-message'), TC = window.TaskCards, hit = false;
+        if (!msg || !TC || !TC.snapshot) return false;
+        msg.querySelectorAll(':scope > .task-cards > .task-card').forEach(function (c) {
+            var s = TC.snapshot(c.dataset.taskId);
+            if (!s) return;
+            putTask(body, m, s.task, s.at);
+            var g = c.parentNode; c.remove(); if (g && !g.children.length) g.remove();
+            hit = true;
+        });
+        return hit;
+    }
+    function putTask(body, m, t, at) {
+        var id = String(t.task_id), prev = m.tk[id];
+        if (prev && prev.task.seq != null && t.seq != null && +prev.task.seq > +t.seq) return;
+        m.tk[id] = { task: t, at: at || Date.now() };
+        tkBody.set(id, body);
     }
     function bodyOf(el) {
         if (!el) return null;
@@ -483,7 +577,7 @@
             var old = models.get(body) || newModel();
             var m = newModel();
             m.user = old.user;
-            m.fo = old.fo || {}; m.fp = old.fp || {}; m.chat = old.chat;
+            m.fo = old.fo || {}; m.fp = old.fp || {}; m.fm = old.fm || {}; m.tk = old.tk || {}; m.to = old.to || {}; m.chat = old.chat;
             m.rid = rid || null;
             var si = 0, lastTs = 0;
             evs.forEach(function (e) {
@@ -508,6 +602,19 @@
             if (OFF) return;
             api.flow(chatId, { ev: 'done', ok: false }, getBody);
         },
+        /* Фоновая задача: узел в «Размышлениях» ответа msgEl. false — блока размышлений нет,
+           task-cards.js рисует обычную карточку (её подберёт absorb, когда блок появится). */
+        task: function (msgEl, t, at) {
+            if (OFF || !t || !t.task_id) return false;
+            var id = String(t.task_id), body = msgEl ? bodyOf(msgEl) : null;
+            if (!body) { body = tkBody.get(id); if (body && !body.isConnected) { tkBody.delete(id); body = null; } }
+            if (!body) return false;
+            absorb(body);
+            putTask(body, model(body), t, at);
+            schedule(body);
+            return true;
+        },
+        hasTask: function (id) { var b = tkBody.get(String(id)); return !!(b && b.isConnected); },
         rounds: function (el) { var b = bodyOf(el); var m = b && models.get(b); return m ? rounds(m) : []; },
         _cut: cut
     };
@@ -520,10 +627,12 @@
     function onFiles(t) {
         var fp = t.closest('.rg-fp');
         var fh = !fp && t.closest('.rg-fh');
-        if (!fp && !fh) return false;
+        if (!fp && !fh && !t.closest('.rg-fm')) return false;
         var row = t.closest('.rg-r.has-files'), body = row && row.closest(BODY), m = body && models.get(body);
+        var fm = !fp && !fh && t.closest('.rg-fm');
         if (!m) return true;
         var cid = row.getAttribute('data-cid');
+        if (fm) { var xm = findCall(m, cid); if (xm && !m.fm[cid]) { m.fm[cid] = 1; loadStep(body, m, xm); } render(body); return true; }
         if (fh) { if (m.fo[cid]) delete m.fo[cid]; else m.fo[cid] = 1; }
         else {
             var k = cid + FP_SEP + fp.getAttribute('data-p');
@@ -535,10 +644,22 @@
         if (again && again.focus) again.focus({ preventScroll: true });
         return true;
     }
+    function onTask(t) {
+        var row = t.closest('.rg-r.is-task.has-tk');
+        if (!row || t.closest('.rg-tkb')) return false;
+        var body = row.closest(BODY), m = body && models.get(body), id = row.getAttribute('data-tk');
+        if (!m) return true;
+        if (m.to[id]) delete m.to[id]; else m.to[id] = 1;
+        render(body);
+        var again = body.querySelector('.rg-r[data-tk="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]');
+        if (again && again.focus) again.focus({ preventScroll: true });
+        return true;
+    }
     document.addEventListener('click', function (e) {
         if (OFF || !e.target.closest) return;
         if (e.target.closest('.rg-fx')) return;   // клики внутри patch (выделение, кнопки) — не сворачивают
         if (onFiles(e.target)) return;
+        if (onTask(e.target)) return;
         var h = e.target.closest('.rr-rd__h');
         if (h) {
             var rd = h.parentNode, body = h.closest(BODY);
@@ -557,8 +678,11 @@
         if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('.rr-th.has-more')) {
             e.preventDefault(); toggle(e.target);
         }
-        if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('.rg-fh, .rg-fp')) {
+        if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('.rg-fh, .rg-fp, .rg-fm')) {
             e.preventDefault(); onFiles(e.target);
+        }
+        if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('.rg-r.is-task.has-tk')) {
+            e.preventDefault(); onTask(e.target);
         }
     });
 

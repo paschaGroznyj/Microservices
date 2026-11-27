@@ -84,6 +84,19 @@ def _extract_ws(args: dict | None, result: object = None) -> str | None:
     return None
 
 
+def _extract_task(result: object) -> str | None:
+    """task_id из ответа submit_task: фронт ставит узел задачи сразу за этим вызовом."""
+    if isinstance(result, dict):
+        tid = result.get("task_id")
+        return tid[:64] if isinstance(tid, str) and tid.strip() else None
+    if isinstance(result, str) and "task_id" in result:
+        import re
+        m = re.search(r'["\']task_id["\']\s*:\s*["\']([A-Za-z0-9_-]{4,64})["\']', result)
+        if m:
+            return m.group(1)
+    return None
+
+
 def tool_flow_fields(name: str, args: dict | None = None, result: object = None) -> dict:
     """{'slot', 'label'[, 'ext', 'ws']} для события tool_start/tool_end. Без имени тула."""
     spec = TOOL_FLOW.get(name or "")
@@ -98,5 +111,9 @@ def tool_flow_fields(name: str, args: dict | None = None, result: object = None)
         out["ws"] = ws
     elif (name or "") in WORKSPACE_TOOLS:
         out["ws"] = "workspace"
+    if name == "submit_task" and result is not None:
+        tid = _extract_task(result)
+        if tid:
+            out["task"] = tid
     return out
 

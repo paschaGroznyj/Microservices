@@ -150,7 +150,10 @@ function host(c){const root=document.querySelector(ROOT);if(!root)return null;
 /* Карточка всегда над текстом ответа: сразу после «Размышлений», а без них (история после F5) — первым блоком. */
 function place(h,el){let a=null;for(const n of h.children)if(n!==el&&n.matches('.reasoning-block,.reasoning-live'))a=n;
  if(a){if(a.nextElementSibling!==el)a.after(el);}else if(h.firstElementChild!==el)h.prepend(el);}
-function paintCard(rid){const c=cards.get(rid);if(!c)return;const h=host(c);if(!h)return;
+/* Карточка «Изменённые файлы» над ответом отключена: файлы и diff по шагам — в «Размышлениях»
+   (reasoning-rounds.js, GET /ws_diff/step). Вернуть: localStorage.setItem('wsd:card','1'). */
+let CARD=false;try{CARD=localStorage.getItem('wsd:card')==='1';}catch(_){}
+function paintCard(rid){if(!CARD)return;const c=cards.get(rid);if(!c)return;const h=host(c);if(!h)return;
  if(!c.message_id&&h.dataset.messageId)c.message_id=h.dataset.messageId;
  if(c.live&&h.querySelector(':scope > .message-actions'))c.live=false;
  const files=[];let ws='',base=null,end=null;
@@ -177,7 +180,7 @@ function apply(ev,opts){if(!ev||!ev.request_id)return;const rid=String(ev.reques
  if(ev.message_id)c.message_id=String(ev.message_id);if(opts.done)c.live=false;if(opts.restored)c.restored=true;
  c.items.set(ev.workspace_id||'',ev);paintCard(rid);}
 function reset(){cards.forEach(c=>c.el&&c.el.remove());cards.clear();}
-async function restore(chatId){reset();if(chatId==null)return;
+async function restore(chatId){reset();if(chatId==null||!CARD)return;
  let r;try{r=await fetch('/api/chats/'+encodeURIComponent(chatId)+'/ws_diff',{credentials:'include'});}catch(_){return;}
  if(!r.ok)return;let data;try{data=await r.json();}catch(_){return;}
  const running=data.running_request_id||null;

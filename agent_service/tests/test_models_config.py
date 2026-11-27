@@ -34,7 +34,7 @@ def test_default_yaml_registry_loaded():
     assert reg.aliases["giga"] == "gigachat"
     assert reg.aliases["deepseek"] == "deepseek"
     assert reg.aliases["ds"] == "deepseek"
-    assert reg.models["gigachat"].model == "ai-sage/GigaChat3.5-432B-A28B"
+    assert reg.models["gigachat"].model == "GigaChat/GigaChat-4-708B-A41"
     assert reg.models["gigachat"].provider == "openai"
     assert reg.models["deepseek"].model == "deepseek-ai/DeepSeek-V4.1-Flash"
     assert reg.models["deepseek"].provider == "openai"

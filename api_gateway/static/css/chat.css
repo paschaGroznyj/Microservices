@@ -3384,3 +3384,6 @@ pre {
   .image-lightbox__media-container > .image-lightbox__img,
   .gc-lightbox .image-lightbox__media-container > .image-lightbox__img { transition: none; }
 }
+
+/* Ход по результату задачи: волна — продолжение прошлого ответа агента, без отступа нового хода */
+.agent-placeholder.agent-placeholder--cont { margin-top: -8px; }

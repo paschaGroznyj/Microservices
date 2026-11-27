@@ -5335,6 +5335,12 @@ class ChatApp {
         if (this._runState !== 'running') return;
         this._runState = 'stopping';
         _fm('done', { chat: this.currentChat, ok: false });
+        {   // Граф размышлений: прерванные вызовы замораживаем, ставим ⊗; таймер шапки стоп.
+            const key = String(this.currentChat);
+            const s = this._resolveStream(key);
+            window.ReasoningRounds?.stop(key, () => s?.reasoningWrapEl || s?.pendingBotEl?.querySelector('.reasoning-block') || null);
+            try { this._stopReasoningTimer(key); } catch (_) {}
+        }
         try {
             if (this._activeRequestId) {
                 await fetch('/api/chats/stop_message', {

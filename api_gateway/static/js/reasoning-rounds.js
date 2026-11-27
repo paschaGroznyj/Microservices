@@ -20,7 +20,7 @@
     var pending = {};                // chatId → [flow-события до появления body]
     var NEW_ROUND_GAP = 400;         // мс без текста между тулами = новая итерация
 
-    function newModel() { return { ev: [], user: {}, rid: null, chat: null, fo: {}, fp: {} }; }
+    function newModel() { return { ev: [], user: {}, rid: null, chat: null, fo: {}, fp: {}, stop: null }; }
     /* Файлы шага: tool_end.files = {n, add, del, rid, approx, list:[{p,s,a,d,b,ws}]}.
        Patch шага — по клику: /api/chats/{chat}/ws_diff/step (кеш по rid|call_id). */
     var stepCache = {};
@@ -95,7 +95,17 @@
     function applyFlow(m, f, t) {
         var ev = f.ev;
         var rid = f.rid || f.request_id || null;
-        if (ev === 'agent_start' && rid && m.rid && rid !== m.rid) { m.ev = []; m.user = {}; }
+        if (ev === 'agent_start' && rid && m.rid && rid !== m.rid) { m.ev = []; m.user = {}; m.stop = null; }
+        // Стоп пользователем (done ok:false): незавершённые вызовы замораживаем, ветку закрываем ⊗.
+        if (ev === 'done') {
+            if (f.ok !== false || m.stop) return false;
+            if (rid && m.rid && rid !== m.rid) return false;
+            m.stop = t;
+            m.ev.forEach(function (e) {
+                if (e.k === 'tool' && e.t1 == null) { e.t1 = t; e.ms = Math.max(0, t - e.t); e.ts = e.t; e.ok = null; e.stopped = true; }
+            });
+            return true;
+        }
         if (rid) m.rid = rid;
         if (ev === 'tool_start') {
             if (f.call_id && findTool(m, f.call_id)) return false;
@@ -103,7 +113,9 @@
                 t: t, gap: f.gap_ms, t1: null, ms: null, ok: null });
             return true;
         }
+        if (ev === 'tool_start' && m.stop) return false;
         if (ev === 'tool_end') {
+            if (m.stop && f.call_id && m.ev.some(function (x) { return x.id === f.call_id; })) return false;
             var e = findTool(m, f.call_id, f.label);
             if (!e) {
                 var ms0 = +f.ms || 0;
@@ -205,6 +217,7 @@
             if (g && g.calls.some(function (x) { return x.t1 == null || x.t1 > e.t + 1; })) { g.calls.push(e); return; }
             g = { k: 'grp', calls: [e] }; out.push(g);
         });
+        if (m.stop && out.length) out.push({ k: 'stop', t: m.stop });
         return out;
     }
     function wall(calls) {
@@ -241,18 +254,18 @@
         return '<div class="rg-fl">' + out + '</div>';
     }
     function callHtml(x, j, g, m) {
-        var run = x.t1 == null, err = x.ok === false, n = g.calls.length, side = '';
+        var run = x.t1 == null, err = x.ok === false, stp = !!x.stopped, n = g.calls.length, side = '';
         var hasF = !run && x.files && x.id, fopen = hasF && m && !!m.fo[x.id];
         if (j === 0 && n > 1) {
             side = '<span class="rg-s" data-n="×' + n + '">' + n + ' параллельно</span>';
         }
         var gc = n > 1 ? (j === 0 ? ' is-g0' : '') + (j === n - 1 ? ' is-gN' : '') : '';
-        return '<div class="rg-r is-call rg-t' + toneOf(j) + gc + (run ? ' is-run' : '') + (err ? ' is-err' : '') +
+        return '<div class="rg-r is-call rg-t' + toneOf(j) + gc + (run ? ' is-run' : '') + (err ? ' is-err' : '') + (stp ? ' is-stop' : '') +
             (hasF ? ' has-files' + (fopen ? ' is-open' : '') : '') + '"' +
             (run ? ' data-t="' + x.t + '"' : '') + (hasF ? ' data-cid="' + esc(x.id) + '"' : '') + ' title="' + esc(x.label) + '">' +
             '<span class="rg-ic">' + (IC[x.slot] || IC.other) + '</span>' +
             '<span class="rg-n">' + esc(x.label) + '</span>' +
-            (err ? '<span class="rg-e">ошибка</span>' : '') +
+            (err ? '<span class="rg-e">ошибка</span>' : '') + (stp ? '<span class="rg-e rg-e--stop">прерван</span>' : '') +
             (hasF ? '<span class="rg-fh" role="button" tabindex="0" aria-expanded="' + fopen + '">' + filesSum(x.files) + IC.chev + '</span>' : '') +
             '<span class="rg-d">' + sec(run ? Date.now() - x.t : x.ms) + '</span>' + side +
             (fopen ? filesPanel(m, x) : '') + '</div>';
@@ -273,6 +286,7 @@
         var lanes = 1, rows = [];
         sq.forEach(function (it) {
             if (it.k === 'th') { rows.push('<div class="rg-r is-th">' + thoughtHtml(it.e.text, false) + '</div>'); return; }
+            if (it.k === 'stop') { rows.push('<div class="rg-r is-stop-end"><span class="rg-n">Остановлено</span></div>'); return; }
             lanes = Math.max(lanes, Math.min(it.calls.length, MAXL));
             it.calls.forEach(function (x, j) { rows.push(callHtml(x, j, it, m)); });
         });
@@ -336,12 +350,17 @@
         var D = 22, paths = [], nodes = [], i = 0, top = Y(0), bottom = Y(rs.length - 1), cutAt = null;
         function node(x, cx, cy, j) {
             var run = x.t1 == null;
-            nodes.push('<g class="rg-o rg-t' + toneOf(j) + (run ? ' is-run' : '') + (x.ok === false ? ' is-err' : '') + '">' +
+            nodes.push('<g class="rg-o rg-t' + toneOf(j) + (run ? ' is-run' : '') + (x.ok === false ? ' is-err' : '') + (x.stopped ? ' is-stop' : '') + '">' +
                 (run ? '<circle class="rg-pl" cx="' + cx + '" cy="' + cy + '" r="4"/>' : '') +
                 '<circle class="rg-c" cx="' + cx + '" cy="' + cy + '" r="4"/></g>');
         }
         sq.forEach(function (it) {
             if (it.k === 'th') { nodes.push('<circle class="rg-q" cx="' + X(0) + '" cy="' + Y(i) + '" r="3.5"/>'); i++; return; }
+            if (it.k === 'stop') {
+                var sx = X(0), sy = Y(i), k = 2.1;
+                nodes.push('<g class="rg-x"><circle cx="' + sx + '" cy="' + sy + '" r="5"/><path d="M' + (sx - k) + ',' + (sy - k) + ' L' + (sx + k) + ',' + (sy + k) + ' M' + (sx + k) + ',' + (sy - k) + ' L' + (sx - k) + ',' + (sy + k) + '"/></g>');
+                i++; return;
+            }
             var n = it.calls.length, first = i, last = i + n - 1;
             var run = it.calls.some(function (x) { return x.t1 == null; });
             var fy = n > 1 ? Y(first) - 6 - D : Y(first), open = Y(last) + 10;
@@ -424,7 +443,7 @@
     var api = {
         /* Живое flow-событие. getBody → .reasoning-body (или .reasoning-block) текущего ответа либо null. */
         flow: function (chatId, f, getBody) {
-            if (OFF || !f || (f.ev !== 'tool_start' && f.ev !== 'tool_end' && f.ev !== 'agent_start')) return;
+            if (OFF || !f || (f.ev !== 'tool_start' && f.ev !== 'tool_end' && f.ev !== 'agent_start' && f.ev !== 'done')) return;
             var t = Date.now();
             var body = null;
             try { body = bodyOf(getBody && getBody()); } catch (_) {}
@@ -471,6 +490,7 @@
                 var ts = +e.ts || lastTs; lastTs = ts;
                 if (e.ev === 'think_end') { if (si < steps.length) addThought(m, steps[si++], ts); return; }
                 if (e.ev === 'tool_start' || e.ev === 'tool_end') applyFlow(m, e, ts);
+                else if (e.ev === 'done' && e.ok === false) applyFlow(m, e, ts);
             });
             for (; si < steps.length; si++) addThought(m, steps[si], lastTs);
             // Мысли и тулы, пришедшие живьём после снимка, не теряем.
@@ -478,9 +498,15 @@
                 if (e.k === 'th') addThought(m, e.text, e.t);
                 else if (e.id && !m.ev.some(function (x) { return x.id === e.id; })) m.ev.push(e);
             });
+            if (old.stop && !m.stop) applyFlow(m, { ev: 'done', ok: false, rid: m.rid }, old.stop);
             models.set(body, m);
             render(body);
             return true;
+        },
+        /* Стоп пользователем: закрыть живую ветку узлом ⊗ (без ожидания done из Redis). */
+        stop: function (chatId, getBody) {
+            if (OFF) return;
+            api.flow(chatId, { ev: 'done', ok: false }, getBody);
         },
         rounds: function (el) { var b = bodyOf(el); var m = b && models.get(b); return m ? rounds(m) : []; },
         _cut: cut

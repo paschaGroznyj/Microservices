@@ -4104,7 +4104,12 @@ class ChatApp {
             }
         }
 
-        if (activeBotEl && activeBotEl.parentNode === msgContainer) {
+        const taskRun = this._taskRunChat === String(this.currentChat) && !st?.pendingBotEl && !!activeBotEl;
+        if (taskRun) {
+            // Ход по задаче: агентский ответ уже стоит после последнего пользовательского — волна под ним.
+            placeholder.classList.add('agent-placeholder--cont');
+            msgContainer.appendChild(placeholder);
+        } else if (activeBotEl && activeBotEl.parentNode === msgContainer) {
             msgContainer.insertBefore(placeholder, activeBotEl);
         } else if (lastUser && lastUser.nextSibling) {
             msgContainer.insertBefore(placeholder, lastUser.nextSibling);
@@ -4728,8 +4733,14 @@ class ChatApp {
             }
 
             if (msg.type === 'agent_status') {
-                // Задачник: агент разбужен результатом задачи — блокируем отправку, как при обычном запросе.
-                if (msg.task_trigger && isActive) this._setSendButtonMode?.('stop');
+                // Задачник: агент разбужен результатом задачи. Это продолжение прошлого ответа:
+                // ход ведём как обычный (стоп работает, request_id известен), вместо старой
+                // статус-строки со спиннером — та же волна ожидания и граф размышлений.
+                if (msg.task_trigger) {
+                    if (!isActive) return;
+                    this._beginTaskTriggerRun(key, msg);
+                    return;
+                }
                 // Статус-строку и скелетон рисуем только для АКТИВНОГО чата.
                 if (!isActive) return;
                 this.updateStatus(msg.status);
@@ -5911,10 +5922,43 @@ class ChatApp {
         this._syncBotPlaceholder();
     }
 
+    /** Ход, запущенный результатом фоновой задачи (task_gw → agent_status.task_trigger).
+     *  Пользователь сообщение не отправлял: сбрасываем состояние прошлого ответа, чтобы
+     *  волна ожидания поднялась под ним, и помечаем ход как running — тогда стоп-кнопка
+     *  шлёт настоящий request_id. Старую строку «Проверяю результат задачи…» не рисуем. */
+    _beginTaskTriggerRun(chatId, msg) {
+        document.getElementById('agent-status-indicator')?.remove();
+        this._botAnswered = false;
+        this._taskRunChat = String(chatId);
+        const st = this._ensureStream(chatId);
+        if (st) {
+            st.streamDone = false;
+            st.streamIsFinal = false;
+            st.runStartedAt = Date.now();
+            st.reasoningDurationSec = 1;
+        }
+        if (msg.request_id) this._activeRequestId = msg.request_id;
+        this._runState = 'running';
+        this._markChatRunning(chatId, true);
+        this._loopWaiting = false;
+        this._setSendButtonMode('stop');
+        const ph = document.getElementById('agent-response-placeholder');
+        if (ph) {
+            ph.dataset.task = '1';
+            ph.title = msg.status || '';
+        }
+    }
+
     async stopCurrentRun() {
         if (this._runState !== 'running') return;
         this._runState = 'stopping';
         _fm('done', { chat: this.currentChat, ok: false });
+        {   // Граф размышлений: прерванные вызовы замораживаем, ставим ⊗; таймер шапки стоп.
+            const key = String(this.currentChat);
+            const s = this._resolveStream(key);
+            window.ReasoningRounds?.stop(key, () => s?.reasoningWrapEl || s?.pendingBotEl?.querySelector('.reasoning-block') || null);
+            try { this._stopReasoningTimer(key); } catch (_) {}
+        }
         try {
             await fetch('/api/chats/stop_message', {
                 method: 'POST',
@@ -5941,6 +5985,7 @@ class ChatApp {
             return;
         }
         this._runState = 'idle';
+        this._taskRunChat = null;
         this._markChatRunning(this.currentChat, false);
         this._loopWaiting = false;
         this._activeRequestId = null;

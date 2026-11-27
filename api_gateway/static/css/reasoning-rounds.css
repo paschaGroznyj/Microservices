@@ -235,3 +235,13 @@
   .rg-wait .rgw-n { transform: none; animation: rgw-f 2.8s ease-in-out var(--d) infinite both; }
 }
 
+
+/* Стоп пользователем: прерванный вызов и конечный узел ⊗ */
+.rg-r.is-stop .rg-n { color: var(--rr-t); }
+.rg-e--stop { color: var(--rr-t); background: none; }
+.rg-o.is-stop .rg-c { fill: var(--rg-node-bg); stroke: #8a8f98; stroke-width: 1.6; }
+.rg-r.is-stop-end { min-height: 24px; margin-top: 12px; }
+.rg-r.is-stop-end .rg-n { color: var(--rr-t); font-size: 12px; }
+.rg-x circle { fill: var(--rg-node-bg); stroke: #8a8f98; stroke-width: 1.5; }
+.rg-x path { stroke: #8a8f98; stroke-width: 1.5; stroke-linecap: round; fill: none; }
+[data-theme="dark"] .rg-x circle, [data-theme="dark"] .rg-x path, [data-theme="dark"] .rg-o.is-stop .rg-c { stroke: #8e95a0; }

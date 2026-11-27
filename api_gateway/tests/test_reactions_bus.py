@@ -1,4 +1,5 @@
 """reactions_bus: Redis-хеш, дебаунс-выгрузка, возврат при ошибке, fallback."""
+
 import asyncio
 import fnmatch
 import json
@@ -219,3 +220,77 @@ def test_failed_flush_requeues_full_list_then_retries(env):
     run(rb.flush_once())
     assert http.calls[0][1] == http.calls[1][1]
     assert r.h == {}
+
+
+@pytest.mark.parametrize("code,exc", [(503, None), (200, OSError("offline"))])
+def test_direct_failure_is_not_acknowledged(env, monkeypatch, code, exc):
+    _, http = env
+    monkeypatch.setattr(rb, "_redis", None)
+    http.code, http.exc = code, exc
+    with pytest.raises(rb.ReactionDeliveryError, match="reaction delivery failed"):
+        run(rb.enqueue(7, [{"message_id": 5, "emojis": ["👍", "🔥", "❤️"]}]))
+
+
+def test_shared_pending_batch_is_split_at_service_limit(env, monkeypatch):
+    r, http = env
+    for uid in range(1, 2002):
+        run(rb.enqueue(uid, [{"message_id": 5, "emojis": ["👍", "🔥", "❤️"]}]))
+
+    async def capped_post(url, json=None):
+        http.calls.append((url, json))
+        return Resp(413 if len(json["ops"]) > 2000 else http.code)
+
+    monkeypatch.setattr(http, "post", capped_post)
+    assert run(rb.flush_once()) == 2001
+    assert [len(body["ops"]) for _, body in http.calls] == [2000, 1]
+    assert {op["user_id"] for _, body in http.calls for op in body["ops"]} == set(range(1, 2002))
+    assert r.h == {}
+
+
+def test_split_batch_failure_is_requeued_and_retryable(env, monkeypatch):
+    r, http = env
+    r.h[rb.PENDING_KEY] = {f"5:{uid}": '["👍", "🔥", "❤️"]' for uid in range(1, 2002)}
+
+    async def fail_second_chunk(url, json=None):
+        http.calls.append((url, json))
+        return Resp(503 if len(http.calls) == 2 else 200)
+
+    monkeypatch.setattr(http, "post", fail_second_chunk)
+    run(rb.flush_once())
+    assert len(r.h[rb.PENDING_KEY]) == 2001
+    run(rb.flush_once())
+    assert [len(body["ops"]) for _, body in http.calls] == [2000, 1, 2000, 1]
+    assert r.h == {}
+
+
+ADDED_EMOJI = (
+    "✅", "❌", "0️⃣", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣",
+    "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🦧", "🤷‍♂️", "🤦‍♂️", "🫂",
+)
+
+
+def test_palette_matches_chats_service_exactly():
+    import ast
+    from pathlib import Path
+    assert len(rb.REACTION_EMOJI) == len(set(rb.REACTION_EMOJI)) == 80
+    assert rb.REACTION_EMOJI[64:] == ADDED_EMOJI
+    source = Path(__file__).resolve().parents[2] / "chats_service/app/core/reactions.py"
+    assignments = ast.parse(source.read_text()).body
+    chats_palette = next(ast.literal_eval(node.value) for node in assignments
+                         if isinstance(node, ast.Assign)
+                         and any(isinstance(t, ast.Name) and t.id == "REACTION_EMOJI" for t in node.targets))
+    assert chats_palette == rb.REACTION_EMOJI
+
+
+@pytest.mark.parametrize("emoji", ADDED_EMOJI)
+@pytest.mark.parametrize("direct", [False, True])
+def test_added_emoji_roundtrip(env, monkeypatch, emoji, direct):
+    _, http = env
+    if direct:
+        monkeypatch.setattr(rb, "_redis", None)
+    assert run(rb.enqueue(7, [{"message_id": 5, "emojis": [emoji, "👍", "🔥", emoji]}])) == ("direct" if direct else "redis")
+    if not direct:
+        run(rb.flush_once())
+    assert http.calls[0][1] == {"ops": [
+        {"message_id": 5, "user_id": 7, "emojis": [emoji, "👍", "🔥"]},
+    ]}

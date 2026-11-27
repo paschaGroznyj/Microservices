@@ -96,8 +96,45 @@ async def main():
     assert set(payload['items'][0]['emojis'])=={'❤️','👍','😁'},payload
     retry=await page.evaluate("""async()=>{const old=window.fetch;window.fetch=async()=>{throw Error('offline')};GroupInteraction._queue.set(901,['❤️','👍','😁']);await GroupInteraction.flush();window.fetch=old;return GroupInteraction._take();}""")
     assert retry[0]['emojis']==['❤️','👍','😁'],retry
+    await page.evaluate("document.querySelector('#text-preview-panel').classList.remove('open')")
+    # Real menu selection on own/other text bubbles and standalone file blocks.
+    for uid, files_only, string_id in [(56,False,False),(56,False,True),(99,False,True),(56,True,True),(99,True,True)]:
+      await page.evaluate("""({uid,files_only,string_id})=>{
+        GroupChat._closeCtxMenu(); GroupInteraction._queue.clear();GroupInteraction._override.clear();
+        window.msg={id:string_id?'911':911,user_id:uid,username:'Тест',
+          message_text:files_only?'':'Проверка реакций своего сообщения',
+          files:files_only?[{id:77,file_name:'report.txt',mime_type:'text/plain',size_bytes:100}]:[],
+          created_at:new Date().toISOString(),reactions:[]};
+        GroupChat.messages=[msg];const box=document.querySelector('#gc-messages');
+        box.innerHTML=GroupChat._msgHtml(msg);GroupChat._bindMsgActions(box);
+        window.fetch=async(url,opts)=>{window.lastReactionPost=JSON.parse(opts.body);return {status:200}};
+      }""",dict(uid=uid,files_only=files_only,string_id=string_id))
+      target=page.locator('.gc-file-block' if files_only else '.gc-msg')
+      if not files_only:
+        assert await target.locator('.gc-bubble-text').evaluate('(e)=>getComputedStyle(e).color===getComputedStyle(e.closest(".gc-msg")).color')
+
+      for emoji in ['✅','1️⃣','🤷‍♂️']:
+        await target.click(button='right')
+        await page.locator('.gc-rbar__more').click()
+        assert await page.locator('.gc-rgrid__btn').count()==80
+        await page.locator('.gc-rgrid__btn').filter(has_text=emoji).click()
+      assert await page.locator('.gc-react--mine').count()==3,(uid,files_only,string_id)
+      await target.click(button='right');await page.locator('.gc-rbar__more').click()
+      await page.locator('.gc-rgrid__btn').filter(has_text='🫂').click()
+      assert await page.locator('.gc-react--mine').count()==3
+      await page.evaluate('GroupInteraction.flush()')
+      assert await page.evaluate("lastReactionPost.items[0].message_id===911 && lastReactionPost.items[0].emojis.join('|')==='✅|1️⃣|🤷‍♂️'")
+      # Simulated server echo, then independent removal via a rendered chip.
+      await page.evaluate("GroupInteraction.onEvent({items:[{message_id:911,reactions:msg.reactions}]})")
+      assert not await page.evaluate('GroupInteraction._override.has(911)')
+      await page.locator('.gc-react[data-emoji="1️⃣"]').click()
+      assert await page.locator('.gc-react--mine').count()==2
+      await page.evaluate('GroupInteraction.flush()')
+      assert await page.evaluate("lastReactionPost.items[0].emojis.join('|')==='✅|🤷‍♂️'")
+      if uid==56 and not string_id:
+        await page.screenshot(path=str(O/f'reactions_{w}_{theme}.png'))
     assert not errors,errors
     results.append({'width':w,'theme':theme,'state':st,'geometry':geometry,'pageerrors':errors})
     await page.close()
-  await b.close();(O/'results.json').write_text(json.dumps(results,ensure_ascii=False,indent=2)); print('PASS 4 cases: 3 reactions / fourth rejected / removal / debounce payload / stale+exact echoes / menu / own+other separate bubbles / per-bubble meta / group preview; pageerrors=[]')
+  await b.close();(O/'results.json').write_text(json.dumps(results,ensure_ascii=False,indent=2)); print('PASS 4 viewport/theme cases: 20 real-menu scenarios own/other text/files, numeric/string IDs, 80 emoji, max3, removal/echo/POST; existing standalone-files/preview regressions PASS; pageerrors=[]')
 asyncio.run(main())

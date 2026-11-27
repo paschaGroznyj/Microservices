@@ -2,6 +2,8 @@
 router монтируем в чистое FastAPI; _http / _get_current_user / admin — моки.
 chats_service по сети не дёргаем.
 """
+import os
+
 import asyncio
 import pytest
 from fastapi import FastAPI
@@ -167,3 +169,40 @@ def test_reactions_normalized_and_authenticated_user_used(bind_gw, mocker, paylo
     response = client.post("/api/group/reactions", json={"items": [{"message_id": 5, "user_id": 999, **payload}]})
     assert response.status_code == 200
     enqueue.assert_awaited_once_with(56, [{"message_id": 5, "emojis": expected}])
+
+
+@pytest.mark.parametrize("code,exc", [(503, None), (200, OSError("offline"))])
+def test_reaction_direct_delivery_failure_returns_503(bind_gw, mocker, code, exc):
+    client, http, _ = bind_gw
+    mocker.patch.object(gw.reactions_bus, "_redis", None)
+    mocker.patch.object(gw.reactions_bus, "_http", http)
+    mocker.patch.object(gw.reactions_bus, "_chats_url", "http://chats")
+    http.post.return_value = _resp(mocker, {}, status=code)
+    http.post.side_effect = exc
+    response = client.post("/api/group/reactions", json={"items": [
+        {"message_id": 5, "emojis": ["👍", "🔥", "❤️"]},
+    ]})
+    assert response.status_code == 503
+    assert response.json()["detail"] == "reaction delivery failed"
+
+
+@pytest.mark.parametrize("emoji", gw.reactions_bus.REACTION_EMOJI[64:])
+def test_added_emoji_api_normalizes_and_uses_authenticated_user(bind_gw, mocker, emoji):
+    client, _, _ = bind_gw
+    enqueue = mocker.patch.object(gw.reactions_bus, "enqueue", new=mocker.AsyncMock(return_value="redis"))
+    response = client.post("/api/group/reactions", json={"items": [
+        {"message_id": 5, "user_id": 999, "emojis": [emoji, "👍", "🔥", emoji]},
+    ]})
+    assert response.status_code == 200
+    enqueue.assert_awaited_once_with(56, [{"message_id": 5, "emojis": [emoji, "👍", "🔥"]}])
+
+
+@pytest.mark.parametrize("emoji", ["0⃣", "0", "🤷‍♂", "🤦‍♂", "🤷♂️", "🤦♂️", "🫠"])
+def test_non_whitelisted_sequences_rejected_before_bus(bind_gw, mocker, emoji):
+    client, _, _ = bind_gw
+    enqueue = mocker.patch.object(gw.reactions_bus, "enqueue", new=mocker.AsyncMock())
+    response = client.post("/api/group/reactions", json={"items": [
+        {"message_id": 5, "emojis": [emoji]},
+    ]})
+    assert response.status_code == 422
+    enqueue.assert_not_awaited()

@@ -22,7 +22,9 @@ import os
 from fastapi import (APIRouter, File, Form, Header, HTTPException, Request,
                      Response, UploadFile)
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
+
+from app.core.reactions import reaction_emojis
 
 from app.core import obs_file_storage
 from app.core.thumbhash import media_meta_from_bytes
@@ -95,7 +97,14 @@ class GroupPinAction(BaseModel):
 class ReactionOp(BaseModel):
     message_id: int
     user_id: int
-    emoji: str = ""
+    emojis: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_reactions(cls, values):
+        if isinstance(values, dict):
+            return {**values, "emojis": reaction_emojis(values)}
+        return values
 
 
 class ReactionBatch(BaseModel):

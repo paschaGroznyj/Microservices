@@ -25,6 +25,8 @@ const FileAttach = (() => {
     let _ctx          = null;        // ключ контекста текущих _files (null — без привязки)
     const _bank       = new Map();   // ctx -> File[] неотправленных файлов других чатов
 
+    let _reorder = null;             // Только плитки текущего композера
+
     /* ─── расширение → метка ─────────────────────────────────── */
     const EXT_LABEL = {
         pdf:  'PDF',  docx: 'DOC',  doc:  'DOC',
@@ -186,9 +188,12 @@ const FileAttach = (() => {
         const bar = _previewBar;
         const el = bar ? Array.from(_barTrack(bar).children).find(c => c._faFile === file) : null;
         file._faRemoving = true;
+        // Удалённый файл не должен попасть в отправку во время анимации.
+        const files = _files;
+        const index = files.indexOf(file);
+        if (index !== -1) files.splice(index, 1);
+        if (_reorder?.file === file) _endReorder();
         const finish = () => {
-            const i = _files.indexOf(file);
-            if (i !== -1) _files.splice(i, 1);
             if (el) {
                 window.FileTiles?.stopAudioFor(el);
                 el.remove();
@@ -198,8 +203,10 @@ const FileAttach = (() => {
                 file._previewUrl = '';
             }
             file._faRemoving = false;
-            _renderPreview();
-            _updateAttachBtn();
+            if (_files === files) {
+                _renderPreview();
+                _updateAttachBtn();
+            }
         };
         const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
         if (el && !reduce) {
@@ -234,6 +241,7 @@ const FileAttach = (() => {
         }
         if (window.FileTiles) window.FileTiles.enhanceScroller(bar, { wheel: true });
         _previewBar = bar;
+        _bindReorder(_barTrack(bar));
         return bar;
     }
 
@@ -247,6 +255,162 @@ const FileAttach = (() => {
         // reflow перед показом, чтобы transition сработал и у только что созданной полосы
         if (has && !bar.classList.contains('fa-preview-bar--visible')) void bar.offsetHeight;
         bar.classList.toggle('fa-preview-bar--visible', has);
+    }
+
+    /* Composer-only reorder: identities, never stale data-idx values. */
+    const REORDER_TYPE = 'application/x-fileattach-reorder';
+    const REORDER_HELP = 'Перетащите для изменения порядка. Клавиши: Alt + ←/→ на плитке или ←/→ на кнопке порядка.';
+
+    function _endReorder() {
+        const state = _reorder;
+        if (!state) return;
+        _reorder = null;
+        cancelAnimationFrame(state.raf);
+        state.track.classList.remove('fa-reordering');
+        _inputBox?.classList.remove('fa-dragover');
+        state.track.querySelectorAll('.fa-reorder-source, .fa-reorder-before, .fa-reorder-after').forEach(el => {
+            el.classList.remove('fa-reorder-source', 'fa-reorder-before', 'fa-reorder-after');
+        });
+        if (state.handle?.hasPointerCapture(state.pointerId)) state.handle.releasePointerCapture(state.pointerId);
+    }
+
+    function _startReorder(track, tile, mode, event) {
+        _endReorder();
+        if (!_previewBar || track !== _barTrack(_previewBar) || !_files.includes(tile._faFile) || tile._faFile._faRemoving) return;
+        _reorder = { track, file: tile._faFile, mode, x: event.clientX, before: undefined };
+        track.classList.add('fa-reordering');
+        tile.classList.add('fa-reorder-source');
+        // Keep scrolling while held at either edge, including native drag on desktop.
+        const tick = () => {
+            const state = _reorder;
+            if (!state) return;
+            const rect = track.getBoundingClientRect();
+            const delta = state.x < rect.left + 36 ? -10 : state.x > rect.right - 36 ? 10 : 0;
+            if (delta) {
+                track.scrollLeft += delta;
+                _reorderAt(state.x);
+            }
+            state.raf = requestAnimationFrame(tick);
+        };
+        _reorder.raf = requestAnimationFrame(tick);
+    }
+
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && _reorder) { _endReorder(); e.stopPropagation(); }
+    }, true);
+
+    function _reorderAt(x) {
+        const state = _reorder;
+        if (!state) return;
+        state.x = x;
+        const tiles = Array.from(state.track.children).filter(el =>
+            el._faFile && el._faFile !== state.file && _files.includes(el._faFile));
+        const next = tiles.find(el => {
+            const rect = el.getBoundingClientRect();
+            return x < rect.left + rect.width / 2;
+        });
+        state.before = next?._faFile || null;
+        state.track.querySelectorAll('.fa-reorder-before, .fa-reorder-after').forEach(el => {
+            el.classList.remove('fa-reorder-before', 'fa-reorder-after');
+        });
+        if (next) next.classList.add('fa-reorder-before');
+        else tiles[tiles.length - 1]?.classList.add('fa-reorder-after');
+    }
+
+    function _moveFile(file, before, track) {
+        const from = _files.indexOf(file);
+        if (from < 0 || file._faRemoving || (before && !_files.includes(before))) return;
+        _files.splice(from, 1);
+        const to = before ? _files.indexOf(before) : _files.length;
+        _files.splice(to, 0, file);
+        _renderPreview();
+        const tile = Array.from(track.children).find(el => el._faFile === file);
+        tile?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        const status = _previewBar.querySelector('.fa-reorder-status');
+        if (status) status.textContent = `${file.name}: ${to + 1} из ${_files.length}`;
+    }
+
+    function _commitReorder() {
+        const state = _reorder;
+        if (!state) return;
+        _endReorder();
+        if (state.before !== undefined) _moveFile(state.file, state.before, state.track);
+    }
+
+    function _bindReorder(track) {
+        if (track._faReorderBound) return;
+        track._faReorderBound = true;
+        const bar = track.closest('.fa-preview-bar');
+        const status = document.createElement('span');
+        status.className = 'fa-reorder-status';
+        status.setAttribute('role', 'status');
+        status.setAttribute('aria-live', 'polite');
+        // Outside the track: FileTiles may contain independent pasted-text chips.
+        (bar || track).appendChild(status);
+        let blocked = false;
+        track.addEventListener('pointerdown', e => {
+            const tile = e.target.closest('.fa-chip');
+            blocked = !e.target.closest('.fa-reorder-handle') && !!e.target.closest('button, a, input, canvas, video, [role="slider"]');
+            const handle = e.target.closest('.fa-reorder-handle');
+            if (!handle || e.pointerType === 'mouse' || !tile?._faFile || e.button !== 0) return;
+            e.preventDefault();
+            _startReorder(track, tile, 'pointer', e);
+            if (!_reorder) return;
+            _reorder.handle = handle;
+            _reorder.pointerId = e.pointerId;
+            handle.setPointerCapture(e.pointerId);
+        });
+        track.addEventListener('pointermove', e => {
+            if (_reorder?.track !== track || _reorder.mode !== 'pointer' || e.pointerId !== _reorder.pointerId) return;
+            e.preventDefault();
+            _reorderAt(e.clientX);
+        });
+        track.addEventListener('pointerup', e => {
+            if (_reorder?.track === track && _reorder.mode === 'pointer' && e.pointerId === _reorder.pointerId) _commitReorder();
+        });
+        for (const type of ['pointercancel', 'lostpointercapture']) track.addEventListener(type, () => {
+            if (_reorder?.track === track && _reorder.mode === 'pointer') _endReorder();
+        });
+        track.addEventListener('dragstart', e => {
+            const tile = e.target.closest('.fa-chip');
+            if (!tile?._faFile) return;
+            if (blocked) { e.preventDefault(); return; }
+            _startReorder(track, tile, 'native', e);
+            if (!_reorder) { e.preventDefault(); return; }
+            e.stopPropagation();
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData(REORDER_TYPE, '1');
+        });
+        for (const type of ['dragenter', 'dragover', 'drop']) track.addEventListener(type, e => {
+            if (_reorder?.track !== track || _reorder.mode !== 'native') return;
+            e.preventDefault();
+            e.stopPropagation(); // Not an external file upload.
+            e.dataTransfer.dropEffect = 'move';
+            _reorderAt(e.clientX);
+            if (type === 'drop') _commitReorder();
+        });
+        track.addEventListener('dragend', _endReorder);
+        track.addEventListener('click', e => {
+            if (e.target.closest('.fa-reorder-handle')) { e.preventDefault(); e.stopPropagation(); }
+        });
+        track.addEventListener('keydown', e => {
+            if (e.key === 'Escape' && _reorder) { _endReorder(); e.stopPropagation(); return; }
+            const tile = e.target.closest('.fa-chip');
+            const handle = e.target.closest('.fa-reorder-handle');
+            if (!tile?._faFile || (!handle && (e.target !== tile || !e.altKey))) return;
+            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const file = tile._faFile;
+            const index = _files.indexOf(file);
+            if (index < 0) return;
+            const to = e.key === 'Home' ? 0 : e.key === 'End' ? _files.length - 1
+                : Math.max(0, Math.min(_files.length - 1, index + (e.key === 'ArrowLeft' ? -1 : 1)));
+            if (to === index) return;
+            const rest = _files.filter(f => f !== file);
+            _moveFile(file, rest[to] || null, track);
+            (handle || tile).focus({ preventScroll: true });
+        });
     }
 
     /* ─── квадратная плитка файла (FileTiles) ─────────────────── */
@@ -273,6 +437,16 @@ const FileAttach = (() => {
         const el = holder.firstElementChild;
         file._faShown = true;
         el._faFile = file;
+        el.draggable = true;
+        el.setAttribute('aria-description', REORDER_HELP);
+        el.setAttribute('aria-keyshortcuts', 'Alt+ArrowLeft Alt+ArrowRight');
+        const handle = document.createElement('button');
+        handle.type = 'button';
+        handle.className = 'fa-reorder-handle';
+        handle.title = REORDER_HELP;
+        handle.setAttribute('aria-label', `Изменить порядок: ${file.name}`);
+        handle.textContent = '⠿';
+        el.appendChild(handle);
         el.querySelector('.fa-chip__remove')?.addEventListener('click', (e) => {
             e.stopPropagation();
             _removeFile(file);
@@ -300,6 +474,9 @@ const FileAttach = (() => {
                 track.insertBefore(el, firstInput);
                 created = true;
             }
+            // Reconcile DOM with the real array, preserving nodes/media state.
+            const current = Array.from(track.children).filter(c => c._faFile)[idx];
+            if (current !== el) track.insertBefore(el, current || firstInput);
             el.dataset.idx = String(idx);
         });
         _syncBarVisible(bar);
@@ -324,13 +501,15 @@ const FileAttach = (() => {
 
     /* ─── drag & drop на inputBox ────────────────────────────── */
     function _bindDragDrop(box) {
-        _hDragEnter = e => { e.preventDefault(); box.classList.add('fa-dragover'); };
-        _hDragOver  = e => { e.preventDefault(); box.classList.add('fa-dragover'); };
+        const isReorder = e => Array.from(e.dataTransfer?.types || []).includes(REORDER_TYPE);
+        _hDragEnter = e => { e.preventDefault(); if (!isReorder(e)) box.classList.add('fa-dragover'); };
+        _hDragOver  = e => { e.preventDefault(); if (!isReorder(e)) box.classList.add('fa-dragover'); };
         _hDragLeave = () => box.classList.remove('fa-dragover');
         _hDropClear = () => box.classList.remove('fa-dragover');
         _hDrop      = e => {
             e.preventDefault();
             const dt = e.dataTransfer;
+            if (isReorder(e)) return;
             if (dt?.files?.length) _addFiles(Array.from(dt.files));
         };
         box.addEventListener('dragenter', _hDragEnter, false);
@@ -376,6 +555,7 @@ const FileAttach = (() => {
     // держал слушатели на прошлом _inputBox, а гард renderMessageInput
     // не переинициализировал модуль при возврате.
     function _unbindPrevious() {
+        _endReorder();
         if (_boundBox) {
             if (_hDragEnter) _boundBox.removeEventListener('dragenter', _hDragEnter, false);
             if (_hDragOver)  _boundBox.removeEventListener('dragover',  _hDragOver,  false);
@@ -534,6 +714,7 @@ const FileAttach = (() => {
      * Сбросить состояние (файлы + превью).
      */
     function clear() {
+        _endReorder();
         _files = [];
         if (_previewBar) {
             window.FileTiles?.stopAudioFor(_previewBar);

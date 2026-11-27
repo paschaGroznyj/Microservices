@@ -39,6 +39,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import resource
 import shlex
 import shutil
@@ -147,6 +148,8 @@ class DiffSnapRequest(BaseModel):
     request_id: str = Field(..., min_length=1, max_length=200)
     chat_id: str | None = Field(None, max_length=200)
     message_id: str | None = Field(None, max_length=200)
+    call_id: str | None = Field(None, max_length=200)
+    phase: str | None = Field(None, pattern="^(pre|post)$")
 
 
 class DiffAttachRequest(BaseModel):
@@ -1135,10 +1138,26 @@ async def diff_snap_endpoint(workspace_id: str, req: DiffSnapRequest):
     if ws_path is None:
         raise HTTPException(status_code=404, detail="Workspace не найден")
     try:
-        data = await asyncio.to_thread(ws_diff.snap, ws_path, req.request_id, req.chat_id, req.message_id)
+        data = await asyncio.to_thread(ws_diff.snap, ws_path, req.request_id, req.chat_id, req.message_id,
+                                       req.call_id, req.phase)
     except Exception as e:
         log.warning("[ws_diff] snap %s: %s", workspace_id, e)
         raise HTTPException(status_code=500, detail=f"snapshot failed: {e}")
+    data["workspace_id"] = workspace_id
+    return data
+
+
+@app.get("/workspace/{workspace_id}/diff/step")
+async def diff_step_endpoint(workspace_id: str, request_id: str, call_id: str, chat_id: str | None = None):
+    """Diff одного вызова тула (клик по шагу в «Размышлениях»). chat_id — запрос должен быть из этого чата."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", workspace_id or ""):
+        raise HTTPException(status_code=404, detail="Workspace не найден")
+    ws_path = _get_workspace_path(workspace_id)
+    if ws_path is None or not os.path.isdir(ws_path):
+        raise HTTPException(status_code=404, detail="Workspace не найден")
+    data = await asyncio.to_thread(ws_diff.get_step_diff, ws_path, request_id, call_id, chat_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Шаг не найден")
     data["workspace_id"] = workspace_id
     return data
 

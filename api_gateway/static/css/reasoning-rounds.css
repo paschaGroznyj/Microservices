@@ -166,11 +166,45 @@
   color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
 .rg-s { margin-left: auto; padding-left: 8px; flex: 0 0 auto; font-size: 11.5px; color: var(--rr-m); white-space: nowrap; }
 
+/* Файлы шага: сводка в строке вызова, список путей и patch по клику (tool_end.files). */
+.rg-r.has-files.is-open { flex-wrap: wrap; height: auto; row-gap: 0; }
+.rg-fh { flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  font-size: 12px; color: var(--rr-m); border-radius: 5px; padding: 0 3px; margin: 0 -3px; }
+.rg-fh:hover { color: var(--rr-t); }
+.rg-fh .rr-chev { width: 10px; height: 10px; }
+.rg-r.has-files.is-open > .rg-fh .rr-chev { transform: rotate(90deg); }
+.rg-f { display: inline-flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rg-fa { font-style: normal; color: var(--rr-m); }
+.rg-fst { flex: 0 0 auto; display: inline-flex; gap: 4px; white-space: nowrap; }
+.rg-fst b { font-weight: 500; }
+.rr-rounds .rg-fst b.a { color: var(--wsd-add-fg); } .rr-rounds .rg-fst b.d { color: var(--wsd-del-fg); }
+.rr-rounds .rg-fst b.z { color: var(--rr-m); opacity: .6; }
+.rg-fl { flex: 0 0 100%; min-width: 0; padding: 0 0 6px 21px; line-height: 20px; }
+.rg-fp { display: flex; align-items: center; gap: 6px; min-width: 0; height: 22px; cursor: pointer; font-size: 12px; color: var(--rr-t); border-radius: 5px; }
+.rg-fp:hover .rg-fname { color: var(--text-primary); }
+.rg-fp .rr-chev { width: 10px; height: 10px; }
+.rg-fp.is-open .rr-chev { transform: rotate(90deg); }
+.rg-fb { flex: 0 0 14px; font: 600 10px/14px var(--wsd-mono); text-align: center; border-radius: 3px; color: var(--wsd-mod-fg); }
+.rg-fp.is-A .rg-fb { color: var(--wsd-add-fg); } .rg-fp.is-D .rg-fb { color: var(--wsd-del-fg); }
+.rg-fpn { flex: 1 1 auto; min-width: 0; display: flex; overflow: hidden; font-family: var(--wsd-mono); font-size: 11.5px; }
+.rg-fdir { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; color: var(--rr-m); }
+.rg-fname { flex: 0 0 auto; white-space: nowrap; }
+.rg-fp.is-D .rg-fname { color: var(--wsd-del-fg); text-decoration: line-through; text-decoration-thickness: 1px; }
+.rg-fbin { font-size: 11px; color: var(--rr-m); }
+.rg-fm { font-size: 11.5px; color: var(--rr-m); padding-left: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rg-fx { margin: 2px 0 6px 16px; min-width: 0; max-width: calc(100% - 16px); }
+.rg-fx.wsd { box-shadow: none; background: transparent; margin: 2px 0 6px 16px; border-radius: 6px; overflow: hidden; }
+.rg-fx.wsd .wsd-code { display: block; max-height: 360px; overflow: auto; border: 1px solid var(--wsd-ring); border-radius: 6px; box-sizing: border-box; max-width: 100%; }
+.rg-fxm { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--rr-m); padding: 2px 0; }
+
 @media (max-width: 600px) {
   .rr-rounds.rg { --rg-lane: 14px; }
   .rg-r.is-call { font-size: 12.5px; }
   .rg-s { font-size: 0; }
   .rg-s::after { content: attr(data-n); font-size: 11.5px; }
+  .rg-fw { display: none; }
+  .rg-fl { padding-left: 4px; }
+  .rg-fx, .rg-fx.wsd { margin-left: 0; }
 }
 @media (prefers-reduced-motion: reduce) { .rg-p.is-run, .rg-o .rg-pl { animation: none; } }
 

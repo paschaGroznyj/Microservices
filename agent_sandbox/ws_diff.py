@@ -10,12 +10,19 @@ objects/info/alternates смотрит в их .git/objects, поэтому фа
 Снимок = `git add -A && git write-tree` (без коммитов и user.name).
 По request_id храним base (первый снимок запроса) и prev (последний снимок):
   diff(base → cur) — итог ответа для карточки,
-  diff(prev → cur) — что изменил последний тул (для FlowMap / live).
+  diff(prev → cur) — что изменил последний тул (для FlowMap / live),
+  diff(open[call_id] → cur) — шаг: что изменил конкретный вызов тула (снимки
+      phase="pre"/"post" с call_id). Пара деревьев шага хранится в steps[call_id],
+      по ней /diff/step отдаёт patch шага. Деревья без ref-ов держатся, потому что
+      в теневых git-dir gc.auto=0 (как и base/prev).
 
 state.json:
   {"requests": {rid: {"chat_id", "message_id", "at", "updated",
                       "base": {prefix: tree}, "prev": {prefix: tree},
-                      "cloned": [prefix], "files": int, "add": int, "del": int}}}
+                      "cloned": [prefix], "files": int, "add": int, "del": int,
+                      "open": {call_id: {"t": {prefix: tree}, "at", "par"}},
+                      "steps": {call_id: {"a": {..}, "b": {..}, "n", "add", "del",
+                                          "at0", "at", "approx"}}}}}
 Хранится последних KEEP_REQUESTS запросов, данные живут, пока жив workspace.
 """
 
@@ -44,6 +51,9 @@ PATCH_TOTAL_MAX = 256 * 1024           # patch всего ответа
 MAX_FILES = 200                        # файлов в ответе
 MAX_PATCH_FILES = 60                   # файлов, для которых считаем patch
 KEEP_REQUESTS = 40
+MAX_STEPS = 200                        # шагов (вызовов с изменениями) на запрос
+MAX_OPEN = 50                          # незакрытых pre-снимков (тул упал без post)
+STEP_LIST = 20                         # путей в сводке шага (tool_end)
 GIT_TIMEOUT = 60
 
 # Папки, которые не обходим и не берём в снимок (по имени, на любой глубине).
@@ -343,10 +353,17 @@ def _clone_base(ws_path: str, prefix: str) -> tuple[str, bool]:
 
 
 def snap(ws_path: str, request_id: str, chat_id: str | None = None,
-         message_id: str | None = None) -> dict:
-    """Снимок после (или до) тула. Первый снимок запроса становится base."""
+         message_id: str | None = None, call_id: str | None = None,
+         phase: str | None = None) -> dict:
+    """Снимок после (или до) тула. Первый снимок запроса становится base.
+
+    call_id + phase="pre" — запоминаем дерево перед вызовом; call_id + phase="post" —
+    step = diff(дерево перед этим вызовом → cur), шаг сохраняется в steps[call_id].
+    Без call_id step = diff(prev → cur), как раньше."""
     if not request_id:
         raise ValueError("request_id обязателен")
+    if phase not in (None, "pre", "post"):
+        raise ValueError("phase: pre | post")
     with _Lock(ws_path):
         cur = _snapshot(ws_path)
         st = _load_state(ws_path)
@@ -368,7 +385,17 @@ def snap(ws_path: str, request_id: str, chat_id: str | None = None,
                 prev.setdefault(prefix, tree)
                 if cloned and prefix not in req["cloned"]:
                     req["cloned"].append(prefix)
-        step = _numstat(ws_path, prev, cur)
+        if call_id and phase == "pre":
+            opened = req.setdefault("open", {})
+            opened[call_id] = {"t": dict(cur), "at": now, "par": bool(opened)}
+            if len(opened) > MAX_OPEN:
+                for old in sorted(opened, key=lambda k: opened[k].get("at") or 0)[:len(opened) - MAX_OPEN]:
+                    opened.pop(old, None)
+            step = _numstat(ws_path, prev, cur)
+        elif call_id and phase == "post":
+            step = _close_step(ws_path, req, call_id, prev, cur, now)
+        else:
+            step = _numstat(ws_path, prev, cur)
         req["prev"] = dict(cur)
         req["updated"] = now
         full = diff_trees(ws_path, req["base"], cur, cloned=req.get("cloned") or [])
@@ -380,6 +407,48 @@ def snap(ws_path: str, request_id: str, chat_id: str | None = None,
     full["base_at"] = req.get("at")
     full["updated"] = now
     full["step"] = step
+    return full
+
+
+def _close_step(ws_path: str, req: dict, call_id: str, prev: dict, cur: dict, now: float) -> dict:
+    """post-снимок вызова: diff от его pre-дерева. Пересечение по времени с другим
+    вызовом в этой же области → approx (чужие изменения могли попасть в окно)."""
+    opened = req.setdefault("open", {})
+    o = opened.pop(call_id, None)
+    a = dict(o["t"]) if o else dict(prev)
+    for prefix in cur:                       # репо появилось во время вызова → его base
+        a.setdefault(prefix, req["base"].get(prefix, EMPTY_TREE))
+    at0 = o.get("at") if o else req.get("updated") or now
+    steps = req.setdefault("steps", {})
+    approx = bool(o and o.get("par")) or bool(opened) or any(
+        (s.get("at") or 0) > at0 for k, s in steps.items() if k != call_id)
+    step = _numstat(ws_path, a, cur)
+    step["approx"] = approx
+    step["call_id"] = call_id
+    if step["files_count"]:
+        steps[call_id] = {"a": a, "b": dict(cur), "n": step["files_count"], "add": step["add"],
+                          "del": step["del"], "at0": at0, "at": now, "approx": approx}
+        if len(steps) > MAX_STEPS:
+            for old in sorted(steps, key=lambda k: steps[k].get("at") or 0)[:len(steps) - MAX_STEPS]:
+                steps.pop(old, None)
+    return step
+
+
+def get_step_diff(ws_path: str, request_id: str, call_id: str,
+                  chat_id: str | None = None) -> dict | None:
+    """Полный diff одного вызова (patch по клику на шаг). chat_id — сверка владельца запроса."""
+    st = _load_state(ws_path)
+    req = st["requests"].get(request_id)
+    if not req:
+        return None
+    if chat_id is not None and str(req.get("chat_id")) != str(chat_id):
+        return None
+    s = (req.get("steps") or {}).get(call_id)
+    if not s:
+        return None
+    full = diff_trees(ws_path, s.get("a") or {}, s.get("b") or {})
+    full.update({"request_id": request_id, "call_id": call_id, "chat_id": req.get("chat_id"),
+                 "approx": bool(s.get("approx")), "base_at": s.get("at0"), "updated": s.get("at")})
     return full
 
 
@@ -474,7 +543,8 @@ def _diff_items(git_dir: str, a: str, b: str) -> list[dict]:
 
 def _numstat(ws_path: str, prev: dict, cur: dict) -> dict:
     files = add = dele = 0
-    paths = []
+    paths: list[str] = []
+    items: list[dict] = []
     for prefix, tree in cur.items():
         gd = os.path.join(_shadow_dir(ws_path), _gitdir_name(prefix))
         base = prev.get(prefix, EMPTY_TREE)
@@ -482,9 +552,12 @@ def _numstat(ws_path: str, prev: dict, cur: dict) -> dict:
             files += 1
             add += it["add"]
             dele += it["del"]
-            if len(paths) < 20:
-                paths.append((prefix + "/" if prefix else "") + it["path"])
-    return {"files_count": files, "add": add, "del": dele, "paths": paths}
+            if len(paths) < STEP_LIST:
+                path = (prefix + "/" if prefix else "") + it["path"]
+                paths.append(path)
+                items.append({"p": path, "s": it["status"], "a": it["add"], "d": it["del"],
+                              "b": 1 if it["binary"] else 0})
+    return {"files_count": files, "add": add, "del": dele, "paths": paths, "list": items}
 
 
 def _blob_size(git_dir: str, blob: str) -> int | None:

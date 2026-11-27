@@ -20,7 +20,11 @@
     var pending = {};                // chatId → [flow-события до появления body]
     var NEW_ROUND_GAP = 400;         // мс без текста между тулами = новая итерация
 
-    function newModel() { return { ev: [], user: {}, rid: null }; }
+    function newModel() { return { ev: [], user: {}, rid: null, chat: null, fo: {}, fp: {} }; }
+    /* Файлы шага: tool_end.files = {n, add, del, rid, approx, list:[{p,s,a,d,b,ws}]}.
+       Patch шага — по клику: /api/chats/{chat}/ws_diff/step (кеш по rid|call_id). */
+    var stepCache = {};
+    var FP_SEP = '\u0000';
     function model(body) {
         var m = models.get(body);
         if (!m) { m = newModel(); models.set(body, m); }
@@ -113,6 +117,7 @@
             e.ts = t - e.ms;
             e.ok = f.ok !== false;
             if (f.label) e.label = f.label;
+            if (f.files && typeof f.files === 'object' && +f.files.n > 0) e.files = f.files;
             return true;
         }
         return false;
@@ -208,18 +213,49 @@
         return Math.max.apply(null, calls.map(function (x) { return x.t1; })) - s;
     }
     function toneOf(j) { return j ? TONES[(Math.min(j, MAXL - 1) - 1) % TONES.length] : 0; }
-    function callHtml(x, j, g) {
+    function statHtml(a, d) {
+        return '<span class="rg-fst"><b class="' + (a ? 'a' : 'z') + '">+' + a + '</b><b class="' + (d ? 'd' : 'z') + '">\u2212' + d + '</b></span>';
+    }
+    function filesSum(fs) {
+        var n = +fs.n || 0;
+        return '<span class="rg-f"' + (fs.approx ? ' title="Вызовы шли параллельно в одной области: в шаг могли попасть изменения соседнего вызова"' : '') + '>' +
+            (fs.approx ? '<i class="rg-fa">\u2248</i>' : '') +
+            '<span class="rg-fn">' + n + '<span class="rg-fw"> ' + plural(n, 'файл', 'файла', 'файлов') + '</span></span>' +
+            statHtml(+fs.add || 0, +fs.del || 0) + '</span>';
+    }
+    function filesPanel(m, x) {
+        var fs = x.files, list = fs.list || [], out = '';
+        list.forEach(function (it) {
+            var p = String(it.p || ''), k = x.id + FP_SEP + p, open = !!m.fp[k], cut = p.lastIndexOf('/');
+            var st = String(it.s || 'M')[0], badge = st === 'A' || st === 'D' ? st : 'M';
+            out += '<div class="rg-fp is-' + badge + (open ? ' is-open' : '') + '" role="button" tabindex="0" aria-expanded="' + open + '"' +
+                ' data-p="' + esc(p) + '" title="' + esc(p) + '">' + IC.chev +
+                '<span class="rg-fb">' + badge + '</span>' +
+                '<span class="rg-fpn"><span class="rg-fdir"><bdi>' + esc(cut >= 0 ? p.slice(0, cut + 1) : '') + '</bdi></span>' +
+                '<span class="rg-fname">' + esc(p.slice(cut + 1)) + '</span></span>' +
+                (it.b ? '<span class="rg-fbin">бинарный</span>' : statHtml(+it.a || 0, +it.d || 0)) + '</div>' +
+                (open ? '<div class="rg-fx" data-p="' + esc(p) + '"></div>' : '');
+        });
+        var more = (+fs.n || 0) - list.length;
+        if (more > 0) out += '<div class="rg-fm" title="Полный список — в «Изменённых файлах»">и ещё ' + more + ' ' + plural(more, 'файл', 'файла', 'файлов') + '</div>';
+        return '<div class="rg-fl">' + out + '</div>';
+    }
+    function callHtml(x, j, g, m) {
         var run = x.t1 == null, err = x.ok === false, n = g.calls.length, side = '';
+        var hasF = !run && x.files && x.id, fopen = hasF && m && !!m.fo[x.id];
         if (j === 0 && n > 1) {
             side = '<span class="rg-s" data-n="×' + n + '">' + n + ' параллельно</span>';
         }
         var gc = n > 1 ? (j === 0 ? ' is-g0' : '') + (j === n - 1 ? ' is-gN' : '') : '';
-        return '<div class="rg-r is-call rg-t' + toneOf(j) + gc + (run ? ' is-run' : '') + (err ? ' is-err' : '') + '"' +
-            (run ? ' data-t="' + x.t + '"' : '') + ' title="' + esc(x.label) + '">' +
+        return '<div class="rg-r is-call rg-t' + toneOf(j) + gc + (run ? ' is-run' : '') + (err ? ' is-err' : '') +
+            (hasF ? ' has-files' + (fopen ? ' is-open' : '') : '') + '"' +
+            (run ? ' data-t="' + x.t + '"' : '') + (hasF ? ' data-cid="' + esc(x.id) + '"' : '') + ' title="' + esc(x.label) + '">' +
             '<span class="rg-ic">' + (IC[x.slot] || IC.other) + '</span>' +
             '<span class="rg-n">' + esc(x.label) + '</span>' +
             (err ? '<span class="rg-e">ошибка</span>' : '') +
-            '<span class="rg-d">' + sec(run ? Date.now() - x.t : x.ms) + '</span>' + side + '</div>';
+            (hasF ? '<span class="rg-fh" role="button" tabindex="0" aria-expanded="' + fopen + '">' + filesSum(x.files) + IC.chev + '</span>' : '') +
+            '<span class="rg-d">' + sec(run ? Date.now() - x.t : x.ms) + '</span>' + side +
+            (fopen ? filesPanel(m, x) : '') + '</div>';
     }
     function render(body) {
         var m = models.get(body);
@@ -238,15 +274,56 @@
         sq.forEach(function (it) {
             if (it.k === 'th') { rows.push('<div class="rg-r is-th">' + thoughtHtml(it.e.text, false) + '</div>'); return; }
             lanes = Math.max(lanes, Math.min(it.calls.length, MAXL));
-            it.calls.forEach(function (x, j) { rows.push(callHtml(x, j, it)); });
+            it.calls.forEach(function (x, j) { rows.push(callHtml(x, j, it, m)); });
         });
         box.style.setProperty('--rg-n', lanes);
         box.innerHTML = '<svg class="rg-svg" aria-hidden="true"></svg><div class="rg-rows">' + rows.join('') + '</div>';
         box._sq = sq;
+        if (m.chat != null) box.setAttribute('data-chat', String(m.chat));
+        paintPatches(box, m);
         restoreOpen(box, openTh);
         draw(box);
         if (gro) gro.observe(box.querySelector('.rg-rows'));
         tick();
+    }
+    function chatOf(box, m) {
+        if (m && m.chat != null) return m.chat;
+        var c = box && box.closest('[data-rr-chat]');
+        return c ? c.getAttribute('data-rr-chat') : (box && box.getAttribute('data-chat'));
+    }
+    function findCall(m, cid) {
+        for (var i = 0; i < m.ev.length; i++) if (m.ev[i].k === 'tool' && m.ev[i].id === cid) return m.ev[i];
+        return null;
+    }
+    function loadStep(body, m, x) {
+        var fs = x.files || {}, rid = fs.rid || m.rid, key = rid + '|' + x.id;
+        if (stepCache[key]) return stepCache[key];
+        var chat = chatOf(body.querySelector('.rr-rounds'), m);
+        var wss = [];
+        (fs.list || []).forEach(function (it) { if (it.ws && wss.indexOf(it.ws) < 0) wss.push(it.ws); });
+        var c = stepCache[key] = { st: 'load', files: [] };
+        if (!rid || chat == null || !wss.length) { c.st = 'err'; return c; }
+        Promise.all(wss.map(function (ws) {
+            var q = '?workspace_id=' + encodeURIComponent(ws) + '&request_id=' + encodeURIComponent(rid) + '&call_id=' + encodeURIComponent(x.id);
+            return fetch('/api/chats/' + encodeURIComponent(chat) + '/ws_diff/step' + q, { credentials: 'include' })
+                .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+                .then(function (j) { (j.files || []).forEach(function (f) { f._ws = ws; c.files.push(f); }); });
+        })).then(function () { c.st = 'ok'; }, function () { c.st = c.files.length ? 'ok' : 'err'; })
+            .then(function () { if (body.isConnected) schedule(body); });
+        return c;
+    }
+    function paintPatches(box, m) {
+        box.querySelectorAll('.rg-fx').forEach(function (el) {
+            var row = el.closest('.rg-r'), x = row && findCall(m, row.getAttribute('data-cid'));
+            if (!x) return;
+            var c = stepCache[((x.files && x.files.rid) || m.rid) + '|' + x.id], p = el.getAttribute('data-p');
+            if (!c || c.st === 'load') { el.innerHTML = '<div class="rg-fxm"><span class="rr-spin"></span>Загружаю diff шага…</div>'; return; }
+            var f = null;
+            c.files.forEach(function (it) { if (!f && it.path === p) f = it; });
+            if (c.st === 'err' || !f) { el.innerHTML = '<div class="rg-fxm">Diff шага недоступен: workspace удалён или запрос старше 40 последних</div>'; return; }
+            if (window.WsDiff && WsDiff.renderFile) WsDiff.renderFile(el, f, f._ws);
+            else el.innerHTML = '<div class="rg-fxm">Нет ws-diff.js</div>';
+        });
     }
     function draw(box) {
         var sq = box && box._sq, rowsEl = box && box.querySelector('.rg-rows'), svg = box && box.querySelector('.rg-svg');
@@ -358,6 +435,7 @@
                 return;
             }
             absorb(body);
+            model(body).chat = chatId;
             if (applyFlow(model(body), f, t)) schedule(body);
         },
         /* Восстановление из Redis (F5 / смена чата): /api/chats/{id}/flow. */
@@ -367,7 +445,12 @@
             absorb(body);
             return fetch('/api/chats/' + encodeURIComponent(chatId) + '/flow', { credentials: 'include', redirect: 'manual' })
                 .then(function (r) { return r.ok ? r.json() : null; })
-                .then(function (j) { return j ? api.replay(body, j) : false; })
+                .then(function (j) {
+                    model(body).chat = chatId;
+                    var ok = j ? api.replay(body, j) : false;
+                    if (models.get(body)) models.get(body).chat = chatId;
+                    return ok;
+                })
                 .catch(function () { return false; });
         },
         /* j = {events:[{ev, ts, rid, ...}], reasoning:{request_id, steps:[...]}} */
@@ -381,6 +464,7 @@
             var old = models.get(body) || newModel();
             var m = newModel();
             m.user = old.user;
+            m.fo = old.fo || {}; m.fp = old.fp || {}; m.chat = old.chat;
             m.rid = rid || null;
             var si = 0, lastTs = 0;
             evs.forEach(function (e) {
@@ -407,8 +491,28 @@
         (attrEl || el).setAttribute('aria-expanded', String(on));
         return on;
     }
+    function onFiles(t) {
+        var fp = t.closest('.rg-fp');
+        var fh = !fp && t.closest('.rg-fh');
+        if (!fp && !fh) return false;
+        var row = t.closest('.rg-r.has-files'), body = row && row.closest(BODY), m = body && models.get(body);
+        if (!m) return true;
+        var cid = row.getAttribute('data-cid');
+        if (fh) { if (m.fo[cid]) delete m.fo[cid]; else m.fo[cid] = 1; }
+        else {
+            var k = cid + FP_SEP + fp.getAttribute('data-p');
+            if (m.fp[k]) delete m.fp[k]; else { m.fp[k] = 1; var x = findCall(m, cid); if (x) loadStep(body, m, x); }
+        }
+        render(body);
+        var again = body.querySelector('.rg-r[data-cid="' + (window.CSS && CSS.escape ? CSS.escape(cid) : cid) + '"] ' +
+            (fh ? '.rg-fh' : '.rg-fp[data-p="' + (window.CSS && CSS.escape ? CSS.escape(fp.getAttribute('data-p')) : fp.getAttribute('data-p')) + '"]'));
+        if (again && again.focus) again.focus({ preventScroll: true });
+        return true;
+    }
     document.addEventListener('click', function (e) {
         if (OFF || !e.target.closest) return;
+        if (e.target.closest('.rg-fx')) return;   // клики внутри patch (выделение, кнопки) — не сворачивают
+        if (onFiles(e.target)) return;
         var h = e.target.closest('.rr-rd__h');
         if (h) {
             var rd = h.parentNode, body = h.closest(BODY);
@@ -426,6 +530,9 @@
     document.addEventListener('keydown', function (e) {
         if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('.rr-th.has-more')) {
             e.preventDefault(); toggle(e.target);
+        }
+        if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('.rg-fh, .rg-fp')) {
+            e.preventDefault(); onFiles(e.target);
         }
     });
 

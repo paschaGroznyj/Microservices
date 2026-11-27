@@ -189,6 +189,9 @@ function handle(msg){if(msg&&msg.type==='ws_diff'){apply(msg);return true;}retur
 function listen(es){if(!es||es._wsdBound)return;es._wsdBound=true;
  es.addEventListener('ws_diff',e=>{let d;try{d=JSON.parse(e.data);}catch(_){return;}apply(d);});}
 let _rz=0;addEventListener('resize',()=>{cancelAnimationFrame(_rz);_rz=requestAnimationFrame(()=>document.querySelectorAll('.wsd-file.is-open .wsd-code').forEach(edge));},{passive:true});
-const api={init,handle,listen,apply,restore,reset,render,parsePatch,get transport(){return transport;}};
+/* Patch одного файла без карточки — для diff шага в «Размышлениях» (reasoning-rounds.js). */
+function renderFile(el,raw,ws){const f=normFile(raw,ws);el.classList.add('wsd','wsd--step');el.innerHTML='';
+ const c=document.createElement('div');c.className='wsd-code';const n=note(f);if(n)c.innerHTML=n;else c.appendChild(unified(f));el.appendChild(c);return el;}
+const api={init,handle,listen,apply,restore,reset,render,renderFile,parsePatch,get transport(){return transport;}};
 window.WsDiff=api;
 })();

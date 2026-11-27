@@ -79,7 +79,7 @@ def test_invoke_tool_snaps_ws_from_absolute_path(agent, monkeypatch):
 def test_invoke_tool_two_workspaces_send_each(agent, monkeypatch):
     calls = []
 
-    async def snap(wid, rid):
+    async def snap(wid, rid, **kw):
         calls.append(wid)
         return _changed(wid) if calls.count(wid) == 2 else {"files_count": 0}
 
@@ -105,3 +105,32 @@ def test_invoke_tool_unchanged_not_sent(agent, monkeypatch):
     monkeypatch.setattr(agent, "_send_ws_diff", send)
     run(agent._invoke_tool({"t": FakeTool("t")}, {"name": "t", "args": {"code": f"open('{WS}/w1/a')"}}, "r1"))
     send.assert_not_awaited()
+
+
+def test_invoke_tool_step_files_in_tool_end(agent, monkeypatch):
+    """pre/post с call_id; сводка шага уходит в tool_end.files, поле step в ws_diff не уходит."""
+    step = {"files_count": 2, "add": 5, "del": 1, "approx": False,
+            "list": [{"p": "a.py", "s": "M", "a": 4, "d": 1, "b": 0}, {"p": "b.txt", "s": "A", "a": 1, "d": 0, "b": 0}]}
+    snap = AsyncMock(side_effect=[{"files_count": 0}, {**_changed("w1"), "step": step}])
+    flow = AsyncMock()
+    monkeypatch.setattr(agent, "_ws_snap", snap)
+    monkeypatch.setattr(agent, "_send_ws_diff", AsyncMock())
+    monkeypatch.setattr(agent, "_send_flow", flow)
+    call = {"name": "sh", "args": {"workspace_id": "w1", "commands": "touch a"}, "id": "call_7"}
+    run(agent._invoke_tool({"sh": FakeTool("sh")}, call, "r1"))
+    assert [c.kwargs for c in snap.await_args_list] == [{"call_id": "call_7", "phase": "pre"},
+                                                       {"call_id": "call_7", "phase": "post"}]
+    end = [c for c in flow.await_args_list if c.args[1] == "tool_end"][0].kwargs
+    f = end["files"]
+    assert (f["n"], f["add"], f["del"], f["rid"], f["approx"]) == (2, 5, 1, "r1", False)
+    assert [(i["p"], i["ws"]) for i in f["list"]] == [("a.py", "w1"), ("b.txt", "w1")]
+
+
+def test_invoke_tool_no_changes_no_files_field(agent, monkeypatch):
+    monkeypatch.setattr(agent, "_ws_snap", AsyncMock(return_value={"files_count": 0, "step": {"files_count": 0}}))
+    monkeypatch.setattr(agent, "_send_ws_diff", AsyncMock())
+    flow = AsyncMock()
+    monkeypatch.setattr(agent, "_send_flow", flow)
+    run(agent._invoke_tool({"t": FakeTool("t")}, {"name": "t", "args": {"workspace_id": "w1"}, "id": "c1"}, "r1"))
+    end = [c for c in flow.await_args_list if c.args[1] == "tool_end"][0].kwargs
+    assert "files" not in end

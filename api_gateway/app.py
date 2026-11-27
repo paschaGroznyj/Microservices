@@ -1369,6 +1369,33 @@ async def chat_ws_diff(chat_id: str, request: Request):
     rid = running.get("request_id") if isinstance(running, dict) else None
     return JSONResponse(content={"chat_id": chat_id, "running_request_id": rid, "items": items})
 
+_WSD_WS_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_WSD_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,200}$")
+
+
+@app.get("/api/chats/{chat_id}/ws_diff/step")
+async def chat_ws_diff_step(chat_id: str, request: Request, workspace_id: str, request_id: str, call_id: str):
+    """Patch одного вызова тула (клик по шагу в «Размышлениях»).
+    Гейт: workspace закреплён за пользователем (реестр редактора), а запрос в sandbox
+    сверяется с chat_id — чужой request_id из другого чата даёт 404."""
+    user = await get_current_user(request)
+    if not user or not user.get("user_id"):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not (_WSD_WS_RE.match(workspace_id) and _WSD_ID_RE.match(request_id) and _WSD_ID_RE.match(call_id)):
+        raise HTTPException(status_code=400, detail="bad id")
+    await editor_gw._assert_owns(user["user_id"], workspace_id)
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(f"{WS_SANDBOX_URL}/workspace/{quote(workspace_id, safe='')}/diff/step",
+                                 params={"request_id": request_id, "call_id": call_id, "chat_id": str(chat_id)})
+    except Exception as e:
+        logger.warning(f"[ws_diff] step: sandbox недоступен: {e}")
+        raise HTTPException(status_code=502, detail="sandbox unavailable")
+    if r.status_code != 200:
+        raise HTTPException(status_code=404 if r.status_code == 404 else 502, detail="step not found")
+    return JSONResponse(content=r.json())
+
+
 @app.get("/api/chats/{chat_id}/flow")
 async def chat_flow(chat_id: str, request: Request):
     """FlowMap: хронология пути последнего запроса (после F5 / переключения чата).

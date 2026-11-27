@@ -135,8 +135,8 @@ function reset() {
   S.active = false; S.phase = 'idle'; S.t0 = 0; S.tEnd = 0; S.d = 0; S.dir = 1; S.allow = 0; S.trail = [];
   S.calls.clear(); S.phases = []; S.toolLog = []; S.fx = []; S.pulses = []; S.lit.fill(0); S.chat = null; S.rid = null;
   S.wsSeen = false; S.wsId = ''; S.wsIds.clear(); S.stepSeq = 0; S.thinkT0 = null; S.tailThinkMs = 0; S.thinkBuf = ''; S.thinkDone = ''; S.tailText = ''; S.err = {}; closeThink();
-  setStatus('Ожидаю запрос'); clearTimeout(miniHideT); MINI.on = HOST.expanded;
-  layoutHost(); renderTimeline(true); kick();
+  setStatus('Ожидаю запрос'); 
+  renderTimeline(true); kick();
 }
 function openPhase(k, label, t) { const p = S.phases[S.phases.length - 1]; if (p && !p.t1) p.t1 = t; S.phases.push({k, label, t0:t, t1:0}); }
 function reachAgent() {
@@ -163,7 +163,7 @@ function emit(type, d = {}) {
       S.chat = d.chat != null ? String(d.chat) : null; S.rid = null;
       S.active = true; S.phase = 'send'; S.t0 = t; S.tEnd = 0; S.d = 0; S.dir = 1; S.allow = D[1]; S.trail = [];
       S.calls.clear(); S.phases = []; S.toolLog = []; S.fx = []; S.pulses = []; S.lit.fill(0); S.lastInside = null; S.stepSeq = 0; S.thinkT0 = null; S.tailThinkMs = 0; S.thinkBuf = ''; S.thinkDone = ''; S.tailText = ''; S.err = {}; TL.follow = true; closeThink();
-      openPhase('gw', 'Шлюз', t); setStatus('Отправляю…'); showMini(true); if (!RS.busy) pulseTapHint(); break;
+      openPhase('gw', 'Шлюз', t); setStatus('Отправляю…'); if (!RS.busy) pulseTapHint(); break;
     case 'gateway':
       if (!S.active) break;
       if (d.request_id) S.rid = d.request_id;
@@ -618,95 +618,11 @@ class MapR {
     try { ctx.letterSpacing = '0px'; } catch (_) {}
   }
 }
-const MINI = {el:$('#fmMini'), cv:$('#fmMiniCv'), on:false};
-MINI.ctx = MINI.cv.getContext('2d');
-function drawMini() {
-  const cv = MINI.cv, r = cv.getBoundingClientRect(); if (!r.width) return;
-  const dpr = Math.min(2, devicePixelRatio || 1);
-  if (cv.width !== Math.round(r.width * dpr)) { cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr); }
-  const W = r.width, span = Math.max(180, W - 78), kx = span / 260, X = v => 18 + v * kx;
-  const MX = {user:X(0), gateway:X(46), chats:X(92), kA:X(130), kB:X(184), consumer:X(218), agent:X(260)};
-  const xs = [MX.user, MX.gateway, MX.chats, MX.kA, MX.kB, MX.consumer, MX.agent];
-  const c = MINI.ctx, Y = 30; c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, W, r.height);
-  c.strokeStyle = rgba(C.stroke); c.lineWidth = 1.2;
-  c.beginPath(); c.moveTo(MX.user, Y); c.lineTo(MX.agent, Y); c.stroke();
-  if (S.t0) { const [, , i0, k0] = routeAt(S.d), xp = xs[i0] + (xs[Math.min(i0 + 1, 6)] - xs[i0]) * k0; c.strokeStyle = rgba(C.accent, .55); c.lineWidth = 1.6; c.beginPath(); c.moveTo(MX.user, Y); c.lineTo(xp, Y); c.stroke(); }
-  const dot = (x, rr, fill, stroke) => { c.beginPath(); c.arc(x, Y, rr, 0, 6.3); c.fillStyle = fill; c.fill(); c.strokeStyle = stroke; c.lineWidth = 1.2; c.stroke(); };
-  dot(MX.user, 3.5, rgba(C.surface), rgba(C.stroke));
-  dot(MX.gateway, 5, rgba(C.surface), rgba(S.hl.gateway > .3 ? C.accent : C.stroke));
-  dot(MX.chats, 5, rgba(C.surface), rgba(S.hl.chats > .3 ? C.accent : C.stroke));
-  c.beginPath(); c.roundRect(MX.kA - 4, Y - 4.5, MX.kB - MX.kA + 8, 9, 4.5); c.fillStyle = rgba(C.surface); c.fill(); c.strokeStyle = rgba(S.phase === 'queue' ? C.accent : C.stroke); c.stroke();
-  dot(MX.consumer, 4.5, rgba(C.surface), rgba(S.hl.consumer > .3 ? C.accent : C.stroke));
-  const busy = S.phase === 'agent' || S.phase === 'answer';
-  dot(MX.agent, 8, rgba(mix(C.surface, C.accent, busy ? .15 : 0)), rgba(busy ? C.accent : C.stroke));
-  dot(MX.agent, 4, rgba(C.surface), rgba(busy ? C.accent : C.stroke));
-  const runSlots = new Set([...S.calls.values()].map(cl => cl.slot));
-  for (const sl of SLOT_LIST) {
-    const x = MX.agent + Math.cos(sl.ang) * 19, y = Y + Math.sin(sl.ang) * 11;
-    c.beginPath(); c.moveTo(x, y - 2.6); c.lineTo(x + 2.6, y); c.lineTo(x, y + 2.6); c.lineTo(x - 2.6, y); c.closePath();
-    c.fillStyle = runSlots.has(sl.id) ? rgba(C.accent) : errOn(sl.id) === 2 ? rgba(C.danger) : S.discovered.has(sl.id) ? rgba(C.stroke) : rgba(C.muted, .35); c.fill();
-  }
-  if (S.active) {
-    const [, , i, k] = routeAt(S.d), x = xs[i] + (xs[Math.min(i + 1, 6)] - xs[i]) * k;
-    c.fillStyle = rgba(C.accent, .18); c.beginPath(); c.arc(x, Y, 7, 0, 6.3); c.fill(); c.fillStyle = rgba(C.accent); c.beginPath(); c.arc(x, Y, 3.4, 0, 6.3); c.fill();
-  }
-  c.font = `600 11.5px ${SANS || getComputedStyle(document.body).fontFamily}`; c.textBaseline = 'middle'; c.textAlign = 'left';
-  const calls = [...S.calls.values()];
-  let txt = S.status;
-  if (calls.length) { const cl = calls[calls.length - 1]; txt = SLOTS[cl.slot].name + ' · ' + fmtS(now() - cl.t0) + (calls.length > 1 ? ` · +${calls.length - 1}` : ''); }
-  else if (S.phase === 'done' && S.tEnd) txt = 'Готово · ' + fmtS(S.tEnd - S.t0);
-  c.fillStyle = rgba(calls.length ? C.accent : C.text, calls.length ? 1 : 0.8); c.fillText(fitTxt(c, txt, Math.max(80, W - 42)), 10, 11);
-  try { c.letterSpacing = '0px'; } catch (_) {}
-}
-let miniHideT = 0;
 
-// ── Хост мини-вида: вертикальная панель в правом поле #view-agent или горизонтальная полоса над вводом ──
-const RAIL_H = 456, RAIL_TOP = 82, COL = 720;
-const HOST = {orient:'v', expanded:false, gutter:0};
-const RAIL = {el:$('#fmRail'), cv:$('#fmRailCv')}; RAIL.ctx = RAIL.cv.getContext('2d');
+// Совместимость FlowViz.host: полосы больше нет.
+const HOST = {orient:'h', expanded:false};
 let SANS = '';
-function layoutHost() {
-  const v = document.getElementById('view-agent');
-  // Узлы держим по ссылке: renderMessageInput пересоздаёт композер через innerHTML,
-  // и полоса, жившая в .chat-input-area, выпадает из DOM вместе с ним.
-  const rail = RAIL.el, mini = MINI.el;
-  if (!rail || !mini) return;
-  if (v && !rail.isConnected) v.appendChild(rail);
-  let vert = false;
-  if (v && v.offsetParent !== null) {
-    const r = v.getBoundingClientRect();
-    const gutter = (r.width - COL) / 2; HOST.gutter = gutter;
-    
-    // ВЕРТИКАЛЬНАЯ ПАНЕЛЬ включается если экран десктопный и есть хоть какое-то правое поле.
-    // Высота инпута (inTop) больше НЕ влияет на ориентацию, так как panel и input не пересекаются по горизонтали!
-    vert = innerWidth > 768 && gutter >= 148;
-    
-    if (vert) {
-      const w = Math.round(Math.min(184, gutter - 28));
-      rail.style.width = w + 'px';
-      rail.style.left = Math.round(r.width / 2 + COL / 2 + Math.max(12, (gutter - w) / 2 - 4)) + 'px';
-      rail.style.top = Math.max(56, Math.min(RAIL_TOP, r.height - RAIL_H - 12)) + 'px';
-    }
-    
-    const inp = v.querySelector('.chat-input-area');
-    if (!vert && inp && mini.parentNode !== inp) inp.appendChild(mini);
-    if (!vert && inp) { 
-      const bx = inp.querySelector('.chat-input-box')?.getBoundingClientRect(), ia = inp.getBoundingClientRect(); 
-      if (bx) { 
-        mini.style.setProperty('--fm-in-l', Math.round(bx.left - ia.left) + 'px'); 
-        mini.style.setProperty('--fm-in-r', Math.round(ia.right - bx.right) + 'px'); 
-      } 
-    }
-  } else {
-    // Если #view-agent скрыт (переключили вкладку), сохраняем десктопный вид, чтобы не мелькала плашка
-    vert = innerWidth > 768;
-  }
-  HOST.orient = vert ? 'v' : 'h';
-  rail.classList.toggle('is-on', MINI.on && vert);
-  mini.classList.toggle('is-on', MINI.on && !vert);
-  document.querySelectorAll('.wave-indicator.fm-tap').forEach(w => { w.classList.toggle('is-linked', MINI.on); w.setAttribute('aria-expanded', MINI.on ? 'true' : 'false'); });
-  kick();
-}
+function layoutHost() {}
 let tapHintT = 0;
 function pulseTapHint() {
   clearTimeout(tapHintT);
@@ -719,15 +635,13 @@ function pulseTapHint() {
     document.querySelectorAll('.wave-indicator.fm-tap.is-hint').forEach(w => w.classList.remove('is-hint'));
   }, 3600);
 }
-function showMini(on) { clearTimeout(miniHideT); MINI.on = !!on && HOST.expanded; layoutHost(); }
 function expand() {
   clearTimeout(tapHintT);
   document.querySelectorAll('.wave-indicator.fm-tap.is-hint').forEach(w => w.classList.remove('is-hint'));
-  if (HOST.expanded && MINI.on) { openModal(); return; }
-  HOST.expanded = true; MINI.on = true; layoutHost();
+  openModal();
 }
-function collapse() { HOST.expanded = false; MINI.on = false; layoutHost(); }
-// Плейсхолдер animations.js: ступень 0 → тап раскрывает панель, повторный тап — модалку.
+function collapse() {}
+// Плейсхолдер animations.js: тап открывает модалку «Путь запроса».
 function bindPlaceholder(ph) {
   const w = ph && ph.querySelector('.wave-indicator'); if (!w) return;
   if (!w.classList.contains('fm-tap')) {
@@ -737,78 +651,9 @@ function bindPlaceholder(ph) {
     w.addEventListener('click', go);
     w.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') go(e); });
   }
-  w.classList.toggle('is-linked', MINI.on); w.setAttribute('aria-expanded', MINI.on ? 'true' : 'false');
   pulseTapHint();
 }
 function fitTxt(c, t, w) { if (c.measureText(t).width <= w) return t; while (t.length > 1 && c.measureText(t + '…').width > w) t = t.slice(0, -1); return t + '…'; }
-const RAIL_NODES = [['user', 'ВЫ'], ['gateway', 'GATEWAY'], ['chats', 'CHATS'], ['kafka', 'KAFKA'], ['consumer', 'CONSUMER'], ['agent', 'AGENT']];
-function drawRail() {
-  const cv = RAIL.cv, r = cv.getBoundingClientRect(); if (!r.width) return;
-  const dpr = Math.min(2, devicePixelRatio || 1);
-  const pw = Math.round(r.width * dpr), ph = Math.round(r.height * dpr);
-  if (cv.width !== pw || cv.height !== ph) { cv.width = pw; cv.height = ph; }
-  if (!SANS) SANS = getComputedStyle(document.body).fontFamily || 'system-ui';
-  const W = r.width, H = r.height, c = RAIL.ctx, t = now();
-  c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, W, H);
-  const X = 27, YS = [48, 82, 116, 144, 156, 186, 220];
-  const NY = {user:YS[0], gateway:YS[1], chats:YS[2], kafka:(YS[3] + YS[4]) / 2, consumer:YS[5], agent:YS[6]};
-  const busy = S.active && (S.phase === 'agent' || S.phase === 'answer');
-  const ls = v => { try { c.letterSpacing = v; } catch (_) {} };
-  c.textBaseline = 'middle'; c.textAlign = 'left';
-  c.font = `600 10px ${MONO}`; ls('1px'); c.fillStyle = rgba(C.label); c.fillText('ПУТЬ ЗАПРОСА', 12, 17);
-  ls('0px');
-  c.strokeStyle = rgba(C.border); c.lineWidth = 1; c.beginPath(); c.moveTo(12, 30.5); c.lineTo(W - 12, 30.5); c.stroke();
-  // ось
-  c.strokeStyle = rgba(C.stroke); c.lineWidth = 1.2; c.beginPath(); c.moveTo(X, YS[0]); c.lineTo(X, YS[6]); c.stroke();
-  let yp = YS[0];
-  if (S.t0) { const [, , i, k] = routeAt(S.d); yp = YS[i] + (YS[Math.min(i + 1, 6)] - YS[i]) * k;
-    c.strokeStyle = rgba(C.accent, .55); c.lineWidth = 1.8; c.beginPath(); c.moveTo(X, YS[0]); c.lineTo(X, yp); c.stroke(); }
-  const on = id => id === 'kafka' ? (S.active && S.phase === 'queue') : id === 'agent' ? busy : S.hl[id] > .3;
-  const dot = (y, rr, id) => { c.beginPath(); c.arc(X, y, rr, 0, 6.3); c.fillStyle = rgba(id === 'agent' && busy ? mix(C.surface, C.accent, .15) : C.surface); c.fill(); c.strokeStyle = rgba(on(id) ? C.accent : C.stroke); c.lineWidth = 1.2; c.stroke(); };
-  dot(YS[0], 3.5, 'user'); dot(YS[1], 5, 'gateway'); dot(YS[2], 5, 'chats');
-  c.beginPath(); c.roundRect(X - 4.5, YS[3] - 4, 9, YS[4] - YS[3] + 8, 4.5); c.fillStyle = rgba(C.surface); c.fill(); c.strokeStyle = rgba(on('kafka') ? C.accent : C.stroke); c.stroke();
-  if (on('kafka') && !RM.matches) { c.save(); c.setLineDash([2, 4]); c.lineDashOffset = -t / 60; c.strokeStyle = rgba(C.accent, .7); c.beginPath(); c.moveTo(X, YS[3] - 1); c.lineTo(X, YS[4] + 1); c.stroke(); c.restore(); }
-  dot(YS[5], 4.5, 'consumer'); dot(YS[6], 8, 'agent');
-  c.beginPath(); c.arc(X, YS[6], 4, 0, 6.3); c.strokeStyle = rgba(busy ? C.accent : C.stroke); c.stroke();
-  if (busy && !RM.matches) { c.save(); c.setLineDash([3, 4]); c.lineDashOffset = -t / 50; c.strokeStyle = rgba(C.accent, .5); c.beginPath(); c.arc(X, YS[6], 12, 0, 6.3); c.stroke(); c.restore(); }
-  c.font = `600 10.5px ${MONO}`; ls('.5px');
-  for (const [id, lb] of RAIL_NODES) { c.fillStyle = on(id) ? rgba(C.accent) : rgba(mix(C.label, C.text, DARK ? .25 : .2)); c.fillText(lb, 44, NY[id]); }
-  ls('0px');
-  // пакет
-  if (S.active) { c.fillStyle = rgba(C.accent, .18); c.beginPath(); c.arc(X, yp, 7, 0, 6.3); c.fill(); c.fillStyle = rgba(C.accent); c.beginPath(); c.arc(X, yp, 3.4, 0, 6.3); c.fill(); }
-  // инструменты
-  const T0 = 274, STEP = 20;
-  c.font = `600 9.5px ${MONO}`; ls('1px'); c.fillStyle = rgba(mix(C.label, C.text, DARK ? .1 : 0)); c.fillText('ИНСТРУМЕНТЫ', 44, 248); ls('0px');
-  const runBy = new Map(); for (const cl of S.calls.values()) { const a = runBy.get(cl.slot); if (!a || cl.t0 < a.t0) runBy.set(cl.slot, {t0:cl.t0, n:(a ? a.n : 0) + 1}); else a.n++; }
-  const logBy = new Map(); for (const l of S.toolLog) { const a = logBy.get(l.slot) || {n:0, ms:0, err:false}; a.n++; if (l.t1) a.ms += l.t1 - l.t0; a.err = l.t1 ? !l.ok : a.err; logBy.set(l.slot, a); }
-  c.save(); c.setLineDash([2, 3]); c.strokeStyle = rgba(C.stroke, .8); c.lineWidth = 1; c.beginPath(); c.moveTo(X, YS[6] + 13); c.lineTo(X, T0 + (SLOT_LIST.length - 1) * STEP); c.stroke(); c.restore();
-  SLOT_LIST.forEach((sl, i) => {
-    const y = T0 + i * STEP, run = runBy.get(sl.id), lg = logBy.get(sl.id), seen = S.discovered.has(sl.id);
-    if (run) { c.strokeStyle = rgba(C.accent, .9); c.lineWidth = 1.8; c.beginPath(); c.moveTo(X, YS[6] + 13); c.lineTo(X, y - 6); c.stroke(); }
-    const d = run ? 5 : 4;
-    c.beginPath(); c.moveTo(X, y - d); c.lineTo(X + d, y); c.lineTo(X, y + d); c.lineTo(X - d, y); c.closePath();
-    if (run) { c.fillStyle = rgba(C.accent); c.fill(); c.strokeStyle = rgba(C.accent, .18); c.lineWidth = 1.4; c.beginPath(); c.arc(X, y, 8.5, 0, 6.3); c.stroke(); if (!RM.matches) { const a = (t / 400) % (Math.PI * 2); c.strokeStyle = rgba(C.accent, .75); c.beginPath(); c.arc(X, y, 8.5, a, a + 1.6); c.stroke(); } }
-    else if (lg && lg.err) { c.fillStyle = rgba(C.danger); c.fill(); }
-    else if (seen) { c.fillStyle = rgba(C.stroke); c.fill(); }
-    else { c.fillStyle = rgba(C.surface); c.fill(); c.save(); c.setLineDash([2, 1.5]); c.strokeStyle = rgba(mix(C.muted, C.text, DARK ? .45 : .25)); c.lineWidth = 1.1; c.stroke(); c.restore(); }
-    c.font = `${run ? 600 : 500} 11.5px ${SANS}`;
-    c.fillStyle = run ? rgba(C.accent) : lg && lg.err ? rgba(C.danger) : seen ? rgba(mix(C.sec, C.text, DARK ? .25 : .35)) : rgba(mix(C.sec, C.muted, DARK ? .15 : .35));
-    let info = '';
-    if (run) info = fmtS(t - run.t0) + (run.n > 1 ? ` ×${run.n}` : '');
-    else if (lg) info = (lg.n > 1 ? `×${lg.n} · ` : '') + fmtS(lg.ms);
-    ls('0px'); c.font = `500 10px ${MONO}`; const iw = info ? c.measureText(info).width + 8 : 0;
-    c.font = `${run ? 600 : 500} 11.5px ${SANS}`; c.fillText(fitTxt(c, sl.name, W - 44 - 12 - iw), 44, y + .5);
-    if (info) { c.font = `500 10px ${MONO}`; c.textAlign = 'right'; c.fillStyle = run ? rgba(C.accent) : lg.err ? rgba(C.danger) : rgba(C.sec); c.fillText(info, W - 12, y + .5); c.textAlign = 'left'; }
-  });
-  // статус
-  const yS = H - 48; c.strokeStyle = rgba(C.border); c.lineWidth = 1; c.beginPath(); c.moveTo(12, yS + .5); c.lineTo(W - 12, yS + .5); c.stroke();
-  const calls = [...S.calls.values()];
-  let st = S.status; if (calls.length) st = calls[calls.length - 1].label;
-  c.font = `${calls.length ? 600 : 500} 11.5px ${SANS}`; c.fillStyle = calls.length ? rgba(C.accent) : rgba(C.text, .85); c.fillText(fitTxt(c, st, W - 24), 12, yS + 16);
-  const total = S.t0 ? fmtS((S.tEnd || t) - S.t0) : '';
-  c.font = `500 11px ${SANS}`; c.fillStyle = rgba(C.sec); c.fillText(total ? fitTxt(c, 'Весь запрос ' + total + (calls.length > 1 ? ` · ${calls.length} паралл.` : ''), W - 24) : '', 12, yS + 34);
-}
-
 let tlLast = 0;
 function renderTimeline(force) {
   const t = now(); if (!force && t - tlLast < 200) return; tlLast = t;
@@ -1045,7 +890,7 @@ function setMode(m) {
 }
 function syncFit() { $('#fmFit').classList.toggle('is-on', VIEW.fit); }
 function openModal() { VIEW.open = true; $('#fmBack').classList.add('is-open'); setLayout(VIEW.layout); renderTimeline(true); kick(); }
-function closeModal() { closeThink(); const wasOpen = VIEW.open; VIEW.open = false; if (wasOpen && MINI.on) setTimeout(() => { const el = HOST.orient === 'v' ? RAIL.el : MINI.el; if (el && el.isConnected) el.focus({preventScroll:true}); }, 0); $('#fmBack').classList.remove('is-open'); for (const c of document.querySelectorAll('.fm-card')) c.classList.remove('is-on'); for (const R of RENDERERS) R.visible = false; }
+function closeModal() { closeThink(); VIEW.open = false; $('#fmBack').classList.remove('is-open'); for (const c of document.querySelectorAll('.fm-card')) c.classList.remove('is-on'); for (const R of RENDERERS) R.visible = false; }
 const STATS = {renders:0, ms:0, msAvg:0, msMax:0, fps:0, frames:0, fpsT:0};
 let raf = 0, slowT = 0, lastT = 0, lastDraw = 0;
 function kick() { if (!raf) raf = requestAnimationFrame(frame); }
@@ -1097,7 +942,6 @@ function frame(ts) {
   const paused = syncRunClock(), visualT = now();
   let more = paused ? false : update(dt, visualT);
   if (VIEW.open) for (const R of RENDERERS) { if (R.visible) { if (!paused && R.update(dt)) more = true; R.draw(visualT); } }
-  if (MINI.on) { if (HOST.orient === 'v') drawRail(); else drawMini(); }
   const ms = performance.now() - t0;
   STATS.renders++; STATS.ms = ms; STATS.msAvg = STATS.msAvg ? STATS.msAvg * 0.9 + ms * 0.1 : ms; STATS.msMax = Math.max(STATS.msMax, ms); STATS.frames++;
   if (ts - STATS.fpsT > 1000) { STATS.fps = STATS.frames * 1000 / (ts - STATS.fpsT); STATS.frames = 0; STATS.fpsT = ts; }
@@ -1127,9 +971,6 @@ function demo(name) {
   }
   if (name === 'error') { tool(2000, 4200, 'e1', 'code', false, 700); tool(4600, 6900, 'e2', 'code', true, 400); at(7300, 'answer'); at(8500, 'done'); }
 }
-$('#fmMini').onclick = e => { if (e.target.closest('.fm-mini__x')) { e.stopPropagation(); collapse(); } else expand(); };
-$('#fmRail').onclick = e => { if (e.target.closest('.fm-rail__x')) collapse(); else openModal(); };
-for (const el of [$('#fmMini'), $('#fmRail')]) el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (e.target.closest('.fm-rail__x,.fm-mini__x')) collapse(); else openModal(); } });
 $('#fmClose').onclick = closeModal;
 $('#fmBack').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && VIEW.open) { const c = document.querySelector('.fm-card.is-on'); if (TH.key) closeThink(true); else if (c) c.classList.remove('is-on'); else closeModal(); } });
@@ -1169,9 +1010,6 @@ $('#fmFit').onclick = () => { VIEW.fit = !VIEW.fit; syncFit(); if (VIEW.fit) for
 new MutationObserver(() => { readTheme(); kick(); }).observe(document.documentElement, {attributes:true, attributeFilter:['data-theme']});
 const ro = new ResizeObserver(() => { if (VIEW.open) for (const R of RENDERERS) R.resize(); kick(); });
 ro.observe($('#pFlat')); ro.observe($('#pIso'));
-const roHost = new ResizeObserver(() => { if (MINI.on) layoutHost(); }); { const v = document.getElementById('view-agent'); if (v) roHost.observe(v); }
-addEventListener('resize', () => { if (MINI.on) layoutHost(); });
-{ const mic = document.querySelector('#view-agent .message-input-container'); if (mic) new MutationObserver(() => { if (MINI.on) layoutHost(); }).observe(mic, {childList:true}); }
 // Делегированное наблюдение переживает пересоздание поля ввода и смену чата.
 // Не завершаем запрос искусственно: поздние done/tool_end по-прежнему обрабатываются.
 new MutationObserver(records => {
@@ -1255,8 +1093,6 @@ window.FlowViz = {emit, reset, restore, replay, demo, open:openModal, close:clos
 
 function mountDom() {
   if (document.getElementById('fmBack')) return;
-  const host = document.getElementById('view-agent') || document.body;
-  host.insertAdjacentHTML('beforeend', '<div class="fm-rail" id="fmRail" role="button" tabindex="0"><canvas id="fmRailCv"></canvas><button class="fm-rail__x" type="button" aria-label="Свернуть путь запроса" title="Свернуть">×</button></div>');
-  document.body.insertAdjacentHTML('beforeend', '<div class="fm-mini" id="fmMini" role="button" tabindex="0"><canvas id="fmMiniCv"></canvas><button class="fm-mini__x" type="button" aria-label="Скрыть путь запроса" title="Скрыть">×</button></div><div id="fvHud"></div>' + MODAL_HTML);
+  document.body.insertAdjacentHTML('beforeend', '<div id="fvHud"></div>' + MODAL_HTML);
 }
 })();

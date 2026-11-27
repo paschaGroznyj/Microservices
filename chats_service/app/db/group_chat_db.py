@@ -16,7 +16,7 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from app.core.reactions import normalize_emoji, summarize
+from app.core.reactions import reaction_emojis, summarize
 
 logger = logging.getLogger(__name__)
 
@@ -273,7 +273,7 @@ class GroupChatDB:
     # ── Реакции ────────────────────────────────────────────
 
     async def apply_reactions(self, ops: list) -> list:
-        """ops: [{message_id, user_id, emoji}], emoji '' снимает реакцию.
+        """ops: [{message_id, user_id, emojis}], [] снимает реакции (legacy emoji тоже).
         Одна транзакция на пачку. Возвращает [{room_uid, message_id, reactions}]
         по изменённым сообщениям (удалённые пропускаются)."""
         # последняя операция пользователя по сообщению побеждает
@@ -283,22 +283,22 @@ class GroupChatDB:
                 mid, uid = int(op["message_id"]), int(op["user_id"])
             except (KeyError, TypeError, ValueError):
                 continue
-            emoji = normalize_emoji(op.get("emoji"))
-            if emoji is None or mid <= 0:
+            emojis = reaction_emojis(op)  # validate the whole batch before acquiring a connection
+            if mid <= 0:
                 continue
-            last[(mid, uid)] = emoji
+            last[(mid, uid)] = emojis
         if not last:
             return []
         touched = sorted({mid for mid, _ in last})
         async with self.pool.acquire() as conn:
             async with conn.transaction():
-                for (mid, uid), emoji in last.items():
-                    if emoji:
+                for (mid, uid), emojis in last.items():
+                    if emojis:
                         await conn.execute("""
                             UPDATE group_messages
                             SET reactions = COALESCE(reactions, '{}'::jsonb) || $2::jsonb
                             WHERE id = $1 AND is_deleted = FALSE
-                        """, mid, json.dumps({str(uid): emoji}))
+                        """, mid, json.dumps({str(uid): emojis}))
                     else:
                         await conn.execute("""
                             UPDATE group_messages

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en" data-theme="light"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pending attachment reorder regression</title>
+<link rel="stylesheet" href="/api_gateway/static/css/file-attach.css">
+<style>
+:root { --bg:#f7f8fa; --surface2:#edf0f4; --text-primary:#172334; --text-secondary:#546273; --border:#ccd4df; --accent:#635bdf; --font-anthropic-sans:Arial,sans-serif; }
+[data-theme=dark] { --bg:#141821; --surface2:#252b37; --text-primary:#edf0fa; --text-secondary:#b6bfd0; --border:#424b59; --accent:#a99dff; }
+* {box-sizing:border-box} body {margin:0;background:var(--bg);color:var(--text-primary);font:16px Arial,sans-serif} main {max-width:1000px;margin:40px auto;padding:0 12px} h1{font-size:24px} h2{font-size:18px} section{margin:24px 0} .chat-input-box,.gc-input-wrapper {border:1px solid var(--border);border-radius:16px;overflow:hidden} textarea{width:100%;height:65px;border:0;padding:14px;background:transparent;color:inherit;font:inherit;resize:none} button{font:inherit} .toolbar{display:flex;gap:10px;padding:10px} .toolbar button{border:1px solid var(--border);background:var(--surface2);color:inherit;border-radius:8px;padding:7px 12px} .fa-dragover{outline:3px solid var(--accent)} #text-preview-panel {border:1px solid var(--border);padding:12px;display:none} #text-preview-panel.open{display:block} #text-preview-title{font-weight:bold} #text-preview-body{white-space:pre-wrap} p{line-height:1.5;color:var(--text-secondary)}
+</style></head><body><main id="view-group"><h1>Reorder pending attachments</h1><p>Drag a tile with a mouse, drag its ⠿ handle on touch, or focus the handle and use ← / → / Home / End. Alt + ← / → also works on the tile.</p>
+<section id="history"><h2>History (not reorderable)</h2><div class="fa-message-files"></div></section>
+<section id="group"><h2>Group composer</h2><div class="gc-input-wrapper"><textarea placeholder="Write to group"></textarea><div class="toolbar"><button class="attach" type="button">Attach files</button><button type="button" onclick="FileAttach.clear()">Clear</button></div></div></section>
+<section id="agent"><h2>Agent composer</h2><div class="chat-input-box"><textarea placeholder="Write to agent"></textarea><div class="toolbar"><button class="attach" type="button">Attach files</button></div></div></section>
+<aside id="text-preview-panel" aria-hidden="true"><div class="text-preview-header"><span id="text-preview-title"></span><button id="text-preview-close" type="button">Close</button></div><div id="text-preview-modes"></div><div id="text-preview-note"></div><div id="text-preview-body"></div><div id="text-preview-render" hidden></div></aside>
+</main>
+<script src="/api_gateway/static/js/file-tiles.js"></script><script src="/api_gateway/static/js/file-attach.js"></script>
+<script>
+window.useComposer = id => { window.activeComposer=id; const root=document.getElementById(id); FileAttach.init(root.querySelector('.attach'),root,id === 'group' ? 'g:main' : 'a:test'); };
+window.add = names => FileAttach.addFiles(names.map(name => new File(['Content of '+name],name,{type:'text/plain'})));
+const history=document.querySelector('.fa-message-files'); history.innerHTML=FileTiles.tileHtml({name:'sent-report.txt',size:42,type:'text/plain',url:'data:text/plain,Sent%20history'}); FileTiles.enhanceScroller(history);
+useComposer('group'); add(['report.txt','notes.md','data.csv']);
+document.getElementById('text-preview-close').onclick=()=>{FileTiles.exitFilePreview(); document.getElementById('text-preview-panel').classList.remove('open');};
+</script></body></html>

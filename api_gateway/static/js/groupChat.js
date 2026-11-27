@@ -1285,7 +1285,10 @@
       const audiosHtml = mediaParts.audios || '';
       const hasImages = !!mediaTop;
       const hasAudios = !!audiosHtml;
-      const hasCaption = !!(textBlock || mediaParts.docs);
+      const separateDocs = !!mediaParts.docs;
+      const docsInBubble = ''; // file cards always live outside message bubbles
+      const docsOnly = separateDocs && !hasImages && !hasAudios && !textBlock;
+      const hasCaption = !!(textBlock || docsInBubble);
       const audioOnly = hasAudios && !hasImages && !hasCaption;
       const bubbleMod = audioOnly
         ? ' gc-msg--audio-only'
@@ -1303,16 +1306,19 @@
         ? `${audiosHtml}${metaHtml}`
         : (hasImages
             ? (hasCaption
-                ? `${mediaTop}<div class="gc-msg__caption">${mediaParts.docs}${textBlock}${metaHtml}</div>`
+                ? `${mediaTop}<div class="gc-msg__caption">${docsInBubble}${textBlock}${metaHtml}</div>`
                 : `<div class="gc-msg__media">${mediaTop}${metaHtml}</div>`)
-            : `${mediaParts.docs}${textBlock}${metaHtml}`);
-      const topAudios = (!audioOnly && hasAudios) ? audiosHtml : '';
+            : `${docsInBubble}${textBlock}${metaHtml}`);
+      const attachmentMeta = `<div class="gc-meta"><span class="gc-time">${this._fmtTime(m.created_at)}</span>${window.GroupInteraction ? window.GroupInteraction.ticksHtml(m) : ''}</div>`;
+      const docsBubble = separateDocs ? `<div class="gc-file-block${mine ? ' gc-file-block--mine' : ''}">${mediaParts.docs}${docsOnly ? metaHtml : attachmentMeta}</div>` : '';
+      const topAudios = (!audioOnly && hasAudios) ? `<div class="${cls} gc-msg--audio-only gc-msg--attachment">${audiosHtml}${attachmentMeta}</div>` : '';
       return `<div class="gc-row ${mine ? 'gc-row--mine' : ''}" data-id="${m.id}" data-mine="${mine ? 1 : 0}" data-pinned="${m.is_pinned ? 1 : 0}" data-can-del="${canDel ? 1 : 0}" data-can-edit="${canEdit ? 1 : 0}" data-can-pin="${canPin ? 1 : 0}">
         ${author}
         ${topAudios}
-        <div class="${cls}${bubbleMod}">
+        ${docsBubble}
+        ${docsOnly ? '' : `<div class="${cls}${bubbleMod}">
           ${innerHtml}
-        </div>
+        </div>`}
         ${reactsRow}
       </div>`;
     },
@@ -2100,7 +2106,7 @@
 
     _flashBubble(row) {
       if (!row) return;
-      const bubble = row.querySelector('.gc-msg');
+      const bubble = row.querySelector('.gc-msg, .gc-file-block');
       if (!bubble) return;
       if (bubble._gcFlashTimer) clearTimeout(bubble._gcFlashTimer);
       bubble.classList.remove('gc-msg--flash');
@@ -2173,7 +2179,7 @@
 
     _bindMsgActions(box) {
       box.querySelectorAll('.gc-row').forEach(row => {
-        row.querySelectorAll('.gc-msg, .gc-audios').forEach(el => {
+        row.querySelectorAll('.gc-msg, .gc-audios, .gc-file-block').forEach(el => {
           el.oncontextmenu = (e) => {
             e.preventDefault();
             this._showCtxMenu(e, row);

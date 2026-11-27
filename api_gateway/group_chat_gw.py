@@ -22,7 +22,7 @@ import logging
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from fastapi.websockets import WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 import reactions_bus
 import reads_bus
@@ -262,7 +262,14 @@ async def api_group_pin(body: GroupPinBody, request: Request):
 
 class ReactionItem(BaseModel):
     message_id: int = Field(gt=0)
-    emoji: str = Field(default="", max_length=16)
+    emojis: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_reactions(cls, values):
+        if isinstance(values, dict):
+            return {**values, "emojis": reactions_bus.reaction_emojis(values)}
+        return values
 
 
 class ReactionsBody(BaseModel):
@@ -272,7 +279,7 @@ class ReactionsBody(BaseModel):
 @router.post("/api/group/reactions")
 async def api_group_reactions(body: ReactionsBody, request: Request):
     """Пачка реакций с фронта (дебаунс 1 с там) -> Redis -> дебаунсер
-    reactions_bus -> chats_service. Набор эмодзи проверяет chats_service."""
+    reactions_bus -> chats_service. Эмодзи и лимит проверяются здесь и в chats_service."""
     user = await _get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")

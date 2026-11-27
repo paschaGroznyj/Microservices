@@ -139,3 +139,31 @@ def test_internal_group_message_broadcasts(bind_gw, mocker):
     r = client.post("/internal/group_message", json={"room_uid": "r1", "text": "x"})
     assert r.status_code == 200 and r.json()["ok"] is True
     bcast.assert_awaited_once()
+
+
+@pytest.mark.parametrize("payload", [
+    {"emojis": ["👍", "🔥", "❤️", "😁"]}, {"emojis": ["bad"]},
+    {"emojis": [""]}, {"emojis": [1]}, {"emojis": [None]},
+    {"emojis": None}, {"emojis": "👍"}, {"emoji": "bad"}, {"emoji": None},
+])
+def test_reaction_item_invalid_rejected_before_bus(bind_gw, mocker, payload):
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        gw.ReactionItem(message_id=5, **payload)
+    enqueue = mocker.patch.object(gw.reactions_bus, "enqueue", new=mocker.AsyncMock())
+    client, _, _ = bind_gw
+    assert client.post("/api/group/reactions", json={"items": [{"message_id": 5, **payload}]}).status_code == 422
+    enqueue.assert_not_awaited()
+
+
+@pytest.mark.parametrize("payload,expected", [
+    ({"emojis": ["👍", "🔥", "❤️", "👍"]}, ["👍", "🔥", "❤️"]),
+    ({"emoji": "👍"}, ["👍"]), ({"emoji": ""}, []),
+    ({"emojis": [], "emoji": "👍"}, []), ({}, []),
+])
+def test_reactions_normalized_and_authenticated_user_used(bind_gw, mocker, payload, expected):
+    client, _, _ = bind_gw
+    enqueue = mocker.patch.object(gw.reactions_bus, "enqueue", new=mocker.AsyncMock(return_value="redis"))
+    response = client.post("/api/group/reactions", json={"items": [{"message_id": 5, "user_id": 999, **payload}]})
+    assert response.status_code == 200
+    enqueue.assert_awaited_once_with(56, [{"message_id": 5, "emojis": expected}])

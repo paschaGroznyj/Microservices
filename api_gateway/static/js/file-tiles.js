@@ -452,6 +452,33 @@
         };
     }
     // Кнопка «Скачать» всегда зафиксирована в шапке text-preview-header.
+    // Shared panel must live in the source view, not the hidden Agent tab.
+    let previewHostObserver = null;
+    function mountPreviewFor(source) {
+        const panel = document.getElementById('text-preview-panel');
+        const host = source?.closest('.view') || document.querySelector('.view:not(.hidden)')
+            || document.getElementById('view-agent');
+        if (!panel || !host) return;
+        if (previewHostObserver) previewHostObserver.disconnect();
+        if (panel.parentElement !== host) {
+            window.TPView?.setWide(false);
+            host.appendChild(panel); // preserve existing controls and their handlers
+        }
+        previewHostObserver = new MutationObserver(() => {
+            if (!host.classList.contains('hidden') || !panel.classList.contains('open')) return;
+            const app = window.__catchpmApp;
+            if (app?.closeTextPreview) app.closeTextPreview();
+            else {
+                exitFilePreview();
+                panel.classList.remove('open');
+                panel.setAttribute('aria-hidden', 'true');
+                panel.setAttribute('inert', '');
+                window.TPView?.setWide(false);
+            }
+        });
+        previewHostObserver.observe(host, { attributes: true, attributeFilter: ['class'] });
+    }
+
     function placeDlBtn() {
         const a = document.getElementById('text-preview-dl');
         const head = document.querySelector('#text-preview-panel .text-preview-header');
@@ -587,6 +614,7 @@
     }
 
     function enterTextChipPreview(chipEl) {
+        mountPreviewFor(chipEl);
         exitFilePreview();
         FP.textChip = chipEl || true;
         FP.textMode = 'raw';
@@ -605,6 +633,7 @@
         if (!type) return false;
         const { panel, body, render, title, modes } = pvEls();
         if (!panel || !body || !render) return false;
+        mountPreviewFor(t);
         const app = window.__catchpmApp;
         // Закрыть чип вставленного текста, если он был открыт в панели.
         if (app && app._activePreviewChipEl) {

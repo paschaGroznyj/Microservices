@@ -1372,7 +1372,7 @@
       const previewAttr = hasPreview ? ' data-preview="1"' : '';
       const mimeAttr = f.mime_type ? ` data-mime="${this._esc(f.mime_type)}"` : '';
       
-      return `<a class="fa-chip fa-chip--${color} fa-chip--bot fa-chip--card" href="${this._esc(dlUrl)}" download="${safeName}" title="${safeName}" rel="noopener noreferrer" data-name="${safeName}" data-url="${this._esc(url)}" data-dlUrl="${this._esc(dlUrl)}"${mimeAttr}${previewAttr}>
+      return `<a class="fa-chip fa-chip--${color} fa-chip--bot fa-chip--card" href="${this._esc(dlUrl)}" download="${safeName}" title="${safeName}" rel="noopener noreferrer" data-name="${safeName}" data-url="${this._esc(url)}" data-dl-url="${this._esc(dlUrl)}"${mimeAttr}${previewAttr}>
 <span class="fa-chip__ty tp-ty" data-c="${color}" aria-hidden="true">${label}</span>
 <span class="fa-chip__cap"><span class="fa-chip__name">${safeName}</span>${size ? `<span class="fa-chip__meta">${size}</span>` : ''}</span>
 <span class="fa-chip__dl-icon" aria-hidden="true">
@@ -1498,7 +1498,6 @@
 
       if (docs.length) {
         docsHtml = '<div class="gc-files">' + docs.map(f => this._makeFileChip(f)).join('') + '</div>';
-      }
       }
       return { collage, audios: audiosHtml, docs: docsHtml };
     },

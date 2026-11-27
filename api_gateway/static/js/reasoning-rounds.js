@@ -1,7 +1,5 @@
-/* reasoning-rounds.js
-   «Размышления» раундами: каждая итерация агента — раунд с номером, внутри
-   мысли (первое предложение заголовком, остальное по клику) и чипы вызовов
-   инструментов с таймингом. Данные о вызовах — те же flow-события, что рисует
+/* reasoning-rounds.js — «Размышления» графом узлов: мысли на стволе,
+   параллельные вызовы инструментов на цветных дорожках с живыми таймингами. Данные о вызовах — те же flow-события, что рисует
    FlowMap (fmMiniCv): tool_start / tool_end {call_id, slot, label, ms, ok}.
    После F5 хронология берётся из Redis flow:{chat_id} через /api/chats/{id}/flow:
    i-й think_end ↔ reasoning.steps[i], tool_* с ts — так восстанавливается порядок.
@@ -189,50 +187,122 @@
         if (r.th.length) { var s = r.th[0].text.trim(); return s.slice(0, cut(s)); }
         return r.tools.length ? r.tools[0].label : '';
     }
+    /* ── Рендер: граф узлов в стиле mm-tg (панель памяти) ──
+       Ствол слева — ход ответа; мысль = полый узел на стволе; вызов = закрашенный узел.
+       Вызовы, которые шли одновременно, расходятся на свои дорожки (тона t1/t2/t4/t3)
+       и сливаются в ствол, когда закончились. Номера шагов не показываем. */
+    var TONES = [1, 2, 4, 3], MAXL = 4;
+    function seq(m) {
+        var out = [], g = null;
+        m.ev.forEach(function (e) {
+            if (e.k === 'th') { g = null; out.push({ k: 'th', e: e }); return; }
+            // Параллельно: вызов стартовал, пока хотя бы один из группы ещё шёл.
+            if (g && g.calls.some(function (x) { return x.t1 == null || x.t1 > e.t + 1; })) { g.calls.push(e); return; }
+            g = { k: 'grp', calls: [e] }; out.push(g);
+        });
+        return out;
+    }
+    function wall(calls) {
+        if (calls.some(function (x) { return x.t1 == null; })) return null;
+        var s = Math.min.apply(null, calls.map(function (x) { return x.ts != null ? x.ts : x.t; }));
+        return Math.max.apply(null, calls.map(function (x) { return x.t1; })) - s;
+    }
+    function toneOf(j) { return j ? TONES[(Math.min(j, MAXL - 1) - 1) % TONES.length] : 0; }
+    function callHtml(x, j, g) {
+        var run = x.t1 == null, err = x.ok === false, n = g.calls.length, side = '';
+        if (j === 0 && n > 1) {
+            side = '<span class="rg-s" data-n="×' + n + '">' + n + ' параллельно</span>';
+        }
+        var gc = n > 1 ? (j === 0 ? ' is-g0' : '') + (j === n - 1 ? ' is-gN' : '') : '';
+        return '<div class="rg-r is-call rg-t' + toneOf(j) + gc + (run ? ' is-run' : '') + (err ? ' is-err' : '') + '"' +
+            (run ? ' data-t="' + x.t + '"' : '') + ' title="' + esc(x.label) + '">' +
+            '<span class="rg-ic">' + (IC[x.slot] || IC.other) + '</span>' +
+            '<span class="rg-n">' + esc(x.label) + '</span>' +
+            (err ? '<span class="rg-e">ошибка</span>' : '') +
+            '<span class="rg-d">' + sec(run ? Date.now() - x.t : x.ms) + '</span>' + side + '</div>';
+    }
     function render(body) {
         var m = models.get(body);
         if (!m) return;
-        var rs = rounds(m);
+        var sq = seq(m);
         var box = body.querySelector(':scope > .rr-rounds');
-        if (!rs.length) { if (box) box.remove(); return; }
+        if (!sq.length) { if (box) box.remove(); return; }
         if (!box) {
             box = document.createElement('div');
-            box.className = 'rr-rounds';
+            box.className = 'rr-rounds rg';
             body.insertBefore(box, body.querySelector(':scope > .reasoning-collapse-btn'));
         }
-        // Открытые мысли переживают перерисовку.
         var openTh = {};
         box.querySelectorAll('.rr-th.is-open').forEach(function (el) { openTh[el.textContent.trim()] = 1; });
-        var flat = rs.length === 1 && !rs[0].tools.length;
-        box.classList.toggle('rr-flat', flat);
-        if (flat) {
-            box.innerHTML = '<div class="rr-rd__in">' + rs[0].items.map(function (e) { return thoughtHtml(e.text, false); }).join('') + '</div>';
-            restoreOpen(box, openTh);
-            return;
-        }
-        var last = rs.length - 1;
-        box.innerHTML = rs.map(function (r, i) {
-            var open = m.user[i] != null ? m.user[i] : i === last;
-            var meta = [];
-            if (r.tools.length) meta.push(r.tools.length + ' инстр.');
-            if (r.errs) meta.push('<span class="rr-err">' + r.errs + '\u00a0' + plural(r.errs, 'ошибка', 'ошибки', 'ошибок') + '</span>');
-            if (r.toolMs) meta.push(sec(r.toolMs));
-            var first = r.th.length ? r.items.indexOf(r.th[0]) : -1;
-            var inner = r.items.map(function (e, j) {
-                return e.k === 'tool' ? toolHtml(e) : thoughtHtml(e.text, j === first);
-            }).join('');
-            var title = esc(roundTitle(r));
-            // Раунд из одной короткой мысли: раскрывать нечего, шапка без шеврона.
-            var empty = !r.tools.length && r.th.length === 1 && !r.th[0].text.trim().slice(cut(r.th[0].text.trim())).trim();
-            if (empty) open = false;
-            return '<section class="rr-rd' + (open ? ' is-open' : '') + (r.running ? ' is-run' : '') + (empty ? ' is-leaf' : '') + '" data-i="' + i + '">' +
-                '<button class="rr-rd__h" type="button"' + (empty ? ' disabled' : ' aria-expanded="' + open + '"') + '>' +
-                '<span class="rr-rd__n">' + (i + 1) + '</span>' +
-                '<span class="rr-rd__t" title="' + title + '">' + title + '</span>' +
-                '<span class="rr-rd__m">' + meta.join(' · ') + '</span>' + IC.chev +
-                '</button><div class="rr-rd__b"><div class="rr-rd__in">' + inner + '</div></div></section>';
-        }).join('');
+        var lanes = 1, rows = [];
+        sq.forEach(function (it) {
+            if (it.k === 'th') { rows.push('<div class="rg-r is-th">' + thoughtHtml(it.e.text, false) + '</div>'); return; }
+            lanes = Math.max(lanes, Math.min(it.calls.length, MAXL));
+            it.calls.forEach(function (x, j) { rows.push(callHtml(x, j, it)); });
+        });
+        box.style.setProperty('--rg-n', lanes);
+        box.innerHTML = '<svg class="rg-svg" aria-hidden="true"></svg><div class="rg-rows">' + rows.join('') + '</div>';
+        box._sq = sq;
         restoreOpen(box, openTh);
+        draw(box);
+        if (gro) gro.observe(box.querySelector('.rg-rows'));
+        tick();
+    }
+    function draw(box) {
+        var sq = box && box._sq, rowsEl = box && box.querySelector('.rg-rows'), svg = box && box.querySelector('.rg-svg');
+        if (!sq || !rowsEl || !svg || !rowsEl.children.length) return;
+        var rs = rowsEl.children, cs = getComputedStyle(box);
+        var x0 = parseFloat(cs.getPropertyValue('--rg-x0')) || 7, lane = parseFloat(cs.getPropertyValue('--rg-lane')) || 16;
+        var X = function (j) { return x0 + Math.min(j, MAXL - 1) * lane; };
+        var Y = function (i) { return rs[i].offsetTop + 12; };
+        var C = function (xa, ya, xb, yb) { var k = (yb - ya) * 0.6; return ' C' + xa + ',' + (ya + k) + ' ' + xb + ',' + (yb - k) + ' ' + xb + ',' + yb; };
+        var D = 22, paths = [], nodes = [], i = 0, top = Y(0), bottom = Y(rs.length - 1), cutAt = null;
+        function node(x, cx, cy, j) {
+            var run = x.t1 == null;
+            nodes.push('<g class="rg-o rg-t' + toneOf(j) + (run ? ' is-run' : '') + (x.ok === false ? ' is-err' : '') + '">' +
+                (run ? '<circle class="rg-pl" cx="' + cx + '" cy="' + cy + '" r="4"/>' : '') +
+                '<circle class="rg-c" cx="' + cx + '" cy="' + cy + '" r="4"/></g>');
+        }
+        sq.forEach(function (it) {
+            if (it.k === 'th') { nodes.push('<circle class="rg-q" cx="' + X(0) + '" cy="' + Y(i) + '" r="3.5"/>'); i++; return; }
+            var n = it.calls.length, first = i, last = i + n - 1;
+            var run = it.calls.some(function (x) { return x.t1 == null; });
+            var fy = n > 1 ? Y(first) - 6 - D : Y(first), open = Y(last) + 10;
+            if (run) {
+                // Группа ещё идёт: ствол обрывается на развилке, дорожки открыты книзу.
+                cutAt = fy; bottom = Math.max(bottom, open);
+                paths.push('<path class="rg-p rg-t0' + (it.calls[0].t1 == null ? ' is-run' : '') + '" d="M' + X(0) + ',' + fy + ' L' + X(0) + ',' + open + '"/>');
+            }
+            it.calls.forEach(function (x, j) {
+                if (j) {
+                    var xx = X(j), d = 'M' + X(0) + ',' + fy + C(X(0), fy, xx, Y(first) - 6);
+                    if (run) d += ' L' + xx + ',' + open;
+                    else { var jy = Y(last) + 6 + D; d += ' L' + xx + ',' + (Y(last) + 6) + C(xx, Y(last) + 6, X(0), jy); bottom = Math.max(bottom, jy); }
+                    paths.push('<path class="rg-p rg-t' + toneOf(j) + (x.t1 == null ? ' is-run' : '') + '" d="' + d + '"/>');
+                }
+                node(x, X(j), Y(first + j), j);
+            });
+            top = Math.min(top, fy);
+            i = last + 1;
+        });
+        var tEnd = cutAt != null ? cutAt : bottom;
+        var trunk = tEnd > top ? '<path class="rg-p rg-t0" d="M' + X(0) + ',' + top + ' L' + X(0) + ',' + tEnd + '"/>' : '';
+        svg.setAttribute('width', X(MAXL) + 4);
+        svg.setAttribute('height', Math.ceil(bottom + 8));
+        svg.innerHTML = trunk + paths.join('') + nodes.join('');
+    }
+    var gro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(function (es) {
+        es.forEach(function (e) { draw(e.target.closest('.rg')); });
+    }) : null;
+    var tickId = 0;
+    function tick() {
+        if (tickId) return;
+        tickId = setInterval(function () {
+            var live = document.querySelectorAll('.rg-r.is-run[data-t]');
+            if (!live.length) { clearInterval(tickId); tickId = 0; return; }
+            var now = Date.now();
+            live.forEach(function (r) { var d = r.querySelector('.rg-d'); if (d) d.textContent = sec(now - +r.getAttribute('data-t')); });
+        }, 100);
     }
     function restoreOpen(box, openTh) {
         box.querySelectorAll('.rr-th.has-more').forEach(function (el) {

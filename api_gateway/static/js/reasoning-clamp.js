@@ -95,6 +95,12 @@
                 step.removeAttribute('aria-expanded');
             }
         });
+        // Граф без бабла сворачивается шапкой: нижняя кнопка ему не нужна.
+        if (body.classList.contains('rr-on')) {
+            body.querySelectorAll(':scope > .reasoning-collapse-btn').forEach(function (btn) { btn.remove(); });
+            body.classList.remove('reasoning-body--tall');
+            return;
+        }
         var btn = ensureButton(body);
         // Кнопку не считаем в высоту, иначе она бы включалась и выключалась по кругу.
         var h = body.getBoundingClientRect().height - (btn.offsetHeight || 0);

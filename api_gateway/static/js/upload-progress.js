@@ -13,7 +13,7 @@
 const UploadProgress = (() => {
     const R = 15;
     const C = 2 * Math.PI * R;
-    const HOSTS = '.fa-tile__media, .gc-collage__cell, .gc-file, .fa-chip--audio, .fa-chip:not(.fa-tile)';
+    const HOSTS = '.fa-tile__media, .gc-collage__cell, .gc-files .fa-chip, .fa-chip--audio, .fa-chip:not(.fa-tile)';
 
     function send(url, formData, opts = {}) {
         return new Promise((resolve, reject) => {
@@ -57,7 +57,7 @@ const UploadProgress = (() => {
     }
 
     function _isCompact(host) {
-        return host.matches('.gc-file, .fa-chip--audio, .fa-chip:not(.fa-tile)');
+        return host.matches('.gc-files .fa-chip, .fa-chip--audio, .fa-chip:not(.fa-tile)');
     }
 
     const ICON_OK = '<svg class="up-ov__icon up-ov__icon--ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12.5l4 4 8-9" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';

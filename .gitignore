@@ -56,3 +56,5 @@ releases/media/
 *.pyo
 **/fixtures/
 **/fixture/
+
+notice.md

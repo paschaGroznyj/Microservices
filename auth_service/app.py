@@ -197,7 +197,6 @@ async def guest_login(response: Response):
 async def guest_login(request: Request):
     """Вход через никнейм authentik"""
     data = await request.json()
-    logging.info(f"Прилетел username: {data['username']}")
     # Внешняя аутентификация: пароля нет, пишем dummy-хеш.
     # Идемпотентно — при повторном входе вернётся id существующего юзера.
     user_id = await db.add_user(data["username"], external=True, source="authentik")

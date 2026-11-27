@@ -384,11 +384,10 @@ STATEFUL_TOOLS = {
 
     "read_workspace_file",
     "edit_workspace_file",
-    # Платные генерации: путь/obs_key/task_id нужны в следующих ходах,
-    # иначе агент «забывает» результат и запускает оплату заново.
     "generate_video", "check_video_status",
     "generate_audio", "generate_music",
     "fetch_from_obs",
+    "list_devices", "run_on_device",
 }
 
 _coerce_tool_result = coerce_tool_result

@@ -1331,6 +1331,57 @@
       return (b / 1024 / 1024).toFixed(1) + ' МБ';
     },
 
+    _makeFileChip(f) {
+      /* Генерирует чип файла в стиле fa-chip--bot fa-chip--card с поддержкой превью.
+         Возвращает outerHTML строку для вставки в gc-files контейнер. */
+      const EXT_LABEL = {
+        pdf:'PDF', docx:'DOC', doc:'DOC',
+        xls:'XLS', xlsx:'XLS', csv:'CSV',
+        ppt:'PPT', pptx:'PPT',
+        png:'PNG', jpg:'JPG', jpeg:'JPG',
+        gif:'GIF', webp:'WEBP', svg:'SVG',
+        mp4:'MP4', mov:'MOV', avi:'AVI',
+        zip:'ZIP', rar:'RAR', '7z':'7Z',
+        json:'JSON', xml:'XML', html:'HTML', py:'PY',
+        js:'JS', ts:'TS', css:'CSS',
+      };
+      const EXT_COLOR = {
+        pdf:'red', doc:'blue', docx:'blue',
+        xls:'green', xlsx:'green', csv:'green',
+        ppt:'orange', pptx:'orange',
+        png:'purple', jpg:'purple', jpeg:'purple',
+        gif:'purple', webp:'purple', svg:'purple',
+        mp4:'pink', mov:'pink', avi:'pink',
+        zip:'gray', rar:'gray', '7z':'gray',
+        json:'yellow', xml:'yellow',
+        py:'teal', js:'yellow', ts:'blue', css:'purple',
+      };
+      
+      const name = f.file_name || 'файл';
+      const ext = (name.split('.').pop() || '').toLowerCase();
+      const label = EXT_LABEL[ext] || ext.toUpperCase().slice(0, 4) || 'FILE';
+      const color = EXT_COLOR[ext] || 'gray';
+      const size = this._fmtSize(f.size_bytes);
+      const url = this._fileUrl(f);
+      const dlUrl = this._fileUrl(f, 1);
+      const safeName = this._esc(name);
+      
+      // Флаг для превью: добавляем data-preview если FileTiles знает как это открыть
+      const FT = window.FileTiles;
+      const hasPreview = FT && typeof FT.previewTypeOf === 'function' && FT.previewTypeOf(name, f.mime_type);
+      const previewAttr = hasPreview ? ' data-preview="1"' : '';
+      const mimeAttr = f.mime_type ? ` data-mime="${this._esc(f.mime_type)}"` : '';
+      
+      return `<a class="fa-chip fa-chip--${color} fa-chip--bot fa-chip--card" href="${this._esc(dlUrl)}" download="${safeName}" title="${safeName}" rel="noopener noreferrer" data-name="${safeName}" data-url="${this._esc(url)}" data-dlUrl="${this._esc(dlUrl)}"${mimeAttr}${previewAttr}>
+<span class="fa-chip__ty tp-ty" data-c="${color}" aria-hidden="true">${label}</span>
+<span class="fa-chip__cap"><span class="fa-chip__name">${safeName}</span>${size ? `<span class="fa-chip__meta">${size}</span>` : ''}</span>
+<span class="fa-chip__dl-icon" aria-hidden="true">
+  <svg viewBox="0 0 14 14" fill="none">
+    <path d="M7 2v7M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
+  </svg>
+</span></a>`;
+    },
+
     /* коллаж картинок (как в ТГ) + плитки не-картинок */
     _isVideo(f) {
       if (!f) return false;
@@ -1446,16 +1497,8 @@
       }
 
       if (docs.length) {
-        docsHtml = '<div class="gc-files">' + docs.map(f => `
-          <a class="gc-file" href="${this._fileUrl(f, 1)}" target="_blank" rel="noopener" title="${this._esc(f.file_name || '')}">
-            <span class="gc-file__ico">
-              <svg viewBox="0 0 24 24" width="20" height="20" fill="none"><path d="M14 3v5h5M6 3h9l5 5v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-            </span>
-            <span class="gc-file__meta">
-              <span class="gc-file__name">${this._esc(f.file_name || 'файл')}</span>
-              <span class="gc-file__size">${this._fmtSize(f.size_bytes)}</span>
-            </span>
-          </a>`).join('') + '</div>';
+        docsHtml = '<div class="gc-files">' + docs.map(f => this._makeFileChip(f)).join('') + '</div>';
+      }
       }
       return { collage, audios: audiosHtml, docs: docsHtml };
     },
@@ -2138,8 +2181,25 @@
           };
         });
       });
+      this._bindFileChips(box);
       window.GroupInteraction?.bindChips(box);
       window.GroupInteraction?.observe(box);
+    },
+
+    _bindFileChips(box) {
+      /* Обработчик клика для превью файлов в группом чате.
+         Если файл имеет data-preview="1", открываем его в панели превью вместо скачивания. */
+      const FT = window.FileTiles;
+      if (!FT || typeof FT.openFilePreview !== 'function') return;
+      
+      box.querySelectorAll('.fa-chip.fa-chip--card[data-preview="1"]').forEach(chip => {
+        chip.addEventListener('click', (e) => {
+          if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+          if (e.target.closest('.fa-chip__dl-icon')) return;
+          e.preventDefault();
+          FT.openFilePreview(chip);
+        });
+      });
     },
 
     _closeCtxMenu() {

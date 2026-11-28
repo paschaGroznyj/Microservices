@@ -120,10 +120,28 @@ def _usage_fields(row) -> dict:
     if not isinstance(tu, dict):
         return {}
     keys = ("input_tokens", "output_tokens", "total_tokens", "cache_read_tokens", "cache_creation_tokens")
-    return {
+    out = {
         "tokens_usage": {k: int(tu.get(k) or 0) for k in keys},
         "model_family": model_family(row["model_type"]),
     }
+    run_ms = _run_ms(tu)
+    if run_ms is not None:
+        out["run_ms"] = run_ms
+    return out
+
+
+def _run_ms(tu) -> int | None:
+    """Время хода агента из tokens_usage.run_ms (пишет event_loop), None у старых записей."""
+    try:
+        v = int(tu.get("run_ms"))
+    except (TypeError, ValueError, AttributeError):
+        return None
+    return v if v >= 0 else None
+
+
+# Старые ответы без run_ms: время хода ≈ created_at ответа − created_at предыдущего
+# сообщения пользователя на странице. Больше часа — не верим (ответ по задаче, пауза и т.п.).
+_RUN_GAP_MAX_MS = 3_600_000
 
 # Видимая история чата с учётом форков: собственные сообщения + сообщения
 # предков до точки форка (chat_chain из postgres/sql/03_agent/03_chats_forks.sql).
@@ -1239,6 +1257,7 @@ class DataBaseChats:
                     """, chat_id, username, None, limit + offset, limit, offset)
 
                 messages = []
+                prev_user_at = None
                 for row in rows:
                     files = row["files"]
                     if isinstance(files, str):
@@ -1268,6 +1287,15 @@ class DataBaseChats:
                         # модель — семейство (claude/gpt/gemini...), без точного имени.
                         **(_usage_fields(row) if row["is_from_bot"] else {}),
                     })
+                    m = messages[-1]
+                    if row["is_from_bot"]:
+                        if "run_ms" not in m and m.get("steps") and prev_user_at is not None:
+                            gap = int((row["created_at"] - prev_user_at).total_seconds() * 1000)
+                            if 0 <= gap <= _RUN_GAP_MAX_MS:
+                                m["run_ms"] = gap
+                        prev_user_at = None
+                    else:
+                        prev_user_at = row["created_at"]
 
                 if mode in ("around", "before", "after"):
                     if messages:

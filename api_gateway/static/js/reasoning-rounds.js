@@ -657,7 +657,9 @@
             wrap.setAttribute('data-cds', 'TurnStatus');
             wrap.setAttribute('data-state', 'done');
             wrap.setAttribute('data-rr-hist', '1');
-            var secs = Math.max(1, Math.round(wallMs / 1000));
+            // Общее время: run_ms хода из БД (или created_at-оценка от chats_service); без него — по тулам.
+            var runMs = msg && Number.isFinite(+msg.run_ms) && msg.run_ms !== null ? Math.max(+msg.run_ms, wallMs) : wallMs;
+            var secs = Math.max(1, Math.round(runMs / 1000));
             wrap.innerHTML = '<div class="reasoning-header" data-cds-row="">' +
                 '<span class="reasoning-label">Размышления</span>' +
                 '<span class="reasoning-timer" data-reasoning-duration="">' + esc(opts.fmt ? opts.fmt(secs) : secs + ' с') + '</span>' +

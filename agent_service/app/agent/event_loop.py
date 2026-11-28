@@ -2795,6 +2795,8 @@ class HarnessAgent:
                     "context_breakdown": last_breakdown,
                     "context_cache_read_tokens": last_cache_read,
                 }
+            # Время хода (мс от начала process_query до финала): «Размышления · N с» в истории после F5.
+            tokens_usage["run_ms"] = int((time.monotonic() - run_t0) * 1000)
             _tools_usage = self._ctx_get("tool_usage") or {}
             if _tools_usage:
                 tokens_usage["tools"] = _tools_usage

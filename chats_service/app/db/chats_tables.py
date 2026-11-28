@@ -406,6 +406,18 @@ class DataBaseChats:
         try:
             async with self.pool.acquire() as conn:
                 async with conn.transaction():
+                    if message_id:
+                        # Идемпотентность для повторной доставки из Kafka (offset коммитится
+                        # после записи): та же пара chat_id+message_id и та же сторона = дубль.
+                        # Блокировка до конца транзакции закрывает гонку двух consumer при ребалансе.
+                        await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+                                           chat_id, str(message_id))
+                        if await conn.fetchval(
+                            "SELECT 1 FROM chats WHERE chat_id = $1 AND message_id = $2 "
+                            "AND is_from_bot IS NOT DISTINCT FROM $3 LIMIT 1",
+                            chat_id, str(message_id), is_from_bot,
+                        ):
+                            return False
                     await conn.execute("""
                         INSERT INTO chats (
                             user_id, chat_id, message_text, is_from_bot,
@@ -433,8 +445,10 @@ class DataBaseChats:
                             )
                             for f in attached_files
                         ])
+            return True
         except asyncpg.UniqueViolationError:
             logging.error("Сообщение не может быть добавлено (дубликат message_id)")
+            return False
 
     async def set_message_reaction(
         self,

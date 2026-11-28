@@ -2,7 +2,8 @@
 import json
 import logging
 import asyncio
-from kafka import KafkaConsumer
+import asyncpg
+from kafka import KafkaConsumer, KafkaProducer
 from app.db.chats_tables import DataBaseChats
 from app.core.config import KAFKA_BROKER
 from app.db.tasks_db import TasksDB
@@ -35,6 +36,47 @@ AGENT_SERVICE_URL = os.getenv("AGENT_SERVICE_URL", "http://agent_service:9001")
 # САМОЦИКЛ АГЕНТА: consumer делает реентри — POST обратно в /send_message того же
 # chats_service (внутри docker-сети). Новый тик летит от user_id=-100 (служебный).
 CHATS_SELF_URL = os.getenv("CHATS_SERVICE_SELF_URL", "http://chats_service:8001")
+
+# Гарантия сохранения: offset Kafka коммитим только после COMMIT транзакции в БД.
+# Сбой соединения с БД (рестарт postgres, сеть) повторяем с паузой; если БД не
+# поднялась за окно повторов, откатываем позицию на это же сообщение и читаем его
+# снова (poll держит членство в группе, max.poll.interval не истекает).
+# Ошибки данных/кода повтором не лечатся: сообщение уходит в DLQ-топик и offset идёт дальше.
+CHAT_MESSAGES_TOPIC = "chat-messages"
+DLQ_TOPIC = os.getenv("CHAT_MESSAGES_DLQ_TOPIC", "chat-messages-dlq")
+SAVE_RETRY_WINDOW = float(os.getenv("CHAT_SAVE_RETRY_WINDOW", "60"))
+SAVE_RETRY_MAX_DELAY = 10.0
+
+
+class MessageNotSaved(Exception):
+    """Сообщение не записано в БД: offset коммитить нельзя (причина в __cause__)."""
+
+
+def _is_transient_db_error(err: BaseException) -> bool:
+    """Повторяемая ошибка: соединение убито/недоступно, а не плохие данные или баг."""
+    if isinstance(err, (
+        asyncpg.ConnectionDoesNotExistError,   # connection was closed in the middle of operation
+        asyncpg.PostgresConnectionError,       # класс 08
+        asyncpg.OperatorInterventionError,     # 57P01 admin shutdown, 57P03 cannot connect now
+        asyncpg.TooManyConnectionsError,
+        asyncpg.DeadlockDetectedError,
+        asyncpg.SerializationError,
+        OSError,                               # gaierror (нет DNS контейнера), refused
+        asyncio.TimeoutError,                  # command_timeout/timeout пула (в 3.10 не OSError)
+    )):
+        return True
+    if isinstance(err, asyncpg.InterfaceError):
+        # пул закрывается/соединение закрыто; прочие InterfaceError — баги вызова
+        msg = str(err).lower()
+        return "closed" in msg or "closing" in msg
+    return False
+
+
+def _payload_ids(payload) -> str:
+    if not isinstance(payload, dict):
+        return "payload=<не dict>"
+    return (f"chat={payload.get('chat_id')} user={payload.get('user_id')} "
+            f"message_id={payload.get('message_id')} bot={bool(payload.get('is_from_bot'))}")
 LOOP_SERVICE_USER_ID = -100
 LOOP_SERVICE_USERNAME = "agent-self-loop"
 LOOP_STOP_MARKER = "[STOP LOOP]"
@@ -124,14 +166,16 @@ class DBConsumer:
             logging.error(f"[mobile] consumer Redis недоступен ({REDIS_URL}): {e}")
 
         self.consumer = KafkaConsumer(
-            'chat-messages',
+            CHAT_MESSAGES_TOPIC,
             bootstrap_servers=[KAFKA_BROKER],
             group_id='db-consumer-group',
-            value_deserializer=lambda m: json.loads(m.decode('utf-8')),
+            # JSON разбираем сами: битое сообщение уходит в DLQ, а не роняет poll
             auto_offset_reset='latest',
-            enable_auto_commit=True,
+            # offset двигаем руками только после COMMIT в БД (см. consume)
+            enable_auto_commit=False,
             max_partition_fetch_bytes=10485760
         )
+        self.dlq = None  # KafkaProducer создаём лениво, при первом сообщении в DLQ
 
     async def _flow_store(self, chat_id, request_id: str, flow: dict) -> None:
         """FlowMap: событие в хронологию Redis flow:{chat_id} (восстановление после F5).
@@ -214,26 +258,35 @@ class DBConsumer:
                     agent_steps = None
                 tc = payload.get("tool_calls")
                 tool_calls = tc if isinstance(tc, list) else None
-            # Сохраняем в БД
-            await self.db.add_message(
-                user_id=user_id,
-                message=message[:20000],
-                chat_id=chat_id,
-                is_from_bot=is_from_bot,
-                action=action,
-                selected_tools=selected_tools or None,
-                context_size=context_size,
-                message_id=message_id,
-                attached_files=attached_files,
-                tool_trace=tool_trace,
-                model_type=model_type,
-                tokens_usage=tokens_usage,
-                agent_steps=agent_steps,
-                tool_calls=tool_calls,
-                gateway_target=gateway_target,
-                input_format=input_format,
-                type_query=type_query,
-            )
+            # Сохраняем в БД. Ошибка здесь = сообщение не записано: пробрасываем
+            # наверх, consume не закоммитит offset и повторит (или отправит в DLQ).
+            try:
+                saved = await self.db.add_message(
+                    user_id=user_id,
+                    message=message[:20000],
+                    chat_id=chat_id,
+                    is_from_bot=is_from_bot,
+                    action=action,
+                    selected_tools=selected_tools or None,
+                    context_size=context_size,
+                    message_id=message_id,
+                    attached_files=attached_files,
+                    tool_trace=tool_trace,
+                    model_type=model_type,
+                    tokens_usage=tokens_usage,
+                    agent_steps=agent_steps,
+                    tool_calls=tool_calls,
+                    gateway_target=gateway_target,
+                    input_format=input_format,
+                    type_query=type_query,
+                )
+            except Exception as save_err:
+                raise MessageNotSaved(_payload_ids(payload)) from save_err
+            if saved is False:
+                # Повторная доставка после сбоя коммита offset/рестарта consumer: строка уже
+                # в БД, а доставка и пуши прошли в первый раз. Второй раз их не делаем.
+                logger.info(f"Сообщение уже в БД, повтор пропущен: {_payload_ids(payload)}")
+                return
             # Превью 384 px картинок для панели вложений (file_thumbs) строит chats_service в фоне:
             # здесь цикл блокируется на KafkaConsumer, фоновая задача стояла бы до следующего сообщения.
             if file_thumbs.has_images(attached_files):
@@ -333,8 +386,12 @@ class DBConsumer:
                 if payload.get("loop"):
                     await self._maybe_reenter_loop(payload)
 
+        except MessageNotSaved:
+            raise
         except Exception as e:
-            logger.error(f"Ошибка обработки сообщения: {e}")
+            # Строка уже в БД (иначе был бы MessageNotSaved): сбой доставки/пушей
+            # повтором сообщения не лечим, offset коммитится.
+            logger.error(f"Ошибка обработки сообщения после сохранения: {e} ({_payload_ids(payload)})")
 
     async def _get_vapid(self):
         if self._vapid is None:
@@ -733,18 +790,88 @@ class DBConsumer:
             logger.error(f"Ошибка отправки в основной сервис: {e}")
 
     async def consume(self):
-        logger.info("DB Consumer запущен")
+        logger.info("DB Consumer запущен (offset коммитится после записи в БД)")
+        while True:
+            # poll в потоке: синхронный kafka-python не держит event loop, пока ждёт сообщений.
+            # Вызовы consumer идут строго по очереди (poll → обработка → commit/seek).
+            batch = await asyncio.to_thread(self.consumer.poll, timeout_ms=1000, max_records=1)
+            for tp, records in batch.items():
+                for rec in records:
+                    if await self._handle_record(rec):
+                        await self._commit(rec)
+                    else:
+                        # БД не поднялась за окно повторов: позицию назад, следующий poll
+                        # вернёт это же сообщение. Offset не коммитим — рестарт consumer
+                        # тоже перечитает его.
+                        self.consumer.seek(tp, rec.offset)
+                        break
 
-        for kafka_message in self.consumer:
+    async def _handle_record(self, rec) -> bool:
+        """True — offset можно коммитить: сообщение в БД (или уже было), пропущено
+        по правилам либо записано в DLQ. False — повторить позже, ничего не коммитить."""
+        where = f"{rec.topic}[{rec.partition}]@{rec.offset}"
+        try:
+            payload = json.loads(rec.value.decode("utf-8"))
+        except Exception as e:
+            return await self._to_dlq(rec, e, where)
+        delay = 0.5
+        deadline = time.monotonic() + SAVE_RETRY_WINDOW
+        attempt = 0
+        while True:
+            attempt += 1
             try:
-                payload = kafka_message.value
                 await self.process_message(payload)
-            except Exception as e:
-                logger.error(f"Ошибка обработки Kafka сообщения: {e}")
+                if attempt > 1:
+                    logger.info(f"Сообщение сохранено с попытки {attempt}: {where} {_payload_ids(payload)}")
+                return True
+            except MessageNotSaved as e:
+                cause = e.__cause__ or e
+                if not _is_transient_db_error(cause):
+                    return await self._to_dlq(rec, cause, where, payload)
+                if time.monotonic() + delay > deadline:
+                    logger.error(f"БД недоступна {SAVE_RETRY_WINDOW:.0f} с, перечитаю сообщение: "
+                                 f"{where} {_payload_ids(payload)}: {type(cause).__name__}: {cause}")
+                    return False
+                logger.warning(f"Не сохранено (попытка {attempt}), повтор через {delay:.1f} с: "
+                               f"{where} {_payload_ids(payload)}: {type(cause).__name__}: {cause}")
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, SAVE_RETRY_MAX_DELAY)
+
+    async def _to_dlq(self, rec, err: BaseException, where: str, payload=None) -> bool:
+        """Неповторяемая ошибка: исходные байты сообщения + причина в DLQ-топик.
+        Если и DLQ недоступен, возвращаем False: сообщение не теряем, читаем заново."""
+        logger.error(f"Сообщение не сохранено, ухожу в {DLQ_TOPIC}: {where} {_payload_ids(payload)}: "
+                     f"{type(err).__name__}: {err}")
+        headers = [
+            ("error", f"{type(err).__name__}: {err}"[:1000].encode("utf-8")),
+            ("source", where.encode("utf-8")),
+        ]
+        try:
+            if self.dlq is None:
+                self.dlq = await asyncio.to_thread(
+                    KafkaProducer, bootstrap_servers=[KAFKA_BROKER], acks="all",
+                    max_request_size=10485760)
+            fut = self.dlq.send(DLQ_TOPIC, value=rec.value, key=rec.key, headers=headers)
+            await asyncio.to_thread(fut.get, timeout=15)
+            return True
+        except Exception as e:
+            logger.error(f"DLQ недоступен ({type(e).__name__}: {e}), перечитаю {where}")
+            await asyncio.sleep(5)
+            return False
+
+    async def _commit(self, rec) -> None:
+        try:
+            await asyncio.to_thread(self.consumer.commit)
+        except Exception as e:
+            # Строка уже в БД. Без коммита (ребаланс, брокер мигнул) сообщение придёт
+            # ещё раз, и add_message отсечёт дубль по message_id.
+            logger.warning(f"Commit offset {rec.topic}[{rec.partition}]@{rec.offset} не прошёл: {e}")
 
     async def close(self):
         if self.consumer:
             self.consumer.close()
+        if self.dlq is not None:
+            self.dlq.close()
         if self.db.pool:
             await self.db.pool.close()
 

@@ -2366,6 +2366,13 @@ class ChatApp {
             }
             this._removeBotPlaceholder();
         }
+        // «Размышления» из истории: вызовы тулов (message.steps) и задачи ответа — у каждого ответа,
+        // не только у последнего. Задачи встают узлом графа, отдельной карточки tc-head нет.
+        if (isBot && (message.steps?.length || message.tasks?.length) && window.ReasoningRounds?.history) {
+            window.ReasoningRounds.history(messageEl, message, {
+                chat: message.chat_id || this.currentChat, fmt: (s) => this._formatReasoningDuration(s), caret: this._reasoningCaretSVG(),
+            });
+        }
         // Задачник: карточки задач из истории (message.tasks) — внутри ответа, над текстом.
         if (isBot && Array.isArray(message.tasks) && message.tasks.length && window.TaskCards) {
             queueMicrotask(() => { if (messageEl.isConnected) window.TaskCards.mount(messageEl, message.tasks); });
@@ -5562,7 +5569,21 @@ class ChatApp {
                     cur = cur.nextElementSibling;
                 }
             }
-            if (targetBotEl && !targetBotEl.querySelector('.reasoning-block')) {
+            const histWrap = targetBotEl?.querySelector(':scope > .reasoning-block[data-rr-hist]');
+            if (histWrap) {
+                const hb = histWrap.querySelector('.reasoning-body');
+                steps.forEach(rawStep => {
+                    const step = document.createElement('div');
+                    step.className = 'reasoning-step';
+                    step.style.whiteSpace = 'pre-wrap';
+                    step.textContent = String(rawStep);
+                    hb.appendChild(step);
+                });
+                histWrap.setAttribute('data-rr-chat', String(chatId));
+                const tm = histWrap.querySelector('.reasoning-timer');
+                if (tm && durSec) tm.textContent = this._formatReasoningDuration(durSec);
+                window.ReasoningRounds?.restore(chatId, hb);
+            } else if (targetBotEl && !targetBotEl.querySelector('.reasoning-block')) {
                 const wrap = document.createElement('div');
                 wrap.className = 'reasoning-block reasoning-collapsed';
                 wrap.setAttribute('data-cds', 'TurnStatus');

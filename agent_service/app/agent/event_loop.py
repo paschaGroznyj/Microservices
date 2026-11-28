@@ -964,6 +964,7 @@ class HarnessAgent:
         # FlowMap: время последнего "конца шага" по request_id (agent_start / tool_end),
         # monotonic. Из него считаем gap_ms — сколько агент думал перед вызовом тула.
         self._flow_last: dict[str, float] = {}
+        self._flow_calls: dict[str, dict] = {}  # request_id → call_id → {slot,label,files,task}
 
     # ------------------------------------------------------------------
     # Память per-user с загрузкой из БД через AgentDB
@@ -2690,7 +2691,7 @@ class HarnessAgent:
                             content = tool_content(tr, MAX_TOOL_MSG_CHARS)
 
                         messages.append(ToolMessage(content=content, tool_call_id=tc["id"]))
-                        tool_calls_log.append(tool_call_record(
+                        _rec = tool_call_record(
                             step=agent_steps,
                             name=tool_name,
                             ok=not tool_failed(tool_name, tr, result_dict),
@@ -2700,7 +2701,11 @@ class HarnessAgent:
                             args=tc.get("args"),
                             result=tr,
                             result_dict=result_dict,
-                        ))
+                        )
+                        if tc.get("id"):
+                            _rec["id"] = str(tc["id"])
+                            _rec.update(self._flow_calls.get(request_id, {}).get(str(tc["id"])) or {})
+                        tool_calls_log.append(_rec)
 
                         summary = _summarize_tool_call(tc, tr)
                         if summary:
@@ -2852,7 +2857,16 @@ class HarnessAgent:
             # Очищаем request-local контекст текущего хода.
             self._request_ctx.reset(ctx_token)
             self._flow_last.pop(request_id, None)
+            self._flow_calls.pop(request_id, None)
 
+
+    def _flow_note(self, request_id, call_id, fields: dict) -> None:
+        """Для chats.tool_calls: подпись/слот/файлы/задача вызова (как во flow), чтобы граф
+        «Размышлений» собирался из истории после F5 без хранения текста мыслей."""
+        if not request_id or not call_id:
+            return
+        keep = {k: fields[k] for k in ("slot", "label", "files", "task") if fields.get(k) is not None}
+        self._flow_calls.setdefault(request_id, {})[str(call_id)] = keep
 
     @tool_logged
     async def _invoke_tool(self, tools_by_name: dict, tool_call: dict, request_id: str) -> str:
@@ -2938,6 +2952,7 @@ class HarnessAgent:
             flow_end = tool_flow_fields(name, args, result)
             if step_files:
                 flow_end["files"] = step_files
+            self._flow_note(request_id, call_id, flow_end)
             await self._send_flow(request_id, "tool_end", call_id=call_id, ok=True, ms=elapsed_ms, **flow_end)
             return result_str
 
@@ -2946,6 +2961,7 @@ class HarnessAgent:
             log_event("tool.result", name=name, ok=False, duration_ms=elapsed_ms, error_type=type(e).__name__)
             if request_id:
                 self._flow_last[request_id] = time.monotonic()
+            self._flow_note(request_id, call_id, flow_tool)
             await self._send_flow(request_id, "tool_end", call_id=call_id, ok=False, ms=elapsed_ms, **flow_tool)
             return f"Ошибка при выполнении {name}: {e}"
 

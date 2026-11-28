@@ -599,7 +599,7 @@
             // Мысли и тулы, пришедшие живьём после снимка, не теряем.
             old.ev.forEach(function (e) {
                 if (e.k === 'th') addThought(m, e.text, e.t);
-                else if (e.id && !m.ev.some(function (x) { return x.id === e.id; })) m.ev.push(e);
+                else if (e.id && !e.hist && !m.ev.some(function (x) { return x.id === e.id; })) m.ev.push(e);
             });
             if (old.stop && !m.stop) applyFlow(m, { ev: 'done', ok: false, rid: m.rid }, old.stop);
             models.set(body, m);
@@ -622,6 +622,55 @@
             putTask(body, model(body), t, at);
             schedule(body);
             return true;
+        },
+        /* История (F5, листание вверх): «Размышления» из chats.tool_calls (message.steps) и задач
+           ответа, текста мыслей нет. Блок создаётся свёрнутым первым ребёнком msgEl.
+           opts: {chat, fmt(sec) → подпись таймера, caret: svg-строка}. Возвращает .reasoning-body или null. */
+        history: function (msgEl, msg, opts) {
+            opts = opts || {};
+            var steps = (msg && Array.isArray(msg.steps)) ? msg.steps.filter(function (x) { return x && typeof x === 'object'; }) : [];
+            var tasks = (msg && Array.isArray(msg.tasks)) ? msg.tasks.filter(function (t) { return t && t.task_id; }) : [];
+            if (OFF || !msgEl || (!steps.length && !tasks.length)) return null;
+            if (msgEl.querySelector(':scope > .reasoning-block')) return bodyOf(msgEl.querySelector(':scope > .reasoning-block'));
+            // Время: t0/ms от начала хода; у старых записей их нет — раскладываем по шагам.
+            var m = newModel(), rid = null, wallMs = 0;
+            steps = steps.slice().sort(function (a, b) {
+                return ((+a.step || 0) - (+b.step || 0)) || ((+a.t0 || 0) - (+b.t0 || 0)) || ((+a.i || 0) - (+b.i || 0));
+            });
+            var fake = 0, lastStep = null;
+            steps.forEach(function (x, k) {
+                var ms = Number.isFinite(+x.ms) ? Math.max(0, +x.ms) : 0, t;
+                if (Number.isFinite(+x.t0) && x.t0 !== null) t = +x.t0;
+                else { if (x.step !== lastStep) fake += 1000; t = fake; }
+                lastStep = x.step;
+                if (x.files && x.files.rid) rid = rid || x.files.rid;
+                var e = { k: 'tool', id: x.id || ('h' + k), slot: x.slot || 'other', label: x.label || 'Инструмент',
+                    t: t, gap: null, t1: t + ms, ms: ms, ts: t, ok: x.ok !== false, hist: true };
+                if (x.files && typeof x.files === 'object' && +x.files.n > 0) e.files = x.files;
+                if (x.task) e.task = String(x.task);
+                m.ev.push(e);
+                wallMs = Math.max(wallMs, t + ms);
+            });
+            m.rid = rid; m.chat = opts.chat != null ? opts.chat : null;
+            var wrap = document.createElement('div');
+            wrap.className = 'reasoning-block reasoning-collapsed';
+            wrap.setAttribute('data-cds', 'TurnStatus');
+            wrap.setAttribute('data-state', 'done');
+            wrap.setAttribute('data-rr-hist', '1');
+            var secs = Math.max(1, Math.round(wallMs / 1000));
+            wrap.innerHTML = '<div class="reasoning-header" data-cds-row="">' +
+                '<span class="reasoning-label">Размышления</span>' +
+                '<span class="reasoning-timer" data-reasoning-duration="">' + esc(opts.fmt ? opts.fmt(secs) : secs + ' с') + '</span>' +
+                (opts.caret || '') + '</div><div class="reasoning-body" data-cds-row-panel=""></div>';
+            if (!steps.length) wrap.querySelector('.reasoning-timer').textContent = '';
+            wrap.querySelector('.reasoning-header').addEventListener('click', function () { wrap.classList.toggle('reasoning-collapsed'); });
+            msgEl.insertBefore(wrap, msgEl.firstElementChild);
+            var body = wrap.querySelector(BODY);
+            models.set(body, m);
+            absorb(body);
+            tasks.forEach(function (t) { putTask(body, m, t, Date.now()); });
+            render(body);
+            return body;
         },
         hasTask: function (id) { var b = tkBody.get(String(id)); return !!(b && b.isConnected); },
         rounds: function (el) { var b = bodyOf(el); var m = b && models.get(b); return m ? rounds(m) : []; },

@@ -76,6 +76,40 @@ def model_family(model: str | None) -> str | None:
     return None
 
 
+_STEP_KEYS = (("id", str), ("slot", str), ("label", str), ("step", int), ("i", int),
+              ("par", int), ("t0", int), ("ms", int), ("task", str))
+
+
+def _front_steps(raw) -> list[dict]:
+    """chats.tool_calls → шаги для фронта. Имя тула, hint (аргументы) и err не отдаём:
+    подпись/слот пишет агент из flow_tools; у старых записей их нет → «Инструмент»."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            return []
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for c in raw:
+        if not isinstance(c, dict) or not c.get("name"):
+            continue
+        d: dict = {"ok": c.get("ok") is not False}
+        for k, typ in _STEP_KEYS:
+            v = c.get(k)
+            if v is None:
+                continue
+            try:
+                d[k] = typ(v)
+            except (TypeError, ValueError):
+                pass
+        f = c.get("files")
+        if isinstance(f, dict) and f.get("n"):
+            d["files"] = f
+        out.append(d)
+    return out
+
+
 def _usage_fields(row) -> dict:
     tu = row["tokens_usage"]
     if isinstance(tu, str):
@@ -1060,6 +1094,7 @@ class DataBaseChats:
                         c.reaction AS reaction,
                         c.model_type AS model_type,
                         c.tokens_usage AS tokens_usage,
+                        c.tool_calls AS tool_calls,
                         COALESCE(
                             (
                                 SELECT json_agg(
@@ -1227,6 +1262,8 @@ class DataBaseChats:
                         "files": files or [],
                         "poll_answers": poll_answers or [],
                         "tasks": tasks or [],
+                        # Граф «Размышлений» из истории: вызовы тулов ответа (без имени тула).
+                        **({"steps": _front_steps(row["tool_calls"])} if row["is_from_bot"] and row["tool_calls"] else {}),
                         # Оверлей «Использование ресурсов за ход»: только у ответов агента,
                         # модель — семейство (claude/gpt/gemini...), без точного имени.
                         **(_usage_fields(row) if row["is_from_bot"] else {}),

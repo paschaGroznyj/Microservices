@@ -1,3 +1,5 @@
+/* Сообщений на страницу истории чата (первая загрузка и дозагрузка вверх/вниз). */
+const HISTORY_PAGE = 10;
 // CatchPM — Chat SPA
 
 // FlowMap: путь запроса (flowmap.js). Отключить: localStorage.setItem('fm:off','1').
@@ -872,7 +874,7 @@ class ChatApp {
         if (isNewChat) {
             this._pagination = {
                 chatId,
-                pageSize: 50,
+                pageSize: HISTORY_PAGE,
                 loaded: 0,
                 hasMore: false,
                 hasNewer: false,
@@ -1251,7 +1253,7 @@ class ChatApp {
        MESSAGES
     ══════════════════════════════════════════ */
     async loadMessages(chatId) {
-        const PAGE_SIZE = 50;
+        const PAGE_SIZE = HISTORY_PAGE;
         const key = String(chatId);
         this._loadingMessagesChat = key;
         let res;
@@ -1482,7 +1484,7 @@ class ChatApp {
 
         let res;
         try {
-            res = await fetch(`/api/chats/${chatId}/messages?limit=50&offset=0`, {
+            res = await fetch(`/api/chats/${chatId}/messages?limit=${HISTORY_PAGE}&offset=0`, {
                 credentials: 'include',
                 redirect: 'manual'
             });
@@ -1620,6 +1622,16 @@ class ChatApp {
         } finally {
             p.loading = false;
         }
+        this._fillHistoryViewport();
+    }
+
+    /* Страница истории маленькая (HISTORY_PAGE): если она не заполнила экран, скролла нет
+       и верхний триггер дозагрузки не сработает — догружаем, пока лента не станет выше окна. */
+    _fillHistoryViewport() {
+        const p = this._pagination, c = this.getMessagesContainer();
+        if (!p || !c || p.loading || !p.hasMore || String(p.chatId) !== String(this.currentChat)) return;
+        if (!c.clientHeight) return;   // лента скрыта: высоты нет, иначе выкачаем всю историю
+        if (c.scrollHeight - c.clientHeight < 160) requestAnimationFrame(() => this.loadOlderMessages());
     }
 
     /**
@@ -1688,6 +1700,7 @@ class ChatApp {
     _initHistoryScrollLoader() {
         const container = this.getMessagesContainer();
         if (!container) return;
+        requestAnimationFrame(() => this._fillHistoryViewport());
         if (container._historyLoaderBound) return;
         container._historyLoaderBound = true;
 

@@ -630,6 +630,8 @@ class ChatApp {
             const id = String(raw);
             // Ответ мог уйти до локальной отметки (отправка/финал) — 4 с доверяем локальной.
             if (now - (this._runningLocalAt?.[id] || 0) < 4000) continue;
+            // Текущий чат с поднятой стоп-кнопкой не гасим: опрос мог не успеть за флагом.
+            if (this._runState === 'running' && id === String(this.currentChat ?? '')) continue;
             const had = this._runningChats.has(id);
             const isOn = on.has(id);
             if (had === isOn) continue;
@@ -5036,6 +5038,34 @@ class ChatApp {
         }
     }
 
+    /* «Размышления» по первому tool_start. Плашка раньше создавалась только живым
+       текстом мысли (kind=live). Claude (adaptive thinking, imitate_tool_status: false)
+       на простых шагах зовёт тул без thinking и без текста — тогда вызовы копились в
+       pending ReasoningRounds и блок не появлялся вовсе (или только с первой мыслью).
+       GPT/Gemini это закрывает имитация статуса. Здесь: тул идёт → пузырь и свёрток есть. */
+    _flowReasoningBody(chatId, f) {
+        const st = this._resolveStream(chatId);
+        const el = st?.reasoningWrapEl || st?.pendingBotEl?.querySelector('.reasoning-block') || null;
+        if (el || !st || !f || f.ev !== 'tool_start' || st.streamIsFinal) return el;
+        const key = String(chatId);
+        const container = this._isActiveChat(chatId) ? this.getMessagesContainer() : null;
+        if (!st.runStartedAt) st.runStartedAt = Date.now();
+        if (!st.pendingBotEl) {
+            st.pendingBotEl = document.createElement('div');
+            st.pendingBotEl.className = 'agent-message';
+            st.pendingBotEl.dataset.id = f.request_id || '';
+            if (container && this._loadingMessagesChat !== key) {
+                this._dedupeTurnReasoningAndActions(container, st, f.request_id);
+                this._ensureBotAfterLastUserMessage(container, st.pendingBotEl);
+                this._clearAllStatuses();
+            }
+            st.botAnswered = true;
+            st.streamingActive = true;
+        }
+        const body = this._ensureReasoningWrap(chatId);
+        return body ? body.closest('.reasoning-block') : null;
+    }
+
     _ensureReasoningWrap(chatId) {
         const st = this._resolveStream(chatId);
         if (!st) return null;
@@ -5312,6 +5342,10 @@ class ChatApp {
         const sendBtn = container?.querySelector('#send-btn');
         if (!sendBtn) return;
         if (mode === 'stop') {
+            // «Агент работает» в сайдбаре — вместе со стоп-кнопкой (agent:running), не ждём flow/опроса.
+            if (this.currentChat != null && !this._runningChats?.has(String(this.currentChat))) {
+                this._markChatRunning(this.currentChat, true);
+            }
             sendBtn.disabled = false;
             sendBtn.classList.add('active', 'stop-mode');
             sendBtn.setAttribute('aria-label', 'Остановить');
@@ -5631,10 +5665,7 @@ class ChatApp {
 
             let f; try { f = JSON.parse(ev.data); } catch (_) { return; }
             if (this._isActiveChat(key)) _fm(f.ev, { ...f, chat: key, id: f.call_id || undefined });
-            window.ReasoningRounds?.flow(key, f, () => {
-                const s = this._resolveStream(key);
-                return s?.reasoningWrapEl || s?.pendingBotEl?.querySelector('.reasoning-block') || null;
-            });
+            window.ReasoningRounds?.flow(key, f, () => this._flowReasoningBody(key, f));
         });
         es.addEventListener('reasoning_end', () => {
             if (this._isActiveChat(key)) _fm('think_end', { chat: key });

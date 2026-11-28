@@ -367,23 +367,24 @@ services:
       AGENT_POOL_PASSWORD: ${AGENT_POOL_PASSWORD}
       POSTGRES_INITDB_ARGS: "--data-checksums"
 
-      # Настройки PostgreSQL для производительности и автоочистки
-      command: >
-        postgres
-        -c autovacuum=on
-        -c max_connections=300
-        -c autovacuum_vacuum_scale_factor=0.2
-        -c autovacuum_vacuum_threshold=5000
-        -c autovacuum_vacuum_cost_delay=20ms
-        -c min_wal_size=500MB
-        -c max_wal_size=2GB
-        -c wal_keep_size=0
-        -c checkpoint_timeout=15min
-        -c log_min_duration_statement=1000
-        -c shared_buffers=256MB
-        -c work_mem=8MB
-        -c maintenance_work_mem=64MB
-        -c effective_cache_size=768MB
+    # Настройки PostgreSQL для производительности и автоочистки.
+    # command на уровне сервиса: внутри environment он был переменной окружения и не применялся.
+    command: >
+      postgres
+      -c autovacuum=on
+      -c max_connections=300
+      -c autovacuum_vacuum_scale_factor=0.2
+      -c autovacuum_vacuum_threshold=5000
+      -c autovacuum_vacuum_cost_delay=20ms
+      -c min_wal_size=500MB
+      -c max_wal_size=2GB
+      -c wal_keep_size=0
+      -c checkpoint_timeout=15min
+      -c log_min_duration_statement=1000
+      -c shared_buffers=256MB
+      -c work_mem=8MB
+      -c maintenance_work_mem=64MB
+      -c effective_cache_size=768MB
 
     ports:
       - "5433:5432"

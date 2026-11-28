@@ -3,7 +3,7 @@
 
 Фронт (groupInteraction.js) копит клики 1 с и шлёт пачку в
 POST /api/group/reactions. Гейтвей кладёт её в Redis-хеш
-  gc:react:pending   field "<message_id>:<user_id>" -> emoji ('' = снять)
+  gc:react:pending   field "<message_id>:<user_id>" -> JSON list of emojis ([] = снять)
 Последний клик пользователя по сообщению перезаписывает прежний, поэтому
 пачка всегда содержит итоговое состояние, а повтор безопасен (операция
 «установить», не «переключить»).
@@ -18,15 +18,60 @@ reactions в комнату). При ошибке поля возвращают�
 Если Redis недоступен, пачка уходит в chats_service напрямую.
 """
 import asyncio
+import json
 import logging
 import os
 import uuid
+
+# Keep the palette and normalization in sync with chats_service/app/core/reactions.py.
+REACTION_EMOJI = (
+    "❤️", "🔥", "😁", "👎", "👍", "💯", "😢", "😨",
+    "👌", "😱", "🤯", "🤩", "🤡", "🤔", "🥺", "🤝",
+    "🥰", "👏", "🤬", "🎉", "🤮", "💩", "🙏", "🕊️",
+    "🥱", "🥴", "😍", "🐳", "❤️‍🔥", "🌚", "🌭", "🤣",
+    "⚡", "🍌", "🏆", "💔", "🤨", "😐", "🍓", "🍾",
+    "💋", "🖕", "😈", "😴", "😭", "🤓", "👻", "👨‍💻",
+    "👀", "🎃", "🙈", "😇", "✍️", "🤗", "🫡", "🎅",
+    "🎄", "☃️", "💅", "🤪", "🗿", "🆒", "💘", "🦄",
+    "✅", "❌", "0️⃣", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣",
+    "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🦧", "🤷‍♂️", "🤦‍♂️", "🫂",
+)
+_ALLOWED = frozenset(REACTION_EMOJI)
+def normalize_emojis(value) -> list[str]:
+    """Canonical list; accept legacy emoji/empty string, reject invalid input.
+
+    Deduplicate before enforcing the limit: the limit counts distinct reactions.
+    """
+    if isinstance(value, str):
+        value = [value] if value else []
+    if not isinstance(value, list):
+        raise ValueError("emojis must be a list")
+    result = []
+    for emoji in value:
+        if not isinstance(emoji, str) or emoji not in _ALLOWED:
+            raise ValueError("unsupported reaction emoji")
+        if emoji not in result:
+            result.append(emoji)
+    if len(result) > 3:
+        raise ValueError("at most 3 reactions per user per message")
+    return result
+
+
+def reaction_emojis(op: dict) -> list[str]:
+    """Explicit emojis (including []) takes precedence over legacy emoji."""
+    if "emojis" in op:
+        if not isinstance(op["emojis"], list):
+            raise ValueError("emojis must be a list")
+        return normalize_emojis(op["emojis"])
+    return normalize_emojis(op.get("emoji", ""))
+
 
 logger = logging.getLogger(__name__)
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 PENDING_KEY = "gc:react:pending"
 INFLIGHT_PREFIX = "gc:react:inflight:"
+MAX_APPLY_OPS = 2000
 DEBOUNCE = float(os.getenv("GC_REACT_DEBOUNCE", "1.0"))
 SWEEP = float(os.getenv("GC_REACT_SWEEP", "5.0"))
 # inflight старше этого считаем брошенным упавшим воркером
@@ -57,16 +102,41 @@ def _field(message_id: int, user_id: int) -> str:
 
 def _ops_from(mapping: dict) -> list:
     ops = []
-    for field, emoji in (mapping or {}).items():
+    for field, payload in (mapping or {}).items():
         try:
-            mid, uid = field.split(":", 1)
-            ops.append({"message_id": int(mid), "user_id": int(uid), "emoji": emoji or ""})
-        except (ValueError, AttributeError):
+            if isinstance(field, bytes):
+                field = field.decode("utf-8")
+            mid, uid = (int(part) for part in field.split(":"))
+            if mid <= 0:
+                continue
+            if isinstance(payload, bytes):
+                payload = payload.decode("utf-8")
+            if not isinstance(payload, str):
+                continue
+            try:
+                value = json.loads(payload)
+            except ValueError:
+                value = payload  # old pending entries contain raw emoji or ''
+            emojis = normalize_emojis(value)
+            ops.append({"message_id": mid, "user_id": uid, "emojis": emojis})
+        except (ValueError, TypeError, AttributeError):
+            # A corrupt field must not poison the other users' valid operations.
             continue
     return ops
 
 
+class ReactionDeliveryError(RuntimeError):
+    pass
+
+
 async def _post(ops: list) -> bool:
+    for offset in range(0, len(ops), MAX_APPLY_OPS):
+        if not await _post_chunk(ops[offset:offset + MAX_APPLY_OPS]):
+            return False
+    return True
+
+
+async def _post_chunk(ops: list) -> bool:
     if not ops:
         return True
     try:
@@ -84,8 +154,9 @@ async def _post(ops: list) -> bool:
 
 
 async def enqueue(user_id: int, items: list) -> str:
-    """items: [{message_id, emoji}]. Возвращает 'redis' | 'direct'."""
-    mapping = {_field(it["message_id"], user_id): it.get("emoji") or "" for it in items}
+    """items: [{message_id, emojis}] (legacy emoji accepted). Возвращает 'redis' | 'direct'."""
+    mapping = {_field(it["message_id"], user_id): json.dumps(reaction_emojis(it), ensure_ascii=False)
+               for it in items}
     if not mapping:
         return "redis"
     if _redis is not None:
@@ -96,7 +167,8 @@ async def enqueue(user_id: int, items: list) -> str:
             return "redis"
         except Exception as e:
             logger.warning("reactions_bus: redis down, direct apply: %s", e)
-    await _post(_ops_from(mapping))
+    if not await _post(_ops_from(mapping)):
+        raise ReactionDeliveryError("reaction delivery failed")
     return "direct"
 
 

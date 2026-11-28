@@ -77,7 +77,7 @@
         if (empty) return;
         // Свёрнутый блок имеет display:none, мерить нечего.
         if (!body.offsetParent && getComputedStyle(body).display === 'none') return;
-        body.querySelectorAll(STEP).forEach(function (step) {
+        body.querySelectorAll(':scope > ' + STEP).forEach(function (step) {
             if (step.classList.contains('reasoning-step--open')) {
                 step.classList.add('reasoning-step--clampable');
                 return;
@@ -95,6 +95,12 @@
                 step.removeAttribute('aria-expanded');
             }
         });
+        // Граф без бабла сворачивается шапкой: нижняя кнопка ему не нужна.
+        if (body.classList.contains('rr-on')) {
+            body.querySelectorAll(':scope > .reasoning-collapse-btn').forEach(function (btn) { btn.remove(); });
+            body.classList.remove('reasoning-body--tall');
+            return;
+        }
         var btn = ensureButton(body);
         // Кнопку не считаем в высоту, иначе она бы включалась и выключалась по кругу.
         var h = body.getBoundingClientRect().height - (btn.offsetHeight || 0);
@@ -103,6 +109,9 @@
     }
 
     function attach(body) {
+        // Шаг мог быть уже вынут из .reasoning-body (reasoning-rounds перекладывает
+        // мысли в раунды) — тогда closest() даёт null, а WeakSet.add(null) бросает.
+        if (!body || body.nodeType !== 1) return;
         if (seen.has(body)) { schedule(body); return; }
         seen.add(body);
         if (ro) ro.observe(body);
@@ -110,7 +119,7 @@
     }
 
     function scan(node) {
-        if (!node || node.nodeType !== 1) return;
+        if (!node || node.nodeType !== 1 || !node.isConnected) return;
         if (node.matches(BODY)) attach(node);
         else if (node.matches(STEP)) attach(node.closest(BODY));
         if (node.querySelectorAll) node.querySelectorAll(BODY).forEach(attach);

@@ -269,8 +269,9 @@ services:
       ALGORITHM: ${ALGORITHM}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       SANDBOX_SERVICE_URL: ${SANDBOX_SERVICE_URL:-http://agent_sandbox:8005}
-      EDITOR_NOTIFY_TOKEN: ${EDITOR_NOTIFY_TOKEN:-}
+      EDITOR_NOTIFY_TOKEN: ${EDITOR_NOTIFY_TOKEN:-} 
       DEVICE_BRIDGE_SERVICE_TOKEN: ${DEVICE_BRIDGE_SERVICE_TOKEN:-}
+      FORWARDED_ALLOW_IPS: "127.0.0.1,::1,172.28.0.1"
     volumes:
       - ./api_gateway:/app
       - ./gw_shared:/app/gw_shared
@@ -302,6 +303,8 @@ services:
       SANDBOX_SERVICE_URL: ${SANDBOX_SERVICE_URL:-http://agent_sandbox:8005}
       EDITOR_NOTIFY_TOKEN: ${EDITOR_NOTIFY_TOKEN:-}
       DEVICE_BRIDGE_SERVICE_TOKEN: ${DEVICE_BRIDGE_SERVICE_TOKEN:-}
+      FORWARDED_ALLOW_IPS: "127.0.0.1,::1,172.28.0.1"
+
     volumes:
       - ./api_gateway_sigma:/app
       - ./api_gateway/static:/app/static

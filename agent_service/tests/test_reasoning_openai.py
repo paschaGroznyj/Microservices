@@ -131,3 +131,57 @@ def test_astream_collect_keeps_reasoning():
     expected = _raw_reasoning(GPT_HIGH_EVENTS)
     assert result.additional_kwargs["reasoning_content"] == expected
     assert "".join(seen) == expected
+
+
+# GigaChat 4: delta.reasoning, tool_state_id, один usage в конце, prompt_tokens БЕЗ cached
+# (форма реального стрима GigaChat/GigaChat-4-708B-A41, 27.11.2026)
+GIGA4_EVENTS = [
+    _ev({"role": "assistant", "reasoning": "Нужно вызвать get_weather."}),
+    _ev({"reasoning": " Параметр city = Самара."}),
+    _ev({"tool_calls": [{"index": 0, "type": "function", "id": "057d6e30",
+                         "function": {"name": "get_weather", "arguments": "{\"city\":\"Самара\"}"}}],
+         "tool_state_id": "01a21dc7"}),
+    _ev({}, finish="tool_calls"),
+    _ev(None, usage={"prompt_tokens": 17, "prompt_tokens_details": {"cached_tokens": 3328},
+                     "completion_tokens": 568, "total_tokens": 585}),
+]
+
+
+def test_giga4_stream_reasoning_tools_and_cached_usage():
+    llm = ChatOpenAIWithReasoning(model="GigaChat/GigaChat-4-708B-A41", api_key="replay",
+                                  prompt_tokens_exclude_cached=True)
+    agg = _replay(llm, GIGA4_EVENTS)
+    assert agg.additional_kwargs["reasoning_content"] == "Нужно вызвать get_weather. Параметр city = Самара."
+    assert [(c["name"], c["args"]) for c in agg.tool_calls] == [("get_weather", {"city": "Самара"})]
+    um = agg.usage_metadata
+    assert um["input_tokens"] == 17 + 3328
+    assert um["input_token_details"]["cache_read"] == 3328
+    assert um["total_tokens"] == 585 + 3328
+
+
+def test_cached_usage_untouched_without_flag():
+    agg = _replay(ChatOpenAIWithReasoning(model="x", api_key="replay"), GIGA4_EVENTS)
+    assert agg.usage_metadata["input_tokens"] == 17
+
+
+def test_nonstream_result_keeps_reasoning_and_fixes_usage():
+    llm = ChatOpenAIWithReasoning(model="GigaChat/GigaChat-4-708B-A41", api_key="replay",
+                                  prompt_tokens_exclude_cached=True)
+    resp = {"model": "GigaChat-4-708B-A41B:4.0.17.11", "choices": [{"index": 0, "finish_reason": "stop",
+            "message": {"role": "assistant", "content": "4", "reasoning": "2+2=4."}}],
+            "usage": {"prompt_tokens": 13, "prompt_tokens_details": {"cached_tokens": 3328},
+                      "completion_tokens": 9, "total_tokens": 22}}
+    msg = llm._create_chat_result(resp).generations[0].message
+    assert msg.content == "4"
+    assert msg.additional_kwargs["reasoning_content"] == "2+2=4."
+    assert msg.usage_metadata["input_tokens"] == 13 + 3328
+
+
+def test_giga4_spec_flag_reaches_llm(monkeypatch):
+    monkeypatch.setattr(ap, "CLOUD_LLM_ACCESS_KEY", "replay")
+    spec = ap.get_model_spec("gigachat")
+    assert spec.model == "GigaChat/GigaChat-4-708B-A41"
+    assert spec.prompt_tokens_exclude_cached is True
+    llm = ap.build_llm_from_spec(spec)
+    inner = getattr(llm, "bound", llm)
+    assert getattr(inner, "prompt_tokens_exclude_cached", None) is True

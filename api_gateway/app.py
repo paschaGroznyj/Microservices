@@ -237,7 +237,6 @@ async def websocket_chat(websocket: WebSocket, chat_id: str):
 async def broadcast(chat_id: str, message: dict):
     dead = []
     for ws in list(connections.get(chat_id, [])):
-        logging.info(f"Подключение {ws}, сообщение {message}")
         try:
             await ws.send_json(message)
         except Exception as e:
@@ -309,7 +308,6 @@ async def bot_stream(payload: BotStream):
 @app.post("/internal/bot_message")
 async def receive_bot_message(bot_msg: BotMessage):
     """Получаем сообщения от бота через DB Consumer и отправляем через WebSocket"""
-    logging.info(f"Получено сообщение от бота для chat_id={bot_msg.chat_id}: {bot_msg.message}")
     start = time.perf_counter()
 
     # Финал пришёл — снимаем Redis-флаг «агент в работе» ДО рассылки в WS,
@@ -335,7 +333,6 @@ async def receive_bot_message(bot_msg: BotMessage):
         logging.warning(f"title_update broadcast не удался: {e}")
 
     elapsed = time.perf_counter() - start
-    logging.info(f"Message Service. Время на отправку в сокет и сообщение от бота = {elapsed:.4f}s")
 
 
 # Service Discovery функция
@@ -387,8 +384,6 @@ async def get_current_user(request: Request):
     """Получение текущего пользователя из cookie"""
     authentik_user = request.headers.get("X-Authentik-Username")
     if authentik_user:
-        # Автоматически создаём/находим юзера в БД
-        logging.info(authentik_user)
         # user = await db.get_or_create_user(authentik_user)
         auth_url = SERVICES['auth']['url']
         try:
@@ -549,7 +544,6 @@ async def login_web(
             timeout=30.0
         )
         elapsed = time.perf_counter() - start
-        logging.info(f"AUTH latency = {elapsed:.4f}s")
         if response.status_code == 200:
             login_data = response.json()
             token = login_data.get("access_token")
@@ -754,7 +748,6 @@ async def me(request: Request):
             timeout=10.0
         )
         if response.status_code == 200:
-            logging.info(f'Статистика пользователя: {type(response.content)}')
             data = response.json()
             data["name"] = await get_first_last_name(request)
             return JSONResponse(content=data, status_code=200)
@@ -1194,7 +1187,13 @@ async def send_message(request: Request):
 
     # Получаем данные из запроса
     data = await request.json()
-    logging.info(data)
+    logger.info(
+        "send_message user_id=%s x_forwarded_for=%s x_real_ip=%s peer_ip=%s",
+        user["user_id"],
+        request.headers.get("x-forwarded-for", "-"),
+        request.headers.get("x-real-ip", "-"),
+        request.client.host if request.client else "-",
+    )
     raw_cmd = (data.get("message") or "").strip().lower()
     if raw_cmd in ("/chat-id", "/workspaces"):
         if raw_cmd == "/workspaces":
@@ -1248,7 +1247,6 @@ async def send_message(request: Request):
     }
     if packed:
         message["files"] = packed["files"]
-    print("Перед отправкой сообщения", data)
     # Флаг «агент в работе» в Redis: переживает F5/переключение чата,
     # фронт по нему восстанавливает стоп-кнопку и индикатор работы.
     # Ставим ДО broadcast эха: другая вкладка по эху сразу спрашивает run_status.
@@ -1271,7 +1269,6 @@ async def send_message(request: Request):
             json=data
         )
         elapsed = time.perf_counter() - start
-        logging.info(f"Время на отправку сообщения пользователя в микросервис = {elapsed:.4f}s")
         body = {}
         try:
             body = response.json()
@@ -1371,6 +1368,33 @@ async def chat_ws_diff(chat_id: str, request: Request):
     running = await run_status.get_running(chat_id)
     rid = running.get("request_id") if isinstance(running, dict) else None
     return JSONResponse(content={"chat_id": chat_id, "running_request_id": rid, "items": items})
+
+_WSD_WS_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_WSD_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,200}$")
+
+
+@app.get("/api/chats/{chat_id}/ws_diff/step")
+async def chat_ws_diff_step(chat_id: str, request: Request, workspace_id: str, request_id: str, call_id: str):
+    """Patch одного вызова тула (клик по шагу в «Размышлениях»).
+    Гейт: workspace закреплён за пользователем (реестр редактора), а запрос в sandbox
+    сверяется с chat_id — чужой request_id из другого чата даёт 404."""
+    user = await get_current_user(request)
+    if not user or not user.get("user_id"):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not (_WSD_WS_RE.match(workspace_id) and _WSD_ID_RE.match(request_id) and _WSD_ID_RE.match(call_id)):
+        raise HTTPException(status_code=400, detail="bad id")
+    await editor_gw._assert_owns(user["user_id"], workspace_id)
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(f"{WS_SANDBOX_URL}/workspace/{quote(workspace_id, safe='')}/diff/step",
+                                 params={"request_id": request_id, "call_id": call_id, "chat_id": str(chat_id)})
+    except Exception as e:
+        logger.warning(f"[ws_diff] step: sandbox недоступен: {e}")
+        raise HTTPException(status_code=502, detail="sandbox unavailable")
+    if r.status_code != 200:
+        raise HTTPException(status_code=404 if r.status_code == 404 else 502, detail="step not found")
+    return JSONResponse(content=r.json())
+
 
 @app.get("/api/chats/{chat_id}/flow")
 async def chat_flow(chat_id: str, request: Request):
@@ -1712,7 +1736,6 @@ async def get_chats(request: Request):
         )
         
         elapsed = time.perf_counter() - start
-        logging.info(f"Время подгрузки чатов = {elapsed:.4f}s")
 
         if response.status_code != 200:
             raise HTTPException(status_code=502, detail="Chats service error")

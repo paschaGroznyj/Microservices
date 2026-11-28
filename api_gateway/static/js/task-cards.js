@@ -207,9 +207,23 @@
         return at;
     }
 
+    // Есть «Размышления» у ответа — задача становится узлом графа (reasoning-rounds.js), карточку убираем.
+    function toGraph(msgEl, t, at) {
+        const RR = window.ReasoningRounds;
+        if (!RR || !RR.task) return false;
+        if (!RR.task(msgEl, t, at)) return false;
+        document.querySelectorAll(`.task-card[data-task-id="${sel(t.task_id)}"]`).forEach((c) => {
+            const g = c.parentElement; c.remove(); if (g && g.classList.contains('task-cards') && !g.children.length) g.remove();
+        });
+        return true;
+    }
     function upsert(container, task, opts = {}) {
         if (!container || !task || !task.task_id) return null;
         const at = remember(task);
+        const gmsg = byMessageId(container, task.message_id)
+            || (opts.pendingEl && opts.pendingEl.isConnected ? opts.pendingEl : null)
+            || pendingMessage(container);
+        if ((window.ReasoningRounds?.hasTask?.(task.task_id) && toGraph(null, task, at)) || (gmsg && toGraph(gmsg, task, at))) return null;
         if (!collapsed.has(task.task_id)) collapsed.set(task.task_id, false);
         let card = findCard(container, task.task_id);
         const host = card && card.closest(AGENT);
@@ -240,6 +254,7 @@
             const fresh = !prev || prev.task.seq == null || (prev.task.seq || 0) <= (t.seq || 0);
             const snap = fresh ? t : prev.task;
             const at = fresh ? remember(t) : prev.at;
+            if (toGraph(messageEl, snap, at)) return;
             const card = findCard(root, t.task_id) || document.createElement('div');
             render(card, snap, at);
             g.appendChild(card);
@@ -262,6 +277,8 @@
         ids.forEach((id) => {
             let card = findCard(container, id);
             const s = seen.get(id);
+            if (!card && window.ReasoningRounds?.hasTask?.(id)) return;   // задача уже узлом в графе
+            if (s && toGraph(target, s.task, s.at)) return;
             if (!card && s) { card = document.createElement('div'); render(card, s.task, s.at); }
             if (card) g.appendChild(card);
         });
@@ -291,5 +308,6 @@
         toggle(h.parentElement);
     });
 
-    window.TaskCards = { upsert, mount, settle, place, toggle, _render: render };
+    window.TaskCards = { upsert, mount, settle, place, toggle, _render: render,
+        snapshot: (id) => seen.get(String(id)) || null };
 })();

@@ -1,12 +1,7 @@
 /* FlowMap: путь запроса */
 #fvHud{position:fixed;right:10px;bottom:10px;font:11px var(--font-mono);color:var(--text-secondary);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 8px;display:none;z-index:50;white-space:pre}
-.fm-mini{position:absolute;left:16px;bottom:calc(100% + 14px - 22px);width:340px;height:44px;border:1px solid var(--border);background:var(--surface);border-radius:var(--radius-md);box-shadow:0 4px 18px rgba(0,0,0,.06);cursor:pointer;opacity:0;transform:translateY(6px);pointer-events:none;transition:opacity .25s,transform .25s}
-.fm-mini.is-on{opacity:1;transform:none;pointer-events:auto}
-.fm-mini:hover{border-color:var(--accent-muted)}
-.fm-mini canvas{display:block;width:100%;height:100%}
 .fm-back{position:fixed;inset:0;background:rgba(0,0,0,.4);backdrop-filter:blur(3px);display:none;align-items:center;justify-content:center;z-index:40}
 [data-theme="dark"] .fm-back{background:rgba(0,0,0,.7)}
-.fm-back.is-open{display:flex}
 .fm-dlg{width:min(1280px,94vw);height:min(760px,86vh);background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-lg);display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.18)}
 .fm-head{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--border);flex-wrap:wrap}
 .fm-title{font:600 11px var(--font-mono);letter-spacing:.12em;color:var(--text-secondary);margin-right:auto}
@@ -53,7 +48,6 @@
 @media (max-width:700px){
 .fm-back{align-items:stretch;justify-content:stretch}
 .fm-dlg{width:100vw;height:100vh;height:100dvh;max-height:100dvh;border-radius:0;border:0}
-.fm-mini{width:calc(100% - 24px)}
 .fm-head{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;column-gap:8px;row-gap:8px;padding:calc(10px + env(safe-area-inset-top)) 12px 10px}
 .fm-title{grid-column:1/3;grid-row:1;margin:0}
 .fm-x{grid-column:3;grid-row:1;width:42px;height:38px;justify-self:end}
@@ -70,24 +64,8 @@
 .fm-foot{padding:8px 12px calc(12px + env(safe-area-inset-bottom))}
 }
 
-/* ── Вертикальная панель в правом поле #view-agent ── */
-.fm-rail{position:absolute;top:82px;left:calc(50% + 372px);width:172px;height:456px;border:1px solid var(--border);background:var(--surface);border-radius:var(--radius-md);box-shadow:0 4px 18px rgba(0,0,0,.06);cursor:pointer;opacity:0;transform:translateX(10px);pointer-events:none;transition:opacity .25s ease,transform .25s ease,border-color .2s;z-index:5}
-.fm-rail.is-on{opacity:1;transform:none;pointer-events:auto}
-.fm-rail:hover,.fm-rail:focus-visible{border-color:var(--accent-muted);outline:none}
-.fm-rail canvas{display:block;width:100%;height:100%}
-.fm-rail__x,.fm-mini__x{position:absolute;top:4px;right:4px;width:26px;height:26px;border:0;background:transparent;color:var(--text-secondary);border-radius:6px;cursor:pointer;font-size:16px;line-height:26px;padding:0;z-index:2}
-.fm-mini__x{top:50%;right:5px;transform:translateY(-50%)}
-.fm-rail__x:hover,.fm-rail__x:focus-visible,.fm-mini__x:hover,.fm-mini__x:focus-visible{background:var(--surface2);color:var(--text-primary);outline:none}
-/* ── Горизонтальная полоса над полем ввода (fallback + мобилка на всю ширину chat-input-box) ── */
-.chat-input-area>.fm-mini{left:var(--fm-in-l,0px);right:var(--fm-in-r,0px);bottom:calc(100% + 8px);width:auto;max-width:none;z-index:5}
-.fm-mini:focus-visible{border-color:var(--accent-muted);outline:none}
-/* ── Плейсхолдер ожидания как точка входа ── */
-.agent-placeholder .wave-indicator.fm-tap{pointer-events:auto;cursor:pointer;border-radius:8px;margin-left:-6px;padding:2px 6px;box-sizing:content-box;transition:background .22s,box-shadow .22s}
-.agent-placeholder .wave-indicator.fm-tap.is-hint{background:color-mix(in srgb,var(--accent) 9%,transparent);box-shadow:0 0 0 1.5px color-mix(in srgb,var(--accent) 56%,transparent),0 0 12px color-mix(in srgb,var(--accent) 22%,transparent);animation:fmTapHint 3.6s ease-in-out forwards}
-.agent-placeholder .wave-indicator.fm-tap:hover,.agent-placeholder .wave-indicator.fm-tap:focus-visible{background:color-mix(in srgb,var(--accent) 10%,transparent);box-shadow:0 0 0 1.5px color-mix(in srgb,var(--accent) 48%,transparent),0 0 10px color-mix(in srgb,var(--accent) 16%,transparent);animation:none;outline:none}
-.agent-placeholder .wave-indicator.fm-tap.is-linked{box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 34%,transparent)}
-@keyframes fmTapHint{0%{background:color-mix(in srgb,var(--accent) 4%,transparent);box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 22%,transparent),0 0 0 0 transparent}18%,56%{background:color-mix(in srgb,var(--accent) 11%,transparent);box-shadow:0 0 0 1.5px color-mix(in srgb,var(--accent) 64%,transparent),0 0 14px 2px color-mix(in srgb,var(--accent) 24%,transparent)}38%{background:color-mix(in srgb,var(--accent) 6%,transparent);box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 36%,transparent),0 0 6px 0 color-mix(in srgb,var(--accent) 12%,transparent)}82%{background:color-mix(in srgb,var(--accent) 8%,transparent);box-shadow:0 0 0 1.25px color-mix(in srgb,var(--accent) 46%,transparent),0 0 10px 1px color-mix(in srgb,var(--accent) 16%,transparent)}100%{background:transparent;box-shadow:0 0 0 1px transparent,0 0 0 0 transparent}}
-@media (max-width:768px){.fm-rail{display:none}.chat-input-area>.fm-mini{left:var(--fm-in-l,0px);right:var(--fm-in-r,0px);width:auto;max-width:none;border-radius:var(--radius-lg)}.fm-mini__x{width:30px;height:30px;line-height:30px;font-size:18px;right:4px}}
+/* ── Плейсхолдер ожидания: пасхалка по клику ── */
+.agent-placeholder .wave-indicator.fm-tap{pointer-events:auto;cursor:pointer;-webkit-tap-highlight-color:transparent;user-select:none}
 
 /* ── Блоки «думает»: вплотную к тулам, тап открывает оверлей «Размышления» ── */
 .fm-tl__row--tools{overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch}
@@ -110,5 +88,15 @@
 .fm-think__empty{color:var(--text-muted)}
 @keyframes fmThinkIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 @media (max-width:700px){.fm-think{max-height:52dvh}.fm-think__x{width:34px;height:34px;line-height:34px;font-size:18px}}
-@media (prefers-reduced-motion:reduce){.fm-think.is-on,.fm-think__live::before,.agent-placeholder .wave-indicator.fm-tap.is-hint{animation:none}}
+@media (prefers-reduced-motion:reduce){.fm-think.is-on,.fm-think__live::before{animation:none}}
 .fm-think.no-arrow::after{display:none}
+
+.wave-indicator.rgw-egg .rgw-box{animation:rgwEggSvg .9s ease-out}
+.wave-indicator.rgw-egg .rgw-n{animation:rgwEgg .6s cubic-bezier(.3,1.6,.5,1) both!important;opacity:1}
+.wave-indicator.rgw-egg .rgw-e{transform:none!important;opacity:1!important;animation:none!important}
+.wave-indicator.rgw-egg .rgw-n:nth-of-type(n){animation-delay:0s}
+.rgw-say{position:absolute;left:calc(100% + 10px);top:50%;transform:translateY(-50%);white-space:nowrap;font-size:12.5px;color:var(--text-secondary,var(--muted,#888));animation:rgwSay 2.2s ease forwards;pointer-events:none}
+@keyframes rgwEgg{0%{transform:translateY(0) scale(1)}40%{transform:translateY(-7px) scale(1.25)}100%{transform:translateY(0) scale(1)}}
+@keyframes rgwEggSvg{30%{transform:rotate(-2deg)}60%{transform:rotate(2deg)}}
+@keyframes rgwSay{0%{opacity:0;transform:translate(-4px,-50%)}12%,80%{opacity:1;transform:translate(0,-50%)}100%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.wave-indicator.rgw-egg .rgw-box,.wave-indicator.rgw-egg .rgw-n{animation:none!important}.rgw-say{animation:none}}

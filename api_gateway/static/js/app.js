@@ -1,3 +1,5 @@
+/* Сообщений на страницу истории чата (первая загрузка и дозагрузка вверх/вниз). */
+const HISTORY_PAGE = 10;
 // CatchPM — Chat SPA
 
 // FlowMap: путь запроса (flowmap.js). Отключить: localStorage.setItem('fm:off','1').
@@ -584,6 +586,8 @@ class ChatApp {
             const id = String(raw);
             // Ответ мог уйти до локальной отметки (отправка/финал) — 4 с доверяем локальной.
             if (now - (this._runningLocalAt?.[id] || 0) < 4000) continue;
+            // Текущий чат с поднятой стоп-кнопкой не гасим: опрос мог не успеть за флагом.
+            if (this._runState === 'running' && id === String(this.currentChat ?? '')) continue;
             const had = this._runningChats.has(id);
             const isOn = on.has(id);
             if (had === isOn) continue;
@@ -872,7 +876,7 @@ class ChatApp {
         if (isNewChat) {
             this._pagination = {
                 chatId,
-                pageSize: 50,
+                pageSize: HISTORY_PAGE,
                 loaded: 0,
                 hasMore: false,
                 hasNewer: false,
@@ -1251,7 +1255,7 @@ class ChatApp {
        MESSAGES
     ══════════════════════════════════════════ */
     async loadMessages(chatId) {
-        const PAGE_SIZE = 50;
+        const PAGE_SIZE = HISTORY_PAGE;
         const key = String(chatId);
         this._loadingMessagesChat = key;
         let res;
@@ -1482,7 +1486,7 @@ class ChatApp {
 
         let res;
         try {
-            res = await fetch(`/api/chats/${chatId}/messages?limit=50&offset=0`, {
+            res = await fetch(`/api/chats/${chatId}/messages?limit=${HISTORY_PAGE}&offset=0`, {
                 credentials: 'include',
                 redirect: 'manual'
             });
@@ -1620,6 +1624,16 @@ class ChatApp {
         } finally {
             p.loading = false;
         }
+        this._fillHistoryViewport();
+    }
+
+    /* Страница истории маленькая (HISTORY_PAGE): если она не заполнила экран, скролла нет
+       и верхний триггер дозагрузки не сработает — догружаем, пока лента не станет выше окна. */
+    _fillHistoryViewport() {
+        const p = this._pagination, c = this.getMessagesContainer();
+        if (!p || !c || p.loading || !p.hasMore || String(p.chatId) !== String(this.currentChat)) return;
+        if (!c.clientHeight) return;   // лента скрыта: высоты нет, иначе выкачаем всю историю
+        if (c.scrollHeight - c.clientHeight < 160) requestAnimationFrame(() => this.loadOlderMessages());
     }
 
     /**
@@ -1688,6 +1702,7 @@ class ChatApp {
     _initHistoryScrollLoader() {
         const container = this.getMessagesContainer();
         if (!container) return;
+        requestAnimationFrame(() => this._fillHistoryViewport());
         if (container._historyLoaderBound) return;
         container._historyLoaderBound = true;
 
@@ -2352,6 +2367,13 @@ class ChatApp {
                 }
             }
             this._removeBotPlaceholder();
+        }
+        // «Размышления» из истории: вызовы тулов (message.steps) и задачи ответа — у каждого ответа,
+        // не только у последнего. Задачи встают узлом графа, отдельной карточки tc-head нет.
+        if (isBot && (message.steps?.length || message.tasks?.length) && window.ReasoningRounds?.history) {
+            window.ReasoningRounds.history(messageEl, message, {
+                chat: message.chat_id || this.currentChat, fmt: (s) => this._formatReasoningDuration(s), caret: this._reasoningCaretSVG(),
+            });
         }
         // Задачник: карточки задач из истории (message.tasks) — внутри ответа, над текстом.
         if (isBot && Array.isArray(message.tasks) && message.tasks.length && window.TaskCards) {
@@ -4104,7 +4126,12 @@ class ChatApp {
             }
         }
 
-        if (activeBotEl && activeBotEl.parentNode === msgContainer) {
+        const taskRun = this._taskRunChat === String(this.currentChat) && !st?.pendingBotEl && !!activeBotEl;
+        if (taskRun) {
+            // Ход по задаче: агентский ответ уже стоит после последнего пользовательского — волна под ним.
+            placeholder.classList.add('agent-placeholder--cont');
+            msgContainer.appendChild(placeholder);
+        } else if (activeBotEl && activeBotEl.parentNode === msgContainer) {
             msgContainer.insertBefore(placeholder, activeBotEl);
         } else if (lastUser && lastUser.nextSibling) {
             msgContainer.insertBefore(placeholder, lastUser.nextSibling);
@@ -4720,12 +4747,19 @@ class ChatApp {
             if (msg.type === 'flow') {
                 if (msg.ev === 'context_usage') { this._applyRealtimeContext(key, msg); return; }
                 if (isActive) _fm(msg.ev, { ...msg, chat: key, id: msg.call_id || undefined });
+                window.ReasoningRounds?.flow(key, msg, () => this._flowReasoningBody(key, msg));
                 return;
             }
 
             if (msg.type === 'agent_status') {
-                // Задачник: агент разбужен результатом задачи — блокируем отправку, как при обычном запросе.
-                if (msg.task_trigger && isActive) this._setSendButtonMode?.('stop');
+                // Задачник: агент разбужен результатом задачи. Это продолжение прошлого ответа:
+                // ход ведём как обычный (стоп работает, request_id известен), вместо старой
+                // статус-строки со спиннером — та же волна ожидания и граф размышлений.
+                if (msg.task_trigger) {
+                    if (!isActive) return;
+                    this._beginTaskTriggerRun(key, msg);
+                    return;
+                }
                 // Статус-строку и скелетон рисуем только для АКТИВНОГО чата.
                 if (!isActive) return;
                 this.updateStatus(msg.status);
@@ -5510,6 +5544,7 @@ class ChatApp {
                     }
                 });
             }
+            window.ReasoningRounds?.restore(chatId, body);
             if (reasoningState.is_final) {
                 this._stopReasoningTimer(chatId, durSec);
             } else {
@@ -5533,7 +5568,21 @@ class ChatApp {
                     cur = cur.nextElementSibling;
                 }
             }
-            if (targetBotEl && !targetBotEl.querySelector('.reasoning-block')) {
+            const histWrap = targetBotEl?.querySelector(':scope > .reasoning-block[data-rr-hist]');
+            if (histWrap) {
+                const hb = histWrap.querySelector('.reasoning-body');
+                steps.forEach(rawStep => {
+                    const step = document.createElement('div');
+                    step.className = 'reasoning-step';
+                    step.style.whiteSpace = 'pre-wrap';
+                    step.textContent = String(rawStep);
+                    hb.appendChild(step);
+                });
+                histWrap.setAttribute('data-rr-chat', String(chatId));
+                const tm = histWrap.querySelector('.reasoning-timer');
+                if (tm && durSec) tm.textContent = this._formatReasoningDuration(durSec);
+                window.ReasoningRounds?.restore(chatId, hb);
+            } else if (targetBotEl && !targetBotEl.querySelector('.reasoning-block')) {
                 const wrap = document.createElement('div');
                 wrap.className = 'reasoning-block reasoning-collapsed';
                 wrap.setAttribute('data-cds', 'TurnStatus');
@@ -5561,6 +5610,7 @@ class ChatApp {
                     body.appendChild(step);
                 });
                 targetBotEl.insertBefore(wrap, targetBotEl.firstElementChild);
+                window.ReasoningRounds?.restore(chatId, body);
                 window.TaskCards?.place?.(targetBotEl);
             }
         }
@@ -5569,6 +5619,34 @@ class ChatApp {
     /* Гарантирует существование ЕДИНОГО свёртка «Размышления» для текущего
        ответа и возвращает его .reasoning-body — контейнер, куда дописываются
        все мысли между вызовами тулз. Не плодим блок на каждый шаг. */
+    /* «Размышления» по первому tool_start. Плашка раньше создавалась только живым
+       текстом мысли (kind=live). Claude (adaptive thinking, imitate_tool_status: false)
+       на простых шагах зовёт тул без thinking и без текста — тогда вызовы копились в
+       pending ReasoningRounds и блок не появлялся вовсе (или только с первой мыслью).
+       GPT/Gemini это закрывает имитация статуса. Здесь: тул идёт → пузырь и свёрток есть. */
+    _flowReasoningBody(chatId, f) {
+        const st = this._resolveStream(chatId);
+        const el = st?.reasoningWrapEl || st?.pendingBotEl?.querySelector('.reasoning-block') || null;
+        if (el || !st || !f || f.ev !== 'tool_start' || st.streamIsFinal) return el;
+        const key = String(chatId);
+        const container = this._isActiveChat(chatId) ? this.getMessagesContainer() : null;
+        if (!st.runStartedAt) st.runStartedAt = Date.now();
+        if (!st.pendingBotEl) {
+            st.pendingBotEl = document.createElement('div');
+            st.pendingBotEl.className = 'agent-message';
+            st.pendingBotEl.dataset.id = f.request_id || '';
+            if (container && this._loadingMessagesChat !== key) {
+                this._dedupeTurnReasoningAndActions(container, st, f.request_id);
+                this._ensureBotAfterLastUserMessage(container, st.pendingBotEl);
+                this._clearAllStatuses();
+            }
+            st.botAnswered = true;
+            st.streamingActive = true;
+        }
+        const body = this._ensureReasoningWrap(chatId);
+        return body ? body.closest('.reasoning-block') : null;
+    }
+
     _ensureReasoningWrap(chatId) {
         const st = this._resolveStream(chatId);
         if (!st) return null;
@@ -5588,6 +5666,7 @@ class ChatApp {
         const wrap = document.createElement('div');
         wrap.className = 'reasoning-block reasoning-collapsed';
         wrap.setAttribute('data-cds', 'TurnStatus');
+        wrap.setAttribute('data-rr-chat', String(chatId));
         wrap.innerHTML = `
             <div class="reasoning-header" data-cds-row="">
                 <span class="reasoning-label">Размышления</span>
@@ -5849,6 +5928,10 @@ class ChatApp {
         const sendBtn = container?.querySelector('#send-btn');
         if (!sendBtn) return;
         if (mode === 'stop') {
+            // «Агент работает» в сайдбаре — вместе со стоп-кнопкой (agent:running), не ждём flow/опроса.
+            if (this.currentChat != null && !this._runningChats?.has(String(this.currentChat))) {
+                this._markChatRunning(this.currentChat, true);
+            }
             sendBtn.disabled = false;
             sendBtn.classList.add('active', 'stop-mode');
             sendBtn.setAttribute('aria-label', 'Остановить');
@@ -5904,10 +5987,43 @@ class ChatApp {
         this._syncBotPlaceholder();
     }
 
+    /** Ход, запущенный результатом фоновой задачи (task_gw → agent_status.task_trigger).
+     *  Пользователь сообщение не отправлял: сбрасываем состояние прошлого ответа, чтобы
+     *  волна ожидания поднялась под ним, и помечаем ход как running — тогда стоп-кнопка
+     *  шлёт настоящий request_id. Старую строку «Проверяю результат задачи…» не рисуем. */
+    _beginTaskTriggerRun(chatId, msg) {
+        document.getElementById('agent-status-indicator')?.remove();
+        this._botAnswered = false;
+        this._taskRunChat = String(chatId);
+        const st = this._ensureStream(chatId);
+        if (st) {
+            st.streamDone = false;
+            st.streamIsFinal = false;
+            st.runStartedAt = Date.now();
+            st.reasoningDurationSec = 1;
+        }
+        if (msg.request_id) this._activeRequestId = msg.request_id;
+        this._runState = 'running';
+        this._markChatRunning(chatId, true);
+        this._loopWaiting = false;
+        this._setSendButtonMode('stop');
+        const ph = document.getElementById('agent-response-placeholder');
+        if (ph) {
+            ph.dataset.task = '1';
+            ph.title = msg.status || '';
+        }
+    }
+
     async stopCurrentRun() {
         if (this._runState !== 'running') return;
         this._runState = 'stopping';
         _fm('done', { chat: this.currentChat, ok: false });
+        {   // Граф размышлений: прерванные вызовы замораживаем, ставим ⊗; таймер шапки стоп.
+            const key = String(this.currentChat);
+            const s = this._resolveStream(key);
+            window.ReasoningRounds?.stop(key, () => s?.reasoningWrapEl || s?.pendingBotEl?.querySelector('.reasoning-block') || null);
+            try { this._stopReasoningTimer(key); } catch (_) {}
+        }
         try {
             await fetch('/api/chats/stop_message', {
                 method: 'POST',
@@ -5934,6 +6050,7 @@ class ChatApp {
             return;
         }
         this._runState = 'idle';
+        this._taskRunChat = null;
         this._markChatRunning(this.currentChat, false);
         this._loopWaiting = false;
         this._activeRequestId = null;

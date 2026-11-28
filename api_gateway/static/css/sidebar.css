@@ -42,6 +42,17 @@
 
 .brand-link:hover { text-decoration: none; opacity: .85; }
 
+/* Лейбл AuGent: один SVG (~3.4 КБ) маской, цвет = currentColor → светлая/тёмная тема без второго файла */
+.brand-logo {
+  display: block;
+  flex: 0 0 auto;
+  width: 109px;
+  height: 18px;
+  background: currentColor;
+  -webkit-mask: url("/static/img/augent-logo.svg") no-repeat left center / contain;
+          mask: url("/static/img/augent-logo.svg") no-repeat left center / contain;
+}
+
 /* Кнопка сворачивания сайдбара — Claude ghost icon-button.
    h-control/w-control aspect-square, rounded, hover: fill-ghost-hover. */
 .sidebar-collapse-btn {

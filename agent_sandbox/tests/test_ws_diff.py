@@ -167,3 +167,90 @@ def test_shadow_hidden_from_editor_and_listing(client, appmod):
     assert not any(n.startswith(".ws_meta") for n in names)
     tree = client.get(f"/workspace/{wid}/editor/tree").json()
     assert ".ws_meta" not in str(tree)
+
+
+# ── шаги: diff одного вызова тула (phase pre/post + call_id) ─────────
+
+def _sn(client, wid, rid, **kw):
+    r = client.post(f"/workspace/{wid}/diff/snap", json={"request_id": rid, "chat_id": "c9", **kw})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_step_per_call_sequential(client):
+    wid, path = _create(client)
+    open(os.path.join(path, "a.py"), "w").write("x = 1\n")
+    _sn(client, wid, "rs", call_id="t1", phase="pre")
+    open(os.path.join(path, "a.py"), "w").write("x = 2\n")
+    open(os.path.join(path, "b.txt"), "w").write("b\n")
+    s1 = _sn(client, wid, "rs", call_id="t1", phase="post")["step"]
+    assert s1["files_count"] == 2 and s1["approx"] is False and s1["call_id"] == "t1"
+    assert {i["p"]: (i["s"], i["a"], i["d"]) for i in s1["list"]} == {"a.py": ("M", 1, 1), "b.txt": ("A", 1, 0)}
+
+    _sn(client, wid, "rs", call_id="t2", phase="pre")
+    os.remove(os.path.join(path, "b.txt"))
+    s2 = _sn(client, wid, "rs", call_id="t2", phase="post")["step"]
+    assert [i["p"] for i in s2["list"]] == ["b.txt"] and s2["list"][0]["s"] == "D"
+
+    d1 = client.get(f"/workspace/{wid}/diff/step", params={"request_id": "rs", "call_id": "t1", "chat_id": "c9"}).json()
+    assert {f["path"] for f in d1["files"]} == {"a.py", "b.txt"}
+    assert "+x = 2" in {f["path"]: f for f in d1["files"]}["a.py"]["patch"]
+    d2 = client.get(f"/workspace/{wid}/diff/step", params={"request_id": "rs", "call_id": "t2"}).json()
+    assert [(f["path"], f["status"]) for f in d2["files"]] == [("b.txt", "D")]
+    # итог запроса не изменился от шагов: a.py M, b.txt создан и удалён → нет
+    tot = client.get(f"/workspace/{wid}/diff", params={"request_id": "rs"}).json()
+    assert [f["path"] for f in tot["files"]] == ["a.py"]
+
+
+def test_step_parallel_marked_approx(client):
+    wid, path = _create(client)
+    _sn(client, wid, "rp", call_id="p1", phase="pre")
+    _sn(client, wid, "rp", call_id="p2", phase="pre")
+    open(os.path.join(path, "one.txt"), "w").write("1\n")
+    s1 = _sn(client, wid, "rp", call_id="p1", phase="post")["step"]
+    open(os.path.join(path, "two.txt"), "w").write("2\n")
+    s2 = _sn(client, wid, "rp", call_id="p2", phase="post")["step"]
+    assert s1["approx"] is True and s2["approx"] is True
+    assert [i["p"] for i in s2["list"]] == ["one.txt", "two.txt"]      # окно p2 видит и p1 — поэтому approx
+
+
+def test_step_no_changes_not_stored_and_access(client):
+    wid, path = _create(client)
+    _sn(client, wid, "rq", call_id="n1", phase="pre")
+    s = _sn(client, wid, "rq", call_id="n1", phase="post")["step"]
+    assert s["files_count"] == 0
+    q = {"request_id": "rq", "call_id": "n1"}
+    assert client.get(f"/workspace/{wid}/diff/step", params=q).status_code == 404
+    _sn(client, wid, "rq", call_id="n2", phase="pre")
+    open(os.path.join(path, "z.txt"), "w").write("z\n")
+    _sn(client, wid, "rq", call_id="n2", phase="post")
+    q = {"request_id": "rq", "call_id": "n2"}
+    assert client.get(f"/workspace/{wid}/diff/step", params={**q, "chat_id": "c9"}).status_code == 200
+    assert client.get(f"/workspace/{wid}/diff/step", params={**q, "chat_id": "other"}).status_code == 404
+    assert client.get(f"/workspace/{wid}/diff/step", params={**q, "request_id": "nope"}).status_code == 404
+    assert client.get("/workspace/../diff/step", params=q).status_code == 404
+    assert client.get("/workspace/..%2F..%2Fetc/diff/step", params=q).status_code == 404
+    assert client.post(f"/workspace/{wid}/diff/snap", json={"request_id": "rq", "phase": "bad"}).status_code == 422
+
+
+def test_step_post_without_pre_falls_back_to_prev(client):
+    wid, path = _create(client)
+    _sn(client, wid, "rf")
+    open(os.path.join(path, "f.txt"), "w").write("f\n")
+    s = _sn(client, wid, "rf", call_id="x", phase="post")["step"]
+    assert [i["p"] for i in s["list"]] == ["f.txt"]
+
+
+def test_step_survives_gc_and_limits(client, monkeypatch):
+    wid, path = _create(client)
+    monkeypatch.setattr(ws_diff, "MAX_STEPS", 3)
+    for i in range(5):
+        _sn(client, wid, "rl", call_id=f"c{i}", phase="pre")
+        open(os.path.join(path, f"f{i}.txt"), "w").write(f"{i}\n")
+        _sn(client, wid, "rl", call_id=f"c{i}", phase="post")
+    st = ws_diff._load_state(path)["requests"]["rl"]
+    assert sorted(st["steps"]) == ["c2", "c3", "c4"] and st["open"] == {}
+    gd = os.path.join(path, ".ws_meta", "shadow", "root.git")
+    assert subprocess.run(["git", "--git-dir", gd, "config", "gc.auto"], capture_output=True, text=True).stdout.strip() == "0"
+    d = client.get(f"/workspace/{wid}/diff/step", params={"request_id": "rl", "call_id": "c2"}).json()
+    assert [f["path"] for f in d["files"]] == ["f2.txt"]

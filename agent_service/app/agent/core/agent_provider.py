@@ -41,6 +41,8 @@ class ModelSpec:
     vision_target: str = "designer"
     base_url: str = "https://foundation-models.api.cloud.ru/v1"
     prompt_cache: bool = True
+    # prompt_tokens у провайдера без cached_tokens (GigaChat 4) — досчитываем в адаптере
+    prompt_tokens_exclude_cached: bool = False
     legacy_builder: str | None = None
     setting_key: str = ""
     hint: str = ""
@@ -108,6 +110,7 @@ def _parse_model_spec(tag: str, raw: dict[str, Any], defaults: dict[str, Any]) -
         vision_target=str(raw.get("vision_target") or tag).strip(),
         base_url=str(raw.get("base_url") or default_url).strip(),
         prompt_cache=bool(raw.get("prompt_cache", defaults.get("prompt_cache", True))),
+        prompt_tokens_exclude_cached=bool(raw.get("prompt_tokens_exclude_cached", False)),
         legacy_builder=str(raw["legacy_builder"]).strip() if raw.get("legacy_builder") else None,
         setting_key=str(raw.get("setting_key") or (aliases[0] if aliases else tag)).strip(),
         hint=str(raw.get("hint") or "").strip(),
@@ -222,6 +225,9 @@ def build_llm_from_spec(spec: ModelSpec):
         if extra_body:
             model_kwargs["extra_body"] = extra_body
 
+    openai_kwargs: dict[str, Any] = {}
+    if spec.prompt_tokens_exclude_cached:
+        openai_kwargs["prompt_tokens_exclude_cached"] = True
     result = ChatOpenAI(
         model=spec.model,
         base_url=spec.base_url,
@@ -230,6 +236,7 @@ def build_llm_from_spec(spec: ModelSpec):
         # без stream_usage astream не присылает usage -> в логах [tokens] нули
         stream_usage=True,
         model_kwargs=model_kwargs,
+        **openai_kwargs,
     )
     from .observability_http import instrument_llm
     return instrument_llm(result)

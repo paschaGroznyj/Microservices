@@ -1,0 +1,307 @@
+/* reasoning-rounds.css — «Размышления» раундами (reasoning-rounds.js).
+   Раунд = итерация агента: номер, заголовок, мета «n инстр. · ошибка · с»;
+   внутри мысли (первое предложение + продолжение по клику) и чипы тулов. */
+.reasoning-body.rr-on {
+  --rr-t: var(--cds-reasoning-text);
+  --rr-m: var(--cds-reasoning-muted);
+  --rr-r: var(--cds-reasoning-ring);
+  --rr-ok: #3f8a5a;
+  --rr-err: #c0463a;
+  gap: 0;
+  overflow-wrap: anywhere;
+  /* Поток: без бабла, граница с ответом держится на отступе */
+  box-shadow: none; background: transparent; border: 0; border-radius: 0;
+  padding: 2px 0 0; margin: 4px 0 6px;
+}
+.reasoning-block:has(> .reasoning-body.rr-on), .reasoning-block:has(.reasoning-body.rr-on) { margin-bottom: 20px; }
+[data-theme="dark"] .reasoning-body.rr-on { --rr-ok: #6fbf8a; --rr-err: #e57f73; --rr-m: #a3a199; }
+.rr-rounds { display: flex; flex-direction: column; min-width: 0; }
+/* Поток: раунды без соединительной линии и разделителей. */
+.rr-rd + .rr-rd { border-top: 0; margin-top: 4px; }
+.rr-on .rr-rd__h { font: inherit; color: inherit; background: none; border: 0; text-align: left; cursor: pointer; }
+.rr-on :focus-visible { outline: 1px solid var(--rr-m); outline-offset: 2px; border-radius: 6px; }
+.rr-chev { flex: 0 0 auto; width: 12px; height: 12px; color: var(--rr-m); transition: transform .2s cubic-bezier(.22,.61,.36,1); }
+.rr-rd.is-open > .rr-rd__h .rr-chev, .rr-th.is-open > .rr-chev { transform: rotate(90deg); }
+
+/* ── Шапка раунда ── */
+.rr-on .rr-rd__h {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; box-sizing: border-box;
+  margin: 0; padding: 5px 0; border-radius: 7px;
+  font-family: var(--font-anthropic-sans, var(--font-sans)); font-size: 13px; line-height: 19.5px;
+}
+@media (hover: hover) { .rr-on .rr-rd__h:hover .rr-rd__t { color: var(--text-primary); } }
+/* Прямоугольные номера раундов; два-три разряда помещаются без сжатия. */
+.rr-rd__n {
+  flex: 0 0 auto; min-width: 22px; height: 18px; padding: 0 3px; box-sizing: border-box; border-radius: 3px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--rr-m) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rr-m) 45%, transparent);
+  color: var(--rr-m);
+}
+.rr-rd.is-open .rr-rd__n { color: var(--rr-t); background: color-mix(in srgb, var(--rr-m) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rr-m) 65%, transparent); }
+.rr-rd.is-run .rr-rd__n { animation: rr-pulse 1.6s ease-in-out infinite; }
+.rr-rd__t { display: block; flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-primary, var(--rr-t)); font-weight: 500; }
+.rr-rd__m { flex: 0 0 auto; font-size: 12px; color: var(--rr-m); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rr-err { color: var(--rr-err); font-weight: 500; }
+.rr-rd.is-leaf > .rr-rd__h { cursor: default; }
+.rr-rd.is-leaf > .rr-rd__h .rr-chev { visibility: hidden; }
+@media (hover: hover) { .rr-on .rr-rd.is-leaf > .rr-rd__h:hover .rr-rd__t { color: inherit; } }
+.rr-on .rr-rd__h:disabled { opacity: 1; }
+
+/* ── Тело раунда (плавное раскрытие) ── */
+.rr-rd__b { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .24s cubic-bezier(.22,.61,.36,1); }
+.rr-rd.is-open > .rr-rd__b { grid-template-rows: 1fr; }
+.rr-rd__in { min-height: 0; min-width: 0; overflow: hidden; display: flex; flex-direction: column; gap: 4px; padding: 0 0 0 30px; }
+.rr-rd.is-open .rr-rd__in { padding-top: 2px; padding-bottom: 10px; }
+.rr-flat > .rr-rd__in { padding: 2px 0; }
+/* Свёрнутый раунд имеет высоту 0: без этого flex сжимает чипы и мысли во время анимации. */
+.rr-rd__in > * { flex-shrink: 0; }
+
+/* ── Мысль: заголовок + продолжение (вариант C) ── */
+.reasoning-body.rr-on .reasoning-step.rr-th {
+  display: grid; grid-template-columns: minmax(0, 1fr) 12px; column-gap: 10px;
+  max-height: none; overflow: visible; -webkit-mask-image: none; mask-image: none;
+  margin: 0; padding: 3px 0; border-radius: 7px; cursor: default;
+  white-space: normal;
+}
+.reasoning-body.rr-on .reasoning-step.rr-th.has-more { cursor: pointer; }
+@media (hover: hover) { .reasoning-body.rr-on .reasoning-step.rr-th.has-more:hover .rr-th__h { color: var(--text-primary); text-decoration: underline; text-decoration-color: var(--rr-r); text-underline-offset: 3px; } }
+.rr-th > .rr-chev { margin-top: 4px; }
+.rr-th__h, .rr-th__b { max-width: 76ch; white-space: pre-wrap; }
+.rr-th__h { color: var(--text-primary, var(--rr-t)); }
+.rr-th__b { display: none; grid-column: 1; margin-top: 4px; padding-left: 10px; box-shadow: inset 1.5px 0 0 color-mix(in srgb, var(--rr-m) 40%, transparent); color: var(--rr-t); }
+.rr-th.is-open > .rr-th__b { display: block; }
+/* Продолжение первой мысли раунда: её первое предложение уже в шапке. */
+.rr-th__hid { display: none; }
+.reasoning-body.rr-on .reasoning-step.rr-th--cont { display: block; padding-top: 0; }
+.rr-th--cont > .rr-th__b { display: block; margin-top: 0; padding-left: 0; box-shadow: none; }
+.reasoning-body.rr-on .reasoning-step.rr-th--empty { display: none; }
+
+/* ── Чип вызова инструмента ── */
+.rr-tool {
+  display: flex; align-items: center; gap: 7px; min-width: 0; box-sizing: border-box;
+  height: 24px; margin: 1px 0; padding: 0;
+  background: none;
+  font-family: var(--font-anthropic-sans, var(--font-sans)); font-size: 12px; line-height: 16px; color: var(--rr-m);
+}
+.rr-tool__ic, .rr-tool__st { flex: 0 0 auto; width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; }
+.rr-tool__ic svg, .rr-tool__st svg { width: 14px; height: 14px; }
+.rr-tool__st { color: var(--rr-ok); }
+.rr-tool.is-err .rr-tool__st, .rr-tool.is-err .rr-tool__n { color: var(--rr-err); }
+.rr-tool__n { flex: 1 1 auto; min-width: 0; color: var(--rr-t); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rr-tool__d { flex: 0 0 auto; margin-left: auto; font-variant-numeric: tabular-nums; }
+.rr-spin { width: 10px; height: 10px; box-sizing: border-box; border-radius: 50%; border: 1.5px solid var(--rr-r); border-top-color: var(--rr-m); animation: rr-spin .8s linear infinite; }
+
+@keyframes rr-spin { to { transform: rotate(360deg); } }
+@keyframes rr-pulse { 50% { opacity: .45; } }
+
+@media (max-width: 600px) {
+  .rr-on .rr-rd__h { display: grid; grid-template-columns: max-content minmax(0, 1fr) 12px; column-gap: 8px; row-gap: 1px; }
+  .rr-rd__n { grid-row: 1; align-self: start; margin-top: 1px; }
+  .rr-rd__t { grid-column: 2; }
+  .rr-rd__m { grid-column: 2; grid-row: 2; font-size: 11px; line-height: 15px; }
+  .rr-rd__h .rr-chev { grid-column: 3; grid-row: 1 / span 2; }
+  .rr-rd__in { padding-left: 30px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rr-rd__b, .rr-chev { transition: none; }
+  .rr-spin, .rr-rd.is-run .rr-rd__n { animation: none; }
+}
+
+/* Граф узлов в стиле mm-tg (панель памяти). */
+/* Блок больше не бабл: кнопка «Свернуть» внизу не нужна, сворачивает шапка. */
+.reasoning-body.rr-on > .reasoning-collapse-btn { display: none !important; }
+
+.rr-rounds.rg {
+  --rg-x0: 7px; --rg-lane: 16px;
+  --rg-node-bg: var(--bg);
+  position: relative; display: block; min-width: 0;
+  padding-left: calc(var(--rg-x0) + (var(--rg-n, 1) - 1) * var(--rg-lane) + 15px);
+}
+.rg-svg { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.rg-rows { display: flex; flex-direction: column; min-width: 0; }
+
+/* Тона дорожек — те же, что у .mm-tg-p t0…t4 */
+.rg-t0 { --rg: #7d8aa0; } .rg-t1 { --rg: #b08d57; } .rg-t2 { --rg: #8a6fb0; } .rg-t3 { --rg: var(--accent); } .rg-t4 { --rg: #328579; }
+[data-theme="dark"] .rg-t0 { --rg: #8e9bb3; } [data-theme="dark"] .rg-t1 { --rg: #c9962e; }
+[data-theme="dark"] .rg-t2 { --rg: #a68bd0; } [data-theme="dark"] .rg-t4 { --rg: #45a596; }
+
+.rg-p { fill: none; stroke: var(--rg); stroke-width: 1.75; stroke-linecap: round; }
+.rg-p.is-run { stroke-dasharray: 3 4; animation: rg-dash .7s linear infinite; }
+.rg-q { fill: var(--rg-node-bg); stroke: #7d8aa0; stroke-width: 1.6; }
+[data-theme="dark"] .rg-q { stroke: #8e9bb3; }
+.rg-o .rg-c { fill: var(--rg); stroke: var(--rg-node-bg); stroke-width: 2; }
+.rg-o .rg-pl { fill: var(--rg); transform-box: fill-box; transform-origin: center; animation: rg-pulse 1.3s ease-out infinite; }
+.rg-o.is-err .rg-c { fill: var(--danger); }
+@keyframes rg-dash { to { stroke-dashoffset: -7; } }
+@keyframes rg-pulse { from { transform: scale(1); opacity: .45; } to { transform: scale(2.6); opacity: 0; } }
+
+/* Строки */
+.rg-r { min-width: 0; }
+.rg-r.is-th { padding: 1px 0; }
+.rg-r + .rg-r { margin-top: 4px; }
+.rg-r.is-call + .rg-r.is-call { margin-top: 0; }
+/* Параллельная группа: воздух под развилку и слияние (дуги по 22px) */
+.rg-r.rg-r.is-g0 { margin-top: 14px; }
+.rg-r.is-gN + .rg-r { margin-top: 14px; }
+.rg-r.is-gN:last-child { margin-bottom: 18px; }
+.reasoning-body.rr-on .rg .reasoning-step.rr-th { padding: 0; }
+.rg .rr-th__h { line-height: 22px; }
+.rg .rr-th > .rr-chev { margin-top: 5px; }
+.rg .rr-th__b { padding-left: 0; box-shadow: none; color: var(--rr-t); }
+.rg-r.is-call {
+  display: flex; align-items: center; gap: 7px; height: 24px;
+  font-size: 13px; line-height: 24px; color: var(--text-primary);
+}
+.rg-ic { flex: 0 0 14px; display: flex; color: var(--rg); }
+.rg-ic svg { width: 14px; height: 14px; }
+.rg-n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rg-d { flex: 0 0 auto; font-size: 12px; color: var(--rr-m); font-variant-numeric: tabular-nums; }
+.rg-r.is-run .rg-n { color: var(--rr-t); }
+.rg-r.is-run .rg-d { color: var(--rg); }
+.rg-r.is-err .rg-n { color: var(--danger); }
+[data-theme="dark"] .rg-r.is-err .rg-n, [data-theme="dark"] .rg-e { color: #ff8a80; }
+.rg-e { flex: 0 0 auto; font-size: 10.5px; font-weight: 600; line-height: 16px; padding: 0 6px; border-radius: 5px;
+  color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.rg-s { margin-left: auto; padding-left: 8px; flex: 0 0 auto; font-size: 11.5px; color: var(--rr-m); white-space: nowrap; }
+
+/* Файлы шага: сводка в строке вызова, список путей и patch по клику (tool_end.files). */
+.rg-r.has-files.is-open { flex-wrap: wrap; height: auto; row-gap: 0; }
+.rg-fh { flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  font-size: 12px; color: var(--rr-m); border-radius: 5px; padding: 0 3px; margin: 0 -3px; }
+.rg-fh:hover { color: var(--rr-t); }
+.rg-fh .rr-chev { width: 10px; height: 10px; }
+.rg-r.has-files.is-open > .rg-fh .rr-chev { transform: rotate(90deg); }
+.rg-f { display: inline-flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rg-fa { font-style: normal; color: var(--rr-m); }
+.rg-fst { flex: 0 0 auto; display: inline-flex; gap: 4px; white-space: nowrap; }
+.rg-fst b { font-weight: 500; }
+.rr-rounds .rg-fst b.a { color: var(--wsd-add-fg); } .rr-rounds .rg-fst b.d { color: var(--wsd-del-fg); }
+.rr-rounds .rg-fst b.z { color: var(--rr-m); opacity: .6; }
+.rg-fl { flex: 0 0 100%; min-width: 0; padding: 0 0 6px 21px; line-height: 20px; }
+.rg-fp { display: flex; align-items: center; gap: 6px; min-width: 0; height: 22px; cursor: pointer; font-size: 12px; color: var(--rr-t); border-radius: 5px; }
+.rg-fp:hover .rg-fname { color: var(--text-primary); }
+.rg-fp .rr-chev { width: 10px; height: 10px; }
+.rg-fp.is-open .rr-chev { transform: rotate(90deg); }
+.rg-fb { flex: 0 0 14px; font: 600 10px/14px var(--wsd-mono); text-align: center; border-radius: 3px; color: var(--wsd-mod-fg); }
+.rg-fp.is-A .rg-fb { color: var(--wsd-add-fg); } .rg-fp.is-D .rg-fb { color: var(--wsd-del-fg); }
+.rg-fpn { flex: 1 1 auto; min-width: 0; display: flex; overflow: hidden; font-family: var(--wsd-mono); font-size: 11.5px; }
+.rg-fdir { flex: 0 100000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; color: var(--rr-m); }
+.rg-fname { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rg-fp.is-D .rg-fname { color: var(--wsd-del-fg); text-decoration: line-through; text-decoration-thickness: 1px; }
+.rg-fbin { flex: none; white-space: nowrap; font-size: 11px; color: var(--rr-m); }
+.rg-fm { font-size: 11.5px; color: var(--rr-m); padding-left: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rg-fx { margin: 2px 0 6px 16px; min-width: 0; max-width: calc(100% - 16px); }
+.rg-fx.wsd { box-shadow: none; background: transparent; margin: 2px 0 6px 16px; border-radius: 6px; overflow: hidden; }
+.rg-fx.wsd .wsd-code { display: block; max-height: 360px; overflow: auto; border: 1px solid var(--wsd-ring); border-radius: 6px; box-sizing: border-box; max-width: 100%; }
+.rg-fxm { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--rr-m); padding: 2px 0; }
+/* «Скачать» и «Открыть в редакторе» у пути шага: маленькие, видна при наведении (на тач — всегда, приглушённо) */
+.rg-fo { flex: none; width: 18px; height: 18px; padding: 0; margin-left: 2px; border: 0; border-radius: 4px; background: transparent; color: var(--rr-m); display: grid; place-items: center; cursor: pointer; opacity: 0; transition: opacity .12s, background-color .12s, color .12s; }
+.rg-fo svg { width: 11px; height: 11px; }
+.rg-fp:hover .rg-fo, .rg-fp:focus-within .rg-fo, .rg-fp.is-open .rg-fo, .rg-fo:focus-visible { opacity: 1; }
+.rg-fo:hover { background: var(--wsd-ring); color: var(--text-primary); }
+.rg-fo:focus-visible { outline: 1.5px solid var(--accent, #cc785c); outline-offset: 1px; }
+@media (hover: none) { .rg-fo { opacity: .7; } }
+/* Картинка/видео/pdf открываются в лайтбоксе или правой панели: раскрывать нечего, шеврон прячем (место сохраняем) */
+.rg-fp.is-side .rr-chev { visibility: hidden; }
+.rg-fp a.rg-fo { text-decoration: none; color: var(--rr-m); }
+.rg-fp a.rg-fo:hover { color: var(--text-primary); }
+/* У удалённого файла кнопок нет: держим место, чтобы «бинарный» и счётчики стояли в одной колонке */
+.rg-fo-sp { flex: none; width: 46px; }
+
+@media (max-width: 600px) {
+  .rr-rounds.rg { --rg-lane: 14px; }
+  .rg-r.is-call { font-size: 12.5px; }
+  .rg-s { font-size: 0; }
+  .rg-s::after { content: attr(data-n); font-size: 11.5px; }
+  .rg-fw { display: none; }
+  .rg-fl { padding-left: 4px; }
+  .rg-fx, .rg-fx.wsd { margin-left: 0; max-width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) { .rg-p.is-run, .rg-o .rg-pl { animation: none; } }
+
+/* Ожидание ответа агента («Шаги»): рёбра дорастают, узлы заливаются по очереди.
+   Разметка — ChatAnimations.waveIndicatorSVG(). HTML-элементы + transform/opacity:
+   без pathLength/stroke-dasharray и transform-box у SVG, которые браузеры поддерживают по-разному. */
+.wave-indicator.rg-wait { --rg-node-bg: var(--bg); width: 112px; height: 24px; }
+.rg-wait .rgw-box { position: relative; width: 112px; height: 24px; }
+.rg-wait .rgw-e, .rg-wait .rgw-q, .rg-wait .rgw-n { position: absolute; top: 12px; box-sizing: border-box; }
+.rg-wait .rgw-e { left: var(--x); width: 32px; height: 1.75px; margin-top: -.875px; border-radius: 1px;
+  background: var(--rg); transform-origin: 0 50%; transform: scaleX(0);
+  animation: rgw-e 2.8s ease-out var(--d) infinite both; }
+.rg-wait .rgw-q { left: var(--x); width: 8.6px; height: 8.6px; margin: -4.3px 0 0 -4.3px; border-radius: 50%;
+  background: var(--rg-node-bg); box-shadow: inset 0 0 0 1.6px #7d8aa0; }
+[data-theme="dark"] .rg-wait .rgw-q { box-shadow: inset 0 0 0 1.6px #8e9bb3; }
+.rg-wait .rgw-n { left: var(--x); width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%;
+  background: var(--rg); border: 2px solid var(--rg-node-bg); transform: scale(0);
+  animation: rgw-n 2.8s cubic-bezier(.3, 1.5, .5, 1) var(--d) infinite both; }
+@keyframes rgw-e { 0% { transform: scaleX(0); opacity: 1; } 12%, 70% { transform: scaleX(1); opacity: 1; }
+  85%, 100% { transform: scaleX(1); opacity: 0; } }
+@keyframes rgw-n { 0% { transform: scale(0); opacity: 1; } 12%, 70% { transform: scale(1); opacity: 1; }
+  85%, 100% { transform: scale(1); opacity: 0; } }
+/* reduced-motion: без роста и масштаба, только мягкое мерцание узлов по очереди
+   (раньше animation:none — при выключенных анимациях в ОС индикатор стоял). */
+@keyframes rgw-f { 0%, 100% { opacity: .25; } 30%, 60% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .rg-wait .rgw-e { animation: none; transform: none; opacity: .5; }
+  .rg-wait .rgw-n { transform: none; animation: rgw-f 2.8s ease-in-out var(--d) infinite both; }
+}
+
+
+/* Стоп пользователем: прерванный вызов и конечный узел ⊗ */
+.rg-r.is-stop .rg-n { color: var(--rr-t); }
+.rg-e--stop { color: var(--rr-t); background: none; }
+.rg-o.is-stop .rg-c { fill: var(--rg-node-bg); stroke: #8a8f98; stroke-width: 1.6; }
+.rg-r.is-stop-end { min-height: 24px; margin-top: 12px; }
+.rg-r.is-stop-end .rg-n { color: var(--rr-t); font-size: 12px; }
+.rg-x circle { fill: var(--rg-node-bg); stroke: #8a8f98; stroke-width: 1.5; }
+.rg-x path { stroke: #8a8f98; stroke-width: 1.5; stroke-linecap: round; fill: none; }
+[data-theme="dark"] .rg-x circle, [data-theme="dark"] .rg-x path, [data-theme="dark"] .rg-o.is-stop .rg-c { stroke: #8e95a0; }
+
+/* Фоновая задача узлом графа (вместо .task-card): квадрат на стволе, статус, раскрытие с этапами/логом */
+.rg-r.is-task { cursor: default; }
+.rg-r.is-task.has-tk { cursor: pointer; }
+.rg-r.is-task.is-open { flex-wrap: wrap; height: auto; row-gap: 0; }
+.rg-r.is-task .rr-chev { width: 10px; height: 10px; flex: 0 0 auto; color: var(--rr-m); }
+.rg-r.is-task.is-open > .rr-chev { transform: rotate(90deg); }
+.rg-tks { flex: 0 0 auto; font-size: 12px; color: var(--rr-m); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rg-r.is-running .rg-tks { color: var(--rg); }
+.rg-r.is-completed .rg-tks { color: var(--rr-ok, #3f8a5a); }
+.rg-r.is-failed .rg-tks { color: var(--danger); }
+.rg-tkb { flex: 0 0 100%; min-width: 0; padding: 2px 0 8px 21px; cursor: auto; }
+.rg-tkst { list-style: none; margin: 0 0 4px; padding: 0; display: flex; flex-direction: column; gap: 1px; font-size: 12px; line-height: 18px; color: var(--rr-m); }
+.rg-tkst li { display: flex; gap: 8px; min-width: 0; }
+.rg-tkst li b { flex: 0 0 10px; text-align: center; font-weight: 600; }
+.rg-tkst li.is-done { color: var(--rr-t); }
+.rg-tkst li.is-running { color: var(--text-primary); }
+.rg-tkst li.is-failed { color: var(--danger); }
+.rg-tkst li.is-skipped span { text-decoration: line-through; }
+.rg-tkl { margin: 2px 0 4px; padding: 6px 8px; max-height: 160px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  font: 11.5px/1.5 var(--wsd-mono, ui-monospace, Menlo, Consolas, monospace); color: var(--rr-t);
+  border: 1px solid var(--wsd-ring, var(--border)); border-radius: 6px; }
+.rg-tkl.is-err { color: var(--danger); }
+.rg-tkm { font: 11px/16px var(--wsd-mono, ui-monospace, Menlo, Consolas, monospace); color: var(--rr-m); overflow-wrap: anywhere; }
+.rg-tn .rg-c { fill: var(--rg-node-bg); stroke: #7d8aa0; stroke-width: 1.6; }
+.rg-tn.is-running .rg-c, .rg-tn.is-pending .rg-c { stroke: var(--accent); }
+.rg-tn.is-running .rg-pl { fill: var(--accent); transform-box: fill-box; transform-origin: center; animation: rg-pulse 1.3s ease-out infinite; }
+.rg-tn.is-completed .rg-c { fill: var(--rr-ok, #3f8a5a); stroke: var(--rg-node-bg); stroke-width: 2; }
+.rg-tn.is-failed .rg-c { fill: var(--danger); stroke: var(--rg-node-bg); stroke-width: 2; }
+.rg-tn.is-cancelled .rg-c { stroke: #8a8f98; }
+[data-theme="dark"] .rg-tn .rg-c { stroke: #8e9bb3; }
+[data-theme="dark"] .rg-tn.is-completed .rg-c, [data-theme="dark"] .rg-tn.is-failed .rg-c { stroke: var(--rg-node-bg); }
+.rg-fm[role="button"] { cursor: pointer; display: flex; align-items: center; gap: 6px; }
+.rg-fm[role="button"]:hover { color: var(--rr-t); }
+@media (max-width: 600px) { .rg-tkb { padding-left: 4px; } }
+@media (prefers-reduced-motion: reduce) { .rg-tn .rg-pl { animation: none; } }
+
+/* Общие ol/pre из chat.css (.reasoning-body ol/pre) не должны трогать тело задачи */
+.reasoning-body .rg-tkb .rg-tkst { margin: 0 0 4px; padding: 0; list-style: none; }
+.reasoning-body .rg-tkb .rg-tkst li { margin: 0; padding: 0; }
+.agent-message .reasoning-body .rg-tkb pre.rg-tkl, .reasoning-body .rg-tkb pre.rg-tkl { margin: 2px 0 4px; padding: 6px 8px !important; background: transparent; max-width: 100%; box-sizing: border-box; min-height: 0; }
+.rg-r.is-task.is-err .rg-n { color: var(--text-primary); }
+.rg-r.is-task .rg-n { flex: 0 1 auto; }
+.rg-r.is-task .rg-tks, .rg-r.is-task .rg-d { flex-shrink: 0; }
+.rg-tkm { margin-top: 2px; color: var(--rr-t); }
+.reasoning-body .rg-tkb pre.rg-tkl { border-color: color-mix(in srgb, var(--rr-m) 45%, transparent); }
+.rg-tkm { margin-top: 4px; }

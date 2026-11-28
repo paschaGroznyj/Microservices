@@ -148,7 +148,7 @@ models:
       </svg>
 
   gigachat:
-    model: "ai-sage/GigaChat3.5-432B-A28B"
+    model: "GigaChat/GigaChat-4-708B-A41"
     provider: "openai"
     label: "GigaChat"
     setting_key: "gigachat"
@@ -158,11 +158,13 @@ models:
     max_tokens: 16384
     reasoning: {}
     chars_per_token: 3.9
+    # GigaChat 4 отдаёт prompt_tokens без cached_tokens (замер 27.11.2026)
+    prompt_tokens_exclude_cached: true
     imitate_tool_status: false
     tool_name_integrity_guidance: true
     vision_target: "coder"
     legacy_builder: "get_llm_model_gigachat"
-    hint: "Модель от Сбера (GigaChat 3.5, 432B MoE)."
+    hint: "Модель от Сбера (GigaChat 4, 708B MoE, рассуждает перед ответом)."
     accent: "#2563eb"
     svg: >-
       <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">

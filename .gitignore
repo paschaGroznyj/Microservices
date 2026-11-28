@@ -56,3 +56,8 @@ releases/media/
 *.pyo
 **/fixtures/
 **/fixture/
+
+notice.md
+
+# Local browser UI harnesses; not part of the application.
+/pvport/

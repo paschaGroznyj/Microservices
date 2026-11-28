@@ -76,6 +76,10 @@
 .qm-item__ic svg { width: 18px; height: 18px; }
 .qm-pill__ic .qm-img { width: 18px; height: 18px; object-fit: contain; display: block; }
 .qm-item__ic .qm-img { width: 22px; height: 22px; object-fit: contain; display: block; }
+/* SVG агента красится как прежняя PNG (чёрная/белая по теме), а не muted-цветом пилюли */
+.qm-pill__ic .qm-svg { width: 18px; height: 18px; display: block; color: var(--text-primary); }
+.qm-item__ic .qm-svg { width: 22px; height: 22px; display: block; color: var(--text-primary); }
+.qm-pill:hover .qm-svg, .qm-pill[aria-expanded="true"] .qm-svg { color: inherit; }
 .qm-item__txt { display: flex; flex-direction: column; gap: 3px; min-width: 0; overflow: hidden; }
 .qm-item__txt b { font-size: 14px; font-weight: 600; }
 .qm-item__txt b, .qm-item__txt small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

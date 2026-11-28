@@ -161,6 +161,33 @@ _WS_PATH_RE = re.compile(r"/tmp/exec/workspaces/([A-Za-z0-9_-]{1,64})(?![A-Za-z0
 _WS_SNAP_MAX = 4  # потолок областей на один вызов тула
 
 
+STEP_FILES_LIST = 20
+
+
+def _step_files(request_id, call_id, ws_ids, snaps) -> dict | None:
+    """Сводка шага для tool_end: {n, add, del, rid, list:[{p,s,a,d,b,ws}], approx}.
+    Только если вызов что-то поменял и у него есть call_id (по нему фронт просит patch шага)."""
+    if not call_id:
+        return None
+    n = add = dele = 0
+    items: list[dict] = []
+    approx = False
+    for w, snap in zip(ws_ids, snaps):
+        st = (snap or {}).get("step") or {}
+        if not st.get("files_count"):
+            continue
+        n += int(st.get("files_count") or 0)
+        add += int(st.get("add") or 0)
+        dele += int(st.get("del") or 0)
+        approx = approx or bool(st.get("approx"))
+        for it in st.get("list") or []:
+            if len(items) < STEP_FILES_LIST:
+                items.append({**it, "ws": w})
+    if not n:
+        return None
+    return {"n": n, "add": add, "del": dele, "rid": request_id, "list": items, "approx": approx}
+
+
 def _ws_ids_from_args(args) -> list[str]:
     """workspace_id из аргумента + все /tmp/exec/workspaces/<wid> в строковых аргументах (рекурсивно)."""
     ids: list[str] = []
@@ -384,11 +411,10 @@ STATEFUL_TOOLS = {
 
     "read_workspace_file",
     "edit_workspace_file",
-    # Платные генерации: путь/obs_key/task_id нужны в следующих ходах,
-    # иначе агент «забывает» результат и запускает оплату заново.
     "generate_video", "check_video_status",
     "generate_audio", "generate_music",
     "fetch_from_obs",
+    "list_devices", "run_on_device",
 }
 
 _coerce_tool_result = coerce_tool_result
@@ -938,6 +964,7 @@ class HarnessAgent:
         # FlowMap: время последнего "конца шага" по request_id (agent_start / tool_end),
         # monotonic. Из него считаем gap_ms — сколько агент думал перед вызовом тула.
         self._flow_last: dict[str, float] = {}
+        self._flow_calls: dict[str, dict] = {}  # request_id → call_id → {slot,label,files,task}
 
     # ------------------------------------------------------------------
     # Память per-user с загрузкой из БД через AgentDB
@@ -1826,14 +1853,19 @@ class HarnessAgent:
         except Exception as e:
             logger.debug(f"[flow] не удалось отправить {ev}: {e}")
 
-    async def _ws_snap(self, workspace_id: str, request_id: str) -> dict | None:
+    async def _ws_snap(self, workspace_id: str, request_id: str,
+                       call_id: str | None = None, phase: str | None = None) -> dict | None:
         """Теневой git-снимок workspace (agent_sandbox ws_diff). Первый снимок запроса — base.
+        call_id + phase pre/post — шаг: что изменил именно этот вызов (step в ответе post).
         Ошибки глушим: карточка изменений не должна ронять тул."""
         try:
             client = await self._get_http_client()
+            body = {"request_id": request_id, "chat_id": str(self._ctx_get("chat_id", "") or "") or None}
+            if call_id and phase:
+                body.update(call_id=str(call_id), phase=phase)
             r = await client.post(
                 f"{WS_SANDBOX_URL}/workspace/{workspace_id}/diff/snap",
-                json={"request_id": request_id, "chat_id": str(self._ctx_get("chat_id", "") or "") or None},
+                json=body,
                 timeout=20,
             )
             if r.status_code != 200:
@@ -2659,7 +2691,7 @@ class HarnessAgent:
                             content = tool_content(tr, MAX_TOOL_MSG_CHARS)
 
                         messages.append(ToolMessage(content=content, tool_call_id=tc["id"]))
-                        tool_calls_log.append(tool_call_record(
+                        _rec = tool_call_record(
                             step=agent_steps,
                             name=tool_name,
                             ok=not tool_failed(tool_name, tr, result_dict),
@@ -2669,7 +2701,11 @@ class HarnessAgent:
                             args=tc.get("args"),
                             result=tr,
                             result_dict=result_dict,
-                        ))
+                        )
+                        if tc.get("id"):
+                            _rec["id"] = str(tc["id"])
+                            _rec.update(self._flow_calls.get(request_id, {}).get(str(tc["id"])) or {})
+                        tool_calls_log.append(_rec)
 
                         summary = _summarize_tool_call(tc, tr)
                         if summary:
@@ -2759,6 +2795,8 @@ class HarnessAgent:
                     "context_breakdown": last_breakdown,
                     "context_cache_read_tokens": last_cache_read,
                 }
+            # Время хода (мс от начала process_query до финала): «Размышления · N с» в истории после F5.
+            tokens_usage["run_ms"] = int((time.monotonic() - run_t0) * 1000)
             _tools_usage = self._ctx_get("tool_usage") or {}
             if _tools_usage:
                 tokens_usage["tools"] = _tools_usage
@@ -2821,7 +2859,16 @@ class HarnessAgent:
             # Очищаем request-local контекст текущего хода.
             self._request_ctx.reset(ctx_token)
             self._flow_last.pop(request_id, None)
+            self._flow_calls.pop(request_id, None)
 
+
+    def _flow_note(self, request_id, call_id, fields: dict) -> None:
+        """Для chats.tool_calls: подпись/слот/файлы/задача вызова (как во flow), чтобы граф
+        «Размышлений» собирался из истории после F5 без хранения текста мыслей."""
+        if not request_id or not call_id:
+            return
+        keep = {k: fields[k] for k in ("slot", "label", "files", "task") if fields.get(k) is not None}
+        self._flow_calls.setdefault(request_id, {})[str(call_id)] = keep
 
     @tool_logged
     async def _invoke_tool(self, tools_by_name: dict, tool_call: dict, request_id: str) -> str:
@@ -2885,12 +2932,15 @@ class HarnessAgent:
         await self._send_flow(request_id, "tool_start", call_id=call_id, gap_ms=gap_ms, **flow_tool)
         ws_ids = _ws_ids_from_args(args) if request_id else []
         if ws_ids:  # baseline/prev до тула: первое упоминание области в запросе = base
-            await asyncio.gather(*(self._ws_snap(w, request_id) for w in ws_ids))
+            await asyncio.gather(*(self._ws_snap(w, request_id, call_id=call_id, phase="pre") for w in ws_ids))
         t0 = time.monotonic()
+        step_files = None
         try:
             result     = await tool_fn.ainvoke(args)
             if ws_ids:
-                snaps = await asyncio.gather(*(self._ws_snap(w, request_id) for w in ws_ids))
+                snaps = await asyncio.gather(*(self._ws_snap(w, request_id, call_id=call_id, phase="post")
+                                               for w in ws_ids))
+                step_files = _step_files(request_id, call_id, ws_ids, snaps)
                 for snap in snaps:
                     if snap and (snap.get("files_count") or (snap.get("step") or {}).get("files_count")):
                         snap.pop("step", None)
@@ -2902,6 +2952,9 @@ class HarnessAgent:
             if request_id:
                 self._flow_last[request_id] = time.monotonic()
             flow_end = tool_flow_fields(name, args, result)
+            if step_files:
+                flow_end["files"] = step_files
+            self._flow_note(request_id, call_id, flow_end)
             await self._send_flow(request_id, "tool_end", call_id=call_id, ok=True, ms=elapsed_ms, **flow_end)
             return result_str
 
@@ -2910,6 +2963,7 @@ class HarnessAgent:
             log_event("tool.result", name=name, ok=False, duration_ms=elapsed_ms, error_type=type(e).__name__)
             if request_id:
                 self._flow_last[request_id] = time.monotonic()
+            self._flow_note(request_id, call_id, flow_tool)
             await self._send_flow(request_id, "tool_end", call_id=call_id, ok=False, ms=elapsed_ms, **flow_tool)
             return f"Ошибка при выполнении {name}: {e}"
 

@@ -1,18 +1,25 @@
-/* ═══ ANTHROPIC FONTS (local woff2) ═══ */
-@font-face{font-family:"anthropic-sans";src:url("../fonts/anthropic/anthropic-sans.woff2")format("woff2");font-weight:300 800;font-style:normal;font-display:swap;font-feature-settings:"dlig" 0}
-@font-face{font-family:"anthropic-sans";src:url("../fonts/anthropic/anthropic-sans-italic.woff2")format("woff2");font-weight:300 800;font-style:italic;font-display:swap;font-feature-settings:"dlig" 0}
-@font-face{font-family:"anthropic-serif";src:url("../fonts/anthropic/anthropic-serif.woff2")format("woff2");font-weight:300 800;font-style:normal;font-display:swap}
-@font-face{font-family:"anthropic-serif";src:url("../fonts/anthropic/anthropic-serif-italic.woff2")format("woff2");font-weight:300 800;font-style:italic;font-display:swap}
-@font-face{font-family:"anthropic-mono";src:url("../fonts/anthropic/anthropic-mono.woff2")format("woff2");font-weight:300 800;font-style:normal;font-display:swap}
-@font-face{font-family:"anthropic-mono";src:url("../fonts/anthropic/anthropic-mono-italic.woff2")format("woff2");font-weight:300 800;font-style:italic;font-display:swap}
-/* serif fallbacks (size-adjust — чтобы текст не прыгал до загрузки woff2) */
-@font-face{font-family:"Anthropic Serif Fallback Georgia";src:local(Georgia);size-adjust:104.79%;ascent-override:94.71%;descent-override:24.57%;line-gap-override:0%}
-@font-face{font-family:"Anthropic Serif Fallback Times";src:local(Times New Roman),local(TimesNewRomanPSMT),local(Liberation Serif),local(LiberationSerif);size-adjust:114.99%;ascent-override:86.31%;descent-override:22.39%;line-gap-override:0%}
+/* ═══ ШРИФТЫ: Google Sans + Google Sans Code (SIL OFL 1.1, static/fonts/google/OFL-*.txt) ═══
+ * Подмножества latin/latin-ext/cyrillic/cyrillic-ext, вариативный вес 400–700. */
+@font-face{font-family:"Google Sans";src:url("../fonts/google/gs-cyrx-i.woff2")format("woff2");font-weight:400 700;font-style:italic;font-display:swap;unicode-range:U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F}
+@font-face{font-family:"Google Sans";src:url("../fonts/google/gs-cyr-i.woff2")format("woff2");font-weight:400 700;font-style:italic;font-display:swap;unicode-range:U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116}
+@font-face{font-family:"Google Sans";src:url("../fonts/google/gs-latx-i.woff2")format("woff2");font-weight:400 700;font-style:italic;font-display:swap;unicode-range:U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF}
+@font-face{font-family:"Google Sans";src:url("../fonts/google/gs-lat-i.woff2")format("woff2");font-weight:400 700;font-style:italic;font-display:swap;unicode-range:U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD}
+@font-face{font-family:"Google Sans";src:url("../fonts/google/gs-cyrx.woff2")format("woff2");font-weight:400 700;font-style:normal;font-display:swap;unicode-range:U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F}
+@font-face{font-family:"Google Sans";src:url("../fonts/google/gs-cyr.woff2")format("woff2");font-weight:400 700;font-style:normal;font-display:swap;unicode-range:U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116}
+@font-face{font-family:"Google Sans";src:url("../fonts/google/gs-latx.woff2")format("woff2");font-weight:400 700;font-style:normal;font-display:swap;unicode-range:U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF}
+@font-face{font-family:"Google Sans";src:url("../fonts/google/gs-lat.woff2")format("woff2");font-weight:400 700;font-style:normal;font-display:swap;unicode-range:U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD}
+@font-face{font-family:"Google Sans Code";src:url("../fonts/google/gsc-latx-i.woff2")format("woff2");font-weight:400 700;font-style:italic;font-display:swap;unicode-range:U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF}
+@font-face{font-family:"Google Sans Code";src:url("../fonts/google/gsc-lat-i.woff2")format("woff2");font-weight:400 700;font-style:italic;font-display:swap;unicode-range:U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD}
+@font-face{font-family:"Google Sans Code";src:url("../fonts/google/gsc-latx.woff2")format("woff2");font-weight:400 700;font-style:normal;font-display:swap;unicode-range:U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF}
+@font-face{font-family:"Google Sans Code";src:url("../fonts/google/gsc-lat.woff2")format("woff2");font-weight:400 700;font-style:normal;font-display:swap;unicode-range:U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD}
 
 :root{
-  --font-anthropic-sans: "anthropic-sans", system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --font-anthropic-serif: "anthropic-serif", "Anthropic Serif Fallback Georgia", "Anthropic Serif Fallback Times", Georgia, "Times New Roman", Times, serif;
-  --font-anthropic-mono: "anthropic-mono", ui-monospace, "JetBrains Mono", monospace;
+  --font-ui:   "Google Sans", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-code: "Google Sans Code", ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  /* старые имена — алиасы, чтобы не трогать все модули разом */
+  --font-anthropic-sans: var(--font-ui);
+  --font-anthropic-serif: var(--font-ui);
+  --font-anthropic-mono: var(--font-code);
 }
 
 /* ═══════════════════════════════════════════════

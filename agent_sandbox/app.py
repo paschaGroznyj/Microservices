@@ -39,6 +39,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import resource
 import shlex
 import shutil
@@ -147,6 +148,8 @@ class DiffSnapRequest(BaseModel):
     request_id: str = Field(..., min_length=1, max_length=200)
     chat_id: str | None = Field(None, max_length=200)
     message_id: str | None = Field(None, max_length=200)
+    call_id: str | None = Field(None, max_length=200)
+    phase: str | None = Field(None, pattern="^(pre|post)$")
 
 
 class DiffAttachRequest(BaseModel):
@@ -1135,10 +1138,26 @@ async def diff_snap_endpoint(workspace_id: str, req: DiffSnapRequest):
     if ws_path is None:
         raise HTTPException(status_code=404, detail="Workspace не найден")
     try:
-        data = await asyncio.to_thread(ws_diff.snap, ws_path, req.request_id, req.chat_id, req.message_id)
+        data = await asyncio.to_thread(ws_diff.snap, ws_path, req.request_id, req.chat_id, req.message_id,
+                                       req.call_id, req.phase)
     except Exception as e:
         log.warning("[ws_diff] snap %s: %s", workspace_id, e)
         raise HTTPException(status_code=500, detail=f"snapshot failed: {e}")
+    data["workspace_id"] = workspace_id
+    return data
+
+
+@app.get("/workspace/{workspace_id}/diff/step")
+async def diff_step_endpoint(workspace_id: str, request_id: str, call_id: str, chat_id: str | None = None):
+    """Diff одного вызова тула (клик по шагу в «Размышлениях»). chat_id — запрос должен быть из этого чата."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", workspace_id or ""):
+        raise HTTPException(status_code=404, detail="Workspace не найден")
+    ws_path = _get_workspace_path(workspace_id)
+    if ws_path is None or not os.path.isdir(ws_path):
+        raise HTTPException(status_code=404, detail="Workspace не найден")
+    data = await asyncio.to_thread(ws_diff.get_step_diff, ws_path, request_id, call_id, chat_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Шаг не найден")
     data["workspace_id"] = workspace_id
     return data
 
@@ -1249,6 +1268,38 @@ async def download_workspace_file_endpoint(workspace_id: str, filepath: str):
         path=target,
         filename=os.path.basename(target),
         media_type="application/octet-stream",
+    )
+
+
+# Сырой файл для превью/скачивания из графа размышлений (картинки, pdf, видео, html).
+# Без фоллбэков по имени (в отличие от /file/...): только точный путь, служебные папки закрыты.
+# FileResponse сам отдаёт Range → 206, видео и pdf грузятся потоково.
+_RAW_TYPES = {".webp": "image/webp", ".avif": "image/avif", ".mkv": "video/x-matroska",
+              ".m4v": "video/mp4", ".mov": "video/quicktime", ".md": "text/plain"}
+
+
+@app.get("/workspace/{workspace_id}/raw")
+async def workspace_raw_endpoint(workspace_id: str, path: str, download: int = 0):
+    import mimetypes
+    ws_path = _get_workspace_path(workspace_id)
+    if ws_path is None:
+        raise HTTPException(status_code=404, detail="Workspace не найден")
+    try:
+        target = _safe_join(ws_path, path.lstrip("/"))
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Путь вне workspace")
+    rel = os.path.relpath(target, os.path.realpath(ws_path))
+    if _is_service_path(rel) or not os.path.isfile(target):
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    if not download and ws_diff._is_secret(rel):
+        raise HTTPException(status_code=403, detail="Секретный файл: только скачивание")
+    ext = os.path.splitext(target)[1].lower()
+    mt = _RAW_TYPES.get(ext) or mimetypes.guess_type(target)[0] or "application/octet-stream"
+    if mt.startswith("text/") or mt in ("application/json", "image/svg+xml", "application/javascript"):
+        mt += "; charset=utf-8"
+    return FileResponse(
+        path=target, media_type=mt, filename=os.path.basename(target),
+        content_disposition_type="attachment" if download else "inline",
     )
 
 

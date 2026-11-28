@@ -24,6 +24,7 @@ import re
 from fastapi import APIRouter, Request, HTTPException
 from urllib.parse import quote
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -315,3 +316,37 @@ async def api_file_download(request: Request, workspace_id: str, path: str):
             )
         },
     )
+
+
+# Превью/скачивание файла workspace из графа размышлений: поток из песочницы с Range (206),
+# видео/pdf/аудио проигрываются без полной загрузки. HTML и SVG рендерятся в sandbox-CSP:
+# скрипты страницы идут в opaque origin и не видят cookie/API gateway.
+_RAW_PASS = ("content-type", "content-length", "content-range", "accept-ranges",
+             "last-modified", "etag", "content-disposition")
+
+
+@router.get("/api/editor/raw")
+async def api_file_raw(request: Request, workspace_id: str, path: str, download: int = 0):
+    user = await _require_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Не авторизован")
+    if not _WS_ID_RE.match(workspace_id or ""):
+        raise HTTPException(status_code=400, detail="Некорректный workspace_id")
+    await _assert_owns(user["user_id"], workspace_id)
+    fwd = {h: request.headers[h] for h in ("range", "if-range", "if-none-match", "if-modified-since")
+           if request.headers.get(h)}
+    req = _http.build_request("GET", f"{_sandbox_url}/workspace/{workspace_id}/raw",
+                              params={"path": path, "download": 1 if download else 0}, headers=fwd)
+    r = await _http.send(req, stream=True)
+    if r.status_code not in (200, 206, 304, 416):
+        await r.aclose()
+        raise HTTPException(status_code=r.status_code if r.status_code in (403, 404) else 502,
+                            detail="Файл недоступен")
+    headers = {k: v for k, v in r.headers.items() if k.lower() in _RAW_PASS}
+    headers["X-Content-Type-Options"] = "nosniff"
+    headers["Cache-Control"] = "private, no-cache"
+    ct = r.headers.get("content-type", "").lower()
+    if not download and ("html" in ct or "svg" in ct or "xml" in ct):
+        headers["Content-Security-Policy"] = "sandbox allow-scripts allow-popups allow-modals allow-forms"
+    return StreamingResponse(r.aiter_raw(), status_code=r.status_code,
+                             headers=headers, background=BackgroundTask(r.aclose))

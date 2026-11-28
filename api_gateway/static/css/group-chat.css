@@ -520,51 +520,94 @@
   aspect-ratio: 1 / 1;
 }
 
-/* ---------- плитки файлов (не картинки) ---------- */
+/* ---------- плитки файлов (не картинки) — fa-chip стиль ---------- */
 .gc-files {
   display: flex;
   flex-direction: column;
   gap: 6px;
   margin-top: 6px;
 }
-.gc-file {
+
+.gc-files .fa-chip.fa-chip--card {
+  --fa-chip-h: 48px;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
+  gap: 8px;
+  padding: 6px 12px 6px 6px;
+  border: 1px solid var(--border);
   border-radius: 10px;
   text-decoration: none;
   color: inherit;
-  background: color-mix(in srgb, var(--border) 28%, transparent);
+  background: var(--surface2);
   transition: background 0.15s ease;
+  position: relative;
+  height: auto;
+  min-height: var(--fa-chip-h);
 }
-.gc-file:hover { background: color-mix(in srgb, var(--border) 45%, transparent); }
-.gc-file__ico {
+
+.gc-files .fa-chip.fa-chip--card:hover {
+  background: color-mix(in srgb, var(--surface2) 90%, var(--accent) 10%);
+}
+
+.gc-files .fa-chip__ty {
   flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 8px 0 0 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: #fff;
 }
-.gc-file__meta {
+
+.gc-files .fa-chip__cap {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  flex: 1;
 }
-.gc-file__name {
-  font-size: 0.9em;
+
+.gc-files .fa-chip__name {
+  font-size: 13px;
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--text-primary);
 }
-.gc-file__size {
-  font-size: 0.76em;
-  opacity: 0.6;
+
+.gc-files .fa-chip__meta {
+  font-size: 11px;
+  opacity: 0.65;
   font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.gc-files .fa-chip__dl-icon {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.gc-files .fa-chip__dl-icon svg {
+  width: 15px;
+  height: 15px;
+  color: currentColor;
+}
+
+.gc-files .fa-chip.fa-chip--card:hover .fa-chip__dl-icon,
+.gc-files .fa-chip.fa-chip--card:focus-visible .fa-chip__dl-icon {
+  opacity: 0.8;
+}
+
+@media (hover: none) {
+  .gc-files .fa-chip.fa-chip--card .fa-chip__dl-icon {
+    opacity: 0.55;
+  }
 }
 
 
@@ -999,3 +1042,26 @@
   pointer-events: none;
 }
 #gc-scroll-to-bottom-btn .gc-arrow-count[hidden] { display: none; }
+
+/* Mixed attachments are separate bubbles, never a document caption on an album. */
+.gc-row > .gc-msg--attachment { margin-bottom: 6px; }
+/* chat.css .message-text has its own foreground; captions inherit the bubble theme. */
+.gc-msg .gc-bubble-text { color: inherit; }
+
+/* Standalone file cards, like Agent attachments: no enclosing message bubble. */
+.gc-file-block {
+  display: flex;
+  flex-direction: column;
+  max-width: 75%;
+  min-width: 0;
+  width: fit-content;
+  color: var(--text-primary);
+  font-family: var(--font-anthropic-sans);
+  font-size: .875rem;
+  line-height: 1.25rem;
+}
+.gc-row > .gc-file-block:not(:last-child) { margin-bottom: 6px; }
+.gc-file-block > .gc-files { margin: 0; }
+.gc-file-block > .gc-meta { color: var(--text-muted); }
+
+.gc-file-block > .gc-meta > :not(.gc-reacts) { opacity: .8; }

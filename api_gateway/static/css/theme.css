@@ -282,3 +282,45 @@ body[data-gateway="sigma"] .theme-icon {
 [data-theme="dark"] body[data-gateway="sigma"] .theme-toggle::before { left: 33px; }
 [data-theme="dark"] body[data-gateway="sigma"] .theme-icon-sun  { display: block; left: 8px; right: auto; }
 [data-theme="dark"] body[data-gateway="sigma"] .theme-icon-moon { display: none; }
+
+/* ═══════════════════════════════════════════════
+   ЕДИНЫЙ ТУЛТИП: светлое на тёмном (светлая тема), тёмное на светлом (тёмная).
+   #ui-tip — замена нативного title (static/js/ui-tip.js), #gen-ui-tip — графики
+   Generative UI, div.vis-tooltip — граф знаний (vis-network).
+════════════════════════════════════════════════ */
+:root {
+  --tip-bg: #1f1d1b;
+  --tip-fg: #f5f3f0;
+}
+[data-theme="dark"] {
+  --tip-bg: #ece8e3;
+  --tip-fg: #161412;
+}
+#ui-tip, #gen-ui-tip, :root div.vis-tooltip {
+  position: fixed;
+  z-index: 10050;
+  max-width: min(320px, calc(100vw - 16px));
+  box-sizing: border-box;
+  padding: 5px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--tip-bg);
+  color: var(--tip-fg);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .18);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+#ui-tip, #gen-ui-tip {
+  opacity: 0;
+  transition: opacity .12s ease;
+}
+#ui-tip { left: 0; top: 0; }
+#ui-tip.on, #gen-ui-tip.on { opacity: 1; }
+/* vis-network вставляет свой <style> для div.vis-tooltip в runtime, поэтому :root для веса */
+:root div.vis-tooltip { position: absolute; font-family: var(--font-ui); }
+@media (prefers-reduced-motion: reduce) { #ui-tip, #gen-ui-tip { transition: none; } }

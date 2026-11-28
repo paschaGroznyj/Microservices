@@ -167,6 +167,10 @@ button.skv-it:hover{background:var(--g)}
 /* ═══ мобила ═══ */
 @media (max-width:600px){
   .skv-col,.skv-bar{padding-left:14px;padding-right:14px}
+  /* мобила: горизонтального скролла у колонки нет; широкий код/таблицы скроллятся сами (pre overflow:auto) */
+  .skv-sc,.skv-wb{overflow-x:hidden}
+  .skv-col{min-width:0;max-width:100%;overflow-x:hidden;overflow-x:clip;overflow-wrap:anywhere}
+  .skv-col pre{max-width:100%;overflow-wrap:normal}
   .skv-bar{gap:6px}
   .skv-seg button{padding:7px 8px}
   .skv-row{min-height:60px;padding-right:4px}

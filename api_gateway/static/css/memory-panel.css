@@ -171,7 +171,10 @@
 .mm-card5>.mm-types{min-height:14px;line-height:14px;box-sizing:content-box}
 .mm-card5>.mm-vp{flex:1 1 auto;min-height:0}
 .mm-card5 .mm-trk{height:100%}
-.mm-card5 .mm-sl{height:100%;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}
+.mm-card5 .mm-sl{height:100%;overflow-y:auto;overscroll-behavior:contain}
+/* скроллбар как у .chat-messages: глобальный ::-webkit-scrollbar из theme.css (5px, var(--border)).
+   scrollbar-width не задаём: в Chrome 121+ он отключает ::-webkit-scrollbar и рисует системную полосу. */
+.mm-card5 .mm-sl,.mm-card5 .mm-sl-t{scrollbar-width:auto;scrollbar-color:auto}
 .mm-c-h{min-width:0}
 /* высота фиксирована, поэтому превью заполняет слайд, а не оставляет пустоту под ссылкой */
 .mm-card5 .mm-txt{-webkit-line-clamp:5;min-height:0}

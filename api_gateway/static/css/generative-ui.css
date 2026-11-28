@@ -435,26 +435,9 @@
 }
 
 /* ── Tooltip & Toast ── */
+/* вид тултипа задаёт theme.css (единый стиль #ui-tip / #gen-ui-tip / .vis-tooltip) */
 #gen-ui-tip {
-  position: fixed;
-  z-index: 10000;
-  pointer-events: none;
-  padding: 6px 10px;
-  border-radius: 8px;
-  border: 1px solid var(--cds-ring-color);
-  background: var(--cds-surface-3);
-  color: var(--cds-text-primary);
-  box-shadow: var(--cds-card-shadow);
-  font-family: var(--font-anthropic-sans, "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
-  font-size: .78rem;
-  line-height: 1.35;
   opacity: 0;
-  transition: opacity .1s;
-  white-space: pre-line;
-}
-
-#gen-ui-tip.on {
-  opacity: 1;
 }
 
 #gen-ui-toast {

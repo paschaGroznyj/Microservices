@@ -187,10 +187,10 @@
 .rg-fb { flex: 0 0 14px; font: 600 10px/14px var(--wsd-mono); text-align: center; border-radius: 3px; color: var(--wsd-mod-fg); }
 .rg-fp.is-A .rg-fb { color: var(--wsd-add-fg); } .rg-fp.is-D .rg-fb { color: var(--wsd-del-fg); }
 .rg-fpn { flex: 1 1 auto; min-width: 0; display: flex; overflow: hidden; font-family: var(--wsd-mono); font-size: 11.5px; }
-.rg-fdir { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; color: var(--rr-m); }
-.rg-fname { flex: 0 0 auto; white-space: nowrap; }
+.rg-fdir { flex: 0 100000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; color: var(--rr-m); }
+.rg-fname { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rg-fp.is-D .rg-fname { color: var(--wsd-del-fg); text-decoration: line-through; text-decoration-thickness: 1px; }
-.rg-fbin { font-size: 11px; color: var(--rr-m); }
+.rg-fbin { flex: none; white-space: nowrap; font-size: 11px; color: var(--rr-m); }
 .rg-fm { font-size: 11.5px; color: var(--rr-m); padding-left: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rg-fx { margin: 2px 0 6px 16px; min-width: 0; max-width: calc(100% - 16px); }
 .rg-fx.wsd { box-shadow: none; background: transparent; margin: 2px 0 6px 16px; border-radius: 6px; overflow: hidden; }

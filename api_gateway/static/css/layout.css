@@ -94,9 +94,9 @@
 }
 
 .main-title {
-  font-family: var(--font-serif);
+  font-family: var(--font-ui);
   font-size: 1rem;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text-primary);
   flex: 1;
   white-space: nowrap;

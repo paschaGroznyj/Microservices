@@ -55,9 +55,9 @@
   width: 100%;
   margin: 0 auto;
   padding: 0 24px;
-  font-family: var(--font-anthropic-serif);
-  font-size: 1rem;
-  line-height: 1.5;
+  font-family: var(--font-ui);
+  font-size: 16px;
+  line-height: 24px;
   color: var(--msg-bot-text);
   position: relative;
   word-wrap: break-word;
@@ -65,28 +65,42 @@
   word-break: break-word;
 }
 
-/* typography inside bot message */
+/* typography inside bot message (по мотивам Google «Режим ИИ»:
+   16/24, заголовки 600, абзацы и пункты с воздухом) */
 .agent-message h1,
 .agent-message h2,
-.agent-message h3 {
-  font-family: var(--font-anthropic-serif);
-  margin: 1.1em 0 .45em;
+.agent-message h3,
+.agent-message h4 {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  margin: 24px 0 12px;
   color: var(--text-primary);
 }
+.agent-message h1:first-child,
+.agent-message h2:first-child,
+.agent-message h3:first-child,
+.agent-message h4:first-child { margin-top: 0; }
 
 .agent-message h1 { font-size: 1.375rem; line-height: 1.75rem; }
-.agent-message h2 { font-size: 1.0625rem; }
-.agent-message h3 { font-size: .9375rem; }
+.agent-message h2 { font-size: 20px; line-height: 28px; }
+.agent-message h3 { font-size: 18px; line-height: 26px; }
+.agent-message h4 { font-size: 16px; line-height: 24px; }
 
-.agent-message p { margin-bottom: .6em; }
+.agent-message p { margin: 0 0 16px; }
 
 .agent-message ul,
 .agent-message ol {
-  padding-left: 1.3em;
-  margin-bottom: .6em;
+  padding-left: 20px;
+  margin: 0 0 16px;
 }
+.agent-message ul { padding-left: 18px; }
 
-.agent-message li { margin-bottom: .2em; }
+.agent-message li { margin-bottom: 12px; padding-left: 4px; }
+.agent-message li > ul,
+.agent-message li > ol { margin: 12px 0 0; }
+.agent-message li > p { margin-bottom: 8px; }
+.agent-message li > p:last-child { margin-bottom: 0; }
+.agent-message strong, .agent-message b { font-weight: 600; }
 
 .agent-message a {
   color: var(--accent);
@@ -95,13 +109,13 @@
 }
 /* ── CODE INLINE ──────────────────────────────── */
 .agent-message code {
-  font-family: var(--font-anthropic-mono);
-  font-size: .8125rem;
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
-  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
-  padding: 1px 4px 1px 4px;
-  border-radius: 5px;
-  color: var(--accent);
+  font-family: var(--font-code);
+  font-size: .875em;
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+  border: 0;
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: inherit;
   /* длинные пути/идентификаторы не должны вылезать за правую границу */
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -120,11 +134,11 @@
   /* Контейнер никогда не должен распирать бабл на мобильных. */
   overflow-x: auto;
   overflow-y: hidden;
-  margin: .9em 0;
-  font-family: var(--font-anthropic-mono);
-  font-size: .8125rem;
-  line-height: 1.1875rem;
-  box-shadow: var(--shadow-md);
+  margin: 16px 0;
+  font-family: var(--font-code);
+  font-size: 14px;
+  line-height: 20px;
+  box-shadow: none;
   max-width: 100%;
   width: 100%;
   box-sizing: border-box;
@@ -148,7 +162,7 @@
   border: none;
   padding: 14px 16px;
   color: inherit;
-  font-size: 0.95em;
+  font-size: 1em;
   /* ВАЖНО: без border-box ширина 100% + горизонтальные паддинги
      переполняют контейнер на мобилках (текст/скролл "вылезает" вправо). */
   box-sizing: border-box;
@@ -177,13 +191,14 @@
 /* ── BLOCKQUOTE ───────────────────────────────── */
 .agent-message blockquote {
   border-left: 3px solid var(--accent);
-  margin: .8em 0;
-  padding: .4em 1em;
+  margin: 16px 0;
+  padding: 8px 16px;
   color: var(--text-secondary);
   font-style: italic;
   background: color-mix(in srgb, var(--accent) 5%, transparent);
   border-radius: 0 6px 6px 0;
 }
+.agent-message blockquote > :last-child { margin-bottom: 0; }
 
 /* ── TABLE ────────────────────────────────────── */
 /* marked рендерит Markdown-таблицы в <table>. display:block + overflow-x:auto
@@ -196,8 +211,8 @@
   max-width: 100%;
   overflow-x: auto;
   border-collapse: collapse;
-  margin: .8em 0;
-  font-size: .95rem;
+  margin: 16px 0;
+  font-size: 15px;
   -webkit-overflow-scrolling: touch;
 }
 
@@ -256,13 +271,13 @@
   flex-direction: column;
   align-items: flex-end;
   max-width: 75%;
-  padding: 10px 14px;
-  border-radius: 14px 14px 3px 14px;
+  padding: 10px 16px;
+  border-radius: 20px 20px 4px 20px;
   background: var(--msg-user-bg);
   color: var(--msg-user-text);
-  font-family: var(--font-anthropic-sans);
-  font-size: .875rem;
-  line-height: 1.25rem;
+  font-family: var(--font-ui);
+  font-size: 16px;
+  line-height: 24px;
   word-break: break-word;
 }
 
@@ -280,8 +295,9 @@
 .message-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
-  margin-top: 5px;
+  gap: 2px;
+  margin-top: 8px;
+  margin-left: -6px;
   opacity: 1;
   transition: opacity var(--transition);
 }
@@ -309,9 +325,9 @@
 
 .message-time {
   margin-left: 6px;
-  font-family: var(--font-anthropic-sans);
-  font-size: .7rem;
-  line-height: 1.25rem;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 20px;
   color: var(--text-muted);
   white-space: nowrap;
   user-select: none;
@@ -336,9 +352,9 @@
 }
 
 .action-button {
-  width: 26px;
-  height: 26px;
-  border-radius: var(--radius-sm);
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -351,7 +367,7 @@
   color: var(--accent);
 }
 
-.action-icon { width: 14px; height: 14px; }
+.action-icon { width: 17px; height: 17px; }
 
 /* ── START SCREEN ─────────────────────────────── */
 /* Основной .chat-start-screen объявлен ниже в секции
@@ -546,14 +562,14 @@
   /* Сообщения */
   .agent-message {
     padding: 10px 14px;
-    font-size: .9rem;
+    font-size: 16px;
   }
 
   /* На узком экране уменьшаем внутренние поля code-блока, чтобы
      длинные строки не упирались в правую границу пузыря. */
   .agent-message pre code {
     padding: 12px 10px;
-    font-size: 0.92em;
+    font-size: 13px;
     /* На мобилках длинные строки переносим, а не уводим в горизонтальный
        скролл — иначе текст визуально "вылезает" за границу экрана. */
     white-space: pre-wrap;
@@ -575,8 +591,8 @@
   }
 
   .user-message {
-    padding: 8px 12px;
-    font-size: .9rem;
+    padding: 9px 14px;
+    font-size: 16px;
     max-width: 88%;
   }
 

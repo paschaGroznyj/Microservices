@@ -15,6 +15,11 @@ class _Conn:
     async def executemany(self, sql, rows):
         self.log.append(("executemany", sql, rows))
 
+    async def fetchval(self, sql, *a):
+        # проверка дубля по message_id: в тестах строк ещё нет
+        self.log.append(("fetchval", sql, a))
+        return None
+
     def transaction(self):
         class _T:
             async def __aenter__(s): return s
